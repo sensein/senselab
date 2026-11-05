@@ -31,6 +31,7 @@ from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.extend import (
     AUDIO_UNVERIFIED,
     AUDIO_VERIFIED,
+    CORPUS_INPUTS_KEY,
     DECISION_SUPERSEDED,
     HINT_GIVEN,
     HINT_RECORDED,
@@ -40,6 +41,7 @@ from senselab.audio.workflows.triage.extend import (
     ReplayInputs,
     ReplayRefused,
     check_replay_inputs,
+    corpus_inputs_digest,
     find_replay_marker,
     live_decisions,
     read_store,
@@ -448,7 +450,13 @@ def test_a_run_already_carrying_this_configurations_marker_is_skipped(tmp_path: 
     marker = store.activity(
         node=REPLAY_NODE,
         step=REPLAY_MARKER_STEP,
-        parameters={"config_hash": config.config_hash, "commit": None, "retired": 0, "hint_digest": NO_HINT},
+        parameters={
+            "config_hash": config.config_hash,
+            "commit": None,
+            "retired": 0,
+            "hint_digest": NO_HINT,
+            CORPUS_INPUTS_KEY: corpus_inputs_digest(store),
+        },
     )
     store.write_jsonl(root / "run" / "store.jsonl")
     before = (root / "run" / "store.jsonl").read_text()
@@ -628,7 +636,13 @@ def test_force_replays_a_run_that_already_carries_the_marker(tmp_path: Path, mon
     store.activity(
         node=REPLAY_NODE,
         step=REPLAY_MARKER_STEP,
-        parameters={"config_hash": config.config_hash, "commit": None, "retired": 0, "hint_digest": NO_HINT},
+        parameters={
+            "config_hash": config.config_hash,
+            "commit": None,
+            "retired": 0,
+            "hint_digest": NO_HINT,
+            CORPUS_INPUTS_KEY: corpus_inputs_digest(store),
+        },
     )
     store.write_jsonl(root / "run" / "store.jsonl")
     monkeypatch.setattr(cli, "replay_decisions", _stub_replay({}))
@@ -880,6 +894,31 @@ class TestTheRecordAReplayWrites:
         record_replayed_hint(store, None, software="s")
         assert declared_task_id(store) == "unknown"
 
+    def test_what_the_new_hint_no_longer_declares_is_dropped_but_a_corpus_path_id_is_kept(self) -> None:
+        """Review of step 9: a dropped target speaker or declared id does not survive; a corpus-path id does."""
+        from senselab.audio.data_structures import TargetSpeaker
+        from senselab.audio.workflows.triage.identity import recorded_identity
+
+        plain = AudioHints(metadata={"participant_id": "p01"})
+        store = self._store("/c/p01/s2/recording.wav", "/c/p01/s2/recording.wav")
+        declared = AudioHints(
+            metadata={"participant_id": "p01", "recording_id": "r-1"}, target_speakers=[TargetSpeaker(id="p01:child")]
+        )
+        record_replayed_hint(store, declared, software="s")
+        first = recorded_identity(store)
+        assert first is not None and (first.target_speaker, first.recording_id) == ("p01:child", "r-1")
+        record_replayed_hint(store, plain, software="s")
+        dropped = recorded_identity(store)
+        assert dropped is not None and (dropped.target_speaker, dropped.recording_id) == (None, None)
+
+        flat = ProvStore(run_id="flat")
+        flat.activity(node="ADMIT", step=None, parameters={"audio_file": "/c/p01/s2/recording.wav"})
+        admitted = identity_of(plain, stem="recording", corpus_path="p01/s2/recording.wav").as_attributes()
+        flat.entity(prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording", **admitted})
+        record_replayed_hint(flat, plain, software="s")
+        kept = recorded_identity(flat)
+        assert kept is not None and kept.id_of("recording") == "p01/s2/recording.wav"
+
 
 class TestTheRecordingCheckReadsTheStatFirst:
     """A recording whose size and modification time match the record is not re-hashed."""
@@ -917,3 +956,52 @@ def test_an_out_root_mirror_is_placed_where_the_replay_leaves_the_identity() -> 
     assert cli.replay_identity(None, stem, None, hint_given=False) == identity_of(None)
     recorded = identity_of(hint)
     assert cli.replay_identity(recorded, stem, None, hint_given=False) == recorded
+
+
+def test_a_marker_matches_only_the_corpus_readings_it_left() -> None:
+    """A replay after extend_cohort reran replays again; a marker from before plan step 9 matches nothing."""
+    from senselab.audio.workflows.triage.cohort_fold import COHORT_READING
+    from senselab.audio.workflows.triage.extend import (
+        CORPUS_INPUTS_KEY,
+        REPLAY_MARKER_STEP,
+        REPLAY_NODE,
+        corpus_inputs_digest,
+        find_replay_marker,
+    )
+
+    store = ProvStore(run_id="marker")
+    left = corpus_inputs_digest(store)
+    marker = store.activity(
+        node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters={"config_hash": "c", CORPUS_INPUTS_KEY: left}
+    )
+    assert find_replay_marker(store, "c", corpus_inputs=corpus_inputs_digest(store)) == marker
+    store.entity(prov_type="measurement", extent=None, attributes={"name": COHORT_READING, "value": 1})
+    assert find_replay_marker(store, "c", corpus_inputs=corpus_inputs_digest(store)) is None
+    old = ProvStore(run_id="old")
+    old.activity(node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters={"config_hash": "c"})
+    assert find_replay_marker(old, "c", corpus_inputs=corpus_inputs_digest(old)) is None
+
+
+def test_a_cohort_pass_that_changes_nothing_leaves_the_marker_matching() -> None:
+    """Review of step 9: rewriting the reading that stands mints nothing, so replay and cohort passes settle."""
+    from senselab.audio.workflows.triage.cohort_stage import write_cohort_reading
+    from senselab.audio.workflows.triage.extend import (
+        CORPUS_INPUTS_KEY,
+        REPLAY_MARKER_STEP,
+        REPLAY_NODE,
+        corpus_inputs_digest,
+        find_replay_marker,
+    )
+
+    store = ProvStore(run_id="settled")
+    reading = {"version": "1", "cohort_key": "k", "status": "computed", "cosine": 0.9}
+    write_cohort_reading(store, reading)
+    marker = store.activity(
+        node=REPLAY_NODE,
+        step=REPLAY_MARKER_STEP,
+        parameters={"config_hash": "c", CORPUS_INPUTS_KEY: corpus_inputs_digest(store)},
+    )
+    write_cohort_reading(store, dict(reading))
+    assert find_replay_marker(store, "c", corpus_inputs=corpus_inputs_digest(store)) == marker
+    write_cohort_reading(store, {**reading, "cosine": 0.5})
+    assert find_replay_marker(store, "c", corpus_inputs=corpus_inputs_digest(store)) is None

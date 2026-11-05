@@ -31,6 +31,8 @@ NO_HINT = "none"
 """:data:`HINT_DIGEST` for a run given no hint at all."""
 
 TARGET_SPEAKER = "target_speaker"
+TARGET_SPEAKERS = "target_speakers"
+"""The hint's declared target speakers; each ``embedding`` is stored reduced, as ``target_speaker`` is."""
 METADATA = "metadata"
 
 
@@ -112,6 +114,9 @@ def hint_attributes(hint: AudioHints | None) -> dict[str, Any]:
     stored = _dumped(hint)
     if stored.get(TARGET_SPEAKER) is not None:
         stored[TARGET_SPEAKER] = _reduced_target_speaker(stored[TARGET_SPEAKER])
+    for entry in stored.get(TARGET_SPEAKERS) or ():
+        if entry.get("embedding") is not None:
+            entry["embedding"] = _reduced_target_speaker(entry["embedding"])
     return {HINT: stored, HINT_DIGEST: hint_digest(hint), HINT_FIELD_DIGESTS: field_digests(hint)}
 
 
@@ -173,3 +178,18 @@ def changed_fields(store: ProvStore, hint: AudioHints | None) -> list[str] | Non
     recorded = dict(record.get(HINT_FIELD_DIGESTS) or {})
     now = field_digests(hint) if hint is not None else {}
     return sorted(name for name in recorded.keys() | now.keys() if recorded.get(name) != now.get(name))
+
+
+def carries_voice(stored: Mapping[str, Any]) -> bool:
+    """Whether a recorded hint carried a target speaker's voice, stored only as a digest and so not rebuilt.
+
+    Its ``target_speaker``, or an embedding on one of its ``target_speakers``.
+
+    Args:
+        stored: The recorded hint (:data:`HINT`).
+
+    Returns:
+        True where it carried one.
+    """
+    entries = stored.get(TARGET_SPEAKERS) or ()
+    return stored.get(TARGET_SPEAKER) is not None or any(entry.get("embedding") is not None for entry in entries)

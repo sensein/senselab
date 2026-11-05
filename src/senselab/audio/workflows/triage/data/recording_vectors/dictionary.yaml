@@ -102,6 +102,22 @@ columns:
       The run records no identity (a store written before ADMIT recorded one), or neither the hint nor the
       stem names a session.
 
+  recording_id:
+    units: none
+    description: The recording's corpus-unique id, which the tables and review pages join on; the stem is its label.
+    computation: >-
+      The recorded identity's `declared_recording_id` (the hint's `recording_id`, else the path under the run's
+      corpus root), else the stem (plan step 9b).
+    source: [recording_vectors.py:extract, identity.py:identity_of, run.py:corpus_path_of]
+    null_means: Never null.
+
+  target_speaker:
+    units: none
+    description: Whose voice the recording's task asks for, where the hint declared a target speaker other than the participant.
+    computation: The recorded identity's `declared_target_speaker` (plan step 9a).
+    source: [recording_vectors.py:view_identity, identity.py:identity_columns, identity.py:declared_target_speaker]
+    null_means: The target speaker is the participant, or the run records no identity.
+
   participant_from:
     units: none
     values: [hint, stem]
@@ -682,16 +698,16 @@ columns:
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
 
-  cohort_condition_n:
+  recruited_condition_n:
     units: count
-    description: Listed conditions naming a study-cohort condition (`verdict.cohort_conditions`).
-    computation: The ledger's `counts.cohort_condition_n`.
+    description: Listed conditions naming a condition the study recruits for (`verdict.recruited_conditions`).
+    computation: The ledger's `counts.recruited_condition_n` (`counts.cohort_condition_n` in a store from before plan step 9).
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record]
     null_means: No `pii_ledger`.
 
   other_condition_n:
     units: count
-    description: Listed conditions naming a condition outside the study's cohorts.
+    description: Listed conditions naming a condition outside the study's recruited conditions.
     computation: The ledger's `counts.other_condition_n`.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record]
     null_means: No `pii_ledger`.
@@ -883,11 +899,11 @@ columns:
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
 
-  cohort_diagnoses:
+  recruited_diagnoses:
     units: none
-    description: The cohort diagnoses the listed conditions name, by the release's `phenotype/diagnosis/` file stem.
-    computation: The ledger's `cohort_diagnoses`, sorted and distinct.
-    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, cohort.py:load_cohort_profile]
+    description: The recruited diagnoses the listed conditions name, by the release's `phenotype/diagnosis/` file stem.
+    computation: The ledger's `recruited_diagnoses` (`cohort_diagnoses` before plan step 9), sorted and distinct.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, recruited_conditions.py:load_recruited_conditions]
     null_means: No `pii_ledger`.
 
   gate_node:

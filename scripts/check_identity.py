@@ -52,9 +52,11 @@ from senselab.audio.workflows.triage.extend import (
     load_hints,
 )
 from senselab.audio.workflows.triage.identity import (
+    RECORDING_ID_COLUMN,
     ROW_PARTICIPANT,
     ROW_SESSION,
     ROW_SOURCES,
+    ROW_TARGET_SPEAKER,
     ROW_TASK,
     IdentityLabelError,
     RecordingIdentity,
@@ -71,6 +73,7 @@ from senselab.audio.workflows.triage.identity_check import (
     check_identities,
 )
 from senselab.audio.workflows.triage.nodes.common import describe_exception
+from senselab.audio.workflows.triage.run import corpus_path_of
 from senselab.audio.workflows.triage.task_catalogue import resolve_task
 
 SOURCE_KEY = "source"
@@ -84,6 +87,10 @@ TABLE_COLUMNS = ("stem", "run_dir", ROW_PARTICIPANT, ROW_SESSION, ROW_TASK, *ROW
 TASK_COLUMNS = (DECLARED_TASK_COLUMN, DECLARED_TASK_SOURCE_COLUMN)
 """The declared-task columns, read where the table has them (schema 31 on); a table without them is one whose runs
 record no task."""
+
+SPEAKER_AND_ID_COLUMNS = (ROW_TARGET_SPEAKER, RECORDING_ID_COLUMN)
+"""The target-speaker and recording-id columns, read where the table has them (step 9); a table without them is
+one whose recordings are keyed by their stems."""
 
 PRIVATE_FILE_MODE = 0o600
 SHOWN_PER_CHECK = 5
@@ -114,6 +121,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=SESSION_SCOPES,
         default=SESSION_SCOPE_PARTICIPANT,
         help="Where session identifiers are unique: within their participant (default) or across the corpus",
+    )
+    parser.add_argument(
+        "--corpus-root",
+        type=Path,
+        default=None,
+        help="The corpus's root the runs are given: a recording's id is its path under it where its hint declares none",
     )
     parser.add_argument("--out", type=Path, default=None, help="Where the JSON report goes")
     add_config_arguments(parser)
@@ -151,6 +164,7 @@ def records_before_run(
     recordings: list[Path],
     build_hint: Callable[[Path], Any] | None,
     read_name: Callable[[str], RecordingIdentity] | None = None,
+    corpus_root: Path | None = None,
 ) -> list[IdentityRecord]:
     """Each recording's identity as ADMIT would declare it.
 
@@ -158,6 +172,8 @@ def records_before_run(
         recordings: The recordings' paths.
         build_hint: The hint populator, or None: then no recording declares anything.
         read_name: The dataset's file-name reader, or None to skip ``stem_disagrees``.
+        corpus_root: The corpus's root, as the runs will be given it: each recording's id where its hint declares
+            none is its path under it (plan step 9b).
 
     Returns:
         One record per recording, located at its path; a hint that raises, or a label that cannot name a folder,
@@ -169,7 +185,7 @@ def records_before_run(
         parsed = read_name(stem) if read_name is not None else None
         try:
             hint = build_hint(wav)[0] if build_hint is not None else None
-            identity = identity_of(hint)
+            identity = identity_of(hint, stem=stem, corpus_path=corpus_path_of(wav, corpus_root))
             task = resolve_task(hint)
         except IdentityLabelError as error:
             records.append(IdentityRecord(stem, str(wav), None, parsed, str(error)))
@@ -200,7 +216,8 @@ def records_after_run(table: Path, read_name: Callable[[str], RecordingIdentity]
     missing = [column for column in TABLE_COLUMNS if column not in present]
     if missing:
         raise ValueError(f"{table} carries no {', '.join(missing)}; rebuild it from a current corpus pass")
-    rows = pq.read_table(table, columns=[*TABLE_COLUMNS, *(c for c in TASK_COLUMNS if c in present)]).to_pylist()
+    optional = [c for c in (*TASK_COLUMNS, *SPEAKER_AND_ID_COLUMNS) if c in present]
+    rows = pq.read_table(table, columns=[*TABLE_COLUMNS, *optional]).to_pylist()
     records: list[IdentityRecord] = []
     for row in rows:
         stem = str(row.get("stem") or "")
@@ -278,14 +295,16 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
         if args.recordings is not None:
-            records = records_before_run(read_recording_list(args.recordings), build_hint, read_name)
+            records = records_before_run(
+                read_recording_list(args.recordings), build_hint, read_name, corpus_root=args.corpus_root
+            )
         else:
             records = records_after_run(args.table, read_name)
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
 
-    report = check_identities(records, session_scope=scope)
+    report = check_identities(records, session_scope=scope, before_run=args.recordings is not None)
     if args.out is not None:
         extra = {
             "mode": "recordings" if args.recordings is not None else "table",

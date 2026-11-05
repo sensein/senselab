@@ -6,24 +6,34 @@ from typing import Any
 
 import pytest
 
-from senselab.audio.data_structures import AudioHints
+from senselab.audio.data_structures import AudioHints, TargetSpeaker
 from senselab.audio.workflows.triage.b2ai_hints import identity_from_name, task_id_of
 from senselab.audio.workflows.triage.identity import (
     ADMIT_NODE,
+    DECLARED_RECORDING_ID,
+    DECLARED_TARGET_SPEAKER,
     DECLARED_TASK_ID,
+    FROM_CORPUS_PATH,
     FROM_HINT,
     FROM_STEM,
     IDENTITY_FROM_KEY,
     PARTICIPANT_KEY,
+    RECORDING_ID_COLUMN,
+    RECORDING_ID_FIELD,
+    RECORDING_ID_KEY,
+    ROW_TARGET_SPEAKER,
     SESSION_KEY,
     TASK_TOKEN_KEY,
     IdentityLabelError,
     ManifestWithoutIdentity,
+    MultipleTargetSpeakers,
     RecordingIdentity,
+    corpus_path_recorded,
     declared_session_key,
     declared_task_id,
     identity_columns,
     identity_disagreement,
+    identity_from_attributes,
     identity_of,
     recorded_identity,
     row_groups,
@@ -254,3 +264,62 @@ class TestCorpusRows:
         assert identity_disagreement(moved, recorded) == ["session"]
         assert identity_disagreement(None, recorded) == ["recorded identity"]
         assert identity_disagreement(recorded, None) == ["recorded identity"]
+
+
+class TestTargetSpeakerAndRecordingId:
+    """Plan step 9: the target speaker and the recording id, recorded only where they are not the defaults."""
+
+    def test_the_default_target_is_the_participant_and_nothing_is_recorded(self) -> None:
+        """B2AI's runs declare no target: its stores gain no attribute."""
+        identity = identity_of(AudioHints(metadata={PARTICIPANT_KEY: "sub-07"}))
+        assert identity.target_speaker is None and identity.speaker == "sub-07"
+        assert DECLARED_TARGET_SPEAKER not in identity.as_attributes()
+
+    def test_a_declared_target_is_recorded_and_read_back(self) -> None:
+        """A caregiver-led recording names the child as the voice the task asks for."""
+        hint = AudioHints(metadata={PARTICIPANT_KEY: "sub-07"}, target_speakers=[TargetSpeaker(id="sub-07:child")])
+        identity = identity_of(hint)
+        assert identity.speaker == "sub-07:child"
+        assert identity_from_attributes(identity.as_attributes()) == identity
+
+    def test_more_than_one_target_is_refused(self) -> None:
+        """Multi-speaker interactions are a later item; a second target is refused, not misread."""
+        hint = AudioHints(target_speakers=[TargetSpeaker(id="a"), TargetSpeaker(id="b")])
+        with pytest.raises(MultipleTargetSpeakers, match="not supported yet"):
+            identity_of(hint)
+
+    def test_the_recording_id_is_declared_else_the_corpus_path_else_the_stem(self) -> None:
+        """Only an id other than the stem is recorded, so a BIDS-named corpus's stores are unchanged."""
+        declared = identity_of(AudioHints(metadata={RECORDING_ID_KEY: "r-1"}), stem="recording")
+        assert declared.id_of("recording") == "r-1" and declared.as_attributes()[DECLARED_RECORDING_ID] == "r-1"
+        flat = identity_of(None, stem="recording", corpus_path="p01/s2/recording.wav")
+        assert flat.id_of("recording") == "p01/s2/recording.wav"
+        bids = identity_of(AudioHints(metadata={RECORDING_ID_KEY: "sub-a_task-x"}), stem="sub-a_task-x")
+        assert bids.recording_id is None and DECLARED_RECORDING_ID not in bids.as_attributes()
+        assert bids.id_of("sub-a_task-x") == "sub-a_task-x"
+
+    def test_a_recorded_id_says_where_it_came_from(self) -> None:
+        """Review of step 9: a replay is given no corpus root, so only an id read off the corpus path is kept."""
+        declared = identity_of(AudioHints(metadata={RECORDING_ID_KEY: "r-1"}), stem="recording")
+        flat = identity_of(None, stem="recording", corpus_path="p01/s2/recording.wav")
+        assert declared.sources[RECORDING_ID_FIELD] == FROM_HINT and corpus_path_recorded(declared) is None
+        assert flat.sources[RECORDING_ID_FIELD] == FROM_CORPUS_PATH
+        assert corpus_path_recorded(identity_from_attributes(flat.as_attributes())) == "p01/s2/recording.wav"
+        assert RECORDING_ID_FIELD not in identity_of(None, stem="recording").sources
+
+    def test_a_row_carries_its_target_speaker_and_recording_id(self) -> None:
+        """Review of step 9: the table's columns rebuild both; an id equal to the stem is none."""
+        row = {"stem": "recording", "participant": "p01", "session": "s2", "task": "x", "task_from": "hint"}
+        identity = row_identity({**row, ROW_TARGET_SPEAKER: "p01:child", RECORDING_ID_COLUMN: "p01/s2/recording.wav"})
+        assert identity is not None and identity.target_speaker == "p01:child"
+        assert identity.id_of("recording") == "p01/s2/recording.wav"
+        same = row_identity({**row, RECORDING_ID_COLUMN: "recording"})
+        assert same is not None and same.recording_id is None
+
+    def test_a_row_naming_another_target_speaker_disagrees_with_the_record(self) -> None:
+        """Review of step 9: a stale manifest is refused rather than enrolled under the wrong voice."""
+        hint = AudioHints(metadata={PARTICIPANT_KEY: "p01"}, target_speakers=[TargetSpeaker(id="p01:child")])
+        recorded = identity_of(hint)
+        assert identity_disagreement(identity_of(AudioHints(metadata={PARTICIPANT_KEY: "p01"})), recorded) == [
+            "target_speaker"
+        ]

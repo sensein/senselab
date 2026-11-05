@@ -1227,7 +1227,7 @@ class TestAConditionNeverWithholds:
             policy=policy,
         )
 
-    _POLICY = FoldPolicy(llm_redaction_withholds=True, cohort_conditions="bridge2ai_voice_adult_2026-09-04")
+    _POLICY = FoldPolicy(llm_redaction_withholds=True, recruited_conditions="bridge2ai_voice_adult_2026-09-04")
 
     @staticmethod
     def _conditions(*texts: str) -> dict[str, Any]:
@@ -1261,12 +1261,12 @@ class TestAConditionNeverWithholds:
 
     def test_the_packaged_config_names_the_study_s_cohort_profile(self) -> None:
         """The shipped key names the Bridge2AI-Voice adult profile, and it loads."""
-        from senselab.audio.workflows.triage.cohort import load_cohort_profile
         from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.recruited_conditions import load_recruited_conditions
 
-        name = FoldPolicy.from_config(load_triage_config()).cohort_conditions
+        name = FoldPolicy.from_config(load_triage_config()).recruited_conditions
         assert name == "bridge2ai_voice_adult_2026-09-04"
-        assert load_cohort_profile(name).diagnosis("spasmodic dysphonia") == "laryngeal_dystonia"
+        assert load_recruited_conditions(name).diagnosis("spasmodic dysphonia") == "laryngeal_dystonia"
 
 
 class TestANonLexicalTaskIsClearedRatherThanHeld:

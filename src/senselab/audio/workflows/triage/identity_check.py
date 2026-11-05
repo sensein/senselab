@@ -13,8 +13,11 @@ and the corpus passes group runs by them. :func:`check_identities` reads one
   its own session, so repeating a task outside a session is no duplicate. Refused.
 * :data:`UNREADABLE_IDENTITY` -- a recording whose identity could not be built (its hint raised, or it declares a
   label that cannot name a folder). Refused.
-* :data:`DUPLICATE_STEM` -- one stem in more than one place. Corpus passes key runs by place and stem, so this is
-  reported, not refused.
+* :data:`DUPLICATE_RECORDING_ID` -- before a run, two recordings sharing one id (the hint's ``recording_id``, else the
+  path under ``--corpus-root``, else the stem; plan step 9b). The tables and review pages join on it, so this is
+  refused.
+* :data:`DUPLICATE_STEM` -- after a run, one recording id under more than one run directory (a recording run twice,
+  or tables concatenated across builds). Reported, not refused.
 * :data:`TASK_NOT_DESCRIBED` -- a recording whose declared task the dataset's task list does not describe
   (:func:`~senselab.audio.workflows.triage.task_catalogue.resolve_task`), one finding per key: a task the list lacks,
   a task described only inline in the hint (recorded, but no branch reads an inline description yet, so each branch
@@ -53,6 +56,7 @@ SESSION_UNDER_TWO_PARTICIPANTS = "session_under_two_participants"
 DUPLICATE_IDENTITY = "duplicate_identity"
 UNREADABLE_IDENTITY = "unreadable_identity"
 DUPLICATE_STEM = "duplicate_stem"
+DUPLICATE_RECORDING_ID = "duplicate_recording_id"
 TASK_NOT_DESCRIBED = "task_not_described"
 STEM_DISAGREES = "stem_disagrees"
 NO_RECORDED_IDENTITY = "no_recorded_identity"
@@ -67,6 +71,7 @@ CHECK_LEVELS: dict[str, str] = {
     DUPLICATE_IDENTITY: REFUSE,
     UNREADABLE_IDENTITY: REFUSE,
     DUPLICATE_STEM: REPORT,
+    DUPLICATE_RECORDING_ID: REFUSE,
     TASK_NOT_DESCRIBED: REPORT,
     STEM_DISAGREES: REPORT,
     NO_RECORDED_IDENTITY: REPORT,
@@ -262,6 +267,7 @@ def check_identities(
     records: Iterable[IdentityRecord | tuple[Any, ...]],
     *,
     session_scope: str,
+    before_run: bool = False,
 ) -> IdentityReport:
     """Check a corpus's identities.
 
@@ -269,6 +275,9 @@ def check_identities(
         records: One :class:`IdentityRecord` (or a tuple of its fields) per recording.
         session_scope: :data:`SESSION_SCOPES`: whether the corpus's session identifiers are unique within their
             participant or across the corpus.
+        before_run: Whether the records are the corpus's recordings (``--recordings``), where a repeated id is two
+            files colliding (:data:`DUPLICATE_RECORDING_ID`, refused), rather than finished runs, where it is one
+            recording run more than once (:data:`DUPLICATE_STEM`, reported).
 
     Returns:
         The report: every finding, its counts, and whether any is refused.
@@ -287,7 +296,7 @@ def check_identities(
     findings: dict[str, list[IdentityFinding]] = {check: [] for check in CHECK_LEVELS}
 
     for record in rows:
-        by_stem[record.stem].append(record)
+        by_stem[record.identity.id_of(record.stem) if record.identity is not None else record.stem].append(record)
         if record.error is not None:
             findings[UNREADABLE_IDENTITY].append(
                 _finding(UNREADABLE_IDENTITY, record.stem, [record], error=record.error)
@@ -323,9 +332,10 @@ def check_identities(
         if len(chosen) > 1:
             label = key[1] if key[0] == "stem" else "/".join(str(part) for part in key)
             findings[DUPLICATE_IDENTITY].append(_finding(DUPLICATE_IDENTITY, str(label), chosen))
-    for stem, chosen in by_stem.items():
+    repeated = DUPLICATE_RECORDING_ID if before_run else DUPLICATE_STEM
+    for recording_id, chosen in by_stem.items():
         if len({record.location for record in chosen}) > 1:
-            findings[DUPLICATE_STEM].append(_finding(DUPLICATE_STEM, stem, chosen))
+            findings[repeated].append(_finding(repeated, recording_id, chosen))
     for task, chosen in sorted(by_task.items()):
         findings[TASK_NOT_DESCRIBED].append(_finding(TASK_NOT_DESCRIBED, task, chosen))
 

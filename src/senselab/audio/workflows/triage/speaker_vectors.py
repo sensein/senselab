@@ -71,6 +71,9 @@ EMBEDDING_DIM = 192
 TABLE_COLUMNS = ("participant", "session", "task", "stem", "run_dir")
 """The corpus-table columns this module reads (``recording_vectors.parquet``)."""
 
+TARGET_SPEAKER_COLUMN = "target_speaker"
+"""The corpus-table column naming a declared target speaker; a table from before plan step 9 has none."""
+
 _PROFILE_PATH = Path(__file__).parent / "data" / "speaker_vector_profile" / "2026-09-22.yaml"
 _PROFILE_VERSION = "1"
 
@@ -237,7 +240,8 @@ def table_recordings(table: Path, report: ScanReport) -> dict[str, list[dict[str
         report: Counted into: rows with no participant and rows with no run directory, both skipped.
 
     Returns:
-        By participant, its rows (:data:`TABLE_COLUMNS`), in (folder, stem) order.
+        By target speaker, its rows (:data:`TABLE_COLUMNS`), in (folder, stem) order: the declared target speaker
+        (:data:`TARGET_SPEAKER_COLUMN`, plan step 9a), else the participant.
 
     Raises:
         ValueError: If the table lacks a column of :data:`TABLE_COLUMNS`.
@@ -246,8 +250,9 @@ def table_recordings(table: Path, report: ScanReport) -> dict[str, list[dict[str
     absent = [name for name in TABLE_COLUMNS if name not in names]
     if absent:
         raise ValueError(f"{table} carries no {', '.join(absent)} column; rebuild the corpus table")
+    columns = [*TABLE_COLUMNS, *([TARGET_SPEAKER_COLUMN] if TARGET_SPEAKER_COLUMN in names else [])]
     latest: dict[tuple[str, str], dict[str, Any]] = {}
-    for row in pq.read_table(table, columns=list(TABLE_COLUMNS)).to_pylist():
+    for row in pq.read_table(table, columns=columns).to_pylist():
         if not row["run_dir"]:
             report.recordings_without_run_dir += 1
             continue
@@ -261,7 +266,7 @@ def table_recordings(table: Path, report: ScanReport) -> dict[str, list[dict[str
             latest[key] = row
     grouped: dict[str, list[dict[str, Any]]] = {}
     for _, row in sorted(latest.items()):
-        grouped.setdefault(str(row["participant"]), []).append(row)
+        grouped.setdefault(str(row.get(TARGET_SPEAKER_COLUMN) or row["participant"]), []).append(row)
     return grouped
 
 
