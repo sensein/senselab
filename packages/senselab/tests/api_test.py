@@ -41,6 +41,7 @@ from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.licenses import backend_license, packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.testing.workers import mit_lock_records
 
 import senselab
 
@@ -207,7 +208,7 @@ entries:
 def fake_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """`run_call` reads the toy catalogue, opens every env as this interpreter and stores under `tmp_path`."""
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path))
-    previous = use_packaged(Packaged(TOY_CATALOGUE, _this_interpreter))
+    previous = use_packaged(Packaged(TOY_CATALOGUE, _this_interpreter, lock_records=mit_lock_records))
     yield
     use_packaged(previous)
 

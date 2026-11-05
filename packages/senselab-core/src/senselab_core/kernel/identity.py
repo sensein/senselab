@@ -272,7 +272,7 @@ class ExecutionContext(Frozen):
     `protocol` is recorded but checked only at the worker handshake; `model_source` is how the model's
     weights were reached (`hf`, `url`, `local`, or None for a call without a model); `env_license` is the code
     license of the env, derived from its lock's license records (None when no records were handed to the runtime).
-    None of these, nor `host`, is fingerprinted.
+    None of these, nor `host`, is fingerprinted; whether `env_license` is recorded is.
     """
 
     env_lock: NonEmptyStr
@@ -287,10 +287,12 @@ class ExecutionContext(Frozen):
     env_license: License | None
 
     def fingerprint(self) -> str:
-        """Return `identity_digest("context@3", fields)` over every field but the four not fingerprinted."""
-        return identity_digest(
-            "context@3", self.model_dump(exclude={"host", "protocol", "model_source", "env_license"})
-        )
+        """Return `identity_digest("context@4", fields)`: every field but the four not fingerprinted, and `licensed`.
+
+        `licensed` is whether `env_license` is recorded.
+        """
+        fields = self.model_dump(exclude={"host", "protocol", "model_source", "env_license"})
+        return identity_digest("context@4", {**fields, "licensed": self.env_license is not None})
 
 
 class ReusePolicy(str, Enum):

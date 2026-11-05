@@ -28,6 +28,7 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.fetch import DataManifest
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
+from senselab_core.testing.workers import mit_lock_records
 
 ROOT = Path(__file__).resolve().parents[4]
 BENCHMARKS = ROOT / "benchmarks"
@@ -100,7 +101,7 @@ def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHan
 @pytest.fixture(autouse=True)
 def packaged() -> Iterator[None]:
     """`run_call` reads the toy registry (and `wer`) and opens every env as this interpreter."""
-    previous = use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, _registry()))
+    previous = use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, _registry(), mit_lock_records))
     yield
     use_packaged(previous)
 
@@ -269,7 +270,7 @@ def test_shipped_suite_resolves_to_pinned_manifests() -> None:
 @pytest.mark.logic
 def test_bench_cli_runs_toy_suite(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """`senselab bench run` over a suite of synthetic tones writes a result of resampling errors."""
-    use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, REGISTRY))
+    use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, REGISTRY, mit_lock_records))
     suite = tmp_path / "tones.yaml"
     suite.write_text(
         "format: benchmark-suite@1.0\nname: tones\nbenchmarks:\n"
@@ -303,7 +304,7 @@ def test_bench_cli_names_each_not_placeable_benchmark_on_stderr(
     """A skipped benchmark is one stderr line naming it and the reason; the exit code stays 0."""
     from senselab.text.tasks.pii_spans import transformers_backend  # noqa: F401, PLC0415 - declares the backend
 
-    use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, REGISTRY))
+    use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, REGISTRY, mit_lock_records))
     suite = tmp_path / "gpu.yaml"
     suite.write_text(
         "format: benchmark-suite@1.0\nname: gpu\nbenchmarks:\n"
@@ -408,7 +409,7 @@ def _gpu_only_registry() -> Registry:
 def test_cuda_only_backend_on_cpu_host_is_not_placeable_and_the_rest_runs(tmp_path: Path) -> None:
     """A benchmark whose backend declares no device the profile and host share is reported, never started."""
     _toy_manifests(tmp_path)
-    use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, _gpu_only_registry()))
+    use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, _gpu_only_registry(), mit_lock_records))
     fetched: list[str] = []
 
     def opener(url: str) -> io.BytesIO:

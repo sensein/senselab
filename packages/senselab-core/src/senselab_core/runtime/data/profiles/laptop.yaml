@@ -1,20 +1,32 @@
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, by profile and key.
+# The profile's format.
 format: execution-profile@2.0
+# The packaged profile's name.
 name: laptop
+# Per task, its stacks best first; empty lets each task's declared backend order decide.
 stack_preferences: {}
+# Device kinds best first; a node takes the first one its backend declares that a class offers.
 devices: [cuda, mps, cpu]
+# Per env kind, the directory env trees are built under.
 env_roots:
   isolated: ~/.cache/senselab/venvs
   server: ~/.cache/senselab/servers
+# Env build lease timing and the torch wheel index override (null: probed from the host).
 envs:
   lease_stale_after_s: 1200
   server_start_margin_s: 60
   torch_index:
+# Allowed hub organisations; null allows those of the catalogue entries.
 model_sources:
+# Cap on the in-process model cache; null for none.
 model_cache_budget_bytes:
+# How a transient fault is retried: attempts and the first, doubling, wait.
 retry:
   attempts: 3
   first_backoff_s: 1.0
+# online, or offline to forbid any fetch.
 network: online
+# The worker classes nodes are placed on, by name, each with its grant and caps.
 resource_classes:
   cpu:
     device: cpu
@@ -25,79 +37,25 @@ resource_classes:
   gpu:
     device: cuda
     max_workers: 1
+# What starts pool workers.
 substrate:
   kind: local
+# How pool workers claim, yield, poll, renew leases and roll index segments.
 pool:
   quantum_items: 100
   quantum_s: 300
   poll_s: 30
   lease_renew_fraction: 0.33
   segment_items: 10000
+# Retries per fault class before an item fails or its env is reported broken.
 faults:
   content_attempts: 2
   infrastructure_replacements: 6
   resource_replacements: 0
+# A worker's model-load and request timeouts in seconds; null for no bound.
 timeouts:
   load_s:
   request_s:
+# Seconds a service stays up after its last consumer lease lapsed.
 services:
   idle_exit_s: 600
-derivations:
-  stack_preferences: >-
-    Empty: no task has two stacks yet, so the backend order a task declares decides. A profile lists
-    a task's stacks best first once a second stack exists.
-  devices: >-
-    Fastest accelerator first, CPU last. A backend takes the first listed device that the host has and
-    the backend declares.
-  env_roots: >-
-    The per-user cache directories 1.x built its subprocess venvs under, one root per env kind.
-  envs: >-
-    lease_stale_after_s 1200: about twice the slowest measured cold build of the crisperwhisper env on
-    ORCD (362.6 s GPU node, 579.7 s and 590 s CPU node, n=2 per host; specs/20260907-shared-lock-heartbeat-inf/
-    stampede-timeout-and-identity-file.md), padded because two samples bound no population. A lease younger
-    than that is a build in progress and is waited on. No torch index override: the CUDA index is probed
-    from the host. A site whose probe is wrong sets torch_index. server_start_margin_s 60: a server start
-    lease is taken before the server is launched and its health deadline begins, so its stale bound is the
-    start-up timeout plus this margin. Not measured: the launch (two process spawns) is sub-second, and the
-    margin is padded for the storage clock's mtime granularity and for a loaded host.
-  model_sources: >-
-    Null: the hub organisations of the catalogue entries. A site that mirrors or restricts models lists
-    organisations here.
-  model_cache_budget_bytes: >-
-    Null: no cap. No measurement of a model-cache size exists to derive a cap from.
-  retry: >-
-    Three tries and a one second first wait, doubling: the 1.x schedule (1 s, 2 s, 4 s) of
-    SENSELAB_HF_MAX_RETRIES. Not measured: no failure-rate data for the Hub or a mirror exists in this
-    repository. A fault that has not cleared after three seconds of waiting surfaces to the caller
-    rather than stalling the run.
-  network: >-
-    Online: a laptop reaches the Hub and the data mirrors directly.
-  resource_classes: >-
-    One class per device the laptop may have, each the host's own CPUs and memory with no time limit and no
-    partition: a laptop runs its workers as local processes. max_workers 1: one worker per class, since a
-    second worker on one host competes for the same memory and device; the plan places a node on the first
-    class of the first listed device the host has and the backend declares. memory_cap_bytes null: no table
-    measures a model yet, and a laptop's free memory is not fixed, so no static cap is checked.
-  substrate: >-
-    local: a laptop starts its pool workers as processes on itself.
-  pool: >-
-    Not measured; each value is the starting point the scale ladder revises. quantum_items 100 and
-    quantum_s 300: a worker yields to an older queue after a hundred items or five minutes, whichever comes
-    first, so a model load is paid at most once per quantum of work. poll_s
-    30: the 1.x reproduce controller's poll interval; a worker whose queues stay empty for three polls exits.
-    lease_renew_fraction 0.33: the 1.x work pool's rule that a heartbeat is at most a third of the lease, so
-    two missed renewals still leave the lease live. segment_items 10000: an index segment rolls at the
-    largest scale point the ladder runs (10^4 items), so a plan of that size reads one segment.
-  faults: >-
-    content_attempts 2: the 1.x work pool's DEFAULT_MAX_ATTEMPTS, an item failing for its content twice goes
-    to dead/. infrastructure_replacements 6: the 1.x work pool's DEFAULT_MAX_INTERRUPTS, releases and reaps
-    allowed before an env is reported broken. resource_replacements 0: one per larger memory class the profile
-    lists, and a laptop lists none, so a resource fault fails at once.
-  timeouts: >-
-    Null, no bound: no measurement of the slowest model load or the slowest single request exists. The
-    scale ladder's resource tables give load_s and the per-input time from which a site sets both; a timeout
-    is a resource fault, so a bound set too low re-places work rather than failing it.
-  services: >-
-    idle_exit_s 600: ten minutes, twice the pool quantum, so a service outlives a consumer's yield to another
-    queue and the next quantum's requests find it up. Not measured: no measurement of how long consumers
-    leave a service idle exists.

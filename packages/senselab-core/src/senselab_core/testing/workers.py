@@ -5,15 +5,25 @@ from typing import Any
 
 from senselab_worker.faults import FaultClass
 
+from senselab_core.kernel.declare import BackendSpec
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
+from senselab_core.kernel.license import License
 from senselab_core.runtime.call import packaged, start_server_worker, stop_servers
 from senselab_core.runtime.hardware import probe_hardware
 from senselab_core.runtime.in_process import InProcessWorker
+from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.worker_client import WorkerClient
 
 TYPED = (FaultClass.CONTENT, FaultClass.RESOURCE)
 """The fault classes an edge input may fail with: never an infrastructure fault."""
+
+_MIT = license_record("MIT", source="test lock", verified={"date": "2026-11-04", "how": "manual"}, gated=False)
+
+
+def mit_lock_records(backend: BackendSpec) -> Mapping[str, License | None]:  # noqa: ARG001 - a LockRecords
+    """Return lock records giving every env one MIT-licensed package, for a test `Packaged` whose hits are served."""
+    return {"pkg": _MIT}
 
 
 def run_alone(

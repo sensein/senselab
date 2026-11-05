@@ -106,7 +106,7 @@ def served(fake_env: EnvHandle) -> Iterator[Registry]:
     for backend in REGISTRY.backends("pii_spans"):
         registry.add_backend(backend.model_copy(update={"devices": ("cpu",)}) if backend.name == "vllm" else backend)
     opened = [fake_env]
-    previous = use_packaged(Packaged(CATALOGUE, lambda _b, _p: opened[-1], registry))
+    previous = use_packaged(Packaged(CATALOGUE, lambda _b, _p: opened[-1], registry, LOCK_RECORDS))
     registry.opened = opened  # type: ignore[attr-defined]
     yield registry
     use_packaged(previous)

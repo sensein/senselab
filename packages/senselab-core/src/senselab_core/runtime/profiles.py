@@ -44,7 +44,6 @@ from senselab_core.runtime.network import Network
 from senselab_core.runtime.retry import RetryPolicy
 
 DEFAULT_PROFILE = "laptop"
-_DERIVATIONS = "derivations"
 
 
 class UnknownProfileKey(ValueError):
@@ -145,18 +144,11 @@ class ExecutionProfile(Formatted):
         Raises:
             ProfileFormatRetired: `override` declares a retired format.
             UnknownProfileKey: a key of `override` that the format does not define, naming the closest one.
-            ValueError: the packaged profile lacks a derivation for a key, or the merged mapping is invalid.
+            ValueError: the merged mapping is invalid.
         """
         packaged = _read(resources.files("senselab_core.runtime").joinpath("data", "profiles", f"{name}.yaml"))
-        derived = packaged.get(_DERIVATIONS, {})
-        missing = [
-            k for k in packaged if k not in (_DERIVATIONS, "format", "name") and not str(derived.get(k, "")).strip()
-        ]
-        if missing:
-            raise ValueError(f"profile {name!r} has no derivation for {missing}")
-        packaged.pop(_DERIVATIONS)
         extra = override if isinstance(override, Mapping) else _read(override) if override is not None else {}
-        merged = _merge(packaged, {k: v for k, v in extra.items() if k != _DERIVATIONS})
+        merged = _merge(packaged, extra)
         if check(EXECUTION_PROFILE_FORMAT, merged.get("format"), RETIRED_EXECUTION_PROFILE_FORMATS) is (
             FormatVerdict.RETIRED
         ):

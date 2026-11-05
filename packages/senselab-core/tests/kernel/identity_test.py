@@ -302,11 +302,12 @@ def test_key_schema_version_is_a_positive_integer(schema_version: object) -> Non
 
 @pytest.mark.logic
 def test_fingerprint_excludes_host_protocol_model_source_and_license() -> None:
-    """Host, protocol, model source and env license do not reach the fingerprint; every other context field does."""
+    """The fingerprint skips host, protocol, model source and the license record, but not whether one is recorded."""
     base = _ctx()
     mit = {"expression": "MIT", "commercial_use": "yes", "copyleft": "none", "attribution": True, "gated": False}
     licensed = _ctx(env_license={**mit, "source": "lock", "verified": {"date": "2026-11-02", "how": "pep639"}})
-    assert licensed.fingerprint() == base.fingerprint() and licensed != base
+    other = _ctx(env_license={**mit, "source": "another lock", "verified": {"date": "2026-11-03", "how": "manual"}})
+    assert licensed.fingerprint() == other.fingerprint() != base.fingerprint() and licensed != other
     assert _ctx(host="node2").fingerprint() == base.fingerprint()
     assert _ctx(protocol="worker-beef/wire-2").fingerprint() == base.fingerprint()
     for source in ("url", "local", None):
@@ -374,10 +375,11 @@ def test_every_policy_member_is_dispatched(policy: ReusePolicy) -> None:
 
 @pytest.mark.logic
 def test_fingerprint_is_the_context_tagged_digest() -> None:
-    """The fingerprint is `identity_digest("context@3", fields without host, protocol, model source, env license)`."""
+    """The fingerprint is `identity_digest("context@4", ...)` over all but the recorded-only fields, plus `licensed`."""
     c = _ctx()
     recorded_only = {"host", "protocol", "model_source", "env_license"}
-    assert c.fingerprint() == identity_digest("context@3", c.model_dump(exclude=recorded_only))
+    fields = {**c.model_dump(exclude=recorded_only), "licensed": c.env_license is not None}
+    assert c.fingerprint() == identity_digest("context@4", fields)
 
 
 @pytest.mark.logic

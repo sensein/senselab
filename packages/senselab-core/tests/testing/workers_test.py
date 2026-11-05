@@ -17,7 +17,7 @@ from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.vllm_server import VllmStartError
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
-from senselab_core.testing.workers import RealWorkers, run_alone
+from senselab_core.testing.workers import RealWorkers, mit_lock_records, run_alone
 from senselab_worker.fake import FAULT_KEY
 from senselab_worker.faults import FaultClass
 
@@ -77,7 +77,7 @@ def env_python(tmp_path: Path) -> Iterator[Path]:
             torch_index=None,
         )
 
-    previous = use_packaged(Packaged(CATALOGUE, opener, registry))
+    previous = use_packaged(Packaged(CATALOGUE, opener, registry, mit_lock_records))
     yield python
     use_packaged(previous)
 
@@ -119,7 +119,7 @@ def _opened_by(seen: list[BackendSpec], python: Path, backend: BackendSpec) -> N
         seen.append(b)
         return EnvHandle(str(python), platform.python_version(), "1" * 64, "2" * 64, None)
 
-    use_packaged(Packaged(CATALOGUE, opener, registry))
+    use_packaged(Packaged(CATALOGUE, opener, registry, mit_lock_records))
 
 
 def test_worker_sources_reach_the_opener_that_places_them(env_python: Path) -> None:

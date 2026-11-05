@@ -14,7 +14,7 @@ from senselab_core.kernel.declare import BackendParams, BackendSpec, Registry
 from senselab_core.kernel.graph import Node, NodeId, split
 from senselab_core.kernel.graph import order as graph_order
 from senselab_core.kernel.identity import ResolvedModel
-from senselab_core.kernel.license import License, LicenseSet
+from senselab_core.kernel.license import License, LicenseConflict, LicenseSet
 from senselab_core.kernel.placement import Cost
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
@@ -103,6 +103,9 @@ def node_licenses(
     """Return each node's license set: its env's and model's records, joined with every upstream node's.
 
     A subject is `env of backend <task>/<name>` or `model <ref>`; one without a record maps to None.
+
+    Raises:
+        LicenseConflict: a subject is recorded with two records; names the node.
     """
     upstream: dict[str, set[str]] = {n.id: set() for n in plan.graph.nodes}
     for edge in plan.graph.edges:
@@ -116,7 +119,10 @@ def node_licenses(
         model = plan.models[node_id]
         if model is not None:
             own[f"model {model.ref}"] = model.license
-        sets[node_id] = LicenseSet(records=own).union(*(sets[u] for u in sorted(upstream[node_id])))
+        try:
+            sets[node_id] = LicenseSet(records=own).union(*(sets[u] for u in sorted(upstream[node_id])))
+        except LicenseConflict as err:
+            raise LicenseConflict(err.subject, node_id) from err
     return sets
 
 
@@ -145,7 +151,8 @@ def check_caps(
     """Refuse a resource class whose models resident at once need more than its `memory_cap_bytes`.
 
     The models resident at once on a class are the distinct backend and model pairs of its nodes, each at its
-    measured peak; a node without a resource table is admitted (`plan_cost` lists it as unmeasured).
+    measured peak; a worker may hold several, so the sum is an upper bound. A node without a resource table is
+    admitted (`plan_cost` lists it as unmeasured).
 
     Raises:
         MemoryCapExceeded: a class's resident peaks sum past its cap.

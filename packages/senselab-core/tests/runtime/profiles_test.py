@@ -164,9 +164,17 @@ def test_retry_policy_read_from_profile(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("name", ["laptop", "orcd"])
-def test_packaged_profile_loads_with_a_derivation_per_key(name: str) -> None:
-    """Each packaged profile validates, and `load` refuses one whose key lacks a derivation."""
+def test_packaged_profile_comments_every_key_and_holds_no_derivations(name: str) -> None:
+    """Each packaged profile validates, carries a `#` comment above every top-level key and no `derivations` key."""
     assert ExecutionProfile.load(name).name == name
+    path = Path(__file__).parents[2] / "src/senselab_core/runtime/data/profiles" / f"{name}.yaml"
+    lines = path.read_text().splitlines()
+    keys = [(i, line.split(":")[0]) for i, line in enumerate(lines) if line[:1].isalpha()]
+    assert "derivations" not in {k for _, k in keys}
+    uncommented = [k for i, k in keys if i == 0 or not lines[i - 1].startswith("# ")]
+    assert not uncommented, f"keys without a comment line: {uncommented}"
+    with pytest.raises(UnknownProfileKey, match="derivations"):
+        ExecutionProfile.load(name, {"derivations": {"network": "prose"}})
 
 
 @pytest.mark.logic

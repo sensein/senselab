@@ -29,6 +29,7 @@ from senselab_core.runtime.call import (
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import build_manifest
 from senselab_core.runtime.explain import explain
+from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
 from senselab_core.runtime.placement import check_caps, check_licenses, node_licenses, place_nodes, plan_cost
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -230,6 +231,7 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
     dataset_profile: Mapping[str, Any] | None = None,
     execution: ExecutionProfile | None = None,
     bind: Mapping[str, str] | None = None,
+    hardware: HardwareInfo | None = None,
 ) -> Plan:
     """Return `target` over `dataset` resolved (`resolve`) and placed under `execution` on this host.
 
@@ -237,7 +239,7 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
     (`place_nodes`) with its placed backend's params validated, gets its license set (`node_licenses`), and the run
     config's license policy is checked on every record of it. The memory caps of each resource class are checked
     (`check_caps`), the envs not yet built are named and the cost is summed from the resource tables (`plan_cost`).
-    `None` means `RunConfig()` and the `laptop` profile.
+    `None` means `RunConfig()`, the `laptop` profile and this host's probed hardware (`host_hardware`).
 
     Raises:
         InvalidGraph, RecordBinding, ValueError, MissingProfileSlice, UnpinnedModel: as `resolve`.
@@ -245,6 +247,7 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
         BackendParamsMismatch: a node's backend params name an undeclared backend, or its placed backend rejects them.
         NoBackend, NoDevice: no backend or resource class runs a node; the error names the node.
         LicenseRefused: the run config's license policy refuses a record of a node's license set.
+        LicenseConflict: one subject reaches a node with two license records.
         MemoryCapExceeded: a resource class's resident models exceed its memory cap.
     """
     config = config if config is not None else RunConfig()
@@ -259,7 +262,7 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
         resolver=replace(PROCESS_RESOLVER, network=profile.network),
         admit=lambda model_id: profile.check_source(model_id, catalogue),
     )
-    placed = place_nodes(logical, profile, host_hardware(), registry, catalogue)
+    placed = place_nodes(logical, profile, hardware or host_hardware(), registry, catalogue)
     licenses = node_licenses(logical, placed, env_license)
     check_licenses(config.licenses, licenses)
     check_caps(logical, placed, profile, catalogue)

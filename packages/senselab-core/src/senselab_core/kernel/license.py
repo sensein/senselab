@@ -54,6 +54,17 @@ def require_license(record: License | None, subject: str) -> License:
     return record
 
 
+class LicenseConflict(ValueError):
+    """One subject recorded with two different license records; names the subject and, when known, the node."""
+
+    def __init__(self, subject: str, node: str | None = None) -> None:
+        """Name the subject and the node."""
+        where = "" if node is None else f"node {node!r}: "
+        super().__init__(f"{where}{subject} is recorded with two licenses")
+        self.subject = subject
+        self.node = node
+
+
 def _sorted_records(v: Mapping[str, License | None]) -> Mapping[str, License | None]:
     return FrozenMapping({subject: v[subject] for subject in sorted(v)})
 
@@ -73,13 +84,13 @@ class LicenseSet(Frozen):
         """Return the set holding every subject of this set and of `others`.
 
         Raises:
-            ValueError: a subject is recorded with two different records.
+            LicenseConflict: a subject is recorded with two different records.
         """
         joined: dict[str, License | None] = dict(self.records)
         for other in others:
             for subject, record in other.records.items():
                 if subject in joined and joined[subject] != record:
-                    raise ValueError(f"{subject} is recorded with two licenses")
+                    raise LicenseConflict(subject)
                 joined[subject] = record
         return LicenseSet(records=joined)
 

@@ -224,8 +224,9 @@ def _unbuilt(backend: BackendSpec, profile: ExecutionProfile) -> bool:  # noqa: 
 class Packaged:
     """What a declaring package hands `run_call`: catalogue, env opener, registry, lock records and env probe.
 
-    `lock_records` gives each backend's env-lock package license records, from which `env_license` derives;
-    `env_built` says whether a backend's env is built (by default none is).
+    `lock_records` gives each backend's env-lock package license records, from which `env_license` derives; without
+    them no stored result is served unless the run's license policy allows unlicensed hits. `env_built` says whether
+    a backend's env is built (by default none is).
     """
 
     catalogue: Catalogue
@@ -405,12 +406,7 @@ def run_call(
     bound = _bound(spec, call)
     env = packaged().open_env(backend, profile)
     expected = _expected(backend, env, model) if backend.env.kind == "server" else None
-    context = ExecutionContext(
-        **_context_fields(backend, env, expected, network_variables(profile.network)),
-        **_host_fields(hardware, placement, bound),
-        model_source=None if model is None else model.ref.source,
-        env_license=code_license,
-    )
+    context = _context(placement, env, expected, profile, hardware, bound, model, code_license)
     identities = {port: identity for port, (identity, _, _) in bound.items()}
     keyed = Call(spec, call.params, identities, model, profile_slices(spec, run.settings))
     key = build_key(keyed, placement, context)
@@ -436,16 +432,52 @@ def run_call(
         attributes["senselab:verifies"] = _verify(store, key, hit, context, outputs, run.thresholds)
     output_identity = store.put(key, outputs, context)
     if output_identity != store_output_identity(outputs):
-        committed = _committed(store, key, context, run)
-        if committed is not None:
-            store.record_reuse(key, context, committed, datetime.now(timezone.utc), attributes)
-            return _served(spec, committed, key, placement, anchors)
+        lost = _lost_race(spec, store, key, context, run, attributes, placement, anchors)
+        if lost is not None:
+            return lost
         output_identity = store_output_identity(outputs)
     store.provenance.add(
         *(kprov.entity(i, core_vocabulary()) for i in identities.values()),
         *_execution(key, context, profile, identities, output_identity, started, attributes),
     )
     return Result(decoded, output_identity, key, context, placement, None)
+
+
+def _context(  # noqa: PLR0913 - every input a context records
+    placement: Placement,
+    env: EnvHandle,
+    expected: Attestation | None,
+    profile: ExecutionProfile,
+    hardware: HardwareInfo,
+    bound: Mapping[str, tuple[InputIdentity, object, str | None]],
+    model: ResolvedModel | None,
+    code_license: License | None,
+) -> ExecutionContext:
+    """Return the context a call runs in: its env, attestation, network, host, decoder, model source and license."""
+    return ExecutionContext(
+        **_context_fields(placement.backend, env, expected, network_variables(profile.network)),
+        **_host_fields(hardware, placement, bound),
+        model_source=None if model is None else model.ref.source,
+        env_license=code_license,
+    )
+
+
+def _lost_race(  # noqa: PLR0913 - the call's store, key, context and run, and what serving needs
+    spec: TaskSpec,
+    store: ResultStore,
+    key: LogicalKey,
+    context: ExecutionContext,
+    run: RunConfig,
+    attributes: Mapping[str, object],
+    placement: Placement,
+    anchors: list[tuple[TimeAnchor, TimeAnchor]],
+) -> Result | None:
+    """Serve the entry another writer committed first, recording the reuse; None when its license refuses it."""
+    committed = _committed(store, key, context, run)
+    if committed is None:
+        return None
+    store.record_reuse(key, context, committed, datetime.now(timezone.utc), {**attributes, **_unlicensed(committed)})
+    return _served(spec, committed, key, placement, anchors)
 
 
 def _placed_params(call: TaskCall, backend: BackendSpec) -> BackendParams:
@@ -511,8 +543,12 @@ def _committed(store: ResultStore, key: LogicalKey, context: ExecutionContext, r
 
 def _reuse_attributes(run: RunConfig, hit: StoredResult) -> dict[str, object]:
     """Return what a reuse activity records: the verify settings and, for a hit with no env license, its allowance."""
-    unlicensed = {"senselab:unlicensedReuse": True} if hit.context.env_license is None else {}
-    return {**_verify_attributes(run), **unlicensed}
+    return {**_verify_attributes(run), **_unlicensed(hit)}
+
+
+def _unlicensed(hit: StoredResult) -> dict[str, object]:
+    """Return `senselab:unlicensedReuse` for a served result whose context records no env license, else nothing."""
+    return {"senselab:unlicensedReuse": True} if hit.context.env_license is None else {}
 
 
 def _bound(spec: TaskSpec, call: TaskCall) -> dict[str, tuple[InputIdentity, object, str | None]]:

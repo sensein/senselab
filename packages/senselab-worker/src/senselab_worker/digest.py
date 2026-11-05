@@ -29,7 +29,7 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
     {
         "logical-key@6",
         "output@3",
-        "context@3",
+        "context@4",
         "content-root@2",
         "audio@4",
         "audio-file@1",
