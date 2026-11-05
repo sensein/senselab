@@ -759,6 +759,22 @@ apart in the tables; a hint declaring two target speakers is refused; a replay a
   `extend_replay_decisions_test.py::test_a_marker_matches_only_the_corpus_readings_it_left`.
 - Found while building it: the first version applied a declared voice after SPEECH read its enrollment settings, so
   the tests raised a KeyError (`enrollment_model_id`); the declared voice is now applied first, before any evidence ran.
+- Review (2026-11-05, high effort, on 538143e01; each finding checked by a verifier): ten findings, eight confirmed,
+  one real but mostly older (7), one rejected (8). Fixed in 732231a18:
+  - 1: `--corpus-root` does not follow symbolic links (a git-annex corpus's id is the path under its root).
+  - 2: a replay drops a target speaker or declared id its hint no longer declares, and keeps an id read off the
+    corpus path; the identity records each id's source.
+  - 3: replay manifests carry `target_speaker` and `recording_id`, so COHORT groups by the declared target.
+  - 4: a review record's id is the one its run recorded.
+  - 5: a declared voice the probe cannot use leaves the enrollment given as the target, with a note.
+  - 6: the after-run identity check reads the table's `recording_id` and `target_speaker`.
+  - 7: `triage_audio.py` checks the identity before the run (exit 2).
+  - 9: a manifest row naming another target speaker than the run's is stale and refused.
+  - 10: the Free Speech review page explains the `recruited` kind.
+
+  Finding 8 (replay and cohort passes never settling) was rejected: they settle after one extra round, now tested.
+  B2AI takes the unchanged paths, so the evidence was not rerun. Suite: 6,645 passed, the same 12 failures under
+  `src/tests/text` and `src/tests/utils` as the base tree (job 27984791).
 
 ## Step 10 — values fitted from a pilot run (added 2026-11-03; after step 5)
 
