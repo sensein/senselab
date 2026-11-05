@@ -1,22 +1,37 @@
-"""The planner: a graph, or one task call, and the records it runs over resolved to a `LogicalPlan`.
+"""The planner: a graph, or one task call, and the records it runs over resolved to a `LogicalPlan`, then placed.
 
 `resolve` reads no execution profile and no hardware: it pins every model, cuts every declared profile slice and
-builds the input manifest, so the plan and its hash are the same on every host.
+builds the input manifest, so the plan and its hash are the same on every host. `plan` resolves and then places the
+logical plan under an execution profile on this host (`runtime.placement`), giving a `Plan`.
 """
 
 import re
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 from typing import Any
 
 from senselab_core.kernel.dataset import Dataset, InputManifest, ManifestRow
 from senselab_core.kernel.declare import Registry, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, GraphIssue, Node, validate
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
-from senselab_core.kernel.plan import LogicalPlan
-from senselab_core.runtime.call import ITEM_ID, RunConfig, TaskCall, bind_input, packaged, pin_model
+from senselab_core.kernel.placement import PlanPlacement
+from senselab_core.kernel.plan import LogicalPlan, plan_hash
+from senselab_core.runtime.call import (
+    ITEM_ID,
+    RunConfig,
+    TaskCall,
+    bind_input,
+    env_license,
+    host_hardware,
+    packaged,
+    pin_model,
+)
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import build_manifest
+from senselab_core.runtime.explain import explain
 from senselab_core.runtime.keys import profile_slices
+from senselab_core.runtime.placement import check_caps, check_licenses, node_licenses, place_nodes, plan_cost
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
 
 CALL_NODE = "call"
@@ -188,3 +203,78 @@ def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolu
         reuse=config.reuse,
     )
     return plan, manifest
+
+
+@dataclass(frozen=True)
+class Plan:
+    """A placed plan: the logical plan and its manifest, its placement, and its hash, the run id (`plan_hash`)."""
+
+    logical: LogicalPlan
+    manifest: InputManifest
+    placement: PlanPlacement
+    hash: str
+
+    def explain(self) -> str:
+        """Return, per node, the backend, stack, env, device, batch, resource class, partition, licenses and reason.
+
+        The first lines give the plan hash, the envs to build and the cost, naming what is unmeasured.
+        """
+        return explain(self.hash, self.logical, self.placement)
+
+
+def plan(  # noqa: PLR0913 - the target and records, then keyword-only run inputs
+    target: Graph | TaskCall,
+    dataset: Dataset | None = None,
+    *,
+    config: RunConfig | None = None,
+    dataset_profile: Mapping[str, Any] | None = None,
+    execution: ExecutionProfile | None = None,
+    bind: Mapping[str, str] | None = None,
+) -> Plan:
+    """Return `target` over `dataset` resolved (`resolve`) and placed under `execution` on this host.
+
+    Models are resolved under the profile's network policy and its source allowlist. Each node is placed
+    (`place_nodes`) with its placed backend's params validated, gets its license set (`node_licenses`), and the run
+    config's license policy is checked on every record of it. The memory caps of each resource class are checked
+    (`check_caps`), the envs not yet built are named and the cost is summed from the resource tables (`plan_cost`).
+    `None` means `RunConfig()` and the `laptop` profile.
+
+    Raises:
+        InvalidGraph, RecordBinding, ValueError, MissingProfileSlice, UnpinnedModel: as `resolve`.
+        UnlistedSource: a model's organisation is not an allowed source.
+        BackendParamsMismatch: a node's backend params name an undeclared backend, or its placed backend rejects them.
+        NoBackend, NoDevice: no backend or resource class runs a node; the error names the node.
+        LicenseRefused: the run config's license policy refuses a record of a node's license set.
+        MemoryCapExceeded: a resource class's resident models exceed its memory cap.
+    """
+    config = config if config is not None else RunConfig()
+    profile = execution if execution is not None else ExecutionProfile.load()
+    registry, catalogue = packaged().registry, packaged().catalogue
+    logical, manifest = resolve(
+        target,
+        dataset,
+        config=config,
+        dataset_profile=dataset_profile,
+        bind=bind,
+        resolver=replace(PROCESS_RESOLVER, network=profile.network),
+        admit=lambda model_id: profile.check_source(model_id, catalogue),
+    )
+    placed = place_nodes(logical, profile, host_hardware(), registry, catalogue)
+    licenses = node_licenses(logical, placed, env_license)
+    check_licenses(config.licenses, licenses)
+    check_caps(logical, placed, profile, catalogue)
+    builds = sorted(
+        {
+            p.env()
+            for p in placed.values()
+            if p.backend.env.kind != "host" and not packaged().env_built(p.backend, profile)
+        }
+    )
+    placement = PlanPlacement(
+        profile_digest=profile.canonical_digest(),
+        nodes={n: p.record() for n, p in placed.items()},
+        env_builds=tuple(builds),
+        licenses=licenses,
+        cost=plan_cost(logical, placed, catalogue),
+    )
+    return Plan(logical=logical, manifest=manifest, placement=placement, hash=plan_hash(logical))

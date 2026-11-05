@@ -275,11 +275,13 @@ class LicensePolicy:
     """A run's license policy: the SPDX ids it allows and those it refuses, matched ignoring case.
 
     `allow` None allows every id `refuse` does not name. A license is accepted when its expression is satisfied by
-    the allowed ids that are not refused (`allows`); a subject with no license record is refused.
+    the allowed ids that are not refused (`allows`); a subject with no license record is refused. A stored result
+    whose context records no env license is served only with `allow_unlicensed_hits`.
     """
 
     allow: frozenset[str] | None = None
     refuse: frozenset[str] = frozenset()
+    allow_unlicensed_hits: bool = False
 
     def refusal(self, subject: str, record: License | None) -> str | None:
         """Return why the policy refuses `record`, the license of `subject`, or None when it accepts it."""

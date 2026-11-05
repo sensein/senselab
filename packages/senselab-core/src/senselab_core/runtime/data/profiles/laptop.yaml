@@ -1,4 +1,4 @@
-format: execution-profile@1.0
+format: execution-profile@2.0
 name: laptop
 stack_preferences: {}
 devices: [cuda, mps, cpu]
@@ -15,6 +15,33 @@ retry:
   attempts: 3
   first_backoff_s: 1.0
 network: online
+resource_classes:
+  cpu:
+    device: cpu
+    max_workers: 1
+  mps:
+    device: mps
+    max_workers: 1
+  gpu:
+    device: cuda
+    max_workers: 1
+substrate:
+  kind: local
+pool:
+  quantum_items: 100
+  quantum_s: 300
+  poll_s: 30
+  lease_renew_fraction: 0.33
+  segment_items: 10000
+faults:
+  content_attempts: 2
+  infrastructure_replacements: 6
+  resource_replacements: 0
+timeouts:
+  load_s:
+  request_s:
+services:
+  idle_exit_s: 600
 derivations:
   stack_preferences: >-
     Empty: no task has two stacks yet, so the backend order a task declares decides. A profile lists
@@ -45,3 +72,32 @@ derivations:
     rather than stalling the run.
   network: >-
     Online: a laptop reaches the Hub and the data mirrors directly.
+  resource_classes: >-
+    One class per device the laptop may have, each the host's own CPUs and memory with no time limit and no
+    partition: a laptop runs its workers as local processes. max_workers 1: one worker per class, since a
+    second worker on one host competes for the same memory and device; the plan places a node on the first
+    class of the first listed device the host has and the backend declares. memory_cap_bytes null: no table
+    measures a model yet, and a laptop's free memory is not fixed, so no static cap is checked.
+  substrate: >-
+    local: a laptop starts its pool workers as processes on itself.
+  pool: >-
+    Not measured; each value is the starting point the scale ladder revises. quantum_items 100 and
+    quantum_s 300: a worker yields to an older queue after a hundred items or five minutes, whichever comes
+    first, so a model load is paid at most once per quantum of work. poll_s
+    30: the 1.x reproduce controller's poll interval; a worker whose queues stay empty for three polls exits.
+    lease_renew_fraction 0.33: the 1.x work pool's rule that a heartbeat is at most a third of the lease, so
+    two missed renewals still leave the lease live. segment_items 10000: an index segment rolls at the
+    largest scale point the ladder runs (10^4 items), so a plan of that size reads one segment.
+  faults: >-
+    content_attempts 2: the 1.x work pool's DEFAULT_MAX_ATTEMPTS, an item failing for its content twice goes
+    to dead/. infrastructure_replacements 6: the 1.x work pool's DEFAULT_MAX_INTERRUPTS, releases and reaps
+    allowed before an env is reported broken. resource_replacements 0: one per larger memory class the profile
+    lists, and a laptop lists none, so a resource fault fails at once.
+  timeouts: >-
+    Null, no bound: no measurement of the slowest model load or the slowest single request exists. The
+    scale ladder's resource tables give load_s and the per-input time from which a site sets both; a timeout
+    is a resource fault, so a bound set too low re-places work rather than failing it.
+  services: >-
+    idle_exit_s 600: ten minutes, twice the pool quantum, so a service outlives a consumer's yield to another
+    queue and the next quantum's requests find it up. Not measured: no measurement of how long consumers
+    leave a service idle exists.

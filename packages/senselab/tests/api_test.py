@@ -186,7 +186,7 @@ def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHan
 
 TOY_CATALOGUE = Catalogue.load(
     """
-format: catalogue@1.0
+format: catalogue@2.0
 entries:
 - id: toyorg/embedder
   revision: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb

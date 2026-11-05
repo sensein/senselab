@@ -12,6 +12,7 @@ from senselab_core.kernel.identity import (
     ProfileSliceIdentity,
     ResolvedModel,
 )
+from senselab_core.kernel.placement import NodePlacement
 from senselab_core.kernel.plan import slice_identity
 
 
@@ -73,11 +74,12 @@ def request_components(backend: BackendSpec) -> RequestComponents:
 
 @dataclass(frozen=True)
 class Placement:
-    """Where a call runs: the backend and its params, the device, and how batches and chunks are formed.
+    """Where a call runs: the backend and its params, the device, the resource class, and how batches are formed.
 
     `batch_formation` and `chunk_grid` describe the placement whether or not the backend declares them
-    output-affecting. `env_root` is the directory the backend's env is built under (None for a host env) and
-    `why` the sentence `explain` returns; neither reaches a key.
+    output-affecting. `env_root` is the directory the backend's env is built under (None for a host env),
+    `resource_class` the class of worker it runs on, `batch_size` the items per request, `partition` the scheduler
+    partition as the profile names it, and `why` the reason `explain` gives; none of these reaches a key.
     """
 
     backend: BackendSpec
@@ -87,14 +89,37 @@ class Placement:
     chunk_grid: str | None = None
     env_root: str | None = None
     why: str = ""
+    resource_class: str = "cpu"
+    batch_size: int = 1
+    partition: str | None = None
+
+    def env(self) -> str:
+        """Return the backend's env as `host` or `<kind>:<name>`."""
+        env = self.backend.env
+        return env.kind if env.name is None else f"{env.kind}:{env.name}"
+
+    def record(self) -> NodePlacement:
+        """Return this placement as the `NodePlacement` a plan's placement document holds."""
+        return NodePlacement(
+            backend=self.backend.name,
+            backend_version=self.backend.version,
+            backend_params=self.backend_params.model_dump(mode="json"),
+            stack=self.backend.stack,
+            env=self.env(),
+            device=self.device,
+            batch_size=self.batch_size,
+            resource_class=self.resource_class,
+            partition=self.partition,
+            env_root=self.env_root,
+            why=self.why,
+        )
 
     def explain(self) -> str:
-        """Return the backend, stack, env, device and the reason for the choice, as one line."""
-        env = self.backend.env
-        where = env.kind if env.name is None else f"{env.kind}:{env.name}"
+        """Return the backend, stack, env, device, batch, resource class, partition and the reason, as one line."""
         return (
-            f"{self.backend.task}: backend {self.backend.name!r} (stack {self.backend.stack!r}, env {where}, "
-            f"device {self.device}); {self.why}"
+            f"{self.backend.task}: backend {self.backend.name!r} (stack {self.backend.stack!r}, env {self.env()}, "
+            f"device {self.device}, batch {self.batch_size}, resource class {self.resource_class}, "
+            f"partition {self.partition or 'none'}); {self.why}"
         )
 
 
@@ -102,7 +127,8 @@ def build_key(call: Call, placement: Placement, context: ExecutionContext) -> Lo
     """Return the logical key of running `call` under `placement`; `context` never reaches it.
 
     The key holds the backend's name and version, its params, and the batch formation and chunk grid
-    the backend declares output-affecting; no other placement field.
+    the backend declares output-affecting; no other placement field: never the device, env root, reason, resource
+    class, batch size or partition.
 
     Raises:
         TypeError: if `context` is not an `ExecutionContext`.

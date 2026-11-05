@@ -1,6 +1,7 @@
 """`build_key`: the one key builder over a call, its placement and the execution context."""
 
 from dataclasses import replace
+from typing import Any
 
 import pytest
 from senselab_core.kernel.declare import BackendParams, BackendSpec, Env, TaskParams, TaskSpec
@@ -87,3 +88,23 @@ def test_declared_slices_reach_the_key_by_identity() -> None:
         profile_slices(reads, {"agg": {"name": "mean"}})
     with pytest.raises(MissingProfileSlice, match="'name'"):
         profile_slices(reads, {"agg": {}}, {"lexicon": []})
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("device", "cuda"),
+        ("env_root", "/elsewhere"),
+        ("why", "another reason"),
+        ("resource_class", "gpu:h100"),
+        ("batch_size", 16),
+        ("partition", "${GPU_PARTITION}"),
+    ],
+)
+def test_nonkey_placement_fields_never_in_key(field: str, value: Any) -> None:  # noqa: ANN401 - a field value
+    """Varying a placement field `build_key` does not read leaves the key, with and without output-affecting ones."""
+    for declared in ((), ("batch_formation", "chunk_grid")):
+        base = _placement(output_affecting=declared)
+        varied = replace(base, **{field: value})
+        assert build_key(CALL, varied, CONTEXT) == build_key(CALL, base, CONTEXT)

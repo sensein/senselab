@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 from senselab_core.kernel.license import License, MissingLicense
-from senselab_core.runtime.catalogue import Catalogue, UnknownModel
+from senselab_core.runtime.catalogue import Catalogue, CatalogueFormatRetired, UnknownModel
 from senselab_core.runtime.fake_backend import FAKE
 from senselab_core.runtime.licenses import (
     LicensePolicy,
@@ -38,7 +38,7 @@ def _entry(id: str = "org/m", revision: str = SHA, license: str = "{expression: 
 
 
 def _text(*entries: str) -> str:
-    return "format: catalogue@1.0\nentries:\n" + "".join(entries)
+    return "format: catalogue@2.0\nentries:\n" + "".join(entries)
 
 
 @pytest.mark.logic
@@ -136,13 +136,13 @@ def test_catalogue_lookup_defaults_and_sources(tmp_path: Path) -> None:
         _text(_entry(extra="default_for: [other]")),
         _text(_entry(license="{expression: GPL-3.0-only, copyleft: none}")),
         _text(_entry(extra="resources: {a100: {}}")),
-        "format: catalogue@2.0\nentries: []\n",
-        "format: catalogue@1.0\nentries:\n  - id: org/m\n",
+        "format: catalogue@3.0\nentries: []\n",
+        "format: catalogue@2.0\nentries:\n  - id: org/m\n",
     ],
     ids=["repeat", "two-defaults", "default-not-in-tasks", "contradicting-flag", "resources", "major", "incomplete"],
 )
 def test_catalogue_refuses_bad_files(text: str) -> None:
-    """Repeated ids, two defaults, a default outside the tasks, a contradicting flag, a resource table, a major."""
+    """Repeated ids, two defaults, a default outside the tasks, a contradicting flag, inline resources, a major."""
     with pytest.raises((ValidationError, ValueError)):
         Catalogue.load(text)
 
@@ -198,3 +198,43 @@ def test_backend_entry_is_the_first_model_else_the_task_default() -> None:
     assert Catalogue.load(_text(_entry())).backend_entry(backend) is None
     with pytest.raises(UnknownModel):
         Catalogue.load(_text(_entry())).backend_entry(backend.model_copy(update={"models": ("org/absent",)}))
+
+
+def _table(task: str = "t", backend: str = "b", model: str = f"id: org/m\n  revision: {SHA}") -> str:
+    return f"""format: resource-table@1.0
+task: {task}
+backend: {backend}
+rows:
+- {model}
+  download_bytes: 1000
+  classes:
+    cpu: {{load_s: 2.0, peak_memory_bytes: 4096, s_per_input_s: 0.5}}
+  measured: {{sha: {SHA}, jobs: ["1"]}}
+"""
+
+
+@pytest.mark.logic
+def test_resource_tables_join_entries_by_id_and_revision(tmp_path: Path) -> None:
+    """A table under `<task>/<backend>.yaml` is joined to the entry it measures; an unmeasured pair has no row."""
+    (tmp_path / "t").mkdir()
+    (tmp_path / "t" / "b.yaml").write_text(_table())
+    catalogue = Catalogue.load(_text(_entry()), resources=tmp_path)
+    row = catalogue.resources("t", "b", "org/m", SHA)
+    assert row is not None and row.classes["cpu"].peak_memory_bytes == 4096 and row.download_bytes == 1000
+    assert catalogue.resources("t", "b", "org/m", DIGEST) is None and catalogue.resources("t", "c", None, None) is None
+    assert Catalogue.load(_text(_entry()), resources=tmp_path / "absent").resource_tables == ()
+    (tmp_path / "t" / "b.yaml").write_text(_table(model=f"id: org/other\n  revision: {SHA}"))
+    with pytest.raises(ValidationError, match="no catalogue entry"):
+        Catalogue.load(_text(_entry()), resources=tmp_path)
+    (tmp_path / "t" / "b.yaml").write_text(_table(backend="c"))
+    with pytest.raises(ValueError, match="holds the table of t/c"):
+        Catalogue.load(_text(_entry()), resources=tmp_path)
+    with pytest.raises(ValueError, match="no resource tables"):
+        Catalogue.load(_text(_entry()) + "resource_tables: []\n")
+
+
+@pytest.mark.logic
+def test_catalogue1_refused_as_retired() -> None:
+    """A `catalogue@1.0` document is refused as retired, naming the rewrite, never read as corrupt."""
+    with pytest.raises(CatalogueFormatRetired, match="catalogue@2.0"):
+        Catalogue.load(_text(_entry(extra="resources: {}")).replace("catalogue@2.0", "catalogue@1.0"))

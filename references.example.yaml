@@ -10,3 +10,4 @@ ORCD_GROUP_SCRATCH:       # shared group scratch directory on the compute cluste
 ORCD_DATA:                # shared group data directory on the compute cluster
 ORCD_PERSONAL_SCRATCH:    # personal scratch directory on the compute cluster
 CPU_PARTITION:            # scheduler partition used for CPU jobs
+GPU_PARTITION:            # scheduler partition used for GPU jobs

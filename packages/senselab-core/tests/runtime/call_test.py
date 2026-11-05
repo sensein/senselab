@@ -167,7 +167,7 @@ TEST_REGISTRY.add_backend(_backend("overlap", "dsp", Env.host(), OVERLAP_TASK, "
 
 CATALOGUE = Catalogue.load(
     f"""
-format: catalogue@1.0
+format: catalogue@2.0
 entries:
 - id: {TOY}
   revision: {REVISION}
@@ -197,8 +197,9 @@ def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHan
 
 @pytest.fixture(autouse=True)
 def packaged() -> Iterator[None]:
-    """`run_call` reads the toy catalogue and registry and opens every env as this interpreter."""
-    previous = use_packaged(Packaged(CATALOGUE, _this_interpreter, TEST_REGISTRY))
+    """`run_call` reads the toy catalogue and registry, opens every env as this interpreter, each locked to MIT code."""
+    records = {"pkg": _record("MIT")}
+    previous = use_packaged(Packaged(CATALOGUE, _this_interpreter, TEST_REGISTRY, lambda _: records))
     yield
     use_packaged(previous)
 
@@ -728,3 +729,48 @@ def test_a_policy_never_serves_a_result_from_an_env_it_refuses(tmp_path: Path) -
         store.put(here.key, {"value": "from a GPL env"}, gpl)
         run = RunConfig(ReusePolicy.TOLERANT, licenses=policy)
         assert run_call(_call("v"), execution=_profile("alpha"), store=store, run=run).reused is reused
+
+
+def _stored_from(tmp_path: Path, name: str, env_license: License | None) -> tuple[Result, ResultStore]:
+    """A store holding the toy call's result computed in this context but with `env_license` recorded."""
+    here = run_call(_call("v"), execution=_profile("alpha"), store=ResultStore(tmp_path / "here"))
+    stored = ExecutionContext.model_validate({**here.context.model_dump(), "env_license": env_license})
+    store = ResultStore(tmp_path / name)
+    store.put(here.key, {"value": f"stored {name}"}, stored)
+    return here, store
+
+
+@pytest.mark.logic
+def test_policy_refuses_tainted_hit(tmp_path: Path) -> None:
+    """A stored result whose env is licensed as the policy refuses is recomputed, not served; others are served."""
+    _, store = _stored_from(tmp_path, "nc", _record("CC-BY-NC-4.0"))
+    assert run_call(_call("v"), execution=_profile("alpha"), store=store).reused is ReusePolicy.EXACT
+    _, store = _stored_from(tmp_path, "nc-refused", _record("CC-BY-NC-4.0"))
+    run = RunConfig(licenses=LicensePolicy(refuse=frozenset({"CC-BY-NC-4.0"})))
+    result = run_call(_call("v"), execution=_profile("alpha"), store=store, run=run)
+    assert result.reused is None and result.outputs != {"value": "stored nc-refused"}
+
+
+@pytest.mark.logic
+def test_hit_without_env_license_refused_by_default(tmp_path: Path) -> None:
+    """A stored result whose context records no env license is recomputed under no policy and under a plain one."""
+    for i, run in enumerate((RunConfig(), RunConfig(licenses=LicensePolicy()))):
+        _, store = _stored_from(tmp_path / str(i), "unlicensed", None)
+        result = run_call(_call("v"), execution=_profile("alpha"), store=store, run=run)
+        assert result.reused is None and result.context.env_license is not None
+        assert [a for a in _activities(store) if "senselab:Reuse" in a.types()] == []
+
+
+@pytest.mark.logic
+def test_policy_allowing_unlicensed_hit_is_recorded(tmp_path: Path) -> None:
+    """A policy allowing unlicensed hits serves one and its reuse records the allowance; a licensed hit records none."""
+    _, store = _stored_from(tmp_path, "unlicensed", None)
+    run = RunConfig(licenses=LicensePolicy(allow_unlicensed_hits=True))
+    served = run_call(_call("v"), execution=_profile("alpha"), store=store, run=run)
+    assert served.reused is ReusePolicy.EXACT and served.outputs == {"value": "stored unlicensed"}
+    [reuse] = [a.node() for a in _activities(store) if "senselab:Reuse" in a.types()]
+    assert prov.literal_value(reuse["senselab:unlicensedReuse"]) is True
+    _, licensed = _stored_from(tmp_path / "l", "licensed", _record("MIT"))
+    assert run_call(_call("v"), execution=_profile("alpha"), store=licensed, run=run).reused is ReusePolicy.EXACT
+    [reuse] = [a.node() for a in _activities(licensed) if "senselab:Reuse" in a.types()]
+    assert "senselab:unlicensedReuse" not in reuse

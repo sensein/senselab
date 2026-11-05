@@ -212,19 +212,27 @@ class OutputTypeMismatch(ValueError):
 
 EnvOpener = Callable[[BackendSpec, ExecutionProfile], EnvHandle]
 """Open the env a backend declares under a profile, building it if needed."""
+EnvProbe = Callable[[BackendSpec, ExecutionProfile], bool]
+"""Whether the env a backend declares is built under a profile, building nothing."""
+
+
+def _unbuilt(backend: BackendSpec, profile: ExecutionProfile) -> bool:  # noqa: ARG001 - an EnvProbe
+    return False
 
 
 @dataclass(frozen=True)
 class Packaged:
-    """What a declaring package hands `run_call`: catalogue, env opener, registry and lock records.
+    """What a declaring package hands `run_call`: catalogue, env opener, registry, lock records and env probe.
 
-    `lock_records` gives each backend's env-lock package license records, from which `env_license` derives.
+    `lock_records` gives each backend's env-lock package license records, from which `env_license` derives;
+    `env_built` says whether a backend's env is built (by default none is).
     """
 
     catalogue: Catalogue
     open_env: EnvOpener
     registry: Registry = REGISTRY
     lock_records: LockRecords | None = None
+    env_built: EnvProbe = _unbuilt
 
 
 def env_license(backend: BackendSpec) -> License | None:
@@ -365,9 +373,10 @@ def run_call(
     disagreement splits the store's class and is logged), then the outputs are stored and the execution activity names
     the evidence (`senselab:verifies`). The context and its agent record the env's code license (`env_license`). Only
     `run.licenses` refuses a license: a refused env or model license raises before anything opens, and a result from a
-    refused env is not served. Every activity a call writes records `senselab:verifyFraction`,
-    `senselab:verifySampling` and `senselab:verifyThresholds`. `None` means the packaged default: the `laptop`
-    profile, `RunConfig()` and the store under `cache_root()/results`.
+    refused env is not served. A result whose context records no env license is recomputed unless `run.licenses`
+    allows unlicensed hits; a reuse so allowed records `senselab:unlicensedReuse`. Every activity a call writes
+    records `senselab:verifyFraction`, `senselab:verifySampling` and `senselab:verifyThresholds`. `None` means the
+    packaged default: the `laptop` profile, `RunConfig()` and the store under `cache_root()/results`.
 
     Raises:
         UnknownTask, InconsistentInputs: the task is not declared; the inputs contradict a constraint it declares.
@@ -414,7 +423,7 @@ def run_call(
         and sampled(run.verify, key.digest(), hit.context, context)
     )
     if hit is not None and not check:
-        store.record_reuse(key, context, hit, looked, _verify_attributes(run))
+        store.record_reuse(key, context, hit, looked, _reuse_attributes(run, hit))
         return _served(spec, hit, key, placement, anchors)
     started = datetime.now(timezone.utc)
     server = _server(backend, env, model, profile, expected) if expected is not None else None
@@ -427,12 +436,11 @@ def run_call(
         attributes["senselab:verifies"] = _verify(store, key, hit, context, outputs, run.thresholds)
     output_identity = store.put(key, outputs, context)
     if output_identity != store_output_identity(outputs):
-        looked = datetime.now(timezone.utc)
-        stored = store.get(key, context, ReusePolicy.EXACT, record=False)
-        if stored is None:
-            raise RuntimeError(f"the entry another writer committed for {key.task!r} could not be read back")
-        store.record_reuse(key, context, stored, looked, attributes)
-        return _served(spec, stored, key, placement, anchors)
+        committed = _committed(store, key, context, run)
+        if committed is not None:
+            store.record_reuse(key, context, committed, datetime.now(timezone.utc), attributes)
+            return _served(spec, committed, key, placement, anchors)
+        output_identity = store_output_identity(outputs)
     store.provenance.add(
         *(kprov.entity(i, core_vocabulary()) for i in identities.values()),
         *_execution(key, context, profile, identities, output_identity, started, attributes),
@@ -473,11 +481,38 @@ def _code_license(run: RunConfig, backend: BackendSpec, model: ResolvedModel | N
 
 
 def _hit(store: ResultStore, key: LogicalKey, context: ExecutionContext, run: RunConfig) -> StoredResult | None:
-    """Return the stored result `run.reuse` admits for `key` in `context`, unless `run.licenses` refuses its env."""
+    """Return the stored result `run.reuse` admits for `key` in `context`, unless its env's license refuses it."""
     hit = store.get(key, context, run.reuse, record=False)
-    if hit is not None and run.licenses is not None and run.licenses.refusal("", hit.context.env_license):
-        return None
-    return hit
+    return hit if hit is not None and _license_admits(run, hit) else None
+
+
+def _license_admits(run: RunConfig, hit: StoredResult) -> bool:
+    """Whether `hit` may be served: its context records an env license `run.licenses` accepts.
+
+    A result whose context records no env license is refused unless `run.licenses` allows unlicensed hits.
+    """
+    recorded = hit.context.env_license
+    if recorded is None:
+        return run.licenses is not None and run.licenses.allow_unlicensed_hits
+    return run.licenses is None or run.licenses.refusal("", recorded) is None
+
+
+def _committed(store: ResultStore, key: LogicalKey, context: ExecutionContext, run: RunConfig) -> StoredResult | None:
+    """Return the entry another writer committed first for `key` in `context`, or None when its license refuses it.
+
+    Raises:
+        RuntimeError: the committed entry cannot be read back.
+    """
+    stored = store.get(key, context, ReusePolicy.EXACT, record=False)
+    if stored is None:
+        raise RuntimeError(f"the entry another writer committed for {key.task!r} could not be read back")
+    return stored if _license_admits(run, stored) else None
+
+
+def _reuse_attributes(run: RunConfig, hit: StoredResult) -> dict[str, object]:
+    """Return what a reuse activity records: the verify settings and, for a hit with no env license, its allowance."""
+    unlicensed = {"senselab:unlicensedReuse": True} if hit.context.env_license is None else {}
+    return {**_verify_attributes(run), **unlicensed}
 
 
 def _bound(spec: TaskSpec, call: TaskCall) -> dict[str, tuple[InputIdentity, object, str | None]]:
@@ -589,7 +624,7 @@ def _place(
     spec: TaskSpec, ref: ModelRef | None, profile: ExecutionProfile
 ) -> tuple[ResolvedModel | None, HardwareInfo, Placement]:
     model, entry = _resolve_model(spec, ref, profile, packaged().catalogue)
-    hardware = _hardware()
+    hardware = host_hardware()
     placement = resolve_execution(spec, entry, profile, hardware, packaged().registry, packaged().catalogue)
     return model, hardware, replace(placement, **request_components(placement.backend))
 
@@ -704,7 +739,8 @@ def bind_input(port: str, port_type: str, value: object) -> tuple[InputIdentity,
 
 
 @functools.cache
-def _hardware() -> HardwareInfo:
+def host_hardware() -> HardwareInfo:
+    """Return this host's hardware, probed once per process."""
     return probe_hardware()
 
 
@@ -893,7 +929,14 @@ def _new_worker(
     backend: BackendSpec, env: EnvHandle, init: dict[str, Any], model: ResolvedModel | None, profile: ExecutionProfile
 ) -> InProcessWorker | WorkerClient:
     if backend.env.kind != "host":
-        return WorkerClient(env.python, backend.worker, init=init, variables=network_variables(profile.network))
+        return WorkerClient(
+            env.python,
+            backend.worker,
+            init=init,
+            variables=network_variables(profile.network),
+            load_timeout=profile.timeouts.load_s,
+            request_timeout=profile.timeouts.request_s,
+        )
     budget = profile.model_cache_budget_bytes
     identity = model.identity if model is not None else value_digest("backend", {"name": backend.name})
     key: ModelKey = (backend.name, identity, init["device"], PRECISION)

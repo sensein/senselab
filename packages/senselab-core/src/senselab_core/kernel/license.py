@@ -1,13 +1,13 @@
-"""Machine-readable license records (P-23)."""
+"""Machine-readable license records and the license sets a derived value carries."""
 
 import datetime
 import re
 from collections.abc import Mapping
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, StrictBool
+from pydantic import AfterValidator, PlainSerializer, StrictBool
 
-from senselab_core.kernel._base import Frozen, NonEmptyStr, StrMap
+from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap, thawed
 
 VERIFIED_HOW: tuple[str, ...] = ("hf-card", "pep639", "license-field", "classifier", "manual")
 """The methods a license record may name in `verified["how"]`."""
@@ -52,3 +52,37 @@ def require_license(record: License | None, subject: str) -> License:
     if record is None:
         raise MissingLicense(f"{subject} has no license record; add one or relax the policy to on_missing: warn")
     return record
+
+
+def _sorted_records(v: Mapping[str, License | None]) -> Mapping[str, License | None]:
+    return FrozenMapping({subject: v[subject] for subject in sorted(v)})
+
+
+class LicenseSet(Frozen):
+    """The licenses a value derives from, by subject (`model <ref>`, `env of backend <name>`).
+
+    A subject maps to its license record, or to None when it has none. `union` joins sets; a subject recorded
+    with two different records is refused.
+    """
+
+    records: Annotated[
+        Mapping[NonEmptyStr, License | None], AfterValidator(_sorted_records), PlainSerializer(thawed)
+    ] = FrozenMapping({})
+
+    def union(self, *others: "LicenseSet") -> "LicenseSet":
+        """Return the set holding every subject of this set and of `others`.
+
+        Raises:
+            ValueError: a subject is recorded with two different records.
+        """
+        joined: dict[str, License | None] = dict(self.records)
+        for other in others:
+            for subject, record in other.records.items():
+                if subject in joined and joined[subject] != record:
+                    raise ValueError(f"{subject} is recorded with two licenses")
+                joined[subject] = record
+        return LicenseSet(records=joined)
+
+    def unrecorded(self) -> tuple[str, ...]:
+        """Return the subjects that have no license record."""
+        return tuple(s for s, r in self.records.items() if r is None)

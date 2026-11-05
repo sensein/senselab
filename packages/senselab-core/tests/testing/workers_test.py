@@ -39,7 +39,7 @@ BACKEND = BackendSpec(
 )
 CATALOGUE = Catalogue.load(
     f"""
-format: catalogue@1.0
+format: catalogue@2.0
 entries:
 - id: {TOY}
   revision: {REVISION}

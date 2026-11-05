@@ -13,6 +13,7 @@ from senselab_core.runtime.profiles import (
     ExecutionProfile,
     NoBackend,
     NoDevice,
+    ProfileFormatRetired,
     UnknownProfileKey,
     UnlistedSource,
     resolve_execution,
@@ -193,3 +194,42 @@ def test_retry_block_keeps_its_format_identity() -> None:
     retry = ExecutionProfile.load().retry
     assert retry.format == "retry-policy@1.0"
     assert retry.canonical_digest() == "dbab4021d94897ef0d33b44d2bae468b549f250744218db112bd209ea0850457"
+
+
+@pytest.mark.logic
+def test_profile1_refused(tmp_path: Path) -> None:
+    """An `execution-profile@1.0` override or file is refused as retired, naming the rewrite; 2.0 is what ships."""
+    with pytest.raises(ProfileFormatRetired, match="execution-profile@2.0"):
+        ExecutionProfile.load("laptop", {"format": "execution-profile@1.0"})
+    path = tmp_path / "site.yaml"
+    path.write_text("format: execution-profile@1.0\nnetwork: offline\n")
+    with pytest.raises(ProfileFormatRetired, match="retired format execution-profile@1.0"):
+        ExecutionProfile.load("orcd", path)
+    assert {ExecutionProfile.load(n).format for n in ("laptop", "orcd")} == {"execution-profile@2.0"}
+
+
+@pytest.mark.logic
+def test_resource_class_follows_device_order_and_host() -> None:
+    """The class is the first of the first listed device the backend declares and, judged here, the host has."""
+    registry = _registry(_backend("b1", "one", devices=("cpu", "cuda")))
+    on_gpu = resolve_execution(TASK, _entry(), _profile(), GPU, registry, CAT)
+    assert (on_gpu.resource_class, on_gpu.device, on_gpu.partition) == ("gpu", "cuda", None)
+    assert resolve_execution(TASK, _entry(), _profile(), NO_GPU, registry, CAT).resource_class == "cpu"
+    orcd = ExecutionProfile.load("orcd")
+    scheduled = resolve_execution(TASK, _entry(), orcd, None, registry, CAT)
+    assert (scheduled.resource_class, scheduled.partition) == ("gpu:h100", "${GPU_PARTITION}")
+    other_gpu = GPU.__class__(**{**GPU.__dict__, "gpus": (GpuInfo(name="A100", memory_bytes=1, driver="1"),)})
+    assert resolve_execution(TASK, _entry(), orcd, other_gpu, registry, CAT).resource_class == "gpu"
+    cpu_only = ExecutionProfile.load("orcd", {"devices": ["cpu"]})
+    assert resolve_execution(TASK, _entry(), cpu_only, other_gpu, registry, CAT).resource_class == "cpu"
+
+
+@pytest.mark.logic
+def test_resource_class_names_match_their_device() -> None:
+    """A class named for one device but declaring another is refused, as is a misspelt class key."""
+    with pytest.raises(ValueError, match="not named for their device"):
+        _profile(resource_classes={"gpu:h100": {"device": "cuda", "max_workers": 1}})
+    with pytest.raises(UnknownProfileKey, match="resource_classes.cpu.max_worker.*did you mean 'max_workers'"):
+        _profile(resource_classes={"cpu": {"max_worker": 2}})
+    with pytest.raises(UnknownProfileKey, match="'pool.quantum'"):
+        _profile(pool={"quantum": 2})

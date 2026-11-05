@@ -4,7 +4,7 @@
         {
             "@id": "senselab:",
             "@type": "owl:Ontology",
-            "owl:versionInfo": "senselab-vocab@1.3"
+            "owl:versionInfo": "senselab-vocab@1.4"
         },
         {
             "@id": "senselab:Run",
@@ -196,6 +196,17 @@
                 "@id": "xsd:string"
             },
             "rdfs:comment": "The canonical digest of the comparison thresholds of the run config the call ran under."
+        },
+        {
+            "@id": "senselab:unlicensedReuse",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "senselab:Reuse"
+            },
+            "rdfs:range": {
+                "@id": "xsd:boolean"
+            },
+            "rdfs:comment": "True when the stored result served records no env license and the run's license policy allowed it."
         },
         {
             "@id": "senselab:verifies",

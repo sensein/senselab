@@ -323,12 +323,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     if lock is None:
         raise EnvLockError(f"a {env.kind} env is built from its lock, none was given")
     parsed = EnvLock.read(lock)
-    index = None
-    if parsed.torch_pins:
-        host_cuda = host_cuda or detect_host_cuda()
-        index = pick_torch_index(host_cuda, override=settings.torch_index, max_cuda=parsed.max_cuda)
-    overlay = _overlay_digest(workers or {})
-    stem = f"{env.name}-{index.tag}-{overlay[:16]}" if index else f"{env.name}-{overlay[:16]}"
+    stem, index, host_cuda = _stem(env, parsed, settings, workers, host_cuda)
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     lock_sha = file_digest("file@1", parsed.path)
@@ -344,6 +339,40 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
             current = _build(root, stem, parsed, lock_sha, index, uv, host_cuda, workers or {})
             write_atomically(root / f"{stem}.json", current.model_dump_json().encode())
     return _handle(root, current, parsed.path)
+
+
+def _stem(
+    env: Env, parsed: EnvLock, settings: Envs, workers: Mapping[str, Path] | None, host_cuda: HostCuda | None
+) -> tuple[str, TorchIndex | None, HostCuda | None]:
+    """Return the build name of `env` from `parsed`, its torch index, and the host CUDA probed to pick it."""
+    index = None
+    if parsed.torch_pins:
+        host_cuda = host_cuda or detect_host_cuda()
+        index = pick_torch_index(host_cuda, override=settings.torch_index, max_cuda=parsed.max_cuda)
+    overlay = _overlay_digest(workers or {})
+    stem = f"{env.name}-{index.tag}-{overlay[:16]}" if index else f"{env.name}-{overlay[:16]}"
+    return stem, index, host_cuda
+
+
+def env_built(  # noqa: PLR0913 - the env, its lock, root and profile settings, and the injectable CUDA probe
+    env: Env,
+    lock: Path,
+    root: Path,
+    *,
+    settings: Envs,
+    workers: Mapping[str, Path] | None = None,
+    host_cuda: HostCuda | None = None,
+) -> bool:
+    """Return whether `ensure_env` would find `env` built from `lock` under `root`, building and creating nothing.
+
+    Raises:
+        EnvLockError: the lock's header lacks what a build needs.
+    """
+    parsed = EnvLock.read(lock)
+    stem, index, _ = _stem(env, parsed, settings, workers, host_cuda)
+    current = _read_record(Path(root), stem) if Path(root).is_dir() else None
+    wanted = (file_digest("file@1", parsed.path), index.url if index else None)
+    return current is not None and (current.lock_sha, current.torch_index) == wanted
 
 
 def _handle(root: Path, record: EnvRecord, lock: Path) -> EnvHandle:

@@ -1,4 +1,4 @@
-format: execution-profile@1.0
+format: execution-profile@2.0
 name: orcd
 stack_preferences: {}
 devices: [cuda, cpu]
@@ -15,6 +15,58 @@ retry:
   attempts: 3
   first_backoff_s: 1.0
 network: online
+resource_classes:
+  cpu:
+    device: cpu
+    cpus: 4
+    mem_bytes: 17179869184
+    time_s: 21600
+    partition: ${CPU_PARTITION}
+    max_workers: 32
+  cpu:large:
+    device: cpu
+    cpus: 8
+    mem_bytes: 68719476736
+    time_s: 21600
+    partition: ${CPU_PARTITION}
+    max_workers: 8
+  gpu:h100:
+    device: cuda
+    gpu_type: h100
+    cpus: 8
+    mem_bytes: 103079215104
+    time_s: 21600
+    partition: ${GPU_PARTITION}
+    gres: gpu:h100:1
+    max_workers: 4
+    memory_cap_bytes: 85899345920
+  gpu:
+    device: cuda
+    cpus: 8
+    mem_bytes: 103079215104
+    time_s: 21600
+    partition: ${GPU_PARTITION}
+    gres: gpu:1
+    max_workers: 4
+substrate:
+  kind: slurm
+  qos_cpu_cap:
+  exclude_nodes: []
+pool:
+  quantum_items: 100
+  quantum_s: 300
+  poll_s: 30
+  lease_renew_fraction: 0.33
+  segment_items: 10000
+faults:
+  content_attempts: 2
+  infrastructure_replacements: 6
+  resource_replacements: 1
+timeouts:
+  load_s:
+  request_s:
+services:
+  idle_exit_s: 600
 derivations:
   stack_preferences: >-
     Empty: no task has two stacks yet, so the backend order a task declares decides. A profile lists
@@ -49,3 +101,41 @@ derivations:
     rather than stalling the run.
   network: >-
     Online: compute nodes reach the Hub and the data mirrors.
+  resource_classes: >-
+    Partitions are site placeholders (${CPU_PARTITION}, ${GPU_PARTITION}), expanded where a worker is
+    submitted; the site's values stay local. cpu: 4 CPUs and 16 GiB for 6 h, the CPU grant of the 1.x
+    diarization jobs (specs/20260915-preprocess-diarization/design.md). cpu:large: 8 CPUs and 64 GiB, the host
+    grant of scripts/speaker_ceiling/evaluate.sbatch, as the larger memory class a resource fault moves to.
+    gpu:h100: one H100 with 8 CPUs and 96 GiB of host memory, the grant of specs/20260820-vlm-spectrogram/
+    job.sh; H100 because review arrays run there first. time_s 21600 on every class: not measured, the
+    diarization grant's limit. memory_cap_bytes 85899345920 on gpu:h100: the H100's 80 GiB of device memory,
+    which the models resident at once on one worker share. CPU classes have no static cap: their memory is
+    the grant, and an OOM there is a resource fault that moves the item to cpu:large. gpu: any GPU type, with
+    the gpu:h100 host grant and an untyped gres, listed after gpu:h100 so a plan never chooses it first; it
+    is the class a call running on a GPU node of another type takes. Its device memory depends on the type, so
+    it has no static cap. max_workers (32, 8, 4, 4): not measured; the substrate's QOS cap bounds them further.
+  substrate: >-
+    slurm: workers are Slurm jobs submitted per resource class. qos_cpu_cap null: the cap is the group's QOS
+    MaxTRESPU CPU limit, which is account-specific and set in a site override; exclude_nodes empty, a site
+    lists nodes it has found broken.
+  pool: >-
+    Not measured; each value is the starting point the scale ladder revises. quantum_items 100 and
+    quantum_s 300: a worker yields to an older queue after a hundred items or five minutes, whichever comes
+    first, so a model load is paid at most once per quantum of work. poll_s
+    30: the 1.x reproduce controller's poll interval; a worker whose queues stay empty for three polls exits.
+    lease_renew_fraction 0.33: the 1.x work pool's rule that a heartbeat is at most a third of the lease, so
+    two missed renewals still leave the lease live. segment_items 10000: an index segment rolls at the
+    largest scale point the ladder runs (10^4 items), so a plan of that size reads one segment.
+  faults: >-
+    content_attempts 2: the 1.x work pool's DEFAULT_MAX_ATTEMPTS, an item failing for its content twice goes
+    to dead/. infrastructure_replacements 6: the 1.x work pool's DEFAULT_MAX_INTERRUPTS, releases and reaps
+    allowed before an env is reported broken. resource_replacements 1: one per larger memory class the profile
+    lists (cpu:large), so a resource fault walks the classes once and then fails.
+  timeouts: >-
+    Null, no bound: no measurement of the slowest model load or the slowest single request exists. The
+    scale ladder's resource tables give load_s and the per-input time from which a site sets both; a timeout
+    is a resource fault, so a bound set too low re-places work rather than failing it.
+  services: >-
+    idle_exit_s 600: ten minutes, twice the pool quantum, so a service outlives a consumer's yield to another
+    queue and the next quantum's requests find it up. Not measured: no measurement of how long consumers
+    leave a service idle exists.

@@ -11,7 +11,7 @@ from senselab_core.kernel._base import Frozen
 
 FORMAT_PATTERN = r"^[a-z0-9_.-]+@\d+\.\d+$"
 
-SENSELAB_VOCAB_FORMAT = "senselab-vocab@1.3"
+SENSELAB_VOCAB_FORMAT = "senselab-vocab@1.4"
 """The format of a `senselab:` vocabulary document, carried as its ontology node's `owl:versionInfo` (ADR-010)."""
 PROV_ACTIVITY_TAG = "prov-activity@1"
 """The identity tag of a PROV activity: its compact JSON-LD node without `@id`."""
@@ -53,6 +53,22 @@ INPUT_MANIFEST_FORMAT = "input-manifest@1.0"
 
 LOGICAL_PLAN_FORMAT = "logical-plan@1.0"
 """The format of a logical plan: a graph with its pinned models, profile slices, manifest digest and reuse policy."""
+
+PLACEMENT_FORMAT = "placement@1.0"
+"""The format of a plan's placement: each node's backend, env, device, batch, resource class, licenses and cost."""
+
+EXECUTION_PROFILE_FORMAT = "execution-profile@2.0"
+"""The format of an execution profile, `runtime/data/profiles/<name>.yaml` or a user's override."""
+RETIRED_EXECUTION_PROFILE_FORMATS = frozenset({"execution-profile@1"})
+"""Execution-profile formats 2.x no longer reads, as `<name>@<major>`."""
+
+CATALOGUE_FORMAT = "catalogue@2.0"
+"""The format of a model catalogue; its resource tables are separate `resource-table@1.0` files."""
+RETIRED_CATALOGUE_FORMATS = frozenset({"catalogue@1"})
+"""Catalogue formats 2.x no longer reads, as `<name>@<major>`."""
+
+RESOURCE_TABLE_FORMAT = "resource-table@1.0"
+"""The format of one task and backend's measured resources, `data/resources/<task>/<backend>.yaml`."""
 
 FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]
 """`<name>@<major>.<minor>`."""

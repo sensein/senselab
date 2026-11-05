@@ -96,10 +96,12 @@ from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.compare import Difference, Threshold, Thresholds
 from senselab_core.runtime.envs import EnvRecord
 from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide
+from senselab_core.runtime.execution_settings import ResourceClass
 from senselab_core.runtime.fetch import DataFile, DataManifest
 from senselab_core.runtime.profiles import Envs, ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
+from senselab_core.testing.placement_samples import register_placement_samples, resource_table
 
 Case = Callable[[], None]
 Factory = Callable[[], Sequence[Frozen]]
@@ -882,12 +884,19 @@ def _register_runtime_samples() -> None:
     register_samples(
         CatalogueEntry,
         lambda: [_catalogue_entry(), _catalogue_entry("org/n", _SHA)],
-        invalid_updates=[{"revision": "main"}, {"resources": {"a": 1}}, {"default_for": ("other",)}],
+        invalid_updates=[{"revision": "main"}, {"tasks": ("",)}, {"default_for": ("other",)}],
     )
     register_samples(
         Catalogue,
-        lambda: [Catalogue(entries=(_catalogue_entry(),)), Catalogue(entries=(_catalogue_entry("org/n"),))],
-        invalid_updates=[{"entries": (_catalogue_entry(), _catalogue_entry())}, {"format": "catalogue@2.0"}],
+        lambda: [
+            Catalogue(entries=(_catalogue_entry(),)),
+            Catalogue(entries=(_catalogue_entry("org/n"),), resource_tables=(resource_table("t", "b", "org/n"),)),
+        ],
+        invalid_updates=[
+            {"entries": (_catalogue_entry(), _catalogue_entry())},
+            {"format": "catalogue@3.0"},
+            {"resource_tables": (resource_table("t", "b", "org/absent"),)},
+        ],
     )
     register_samples(
         StorePolicy,
@@ -937,7 +946,12 @@ def _register_runtime_samples() -> None:
     register_samples(
         ExecutionProfile,
         lambda: [ExecutionProfile.load("laptop"), ExecutionProfile.load("orcd")],
-        invalid_updates=[{"network": "maybe"}, {"devices": ("tpu",)}, {"format": "execution-profile@2.0"}],
+        invalid_updates=[
+            {"network": "maybe"},
+            {"devices": ("tpu",)},
+            {"format": "execution-profile@3.0"},
+            {"resource_classes": {"gpu:h100": ResourceClass(device="cpu", max_workers=1)}},
+        ],
     )
     register_samples(
         RetryPolicy,
@@ -1119,3 +1133,4 @@ _register_graph_samples()
 _register_dataset_samples()
 _register_plan_samples()
 _register_runtime_samples()
+register_placement_samples(register_samples, _license())

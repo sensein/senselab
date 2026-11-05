@@ -1,7 +1,7 @@
-format: catalogue@1.0
+format: catalogue@2.0
 # Every Phase 2 model, pinned by the commit its hub metadata query returned on 2026-11-01 (no weights read).
 # `license` is the hub card's license field; flags are derived from the expression. `default_for` names the task
-# the model is the default of. Resource tables stay empty until the scale ladder.
+# the model is the default of. Measured resources are resource-table@1.0 files under data/resources/.
 entries:
 - id: openai/whisper-large-v3-turbo
   revision: 41f01f3fe87f28c78e2fbf8b568835947dd65ed9
@@ -14,7 +14,6 @@ entries:
     source: openai/whisper-large-v3-turbo README.md at 41f01f3fe87f28c78e2fbf8b568835947dd65ed9
     verified: {date: 2026-11-01, how: hf-card}
     gated: false
-  resources: {}
 - id: nyralabs/CrisperWhisper2.0_turbo
   revision: de0369c8a68025b7f6e86387b6eb5a3b369787c8
   tasks: [speech_to_text]
@@ -26,7 +25,6 @@ entries:
     source: nyralabs/CrisperWhisper2.0_turbo README.md at de0369c8a68025b7f6e86387b6eb5a3b369787c8 (license_name nyra-health-non-commercial-research)
     verified: {date: 2026-11-01, how: hf-card}
     gated: false
-  resources: {}
 - id: pyannote/speaker-diarization-community-1
   revision: 3533c8cf8e369892e6b79ff1bf80f7b0286a54ee
   tasks: [diarize]
@@ -38,7 +36,6 @@ entries:
     source: pyannote/speaker-diarization-community-1 README.md at 3533c8cf8e369892e6b79ff1bf80f7b0286a54ee
     verified: {date: 2026-11-01, how: hf-card}
     gated: true
-  resources: {}
 - id: speechbrain/spkrec-ecapa-voxceleb
   revision: 0f99f2d0ebe89ac095bcc5903c4dd8f72b367286
   tasks: [speaker_embeddings]
@@ -50,7 +47,6 @@ entries:
     source: speechbrain/spkrec-ecapa-voxceleb README.md at 0f99f2d0ebe89ac095bcc5903c4dd8f72b367286
     verified: {date: 2026-11-01, how: hf-card}
     gated: false
-  resources: {}
 - id: google/gemma-4-31B-it-qat-w4a16-ct
   revision: 52f3f65bc7a02d555763bc923bd1d9094898219d
   tasks: [pii_spans]
@@ -62,4 +58,3 @@ entries:
     source: google/gemma-4-31B-it-qat-w4a16-ct README.md at 52f3f65bc7a02d555763bc923bd1d9094898219d
     verified: {date: 2026-11-01, how: hf-card}
     gated: false
-  resources: {}

@@ -1,5 +1,6 @@
 """`resolve`: a graph or one call over records to a logical plan, with no execution input (fake stack)."""
 
+import dataclasses
 import inspect
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -11,15 +12,22 @@ from pydantic import ValidationError
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Graph
 from senselab_core.kernel.identity import ReusePolicy
+from senselab_core.kernel.license import License
 from senselab_core.kernel.plan import plan_hash, slice_identity
+from senselab_core.runtime import planner
 from senselab_core.runtime.call import Packaged, RunConfig, TaskCall, use_packaged
+from senselab_core.runtime.call import packaged as packaged_now
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.keys import MissingProfileSlice
-from senselab_core.runtime.planner import CALL_NODE, InvalidGraph, RecordBinding, resolve
-from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.licenses import LicensePolicy, LicenseRefused, license_record
+from senselab_core.runtime.placement import BackendParamsMismatch, MemoryCapExceeded, place_nodes, plan_cost
+from senselab_core.runtime.planner import CALL_NODE, InvalidGraph, RecordBinding, plan, resolve
+from senselab_core.runtime.profiles import ExecutionProfile, NoDevice
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
+from senselab_core.testing.placement_samples import resource_table
 
 TOY = "toyorg/toy"
 PIN = "a" * 40
@@ -49,14 +57,14 @@ READS = SCORE.model_copy(
 )
 
 
-def _backend(name: str, task: TaskSpec) -> BackendSpec:
+def _backend(name: str, task: TaskSpec, devices: tuple[str, ...] = ("cpu",), env: Env | None = None) -> BackendSpec:
     return BackendSpec(
         task=task.name,
         name=name,
         version="1",
         stack=name,
-        env=Env.host(),
-        devices=("cpu",),
+        env=env or Env.host(),
+        devices=devices,
         batch_invariant=True,
         worker=fake.WORKER_MODULE,
         load_stub={},
@@ -67,16 +75,23 @@ PAIR = SCORE.model_copy(
     update={"name": "planner_test.pair", "inputs": {"a": "json", "b": "json"}, "outputs": {"pair": "json"}}
 )
 
+TAIL = SCORE.model_copy(update={"name": "planner_test.tail", "outputs": {"tail": "json"}})
+GPU_ONLY = SCORE.model_copy(update={"name": "planner_test.gpu", "outputs": {"on_gpu": "json"}})
+ISOLATED = SCORE.model_copy(update={"name": "planner_test.isolated", "outputs": {"boxed": "json"}})
+
 REGISTRY = Registry()
-for _task in (SCORE, READS, PAIR):
+for _task in (SCORE, READS, PAIR, TAIL, GPU_ONLY, ISOLATED):
     REGISTRY.add_task(_task)
 REGISTRY.add_backend(_backend("alpha", SCORE))
 REGISTRY.add_backend(_backend("beta", SCORE))
 REGISTRY.add_backend(_backend("alpha", READS))
+REGISTRY.add_backend(_backend("gamma", TAIL))
+REGISTRY.add_backend(_backend("cuda-only", GPU_ONLY, devices=("cuda",)))
+REGISTRY.add_backend(_backend("boxed", ISOLATED, env=Env.isolated("boxed")))
 
 CATALOGUE = Catalogue.load(
     f"""
-format: catalogue@1.0
+format: catalogue@2.0
 entries:
 - id: {TOY}
   revision: {PIN}
@@ -335,3 +350,190 @@ def test_reuse_policy_and_bind_reach_the_plan() -> None:
     rows = from_records([{"id": "r", "inputs": {"utterance": "x"}}])
     plan, _ = resolve(_call(), rows, config=RunConfig(reuse=ReusePolicy.EXACT), bind={"text": "utterance"})
     assert plan.reuse == ReusePolicy.EXACT.value and dict(plan.bind) == {"text": "utterance"}
+
+
+NO_GPU = HardwareInfo(cpu_count=2, memory_bytes=2**33, gpus=(), apple_silicon=False, platform="linux-x86_64")
+GPU = HardwareInfo(
+    cpu_count=2,
+    memory_bytes=2**33,
+    gpus=(GpuInfo(name="NVIDIA H100 80GB HBM3", memory_bytes=2**36, driver="1"),),
+    apple_silicon=False,
+    platform="linux-x86_64",
+)
+
+
+@pytest.fixture
+def on(monkeypatch: pytest.MonkeyPatch) -> Callable[[HardwareInfo], None]:
+    """Set the hardware `plan` probes on this host."""
+    return lambda hardware: monkeypatch.setattr(planner, "host_hardware", lambda: hardware)
+
+
+def _license(expression: str) -> License:
+    return license_record(expression, source="lock", verified={"date": "2026-11-04", "how": "pep639"}, gated=False)
+
+
+def _use(**fields: Any) -> None:  # noqa: ANN401 - Packaged fields
+    """Replace fields of the packaged state for one test; the autouse fixture restores it."""
+    use_packaged(dataclasses.replace(packaged_now(), **fields))
+
+
+def _chain() -> Graph:
+    """`a` scores each record and `b` (task `tail`, no model) scores `a`'s value."""
+    return Graph.model_validate(
+        {
+            "inputs": {"text": "list[json]"},
+            "nodes": [
+                {"id": "a", "task": SCORE.name, "task_version": "1"},
+                {"id": "b", "task": TAIL.name, "task_version": "1"},
+            ],
+            "edges": [
+                {"source": "input.text", "target": "a.text", "kind": "map"},
+                {"source": "a.value", "target": "b.text"},
+            ],
+            "outputs": {"tail": "b.tail"},
+        }
+    )
+
+
+def _tables(*tables: Any) -> None:  # noqa: ANN401 - resource tables
+    _use(catalogue=Catalogue(entries=CATALOGUE.entries, resource_tables=tables))
+
+
+ORCD = {"orcd": ExecutionProfile.load("orcd"), "laptop": ExecutionProfile.load("laptop")}
+
+
+@pytest.mark.logic
+def test_plan_hash_ignores_execution_fields(on: Callable[[HardwareInfo], None]) -> None:
+    """Under the laptop and orcd profiles, on a CPU host and a GPU host, one plan hash: the logical plan's."""
+    logical, _ = resolve(_call(), _records("x"), config=RunConfig())
+    seen = set()
+    for hardware in (NO_GPU, GPU):
+        on(hardware)
+        for profile in ORCD.values():
+            placed = plan(_call(), _records("x"), execution=profile)
+            seen.add((placed.hash, placed.placement.profile_digest))
+            assert placed.hash == plan_hash(placed.logical) == plan_hash(logical)
+    assert len({h for h, _ in seen}) == 1 and len({d for _, d in seen}) == 2
+
+
+@pytest.mark.logic
+def test_gpu_only_node_without_gpu_class_fails_naming_node(on: Callable[[HardwareInfo], None]) -> None:
+    """A CUDA-only node fails planning, naming the node, where no GPU class runs it; the cluster's H100 class does."""
+    on(NO_GPU)
+    with pytest.raises(NoDevice, match="node 'call'"):
+        plan(_call(GPU_ONLY), _records("x"))
+    without = ExecutionProfile.load("orcd", {"devices": ["cpu"]})
+    with pytest.raises(NoDevice, match="node 'call'.*resource classes"):
+        plan(_call(GPU_ONLY), _records("x"), execution=without)
+    placed = plan(_call(GPU_ONLY), _records("x"), execution=ORCD["orcd"]).placement.nodes[CALL_NODE]
+    assert (placed.device, placed.resource_class, placed.partition) == ("cuda", "gpu:h100", "${GPU_PARTITION}")
+    on(GPU)
+    assert plan(_call(GPU_ONLY), _records("x")).placement.nodes[CALL_NODE].resource_class == "gpu"
+
+
+@pytest.mark.logic
+def test_explain_lists_every_placement_field(on: Callable[[HardwareInfo], None]) -> None:
+    """`explain` names the plan hash, env builds and cost, and per node every placement field and its licenses."""
+    on(NO_GPU)
+    placed = plan(_call(backend_params={"beta": {}}), _records("x"))
+    text = placed.explain()
+    for field in (placed.hash, "envs to build: none", "cost: wall unmeasured", "unmeasured: call"):
+        assert field in text, field
+    node = text.splitlines()[-1]
+    for field in (
+        "node call",
+        "backend 'alpha' 1",
+        "stack 'alpha'",
+        "env host",
+        "device cpu",
+        "batch 1",
+        "resource class cpu",
+        "partition none",
+        f"model {TOY}@{PIN} MIT",
+        "env of backend planner_test.score/alpha no record",
+        "cost unmeasured",
+        "first declared",
+    ):
+        assert field in node, field
+
+
+@pytest.mark.logic
+def test_env_builds_announced(on: Callable[[HardwareInfo], None]) -> None:
+    """An isolated env not yet built is announced, and a built one is not; a host env never is."""
+    on(NO_GPU)
+    _use(env_built=lambda backend, profile: False)
+    assert plan(_call(ISOLATED), _records("x")).placement.env_builds == ("isolated:boxed",)
+    assert plan(_call(), _records("x")).placement.env_builds == ()
+    _use(env_built=lambda backend, profile: True)
+    assert plan(_call(ISOLATED), _records("x")).placement.env_builds == ()
+
+
+@pytest.mark.logic
+def test_unmeasured_cost_is_none_and_named(on: Callable[[HardwareInfo], None]) -> None:
+    """A node or model without a table makes each figure None and is named; measured nodes sum, never estimated."""
+    on(NO_GPU)
+    cost = plan(_chain(), _records("x")).placement.cost
+    assert (cost.wall_s, cost.gpu_hours, cost.download_bytes) == (None, None, None)
+    assert cost.unmeasured == ("a", "b", f"{TOY}@{PIN}")
+    _tables(resource_table(SCORE.name, "alpha", TOY, PIN))
+    cost = plan(_chain(), _records("x")).placement.cost
+    assert cost.unmeasured == ("b",) and cost.download_bytes is None and cost.wall_s is None
+    _tables(resource_table(SCORE.name, "alpha", TOY, PIN), resource_table(TAIL.name, "gamma", None))
+    placed = plan(_chain(), _records("x"))
+    assert placed.placement.cost.unmeasured == () and placed.placement.cost.download_bytes == 2000
+    assert placed.placement.cost.wall_s is None
+    catalogue = packaged_now().catalogue
+    nodes = place_nodes(placed.logical, ORCD["laptop"], NO_GPU, REGISTRY, catalogue)
+    measured = plan_cost(placed.logical, nodes, catalogue, 10.0)
+    assert measured.wall_s == pytest.approx(2 * (2.5 + 0.1 * 10)) and measured.gpu_hours == 0.0
+
+
+@pytest.mark.logic
+def test_taint_unions_upstream_licenses(on: Callable[[HardwareInfo], None]) -> None:
+    """A node's license set holds its own env and model and every upstream node's; a policy refuses the taint."""
+    on(NO_GPU)
+    by_backend = {"alpha": _license("CC-BY-NC-4.0"), "gamma": _license("MIT")}
+    _use(lock_records=lambda backend: {"pkg": by_backend[backend.name]})
+    sets = plan(_chain(), _records("x")).placement.licenses
+    own_a = {f"env of backend {SCORE.name}/alpha": "CC-BY-NC-4.0", f"model {TOY}@{PIN}": "MIT"}
+    assert {k: v.expression for k, v in sets["a"].records.items() if v} == own_a
+    assert {k: v.expression for k, v in sets["b"].records.items() if v} == {
+        **own_a,
+        f"env of backend {TAIL.name}/gamma": "MIT",
+    }
+    permissive = RunConfig(licenses=LicensePolicy(refuse=frozenset({"CC-BY-NC-4.0"})))
+    with pytest.raises(LicenseRefused, match="node 'a'.*CC-BY-NC-4.0"):
+        plan(_chain(), _records("x"), config=permissive)
+    plan(_chain(), _records("x"), config=RunConfig(licenses=LicensePolicy(allow=frozenset({"MIT", "CC-BY-NC-4.0"}))))
+
+
+@pytest.mark.logic
+def test_caps_refuse_resident_models_over_cap(on: Callable[[HardwareInfo], None]) -> None:
+    """The models resident at once on a class must fit its cap; an unmeasured node is admitted."""
+    on(NO_GPU)
+    capped = ExecutionProfile.load("laptop", {"resource_classes": {"cpu": {"memory_cap_bytes": 6000}}})
+    plan(_chain(), _records("x"), execution=capped)
+    _tables(resource_table(SCORE.name, "alpha", TOY, PIN), resource_table(TAIL.name, "gamma", None))
+    with pytest.raises(MemoryCapExceeded, match="'cpu'.*6000.*8192") as raised:
+        plan(_chain(), _records("x"), execution=capped)
+    assert raised.value.nodes == ["a", "b"]
+    plan(_call(), _records("x"), execution=capped)
+    plan(
+        _chain(),
+        _records("x"),
+        execution=ExecutionProfile.load("laptop", {"resource_classes": {"cpu": {"memory_cap_bytes": 8192}}}),
+    )
+
+
+@pytest.mark.logic
+def test_backend_params_mismatch_at_plan_time(on: Callable[[HardwareInfo], None]) -> None:
+    """The placed backend's entry is validated at plan time; another backend's is not; an undeclared name is refused."""
+    on(NO_GPU)
+    with pytest.raises(BackendParamsMismatch, match="node 'call'.*'alpha'.*beam") as raised:
+        plan(_call(backend_params={"alpha": {"beam": 2}}), _records("x"))
+    assert (raised.value.node, raised.value.backend) == (CALL_NODE, "alpha")
+    placed = plan(_call(backend_params={"beta": {"beam": 2}}), _records("x"))
+    assert dict(placed.placement.nodes[CALL_NODE].backend_params) == {}
+    with pytest.raises(BackendParamsMismatch, match="declares no backend 'delta'") as raised:
+        plan(_call(backend_params={"delta": {}}), _records("x"))
+    assert raised.value.backend == "delta"
