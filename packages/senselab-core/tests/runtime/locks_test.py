@@ -759,3 +759,37 @@ def test_a_judge_listing_during_a_claim_ages_the_lease_fresh(tmp_path: Path, mon
         assert claimant.broke == [_lease_dir(resource)] and claimant.owns()
     assert outcome == ["refused"] and judge.broke == []
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("where", [("lstat",), ("listdir",), ("lstat", "listdir")])
+def test_a_lease_judged_while_another_node_removes_it_reads_estale_as_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: tuple[str, ...]
+) -> None:
+    """`ESTALE` on a `gone-` entry's `lstat` or the lease's `listdir` while judging reads as gone; the taker holds."""
+    lease_dir = _lease_dir(tmp_path / "thing")
+    claimed = lease_dir / f"gone-{uuid.uuid4().hex}"
+    claimed.mkdir(parents=True)
+    for path in (claimed, lease_dir):
+        os.utime(path, (OLD, OLD))
+    real_lstat, real_listdir, raised = os.lstat, os.listdir, []
+
+    def stale(call: str, path: Any) -> None:  # noqa: ANN401
+        if call in where and call not in raised:
+            raised.append(call)
+            raise OSError(errno.ESTALE, "Stale file handle", str(path))
+
+    def lstat(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:  # noqa: ANN401
+        if os.fsdecode(path).startswith("gone-"):
+            stale("lstat", path)
+        return real_lstat(path, *args, **kwargs)
+
+    def listdir(path: Any = ".") -> list[str]:  # noqa: ANN401
+        if isinstance(path, int) and lease_dir.exists() and os.fstat(path).st_ino == real_lstat(lease_dir).st_ino:
+            stale("listdir", path)
+        return real_listdir(path)
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    monkeypatch.setattr(os, "listdir", listdir)
+    with Lease(tmp_path / "thing", timeout=5, stale_after=60) as lease:
+        assert lease.owns()
+    assert sorted(raised) == sorted(where)

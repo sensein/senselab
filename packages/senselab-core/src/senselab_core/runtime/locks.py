@@ -190,11 +190,15 @@ class Lease:
         """
         try:
             with self._directory().child(self._name) as lease:
-                found = {n: lease.lstat(n) for n in lease.listdir()}
+                found = {n: _lstat_or_gone(lease, n) for n in lease.listdir()}
         except (FileNotFoundError, WrongKindError):
             return None
         except PermissionError:
             return {}, None
+        except OSError as err:
+            if err.errno in GONE_ERRNOS:
+                return None
+            raise
         tokens = {
             n: st.st_mtime
             for n, st in found.items()
@@ -210,7 +214,7 @@ class Lease:
         directory at the name is moved aside.
         """
         directory = self._directory()
-        st = directory.lstat(self._name)
+        st = _lstat_or_gone(directory, self._name)
         if st is None:
             return None
         if not stat.S_ISDIR(st.st_mode):
@@ -221,7 +225,7 @@ class Lease:
         if listing is None:
             return None
         tokens, others = listing
-        after = directory.lstat(self._name)
+        after = _lstat_or_gone(directory, self._name)
         if after is None:
             return None
         claims = [m for n, m in (others or {}).items() if GONE_NAME.fullmatch(n) or CLAIM_NAME.fullmatch(n)]
@@ -237,7 +241,7 @@ class Lease:
                 directory.remove_owned(aside, pattern=UUID_HEX)
             except OSError as err:
                 failure = err
-            if directory.lstat(aside) is None:
+            if _lstat_or_gone(directory, aside) is None:
                 return
         self.set_aside.append(directory.path / aside)
         logger.warning("lease %s: moved aside to %s, which cannot be removed: %s", self._lease_path, aside, failure)
@@ -273,15 +277,17 @@ class Lease:
         if claimed is None:
             return False
         directory = self._directory()
-        current = directory.lstat(self._name)
+        current = _lstat_or_gone(directory, self._name)
         if current is None or (current.st_dev, current.st_ino) != (claimed.st_dev, claimed.st_ino):
             logger.warning("lease %s: claimed, then found another directory at its name", self._lease_path)
             return False
         aside = uuid.uuid4().hex
         try:
             directory.rename(self._name, directory, aside, grammar=UUID_HEX)
-        except FileNotFoundError:
-            return False
+        except OSError as err:
+            if err.errno in GONE_ERRNOS:
+                return False
+            raise
         self._remove(aside)
         return True
 
@@ -314,7 +320,7 @@ class Lease:
         """
         if self._remove_empty():
             return True
-        if self._directory().lstat(self._name) is None:
+        if _lstat_or_gone(self._directory(), self._name) is None:
             return False
         raise LeaseUnavailable(
             self._lease_path,
@@ -382,6 +388,10 @@ class Lease:
                     return None
         except (FileNotFoundError, WrongKindError):
             return None
+        except OSError as err:
+            if err.errno in GONE_ERRNOS:
+                return None
+            raise
         return token if self._has(token) else None
 
     def holder(self) -> Optional[dict[str, Any]]:
@@ -576,6 +586,16 @@ class Lease:
         directory, self._dir = self._dir, None
         if directory is not None:
             directory.close()
+
+
+def _lstat_or_gone(directory: StorageDir, name: str) -> Optional[os.stat_result]:
+    """Return the `lstat` of `name` in `directory`, None when it is gone: missing, or a stale handle (`ESTALE`)."""
+    try:
+        return directory.lstat(name)
+    except OSError as err:
+        if err.errno in GONE_ERRNOS:
+            return None
+        raise
 
 
 def _user(uid: int) -> str:
