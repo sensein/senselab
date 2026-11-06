@@ -8,7 +8,9 @@ from collections.abc import Callable, Iterator
 from typing import Any, Protocol
 
 from senselab_worker.canonical import jcs_dumps
+from senselab_worker.faults import InfrastructureFault
 from senselab_worker.model_cache import ModelCache, ModelKey
+from senselab_worker.serve import backend_init
 
 from senselab_core.kernel._base import value_digest
 from senselab_core.kernel.declare import BackendSpec
@@ -47,6 +49,10 @@ class Server(Protocol):
 
     def stop(self) -> None:
         """Stop the server."""
+
+
+class WorkerLoadFailed(InfrastructureFault):
+    """A worker did not start or load its backend: an infrastructure fault of its env; `__cause__` is what it raised."""
 
 
 ServerStart = Callable[[BackendSpec, EnvHandle, ResolvedModel, ExecutionProfile], Server]
@@ -172,7 +178,7 @@ class WorkerSet:
         Raises:
             ValueError: a server backend without `expected`; a budgeted host backend without `state_bytes`.
             VllmStartError, LeaseTimeout, LeaseUnavailable, AttestationMismatch: as `server`.
-            WorkerFatal: the worker failed to start or load.
+            WorkerLoadFailed: a pooled worker failed to start or load, whatever it raised.
         """
         init = worker_init(device, model)
         if backend.env.kind == "server":
@@ -239,19 +245,24 @@ class WorkerSet:
         profile: ExecutionProfile,
     ) -> Worker:
         if backend.env.kind != "host":
-            return WorkerClient(
-                env.python,
-                backend.worker,
-                init=init,
-                variables=network_variables(profile.network),
-                load_timeout=profile.timeouts.load_s,
-                request_timeout=profile.timeouts.request_s,
+            return _loaded(
+                lambda: WorkerClient(
+                    env.python,
+                    backend.worker,
+                    init=init,
+                    variables=network_variables(profile.network),
+                    load_timeout=profile.timeouts.load_s,
+                    request_timeout=profile.timeouts.request_s,
+                )
             )
         budget = profile.model_cache_budget_bytes
         identity = model.identity if model is not None else value_digest("backend", {"name": backend.name})
         key: ModelKey = (backend.name, identity, init["device"], PRECISION)
-        return HostWorker(
-            backend.worker, init=init, key=key, cache=process_cache(budget), size_of=_size_of(backend.worker, budget)
+        size_of = _size_of(backend.worker, budget)
+        return _loaded(
+            lambda: HostWorker(
+                backend.worker, init=backend_init(init), key=key, cache=process_cache(budget), size_of=size_of
+            )
         )
 
     def server(
@@ -300,11 +311,23 @@ class WorkerSet:
         """Return the in-process worker of a server backend, given `server` as `init["server"]`."""
         return HostWorker(
             backend.worker,
-            init={**init, "server": server},
+            init={**backend_init(init), "server": server},
             key=(backend.name, init["model"]["identity"], init["device"], PRECISION),
             cache=ModelCache(2**63 - 1),
             size_of=lambda _: 0,
         )
+
+    def abandon(self) -> None:
+        """Close every pooled worker process a job holds now, so its `run` raises `WorkerLost`.
+
+        A later checkout starts another. A host worker runs in this process and cannot be stopped; it is left to finish.
+        """
+        with self._lock:
+            held = [(k, w) for k, w in self._pool.items() if self._busy[k] > 0 and isinstance(w, WorkerClient)]
+            for key, _ in held:
+                del self._pool[key]
+        for _, worker in held:
+            worker.close()
 
     def close(self) -> None:
         """Stop every pooled worker process and every server; a later checkout starts its own again."""
@@ -317,6 +340,21 @@ class WorkerSet:
                 worker.close()
         for server in servers:
             server.stop()
+
+
+def _loaded(start: Callable[[], Worker]) -> Worker:
+    """Return the worker `start` starts and loads.
+
+    Raises:
+        WorkerLoadFailed: whatever the start or load raised, as its cause.
+    """
+    try:
+        return start()
+    except Exception as exc:
+        failed = WorkerLoadFailed(f"{type(exc).__name__}: {exc}")
+        for note in getattr(exc, "__notes__", ()):
+            failed.add_note(note)
+        raise failed from exc
 
 
 def _size_of(module: str, budget: int | None) -> Callable[[object], int]:

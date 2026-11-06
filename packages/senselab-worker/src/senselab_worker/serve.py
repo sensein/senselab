@@ -36,26 +36,46 @@ UNBOUNDED_BYTES = 2**63 - 1
 """The budget of a worker process's model cache: unbounded."""
 
 
+HOST_KEYS = ("dtype",)
+"""Keys of `init` the host sends for the launcher alone; a backend's `load` never sees them."""
+
+
+def backend_init(init: dict[str, Any]) -> dict[str, Any]:
+    """Return `init` without the launcher's keys (`HOST_KEYS`), as a backend's `load` takes it."""
+    return {k: v for k, v in init.items() if k not in HOST_KEYS}
+
+
 def model_key(backend: str, init: dict[str, Any]) -> ModelKey | None:
-    """Return the `ModelCache` key `init` names for `backend`: its model's identity, device and dtype; None without."""
-    model, device, dtype = init.get("model"), init.get("device"), init.get("dtype")
+    """Return the `ModelCache` key `init` names for `backend`: its model's identity, device and dtype; None without.
+
+    Raises:
+        ProtocolError: `init` names a model without a string `identity`, `device` and `dtype`.
+    """
+    if "model" not in init:
+        return None
+    model, device, dtype = init["model"], init.get("device"), init.get("dtype")
     identity = model.get("identity") if isinstance(model, dict) else None
-    if isinstance(identity, str) and isinstance(device, str) and isinstance(dtype, str):
-        return (backend, identity, device, dtype)
-    return None
+    if not (isinstance(identity, str) and isinstance(device, str) and isinstance(dtype, str)):
+        raise ProtocolError(
+            "an init naming a model names its identity, device and dtype as strings; "
+            f"got model {type(model).__name__}, device {type(device).__name__}, dtype {type(dtype).__name__}"
+        )
+    return (backend, identity, device, dtype)
 
 
 def cached_load(load: Load, backend: str, cache: ModelCache) -> Load:
-    """Return `load` routed through `cache` under `model_key(backend, init)`; an init naming no model loads directly.
+    """Return `load` given `backend_init(init)`, routed through `cache` under `model_key(backend, init)`.
 
-    The returned load raises `ValueError` when the init's model identity is not a commit or weights digest.
+    An init naming no model loads directly. The returned load raises `ProtocolError` for a partial or malformed
+    model, device or dtype, and `ValueError` when the model identity is not a commit or weights digest.
     """
 
     def through(init: dict[str, Any]) -> object:
         key = model_key(backend, init)
+        given = backend_init(init)
         if key is None:
-            return load(init)
-        return cache.get_or_load(key, lambda: load(init), lambda _: 0)
+            return load(given)
+        return cache.get_or_load(key, lambda: load(given), lambda _: 0)
 
     return through
 

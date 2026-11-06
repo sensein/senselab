@@ -1,11 +1,11 @@
 """A one-node plan over host backends for pool tests: its task, registry, packaged stack and placed plan."""
 
 import contextlib
+import os
 import platform
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
-import pytest
 from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, Node
@@ -35,15 +35,15 @@ def scoring(name: str) -> TaskSpec:
     )
 
 
-def registry(*tasks: TaskSpec, worker: str = BACKEND) -> Registry:
-    """Return a registry of `tasks`, each served by one batch-invariant host backend `dsp` running `worker`."""
+def registry(*tasks: TaskSpec, worker: str = BACKEND, name: str = "dsp") -> Registry:
+    """Return a registry of `tasks`, each served by one batch-invariant host backend `name` running `worker`."""
     found = Registry()
     for task in tasks:
         found.add_task(task)
         found.add_backend(
             BackendSpec(
                 task=task.name,
-                name="dsp",
+                name=name,
                 version="1",
                 stack="dsp",
                 env=Env.host(),
@@ -68,9 +68,10 @@ def host_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # n
 
 
 @contextlib.contextmanager
-def packaged(found: Registry, cache: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Use `found` with no catalogue, every env this interpreter under an MIT lock, and the cache at `cache`."""
-    monkeypatch.setenv("SENSELAB_CACHE", str(cache))
+def packaged(found: Registry, cache: Path) -> Iterator[None]:
+    """Use `found` with no catalogue, every env this interpreter under an MIT lock, and `SENSELAB_CACHE` at `cache`."""
+    previous_cache = os.environ.get("SENSELAB_CACHE")
+    os.environ["SENSELAB_CACHE"] = str(cache)
     mit = license_record("MIT", source="lock", verified={"date": "2026-11-06", "how": "pep639"}, gated=False)
     catalogue = Catalogue.load("format: catalogue@2.0\nentries: []\n")
     previous = use_packaged(Packaged(catalogue, host_env, found, lambda _: {"p": mit}))
@@ -78,6 +79,10 @@ def packaged(found: Registry, cache: Path, monkeypatch: pytest.MonkeyPatch) -> I
         yield
     finally:
         use_packaged(previous)
+        if previous_cache is None:
+            os.environ.pop("SENSELAB_CACHE", None)
+        else:
+            os.environ["SENSELAB_CACHE"] = previous_cache
 
 
 def planned(

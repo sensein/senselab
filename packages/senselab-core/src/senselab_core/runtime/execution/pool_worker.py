@@ -36,12 +36,12 @@ from senselab_core.runtime.execution.in_process import fragment_jobs, job_key, p
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool import report, run_plan
 from senselab_core.runtime.execution.queue import Claim, QueueSet
-from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
-from senselab_core.runtime.worker_client import WorkerFatal, WorkerLost
+from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerFatal, WorkerLost
 
 logger = logging.getLogger("senselab")
 
@@ -52,8 +52,17 @@ Send = Callable[[Sequence[Job], Placement], list[JobOutcome]]
 """Run jobs of one call under a placement and return one outcome per job, in order (`execute`)."""
 
 
+class Abandoned(Exception):
+    """The claim whose jobs were running was lost or halted; nothing more is sent for it."""
+
+
 def whole(exc: BaseException) -> bool:
-    """Whether `exc` fails a request as a whole: its worker was lost, fatal or broke the protocol, or ran out."""
+    """Whether `exc` fails a request of a loaded worker as a whole: it was lost, fatal, broke the protocol, or ran out.
+
+    A worker that failed to start or load (`WorkerLoadFailed`) fails its env, not the request, and is never one.
+    """
+    if isinstance(exc, WorkerLoadFailed):
+        return False
     return isinstance(exc, (WorkerLost, WorkerFatal, ProtocolError)) or classify(exc) is FaultClass.RESOURCE
 
 
@@ -72,21 +81,30 @@ class Member:
     key: str
 
 
-def bisect(members: Sequence[Member], placement: Placement, send: Send) -> list[JobOutcome]:
+def bisect(
+    members: Sequence[Member], placement: Placement, send: Send, cancelled: threading.Event | None = None
+) -> list[JobOutcome]:
     """Return one outcome per member, sent as one request; one that fails as a whole is split in halves.
 
-    A member alone whose request fails as a whole gets that failure; any other exception propagates.
+    A member alone whose request fails as a whole gets that failure. Any other exception is the failure of every
+    member of the request that raised it, so a half that completed keeps its outcomes.
+
+    Raises:
+        Abandoned: `cancelled` was set before a request, or while one ran.
     """
+    if cancelled is not None and cancelled.is_set():
+        raise Abandoned
     try:
         return send([m.job for m in members], placement)
     except Exception as exc:
-        if not whole(exc):
-            raise
-        if len(members) == 1:
-            logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)
-            return [Failed(members[0].job.ref, members[0].key, failure_of(exc))]
+        if cancelled is not None and cancelled.is_set():
+            raise Abandoned from exc
+        if not whole(exc) or len(members) == 1:
+            if len(members) == 1:
+                logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)
+            return [Failed(m.job.ref, m.key, failure_of(exc)) for m in members]
         half = len(members) // 2
-        return bisect(members[:half], placement, send) + bisect(members[half:], placement, send)
+        return bisect(members[:half], placement, send, cancelled) + bisect(members[half:], placement, send, cancelled)
 
 
 @dataclass
@@ -108,6 +126,8 @@ class PoolWorker:
     Attributes:
         served: The queue name and item digest of each item claimed, in claim order.
         stop: Set (`halt`) to make the worker commit what finished, release the rest and return.
+        join_s: How long a halted claim waits for its abandoned request to stop; the graces' bound of a worker
+            client by default, within which a closed worker process is stopped.
     """
 
     def __init__(  # noqa: PLR0913 - the queues and classes, then keyword-only parts and seams
@@ -120,6 +140,7 @@ class PoolWorker:
         workers: WorkerSet | None = None,
         send: Send | None = None,
         name: str | None = None,
+        join_s: float = DEFAULT_GRACES.bound,
     ) -> None:
         """Serve `classes` under `profile`, storing into `store`; jobs go through `send` (`execute` when None).
 
@@ -140,6 +161,7 @@ class PoolWorker:
         self._send = send
         self._plans: dict[str, tuple[Plan, Mapping[InputIdentity, object]]] = {}
         self._finished: Finished = queue.SimpleQueue()
+        self.join_s = join_s
 
     def halt(self) -> None:
         """Set `stop` and wake the wait for a running claim's outcomes; safe in a signal handler."""
@@ -190,8 +212,10 @@ class PoolWorker:
         """Run every item of `claim`, committing each as its jobs finish; release what is held at the end.
 
         An item whose jobs cannot be built is given the outcome `dead` with that failure. The jobs run on a thread
-        while this one waits, proving the claim's leases every renewal interval; once `stop` is set, what finished
-        is committed and the rest released.
+        while this one waits, proving the claim's leases every renewal interval. Once a lease is lost, the request in
+        flight is abandoned (`WorkerSet.abandon`), nothing more is sent, and this returns only after the thread
+        stopped. Once `stop` is set, the request is abandoned too, the thread is given `join_s`, and the items whose
+        jobs finished by then are committed.
         """
         with claim:
             self._log_claimed(claim)
@@ -201,8 +225,9 @@ class PoolWorker:
             pending = {d: len(f.jobs) for d, f in zip(claim.items, claim.fragments, strict=True)}
             outcomes: dict[str, dict[int, JobOutcome]] = {d: {} for d in claim.items}
             finished: Finished = queue.SimpleQueue()
-            self._finished = finished
-            threading.Thread(target=self._run_groups, args=(groups, finished), daemon=True).start()
+            self._finished, cancelled = finished, threading.Event()
+            runner = threading.Thread(target=self._run_groups, args=(groups, finished, cancelled), daemon=True)
+            runner.start()
             interval = self.profile.lease.renew_fraction * self.profile.lease.stale_after_s
             running = True
             while running and claim.items and not self.stop.is_set():
@@ -210,11 +235,28 @@ class PoolWorker:
                     batch = finished.get(timeout=interval)
                     running = batch is not None
                     self._commit(claim, batch or [], outcomes, pending)
-                claim.renew()
-            while running and not finished.empty():
-                batch = finished.get_nowait()
-                running = batch is not None
-                self._commit(claim, batch or [], outcomes, pending)
+                if not claim.renew():
+                    logger.warning(
+                        "pool worker %s lost a claim on queue %s; its request is abandoned", self.name, claim.queue.name
+                    )
+                    break
+            self._stop_runner(runner, cancelled)
+            while not finished.empty():
+                self._commit(claim, finished.get_nowait() or [], outcomes, pending)
+
+    def _stop_runner(self, runner: threading.Thread, cancelled: threading.Event) -> None:
+        """Abandon what `runner` still runs and wait for it: `join_s` once halted, else until it stops."""
+        if not runner.is_alive():
+            return
+        cancelled.set()
+        (self._workers if self._workers is not None else process_workers(self.profile)).abandon()
+        if self.stop.is_set():
+            runner.join(self.join_s)
+            return
+        while runner.is_alive() and not self.stop.is_set():
+            runner.join(self.profile.pool.poll_s)
+        if runner.is_alive():
+            runner.join(self.join_s)
 
     def _commit(
         self,
@@ -230,19 +272,15 @@ class PoolWorker:
             if len(outcomes[digest]) == pending[digest] and digest in claim.items:
                 report(claim, digest, [outcomes[digest][i] for i in range(pending[digest])])
 
-    def _run_groups(self, groups: list[_Group], finished: "Finished") -> None:
-        """Run each group, putting its members' outcomes on `finished`; then put None.
-
-        An exception that is not bisected is the failure of every job of its group.
-        """
+    def _run_groups(self, groups: list[_Group], finished: Finished, cancelled: threading.Event) -> None:
+        """Run each group until `cancelled`, putting its members' outcomes on `finished`; then put None."""
         try:
             for group in groups:
                 send = self._send or functools.partial(self._execute, run=group.run)
-                try:
-                    outcomes = bisect(group.members, group.placement, send)
-                except Exception as exc:  # noqa: BLE001 - a group's failure is each of its jobs' failure
-                    outcomes = [Failed(m.job.ref, m.key, failure_of(exc)) for m in group.members]
+                outcomes = bisect(group.members, group.placement, send, cancelled)
                 finished.put(list(zip(group.members, outcomes, strict=True)))
+        except Abandoned:
+            logger.info("pool worker %s abandoned the rest of its claim", self.name)
         finally:
             finished.put(None)
 
@@ -303,12 +341,13 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
     store: ResultStore,
     workers: WorkerSet | None = None,
     send: Send | None = None,
+    join_s: float = DEFAULT_GRACES.bound,
 ) -> int:
     """Serve the queues of `classes` in `pool_dir` (a run's `queues` directory) as one `PoolWorker`; return 0.
 
     On the main thread SIGTERM halts the worker (`PoolWorker.halt`); the previous handler is restored after.
     """
-    worker = PoolWorker(pool_dir, classes, profile=profile, store=store, workers=workers, send=send)
+    worker = PoolWorker(pool_dir, classes, profile=profile, store=store, workers=workers, send=send, join_s=join_s)
     if threading.current_thread() is not threading.main_thread():
         return worker.serve()
     previous = signal.signal(signal.SIGTERM, lambda *_: worker.halt())

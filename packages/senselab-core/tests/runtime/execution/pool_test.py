@@ -60,9 +60,9 @@ def _profile(**faults: int) -> ExecutionProfile:
 
 
 @pytest.fixture(autouse=True)
-def stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def stack(tmp_path: Path) -> Iterator[None]:
     """This module's registry, every env this interpreter under an MIT lock; the cache under `tmp_path`."""
-    with packaged(REGISTRY, tmp_path / "cache", monkeypatch):
+    with packaged(REGISTRY, tmp_path / "cache"):
         yield
     WORKERS.close()
 

@@ -284,9 +284,12 @@ def stub_worker_importable(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_contract_cases_load_the_declared_stub() -> None:
     """`content_fault_isolated` passes the declared load stub to `load`; a stub the worker cannot load fails it."""
     worker = {"worker": "stub_worker_fixture", "stack": "torch"}
-    _case(_registry({}, {**worker, "load_stub": {"model": "stub"}}), "fake::content_fault_isolated")()
+    model = {"source": "stub", "id": "stub", "identity": "0" * 40}
+    stub = {"model": model, "device": "cpu", "dtype": "default"}
+    _case(_registry({}, {**worker, "load_stub": stub}), "fake::content_fault_isolated")()
+    weights = {**stub, "model": {**model, "id": "weights"}}
     with pytest.raises(WorkerFatal, match="weights"):
-        _case(_registry({}, {**worker, "load_stub": {"model": "weights"}}), "fake::content_fault_isolated")()
+        _case(_registry({}, {**worker, "load_stub": weights}), "fake::content_fault_isolated")()
 
 
 @pytest.mark.contract

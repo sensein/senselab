@@ -14,7 +14,7 @@ import numpy
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from senselab_worker import _raw_digest, runtime_identity
+from senselab_worker import WIRE_VERSION, _raw_digest, runtime_identity
 from senselab_worker.canonical import MAX_DEPTH, npy_bytes
 from senselab_worker.codec import (
     MAX_LINE_BYTES,
@@ -277,7 +277,7 @@ def test_writer_leaves_no_temporary_after_a_failed_write(tmp_path: Path, monkeyp
 
 _ERROR = {"type": "ValueError", "message": "m", "fault": "content", "traceback": "", "gap": True}
 VALID: dict[str, dict[str, Any]] = {
-    "hello": {"hello": {"wire": 2, "runtime": "a" * 64, "python": "3.12.0", "numpy": "2.0.0", "pid": 7}},
+    "hello": {"hello": {"wire": WIRE_VERSION, "runtime": "a" * 64, "python": "3.12.0", "numpy": "2.0.0", "pid": 7}},
     "init": {"init": {"array_dir": "/tmp/x", "backend_key": 1}},
     "ready": {"ready": {"load_s": 0.5}},
     "request": {"id": "r", "items": [{"id": "a", "inputs": {}}, {"id": "b", "inputs": {"x": 1}}], "params": {}},

@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from typing import Any
 
 import pytest
 from pool_stack_fixture import packaged, planned, registry, scoring
+from senselab_core.kernel.declare import TaskSpec
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.executor import Admission, PlanFragment, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
@@ -20,7 +22,7 @@ from senselab_core.runtime.execution.job import Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool_worker import PoolWorker, Send, serve_pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.run import prepare
-from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -30,6 +32,7 @@ from senselab_core.testing.interpreter import source_tree_python
 from senselab_worker.faults import FaultClass, classify, error_record
 
 TASK = scoring("pool_worker_test.score")
+BROKEN = scoring("pool_worker_test.broken")
 REGISTRY = registry(TASK)
 WORKERS = WorkerSet(2)
 OVERRIDE: dict[str, Any] = {
@@ -44,9 +47,9 @@ OVERRIDE: dict[str, Any] = {
 
 
 @pytest.fixture(autouse=True)
-def stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def stack(tmp_path: Path) -> Iterator[None]:
     """This module's registry, every env this interpreter under an MIT lock; the cache under `tmp_path`."""
-    with packaged(REGISTRY, tmp_path / "cache", monkeypatch):
+    with packaged(REGISTRY, tmp_path / "cache"):
         yield
     WORKERS.close()
 
@@ -55,21 +58,22 @@ def _profile(**pool: object) -> ExecutionProfile:
     return ExecutionProfile.load("laptop", {**OVERRIDE, "pool": {**OVERRIDE["pool"], **pool}})
 
 
-def _run(tmp_path: Path, profile: ExecutionProfile, texts: Sequence[str]) -> tuple[Plan, ResultStore, Path]:
-    """Prepare a run of one job per text in `tmp_path/run`; return its plan, its store and its queues directory."""
-    placed, _ = planned(TASK, profile, texts)
+def _run(
+    tmp_path: Path, profile: ExecutionProfile, texts: Sequence[str], task: TaskSpec = TASK
+) -> tuple[Plan, ResultStore, Path]:
+    """Prepare a run of `task`, one job per text, in `tmp_path/run`; return its plan, its store and its queues."""
+    placed, _ = planned(task, profile, texts)
     store = ResultStore(tmp_path / "store")
     prepare(placed, tmp_path / "run", store)
     return placed, store, tmp_path / "run" / RUN_QUEUES
 
 
-def _put(placed: Plan, pool_dir: Path, element: int, queue: str = "cpu") -> str:
-    """Put the one-job fragment of `element` on `queue`; return the text it scores."""
+def _put(placed: Plan, pool_dir: Path, element: int, queue: str = "cpu", why: str = "") -> str:
+    """Put the one-job fragment of `element` on `queue`, its placement's `why` set when given; return its row id."""
     admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
     fragment = node_fragment(placed, admission, elements=[(element,)])
-    fragment = fragment.model_copy(
-        update={"placement": fragment.placement.model_copy(update={"resource_class": queue})}
-    )
+    update: dict[str, object] = {"resource_class": queue, **({"why": why} if why else {})}
+    fragment = fragment.model_copy(update={"placement": fragment.placement.model_copy(update=update)})
     QueueSet(pool_dir, placed.execution).queue(queue).put(fragment)
     time.sleep(0.01)
     return str(placed.manifest.rows[element].id)
@@ -169,7 +173,6 @@ def test_claim_renewed_during_long_item(tmp_path: Path) -> None:
 CHILD = """
 import json, sys, time
 from pathlib import Path
-import pytest
 from pool_stack_fixture import packaged, registry, scoring
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.job import execute
@@ -187,8 +190,8 @@ def send(jobs, placement):
         time.sleep(600)
     return execute(jobs, placement, store=store, run=RunConfig(), profile=profile, workers=workers)
 
-with packaged(registry(scoring("pool_worker_test.score")), cache, pytest.MonkeyPatch()):
-    sys.exit(serve_pool(pool_dir, ["cpu"], profile=profile, store=store, send=send))
+with packaged(registry(scoring("pool_worker_test.score")), cache):
+    sys.exit(serve_pool(pool_dir, ["cpu"], profile=profile, store=store, send=send, join_s=0.2))
 """
 
 
@@ -251,3 +254,121 @@ def test_serve_pool_restores_the_sigterm_handler(tmp_path: Path) -> None:
     assert serve_pool(pool_dir, ["cpu"], profile=profile, store=store) == 0
     assert signal.getsignal(signal.SIGTERM) is before
     assert threading.current_thread() is threading.main_thread()
+
+
+def _refs(pool_dir: Path, profile: ExecutionProfile) -> list[ResultRef]:
+    return [ResultRef.model_validate(j) for o in _outcomes(pool_dir, profile) for j in o["jobs"]]
+
+
+@pytest.mark.logic
+def test_a_broken_env_costs_one_load_per_claim(tmp_path: Path) -> None:
+    """A backend that cannot load fails a claim of 8 with one request and one load, each job `WorkerLoadFailed`."""
+    from backends import failing_load_backend_fixture as failing  # noqa: PLC0415 - the module records loads
+
+    failing.LOADS.clear()
+    profile = _profile(quantum_items=8)
+    with packaged(registry(BROKEN, worker="backends.failing_load_backend_fixture", name="broken"), tmp_path / "cache"):
+        placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(8)], BROKEN)
+        for element in range(8):
+            _put(placed, pool_dir, element)
+        send, sizes = _sender(store, profile), []
+
+        def counted(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+            sizes.append(len(jobs))
+            return send(jobs, placement)
+
+        assert PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=counted).serve() == 0
+    refs = _refs(pool_dir, profile)
+    assert sizes == [8] and len(failing.LOADS) == 1 and len(refs) == 8
+    assert {(r.failure.type, r.failure.fault) for r in refs if r.failure} == {("WorkerLoadFailed", "infrastructure")}
+
+
+@pytest.mark.logic
+def test_a_load_failure_during_bisection_keeps_the_first_halfs_commits(tmp_path: Path) -> None:
+    """A request lost as a whole is halved; the first half commits, and the second half, whose load fails, fails."""
+    profile = _profile(quantum_items=8)
+    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(8)])
+    for element in range(8):
+        _put(placed, pool_dir, element)
+    send, sizes = _sender(store, profile), []
+
+    def flaky(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+        sizes.append(len(jobs))
+        if len(sizes) == 1:
+            raise WorkerLost("the worker died on its request", returncode=-11)
+        if len(sizes) == 3:
+            raise WorkerLoadFailed("WorkerFatal: the replacement worker did not load")
+        return send(jobs, placement)
+
+    assert PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=flaky).serve() == 0
+    refs = _refs(pool_dir, profile)
+    done = [r for r in refs if r.failure is None]
+    assert sizes == [8, 4, 4] and len(done) == 4 and len(refs) == 8
+    assert all(store.outputs_of(r.key_digest, r.output_identity) is not None for r in done if r.output_identity)
+    assert {r.failure.type for r in refs if r.failure} == {"WorkerLoadFailed"}
+
+
+class _Abandoning(WorkerSet):
+    """A worker set that records `abandon` instead of closing worker processes."""
+
+    def __init__(self) -> None:
+        super().__init__(1)
+        self.abandoned = threading.Event()
+
+    def abandon(self) -> None:
+        self.abandoned.set()
+
+
+@pytest.mark.logic
+def test_a_lost_claim_abandons_its_request(tmp_path: Path) -> None:
+    """A claim broken mid-request: its worker set abandons the request, nothing is committed, nothing more is sent."""
+    profile = _profile()
+    placed, store, pool_dir = _run(tmp_path, profile, ["one", "two"])
+    _put(placed, pool_dir, 0)
+    _put(placed, pool_dir, 1, why="second")
+    queue = QueueSet(pool_dir, profile).queue("cpu")
+    workers, sends, thief, seen = _Abandoning(), [], [], []
+
+    def stolen(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+        sends.append(len(jobs))
+        for lease in (queue.path / "claims").iterdir():
+            shutil.rmtree(lease)
+        thief.append(queue.claim("thief", max_items=2))
+        seen.append(workers.abandoned.wait(10))
+        raise WorkerLost("closed by abandon")
+
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, workers=workers, send=stolen)
+    assert worker.serve() == 0
+    assert seen == [True] and sends == [1] and _outcomes(pool_dir, profile) == [] and thief[0] is not None
+    assert len(thief[0].items) == 2
+    thief[0].release()
+
+
+@pytest.mark.logic
+def test_halt_commits_finished_groups_and_releases_the_rest(tmp_path: Path) -> None:
+    """Halted while a claim's second group runs, the worker commits the first group's item and releases the second."""
+    profile = _profile()
+    placed, store, pool_dir = _run(tmp_path, profile, ["fast", "slow"])
+    _put(placed, pool_dir, 0)
+    _put(placed, pool_dir, 1, why="second")
+    send, release = _sender(store, profile), threading.Event()
+    worker: PoolWorker
+
+    def halting(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+        if _text(jobs[0]) == "slow":
+            release.wait(10)
+            raise WorkerLost("closed by abandon")
+        outcomes = send(jobs, placement)
+        worker.halt()
+        return outcomes
+
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=halting, join_s=0.2)
+    try:
+        assert worker.serve() == 0
+    finally:
+        release.set()
+    [outcome] = _outcomes(pool_dir, profile)
+    queue = QueueSet(pool_dir, profile).queue("cpu")
+    again = queue.claim("next", max_items=2)
+    assert outcome["outcome"] == "done" and again is not None and len(again.items) == 1
+    again.release()

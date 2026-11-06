@@ -9,7 +9,7 @@ from senselab_core.kernel.declare import BackendSpec
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
 from senselab_core.runtime.call import packaged
-from senselab_core.runtime.execution.workers import WorkerSet, expected_of
+from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, expected_of
 from senselab_core.runtime.hardware import probe_hardware
 from senselab_core.runtime.host_worker import HostWorker
 from senselab_core.runtime.licenses import license_record
@@ -74,7 +74,7 @@ class RealWorkers:
             raise ValueError(f"{task!r} has no backend {name!r}")
         backend = found[0]
         self.close()
-        init: dict[str, Any] = {"device": self.device}
+        init: dict[str, Any] = {"device": self.device, "dtype": PRECISION}
         entry = packaged().catalogue.backend_entry(backend)
         if entry is not None:
             init["model"] = {"source": "hf", "id": entry.id, "identity": entry.revision}

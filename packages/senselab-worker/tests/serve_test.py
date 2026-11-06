@@ -100,11 +100,26 @@ def test_worker_loads_through_model_cache(tmp_path: Path) -> None:
         )
         assert code == 0 and _replies(out)[0]["outputs"]["state"] == "weights"
     assert len(loads) == 1 and cache.keys() == [("pkg.backend", "a" * 40, "cpu", "default")]
-    _session(tmp_path, [_init(tmp_path, device="cpu")], load=through)
+    assert "dtype" not in loads[0] and loads[0]["model"] == model
+    _session(tmp_path, [_init(tmp_path, device="cpu", dtype="default")], load=through)
+    assert len(loads) == 2 and loads[1].keys() == {"array_dir", "device"}
     code, out = _session(
         tmp_path, [_init(tmp_path, model={**model, "identity": "main"}, device="cpu", dtype="x")], load=through
     )
     assert len(loads) == 2 and code == EXIT_FATAL and "never a ref" in out[-1]["error"]["message"]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "named",
+    [{"model": "stub"}, {"model": {"identity": 7}, "device": "cpu", "dtype": "d"}, {"model": {"identity": "a" * 40}}],
+)
+def test_a_partial_or_malformed_model_init_is_refused_at_load(tmp_path: Path, named: dict[str, Any]) -> None:
+    """An init naming a model without a string identity, device and dtype is a fatal `ProtocolError`, never loaded."""
+    loads: list[dict[str, Any]] = []
+    through = cached_load(loads.append, "pkg.backend", ModelCache(1))
+    code, out = _session(tmp_path, [_init(tmp_path, **named)], load=through)
+    assert code == EXIT_FATAL and out[-1]["error"]["type"] == "ProtocolError" and loads == []
 
 
 @pytest.mark.logic
