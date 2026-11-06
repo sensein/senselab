@@ -78,6 +78,27 @@ and is reported as a classification gap.
 When one env or one worker is broken, the fault is reported against the env or worker, never
 spread across a million items.
 
+**As built (Phase 3 Task 14, P3-33, P3-34, P3-36).** The `Pool` applies each effect once, with the budgets of the
+profile's `faults` section. A fault with `gap: true` is treated as infrastructure whatever its class. A retry is a
+one-job fragment of the next `attempt`, logged `failed` then `queued` by the coordinator; only the final failure is
+yielded to the runner, read back from `dead/<key digest>.json`.
+
+| Class | Budget key | As built |
+|---|---|---|
+| content (not a gap) | `content_attempts` | charged; queued again until the item has that many charges, then dead |
+| resource (not a gap) | `resource_replacements` | uncharged; moved to the class with the least memory above the current one, on the same device and GPU type; at most that many moves, then (or with no larger class) dead |
+| infrastructure, or any gap | `infrastructure_replacements` | uncharged; queued again on the same class; once one env has that many failures in the current epoch (counted from that epoch's `failed` events on disk, so a coordinator restarted within the epoch keeps the count, and a new epoch starts afresh) it is reported once as `BrokenEnv` and held on each queue it is seen on (`held-<epoch>-<env label>`), only its own items: claimers skip items of a held env and other envs on the class keep running. `QueueHeld` stops the run; no item is failed (a held job is logged `queued` again), so a later epoch runs them |
+
+A worker's reported result is yielded only when it names the job's own logical key (`job_key`; any other key is a
+content fault `WrongKey` of that job, never a yield) and the store holds its outputs; one it does not hold is a
+`MissingOutput` gap and is retried. The resource budget counts moves, so the laptop profile's
+`resource_replacements: 0` fails a resource fault at once. The class decides the effect: a worker's `charged` flag is
+not read, so a content record that is not a gap is charged whatever it says. A `WrongKey` is a charged content
+fault and charges replay from the queues' outcomes, so a worker bug that reported wrong keys leaves its jobs in
+`dead/` for the run; those `dead/<key>.json` files are removed by hand once the worker is fixed. Holding an env passes the epoch fence
+first, and a hold counts only for its own epoch or a newer one, so a stale coordinator can never hold work of the
+current one.
+
 ### 3.4 Scheduling and memory
 - **Claim order.** Queues keep time-ordered index segments, and workers claim the oldest item
   first, in O(1) amortised (ADR-003).
@@ -264,9 +285,56 @@ are recorded here (R-200).
 - **Servers are per worker set.** A second `WorkerSet` (such as a test's own) starts its own server for a key the
   process set already serves, and a `close()` racing a `server()` may hand back a stopped server. Neither arises with
   the one process set `process_workers` returns.
-- **Open (Task 14): queued against running across writers.** Within one attempt, a job's non-terminal state (queued,
-  claimed, started) is read from the time-merged events, so clock skew between a controller and a pool worker can show
-  a running job as queued; terminal states do not depend on any cross-writer order.
+- **Queued against running across writers (Task 14).** A job's non-terminal state is counted, never ordered: in the
+  latest attempt it is running while its claims (`claimed`, `started`) outnumber its `yielded` events and at least
+  match its `queued` events, else queued. A `failed` its writer then logged `queued` again (a retry within one
+  attempt) is not terminal, so the job reads as the retry's state. While the latest attempt has no terminal event, a
+  result an earlier attempt gave stands only when its key is the key the latest attempt gives the job: the runner
+  logs every job `queued` with its key under the current plan and placement (`plan_keys`; an upstream input is
+  identified by its upstream key, so every key is known before any job runs), and the Pool logs its retries with the
+  key under the retry's placement. A resume onto the same placement therefore shows completed work as done, and one
+  onto another backend is not done until recomputed; `Run.results` never serves an output under another key.
+  `Run.status` and `Run.results` read under the run's current epoch: a job with no event of it yet is queued. `logs_claims` is a member of the `Executor` protocol (`InProcess`
+  False, `Pool` True); when it is set the runner logs no `started` as it sends a fragment: the worker's `claimed` is
+  the start.
+- **The epoch precedes the attempt (Task 14 fix round).** `prepare` takes the epoch, then claims the attempt ordinal,
+  and records the attempt in `epoch/<n>/attempt.json` (`Epoch.bind`, read by `Epoch.attempt`, which is also how a
+  pool worker finds the attempt and ordinal to log `claimed` under). Every event carries its attempt's `epoch`, and a
+  job's latest attempt is ranked by (epoch, ordinal), so a stale coordinator that claimed a higher ordinal cannot
+  override the live epoch's results; its failures and blocks never decide a job's state, though a result it gave
+  stands as an earlier result. The runner treats `StaleCoordinator` and `QueueHeld` as interruptions: no
+  `fail_batch` and no `blocked` or `cancelled` for unsent jobs, which a later epoch runs.
+- **Epochs and the Pool (Task 14, ADR-003).** `runtime/execution/epoch.py`: `Epoch(run_dir).take()` makes
+  `epoch/<n>` by `mkdir` (a number taken by another coordinator is skipped), writing the lease bound to
+  `epoch/<n>/lease.json` at once, and `current()` is the highest. A coordinator (`start`, or `senselab coordinate
+  <run>`) holds `epoch/<n>/coordinator.lease`, kept alive under the profile's `lease` section, and marks
+  `epoch/<n>/ended` when it stops. `Run.wait` reports `interrupted` only while no thread of that `Run` is alive, the
+  latest epoch ended or its lease (or, never held, its directory) is older than its bound (`Epoch.stopped`), and no
+  claim on any of the run's queues is live; a running run is never reported interrupted. `Pool.submit`, every retry
+  and every poll of `results` raise `StaleCoordinator` once a newer epoch exists. `start` (and `Plan.run`) hands its
+  own epoch and attempt log to the executor through the protocol's `bind_epoch`, so a `Pool` built beforehand
+  coordinates as that epoch and is never stale for the first coordinator. `results` polls from `pool.first_poll_s`,
+  doubling up to `pool.poll_s`. A coordinator holds its epoch's lease from right after `prepare` (before
+  `reconcile`, the prov write and, in `start`, the thread launch), so a slow start never reads as a stale one. A
+  `QueueSet` built without `epoch=` reads `Epoch(root.parent).current`, the run its queues belong to, so a hold an
+  older epoch made after passing the fence is never honoured by any claimer. The Pool's expected key is computed
+  under the fragment's own placement (`job_key(..., placement)`), the request actually sent. Correctness does not rest on the fence: a stale
+  coordinator's put of a fragment already put is a no-op (an item is named by its digest, first writer wins), a put of
+  a new fragment is work a worker does once per outcome, and every result is first-writer-wins in the store. The Pool's
+  admission id is the run's (`run-<plan hash>`), since workers bind graph inputs from `inputs.json`, so two
+  coordinators of one plan put identical items, and a restarted coordinator replays the retry chain from the
+  outcomes on disk (`test_content_and_resource_charges_replay_after_restart`).
+- **Open: queue names lack `#<model identity>` (P3-32).** `NodePlacement` carries no resident-model identity yet, so
+  a `Pool` queue is named by `resource_class` alone; the suffix arrives with resident models and `svc:<id>` queues
+  (Task 16). `senselab coordinate` runs the plan's latest placement under the
+  packaged profile (or `--profile`), with workers started separately (`ExternalWorkers`) until Tasks 15 and 16 add
+  substrates; `Plan.run` on a slurm substrate still raises `ExecutorUnavailable`.
+- **Worker report (Task 14, for Task 15a).** A pool worker commits each item with `report(claim, digest, outcomes)`:
+  the outcome record carries `jobs`, one `ResultRef` per job. A queue `dead` outcome (a corrupt item) is a content
+  fault of each of its jobs. A held queue (`Queue.hold`) gives no claim.
+- **`inputs.json` under a lease (R-211).** `record_sources` merges and writes `inputs.json` under a lease on it,
+  proven before the write and retried up to `RECORD_ATTEMPTS` times, so two coordinators starting one plan both keep
+  every durable source.
 - **Queues (Task 13, ADR-003).** `runtime/execution/queue.py` holds one queue per resource class, with `#<model
   identity>` for a resident model, in a directory named by `identity_digest("label@1", name)`. An item is a plan
   fragment's JCS under `identity_digest("plan-fragment@1", …)`, first writer wins. The index is slots, never appended
