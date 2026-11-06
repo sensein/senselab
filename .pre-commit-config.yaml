@@ -52,14 +52,12 @@ repos:
   - id: check-added-large-files
     args: [--maxkb=15000]
   - id: check-case-conflict
-  # The b2aiprep task registry is vendored verbatim from upstream (data/b2ai_task_registry/PROVENANCE.yaml:
-  # "never hand-edit them"), so the formatters and codespell leave it byte-identical to its source commit.
   - id: end-of-file-fixer
-    exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/data/b2ai_task_registry/)
+    exclude: ^specs/.*/raw/
   - id: trailing-whitespace
     exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/review_page/vendor/)
   - id: pretty-format-json
-    exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/data/b2ai_task_registry/)
+    exclude: ^specs/.*/raw/
     args:
     - --autofix
     - --indent=4
@@ -97,7 +95,7 @@ repos:
     # reason. oclock is temporal_words.yaml's normalised key for "o'clock"; meu is Portuguese,
     # quoted from a transcript in a spec. mis, ser, vas, hace and varios are Spanish words in the
     # redaction policy's Spanish lexicons.
-    args: [--skip=*.ipynb, --skip=src/senselab/audio/workflows/triage/viewer/vendor/*.js, --skip=src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html, --skip=src/senselab/audio/workflows/triage/data/b2ai_task_registry/*, --ignore-words-list, 'oclock,meu,AER,FPR,PASE,preemptable,caf,als,UNDET,UNX,NotIn,FigureStyle,allk,empt,empted,disjointness,declaring,meaned,retuned,re-declaring,pre-empt,pre-empted,unparseable,probablistic,mis,ser,vas,hace,varios']
+    args: [--skip=*.ipynb, --skip=src/senselab/audio/workflows/triage/viewer/vendor/*.js, --skip=src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html, --ignore-words-list, 'oclock,meu,AER,FPR,PASE,preemptable,caf,als,UNDET,UNX,NotIn,FigureStyle,allk,empt,empted,disjointness,declaring,meaned,retuned,re-declaring,pre-empt,pre-empted,unparseable,probablistic,mis,ser,vas,hace,varios']
     additional_dependencies:
     - tomli
 - repo: local

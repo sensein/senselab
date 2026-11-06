@@ -268,7 +268,7 @@ voice:
 # SPEECH's enrollment, separation, diarization and non-target settings.
 speech:
   second_diarizer:                     # which model corroborates pyannote's speaker count
-  target_match_cosine: 0.25            # similarity at or above which a speaker or run is the enrolled target. SpeechBrain's own verification default for spkrec-ecapa-voxceleb; B2AI's profile fits 0.231
+  target_match_cosine: 0.25            # similarity at or above which a speaker or run is the enrolled target. SpeechBrain's own verification default for spkrec-ecapa-voxceleb; a profile may fit its own
   secondary_exclusive_min_s:           # profile value (data/profile_values.yaml)
   speech_test_stoi_floor:              # profile value (data/profile_values.yaml)
   speech_test_si_sdr_floor:            # profile value (data/profile_values.yaml)
@@ -445,7 +445,7 @@ verdict:
     # per-family difference has been derived yet. What it buys now is that the differences the
     # design names -- `maximum-phonation-time` declaring `expect_inhale` where its v2 does not,
     # inside one group -- are expressible without a code change.
-    by_family: {}   # dataset profile: per-family gate bounds (B2AI: rainbow, caterpillar and Stroop content-omission fractions, r8)
+    by_family: {}   # dataset profile: per-family gate bounds (e.g. a reading passage's content-omission fraction)
 
 # The label consolidation. TAXONOMY runs no models: it consolidates PREPROCESS's stored scores.
 taxonomy:
