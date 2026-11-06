@@ -54,6 +54,8 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
         "port-output@1",
         "port-gather@1",
         "profile-slice@1",
+        "plan-fragment@1",
+        "label@1",
     }
 )
 """The registered tags of `identity_digest`; no tag is a prefix of another."""
