@@ -5,7 +5,7 @@ import contextlib
 import importlib
 import threading
 from collections.abc import Callable, Iterator
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.faults import InfrastructureFault
@@ -54,6 +54,8 @@ class Server(Protocol):
 class WorkerLoadFailed(InfrastructureFault):
     """A worker did not start or load its backend: an infrastructure fault of its env; `__cause__` is what it raised."""
 
+
+Started = TypeVar("Started")
 
 ServerStart = Callable[[BackendSpec, EnvHandle, ResolvedModel, ExecutionProfile], Server]
 """Start the server of a backend, env and model under a profile and return it running."""
@@ -139,6 +141,7 @@ class WorkerSet:
         self._pool: collections.OrderedDict[tuple[str, ...], Worker] = collections.OrderedDict()
         self._held: dict[tuple[str, ...], threading.Lock] = {}
         self._busy: collections.Counter[tuple[str, ...]] = collections.Counter()
+        self._holders: dict[tuple[str, ...], int] = {}
         self._servers: dict[tuple[str, str, str], Server] = {}
         self._leases: dict[tuple[str, str, str], threading.Lock] = {}
 
@@ -177,24 +180,33 @@ class WorkerSet:
 
         Raises:
             ValueError: a server backend without `expected`; a budgeted host backend without `state_bytes`.
-            VllmStartError, LeaseTimeout, LeaseUnavailable, AttestationMismatch: as `server`.
-            WorkerLoadFailed: a pooled worker failed to start or load, whatever it raised.
+            WorkerLoadFailed: a worker or a server failed to start or load, whatever it raised (`VllmStartError`,
+                `LeaseTimeout`, `LeaseUnavailable` and `AttestationMismatch` from a server start among them).
         """
         init = worker_init(device, model)
         if backend.env.kind == "server":
             if expected is None or model is None:
                 raise ValueError(f"backend {backend.name!r} is a server backend; its expected attestation is needed")
-            yield self.server_worker(backend, init, self.server(backend, env, model, profile, expected))
+            yield _loaded(
+                lambda: self.server_worker(backend, init, self.server(backend, env, model, profile, expected))
+            )
             return
         host = backend.env.kind == "host"
         variant = str(profile.model_cache_budget_bytes) if host else profile.network
-        key = (backend.env.kind, env.python, backend.name, backend.worker, jcs_dumps(init).decode(), variant)
+        named = (backend.task, backend.name, backend.version, backend.worker)
+        key = (backend.env.kind, env.python, *named, jcs_dumps(init).decode(), variant)
         with self._lock:
             held = self._held.setdefault(key, threading.Lock())
             self._busy[key] += 1
         try:
             with held:
-                yield self._worker(key, backend, env, init, model, profile)
+                with self._lock:
+                    self._holders[key] = threading.get_ident()
+                try:
+                    yield self._worker(key, backend, env, init, model, profile)
+                finally:
+                    with self._lock:
+                        self._holders.pop(key, None)
         finally:
             with self._lock:
                 self._busy[key] -= 1
@@ -256,8 +268,7 @@ class WorkerSet:
                 )
             )
         budget = profile.model_cache_budget_bytes
-        identity = model.identity if model is not None else value_digest("backend", {"name": backend.name})
-        key: ModelKey = (backend.name, identity, init["device"], PRECISION)
+        key = host_model_key(backend, env, model, init["device"])
         size_of = _size_of(backend.worker, budget)
         return _loaded(
             lambda: HostWorker(
@@ -317,13 +328,15 @@ class WorkerSet:
             size_of=lambda _: 0,
         )
 
-    def abandon(self) -> None:
-        """Close every pooled worker process a job holds now, so its `run` raises `WorkerLost`.
+    def abandon(self, thread: int) -> None:
+        """Close every pooled worker process the thread `thread` holds now, so its `run` raises `WorkerLost`.
 
         A later checkout starts another. A host worker runs in this process and cannot be stopped; it is left to finish.
         """
         with self._lock:
-            held = [(k, w) for k, w in self._pool.items() if self._busy[k] > 0 and isinstance(w, WorkerClient)]
+            held = [
+                (k, w) for k, w in self._pool.items() if self._holders.get(k) == thread and isinstance(w, WorkerClient)
+            ]
             for key, _ in held:
                 del self._pool[key]
         for _, worker in held:
@@ -342,7 +355,23 @@ class WorkerSet:
             server.stop()
 
 
-def _loaded(start: Callable[[], Worker]) -> Worker:
+def host_model_key(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | None, device: str) -> ModelKey:
+    """Return the process `ModelCache` key of a host backend, as (name, identity, device, dtype).
+
+    The identity is its model's; without a model it is the digest of the backend's task, name, version and env, so
+    two same-named backends never share a loaded state.
+    """
+    identity = (
+        model.identity
+        if model is not None
+        else value_digest(
+            "backend", {"task": backend.task, "name": backend.name, "version": backend.version, "env": env.python}
+        )
+    )
+    return (backend.name, identity, device, PRECISION)
+
+
+def _loaded(start: Callable[[], Started]) -> Started:
     """Return the worker `start` starts and loads.
 
     Raises:

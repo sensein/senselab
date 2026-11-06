@@ -1,5 +1,6 @@
 """`WorkerSet`: a bounded pool that closes idle workers first, and server starts leased per env, backend and model."""
 
+import dataclasses
 import platform
 import threading
 from typing import Any
@@ -9,11 +10,12 @@ import senselab_core.runtime.fake_backend as fake
 from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.execution.workers import PRECISION, WorkerLoadFailed, WorkerSet, host_model_key
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.vllm_server import Attestation
+from senselab_core.runtime.vllm_server import Attestation, VllmStartError
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
+from senselab_worker.faults import FaultClass, classify
 
 ENV = EnvHandle(source_tree_python(), platform.python_version(), "1" * 64, "2" * 64, None)
 PROFILE = ExecutionProfile.load()
@@ -144,3 +146,43 @@ def test_server_start_lock_per_env_and_model() -> None:
     assert served.attestation == _attestation(first) and len(starts) == 2
     workers.close()
     assert served.attestation is None
+
+
+@pytest.mark.logic
+def test_same_named_host_backends_of_two_tasks_never_share_a_loaded_state() -> None:
+    """Two host backends named `dsp`, of two tasks, load their own state; a model's key is its identity as before."""
+    first = _host("dsp").model_copy(update={"worker": "backends.load_counter_backend_fixture"})
+    second = first.model_copy(update={"task": "worker_set_test.other"})
+    workers, states = WorkerSet(4), []
+    for backend in (first, second, first):
+        with workers.checkout(backend, ENV, None, device="cpu", profile=PROFILE) as worker:
+            states.append(worker.run([{"id": "a", "inputs": {}}], {})[0]["outputs"]["state"])
+    workers.close()
+    assert states[0] != states[1] and states[2] == states[0]
+    keys = {
+        host_model_key(b, e, None, "cpu")
+        for b in (first, second)
+        for e in (ENV, dataclasses.replace(ENV, python="other"))
+    }
+    assert len(keys) == 4
+    model = _model("a" * 40)
+    assert host_model_key(first, ENV, model, "cpu") == host_model_key(second, ENV, model, "cpu")
+    assert host_model_key(first, ENV, model, "cpu") == ("dsp", "a" * 40, "cpu", PRECISION)
+
+
+@pytest.mark.logic
+def test_a_server_that_fails_to_start_is_a_load_failure() -> None:
+    """A server that fails to start reaches a checkout as the cause of `WorkerLoadFailed`, an infrastructure fault."""
+
+    def start(*_: Any) -> Any:  # noqa: ANN401 - a ServerStart
+        raise VllmStartError("timeout", "the server did not come up")
+
+    backend = _host("served").model_copy(
+        update={"env": Env.server("s"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
+    )
+    model = _model("b" * 40)
+    workers = WorkerSet(1, start_server=start)
+    with pytest.raises(WorkerLoadFailed, match="VllmStartError") as raised:
+        with workers.checkout(backend, ENV, model, device="cpu", profile=PROFILE, expected=_attestation(model)):
+            pass
+    assert isinstance(raised.value.__cause__, VllmStartError) and classify(raised.value) is FaultClass.INFRASTRUCTURE

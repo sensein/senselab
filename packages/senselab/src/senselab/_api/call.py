@@ -25,6 +25,7 @@ from senselab_core.runtime.call import Result, TaskCall
 from senselab_core.runtime.execution.in_process import CallFailed, InProcess
 from senselab_core.runtime.execution.outputs import AmbiguousClock, OutputTypeMismatch
 from senselab_core.runtime.execution.run import ResultSet
+from senselab_core.runtime.execution.workers import WorkerLoadFailed
 from senselab_core.runtime.keys import MissingProfileSlice
 from senselab_core.runtime.licenses import LicenseRefused
 from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
@@ -93,6 +94,7 @@ ERROR_CODES: tuple[tuple[type[Exception], str, str], ...] = (
     (LeaseTimeout, "resource_busy", "retry when the other holder of the resource has finished"),
     (LeaseUnavailable, "resource_busy", "retry when the other holder of the resource has finished"),
     (WorkerFatal, "worker_failed", "the worker stopped; this is a fault of the host, not of the input"),
+    (WorkerLoadFailed, "worker_failed", "the worker did not load; this is a fault of the host, not of the input"),
     (WorkerLost, "worker_failed", "the worker stopped; this is a fault of the host, not of the input"),
     (ProtocolError, "worker_failed", "the worker broke its protocol; report the backend"),
     (
@@ -113,6 +115,8 @@ _FAULT_FIX = {
 
 def api_error(error: Exception) -> ApiError | None:
     """Return the `ApiError` for an error `InProcess.call` documents, or None when it documents none such."""
+    if isinstance(error, WorkerLoadFailed) and isinstance(error.__cause__, Exception):
+        return api_error(error.__cause__)
     if isinstance(error, CallFailed):
         fault = error.failure.fault_class
         return ApiError(f"{fault.value}_fault", str(error), _FAULT_FIX[fault])

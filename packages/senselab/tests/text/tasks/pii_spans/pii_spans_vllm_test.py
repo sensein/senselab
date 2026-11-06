@@ -24,7 +24,7 @@ from senselab_core.kernel.results import TextSpans
 from senselab_core.runtime.call import Packaged, Result, TaskCall, use_packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.in_process import CallFailed, InProcess
-from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.licenses import packaged_lock_records
@@ -343,5 +343,6 @@ def test_a_store_hit_starts_no_server_and_a_mismatching_attestation_refuses(
     assert not list((tmp_path / "fake2").glob("*.json"))
     _knob(tmp_path, FAKE_VLLM_VERSION="9.9.9")
     served.opened.append(_make_env(tmp_path, "env3"))  # type: ignore[attr-defined]
-    with pytest.raises(AttestationMismatch, match="9.9.9"):
+    with pytest.raises(WorkerLoadFailed, match="9.9.9") as refused:
         _run(_call_of("Call 555-0199."), execution=profile, store=store)
+    assert isinstance(refused.value.__cause__, AttestationMismatch)

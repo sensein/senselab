@@ -36,7 +36,7 @@ from senselab_core.runtime.execution.in_process import fragment_jobs, job_key, p
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool import report, run_plan
 from senselab_core.runtime.execution.queue import Claim, QueueSet
-from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
+from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -59,10 +59,8 @@ class Abandoned(Exception):
 def whole(exc: BaseException) -> bool:
     """Whether `exc` fails a request of a loaded worker as a whole: it was lost, fatal, broke the protocol, or ran out.
 
-    A worker that failed to start or load (`WorkerLoadFailed`) fails its env, not the request, and is never one.
+    A worker that failed to start or load (`WorkerLoadFailed`) is an infrastructure fault of its env and is never one.
     """
-    if isinstance(exc, WorkerLoadFailed):
-        return False
     return isinstance(exc, (WorkerLost, WorkerFatal, ProtocolError)) or classify(exc) is FaultClass.RESOURCE
 
 
@@ -212,10 +210,10 @@ class PoolWorker:
         """Run every item of `claim`, committing each as its jobs finish; release what is held at the end.
 
         An item whose jobs cannot be built is given the outcome `dead` with that failure. The jobs run on a thread
-        while this one waits, proving the claim's leases every renewal interval. Once a lease is lost, the request in
-        flight is abandoned (`WorkerSet.abandon`), nothing more is sent, and this returns only after the thread
-        stopped. Once `stop` is set, the request is abandoned too, the thread is given `join_s`, and the items whose
-        jobs finished by then are committed.
+        while this one waits, proving the claim's leases every renewal interval. Once a lease is lost, the claim's
+        other items are released at once, the request in flight is abandoned (`WorkerSet.abandon`), nothing more is
+        sent, and this returns only after the thread stopped. Once `stop` is set, the request is abandoned too, the
+        thread is given `join_s`, and the items whose jobs finished by then are committed.
         """
         with claim:
             self._log_claimed(claim)
@@ -239,6 +237,7 @@ class PoolWorker:
                     logger.warning(
                         "pool worker %s lost a claim on queue %s; its request is abandoned", self.name, claim.queue.name
                     )
+                    claim.release()
                     break
             self._stop_runner(runner, cancelled)
             while not finished.empty():
@@ -249,7 +248,8 @@ class PoolWorker:
         if not runner.is_alive():
             return
         cancelled.set()
-        (self._workers if self._workers is not None else process_workers(self.profile)).abandon()
+        if runner.ident is not None:
+            (self._workers if self._workers is not None else process_workers(self.profile)).abandon(runner.ident)
         if self.stop.is_set():
             runner.join(self.join_s)
             return

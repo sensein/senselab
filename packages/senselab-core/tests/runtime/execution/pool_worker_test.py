@@ -20,7 +20,7 @@ from senselab_core.runtime.execution.executor import Admission, PlanFragment, Re
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
 from senselab_core.runtime.execution.job import Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool_worker import PoolWorker, Send, serve_pool
-from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
+from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest
 from senselab_core.runtime.execution.run import prepare
 from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
 from senselab_core.runtime.keys import Placement
@@ -69,14 +69,14 @@ def _run(
 
 
 def _put(placed: Plan, pool_dir: Path, element: int, queue: str = "cpu", why: str = "") -> str:
-    """Put the one-job fragment of `element` on `queue`, its placement's `why` set when given; return its row id."""
+    """Put the one-job fragment of `element` on `queue`, its placement's `why` set when given; return its digest."""
     admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
     fragment = node_fragment(placed, admission, elements=[(element,)])
     update: dict[str, object] = {"resource_class": queue, **({"why": why} if why else {})}
     fragment = fragment.model_copy(update={"placement": fragment.placement.model_copy(update=update)})
     QueueSet(pool_dir, placed.execution).queue(queue).put(fragment)
     time.sleep(0.01)
-    return str(placed.manifest.rows[element].id)
+    return item_digest(fragment)
 
 
 def _sender(store: ResultStore, profile: ExecutionProfile) -> Send:
@@ -315,7 +315,7 @@ class _Abandoning(WorkerSet):
         super().__init__(1)
         self.abandoned = threading.Event()
 
-    def abandon(self) -> None:
+    def abandon(self, thread: int) -> None:
         self.abandoned.set()
 
 
@@ -372,3 +372,34 @@ def test_halt_commits_finished_groups_and_releases_the_rest(tmp_path: Path) -> N
     again = queue.claim("next", max_items=2)
     assert outcome["outcome"] == "done" and again is not None and len(again.items) == 1
     again.release()
+
+
+@pytest.mark.logic
+def test_a_lost_claim_releases_its_other_items_before_its_request_ends(tmp_path: Path) -> None:
+    """A request that cannot be abandoned outlives the lease it lost; the claim's other item is claimable at once."""
+    profile = _profile()
+    placed, store, pool_dir = _run(tmp_path, profile, ["one", "two"])
+    lost = _put(placed, pool_dir, 0)
+    kept = _put(placed, pool_dir, 1, why="second")
+    queue = QueueSet(pool_dir, profile).queue("cpu")
+    taken: list[Claim] = []
+    seen: list[str] = []
+
+    def uninterruptible(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+        shutil.rmtree(queue.path / "claims" / f"{lost}.lease")
+        until = time.monotonic() + 2.5 * profile.lease.stale_after_s
+        while time.monotonic() < until and kept not in seen:
+            claim = queue.claim("other", max_items=2)
+            taken.extend([claim] if claim is not None else [])
+            seen.extend(claim.items if claim is not None else ())
+            time.sleep(0.02)
+        time.sleep(max(0.0, until - time.monotonic()))
+        raise WorkerLost("the request ended after its claim was lost")
+
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, workers=WORKERS, send=uninterruptible)
+    try:
+        assert worker.serve() == 0
+    finally:
+        for claim in taken:
+            claim.release()
+    assert kept in seen and _outcomes(pool_dir, profile) == []
