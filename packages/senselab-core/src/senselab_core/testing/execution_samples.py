@@ -103,8 +103,13 @@ def register_execution_samples(register: Register) -> None:
         lambda: [
             ResultRef(job=jobs[0], key_digest=_PLAN, output_identity=_OUTPUT),
             ResultRef(job=jobs[1], key_digest=_PLAN, failure=faults[0]),
+            ResultRef(job=jobs[0], key_digest=_PLAN, output_identity=_OUTPUT, served="exact"),
         ],
-        invalid_updates=[{"key_digest": "k"}, {"output_identity": _OUTPUT, "failure": faults[0].model_dump()}],
+        invalid_updates=[
+            {"key_digest": "k"},
+            {"output_identity": _OUTPUT, "failure": faults[0].model_dump()},
+            {"served": "other"},
+        ],
     )
     register(
         UpstreamRef,
@@ -126,26 +131,32 @@ def register_event_samples(register: Register, jobs: tuple[JobRef, ...], faults:
     register(
         Event,
         lambda: [
-            Event(kind="queued", node="n", job=jobs[0], key=_PLAN, t_ns=1),
+            Event(kind="queued", node="n", job=jobs[0], attempt="a-1", seq=0, t_ns=1),
             Event(
                 kind="finished",
                 node="n",
                 job=jobs[1],
                 key=_PLAN,
-                attempt=2,
+                attempt="a-2",
+                seq=3,
                 placement_digest="12" * 32,
                 env="host",
                 output=_OUTPUT,
                 t_ns=2,
             ),
-            Event(kind="failed", node="n", job=jobs[0], fault="content", failure=faults[0], t_ns=3),
-            Event(kind="cache_hit", node="n", job=jobs[1], reuse="equivalent", output=_OUTPUT, t_ns=4),
-            Event(kind="verify", node="n", t_ns=5),
+            Event(kind="failed", node="n", job=jobs[0], fault="content", failure=faults[0], attempt="a", seq=1, t_ns=3),
+            Event(
+                kind="cache_hit", node="n", job=jobs[1], reuse="equivalent", output=_OUTPUT, attempt="a", seq=2, t_ns=4
+            ),
+            Event(kind="verify", node="n", attempt="a", seq=4, t_ns=5),
+            Event(kind="blocked", node="n", job=jobs[0], attempt="a", seq=5, t_ns=6),
+            Event(kind="cancelled", node="n", job=jobs[1], attempt="a", seq=6, t_ns=7),
         ],
         invalid_updates=[
             {"format": "run-event@2.0"},
             {"kind": "other"},
-            {"attempt": 0},
+            {"attempt": ""},
+            {"seq": -1},
             {"t_ns": -1},
             {"fault": "resource"},
             {"reuse": "other"},

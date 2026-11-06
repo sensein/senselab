@@ -18,7 +18,7 @@ from senselab_core.runtime.planner import Plan, one_node_graph
 from senselab_core.runtime.planner import plan as plan_runtime
 from senselab_core.runtime.profiles import ExecutionProfile
 
-from senselab._api.call import ConfiguredTask, api_error
+from senselab._api.call import ConfiguredTask, reraise
 
 __all__ = ["Dataset", "PlanKwargs", "Session", "map_over", "plan", "resume", "run", "session", "use"]
 
@@ -124,17 +124,17 @@ def run(
 
 
 def resume(target: Plan | Run) -> ResultSet:
-    """Run a plan again in its own run directory, served from the result store where it was done, and return it.
+    """Run a plan again in its own run directory, as a new attempt, and return its results.
+
+    A `Run` is resumed from what its directory holds: its plan, its input sources and the result store, so jobs the
+    store serves are not recomputed. Without a session executor it runs on `InProcess` under the packaged profile if
+    the plan was placed under it.
 
     Raises:
-        ValueError: a `Run` that was not started in this process has no plan to run again.
+        ExecutorUnavailable, ValueError, InputChanged: as `Plan.run`.
     """
-    if isinstance(target, Run):
-        found = target.plan
-        if found is None:
-            raise ValueError("a run opened over a directory has no plan in this process; resume the `Plan`")
-        target = found
-    started = target.run(session().executor)
+    placed = target.plan if isinstance(target, Run) else target
+    started = placed.run(session().executor)
     started.wait()
     return started.results()
 
@@ -145,7 +145,4 @@ def map_over(task: ConfiguredTask, dataset: DatasetProtocol, bind: Mapping[str, 
     try:
         return run(graph, dataset, bind=dict(bind or {}))
     except Exception as error:
-        envelope = api_error(error)
-        if envelope is None:
-            raise
-        raise envelope from error
+        reraise(error)

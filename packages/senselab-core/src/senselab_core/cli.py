@@ -8,7 +8,7 @@ from pathlib import Path
 
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
-from senselab_core.runtime.execution.events import Event, run_dir_of
+from senselab_core.runtime.execution.events import Event, runs_root
 from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run
 from senselab_core.runtime.explain import node_line
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
@@ -60,7 +60,7 @@ def _run_directory(name: str) -> Path:
     """
     if Path(name).is_dir():
         return Path(name)
-    root = run_dir_of("runs").parent
+    root = runs_root()
     listed = sorted(root.iterdir()) if root.is_dir() else []
     found = [p for p in listed if p.is_dir() and name and p.name.startswith(name)]
     if len(found) != 1:
@@ -76,12 +76,12 @@ def run_status(args: argparse.Namespace) -> int:
     """Run a parsed ``status``: the jobs of a run by state, its faults and its broken envs, from its events."""
     try:
         run = Run(_run_directory(args.run_ref))
-        status, manifest = run.status(), run.manifest()
+        status = run.status()
     except (OSError, ValueError) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
         return 1
-    state = manifest.get("state", "unknown")
-    print(f"run {manifest.get('plan_hash', run.run_dir.name)} attempt {manifest.get('attempt', '-')}: {state}")
+    state = "cancelled" if status.cancelled else "done" if status.done else "not done"
+    print(f"run {run.manifest().get('plan_hash', run.run_dir.name)}: {state}; last event {status.last_event_ns}")
     print("jobs: " + ", ".join(f"{k} {v}" for k, v in status.counts.items()))
     print("faults: " + (", ".join(f"{k} {v}" for k, v in sorted(status.faults.items())) or "none"))
     for broken in status.broken:
@@ -95,7 +95,16 @@ def _event_line(event: Event) -> str:
     element = "" if event.job is None else str(list(event.job.element))
     fault = "" if event.fault is None else f" fault {event.fault}"
     key = "" if event.key is None else f" key {event.key[:12]}"
-    return f"  {event.t_ns} {event.kind} {event.node}{element} attempt {event.attempt}{key}{fault}"
+    return f"  {event.t_ns} {event.kind} {event.node}{element} attempt {event.attempt} seq {event.seq}{key}{fault}"
+
+
+def _placement(run_dir: Path, document: dict[str, object], events: list[Event]) -> PlanPlacement:
+    """Return the placement of the attempt that wrote the newest of `events`, else the plan's."""
+    for event in reversed(events):
+        path = run_dir / PLACEMENTS_DIR / f"{event.attempt}.json"
+        if path.is_file():
+            return PlanPlacement.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    return PlanPlacement.model_validate(document["placement"])
 
 
 def run_explain(args: argparse.Namespace) -> int:
@@ -104,10 +113,6 @@ def run_explain(args: argparse.Namespace) -> int:
         run = Run(_run_directory(args.run_ref))
         document = json.loads((run.run_dir / PLAN_FILE).read_text(encoding="utf-8"))
         logical = LogicalPlan.model_validate(document["logical"])
-        attempt = run.manifest().get("attempt")
-        attempted = run.run_dir / PLACEMENTS_DIR / f"{attempt}.json"
-        found = json.loads(attempted.read_text(encoding="utf-8")) if attempted.is_file() else document["placement"]
-        placement = PlanPlacement.model_validate(found)
         events = run.events()
     except (OSError, ValueError, KeyError) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
@@ -119,8 +124,9 @@ def run_explain(args: argparse.Namespace) -> int:
         print(f"senselab: error: no node or key {args.target!r} in run {run.run_dir.name}", file=sys.stderr)
         return 1
     for node in nodes:
-        print(node_line(node, tasks[node], placement) if node in placement.nodes else f"node {node}")
         shown = [e for e in matched if e.node == node] or [e for e in events if e.node == node]
+        placement = _placement(run.run_dir, document, shown)
+        print(node_line(node, tasks[node], placement) if node in placement.nodes else f"node {node}")
         print(f"events ({len(shown)}):")
         for event in shown:
             print(_event_line(event))
@@ -128,8 +134,9 @@ def run_explain(args: argparse.Namespace) -> int:
             assert event.failure is not None
             print(f"fault {event.failure.fault}: {event.failure.type}")
             print(_tail(event.failure.message))
-        if not any(e.kind in ("finished", "cache_hit", "failed") for e in shown):
-            print("no result: no job of this node finished; an upstream job failed, or the run stopped before it")
+        for event in (e for e in shown if e.kind in ("blocked", "cancelled")):
+            why = "an upstream job failed" if event.kind == "blocked" else "the run was cancelled before it was sent"
+            print(f"{event.kind} {event.node}{list(event.job.element) if event.job else ''}: {why}")
     return 0
 
 

@@ -9,7 +9,9 @@ import pytest
 import soundfile
 from api_test import _echo_namespace, fake_stack  # noqa: F401 - `fake_stack` is the fixture of the fake stack
 from senselab._api.facade import PlanKwargs, session
-from senselab_core.runtime.execution.run import Output, ResultSet
+from senselab_core.kernel.dataset import Record
+from senselab_core.runtime.execution.executor import FaultRecord
+from senselab_core.runtime.execution.run import NotRun, Output, ResultSet
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 
@@ -104,3 +106,27 @@ def test_sl_dataset_bids_builds_bids_dataset(tmp_path: Path) -> None:
     assert [r.entities["task"] for r in built.records()] == ["read"]
     with pytest.raises(TypeError, match="namespace"):
         sl.Dataset()
+
+
+@pytest.mark.logic
+def test_to_frame_indexed_by_entities() -> None:
+    """The frame is indexed by the records' entities, one column per output, and a failed row holds its fault class."""
+    import pandas  # noqa: PLC0415 - a test dependency of this package, imported so its absence fails the test
+
+    records = [Record(id=f"sub-0{i}/a.wav", entities={"subject": f"0{i}", "task": "x"}) for i in (1, 2, 3)]
+    fault = FaultRecord(fault="content", type="ContentFault", message="bad", gap=False, charged=True)
+    results = ResultSet(
+        [
+            (records[0], Output({"score": 0.5, "label": "a"})),
+            (records[1], fault),
+            (records[2], Output({"score": 0.25, "label": "b"})),
+        ]
+    )
+    frame = results.to_frame()
+    assert list(frame.index.names) == ["subject", "task"]
+    assert list(frame.index) == [("01", "x"), ("02", "x"), ("03", "x")]
+    assert list(frame.columns) == ["id", "label", "score", "fault", "not_run"]
+    assert frame.loc[("01", "x"), "score"] == 0.5 and frame.loc[("03", "x"), "label"] == "b"
+    assert frame.loc[("02", "x"), "fault"] == "content" and pandas.isna(frame.loc[("02", "x"), "score"])
+    plain = ResultSet([(Record(id="r0"), Output({"v": 1})), (Record(id="r1"), NotRun("cancelled"))]).to_frame()
+    assert list(plain.index) == ["r0", "r1"] and plain.index.name == "id" and plain.loc["r1", "not_run"] == "cancelled"

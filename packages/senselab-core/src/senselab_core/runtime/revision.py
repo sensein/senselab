@@ -91,7 +91,16 @@ def choose_attempt_id(environ: Mapping[str, str]) -> str:
     try:
         return run_component(chosen)
     except ValueError as err:
-        raise ValueError(f"run id from SENSELAB_RUN_ID or Slurm: {err}") from None
+        raise ValueError(f"attempt id from SENSELAB_RUN_ID or Slurm: {err}") from None
+
+
+def fresh_attempt_id(environ: Mapping[str, str] | None = None) -> str:
+    """Return the attempt id of one run or resume: the id `environ` pins, else a new UUID4 every call.
+
+    Raises:
+        ValueError: the id is refused by `run_component`.
+    """
+    return choose_attempt_id(os.environ if environ is None else environ)
 
 
 @functools.cache

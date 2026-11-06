@@ -18,6 +18,7 @@ from senselab_core.kernel.identity import (
     port_output_identity,
 )
 from senselab_core.kernel.placement import NodePlacement
+from senselab_core.kernel.plan import ReuseName
 from senselab_core.runtime.planner import Plan
 
 Hex64 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -170,15 +171,21 @@ class PlanFragment(Formatted):
 
 
 class ResultRef(Frozen):
-    """What one job gave: its key's digest and either its output identity or its failure."""
+    """What one job gave: its key's digest and either its output identity or its failure.
+
+    `served` is the reuse policy under which a stored result gave it, None when the job executed.
+    """
 
     job: JobRef
     key_digest: Hex64
     output_identity: OutputIdentity | None = None
     failure: FaultRecord | None = None
+    served: ReuseName | None = None
 
     @model_validator(mode="after")
     def _check_one(self) -> "ResultRef":
+        if self.served is not None and self.output_identity is None:
+            raise ValueError("only a result that was given can have been served from the store")
         if (self.output_identity is None) == (self.failure is None):
             raise ValueError("a result names exactly one of an output identity and a failure")
         return self

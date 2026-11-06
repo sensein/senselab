@@ -14,6 +14,7 @@ import contextlib
 import os
 import re
 import threading
+import traceback
 import typing
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -30,7 +31,7 @@ from pydra.workers.base import Worker
 
 from senselab_core.kernel.graph import Edge, fan_out_issues, mapped_nodes, order, split
 from senselab_core.kernel.identity import InputIdentity, gather_identity, port_output_identity
-from senselab_core.runtime.execution.events import EventKind, EventLog, run_dir_of
+from senselab_core.runtime.execution.events import TERMINAL, EventKind, EventLog, run_dir_of
 from senselab_core.runtime.execution.executor import Admission, Executor, FaultRecord, JobRef, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
 from senselab_core.runtime.execution_settings import JobLease
@@ -304,6 +305,35 @@ class _Run:
     errors: list[BaseException] = field(default_factory=list)
     sending: set[asyncio.Task[None]] = field(default_factory=set)
     element_failures: set[str] = field(default_factory=set)
+    ended: set[tuple[str, tuple[int, ...]]] = field(default_factory=set)
+
+    def expected(self) -> list[tuple[str, tuple[int, ...]]]:
+        """Return every job of the plan as (node, element): a mapped node's per record, any other once."""
+        graph = self.placed.logical.graph
+        mapped = mapped_nodes(graph)
+        rows = len(self.placed.manifest.rows)
+        return [(n, (i,)) for n in order(graph) if n in mapped for i in range(rows)] + [
+            (n, ()) for n in order(graph) if n not in mapped
+        ]
+
+    def close(self) -> None:
+        """Give every job with no terminal event its own: `cancelled` once cancelled, else `blocked`."""
+        for node, element in self.expected():
+            if (node, element) not in self.ended:
+                self.log("cancelled" if self.cancel.is_set() else "blocked", node, element)
+
+    def fail_batch(self, node: str, elements: list[tuple[int, ...]], error: Exception) -> None:
+        """Log `failed` for each of `elements` with no result: infrastructure, with the error and its notes."""
+        failure = FaultRecord(
+            fault="infrastructure",
+            type=type(error).__name__,
+            message="".join(traceback.format_exception_only(error)),
+            gap=False,
+            charged=False,
+        )
+        for element in elements:
+            if (node, element) not in self.ended:
+                self.log("failed", node, element, failure=failure)
 
     def dispatch(
         self, node: str, batch: list[tuple[Any, tuple[int, ...], Any]], settle: Callable[[ResultRef], object]
@@ -319,8 +349,8 @@ class _Run:
         fragment = node_fragment(
             self.placed, self.admission, node, upstream=_upstream(self.placed, node, batch), elements=elements
         )
-        for element in elements:
-            self.log("started", node, element)
+        for job, element, _ in batch:
+            self.log("started", node, element, key=job.checksum)
         for ref in self.executor.results(self.executor.submit(fragment)):
             settle(ref)
 
@@ -333,9 +363,12 @@ class _Run:
         key: str | None = None,
         failure: FaultRecord | None = None,
         output: str | None = None,
+        reuse: str | None = None,
     ) -> None:
         """Append the event of `kind` for the job of `node` at `element`, with the node's placement and env."""
         placement = self.placed.placement.nodes[node]
+        if kind in TERMINAL:
+            self.ended.add((node, element))
         self.events.record(
             kind,
             node,
@@ -345,6 +378,7 @@ class _Run:
             failure=failure,
             env=placement.env,
             output=output,
+            reuse=reuse,
         )
 
 
@@ -408,7 +442,6 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
         future: asyncio.Future[ResultRef] = loop.create_future()
         element = _element(run.placed, node, job)
         run.pending.setdefault(node, []).append((job, element, future))
-        run.log("queued", node, element, key=job.checksum)
         if len(run.pending[node]) >= run.placed.placement.nodes[node].batch_size:
             self._flush(run, node)
         elif node not in run.scheduled:
@@ -434,13 +467,15 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
 
         def settle(ref: ResultRef) -> None:
             run.results.setdefault(node, {})[ref.job.element] = ref
+            kind: EventKind = "failed" if ref.failure is not None else "cache_hit" if ref.served else "finished"
             run.log(
-                "finished" if ref.failure is None else "failed",
+                kind,
                 node,
                 ref.job.element,
                 key=ref.key_digest,
                 failure=ref.failure,
                 output=ref.output_identity,
+                reuse=ref.served,
             )
             futures[ref.job.element].set_result(ref)
 
@@ -448,6 +483,8 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
             await asyncio.to_thread(run.dispatch, node, batch, lambda ref: loop.call_soon_threadsafe(settle, ref))
         except Exception as error:  # noqa: BLE001 - every waiting job is failed with it, and the run re-raises it
             run.errors.append(error)
+            if not isinstance(error, RunCancelled):
+                run.fail_batch(node, list(futures), error)
         except BaseException as signal:
             for future in futures.values():
                 if not future.done():
@@ -512,6 +549,8 @@ class PydraRunner:
         store = store if store is not None else SenselabStore(root)
         admission = executor.admit(placed, values)
         run = _Run(placed, admission, executor, store, events, cancel if cancel is not None else threading.Event())
+        for node, element in run.expected():
+            run.log("queued", node, element)
         classes = sorted({p.resource_class for p in placed.placement.nodes.values()})
         workers = {name: ExecutorWorker(run_state=run, resource_class=name) for name in classes}
         try:
@@ -535,6 +574,7 @@ class PydraRunner:
                 raise
         finally:
             executor.release(admission)
+            run.close()
         return _outcome(placed, run)
 
 

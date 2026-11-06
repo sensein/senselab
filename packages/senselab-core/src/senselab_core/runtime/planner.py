@@ -10,10 +10,10 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
-from senselab_core.kernel.dataset import Dataset, InputManifest, ManifestRow, Record
+from senselab_core.kernel.dataset import Dataset, InputManifest, ManifestRow
 from senselab_core.kernel.declare import Registry, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, GraphIssue, Node, validate
-from senselab_core.kernel.identity import InputIdentity, ModelRef, ResolvedModel
+from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan, plan_hash
 from senselab_core.runtime.call import (
@@ -27,7 +27,7 @@ from senselab_core.runtime.call import (
     pin_model,
 )
 from senselab_core.runtime.catalogue import Catalogue
-from senselab_core.runtime.datasets import bound_manifest
+from senselab_core.runtime.datasets import sourced_manifest
 from senselab_core.runtime.explain import explain
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
@@ -38,6 +38,7 @@ from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
 if TYPE_CHECKING:
     from senselab_core.runtime.execution.executor import Executor
     from senselab_core.runtime.execution.run import Run
+    from senselab_core.runtime.store import ResultStore
 
 CALL_NODE = "call"
 """The id of the one node a task call is planned as."""
@@ -150,11 +151,12 @@ def _manifest(  # noqa: PLR0913 - the graph and what binds its inputs
     spec: TaskSpec | None,
     bind: Mapping[str, str],
     inputs: Mapping[str, object],
-) -> tuple[InputManifest, dict[InputIdentity, object], tuple[Record, ...]]:
-    """Return the manifest of the records `graph` runs over, the value of each input identity and the records.
+) -> tuple[InputManifest, dict[str, Any]]:
+    """Return the manifest of the records `graph` runs over and the sources its inputs are read from.
 
-    The records are the dataset's, or the call's one. Over a dataset each row holds its record's identity for every
-    record-bound input and the broadcast identity of every other input.
+    The sources are `{"rows": [{port: source}], "shared": {port: source}}`, a row per manifest row and the broadcast
+    inputs once; a source is a path as text or a JSON value. Over a dataset each row holds its
+    record's identity for every record-bound input and the broadcast identity of every other input.
     """
     if dataset is not None:
         if call is not None and call.inputs:
@@ -166,27 +168,24 @@ def _manifest(  # noqa: PLR0913 - the graph and what binds its inputs
             )
         if set(bind) - set(record):
             raise RecordBinding(tuple(sorted(set(bind) - set(record))), "bind names record-bound inputs only")
-        bound = {port: bind_input(port, kind, inputs[port]) for port, kind in broadcast.items()}
-        shared = {port: identity for port, (identity, _, _) in bound.items()}
-        built, values = bound_manifest(dataset, record, bind=bind)
-        values.update({identity: value for identity, value, _ in bound.values()})
+        shared = {port: bind_input(port, kind, inputs[port])[0] for port, kind in broadcast.items()}
+        built, rows = sourced_manifest(dataset, record, bind=bind)
         manifest = InputManifest(
             rows=tuple(ManifestRow(id=r.id, entities=r.entities, inputs={**r.inputs, **shared}) for r in built.rows)
         )
-        return manifest, values, tuple(dataset.records())
+        return manifest, {"rows": rows, "shared": {port: inputs[port] for port in broadcast}}
     if bind or inputs:
         raise ValueError("bind and inputs name the inputs of a graph over a dataset; there is no dataset")
     if call is None or spec is None:
         if graph.inputs:
             raise ValueError(f"the graph has inputs {sorted(graph.inputs)}; they are bound from a dataset's records")
-        return InputManifest(), {}, ()
+        return InputManifest(), {"rows": [], "shared": {}}
     if set(call.inputs) != set(spec.inputs):
         raise ValueError(f"{call.task!r} takes inputs {sorted(spec.inputs)}; the call gives {sorted(call.inputs)}")
     bound = {port: bind_input(port, spec.inputs[port], value) for port, value in call.inputs.items()}
     identities = {port: identity for port, (identity, _, _) in bound.items()}
-    values = {identity: value for identity, value, _ in bound.values()}
     manifest = InputManifest(rows=(ManifestRow(id=ITEM_ID, entities={}, inputs=identities),))
-    return manifest, values, (Record(id=ITEM_ID),)
+    return manifest, {"rows": [dict(call.inputs)], "shared": {}}
 
 
 def _completed(graph: Graph, registry: Registry) -> Graph:
@@ -223,12 +222,11 @@ def _pinned(
 
 @dataclass(frozen=True)
 class Resolved:
-    """A resolved plan with what it runs over: its input manifest, the value of each input identity, the records."""
+    """A resolved plan with what it runs over: its input manifest and the sources its inputs are read from."""
 
     logical: LogicalPlan
     manifest: InputManifest
-    values: Mapping[InputIdentity, object]
-    records: tuple[Record, ...]
+    sources: Mapping[str, Any]
 
 
 def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolution inputs
@@ -244,7 +242,7 @@ def resolve(  # noqa: PLR0913 - the target and records, then keyword-only resolu
 ) -> tuple[LogicalPlan, InputManifest]:
     """Return the logical plan of `target` over `dataset`, and the input manifest whose digest it holds.
 
-    See `resolve_bound`, which also returns the input values and records.
+    See `resolve_bound`, which also returns the input sources.
     """
     found = resolve_bound(
         target,
@@ -270,7 +268,7 @@ def resolve_bound(  # noqa: PLR0913 - as `resolve`
     resolver: Resolver = PROCESS_RESOLVER,
     admit: Callable[[str], None] | None = None,
 ) -> Resolved:
-    """Return the logical plan of `target` over `dataset`, its input manifest, input values and records.
+    """Return the logical plan of `target` over `dataset`, its input manifest and the sources of its inputs.
 
     A task call becomes `one_node_graph`; without a dataset its own inputs are the one record, `call`. Each node's
     params are completed with their declared defaults. Each node's model is the catalogue's pin, or `resolve()`d
@@ -303,7 +301,7 @@ def resolve_bound(  # noqa: PLR0913 - as `resolve`
     specs = {n.id: registry.spec(n.task) for n in graph.nodes}
     models = {n.id: _pinned(specs[n.id], n, catalogue, resolver, admit) for n in graph.nodes}
     slices = {n.id: profile_slices(specs[n.id], config.settings, dataset_profile) for n in graph.nodes}
-    manifest, values, records = _manifest(graph, dataset, call, spec, bind or {}, inputs or {})
+    manifest, sources = _manifest(graph, dataset, call, spec, bind or {}, inputs or {})
     plan = LogicalPlan(
         graph=graph,
         models=models,
@@ -312,7 +310,7 @@ def resolve_bound(  # noqa: PLR0913 - as `resolve`
         bind=bind or {},
         reuse=config.reuse,
     )
-    return Resolved(plan, manifest, values, records)
+    return Resolved(plan, manifest, sources)
 
 
 class ExecutorUnavailable(RuntimeError):
@@ -332,7 +330,7 @@ class Plan:
     """A placed plan: the logical plan and its manifest, its placement, and its hash, the run id (`plan_hash`).
 
     Beside the documents it holds what running it needs, none of which is part of its identity: the execution
-    profile and run config it was placed under, the value of each input identity and the records it runs over.
+    profile and run config it was placed under and the sources its inputs are read from (`_manifest`).
     """
 
     logical: LogicalPlan
@@ -341,14 +339,14 @@ class Plan:
     hash: str
     execution: ExecutionProfile | None = field(default=None, compare=False, repr=False)
     config: RunConfig | None = field(default=None, compare=False, repr=False)
-    values: Mapping[InputIdentity, object] = field(default_factory=dict, compare=False, repr=False)
-    records: tuple[Record, ...] = field(default=(), compare=False, repr=False)
+    sources: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
-    def run(self, executor: "Executor | None" = None) -> "Run":
+    def run(self, executor: "Executor | None" = None, *, store: "ResultStore | None" = None) -> "Run":
         """Start this plan on `executor` and return its `Run`, which runs in the background.
 
         `None` means `InProcess` over the result store under `cache_root()/results`, under the plan's own profile and
-        run config, when the profile's substrate is local.
+        run config, when the profile's substrate is local. `store` is the result store the run's results are read from;
+        give it with an executor that stores results.
 
         Raises:
             ExecutorUnavailable: no executor is given and the profile's substrate is `slurm`, which runs on `Pool`.
@@ -357,7 +355,7 @@ class Plan:
         """
         from senselab_core.runtime.execution.run import start  # noqa: PLC0415 - run imports this module
 
-        return start(self, executor)
+        return start(self, executor, store=store)
 
     def explain(self) -> str:
         """Return, per node, the backend, stack, env, device, batch, resource class, partition, licenses and reason.
@@ -434,6 +432,5 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
         hash=plan_hash(logical),
         execution=profile,
         config=config,
-        values=found.values,
-        records=found.records,
+        sources=found.sources,
     )

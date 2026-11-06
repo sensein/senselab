@@ -333,7 +333,13 @@ class InProcess:
         for outcome in self.outcomes(handle):
             if isinstance(outcome, Completed):
                 key = outcome.result.key.digest()
-                yield ResultRef(job=outcome.ref, key_digest=key, output_identity=outcome.result.output_identity)
+                reused = outcome.result.reused
+                yield ResultRef(
+                    job=outcome.ref,
+                    key_digest=key,
+                    output_identity=outcome.result.output_identity,
+                    served=None if reused is None else reused.value,
+                )
             else:
                 yield ResultRef(job=outcome.ref, key_digest=outcome.key_digest, failure=outcome.failure)
 

@@ -364,13 +364,13 @@ def probe_corrupt_array(scratch: str, corruption: str) -> dict[str, Any]:
     return {"same_identity": again == identity, "served": served}
 
 
-# -- run manifests: umask, run id, leftover temporaries --
+# -- run manifests: umask, attempt id, leftover temporaries --
 
-BAD_RUN_IDS = ("../../escaped", "..", ".", "", "a/b", "a\\b", "a\x00b", "/abs")
+BAD_ATTEMPT_IDS = ("../../escaped", "..", ".", "", "a/b", "a\\b", "a\x00b", "/abs")
 
 
-def probe_run_id(scratch: str, run: str) -> dict[str, Any]:
-    """Record a resolution under run id `run`; report the error and every file written outside `runs/`."""
+def probe_attempt_id(scratch: str, run: str) -> dict[str, Any]:
+    """Record a resolution under attempt id `run`; report the error and every file written outside `runs/`."""
     from senselab_core.runtime import revision
 
     cache = Path(scratch) / "cache"
@@ -386,7 +386,7 @@ def probe_run_id(scratch: str, run: str) -> dict[str, Any]:
     return {"error": error, "outside": outside}
 
 
-def probe_environment_run_id(scratch: str, run: str) -> str:
+def probe_environment_attempt_id(scratch: str, run: str) -> str:
     """Return the error `attempt_id()` raises when SENSELAB_RUN_ID is `run`."""
     from senselab_core.runtime import revision
 

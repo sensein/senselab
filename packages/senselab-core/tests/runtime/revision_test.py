@@ -15,7 +15,7 @@ import pytest
 from huggingface_hub.errors import RepositoryNotFoundError
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from planted_objects_fixture import BAD_RUN_IDS, LEASE, NAME_BOUND_S, UNOPENABLE_NAMES, bounded
+from planted_objects_fixture import BAD_ATTEMPT_IDS, LEASE, NAME_BOUND_S, UNOPENABLE_NAMES, bounded
 from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
@@ -67,18 +67,18 @@ def _isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "senselab"))
 
 
-_RUN_ID_TWICE = """
+_ATTEMPT_ID_TWICE = """
 import json, os
 from senselab_core.runtime.revision import attempt_id
 print(json.dumps([attempt_id(), attempt_id(), os.environ["SENSELAB_RUN_ID"]]))
 """
 
 
-def _run_id_in_a_fresh_process(**environ: str) -> list[str]:
+def _attempt_id_in_a_fresh_process(**environ: str) -> list[str]:
     """`attempt_id()` twice and the exported `SENSELAB_RUN_ID`, in a fresh interpreter with run variables `environ`."""
     base = {k: v for k, v in os.environ.items() if k not in ("SENSELAB_RUN_ID", "SLURM_ARRAY_JOB_ID", "SLURM_JOB_ID")}
     proc = subprocess.run(
-        [sys.executable, "-c", _RUN_ID_TWICE],
+        [sys.executable, "-c", _ATTEMPT_ID_TWICE],
         env={**base, **environ},
         capture_output=True,
         text=True,
@@ -90,36 +90,36 @@ def _run_id_in_a_fresh_process(**environ: str) -> list[str]:
 
 
 @pytest.mark.logic
-def test_run_id_is_generated_once_and_exported() -> None:
-    """A generated run id is stable within the process and exported to the environment."""
-    first, second, exported = _run_id_in_a_fresh_process()
-    assert first == second, "run_id must be stable within a process"
-    assert exported == first, "run id must be exported so subprocesses inherit it"
+def test_attempt_id_is_generated_once_and_exported() -> None:
+    """A generated attempt id is stable within the process and exported to the environment."""
+    first, second, exported = _attempt_id_in_a_fresh_process()
+    assert first == second, "attempt_id must be stable within a process"
+    assert exported == first, "attempt id must be exported so subprocesses inherit it"
 
 
 @pytest.mark.logic
-def test_run_id_is_inherited_when_already_set() -> None:
+def test_attempt_id_is_inherited_when_already_set() -> None:
     """A pre-set SENSELAB_RUN_ID is reused rather than replaced with a fresh UUID."""
     assert choose_attempt_id({"SENSELAB_RUN_ID": "job-12345"}) == "job-12345"
 
 
 @pytest.mark.logic
-def test_run_id_falls_back_to_the_slurm_job_id() -> None:
+def test_attempt_id_falls_back_to_the_slurm_job_id() -> None:
     """Without SENSELAB_RUN_ID, a Slurm job shares one manifest via its job id, not one per process."""
     assert choose_attempt_id({"SLURM_JOB_ID": "778899"}) == "778899"
-    assert _run_id_in_a_fresh_process(SLURM_JOB_ID="778899") == ["778899"] * 3, (
+    assert _attempt_id_in_a_fresh_process(SLURM_JOB_ID="778899") == ["778899"] * 3, (
         "the chosen id must be exported for subprocesses"
     )
 
 
 @pytest.mark.logic
-def test_run_id_prefers_the_array_job_id_so_an_array_shares_one_manifest() -> None:
+def test_attempt_id_prefers_the_array_job_id_so_an_array_shares_one_manifest() -> None:
     """SLURM_ARRAY_JOB_ID (shared by the whole array) wins over per-task SLURM_JOB_ID."""
     assert choose_attempt_id({"SLURM_ARRAY_JOB_ID": "112233", "SLURM_JOB_ID": "112240"}) == "112233"
 
 
 @pytest.mark.logic
-def test_explicit_run_id_wins_over_slurm() -> None:
+def test_explicit_attempt_id_wins_over_slurm() -> None:
     """An explicit SENSELAB_RUN_ID still takes precedence over any Slurm identity."""
     assert choose_attempt_id({"SENSELAB_RUN_ID": "explicit", "SLURM_ARRAY_JOB_ID": "112233"}) == "explicit"
 
@@ -469,16 +469,16 @@ def test_a_newline_suffixed_sha_is_not_passed_through(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a_run_id_with_a_parent_component_is_refused(tmp_path: Path) -> None:
-    """`../../escaped` is not a run id: nothing is written outside `runs/`."""
-    assert bounded("probe_run_id", str(tmp_path), "../../escaped") == {"error": "ValueError", "outside": []}
+def test_an_attempt_id_with_a_parent_component_is_refused(tmp_path: Path) -> None:
+    """`../../escaped` is not an attempt id: nothing is written outside `runs/`."""
+    assert bounded("probe_attempt_id", str(tmp_path), "../../escaped") == {"error": "ValueError", "outside": []}
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("run", BAD_RUN_IDS, ids=repr)
-def test_every_run_id_that_is_not_one_component_is_refused(tmp_path: Path, run: str) -> None:
-    """Each run id that is not a single path component is refused before anything is written."""
-    assert bounded("probe_run_id", str(tmp_path), run) == {"error": "ValueError", "outside": []}
+@pytest.mark.parametrize("run", BAD_ATTEMPT_IDS, ids=repr)
+def test_every_attempt_id_that_is_not_one_component_is_refused(tmp_path: Path, run: str) -> None:
+    """Each attempt id that is not a single path component is refused before anything is written."""
+    assert bounded("probe_attempt_id", str(tmp_path), run) == {"error": "ValueError", "outside": []}
 
 
 SET_ASIDE_FORMS = ["0123456789abcdef0123456789abcdef", "0" * 32, "f" * 32, uuid.UUID(int=7).hex]
@@ -486,8 +486,8 @@ SET_ASIDE_FORMS = ["0123456789abcdef0123456789abcdef", "0" * 32, "f" * 32, uuid.
 
 @pytest.mark.logic
 @pytest.mark.parametrize("run", SET_ASIDE_FORMS)
-def test_a_run_id_of_the_set_aside_form_is_refused(tmp_path: Path, run: str) -> None:
-    """A run id that a collector would read as a set-aside object is refused before anything is read or written."""
+def test_an_attempt_id_of_the_set_aside_form_is_refused(tmp_path: Path, run: str) -> None:
+    """An attempt id that a collector would read as a set-aside object is refused before anything is read or written."""
     with pytest.raises(ValueError, match="set-aside"):
         choose_attempt_id({"SENSELAB_RUN_ID": run})
     for call in (
@@ -501,8 +501,8 @@ def test_a_run_id_of_the_set_aside_form_is_refused(tmp_path: Path, run: str) -> 
 
 
 @pytest.mark.logic
-def test_run_id_over_name_max_refused(tmp_path: Path) -> None:
-    """A run id longer than one path component can hold is a `ValueError` before any I/O, never a raw `OSError`."""
+def test_attempt_id_over_name_max_refused(tmp_path: Path) -> None:
+    """An attempt id longer than one path component can hold is a `ValueError` before any I/O, never a raw `OSError`."""
     run = "x" * (NAME_MAX + 1)
     with pytest.raises(ValueError, match=str(NAME_MAX)):
         choose_attempt_id({"SENSELAB_RUN_ID": run})
@@ -562,7 +562,7 @@ def test_displaced_lease_keeps_manifest_update(tmp_path: Path, monkeypatch: pyte
 @pytest.mark.logic
 @pytest.mark.parametrize("run", ["job-123", "4242", str(uuid.UUID(int=7)), "0123456789abcdef0123456789abcdeF"])
 def test_an_aged_run_survives_another_runs_collection(tmp_path: Path, run: str) -> None:
-    """Every accepted run id's manifest outlives the quarantine age when another run collects what was set aside."""
+    """Every accepted attempt id's manifest outlives the quarantine age when another run collects what was set aside."""
     record_resolution("org/m", "main", SHA_A, run=run, root=tmp_path)
     old = time.time() - 30 * 24 * 3600
     for path in (manifest_path(run, root=tmp_path), manifest_path(run, root=tmp_path).parent):
@@ -572,10 +572,10 @@ def test_an_aged_run_survives_another_runs_collection(tmp_path: Path, run: str) 
 
 
 @pytest.mark.logic
-def test_a_run_id_from_the_environment_is_one_component(tmp_path: Path) -> None:
+def test_an_attempt_id_from_the_environment_is_one_component(tmp_path: Path) -> None:
     """SENSELAB_RUN_ID naming a parent directory is refused."""
-    assert bounded("probe_environment_run_id", str(tmp_path), "../../escaped") == "ValueError"
-    assert bounded("probe_environment_run_id", str(tmp_path), "job-123") == ""
+    assert bounded("probe_environment_attempt_id", str(tmp_path), "../../escaped") == "ValueError"
+    assert bounded("probe_environment_attempt_id", str(tmp_path), "job-123") == ""
 
 
 @pytest.mark.logic

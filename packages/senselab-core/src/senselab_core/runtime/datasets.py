@@ -112,15 +112,17 @@ def build_manifest(
 ) -> InputManifest:
     """Return the manifest of `dataset` for a graph whose inputs are `ports`, as port name to port type.
 
-    See `bound_manifest`, which also returns the bound values.
+    See `sourced_manifest`, which also returns what each row's inputs were read from.
     """
-    return bound_manifest(dataset, ports, bind=bind)[0]
+    return sourced_manifest(dataset, ports, bind=bind)[0]
 
 
-def bound_manifest(
+def sourced_manifest(
     dataset: Dataset, ports: Mapping[str, str], *, bind: Mapping[str, str] | None = None
-) -> tuple[InputManifest, dict[InputIdentity, object]]:
-    """Return the manifest of `dataset` for a graph whose inputs are `ports`, and each bound input's value by identity.
+) -> tuple[InputManifest, list[dict[str, object]]]:
+    """Return the manifest of `dataset` for a graph whose inputs are `ports`, and each row's input sources by port.
+
+    A source is what `bind_input` reads the input from: the file's path as text, or the JSON value.
 
     Each port binds to the record input of the same name; `bind[port]` names another input instead (for BIDS, a
     suffix). A file input is read as `bind_input` reads a path for the port's type, so its identity is the one a
@@ -131,9 +133,10 @@ def bound_manifest(
     """
     chosen = bind or {}
     rows = []
-    values: dict[InputIdentity, object] = {}
+    sources: list[dict[str, object]] = []
     for record in dataset.records():
         identities: dict[str, InputIdentity] = {}
+        read: dict[str, object] = {}
         for port, port_type in ports.items():
             ref = record.inputs.get(chosen.get(port, port))
             if ref is None:
@@ -147,8 +150,8 @@ def bound_manifest(
                 value: object = dataset.locate(ref.path)
             else:
                 value = ref.value
-            identity, bound, _ = bind_input(port, port_type, value)
-            identities[port] = identity
-            values[identity] = bound
+            identities[port] = bind_input(port, port_type, value)[0]
+            read[port] = value
         rows.append(ManifestRow(id=record.id, entities=record.entities, inputs=identities))
-    return InputManifest(rows=tuple(rows)), values
+        sources.append(read)
+    return InputManifest(rows=tuple(rows)), sources

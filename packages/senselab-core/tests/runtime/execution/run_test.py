@@ -1,5 +1,8 @@
 """A run's lifecycle over the fake stack: its directory, status, wait, results, cancel and the CLI that reads it."""
 
+import json
+import subprocess
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -15,12 +18,13 @@ from runner_test import (  # noqa: F401 - `packaged` is the autouse fixture of t
 )
 from senselab_core.cli import main as cli_main
 from senselab_core.runtime.execution.events import read_events
-from senselab_core.runtime.execution.executor import Handle, PlanFragment
-from senselab_core.runtime.execution.run import Output, Run
+from senselab_core.runtime.execution.executor import FaultRecord, Handle, PlanFragment
+from senselab_core.runtime.execution.run import InputChanged, NotRun, Output, Run, bind_inputs, load_plan
 from senselab_core.runtime.planner import ExecutorUnavailable
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.revision import attempt_id
+from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.worker_client import WorkerLost
 
 pytest.importorskip("pydra")
 
@@ -36,51 +40,128 @@ def cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
 
 
 def _started(tmp_path: Path, rows: list[dict[str, str]] = ROWS) -> tuple[Run, Recording]:
-    placed, values = _plan(GRAPH, rows)
+    placed, _ = _plan(GRAPH, rows)
     executor = Recording(ResultStore(tmp_path / "store"))
-    run = placed.run(executor)
-    assert values and run.wait(60).done
+    run = placed.run(executor, store=executor.store)
+    assert run.wait(60).done
     return run, executor
 
 
 @pytest.mark.contract
-def test_run_writes_its_directory_and_derives_status_from_events(tmp_path: Path) -> None:
-    """A run's directory holds the plan, manifest, placement, pool directories and one event file per writer."""
+def test_status_comes_from_events_alone_and_counts_blocked_jobs(tmp_path: Path) -> None:
+    """The run directory holds no status file; blocked descendants of the failed element are counted, and done."""
     run, _ = _started(tmp_path)
     names = {p.name for p in run.run_dir.iterdir()}
-    assert {"plan.json", "manifest.json", "placements", "events", "dead", "prov", "queues", "epoch"} <= names
+    assert {
+        "plan.json",
+        "inputs.json",
+        "manifest.json",
+        "placements",
+        "events",
+        "dead",
+        "prov",
+        "queues",
+        "epoch",
+    } <= names
+    assert set(run.manifest()) == {"plan_hash", "store"}
     status = run.status()
-    assert status.counts == {"queued": 0, "running": 0, "done": 4, "failed": 1} and status.done
-    assert status.faults == {"content": 1} and status.broken == ()
-    assert status == Run(run.run_dir).status()
-    assert run.manifest()["state"] == "failed" and len(list((run.run_dir / "events").iterdir())) == 1
+    assert status.counts == {"queued": 0, "running": 0, "done": 4, "failed": 1, "blocked": 1, "cancelled": 0}
+    assert status.done and not status.cancelled and status.faults == {"content": 1} and status.broken == ()
+    assert status == Run(run.run_dir).status() and status.last_event_ns is not None
 
 
 @pytest.mark.contract
-def test_attempt_id_distinct_from_run_id(tmp_path: Path) -> None:
-    """The run id is the plan hash, which names the directory; the attempt id names the placement file."""
-    run, _ = _started(tmp_path)
-    manifest = run.manifest()
-    assert run.plan is not None and run.run_dir.name == manifest["plan_hash"] == run.plan.hash
-    assert manifest["attempt"] == attempt_id() != manifest["plan_hash"]
-    assert (run.run_dir / "placements" / f"{attempt_id()}.json").is_file()
-    assert {e.job.plan_hash for e in read_events(run.run_dir) if e.job} == {manifest["plan_hash"]}
+def test_every_run_is_a_new_attempt_with_its_own_placement_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two runs of one plan in one process have two attempt ids, two placement files and tagged events."""
+    placed, _ = _plan(GRAPH, ROWS)
+    executor = Recording(ResultStore(tmp_path / "store"))
+    first, second = placed.run(executor, store=executor.store), None
+    first.wait(60)
+    second = placed.run(executor, store=executor.store)
+    second.wait(60)
+    attempts = {e.attempt for e in read_events(first.run_dir)}
+    assert len(attempts) == 2 and {p.stem for p in (first.run_dir / "placements").iterdir()} == attempts
+    assert first.run_dir.name == placed.hash and placed.hash not in attempts
+    monkeypatch.setenv("SENSELAB_RUN_ID", "pinned")
+    third, fourth = placed.run(executor, store=executor.store), None
+    third.wait(60)
+    fourth = placed.run(executor, store=executor.store)
+    fourth.wait(60)
+    pinned = {p.stem for p in (first.run_dir / "placements").iterdir()} - attempts
+    assert pinned == {"pinned", "pinned-1"}
 
 
 @pytest.mark.contract
-def test_results_come_from_events_and_the_store_in_record_order(tmp_path: Path) -> None:
-    """A failed record gives its fault; the others give an output; a run opened over the directory reads the same."""
+def test_a_second_attempt_is_served_from_the_store_and_logged_as_cache_hits(tmp_path: Path) -> None:
+    """Resumed from the directory alone, the jobs the store holds are `cache_hit` with their reuse policy."""
+    run, executor = _started(tmp_path)
+    fresh = Run(run.run_dir, store=executor.store)
+    again = fresh.plan.run(executor, store=executor.store)
+    assert again.wait(60).done
+    latest = max(read_events(run.run_dir), key=lambda e: e.t_ns).attempt
+    hits = [e for e in read_events(run.run_dir) if e.kind == "cache_hit"]
+    assert hits and {e.attempt for e in hits} == {latest} and {e.reuse for e in hits} == {"exact"}
+    assert not [e for e in read_events(run.run_dir) if e.kind == "finished" and e.attempt == latest]
+
+
+@pytest.mark.contract
+def test_results_come_lazily_from_the_run_in_record_order(tmp_path: Path) -> None:
+    """A failed record gives its fault; a run opened over the directory, with no plan in memory, reads the same."""
     run, _ = _started(tmp_path)
-    items = list(run.results())
-    assert [r.id for r, _ in items] == ["r0", "r1", "r2"]
+    results = run.results()
+    assert results.run is run and [r.id for r, _ in results] == ["r0", "r1", "r2"]
+    items = list(results)
     assert isinstance(items[0][1], Output) and isinstance(items[2][1], Output)
-    assert items[1][1].fault == "content" and items[1][1].type == "ContentFault"  # type: ignore[union-attr]
+    assert isinstance(items[1][1], FaultRecord) and items[1][1].type == "ContentFault"
     again = list(Run(run.run_dir, store=ResultStore(tmp_path / "store")).results())
     assert [(r.id, type(o).__name__) for r, o in again] == [(r.id, type(o).__name__) for r, o in items]
 
 
+@pytest.mark.contract
+def test_inputs_are_bound_from_the_run_directory_and_a_changed_one_is_refused(tmp_path: Path) -> None:
+    """`bind_inputs` re-binds every source and refuses one whose identity differs from the manifest's."""
+    run, _ = _started(tmp_path)
+    placed = load_plan(run.run_dir)
+    values = bind_inputs(run.run_dir)
+    assert set(values) == {i for row in placed.manifest.rows for i in row.inputs.values()}
+    document = json.loads((run.run_dir / "inputs.json").read_text())
+    document["rows"][0]["text"] = "changed"
+    (run.run_dir / "inputs.json").write_text(json.dumps(document))
+    with pytest.raises(InputChanged, match="r0"):
+        bind_inputs(run.run_dir)
+
+
+_FRESH = """
+import json, sys
+from senselab_core.runtime.execution.run import Output, Run, bind_inputs, load_plan
+run = Run(sys.argv[1])
+items = list(run.results())
+print(json.dumps({
+    "ids": [r.id for r, _ in items],
+    "kinds": [type(o).__name__ for _, o in items],
+    "done": run.status().done,
+    "values": len(bind_inputs(run.run_dir)),
+    "hash": load_plan(run.run_dir).hash,
+}))
+"""
+
+
+@pytest.mark.contract
+def test_a_fresh_process_reads_and_binds_a_run_from_its_directory(tmp_path: Path) -> None:
+    """With no plan in memory, a new process reads the results and status and binds the inputs of the run."""
+    run, _ = _started(tmp_path)
+    done = subprocess.run(
+        [sys.executable, "-c", _FRESH, str(run.run_dir)], capture_output=True, text=True, check=True, timeout=120
+    )
+    found = json.loads(done.stdout)
+    assert found["ids"] == ["r0", "r1", "r2"] and found["kinds"] == ["Output", "FaultRecord", "Output"]
+    assert found["done"] is True and found["values"] == 3 and found["hash"] == run.run_dir.name
+
+
 class Gated(Recording):
-    """A `Recording` executor whose first fragment waits until `release` is set."""
+    """A `Recording` executor whose fragments of node `a` wait until `gate` is set."""
 
     def __init__(self, store: ResultStore) -> None:
         """Hold the gate."""
@@ -98,18 +179,78 @@ class Gated(Recording):
 
 @pytest.mark.contract
 def test_cancel_stops_release(tmp_path: Path) -> None:
-    """Cancelled while node `a` is in flight, `a` finishes and no fragment of `b` is ever sent."""
+    """Cancelled while `a` is in flight, `a` finishes, no fragment of `b` is sent, and status says cancelled."""
     placed, _ = _plan(GRAPH, [{"text": t} for t in ("one", "two")])
     executor = Gated(ResultStore(tmp_path / "store"))
-    run = placed.run(executor)
+    run = placed.run(executor, store=executor.store)
     assert executor.entered.wait(30)
     run.cancel()
     executor.gate.set()
     status = run.wait(60)
     assert executor.sizes("b") == [] and sum(executor.sizes("a")) == 2
-    assert run.manifest()["state"] == "cancelled" and status.done
-    assert status.counts["done"] == 2 and status.counts["failed"] == 0
-    assert all(not isinstance(o, Output) for _, o in run.results())
+    assert status.done and status.cancelled and status.faults == {}
+    assert status.counts["done"] == 2 and status.counts["cancelled"] == 2 and status.counts["queued"] == 0
+    assert all(isinstance(o, NotRun) and o.kind == "cancelled" for _, o in run.results())
+
+
+@pytest.mark.contract
+def test_wait_polls_the_events_of_a_run_another_object_drives(tmp_path: Path) -> None:
+    """`Run(run_dir).wait(timeout)` returns not done at the timeout, and done once the other run's events say so."""
+    placed, _ = _plan(GRAPH, [{"text": "one"}])
+    executor = Gated(ResultStore(tmp_path / "store"))
+    driver = placed.run(executor, store=executor.store)
+    assert executor.entered.wait(30)
+    watcher = Run(driver.run_dir)
+    assert not watcher.wait(0.2, poll=0.05).done
+    executor.gate.set()
+    assert watcher.wait(60, poll=0.05).done and driver.wait(60).done
+
+
+class Crashing(Recording):
+    """A `Recording` executor whose worker dies on node `b`, leaving the stderr tail as a note."""
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Raise `WorkerLost` with a stderr note for node `b`."""
+        if fragment.node == "b":
+            error = WorkerLost("worker closed its output", returncode=-11)
+            error.add_note("worker exit code -11; stderr, last 2 lines:\nloading model\nSegmentation fault: 11")
+            raise error
+        return super().submit(fragment)
+
+
+@pytest.mark.contract
+def test_a_lost_worker_fails_every_job_it_held_and_explain_shows_its_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The jobs of the batch the worker held are `failed` (infrastructure) with its stderr tail, shown by `explain`."""
+    placed, _ = _plan(GRAPH, [{"text": "one"}, {"text": "two"}])
+    crashing = Crashing(ResultStore(tmp_path / "store"))
+    run = placed.run(crashing, store=crashing.store)
+    with pytest.raises(WorkerLost):
+        run.wait(60)
+    status = run.status()
+    assert status.done and status.counts["failed"] == 2 and status.faults == {"infrastructure": 2}
+    assert cli_main(["explain", str(run.run_dir), "b"]) == 0
+    out = capsys.readouterr().out
+    assert "fault infrastructure: WorkerLost" in out and "Segmentation fault: 11" in out and "exit code -11" in out
+
+
+class FailingProvenance(ProvStore):
+    """A provenance store whose `write` fails as a full disk does."""
+
+    def write(self, run: str | Path) -> None:
+        """Raise `OSError`."""
+        raise OSError(28, "No space left on device")
+
+
+@pytest.mark.contract
+def test_a_failed_provenance_write_fails_the_run(tmp_path: Path) -> None:
+    """The run does not report done and clean when its provenance could not be written: `wait` raises."""
+    placed, _ = _plan(GRAPH, [{"text": "one"}])
+    store = ResultStore(tmp_path / "store", provenance=FailingProvenance())
+    run = placed.run(Recording(store), store=store)
+    with pytest.raises(OSError, match="No space"):
+        run.wait(60)
 
 
 @pytest.mark.contract
@@ -125,12 +266,14 @@ def test_a_slurm_substrate_without_an_executor_names_pool(tmp_path: Path) -> Non
 
 @pytest.mark.contract
 def test_explain_names_fault_and_placement(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """`explain <run> <node>` prints the node's placement and reason, its events and its fault with the message."""
+    """`explain <run> <node>` prints the placement of the attempt that ran it, its events and its fault message."""
     run, _ = _started(tmp_path)
     assert cli_main(["explain", str(run.run_dir), "a"]) == 0
     out = capsys.readouterr().out
     assert "node a (runner_test.score): backend 'score'" in out and "device cpu" in out and "resource class" in out
     assert "failed a[1]" in out and "fault content" in out and "ContentFault" in out and "asked to fail" in out
+    assert cli_main(["explain", str(run.run_dir), "b"]) == 0
+    assert "blocked b[1]: an upstream job failed" in capsys.readouterr().out
     key = next(e.key for e in run.events() if e.kind == "failed")
     assert key is not None
     assert cli_main(["explain", run.run_dir.name[:10], key[:12]]) == 0
@@ -140,11 +283,12 @@ def test_explain_names_fault_and_placement(tmp_path: Path, capsys: pytest.Captur
 
 @pytest.mark.contract
 def test_status_command_reports_jobs_faults_and_state(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """`status <run>` prints the attempt's state, the job counts, the faults by class and each node."""
+    """`status <run>` prints done or cancelled, the job counts, the faults by class and each node."""
     run, _ = _started(tmp_path)
     assert cli_main(["status", str(run.run_dir)]) == 0
     out = capsys.readouterr().out
-    assert "failed" in out.splitlines()[0] and "jobs: queued 0, running 0, done 4, failed 1" in out
-    assert "faults: content 1" in out and "node a: done 2, failed 1" in out
+    assert ": done;" in out.splitlines()[0] and "last event" in out.splitlines()[0]
+    assert "done 4, failed 1, blocked 1, cancelled 0" in out
+    assert "faults: content 1" in out and "node a: done 2, failed 1" in out and "node b: done 2, blocked 1" in out
     assert cli_main(["status", str(tmp_path / "nowhere")]) == 1
     assert run.manifest()["plan_hash"] in out

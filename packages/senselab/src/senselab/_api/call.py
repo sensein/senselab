@@ -3,7 +3,7 @@
 import difflib
 from collections.abc import Iterable, Mapping
 from os import PathLike
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, NoReturn, Self
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from senselab_core.kernel._base import FrozenMapping, NonEmptyStr
@@ -122,6 +122,14 @@ def api_error(error: Exception) -> ApiError | None:
     return None
 
 
+def reraise(error: Exception) -> NoReturn:
+    """Raise the `ApiError` envelope for `error` from it; an error with no envelope is raised as it is."""
+    envelope = api_error(error)
+    if envelope is None:
+        raise error
+    raise envelope from error
+
+
 def closest(word: str, known: Iterable[str], n: int = 3) -> list[str]:
     """Return up to `n` of `known` closest to `word`."""
     return difflib.get_close_matches(word, sorted(known), n=n)
@@ -237,10 +245,7 @@ class ConfiguredTask:
         try:
             return InProcess().call(call)
         except Exception as error:
-            envelope = api_error(error)
-            if envelope is None:
-                raise
-            raise envelope from error
+            reraise(error)
 
     def _map(self, dataset: Dataset, bind: Mapping[str, str] | None) -> ResultSet:
         from senselab._api.facade import map_over  # noqa: PLC0415 - the facade imports this module
