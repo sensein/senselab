@@ -37,6 +37,7 @@ from senselab_core.runtime.execution.in_process import job_key, node_fragment
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.planner import Plan, check_mapped_outputs
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.revision import attempt_scope
 
 RECORDS = "records"
 """The pydra node split over the manifest's rows; every mapped node reads its row from it."""
@@ -536,7 +537,8 @@ class PydraRunner:
 
         A failed element fails only its descendants, which are reported `blocked`; every other element runs. Each
         job's `queued`, `started` and `finished` or `failed` event is appended to `events`. Once `cancel` is set no
-        further fragment is sent: running fragments finish and the run raises `RunCancelled`.
+        further fragment is sent: running fragments finish and the run raises `RunCancelled`. While it runs,
+        `attempt_id()` is the attempt of `events`.
 
         Raises:
             ValueError: as `compile_plan`, or as `executor.admit`.
@@ -545,6 +547,18 @@ class PydraRunner:
             BaseException: an exception pydra raised its `WorkflowError` over, such as a cancellation.
             Exception: the first error an executor call raised, or a result it did not give, after the run.
         """
+        with attempt_scope(events.attempt):
+            return self._run_plan(placed, executor, values, events, store, cancel)
+
+    def _run_plan(  # noqa: PLR0913 - as `run_plan`
+        self,
+        placed: Plan,
+        executor: Executor,
+        values: Mapping[InputIdentity, object],
+        events: EventLog,
+        store: SenselabStore | None,
+        cancel: threading.Event | None,
+    ) -> RunOutcome:
         root = self.work_dir if self.work_dir is not None else run_dir_of(placed.hash) / "pydra"
         store = store if store is not None else SenselabStore(root)
         admission = executor.admit(placed, values)

@@ -22,10 +22,14 @@ def _event(  # noqa: PLR0913 - the fields of an event
     t_ns: int = 1,
     seq: int = 0,
     attempt: str = "a1",
+    writer: str = "w",
     **fields: object,
 ) -> Event:
     job = JobRef(plan_hash=PLAN, node=node, element=element)
-    return Event(kind=kind, node=node, job=job, t_ns=t_ns, seq=seq, attempt=attempt, **fields)
+    ordinal = int(attempt[1:])
+    return Event(
+        kind=kind, node=node, job=job, t_ns=t_ns, seq=seq, attempt=attempt, ordinal=ordinal, writer=writer, **fields
+    )
 
 
 @pytest.mark.logic
@@ -100,11 +104,34 @@ def test_a_later_attempt_overrides_an_earlier_one_and_a_crashed_run_keeps_its_la
     assert crashed.counts["running"] == 1 and not crashed.done and crashed.last_event_ns == 2
 
 
+@pytest.mark.logic
+def test_a_result_is_never_hidden_by_another_writers_not_run_event() -> None:
+    """A worker's `finished` at seq 1 and the controller's later `cancelled` at seq 6 for one job give `finished`."""
+    worker = [_event("started", seq=0, writer="w"), _event("finished", seq=1, writer="w", t_ns=2)]
+    controller = [_event("queued", seq=0, writer="c"), _event("cancelled", seq=6, writer="c", t_ns=9)]
+    for events in ([*controller, *worker], [*worker, *controller]):
+        status = status_from(events)
+        assert status.counts["done"] == 1 and status.counts["cancelled"] == 0 and not status.cancelled
+    failed = _event("failed", seq=1, writer="w", fault="content", failure=CONTENT)
+    blocked = _event("blocked", seq=9, writer="c")
+    assert status_from([failed, blocked]).counts["failed"] == 1 and status_from([blocked, failed]).counts["failed"] == 1
+
+
+@pytest.mark.logic
+def test_a_later_attempt_wins_by_its_claim_whatever_its_clock() -> None:
+    """Attempt two, claimed second, overrides attempt one even though its clock runs behind."""
+    first = [_event("queued", t_ns=100), _event("failed", seq=1, t_ns=140, fault="content", failure=CONTENT)]
+    second = [_event("queued", attempt="a2", t_ns=60), _event("finished", seq=1, attempt="a2", t_ns=70)]
+    for events in ([*first, *second], [*second, *first]):
+        assert status_from(events).counts == {**status_from(second).counts}
+        assert status_from(events).counts["done"] == 1 and status_from(events).faults == {"content": 1}
+
+
 @pytest.mark.contract
 def test_two_writers_one_event_log(tmp_path: Path) -> None:
     """Two writers on one run append to their own files; reading keeps each writer's order and merges by time."""
-    first = EventLog(tmp_path, "a1", clock=iter([1, 3, 5]).__next__)
-    second = EventLog(tmp_path, "a1", clock=iter([2, 4]).__next__)
+    first = EventLog(tmp_path, "a1", 1, clock=iter([1, 3, 5]).__next__)
+    second = EventLog(tmp_path, "a1", 1, clock=iter([2, 4]).__next__)
     assert first.writer != second.writer
     jobs = [JobRef(plan_hash=PLAN, node="a", element=(i,)) for i in range(2)]
     first.record("queued", "a", job=jobs[0])
@@ -124,8 +151,8 @@ def test_two_writers_one_event_log(tmp_path: Path) -> None:
 def test_a_clock_stepping_back_or_skewed_across_writers_changes_no_status(tmp_path: Path) -> None:
     """A writer's own order is kept whatever its clock did, and a skewed second writer cannot undo a terminal event."""
     job = JobRef(plan_hash=PLAN, node="a", element=(0,))
-    controller = EventLog(tmp_path, "a1", clock=iter([100, 50]).__next__)
-    worker = EventLog(tmp_path, "a1", clock=iter([60, 70]).__next__)
+    controller = EventLog(tmp_path, "a1", 1, clock=iter([100, 50]).__next__)
+    worker = EventLog(tmp_path, "a1", 1, clock=iter([60, 70]).__next__)
     controller.record("queued", "a", job=job)
     worker.record("started", "a", job=job)
     worker.record("finished", "a", job=job, key=PLAN, output="output:" + "0" * 64)
@@ -138,7 +165,7 @@ def test_a_clock_stepping_back_or_skewed_across_writers_changes_no_status(tmp_pa
 @pytest.mark.contract
 def test_a_torn_last_line_is_skipped_and_a_corrupt_middle_line_raises(tmp_path: Path) -> None:
     """A crash mid-write leaves the writer's last line cut short, which is skipped; damage elsewhere is an error."""
-    log = EventLog(tmp_path, "a1", clock=iter([1, 2]).__next__)
+    log = EventLog(tmp_path, "a1", 1, clock=iter([1, 2]).__next__)
     log.record("queued", "a")
     log.record("started", "a")
     with log.path.open("a") as handle:

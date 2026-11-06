@@ -48,8 +48,8 @@ _STATE: Mapping[str, JobState] = {
     "blocked": "blocked",
     "cancelled": "cancelled",
 }
-TERMINAL = frozenset({"finished", "cache_hit", "failed", "blocked", "cancelled"})
-"""The kinds that end a job's state machine: queued, then claimed, started, then one of these."""
+TERMINAL: Mapping[str, int] = {"finished": 3, "cache_hit": 3, "failed": 2, "blocked": 1, "cancelled": 0}
+"""The kinds that end a job's state machine (queued, then claimed, started, then one of these), by precedence."""
 
 
 def run_dir_of(plan_hash: str, root: Path | None = None) -> Path:
@@ -61,7 +61,8 @@ class Event(Formatted):
     """A `run-event@1.0` document: one state change of one job of one attempt.
 
     `job` names the job (None for an event of the node as a whole), `key` its key digest, `attempt` the id of the
-    attempt (run or resume) that wrote it, `seq` its position in its writer's file, `placement_digest` the digest of
+    attempt (run or resume) that wrote it, `ordinal` that attempt's place among the run's attempts (taken when it was
+    claimed), `writer` the writer whose file holds it, `seq` its position in that file, `placement_digest` the digest of
     the node's placement, `fault` the class of a failure, `failure` the record of it, `reuse` the policy that served a
     `cache_hit` (its value), `env` the env the job ran in, `output` the output identity of a `finished` or
     `cache_hit` job and `t_ns` the wall-clock nanoseconds of the event.
@@ -74,6 +75,8 @@ class Event(Formatted):
     key: Hex64 | None = None
     job: JobRef | None = None
     attempt: NonEmptyStr
+    ordinal: Annotated[int, Field(ge=1)]
+    writer: NonEmptyStr
     seq: Annotated[int, Field(ge=0)]
     placement_digest: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
     fault: FaultName | None = None
@@ -124,46 +127,52 @@ class RunStatus:
     nodes: Mapping[str, Mapping[JobState, int]] = field(default_factory=dict)
 
 
-def _latest_terminal(events: Sequence[Event], started: Mapping[str, int]) -> Event | None:
-    """Return a job's latest attempt's last terminal event by `seq`, or None if that attempt has none."""
-    latest = max((e.attempt for e in events), key=lambda a: (started[a], a))
-    terminal = [e for e in events if e.attempt == latest and e.kind in TERMINAL]
-    return max(terminal, key=lambda e: (e.seq, e.t_ns)) if terminal else None
+def _latest(events: Sequence[Event]) -> list[Event]:
+    """Return the events of a job's latest attempt, the one with the highest `ordinal`."""
+    latest = max((e.ordinal, e.attempt) for e in events)
+    return [e for e in events if (e.ordinal, e.attempt) == latest]
 
 
-def _job_state(events: Sequence[Event], started: Mapping[str, int]) -> JobState:
-    """Return a job's state: its latest terminal event's, else that of its latest attempt's last other event."""
-    found = _latest_terminal(events, started)
+def _latest_terminal(events: Sequence[Event]) -> Event | None:
+    """Return the terminal event of a job's latest attempt that has precedence, or None if that attempt has none.
+
+    A result (`finished`, `cache_hit`) outranks `failed`, which outranks `blocked`, then `cancelled`; among events of
+    one kind the one later in its writer's file, then the greater writer, is taken.
+    """
+    terminal = [e for e in _latest(events) if e.kind in TERMINAL]
+    return max(terminal, key=lambda e: (TERMINAL[e.kind], e.writer, e.seq)) if terminal else None
+
+
+def _job_state(events: Sequence[Event]) -> JobState:
+    """Return a job's state: its latest attempt's terminal state, else that of that attempt's last other event."""
+    found = _latest_terminal(events)
     if found is not None:
         return _STATE[found.kind]
-    latest = max((e.attempt for e in events), key=lambda a: (started[a], a))
-    mine = [e for e in events if e.attempt == latest and e.kind in _STATE]
+    mine = [e for e in _latest(events) if e.kind in _STATE]
     return _STATE[mine[-1].kind] if mine else "queued"
 
 
-def _by_job(events: Iterable[Event]) -> tuple[dict[tuple[str, tuple[int, ...]], list[Event]], dict[str, int]]:
-    """Return each job's state-changing events in order, and the time each attempt's first event was written."""
-    started: dict[str, int] = {}
+def _by_job(events: Iterable[Event]) -> dict[tuple[str, tuple[int, ...]], list[Event]]:
+    """Return each job's state-changing events, in the order given."""
     jobs: dict[tuple[str, tuple[int, ...]], list[Event]] = {}
     for event in events:
-        started[event.attempt] = min(started.get(event.attempt, event.t_ns), event.t_ns)
         if event.kind in _STATE:
             jobs.setdefault((event.node, event.job.element if event.job is not None else ()), []).append(event)
-    return jobs, started
+    return jobs
 
 
 def terminal_events(events: Iterable[Event]) -> dict[tuple[str, tuple[int, ...]], Event]:
     """Return, for each job `(node, element)` with one, the terminal event that states how it ended."""
-    jobs, started = _by_job(events)
-    found = {job: _latest_terminal(each, started) for job, each in jobs.items()}
+    found = {job: _latest_terminal(each) for job, each in _by_job(events).items()}
     return {job: event for job, event in found.items() if event is not None}
 
 
 def status_from(events: Iterable[Event], *, broken_after: int | None = None) -> RunStatus:
     """Return the status of a run from its `events`, each writer's in file order (`read_events`).
 
-    A job's state is its latest attempt's last terminal event (by `seq` in its writer), else its last non-terminal
-    event's state; `verify` changes none. No order across writers is assumed. `faults` counts every `failed` event by
+    A job's state is the terminal event of its latest attempt (highest `ordinal`) with precedence (`TERMINAL`), else
+    the state of that attempt's last other event; `verify` changes none. `seq` is compared within one writer only and
+    no clock order is assumed for terminal states. `faults` counts every `failed` event by
     its class; an env with `broken_after` infrastructure failures (the packaged profile's
     `infrastructure_replacements` when None) is `broken`. Cancelled and blocked jobs are not faults.
     """
@@ -172,7 +181,7 @@ def status_from(events: Iterable[Event], *, broken_after: int | None = None) -> 
 
         broken_after = ExecutionProfile.load().faults.infrastructure_replacements
     seen = list(events)
-    jobs, started = _by_job(seen)
+    jobs = _by_job(seen)
     faults: Counter[str] = Counter()
     failures: Counter[str] = Counter()
     latest: dict[str, FaultRecord] = {}
@@ -185,7 +194,7 @@ def status_from(events: Iterable[Event], *, broken_after: int | None = None) -> 
     tally: Counter[str] = Counter()
     per_node: dict[str, Counter[str]] = {}
     for (node, _), found in jobs.items():
-        state = _job_state(found, started)
+        state = _job_state(found)
         tally[state] += 1
         per_node.setdefault(node, Counter())[state] += 1
     broken = tuple(
@@ -205,15 +214,16 @@ def status_from(events: Iterable[Event], *, broken_after: int | None = None) -> 
 class EventLog:
     """One writer's append-only log of a run: `<run dir>/events/<writer uuid>.jsonl`, written by this writer only.
 
-    `attempt` is the id of the attempt every event of this log belongs to, `clock` gives the `t_ns` of an event
-    `record` makes, and each event gets the next `seq` of this writer. A writer used after a `fork` is a new writer in
-    the child.
+    `attempt` is the id of the attempt every event of this log belongs to and `ordinal` its claim order, `clock` gives
+    the `t_ns` of an event `record` makes, and each event gets the next `seq` of this writer. A writer used after a
+    `fork` is a new writer in the child.
     """
 
-    def __init__(self, run_dir: Path, attempt: str, *, clock: Callable[[], int] = time.time_ns) -> None:
-        """Log to `run_dir` as attempt `attempt`; nothing is created until the first append."""
+    def __init__(self, run_dir: Path, attempt: str, ordinal: int, *, clock: Callable[[], int] = time.time_ns) -> None:
+        """Log to `run_dir` as attempt `attempt`, the `ordinal`-th; nothing is created until the first append."""
         self.run_dir = Path(run_dir)
         self.attempt = attempt
+        self.ordinal = ordinal
         self.clock = clock
         self._writer = (os.getpid(), uuid.uuid4().hex)
         self._seq = 0
@@ -259,7 +269,7 @@ class EventLog:
     ) -> Event:
         """Append the event of `kind` for `node`, stamped now with the next `seq`, and return it."""
         with self._lock:
-            _ = self.writer
+            writer = self.writer
             seq, self._seq = self._seq, self._seq + 1
         event = Event(
             kind=kind,
@@ -267,6 +277,8 @@ class EventLog:
             job=job,
             key=key,
             attempt=self.attempt,
+            ordinal=self.ordinal,
+            writer=writer,
             seq=seq,
             placement_digest=placement_digest,
             fault=None if failure is None else failure.fault,

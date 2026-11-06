@@ -5,13 +5,15 @@ and every participant binds to that answer; entries are append-if-absent. `2x/` 
 reads and writes no manifest outside it. Rationale: `specs/20261030-140022-senselab-2x-api/adr/ADR-006-formats.md`.
 """
 
+import contextlib
+import contextvars
 import functools
 import json
 import logging
 import os
 import re
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -103,8 +105,31 @@ def fresh_attempt_id(environ: Mapping[str, str] | None = None) -> str:
     return choose_attempt_id(os.environ if environ is None else environ)
 
 
-@functools.cache
+_ATTEMPT: contextvars.ContextVar[str | None] = contextvars.ContextVar("senselab_attempt", default=None)
+
+
+@contextlib.contextmanager
+def attempt_scope(attempt: str) -> Iterator[str]:
+    """Make `attempt` the id `attempt_id()` returns in this context until the block exits."""
+    token = _ATTEMPT.set(run_component(attempt))
+    try:
+        yield attempt
+    finally:
+        _ATTEMPT.reset(token)
+
+
 def attempt_id() -> str:
+    """Return the id of the attempt running in this context (`attempt_scope`), else `process_attempt_id()`.
+
+    Raises:
+        ValueError: the chosen id is refused by `run_component`.
+    """
+    current = _ATTEMPT.get()
+    return current if current is not None else process_attempt_id()
+
+
+@functools.cache
+def process_attempt_id() -> str:
     """Return this process's attempt id (`choose_attempt_id` of the environment), chosen once and exported.
 
     It is exported as `SENSELAB_RUN_ID` so subprocesses inherit it.

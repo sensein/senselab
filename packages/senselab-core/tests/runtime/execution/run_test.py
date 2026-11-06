@@ -11,6 +11,8 @@ import pytest
 from runner_test import (  # noqa: F401 - `packaged` is the autouse fixture of the fake stack
     CHAIN_EDGES,
     CHAINED,
+    ZIPPED,
+    ZIPPED_ROWS,
     Recording,
     _graph,
     _plan,
@@ -19,10 +21,19 @@ from runner_test import (  # noqa: F401 - `packaged` is the autouse fixture of t
 from senselab_core.cli import main as cli_main
 from senselab_core.runtime.execution.events import read_events
 from senselab_core.runtime.execution.executor import FaultRecord, Handle, PlanFragment
-from senselab_core.runtime.execution.run import InputChanged, NotRun, Output, Run, bind_inputs, load_plan
+from senselab_core.runtime.execution.run import (
+    InputChanged,
+    InputsUnavailable,
+    NotRun,
+    Output,
+    Run,
+    bind_inputs,
+    load_plan,
+)
 from senselab_core.runtime.planner import ExecutorUnavailable
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
+from senselab_core.runtime.revision import attempt_id, attempt_scope, process_attempt_id
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import WorkerLost
 
@@ -91,6 +102,82 @@ def test_every_run_is_a_new_attempt_with_its_own_placement_file(
     fourth.wait(60)
     pinned = {p.stem for p in (first.run_dir / "placements").iterdir()} - attempts
     assert pinned == {"pinned", "pinned-1"}
+    claimed = {p.name: p.read_text() for p in (first.run_dir / "attempts").iterdir()}
+    assert sorted(claimed) == ["1", "2", "3", "4"] and claimed["3"] == "pinned" and claimed["4"] == "pinned-1"
+    assert {(e.attempt, e.ordinal) for e in read_events(first.run_dir)} == {(a, int(n)) for n, a in claimed.items()}
+
+
+class Attempted(Recording):
+    """A `Recording` executor that notes `attempt_id()` as each fragment is submitted."""
+
+    def __init__(self, store: ResultStore) -> None:
+        """Hold the notes."""
+        super().__init__(store)
+        self.seen: list[str] = []
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Note the attempt id in force, then submit."""
+        self.seen.append(attempt_id())
+        return super().submit(fragment)
+
+
+@pytest.mark.contract
+def test_attempt_id_is_the_runs_attempt_while_it_runs_and_the_process_id_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Evidence and the revision manifest read `attempt_id()`: the running attempt's id, else the process's."""
+    monkeypatch.delenv("SENSELAB_RUN_ID", raising=False)
+    monkeypatch.delenv("SLURM_ARRAY_JOB_ID", raising=False)
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    placed, _ = _plan(GRAPH, [{"text": "one"}])
+    executor = Attempted(ResultStore(tmp_path / "store"))
+    run = placed.run(executor, store=executor.store)
+    assert run.wait(60).done
+    [attempt] = {e.attempt for e in read_events(run.run_dir)}
+    assert executor.seen and set(executor.seen) == {attempt} and attempt != process_attempt_id()
+    assert attempt_id() == process_attempt_id()
+    with attempt_scope("scoped"):
+        assert attempt_id() == "scoped"
+    assert attempt_id() == process_attempt_id()
+
+
+def _live(tmp_path: Path) -> tuple[Run, FaultRecord]:
+    """Run `ZIPPED` with its broadcast input given as an object that is neither a path nor JSON."""
+    held = FaultRecord(fault="content", type="Held", message="in memory", gap=False, charged=True)
+    placed, _ = _plan(ZIPPED, ZIPPED_ROWS, broadcast={"both": held})
+    executor = Recording(ResultStore(tmp_path / "store"))
+    run = placed.run(executor, store=executor.store)
+    assert run.wait(60).done
+    return run, held
+
+
+@pytest.mark.contract
+def test_an_input_given_as_an_object_runs_in_process_and_is_recorded_as_memory(tmp_path: Path) -> None:
+    """The object is admitted live; `inputs.json` records `{"memory": <identity>}` for it."""
+    run, _ = _live(tmp_path)
+    assert run.status().counts["done"] == 9 and run.status().faults == {}
+    assert all(isinstance(o, Output) for _, o in run.results())
+    shared = json.loads((run.run_dir / "inputs.json").read_text())["shared"]
+    [identity] = {i for row in load_plan(run.run_dir).manifest.rows for p, i in row.inputs.items() if p == "both"}
+    assert shared == {"both": {"memory": identity}}
+
+
+@pytest.mark.contract
+def test_a_run_from_disk_without_its_live_inputs_raises_before_writing(tmp_path: Path) -> None:
+    """Re-run from the directory, the memory input is `InputsUnavailable`, and no attempt or file is written."""
+    run, _ = _live(tmp_path)
+    with pytest.raises(InputsUnavailable, match="both") as raised:
+        bind_inputs(run.run_dir)
+    assert {port for _, port in raised.value.missing} == {"both"} and len(raised.value.missing) == 3
+    before = sorted(str(p.relative_to(run.run_dir)) for p in run.run_dir.rglob("*") if "pydra" not in p.parts)
+    with pytest.raises(InputsUnavailable):
+        Run(run.run_dir).plan.run(Recording(ResultStore(tmp_path / "store")), store=ResultStore(tmp_path / "store"))
+    after = sorted(str(p.relative_to(run.run_dir)) for p in run.run_dir.rglob("*") if "pydra" not in p.parts)
+    assert after == before
+    run.run_dir.rename(tmp_path / "moved")
+    with pytest.raises(InputsUnavailable):
+        load_plan(tmp_path / "moved").run(Recording(ResultStore(tmp_path / "store")))
+    assert not run.run_dir.exists()
 
 
 @pytest.mark.contract

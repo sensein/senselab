@@ -140,7 +140,7 @@ def _graph(nodes: Sequence[tuple[str, TaskSpec]], edges: Sequence[tuple[str, str
 def _plan(
     graph: Graph,
     rows: Sequence[Mapping[str, str]],
-    broadcast: Mapping[str, str] | None = None,
+    broadcast: Mapping[str, object] | None = None,
     profile: ExecutionProfile = PROFILE,
 ) -> tuple[Plan, dict[str, object]]:
     """Return `graph` planned over records of `rows` under `profile`, and the admitted value of each input identity."""
@@ -159,7 +159,7 @@ def _run(
     placed: Plan, values: Mapping[str, object], tmp_path: Path, profile: ExecutionProfile = PROFILE, **kw: object
 ) -> tuple[Any, Recording, list[Any]]:
     executor = Recording(ResultStore(tmp_path / "store"), profile)
-    events = EventLog(tmp_path / "run", "a1")
+    events = EventLog(tmp_path / "run", "a1", 1)
     work = tmp_path / "pydra"
     status = runner.PydraRunner(profile=profile, work_dir=work).run_plan(
         placed, executor, values=values, events=events, **kw
@@ -332,7 +332,7 @@ def test_an_executor_error_is_raised_after_the_run(tmp_path: Path) -> None:
     executor = Refusing(ResultStore(tmp_path / "store"))
     with pytest.raises(LookupError, match="refused"):
         runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1")
+            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1)
         )
     assert executor.sizes("a") == [1, 1]
 
@@ -435,7 +435,7 @@ def test_a_cancellation_beside_a_failed_element_propagates(tmp_path: Path) -> No
     executor = Cancelling(ResultStore(tmp_path / "store"))
     with pytest.raises(asyncio.CancelledError) as raised:
         runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1")
+            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1)
         )
     assert type(raised.value.__cause__).__name__ == "WorkflowError" and executor.sizes("a") == [1, 1]
 
@@ -477,6 +477,6 @@ def test_a_set_cancel_sends_no_further_fragment(tmp_path: Path) -> None:
     cancel.set()
     with pytest.raises(runner.RunCancelled):
         runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, executor, values=values, events=EventLog(tmp_path / "run", "a1"), cancel=cancel
+            placed, executor, values=values, events=EventLog(tmp_path / "run", "a1", 1), cancel=cancel
         )
     assert executor.fragments == []

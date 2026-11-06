@@ -9,11 +9,14 @@ import pytest
 import soundfile
 from api_test import _echo_namespace, fake_stack  # noqa: F401 - `fake_stack` is the fixture of the fake stack
 from senselab._api.facade import PlanKwargs, session
+from senselab_core.kernel._base import FrozenMapping
 from senselab_core.kernel.dataset import Record
 from senselab_core.runtime.execution.executor import FaultRecord
-from senselab_core.runtime.execution.run import NotRun, Output, ResultSet
+from senselab_core.runtime.execution.in_process import InProcess
+from senselab_core.runtime.execution.run import InputsUnavailable, NotRun, Output, ResultSet, Run
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.store import ResultStore
 
 import senselab as sl
 
@@ -29,7 +32,7 @@ def session_restored() -> Iterator[None]:
     """Leave the session defaults as they were."""
     before = session()
     yield
-    sl.use(execution=before.execution, config=before.config, executor=before.executor)
+    sl.use(execution=before.execution, config=before.config, executor=before.executor, store=before.store)
 
 
 @pytest.mark.contract
@@ -74,6 +77,40 @@ def test_facade_plan_run_and_resume_agree_with_map() -> None:
     run = placed.run()
     run.wait(60)
     assert run.run_dir.name == placed.hash and sl.resume(run).outputs("value") == ran.outputs("value")
+
+
+@pytest.mark.contract
+@needs_runner
+@pytest.mark.usefixtures("fake_stack")
+def test_a_session_executor_runs_over_its_own_store(tmp_path: Path) -> None:
+    """`sl.run` and `sl.resume` read the results from the store the session's executor writes, not the default one."""
+    echo = _echo_namespace()["Echo"](salt="s")
+    dataset = sl.Dataset.from_records(_records(2))
+    elsewhere = ResultStore(tmp_path / "elsewhere")
+    with pytest.raises(ValueError, match="store"):
+        sl.use(executor=InProcess(store=elsewhere))
+    with sl.use(executor=InProcess(store=elsewhere), store=elsewhere):
+        ran = sl.run(echo, dataset)
+        resumed = sl.resume(sl.plan(echo, dataset))
+    expected = [echo({"v": i}).outputs["value"] for i in range(2)]
+    assert all(isinstance(o, Output) for _, o in ran) and ran.outputs("value") == expected
+    assert resumed.outputs("value") == expected and any((tmp_path / "elsewhere").iterdir())
+
+
+@pytest.mark.contract
+@needs_runner
+@pytest.mark.usefixtures("fake_stack")
+def test_a_call_given_an_object_runs_live_and_a_resume_from_disk_names_the_input() -> None:
+    """An object input is admitted live and its job runs; resuming the `Run` from the directory raises, naming it."""
+    echo = _echo_namespace()["Echo"](salt="s")
+    held = FrozenMapping({"v": 7})
+    placed = sl.plan(echo.call(held))
+    assert placed.sources["rows"] == [{"payload": {"memory": placed.manifest.rows[0].inputs["payload"]}}]
+    ran = placed.run()
+    status = ran.wait(60)
+    assert status.done and status.counts["done"] + status.counts["failed"] == 1
+    with pytest.raises(InputsUnavailable, match="payload"):
+        sl.resume(Run(ran.run_dir))
 
 
 @pytest.mark.logic

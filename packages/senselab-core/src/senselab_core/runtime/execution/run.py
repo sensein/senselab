@@ -2,10 +2,11 @@
 
 A run lives in `<cache root>/2x/runs/<plan hash>/`: `plan.json` (the plan's documents), `inputs.json` (what each
 record's inputs are read from), `manifest.json` (the plan hash and the result store, the same for every attempt),
-`placements/<attempt>.json` (one per attempt, never overwritten), `events/<writer>.jsonl` (`EventLog`), `prov/` (the
+`placements/<attempt>.json` (one per attempt, never overwritten), `attempts/<n>` (the attempt id claimed `n`-th),
+`events/<writer>.jsonl` (`EventLog`), `prov/` (the
 provenance documents), and `dead/`, `queues/` and `epoch/` for the pool. A `Run` over a directory derives its status
 and its results from the events and the result store, and binds its input values from `inputs.json`, so it works from
-a run another process started.
+a run another process started, unless an input was held in memory by the process that planned it.
 """
 
 import importlib.util
@@ -48,6 +49,7 @@ MANIFEST_FILE = "manifest.json"
 PLACEMENTS_DIR = "placements"
 RESULTS_DIR = "results"
 """The default result store, `<cache root>/results`."""
+ATTEMPTS_DIR = "attempts"
 POOL_DIRS = ("dead", "prov", "queues", "epoch")
 POLL_S = 0.5
 """Seconds between reads of the event log while `Run.wait` waits for a run another process drives."""
@@ -67,6 +69,20 @@ class MissingExtra(ImportError):
 
 class InputChanged(ValueError):
     """An input read from disk no longer has the identity the plan was made with."""
+
+
+class InputsUnavailable(ValueError):
+    """Inputs held in memory by the process that planned the run are not in this one; `missing` is (record, port)."""
+
+    def __init__(self, missing: Sequence[tuple[str, str]]) -> None:
+        """Name the records and ports whose inputs are missing."""
+        self.missing = tuple(missing)
+        ports = sorted({port for _, port in self.missing})
+        records = sorted({record for record, _ in self.missing})
+        super().__init__(
+            f"inputs {ports} of records {records[:5]} were held in memory by the process that planned the run; run the"
+            " plan in that process, or give them as paths or JSON values"
+        )
 
 
 @dataclass(frozen=True)
@@ -216,32 +232,62 @@ def load_plan(run_dir: Path) -> Plan:
     )
 
 
-def bind_inputs(run_dir: Path) -> dict[InputIdentity, object]:
-    """Return the value of each input identity of the plan in `run_dir`, read from the sources in `inputs.json`.
+def _memory(source: object) -> str | None:
+    """Return the identity a `{"memory": <identity>}` source names, None for a path or JSON value."""
+    if isinstance(source, Mapping) and set(source) == {"memory"} and isinstance(source["memory"], str):
+        return source["memory"]
+    return None
 
-    Every input is bound again (`bind_input`) and its identity must be the one the plan's manifest holds, so a file
-    changed since planning is refused.
+
+def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
+    """Return the value of each input identity of `placed`, bound from its sources and its live values.
+
+    A path or JSON source is bound again (`bind_input`) and must give the identity the manifest holds, so a file
+    changed since planning is refused; a `{"memory": <identity>}` source takes the value `placed.live` holds.
 
     Raises:
         InputChanged: an input has another identity than the manifest's.
-        FileNotFoundError, KeyError: the run has no plan or no recorded sources.
+        InputsUnavailable: an input held in memory is not in `placed.live`.
+        KeyError: the plan records no sources.
     """
-    placed = load_plan(run_dir)
     types = {
         port: (found[1] if (found := _LIST.match(declared)) else declared)
         for port, declared in placed.logical.graph.inputs.items()
     }
     rows, shared = placed.sources["rows"], placed.sources["shared"]
     values: dict[InputIdentity, object] = {}
+    missing: list[tuple[str, str]] = []
     for row, read in zip(placed.manifest.rows, rows, strict=True):
         for port, expected in row.inputs.items():
             if port in shared and expected in values:
                 continue
-            identity, value, _ = bind_input(port, types[port], read[port] if port in read else shared[port])
+            source = read[port] if port in read else shared[port]
+            held = _memory(source)
+            if held is not None:
+                if held != expected:
+                    raise InputChanged(f"input {port!r} of record {row.id!r} is not the one the plan was made with")
+                if held in placed.live:
+                    values[held] = placed.live[held]
+                else:
+                    missing.append((row.id, port))
+                continue
+            identity, value, _ = bind_input(port, types[port], source)
             if identity != expected:
                 raise InputChanged(f"input {port!r} of record {row.id!r} changed since the plan was made")
             values[identity] = value
+    if missing:
+        raise InputsUnavailable(missing)
     return values
+
+
+def bind_inputs(run_dir: Path) -> dict[InputIdentity, object]:
+    """Return the value of each input identity of the plan in `run_dir` (`bind_sources` of `load_plan`).
+
+    Raises:
+        InputChanged, InputsUnavailable: as `bind_sources`; an input held in memory is never on disk.
+        FileNotFoundError, KeyError: the run has no plan or no recorded sources.
+    """
+    return bind_sources(load_plan(run_dir))
 
 
 class _Reader:
@@ -447,8 +493,24 @@ def _executor(placed: Plan, executor: Executor | None, store: ResultStore | None
     return InProcess(store=store, profile=profile, run=config)
 
 
-def _claim_attempt(run_dir: Path, placement: PlanPlacement) -> str:
-    """Return a fresh attempt id and write its placement file, which is never replaced: a taken id gets `-<n>`."""
+def _claim_ordinal(run_dir: Path, attempt: str) -> int:
+    """Return the next free ordinal `n` of the run's attempts, claimed by creating `attempts/<n>` holding `attempt`."""
+    directory = run_dir / ATTEMPTS_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    ordinal = 1 + sum(1 for _ in directory.iterdir())
+    while True:
+        try:
+            descriptor = os.open(directory / str(ordinal), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            ordinal += 1
+            continue
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(attempt)
+        return ordinal
+
+
+def _claim_attempt(run_dir: Path, placement: PlanPlacement) -> tuple[str, int]:
+    """Return a fresh attempt id and its ordinal, its placement file written and never replaced (a taken id: `-<n>`)."""
     directory = run_dir / PLACEMENTS_DIR
     directory.mkdir(parents=True, exist_ok=True)
     base, n = fresh_attempt_id(), 0
@@ -461,11 +523,11 @@ def _claim_attempt(run_dir: Path, placement: PlanPlacement) -> str:
             continue
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(placement.model_dump(mode="json"), sort_keys=True, indent=1))
-        return attempt
+        return attempt, _claim_ordinal(run_dir, attempt)
 
 
-def _prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> str:
-    """Write the plan, its input sources and the manifest into `run_dir`, claim an attempt and return its id."""
+def _prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[str, int]:
+    """Write the plan, its input sources and the manifest into `run_dir`, then claim an attempt (`_claim_attempt`)."""
     _write(
         run_dir / PLAN_FILE,
         {
@@ -487,13 +549,14 @@ def start(placed: Plan, executor: Executor | None = None, *, store: ResultStore 
 
     With no executor, `InProcess` runs a plan under a local substrate, over `store` (default: the result store under
     the cache root) with the plan's own profile and run config. `store` is also where the run's results are read from,
-    so it is given with any other executor that stores results. The input values are bound from the run directory
-    (`bind_inputs`), so every input must be a path or a JSON value.
+    so it is given with any other executor that stores results. The input values are bound (`bind_sources`) before
+    anything is written: from their paths or JSON values, or from the values the plan holds in memory.
 
     Raises:
         ExecutorUnavailable: no executor is given and the substrate is not local.
-        ValueError: an input cannot be written to the run directory, or as `admit`.
+        ValueError: as `admit`.
         InputChanged: an input file changed since the plan was made.
+        InputsUnavailable: an input held in memory is not held by `placed` (a plan read from disk).
         MissingExtra: pydra is not installed.
     """
     if importlib.util.find_spec("pydra") is None:
@@ -504,11 +567,11 @@ def start(placed: Plan, executor: Executor | None = None, *, store: ResultStore 
     if executor is None and store is None:
         store = ResultStore(cache_root() / RESULTS_DIR, provenance=provenance)
     executor = _executor(placed, executor, store)
+    values = bind_sources(placed)
     run_dir = run_dir_of(placed.hash)
-    attempt = _prepare(placed, run_dir, store)
-    values = bind_inputs(run_dir)
+    attempt, ordinal = _prepare(placed, run_dir, store)
     run = Run(run_dir, store=store)
-    log = EventLog(run_dir, attempt)
+    log = EventLog(run_dir, attempt, ordinal)
     runner = PydraRunner(profile=placed.execution, work_dir=run_dir / "pydra")
     written = provenance if store is None else store.provenance
 

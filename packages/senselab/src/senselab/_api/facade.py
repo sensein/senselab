@@ -17,6 +17,7 @@ from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.planner import Plan, one_node_graph
 from senselab_core.runtime.planner import plan as plan_runtime
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.store import ResultStore
 
 from senselab._api.call import ConfiguredTask, reraise
 
@@ -25,11 +26,12 @@ __all__ = ["Dataset", "PlanKwargs", "Session", "map_over", "plan", "resume", "ru
 
 @dataclass(frozen=True)
 class Session:
-    """The defaults of `plan` and `run`: the execution profile, the run config and the executor."""
+    """The defaults of `plan` and `run`: the execution profile, the run config, the executor and its result store."""
 
     execution: ExecutionProfile | None = None
     config: RunConfig | None = None
     executor: Executor | None = None
+    store: ResultStore | None = None
 
 
 _SESSION: contextvars.ContextVar[Session] = contextvars.ContextVar("senselab_session", default=Session())
@@ -43,7 +45,11 @@ def session() -> Session:
 class use:  # noqa: N801 - a context manager used as a function
     """Set the session defaults for the context it is used in; as a `with` block, restore them on exit.
 
-    `execution` is a profile or the name of a packaged one; a default not given keeps the one in force.
+    `execution` is a profile or the name of a packaged one; a default not given keeps the one in force. An
+    `executor` is given with the result `store` it writes to, which runs read their results from.
+
+    Raises:
+        ValueError: the session would have an executor and no store.
     """
 
     def __init__(
@@ -52,6 +58,7 @@ class use:  # noqa: N801 - a context manager used as a function
         execution: ExecutionProfile | str | None = None,
         config: RunConfig | None = None,
         executor: Executor | None = None,
+        store: ResultStore | None = None,
     ) -> None:
         """Set the given defaults now."""
         current = session()
@@ -60,7 +67,10 @@ class use:  # noqa: N801 - a context manager used as a function
             execution=profile if profile is not None else current.execution,
             config=config if config is not None else current.config,
             executor=executor if executor is not None else current.executor,
+            store=store if store is not None else None if executor is not None else current.store,
         )
+        if self.session.executor is not None and self.session.store is None:
+            raise ValueError("an executor is used with the result store it writes to; give `store`")
         self._token = _SESSION.set(self.session)
 
     def __enter__(self) -> Session:
@@ -118,7 +128,8 @@ def run(
     target: Graph | TaskCall | ConfiguredTask, dataset: DatasetProtocol | None = None, **plan_kwargs: Unpack[PlanKwargs]
 ) -> ResultSet:
     """Plan `target` over `dataset` (`plan`), run it on the session's executor, wait and return its results."""
-    started = plan(target, dataset, **plan_kwargs).run(session().executor)
+    current = session()
+    started = plan(target, dataset, **plan_kwargs).run(current.executor, store=current.store)
     started.wait()
     return started.results()
 
@@ -131,10 +142,12 @@ def resume(target: Plan | Run) -> ResultSet:
     the plan was placed under it.
 
     Raises:
-        ExecutorUnavailable, ValueError, InputChanged: as `Plan.run`.
+        ExecutorUnavailable, ValueError, InputChanged, InputsUnavailable: as `Plan.run`; a `Run` whose inputs were
+            held in memory raises `InputsUnavailable`.
     """
     placed = target.plan if isinstance(target, Run) else target
-    started = placed.run(session().executor)
+    current = session()
+    started = placed.run(current.executor, store=current.store)
     started.wait()
     return started.results()
 
