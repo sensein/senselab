@@ -275,6 +275,66 @@ def test_an_empty_lease_a_taker_left_is_judged_by_its_own_stamp(tmp_path: Path) 
         assert lease.owns() and lease.broke == [lease_dir]
 
 
+def test_a_lease_a_claimant_died_in_is_claimed_and_broken_when_stale(tmp_path: Path) -> None:
+    """A lease left holding only a dead claimant's `gone-<token>` is claimed by renaming that entry, then broken."""
+    lease_dir = _lease_dir(tmp_path / "thing")
+    claimed = lease_dir / f"gone-{uuid.uuid4().hex}"
+    claimed.mkdir(parents=True)
+    for path in (claimed, lease_dir):
+        os.utime(path, (OLD, OLD))
+    with Lease(tmp_path / "thing", timeout=1, stale_after=60) as lease:
+        assert lease.owns() and lease.broke == [lease_dir]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_fresh_taker_after_a_crash_is_never_displaced_by_a_late_breaker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A late breaker that judged a crashed, empty lease never removes the fresh lease that replaced it.
+
+    Before the late breaker acts, another breaks the empty lease and takes the name; the late breaker's `lstat` of
+    the name is then served from a cache, as an NFS client serves it, and still shows the old lease.
+    """
+    resource, real_lstat, real_listdir = tmp_path / "thing", os.lstat, os.listdir
+    lease_dir = _lease_dir(resource)
+    lease_dir.mkdir()
+    os.utime(lease_dir, (OLD, OLD))
+    winner = Lease(resource, timeout=1, stale_after=60)
+    last: list[os.stat_result] = []
+    cached: list[os.stat_result] = []
+    listings, running = [0], [False]
+
+    def lstat(path: Any, *, dir_fd: int | None = None) -> os.stat_result:  # noqa: ANN401
+        if os.fsdecode(path) == "thing.lease" and cached and not running[0]:
+            return cached[0]
+        st = real_lstat(path, dir_fd=dir_fd)
+        if os.fsdecode(path) == "thing.lease":
+            last[:] = [st]
+        return st
+
+    def listdir(path: Any = ".") -> list[str]:  # noqa: ANN401
+        names = real_listdir(path)
+        if isinstance(path, int) and not running[0] and not cached:
+            listings[0] += 1
+            if listings[0] == 2:  # noqa: PLR2004 - the end of the late breaker's second, fresh read of the lease
+                running[0] = True
+                winner.__enter__()
+                running[0] = False
+                cached.append(last[0])
+        return names
+
+    monkeypatch.setattr(os, "listdir", listdir)
+    monkeypatch.setattr(os, "lstat", lstat)
+    late = Lease(resource, timeout=0, stale_after=60)
+    with pytest.raises(LeaseTimeout):
+        late.__enter__()
+    monkeypatch.setattr(os, "lstat", real_lstat)
+    monkeypatch.setattr(os, "listdir", real_listdir)
+    assert winner.broke == [lease_dir] and late.broke == [] and winner.owns()
+    winner.__exit__(None, None, None)
+    assert list(tmp_path.iterdir()) == []
+
+
 # -- broken and released by rename --
 
 
@@ -298,7 +358,7 @@ def test_a_late_breaker_cannot_claim_a_lease_another_breaker_already_broke(tmp_p
     late = Lease(resource, timeout=0, stale_after=60)
     with Lease(resource, timeout=1, stale_after=60) as winner:
         assert winner.broke and winner.owns()
-        assert late._break(judged, None) is False
+        assert late._break(judged, frozenset()) is False
         assert winner.owns()
     late._close()
     assert list(tmp_path.iterdir()) == []
@@ -449,14 +509,16 @@ def test_the_lease_mode_is_set_through_its_descriptor_whatever_the_umask(tmp_pat
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root lists a 0o000 directory")
-def test_a_stale_lease_this_user_cannot_list_is_still_broken(tmp_path: Path) -> None:
-    """A stale lease another user left unlistable is judged by its own stamp, moved aside, and taken."""
+def test_a_stale_lease_this_user_cannot_list_is_a_typed_error_naming_its_owner(tmp_path: Path) -> None:
+    """A stale lease another user left unlistable cannot be claimed, so it is not broken: the error names its owner."""
     resource = tmp_path / "thing"
     _plant_lease(resource)
     os.chmod(_lease_dir(resource), 0o000)
     try:
-        with Lease(resource, timeout=1, stale_after=60) as lease:
-            assert lease.owns() and lease.broke == [_lease_dir(resource)] and len(lease.set_aside) == 1
+        with pytest.raises(LeaseUnavailable, match=r"cannot be listed.*owned by"):
+            with Lease(resource, timeout=1, stale_after=60):
+                pass
+        assert _lease_dir(resource).exists()
     finally:
         for path in tmp_path.iterdir():
             os.chmod(path, 0o700)

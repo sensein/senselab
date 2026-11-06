@@ -4,11 +4,11 @@ An isolated env is a uv venv on a uv-managed interpreter (`--python-preference o
 version, `t` for free-threaded), installed from its lock: a lock with `torch:` pins installs them from the PyTorch
 wheel index routed to the host's CUDA (`pick_torch_index`), then the lock body with `--no-deps`. Under `root`, env
 `<name>` lives in `<name>[-<tag>]-<uuid>/`, and `<name>[-<tag>].json` (`env-record@1.0`) names the current build;
-both are written under a `Lease` on `<name>[-<tag>]`, kept alive by beats while the build runs; a builder whose lease
-was lost does not publish its record. A build is never moved or removed here, so a broken lease costs a duplicate
-build, never a mixed env, and a superseded build stays until an explicit clean-up. The worker
-runtime, and the worker modules a backend declares, are copied into every env as an overlay that leaves its
-wheel set unchanged.
+both are written under a `Lease` on `<name>[-<tag>]`, kept alive by beats while the build runs. A builder whose
+lease was lost, or cannot prove it right before publishing (`Lease.prove`), does not publish its record. A build is
+never moved or removed here, so a broken lease costs a duplicate build, never a mixed env, and a superseded build
+stays until an explicit clean-up. The worker runtime, and the worker modules a backend declares, are copied into
+every env as an overlay that leaves its wheel set unchanged.
 """
 
 import errno
@@ -341,7 +341,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         if current is None or (current.lock_sha, current.torch_index) != wanted:
             require_online(network, f"building env {stem}")
             current = _build(root, stem, parsed, lock_sha, index, uv, host_cuda, workers or {})
-            if state.lost:
+            if state.lost or not held.prove():
                 logger.warning("env %s: its build lease was lost; the build is used here and not published", stem)
             else:
                 write_atomically(root / f"{stem}.json", current.model_dump_json().encode())

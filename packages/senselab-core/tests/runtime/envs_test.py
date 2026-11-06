@@ -37,6 +37,7 @@ from senselab_core.runtime.envs import (
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.profiles import Envs
 from senselab_worker.digest import identity_digest
+from syscall_faults_fixture import displace_before_proof
 
 pytestmark = pytest.mark.logic
 
@@ -322,6 +323,16 @@ def test_the_build_lease_outlasts_its_stale_bound_while_it_beats(
     handle = _ensure(tmp_path, _lock(tmp_path))
     assert clock.attempts == 4 and clock.breaks == 0
     assert handle.python and list((tmp_path / "envs").glob("demo-*.json"))
+
+
+def test_a_builder_displaced_just_before_publishing_does_not_publish(
+    tmp_path: Path, uv_log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The record is published only after a fresh `mkdir` proves the lease; a displaced builder uses, not publishes."""
+    displaced = displace_before_proof(monkeypatch, ".lease")
+    handle = _ensure(tmp_path, _lock(tmp_path))
+    assert displaced and Path(handle.python).exists()
+    assert list((tmp_path / "envs").glob("demo-*.json")) == []
 
 
 def _uv_lock(tmp_path: Path, *packages: tuple[str, str], extras: dict[str, dict[str, list[str]]] | None = None) -> Path:

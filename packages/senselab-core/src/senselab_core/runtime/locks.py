@@ -17,10 +17,12 @@ stays inside `<dir>`; no file is written under the lease:
 - **judge:** a lease's age is the storage clock (`StorageDir.dir_now`) less the newest mtime of `<name>.lease`
   and its tokens, read by a fresh `lstat`; a lease is broken only when that age, read after a fresh clock
   probe, passes `stale_after`. Anything but a directory at the name is moved aside (quarantined).
-- **break and release:** the breaker or releaser claims the lease by renaming its token to `gone-<token>` inside
-  it; a token is unique to one lease, so one claim succeeds, and only the claimant renames `<name>.lease` to a
-  fresh uuid name beside it and removes it. A lease with no token is moved only if `lstat` shows it is still the
-  directory judged. A holder whose token was claimed learns it at its next beat, `owns` or `prove`.
+- **break and release:** the breaker or releaser claims the lease by renaming an entry inside it: its token to
+  `gone-<token>`, or, in a lease with no token, another entry (a dead claimant's) to `claim-<uuid4>`. An entry is
+  one directory's, so one claim succeeds, and only the claimant renames `<name>.lease` to a fresh uuid name beside
+  it and removes it. A lease with no entry is removed by `rmdir`, which fails once a taker's token is in it; one
+  that cannot be listed is not broken. A holder whose token was claimed learns it at its next beat, `owns` or
+  `prove`.
 
 Every wait ends at `timeout` in `LeaseTimeout`. The lease is an efficiency hint: what it guards stays correct by
 idempotence, not by the lease.
@@ -56,6 +58,10 @@ GONE_PREFIX = "gone-"
 """Prefixed to a token by the one caller that claims its lease for removal."""
 GONE_NAME = re.compile(r"^gone-[0-9a-f]{32}$")
 """A claimed token in a lease being removed."""
+CLAIM_PREFIX = "claim-"
+"""Names the entry a breaker renames to claim a lease that has no token."""
+CLAIM_NAME = re.compile(r"^claim-[0-9a-f]{32}$")
+"""A claimed lease with no token, being removed."""
 PROOF_NAME = re.compile(r"^proof-[0-9a-f]{32}$")
 """A directory `Lease.prove` makes and removes in a holder's token directory."""
 LEASE_DIR_MODE = 0o2770
@@ -70,6 +76,8 @@ REMOVE_ATTEMPTS = 3
 """How many times a lease moved aside is removed while a taker that reached it before the move races the removal."""
 GONE_ERRNOS = frozenset({errno.ENOENT, errno.ESTALE})
 """What the storage answers for a lease directory that was moved or removed: gone, or a stale NFS handle to it."""
+CLAIM_LOST_ERRNOS = GONE_ERRNOS | {errno.EINVAL}
+"""What a claim's rename answers when the entry was claimed first or its lease is being torn down (`EINVAL` on APFS)."""
 RENEWER_PREFIX = "lease-renewer:"
 """The name of a renewer thread, before its lease's name."""
 
@@ -175,22 +183,31 @@ class Lease:
             self._clock = (self._directory().dir_now(), time.monotonic())
         return self._clock[0] + time.monotonic() - self._clock[1]
 
-    def _tokens_in(self, name: str) -> Optional[dict[str, float]]:
-        """Return the mtime of each token directory in the directory `name`; empty if unlistable, None if gone."""
+    def _listing(self) -> Optional[tuple[dict[str, float], Optional[dict[str, float]]]]:
+        """Return the mtime of each token directory in the lease and of each other entry; None if the lease is gone.
+
+        The other entries are None when the lease cannot be listed.
+        """
         try:
-            with self._directory().child(name) as lease:
-                found = {t: lease.lstat(t) for t in lease.listdir() if UUID_HEX.fullmatch(t)}
+            with self._directory().child(self._name) as lease:
+                found = {n: lease.lstat(n) for n in lease.listdir()}
         except (FileNotFoundError, WrongKindError):
             return None
         except PermissionError:
-            return {}
-        return {t: st.st_mtime for t, st in found.items() if st is not None and stat.S_ISDIR(st.st_mode)}
+            return {}, None
+        tokens = {
+            n: st.st_mtime
+            for n, st in found.items()
+            if st is not None and UUID_HEX.fullmatch(n) and stat.S_ISDIR(st.st_mode)
+        }
+        return tokens, {n: st.st_mtime for n, st in found.items() if st is not None and n not in tokens}
 
-    def _seen(self) -> Optional[tuple[frozenset[str], float, tuple[int, int, int]]]:
-        """Return the lease's tokens, the newest mtime of it and them, and its identity; None if no lease is there.
+    def _seen(self) -> Optional[tuple[frozenset[str], float, Optional[frozenset[str]]]]:
+        """Return the lease's tokens, the newest mtime of it, its tokens and claims, and its other entries.
 
-        The identity is the lease directory's device, inode and mtime. Anything but a directory at the name is moved
-        aside.
+        None when no lease is at the name. The lease is read again after its entries, so a claim renamed inside it
+        meanwhile shows in its mtime. The other entries are None when the lease cannot be listed. Anything but a
+        directory at the name is moved aside.
         """
         directory = self._directory()
         st = directory.lstat(self._name)
@@ -200,10 +217,16 @@ class Lease:
             self.set_aside.append(directory.set_aside(self._name, None))
             logger.warning("lease %s: moved an object of the wrong kind aside", self._lease_path)
             return None
-        tokens = self._tokens_in(self._name)
-        if tokens is None:
+        listing = self._listing()
+        if listing is None:
             return None
-        return frozenset(tokens), max([st.st_mtime, *tokens.values()]), _identity(st)
+        tokens, others = listing
+        after = directory.lstat(self._name)
+        if after is None:
+            return None
+        claims = [m for n, m in (others or {}).items() if GONE_NAME.fullmatch(n) or CLAIM_NAME.fullmatch(n)]
+        newest = max([st.st_mtime, after.st_mtime, *tokens.values(), *claims])
+        return frozenset(tokens), newest, None if others is None else frozenset(others)
 
     def _remove(self, aside: str) -> None:
         """Remove the moved lease `aside`, again while a taker that reached it before the move races the removal."""
@@ -219,45 +242,74 @@ class Lease:
         self.set_aside.append(directory.path / aside)
         logger.warning("lease %s: moved aside to %s, which cannot be removed: %s", self._lease_path, aside, failure)
 
-    def _break(self, tokens: frozenset[str], identity: Optional[tuple[int, int, int]]) -> bool:
-        """Move the lease holding `tokens` aside and remove it; return whether this caller did.
+    def _break(self, tokens: frozenset[str], others: Optional[frozenset[str]]) -> bool:
+        """Claim the lease holding `tokens` (or, with none, the entries `others`), move it aside and remove it.
 
-        With tokens, the caller first claims the lease by renaming its first token to `gone-<token>` inside it. A
-        token name is unique to one lease, so of all callers that judged it only one claim succeeds, and only the
-        claimant then moves `<name>.lease`; no other lease is ever moved. A lease with no token (left empty by a
-        taker that died, or unlistable) is moved only if the directory at the name is still the one judged
-        (device, inode and mtime by `lstat`).
+        Returns whether this caller removed it. The caller first claims the lease by renaming one entry inside it, and
+        stamps the claimed entry so other judges see the lease as fresh while it is removed: its
+        first token to `gone-<token>`, or, with no token, its first other entry (a dead claimant's `gone-<token>`) to
+        `claim-<uuid4>`. An entry name is one directory's, so of all callers that judged the lease only one claim
+        succeeds, and only the claimant moves `<name>.lease`. A further token is claimed too; it cannot be a live
+        holder's, since the lease's age is the newest of its tokens' and it was judged stale. A lease with no entry
+        at all is removed by `rmdir`, which succeeds only while it is empty.
+
+        Raises:
+            LeaseUnavailable: the lease cannot be listed, so it cannot be claimed.
         """
+        if others is None:
+            raise LeaseUnavailable(
+                self._lease_path,
+                f"{self._lease_path} is stale and cannot be listed, so it cannot be claimed; "
+                f"{owner_remedy(self._lease_path)}",
+            )
+        if not tokens and not others:
+            return self._remove_empty()
+        claims = [(t, GONE_PREFIX + t, GONE_NAME) for t in sorted(tokens)] or [
+            (min(others), f"{CLAIM_PREFIX}{uuid.uuid4().hex}", CLAIM_NAME)
+        ]
+        claimed = self._claim(claims)
+        if claimed is None:
+            return False
         directory = self._directory()
-        if tokens:
-            first, *rest = sorted(tokens)
-            try:
-                with directory.child(self._name) as lease:
-                    lease.rename(first, lease, GONE_PREFIX + first, grammar=GONE_NAME)
-                    for token in rest:
-                        with contextlib.suppress(OSError):
-                            lease.rename(token, lease, GONE_PREFIX + token, grammar=GONE_NAME)
-                    claimed = os.fstat(lease.fd)
-            except WrongKindError:
-                return False
-            except OSError as err:
-                if err.errno in GONE_ERRNOS:
-                    return False
-                raise
-            current = directory.lstat(self._name)
-            if current is None or (current.st_dev, current.st_ino) != (claimed.st_dev, claimed.st_ino):
-                logger.warning("lease %s: claimed, then found another directory at its name", self._lease_path)
-                return False
-        else:
-            current = directory.lstat(self._name)
-            if current is None or identity is None or _identity(current) != identity:
-                return False
+        current = directory.lstat(self._name)
+        if current is None or (current.st_dev, current.st_ino) != (claimed.st_dev, claimed.st_ino):
+            logger.warning("lease %s: claimed, then found another directory at its name", self._lease_path)
+            return False
         aside = uuid.uuid4().hex
         try:
             directory.rename(self._name, directory, aside, grammar=UUID_HEX)
         except FileNotFoundError:
             return False
         self._remove(aside)
+        return True
+
+    def _claim(self, claims: list[tuple[str, str, re.Pattern[str]]]) -> Optional[os.stat_result]:
+        """Rename each `(entry, claim)` in the lease, the first deciding; return the claimed lease's stat, else None."""
+        try:
+            with self._directory().child(self._name) as lease:
+                (name, claim, grammar), *rest = claims
+                lease.rename(name, lease, claim, grammar=grammar)
+                with contextlib.suppress(OSError):
+                    lease.stamp(claim)
+                for name, claim, grammar in rest:
+                    with contextlib.suppress(OSError):
+                        lease.rename(name, lease, claim, grammar=grammar)
+                return os.fstat(lease.fd)
+        except WrongKindError:
+            return None
+        except OSError as err:
+            if err.errno in CLAIM_LOST_ERRNOS:
+                return None
+            raise
+
+    def _remove_empty(self) -> bool:
+        """Remove the lease by `rmdir`, which succeeds only while it holds nothing; return whether it did."""
+        try:
+            self._directory().remove_dir(self._name, grammar=LEASE_NAME)
+        except OSError as err:
+            if err.errno in (*GONE_ERRNOS, errno.ENOTEMPTY, errno.EEXIST):
+                return False
+            raise
         return True
 
     def _judge(self) -> None:
@@ -350,7 +402,7 @@ class Lease:
         proof = f"proof-{uuid.uuid4().hex}"
         try:
             with self._directory().child(self._name) as lease, lease.child(self._held) as mine:
-                mine.make_dir(proof, grammar=PROOF_NAME)
+                mine.make_dir(proof, grammar=PROOF_NAME, exist_ok=True)
                 with contextlib.suppress(OSError):
                     mine.remove_dir(proof, grammar=PROOF_NAME)
         except WrongKindError:
@@ -483,7 +535,7 @@ class Lease:
         try:
             self._stop_renewer()
             token = self._held
-            if token is not None and not self._break(frozenset({token}), None):
+            if token is not None and not self._break(frozenset({token}), frozenset()):
                 logger.warning("lease %s: was broken while held; the work it guarded may run twice", self._lease_path)
         finally:
             self._held = None
@@ -495,10 +547,6 @@ class Lease:
             directory.close()
 
 
-def _identity(st: Any) -> tuple[int, int, int]:  # noqa: ANN401 - an `os.stat_result` or a stand-in for one
-    return (st.st_dev, st.st_ino, st.st_mtime_ns)
-
-
 def _user(uid: int) -> str:
     try:
         return pwd.getpwuid(uid).pw_name
@@ -508,6 +556,9 @@ def _user(uid: int) -> str:
 
 __all__ = [
     "BEAT_NAME",
+    "CLAIM_LOST_ERRNOS",
+    "CLAIM_NAME",
+    "CLAIM_PREFIX",
     "GONE_ERRNOS",
     "GONE_NAME",
     "GONE_PREFIX",

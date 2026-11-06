@@ -104,8 +104,10 @@ TAKERS = 8
 def test_contending_processes_break_a_stale_lease_once_and_never_orphan_it(tmp_path: Path) -> None:
     """Eight processes contend for one stale lease for 25 rounds, and nothing is left behind.
 
-    In every round there is one break, every taker holds in turn, no taker times out on an unknown holder, and a process
-    renames only the stale lease it judged or its own.
+    In every round there is one break, every taker holds in turn and none is displaced (no overlapping holds), no taker
+    times out on an unknown holder (no orphan), and a process moves only the stale lease it judged or its own. A
+    moved lease may also hold the token of a taker that reached it before the move, which then withdrew; it never
+    holds another process's held token.
     """
     context = multiprocessing.get_context("spawn")
     with context.Pool(TAKERS, initializer=lease_stress_fixture.setup) as pool:
@@ -118,7 +120,10 @@ def test_contending_processes_break_a_stale_lease_once_and_never_orphan_it(tmp_p
             assert [r["timeout"] for r in reports if r["timeout"]] == [], (n, reports)
             assert all(r["held"] and not r["displaced"] for r in reports), (n, reports)
             assert sum(r["broke"] for r in reports) == 1, (n, reports)
+            held = {r["token"] for r in reports}
             for r in reports:
-                moved = [[t.removeprefix(GONE_PREFIX) for t in tokens] for tokens in r["renamed"]]
-                assert all(tokens in ([planted], [r["token"]]) for tokens in moved), (n, r)
+                for tokens in r["renamed"]:
+                    moved = {t.removeprefix(GONE_PREFIX) for t in tokens}
+                    assert planted in moved or r["token"] in moved, (n, r)
+                    assert not moved & (held - {r["token"]}), (n, r)
             assert list(root.iterdir()) == [], (n, list(root.iterdir()))

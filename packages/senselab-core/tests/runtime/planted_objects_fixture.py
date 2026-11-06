@@ -713,12 +713,20 @@ def _recording() -> list[Path]:
 
 
 def _ephemeral(rel: Path) -> bool:
+    """Whether `rel` is a name no reader looks for: staging and temporaries, and any entry inside a lease directory.
+
+    An object planted inside a lease makes a fresh lease at its name, which is waited on for `stale_after` like any
+    live lease; planting at the lease's own name is what tests the lease.
+    """
     from senselab_core.runtime.fetch import LINK_STAGING_NAME
+    from senselab_core.runtime.locks import LEASE_NAME
     from senselab_core.runtime.storage import TEMPORARY_NAME
     from senselab_worker.ownership import UUID_HEX
 
-    return any(UUID_HEX.fullmatch(p) for p in rel.parts) or bool(
-        TEMPORARY_NAME.fullmatch(rel.name) or LINK_STAGING_NAME.fullmatch(rel.name)
+    return (
+        any(UUID_HEX.fullmatch(p) for p in rel.parts)
+        or any(LEASE_NAME.fullmatch(p) for p in rel.parts[:-1])
+        or bool(TEMPORARY_NAME.fullmatch(rel.name) or LINK_STAGING_NAME.fullmatch(rel.name))
     )
 
 
