@@ -3,8 +3,9 @@
 `VllmServer` starts ``<env>/bin/vllm serve`` on a pinned model under a beating `Lease` named by the host and the
 devices, so servers that share a card start one at a time. It waits for ``/health``, reads the served version and model,
 and holds an `Attestation` (engine version, model identity, config digest) that every reply it returns carries
-and that its `context_fields` put in the execution context. The server runs in its own process group; a watchdog
-kills that group if the owner dies, and leaving the context stops it (SIGTERM, then SIGKILL).
+and that its `context_fields` put in the execution context. The server is launched through the supervisor in force
+(`Supervisor`), in its own process group, which the supervisor's keeper kills if the owner dies; leaving the context
+stops it (SIGTERM, then SIGKILL).
 
 The clients `chat` (with `content_part` for text, image, video and audio parts) and `complete` call a running
 server's OpenAI-compatible endpoints over loopback and return the parsed JSON; they log nothing.
@@ -20,7 +21,6 @@ import re
 import signal
 import socket
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -36,6 +36,7 @@ from senselab_worker.digest import identity_digest
 
 from senselab_core.kernel.identity import ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.supervisor import current
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.launch import Launch, launch
 from senselab_core.runtime.locks import TIMEOUT_S, Lease, LeaseUnavailable
@@ -86,36 +87,6 @@ STOP_TIMEOUT_S = 60.0
 """Seconds a server has to exit after SIGTERM before its group is killed."""
 
 _NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-
-# Run as ``python -c _WATCHDOG <owner pid> <server group>`` in its own session; kills the group once the owner is gone.
-_WATCHDOG = r"""
-import ctypes, os, signal, sys, time
-
-owner, group = int(sys.argv[1]), int(sys.argv[2])
-
-
-def kill_group():
-    try:
-        os.killpg(group, signal.SIGKILL)
-    except OSError:
-        pass
-    os._exit(0)
-
-
-def on_term(signum, frame):
-    if os.getppid() != owner:
-        kill_group()
-
-
-signal.signal(signal.SIGTERM, on_term)
-try:
-    ctypes.CDLL(None).prctl(1, signal.SIGTERM)
-except Exception:
-    pass
-while os.getppid() == owner:
-    time.sleep(1)
-kill_group()
-"""
 
 
 class VllmStartError(RuntimeError):
@@ -357,7 +328,7 @@ class VllmServer:
         self._env = env
         self._network = network
         self._server: subprocess.Popen[bytes] | None = None
-        self._watchdog: subprocess.Popen[bytes] | None = None
+        self._supervisor = current()
         self._log: IO[bytes] | None = None
 
     @property
@@ -461,19 +432,14 @@ class VllmServer:
             path = self.log_dir / f"vllm-{socket.gethostname()}-{os.getpid()}-{port}.log"
             self._log = os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "wb")
             sink = self._log
-        self._server = subprocess.Popen(  # noqa: S603 - the env's vllm executable
+        self._supervisor = current()
+        self._server = started.start(
             [*command, *self._model_args, *self.args],
+            supervisor=self._supervisor,
+            keep=True,
             stdin=subprocess.DEVNULL,
             stdout=sink,
             stderr=subprocess.STDOUT,
-            env=dict(started.variables),
-            cwd=started.cwd,
-            start_new_session=True,
-        )
-        self._watchdog = subprocess.Popen(  # noqa: S603 - this interpreter
-            [sys.executable, "-c", _WATCHDOG, str(os.getpid()), str(self._server.pid)],
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
         )
         self.url = f"http://{HOST}:{port}"
 
@@ -506,7 +472,7 @@ class VllmServer:
         )
 
     def stop(self) -> None:
-        """Stop the server's process group (SIGTERM, then SIGKILL) and its watchdog; safe to call twice."""
+        """Stop the server's process group (SIGTERM, then SIGKILL) and release it; safe to call twice."""
         server, self._server = self._server, None
         if server is not None:
             _killpg(server.pid, signal.SIGTERM)
@@ -515,11 +481,8 @@ class VllmServer:
             except subprocess.TimeoutExpired:
                 pass
             _killpg(server.pid, signal.SIGKILL)
+            self._supervisor.released(server.pid)
             server.wait()
-        watchdog, self._watchdog = self._watchdog, None
-        if watchdog is not None:
-            watchdog.kill()
-            watchdog.wait()
         log, self._log = self._log, None
         if log is not None:
             log.close()

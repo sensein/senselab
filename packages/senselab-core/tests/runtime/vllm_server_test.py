@@ -110,7 +110,7 @@ def _group_gone(pgid: int, timeout_s: float = 30.0) -> bool:
     while time.monotonic() < deadline:
         try:
             os.killpg(pgid, 0)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):  # macOS: EPERM once every member is a zombie or exiting
             return True
         time.sleep(0.1)
     return False

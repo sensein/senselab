@@ -293,7 +293,7 @@ def test_closing_the_worker_set_stops_the_server_it_started(
     while time.monotonic() < deadline:
         try:
             os.killpg(record["pgid"], 0)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):  # macOS: EPERM once every member is a zombie or exiting
             return
         time.sleep(0.1)
     pytest.fail("the server's process group outlived closing the worker set")
@@ -320,7 +320,7 @@ def test_real_workers_close_and_the_next_start_stop_the_server(
         while time.monotonic() < deadline:
             try:
                 os.killpg(pgid, 0)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):  # macOS: EPERM once every member is a zombie or exiting
                 break
             time.sleep(0.1)
         else:

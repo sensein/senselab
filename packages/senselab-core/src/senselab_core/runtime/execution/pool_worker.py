@@ -36,6 +36,7 @@ from senselab_core.runtime.execution.in_process import fragment_jobs, job_key, p
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool import report, run_plan
 from senselab_core.runtime.execution.queue import Claim, QueueSet
+from senselab_core.runtime.execution.supervisor import Supervisor
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import LeaseTimeout
@@ -360,16 +361,18 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
 ) -> int:
     """Serve the queues of `classes` in `pool_dir` (a run's `queues` directory) as one `PoolWorker`; return 0.
 
+    The worker runs under a `Supervisor`, so every process it launches, and every orphan they leave, ends with it.
     On the main thread SIGTERM halts the worker (`PoolWorker.halt`); the previous handler is restored after.
     """
     worker = PoolWorker(pool_dir, classes, profile=profile, store=store, workers=workers, send=send, join_s=join_s)
-    if threading.current_thread() is not threading.main_thread():
-        return worker.serve()
-    previous = signal.signal(signal.SIGTERM, lambda *_: worker.halt())
-    try:
-        return worker.serve()
-    finally:
-        signal.signal(signal.SIGTERM, previous)
+    with Supervisor():
+        if threading.current_thread() is not threading.main_thread():
+            return worker.serve()
+        previous = signal.signal(signal.SIGTERM, lambda *_: worker.halt())
+        try:
+            return worker.serve()
+        finally:
+            signal.signal(signal.SIGTERM, previous)
 
 
 __all__ = ["IDLE_POLLS", "Member", "PoolWorker", "Send", "bisect", "failure_of", "serve_pool", "whole"]

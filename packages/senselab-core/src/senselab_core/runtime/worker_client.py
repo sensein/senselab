@@ -51,6 +51,7 @@ from senselab_worker.faults import (
 )
 from senselab_worker.ownership import ARRAY_FILE, remove_owned
 
+from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.hardware import cgroup_memory_events, oom_kills
 from senselab_core.runtime.launch import launch
 
@@ -347,39 +348,12 @@ def _signal_group(pgid: int, sig: signal.Signals, *, leader_exited: bool) -> Non
             logger.warning("signal %s to worker process group %d failed: %s", sig.name, pgid, exc)
 
 
-_STAT_STATE = 0
-_STAT_PGRP = 2
-"""Field indices in `/proc/<pid>/stat` after the parenthesised command name: the state and the process group."""
-
-
-def _live_members(pgid: int) -> bool:
-    """Whether group `pgid` has a member that is neither a zombie nor exiting: by `/proc`, else by `killpg(pgid, 0)`."""
-    if os.path.isdir("/proc/self/task"):
-        for entry in os.listdir("/proc"):
-            if not entry.isdigit():
-                continue
-            try:
-                with open(f"/proc/{entry}/stat", "rb") as f:
-                    data = f.read()
-            except OSError:
-                continue
-            fields = data[data.rfind(b")") + 2 :].split()
-            if len(fields) > _STAT_PGRP and int(fields[_STAT_PGRP]) == pgid and fields[_STAT_STATE] not in (b"Z", b"X"):
-                return True
-        return False
-    try:
-        os.killpg(pgid, 0)
-    except (ProcessLookupError, PermissionError):
-        return False
-    return True
-
-
-def _members_gone(pgid: int, exited: threading.Event, deadline: Deadline) -> bool:
-    """Wait until the leader has exited and group `pgid` has no live member; return whether that happened."""
+def _members_gone(pgid: int, exited: threading.Event, deadline: Deadline, live: Callable[[int], bool]) -> bool:
+    """Wait until the leader has exited and group `pgid` has no member `live` names; return whether it happened."""
     delay = 0.001
     while True:
         seen = _exit_seen(pgid, exited)
-        if seen and not _live_members(pgid):
+        if seen and not live(pgid):
             return True
         remaining = deadline.remaining()
         if remaining is not None and remaining <= 0:
@@ -454,7 +428,8 @@ class WorkerClient:
     array files in it, never other names: after each request every array file except those `init`
     references, and on close all of them and then the directory if it is empty. The worker runs in
     its own process group, which `close` and every host fault stop within its graces' `bound`; a
-    descendant that calls `setsid` leaves the group and is not reached. One `run` may be in flight at
+    descendant that calls `setsid` leaves the group and is reached only by an adopting supervisor (`Supervisor`),
+    once the worker is released to it. One `run` may be in flight at
     a time. Host faults (`ProtocolMismatch`, `ProtocolError`, `WorkerLost`, `WorkerFatal`,
     `WorkerTimeout`, `WorkerOOMKilled`) discard the worker and carry its exit code and last stderr lines as a note.
     A worker that exits by SIGKILL while `memory_events` (this process's cgroup v2 `memory.events` when None) records
@@ -482,12 +457,14 @@ class WorkerClient:
         max_line_bytes: int = MAX_LINE_BYTES,
         variables: Mapping[str, str] | None = None,
         memory_events: Path | None = None,
+        supervisor: Supervisor | None = None,
     ) -> None:
         """Start the worker, check its hello and wait until it has loaded `init`; stop it within `graces`.
 
         `max_line_bytes` bounds every line the client sends and every reply line it accepts after the hello;
         a longer reply is `LineTooLarge`, a `ProtocolError`.
-        `variables` are set on the worker process over the launch's allowlist (`launch`).
+        `variables` are set on the worker process over the launch's allowlist (`launch`). The worker is launched
+        through `supervisor` (`current()` when None), which also judges whether its group is live.
 
         Raises:
             ValueError: if `init` uses the reserved key `array_dir` or has no wire form, or `max_line_bytes` is
@@ -509,8 +486,8 @@ class WorkerClient:
             raise TypeError(f"graces must be a ShutdownGraces, got {type(graces).__name__}")
         if type(max_line_bytes) is not int or not 0 < max_line_bytes <= MAX_LINE_BYTES:
             raise ValueError(f"max_line_bytes must be an int in [1, {MAX_LINE_BYTES}], got {max_line_bytes!r}")
-        self._max_line_bytes = max_line_bytes
-        self._request_timeout = request_timeout
+        self._max_line_bytes, self._request_timeout = max_line_bytes, request_timeout
+        self._supervisor = supervisor if supervisor is not None else current()
         self._memory_events = memory_events if memory_events is not None else cgroup_memory_events()
         self._oom_baseline = oom_kills(self._memory_events)
         self._graces = graces
@@ -528,8 +505,7 @@ class WorkerClient:
         self._shutdown_lock = threading.Lock()
         self._shutting_down: set[int] = set()
         self._closed_by_caller = False
-        self._stopped = False
-        self._released = False
+        self._stopped = self._released = False
         self._init_names: set[str] = set()
         self.hello: dict[str, Any] = {}
         self._wake_r, self._wake_w = os.pipe()
@@ -760,15 +736,7 @@ class WorkerClient:
         with self._shutdown_lock:
             if self._closed:
                 raise WorkerLost("the client was closed before its worker started")
-            self._proc = proc = subprocess.Popen(  # noqa: S603 - the env's interpreter
-                argv,
-                stdin=pipe,
-                stdout=pipe,
-                stderr=pipe,
-                env=dict(started.variables),
-                cwd=started.cwd,
-                start_new_session=True,
-            )
+            self._proc = proc = started.start(argv, supervisor=self._supervisor, stdin=pipe, stdout=pipe, stderr=pipe)
         assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
         os.set_blocking(proc.stdin.fileno(), False)
         tail = self._stderr
@@ -1053,9 +1021,10 @@ class WorkerClient:
         exited = self._exited
         _signal_group(pgid, signal.SIGTERM, leader_exited=_exit_seen(pgid, exited))
         _signal_group(pgid, signal.SIGCONT, leader_exited=_exit_seen(pgid, exited))
-        if not _members_gone(pgid, exited, stop):
+        live = self._supervisor.group_live
+        if not _members_gone(pgid, exited, stop, live):
             self._sigkill_group(pgid)
-            if not _members_gone(pgid, exited, Deadline(self._graces.kill)):
+            if not _members_gone(pgid, exited, Deadline(self._graces.kill), live):
                 logger.error("worker process group %d still has members after SIGKILL", pgid)
 
     def _stop_group(self, proc: subprocess.Popen[bytes], stop: Deadline) -> None:
@@ -1076,6 +1045,7 @@ class WorkerClient:
         else:
             logger.warning("worker %d was reaped outside this client; its process group is not signalled", pgid)
         if self._exited.is_set() and proc.returncode is None:
+            self._supervisor.released(pgid)
             proc.wait()
 
     def _terminate(self, *, graceful: bool) -> None:
