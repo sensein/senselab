@@ -5,6 +5,8 @@ import dataclasses
 import inspect
 import json
 import platform
+import subprocess
+import sys
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
@@ -17,6 +19,7 @@ from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams,
 from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.signals import StaleSource
 from senselab_core.runtime import planner
+from senselab_core.runtime.audio_io import open_audio
 from senselab_core.runtime.call import Packaged, RunConfig, TaskCall, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import from_records
@@ -24,7 +27,7 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.events import Event, read_events, run_dir_of
 from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status
 from senselab_core.runtime.execution.in_process import InProcess
-from senselab_core.runtime.execution.run import InputChanged, Output, Run, load_plan
+from senselab_core.runtime.execution.run import ConflictingSources, InputChanged, Output, Run, load_plan
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.planner import NoRun, Plan, plan, resume
@@ -203,11 +206,15 @@ def test_resume_and_place_name_no_resolver() -> None:
     """Neither `resume` nor `place` names a resolver, `pin_model` or `resolve`, so neither can resolve a ref."""
     tree = ast.parse(inspect.getsource(planner))
     bodies = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {"resume", "place"}]
-    named = {
-        n.id if isinstance(n, ast.Name) else n.attr
-        for body in bodies
-        for n in ast.walk(body)
-        if isinstance(n, ast.Name | ast.Attribute)
+    nodes = [n for body in bodies for n in ast.walk(body)]
+    named = {n.id for n in nodes if isinstance(n, ast.Name)} | {n.attr for n in nodes if isinstance(n, ast.Attribute)}
+    named |= {
+        name
+        for n in nodes
+        if isinstance(n, ast.Import | ast.ImportFrom)
+        for alias in n.names
+        for name in (alias.name.rpartition(".")[2], alias.asname)
+        if name is not None
     }
     assert len(bodies) == 2 and "place" in named
     assert not named & {"pin_model", "resolve", "resolve_bound", "PROCESS_RESOLVER", "Resolver", "_pinned"}
@@ -343,3 +350,54 @@ def test_a_single_call_writes_its_plan_entity(tmp_path: Path) -> None:
     result = _executor(store).call(call)
     assert result.output_identity is not None
     _linked_to_one_plan(store.provenance, store.provenance.plans()[0].id.partition(":")[2])
+
+
+FRESH = """
+import sys
+from senselab_core.runtime.execution.run import bind_inputs
+print(len(bind_inputs(sys.argv[1])))
+"""
+
+
+def _heard(source: object) -> Plan:
+    call = TaskCall.model_validate({"task": HEAR.name, "inputs": {"audio": source}}, context={"registry": REGISTRY})
+    return plan(call, config=RunConfig(), execution=PROFILE)
+
+
+def _sources(run: Run) -> object:
+    return json.loads((run.run_dir / "inputs.json").read_text())["rows"][0]["audio"]
+
+
+def test_a_rerun_in_memory_keeps_the_path_and_another_process_binds_from_it(tmp_path: Path) -> None:
+    """Run from a path, then from the same audio held in memory: `inputs.json` keeps the path, read elsewhere."""
+    store, path = ResultStore(tmp_path / "store"), _wav(tmp_path / "a.wav", 0.25)
+    first = _ran(_heard(path), store)
+    second = _ran(_heard(open_audio(path)), store)
+    assert second.run_dir == first.run_dir and _sources(second) == str(path)
+    found = subprocess.run(
+        [sys.executable, "-c", FRESH, str(first.run_dir)], capture_output=True, text=True, check=True
+    )
+    assert found.stdout.strip() == "1"
+
+
+def test_a_path_run_upgrades_a_memory_source(tmp_path: Path) -> None:
+    """Run first from audio held in memory, then from its path: the recorded source becomes the path."""
+    store, path = ResultStore(tmp_path / "store"), _wav(tmp_path / "a.wav", 0.25)
+    first = _ran(_heard(open_audio(path)), store)
+    assert set(cast("dict[str, Any]", _sources(first))) == {"memory"}
+    assert _sources(_ran(_heard(path), store)) == str(path)
+
+
+def test_conflicting_durable_sources_are_refused_before_any_write(tmp_path: Path) -> None:
+    """A recorded path that now reads other audio than a new path of the plan's audio is refused; nothing is written."""
+    store, recorded = ResultStore(tmp_path / "store"), _wav(tmp_path / "a.wav", 0.25)
+    run = _ran(_heard(recorded), store)
+    moved = _wav(tmp_path / "b.wav", 0.25)
+    _wav(recorded, 0.5)
+    placed = _heard(moved)
+    assert placed.hash == run.run_dir.name
+    before = _tree(run.run_dir)
+    with pytest.raises(ConflictingSources) as raised:
+        placed.run(_executor(store), store=store)
+    assert raised.value.conflicts == (("call", "audio"),)
+    assert _tree(run.run_dir) == before

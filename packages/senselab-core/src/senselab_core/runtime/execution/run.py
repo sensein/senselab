@@ -2,7 +2,8 @@
 
 A run lives in `<cache root>/2x/runs/<plan hash>/`: `plan.json` (the logical plan and its input manifest, written
 once), `inputs.json` (what each
-record's inputs are read from), `manifest.json` (the plan hash and the result store, the same for every attempt),
+record's inputs are read from, merged across attempts), `manifest.json` (the plan hash and the latest attempt's
+result store),
 `placements/<attempt>.json` (one per attempt, never overwritten), `attempts/<n>` (the attempt id claimed `n`-th),
 `events/<writer>.jsonl` (`EventLog`), `prov/` (the
 provenance documents), and `dead/`, `queues/` and `epoch/` for the pool. A `Run` over a directory derives its status
@@ -20,7 +21,7 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from senselab_core.kernel.dataset import InputManifest, Record
 from senselab_core.kernel.graph import Graph, mapped_nodes, order, split
@@ -79,6 +80,18 @@ class InputChanged(StaleSource):
         ports = sorted({port for _, port in self.changed})
         records = sorted({record for record, _ in self.changed})
         super().__init__(f"inputs {ports} of records {records[:5]} changed since the plan was made; plan them again")
+
+
+class ConflictingSources(ValueError):
+    """Two durable sources of one input read different contents; `conflicts` is (record, port), record `*` if shared."""
+
+    def __init__(self, conflicts: Sequence[tuple[str, str]]) -> None:
+        """Name the records and ports whose recorded and given sources differ."""
+        self.conflicts = tuple(conflicts)
+        super().__init__(
+            f"inputs {sorted({p for _, p in self.conflicts})} of records {sorted({r for r, _ in self.conflicts})[:5]}"
+            " are recorded with a source that now reads other content than the one given; this run is not that plan's"
+        )
 
 
 class InputsUnavailable(ValueError):
@@ -267,6 +280,14 @@ def _memory(source: object) -> str | None:
     return None
 
 
+def _port_types(placed: Plan) -> dict[str, str]:
+    """Return the type one record gives of each graph input of `placed`."""
+    return {
+        port: (found[1] if (found := _LIST.match(declared)) else declared)
+        for port, declared in placed.logical.graph.inputs.items()
+    }
+
+
 def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
     """Return the value of each input identity of `placed`, bound from its sources and its live values.
 
@@ -279,10 +300,7 @@ def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
         InputsUnavailable: an input held in memory is not in `placed.live`.
         KeyError: the plan records no sources.
     """
-    types = {
-        port: (found[1] if (found := _LIST.match(declared)) else declared)
-        for port, declared in placed.logical.graph.inputs.items()
-    }
+    types = _port_types(placed)
     rows, shared = placed.sources["rows"], placed.sources["shared"]
     values: dict[InputIdentity, object] = {}
     missing: list[tuple[str, str]] = []
@@ -588,12 +606,61 @@ def _write_once(path: Path, document: Mapping[str, object]) -> None:
         staging.unlink()
 
 
+def _durable(source: object) -> object:
+    """Return `source` as it is written to `inputs.json`: a path as text, a JSON value as itself."""
+    return json.loads(json.dumps(source, default=_source))
+
+
+def _kept(old: object, new: object, port: str, kind: str, expected: InputIdentity) -> object | None:
+    """Return the source an input keeps, `old` recorded and `new` given; None when the two durable ones conflict.
+
+    A durable source (a path or JSON value) is never replaced by a `{"memory": ...}` marker, and replaces one. Two
+    different durable sources keep the new one unless the old one still reads, as another identity than `expected`.
+    """
+    if old is None or old == new or _memory(old) is not None:
+        return new
+    if _memory(new) is not None:
+        return old
+    try:
+        identity = bind_input(port, kind, old)[0]
+    except OSError:
+        return new
+    return new if identity == expected else None
+
+
+def merged_sources(placed: Plan, run_dir: Path) -> dict[str, Any]:
+    """Return the input sources of `placed` merged, per record and port, over those `run_dir` records (`_kept`).
+
+    Raises:
+        ConflictingSources: a recorded durable source reads another identity than the one the plan holds.
+    """
+    given = cast("dict[str, Any]", _durable(dict(placed.sources)))
+    path = Path(run_dir) / INPUTS_FILE
+    if not path.is_file():
+        return given
+    held = json.loads(path.read_text(encoding="utf-8"))
+    types = _port_types(placed)
+    rows, conflicts = placed.manifest.rows, []
+    merged_rows = []
+    for row, old, new in zip(rows, held["rows"], given["rows"], strict=True):
+        kept = {p: _kept(old.get(p), s, p, types[p], row.inputs[p]) for p, s in new.items()}
+        conflicts += [(row.id, p) for p, s in kept.items() if s is None]
+        merged_rows.append(kept)
+    shared = {p: _kept(held["shared"].get(p), s, p, types[p], rows[0].inputs[p]) for p, s in given["shared"].items()}
+    conflicts += [("*", p) for p, s in shared.items() if s is None]
+    if conflicts:
+        raise ConflictingSources(conflicts)
+    return {"rows": merged_rows, "shared": shared}
+
+
 def _prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[str, int]:
     """Write the plan once, its input sources and the manifest into `run_dir`, then claim an attempt.
 
     Raises:
         ValueError: `run_dir` holds another plan.
+        ConflictingSources: as `merged_sources`; nothing is written.
     """
+    sources = merged_sources(placed, run_dir)
     _write_once(
         run_dir / PLAN_FILE,
         {
@@ -602,7 +669,7 @@ def _prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[st
             "manifest": placed.manifest.model_dump(mode="json"),
         },
     )
-    _write(run_dir / INPUTS_FILE, dict(placed.sources))
+    _write(run_dir / INPUTS_FILE, sources)
     for name in POOL_DIRS:
         (run_dir / name).mkdir(exist_ok=True)
     _write(run_dir / MANIFEST_FILE, {"plan_hash": placed.hash, "store": None if store is None else str(store.root)})
@@ -620,15 +687,17 @@ def start(
 
     With no executor, `InProcess` runs a plan under a local substrate, over `store` (default: the result store under
     the cache root) with the plan's own profile and run config. `store` is also where the run's results are read from,
-    so it is given with any other executor that stores results. The input values are bound (`bind_sources`) before
-    anything is written: from their paths or JSON values, or from the values the plan holds in memory; `values` gives
-    them already bound.
+    so it is given with any other executor that stores results, and it is the store that executor writes: the plan's
+    `senselab:Plan` entity is added to its provenance. The input values are bound (`bind_sources`) before anything
+    is written: from their paths or JSON values, or from the values the plan holds in memory; `values` gives them
+    already bound. The sources are merged into `inputs.json` (`merged_sources`), also before anything is written.
 
     Raises:
         ExecutorUnavailable: no executor is given and the substrate is not local.
         ValueError: as `admit`.
         InputChanged: an input changed since the plan was made.
         InputsUnavailable: an input held in memory is not held by `placed` (a plan read from disk).
+        ConflictingSources: a source the run records reads other content than the plan's.
         MissingExtra: pydra is not installed.
     """
     if importlib.util.find_spec("pydra") is None:
