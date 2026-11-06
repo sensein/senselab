@@ -692,9 +692,84 @@ suite as a SLURM job.
 - The B2AI profile, `b2ai_hints.py`, `task_registry.py` and `data/b2ai_task_registry/` move to b2aiprep.
 - This lands together with b2aiprep's paired PR.
 
-## Step 8 — tests on the fixture profile
+## Step 8 — tests on a fixture profile and a made-up one (agreed 2026-11-06; before step 7)
 
-- The 59 triage test files that name B2AI tasks load the fixture profile.
+**What it is for.** Every triage and script test (136 files) runs with B2AI's profile active, 84 name B2AI tasks,
+48 use B2AI-style file names (`sub-…_ses-…_task-…`, 262 of them) and 18 read identity off those names with B2AI's
+reader. Step 7 moves B2AI's profile and reader to b2aiprep, which senselab's tests cannot import. Walked through with
+the user on 2026-11-06.
+
+**8a — two profiles** (user: option 2, "so we have additional test coverage", and "without ever naming anything as
+b2ai"). (1) The existing tests run on a fixture with the same content, under a neutral name: a test snapshot of a
+real adult clinical-speech dataset's profile. (2) A made-up profile adds coverage that needs no B2AI-derived file.
+
+**8b — plain file names, identity declared** (user: "move away from b2ai bids naming convention for testing to prove
+that the new mechanisms work"). Test recordings take names that carry no identity (`rec-0007`); a test helper
+builds the hint each test declares (participant, session, task), as a dataset's hint builder would, in place of the
+18 uses of B2AI's reader. Three or four decoy tests give a BIDS-looking name that contradicts the hint and check the
+hint's identity is recorded. Tests of B2AI's reader move with it in step 7; the identity check's "the name disagrees
+with the hint" report gets a test-local reader. Run folders still follow participant and session.
+
+**8c — the made-up profile.** One invented task per kind of task the engine reads (all 12 patterns, or the ones that
+run, said so). It extends the reference profile, makes up its policy and per-task values, and takes its corpus
+statistics from a `fitted.yaml`. Its tests, per kind, at unit level and with no model loaded: the start check passes,
+ADMIT records the declared identity and task, the owning branch reads it with its matcher, the gates resolve, and
+VERDICT folds a prepared reading. It grows the two-task lab corpus of `task_catalogue_test.py`.
+
+**8d — names.** The fixture: `profiles/adult_speech_fixture/`, named `adult-speech-fixture`, its manifest a test
+snapshot taken 2026-11-06, comments citing B2AI's runs made neutral, its recruited-conditions list renamed. The
+made-up profile: `profiles/lab_corpus/`. Test helpers: `FIXTURE_PROFILE`, `triage_profile`,
+`declared_identity_attributes`, `hint_for(participant, session, task)`.
+
+**Checks.** The suite keeps its pass count, give or take the moved and added tests, each listed; a test fails if any
+file under senselab's tests names Bridge2AI or B2AI, but the tests of the two modules step 7 moves; B2AI unchanged:
+the 5 paired runs and the 192-run replay on the renamed fixture (identical content), every store entity identical,
+the run record naming the new profile (the replays take `--allow-profile-change` for it).
+
+**Results (2026-11-06, branch `refactor/triage-tests` off 3aeed5433, evidence in `triage_env_2026_10_22/s8/`).**
+- The fixture: `profiles/adult_speech_fixture/` (`adult-speech-fixture`), same content; its own text and its
+  recruited-conditions list renamed; `task_guidance.yaml` left byte-identical, since every reviewer reading's cache
+  key hashes it, and exempted by name from the naming check. Stores record neither the profile's nor the list's name.
+- Plain names: 58 test files converted by four agents on disjoint groups (746, 532, 740 and 646 passed), with
+  `hint_for`, `declared_identity_attributes` and `seed_recorded_identity(store, stem, participant, session, task)`.
+  The test helper no longer derives a task from a task token through the dataset's parser, so 11 hints in three more
+  files name their task. The identity check's name-disagreement tests use a test-local reader
+  (`<participant>.<session>.<task>`). Tests whose point is that a BIDS-looking name is not read keep one.
+- Decoys: four tests (ADMIT, identity, run folder, corpus table) give `sub-x9_ses-y9_task-voluntary-cough-3` and a
+  hint declaring p07, s2, rainbow-passage; the hint's identity is what is recorded.
+- The dataset's reader: its five tests moved to `b2ai_hints_test.py`, which step 7 hands over with the module
+  (`task_registry_test.py` too). Three scripts still read the task off file names with it and now take the recorded
+  task: the Free Speech review page (from the run record; every run is a candidate, the recorded task decides;
+  its language now comes from the recorded hint's `metadata.language`, not the source dataset's sidecar, so a run
+  from before the hint record shows none), `verify_task_squim.py` (the driver log row's declared family) and
+  `analyze_routing_evidence.py` (the run summary's recorded task). No script or library module imports the reader.
+- The made-up profile: `profiles/lab_corpus/`, written from the template, ten invented tasks (one per kind a branch
+  reads; `effort` and `per_sentence` have no matcher), its corpus statistics in `fitted.yaml`; `lab_corpus_test.py`,
+  42 tests (start check, ADMIT, the owning branch's matcher, the gates, the fold, per kind), all passing.
+- Naming check: `no_dataset_name_test.py` fails on any line naming the source dataset under the triage, scripts and
+  text tests, but the two moving modules' tests, the byte-hashed task guidance and the packaged registry's directory
+  name (until step 7). `quality_control_test.py` (outside triage) names senselab's own Bridge2AI taxonomy.
+- Suite: 6,732 passed, 34 skipped (job 28099312; 48 more than at step 10: the lab corpus, the decoys and the check);
+  the 12 failures under `src/tests/text` and `src/tests/utils` fail on the base tree too. mypy over the touched
+  scripts and modules: no issues.
+- B2AI unchanged: 5 paired fresh runs and the 192-run replay, every store entity identical (ids normalized), the
+  same decisions and replay rows, the same rereads (59 / 133). run.json names `adult-speech-fixture` (config hash
+  434248ea993153c6, was 40722e4438d7e559 under the old name).
+- Review (2026-11-06, high effort, on 05b5bd5e9; findings checked against the code): ten confirmed, fixed:
+  - 1-2: `verify_task_squim.py` takes a log row's family from the task its run's store recorded (the row's
+    declared family as fallback); `analyze_routing_evidence.py` takes the task from each store, since no writer of
+    the `<stem>.summary.json` field it read exists in the repo.
+  - 3-4: the review page reads only the head of each store, up to ADMIT's recording record, to pick candidates
+    (a replay that later moved a recording's task into scope is not seen there); the language is read through
+    ADMIT's record, refused recordings included, and the light reader keeps activities.
+  - 5-6: seven "the name is not read" tests in identity, run and the identity check take a BIDS-looking decoy
+    name again.
+  - 7-10: the r37 measurement script points at the renamed fixture; the lab corpus has its own time words and its
+    test refuses a file copied from the fixture; the fold test that checked nothing is dropped (32 per-kind tests
+    remain); the fixture's header says it was extracted on 2026-10-22 and kept through step 10.
+
+  Suite after the fixes: 6,725 passed, 34 skipped (job 28107150), the same 12 failures as the base tree. mypy over
+  the touched files: one error, in the r37 script's own older code (`analyse.py:210`).
 
 ## Step 9 — speakers, recordings and corpus inputs (agreed 2026-11-04)
 
