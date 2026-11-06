@@ -5,4 +5,4 @@
 # carries a set, each with its derivation.
 version: 1
 default_s:         # profile value (data/profile_values.yaml)
-families: {}       # dataset profile: per-family floors (B2AI: voluntary-cough and -v2-hardcough 0.5)
+families: {}       # dataset profile: per-family floors (e.g. 0.5 s for a single voluntary cough)
