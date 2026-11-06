@@ -392,7 +392,8 @@ def test_conflicting_durable_sources_are_refused_before_any_write(tmp_path: Path
     """A recorded path that now reads other audio than a new path of the plan's audio is refused; nothing is written."""
     store, recorded = ResultStore(tmp_path / "store"), _wav(tmp_path / "a.wav", 0.25)
     run = _ran(_heard(recorded), store)
-    moved = _wav(tmp_path / "b.wav", 0.25)
+    moved = tmp_path / "b.wav"
+    moved.write_bytes(recorded.read_bytes())
     _wav(recorded, 0.5)
     placed = _heard(moved)
     assert placed.hash == run.run_dir.name
