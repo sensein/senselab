@@ -10,12 +10,14 @@ import os
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from senselab_core.kernel import plan as kernel_plan
 from senselab_core.kernel.dataset import Dataset, InputManifest, ManifestRow
 from senselab_core.kernel.declare import Registry, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, GraphIssue, Node, validate
-from senselab_core.kernel.identity import InputIdentity, ModelRef, ResolvedModel
+from senselab_core.kernel.identity import InputIdentity, ModelRef, ResolvedModel, ReusePolicy
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan, plan_hash
 from senselab_core.runtime.call import (
@@ -401,27 +403,22 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
     bind: Mapping[str, str] | None = None,
     inputs: Mapping[str, object] | None = None,
     hardware: HardwareInfo | None = None,
+    resolver: Resolver | None = None,
 ) -> Plan:
-    """Return `target` over `dataset` resolved (`resolve`) and placed under `execution` on this host.
+    """Return `target` over `dataset` resolved (`resolve`) and placed under `execution` on this host (`place`).
 
-    Models are resolved under the profile's network policy and its source allowlist. Each node is placed
-    (`place_nodes`) with its placed backend's params validated, gets its license set (`node_licenses`), and the run
-    config's license policy is checked on every record of it. The memory caps of each resource class are checked
-    (`check_caps`), the envs not yet built are named and the cost is summed from the resource tables (`plan_cost`).
-    `None` means `RunConfig()`, the `laptop` profile and this host's probed hardware (`host_hardware`).
+    Models are resolved through `resolver` (`None`: the process resolver under the profile's network policy) and
+    the profile's source allowlist. `None` means `RunConfig()`, the `laptop` profile and this host's probed hardware
+    (`host_hardware`).
 
     Raises:
         InvalidGraph, UnmappedOutput, RecordBinding, ValueError, MissingProfileSlice, UnpinnedModel: as `resolve`.
         UnlistedSource: a model's organisation is not an allowed source.
-        BackendParamsMismatch: a node's backend params name an undeclared backend, or its placed backend rejects them.
-        NoBackend, NoDevice: no backend or resource class runs a node; the error names the node.
-        LicenseRefused: the run config's license policy refuses a record of a node's license set.
-        LicenseConflict: one subject reaches a node with two license records.
-        MemoryCapExceeded: a resource class's resident models exceed its memory cap.
+        BackendParamsMismatch, NoBackend, NoDevice, LicenseRefused, LicenseConflict, MemoryCapExceeded: as `place`.
     """
     config = config if config is not None else RunConfig()
     profile = execution if execution is not None else ExecutionProfile.load()
-    registry, catalogue = packaged().registry, packaged().catalogue
+    catalogue = packaged().catalogue
     found = resolve_bound(
         target,
         dataset,
@@ -429,11 +426,39 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
         dataset_profile=dataset_profile,
         bind=bind,
         inputs=inputs,
-        resolver=replace(PROCESS_RESOLVER, network=profile.network),
+        resolver=resolver if resolver is not None else replace(PROCESS_RESOLVER, network=profile.network),
         admit=lambda model_id: profile.check_source(model_id, catalogue),
     )
-    logical = found.logical
-    placed = place_nodes(logical, profile, hardware or host_hardware(), registry, catalogue)
+    return Plan(
+        logical=found.logical,
+        manifest=found.manifest,
+        placement=place(found.logical, profile, hardware or host_hardware(), config),
+        hash=plan_hash(found.logical),
+        execution=profile,
+        config=config,
+        sources=found.sources,
+        live=found.live,
+    )
+
+
+def place(logical: LogicalPlan, profile: ExecutionProfile, hardware: HardwareInfo, config: RunConfig) -> PlanPlacement:
+    """Return the placement of `logical` under `profile` on `hardware`; it reads the plan and resolves nothing.
+
+    Each node is placed (`place_nodes`) with its placed backend's params validated, gets its license set
+    (`node_licenses`), and the run config's license policy is checked on every record of it. The memory caps of each
+    resource class are checked (`check_caps`), the envs not yet built are named and the cost is summed from the
+    resource tables (`plan_cost`).
+
+    Raises:
+        UnlistedSource: a model's organisation is not an allowed source.
+        BackendParamsMismatch: a node's backend params name an undeclared backend, or its placed backend rejects them.
+        NoBackend, NoDevice: no backend or resource class runs a node; the error names the node.
+        LicenseRefused: the run config's license policy refuses a record of a node's license set.
+        LicenseConflict: one subject reaches a node with two license records.
+        MemoryCapExceeded: a resource class's resident models exceed its memory cap.
+    """
+    registry, catalogue = packaged().registry, packaged().catalogue
+    placed = place_nodes(logical, profile, hardware, registry, catalogue)
     licenses = node_licenses(logical, placed, env_license)
     check_licenses(config.licenses, licenses)
     check_caps(logical, placed, profile, catalogue)
@@ -444,20 +469,74 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
             if p.backend.env.kind != "host" and not packaged().env_built(p.backend, profile)
         }
     )
-    placement = PlanPlacement(
+    return PlanPlacement(
         profile_digest=profile.canonical_digest(),
         nodes={n: p.record() for n, p in placed.items()},
         env_builds=tuple(builds),
         licenses=licenses,
         cost=plan_cost(logical, placed, catalogue),
     )
-    return Plan(
-        logical=logical,
-        manifest=found.manifest,
-        placement=placement,
-        hash=plan_hash(logical),
+
+
+class NoRun(FileNotFoundError):
+    """No run of the plan hash is on disk: `<cache root>/2x/runs/<plan hash>/plan.json` is absent."""
+
+
+def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
+    plan_hash: str,
+    *,
+    execution: ExecutionProfile | str | None = None,
+    store: "ResultStore | None" = None,
+    executor: "Executor | None" = None,
+    config: RunConfig | None = None,
+    hardware: HardwareInfo | None = None,
+) -> "Run":
+    """Start the run of `plan_hash` again from its run directory, as a new attempt under a fresh placement.
+
+    The logical plan, input manifest and input sources are read from `plan.json` and `inputs.json`; the plan's
+    pinned models are run as they are and no model reference is resolved. Every input is bound again and checked
+    against the manifest's identity before anything is written. The plan is then placed (`place`) under `execution`
+    (a profile, the name of a packaged one, or `None` for the packaged default) on `hardware` (`None`: this host,
+    probed), and started (`Plan.run`), the placement written to a new `placements/<attempt>.json`. The plan hash is
+    unchanged; a node placed on another backend has another key and is computed again, and a job the store holds
+    is served from it. `store` is where results are read and written: by default the one `manifest.json` names.
+    `config` defaults to `RunConfig()` under the plan's reuse policy.
+
+    Raises:
+        NoRun: no run of `plan_hash` is on disk.
+        ValueError: `plan.json` is not the plan `plan_hash` names, or `config` reuses under another policy.
+        InputChanged: an input changed since the plan was made; it names every record, and nothing is written.
+        InputsUnavailable: an input was held in memory by the process that planned the run.
+        UnlistedSource, BackendParamsMismatch, NoBackend, NoDevice, LicenseRefused, LicenseConflict,
+            MemoryCapExceeded: as `place`.
+        ExecutorUnavailable, MissingExtra: as `Plan.run`.
+    """
+    from senselab_core.runtime.execution.events import run_dir_of  # noqa: PLC0415 - execution imports the planner
+    from senselab_core.runtime.execution.run import Run, bind_sources, load_plan, start  # noqa: PLC0415 - as above
+    from senselab_core.runtime.store import ResultStore  # noqa: PLC0415 - as above
+
+    run_dir = run_dir_of(plan_hash)
+    try:
+        stored = load_plan(run_dir)
+    except FileNotFoundError as err:
+        raise NoRun(f"there is no run of plan {plan_hash}; plan and run it first") from err
+    if stored.hash != plan_hash or kernel_plan.plan_hash(stored.logical) != plan_hash:
+        raise ValueError(f"the run directory of plan {plan_hash} holds another plan")
+    if stored.manifest.digest() != stored.logical.manifest_digest:
+        raise ValueError(f"the input manifest of plan {plan_hash} is not the one its plan holds")
+    reuse = ReusePolicy(stored.logical.reuse)
+    config = config if config is not None else RunConfig(reuse=reuse)
+    if config.reuse is not reuse:
+        raise ValueError(f"plan {plan_hash} reuses under {reuse.value}, not {config.reuse.value}")
+    values = bind_sources(stored)
+    profile = ExecutionProfile.load(execution) if isinstance(execution, str) else execution or ExecutionProfile.load()
+    placed = replace(
+        stored,
+        placement=place(stored.logical, profile, hardware or host_hardware(), config),
         execution=profile,
         config=config,
-        sources=found.sources,
-        live=found.live,
     )
+    if store is None:
+        named = Run(run_dir).manifest().get("store")
+        store = ResultStore(Path(named)) if isinstance(named, str) else None
+    return start(placed, executor, store=store, values=values)

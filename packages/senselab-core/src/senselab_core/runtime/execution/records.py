@@ -9,12 +9,18 @@ from senselab_core.kernel.identity import ExecutionContext, InputIdentity, Logic
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.compare import Thresholds, compare
 from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, EvidenceSide
+from senselab_core.runtime.execution.executor import JobRef
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import attempt_id
 from senselab_core.runtime.store import ResultStore, StoredResult, agent_record, context_record, key_record
 from senselab_core.runtime.vocabulary import core_vocabulary
 
 logger = logging.getLogger("senselab")
+
+
+def plan_link(agent: kprov.Record, job: JobRef) -> kprov.Association:
+    """Return the association of `job`'s activity with `agent`: its role the job's node, its plan `plan:<hash>`."""
+    return kprov.Association(agent.id, node_id=job.node, plan=f"plan:{job.plan_hash}")
 
 
 def verify_attributes(run: RunConfig) -> dict[str, object]:
@@ -81,10 +87,12 @@ def execution_records(  # noqa: PLR0913 - one execution's records
     output: OutputIdentity,
     started: datetime,
     attributes: Mapping[str, object],
+    job: JobRef,
 ) -> tuple[kprov.Record, kprov.Record]:
     """Return the execution's agent and its activity, which used each `(port, entity)` and generated the output.
 
-    `attributes` are recorded on the activity beside the key, the context and the profile's digest.
+    `attributes` are recorded on the activity beside the key, the context and the profile's digest. The activity's
+    association names `job`'s node and its plan (`plan_link`).
     """
     agent = agent_record(key, context)
     activity = kprov.activity(
@@ -97,7 +105,7 @@ def execution_records(  # noqa: PLR0913 - one execution's records
         },
         used=[kprov.Usage(identity, port=port) for port, identity in used],
         generated=[kprov.Generation(output)],
-        associations=[kprov.Association(agent.id, node_id=key.task)],
+        associations=[plan_link(agent, job)],
         started=started,
         ended=datetime.now(timezone.utc),
     )

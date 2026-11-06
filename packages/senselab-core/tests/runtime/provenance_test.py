@@ -202,6 +202,17 @@ def test_dangling_endpoint_refused(tmp_path: Path) -> None:
     assert ProvStore.read(_run(tmp_path, ProvStore(_entities())), VOCAB).get(execution.id) == execution
 
 
+def test_a_plan_an_association_names_is_read_back_and_must_be_held(tmp_path: Path) -> None:
+    """`prov:hadPlan` names a plan node of the union: read back with it, refused without it."""
+    plan = prov.plan("3" * 64, VOCAB)
+    linked = prov.activity(VOCAB, associations=[Association(_agent().id, node_id="asr", plan=plan.id)])
+    with pytest.raises(DanglingReference) as caught:
+        ProvStore.read(_run(tmp_path, ProvStore([linked, _agent()])), VOCAB)
+    assert (caught.value.node_id, caught.value.target) == (linked.id, plan.id)
+    read = ProvStore.read(_run(tmp_path, ProvStore([plan])), VOCAB)
+    assert read.get(linked.id) == linked and read.plans() == [plan]
+
+
 def test_dangling_attribute_reference_refused(tmp_path: Path) -> None:
     """An attribute naming a file no writer holds is refused."""
     entity = prov.entity(INPUT, VOCAB, attributes={"senselab:waveform": numpy.zeros(2)})

@@ -1,0 +1,263 @@
+"""`resume`: a run started again by its plan hash under a fresh placement, and the plan its activities name."""
+
+import dataclasses
+import json
+import platform
+import threading
+from collections.abc import Callable, Iterator, Sequence
+from pathlib import Path
+from typing import Any, cast
+
+import numpy
+import pytest
+import soundfile
+from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
+from senselab_core.kernel.graph import Edge, Graph, Node
+from senselab_core.kernel.signals import StaleSource
+from senselab_core.runtime.call import Packaged, RunConfig, use_packaged
+from senselab_core.runtime.catalogue import Catalogue
+from senselab_core.runtime.datasets import from_records
+from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.events import Event, read_events
+from senselab_core.runtime.execution.executor import Handle, PlanFragment
+from senselab_core.runtime.execution.in_process import InProcess
+from senselab_core.runtime.execution.run import InputChanged, Output, Run
+from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.licenses import license_record
+from senselab_core.runtime.planner import NoRun, Plan, plan, resume
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.provenance import ProvStore
+from senselab_core.runtime.revision import Resolver
+from senselab_core.runtime.store import ResultStore
+from senselab_core.testing.interpreter import source_tree_python
+
+pytest.importorskip("pydra")
+pytestmark = pytest.mark.contract
+
+SCORE = TaskSpec(
+    name="resume_test.score",
+    version="1",
+    kind="transform",
+    inputs={"text": "json"},
+    outputs={"value": "sha256"},
+    params=TaskParams,
+)
+HEAR = SCORE.model_copy(update={"name": "resume_test.hear", "inputs": {"audio": "Audio"}})
+PIN, MOVED = "a" * 40, "c" * 40
+
+
+def _backend(task: TaskSpec, stack: str) -> BackendSpec:
+    return BackendSpec(
+        task=task.name,
+        name=stack,
+        version="1",
+        stack=stack,
+        env=Env.host(),
+        devices=("cpu",),
+        batch_invariant=True,
+        worker="backends.sizes_backend_fixture",
+        load_stub={},
+    )
+
+
+REGISTRY = Registry()
+for _task in (SCORE, HEAR):
+    REGISTRY.add_task(_task)
+    REGISTRY.add_backend(_backend(_task, "dsp"))
+REGISTRY.add_backend(_backend(SCORE, "alt"))
+CATALOGUE = Catalogue.load("format: catalogue@2.0\nentries: []\n")
+BASE = {"devices": ["cpu"], "model_sources": ["toyorg"]}
+PROFILE = ExecutionProfile.load("laptop", BASE)
+SAME_BACKEND = ExecutionProfile.load("laptop", {**BASE, "model_cache_budget_bytes": 2**30})
+OTHER_BACKEND = ExecutionProfile.load("laptop", {**BASE, "stack_preferences": {SCORE.name: ["alt"]}})
+WORKERS = WorkerSet(4)
+
+
+def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+    return EnvHandle(
+        python=source_tree_python(),
+        python_version=platform.python_version(),
+        lock_sha="1" * 64,
+        wheel_set="2" * 64,
+        torch_index=None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def packaged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """This module's registry, every env this interpreter and MIT-locked; runs under `tmp_path`."""
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
+    mit = license_record("MIT", source="lock", verified={"date": "2026-11-02", "how": "pep639"}, gated=False)
+    previous = use_packaged(Packaged(CATALOGUE, _this_interpreter, REGISTRY, lambda _: {"pkg": mit}))
+    yield
+    use_packaged(previous)
+    WORKERS.close()
+
+
+class Stopping(InProcess):
+    """An `InProcess` executor that runs the first `k` fragments it is given and raises on every later one."""
+
+    def __init__(self, store: ResultStore, k: int) -> None:
+        """Run `k` fragments over `store` under `PROFILE`."""
+        super().__init__(store=store, profile=PROFILE, run=RunConfig(), workers=WORKERS)
+        self.left = k
+        self.guard = threading.Lock()
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Submit while fragments are left; then raise, as a process stopped at the job boundary would."""
+        with self.guard:
+            self.left -= 1
+            go = self.left >= 0
+        if not go:
+            raise RuntimeError("planted stop at the job boundary")
+        return super().submit(fragment)
+
+
+def _executor(store: ResultStore, profile: ExecutionProfile = PROFILE) -> InProcess:
+    return InProcess(store=store, profile=profile, run=RunConfig(), workers=WORKERS)
+
+
+def _graph(task: TaskSpec = SCORE, port: str = "text", model: str | None = None) -> Graph:
+    return Graph(
+        inputs={port: f"list[{task.inputs[port]}]"},
+        nodes=(Node(id="a", task=task.name, task_version="1", model=model),),
+        edges=(Edge(source=f"input.{port}", target=f"a.{port}", kind="map"),),
+        outputs={"value": "a.value"},
+    )
+
+
+def _plan(n: int, **kw: Any) -> Plan:  # noqa: ANN401 - `plan` keywords
+    rows = from_records({"id": f"r{i}", "inputs": {"text": f"t{i}"}} for i in range(n))
+    placed = plan(kw.pop("graph", _graph()), rows, config=RunConfig(), execution=PROFILE, **kw)
+    nodes = {k: v.model_copy(update={"batch_size": 1}) for k, v in placed.placement.nodes.items()}
+    return dataclasses.replace(placed, placement=placed.placement.model_copy(update={"nodes": nodes}))
+
+
+def _ran(placed: Plan, store: ResultStore) -> Run:
+    run = placed.run(_executor(store), store=store)
+    assert run.wait(60).done
+    return run
+
+
+def _latest(run: Run) -> list[Event]:
+    events = read_events(run.run_dir)
+    last = max(e.ordinal for e in events)
+    return [e for e in events if e.ordinal == last]
+
+
+def _kinds(events: Sequence[Event]) -> list[str]:
+    return sorted(e.kind for e in events if e.kind in {"finished", "cache_hit", "failed", "blocked", "cancelled"})
+
+
+def _placement(run: Run) -> dict[str, Any]:
+    attempt = _latest(run)[0].attempt
+    found: dict[str, Any] = json.loads((run.run_dir / "placements" / f"{attempt}.json").read_text())
+    return found
+
+
+def test_resume_executes_only_missing(tmp_path: Path) -> None:
+    """Stopped after 2 of 4 jobs, the resumed attempt reuses those 2 and executes the other 2, under one hash."""
+    store = ResultStore(tmp_path / "store")
+    placed = _plan(4)
+    stopped = placed.run(Stopping(store, 2), store=store)
+    with pytest.raises(RuntimeError, match="planted stop"):
+        stopped.wait(60)
+    assert _kinds(_latest(stopped)) == ["failed", "failed", "finished", "finished"]
+    resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
+    assert resumed.wait(60).done and resumed.run_dir == stopped.run_dir
+    assert _kinds(_latest(resumed)) == ["cache_hit", "cache_hit", "finished", "finished"]
+    assert all(isinstance(o, Output) for _, o in resumed.results())
+    assert sorted(p.name for p in (resumed.run_dir / "attempts").iterdir()) == ["1", "2"]
+    with pytest.raises(NoRun, match="0" * 64):
+        resume("0" * 64)
+
+
+def _hub(answers: dict[str, str], seen: list[str]) -> Callable[[str, str, str | None], str]:
+    def hub(repo: str, ref: str, token: str | None) -> str:  # noqa: ARG001 - a hub lookup
+        seen.append(f"{repo}@{ref}")
+        return answers[ref]
+
+    return hub
+
+
+def test_resume_never_reresolves_ref(tmp_path: Path) -> None:
+    """A ref resolved when planning is not resolved again: the moved ref is never asked, the pinned commit runs."""
+    store, answers, seen = ResultStore(tmp_path / "store"), {"main": PIN}, list[str]()
+    resolver = Resolver(cache_dir=tmp_path / "hf-hub", hub=_hub(answers, seen), cache_root=tmp_path / "pins")
+    placed = _plan(2, graph=_graph(model="toyorg/m@main"), resolver=resolver)
+    assert seen == ["toyorg/m@main"]
+    _ran(placed, store)
+    answers["main"] = MOVED
+    resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
+    assert resumed.wait(60).done and seen == ["toyorg/m@main"]
+    model = resumed.plan.logical.models["a"]
+    assert model is not None and model.identity == PIN and resumed.plan.hash == placed.hash
+    assert _kinds(_latest(resumed)) == ["cache_hit", "cache_hit"]
+
+
+def test_resume_with_other_profile_same_backend_reuses(tmp_path: Path) -> None:
+    """Placed afresh under another profile that picks the same backend, every job is served from the store."""
+    store = ResultStore(tmp_path / "store")
+    placed = _plan(3)
+    _ran(placed, store)
+    resumed = resume(placed.hash, execution=SAME_BACKEND, store=store, executor=_executor(store, SAME_BACKEND))
+    assert resumed.wait(60).done and resumed.run_dir.name == placed.hash
+    assert _kinds(_latest(resumed)) == ["cache_hit"] * 3
+    fresh = _placement(resumed)
+    assert fresh["profile_digest"] == SAME_BACKEND.canonical_digest() != PROFILE.canonical_digest()
+    assert fresh["nodes"]["a"]["backend"] == "dsp"
+
+
+def test_resume_with_other_backend_recomputes(tmp_path: Path) -> None:
+    """A fresh placement on another backend keeps the plan hash; the backend is keyed, so the node is recomputed."""
+    store = ResultStore(tmp_path / "store")
+    placed = _plan(3)
+    _ran(placed, store)
+    resumed = resume(placed.hash, execution=OTHER_BACKEND, store=store, executor=_executor(store, OTHER_BACKEND))
+    assert resumed.wait(60).done and resumed.run_dir.name == placed.hash
+    assert _kinds(_latest(resumed)) == ["finished"] * 3
+    assert _placement(resumed)["nodes"]["a"]["backend"] == "alt"
+    assert placed.placement.nodes["a"].backend == "dsp"
+
+
+def _wav(path: Path, value: float) -> Path:
+    soundfile.write(path, numpy.full((800, 1), value, dtype=numpy.float32), 8000, subtype="FLOAT")
+    return path
+
+
+def _tree(run_dir: Path) -> list[tuple[str, bytes]]:
+    return sorted((str(p.relative_to(run_dir)), p.read_bytes()) for p in run_dir.rglob("*") if p.is_file())
+
+
+def test_resume_refuses_stale_manifest(tmp_path: Path) -> None:
+    """An input file changed or gone since planning refuses the whole resume, naming its records; nothing is written."""
+    store = ResultStore(tmp_path / "store")
+    paths = [_wav(tmp_path / f"r{i}.wav", 0.1 * (i + 1)) for i in range(3)]
+    rows = from_records({"id": f"r{i}", "inputs": {"audio": p}} for i, p in enumerate(paths))
+    placed = plan(_graph(HEAR, "audio"), rows, config=RunConfig(), execution=PROFILE)
+    run = _ran(placed, store)
+    _wav(paths[0], 0.9)
+    paths[2].unlink()
+    before = _tree(run.run_dir)
+    with pytest.raises(StaleSource) as raised:
+        resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
+    assert isinstance(raised.value, InputChanged) and set(raised.value.changed) == {("r0", "audio"), ("r2", "audio")}
+    assert "r0" in str(raised.value) and "r2" in str(raised.value)
+    assert _tree(run.run_dir) == before
+
+
+def test_activity_had_plan(tmp_path: Path) -> None:
+    """Execution and reuse activities are associated through `prov:hadPlan` with the run's one `senselab:Plan`."""
+    store = ResultStore(tmp_path / "store")
+    placed = _plan(2)
+    run = _ran(placed, store)
+    resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store)).wait(60)
+    read = ProvStore.read(run.run_dir)
+    [entity] = read.plans()
+    assert entity.id == f"plan:{placed.hash}" and "senselab:Plan" in entity.types()
+    activities = read.activities()
+    assert {("senselab:Reuse" in a.types()) for a in activities} == {True, False}
+    for activity in activities:
+        [association] = cast("list[dict[str, Any]]", activity.node()["prov:qualifiedAssociation"])
+        assert association["prov:hadPlan"] == {"@id": entity.id}
+        assert association["prov:hadRole"]["senselab:nodeId"] == "a"

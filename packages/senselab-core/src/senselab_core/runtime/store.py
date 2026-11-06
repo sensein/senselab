@@ -983,18 +983,20 @@ class ResultStore:
                 return payload[2]
         raise RuntimeError(f"{entry} was still corrupt after {COMMIT_ATTEMPTS} commits")
 
-    def record_reuse(
+    def record_reuse(  # noqa: PLR0913 - the served hit, then what its activity records
         self,
         key: LogicalKey,
         current: ExecutionContext,
         hit: StoredResult,
         started: datetime,
         attributes: Mapping[str, object] | None = None,
+        association: Callable[[kprov.Record], kprov.Association] | None = None,
     ) -> None:
         """Add the `senselab:Reuse` activity of serving `hit` for `key` in `current`, `attributes` beside its own.
 
         The activity is associated with the agent of `current` and names the agent that computed `hit`
-        (`senselab:storedAgent`), so a result served across env locks records both.
+        (`senselab:storedAgent`), so a result served across env locks records both. `association` gives the
+        association with that agent (a plan's node and plan); by default its role is the key's task.
         """
         agent, stored_agent = agent_record(key, current), agent_record(key, hit.context)
         own: dict[str, object] = {
@@ -1012,7 +1014,7 @@ class ResultStore:
             types=["senselab:Reuse"],
             attributes=own,
             used=[kprov.Usage(hit.output_identity)],
-            associations=[kprov.Association(agent.id, node_id=key.task)],
+            associations=[kprov.Association(agent.id, node_id=key.task) if association is None else association(agent)],
             started=started,
             ended=datetime.now(timezone.utc),
         )

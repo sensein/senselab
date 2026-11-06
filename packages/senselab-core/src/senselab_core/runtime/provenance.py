@@ -230,6 +230,10 @@ class ProvStore:
             and jcs_dumps(kprov.literal_value(node["senselab:logicalKey"])) == wanted
         ]
 
+    def plans(self) -> list[kprov.Record]:
+        """Return the plans (`plan:<plan hash>`), in `@id` order."""
+        return self._of("plan")
+
     def agents(self) -> list[kprov.Record]:
         """Return the agents, in `@id` order."""
         return self._of("agent")
@@ -442,7 +446,7 @@ class _Rebuild:
         rebuilt = self.checked_build(node_id, node, writer)
         if rebuilt.jcs != raw:
             raise MalformedDocument(writer, f"{node_id} differs from its rebuild")
-        for target in sorted({ref["@id"] for key in _ENDPOINT_KEYS for ref in node.get(key, [])}):
+        for target in sorted(_endpoints(node)):
             if target not in self.nodes:
                 raise DanglingReference(node_id, target)
         self.pending.discard(node_id)
@@ -465,6 +469,8 @@ class _Rebuild:
             return kprov.agent(self.vocabulary, types=types, attributes=attributes)
         if kind == "environment":
             return kprov.environment(self.vocabulary, attributes)
+        if kind == "plan":
+            return kprov.plan(node_id.partition(":")[2], self.vocabulary)
         return kprov.entity(node_id, self.vocabulary, types=types, attributes=attributes)
 
     def activity(self, node_id: str, node: dict[str, Any]) -> kprov.Record:
@@ -483,7 +489,7 @@ class _Rebuild:
         usages += [kprov.Usage(e) for e in _ids(node, "prov:used") - {u.entity for u in usages}]
         generations += [kprov.Generation(e) for e in _ids(node, "prov:generated") - {g.entity for g in generations}]
         associations = [
-            kprov.Association(q["prov:agent"]["@id"], q["prov:hadRole"]["senselab:nodeId"])
+            kprov.Association(q["prov:agent"]["@id"], q["prov:hadRole"]["senselab:nodeId"], _plan_of(q))
             for q in node.get("prov:qualifiedAssociation", [])
         ]
         return kprov.activity(
@@ -518,6 +524,17 @@ class _Rebuild:
         if not (isinstance(target, str) and kprov.NODE_ID.fullmatch(target)):
             raise ValueError("a reference is an @id")
         return self.record(target, node_id)
+
+
+def _endpoints(node: Mapping[str, Any]) -> set[str]:
+    """Return the `@id` of every record a node relates to: its PROV endpoints and the plans its associations name."""
+    plans = {p for q in node.get("prov:qualifiedAssociation", []) if (p := _plan_of(q)) is not None}
+    return {ref["@id"] for key in _ENDPOINT_KEYS for ref in node.get(key, [])} | plans
+
+
+def _plan_of(association: Mapping[str, Any]) -> str | None:
+    named = association.get("prov:hadPlan")
+    return None if named is None else named["@id"]
 
 
 def _ids(node: Mapping[str, Any], key: str) -> set[str]:

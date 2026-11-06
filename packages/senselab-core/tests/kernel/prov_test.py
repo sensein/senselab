@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 import numpy
 import pytest
@@ -293,6 +293,21 @@ def test_one_key_two_records_two_activities() -> None:
     other_type = _execution(attributes={"senselab:logicalKey": key}, types=["senselab:Run"])
     assert other_type.id != first.id
     assert other_type.node()["senselab:logicalKey"] == first.node()["senselab:logicalKey"]
+
+
+@pytest.mark.logic
+def test_plan_is_an_entity_named_by_its_hash_and_an_association_names_it() -> None:
+    """`plan` gives `plan:<hash>`, a `senselab:Plan`; an association naming it carries `prov:hadPlan`."""
+    plan = prov.plan("3" * 64, CORE)
+    assert plan.node() == {"@id": "plan:" + "3" * 64, "@type": ["prov:Entity", "prov:Plan", "senselab:Plan"]}
+    software = prov.agent(CORE, types=["senselab:SoftwareAgent"])
+    linked = _execution(associations=[Association(software.id, node_id="node-1", plan=plan.id)])
+    [association] = cast("list[dict[str, Any]]", linked.node()["prov:qualifiedAssociation"])
+    assert association["prov:hadPlan"] == {"@id": plan.id} and linked.id != _execution().id
+    with pytest.raises(ValueError, match="plan_hash"):
+        prov.plan("not-a-hash", CORE)
+    with pytest.raises(ValueError, match="associations"):
+        _execution(associations=[Association(software.id, node_id="n", plan=E1)])
 
 
 @pytest.mark.logic

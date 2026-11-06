@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 
+from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.declare import Registry, TaskSpec
 from senselab_core.kernel.graph import Edge, Node
 from senselab_core.kernel.identity import InputIdentity, LogicalKey, ReusePolicy, gather_identity
@@ -30,6 +31,7 @@ from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
 from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.vocabulary import core_vocabulary
 
 
 class CallFailed(RuntimeError):
@@ -264,7 +266,8 @@ class InProcess:
     def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:
         """Hold `placed` and the values of the graph-input identities its fragments name, until `release`.
 
-        Each admission is its own: two admissions of one plan never share or replace each other's values.
+        Each admission is its own: two admissions of one plan never share or replace each other's values. The plan's
+        `senselab:Plan` entity is added to the store's provenance, for the activities of its jobs to name.
 
         Raises:
             ValueError: the plan was placed under another profile, or resolved under another reuse policy.
@@ -274,6 +277,7 @@ class InProcess:
         if ReusePolicy(placed.logical.reuse) is not self.run.reuse:
             raise ValueError(f"plan {placed.hash} reuses under {placed.logical.reuse}, not {self.run.reuse.value}")
         admission = Admission(id=f"admission-{uuid.uuid4().hex}", plan_hash=placed.hash)
+        self.store.provenance.add(kprov.plan(placed.hash, core_vocabulary()))
         with self._lock:
             self._admissions[admission.id] = (placed, dict(values))
         return admission

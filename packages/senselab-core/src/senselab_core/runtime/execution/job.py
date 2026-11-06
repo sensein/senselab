@@ -8,7 +8,7 @@ stored.
 
 import platform
 import sysconfig
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
@@ -38,7 +38,13 @@ from senselab_core.runtime.execution.outputs import (
     read_port,
     rebound,
 )
-from senselab_core.runtime.execution.records import execution_records, reuse_attributes, unlicensed, verify
+from senselab_core.runtime.execution.records import (
+    execution_records,
+    plan_link,
+    reuse_attributes,
+    unlicensed,
+    verify,
+)
 from senselab_core.runtime.execution.records import verify_attributes as verify_settings
 from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, expected_of
 from senselab_core.runtime.hardware import numerics_class
@@ -126,8 +132,8 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     identity, and the inputs are checked against the task's constraints. A file-backed input is checked against its
     stamp (`audio_io.check`) before its job is keyed; a stale or missing one fails the job. The jobs not served are
     sent in requests of `request_size` items through `workers`; each item's outputs are stored, and each execution
-    writes one activity associated with its agent (the model's source included). An item the backend fails gives
-    `Failed`.
+    writes one activity associated with its agent (the model's source included), naming its job's node and plan.
+    An item the backend fails gives `Failed`.
 
     Raises:
         ValueError: the jobs are not of one call; a server backend has no model.
@@ -340,8 +346,13 @@ def _serve(  # noqa: PLR0913 - the job's store, key, context and run, and what s
         return None, None
     if hit.policy_used is not ReusePolicy.EXACT and sampled(run.verify, key.digest(), hit.context, context):
         return None, hit
-    store.record_reuse(key, context, hit, looked, reuse_attributes(run, hit))
+    store.record_reuse(key, context, hit, looked, reuse_attributes(run, hit), _linked(job))
     return served(job, hit, key, placement), None
+
+
+def _linked(job: Job) -> Callable[[kprov.Record], kprov.Association]:
+    """Return the association of a reuse activity of `job` with an agent (`plan_link`)."""
+    return lambda agent: plan_link(agent, job.ref)
 
 
 def served(job: Job, hit: StoredResult, key: LogicalKey, placement: Placement) -> Result:
@@ -369,7 +380,9 @@ def lost_race(  # noqa: PLR0913 - the job's store, key, context and run, and wha
         raise RuntimeError(f"the entry another writer committed for {key.task!r} could not be read back")
     if not _license_admits(run, committed):
         return None
-    store.record_reuse(key, context, committed, datetime.now(timezone.utc), {**attributes, **unlicensed(committed)})
+    store.record_reuse(
+        key, context, committed, datetime.now(timezone.utc), {**attributes, **unlicensed(committed)}, _linked(job)
+    )
     return served(job, committed, key, placement)
 
 
@@ -418,7 +431,7 @@ def _record(  # noqa: PLR0913 - one sent item and where its result goes
         if lost is not None:
             return Completed(job.ref, lost)
         output_identity = store_output_identity(outputs)
-    _provenance(store, key, context, profile, _used(job), output_identity, started, attributes)
+    _provenance(store, key, context, profile, _used(job), output_identity, started, attributes, job.ref)
     return Completed(job.ref, Result(read, output_identity, key, context, placement, None))
 
 
@@ -431,10 +444,11 @@ def _provenance(  # noqa: PLR0913 - one execution's records
     output: OutputIdentity,
     started: datetime,
     attributes: Mapping[str, object],
+    ref: JobRef,
 ) -> None:
     store.provenance.add(
         *(kprov.entity(i, core_vocabulary()) for i in dict.fromkeys(i for _, i in used)),
-        *execution_records(key, context, profile, used, output, started, attributes),
+        *execution_records(key, context, profile, used, output, started, attributes, ref),
     )
 
 

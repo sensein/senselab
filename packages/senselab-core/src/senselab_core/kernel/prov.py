@@ -7,7 +7,8 @@ the prefixes of the published context (`CONTEXT_URL`). Builders check every type
 Identifiers:
 - an entity's `@id` is its content address, `content:<hex>` or `output:<hex>`;
 - an activity's is `activity:` + `identity_digest("prov-activity@1", <node without @id>)`;
-- an agent's is `agent:` and an environment's `environment:` + `identity_digest("prov-node@1", <node without @id>)`.
+- an agent's is `agent:` and an environment's `environment:` + `identity_digest("prov-node@1", <node without @id>)`;
+- a plan's is `plan:` + its plan hash.
 """
 
 import math
@@ -75,7 +76,9 @@ ENTITY_ID = re.compile(r"(content|output):[0-9a-f]{64}")
 """The grammar of an entity `@id`."""
 AGENT_ID = re.compile(r"agent:[0-9a-f]{64}")
 """The grammar of an agent `@id`."""
-NODE_ID = re.compile(r"(content|output|activity|agent|environment):[0-9a-f]{64}")
+PLAN_ID = re.compile(r"plan:[0-9a-f]{64}")
+"""The grammar of a plan `@id`."""
+NODE_ID = re.compile(r"(content|output|activity|agent|environment|plan):[0-9a-f]{64}")
 """The grammar of every node `@id` a document holds."""
 _TERM = re.compile(r"senselab:[A-Za-z][A-Za-z0-9_]*")
 _VOCAB_NODE_KEYS = frozenset({"@id", "@type", "rdfs:subClassOf", "rdfs:domain", "rdfs:range", "rdfs:comment"})
@@ -236,8 +239,8 @@ _SEAL = object()
 class Record:
     """One compact JSON-LD node and the `senselab:File` entities its attribute values name.
 
-    Built only by `entity`, `agent`, `environment` and `activity`. It holds the node's JCS bytes (`jcs`); `node()`
-    returns a fresh copy. Records compare and hash by those bytes and their files.
+    Built only by `entity`, `plan`, `agent`, `environment` and `activity`. It holds the node's JCS bytes (`jcs`);
+    `node()` returns a fresh copy. Records compare and hash by those bytes and their files.
     """
 
     __slots__ = ("_files", "_jcs")
@@ -247,7 +250,7 @@ class Record:
     def __init__(self, jcs: bytes, files: tuple["Record", ...], *, seal: object = None) -> None:
         """Hold a node the builders made; any other caller is refused with `TypeError`."""
         if seal is not _SEAL:
-            raise TypeError("a Record is built by entity, agent, environment or activity")
+            raise TypeError("a Record is built by entity, plan, agent, environment or activity")
         object.__setattr__(self, "_jcs", jcs)
         object.__setattr__(self, "_files", files)
 
@@ -311,10 +314,11 @@ class Generation:
 
 @dataclass(frozen=True)
 class Association:
-    """An activity's association with an agent; its role carries the pipeline node id."""
+    """An activity's association with an agent; its role carries the pipeline node id, `plan` the plan's `@id`."""
 
     agent: str
     node_id: str
+    plan: str | None = None
 
 
 @dataclass
@@ -496,6 +500,17 @@ def entity(
     return b.record({"@id": _checked(ENTITY_ID, address, "address"), "@type": t, **b.attributes(t, attributes or {})})
 
 
+def plan(plan_hash: str, vocabulary: Vocabulary) -> Record:
+    """Return the `senselab:Plan` entity of a logical plan, `plan:<plan hash>`, with no attributes.
+
+    Raises:
+        ValueError: if `plan_hash` is not 64 lowercase hex digits.
+    """
+    b = _Builder(vocabulary)
+    address = _checked(PLAN_ID, f"plan:{plan_hash}", "plan_hash")
+    return b.record({"@id": address, "@type": b.types("prov:Entity", ["prov:Plan", "senselab:Plan"])})
+
+
 def environment(vocabulary: Vocabulary, attributes: Mapping[str, object]) -> Record:
     """Return a `senselab:Environment` entity, content-addressed over its node under `prov-node@1`.
 
@@ -535,7 +550,8 @@ def activity(  # noqa: PLR0913 - keyword-only, one argument per PROV relation
 
     Every relation is written as its unqualified PROV property (`prov:used`, `prov:generated`,
     `prov:wasAssociatedWith`) and, where a port, time or node id attaches, its qualified form: `prov:qualifiedUsage`,
-    `prov:qualifiedAssociation` (whose `prov:hadRole` carries `senselab:nodeId`), and `prov:qualifiedGeneration` of
+    `prov:qualifiedAssociation` (whose `prov:hadRole` carries `senselab:nodeId`, and `prov:hadPlan` the plan's `@id`
+    when the association names one), and `prov:qualifiedGeneration` of
     the entity, written inside this node through `@reverse`. Relations are sorted, so their order does not change
     the `@id`. The logical key of an execution is its `senselab:logicalKey` attribute.
 
@@ -588,11 +604,14 @@ def _qualified(b: _Builder, kind: str, rel: Usage | Generation) -> dict[str, obj
 
 
 def _association(b: _Builder, a: Association) -> dict[str, object]:
-    return {
+    q: dict[str, object] = {
         "@type": "prov:Association",
         "prov:agent": {"@id": a.agent},
         "prov:hadRole": _role(b, "senselab:nodeId", a.node_id),
     }
+    if a.plan is not None:
+        q["prov:hadPlan"] = {"@id": _checked(PLAN_ID, a.plan, "associations")}
+    return q
 
 
 def literal_value(literal: object) -> object:

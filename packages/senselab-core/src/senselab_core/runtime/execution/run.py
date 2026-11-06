@@ -26,6 +26,7 @@ from senselab_core.kernel.graph import Graph, mapped_nodes, order, split
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
+from senselab_core.kernel.signals import StaleSource
 from senselab_core.runtime.call import RunConfig, bind_input
 from senselab_core.runtime.execution.events import (
     Event,
@@ -67,8 +68,15 @@ class MissingExtra(ImportError):
         self.extra = extra
 
 
-class InputChanged(ValueError):
-    """An input read from disk no longer has the identity the plan was made with."""
+class InputChanged(StaleSource):
+    """Inputs no longer of the identity the plan was made with, or unreadable; `changed` is (record, port)."""
+
+    def __init__(self, changed: Sequence[tuple[str, str]]) -> None:
+        """Name the records and ports whose inputs changed."""
+        self.changed = tuple(changed)
+        ports = sorted({port for _, port in self.changed})
+        records = sorted({record for record, _ in self.changed})
+        super().__init__(f"inputs {ports} of records {records[:5]} changed since the plan was made; plan them again")
 
 
 class InputsUnavailable(ValueError):
@@ -243,10 +251,11 @@ def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
     """Return the value of each input identity of `placed`, bound from its sources and its live values.
 
     A path or JSON source is bound again (`bind_input`) and must give the identity the manifest holds, so a file
-    changed since planning is refused; a `{"memory": <identity>}` source takes the value `placed.live` holds.
+    changed since planning is refused; a `{"memory": <identity>}` source takes the value `placed.live` holds. Every
+    record is checked before anything is raised.
 
     Raises:
-        InputChanged: an input has another identity than the manifest's.
+        InputChanged: inputs have another identity than the manifest's, or cannot be read; it names every one.
         InputsUnavailable: an input held in memory is not in `placed.live`.
         KeyError: the plan records no sources.
     """
@@ -257,27 +266,41 @@ def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
     rows, shared = placed.sources["rows"], placed.sources["shared"]
     values: dict[InputIdentity, object] = {}
     missing: list[tuple[str, str]] = []
+    changed: list[tuple[str, str]] = []
     for row, read in zip(placed.manifest.rows, rows, strict=True):
         for port, expected in row.inputs.items():
             if port in shared and expected in values:
                 continue
             source = read[port] if port in read else shared[port]
             held = _memory(source)
-            if held is not None:
-                if held != expected:
-                    raise InputChanged(f"input {port!r} of record {row.id!r} is not the one the plan was made with")
-                if held in placed.live:
-                    values[held] = placed.live[held]
-                else:
-                    missing.append((row.id, port))
+            if held is not None and held == expected and held not in placed.live:
+                missing.append((row.id, port))
                 continue
-            identity, value, _ = bind_input(port, types[port], source)
-            if identity != expected:
-                raise InputChanged(f"input {port!r} of record {row.id!r} changed since the plan was made")
-            values[identity] = value
+            bound = _bound(port, types[port], source, placed.live) if held in (None, expected) else None
+            if bound is None or bound[0] != expected:
+                changed.append((row.id, port))
+                continue
+            values[expected] = bound[1]
+    if changed:
+        raise InputChanged(changed)
     if missing:
         raise InputsUnavailable(missing)
     return values
+
+
+def _bound(port: str, kind: str, source: object, live: Mapping[InputIdentity, object]) -> tuple[str, object] | None:
+    """Return the identity and value of an input read from `source`, None when its file cannot be read.
+
+    A `{"memory": <identity>}` source is that identity's value in `live`, which holds it.
+    """
+    held = _memory(source)
+    if held is not None:
+        return held, live[held]
+    try:
+        identity, value, _ = bind_input(port, kind, source)
+    except OSError:
+        return None
+    return identity, value
 
 
 def bind_inputs(run_dir: Path) -> dict[InputIdentity, object]:
@@ -544,18 +567,25 @@ def _prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[st
     return _claim_attempt(run_dir, placed.placement)
 
 
-def start(placed: Plan, executor: Executor | None = None, *, store: ResultStore | None = None) -> Run:
+def start(
+    placed: Plan,
+    executor: Executor | None = None,
+    *,
+    store: ResultStore | None = None,
+    values: Mapping[InputIdentity, object] | None = None,
+) -> Run:
     """Start `placed` on `executor` in a background thread, as a new attempt, and return its `Run`.
 
     With no executor, `InProcess` runs a plan under a local substrate, over `store` (default: the result store under
     the cache root) with the plan's own profile and run config. `store` is also where the run's results are read from,
     so it is given with any other executor that stores results. The input values are bound (`bind_sources`) before
-    anything is written: from their paths or JSON values, or from the values the plan holds in memory.
+    anything is written: from their paths or JSON values, or from the values the plan holds in memory; `values` gives
+    them already bound.
 
     Raises:
         ExecutorUnavailable: no executor is given and the substrate is not local.
         ValueError: as `admit`.
-        InputChanged: an input file changed since the plan was made.
+        InputChanged: an input changed since the plan was made.
         InputsUnavailable: an input held in memory is not held by `placed` (a plan read from disk).
         MissingExtra: pydra is not installed.
     """
@@ -567,7 +597,7 @@ def start(placed: Plan, executor: Executor | None = None, *, store: ResultStore 
     if executor is None and store is None:
         store = ResultStore(cache_root() / RESULTS_DIR, provenance=provenance)
     executor = _executor(placed, executor, store)
-    values = bind_sources(placed)
+    values = bind_sources(placed) if values is None else values
     run_dir = run_dir_of(placed.hash)
     attempt, ordinal = _prepare(placed, run_dir, store)
     run = Run(run_dir, store=store)

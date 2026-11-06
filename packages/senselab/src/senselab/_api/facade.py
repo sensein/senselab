@@ -16,6 +16,7 @@ from senselab_core.runtime.execution.run import ResultSet, Run
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.planner import Plan, one_node_graph
 from senselab_core.runtime.planner import plan as plan_runtime
+from senselab_core.runtime.planner import resume as resume_runtime
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 
@@ -134,20 +135,22 @@ def run(
     return started.results()
 
 
-def resume(target: Plan | Run) -> ResultSet:
-    """Run a plan again in its own run directory, as a new attempt, and return its results.
+def resume(target: Plan | Run | str) -> ResultSet:
+    """Resume a run by its plan hash (`senselab_core.runtime.planner.resume`), wait and return its results.
 
-    A `Run` is resumed from what its directory holds: its plan, its input sources and the result store, so jobs the
-    store serves are not recomputed. Without a session executor it runs on `InProcess` under the packaged profile if
-    the plan was placed under it.
+    The run is read from its directory: its plan, its input sources and its result store, so jobs the store serves
+    are not recomputed. It is placed afresh under the session's execution profile and run on the session's executor
+    and store.
 
     Raises:
-        ExecutorUnavailable, ValueError, InputChanged, InputsUnavailable: as `Plan.run`; a `Run` whose inputs were
+        NoRun, ValueError, InputChanged, InputsUnavailable, ExecutorUnavailable: as `resume`; a run whose inputs were
             held in memory raises `InputsUnavailable`.
     """
-    placed = target.plan if isinstance(target, Run) else target
+    plan_hash = target if isinstance(target, str) else target.run_dir.name if isinstance(target, Run) else target.hash
     current = session()
-    started = placed.run(current.executor, store=current.store)
+    started = resume_runtime(
+        plan_hash, execution=current.execution, store=current.store, executor=current.executor, config=current.config
+    )
     started.wait()
     return started.results()
 
