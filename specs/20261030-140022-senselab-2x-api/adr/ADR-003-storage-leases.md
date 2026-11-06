@@ -195,6 +195,81 @@ waits are bounded, and correctness rests on idempotence.
 - **Services.** A registry entry `{identity, endpoint}` lives under a lease kept alive by its server's renewer;
   the beats are its liveness, so it carries no separate heartbeat field.
 
+## Amendment 2026-11-06: renewal as built (R-111)
+
+Records how the 2026-11-03 amendment was built (Phase 3 Task 12, ruling P3-30, and the review fix round) and closes
+R-111. It replaces nothing in that amendment; it fixes what that amendment left open.
+
+- **Storage clock.** A breaker reads the storage clock from a fresh probe directory: `mkdir` of a uuid-named
+  directory beside the lease, its `lstat`, then `rmdir` (`StorageDir.dir_now`). No file is written for the clock.
+  A wait reads the clock once and adds the monotonic time since; a lease is broken only when its age, read again by
+  `lstat` after a second, fresh probe, passes `stale_after`. The monotonic extrapolation can only make a waiter
+  re-probe early, never break early. The storage clock itself stepping forward by more than
+  `stale_after − renew interval − attribute_delay_s` would break a live lease; that is outside the protocol.
+- **Age.** The newest mtime of `<name>.lease` (read before and again after its entries are listed, so a claim
+  renamed inside it meanwhile shows), of its token directories and of its `gone-`/`claim-` entries; a stray
+  entry does not keep a lease fresh. An empty `<name>.lease`, left by a taker that died
+  between its two `mkdir`s, is judged by its own mtime. A stale lease this user cannot list is removed by `rmdir` when
+  it is empty, as a crash between a lease's `mkdir` and its mode change leaves it; one that holds entries cannot be
+  claimed and is not broken: the wait ends in `LeaseUnavailable` naming the owner. That is unreachable with the
+  packaged modes: every
+  lease is `shared_dir_mode` or `LEASE_DIR_MODE` (group-listable), except the label map's, which is
+  `PRIVATE_DIR_MODE` under a `0o700` directory that no other user can reach.
+- **Take.** After `mkdir <name>.lease/<token>`, the taker lists the lease. Another token beside its own means its
+  lease directory was swapped under it; it removes its token and does not hold. It then `rmdir`s `<name>.lease`,
+  which succeeds only if the directory is empty, so two takers that both see each other's token and both withdraw
+  leave nothing at the name (otherwise an empty, fresh lease that no one holds would stall every waiter for
+  `stale_after`). The rule stays asymmetric: whoever sees another token withdraws; a tie-break by token order
+  would let one keep `{A, B}` while the other keeps `{B}`. A third taker that opened the directory before that
+  `rmdir` gets `ENOENT` on its token and retries. Finally the taker checks its token afresh by name. A lost reply
+  on the first `mkdir` answers `EEXIST`; the taker treats it as another's and breaks its own empty lease one bound
+  later.
+- **Break and release: a claim by rename.** A breaker that judged a lease stale, or a holder releasing its lease,
+  first claims it by renaming an entry inside it: its token `<token>` to `gone-<token>`, or, in a lease with no token
+  (a claimant that died after its claim), another entry to `claim-<uuid4>`. An entry is one directory's, so of any
+  number of contenders exactly one claim succeeds; the others get `ENOENT` (or `EINVAL` on APFS while the lease is
+  torn down) and move nothing. The claimant stamps the entry before the rename and again after, so a judge that
+  lists the lease at any point of the claim, even with the lease's own stat served from an attribute cache, ages it
+  as fresh and does not claim it again; a `claim-` entry is chosen only when the lease holds no other entry, and only the claimant renames `<name>.lease` aside (after checking that the directory at the name
+  is the one it claimed in) and removes it. A lease with no entry at all is removed by `rmdir <name>.lease`, which
+  succeeds only while it is empty, so it can never remove a lease a taker has put its token in; a taker between its
+  two `mkdir`s just retries. Under N contending breakers each lease is moved at most once, by its claimant. No
+  `lstat` identity compare remains: the one fix round 1 kept for tokenless leases was not a one-syscall gap but the
+  client's attribute-cache window on NFS, during which a stale `lstat` could let a loser move a fresh lease. A moved
+  lease is never put back (the D-2 link-back is gone), and nothing renames onto `<name>.lease`.
+- **Renewer.** `Lease.keep_alive(renew_fraction)` starts a daemon thread named for the lease, with its own handle
+  on the directory. Beats are due on a monotonic cadence of `renew_fraction × stale_after`: each is due one
+  interval after the last was due, whatever the beats took, so beat latency does not stretch the period. Each beat
+  reopens `<name>.lease` and `<token>` by name; `ENOENT` or `ESTALE` (an NFS handle to a removed directory) marks
+  the state lost at once. Any other failure is retried at the next beat, and one unrenewed for longer than
+  `stale_after` is lost. A renewer that ends for any reason other than being stopped marks the state lost. On
+  release the renewer is stopped and joined for one interval; one held in a hung beat is left to end on its own.
+- **Proof before commit.** `Lease.prove()` makes and removes a directory in the holder's token directory. A `mkdir`
+  is answered by the storage, never from a client's attribute cache, so it fails once the lease was claimed and
+  removed. Every commit under a lease is preceded by `prove()`, and a holder whose proof fails is lost and does not
+  commit. The run manifest and the label map are read-merge-write, so each commit is one atomic replace of the
+  merged content (`write_atomically`) made after a successful proof. The manifest's holder re-takes the lease,
+  re-reads and merges, up to `RECORD_ATTEMPTS` times; the label map's raises `RunIOError`.
+- **Callers.** Every lease holder beats under the profile's `lease` section (`envs.lease_stale_after_s` is folded
+  into it). On a lost lease, or a failed `prove()` right before publishing, the env build is used but its record
+  is not published; the manifest and the label map
+  are not written. The vLLM start lease only orders starts: lost before the launch (checked by `prove()`), the
+  start is refused; lost after it, the healthy server is kept and the loss is logged.
+- **The beat bound is checked at load.** `lease.attribute_delay_s` is data (the NFS default acdirmax, 60 s, on
+  `orcd`; 0 on local disk) until Task 16 measures it. `ExecutionProfile.load` refuses a profile where
+  `2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s` with `LeaseBoundError`; the factor 2
+  allows one missed beat. Both packaged profiles load (orcd: 198 + 60 = 258 < 300).
+- **Unsupported roots.** `StorageUnsupported` is raised when `mkdir` fails as an unsupported operation (`ENOTSUP`,
+  `EOPNOTSUPP`, `ENOSYS`). The full capability probe (directory rename, server-clock mtimes, the attribute delay)
+  is Task 16's `probe_capabilities`, which raises the same type.
+- **Not guaranteed.** On NFS a breaker's `lstat` of a token may be served from its attribute cache for up to
+  `acdirmax`; the load-time check holds only as far as `attribute_delay_s` is right. On the holder's side, `owns()`
+  and the beat's reopen by name are dentry lookups that the client may trust for up to `attribute_delay_s`, so a
+  holder whose lease was claimed may believe it holds for one interval plus that delay. That is why commits rest on
+  `prove()` rather than `owns()`, and why `ESTALE` counts as lost. A proof's `mkdir` can still land in a lease that
+  a claimant has renamed aside but not yet removed (one syscall gap). The cross-node check (three nodes, holder
+  SIGKILLed) is `scripts/probe_lease_cross_node.py`, run on ORCD.
+
 ## Amendment log
 
 - 2026-10-31: paths, kinds and entry binding under a storage root (R-100, R-101; H9b).
@@ -203,3 +278,4 @@ waits are bounded, and correctness rests on idempotence.
 - 2026-11-01: one transient classifier (`faults.is_transient`); retry takes a `RetryPolicy` from data; no ambient retry knob (F1, F3).
 - 2026-11-01: services are process-scoped in Phase 2; the leased registry and `svc` pool worker arrive with lease renewal in Phase 3 (P2-14, P2-38; Task 9b).
 - 2026-11-03: a lease is a directory taken by `mkdir` with the holder's token, renewed by beat directories from a renewer independent of the work; replaces the `O_EXCL` link (owner item 58).
+- 2026-11-06: renewal as built: probe-directory clock, fresh re-read before a break, claim by rename before a break or release (tokenless leases included; empty ones by `rmdir`), withdrawn leases removed, no put-back, `keep_alive` renewer on a monotonic cadence held by every lease caller, `prove()` before every commit, `ESTALE` as lost, the beat bound (one missed beat allowed) checked at profile load, `StorageUnsupported` on an unsupported `mkdir`; closes R-111.
