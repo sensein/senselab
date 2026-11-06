@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from lease_time_fixture import LeaseTime, install
 from senselab_core.runtime.locks import RENEWER_PREFIX, Lease, LeaseState, LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.storage import StorageUnsupported
 
@@ -40,49 +41,10 @@ def lease_dir(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Path]:
         shutil.rmtree(root, ignore_errors=True)
 
 
-class _Shifted:
-    """A stat result whose mtime reads `by` seconds later."""
-
-    def __init__(self, st: os.stat_result, by: float) -> None:
-        self._st, self._by = st, by
-
-    def __getattr__(self, name: str) -> object:
-        if name == "st_mtime":
-            return self._st.st_mtime + self._by
-        if name == "st_mtime_ns":
-            return self._st.st_mtime_ns + int(self._by * 1e9)
-        return getattr(self._st, name)
-
-
-class StorageClock:
-    """The storage clock, advanced at the `os` boundary: a stamp made after an advance reads that much later."""
-
-    def __init__(self) -> None:
-        """Start with no advance."""
-        self.advances: list[tuple[float, float]] = []
-
-    def advance(self, seconds: float) -> None:
-        """Move the storage clock `seconds` ahead from now on, and let the storage's stamps pass the moment."""
-        time.sleep(0.05)
-        self.advances.append((time.time(), seconds))
-        time.sleep(0.05)
-
-    def offset(self, mtime: float) -> float:
-        """Return how far the storage clock was advanced before the stamp `mtime`."""
-        return sum(by for at, by in self.advances if mtime >= at)
-
-
 @pytest.fixture
-def storage_clock(monkeypatch: pytest.MonkeyPatch) -> StorageClock:
-    """A storage clock the test advances; every `lstat` relative to a directory reads its stamps on it."""
-    clock, real = StorageClock(), os.lstat
-
-    def lstat(path: Any, *, dir_fd: int | None = None) -> object:  # noqa: ANN401
-        st = real(path, dir_fd=dir_fd)
-        return st if dir_fd is None else _Shifted(st, clock.offset(st.st_mtime))
-
-    monkeypatch.setattr(os, "lstat", lstat)
-    return clock
+def storage_clock(monkeypatch: pytest.MonkeyPatch) -> LeaseTime:
+    """A storage clock the test advances at the `os` boundary."""
+    return install(monkeypatch)
 
 
 def _lease_dir(resource: Path) -> Path:
@@ -248,7 +210,7 @@ def test_keep_alive_needs_a_held_lease_and_a_fraction_below_one(tmp_path: Path) 
 # -- judged stale on the storage clock --
 
 
-def test_dead_holder_lease_broken_after_bound(tmp_path: Path, storage_clock: StorageClock) -> None:
+def test_dead_holder_lease_broken_after_bound(tmp_path: Path, storage_clock: LeaseTime) -> None:
     """A holder that stops beating is not broken 59 s on the storage clock after its last stamp, and is at 61 s."""
     resource = tmp_path / "thing"
     dead = Lease(resource, timeout=0, stale_after=60)
@@ -263,7 +225,7 @@ def test_dead_holder_lease_broken_after_bound(tmp_path: Path, storage_clock: Sto
     dead.__exit__(None, None, None)
 
 
-def test_breaker_never_breaks_a_beating_lease(tmp_path: Path, storage_clock: StorageClock) -> None:
+def test_breaker_never_breaks_a_beating_lease(tmp_path: Path, storage_clock: LeaseTime) -> None:
     """Over 100 s on the storage clock, more than three stale bounds, a beating lease is never broken."""
     resource = tmp_path / "thing"
     with Lease(resource, timeout=0, stale_after=30) as holder, holder.keep_alive(0.01) as state:
@@ -278,7 +240,7 @@ def test_breaker_never_breaks_a_beating_lease(tmp_path: Path, storage_clock: Sto
 
 
 def test_staleness_is_read_on_the_storage_clock_not_the_local_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage_clock: StorageClock
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage_clock: LeaseTime
 ) -> None:
     """A local clock an hour ahead does not age a fresh lease; an hour on the storage clock does."""
     resource = tmp_path / "thing"

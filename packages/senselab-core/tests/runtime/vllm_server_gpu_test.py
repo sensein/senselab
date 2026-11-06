@@ -31,7 +31,11 @@ def test_vllm_server_attests_the_pii_model_and_a_restart_with_new_config_changes
     """The server loads the catalogue commit, every reply carries its attestation, and a new config re-attests."""
     profile = ExecutionProfile.load("orcd")
     env = ensure_env(
-        Env.server("vllm-server"), DATA / "env_locks/vllm-server.txt", profile.env_root("server"), settings=profile.envs
+        Env.server("vllm-server"),
+        DATA / "env_locks/vllm-server.txt",
+        profile.env_root("server"),
+        settings=profile.envs,
+        lease=profile.lease,
     )
     entry = Catalogue.load(DATA / "catalogue.yaml").default("pii_spans")
     model = ResolvedModel(ref=ModelRef(source="hf", id=entry.id, ref=entry.revision), identity=entry.revision)
@@ -45,6 +49,7 @@ def test_vllm_server_attests_the_pii_model_and_a_restart_with_new_config_changes
             start_lock_dir=profile.env_root("server") / "locks",
             startup_timeout_s=STARTUP_TIMEOUT_S,
             start_margin_s=profile.envs.server_start_margin_s,
+            lease=profile.lease,
             log_dir=profile.env_root("server") / "logs",
         ) as server:
             reply = server.chat([{"role": "user", "content": "Say ok."}], sampling={"max_tokens": 8, "temperature": 0})

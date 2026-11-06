@@ -7,7 +7,7 @@ import numpy
 import pytest
 from senselab_core.kernel.declare import Env
 from senselab_core.runtime.envs import Uv, ensure_env
-from senselab_core.runtime.profiles import Envs
+from senselab_core.runtime.profiles import Envs, ExecutionProfile
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_worker import fake
 
@@ -43,7 +43,8 @@ def test_envs_crisperwhisper_lock_builds_and_round_trips_every_wire_type(tmp_pat
         Env.isolated("crisperwhisper"),
         LOCK,
         tmp_path / "envs",
-        settings=Envs(lease_stale_after_s=600, server_start_margin_s=60),
+        settings=Envs(server_start_margin_s=60),
+        lease=ExecutionProfile.load().lease,
         uv=Uv.find(),
     )
     assert handle.python_version and handle.lock_sha and handle.wheel_set

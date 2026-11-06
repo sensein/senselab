@@ -19,7 +19,9 @@ from senselab_worker.canonical import jcs_dumps, jcs_loads
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.formats import LABELS_FORMAT, RETIRED_LABELS_FORMATS, FormatVerdict, check
-from senselab_core.runtime.locks import Lease
+from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.locks import Lease, LeaseUnavailable
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import (
     FILE_LABEL,
     PROV_DIR,
@@ -108,18 +110,20 @@ class LabelMap:
 
     Args:
         run: The run directory; `private/` is made under it, mode 0700, when a label is first assigned.
+        lease: How the map's lease beats; the packaged `laptop` profile's when None.
     """
 
-    def __init__(self, run: str | Path) -> None:
+    def __init__(self, run: str | Path, *, lease: JobLease | None = None) -> None:
         """Name the run; nothing is read or made until the first call."""
         self._run = Path(run)
+        self._lease = lease
 
     def assign(self, files: Iterable[tuple[str, str]]) -> list[str]:
         """Return the label of each `(content address, path)`, recording the path under it, under one lease.
 
         Raises:
             ValueError: an address is not a `content:` or `output:` address, or the map on disk is not `labels@2`.
-            RunIOError: the map cannot be read or written; the error names no path.
+            RunIOError: the map cannot be read or written, or its lease was lost; the error names no path.
         """
         items = list(files)
         for address, _ in items:
@@ -128,10 +132,14 @@ class LabelMap:
         return pathless("assigning file labels", lambda: self._assign(items))
 
     def _assign(self, items: list[tuple[str, str]]) -> list[str]:
+        settings = self._lease if self._lease is not None else ExecutionProfile.load().lease
         with (
             StorageDir.open_root(self._run, create=True) as run,
             run.walk(PRIVATE_DIR, create=True, mode=PRIVATE_DIR_MODE, aside=None) as private,
-            Lease(private.path / LABELS_NAME, mode=PRIVATE_DIR_MODE, directory=private),
+            Lease(
+                private.path / LABELS_NAME, stale_after=settings.stale_after_s, mode=PRIVATE_DIR_MODE, directory=private
+            ) as lease,
+            lease.keep_alive(settings.renew_fraction) as state,
         ):
             labels = _read_labels(private)
             by_address = {address: label for label, (address, _) in labels.items()}
@@ -146,6 +154,8 @@ class LabelMap:
                 assigned.append(label)
             record = {k: {"address": a, "paths": p} for k, (a, p) in labels.items()}
             body = jcs_dumps({"format": LABELS_FORMAT, "labels": record})
+            if state.lost or not lease.owns():
+                raise LeaseUnavailable(lease.path, "the label map's lease was lost; nothing was written")
             private.write_atomically(LABELS_NAME, body, grammar=_LABELS_FILE, mode=LABELS_MODE)
             return assigned
 

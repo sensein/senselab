@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 import senselab_worker
+from lease_time_fixture import install, on_create
 from senselab_core.kernel.declare import Env
 from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.runtime.envs import (
@@ -33,7 +34,8 @@ from senselab_core.runtime.envs import (
     pick_torch_index,
     read_lock_inputs,
 )
-from senselab_core.runtime.profiles import Envs, ExecutionProfile
+from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.profiles import Envs
 from senselab_worker.digest import identity_digest
 
 pytestmark = pytest.mark.logic
@@ -41,7 +43,8 @@ pytestmark = pytest.mark.logic
 FAKE_UV = Uv((sys.executable, str(Path(__file__).with_name("fake_uv_fixture.py"))))
 CUDA_12_8 = HostCuda((12, 8), "nvidia-smi")
 PROFILE_INDEX = "https://mirror.example/whl/cu126"
-SETTINGS = Envs(lease_stale_after_s=30.0, server_start_margin_s=1.0)
+SETTINGS = Envs(server_start_margin_s=1.0)
+LEASE = JobLease(stale_after_s=30.0, renew_fraction=0.01, attribute_delay_s=0)
 
 
 def _lock(
@@ -69,8 +72,10 @@ def uv_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return log
 
 
-def _ensure(tmp_path: Path, lock: Path, settings: Envs = SETTINGS) -> EnvHandle:
-    return ensure_env(Env.isolated("demo"), lock, tmp_path / "envs", settings=settings, uv=FAKE_UV, host_cuda=CUDA_12_8)
+def _ensure(tmp_path: Path, lock: Path, settings: Envs = SETTINGS, lease: JobLease = LEASE) -> EnvHandle:
+    return ensure_env(
+        Env.isolated("demo"), lock, tmp_path / "envs", settings=settings, lease=lease, uv=FAKE_UV, host_cuda=CUDA_12_8
+    )
 
 
 def _smi(version: str) -> str:
@@ -110,9 +115,7 @@ def test_cuda_index_routing(smi: str | None, nvcc: str | None, ceiling: tuple[in
 def test_profile_torch_index_overrides_probe(tmp_path: Path, uv_log: Path) -> None:
     """The profile's `envs.torch_index` replaces the probed index, and torch installs from it."""
     assert pick_torch_index(CUDA_12_8, override=PROFILE_INDEX) == TorchIndex(PROFILE_INDEX, "profile", "profile")
-    handle = _ensure(
-        tmp_path, _lock(tmp_path), Envs(lease_stale_after_s=30.0, server_start_margin_s=1.0, torch_index=PROFILE_INDEX)
-    )
+    handle = _ensure(tmp_path, _lock(tmp_path), Envs(server_start_margin_s=1.0, torch_index=PROFILE_INDEX))
     (stage_one,) = [c for c in _calls(uv_log) if "--index-url" in c]
     assert stage_one[stage_one.index("--index-url") + 1] == PROFILE_INDEX
     assert handle.torch_index == PROFILE_INDEX
@@ -135,7 +138,12 @@ def test_torch_index_recorded_in_context(tmp_path: Path, uv_log: Path) -> None:
     assert context.env_lock == handle.lock_sha
     assert context.wheel_set == handle.wheel_set
     torch_free = ensure_env(
-        Env.isolated("plain"), _lock(tmp_path, torch="none"), tmp_path / "envs", settings=SETTINGS, uv=FAKE_UV
+        Env.isolated("plain"),
+        _lock(tmp_path, torch="none"),
+        tmp_path / "envs",
+        settings=SETTINGS,
+        lease=LEASE,
+        uv=FAKE_UV,
     )
     assert torch_free.torch_index is None
     assert torch_free.context_fields()["driver"] == {}
@@ -149,6 +157,7 @@ from senselab_core.runtime.envs import HostCuda, Uv, ensure_env
 from senselab_core.runtime.profiles import ExecutionProfile
 root, lock, fake = sys.argv[1:]
 handle = ensure_env(Env.isolated("demo"), Path(lock), Path(root), settings=ExecutionProfile.load().envs,
+                    lease=ExecutionProfile.load().lease,
                     uv=Uv((sys.executable, fake)),
                     host_cuda=HostCuda((12, 8), "nvidia-smi"))
 print(handle.python)
@@ -233,6 +242,7 @@ def test_worker_modules_are_placed_where_the_worker_imports_them(tmp_path: Path,
             lock,
             tmp_path / "envs",
             settings=SETTINGS,
+            lease=LEASE,
             uv=FAKE_UV,
             host_cuda=CUDA_12_8,
             workers=workers,
@@ -261,12 +271,12 @@ def test_host_env_requires_a_managed_interpreter(tmp_path: Path, monkeypatch: py
     lock = tmp_path / "uv.lock"
     lock.write_text('version = 1\n[[package]]\nname = "numpy"\nversion = "2.1.0"\n')
     monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(Path(sys.base_prefix).resolve().parent))
-    handle = ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=["numpy"])
+    handle = ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, lease=LEASE, uv=FAKE_UV, requirements=["numpy"])
     assert handle.python == sys.executable
     assert handle.torch_index is None
     monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(tmp_path / "elsewhere"))
     with pytest.raises(ManagedPythonMissing, match="uv python install"):
-        ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=["numpy"])
+        ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, lease=LEASE, uv=FAKE_UV, requirements=["numpy"])
 
 
 def test_other_venv_failure_is_not_managed_python_missing(
@@ -290,17 +300,28 @@ def _plant_lease(tmp_path: Path, age_s: float) -> Path:
 
 
 def test_profile_lease_bound_breaks_an_expired_build_lease(tmp_path: Path, uv_log: Path) -> None:
-    """The profile's `lease_stale_after_s` reaches the lease: older is broken at once, younger is waited out."""
-    assert ExecutionProfile.load("orcd").envs.lease_stale_after_s == ExecutionProfile.load().envs.lease_stale_after_s
+    """The profile's `lease.stale_after_s` reaches the build lease: older is broken at once, younger is waited out."""
     _plant_lease(tmp_path, age_s=120.0)
     started = time.monotonic()
-    _ensure(tmp_path, _lock(tmp_path), Envs(lease_stale_after_s=60.0, server_start_margin_s=1.0))
+    _ensure(tmp_path, _lock(tmp_path), lease=JobLease(stale_after_s=60.0, renew_fraction=0.33, attribute_delay_s=0))
     assert time.monotonic() - started < 20  # noqa: PLR2004 - far below the 60 s a live lease would hold it
     lease = _plant_lease(tmp_path, age_s=0.0)
     started = time.monotonic()
-    _ensure(tmp_path, _lock(tmp_path, body="scipy==1.14.0\n"), Envs(lease_stale_after_s=1.0, server_start_margin_s=1.0))
+    young = JobLease(stale_after_s=1.0, renew_fraction=0.33, attribute_delay_s=0)
+    _ensure(tmp_path, _lock(tmp_path, body="scipy==1.14.0\n"), lease=young)
     assert time.monotonic() - started >= 0.9  # noqa: PLR2004 - the young lease was held until it aged past 1 s
     assert not lease.exists()
+
+
+def test_the_build_lease_outlasts_its_stale_bound_while_it_beats(
+    tmp_path: Path, uv_log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before the build's record is written the storage clock passes the lease's stale bound; it is never broken."""
+    clock = install(monkeypatch)
+    on_create(monkeypatch, ".demo-", lambda: clock.outlast(tmp_path / "envs", LEASE.stale_after_s))
+    handle = _ensure(tmp_path, _lock(tmp_path))
+    assert clock.attempts == 4 and clock.breaks == 0
+    assert handle.python and list((tmp_path / "envs").glob("demo-*.json"))
 
 
 def _uv_lock(tmp_path: Path, *packages: tuple[str, str], extras: dict[str, dict[str, list[str]]] | None = None) -> Path:
@@ -317,13 +338,15 @@ def _uv_lock(tmp_path: Path, *packages: tuple[str, str], extras: dict[str, dict[
 
 
 def _host(tmp_path: Path, lock: Path, requirements: list[str]) -> EnvHandle:
-    return ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=requirements)
+    return ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, lease=LEASE, uv=FAKE_UV, requirements=requirements)
 
 
 def test_host_without_a_lock_checks_the_installed_packages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """With no lock, a host env is opened when the installed distributions satisfy the requirements."""
     monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(Path(sys.base_prefix).resolve().parent))
-    handle = ensure_env(Env.host(), None, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=["numpy", "pytest>=1"])
+    handle = ensure_env(
+        Env.host(), None, tmp_path, settings=SETTINGS, lease=LEASE, uv=FAKE_UV, requirements=["numpy", "pytest>=1"]
+    )
     assert handle.python == sys.executable and handle.lock_sha
     assert installed_gaps(["numpy>=0", "no-such-dist-xyz", "numpy<0.1", "no-such-dist-xyz; python_version < '3'"]) == [
         "no-such-dist-xyz",
@@ -335,7 +358,13 @@ def test_host_without_a_lock_refuses_a_real_gap(tmp_path: Path) -> None:
     """With no lock, a requirement the installed packages do not satisfy refuses the backend, naming it."""
     with pytest.raises(HostLockLacksBackend, match="no-such-dist-xyz"):
         ensure_env(
-            Env.host(), None, tmp_path, settings=SETTINGS, uv=FAKE_UV, requirements=["numpy", "no-such-dist-xyz"]
+            Env.host(),
+            None,
+            tmp_path,
+            settings=SETTINGS,
+            lease=LEASE,
+            uv=FAKE_UV,
+            requirements=["numpy", "no-such-dist-xyz"],
         )
 
 

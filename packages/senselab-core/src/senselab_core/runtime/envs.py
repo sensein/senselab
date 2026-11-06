@@ -4,8 +4,9 @@ An isolated env is a uv venv on a uv-managed interpreter (`--python-preference o
 version, `t` for free-threaded), installed from its lock: a lock with `torch:` pins installs them from the PyTorch
 wheel index routed to the host's CUDA (`pick_torch_index`), then the lock body with `--no-deps`. Under `root`, env
 `<name>` lives in `<name>[-<tag>]-<uuid>/`, and `<name>[-<tag>].json` (`env-record@1.0`) names the current build;
-both are written under a `Lease` on `<name>[-<tag>]`. A build is never moved or removed here, so a broken lease
-costs a duplicate build, never a mixed env, and a superseded build stays until an explicit clean-up. The worker
+both are written under a `Lease` on `<name>[-<tag>]`, kept alive by beats while the build runs; a builder whose lease
+was lost does not publish its record. A build is never moved or removed here, so a broken lease costs a duplicate
+build, never a mixed env, and a superseded build stays until an explicit clean-up. The worker
 runtime, and the worker modules a backend declares, are copied into every env as an overlay that leaves its
 wheel set unchanged.
 """
@@ -38,6 +39,7 @@ from senselab_worker.digest import file_digest, identity_digest
 from senselab_core.kernel.declare import Env
 from senselab_core.kernel.formats import FormatTag, Formatted
 from senselab_core.runtime.config import load_yaml
+from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.hardware import _run
 from senselab_core.runtime.locks import TIMEOUT_S, Lease
 from senselab_core.runtime.network import Network, require_online
@@ -271,6 +273,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     root: Path,
     *,
     settings: Envs,
+    lease: JobLease,
     requirements: Sequence[str] = (),
     workers: Mapping[str, Path] | None = None,
     uv: Uv | None = None,
@@ -289,8 +292,9 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         env: The env a backend declares.
         lock: The lock file the env is installed from.
         root: The directory the profile's `env_roots` gives for `env.kind`; unused for a host env.
-        settings: The profile's `envs`: `torch_index` replaces the probed index when set, and a build's lease is
-            broken once older than `lease_stale_after_s`; a waiter waits that long plus `locks.TIMEOUT_S`.
+        settings: The profile's `envs`: `torch_index` replaces the probed index when set.
+        lease: The profile's `lease`: the build's lease beats under it, and a waiter waits `stale_after_s` plus
+            `locks.TIMEOUT_S`.
         requirements: The backend's requirements; required for a host env, which is refused unless `lock` covers each.
         workers: The backend's worker modules, dotted name to source file; each is copied into the env's
             site-packages as that module, beside the worker runtime, when the env is built.
@@ -331,13 +335,16 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     current = _read_record(root, stem)
     if current is not None and (current.lock_sha, current.torch_index) == wanted:
         return _handle(root, current, parsed.path)
-    stale_after = settings.lease_stale_after_s
-    with Lease(root / stem, stale_after=stale_after, timeout=stale_after + TIMEOUT_S):
+    held = Lease(root / stem, stale_after=lease.stale_after_s, timeout=lease.stale_after_s + TIMEOUT_S)
+    with held, held.keep_alive(lease.renew_fraction) as state:
         current = _read_record(root, stem)
         if current is None or (current.lock_sha, current.torch_index) != wanted:
             require_online(network, f"building env {stem}")
             current = _build(root, stem, parsed, lock_sha, index, uv, host_cuda, workers or {})
-            write_atomically(root / f"{stem}.json", current.model_dump_json().encode())
+            if state.lost:
+                logger.warning("env %s: its build lease was lost; the build is used here and not published", stem)
+            else:
+                write_atomically(root / f"{stem}.json", current.model_dump_json().encode())
     return _handle(root, current, parsed.path)
 
 

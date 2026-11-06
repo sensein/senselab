@@ -43,11 +43,23 @@ def open_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
         lock = host_lock()
         root = Path(".") if lock is None else lock.parent
         return ensure_env(
-            env, lock, root, settings=profile.envs, requirements=backend.requirements, network=profile.network
+            env,
+            lock,
+            root,
+            settings=profile.envs,
+            lease=profile.lease,
+            requirements=backend.requirements,
+            network=profile.network,
         )
     env_lock, workers = _built_from(backend)
     return ensure_env(
-        env, env_lock, profile.env_root(env.kind), settings=profile.envs, workers=workers, network=profile.network
+        env,
+        env_lock,
+        profile.env_root(env.kind),
+        settings=profile.envs,
+        lease=profile.lease,
+        workers=workers,
+        network=profile.network,
     )
 
 

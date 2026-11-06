@@ -16,7 +16,9 @@ import pytest
 from huggingface_hub.errors import RepositoryNotFoundError
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from lease_time_fixture import install, on_create
 from planted_objects_fixture import BAD_ATTEMPT_IDS, LEASE, NAME_BOUND_S, UNOPENABLE_NAMES, bounded
+from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
@@ -648,3 +650,17 @@ def test_an_unopenable_lease_that_cannot_be_moved_is_a_typed_error_naming_its_re
     report = bounded("probe_record_with_plant", str(tmp_path), LEASE, "unmovable")
     assert report["error"] == "LeaseUnavailable", report
     assert LEASE in report["message"] and "owned by" in report["message"], report
+
+
+@pytest.mark.logic
+def test_the_manifest_lease_outlasts_its_stale_bound_while_it_beats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before the manifest write the storage clock passes the stale bound; the lease beats, is never broken, writes."""
+    lease = JobLease(stale_after_s=30, renew_fraction=0.01, attribute_delay_s=0)
+    clock = install(monkeypatch)
+    run_dir = manifest_path("r", root=tmp_path).parent
+    on_create(monkeypatch, f".{MANIFEST_NAME}.", lambda: clock.outlast(run_dir, lease.stale_after_s))
+    assert record_resolution("org/m", "main", SHA_A, run="r", root=tmp_path, lease=lease) == SHA_A
+    assert clock.attempts == 4 and clock.breaks == 0
+    assert read_manifest("r", root=tmp_path) == {manifest_key("org/m", "main"): SHA_A}

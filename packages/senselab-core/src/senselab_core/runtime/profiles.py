@@ -79,12 +79,10 @@ class Envs(Frozen):
     """Env settings.
 
     Attributes:
-        lease_stale_after_s: Seconds after which another process breaks an env build's lease.
-        server_start_margin_s: Seconds a server start lease outlives the start-up timeout before it is broken.
+        server_start_margin_s: Seconds a waiter on a server start lease waits beyond the start-up timeout.
         torch_index: Replaces the probed CUDA wheel index when set.
     """
 
-    lease_stale_after_s: Annotated[float, Field(gt=0)]
     server_start_margin_s: Annotated[float, Field(gt=0)]
     torch_index: NonEmptyStr | None = None
 
@@ -147,6 +145,7 @@ class ExecutionProfile(Formatted):
         Raises:
             ProfileFormatRetired: `override` declares a retired format.
             UnknownProfileKey: a key of `override` that the format does not define, naming the closest one.
+            LeaseBoundError: the lease's beat interval plus its attribute delay is not below its stale bound.
             ValueError: the merged mapping is invalid.
         """
         packaged = _read(resources.files("senselab_core.runtime").joinpath("data", "profiles", f"{name}.yaml"))
@@ -157,7 +156,9 @@ class ExecutionProfile(Formatted):
         ):
             raise ProfileFormatRetired(str(merged.get("format")))
         _check_keys(merged, cls.model_fields)
-        return cls.model_validate(merged)
+        profile = cls.model_validate(merged)
+        profile.lease.check_bound()
+        return profile
 
     def env_root(self, kind: str) -> Path:
         """Return the root for env `kind` with `${VAR:-fallback}`, then `~` and `$VAR`, expanded.

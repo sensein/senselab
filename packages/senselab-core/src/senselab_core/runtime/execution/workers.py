@@ -68,6 +68,7 @@ def start_vllm(backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profi
         start_lock_dir=root / "locks",
         startup_timeout_s=backend.server.startup_timeout_s,
         start_margin_s=profile.envs.server_start_margin_s,
+        lease=profile.lease,
         log_dir=root / "logs",
         network=profile.network,
     )

@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from lease_time_fixture import install, on_create
 from senselab_core.kernel import prov
 from senselab_core.kernel.prov import Association, Generation, Usage
 from senselab_core.runtime.bep028 import (
@@ -26,6 +27,7 @@ from senselab_core.runtime.bep028 import (
     file_entity,
     layout_name,
 )
+from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.fetch import DataManifest
 from senselab_core.runtime.provenance import PROV_DIR, MalformedDocument, ProvStore, RunIOError
 from senselab_core.runtime.vocabulary import core_vocabulary
@@ -380,3 +382,15 @@ def test_a_deeply_nested_label_map_is_refused_typed(tmp_path: Path) -> None:
     (run / PRIVATE_DIR / LABELS_NAME).write_text(body)
     with pytest.raises(ValueError, match="labels@2.0"):
         LabelMap(run).paths()
+
+
+def test_the_label_map_lease_outlasts_its_stale_bound_while_it_beats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before the map is written the storage clock passes the stale bound; the lease beats, is never broken, writes."""
+    lease = JobLease(stale_after_s=30, renew_fraction=0.01, attribute_delay_s=0)
+    clock = install(monkeypatch)
+    on_create(monkeypatch, f".{LABELS_NAME}.", lambda: clock.outlast(tmp_path / "private", lease.stale_after_s))
+    assert LabelMap(tmp_path, lease=lease).assign([("content:" + "1" * 64, "a.wav")]) == ["file-1"]
+    assert clock.attempts == 4 and clock.breaks == 0
+    assert LabelMap(tmp_path).paths() == {"file-1": ["a.wav"]}

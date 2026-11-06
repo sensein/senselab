@@ -11,9 +11,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from lease_time_fixture import install
 from senselab_core.kernel.identity import ExecutionContext, ModelRef, ResolvedModel
 from senselab_core.runtime import vllm_server as vs
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution_settings import JobLease
 from senselab_worker.digest import identity_digest
 
 pytestmark = pytest.mark.logic
@@ -31,6 +33,7 @@ SETTINGS: dict[str, Any] = {
     "flashinfer_sampler": False,
 }
 FAKE = Path(__file__).with_name("fake_vllm_fixture.py")
+LEASE = JobLease(stale_after_s=30, renew_fraction=0.01, attribute_delay_s=0)
 
 _HOLDER = r"""
 import sys, time
@@ -39,11 +42,13 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_worker.digest import identity_digest
 from senselab_core.runtime.vllm_server import VllmServer
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
+from senselab_core.runtime.execution_settings import JobLease
 
 python, locks, sha, settings = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 env = EnvHandle(python=python, python_version="3.12", lock_sha="l", wheel_set="w", torch_index=None)
 model = ResolvedModel(ref=ModelRef.parse(f"org/model@{sha}"), identity=sha)
-kwargs = {"start_lock_dir": Path(locks), "startup_timeout_s": 30, "start_margin_s": 1}
+lease = JobLease(stale_after_s=30, renew_fraction=0.1, attribute_delay_s=0)
+kwargs = {"start_lock_dir": Path(locks), "startup_timeout_s": 30, "start_margin_s": 1, "lease": lease}
 with VllmServer(env, model, __import__("json").loads(settings), **kwargs):
     print("up", flush=True)
     time.sleep(600)
@@ -78,7 +83,7 @@ def _knob(tmp_path: Path, **knobs: str) -> None:
 
 def _server(env: EnvHandle, tmp_path: Path, settings: dict[str, Any] = SETTINGS) -> vs.VllmServer:
     return vs.VllmServer(
-        env, MODEL, settings, start_lock_dir=tmp_path / "locks", startup_timeout_s=30, start_margin_s=1
+        env, MODEL, settings, start_lock_dir=tmp_path / "locks", startup_timeout_s=30, start_margin_s=1, lease=LEASE
     )
 
 
@@ -220,7 +225,7 @@ def test_start_failure_is_typed_and_stops(
 def test_url_or_unpinned_model_refused(env: EnvHandle, tmp_path: Path, model: ResolvedModel) -> None:
     """Only a pinned hub or local model is served."""
     with pytest.raises(ValueError, match="pinned|url"):
-        vs.VllmServer(env, model, SETTINGS, start_lock_dir=tmp_path, startup_timeout_s=1, start_margin_s=1)
+        vs.VllmServer(env, model, SETTINGS, start_lock_dir=tmp_path, startup_timeout_s=1, start_margin_s=1, lease=LEASE)
 
 
 @pytest.mark.parametrize("settings", [{k: v for k, v in SETTINGS.items() if k != "max_num_seqs"}, {**SETTINGS, "x": 1}])
@@ -243,7 +248,7 @@ def test_local_model_errors_name_no_path(env: EnvHandle, tmp_path: Path, monkeyp
     model = ResolvedModel(ref=ModelRef.parse(f"local:{weights}"), identity="c" * 64)
     _knob(tmp_path, FAKE_VLLM_ROOT="elsewhere")
     server = vs.VllmServer(
-        env, model, SETTINGS, start_lock_dir=tmp_path / "locks", startup_timeout_s=30, start_margin_s=1
+        env, model, SETTINGS, start_lock_dir=tmp_path / "locks", startup_timeout_s=30, start_margin_s=1, lease=LEASE
     )
     with pytest.raises(vs.VllmStartError) as raised:
         server.__enter__()
@@ -258,3 +263,23 @@ def test_unreadable_media_error_names_no_path(tmp_path: Path, kind: str) -> None
     with pytest.raises(ValueError, match="cannot read a '.wav' file") as raised:
         vs.content_part(kind, tmp_path / "secret-name.wav")
     assert "secret-name" not in str(raised.value) and raised.value.__cause__ is None
+
+
+def test_the_start_lease_outlasts_its_stale_bound_while_it_beats(
+    env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """While the server starts, the storage clock passes the start lease's stale bound; it beats and is never broken."""
+    clock, real_popen = install(monkeypatch), subprocess.Popen
+    started: list[int] = []
+
+    class Popen(real_popen):  # type: ignore[misc,valid-type]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+            if not started:
+                started.append(1)
+                clock.outlast(tmp_path / "locks", LEASE.stale_after_s)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", Popen)
+    with _server(env, tmp_path) as server:
+        assert server.attestation is not None
+    assert clock.attempts == 4 and clock.breaks == 0

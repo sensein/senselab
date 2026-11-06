@@ -34,7 +34,7 @@ manifest = DataManifest.model_validate({"format": "data-manifest@2.0", "name": "
 steps = {
     "resolve": lambda: Resolver(cache_dir=tmp / "hf", network=profile.network).lookup("org/model", "main"),
     "fetch": lambda: fetch(manifest, cache_root=tmp / "data", network=profile.network),
-    "build": lambda: ensure_env(Env.isolated("demo"), lock, tmp / "envs", settings=profile.envs,
+    "build": lambda: ensure_env(Env.isolated("demo"), lock, tmp / "envs", settings=profile.envs, lease=profile.lease,
         uv=Uv((sys.executable, str(fake_uv))), host_cuda=HostCuda(None, "none"), network=profile.network),
 }
 refused = {}

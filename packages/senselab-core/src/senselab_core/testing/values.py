@@ -927,14 +927,10 @@ def _register_runtime_samples() -> None:
     register_samples(
         Envs,
         lambda: [
-            Envs(lease_stale_after_s=120, server_start_margin_s=60),
-            Envs(
-                lease_stale_after_s=30.5,
-                server_start_margin_s=1.5,
-                torch_index="https://download.pytorch.org/whl/cpu",
-            ),
+            Envs(server_start_margin_s=60),
+            Envs(server_start_margin_s=1.5, torch_index="https://download.pytorch.org/whl/cpu"),
         ],
-        invalid_updates=[{"torch_index": ""}, {"lease_stale_after_s": 0}, {"server_start_margin_s": 0}],
+        invalid_updates=[{"torch_index": ""}, {"server_start_margin_s": 0}],
     )
     register_samples(
         EnvRecord,

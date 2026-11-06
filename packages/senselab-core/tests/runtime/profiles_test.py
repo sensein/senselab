@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
+from senselab_core.runtime.execution_settings import LeaseBoundError
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.keys import build_key
 from senselab_core.runtime.profiles import (
@@ -241,3 +242,19 @@ def test_resource_class_names_match_their_device() -> None:
         _profile(resource_classes={"cpu": {"max_worker": 2}})
     with pytest.raises(UnknownProfileKey, match="'pool.quantum'"):
         _profile(pool={"quantum": 2})
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("name", ["laptop", "orcd"])
+def test_each_packaged_lease_beats_inside_its_attribute_delay(name: str) -> None:
+    """Each packaged profile loads: its beat interval plus its attribute delay stays below its stale bound."""
+    lease = ExecutionProfile.load(name).lease
+    assert lease.renew_fraction * lease.stale_after_s + lease.attribute_delay_s < lease.stale_after_s
+
+
+@pytest.mark.logic
+def test_a_lease_whose_beat_cannot_outrun_the_attribute_delay_is_refused() -> None:
+    """0.33 × 300 + 201 ≥ 300: a beating lease could look stale, so load refuses it, naming the three values."""
+    with pytest.raises(LeaseBoundError, match=r"0\.33.*300.*201"):
+        ExecutionProfile.load("orcd", {"lease": {"attribute_delay_s": 201}})
+    assert ExecutionProfile.load("orcd", {"lease": {"attribute_delay_s": 200}}).lease.attribute_delay_s == 200

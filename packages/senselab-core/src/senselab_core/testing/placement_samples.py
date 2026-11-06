@@ -146,8 +146,11 @@ def _register_settings(register: Register) -> None:
             [{"poll_s": 0}, {"quantum_items": 0}],
         ),
         JobLease: (
-            [JobLease(stale_after_s=300, renew_fraction=0.33), JobLease(stale_after_s=0.5, renew_fraction=0.9)],
-            [{"stale_after_s": 0}, {"renew_fraction": 1.0}, {"renew_fraction": 0}],
+            [
+                JobLease(stale_after_s=300, renew_fraction=0.33, attribute_delay_s=60),
+                JobLease(stale_after_s=0.5, renew_fraction=0.9, attribute_delay_s=0),
+            ],
+            [{"stale_after_s": 0}, {"renew_fraction": 1.0}, {"renew_fraction": 0}, {"attribute_delay_s": -1}],
         ),
         FaultBudgets: (
             [

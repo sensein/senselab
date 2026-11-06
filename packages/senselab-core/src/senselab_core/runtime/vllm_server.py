@@ -1,7 +1,7 @@
 """A ``vllm serve`` process in an `Env.server` env, owned by the calling process, and its HTTP clients.
 
-`VllmServer` starts ``<env>/bin/vllm serve`` on a pinned model under a `Lease` named by the host and the devices,
-so servers that share a card start one at a time. It waits for ``/health``, reads the served version and model,
+`VllmServer` starts ``<env>/bin/vllm serve`` on a pinned model under a beating `Lease` named by the host and the
+devices, so servers that share a card start one at a time. It waits for ``/health``, reads the served version and model,
 and holds an `Attestation` (engine version, model identity, config digest) that every reply it returns carries
 and that its `context_fields` put in the execution context. The server runs in its own process group; a watchdog
 kills that group if the owner dies, and leaving the context stops it (SIGTERM, then SIGKILL).
@@ -35,8 +35,9 @@ from senselab_worker.digest import identity_digest
 
 from senselab_core.kernel.identity import ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.launch import Launch, launch
-from senselab_core.runtime.locks import TIMEOUT_S, Lease
+from senselab_core.runtime.locks import TIMEOUT_S, Lease, LeaseUnavailable
 from senselab_core.runtime.network import Network, network_variables
 
 HOST = "127.0.0.1"
@@ -290,7 +291,8 @@ class VllmServer:
 
     On entry it takes a `Lease` on ``<start_lock_dir>/vllm-start-<host>-<devices>``, starts ``<env>/bin/vllm serve``
     in its own session (a hub model with ``--revision`` and ``--tokenizer-revision`` set to its commit;
-    ``CUDA_VISIBLE_DEVICES`` set to `devices` when given), waits for ``/health`` and releases the lease. It then
+    ``CUDA_VISIBLE_DEVICES`` set to `devices` when given), waits for ``/health`` and releases the lease; the lease
+    beats while it is held, and a start whose lease was lost is stopped. It then
     reads ``/version`` and checks that ``/v1/models`` serves the model. On exit, and on any start failure, the
     server's process group gets SIGTERM, then SIGKILL.
 
@@ -309,6 +311,7 @@ class VllmServer:
         start_lock_dir: Path,
         startup_timeout_s: float,
         start_margin_s: float,
+        lease: JobLease,
         devices: Sequence[int | str] | None = None,
         log_dir: Path | None = None,
         network: Network = "online",
@@ -321,8 +324,9 @@ class VllmServer:
             settings: The server settings `server_args` reads.
             start_lock_dir: Where the start lease lives.
             startup_timeout_s: Seconds the server has to become healthy once the lease is held.
-            start_margin_s: The profile's `envs.server_start_margin_s`; the lease is stale after
-                `startup_timeout_s` plus this.
+            start_margin_s: The profile's `envs.server_start_margin_s`; a waiter for the start lease waits
+                `startup_timeout_s` plus this plus the lease's stale bound and `locks.TIMEOUT_S`.
+            lease: The profile's `lease`, under which the start lease beats.
             devices: The server's visible devices; when None the inherited environment is left alone and the lease
                 is named by the inherited ``CUDA_VISIBLE_DEVICES`` (``all`` if unset).
             log_dir: Where the server's output goes, one mode-600 file per server; the owner's stderr when None.
@@ -342,6 +346,7 @@ class VllmServer:
         self.start_lock_dir = Path(start_lock_dir)
         self.startup_timeout_s = float(startup_timeout_s)
         self.start_margin_s = float(start_margin_s)
+        self.lease = lease
         self.log_dir = log_dir
         self.url: str | None = None
         self.attestation: Attestation | None = None
@@ -371,14 +376,18 @@ class VllmServer:
         Raises:
             VllmStartError: The server exited before it was healthy, was not healthy in time, or serves another
                 model.
-            LeaseTimeout, LeaseUnavailable: as `Lease`.
+            LeaseTimeout, LeaseUnavailable: as `Lease`; `LeaseUnavailable` also when the start lease was lost.
         """
         self.start_lock_dir.mkdir(parents=True, exist_ok=True)
         try:
-            stale_after = self.startup_timeout_s + self.start_margin_s
-            with Lease(self.lock_path, stale_after=stale_after, timeout=stale_after + TIMEOUT_S):
+            stale_after = self.lease.stale_after_s
+            wait = self.startup_timeout_s + self.start_margin_s + stale_after + TIMEOUT_S
+            held = Lease(self.lock_path, stale_after=stale_after, timeout=wait)
+            with held, held.keep_alive(self.lease.renew_fraction) as state:
                 self._launch()
                 self._await_health()
+                if state.lost:
+                    raise LeaseUnavailable(held.path, f"the start lease {held.path} was lost while the server started")
             self.attestation = self._attest()
         except BaseException:
             self.stop()

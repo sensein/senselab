@@ -80,11 +80,31 @@ class PoolSettings(Frozen):
     segment_items: PositiveInt
 
 
+class LeaseBoundError(ValueError):
+    """A lease's renewal interval plus the storage's attribute delay does not stay below its stale bound."""
+
+
 class JobLease(Frozen):
-    """How a lease is kept (`Lease.keep_alive`): its stale bound in seconds, and the share of that between renewals."""
+    """How every lease is kept (`Lease.keep_alive`).
+
+    Attributes:
+        stale_after_s: Seconds on the storage clock after which another process breaks the lease.
+        renew_fraction: The share of `stale_after_s` between two beats.
+        attribute_delay_s: Seconds a client of the storage may show a directory's stale mtime.
+    """
 
     stale_after_s: PositiveSeconds
     renew_fraction: Annotated[float, Field(gt=0, lt=1)]
+    attribute_delay_s: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+
+    def check_bound(self) -> None:
+        """Raise `LeaseBoundError` unless `renew_fraction × stale_after_s + attribute_delay_s < stale_after_s`."""
+        if self.renew_fraction * self.stale_after_s + self.attribute_delay_s >= self.stale_after_s:
+            raise LeaseBoundError(
+                f"lease.renew_fraction {self.renew_fraction} × lease.stale_after_s {self.stale_after_s} + "
+                f"lease.attribute_delay_s {self.attribute_delay_s} is not below lease.stale_after_s "
+                f"{self.stale_after_s}: a beating lease could be seen as stale and broken"
+            )
 
 
 class FaultBudgets(Frozen):
