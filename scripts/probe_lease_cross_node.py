@@ -40,6 +40,7 @@ from senselab_core.runtime.storage import StorageDir
 DIR_VARIABLE = "SENSELAB_LEASE_PROBE_DIR"
 EVENT_POLL_S = 5.0
 TAKE_POLL_S = 1.0
+HOSTS = 3
 
 
 def _now(root: Path) -> float:
@@ -75,8 +76,9 @@ def breaker(root: Path, stale: float, fraction: float, name: str, until: float) 
             with Lease(root / "resource", timeout=0, stale_after=stale) as lease, lease.keep_alive(fraction) as state:
                 _log(root, name, event="took", broke=[str(p) for p in lease.broke])
                 time.sleep(2 * stale)
-                _log(root, name, event="released", owns=lease.owns(), lost=state.lost)
-                return
+                owned = lease.owns()
+            _log(root, name, event="released", owns=owned, lost=state.lost)
+            return
         except LeaseTimeout:
             _log(root, name, event="refused")
         time.sleep(TAKE_POLL_S)
@@ -84,26 +86,46 @@ def breaker(root: Path, stale: float, fraction: float, name: str, until: float) 
 
 
 def verdict(root: Path, stale: float, slack: float) -> bool:
-    """Print the probe's verdict as JSON; return whether it passed."""
+    """Print the probe's verdict as JSON; return whether it passed.
+
+    It fails when a role's record is missing, a take has no release, fewer than three hosts took part, a take
+    precedes the kill, a take follows it by more than `stale` plus `slack`, two holds overlap, or a lease was lost.
+    """
     events = [json.loads(line) for p in sorted(root.glob("events-*.jsonl")) for line in p.read_text().splitlines()]
-    kill = next(e["storage_t"] for e in events if e["role"] == "A" and e["event"] == "kill")
-    held = next(e["storage_t"] for e in events if e["role"] == "A" and e["event"] == "held")
+    kill = next((e["storage_t"] for e in events if e["role"] == "A" and e["event"] == "kill"), None)
+    held = next((e["storage_t"] for e in events if e["role"] == "A" and e["event"] == "held"), None)
+    spans = []
+    unreleased = 0
+    for t in (e for e in events if e["event"] == "took"):
+        released = next((r["storage_t"] for r in events if r["role"] == t["role"] and r["event"] == "released"), None)
+        if released is None:
+            unreleased += 1
+        else:
+            spans.append((t["storage_t"], released))
+    spans.sort()
     took = sorted(e["storage_t"] for e in events if e["event"] == "took")
-    spans = sorted(
-        (t["storage_t"], next(r["storage_t"] for r in events if r["role"] == t["role"] and r["event"] == "released"))
-        for t in events
-        if t["event"] == "took"
-    )
     overlaps = sum(later[0] < earlier[1] for earlier, later in zip(spans, spans[1:]))
-    early = [t for t in took if t < kill]
+    hosts = sorted({e["host"] for e in events})
     lost = [e for e in events if e.get("lost")]
-    passed = bool(took) and not early and not lost and not overlaps and kill - held > stale
-    passed = passed and took[0] - kill <= stale + slack
+    early = [t for t in took if kill is not None and t < kill]
+    passed = (
+        kill is not None
+        and held is not None
+        and bool(took)
+        and len(hosts) == HOSTS
+        and not unreleased
+        and not early
+        and not lost
+        and not overlaps
+        and kill - held > stale
+        and took[0] - kill <= stale + slack
+    )
     report = {
-        "hosts": sorted({e["host"] for e in events}),
-        "held_s": kill - held,
-        "take_after_kill_s": (took[0] - kill) if took else None,
+        "hosts": hosts,
+        "held_s": (kill - held) if kill is not None and held is not None else None,
+        "take_after_kill_s": (took[0] - kill) if took and kill is not None else None,
         "takes_before_kill": len(early),
+        "unreleased_takes": unreleased,
         "overlapping_holds": overlaps,
         "lost": len(lost),
         "takers": len(took),

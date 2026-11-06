@@ -13,6 +13,7 @@ server's OpenAI-compatible endpoints over loopback and return the parsed JSON; t
 import base64
 import http.client
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -39,6 +40,8 @@ from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.launch import Launch, launch
 from senselab_core.runtime.locks import TIMEOUT_S, Lease, LeaseUnavailable
 from senselab_core.runtime.network import Network, network_variables
+
+logger = logging.getLogger("senselab")
 
 HOST = "127.0.0.1"
 """The only address a server listens on."""
@@ -292,7 +295,8 @@ class VllmServer:
     On entry it takes a `Lease` on ``<start_lock_dir>/vllm-start-<host>-<devices>``, starts ``<env>/bin/vllm serve``
     in its own session (a hub model with ``--revision`` and ``--tokenizer-revision`` set to its commit;
     ``CUDA_VISIBLE_DEVICES`` set to `devices` when given), waits for ``/health`` and releases the lease; the lease
-    beats while it is held, and a start whose lease was lost is stopped. It then
+    beats while it is held. A start whose lease is lost before the launch is refused; one lost after it is logged,
+    and the healthy server is kept, since the lease only orders starts. It then
     reads ``/version`` and checks that ``/v1/models`` serves the model. On exit, and on any start failure, the
     server's process group gets SIGTERM, then SIGKILL.
 
@@ -376,7 +380,8 @@ class VllmServer:
         Raises:
             VllmStartError: The server exited before it was healthy, was not healthy in time, or serves another
                 model.
-            LeaseTimeout, LeaseUnavailable: as `Lease`; `LeaseUnavailable` also when the start lease was lost.
+            LeaseTimeout, LeaseUnavailable: as `Lease`; `LeaseUnavailable` also when the start lease was lost before
+                the launch.
         """
         self.start_lock_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -384,10 +389,14 @@ class VllmServer:
             wait = self.startup_timeout_s + self.start_margin_s + stale_after + TIMEOUT_S
             held = Lease(self.lock_path, stale_after=stale_after, timeout=wait)
             with held, held.keep_alive(self.lease.renew_fraction) as state:
+                if state.lost or not held.prove():
+                    raise LeaseUnavailable(held.path, f"the start lease {held.path} was lost before the server started")
                 self._launch()
                 self._await_health()
                 if state.lost:
-                    raise LeaseUnavailable(held.path, f"the start lease {held.path} was lost while the server started")
+                    logger.warning(
+                        "start lease %s was lost while the server started; the healthy server is kept", held.path
+                    )
             self.attestation = self._attest()
         except BaseException:
             self.stop()

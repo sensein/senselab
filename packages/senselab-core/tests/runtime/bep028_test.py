@@ -32,6 +32,7 @@ from senselab_core.runtime.fetch import DataManifest
 from senselab_core.runtime.provenance import PROV_DIR, MalformedDocument, ProvStore, RunIOError
 from senselab_core.runtime.vocabulary import core_vocabulary
 from senselab_worker.canonical import jcs_dumps, jcs_loads
+from syscall_faults_fixture import displace_before_proof
 
 pytestmark = pytest.mark.logic
 
@@ -394,3 +395,13 @@ def test_the_label_map_lease_outlasts_its_stale_bound_while_it_beats(
     assert LabelMap(tmp_path, lease=lease).assign([("content:" + "1" * 64, "a.wav")]) == ["file-1"]
     assert clock.attempts == 4 and clock.breaks == 0
     assert LabelMap(tmp_path).paths() == {"file-1": ["a.wav"]}
+
+
+def test_a_label_map_holder_displaced_just_before_its_commit_does_not_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The map is committed only after a fresh `mkdir` proves the lease; a holder displaced before it writes nothing."""
+    displaced = displace_before_proof(monkeypatch, f"{LABELS_NAME}.lease")
+    with pytest.raises(RunIOError):
+        LabelMap(tmp_path).assign([("content:" + "1" * 64, "a.wav")])
+    assert displaced and not (tmp_path / "private" / LABELS_NAME).exists()

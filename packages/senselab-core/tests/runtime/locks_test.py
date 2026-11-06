@@ -1,5 +1,6 @@
 """A lease is a directory taken by `mkdir` and renewed by beats, one planted contract per invariant ADR-003 states."""
 
+import contextlib
 import errno
 import os
 import shutil
@@ -290,46 +291,53 @@ def test_a_release_never_removes_a_lease_another_holder_took(tmp_path: Path) -> 
         assert second.owns()
 
 
-def test_a_breaker_that_moved_a_newer_lease_by_mistake_reports_no_break_and_its_holder_knows(tmp_path: Path) -> None:
-    """A breaker that renamed a newer lease records no break, and the newer holder finds its lease lost."""
+def test_a_late_breaker_cannot_claim_a_lease_another_breaker_already_broke(tmp_path: Path) -> None:
+    """A breaker claims the lease it judged by its token; once another broke it, the claim fails; the new one stays."""
     resource = tmp_path / "thing"
     judged = frozenset({_plant_lease(resource).name})
     late = Lease(resource, timeout=0, stale_after=60)
     with Lease(resource, timeout=1, stale_after=60) as winner:
         assert winner.broke and winner.owns()
-        assert late._take_aside(lambda found: found == judged) is False
-        assert not winner.owns()
+        assert late._break(judged, None) is False
+        assert winner.owns()
     late._close()
     assert list(tmp_path.iterdir()) == []
 
 
-def test_concurrent_breakers_remove_one_stale_lease_once_and_a_displaced_holder_knows(lease_dir: Path) -> None:
-    """Eight takers break one stale lease together: it is removed once; holders overlap only when one was displaced."""
+def test_concurrent_breakers_remove_one_stale_lease_once_and_displace_no_holder(lease_dir: Path) -> None:
+    """Eight takers break one stale lease together: it is removed once, each holds in turn, and none is displaced.
+
+    None times out waiting on an unknown holder (an orphaned lease).
+    """
     resource = lease_dir / "thing"
     _plant_lease(resource)
     takers = 8
     barrier = threading.Barrier(takers)
     lock = threading.Lock()
     inside, most, broke, displaced = [0], [0], [0], [0]
+    timeouts: list[str] = []
 
     def take() -> None:
         barrier.wait(JOIN_S)
-        with Lease(resource, timeout=5, stale_after=60) as lease:
-            with lock:
-                inside[0] += 1
-                most[0] = max(most[0], inside[0])
-                broke[0] += len(lease.broke)
-            time.sleep(0.02)
-            with lock:
-                inside[0] -= 1
-                displaced[0] += not lease.owns()
+        try:
+            with Lease(resource, timeout=5, stale_after=60) as lease:
+                with lock:
+                    inside[0] += 1
+                    most[0] = max(most[0], inside[0])
+                    broke[0] += len(lease.broke)
+                time.sleep(0.02)
+                with lock:
+                    inside[0] -= 1
+                    displaced[0] += not lease.owns()
+        except LeaseTimeout as err:
+            timeouts.append(str(err))
 
     threads = [threading.Thread(target=take) for _ in range(takers)]
     for thread in threads:
         thread.start()
     _join(threads)
-    assert broke[0] == 1
-    assert most[0] == 1 or displaced[0] >= 1, (most, displaced)
+    assert timeouts == []
+    assert broke[0] == 1 and most[0] == 1 and displaced[0] == 0, (most, displaced)
     assert list(lease_dir.iterdir()) == []
 
 
@@ -466,3 +474,173 @@ def test_a_directory_that_refuses_the_lease_is_a_typed_error_naming_its_owner(tm
                 pass
     finally:
         os.chmod(root, 0o755)
+
+
+# -- fix round: interleavings forced at the `os` boundary --
+
+
+def test_takers_that_both_withdraw_leave_no_orphan_at_the_name(  # noqa: C901 - the seams of one interleaving
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A's lease is renamed away by a late breaker, B makes a new one, A's token lands beside B's, both withdraw.
+
+    The emptied lease is removed, so a third taker holds at once instead of waiting `stale_after` on an orphan.
+    """
+    resource, real_mkdir, real_listdir = tmp_path / "thing", os.mkdir, os.listdir
+    b_go, b_made = threading.Event(), threading.Event()
+    both_listed = threading.Barrier(2, timeout=JOIN_S)
+    calls, listed = [0], [0]
+    lock = threading.Lock()
+
+    def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if os.fsdecode(path) != "thing.lease":
+            real_mkdir(path, mode, dir_fd=dir_fd)
+            return
+        with lock:
+            calls[0] += 1
+            n = calls[0]
+        real_mkdir(path, mode, dir_fd=dir_fd)
+        if n == 1:
+            os.rename(path, uuid.uuid4().hex, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            b_go.set()
+            assert b_made.wait(JOIN_S)
+        elif n == 2:  # noqa: PLR2004 - the second taker
+            b_made.set()
+
+    def listdir(path: Any = ".") -> list[str]:  # noqa: ANN401
+        names = real_listdir(path)
+        with lock:
+            armed = isinstance(path, int) and calls[0] == 2 and listed[0] < 2  # noqa: PLR2004 - the two takers
+            listed[0] += armed
+        if armed:
+            with contextlib.suppress(threading.BrokenBarrierError):
+                both_listed.wait()
+            names = real_listdir(path)
+        return names
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    monkeypatch.setattr(os, "listdir", listdir)
+    outcomes: dict[str, str] = {}
+
+    def take(who: str, wait: threading.Event | None) -> None:
+        if wait is not None:
+            assert wait.wait(JOIN_S)
+        try:
+            with Lease(resource, timeout=0, stale_after=60):
+                outcomes[who] = "held"
+        except LeaseTimeout:
+            outcomes[who] = "timeout"
+
+    threads = [threading.Thread(target=take, args=("A", None)), threading.Thread(target=take, args=("B", b_go))]
+    for thread in threads:
+        thread.start()
+    _join(threads)
+    monkeypatch.setattr(os, "listdir", real_listdir)
+    assert sorted(outcomes.values()) in (["timeout", "timeout"], ["held", "timeout"]), outcomes
+    with Lease(resource, timeout=0, stale_after=60) as third:
+        assert third.owns()
+
+
+def test_a_breaker_never_renames_a_lease_other_than_the_one_it_judged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Between a late breaker's fresh judgement and its rename another breaks and takes; the new lease is left alone."""
+    resource, real_lstat = tmp_path / "thing", os.lstat
+    planted = _plant_lease(resource).name
+    winner = Lease(resource, timeout=1, stale_after=60)
+    seen, running = [0], [False]
+
+    def lstat(path: Any, *, dir_fd: int | None = None) -> os.stat_result:  # noqa: ANN401
+        st = real_lstat(path, dir_fd=dir_fd)
+        if os.fsdecode(path) == planted and not running[0]:
+            seen[0] += 1
+            if seen[0] == 2:  # noqa: PLR2004 - the end of the late breaker's second, fresh read of the stale lease
+                running[0] = True
+                winner.__enter__()
+        return st
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    late = Lease(resource, timeout=0, stale_after=60)
+    with pytest.raises(LeaseTimeout):
+        late.__enter__()
+    assert winner.broke == [_lease_dir(resource)] and late.broke == [] and winner.owns()
+    winner.__exit__(None, None, None)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("where", ["beat", "owns"])
+def test_a_stale_nfs_handle_is_a_lost_lease_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    """`ESTALE` on a beat marks the lease lost at that beat, not after `stale_after`; on `owns()` it reads as False."""
+    real_mkdir, real_open = os.mkdir, os.open
+
+    def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if where == "beat" and os.fsdecode(path).startswith("beat-"):
+            raise OSError(errno.ESTALE, "Stale file handle", os.fsdecode(path))
+        real_mkdir(path, mode, dir_fd=dir_fd)
+
+    def opened(path: Any, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:  # noqa: ANN401
+        if where == "owns" and armed and os.fsdecode(path) == "thing.lease":
+            raise OSError(errno.ESTALE, "Stale file handle", os.fsdecode(path))
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    armed = False
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    monkeypatch.setattr(os, "open", opened)
+    with Lease(tmp_path / "thing", timeout=0, stale_after=60) as lease, lease.keep_alive(0.005) as state:
+        if where == "beat":
+            assert state.wait_lost(5.0)
+        else:
+            armed = True
+            assert lease.owns() is False and lease.prove() is False
+            armed = False
+    assert _renewers() == []
+
+
+def test_prove_is_a_fresh_mkdir_that_fails_once_the_lease_is_gone(tmp_path: Path) -> None:
+    """`prove` makes and removes a directory in the token; it is True while held and False once the lease is gone."""
+    resource = tmp_path / "thing"
+    with Lease(resource, timeout=0) as lease:
+        assert lease.prove()
+        token = next(_lease_dir(resource).iterdir())
+        assert list(token.iterdir()) == []
+        aside = tmp_path / uuid.uuid4().hex
+        _lease_dir(resource).rename(aside)
+        shutil.rmtree(aside)
+        assert not lease.prove()
+
+
+def test_a_renewer_ended_by_any_error_marks_the_lease_lost(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An exception that is not an `OSError` ends the renewer, and the lease is then marked lost, not left unrenewed."""
+    real_mkdir = os.mkdir
+
+    def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if os.fsdecode(path).startswith("beat-"):
+            raise MemoryError("a beat ran out of memory")
+        real_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    with Lease(tmp_path / "thing", timeout=0, stale_after=60) as lease, lease.keep_alive(0.005) as state:
+        assert state.wait_lost(5.0)
+    assert _renewers() == []
+
+
+def test_a_hung_beat_does_not_hold_up_the_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A beat stuck for 1.5 s delays the release by at most one interval; the renewer ends when the beat returns."""
+    real_mkdir, hung = os.mkdir, threading.Event()
+
+    def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if os.fsdecode(path) == "beat-2":
+            hung.set()
+            time.sleep(1.5)
+        real_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    with Lease(tmp_path / "thing", timeout=0, stale_after=10) as lease, lease.keep_alive(0.01):
+        assert hung.wait(JOIN_S)
+        started = time.monotonic()
+    assert time.monotonic() - started < 1.0
+    for thread in _renewers():
+        thread.join(JOIN_S)
+    assert _renewers() == []

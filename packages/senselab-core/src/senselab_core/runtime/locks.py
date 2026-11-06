@@ -6,32 +6,37 @@ stays inside `<dir>`; no file is written under the lease:
 
 - **take:** `mkdir <name>.lease`, which fails if anything is at the name, so one taker wins; then
   `mkdir <name>.lease/<token>`. An `EEXIST` on the token is this holder's own (a lost NFS reply). A taker that
-  finds another token beside its own withdraws.
+  finds another token beside its own withdraws, and removes the lease directory if that leaves it empty, so two
+  takers that both withdraw leave nothing at the name. A taker checks its token afresh after the take.
 - **renew:** `keep_alive` runs a renewer thread, owned by the lease and independent of the work, that creates
-  `<token>/beat-<n+1>` and removes `<token>/beat-<n>` every `renew_fraction × stale_after`, so the storage
-  stamps `<token>/` at each beat. A beat that finds the lease gone (`ENOENT`) marks its `LeaseState` lost.
+  `<token>/beat-<n+1>` and removes `<token>/beat-<n>` on a cadence of `renew_fraction × stale_after`, so the
+  storage stamps `<token>/` at each beat. A beat that finds the lease gone (`ENOENT`, or `ESTALE` on NFS), or a
+  renewer that ends for any other reason, marks its `LeaseState` lost.
+- **prove:** before committing anything under the lease, a holder calls `prove`, a `mkdir` in its token
+  directory that the storage answers itself.
 - **judge:** a lease's age is the storage clock (`StorageDir.dir_now`) less the newest mtime of `<name>.lease`
   and its tokens, read by a fresh `lstat`; a lease is broken only when that age, read after a fresh clock
   probe, passes `stale_after`. Anything but a directory at the name is moved aside (quarantined).
-- **break and release:** `<name>.lease` is renamed to a fresh uuid name beside it, which is atomic, and removed
-  whatever it holds. A breaker moves only what holds the tokens it judged stale, re-read after a fresh clock
-  probe; a newer lease moved in the window between that read and the rename is removed too, and its holder
-  learns it at its next beat or `owns` (overlap is duplicate work, within idempotence). A taker checks its
-  token afresh after the take, so a lease moved during the take is not held.
+- **break and release:** the breaker or releaser claims the lease by renaming its token to `gone-<token>` inside
+  it; a token is unique to one lease, so one claim succeeds, and only the claimant renames `<name>.lease` to a
+  fresh uuid name beside it and removes it. A lease with no token is moved only if `lstat` shows it is still the
+  directory judged. A holder whose token was claimed learns it at its next beat, `owns` or `prove`.
 
 Every wait ends at `timeout` in `LeaseTimeout`. The lease is an efficiency hint: what it guards stays correct by
 idempotence, not by the lease.
 """
 
 import contextlib
+import errno
 import logging
+import os
 import pwd
 import re
 import stat
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Optional
 
@@ -47,6 +52,12 @@ LEASE_NAME = re.compile(r"^.+\.lease$")
 """The lease directory: `<name>.lease`."""
 BEAT_NAME = re.compile(r"^beat-[0-9]+$")
 """A beat directory in a holder's token directory."""
+GONE_PREFIX = "gone-"
+"""Prefixed to a token by the one caller that claims its lease for removal."""
+GONE_NAME = re.compile(r"^gone-[0-9a-f]{32}$")
+"""A claimed token in a lease being removed."""
+PROOF_NAME = re.compile(r"^proof-[0-9a-f]{32}$")
+"""A directory `Lease.prove` makes and removes in a holder's token directory."""
 LEASE_DIR_MODE = 0o2770
 """The default mode of a lease directory and of its token directory."""
 TIMEOUT_S = 600.0
@@ -57,6 +68,8 @@ POLL_S = 0.05
 """Seconds between two attempts to take a lease."""
 REMOVE_ATTEMPTS = 3
 """How many times a lease moved aside is removed while a taker that reached it before the move races the removal."""
+GONE_ERRNOS = frozenset({errno.ENOENT, errno.ESTALE})
+"""What the storage answers for a lease directory that was moved or removed: gone, or a stale NFS handle to it."""
 RENEWER_PREFIX = "lease-renewer:"
 """The name of a renewer thread, before its lease's name."""
 
@@ -142,7 +155,7 @@ class Lease:
         self._dir: Optional[StorageDir] = None
         self._held: Optional[str] = None
         self._clock: Optional[tuple[float, float]] = None
-        self._renewer: Optional[tuple[threading.Thread, threading.Event]] = None
+        self._renewer: Optional[tuple[threading.Thread, threading.Event, float]] = None
         self.broke: list[Path] = []
         self.set_aside: list[Path] = []
 
@@ -173,10 +186,11 @@ class Lease:
             return {}
         return {t: st.st_mtime for t, st in found.items() if st is not None and stat.S_ISDIR(st.st_mode)}
 
-    def _seen(self) -> Optional[tuple[frozenset[str], float]]:
-        """Return the tokens of the lease and the newest mtime of it and them; None if no lease is at the name.
+    def _seen(self) -> Optional[tuple[frozenset[str], float, tuple[int, int, int]]]:
+        """Return the lease's tokens, the newest mtime of it and them, and its identity; None if no lease is there.
 
-        Anything but a directory at the name is moved aside.
+        The identity is the lease directory's device, inode and mtime. Anything but a directory at the name is moved
+        aside.
         """
         directory = self._directory()
         st = directory.lstat(self._name)
@@ -189,7 +203,7 @@ class Lease:
         tokens = self._tokens_in(self._name)
         if tokens is None:
             return None
-        return frozenset(tokens), max([st.st_mtime, *tokens.values()])
+        return frozenset(tokens), max([st.st_mtime, *tokens.values()]), _identity(st)
 
     def _remove(self, aside: str) -> None:
         """Remove the moved lease `aside`, again while a taker that reached it before the move races the removal."""
@@ -205,28 +219,46 @@ class Lease:
         self.set_aside.append(directory.path / aside)
         logger.warning("lease %s: moved aside to %s, which cannot be removed: %s", self._lease_path, aside, failure)
 
-    def _take_aside(self, expected: Callable[[frozenset[str]], bool]) -> bool:
-        """Rename the lease aside and remove it; return whether its tokens were those `expected` holds of.
+    def _break(self, tokens: frozenset[str], identity: Optional[tuple[int, int, int]]) -> bool:
+        """Move the lease holding `tokens` aside and remove it; return whether this caller did.
 
-        Rename is atomic, so of two callers expecting one lease only one moves it. A lease moved by mistake is not
-        put back, because its taker may have judged its take failed; its holder finds it lost.
+        With tokens, the caller first claims the lease by renaming its first token to `gone-<token>` inside it. A
+        token name is unique to one lease, so of all callers that judged it only one claim succeeds, and only the
+        claimant then moves `<name>.lease`; no other lease is ever moved. A lease with no token (left empty by a
+        taker that died, or unlistable) is moved only if the directory at the name is still the one judged
+        (device, inode and mtime by `lstat`).
         """
         directory = self._directory()
+        if tokens:
+            first, *rest = sorted(tokens)
+            try:
+                with directory.child(self._name) as lease:
+                    lease.rename(first, lease, GONE_PREFIX + first, grammar=GONE_NAME)
+                    for token in rest:
+                        with contextlib.suppress(OSError):
+                            lease.rename(token, lease, GONE_PREFIX + token, grammar=GONE_NAME)
+                    claimed = os.fstat(lease.fd)
+            except WrongKindError:
+                return False
+            except OSError as err:
+                if err.errno in GONE_ERRNOS:
+                    return False
+                raise
+            current = directory.lstat(self._name)
+            if current is None or (current.st_dev, current.st_ino) != (claimed.st_dev, claimed.st_ino):
+                logger.warning("lease %s: claimed, then found another directory at its name", self._lease_path)
+                return False
+        else:
+            current = directory.lstat(self._name)
+            if current is None or identity is None or _identity(current) != identity:
+                return False
         aside = uuid.uuid4().hex
         try:
             directory.rename(self._name, directory, aside, grammar=UUID_HEX)
         except FileNotFoundError:
             return False
-        found = self._tokens_in(aside)
-        if found is None:
-            self.set_aside.append(directory.path / aside)
-            return False
         self._remove(aside)
-        if expected(frozenset(found)):
-            return True
-        if found:
-            logger.warning("lease %s: displaced a newer lease; its holder finds it lost", self._lease_path)
-        return False
+        return True
 
     def _judge(self) -> None:
         """Clear the lease name if what is there is of the wrong kind or a stale lease."""
@@ -238,16 +270,15 @@ class Lease:
             seen = self._seen()
             if seen is None or now - seen[1] <= self._stale_after:
                 return
-            holder = self.holder() or "an unknown holder"
             judged = seen[0]
-            if self._take_aside(lambda found: found == judged):
+            if self._break(judged, seen[2]):
                 self.broke.append(self._lease_path)
                 logger.warning(
                     "lease %s: broke a stale lease %.1fs old (> %.1fs), held by %s",
                     self._lease_path,
                     now - seen[1],
                     self._stale_after,
-                    holder,
+                    ", ".join(sorted(judged)) or "no token",
                 )
         except (WrongKindError, PermissionError) as err:
             raise LeaseUnavailable(
@@ -274,6 +305,8 @@ class Lease:
                 lease.make_dir(token, grammar=UUID_HEX, mode=self._mode, exist_ok=True)
                 if any(t != token and UUID_HEX.fullmatch(t) for t in lease.listdir()):
                     lease.remove_dir(token, grammar=UUID_HEX)
+                    with contextlib.suppress(OSError):
+                        directory.remove_dir(self._name, grammar=LEASE_NAME)
                     return None
         except (FileNotFoundError, WrongKindError):
             return None
@@ -299,8 +332,34 @@ class Lease:
         try:
             with self._directory().child(self._name) as lease:
                 return lease.kind(token) == "directory"
-        except (FileNotFoundError, WrongKindError):
+        except WrongKindError:
             return False
+        except OSError as err:
+            if err.errno in GONE_ERRNOS:
+                return False
+            raise
+
+    def prove(self) -> bool:
+        """Return whether this lease is still held, proven by a `mkdir` (and `rmdir`) in its token directory.
+
+        A `mkdir` is answered by the storage itself, never from a client's attribute cache, so a holder calls this
+        immediately before it commits anything under the lease; False means the lease was lost.
+        """
+        if self._held is None:
+            return False
+        proof = f"proof-{uuid.uuid4().hex}"
+        try:
+            with self._directory().child(self._name) as lease, lease.child(self._held) as mine:
+                mine.make_dir(proof, grammar=PROOF_NAME)
+                with contextlib.suppress(OSError):
+                    mine.remove_dir(proof, grammar=PROOF_NAME)
+        except WrongKindError:
+            return False
+        except OSError as err:
+            if err.errno in GONE_ERRNOS:
+                return False
+            raise
+        return True
 
     @contextlib.contextmanager
     def keep_alive(self, renew_fraction: float) -> Iterator[LeaseState]:
@@ -316,13 +375,14 @@ class Lease:
             raise RuntimeError(f"lease {self._lease_path}: keep_alive needs a held lease without a renewer")
         lost, stop = threading.Event(), threading.Event()
         state = LeaseState(lost)
+        interval = renew_fraction * self._stale_after
         thread = threading.Thread(
             target=self._renew,
-            args=(self._held, renew_fraction * self._stale_after, state, lost, stop),
+            args=(self._directory().dup(), self._held, interval, state, lost, stop),
             name=RENEWER_PREFIX + self._name,
             daemon=True,
         )
-        self._renewer = (thread, stop)
+        self._renewer = (thread, stop, interval)
         thread.start()
         try:
             yield state
@@ -330,39 +390,65 @@ class Lease:
             self._stop_renewer()
 
     def _stop_renewer(self) -> None:
+        """Stop the renewer and wait for it for one interval; one held in a hung beat is left to end on its own."""
         renewer, self._renewer = self._renewer, None
         if renewer is not None:
-            renewer[1].set()
-            renewer[0].join()
+            thread, stop, interval = renewer
+            stop.set()
+            thread.join(interval)
+            if thread.is_alive():
+                logger.warning("lease %s: its renewer is still in a beat; it ends when the beat returns", self._name)
 
-    def _beat(self, token: str, n: int) -> None:
+    def _beat(self, directory: StorageDir, token: str, n: int) -> None:
         """Make `beat-<n+1>` in this holder's token directory, reached afresh, and remove `beat-<n>`."""
-        with self._directory().child(self._name) as lease, lease.child(token) as mine:
+        with directory.child(self._name) as lease, lease.child(token) as mine:
             mine.make_dir(f"beat-{n + 1}", grammar=BEAT_NAME, exist_ok=True)
             if n:
                 with contextlib.suppress(FileNotFoundError):
                     mine.remove_dir(f"beat-{n}", grammar=BEAT_NAME)
 
-    def _renew(  # noqa: PLR0913 - the token, the interval, and the state with its two events
-        self, token: str, interval: float, state: LeaseState, lost: threading.Event, stop: threading.Event
+    def _renew(  # noqa: PLR0913 - its own directory handle, the token, the interval, the state and its two events
+        self,
+        directory: StorageDir,
+        token: str,
+        interval: float,
+        state: LeaseState,
+        lost: threading.Event,
+        stop: threading.Event,
     ) -> None:
-        """Beat every `interval` seconds until `stop`; a lease found gone, or unrenewed past its bound, is lost."""
-        last = time.monotonic()
-        while not stop.wait(interval):
-            try:
-                self._beat(token, state.beats)
-            except (FileNotFoundError, WrongKindError):
-                logger.warning("lease %s: was broken while held; its holder stops", self._lease_path)
-                lost.set()
-                return
-            except OSError as err:
-                logger.warning("lease %s: a beat failed: %s", self._lease_path, err)
-                if time.monotonic() - last > self._stale_after:
-                    lost.set()
+        """Beat every `interval` seconds until `stop`; a lease found gone, or unrenewed past its bound, is lost.
+
+        Each beat is due `interval` after the last one was due, whatever the beats took, and a beat that is already
+        overdue runs at once. The renewer marks the lease lost whenever it ends for any reason but `stop`.
+        """
+        last = due = time.monotonic()
+        try:
+            while True:
+                due += interval
+                if stop.wait(max(0.0, due - time.monotonic())):
                     return
-                continue
-            state.beats += 1
-            last = time.monotonic()
+                try:
+                    self._beat(directory, token, state.beats)
+                except WrongKindError:
+                    logger.warning("lease %s: was broken while held; its holder stops", self._lease_path)
+                    return
+                except OSError as err:
+                    if err.errno in GONE_ERRNOS:
+                        logger.warning("lease %s: was broken while held; its holder stops", self._lease_path)
+                        return
+                    logger.warning("lease %s: a beat failed: %s", self._lease_path, err)
+                    if time.monotonic() - last > self._stale_after:
+                        return
+                    continue
+                state.beats += 1
+                last = time.monotonic()
+                due = max(due, last - interval)
+        except Exception:
+            logger.exception("lease %s: the renewer failed; the lease is lost", self._lease_path)
+        finally:
+            directory.close()
+            if not stop.is_set():
+                lost.set()
 
     def __enter__(self) -> "Lease":
         """Take the lease, breaking a stale one and moving a wrong kind aside.
@@ -397,7 +483,7 @@ class Lease:
         try:
             self._stop_renewer()
             token = self._held
-            if token is not None and not (self.owns() and self._take_aside(lambda found: token in found)):
+            if token is not None and not self._break(frozenset({token}), None):
                 logger.warning("lease %s: was broken while held; the work it guarded may run twice", self._lease_path)
         finally:
             self._held = None
@@ -409,6 +495,10 @@ class Lease:
             directory.close()
 
 
+def _identity(st: Any) -> tuple[int, int, int]:  # noqa: ANN401 - an `os.stat_result` or a stand-in for one
+    return (st.st_dev, st.st_ino, st.st_mtime_ns)
+
+
 def _user(uid: int) -> str:
     try:
         return pwd.getpwuid(uid).pw_name
@@ -418,6 +508,10 @@ def _user(uid: int) -> str:
 
 __all__ = [
     "BEAT_NAME",
+    "GONE_ERRNOS",
+    "GONE_NAME",
+    "GONE_PREFIX",
+    "PROOF_NAME",
     "LEASE_DIR_MODE",
     "LEASE_NAME",
     "LEASE_SUFFIX",

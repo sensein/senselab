@@ -154,7 +154,7 @@ class LabelMap:
                 assigned.append(label)
             record = {k: {"address": a, "paths": p} for k, (a, p) in labels.items()}
             body = jcs_dumps({"format": LABELS_FORMAT, "labels": record})
-            if state.lost or not lease.owns():
+            if state.lost or not lease.prove():
                 raise LeaseUnavailable(lease.path, "the label map's lease was lost; nothing was written")
             private.write_atomically(LABELS_NAME, body, grammar=_LABELS_FILE, mode=LABELS_MODE)
             return assigned

@@ -145,7 +145,7 @@ class ExecutionProfile(Formatted):
         Raises:
             ProfileFormatRetired: `override` declares a retired format.
             UnknownProfileKey: a key of `override` that the format does not define, naming the closest one.
-            LeaseBoundError: the lease's beat interval plus its attribute delay is not below its stale bound.
+            LeaseBoundError: two of the lease's beat intervals plus its attribute delay are not below its stale bound.
             ValueError: the merged mapping is invalid.
         """
         packaged = _read(resources.files("senselab_core.runtime").joinpath("data", "profiles", f"{name}.yaml"))

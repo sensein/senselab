@@ -225,3 +225,26 @@ def displace_after_take(monkeypatch: pytest.MonkeyPatch, name: str) -> list[str]
     monkeypatch.setattr(os, "mkdir", mkdir)
     monkeypatch.setattr(os, "open", opened)
     return displaced
+
+
+def displace_before_proof(monkeypatch: pytest.MonkeyPatch, name: str) -> list[str]:
+    """Remove the lease directory `name` just before each `Lease.prove` makes its proof directory, as a breaker would.
+
+    Returns the list each displacement appends `name` to.
+    """
+    real_mkdir = os.mkdir
+    parent: list[int] = []
+    displaced: list[str] = []
+
+    def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if os.fsdecode(path).startswith("proof-") and parent:
+            aside = uuid.uuid4().hex
+            os.rename(name, aside, src_dir_fd=parent[0], dst_dir_fd=parent[0])
+            shutil.rmtree(aside, dir_fd=parent[0])
+            displaced.append(name)
+        real_mkdir(path, mode, dir_fd=dir_fd)
+        if os.fsdecode(path) == name and dir_fd is not None:
+            parent[:] = [dir_fd]
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    return displaced

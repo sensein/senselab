@@ -274,9 +274,10 @@ def _record_in(  # noqa: PLR0913 - the two directories, the entry, then the stor
 ) -> str:
     """Append-if-absent `key -> sha` to the manifest in `run_dir`, under the manifest's lease.
 
-    A holder whose lease was displaced before or after its write (whose temporary the new holder may have
-    removed) takes the lease again and re-reads and merges the manifest, so its entry is kept beside the
-    entries of the holder that displaced it, up to `RECORD_ATTEMPTS` takes.
+    The commit is one atomic replace of the merged manifest, made only after `Lease.prove` shows the lease is
+    still held. A holder whose lease was displaced before its write (or whose temporary the new holder removed)
+    takes the lease again and re-reads and merges the manifest, so its entry is kept beside the entries of the
+    holder that displaced it, up to `RECORD_ATTEMPTS` takes.
 
     Raises:
         LeaseUnavailable: the lease was displaced on every one of `RECORD_ATTEMPTS` takes.
@@ -287,7 +288,7 @@ def _record_in(  # noqa: PLR0913 - the two directories, the entry, then the stor
         with lease, lease.keep_alive(settings.renew_fraction) as state:
 
             def owns() -> bool:
-                return lease.owns() and not state.lost
+                return not state.lost and lease.prove()
 
             _remove_leftovers(runs, run_dir, policy)
             current = _read_in(run_dir)
@@ -306,7 +307,7 @@ def _record_in(  # noqa: PLR0913 - the two directories, the entry, then the stor
                 except FileNotFoundError:
                     if owns():
                         raise
-                if owns():
+                else:
                     return sha
         logger.warning("run manifest %s: lease displaced; re-reading and merging", path)
     raise LeaseUnavailable(

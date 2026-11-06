@@ -37,7 +37,7 @@ from senselab_core.runtime.revision import (
     resolve_revision,
 )
 from senselab_core.runtime.storage import NAME_MAX
-from syscall_faults_fixture import displace_after_take, pause_replaces
+from syscall_faults_fixture import displace_after_take, displace_before_proof, pause_replaces
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -664,3 +664,15 @@ def test_the_manifest_lease_outlasts_its_stale_bound_while_it_beats(
     assert record_resolution("org/m", "main", SHA_A, run="r", root=tmp_path, lease=lease) == SHA_A
     assert clock.attempts == 4 and clock.breaks == 0
     assert read_manifest("r", root=tmp_path) == {manifest_key("org/m", "main"): SHA_A}
+
+
+@pytest.mark.logic
+def test_a_holder_displaced_just_before_its_commit_does_not_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The manifest is committed only after a fresh `mkdir` proves the lease; one displaced before it writes nothing."""
+    displaced = displace_before_proof(monkeypatch, f"{MANIFEST_NAME}.lease")
+    with pytest.raises(LeaseUnavailable, match="displaced"):
+        record_resolution("org/m", "main", SHA_A, run="r", root=tmp_path)
+    assert len(displaced) == RECORD_ATTEMPTS
+    assert read_manifest("r", root=tmp_path) == {}

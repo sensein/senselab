@@ -6,6 +6,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -283,3 +284,29 @@ def test_the_start_lease_outlasts_its_stale_bound_while_it_beats(
     with _server(env, tmp_path) as server:
         assert server.attestation is not None
     assert clock.attempts == 4 and clock.breaks == 0
+
+
+def test_a_start_lease_lost_after_the_launch_keeps_the_healthy_server(
+    env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The start lease only orders starts: lost while the launched server comes up, it is logged and the server kept."""
+    real_mkdir, real_popen = os.mkdir, subprocess.Popen
+    failing, failed = threading.Event(), threading.Event()
+
+    def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if failing.is_set() and os.fsdecode(path).startswith("beat-"):
+            failed.set()
+            raise FileNotFoundError(2, "No such file or directory", os.fsdecode(path))
+        real_mkdir(path, mode, dir_fd=dir_fd)
+
+    class Popen(real_popen):  # type: ignore[misc,valid-type]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+            if not failing.is_set():
+                failing.set()
+                assert failed.wait(10)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    monkeypatch.setattr(subprocess, "Popen", Popen)
+    with _server(env, tmp_path) as server:
+        assert server.attestation is not None

@@ -71,7 +71,7 @@ pool:
   poll_s: 30
   segment_items: 10000
 # Every lease: seconds after which another process breaks it, the share of that between beats, and the
-# storage's attribute delay; load refuses renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.
+# storage's attribute delay; load refuses 2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.
 lease:
   stale_after_s: 300
   renew_fraction: 0.33

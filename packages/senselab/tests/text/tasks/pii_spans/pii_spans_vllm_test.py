@@ -25,6 +25,7 @@ from senselab_core.runtime.call import Packaged, Result, TaskCall, use_packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.in_process import CallFailed, InProcess
 from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
@@ -142,6 +143,7 @@ def _server(env: EnvHandle, tmp_path: Path) -> VllmServer:
         start_lock_dir=tmp_path / "other-locks",
         startup_timeout_s=30,
         start_margin_s=1,
+        lease=JobLease(stale_after_s=30, renew_fraction=0.1, attribute_delay_s=0),
     )
 
 

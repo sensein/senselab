@@ -249,12 +249,12 @@ def test_resource_class_names_match_their_device() -> None:
 def test_each_packaged_lease_beats_inside_its_attribute_delay(name: str) -> None:
     """Each packaged profile loads: its beat interval plus its attribute delay stays below its stale bound."""
     lease = ExecutionProfile.load(name).lease
-    assert lease.renew_fraction * lease.stale_after_s + lease.attribute_delay_s < lease.stale_after_s
+    assert 2 * lease.renew_fraction * lease.stale_after_s + lease.attribute_delay_s < lease.stale_after_s
 
 
 @pytest.mark.logic
 def test_a_lease_whose_beat_cannot_outrun_the_attribute_delay_is_refused() -> None:
-    """0.33 × 300 + 201 ≥ 300: a beating lease could look stale, so load refuses it, naming the three values."""
-    with pytest.raises(LeaseBoundError, match=r"0\.33.*300.*201"):
-        ExecutionProfile.load("orcd", {"lease": {"attribute_delay_s": 201}})
-    assert ExecutionProfile.load("orcd", {"lease": {"attribute_delay_s": 200}}).lease.attribute_delay_s == 200
+    """2 × 0.33 × 300 + 102 ≥ 300: a lease one beat late could look stale, so load refuses it, naming the values."""
+    with pytest.raises(LeaseBoundError, match=r"0\.33.*300.*102"):
+        ExecutionProfile.load("orcd", {"lease": {"attribute_delay_s": 102}})
+    assert ExecutionProfile.load("orcd", {"lease": {"attribute_delay_s": 101}}).lease.attribute_delay_s == 101

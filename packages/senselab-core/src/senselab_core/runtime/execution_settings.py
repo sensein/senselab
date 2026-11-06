@@ -81,7 +81,7 @@ class PoolSettings(Frozen):
 
 
 class LeaseBoundError(ValueError):
-    """A lease's renewal interval plus the storage's attribute delay does not stay below its stale bound."""
+    """Two renewal intervals plus the storage's attribute delay do not stay below a lease's stale bound."""
 
 
 class JobLease(Frozen):
@@ -98,12 +98,15 @@ class JobLease(Frozen):
     attribute_delay_s: Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
     def check_bound(self) -> None:
-        """Raise `LeaseBoundError` unless `renew_fraction × stale_after_s + attribute_delay_s < stale_after_s`."""
-        if self.renew_fraction * self.stale_after_s + self.attribute_delay_s >= self.stale_after_s:
+        """Raise `LeaseBoundError` unless `2 × renew_fraction × stale_after_s + attribute_delay_s < stale_after_s`.
+
+        The factor 2 allows one missed beat.
+        """
+        if 2 * self.renew_fraction * self.stale_after_s + self.attribute_delay_s >= self.stale_after_s:
             raise LeaseBoundError(
-                f"lease.renew_fraction {self.renew_fraction} × lease.stale_after_s {self.stale_after_s} + "
+                f"2 × lease.renew_fraction {self.renew_fraction} × lease.stale_after_s {self.stale_after_s} + "
                 f"lease.attribute_delay_s {self.attribute_delay_s} is not below lease.stale_after_s "
-                f"{self.stale_after_s}: a beating lease could be seen as stale and broken"
+                f"{self.stale_after_s}: a beating lease that missed one beat could be seen as stale and broken"
             )
 
 
