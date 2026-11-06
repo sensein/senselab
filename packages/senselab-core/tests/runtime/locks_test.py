@@ -508,6 +508,21 @@ def test_the_lease_mode_is_set_through_its_descriptor_whatever_the_umask(tmp_pat
     assert modes == {0o770}
 
 
+def test_an_empty_lease_this_user_cannot_list_is_removed_and_taken(tmp_path: Path) -> None:
+    """An empty `0o000` lease, as a crash between a lease's `mkdir` and its mode change leaves, is removed (`rmdir`)."""
+    lease_dir = _lease_dir(tmp_path / "thing")
+    lease_dir.mkdir()
+    os.utime(lease_dir, (OLD, OLD))
+    os.chmod(lease_dir, 0o000)
+    try:
+        with Lease(tmp_path / "thing", timeout=1, stale_after=60) as lease:
+            assert lease.owns() and lease.broke == [lease_dir]
+    finally:
+        for path in tmp_path.iterdir():
+            os.chmod(path, 0o700)
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root lists a 0o000 directory")
 def test_a_stale_lease_this_user_cannot_list_is_a_typed_error_naming_its_owner(tmp_path: Path) -> None:
     """A stale lease another user left unlistable cannot be claimed, so it is not broken: the error names its owner."""
@@ -706,3 +721,41 @@ def test_a_hung_beat_does_not_hold_up_the_release(tmp_path: Path, monkeypatch: p
     for thread in _renewers():
         thread.join(JOIN_S)
     assert _renewers() == []
+
+
+def test_a_judge_listing_during_a_claim_ages_the_lease_fresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A judge that lists the lease in the middle of a claim ages it fresh, and the claimant breaks it once.
+
+    The judge lists right after the claimant's rename, with the lease's own stat served from a cache as an NFS client
+    serves it; the claimed entry was stamped before its rename, so the judge does not claim it again.
+    """
+    resource, real_rename, real_lstat = tmp_path / "thing", os.rename, os.lstat
+    planted = _plant_lease(resource).name
+    cached = [real_lstat(_lease_dir(resource))]
+    judge = Lease(resource, timeout=0, stale_after=60)
+    serving = [False]
+    outcome: list[str] = []
+
+    def lstat(path: Any, *, dir_fd: int | None = None) -> os.stat_result:  # noqa: ANN401
+        if serving[0] and os.fsdecode(path) == "thing.lease":
+            return cached[0]
+        return real_lstat(path, dir_fd=dir_fd)
+
+    def rename(src: Any, dst: Any, *, src_dir_fd: int | None = None, dst_dir_fd: int | None = None) -> None:  # noqa: ANN401
+        real_rename(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+        if os.fsdecode(src) == planted and not outcome:
+            serving[0] = True
+            try:
+                judge.__enter__()
+                outcome.append("held")
+            except LeaseTimeout:
+                outcome.append("refused")
+            finally:
+                serving[0] = False
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    monkeypatch.setattr(os, "rename", rename)
+    with Lease(resource, timeout=1, stale_after=60) as claimant:
+        assert claimant.broke == [_lease_dir(resource)] and claimant.owns()
+    assert outcome == ["refused"] and judge.broke == []
+    assert list(tmp_path.iterdir()) == []

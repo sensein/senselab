@@ -245,27 +245,29 @@ class Lease:
     def _break(self, tokens: frozenset[str], others: Optional[frozenset[str]]) -> bool:
         """Claim the lease holding `tokens` (or, with none, the entries `others`), move it aside and remove it.
 
-        Returns whether this caller removed it. The caller first claims the lease by renaming one entry inside it, and
-        stamps the claimed entry so other judges see the lease as fresh while it is removed: its
-        first token to `gone-<token>`, or, with no token, its first other entry (a dead claimant's `gone-<token>`) to
-        `claim-<uuid4>`. An entry name is one directory's, so of all callers that judged the lease only one claim
-        succeeds, and only the claimant moves `<name>.lease`. A further token is claimed too; it cannot be a live
-        holder's, since the lease's age is the newest of its tokens' and it was judged stale. A lease with no entry
-        at all is removed by `rmdir`, which succeeds only while it is empty.
+        Returns whether this caller removed it. The caller first claims the lease by renaming one entry inside it:
+        its first token to `gone-<token>`, or, with no token, another entry (a dead claimant's `gone-<token>`, a
+        `claim-` entry only when there is no other) to `claim-<uuid4>`. The entry is stamped before the rename and
+        again after, so a judge that lists the lease at any point of the claim ages it as fresh. An entry name is one
+        directory's, so of all callers that judged the lease only one claim succeeds, and only the claimant moves
+        `<name>.lease`. A further token is claimed too; it cannot be a live holder's, since the lease's age is the
+        newest of its tokens' and it was judged stale. A lease with no entry at all is removed by `rmdir`, which
+        succeeds only while it is empty; so is a lease that cannot be listed, as a crash between its `mkdir` and its
+        mode change leaves it.
 
         Raises:
-            LeaseUnavailable: the lease cannot be listed, so it cannot be claimed.
+            LeaseUnavailable: the lease holds entries and cannot be listed, so it cannot be claimed.
         """
         if others is None:
-            raise LeaseUnavailable(
-                self._lease_path,
-                f"{self._lease_path} is stale and cannot be listed, so it cannot be claimed; "
-                f"{owner_remedy(self._lease_path)}",
-            )
+            return self._remove_unlistable()
         if not tokens and not others:
             return self._remove_empty()
         claims = [(t, GONE_PREFIX + t, GONE_NAME) for t in sorted(tokens)] or [
-            (min(others), f"{CLAIM_PREFIX}{uuid.uuid4().hex}", CLAIM_NAME)
+            (
+                min(others, key=lambda n: (bool(CLAIM_NAME.fullmatch(n)), n)),
+                f"{CLAIM_PREFIX}{uuid.uuid4().hex}",
+                CLAIM_NAME,
+            )
         ]
         claimed = self._claim(claims)
         if claimed is None:
@@ -288,6 +290,8 @@ class Lease:
         try:
             with self._directory().child(self._name) as lease:
                 (name, claim, grammar), *rest = claims
+                with contextlib.suppress(OSError):
+                    lease.stamp(name)
                 lease.rename(name, lease, claim, grammar=grammar)
                 with contextlib.suppress(OSError):
                     lease.stamp(claim)
@@ -301,6 +305,22 @@ class Lease:
             if err.errno in CLAIM_LOST_ERRNOS:
                 return None
             raise
+
+    def _remove_unlistable(self) -> bool:
+        """Remove a lease this caller cannot list by `rmdir`, which succeeds only while it is empty.
+
+        Raises:
+            LeaseUnavailable: it is still there, so it holds entries and cannot be claimed.
+        """
+        if self._remove_empty():
+            return True
+        if self._directory().lstat(self._name) is None:
+            return False
+        raise LeaseUnavailable(
+            self._lease_path,
+            f"{self._lease_path} is stale, holds entries and cannot be listed, so it cannot be claimed; "
+            f"{owner_remedy(self._lease_path)}",
+        )
 
     def _remove_empty(self) -> bool:
         """Remove the lease by `rmdir`, which succeeds only while it holds nothing; return whether it did."""
