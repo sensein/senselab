@@ -40,7 +40,7 @@ from senselab_core.runtime.execution.events import (
     terminal_events,
 )
 from senselab_core.runtime.execution.executor import Executor, FaultRecord
-from senselab_core.runtime.execution.queue import QueueSet
+from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.planner import ExecutorUnavailable, Plan
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -55,7 +55,7 @@ PLACEMENTS_DIR = "placements"
 RESULTS_DIR = "results"
 """The default result store, `<cache root>/results`."""
 ATTEMPTS_DIR = "attempts"
-POOL_DIRS = ("dead", "prov", "queues", "epoch")
+POOL_DIRS = ("dead", "prov", RUN_QUEUES, "epoch")
 POLL_S = 0.5
 """Seconds between reads of the event log while `Run.wait` waits for a run another process drives."""
 
@@ -713,7 +713,7 @@ def start(
     values = bind_sources(placed) if values is None else values
     run_dir = run_dir_of(placed.hash)
     attempt, ordinal = _prepare(placed, run_dir, store)
-    QueueSet(run_dir / "queues", placed.execution).reconcile()
+    QueueSet(run_dir / RUN_QUEUES, placed.execution).reconcile()
     run = Run(run_dir, store=store)
     log = EventLog(run_dir, attempt, ordinal)
     runner = PydraRunner(profile=placed.execution, work_dir=run_dir / "pydra")

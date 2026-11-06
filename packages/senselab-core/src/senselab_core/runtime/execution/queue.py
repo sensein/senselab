@@ -10,9 +10,11 @@
   the next free `n`; `n` runs from 0 to `pool.segment_items - 1`, and a put that finds them all taken makes
   `segments/<seq+1>`. Order is slot order within a segment and segment order across segments. Nothing in a segment is
   written in place.
-- `segments/<seq>/res-<n>`: the mark that slot `n`'s item has an outcome.
+- `segments/<seq>/res-<n>`: the mark that slot `n`'s item has an outcome, written only once `outcome/<digest>`
+  exists and the slot, read again, names that digest.
 - `slotted/<digest>`: a symlink to `<seq>/<n>`, made after the item's first slot; a put of a slotted item adds none.
-- `retired/<seq>`: a segment whose slots are all taken and all marked, renamed out of `segments/`.
+- `segments/<seq>/retired`: the mark, made by an exclusive create, of a segment whose slots are all taken and all
+  marked. A segment stays where it is once retired, so a segment number is made once.
 - `claims/<digest>.lease`: the `Lease` of a claim on the item.
 - `outcome/<digest>`: the item's one outcome, a JCS record `{"outcome": "done" | "dead", ...}` linked from a staged
   file, so the first writer wins and an item is never both done and dead.
@@ -48,6 +50,8 @@ from senselab_core.runtime.storage import (
 
 logger = logging.getLogger("senselab")
 
+RUN_QUEUES = "queues"
+"""The directory of a run's queues, under its run directory."""
 ITEM_TAG = "plan-fragment@1"
 """The identity tag of a queue item: the digest of a fragment's JSON form."""
 LABEL_TAG = "label@1"
@@ -64,9 +68,13 @@ SLOT_NAME = re.compile(r"^slot-([0-9]+)$")
 """A slot of a segment: `slot-<n>`."""
 RESOLVED_NAME = re.compile(r"^res-([0-9]+)$")
 """The mark of a slot whose item has an outcome: `res-<n>`."""
+RETIRED_MARK = "retired"
+"""The mark of a retired segment, inside it."""
+RETIRED_NAME = re.compile(r"^retired$")
+"""The grammar of `RETIRED_MARK`."""
 NAME_FILE = re.compile(r"^name$")
 """The file holding a queue's name."""
-DIRECTORIES = ("items", "segments", "slotted", "retired", "claims", "outcome")
+DIRECTORIES = ("items", "segments", "slotted", "claims", "outcome")
 """The directories of a queue."""
 OUTCOMES = ("done", "dead")
 """The outcomes an item can have."""
@@ -89,11 +97,18 @@ def _publish(directory: StorageDir, name: str, data: bytes, grammar: re.Pattern[
     return True
 
 
-def _resolve(segments: StorageDir, seq: int, n: int) -> None:
-    """Mark slot `n` of segment `seq` resolved; a retired segment is already resolved."""
-    with contextlib.suppress(FileNotFoundError), segments.child(_seq(seq)) as segment:
-        with contextlib.suppress(FileExistsError):
-            segment.write_new(f"res-{n}", b"", STAGING_FILE_MODE, grammar=RESOLVED_NAME)
+def _resolve(q: StorageDir, seq: int, n: int, digest: str) -> None:
+    """Mark slot `n` of segment `seq` resolved, only when `outcome/<digest>` exists and the slot names `digest`."""
+    with q.child("outcome") as outcome:
+        if outcome.lstat(digest) is None:
+            return
+    with contextlib.suppress(FileNotFoundError), q.child("segments") as segments:
+        with segments.child(_seq(seq)) as segment:
+            if segment.readlink(f"slot-{n}") != digest:
+                logger.warning("queue segment %s slot %d no longer names %s; not marked", _seq(seq), n, digest)
+                return
+            with contextlib.suppress(FileExistsError):
+                segment.write_new(f"res-{n}", b"", STAGING_FILE_MODE, grammar=RESOLVED_NAME)
 
 
 def _slots(segment: StorageDir) -> tuple[list[int], set[int]]:
@@ -205,8 +220,7 @@ class Claim:
             with self.queue.open() as q:
                 written = settle(held.lease, q, held.digest, record)
                 if written is not None:
-                    with q.child("segments") as segments:
-                        _resolve(segments, *held.slot)
+                    _resolve(q, *held.slot, held.digest)
         result = (
             "lost" if written is None else ("committed" if outcome == "done" else "dead") if written else "duplicate"
         )
@@ -317,27 +331,24 @@ class Queue:
         """Give each of `digests` that has neither a slot nor an outcome a slot, in order; return how many."""
         taken = 0
         with q.child("outcome") as outcome, q.child("slotted") as slotted, q.child("segments") as segments:
-            with q.child("retired") as retired:
-                for digest in digests:
-                    if slotted.lstat(digest) is not None or outcome.lstat(digest) is not None:
-                        continue
-                    seq, n = self._take_slot(segments, retired, digest)
-                    with contextlib.suppress(FileExistsError):
-                        slotted.symlink(f"{_seq(seq)}/{n}", digest, grammar=DIGEST_NAME)
-                    taken += 1
+            for digest in digests:
+                if slotted.lstat(digest) is not None or outcome.lstat(digest) is not None:
+                    continue
+                seq, n = self._take_slot(segments, digest)
+                with contextlib.suppress(FileExistsError):
+                    slotted.symlink(f"{_seq(seq)}/{n}", digest, grammar=DIGEST_NAME)
+                taken += 1
         return taken
 
-    def _take_slot(self, segments: StorageDir, retired: StorageDir, digest: str) -> tuple[int, int]:
-        """Make the next free slot of the head segment point at `digest`, rolling to a new segment when it is full."""
-        seq = max(self._head, self._last(segments, retired))
+    def _take_slot(self, segments: StorageDir, digest: str) -> tuple[int, int]:
+        """Make the next free slot of the head segment point at `digest`, rolling to a new segment when it is full.
+
+        A segment's directory is made by `mkdir`, which the storage refuses for a number made before, so a segment
+        number, retired or not, is opened and never made again.
+        """
+        seq = max(self._head, self._last(segments))
         while True:
-            try:
-                segment = segments.child(_seq(seq))
-            except FileNotFoundError:
-                if retired.lstat(_seq(seq)) is not None:
-                    seq += 1
-                    continue
-                segment = segments.child(_seq(seq), create=True, mode=STAGING_DIR_MODE)
+            segment = segments.child(_seq(seq), create=True, mode=STAGING_DIR_MODE)
             with segment:
                 slots, _ = _slots(segment)
                 n = slots[-1] + 1 if slots else 0
@@ -351,18 +362,18 @@ class Queue:
                     return seq, n
             seq += 1
 
-    def _last(self, segments: StorageDir, retired: StorageDir) -> int:
-        """Return the highest segment number in `segments/`, else one past the highest retired, else 0."""
+    def _last(self, segments: StorageDir) -> int:
+        """Return the highest segment number this queue knows of, listing `segments/` when it knows none."""
         if self._head:
             return self._head
-        live = [int(n) for n in segments.listdir() if SEQ_NAME.fullmatch(n)]
-        if live:
-            return max(live)
-        gone = [int(n) for n in retired.listdir() if SEQ_NAME.fullmatch(n)]
-        return max(gone) + 1 if gone else 0
+        return max((int(n) for n in segments.listdir() if SEQ_NAME.fullmatch(n)), default=0)
 
     def reconcile(self) -> int:
-        """Put again every item that has neither a slot nor an outcome; return how many slots were taken."""
+        """Put again every item that has neither a slot nor an outcome; return how many slots were taken.
+
+        It lists every item and looks each up, so it costs O(items), once per run start. Repaired items take slots in
+        digest order, behind the work already queued.
+        """
         with self.open() as q, q.child("items") as items:
             digests = sorted(m.group(1) for n in items.listdir() if (m := ITEM_NAME.fullmatch(n)))
             return self._index(q, digests)
@@ -382,44 +393,44 @@ class Queue:
         taken: list[_Held] = []
         try:
             with self.open() as q, q.child("segments") as segments, q.child("claims") as claims:
-                with q.child("retired") as retired:
-                    self._fill(q, segments, retired, claims, taken, max_items)
+                self._fill(q, segments, claims, taken, max_items)
         except BaseException:
             for held in taken:
                 held.stack.close()
             raise
         return Claim(self, worker, taken) if taken else None
 
-    def _segments(
-        self, segments: StorageDir, retired: StorageDir
-    ) -> Generator[tuple[int, StorageDir, list[int], set[int]], None, None]:
-        """Yield each live segment, open, oldest first from the oldest this queue has seen live; retire full ones."""
+    def _segments(self, segments: StorageDir) -> Generator[tuple[int, StorageDir, list[int], set[int]], None, None]:
+        """Yield each live segment, open, oldest first from the oldest this queue has seen live; retire full ones.
+
+        A segment is retired by its `retired` mark, made in place once all its slots are taken and marked.
+        """
         seq, prefix = self._oldest, True
         while True:
             try:
                 segment = segments.child(_seq(seq))
             except FileNotFoundError:
-                if retired.lstat(_seq(seq)) is None:
-                    return
-                self._oldest = seq + 1 if prefix else self._oldest
-                seq += 1
-                continue
+                return
             with segment:
-                slots, resolved = _slots(segment)
-                if len(slots) >= self._segment_items and resolved.issuperset(slots):
-                    with contextlib.suppress(FileNotFoundError, FileExistsError, OSError):
-                        segments.rename(_seq(seq), retired, _seq(seq), grammar=SEQ_NAME)
-                    self._oldest = seq + 1 if prefix else self._oldest
-                else:
+                live = segment.lstat(RETIRED_MARK) is None
+                if live:
+                    slots, resolved = _slots(segment)
+                    live = len(slots) < self._segment_items or not resolved.issuperset(slots)
+                    if not live:
+                        with contextlib.suppress(FileExistsError):
+                            segment.write_new(RETIRED_MARK, b"", STAGING_FILE_MODE, grammar=RETIRED_NAME)
+                if live:
                     prefix = False
                     yield seq, segment, slots, resolved
+                elif prefix:
+                    self._oldest = seq + 1
+                    self._targets = {k: d for k, d in self._targets.items() if k[0] > seq}
             seq += 1
 
     def _fill(  # noqa: PLR0913 - the queue's open directories, the items taken and the bound
         self,
         q: StorageDir,
         segments: StorageDir,
-        retired: StorageDir,
         claims: StorageDir,
         taken: list[_Held],
         most: int,
@@ -429,14 +440,13 @@ class Queue:
         now = time.monotonic()
         self._judged = {d: at for d, at in self._judged.items() if d in leased and now - at < self._interval}
         self._missing = {d: at for d, at in self._missing.items() if now - at < self._interval}
-        walk = self._segments(segments, retired)
+        walk = self._segments(segments)
         with contextlib.closing(walk):
-            self._fill_from(q, segments, claims, walk, taken, most)
+            self._fill_from(q, claims, walk, taken, most)
 
     def _fill_from(  # noqa: PLR0913 - as `_fill`, with the walk of live segments
         self,
         q: StorageDir,
-        segments: StorageDir,
         claims: StorageDir,
         walk: Iterator[tuple[int, StorageDir, list[int], set[int]]],
         taken: list[_Held],
@@ -449,7 +459,7 @@ class Queue:
                 digest = self._target(segment, seq, n)
                 if digest is None or digest in self._judged or digest in self._missing:
                     continue
-                held = self._take(q, claims, segments, (seq, n), digest)
+                held = self._take(q, claims, (seq, n), digest)
                 if held is not None:
                     taken.append(held)
                     if len(taken) == most:
@@ -469,9 +479,7 @@ class Queue:
             self._targets[(seq, n)] = target
         return self._targets[(seq, n)]
 
-    def _take(
-        self, q: StorageDir, claims: StorageDir, segments: StorageDir, slot: tuple[int, int], digest: str
-    ) -> Optional[_Held]:
+    def _take(self, q: StorageDir, claims: StorageDir, slot: tuple[int, int], digest: str) -> Optional[_Held]:
         """Take the claim on `digest` and read its fragment; None if it is claimed, has an outcome or is missing."""
         stack = contextlib.ExitStack()
         lease = Lease(claims.path / digest, timeout=0, stale_after=self._stale_after, directory=claims)
@@ -484,10 +492,10 @@ class Queue:
         try:
             with q.child("outcome") as outcome:
                 if outcome.lstat(digest) is not None:
-                    _resolve(segments, *slot)
+                    _resolve(q, *slot, digest)
                     stack.close()
                     return None
-            fragment = self._fragment(q, lease, segments, slot, digest)
+            fragment = self._fragment(q, lease, slot, digest)
             if fragment is None:
                 stack.close()
                 return None
@@ -497,9 +505,7 @@ class Queue:
             raise
         return _Held(digest, slot, fragment, lease, state, stack)
 
-    def _fragment(
-        self, q: StorageDir, lease: Lease, segments: StorageDir, slot: tuple[int, int], digest: str
-    ) -> Optional[PlanFragment]:
+    def _fragment(self, q: StorageDir, lease: Lease, slot: tuple[int, int], digest: str) -> Optional[PlanFragment]:
         """Return the fragment of `digest`, held under `lease`; None when it is missing or is not that fragment.
 
         A missing item is an infrastructure fault: it is recorded in `faults` and stays ready. An item that is not the
@@ -525,7 +531,7 @@ class Queue:
             logger.warning("queue %s: item %s cannot be read (%s); its outcome is dead", self.name, digest, err)
             record = {"outcome": "dead", "worker": "queue", "finish": uuid.uuid4().hex}
             if settle(lease, q, digest, {**record, "fault": fault.model_dump(mode="json")}) is not None:
-                _resolve(segments, *slot)
+                _resolve(q, *slot, digest)
             return None
 
     def depth(self) -> int:
@@ -538,8 +544,9 @@ class Queue:
             for name in segments.listdir():
                 if SEQ_NAME.fullmatch(name):
                     with contextlib.suppress(FileNotFoundError), segments.child(name) as segment:
-                        slots, resolved = _slots(segment)
-                        total += len(set(slots) - resolved)
+                        if segment.lstat(RETIRED_MARK) is None:
+                            slots, resolved = _slots(segment)
+                            total += len(set(slots) - resolved)
         return total
 
     def oldest_age_s(self) -> Optional[float]:
@@ -549,8 +556,10 @@ class Queue:
         """
         with self.open() as q, q.child("segments") as segments, q.child("claims") as claims:
             now = q.dir_now()
-            for name in sorted(n for n in segments.listdir() if SEQ_NAME.fullmatch(n)):
+            for name in sorted(n for n in segments.listdir() if SEQ_NAME.fullmatch(n) and int(n) >= self._oldest):
                 with contextlib.suppress(FileNotFoundError), segments.child(name) as segment:
+                    if segment.lstat(RETIRED_MARK) is not None:
+                        continue
                     slots, resolved = _slots(segment)
                     for n in slots:
                         digest = None if n in resolved else self._target(segment, int(name), n)
@@ -606,4 +615,4 @@ class QueueSet:
         return total
 
 
-__all__ = ["ITEM_TAG", "LABEL_TAG", "OUTCOMES", "Claim", "Queue", "QueueSet", "settle"]
+__all__ = ["ITEM_TAG", "LABEL_TAG", "OUTCOMES", "RUN_QUEUES", "Claim", "Queue", "QueueSet", "settle"]

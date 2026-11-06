@@ -247,7 +247,7 @@ def verdict(root: Path, args: argparse.Namespace) -> bool:
         "reclaims": sum(1 for e in events if e["event"] == "claim" and e.get("broke")),
         "disturbances": kinds["disturb"],
         "segments_claimed_from": len(segments),
-        "retired_segments": sum(1 for _ in (queue.path / "retired").iterdir()),
+        "retired_segments": sum(1 for p in (queue.path / "segments").glob("*/retired")),
         "order_inversions_explained": explained,
         "order_inversions_unexplained": unexplained,
         "claimers_over_their_backoffs": over,

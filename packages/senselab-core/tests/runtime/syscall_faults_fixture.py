@@ -325,3 +325,38 @@ def exit_at(function: str, prefix: str) -> None:
         return real(*args, **kwargs)
 
     setattr(os, function, crashed)
+
+
+def stale_lookup(monkeypatch: pytest.MonkeyPatch, name: str, *, times: int = 1) -> list[str]:
+    """Answer the next `times` `os.lstat` calls on a name whose last component is `name` with `ENOENT`.
+
+    This stands in for an NFS client's negative dentry cache answering a lookup of a name that now exists. Returns
+    the list each stale answer appends `name` to.
+    """
+    real_lstat = os.lstat
+    answered: list[str] = []
+
+    def lstat(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:  # noqa: ANN401
+        if os.path.basename(os.fsdecode(path)) == name and len(answered) < times:
+            answered.append(name)
+            raise FileNotFoundError(errno.ENOENT, "stale negative lookup", os.fsdecode(path))
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    return answered
+
+
+def refuse_call(monkeypatch: pytest.MonkeyPatch, function: str, prefix: str, err: OSError) -> list[str]:
+    """Make every `os.<function>` call on a name starting with `prefix` raise `err`; return the names refused."""
+    real = getattr(os, function)
+    refused: list[str] = []
+
+    def refusing(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        names = [os.path.basename(os.fsdecode(a)) for a in args[:2] if isinstance(a, (str, bytes, os.PathLike))]
+        if hit := [n for n in names if n.startswith(prefix)]:
+            refused.append(hit[0])
+            raise err
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(os, function, refusing)
+    return refused

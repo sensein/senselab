@@ -2,7 +2,6 @@
 
 import errno
 import json
-import os
 import subprocess
 import sys
 import threading
@@ -24,7 +23,7 @@ from runner_test import (  # noqa: F401 - `packaged` is the autouse fixture of t
 from senselab_core.cli import main as cli_main
 from senselab_core.runtime.execution.events import read_events
 from senselab_core.runtime.execution.executor import FaultRecord, Handle, PlanFragment
-from senselab_core.runtime.execution.queue import QueueSet
+from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.run import (
     InputChanged,
     InputsUnavailable,
@@ -40,6 +39,7 @@ from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import attempt_id, attempt_scope, process_attempt_id
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import WorkerLost
+from syscall_faults_fixture import refuse_call
 
 pytest.importorskip("pydra")
 
@@ -391,13 +391,9 @@ def test_a_new_attempt_puts_the_runs_unindexed_queue_items_again(
 ) -> None:
     """An item the run's queue holds without a slot (an interrupted put) has a slot once the run starts again."""
     run, executor = _started(tmp_path)
-    queue = QueueSet(run.run_dir / "queues").queue("cpu")
+    queue = QueueSet(run.run_dir / RUN_QUEUES).queue("cpu")
     with monkeypatch.context() as patch:
-
-        def symlink(*args: object, **kwargs: object) -> None:
-            raise OSError(errno.EIO, "interrupted")
-
-        patch.setattr(os, "symlink", symlink)
+        refuse_call(patch, "symlink", "slot-", OSError(errno.EIO, "interrupted"))
         with pytest.raises(OSError, match="interrupted"):
             queue.put(fragment("interrupted"))
     assert queue.depth() == 0

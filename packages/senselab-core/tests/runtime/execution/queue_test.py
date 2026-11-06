@@ -19,7 +19,7 @@ from senselab_core.runtime.execution.queue import ITEM_TAG, LABEL_TAG, Queue, Qu
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import identity_digest
-from syscall_faults_fixture import count_calls
+from syscall_faults_fixture import count_calls, refuse_call, stale_lookup
 
 pytestmark = pytest.mark.logic
 
@@ -86,9 +86,32 @@ def test_claims_oldest_first_across_segments(tmp_path: Path) -> None:
 
     assert _drain(queue) == digests[3:]
     assert queue.depth() == 0 and queue.oldest_age_s() is None
-    assert sorted(p.name for p in (queue.path / "retired").iterdir()) == [f"{s:012d}" for s in range(2)]
+    retired = [(queue.path / "segments" / f"{s:012d}" / "retired").exists() for s in range(3)]
+    assert retired == [True, True, False]
     queue.put(fragments[0])
     assert queue.depth() == 0
+
+
+def test_a_stale_lookup_never_lets_a_retired_segment_number_be_made_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A putter's stale lookup of a retired segment's name never makes that segment again.
+
+    A long-lived claimer drains and retires two segments; the putter, its lookup of segment 1 answered `ENOENT` once,
+    puts one more item, which the same claimer then claims and commits.
+    """
+    putter, claimer = _queue(tmp_path), _queue(tmp_path)
+    putter.put_all(_fragments(6))
+    assert len(_drain(claimer)) == 6 and claimer.claim("w", 1) is None
+    late = fragment("late")
+    with monkeypatch.context() as patch:
+        stale_lookup(patch, f"{1:012d}")
+        putter.put(late)
+    assert claimer.depth() == 1 and _queue(tmp_path).depth() == 1
+    claim = claimer.claim("w", 1)
+    assert claim is not None and claim.items == (_digest(late),) and claim.commit() == (_digest(late),)
+    record = _queue(tmp_path).outcome(_digest(late))
+    assert record is not None and record["outcome"] == "done"
 
 
 def test_put_is_idempotent_and_names_the_queue_by_label(tmp_path: Path) -> None:
@@ -182,7 +205,7 @@ def test_a_stalled_putter_keeps_its_item_indexed(tmp_path: Path, pool: Pool) -> 
     claim = queue.claim("w", 1)
     assert claim is not None and claim.items == (_digest(fragment("late")),)
     claim.commit()
-    assert (queue.path / "retired" / f"{0:012d}").is_dir()
+    assert (queue.path / "segments" / f"{0:012d}" / "retired").exists()
 
 
 def test_a_missing_item_stays_ready_and_a_corrupt_one_is_dead(tmp_path: Path) -> None:
@@ -250,11 +273,7 @@ def test_an_interrupted_put_is_repaired_by_reconcile(tmp_path: Path, monkeypatch
     queue = queues.queue("cpu")
     (each,) = _fragments(1)
     with monkeypatch.context() as patch:
-
-        def symlink(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401
-            raise OSError(errno.EIO, "interrupted")
-
-        patch.setattr(os, "symlink", symlink)
+        refuse_call(patch, "symlink", "slot-", OSError(errno.EIO, "interrupted"))
         with pytest.raises(OSError, match="interrupted"):
             queue.put(each)
     assert queue.depth() == 0 and queue.claim("w", 1) is None
