@@ -223,3 +223,16 @@ Source: bids-standard/BEP028_BIDSprov, `bep028spec.md` at master 162bea57 (2026-
   canonical digest of the comparison thresholds of the run config the call ran under. Every reuse and execution
   activity carries it beside `senselab:verifyFraction` and `senselab:verifySampling`; a sampled execution's
   `senselab:verifies` evidence record holds the same digest.
+
+## Amendment 2026-11-06: the plan link is recorded (Phase 3 Task 11)
+
+- **`prov:hadPlan` is recorded,** ending the staging of the 2026-11-01 amendment. Every execution and reuse activity of
+  a planned job carries `prov:qualifiedAssociation` with `prov:hadRole` (`senselab:nodeId`, now the graph node id, no
+  longer the task name) and `prov:hadPlan` → `plan:<plan hash>`. The plan is a `prov:Plan` / `senselab:Plan` entity
+  with no attributes, written once per run by the run that starts it (and by a single call for its own plan);
+  `plan:` joins the checked `@id` addresses, and a reader refuses a `prov:hadPlan` that names no plan of the union
+  (`DanglingReference`). A reuse recorded outside a plan (a direct `ResultStore.get`) names its agent alone: no
+  `prov:hadRole` and no plan, so `senselab:nodeId` always means a graph node id. No vocabulary term is added
+  (`senselab:Plan` was a core term), so `senselab-vocab` stays at 1.4.
+- **`plan.json` is written once** and holds the logical plan and input manifest only; each attempt's placement is
+  `placements/<attempt>.json`, and a run's current placement is that of its latest claimed attempt (ADR-004).
