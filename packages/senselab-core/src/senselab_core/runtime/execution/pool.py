@@ -338,7 +338,7 @@ class Pool:
         placed = self._plans.get(fragment.admission)
         if placed is None:
             raise ValueError(f"admission {fragment.admission} is not held by this pool")
-        return job_key(placed, fragment.node, fragment.inputs[index]).digest()
+        return job_key(placed, fragment.node, fragment.inputs[index], fragment.placement).digest()
 
     def _effect(  # noqa: PLR0913 - the followed fragment, the item and the job's failure
         self, followed: _Followed, flight: _Flight, index: int, key: str, fault: FaultRecord
@@ -353,7 +353,7 @@ class Pool:
             if self._infrastructure(flight, job, key, fault):
                 self._again(followed, flight, index)
             else:
-                self.events.record("queued", job.node, job=job, env=placement.env)
+                self.events.record("queued", job.node, job=job, key=key, env=placement.env)
                 followed.held.append(self._held(flight))
             return
         if fault.fault == "resource":
@@ -423,9 +423,10 @@ class Pool:
             update["placement"] = placement.model_dump(mode="json")
         retry = _one_job(flight.fragment, index, **update)
         followed.flights.append(self._put(retry))
-        job = retry.jobs[0]
+        job, placed = retry.jobs[0], retry.placement
+        key = self._key(retry, 0)
         self.events.record(
-            "queued", job.node, job=job, placement_digest=retry.placement.canonical_digest(), env=retry.placement.env
+            "queued", job.node, job=job, key=key, placement_digest=placed.canonical_digest(), env=placed.env
         )
 
     def _dead(self, job: JobRef, key: str, fault: FaultRecord) -> ResultRef:
@@ -485,10 +486,10 @@ def coordinate(
     values = bind_sources(placed)
     epoch, attempt, ordinal = prepare(placed, run_dir, store)
     epochs = Epoch(run_dir)
-    queues = QueueSet(run_dir / RUN_QUEUES, profile, epoch=epochs.current)
-    queues.reconcile()
-    events = EventLog(run_dir, attempt, ordinal, epoch=epoch)
     with epochs.held(epoch, profile.lease):
+        queues = QueueSet(run_dir / RUN_QUEUES, profile, epoch=epochs.current)
+        queues.reconcile()
+        events = EventLog(run_dir, attempt, ordinal, epoch=epoch)
         pool = Pool(
             run_dir, queues=queues, store=store, events=events, profile=profile, substrate=substrate, epoch=epoch
         )

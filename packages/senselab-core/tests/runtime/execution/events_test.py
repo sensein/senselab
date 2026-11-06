@@ -6,7 +6,14 @@ from pathlib import Path
 
 import pytest
 from senselab_core.kernel.dataset import Record
-from senselab_core.runtime.execution.events import Event, EventLog, JobState, read_events, status_from
+from senselab_core.runtime.execution.events import (
+    Event,
+    EventLog,
+    JobState,
+    read_events,
+    status_from,
+    terminal_events,
+)
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef
 from senselab_core.runtime.execution.run import MissingExtra, NotRun, Output, ResultSet
 
@@ -173,14 +180,24 @@ def test_a_stale_epoch_never_overrides_the_live_one_whatever_its_ordinal() -> No
 
 
 @pytest.mark.logic
-def test_a_resume_in_progress_shows_an_earlier_result_done() -> None:
-    """A job finished in attempt one is done while attempt two has only queued it; a later terminal state wins."""
-    first = [_event("queued"), _event("finished", seq=1)]
-    second = _event("queued", attempt="a2", seq=0)
-    assert status_from([*first, second]).counts == {**status_from(first).counts}
-    blocked = _event("blocked", attempt="a2", seq=1)
-    assert status_from([*first, second, blocked]).counts["blocked"] == 1
-    assert status_from([first[0], second]).counts["queued"] == 1
+def test_a_resume_in_progress_shows_an_earlier_result_done_only_under_its_key() -> None:
+    """A job finished in epoch 1 is done while epoch 2 has queued it under the same key; under another key it is not.
+
+    The current epoch's own terminal state wins, and a job with no event of the run's current epoch is queued.
+    """
+    key, other = "1" * 64, "2" * 64
+    first = [_event("queued", key=key, epoch=1), _event("finished", seq=1, key=key, epoch=1)]
+    same = _event("queued", attempt="a2", writer="v", key=key, epoch=2)
+    moved = _event("queued", attempt="a2", writer="v", key=other, epoch=2)
+    assert status_from([*first, same]).counts == status_from(first).counts and status_from([*first, same]).done
+    replaced = status_from([*first, moved])
+    assert replaced.counts["queued"] == 1 and replaced.counts["done"] == 0 and not replaced.done
+    assert terminal_events([*first, moved]) == {} and len(terminal_events([*first, same])) == 1
+    unkeyed = _event("queued", attempt="a2", writer="v", epoch=2)
+    assert status_from([*first, unkeyed]).counts["queued"] == 1
+    blocked = _event("blocked", attempt="a2", writer="v", seq=1, epoch=2)
+    assert status_from([*first, same, blocked]).counts["blocked"] == 1
+    assert status_from(first, epoch=2).counts["queued"] == 1 and terminal_events(first, epoch=2) == {}
 
 
 @pytest.mark.contract

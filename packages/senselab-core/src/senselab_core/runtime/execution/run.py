@@ -11,6 +11,7 @@ and its results from the events and the result store, and binds its input values
 a run another process started, unless an input was held in memory by the process that planned it.
 """
 
+import contextlib
 import dataclasses
 import importlib.util
 import json
@@ -359,11 +360,11 @@ def bind_inputs(run_dir: Path) -> dict[InputIdentity, object]:
 class _Reader:
     """Reads the graph outputs of one record, or of the run, from the terminal event of each job."""
 
-    def __init__(self, graph: Graph, events: Sequence[Event], store: ResultStore) -> None:
+    def __init__(self, graph: Graph, events: Sequence[Event], store: ResultStore, epoch: int | None = None) -> None:
         self.graph = graph
         self.mapped = mapped_nodes(graph)
         self.store = store
-        self.latest = terminal_events(events)
+        self.latest = terminal_events(events, epoch=epoch)
         self.held: dict[tuple[str, str], Mapping[str, object] | None] = {}
 
     def _because(self, index: int | None) -> FaultRecord | None:
@@ -465,8 +466,13 @@ class Run:
         return read_events(self.run_dir)
 
     def status(self) -> RunStatus:
-        """Return the status derived from the events alone."""
-        return status_from(self.events())
+        """Return the status derived from the events, under the run's current epoch (read first)."""
+        epoch = self._epoch()
+        return status_from(self.events(), epoch=epoch)
+
+    def _epoch(self) -> int | None:
+        """Return the run's current epoch, None where none was taken."""
+        return Epoch(self.run_dir).current() or None
 
     def wait(self, timeout: float | None = None, *, poll: float = POLL_S) -> RunStatus:
         """Wait up to `timeout` seconds for the run to be done and return its status.
@@ -520,14 +526,16 @@ class Run:
     def results(self) -> ResultSet:
         """Return what each record gave, read from the result store as each is asked for.
 
-        The events are read now; a record whose job failed, was blocked or cancelled gives that.
+        The events are read now, under the run's current epoch; a record whose job failed, was blocked or cancelled
+        gives that, and an earlier attempt's result is served only under the key the current attempt gives its job.
 
         Raises:
             FileNotFoundError: the run has no `plan.json`.
         """
         placed = self.plan
         graph = placed.logical.graph
-        reader = _Reader(graph, self.events(), self._results_store())
+        epoch = self._epoch()
+        reader = _Reader(graph, self.events(), self._results_store(), epoch)
         per_record = [n for n in order(graph) if n in reader.mapped]
         outputs = sorted(graph.outputs)
         mine = [name for name in outputs if split(graph.outputs[name])[0] in per_record]
@@ -742,8 +750,8 @@ def start(
     is written: from their paths or JSON values, or from the values the plan holds in memory; `values` gives them
     already bound. The sources are merged into `inputs.json` under its lease (`record_sources`), also before anything
     else is written. Every item in the run's `queues/` with neither a slot nor an outcome is put again
-    (`QueueSet.reconcile`). The run takes the next epoch before its attempt (`prepare`), hands it to the executor
-    (`bind_epoch`), and holds its coordinator lease while it runs.
+    (`QueueSet.reconcile`). The run takes the next epoch before its attempt (`prepare`), holds its coordinator lease
+    from then until the run ends, and hands the epoch to the executor (`bind_epoch`).
 
     Raises:
         ExecutorUnavailable: no executor is given and the substrate is not local.
@@ -766,16 +774,22 @@ def start(
     run_dir = run_dir_of(placed.hash)
     epoch, attempt, ordinal = prepare(placed, run_dir, store)
     epochs = Epoch(run_dir)
-    QueueSet(run_dir / RUN_QUEUES, placed.execution, epoch=epochs.current).reconcile()
-    run = Run(run_dir, store=store)
-    log = EventLog(run_dir, attempt, ordinal, epoch=epoch)
-    executor.bind_epoch(epoch, log)
-    runner = PydraRunner(profile=placed.execution, work_dir=run_dir / "pydra")
-    written = provenance if store is None else store.provenance
-    add_plan_entity(written, placed.hash)
+    held = contextlib.ExitStack()
+    held.enter_context(epochs.held(epoch, _lease_of(placed)))
+    try:
+        QueueSet(run_dir / RUN_QUEUES, placed.execution, epoch=epochs.current).reconcile()
+        run = Run(run_dir, store=store)
+        log = EventLog(run_dir, attempt, ordinal, epoch=epoch)
+        executor.bind_epoch(epoch, log)
+        runner = PydraRunner(profile=placed.execution, work_dir=run_dir / "pydra")
+        written = provenance if store is None else store.provenance
+        add_plan_entity(written, placed.hash)
+    except BaseException:
+        held.close()
+        raise
 
     def body() -> None:
-        with epochs.held(epoch, _lease_of(placed)):
+        with held:
             try:
                 runner.run_plan(placed, executor, values=values, events=log, cancel=run.cancelled)
             except BaseException as err:  # noqa: BLE001 - held for `wait`
@@ -786,5 +800,9 @@ def start(
             except Exception as err:  # noqa: BLE001 - held for `wait`
                 run.fail(err)
 
-    run.launch(threading.Thread(target=body, name=f"senselab-run-{placed.hash[:8]}", daemon=True))
+    try:
+        run.launch(threading.Thread(target=body, name=f"senselab-run-{placed.hash[:8]}", daemon=True))
+    except BaseException:
+        held.close()
+        raise
     return run

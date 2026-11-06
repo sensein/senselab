@@ -9,7 +9,7 @@ from dataclasses import replace
 from typing import ClassVar
 
 from senselab_core.kernel.declare import Registry, TaskSpec
-from senselab_core.kernel.graph import Edge, Node
+from senselab_core.kernel.graph import Edge, Node, order
 from senselab_core.kernel.identity import InputIdentity, LogicalKey, ReusePolicy, gather_identity
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.call import Result, RunConfig, TaskCall, bind_input, packaged
@@ -222,17 +222,22 @@ def _node_call(placed: Plan, node_id: str, registry: Registry) -> Call:
     return Call(spec, params, {}, placed.logical.models[node_id], placed.logical.profile_slices[node_id])
 
 
-def job_key(placed: Plan, node: str, inputs: Mapping[str, InputIdentity]) -> LogicalKey:
-    """Return the logical key `execute` gives the job of `node` of `placed` that reads `inputs`.
+def job_key(
+    placed: Plan, node: str, inputs: Mapping[str, InputIdentity], placement: NodePlacement | None = None
+) -> LogicalKey:
+    """Return the logical key `execute` gives the job of `node` of `placed` that reads `inputs`, sent on `placement`.
+
+    `placement` is the node's placement in the plan when None.
 
     Raises:
         ValueError: as `placement_of_record`, or the plan has no such node.
     """
     registry = packaged().registry
     call = replace(_node_call(placed, node, registry), inputs=dict(inputs))
-    placement = placement_of_record(placed.placement.nodes[node], call.task, registry)
-    size = request_size(placement.backend, placement.batch_size)
-    return call_key(call, replace(placement, **request_components(placement.backend, size)))
+    record = placed.placement.nodes[node] if placement is None else placement
+    placed_on = placement_of_record(record, call.task, registry)
+    size = request_size(placed_on.backend, placed_on.batch_size)
+    return call_key(call, replace(placed_on, **request_components(placed_on.backend, size)))
 
 
 def result_ref(outcome: JobOutcome) -> ResultRef:
@@ -246,6 +251,29 @@ def result_ref(outcome: JobOutcome) -> ResultRef:
         output_identity=outcome.result.output_identity,
         served=None if reused is None else reused.value,
     )
+
+
+def plan_keys(placed: Plan) -> dict[tuple[str, tuple[int, ...]], str]:
+    """Return the key digest of every job of `placed` by (node, element), as `job_key` gives it under the plan.
+
+    An upstream input is identified by its upstream job's key digest and port, never by its outputs, so every key is
+    known before any job runs. A node with no job (mapped over no record) has no key.
+    """
+    admission = Admission(id="keys", plan_hash=placed.hash)
+    keys: dict[tuple[str, tuple[int, ...]], str] = {}
+    refs: dict[str, list[ResultRef]] = {}
+    unread = "output:" + "0" * 64
+    for node in order(placed.logical.graph):
+        refs[node] = []
+        try:
+            fragment = node_fragment(placed, admission, node, upstream=refs)
+        except ValueError:
+            continue
+        for job, inputs in zip(fragment.jobs, fragment.inputs, strict=True):
+            key = job_key(placed, node, inputs).digest()
+            keys[(node, job.element)] = key
+            refs[node].append(ResultRef(job=job, key_digest=key, output_identity=unread))
+    return keys
 
 
 class InProcess:

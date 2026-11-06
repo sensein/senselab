@@ -26,7 +26,7 @@ from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import EventLog, read_events, run_dir_of, status_from
-from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment, QueueHeld, ResultRef
+from senselab_core.runtime.execution.executor import Admission, FaultRecord, PlanFragment, QueueHeld, ResultRef
 from senselab_core.runtime.execution.in_process import InProcess, job_key, node_fragment
 from senselab_core.runtime.execution.job import Failed, JobOutcome
 from senselab_core.runtime.execution.pool import Pool, report
@@ -67,6 +67,7 @@ for _spec in (SCORE, HEAR):
             load_stub={},
         )
     )
+REGISTRY.add_backend(REGISTRY.backends(SCORE.name)[0].model_copy(update={"name": "alt"}))
 CLASSES = {
     "cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1},
     "cpu:large": {"device": "cpu", "mem_bytes": 2**33, "max_workers": 1},
@@ -746,3 +747,40 @@ def test_a_held_env_leaves_its_jobs_queued_and_the_wait_interrupted(tmp_path: Pa
     assert not {"blocked", "cancelled"} & {e.kind for e in read_events(run_dir)}
     status = Run(run_dir).wait(None, poll=0.05)
     assert status.interrupted and status.counts["queued"] == 2 and status.counts["failed"] == 0
+
+
+@pytest.mark.contract
+def test_a_default_queue_set_honours_only_the_current_epochs_holds(tmp_path: Path) -> None:
+    """A queue set built with no epoch reads its run's current epoch: a hold an older epoch made is not honoured."""
+    profile = _profile(**CONTENT)
+    placed, _ = _planned(profile, ["one"])
+    run_dir = tmp_path / "run"
+    epochs = Epoch(run_dir)
+    epochs.take()
+    epochs.take()
+    queue = QueueSet(run_dir / RUN_QUEUES, profile).queue("cpu")
+    queue.put(node_fragment(placed, Admission(id="a", plan_hash=placed.hash)))
+    queue.hold(1, "host")
+    assert queue.held("host") is None
+    claim = queue.claim("w")
+    assert claim is not None
+    claim.release()
+    queue.hold(2, "host")
+    assert queue.held("host") == 2 and queue.claim("w") is None
+
+
+@pytest.mark.contract
+def test_the_expected_key_is_the_key_of_the_placement_sent(tmp_path: Path) -> None:
+    """A fragment re-placed on another backend is checked against the key under that placement, and is yielded."""
+    profile = _profile(**CONTENT)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one"])
+    pool = _pool(tmp_path, store, workers, profile)
+    fragment = node_fragment(placed, pool.admit(placed, values))
+    moved = fragment.model_copy(update={"placement": fragment.placement.model_copy(update={"backend": "alt"})})
+    try:
+        [ref] = list(pool.results(pool.submit(moved)))
+    finally:
+        workers.stop()
+    planned = job_key(placed, "a", fragment.inputs[0]).digest()
+    sent = job_key(placed, "a", fragment.inputs[0], moved.placement).digest()
+    assert ref.failure is None and ref.key_digest == sent != planned and len(workers.served) == 1

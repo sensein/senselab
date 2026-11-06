@@ -145,31 +145,40 @@ def _superseded(event: Event, events: Sequence[Event]) -> bool:
     )
 
 
-def _latest_terminal(events: Sequence[Event]) -> Event | None:
-    """Return the terminal event of a job's latest attempt that has precedence, else an earlier attempt's result.
+def _current(events: Sequence[Event], epoch: int | None) -> list[Event]:
+    """Return the events of a job's latest attempt (`_latest`); none when it has no event of epoch `epoch` or later."""
+    mine = _latest(events)
+    return [] if epoch is not None and mine[0].epoch < epoch else mine
+
+
+def _latest_terminal(events: Sequence[Event], epoch: int | None = None) -> Event | None:
+    """Return the terminal event of a job's latest attempt that has precedence, else an earlier result under its key.
 
     A result (`finished`, `cache_hit`) outranks `failed`, which outranks `blocked`, then `cancelled`; among events of
     one kind the one later in its writer's file, then the greater writer, is taken. A `failed` its writer queued
-    again is not terminal. While the latest attempt has no terminal event, a result an earlier attempt gave stands.
+    again is not terminal. While the latest attempt has no terminal event, a result an earlier attempt gave stands
+    only when its key is the key the latest attempt's events give the job. With `epoch`, a job with no event of that
+    epoch has no latest attempt (`_current`).
     """
-    mine = _latest(events)
+    mine = _current(events, epoch)
     terminal = [e for e in mine if e.kind in TERMINAL and not _superseded(e, mine)]
     if not terminal:
-        terminal = [e for e in events if e.kind in RESULTS]
+        keys = {e.key for e in mine if e.key is not None}
+        terminal = [e for e in events if e.kind in RESULTS and e.key in keys]
     return max(terminal, key=lambda e: (TERMINAL[e.kind], e.epoch, e.ordinal, e.writer, e.seq)) if terminal else None
 
 
-def _job_state(events: Sequence[Event]) -> JobState:
+def _job_state(events: Sequence[Event], epoch: int | None = None) -> JobState:
     """Return a job's state: its terminal state (`_latest_terminal`), else `running` or `queued` by counts.
 
     In the latest attempt a job is running while its claims (`claimed`, `started`) outnumber its yields and at least
     match its submissions (`queued`), so a retry queued after a failure is queued until it is claimed again. Counts
     read no clock and no order across writers.
     """
-    found = _latest_terminal(events)
+    found = _latest_terminal(events, epoch)
     if found is not None:
         return _STATE[found.kind]
-    kinds = Counter(e.kind for e in _latest(events))
+    kinds = Counter(e.kind for e in _current(events, epoch))
     claims = kinds["claimed"] + kinds["started"]
     return "running" if claims > kinds["yielded"] and claims >= kinds["queued"] else "queued"
 
@@ -183,21 +192,23 @@ def _by_job(events: Iterable[Event]) -> dict[tuple[str, tuple[int, ...]], list[E
     return jobs
 
 
-def terminal_events(events: Iterable[Event]) -> dict[tuple[str, tuple[int, ...]], Event]:
-    """Return, for each job `(node, element)` with one, the terminal event that states how it ended."""
-    found = {job: _latest_terminal(each) for job, each in _by_job(events).items()}
+def terminal_events(events: Iterable[Event], *, epoch: int | None = None) -> dict[tuple[str, tuple[int, ...]], Event]:
+    """Return, for each job `(node, element)` with one, the terminal event that states how it ended (under `epoch`)."""
+    found = {job: _latest_terminal(each, epoch) for job, each in _by_job(events).items()}
     return {job: event for job, event in found.items() if event is not None}
 
 
-def status_from(events: Iterable[Event], *, broken_after: int | None = None) -> RunStatus:
+def status_from(events: Iterable[Event], *, broken_after: int | None = None, epoch: int | None = None) -> RunStatus:
     """Return the status of a run from its `events`, each writer's in file order (`read_events`).
 
     A job's state is the terminal event of its latest attempt (highest `epoch`, then `ordinal`) with precedence
-    (`TERMINAL`), a failure queued again excepted, else a result of an earlier attempt, else running or queued as the
-    latest attempt's claims and submissions count (`_job_state`); `verify` changes none. `seq` is compared within one
-    writer only and no clock order is assumed for terminal states. `faults` counts every `failed` event by its class; an
-    env with `broken_after` infrastructure failures (the packaged profile's `infrastructure_replacements` when None) is
-    `broken`. Cancelled and blocked jobs are not faults.
+    (`TERMINAL`), a failure queued again excepted, else a result of an earlier attempt under the same key, else
+    running or queued as the latest attempt's claims and submissions count (`_job_state`); `verify` changes none.
+    `seq` is compared within one writer only and no clock order is assumed for terminal states. `faults` counts
+    every `failed` event by its class; an env with `broken_after` infrastructure failures (the packaged profile's
+    `infrastructure_replacements` when None) is `broken`. Cancelled and blocked jobs are not faults. With `epoch`
+    (the run's current one), a job with no event of
+    that epoch is queued.
     """
     if broken_after is None:
         from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - read only when needed
@@ -217,7 +228,7 @@ def status_from(events: Iterable[Event], *, broken_after: int | None = None) -> 
     tally: Counter[str] = Counter()
     per_node: dict[str, Counter[str]] = {}
     for (node, _), found in jobs.items():
-        state = _job_state(found)
+        state = _job_state(found, epoch)
         tally[state] += 1
         per_node.setdefault(node, Counter())[state] += 1
     broken = tuple(

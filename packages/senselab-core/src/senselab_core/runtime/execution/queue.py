@@ -38,6 +38,7 @@ from typing import Optional
 from senselab_worker.canonical import jcs_dumps, jcs_loads
 from senselab_worker.digest import identity_digest
 
+from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment
 from senselab_core.runtime.locks import Lease, LeaseState, LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -296,7 +297,6 @@ class Queue:
         self._missing: dict[str, float] = {}
         self._targets: dict[tuple[int, int], str] = {}
         self._envs: dict[str, str] = {}
-        self._skip: set[str] = set()
         self._epoch = epoch
         self._head = 0
         self._oldest = 0
@@ -448,11 +448,11 @@ class Queue:
         """
         if max_items < 1:
             raise ValueError(f"a claim takes at least one item (got {max_items})")
-        self._skip = set(self._holds())
+        skip = set(self._holds())
         taken: list[_Held] = []
         try:
             with self.open() as q, q.child("segments") as segments, q.child("claims") as claims:
-                self._fill(q, segments, claims, taken, max_items)
+                self._fill(q, segments, claims, taken, max_items, skip)
         except BaseException:
             for held in taken:
                 held.stack.close()
@@ -493,6 +493,7 @@ class Queue:
         claims: StorageDir,
         taken: list[_Held],
         most: int,
+        skip: set[str],
     ) -> None:
         """Take claims into `taken`, oldest first, until it holds `most` or no live segment has a claimable item."""
         leased = {n.removesuffix(".lease") for n in claims.listdir() if n.endswith(".lease")}
@@ -501,7 +502,7 @@ class Queue:
         self._missing = {d: at for d, at in self._missing.items() if now - at < self._interval}
         walk = self._segments(segments)
         with contextlib.closing(walk):
-            self._fill_from(q, claims, walk, taken, most)
+            self._fill_from(q, claims, walk, taken, most, skip)
 
     def _fill_from(  # noqa: PLR0913 - as `_fill`, with the walk of live segments
         self,
@@ -510,6 +511,7 @@ class Queue:
         walk: Iterator[tuple[int, StorageDir, list[int], set[int]]],
         taken: list[_Held],
         most: int,
+        skip: set[str],
     ) -> None:
         for seq, segment, slots, resolved in walk:
             for n in slots:
@@ -518,9 +520,9 @@ class Queue:
                 digest = self._target(segment, seq, n)
                 if digest is None or digest in self._judged or digest in self._missing:
                     continue
-                if self._envs.get(digest) in self._skip:
+                if self._envs.get(digest) in skip:
                     continue
-                held = self._take(q, claims, (seq, n), digest)
+                held = self._take(q, claims, (seq, n), digest, skip)
                 if held is not None:
                     taken.append(held)
                     if len(taken) == most:
@@ -540,8 +542,13 @@ class Queue:
             self._targets[(seq, n)] = target
         return self._targets[(seq, n)]
 
-    def _take(self, q: StorageDir, claims: StorageDir, slot: tuple[int, int], digest: str) -> Optional[_Held]:
-        """Take the claim on `digest` and read its fragment; None if it is claimed, has an outcome or is missing."""
+    def _take(  # noqa: PLR0913 - the queue's open directories, the slot, the item and the held envs
+        self, q: StorageDir, claims: StorageDir, slot: tuple[int, int], digest: str, skip: set[str]
+    ) -> Optional[_Held]:
+        """Take the claim on `digest` and read its fragment; None if it is claimed, has an outcome or is missing.
+
+        None too when its env's label is in `skip`.
+        """
         stack = contextlib.ExitStack()
         lease = Lease(claims.path / digest, timeout=0, stale_after=self._stale_after, directory=claims)
         try:
@@ -559,7 +566,7 @@ class Queue:
             fragment = self._fragment(q, lease, slot, digest)
             if fragment is not None:
                 self._envs[digest] = identity_digest(LABEL_TAG, fragment.placement.env)
-            if fragment is None or self._envs[digest] in self._skip:
+            if fragment is None or self._envs[digest] in skip:
                 stack.close()
                 return None
             state = stack.enter_context(lease.keep_alive(self._renew_fraction))
@@ -655,10 +662,14 @@ class QueueSet:
     def __init__(
         self, root: Path, profile: Optional[ExecutionProfile] = None, *, epoch: Optional[Callable[[], int]] = None
     ) -> None:
-        """Hold the queues under `root`; `epoch` gives the current coordinator epoch, as `Queue` reads it."""
+        """Hold the queues under `root`; `epoch` gives the current coordinator epoch, as `Queue` reads it.
+
+        A run's queues live in `<run dir>/queues`, so `epoch` is the current epoch of the run at `root`'s parent
+        (`Epoch(root.parent).current`, 0 where no epoch was taken) when None.
+        """
         self.root = Path(root)
         self.profile = profile if profile is not None else ExecutionProfile.load()
-        self.epoch = epoch
+        self.epoch = epoch if epoch is not None else Epoch(self.root.parent).current
         self._queues: dict[str, Queue] = {}
 
     def queue(self, name: str) -> Queue:

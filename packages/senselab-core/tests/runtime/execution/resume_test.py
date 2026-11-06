@@ -24,10 +24,11 @@ from senselab_core.runtime.call import Packaged, RunConfig, TaskCall, use_packag
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import Event, EventLog, read_events, run_dir_of
 from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status
 from senselab_core.runtime.execution.in_process import InProcess
-from senselab_core.runtime.execution.run import ConflictingSources, InputChanged, Output, Run, load_plan
+from senselab_core.runtime.execution.run import ConflictingSources, InputChanged, NotRun, Output, Run, load_plan
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.planner import NoRun, Plan, plan, resume
@@ -246,6 +247,61 @@ def test_resume_with_other_backend_recomputes(tmp_path: Path) -> None:
     assert _placement(resumed)["nodes"]["a"]["backend"] == "alt" == load_plan(run.run_dir).placement.nodes["a"].backend
     assert placed.placement.nodes["a"].backend == "dsp"
     assert (run.run_dir / "plan.json").read_bytes() == written
+
+
+class Gated(InProcess):
+    """An `InProcess` executor whose `submit` waits for `go` once it has noted, in `entered`, that it was called."""
+
+    def __init__(self, store: ResultStore, profile: ExecutionProfile) -> None:
+        """Run over `store` under `profile`."""
+        super().__init__(store=store, profile=profile, run=RunConfig(), workers=WORKERS)
+        self.entered, self.go = threading.Event(), threading.Event()
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Note the call, wait for `go`, then submit."""
+        self.entered.set()
+        assert self.go.wait(60)
+        return super().submit(fragment)
+
+
+def _gated_resume(placed: Plan, store: ResultStore, profile: ExecutionProfile) -> tuple[Run, Gated]:
+    """Resume `placed` under `profile` on a gated executor; return once its jobs are queued and the first is sent."""
+    gated = Gated(store, profile)
+    resumed = resume(placed.hash, execution=profile, store=store, executor=gated)
+    epoch = Epoch(resumed.run_dir).current()
+    assert (resumed.run_dir / "epoch" / str(epoch) / "coordinator.lease").is_dir()
+    assert gated.entered.wait(30)
+    return resumed, gated
+
+
+def test_a_resume_onto_another_backend_is_not_done_until_recomputed(tmp_path: Path) -> None:
+    """Mid-resume onto another backend, the earlier epoch's results are under other keys: not done, not served."""
+    store = ResultStore(tmp_path / "store")
+    placed = _plan(2)
+    _ran(placed, store)
+    resumed, gated = _gated_resume(placed, store, OTHER_BACKEND)
+    try:
+        status = Run(resumed.run_dir).status()
+        assert not status.done and status.counts["done"] == 0
+        assert all(isinstance(given, NotRun) and given.kind == "pending" for _, given in Run(resumed.run_dir).results())
+    finally:
+        gated.go.set()
+    assert resumed.wait(60).done and all(isinstance(g, Output) for _, g in Run(resumed.run_dir).results())
+
+
+def test_a_resume_onto_the_same_placement_shows_completed_work_done(tmp_path: Path) -> None:
+    """Mid-resume onto the same placement, the earlier epoch's results are under the same keys: done and served."""
+    store = ResultStore(tmp_path / "store")
+    placed = _plan(2)
+    _ran(placed, store)
+    resumed, gated = _gated_resume(placed, store, PROFILE)
+    try:
+        status = Run(resumed.run_dir).status()
+        assert status.done and status.counts["done"] == 2
+        assert all(isinstance(given, Output) for _, given in Run(resumed.run_dir).results())
+    finally:
+        gated.go.set()
+    assert resumed.wait(60).done
 
 
 def _wav(path: Path, value: float) -> Path:

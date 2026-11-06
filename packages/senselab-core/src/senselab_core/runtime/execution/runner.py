@@ -34,7 +34,7 @@ from senselab_core.kernel.identity import InputIdentity, gather_identity, port_o
 from senselab_core.runtime.execution.epoch import StaleCoordinator
 from senselab_core.runtime.execution.events import TERMINAL, EventKind, EventLog, run_dir_of
 from senselab_core.runtime.execution.executor import Admission, Executor, FaultRecord, JobRef, QueueHeld, ResultRef
-from senselab_core.runtime.execution.in_process import job_key, node_fragment
+from senselab_core.runtime.execution.in_process import job_key, node_fragment, plan_keys
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.planner import Plan, check_mapped_outputs
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -549,6 +549,8 @@ class PydraRunner:
     ) -> RunOutcome:
         """Run every job of `placed` through `executor`, admitted with `values`, and return what became of each.
 
+        Each job is first logged `queued` with its key under this plan (`plan_keys`).
+
         A failed element fails only its descendants, which are reported `blocked`; every other element runs. Each
         job's `queued`, `started` and `finished` or `failed` event is appended to `events`. Once `cancel` is set no
         further fragment is sent: running fragments finish and the run raises `RunCancelled`. While it runs,
@@ -578,8 +580,9 @@ class PydraRunner:
         store = store if store is not None else SenselabStore(root)
         admission = executor.admit(placed, values)
         run = _Run(placed, admission, executor, store, events, cancel if cancel is not None else threading.Event())
+        keys = plan_keys(placed)
         for node, element in run.expected():
-            run.log("queued", node, element)
+            run.log("queued", node, element, key=keys.get((node, element)))
         classes = sorted({p.resource_class for p in placed.placement.nodes.values()})
         try:
             with (
