@@ -11,6 +11,7 @@ and its results from the events and the result store, and binds its input values
 a run another process started, unless an input was held in memory by the process that planned it.
 """
 
+import dataclasses
 import importlib.util
 import json
 import os
@@ -30,6 +31,7 @@ from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.kernel.signals import StaleSource
 from senselab_core.runtime.call import RunConfig, bind_input
+from senselab_core.runtime.execution.epoch import EPOCH_DIR, Epoch
 from senselab_core.runtime.execution.events import (
     Event,
     EventLog,
@@ -42,6 +44,7 @@ from senselab_core.runtime.execution.events import (
 from senselab_core.runtime.execution.executor import Executor, FaultRecord
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
+from senselab_core.runtime.locks import Lease, LeaseUnavailable
 from senselab_core.runtime.planner import ExecutorUnavailable, Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
@@ -55,11 +58,11 @@ PLACEMENTS_DIR = "placements"
 RESULTS_DIR = "results"
 """The default result store, `<cache root>/results`."""
 ATTEMPTS_DIR = "attempts"
-POOL_DIRS = ("dead", "prov", RUN_QUEUES, "epoch")
+POOL_DIRS = ("dead", "prov", RUN_QUEUES, EPOCH_DIR)
 POLL_S = 0.5
 """Seconds between reads of the event log while `Run.wait` waits for a run another process drives."""
-
-_DONE = ("finished", "cache_hit")
+RECORD_ATTEMPTS = 3
+"""Times the merge of `inputs.json` is taken again after its lease failed its proof."""
 _LIST = re.compile(r"^list\[(.+)\]$")
 
 
@@ -468,7 +471,9 @@ class Run:
         """Wait up to `timeout` seconds for the run to be done and return its status.
 
         A run started here is waited on through its thread; any run is then polled, reading the event log every `poll`
-        seconds, until its events say it is done, so a run another process drives can be waited for.
+        seconds, until its events say it is done, so a run another process drives can be waited for. A run whose
+        current coordinator ended, or whose coordinator lease is past its stale bound (`Epoch.stopped`), is not waited
+        for further: its status is returned with `interrupted` set.
 
         Raises:
             BaseException: the error that stopped a run started here, other than its cancellation.
@@ -480,7 +485,10 @@ class Run:
             if not thread.is_alive() and self._error is not None:
                 raise self._error
         status = self.status()
+        epochs = Epoch(self.run_dir)
         while not status.done and (deadline is None or time.monotonic() < deadline):
+            if epochs.stopped():
+                return dataclasses.replace(self.status(), interrupted=True)
             time.sleep(poll if deadline is None else max(0.0, min(poll, deadline - time.monotonic())))
             status = self.status()
         return status
@@ -654,27 +662,54 @@ def merged_sources(placed: Plan, run_dir: Path) -> dict[str, Any]:
     return {"rows": merged_rows, "shared": shared}
 
 
-def _prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[str, int]:
-    """Write the plan once, its input sources and the manifest into `run_dir`, then claim an attempt.
+def record_sources(placed: Plan, run_dir: Path) -> None:
+    """Merge the input sources of `placed` into `run_dir`'s `inputs.json` (`merged_sources`) under its lease.
+
+    The lease, kept alive under the plan's profile's `lease` section, is proven before the write, so two coordinators
+    starting one plan merge one after the other and neither loses a durable source. A merge whose proof failed is
+    made again, up to `RECORD_ATTEMPTS` times.
+
+    Raises:
+        ConflictingSources: as `merged_sources`; nothing is written.
+        LeaseUnavailable: the merge's lease was lost on every attempt.
+        LeaseTimeout: another holder kept the lease for its whole timeout.
+    """
+    lease = (placed.execution if placed.execution is not None else ExecutionProfile.load()).lease
+    run_dir.mkdir(parents=True, exist_ok=True)
+    for _ in range(RECORD_ATTEMPTS):
+        held = Lease(run_dir / INPUTS_FILE, stale_after=lease.stale_after_s)
+        with held, held.keep_alive(lease.renew_fraction):
+            sources = merged_sources(placed, run_dir)
+            if held.prove():
+                _write(run_dir / INPUTS_FILE, sources)
+                return
+    raise LeaseUnavailable(run_dir / INPUTS_FILE, f"the lease on {run_dir / INPUTS_FILE} was lost on every merge")
+
+
+def prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[str, int]:
+    """Write the plan once, record its input sources (`record_sources`) and the manifest, and claim an attempt.
+
+    Returns the attempt id and its ordinal.
 
     Raises:
         ValueError: `run_dir` holds another plan.
-        ConflictingSources: as `merged_sources`; nothing is written.
+        ConflictingSources, LeaseUnavailable, LeaseTimeout: as `record_sources`; a source conflicts only with a
+            recorded run, whose plan is already written, so nothing is written.
     """
-    sources = merged_sources(placed, run_dir)
-    _write_once(
-        run_dir / PLAN_FILE,
-        {
-            "plan_hash": placed.hash,
-            "logical": placed.logical.model_dump(mode="json"),
-            "manifest": placed.manifest.model_dump(mode="json"),
-        },
-    )
-    _write(run_dir / INPUTS_FILE, sources)
+    _write_once(run_dir / PLAN_FILE, _plan_document(placed))
+    record_sources(placed, run_dir)
     for name in POOL_DIRS:
         (run_dir / name).mkdir(exist_ok=True)
     _write(run_dir / MANIFEST_FILE, {"plan_hash": placed.hash, "store": None if store is None else str(store.root)})
     return _claim_attempt(run_dir, placed.placement)
+
+
+def _plan_document(placed: Plan) -> dict[str, object]:
+    return {
+        "plan_hash": placed.hash,
+        "logical": placed.logical.model_dump(mode="json"),
+        "manifest": placed.manifest.model_dump(mode="json"),
+    }
 
 
 def start(
@@ -691,8 +726,9 @@ def start(
     so it is given with any other executor that stores results, and it is the store that executor writes: the plan's
     `senselab:Plan` entity is added to its provenance. The input values are bound (`bind_sources`) before anything
     is written: from their paths or JSON values, or from the values the plan holds in memory; `values` gives them
-    already bound. The sources are merged into `inputs.json` (`merged_sources`), also before anything is written.
-    Every item in the run's `queues/` with neither a slot nor an outcome is put again (`QueueSet.reconcile`).
+    already bound. The sources are merged into `inputs.json` under its lease (`record_sources`), also before anything
+    else is written. Every item in the run's `queues/` with neither a slot nor an outcome is put again
+    (`QueueSet.reconcile`). The run takes the next epoch (`Epoch.take`) and holds its coordinator lease while it runs.
 
     Raises:
         ExecutorUnavailable: no executor is given and the substrate is not local.
@@ -700,6 +736,7 @@ def start(
         InputChanged: an input changed since the plan was made.
         InputsUnavailable: an input held in memory is not held by `placed` (a plan read from disk).
         ConflictingSources: a source the run records reads other content than the plan's.
+        LeaseUnavailable, LeaseTimeout: as `record_sources`.
         MissingExtra: pydra is not installed.
     """
     if importlib.util.find_spec("pydra") is None:
@@ -712,8 +749,10 @@ def start(
     executor = _executor(placed, executor, store)
     values = bind_sources(placed) if values is None else values
     run_dir = run_dir_of(placed.hash)
-    attempt, ordinal = _prepare(placed, run_dir, store)
+    attempt, ordinal = prepare(placed, run_dir, store)
     QueueSet(run_dir / RUN_QUEUES, placed.execution).reconcile()
+    epochs = Epoch(run_dir)
+    epoch = epochs.take()
     run = Run(run_dir, store=store)
     log = EventLog(run_dir, attempt, ordinal)
     runner = PydraRunner(profile=placed.execution, work_dir=run_dir / "pydra")
@@ -721,15 +760,16 @@ def start(
     add_plan_entity(written, placed.hash)
 
     def body() -> None:
-        try:
-            runner.run_plan(placed, executor, values=values, events=log, cancel=run.cancelled)
-        except BaseException as err:  # noqa: BLE001 - held for `wait`
-            if not isinstance(err, RunCancelled):
+        with epochs.held(epoch, (placed.execution or ExecutionProfile.load()).lease):
+            try:
+                runner.run_plan(placed, executor, values=values, events=log, cancel=run.cancelled)
+            except BaseException as err:  # noqa: BLE001 - held for `wait`
+                if not isinstance(err, RunCancelled):
+                    run.fail(err)
+            try:
+                written.write(run_dir)
+            except Exception as err:  # noqa: BLE001 - held for `wait`
                 run.fail(err)
-        try:
-            written.write(run_dir)
-        except Exception as err:  # noqa: BLE001 - held for `wait`
-            run.fail(err)
 
     run.launch(threading.Thread(target=body, name=f"senselab-run-{placed.hash[:8]}", daemon=True))
     return run

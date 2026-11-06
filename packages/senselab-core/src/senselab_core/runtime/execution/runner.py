@@ -32,7 +32,7 @@ from pydra.workers.base import Worker
 from senselab_core.kernel.graph import Edge, fan_out_issues, mapped_nodes, order, split
 from senselab_core.kernel.identity import InputIdentity, gather_identity, port_output_identity
 from senselab_core.runtime.execution.events import TERMINAL, EventKind, EventLog, run_dir_of
-from senselab_core.runtime.execution.executor import Admission, Executor, FaultRecord, JobRef, ResultRef
+from senselab_core.runtime.execution.executor import Admission, Executor, FaultRecord, JobRef, QueueHeld, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.planner import Plan, check_mapped_outputs
@@ -342,6 +342,8 @@ class _Run:
     ) -> None:
         """Send the jobs of `batch` as one fragment and pass each result to `settle`, as the executor gives it.
 
+        Each job is logged `started` as it is sent, unless the executor logs its own claims (`logs_claims`).
+
         Raises:
             RunCancelled: the run was cancelled before the fragment was sent.
         """
@@ -351,8 +353,9 @@ class _Run:
         fragment = node_fragment(
             self.placed, self.admission, node, upstream=_upstream(self.placed, node, batch), elements=elements
         )
-        for job, element, _ in batch:
-            self.log("started", node, element, key=job.checksum)
+        if not getattr(self.executor, "logs_claims", False):
+            for job, element, _ in batch:
+                self.log("started", node, element, key=job.checksum)
         for ref in self.executor.results(self.executor.submit(fragment)):
             settle(ref)
 
@@ -485,7 +488,7 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
             await asyncio.to_thread(run.dispatch, node, batch, lambda ref: loop.call_soon_threadsafe(settle, ref))
         except Exception as error:  # noqa: BLE001 - every waiting job is failed with it, and the run re-raises it
             run.errors.append(error)
-            if not isinstance(error, RunCancelled):
+            if not isinstance(error, RunCancelled | QueueHeld):
                 run.fail_batch(node, list(futures), error)
         except BaseException as signal:
             for future in futures.values():

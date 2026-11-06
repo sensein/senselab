@@ -22,7 +22,7 @@ from senselab_core.runtime.execution.executor import (
     Status,
     UpstreamRef,
 )
-from senselab_core.runtime.execution.job import Completed, Failed, Job, JobOutcome, Upstream, execute
+from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, Upstream, execute
 from senselab_core.runtime.execution.outputs import anchors_of
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.workers import WorkerSet
@@ -233,6 +233,19 @@ def job_key(placed: Plan, node: str, inputs: Mapping[str, InputIdentity]) -> Log
     return call_key(call, replace(placement, **request_components(placement.backend, size)))
 
 
+def result_ref(outcome: JobOutcome) -> ResultRef:
+    """Return the `ResultRef` of one job's outcome: its key digest and output identity, or its failure."""
+    if isinstance(outcome, Failed):
+        return ResultRef(job=outcome.ref, key_digest=outcome.key_digest, failure=outcome.failure)
+    reused = outcome.result.reused
+    return ResultRef(
+        job=outcome.ref,
+        key_digest=outcome.result.key.digest(),
+        output_identity=outcome.result.output_identity,
+        served=None if reused is None else reused.value,
+    )
+
+
 class InProcess:
     """An `Executor` whose `submit` runs a fragment's jobs through `execute` in this process, before returning.
 
@@ -332,17 +345,7 @@ class InProcess:
             KeyError: the handle is not this executor's, or was forgotten.
         """
         for outcome in self.outcomes(handle):
-            if isinstance(outcome, Completed):
-                key = outcome.result.key.digest()
-                reused = outcome.result.reused
-                yield ResultRef(
-                    job=outcome.ref,
-                    key_digest=key,
-                    output_identity=outcome.result.output_identity,
-                    served=None if reused is None else reused.value,
-                )
-            else:
-                yield ResultRef(job=outcome.ref, key_digest=outcome.key_digest, failure=outcome.failure)
+            yield result_ref(outcome)
 
     def outcomes(self, handle: Handle) -> list[JobOutcome]:
         """Return the outcome of each job of `handle`, results and their outputs included, in the fragment's order.

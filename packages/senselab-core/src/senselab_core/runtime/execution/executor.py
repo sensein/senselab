@@ -206,6 +206,20 @@ class Status(str, Enum):
     CANCELLED = "cancelled"
 
 
+class QueueHeld(RuntimeError):
+    """An executor holds the queue of a fragment's jobs: env `env` failed `failures` times by infrastructure faults.
+
+    The jobs are not failed; they wait in the queue for a later attempt.
+    """
+
+    def __init__(self, queue: str, env: str, failures: int) -> None:
+        """Name the queue, the env and its failures."""
+        super().__init__(f"queue {queue!r} is held: env {env!r} failed {failures} times by infrastructure faults")
+        self.queue = queue
+        self.env = env
+        self.failures = failures
+
+
 class Executor(Protocol):
     """Runs plan fragments of admitted plans: `admit` a plan, `submit` its fragments, follow, stop and read them.
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from senselab_core.kernel.dataset import Record
-from senselab_core.runtime.execution.events import Event, EventLog, read_events, status_from
+from senselab_core.runtime.execution.events import Event, EventLog, JobState, read_events, status_from
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef
 from senselab_core.runtime.execution.run import MissingExtra, NotRun, Output, ResultSet
 
@@ -125,6 +125,43 @@ def test_a_later_attempt_wins_by_its_claim_whatever_its_clock() -> None:
     for events in ([*first, *second], [*second, *first]):
         assert status_from(events).counts == {**status_from(second).counts}
         assert status_from(events).counts["done"] == 1 and status_from(events).faults == {"content": 1}
+
+
+@pytest.mark.logic
+def test_queued_or_running_across_writers_reads_claims_not_clocks() -> None:
+    """A coordinator queues and a pool worker claims: running from the claim, whatever either writer's clock says.
+
+    A retry the coordinator logs `failed` then `queued` reads as queued, not failed, until a worker claims it again.
+    """
+    queued = _event("queued", writer="c", seq=0, t_ns=50)
+    claimed = _event("claimed", writer="w", seq=0, t_ns=10)
+    retried = [
+        _event("failed", writer="c", seq=1, t_ns=60, fault="infrastructure", failure=INFRA, env="host"),
+        _event("queued", writer="c", seq=2, t_ns=61),
+    ]
+    again = _event("claimed", writer="v", seq=0, t_ns=5)
+    finished = _event("finished", writer="c", seq=3, t_ns=70)
+    cases: list[tuple[list[Event], JobState]] = [
+        ([queued], "queued"),
+        ([claimed, queued], "running"),
+        ([*retried, claimed, queued], "queued"),
+        ([again, *retried, claimed, queued], "running"),
+        ([finished, again, *retried, claimed, queued], "done"),
+    ]
+    for events, state in cases:
+        assert status_from(events).counts[state] == 1, state
+    assert status_from([*retried, claimed, queued]).faults == {"infrastructure": 1}
+
+
+@pytest.mark.logic
+def test_a_resume_in_progress_shows_an_earlier_result_done() -> None:
+    """A job finished in attempt one is done while attempt two has only queued it; a later terminal state wins."""
+    first = [_event("queued"), _event("finished", seq=1)]
+    second = _event("queued", attempt="a2", seq=0)
+    assert status_from([*first, second]).counts == {**status_from(first).counts}
+    blocked = _event("blocked", attempt="a2", seq=1)
+    assert status_from([*first, second, blocked]).counts["blocked"] == 1
+    assert status_from([first[0], second]).counts["queued"] == 1
 
 
 @pytest.mark.contract

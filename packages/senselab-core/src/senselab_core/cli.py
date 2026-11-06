@@ -1,4 +1,4 @@
-"""The ``data`` command group and the ``status`` and ``explain`` commands, mounted by ``senselab.cli``."""
+"""The ``data`` command group and the ``status``, ``explain`` and ``coordinate`` commands of ``senselab.cli``."""
 
 import argparse
 import json
@@ -8,10 +8,14 @@ from pathlib import Path
 
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
+from senselab_core.runtime.execution.epoch import StaleCoordinator
 from senselab_core.runtime.execution.events import Event, runs_root
+from senselab_core.runtime.execution.executor import QueueHeld
+from senselab_core.runtime.execution.pool import ExternalWorkers, coordinate
 from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run, latest_placement
 from senselab_core.runtime.explain import node_line
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
+from senselab_core.runtime.profiles import ExecutionProfile
 
 
 def mount_data(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -140,8 +144,22 @@ def run_explain(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_coordinate(args: argparse.Namespace) -> int:
+    """Run a parsed ``coordinate``: take the run's next epoch and send its jobs to its queues, for pool workers."""
+    try:
+        profile = ExecutionProfile.load(args.profile) if args.profile else None
+        outcome = coordinate(_run_directory(args.run_ref), substrate=ExternalWorkers(), profile=profile)
+    except (OSError, ValueError, StaleCoordinator, QueueHeld) as err:
+        print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
+        return 1
+    blocked = sum(len(e) for e in outcome.blocked.values())
+    failed = sum(r.failure is not None for refs in outcome.results.values() for r in refs)
+    print(f"run {outcome.plan_hash}: {'done' if outcome.done else 'not done'}; {failed} failed, {blocked} blocked")
+    return 0 if outcome.done else 1
+
+
 def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
-    """Add the ``status`` and ``explain`` commands to a parser's subparsers."""
+    """Add the ``status``, ``explain`` and ``coordinate`` commands to a parser's subparsers."""
     status = groups.add_parser("status", help="the jobs, faults and broken envs of a run")
     status.add_argument(
         "run_ref",
@@ -153,10 +171,14 @@ def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
     explain.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
     explain.add_argument("target", help="a node id, or a key digest or its prefix")
     explain.set_defaults(run=run_explain)
+    coordinating = groups.add_parser("coordinate", help="coordinate a run on its queues, as the next epoch")
+    coordinating.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
+    coordinating.add_argument("--profile", default=None, help="the execution profile the run was placed under")
+    coordinating.set_defaults(run=run_coordinate)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the ``data`` group and the ``status`` and ``explain`` commands alone; return the process exit code."""
+    """Run the ``data`` group and the ``status``, ``explain`` and ``coordinate`` commands; return the exit code."""
     parser = argparse.ArgumentParser(prog="senselab")
     groups = parser.add_subparsers(dest="group", required=True)
     mount_data(groups)

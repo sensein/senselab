@@ -18,6 +18,7 @@
 - `claims/<digest>.lease`: the `Lease` of a claim on the item.
 - `outcome/<digest>`: the item's one outcome, a JCS record `{"outcome": "done" | "dead", ...}` linked from a staged
   file, so the first writer wins and an item is never both done and dead.
+- `held-<epoch>`: the mark, made by the coordinator of that epoch, that no item of the queue is claimed.
 
 A claim walks the segments from the oldest live one, lists each, and takes the lease of the first slot that is
 neither marked nor under a live claim; the outcome is checked again once the lease is held. An outcome is staged,
@@ -72,12 +73,19 @@ RETIRED_MARK = "retired"
 """The mark of a retired segment, inside it."""
 RETIRED_NAME = re.compile(r"^retired$")
 """The grammar of `RETIRED_MARK`."""
+HELD_NAME = re.compile(r"^held-([1-9][0-9]*)$")
+"""The mark of a held queue, naming the epoch that held it."""
 NAME_FILE = re.compile(r"^name$")
 """The file holding a queue's name."""
 DIRECTORIES = ("items", "segments", "slotted", "claims", "outcome")
 """The directories of a queue."""
 OUTCOMES = ("done", "dead")
 """The outcomes an item can have."""
+
+
+def item_digest(fragment: PlanFragment) -> str:
+    """Return the digest that names `fragment` as a queue item: `identity_digest("plan-fragment@1", …)` of its JSON."""
+    return identity_digest(ITEM_TAG, fragment.model_dump(mode="json"))
 
 
 def _seq(seq: int) -> str:
@@ -227,9 +235,11 @@ class Claim:
         self._end(held, result)
         return result
 
-    def commit(self, items: Optional[Iterable[str]] = None) -> tuple[str, ...]:
-        """Commit the held `items` (all by default) as `done`; return the digests this call committed."""
-        outcomes = {h.digest: self._finish(h, "done", {}) for h in self._chosen(items)}
+    def commit(
+        self, items: Optional[Iterable[str]] = None, extra: Optional[dict[str, object]] = None
+    ) -> tuple[str, ...]:
+        """Commit the held `items` (all by default) as `done`, with the fields of `extra`; return those committed."""
+        outcomes = {h.digest: self._finish(h, "done", dict(extra or {})) for h in self._chosen(items)}
         return tuple(d for d, o in outcomes.items() if o == "committed")
 
     def dead(self, fault: FaultRecord, items: Optional[Iterable[str]] = None) -> tuple[str, ...]:
@@ -320,10 +330,9 @@ class Queue:
             for fragment in fragments:
                 if not isinstance(fragment, PlanFragment):
                     raise TypeError(f"a queue item is a PlanFragment, not {type(fragment).__name__}")
-                document = fragment.model_dump(mode="json")
-                digest = identity_digest(ITEM_TAG, document)
+                digest = item_digest(fragment)
                 if items.lstat(f"{digest}.json") is None:
-                    _publish(items, f"{digest}.json", jcs_dumps(document), ITEM_NAME)
+                    _publish(items, f"{digest}.json", jcs_dumps(fragment.model_dump(mode="json")), ITEM_NAME)
                 digests[digest] = None
             return self._index(q, list(digests))
 
@@ -378,18 +387,44 @@ class Queue:
             digests = sorted(m.group(1) for n in items.listdir() if (m := ITEM_NAME.fullmatch(n)))
             return self._index(q, digests)
 
+    def hold(self, epoch: int) -> None:
+        """Mark the queue held by the coordinator of `epoch`: no item is claimed until the mark is removed."""
+        with self.open() as q:
+            q.make_dir(f"held-{epoch}", grammar=HELD_NAME, mode=STAGING_DIR_MODE, exist_ok=True)
+
+    def held(self) -> Optional[int]:
+        """Return the newest epoch that holds the queue, None when it is not held."""
+        with self.open() as q:
+            return max((int(m.group(1)) for n in q.listdir() if (m := HELD_NAME.fullmatch(n))), default=None)
+
+    def unhold(self, before: int) -> None:
+        """Remove every hold made by an epoch older than `before`."""
+        with self.open() as q:
+            for name in q.listdir():
+                if (m := HELD_NAME.fullmatch(name)) and int(m.group(1)) < before:
+                    with contextlib.suppress(FileNotFoundError):
+                        q.remove_dir(name, grammar=HELD_NAME)
+
+    def claimed(self, digest: str) -> bool:
+        """Return whether `digest` is under a claim stamped within the stale bound, on the storage clock."""
+        with self.open() as q, q.child("claims") as claims:
+            return self._live(claims, digest, q.dir_now())
+
     def claim(self, worker: str, max_items: int = 1) -> Optional[Claim]:
         """Claim up to `max_items` items without an outcome, oldest first, for `worker`; None when none is claimable.
 
         Each item is held under a `Lease` beating from its own renewer until the claim commits, kills or releases
         it. An item under a live claim is skipped; a stale claim is broken, within one renewal interval of going
-        stale, and its item claimed again. A missing item is left ready and recorded in `faults`.
+        stale, and its item claimed again. A missing item is left ready and recorded in `faults`. A held queue
+        (`hold`) gives no claim.
 
         Raises:
             ValueError: `max_items` is below 1.
         """
         if max_items < 1:
             raise ValueError(f"a claim takes at least one item (got {max_items})")
+        if self.held() is not None:
+            return None
         taken: list[_Held] = []
         try:
             with self.open() as q, q.child("segments") as segments, q.child("claims") as claims:
@@ -615,4 +650,4 @@ class QueueSet:
         return total
 
 
-__all__ = ["ITEM_TAG", "LABEL_TAG", "OUTCOMES", "RUN_QUEUES", "Claim", "Queue", "QueueSet", "settle"]
+__all__ = ["ITEM_TAG", "LABEL_TAG", "OUTCOMES", "RUN_QUEUES", "Claim", "Queue", "QueueSet", "item_digest", "settle"]

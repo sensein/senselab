@@ -396,6 +396,17 @@ class Lease:
             return None
         return None
 
+    def age(self) -> Optional[float]:
+        """Return the lease's age on a freshly probed storage clock, as a breaker judges it; None when none is held.
+
+        Anything but a directory at the lease name is moved aside, as a breaker would.
+        """
+        try:
+            seen = self._seen()
+            return None if seen is None else self._now(fresh=True) - seen[1]
+        finally:
+            self._close()
+
     def owns(self) -> bool:
         """Return whether this lease's token directory is in the directory at the lease name."""
         return self._held is not None and self._has(self._held)

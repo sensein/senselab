@@ -50,6 +50,8 @@ _STATE: Mapping[str, JobState] = {
 }
 TERMINAL: Mapping[str, int] = {"finished": 3, "cache_hit": 3, "failed": 2, "blocked": 1, "cancelled": 0}
 """The kinds that end a job's state machine (queued, then claimed, started, then one of these), by precedence."""
+RESULTS = ("finished", "cache_hit")
+"""The terminal kinds that give a result."""
 
 
 def run_dir_of(plan_hash: str, root: Path | None = None) -> Path:
@@ -115,7 +117,7 @@ class RunStatus:
 
     Derived from events alone (`status_from`). `done` is True once every job seen has a terminal event, and
     `cancelled` once any job was cancelled, so a cancelled run is never plain done. `last_event_ns` is the time of the
-    newest event: a run that is not done and whose last event is old was left by a process that died.
+    newest event. `interrupted` is set by `Run.wait` alone, when the run is not done and its coordinator stopped.
     """
 
     counts: Mapping[JobState, int]
@@ -124,6 +126,7 @@ class RunStatus:
     done: bool = False
     cancelled: bool = False
     last_event_ns: int | None = None
+    interrupted: bool = False
     nodes: Mapping[str, Mapping[JobState, int]] = field(default_factory=dict)
 
 
@@ -133,23 +136,40 @@ def _latest(events: Sequence[Event]) -> list[Event]:
     return [e for e in events if (e.ordinal, e.attempt) == latest]
 
 
+def _superseded(event: Event, events: Sequence[Event]) -> bool:
+    """Return whether `event` is a failure its writer then queued again: a retry within one attempt."""
+    return event.kind == "failed" and any(
+        e.kind == "queued" and e.writer == event.writer and e.seq > event.seq for e in events
+    )
+
+
 def _latest_terminal(events: Sequence[Event]) -> Event | None:
-    """Return the terminal event of a job's latest attempt that has precedence, or None if that attempt has none.
+    """Return the terminal event of a job's latest attempt that has precedence, else an earlier attempt's result.
 
     A result (`finished`, `cache_hit`) outranks `failed`, which outranks `blocked`, then `cancelled`; among events of
-    one kind the one later in its writer's file, then the greater writer, is taken.
+    one kind the one later in its writer's file, then the greater writer, is taken. A `failed` its writer queued
+    again is not terminal. While the latest attempt has no terminal event, a result an earlier attempt gave stands.
     """
-    terminal = [e for e in _latest(events) if e.kind in TERMINAL]
-    return max(terminal, key=lambda e: (TERMINAL[e.kind], e.writer, e.seq)) if terminal else None
+    mine = _latest(events)
+    terminal = [e for e in mine if e.kind in TERMINAL and not _superseded(e, mine)]
+    if not terminal:
+        terminal = [e for e in events if e.kind in RESULTS]
+    return max(terminal, key=lambda e: (TERMINAL[e.kind], e.ordinal, e.writer, e.seq)) if terminal else None
 
 
 def _job_state(events: Sequence[Event]) -> JobState:
-    """Return a job's state: its latest attempt's terminal state, else that of that attempt's last other event."""
+    """Return a job's state: its terminal state (`_latest_terminal`), else `running` or `queued` by counts.
+
+    In the latest attempt a job is running while its claims (`claimed`, `started`) outnumber its yields and at least
+    match its submissions (`queued`), so a retry queued after a failure is queued until it is claimed again. Counts
+    read no clock and no order across writers.
+    """
     found = _latest_terminal(events)
     if found is not None:
         return _STATE[found.kind]
-    mine = [e for e in _latest(events) if e.kind in _STATE]
-    return _STATE[mine[-1].kind] if mine else "queued"
+    kinds = Counter(e.kind for e in _latest(events))
+    claims = kinds["claimed"] + kinds["started"]
+    return "running" if claims > kinds["yielded"] and claims >= kinds["queued"] else "queued"
 
 
 def _by_job(events: Iterable[Event]) -> dict[tuple[str, tuple[int, ...]], list[Event]]:
@@ -170,8 +190,9 @@ def terminal_events(events: Iterable[Event]) -> dict[tuple[str, tuple[int, ...]]
 def status_from(events: Iterable[Event], *, broken_after: int | None = None) -> RunStatus:
     """Return the status of a run from its `events`, each writer's in file order (`read_events`).
 
-    A job's state is the terminal event of its latest attempt (highest `ordinal`) with precedence (`TERMINAL`), else
-    the state of that attempt's last other event; `verify` changes none. `seq` is compared within one writer only and
+    A job's state is the terminal event of its latest attempt (highest `ordinal`) with precedence (`TERMINAL`), a
+    failure queued again excepted, else a result of an earlier attempt, else running or queued as the latest attempt's
+    claims and submissions count (`_job_state`); `verify` changes none. `seq` is compared within one writer only and
     no clock order is assumed for terminal states. `faults` counts every `failed` event by
     its class; an env with `broken_after` infrastructure failures (the packaged profile's
     `infrastructure_replacements` when None) is `broken`. Cancelled and blocked jobs are not faults.
