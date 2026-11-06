@@ -101,14 +101,14 @@ class _State:
 
 
 def load(init: dict[str, Any]) -> object:
-    """Return the fake's state; `init` may hold only `array_dir`, and the `device` and `model` it ignores.
+    """Return the fake's state; `init` may hold only `array_dir`, and the `device`, `dtype` and `model` it ignores.
 
     Raises:
         ValueError: on any other key.
     """
-    unknown = sorted(init.keys() - {"array_dir", "device", "model"})
+    unknown = sorted(init.keys() - {"array_dir", "device", "dtype", "model"})
     if unknown:
-        raise ValueError(f"fake init takes only array_dir, device and model, got {unknown}")
+        raise ValueError(f"fake init takes only array_dir, device, dtype and model, got {unknown}")
     return _State()
 
 

@@ -91,7 +91,7 @@ ITEMS = [{"id": "a", "inputs": {}}]
 TYPED: dict[str, set[str | None]] = {
     "init": {None, "WorkerLost"},
     "init_lost": {"WorkerLost"},
-    "timeout": {"TimeoutError", "WorkerLost"},
+    "timeout": {"WorkerTimeout", "WorkerLost"},
     "close": {None},
 }
 """Per path, the outcomes it may end in besides the injected exception."""

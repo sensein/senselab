@@ -1,4 +1,4 @@
-"""The ``data`` command group and the ``status``, ``explain`` and ``coordinate`` commands of ``senselab.cli``."""
+"""The ``data`` group and the ``status``, ``explain``, ``coordinate`` and ``execute`` commands of ``senselab.cli``."""
 
 import argparse
 import json
@@ -11,7 +11,8 @@ from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.runtime.execution.epoch import StaleCoordinator
 from senselab_core.runtime.execution.events import Event, runs_root
 from senselab_core.runtime.execution.executor import QueueHeld
-from senselab_core.runtime.execution.pool import ExternalWorkers, coordinate
+from senselab_core.runtime.execution.pool import ExternalWorkers, coordinate, run_store
+from senselab_core.runtime.execution.pool_worker import serve_pool
 from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run, latest_placement
 from senselab_core.runtime.explain import node_line
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
@@ -158,8 +159,20 @@ def run_coordinate(args: argparse.Namespace) -> int:
     return 0 if outcome.done else 1
 
 
+def run_execute(args: argparse.Namespace) -> int:
+    """Run a parsed ``execute``: serve a run's queues of the named resource classes as one pool worker."""
+    pool = Path(args.pool)
+    classes = [c for c in args.classes.split(",") if c]
+    try:
+        profile = ExecutionProfile.load(args.profile) if args.profile else ExecutionProfile.load()
+        return serve_pool(pool, classes, profile=profile, store=run_store(pool.parent))
+    except (OSError, ValueError) as err:
+        print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
+        return 1
+
+
 def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
-    """Add the ``status``, ``explain`` and ``coordinate`` commands to a parser's subparsers."""
+    """Add the ``status``, ``explain``, ``coordinate`` and ``execute`` commands to a parser's subparsers."""
     status = groups.add_parser("status", help="the jobs, faults and broken envs of a run")
     status.add_argument(
         "run_ref",
@@ -175,10 +188,15 @@ def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
     coordinating.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
     coordinating.add_argument("--profile", default=None, help="the execution profile the run was placed under")
     coordinating.set_defaults(run=run_coordinate)
+    executing = groups.add_parser("execute", help="serve a run's queues as one pool worker")
+    executing.add_argument("--pool", required=True, help="the run's queues directory, <run dir>/queues")
+    executing.add_argument("--classes", required=True, help="the resource classes to serve, comma-separated")
+    executing.add_argument("--profile", default=None, help="the execution profile the run was placed under")
+    executing.set_defaults(run=run_execute)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the ``data`` group and the ``status``, ``explain`` and ``coordinate`` commands; return the exit code."""
+    """Run the ``data`` group and the ``status``, ``explain``, ``coordinate`` and ``execute`` commands."""
     parser = argparse.ArgumentParser(prog="senselab")
     groups = parser.add_subparsers(dest="group", required=True)
     mount_data(groups)

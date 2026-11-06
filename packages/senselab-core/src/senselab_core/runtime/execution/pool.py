@@ -450,6 +450,30 @@ def _gap(kind: str, message: str) -> FaultRecord:
     return FaultRecord(fault="infrastructure", type=kind, message=message, gap=True, charged=False)
 
 
+def run_plan(run_dir: Path, profile: ExecutionProfile) -> Plan:
+    """Return the plan of the run in `run_dir` under its latest placement, with `profile` and the plan's reuse policy.
+
+    Raises:
+        ValueError: the plan was placed under another profile than `profile`.
+        FileNotFoundError: the run has no plan, or no claimed attempt.
+    """
+    from senselab_core.runtime.execution.run import load_plan  # noqa: PLC0415
+
+    stored = load_plan(run_dir)
+    if stored.placement.profile_digest != profile.canonical_digest():
+        raise ValueError(f"plan {stored.hash} was placed under another execution profile; name the one it was")
+    return replace(stored, execution=profile, config=RunConfig(reuse=ReusePolicy(stored.logical.reuse)))
+
+
+def run_store(run_dir: Path) -> ResultStore:
+    """Return the result store the run in `run_dir` names in `manifest.json`, else the cache's."""
+    from senselab_core.runtime.execution.run import RESULTS_DIR, Run  # noqa: PLC0415
+    from senselab_core.runtime.revision import cache_root  # noqa: PLC0415
+
+    named = Run(run_dir).manifest().get("store")
+    return ResultStore(Path(named) if isinstance(named, str) else cache_root() / RESULTS_DIR)
+
+
 def coordinate(
     run_dir: Path,
     *,
@@ -470,19 +494,13 @@ def coordinate(
         QueueHeld: an env broke and was held.
         InputChanged, InputsUnavailable, ConflictingSources: as `start`.
     """
-    from senselab_core.runtime.execution.run import RESULTS_DIR, Run, bind_sources, load_plan, prepare  # noqa: PLC0415
+    from senselab_core.runtime.execution.run import bind_sources, prepare  # noqa: PLC0415
     from senselab_core.runtime.execution.runner import PydraRunner  # noqa: PLC0415 - needs pydra
-    from senselab_core.runtime.revision import cache_root  # noqa: PLC0415
 
     run_dir = Path(run_dir)
     profile = profile if profile is not None else ExecutionProfile.load()
-    stored = load_plan(run_dir)
-    if stored.placement.profile_digest != profile.canonical_digest():
-        raise ValueError(f"plan {stored.hash} was placed under another execution profile; name the one it was")
-    placed = replace(stored, execution=profile, config=RunConfig(reuse=ReusePolicy(stored.logical.reuse)))
-    if store is None:
-        named = Run(run_dir).manifest().get("store")
-        store = ResultStore(Path(named) if isinstance(named, str) else cache_root() / RESULTS_DIR)
+    placed = run_plan(run_dir, profile)
+    store = store if store is not None else run_store(run_dir)
     values = bind_sources(placed)
     epoch, attempt, ordinal = prepare(placed, run_dir, store)
     epochs = Epoch(run_dir)
@@ -501,4 +519,14 @@ def coordinate(
             pool.close()
 
 
-__all__ = ["DEAD_DIR", "ExternalWorkers", "Pool", "Substrate", "coordinate", "larger_class", "report"]
+__all__ = [
+    "DEAD_DIR",
+    "ExternalWorkers",
+    "Pool",
+    "Substrate",
+    "coordinate",
+    "larger_class",
+    "report",
+    "run_plan",
+    "run_store",
+]

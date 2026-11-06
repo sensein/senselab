@@ -88,8 +88,11 @@ def expected_of(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | Non
 
 
 def worker_init(device: str, model: ResolvedModel | None) -> dict[str, Any]:
-    """Return a worker's init: the device and, when there is one, the model's source, id and identity."""
-    init: dict[str, Any] = {"device": device}
+    """Return a worker's init: the device, the dtype (`PRECISION`) and, with a model, its source, id and identity.
+
+    A worker loads a model through its `ModelCache` under that identity, device and dtype.
+    """
+    init: dict[str, Any] = {"device": device, "dtype": PRECISION}
     if model is not None:
         init["model"] = {"source": model.ref.source, "id": model.ref.id, "identity": model.identity}
     return init

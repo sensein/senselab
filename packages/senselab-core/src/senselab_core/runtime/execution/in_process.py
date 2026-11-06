@@ -449,27 +449,7 @@ class InProcess:
 
     def _jobs(self, fragment: PlanFragment) -> tuple[list[Job], Placement]:
         """Return the jobs of `fragment` with their graph-input values and upstream inputs, and its placement."""
-        placed, values = self._held(fragment)
-        registry = packaged().registry
-        base = _node_call(placed, fragment.node, registry)
-        nodes = {n.id: n for n in placed.logical.graph.nodes}
-        edges = placed.logical.graph.edges
-        feeds = {e.target.split(".", 1)[1]: _source(e) for e in edges if e.target.split(".", 1)[0] == fragment.node}
-        jobs = []
-        for ref, identities in zip(fragment.jobs, fragment.inputs, strict=True):
-            held, upstream = {}, {}
-            for port, identity in identities.items():
-                if port not in feeds:
-                    raise ValueError(f"{ref} names input {port!r}, which no edge of node {fragment.node!r} feeds")
-                if feeds[port][0] != "input":
-                    upstream[port] = _upstream_input(fragment, identity, feeds[port], nodes, registry)
-                elif identity in values:
-                    held[port] = values[identity]
-                else:
-                    raise ValueError(f"no value is admitted for input {port!r} of {ref}")
-            call = replace(base, inputs=dict(identities))
-            jobs.append(Job(ref, call, held, anchors_of(held.values()), upstream))
-        return jobs, placement_of_record(fragment.placement, base.task, registry)
+        return fragment_jobs(fragment, *self._held(fragment))
 
     def _held(self, fragment: PlanFragment) -> tuple[Plan, dict[InputIdentity, object]]:
         """Return the plan and graph-input values of the admission `fragment` names.
@@ -484,6 +464,36 @@ class InProcess:
         if placed.hash != fragment.plan_hash:
             raise ValueError(f"admission {fragment.admission} is of plan {placed.hash}, not {fragment.plan_hash}")
         return placed, values
+
+
+def fragment_jobs(
+    fragment: PlanFragment, placed: Plan, values: Mapping[InputIdentity, object]
+) -> tuple[list[Job], Placement]:
+    """Return the jobs of `fragment` of `placed`, with their graph-input `values` and upstream inputs, and placement.
+
+    Raises:
+        ValueError: a job names an input no edge of its node feeds, or a graph input with no value.
+    """
+    registry = packaged().registry
+    base = _node_call(placed, fragment.node, registry)
+    nodes = {n.id: n for n in placed.logical.graph.nodes}
+    edges = placed.logical.graph.edges
+    feeds = {e.target.split(".", 1)[1]: _source(e) for e in edges if e.target.split(".", 1)[0] == fragment.node}
+    jobs = []
+    for ref, identities in zip(fragment.jobs, fragment.inputs, strict=True):
+        held, upstream = {}, {}
+        for port, identity in identities.items():
+            if port not in feeds:
+                raise ValueError(f"{ref} names input {port!r}, which no edge of node {fragment.node!r} feeds")
+            if feeds[port][0] != "input":
+                upstream[port] = _upstream_input(fragment, identity, feeds[port], nodes, registry)
+            elif identity in values:
+                held[port] = values[identity]
+            else:
+                raise ValueError(f"no value is admitted for input {port!r} of {ref}")
+        call = replace(base, inputs=dict(identities))
+        jobs.append(Job(ref, call, held, anchors_of(held.values()), upstream))
+    return jobs, placement_of_record(fragment.placement, base.task, registry)
 
 
 def _upstream_input(

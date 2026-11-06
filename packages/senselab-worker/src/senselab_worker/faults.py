@@ -108,10 +108,25 @@ def _safe_text(exc: BaseException) -> str:
     return f"<unprintable {wire_text(type(exc).__name__)}>"
 
 
+def _chain_limited(exc: BaseException) -> traceback.TracebackException:
+    """Return `exc`'s formatter holding its most recent `TRACEBACK_FRAMES` frames in total across its chain.
+
+    The frames are spent from `exc` outward along its causes and contexts, most recent first.
+    """
+    formatter = traceback.TracebackException(type(exc), exc, exc.__traceback__, compact=True)
+    left = TRACEBACK_FRAMES
+    node: traceback.TracebackException | None = formatter
+    while node is not None:
+        kept = list(node.stack)[-left:] if left else []
+        node.stack = traceback.StackSummary.from_list(kept)
+        left -= len(kept)
+        node = node.__cause__ or (None if node.__suppress_context__ else node.__context__)
+    return formatter
+
+
 def _safe_traceback(exc: BaseException) -> str:
     try:
-        frames = traceback.format_exception(type(exc), exc, exc.__traceback__, limit=-TRACEBACK_FRAMES)
-        return wire_text("".join(frames))
+        return wire_text("".join(_chain_limited(exc).format()))
     except PASS_THROUGH:
         raise
     except BaseException as failure:  # noqa: BLE001 - the record is total; a broken traceback is named, not raised
@@ -122,8 +137,9 @@ def error_record(exc: BaseException) -> dict[str, Any]:
     """Return the wire error object for an exception; total over every exception object.
 
     Keys: `type` (class name), `message` (`str(exc)`, else `repr(exc)`, else `<unprintable Type>`),
-    `fault`, `traceback` (the last 8 frames) and `gap`, which is false only for a `ContentFault`,
-    `ResourceFault` or `InfrastructureFault`, and true whenever the fallback table decided. Text
+    `fault`, `traceback` (the last 8 frames in total across the cause chain) and `gap`, which is false
+    only for a `ContentFault`, `ResourceFault` or `InfrastructureFault`, and true whenever the fallback
+    table decided. Text
     fields are cut to `MAX_TEXT_CHARS`, and code points UTF-8 cannot encode, such as lone
     surrogates, are backslash-escaped.
     """

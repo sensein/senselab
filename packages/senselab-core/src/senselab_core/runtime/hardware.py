@@ -12,6 +12,7 @@ import platform
 import re
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Mapping, Optional
 
 logger = logging.getLogger("senselab")
@@ -217,3 +218,33 @@ def numerics_class(
     elif kind == "mps" and info.chip:
         facts["gpu_architecture"] = info.chip
     return facts
+
+
+CGROUP_ROOT = Path("/sys/fs/cgroup")
+"""Where cgroup v2 is mounted."""
+
+
+def cgroup_memory_events(proc_cgroup: Path = Path("/proc/self/cgroup")) -> Optional[Path]:
+    """Return the `memory.events` file of this process's cgroup v2, None where there is none."""
+    try:
+        lines = proc_cgroup.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        if line.startswith("0::"):
+            path = CGROUP_ROOT / line[3:].lstrip("/") / "memory.events"
+            return path if path.is_file() else None
+    return None
+
+
+def oom_kills(memory_events: Optional[Path]) -> Optional[int]:
+    """Return the `oom_kill` count a cgroup `memory.events` file records, None when it cannot be read."""
+    if memory_events is None:
+        return None
+    try:
+        lines = memory_events.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    counts = dict(line.split(maxsplit=1) for line in lines if len(line.split()) == 2)  # noqa: PLR2004 - name, count
+    found = counts.get("oom_kill", "")
+    return int(found) if found.isdigit() else None

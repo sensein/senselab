@@ -34,6 +34,7 @@ from senselab_core.runtime.worker_client import (
     WorkerClient,
     WorkerFatal,
     WorkerLost,
+    WorkerTimeout,
 )
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_worker import codec, runtime_identity
@@ -41,7 +42,7 @@ from senselab_worker.canonical import MAX_DEPTH, canonical_npy_bytes
 from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_LINE_BYTES, LineTooLarge, to_wire
 from senselab_worker.digest import identity_digest
 from senselab_worker.fake import EXIT_CRASH, FAULT_KEY
-from senselab_worker.faults import FaultClass, ProtocolError, ValueTooLarge, classify
+from senselab_worker.faults import FaultClass, ProtocolError, ValueTooLarge, classify, error_record
 from senselab_worker.model_cache import ModelCache
 
 FAKE = "senselab_worker.fake"
@@ -394,13 +395,17 @@ def test_crash_mid_batch_is_worker_lost(array_parent: Path) -> None:
 
 
 @pytest.mark.logic
-def test_request_timeout_is_resource_and_kills_the_worker(array_parent: Path) -> None:
-    """A request past its timeout raises `TimeoutError` and the worker is killed."""
+def test_timeout_is_resource_fault(array_parent: Path) -> None:
+    """A load or request past its timeout is `WorkerTimeout`, a typed resource fault, and the worker is killed."""
     client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent, request_timeout=0.5)
-    with pytest.raises(TimeoutError) as info:
+    with pytest.raises(WorkerTimeout) as info:
         client.run([{"id": "a", "inputs": {}}], {FAULT_KEY: {"latency_s": 60}})
-    assert classify(info.value) is FaultClass.RESOURCE and not client.alive
+    record = error_record(info.value)
+    assert (record["fault"], record["gap"]) == ("resource", False) and isinstance(info.value, TimeoutError)
+    assert not client.alive and info.value.__notes__
     client.close()
+    with pytest.raises(WorkerTimeout):
+        WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent, load_timeout=1e-9)
 
 
 @pytest.mark.logic

@@ -26,11 +26,38 @@ from senselab_worker.faults import (
     ValueTooLarge,
     error_record,
 )
+from senselab_worker.model_cache import ModelCache, ModelKey
 
 Load = Callable[[dict[str, Any]], object]
 Handle = Callable[[object, list[dict[str, Any]], dict[str, Any]], list[dict[str, Any]]]
 
 EXIT_FATAL = 1
+UNBOUNDED_BYTES = 2**63 - 1
+"""The budget of a worker process's model cache: unbounded."""
+
+
+def model_key(backend: str, init: dict[str, Any]) -> ModelKey | None:
+    """Return the `ModelCache` key `init` names for `backend`: its model's identity, device and dtype; None without."""
+    model, device, dtype = init.get("model"), init.get("device"), init.get("dtype")
+    identity = model.get("identity") if isinstance(model, dict) else None
+    if isinstance(identity, str) and isinstance(device, str) and isinstance(dtype, str):
+        return (backend, identity, device, dtype)
+    return None
+
+
+def cached_load(load: Load, backend: str, cache: ModelCache) -> Load:
+    """Return `load` routed through `cache` under `model_key(backend, init)`; an init naming no model loads directly.
+
+    The returned load raises `ValueError` when the init's model identity is not a commit or weights digest.
+    """
+
+    def through(init: dict[str, Any]) -> object:
+        key = model_key(backend, init)
+        if key is None:
+            return load(init)
+        return cache.get_or_load(key, lambda: load(init), lambda _: 0)
+
+    return through
 
 
 def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO) -> int:

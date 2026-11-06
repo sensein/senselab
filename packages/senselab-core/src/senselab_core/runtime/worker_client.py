@@ -44,12 +44,14 @@ from senselab_worker.faults import (
     FaultClass,
     InfrastructureFault,
     ProtocolError,
+    ResourceFault,
     ValueTooLarge,
     error_record,
     wire_text,
 )
 from senselab_worker.ownership import ARRAY_FILE, remove_owned
 
+from senselab_core.runtime.hardware import cgroup_memory_events, oom_kills
 from senselab_core.runtime.launch import launch
 
 LAUNCHER = "senselab_worker.launch"
@@ -141,6 +143,19 @@ class WorkerFatal(InfrastructureFault):
         """Wrap the worker's error object."""
         super().__init__(f"worker fatal: {error.get('type')}: {error.get('message')}")
         self.error = error
+
+
+class WorkerTimeout(ResourceFault, TimeoutError):
+    """The worker did not load, or answer a request, within its timeout; it was stopped."""
+
+
+class WorkerOOMKilled(ResourceFault):
+    """The worker was killed by SIGKILL while its cgroup recorded an out-of-memory kill; `returncode` is its code."""
+
+    def __init__(self, message: str, *, returncode: int | None) -> None:
+        """Carry the message and the worker's exit code."""
+        super().__init__(message)
+        self.returncode = returncode
 
 
 class ConcurrentUse(InfrastructureFault):
@@ -441,7 +456,9 @@ class WorkerClient:
     its own process group, which `close` and every host fault stop within its graces' `bound`; a
     descendant that calls `setsid` leaves the group and is not reached. One `run` may be in flight at
     a time. Host faults (`ProtocolMismatch`, `ProtocolError`, `WorkerLost`, `WorkerFatal`,
-    `TimeoutError`) discard the worker and carry its exit code and last stderr lines as a note.
+    `WorkerTimeout`, `WorkerOOMKilled`) discard the worker and carry its exit code and last stderr lines as a note.
+    A worker that exits by SIGKILL while `memory_events` (this process's cgroup v2 `memory.events` when None) records
+    more `oom_kill`s than at the client's start is `WorkerOOMKilled`, a resource fault, not `WorkerLost`.
     `hello` holds the worker's hello.
 
     Shutdown is two steps, stopping the process group and then removing the files, each recorded
@@ -464,6 +481,7 @@ class WorkerClient:
         graces: ShutdownGraces = DEFAULT_GRACES,
         max_line_bytes: int = MAX_LINE_BYTES,
         variables: Mapping[str, str] | None = None,
+        memory_events: Path | None = None,
     ) -> None:
         """Start the worker, check its hello and wait until it has loaded `init`; stop it within `graces`.
 
@@ -480,7 +498,8 @@ class WorkerClient:
                 arrives within `HELLO_TIMEOUT_S`.
             WorkerLost: if the worker exits or closes its output before it is ready.
             WorkerFatal: if loading fails.
-            TimeoutError: if sending `init` and loading exceed `load_timeout`.
+            WorkerTimeout: if sending `init` and loading exceed `load_timeout`.
+            WorkerOOMKilled: if the worker is killed for memory while it loads.
         """
         self._closed = True
         self._owner_pid = os.getpid()
@@ -492,6 +511,8 @@ class WorkerClient:
             raise ValueError(f"max_line_bytes must be an int in [1, {MAX_LINE_BYTES}], got {max_line_bytes!r}")
         self._max_line_bytes = max_line_bytes
         self._request_timeout = request_timeout
+        self._memory_events = memory_events if memory_events is not None else cgroup_memory_events()
+        self._oom_baseline = oom_kills(self._memory_events)
         self._graces = graces
         self._stderr: collections.deque[str] = collections.deque(maxlen=STDERR_TAIL_LINES)
         self._lines: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
@@ -542,6 +563,7 @@ class WorkerClient:
             finally:
                 if not (self._stopped and self._released):
                     self._shutdown(graceful=False)
+            raised = self._typed(raised)
             if raised is exc:
                 raise
             raise raised from exc
@@ -581,7 +603,8 @@ class WorkerClient:
             ValueTooLarge: if `params` cannot fit one wire line, or the items that each fit alone do
                 not fit one line together; an item that cannot fit alone fails alone instead.
             ProtocolError, WorkerLost, WorkerFatal: infrastructure faults; the worker is discarded.
-            TimeoutError: if the request exceeds `request_timeout`; the worker is killed.
+            WorkerTimeout: if the request exceeds `request_timeout`; the worker is killed.
+            WorkerOOMKilled: if the worker is killed for memory during the request.
         """
         if self._foreign():
             raise WorkerLost(f"this client belongs to process {self._owner_pid}; start a new WorkerClient")
@@ -722,7 +745,10 @@ class WorkerClient:
             replies = self._read_replies(request, deadline)
         except BaseException as exc:
             self._fail(exc)
-            raise
+            typed = self._typed(exc)
+            if typed is exc:
+                raise
+            raise typed from exc
         for (i, _), reply in zip(sent, replies):
             results[i] = reply
         return results
@@ -918,6 +944,23 @@ class WorkerClient:
                 f"worker exit code {_code_text(self.returncode)}; stderr, last {len(self._stderr)} lines:\n"
                 + "\n".join(self._stderr)
             )
+
+    def _typed(self, exc: BaseException) -> BaseException:
+        """Return the resource fault a host fault is, its notes kept: a timeout, or a SIGKILL under an OOM kill."""
+        if isinstance(exc, TimeoutError) and not isinstance(exc, ResourceFault):
+            typed: BaseException = WorkerTimeout(str(exc))
+        elif isinstance(exc, WorkerLost) and exc.returncode == -signal.SIGKILL and self._oom_killed():
+            typed = WorkerOOMKilled(f"the worker was killed for memory: {exc}", returncode=exc.returncode)
+        else:
+            return exc
+        for note in getattr(exc, "__notes__", ()):
+            typed.add_note(note)
+        return typed
+
+    def _oom_killed(self) -> bool:
+        """Whether the cgroup recorded an out-of-memory kill since this client started."""
+        now = oom_kills(self._memory_events)
+        return self._oom_baseline is not None and now is not None and now > self._oom_baseline
 
     def _shutdown(self, *, graceful: bool) -> None:
         """Run each shutdown step not yet completed: stop the group, then, once no run is in flight, remove files.

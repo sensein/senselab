@@ -2,7 +2,6 @@
 
 import json
 import os
-import platform
 import subprocess
 import sys
 import threading
@@ -14,16 +13,11 @@ from typing import Any
 import numpy
 import pytest
 import soundfile
+from pool_stack_fixture import packaged, planned, registry, scoring
 from senselab_core.cli import main as cli_main
-from senselab_core.kernel.dataset import Record, ValueInput
-from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
-from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.audio_io import open_audio
-from senselab_core.runtime.call import Packaged, RunConfig, TaskCall, bind_input, use_packaged
-from senselab_core.runtime.catalogue import Catalogue
-from senselab_core.runtime.datasets import RecordSet
-from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.call import RunConfig, TaskCall
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import EventLog, read_events, run_dir_of, status_from
 from senselab_core.runtime.execution.executor import Admission, FaultRecord, PlanFragment, QueueHeld, ResultRef
@@ -34,39 +28,15 @@ from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet
 from senselab_core.runtime.execution.run import INPUTS_FILE, RECORD_ATTEMPTS, Run, prepare, record_sources
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.execution_settings import JobLease
-from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
-from senselab_core.testing.interpreter import source_tree_python
 from syscall_faults_fixture import displace_before_proof, pause_replaces
 
-SCORE = TaskSpec(
-    name="pool_test.score",
-    version="1",
-    kind="transform",
-    inputs={"text": "json"},
-    outputs={"value": "sha256"},
-    params=TaskParams,
-)
+SCORE = scoring("pool_test.score")
 HEAR = SCORE.model_copy(update={"name": "pool_test.hear", "inputs": {"audio": "Audio"}})
-REGISTRY = Registry()
-for _spec in (SCORE, HEAR):
-    REGISTRY.add_task(_spec)
-    REGISTRY.add_backend(
-        BackendSpec(
-            task=_spec.name,
-            name="dsp",
-            version="1",
-            stack="dsp",
-            env=Env.host(),
-            devices=("cpu",),
-            batch_invariant=True,
-            worker="backends.sizes_backend_fixture",
-            load_stub={},
-        )
-    )
+REGISTRY = registry(SCORE, HEAR)
 REGISTRY.add_backend(REGISTRY.backends(SCORE.name)[0].model_copy(update={"name": "alt"}))
 CLASSES = {
     "cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1},
@@ -89,39 +59,16 @@ def _profile(**faults: int) -> ExecutionProfile:
     return ExecutionProfile.load("laptop", override)
 
 
-def _host(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
-    return EnvHandle(
-        python=source_tree_python(),
-        python_version=platform.python_version(),
-        lock_sha="3" * 64,
-        wheel_set="4" * 64,
-        torch_index=None,
-    )
-
-
 @pytest.fixture(autouse=True)
 def stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """This module's registry, every env this interpreter under an MIT lock; the cache under `tmp_path`."""
-    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
-    mit = license_record("MIT", source="lock", verified={"date": "2026-11-06", "how": "pep639"}, gated=False)
-    previous = use_packaged(
-        Packaged(Catalogue.load("format: catalogue@2.0\nentries: []\n"), _host, REGISTRY, lambda _: {"p": mit})
-    )
-    yield
-    use_packaged(previous)
+    with packaged(REGISTRY, tmp_path / "cache", monkeypatch):
+        yield
     WORKERS.close()
 
 
 def _planned(profile: ExecutionProfile, texts: Sequence[str]) -> tuple[Plan, dict[InputIdentity, object]]:
-    graph = Graph(
-        inputs={"text": "list[json]"},
-        nodes=(Node(id="a", task=SCORE.name, task_version="1"),),
-        edges=(Edge(source="input.text", target="a.text", kind="map"),),
-        outputs={"value": "a.value"},
-    )
-    rows = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(texts)]
-    placed = plan(graph, RecordSet(rows), config=RunConfig(), execution=profile)
-    return placed, {bind_input("x", "json", t)[0]: t for t in texts}
+    return planned(SCORE, profile, texts)
 
 
 Act = Callable[[PlanFragment], "FaultRecord | ResultStore | None"]

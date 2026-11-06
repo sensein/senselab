@@ -12,7 +12,8 @@ from senselab_worker import WIRE_VERSION, runtime_identity
 from senselab_worker.canonical import MAX_DEPTH
 from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_LINE_BYTES, to_wire, validate_message
 from senselab_worker.faults import ContentFault
-from senselab_worker.serve import EXIT_FATAL, serve
+from senselab_worker.model_cache import ModelCache
+from senselab_worker.serve import EXIT_FATAL, cached_load, serve
 
 Handle = Callable[[object, list[dict[str, Any]], dict[str, Any]], list[dict[str, Any]]]
 
@@ -70,7 +71,7 @@ def test_session_hello_ready_response_stop(tmp_path: Path) -> None:
     """A full session answers hello, ready and one response per request, then exits 0 on stop."""
     code, out = _session(tmp_path, [_init(tmp_path), _request("a", "b"), {"stop": True}, _request("c")])
     hello, ready, *response = out
-    assert code == 0 and WIRE_VERSION == 2
+    assert code == 0 and WIRE_VERSION == 3
     validate_message(hello, "hello")
     validate_message(ready, "ready")
     assert hello["hello"]["wire"] == WIRE_VERSION and hello["hello"]["runtime"] == runtime_identity()
@@ -80,6 +81,30 @@ def test_session_hello_ready_response_stop(tmp_path: Path) -> None:
         {"id": "req-1", "item": "b", "outputs": {"seen": ["k"], "state": "loaded"}},
         {"id": "req-1", "done": 2},
     ]
+
+
+@pytest.mark.logic
+def test_worker_loads_through_model_cache(tmp_path: Path) -> None:
+    """An init naming a model, device and dtype loads once per process cache under that key; others load directly."""
+    loads: list[dict[str, Any]] = []
+
+    def load(init: dict[str, Any]) -> object:
+        loads.append(init)
+        return "weights"
+
+    cache, model = ModelCache(1), {"source": "hf", "id": "org/m", "identity": "a" * 40}
+    through = cached_load(load, "pkg.backend", cache)
+    for _ in range(2):
+        code, out = _session(
+            tmp_path, [_init(tmp_path, model=model, device="cpu", dtype="default"), _request("a")], load=through
+        )
+        assert code == 0 and _replies(out)[0]["outputs"]["state"] == "weights"
+    assert len(loads) == 1 and cache.keys() == [("pkg.backend", "a" * 40, "cpu", "default")]
+    _session(tmp_path, [_init(tmp_path, device="cpu")], load=through)
+    code, out = _session(
+        tmp_path, [_init(tmp_path, model={**model, "identity": "main"}, device="cpu", dtype="x")], load=through
+    )
+    assert len(loads) == 2 and code == EXIT_FATAL and "never a ref" in out[-1]["error"]["message"]
 
 
 @pytest.mark.logic
