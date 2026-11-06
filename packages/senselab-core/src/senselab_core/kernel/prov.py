@@ -314,10 +314,13 @@ class Generation:
 
 @dataclass(frozen=True)
 class Association:
-    """An activity's association with an agent; its role carries the pipeline node id, `plan` the plan's `@id`."""
+    """An activity's association with an agent, within a plan: its role carries the node id, `plan` the plan's `@id`.
+
+    Outside a plan both are None and the association names the agent alone.
+    """
 
     agent: str
-    node_id: str
+    node_id: str | None = None
     plan: str | None = None
 
 
@@ -550,8 +553,8 @@ def activity(  # noqa: PLR0913 - keyword-only, one argument per PROV relation
 
     Every relation is written as its unqualified PROV property (`prov:used`, `prov:generated`,
     `prov:wasAssociatedWith`) and, where a port, time or node id attaches, its qualified form: `prov:qualifiedUsage`,
-    `prov:qualifiedAssociation` (whose `prov:hadRole` carries `senselab:nodeId`, and `prov:hadPlan` the plan's `@id`
-    when the association names one), and `prov:qualifiedGeneration` of
+    `prov:qualifiedAssociation` (whose `prov:hadRole` carries `senselab:nodeId` and `prov:hadPlan` the plan's `@id`,
+    when the association names them), and `prov:qualifiedGeneration` of
     the entity, written inside this node through `@reverse`. Relations are sorted, so their order does not change
     the `@id`. The logical key of an execution is its `senselab:logicalKey` attribute.
 
@@ -604,11 +607,9 @@ def _qualified(b: _Builder, kind: str, rel: Usage | Generation) -> dict[str, obj
 
 
 def _association(b: _Builder, a: Association) -> dict[str, object]:
-    q: dict[str, object] = {
-        "@type": "prov:Association",
-        "prov:agent": {"@id": a.agent},
-        "prov:hadRole": _role(b, "senselab:nodeId", a.node_id),
-    }
+    q: dict[str, object] = {"@type": "prov:Association", "prov:agent": {"@id": a.agent}}
+    if a.node_id is not None:
+        q["prov:hadRole"] = _role(b, "senselab:nodeId", a.node_id)
     if a.plan is not None:
         q["prov:hadPlan"] = {"@id": _checked(PLAN_ID, a.plan, "associations")}
     return q

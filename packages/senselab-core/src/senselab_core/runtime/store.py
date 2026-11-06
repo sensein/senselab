@@ -996,7 +996,7 @@ class ResultStore:
 
         The activity is associated with the agent of `current` and names the agent that computed `hit`
         (`senselab:storedAgent`), so a result served across env locks records both. `association` gives the
-        association with that agent (a plan's node and plan); by default its role is the key's task.
+        association with that agent within a plan (its node and plan); by default it names the agent alone.
         """
         agent, stored_agent = agent_record(key, current), agent_record(key, hit.context)
         own: dict[str, object] = {
@@ -1014,7 +1014,7 @@ class ResultStore:
             types=["senselab:Reuse"],
             attributes=own,
             used=[kprov.Usage(hit.output_identity)],
-            associations=[kprov.Association(agent.id, node_id=key.task) if association is None else association(agent)],
+            associations=[kprov.Association(agent.id) if association is None else association(agent)],
             started=started,
             ended=datetime.now(timezone.utc),
         )

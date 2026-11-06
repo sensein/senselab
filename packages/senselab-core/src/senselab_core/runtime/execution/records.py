@@ -11,11 +11,17 @@ from senselab_core.runtime.compare import Thresholds, compare
 from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, EvidenceSide
 from senselab_core.runtime.execution.executor import JobRef
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import attempt_id
 from senselab_core.runtime.store import ResultStore, StoredResult, agent_record, context_record, key_record
 from senselab_core.runtime.vocabulary import core_vocabulary
 
 logger = logging.getLogger("senselab")
+
+
+def add_plan_entity(provenance: ProvStore, plan_hash: str) -> None:
+    """Add the `senselab:Plan` entity `plan:<plan_hash>` that the activities of the plan's jobs name."""
+    provenance.add(kprov.plan(plan_hash, core_vocabulary()))
 
 
 def plan_link(agent: kprov.Record, job: JobRef) -> kprov.Association:

@@ -85,6 +85,17 @@ def _reuses(store: ResultStore) -> list[dict[str, object]]:
 
 
 @pytest.mark.logic
+def test_a_reuse_outside_a_plan_names_its_agent_alone(tmp_path: Path) -> None:
+    """A `get` that records its own reuse is associated with its agent with no node role and no plan."""
+    s = ResultStore(tmp_path)
+    s.put(store_key(), {"y": 1}, store_context())
+    assert s.get(store_key(), store_context(), ReusePolicy.EXACT) is not None
+    [reuse] = [r for r in s.provenance.activities() if "senselab:Reuse" in r.types()]
+    associations = reuse.node()["prov:qualifiedAssociation"]
+    assert isinstance(associations, list) and [set(a) for a in associations] == [{"@type", "prov:agent"}]
+
+
+@pytest.mark.logic
 def test_put_get_exact(tmp_path: Path) -> None:
     """A put reads back exactly: arrays as canonical .npy named by hash, the rest as JCS JSON."""
     s = ResultStore(tmp_path)

@@ -9,7 +9,7 @@ from pathlib import Path
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.runtime.execution.events import Event, runs_root
-from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run
+from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run, latest_placement
 from senselab_core.runtime.explain import node_line
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
 
@@ -98,13 +98,13 @@ def _event_line(event: Event) -> str:
     return f"  {event.t_ns} {event.kind} {event.node}{element} attempt {event.attempt} seq {event.seq}{key}{fault}"
 
 
-def _placement(run_dir: Path, document: dict[str, object], events: list[Event]) -> PlanPlacement:
-    """Return the placement of the attempt that wrote the newest of `events`, else the plan's."""
+def _placement(run_dir: Path, events: list[Event]) -> PlanPlacement:
+    """Return the placement of the attempt that wrote the newest of `events`, else the latest attempt's."""
     for event in reversed(events):
         path = run_dir / PLACEMENTS_DIR / f"{event.attempt}.json"
         if path.is_file():
             return PlanPlacement.model_validate(json.loads(path.read_text(encoding="utf-8")))
-    return PlanPlacement.model_validate(document["placement"])
+    return latest_placement(run_dir)
 
 
 def run_explain(args: argparse.Namespace) -> int:
@@ -125,7 +125,7 @@ def run_explain(args: argparse.Namespace) -> int:
         return 1
     for node in nodes:
         shown = [e for e in matched if e.node == node] or [e for e in events if e.node == node]
-        placement = _placement(run.run_dir, document, shown)
+        placement = _placement(run.run_dir, shown)
         print(node_line(node, tasks[node], placement) if node in placement.nodes else f"node {node}")
         print(f"events ({len(shown)}):")
         for event in shown:

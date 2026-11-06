@@ -304,6 +304,9 @@ def test_plan_is_an_entity_named_by_its_hash_and_an_association_names_it() -> No
     linked = _execution(associations=[Association(software.id, node_id="node-1", plan=plan.id)])
     [association] = cast("list[dict[str, Any]]", linked.node()["prov:qualifiedAssociation"])
     assert association["prov:hadPlan"] == {"@id": plan.id} and linked.id != _execution().id
+    alone = _execution(associations=[Association(software.id)])
+    [bare] = cast("list[dict[str, Any]]", alone.node()["prov:qualifiedAssociation"])
+    assert bare == {"@type": "prov:Association", "prov:agent": {"@id": software.id}}
     with pytest.raises(ValueError, match="plan_hash"):
         prov.plan("not-a-hash", CORE)
     with pytest.raises(ValueError, match="associations"):

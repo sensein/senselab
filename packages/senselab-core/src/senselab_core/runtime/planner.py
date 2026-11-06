@@ -494,13 +494,15 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
     """Start the run of `plan_hash` again from its run directory, as a new attempt under a fresh placement.
 
     The logical plan, input manifest and input sources are read from `plan.json` and `inputs.json`; the plan's
-    pinned models are run as they are and no model reference is resolved. Every input is bound again and checked
-    against the manifest's identity before anything is written. The plan is then placed (`place`) under `execution`
-    (a profile, the name of a packaged one, or `None` for the packaged default) on `hardware` (`None`: this host,
-    probed), and started (`Plan.run`), the placement written to a new `placements/<attempt>.json`. The plan hash is
-    unchanged; a node placed on another backend has another key and is computed again, and a job the store holds
-    is served from it. `store` is where results are read and written: by default the one `manifest.json` names.
-    `config` defaults to `RunConfig()` under the plan's reuse policy.
+    pinned models are run as they are and no model reference is resolved. The plan is placed (`place`) under
+    `execution` (a profile, the name of a packaged one, or `None` for the packaged default) on `hardware` (`None`:
+    this host, probed); every input is then bound again and checked against the manifest's identity, all before
+    anything is written. The plan is started (`Plan.run`), the placement written to a new
+    `placements/<attempt>.json`. The plan hash is unchanged; a node placed on another backend has another key and is
+    computed again, and a job the store holds is served from it. `store` is where results are read and written: by
+    default the one `manifest.json` names. `executor` defaults to `InProcess` over that store for a local substrate.
+    `config` defaults to `RunConfig()` under the plan's reuse policy; given with an executor, it is that executor's
+    run config.
 
     Raises:
         NoRun: no run of `plan_hash` is on disk.
@@ -528,14 +530,10 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
     config = config if config is not None else RunConfig(reuse=reuse)
     if config.reuse is not reuse:
         raise ValueError(f"plan {plan_hash} reuses under {reuse.value}, not {config.reuse.value}")
-    values = bind_sources(stored)
     profile = ExecutionProfile.load(execution) if isinstance(execution, str) else execution or ExecutionProfile.load()
-    placed = replace(
-        stored,
-        placement=place(stored.logical, profile, hardware or host_hardware(), config),
-        execution=profile,
-        config=config,
-    )
+    placement = place(stored.logical, profile, hardware or host_hardware(), config)
+    values = bind_sources(stored)
+    placed = replace(stored, placement=placement, execution=profile, config=config)
     if store is None:
         named = Run(run_dir).manifest().get("store")
         store = ResultStore(Path(named)) if isinstance(named, str) else None

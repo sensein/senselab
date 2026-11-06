@@ -1,6 +1,7 @@
 """A run's lifecycle and its results: `start` a plan, follow it as a `Run`, read its `ResultSet`.
 
-A run lives in `<cache root>/2x/runs/<plan hash>/`: `plan.json` (the plan's documents), `inputs.json` (what each
+A run lives in `<cache root>/2x/runs/<plan hash>/`: `plan.json` (the logical plan and its input manifest, written
+once), `inputs.json` (what each
 record's inputs are read from), `manifest.json` (the plan hash and the result store, the same for every attempt),
 `placements/<attempt>.json` (one per attempt, never overwritten), `attempts/<n>` (the attempt id claimed `n`-th),
 `events/<writer>.jsonl` (`EventLog`), `prov/` (the
@@ -38,6 +39,7 @@ from senselab_core.runtime.execution.events import (
     terminal_events,
 )
 from senselab_core.runtime.execution.executor import Executor, FaultRecord
+from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.planner import ExecutorUnavailable, Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
@@ -223,18 +225,36 @@ def _source(value: object) -> str:
     )
 
 
-def load_plan(run_dir: Path) -> Plan:
-    """Return the plan written in `run_dir`, with the sources of its inputs; it carries no profile or run config.
+def latest_placement(run_dir: Path) -> PlanPlacement:
+    """Return the placement of the run's latest claimed attempt, `placements/<attempt>.json`.
 
     Raises:
-        FileNotFoundError: the run has no `plan.json`.
+        FileNotFoundError: the run has no claimed attempt.
+    """
+    directory = Path(run_dir) / ATTEMPTS_DIR
+    claimed = sorted((int(p.name), p) for p in directory.iterdir() if p.name.isdigit()) if directory.is_dir() else []
+    for _, path in reversed(claimed):
+        attempt = path.read_text(encoding="utf-8")
+        if attempt:
+            placement = Path(run_dir) / PLACEMENTS_DIR / f"{attempt}.json"
+            return PlanPlacement.model_validate(json.loads(placement.read_text(encoding="utf-8")))
+    raise FileNotFoundError(f"run {Path(run_dir).name} has no claimed attempt, so no placement")
+
+
+def load_plan(run_dir: Path) -> Plan:
+    """Return the plan written in `run_dir` under its latest attempt's placement, with the sources of its inputs.
+
+    It carries no profile or run config.
+
+    Raises:
+        FileNotFoundError: the run has no `plan.json`, or no claimed attempt.
     """
     document = json.loads((Path(run_dir) / PLAN_FILE).read_text(encoding="utf-8"))
     inputs = Path(run_dir) / INPUTS_FILE
     return Plan(
         logical=LogicalPlan.model_validate(document["logical"]),
         manifest=InputManifest.model_validate(document["manifest"]),
-        placement=PlanPlacement.model_validate(document["placement"]),
+        placement=latest_placement(run_dir),
         hash=document["plan_hash"],
         sources=json.loads(inputs.read_text(encoding="utf-8")) if inputs.is_file() else {},
     )
@@ -549,15 +569,37 @@ def _claim_attempt(run_dir: Path, placement: PlanPlacement) -> tuple[str, int]:
         return attempt, _claim_ordinal(run_dir, attempt)
 
 
+def _write_once(path: Path, document: Mapping[str, object]) -> None:
+    """Write `document` as JSON to `path` unless a file is there; one that is must name the same `plan_hash`.
+
+    Raises:
+        ValueError: `path` holds the document of another plan.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staging = path.with_name(f".{path.name}.{uuid.uuid4().hex}")
+    staging.write_text(json.dumps(document, sort_keys=True, indent=1), encoding="utf-8")
+    try:
+        os.link(staging, path)
+    except FileExistsError:
+        held = json.loads(path.read_text(encoding="utf-8")).get("plan_hash")
+        if held != document["plan_hash"]:
+            raise ValueError(f"{path.parent.name} holds the plan {held}, not {document['plan_hash']}") from None
+    finally:
+        staging.unlink()
+
+
 def _prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[str, int]:
-    """Write the plan, its input sources and the manifest into `run_dir`, then claim an attempt (`_claim_attempt`)."""
-    _write(
+    """Write the plan once, its input sources and the manifest into `run_dir`, then claim an attempt.
+
+    Raises:
+        ValueError: `run_dir` holds another plan.
+    """
+    _write_once(
         run_dir / PLAN_FILE,
         {
             "plan_hash": placed.hash,
             "logical": placed.logical.model_dump(mode="json"),
             "manifest": placed.manifest.model_dump(mode="json"),
-            "placement": placed.placement.model_dump(mode="json"),
         },
     )
     _write(run_dir / INPUTS_FILE, dict(placed.sources))
@@ -604,6 +646,7 @@ def start(
     log = EventLog(run_dir, attempt, ordinal)
     runner = PydraRunner(profile=placed.execution, work_dir=run_dir / "pydra")
     written = provenance if store is None else store.provenance
+    add_plan_entity(written, placed.hash)
 
     def body() -> None:
         try:

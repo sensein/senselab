@@ -1,10 +1,12 @@
 """`resume`: a run started again by its plan hash under a fresh placement, and the plan its activities name."""
 
+import ast
 import dataclasses
+import inspect
 import json
 import platform
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,14 +16,15 @@ import soundfile
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.signals import StaleSource
-from senselab_core.runtime.call import Packaged, RunConfig, use_packaged
+from senselab_core.runtime import planner
+from senselab_core.runtime.call import Packaged, RunConfig, TaskCall, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.events import Event, read_events
-from senselab_core.runtime.execution.executor import Handle, PlanFragment
+from senselab_core.runtime.execution.events import Event, read_events, run_dir_of
+from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status
 from senselab_core.runtime.execution.in_process import InProcess
-from senselab_core.runtime.execution.run import InputChanged, Output, Run
+from senselab_core.runtime.execution.run import InputChanged, Output, Run, load_plan
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.planner import NoRun, Plan, plan, resume
@@ -69,6 +72,7 @@ CATALOGUE = Catalogue.load("format: catalogue@2.0\nentries: []\n")
 BASE = {"devices": ["cpu"], "model_sources": ["toyorg"]}
 PROFILE = ExecutionProfile.load("laptop", BASE)
 SAME_BACKEND = ExecutionProfile.load("laptop", {**BASE, "model_cache_budget_bytes": 2**30})
+OFFLINE = ExecutionProfile.load("laptop", {**BASE, "network": "offline"})
 OTHER_BACKEND = ExecutionProfile.load("laptop", {**BASE, "stack_preferences": {SCORE.name: ["alt"]}})
 WORKERS = WorkerSet(4)
 
@@ -180,19 +184,33 @@ def _hub(answers: dict[str, str], seen: list[str]) -> Callable[[str, str, str | 
     return hub
 
 
-def test_resume_never_reresolves_ref(tmp_path: Path) -> None:
-    """A ref resolved when planning is not resolved again: the moved ref is never asked, the pinned commit runs."""
-    store, answers, seen = ResultStore(tmp_path / "store"), {"main": PIN}, list[str]()
-    resolver = Resolver(cache_dir=tmp_path / "hf-hub", hub=_hub(answers, seen), cache_root=tmp_path / "pins")
+def test_resume_never_reresolves_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Planned through a ref, the run resumes offline with an empty hub cache: any resolution would raise."""
+    store, seen = ResultStore(tmp_path / "store"), list[str]()
+    resolver = Resolver(cache_dir=tmp_path / "hf-hub", hub=_hub({"main": PIN}, seen), cache_root=tmp_path / "pins")
     placed = _plan(2, graph=_graph(model="toyorg/m@main"), resolver=resolver)
     assert seen == ["toyorg/m@main"]
     _ran(placed, store)
-    answers["main"] = MOVED
-    resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
-    assert resumed.wait(60).done and seen == ["toyorg/m@main"]
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "empty-hub"))
+    resumed = resume(placed.hash, execution=OFFLINE, store=store, executor=_executor(store, OFFLINE))
+    assert resumed.wait(60).done and all(isinstance(o, Output) for _, o in resumed.results())
     model = resumed.plan.logical.models["a"]
-    assert model is not None and model.identity == PIN and resumed.plan.hash == placed.hash
-    assert _kinds(_latest(resumed)) == ["cache_hit", "cache_hit"]
+    assert model is not None and model.identity == PIN and model.ref.ref == PIN and resumed.plan.hash == placed.hash
+    assert _placement(resumed)["profile_digest"] == OFFLINE.canonical_digest()
+
+
+def test_resume_and_place_name_no_resolver() -> None:
+    """Neither `resume` nor `place` names a resolver, `pin_model` or `resolve`, so neither can resolve a ref."""
+    tree = ast.parse(inspect.getsource(planner))
+    bodies = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {"resume", "place"}]
+    named = {
+        n.id if isinstance(n, ast.Name) else n.attr
+        for body in bodies
+        for n in ast.walk(body)
+        if isinstance(n, ast.Name | ast.Attribute)
+    }
+    assert len(bodies) == 2 and "place" in named
+    assert not named & {"pin_model", "resolve", "resolve_bound", "PROCESS_RESOLVER", "Resolver", "_pinned"}
 
 
 def test_resume_with_other_profile_same_backend_reuses(tmp_path: Path) -> None:
@@ -212,12 +230,15 @@ def test_resume_with_other_backend_recomputes(tmp_path: Path) -> None:
     """A fresh placement on another backend keeps the plan hash; the backend is keyed, so the node is recomputed."""
     store = ResultStore(tmp_path / "store")
     placed = _plan(3)
-    _ran(placed, store)
+    run = _ran(placed, store)
+    written = (run.run_dir / "plan.json").read_bytes()
+    assert "placement" not in json.loads(written)
     resumed = resume(placed.hash, execution=OTHER_BACKEND, store=store, executor=_executor(store, OTHER_BACKEND))
     assert resumed.wait(60).done and resumed.run_dir.name == placed.hash
     assert _kinds(_latest(resumed)) == ["finished"] * 3
-    assert _placement(resumed)["nodes"]["a"]["backend"] == "alt"
+    assert _placement(resumed)["nodes"]["a"]["backend"] == "alt" == load_plan(run.run_dir).placement.nodes["a"].backend
     assert placed.placement.nodes["a"].backend == "dsp"
+    assert (run.run_dir / "plan.json").read_bytes() == written
 
 
 def _wav(path: Path, value: float) -> Path:
@@ -261,3 +282,64 @@ def test_activity_had_plan(tmp_path: Path) -> None:
         [association] = cast("list[dict[str, Any]]", activity.node()["prov:qualifiedAssociation"])
         assert association["prov:hadPlan"] == {"@id": entity.id}
         assert association["prov:hadRole"]["senselab:nodeId"] == "a"
+
+
+class Delegating:
+    """An `Executor` that is not `InProcess`: it hands every call to one it holds."""
+
+    def __init__(self, inner: InProcess) -> None:
+        """Hold `inner`."""
+        self.inner = inner
+
+    def admit(self, placed: Plan, values: Mapping[str, object]) -> Admission:
+        """Admit through `inner`."""
+        return self.inner.admit(placed, values)
+
+    def release(self, admission: Admission) -> None:
+        """Release through `inner`."""
+        self.inner.release(admission)
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Submit through `inner`."""
+        return self.inner.submit(fragment)
+
+    def status(self, handle: Handle) -> Status:
+        """Return the status `inner` gives."""
+        return self.inner.status(handle)
+
+    def cancel(self, handle: Handle) -> None:
+        """Cancel through `inner`."""
+        self.inner.cancel(handle)
+
+    def results(self, handle: Handle) -> Iterator[ResultRef]:
+        """Yield the results `inner` gives."""
+        return self.inner.results(handle)
+
+
+def _linked_to_one_plan(provenance: ProvStore, plan_hash: str) -> None:
+    [entity] = provenance.plans()
+    assert entity.id == f"plan:{plan_hash}" and provenance.activities()
+    for activity in provenance.activities():
+        [association] = cast("list[dict[str, Any]]", activity.node()["prov:qualifiedAssociation"])
+        assert association["prov:hadPlan"] == {"@id": entity.id}
+
+
+def test_the_run_writes_its_plan_entity_for_any_executor(tmp_path: Path) -> None:
+    """Two attempts on an executor that is not `InProcess` give one plan entity, which every activity names."""
+    store = ResultStore(tmp_path / "store")
+    placed = _plan(2)
+    executor = Delegating(_executor(store))
+    executor.admit(placed, {})
+    assert store.provenance.plans() == []
+    for _ in range(2):
+        assert placed.run(executor, store=store).wait(60).done
+    _linked_to_one_plan(ProvStore.read(run_dir_of(placed.hash)), placed.hash)
+
+
+def test_a_single_call_writes_its_plan_entity(tmp_path: Path) -> None:
+    """`InProcess.call` plans its call itself, and adds that plan's entity for its activity to name."""
+    store = ResultStore(tmp_path / "store")
+    call = TaskCall.model_validate({"task": SCORE.name, "inputs": {"text": "x"}}, context={"registry": REGISTRY})
+    result = _executor(store).call(call)
+    assert result.output_identity is not None
+    _linked_to_one_plan(store.provenance, store.provenance.plans()[0].id.partition(":")[2])
