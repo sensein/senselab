@@ -191,7 +191,7 @@ class TaskEntry:
             :data:`~senselab.audio.workflows.triage.nodes.branches.BRANCHES`.
         expects: What the task asks a recording to contain.
         unused_voice_reading: A VOICE description of a SPEECH task that no stage applies, or None.
-        voice_reading_text: For a word task also read for its voice (B2AI's ``loudness``: say "hey", then shout it),
+        voice_reading_text: For a word task also read for its voice (a loudness task: say "hey", then shout it),
             the words the voice is read over; None for every other task.
         lexicon: The profile data file listing the task's own words and phrases (``task_lexicon/...``), or None.
         categories: For a word-generation task, the categories a recording may ask for, by name; empty otherwise.

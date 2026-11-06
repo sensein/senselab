@@ -277,7 +277,7 @@ class TestSenselabShipsNoFittedValue:
             assert shipped == [], relative
 
     def test_senselab_data_names_no_dataset_task(self) -> None:
-        """No key or value of a packaged data file is a fixture task name (the vendored registry moves in step 7)."""
+        """No key or value of a packaged data file is a fixture task name."""
         tasks = set(yaml.safe_load((FIXTURE_PROFILE / "tasks.yaml").read_text())["tasks"])
 
         def strings(node: Any) -> list[str]:  # noqa: ANN401 -- a YAML value
@@ -290,7 +290,6 @@ class TestSenselabShipsNoFittedValue:
         named = {
             str(path.relative_to(PACKAGED_DATA)): sorted(set(strings(yaml.safe_load(path.read_text()))) & tasks)
             for path in sorted(PACKAGED_DATA.rglob("*.yaml"))
-            if "b2ai_task_registry" not in path.parts
         }
         assert {path: names for path, names in named.items() if names} == {}
 
