@@ -44,7 +44,7 @@ pool:
   quantum_items: 100
   quantum_s: 300
   poll_s: 30
-  segment_items: 10000
+  segment_items: 512
 # Every lease: seconds after which another process breaks it, the share of that between beats, and the
 # storage's attribute delay; load refuses 2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.
 lease:

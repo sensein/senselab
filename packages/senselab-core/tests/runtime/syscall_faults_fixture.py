@@ -9,6 +9,7 @@ import io
 import os
 import shutil
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -250,3 +251,77 @@ def displace_before_proof(monkeypatch: pytest.MonkeyPatch, name: str) -> list[st
 
     monkeypatch.setattr(os, "mkdir", mkdir)
     return displaced
+
+
+COUNTED = (
+    *("open", "close", "read", "write", "mkdir", "rmdir", "rename", "replace", "link", "symlink", "unlink"),
+    *("lstat", "stat", "fstat", "listdir", "scandir", "readlink", "utime", "fsync", "fchmod", "dup"),
+)
+"""The `os` functions `count_calls` counts."""
+
+
+def count_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Count calls to the `COUNTED` functions and the bytes they return; `calls` and `bytes` keep the totals.
+
+    The bytes are those `read` returns, the target `readlink` returns and the names `listdir` returns.
+    """
+    totals = {"calls": 0, "bytes": 0}
+
+    def size(result: object) -> int:
+        if isinstance(result, (bytes, str)):
+            return len(result)
+        if isinstance(result, list):
+            return sum(len(n) for n in result if isinstance(n, (bytes, str)))
+        return 0
+
+    def wrap(name: str, real: Callable[..., Any]) -> Callable[..., Any]:
+        def counted(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            result = real(*args, **kwargs)
+            totals["calls"] += 1
+            if name in ("read", "readlink", "listdir"):
+                totals["bytes"] += size(result)
+            return result
+
+        return counted
+
+    for name in COUNTED:
+        if hasattr(os, name):
+            monkeypatch.setattr(os, name, wrap(name, getattr(os, name)))
+    return totals
+
+
+def stall(function: str, prefix: str, seconds: float, *, times: int | None = None, after: bool = False) -> None:
+    """In this process, make `os.<function>` on a name starting with `prefix` sleep `seconds`, without `monkeypatch`.
+
+    The sleep comes before the call, or after it with `after`; only the first `times` matching calls sleep (all with
+    None). For a spawned child, which ends with its patch.
+    """
+    real = getattr(os, function)
+    left = [times]
+
+    def stalled(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        names = [os.path.basename(os.fsdecode(a)) for a in args[:2] if isinstance(a, (str, bytes, os.PathLike))]
+        due = any(n.startswith(prefix) for n in names) and left[0] != 0
+        if due and left[0] is not None:
+            left[0] -= 1
+        if due and not after:
+            time.sleep(seconds)
+        result = real(*args, **kwargs)
+        if due and after:
+            time.sleep(seconds)
+        return result
+
+    setattr(os, function, stalled)
+
+
+def exit_at(function: str, prefix: str) -> None:
+    """In this process, make `os.<function>` on a name starting with `prefix` end the process at once, as a crash."""
+    real = getattr(os, function)
+
+    def crashed(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        names = [os.path.basename(os.fsdecode(a)) for a in args[:2] if isinstance(a, (str, bytes, os.PathLike))]
+        if any(n.startswith(prefix) for n in names):
+            os._exit(9)
+        return real(*args, **kwargs)
+
+    setattr(os, function, crashed)

@@ -1,81 +1,46 @@
-"""Queues of plan fragments: items by identity, index segments, oldest-first claims under leases (ADR-003)."""
+"""Queues of plan fragments: items by identity, slots in segments, oldest-first claims and one outcome per item."""
 
-import collections
-import json
+import errno
 import multiprocessing
 import os
 import pickle
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Iterator
+from multiprocessing.pool import Pool
 from pathlib import Path
 from typing import Any
 
 import pytest
 import queue_race_fixture
-from senselab_core.kernel.placement import NodePlacement
-from senselab_core.runtime.execution.executor import FaultRecord, JobRef, PlanFragment
+from queue_race_fixture import FAULT, fragment
+from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment
 from senselab_core.runtime.execution.queue import ITEM_TAG, LABEL_TAG, Queue, QueueSet
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import identity_digest
+from syscall_faults_fixture import count_calls
 
 pytestmark = pytest.mark.logic
 
-PLAN = "ab" * 32
 OLD = 10**9
 RACE = {"stale_after_s": 0.5, "renew_fraction": 0.25, "attribute_delay_s": 0.0}
-COUNTED = (
-    "open",
-    "close",
-    "read",
-    "write",
-    "mkdir",
-    "rmdir",
-    "rename",
-    "replace",
-    "link",
-    "unlink",
-    "lstat",
-    "stat",
-    "fstat",
-    "listdir",
-    "scandir",
-    "utime",
-    "fsync",
-    "fchmod",
-    "dup",
-)
+OVERRIDE = {"pool": {"segment_items": 3}, "lease": RACE}
 
 
 def _fragments(n: int, prefix: str = "a") -> list[PlanFragment]:
-    placement = NodePlacement(
-        backend="b",
-        backend_version="1",
-        backend_params={},
-        stack="s",
-        env="host",
-        device="cpu",
-        batch_size=1,
-        resource_class="cpu",
-    )
-    job = (JobRef(plan_hash=PLAN, node="n", element=(0,)),)
-    return [
-        PlanFragment(plan_hash=PLAN, node="n", admission=f"{prefix}-{i}", jobs=job, inputs=({},), placement=placement)
-        for i in range(n)
-    ]
+    return [fragment(f"{prefix}-{i}") for i in range(n)]
 
 
-def _digest(fragment: PlanFragment) -> str:
-    return identity_digest(ITEM_TAG, fragment.model_dump(mode="json"))
+def _digest(fragment_: PlanFragment) -> str:
+    return identity_digest(ITEM_TAG, fragment_.model_dump(mode="json"))
 
 
 def _queue(root: Path, segment_items: int = 3, lease: dict[str, float] | None = None) -> Queue:
     override: dict[str, Any] = {"pool": {"segment_items": segment_items}}
     if lease is not None:
         override["lease"] = lease
-    profile = ExecutionProfile.load(override=override)
-    return QueueSet(root, profile).queue("cpu")
+    return QueueSet(root, ExecutionProfile.load(override=override)).queue("cpu")
 
 
 def _drain(queue: Queue, worker: str = "w") -> list[str]:
@@ -86,22 +51,30 @@ def _drain(queue: Queue, worker: str = "w") -> list[str]:
     return order
 
 
-def test_claims_oldest_first_across_segments(tmp_path: Path) -> None:
-    """Seven puts fill three segments of three; claims come back in put order, and a release is claimed next.
+@pytest.fixture
+def pool() -> Iterator[Pool]:
+    """Two spawned processes, their imports done."""
+    with multiprocessing.get_context("spawn").Pool(2) as processes:
+        assert len(set(processes.map(queue_race_fixture.ready, [0.2, 0.2], chunksize=1))) == 2
+        yield processes
 
-    A finished segment below the head is retired.
+
+def test_claims_oldest_first_across_segments(tmp_path: Path) -> None:
+    """Seven puts take slots in three segments of three; claims come back in put order, and a release is next.
+
+    A full segment whose slots are all resolved is retired out of `segments/`.
     """
     queue = _queue(tmp_path)
     fragments = _fragments(7)
-    for fragment in fragments:
-        queue.put(fragment)
+    for each in fragments:
+        queue.put(each)
     digests = [_digest(f) for f in fragments]
-    segments = queue.path / "segments"
-    assert sorted(p.name for p in segments.glob("*.jsonl")) == [f"{s:012d}.jsonl" for s in range(3)]
+    assert sorted(p.name for p in (queue.path / "segments").iterdir()) == [f"{s:012d}" for s in range(3)]
+    assert os.readlink(queue.path / "segments" / f"{1:012d}" / "slot-0") == digests[3]
     assert queue.depth() == 7 and queue.oldest_age_s() is not None
 
     first = queue.claim("w", 2)
-    assert first is not None and first.items == tuple(digests[:2]) and first.segment(digests[0]) == 0
+    assert first is not None and first.items == tuple(digests[:2]) and first.slot(digests[0]) == (0, 0)
     second = queue.claim("w", 1)
     assert second is not None and second.items == (digests[2],)
     first.release([digests[1]])
@@ -113,36 +86,35 @@ def test_claims_oldest_first_across_segments(tmp_path: Path) -> None:
 
     assert _drain(queue) == digests[3:]
     assert queue.depth() == 0 and queue.oldest_age_s() is None
-    assert sorted(p.name for p in segments.glob("*.retired")) == [f"{s:012d}.retired" for s in range(2)]
+    assert sorted(p.name for p in (queue.path / "retired").iterdir()) == [f"{s:012d}" for s in range(2)]
     queue.put(fragments[0])
     assert queue.depth() == 0
 
 
-def test_put_is_first_writer_wins_and_names_the_queue_by_label(tmp_path: Path) -> None:
-    """Two puts of one fragment write one item; a queue for a resident model lives under its label digest."""
+def test_put_is_idempotent_and_names_the_queue_by_label(tmp_path: Path) -> None:
+    """Two puts of one fragment write one item and one slot; a queue for a resident model lives under its label."""
     queues = QueueSet(tmp_path, ExecutionProfile.load())
     model = queues.queue("gpu:h100#model-1")
     assert model.path == tmp_path / identity_digest(LABEL_TAG, "gpu:h100#model-1")
     assert (model.path / "name").read_text() == "gpu:h100#model-1"
-    fragment = _fragments(1)[0]
-    model.put(fragment)
-    model.put(fragment)
-    assert [p.name for p in (model.path / "items").iterdir()] == [f"{_digest(fragment)}.json"]
+    (each,) = _fragments(1)
+    assert model.put_all([each]) == 1 and model.put_all([each]) == 0
+    assert [p.name for p in (model.path / "items").iterdir()] == [f"{_digest(each)}.json"]
     assert model.depth() == 1
     with pytest.raises(ValueError, match="queue name"):
         queues.queue("gpu h100")
 
 
-def test_dead_holds_the_fault_and_finishes_the_item(tmp_path: Path) -> None:
-    """A claim moved to `dead/` records its `FaultRecord`; the item is not claimed again."""
+def test_dead_is_the_one_outcome_and_the_item_is_not_claimed_again(tmp_path: Path) -> None:
+    """A claim killed with a fault records `dead` and the fault at `outcome/<digest>`; nothing claims it again."""
     queue = _queue(tmp_path)
     queue.put(_fragments(1)[0])
     claim = queue.claim("w", 1)
     assert claim is not None
-    fault = FaultRecord(fault="content", type="ContentFault", message="bad", gap=False, charged=True)
-    (digest,) = claim.dead(fault)
-    record = json.loads((queue.path / "dead" / f"{digest}.json").read_bytes())
-    assert FaultRecord.model_validate(record["fault"]) == fault and record["worker"] == "w"
+    (digest,) = claim.dead(FAULT)
+    record = queue.outcome(digest)
+    assert record is not None and record["outcome"] == "dead" and record["worker"] == "w"
+    assert FaultRecord.model_validate(record["fault"]) == FAULT
     assert queue.claim("w", 1) is None and queue.depth() == 0
 
 
@@ -155,6 +127,7 @@ def test_expired_claim_reclaimed(tmp_path: Path) -> None:
     dead_token.mkdir(parents=True)
     for path in (dead_token, dead_token.parent):
         os.utime(path, (OLD, OLD))
+    assert queue.oldest_age_s() is not None
 
     claim = queue.claim("w", 1)
     assert claim is not None and claim.items == (_digest(fragments[0]),) and claim.broke(claim.items[0]) == 1
@@ -165,61 +138,148 @@ def test_expired_claim_reclaimed(tmp_path: Path) -> None:
     other.release()
 
 
-def test_double_claim_commits_once(tmp_path: Path) -> None:
-    """A claimer stalled past the stale bound is broken by a second process; the item is committed once.
-
-    The stalled claimer's beats and commit link sleep at the `os` boundary; its late commit is refused as a duplicate.
-    """
+def _race(tmp_path: Path, pool: Pool, kinds: tuple[str, str]) -> tuple[str, list[dict[str, Any]]]:
+    """Put one item; a claimer stalled after its proof and a fast claimer starting past the stale bound finish it."""
     queue = _queue(tmp_path, lease=RACE)
-    (fragment,) = _fragments(1)
-    queue.put(fragment)
-    override = {"pool": {"segment_items": 3}, "lease": RACE}
-    context = multiprocessing.get_context("spawn")
-    with context.Pool(2) as pool:
-        assert len(set(pool.map(queue_race_fixture.ready, [0.2, 0.2], chunksize=1))) == 2
-        start = time.time() + 0.3
-        slow = pool.apply_async(queue_race_fixture.claim_and_commit, (str(tmp_path), override, start, 0.95))
-        fast = pool.apply_async(queue_race_fixture.claim_and_commit, (str(tmp_path), override, start + 0.6, 0.0))
-        reports = [slow.get(30), fast.get(30)]
-    assert sum(len(r["committed"]) for r in reports) == 1, reports
-    assert [p.name for p in (queue.path / "done").iterdir()] == [f"{_digest(fragment)}.json"]
+    (each,) = _fragments(1)
+    queue.put(each)
+    start = time.time() + 0.3
+    args = [(str(tmp_path), OVERRIDE, start, 0.95, kinds[0]), (str(tmp_path), OVERRIDE, start + 0.6, 0.0, kinds[1])]
+    slow, fast = (pool.apply_async(queue_race_fixture.claim_and_finish, a) for a in args)
+    reports = [slow.get(30), fast.get(30)]
     assert [r["claimed"] for r in reports] == [True, True] and reports[1]["broke"] == 1, reports
-    assert list(reports[0]["outcomes"].values()) == ["duplicate"], reports
+    return _digest(each), reports
+
+
+def test_double_claim_commits_once(tmp_path: Path, pool: Pool) -> None:
+    """A claimer stalled past the stale bound after its proof is broken by a second process; one commit is kept.
+
+    The stalled claimer's beats and outcome link sleep at the `os` boundary; its late link is refused as a duplicate.
+    """
+    digest, reports = _race(tmp_path, pool, ("done", "done"))
+    assert [r["finished"] for r in reports] == [[], [digest]] and reports[0]["outcomes"] == {digest: "duplicate"}
+    assert [p.name for p in (_queue(tmp_path).path / "outcome").iterdir()] == [digest]
+
+
+def test_a_stalled_commit_and_a_fast_dead_give_one_outcome(tmp_path: Path, pool: Pool) -> None:
+    """A commit stalled after its proof and a `dead` from the claimer that broke it: the item has one outcome."""
+    digest, reports = _race(tmp_path, pool, ("done", "dead"))
+    queue = _queue(tmp_path)
+    record = queue.outcome(digest)
+    assert record is not None and record["outcome"] == "dead"
+    assert reports[0]["outcomes"] == {digest: "duplicate"} and reports[1]["finished"] == [digest]
+    assert [p.name for p in (queue.path / "outcome").iterdir()] == [digest]
+
+
+def test_a_stalled_putter_keeps_its_item_indexed(tmp_path: Path, pool: Pool) -> None:
+    """A putter whose slot `symlink` stalls while others fill, finish and retire its segment still takes a slot."""
+    late = pool.apply_async(queue_race_fixture.put_stalled, (str(tmp_path), OVERRIDE, "late", 1.0))
+    time.sleep(0.5)
+    queue = _queue(tmp_path, lease=RACE)
+    queue.put_all(_fragments(3))
+    _drain(queue)
+    assert late.get(30) == 1
+    claim = queue.claim("w", 1)
+    assert claim is not None and claim.items == (_digest(fragment("late")),)
+    claim.commit()
+    assert (queue.path / "retired" / f"{0:012d}").is_dir()
+
+
+def test_a_missing_item_stays_ready_and_a_corrupt_one_is_dead(tmp_path: Path) -> None:
+    """A missing item file is an infrastructure fault and stays ready; one that is not its digest's is a dead item."""
+    queue = _queue(tmp_path)
+    missing, corrupt = _fragments(2)
+    queue.put_all([missing, corrupt])
+    item = queue.path / "items" / f"{_digest(missing)}.json"
+    held = item.read_bytes()
+    item.unlink()
+    (queue.path / "items" / f"{_digest(corrupt)}.json").write_bytes(held)
     assert queue.claim("w", 1) is None
+    assert [(d, f.fault, f.charged) for d, f in queue.faults] == [(_digest(missing), "infrastructure", False)]
+    corrupt_outcome = queue.outcome(_digest(corrupt))
+    assert corrupt_outcome is not None and corrupt_outcome["outcome"] == "dead"
+    assert FaultRecord.model_validate(corrupt_outcome["fault"]).fault == "content"
+    assert queue.outcome(_digest(missing)) is None
+    item.write_bytes(held)
+    claim = _queue(tmp_path).claim("w", 1)
+    assert claim is not None and claim.items == (_digest(missing),)
+    claim.commit()
 
 
-def _counting(monkeypatch: pytest.MonkeyPatch) -> collections.Counter[str]:
-    counts: collections.Counter[str] = collections.Counter()
+def test_a_crash_after_the_outcome_marks_the_slot_and_does_not_run_again(tmp_path: Path) -> None:
+    """A claimer that dies between its outcome link and its slot's mark: the next claimer marks it and runs nothing."""
+    queue = _queue(tmp_path, lease=RACE)
+    (each,) = _fragments(1)
+    queue.put(each)
+    child = multiprocessing.get_context("spawn").Process(
+        target=queue_race_fixture.commit_then_crash, args=(str(tmp_path), OVERRIDE)
+    )
+    child.start()
+    child.join(30)
+    assert child.exitcode == 9
+    record = queue.outcome(_digest(each))
+    assert record is not None and record["worker"] == "crashed"
+    assert not (queue.path / "segments" / f"{0:012d}" / "res-0").exists()
+    time.sleep(RACE["stale_after_s"] + 0.2)
+    assert queue.claim("w", 1) is None
+    assert (queue.path / "segments" / f"{0:012d}" / "res-0").exists()
 
-    def wrap(name: str, real: Callable[..., Any]) -> Callable[..., Any]:
-        def counted(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-            counts[name] += 1
-            return real(*args, **kwargs)
 
-        return counted
+def test_a_lost_reply_on_the_outcome_link_is_this_claims_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A link the storage made but answered `EEXIST` (a retransmission) is read back as this claim's commit."""
+    queue = _queue(tmp_path)
+    (each,) = _fragments(1)
+    queue.put(each)
+    claim = queue.claim("w", 1)
+    assert claim is not None
+    real_link = os.link
 
-    for name in COUNTED:
-        if hasattr(os, name):
-            monkeypatch.setattr(os, name, wrap(name, getattr(os, name)))
-    return counts
+    def link(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+        real_link(*args, **kwargs)
+        raise FileExistsError(errno.EEXIST, "lost reply")
+
+    monkeypatch.setattr(os, "link", link)
+    assert claim.commit() == (_digest(each),) and claim.outcomes == {_digest(each): "committed"}
 
 
-def _claim_cost(root: Path, items: int, claims: int, monkeypatch: pytest.MonkeyPatch) -> int:
+def test_an_interrupted_put_is_repaired_by_reconcile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A put that wrote its item and failed before its slot leaves the item unindexed until `reconcile` puts it."""
+    queues = QueueSet(tmp_path, ExecutionProfile.load(override={"pool": {"segment_items": 3}}))
+    queue = queues.queue("cpu")
+    (each,) = _fragments(1)
+    with monkeypatch.context() as patch:
+
+        def symlink(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+            raise OSError(errno.EIO, "interrupted")
+
+        patch.setattr(os, "symlink", symlink)
+        with pytest.raises(OSError, match="interrupted"):
+            queue.put(each)
+    assert queue.depth() == 0 and queue.claim("w", 1) is None
+    assert QueueSet(tmp_path).reconcile() == 1 and QueueSet(tmp_path).reconcile() == 0
+    claim = queue.claim("w", 1)
+    assert claim is not None and claim.items == (_digest(each),)
+    claim.commit()
+
+
+def _claim_cost(root: Path, items: int, claims: int, monkeypatch: pytest.MonkeyPatch) -> tuple[int, int]:
     queue = _queue(root, segment_items=50)
     queue.put_all(_fragments(items))
-    total = 0
+    calls = read = 0
     for _ in range(claims):
         with monkeypatch.context() as patch:
-            counts = _counting(patch)
+            totals = count_calls(patch)
             claim = queue.claim("w", 1)
-        total += sum(counts.values())
+        calls, read = calls + totals["calls"], read + totals["bytes"]
         assert claim is not None
         claim.commit()
-    return total
+    return calls, read
 
 
 def test_claim_cost_flat_in_queue_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Claiming 100 items, across a segment retirement, costs the same syscalls at 10^2 and 10^4 items queued."""
+    """Claiming 100 items, through a segment retirement, costs the same syscalls and bytes read at 10^2 and 10^4."""
     small = _claim_cost(tmp_path / "small", 10**2, 100, monkeypatch)
     large = _claim_cost(tmp_path / "large", 10**4, 100, monkeypatch)
     assert small == large, (small, large)
@@ -234,10 +294,10 @@ def test_fragment_is_never_pickled(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     for name in ("dump", "dumps", "load", "loads"):
         monkeypatch.setattr(pickle, name, refuse)
     queue = _queue(tmp_path)
-    (fragment,) = _fragments(1)
-    queue.put(fragment)
-    item = queue.path / "items" / f"{_digest(fragment)}.json"
-    assert item.read_bytes() == jcs_dumps(fragment.model_dump(mode="json"))
+    (each,) = _fragments(1)
+    queue.put(each)
+    item = queue.path / "items" / f"{_digest(each)}.json"
+    assert item.read_bytes() == jcs_dumps(each.model_dump(mode="json"))
     claim = queue.claim("w", 1)
-    assert claim is not None and claim.fragments == (fragment,)
+    assert claim is not None and claim.fragments == (each,)
     claim.commit()

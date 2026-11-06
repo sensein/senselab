@@ -1,6 +1,8 @@
 """A run's lifecycle over the fake stack: its directory, status, wait, results, cancel and the CLI that reads it."""
 
+import errno
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -8,6 +10,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from queue_race_fixture import fragment
 from runner_test import (  # noqa: F401 - `packaged` is the autouse fixture of the fake stack
     CHAIN_EDGES,
     CHAINED,
@@ -21,6 +24,7 @@ from runner_test import (  # noqa: F401 - `packaged` is the autouse fixture of t
 from senselab_core.cli import main as cli_main
 from senselab_core.runtime.execution.events import read_events
 from senselab_core.runtime.execution.executor import FaultRecord, Handle, PlanFragment
+from senselab_core.runtime.execution.queue import QueueSet
 from senselab_core.runtime.execution.run import (
     InputChanged,
     InputsUnavailable,
@@ -379,3 +383,24 @@ def test_status_command_reports_jobs_faults_and_state(tmp_path: Path, capsys: py
     assert "faults: content 1" in out and "node a: done 2, failed 1" in out and "node b: done 2, blocked 1" in out
     assert cli_main(["status", str(tmp_path / "nowhere")]) == 1
     assert run.manifest()["plan_hash"] in out
+
+
+@pytest.mark.contract
+def test_a_new_attempt_puts_the_runs_unindexed_queue_items_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An item the run's queue holds without a slot (an interrupted put) has a slot once the run starts again."""
+    run, executor = _started(tmp_path)
+    queue = QueueSet(run.run_dir / "queues").queue("cpu")
+    with monkeypatch.context() as patch:
+
+        def symlink(*args: object, **kwargs: object) -> None:
+            raise OSError(errno.EIO, "interrupted")
+
+        patch.setattr(os, "symlink", symlink)
+        with pytest.raises(OSError, match="interrupted"):
+            queue.put(fragment("interrupted"))
+    assert queue.depth() == 0
+    again = Run(run.run_dir, store=executor.store).plan.run(executor, store=executor.store)
+    assert again.wait(60).done
+    assert queue.depth() == 1
