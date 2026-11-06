@@ -687,10 +687,57 @@ suite as a SLURM job.
   changed redactions (fixed before any evidence ran); a profile's template now writes `review_policy.txt` and
   `task_guidance.yaml` when REVIEW runs, and the start check refuses a policy file still holding the template text.
 
-## Step 7 — hand-over to b2aiprep
+## Step 7 — hand-over to b2aiprep (agreed 2026-11-06; after step 8)
 
-- The B2AI profile, `b2ai_hints.py`, `task_registry.py` and `data/b2ai_task_registry/` move to b2aiprep.
-- This lands together with b2aiprep's paired PR.
+**What it is for.** The last B2AI code and data leave senselab: the B2AI profile, its hint builder and file-name
+reader (`b2ai_hints.py`), its task-registry reader (`task_registry.py`) and the frozen registry copy
+(`data/b2ai_task_registry/`). b2aiprep's design (sensein/b2aiprep#361, `docs/design/triage-workflow-step.md`)
+already places them. Walked through with the user on 2026-11-06.
+
+**Facts checked first.** senselab's frozen registry copy (b2aiprep 8c43256) is byte-identical, file for file, to
+b2aiprep `release/v4.1.0`, so a builder reading b2aiprep's own registry writes the same hints. No published senselab
+carries this refactor (PyPI's newest is 1.4.0a9, from `alpha`; the stack #607-#638 is unmerged), and the hint builder
+imports senselab's identity record, task list and profile loader, so b2aiprep's copy needs a senselab with the stack.
+
+**7a — what moves where** (agreed). The profile (the fixture's content, named `bridge2ai-voice-adult` again) to
+b2aiprep `src/b2aiprep/prepare/resources/triage_profile/adult/`; `b2ai_hints.py` to a new
+`src/b2aiprep/prepare/triage_hints.py`, with the profile's `hints.py` exposing it to the identity check;
+`task_registry.py` beside it, reading `resources/task_registry/` directly; their tests to b2aiprep's `tests/`.
+senselab deletes the frozen copy. senselab's test fixture stays: same content, neutral name.
+
+**7b — order: add first, then remove** (option a). Both PRs are built now as drafts: b2aiprep's on
+`release/v4.1.0` (adds), senselab's removal stacked on #638. Merge order: senselab's stack into `alpha`, an alpha
+published, b2aiprep's senselab pin moved to it and its PR merged, then senselab's removal merged, so no release is
+left without a hint builder.
+
+**7c — checks** (agreed). Hints from b2aiprep's builder and senselab's current one byte-identical for the 5 test
+recordings and the 192 stored runs; with b2aiprep's profile active, every value B2AI's runs read equal to the
+fixture's (the 25 value files and the config), the profile's name aside; the 5 paired runs and the 192-run replay
+identical, senselab with the modules against senselab without them plus b2aiprep's profile and hints; senselab's suite
+without the modules, the copy or the naming check's exemptions; b2aiprep's suite with the moved tests, against the
+senselab branch.
+
+**Results (2026-11-06; senselab `refactor/triage-handover` off f06526391, b2aiprep `feat/triage-profile-handover` off
+`release/v4.1.0` 6bb52c7; evidence in `triage_env_2026_10_22/s7/`).**
+- b2aiprep: the profile at `prepare/resources/triage_profile/adult/` (3aeed5433's B2AI profile, its header now
+  naming its home) with a `hints.py` exposing `build_hint` and `identity_from_name`; `prepare/triage_hints.py` and
+  `prepare/triage_task_registry.py`, the latter reading `resources/` directly; `tests/test_triage_hints.py` and
+  `tests/test_triage_task_registry.py`, which skip under a senselab without the refactor; the profile added to the
+  package data. b2aiprep's senselab pin is unchanged until the alpha with the stack is published (7b).
+- senselab: `b2ai_hints.py`, `task_registry.py`, `data/b2ai_task_registry/` and their tests deleted; the naming
+  check's exemptions and the registry's pre-commit excludes removed; packaged comments that cited B2AI's values as
+  examples made neutral (the reference profile's record of what it was fitted on stays). Two scripts still name B2AI
+  tasks: `evaluate_task_events.py` (scores against B2AI's listening labels, in the fixture) and
+  `triage_viewer_fixture.py` (viewer demo data); left for the user to place.
+- Hints: b2aiprep's builder and senselab's write byte-identical hints for the 5 test recordings and the 192 stored
+  runs' sources. Values: every value B2AI's runs read identical, but the recruited-conditions list's name (the
+  fixture's neutral one against `bridge2ai_voice_adult_2026-09-04`).
+- B2AI unchanged: 5 paired runs and the 192-run replay (senselab with the modules, the fixture and its hints, against
+  senselab without them, b2aiprep's profile and its `hints.py`): every store entity identical (ids normalized), the
+  same decisions and replay rows, the same rereads (59 / 133); run.json names `bridge2ai-voice-adult` again.
+- Suites: senselab 6,700 passed, the same 12 failures as the base tree; b2aiprep with the senselab branch 625 passed
+  (25 moved tests), with its installed senselab 1.3.0 600 passed and 2 skipped, the same 13 failures as
+  `release/v4.1.0` in both.
 
 ## Step 8 — tests on a fixture profile and a made-up one (agreed 2026-11-06; before step 7)
 
