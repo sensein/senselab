@@ -473,7 +473,7 @@ def test_extract_writes_one_line_per_recording(tmp_path: Path) -> None:
         participant="p03",
     )
     report = page.extract(tmp_path, tmp_path / "out.jsonl", workers=1)
-    assert report["candidates"] == 3, "every run is read; its recorded task, not its name, decides"
+    assert report["candidates"] == 2, "the task each run recorded at admission, not its name, picks the candidates"
     assert report["participants"] == 2
     assert report["counts"]["recordings"] == 2
     assert report["counts"]["family:cinderella-story"] == 1
@@ -2163,3 +2163,11 @@ def test_every_condition_kind_has_its_explanation_on_the_page() -> None:
     found = re.search(r"const KIND_WHY=\{([^}]*)\}", page._SCRIPT)
     assert found is not None
     assert set(re.findall(r"(\w+):'", found.group(1))) == set(CONDITION_KINDS)
+
+
+def test_a_candidate_is_picked_by_the_task_admit_recorded(tmp_path: Path) -> None:
+    """Review of step 8: the head of a store names the task; a name naming another task is not read."""
+    run_root = _store(tmp_path, _FAMILY_TOKEN, [], recording="sub-x9_ses-y9_task-animal-fluency")
+    assert page.admitted_family(run_root / "run" / "store.jsonl") == "free-speech"
+    bare = _store(tmp_path, _FAMILY_TOKEN, [], recording="rec-0002", identity=False)
+    assert page.admitted_family(bare / "run" / "store.jsonl") is None

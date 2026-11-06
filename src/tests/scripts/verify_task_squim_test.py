@@ -141,3 +141,22 @@ def test_a_voice_value_fails_the_sanity_check(tmp_path: Path) -> None:
     old = _write(tmp_path / "old.tsv", _rows(False))
     new = _write(tmp_path / "new.tsv", _rows(True, voice_value=True))
     assert cli.main(["--old", str(old), "--new", str(new), "--out", str(tmp_path / "v.md")]) == 1
+
+
+def test_a_log_rows_family_is_the_task_its_run_recorded(tmp_path: Path) -> None:
+    """Review of step 8: the row's run store names the task; a row whose run cannot be read falls back."""
+    from tests.audio.workflows.triage.conftest import declared_identity_attributes
+
+    run_root = tmp_path / "p01" / "s1" / "rec-0001_20000101-000000"
+    (run_root / "run" / "streams").mkdir(parents=True)
+    attributes = {
+        "name": "recording",
+        "path": "rec-0001.wav",
+        **declared_identity_attributes("p01", "s1", "rainbow-passage"),
+    }
+    entity = {"record": "entity", "id": "stream-1", "prov_type": "stream", "extent": None, "attributes": attributes}
+    (run_root / "run" / "store.jsonl").write_text(json.dumps(entity) + "\n")
+    enhanced = str(run_root / "run" / "streams" / "enhanced.flac")
+    assert cli.logged_family({"stem": run_root.name, "enhanced": enhanced, "status": "ok"}) == "rainbow-passage"
+    missing = {"stem": "rec-0002", "enhanced": "/nowhere.flac", "declared_family": "free-speech", "status": "ok"}
+    assert cli.logged_family(missing) == "free-speech"

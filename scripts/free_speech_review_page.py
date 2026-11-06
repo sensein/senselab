@@ -27,7 +27,13 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from senselab.audio.workflows.triage.hint_record import HINT
-from senselab.audio.workflows.triage.identity import participant_group
+from senselab.audio.workflows.triage.identity import (
+    ADMIT_NODE,
+    DECLARED_TASK_ID,
+    RECORDING_STREAM,
+    admit_choice,
+    participant_group,
+)
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS, expected_names
 from senselab.audio.workflows.triage.nodes.gates import Pattern
 from senselab.audio.workflows.triage.recording_vectors import (
@@ -147,6 +153,14 @@ def read_store_light(path: Path, extra_markers: Sequence[str] = ()) -> StoreView
                         extent=(float(extent[0]), float(extent[1])) if extent else None,
                         attributes=record.get("attributes") or {},
                     )
+                )
+            elif kind == "activity":
+                view.activities.append(
+                    {
+                        "node": record.get("node"),
+                        "step": record.get("step"),
+                        "parameters": record.get("parameters") or {},
+                    }
                 )
             elif kind == "relation":
                 relation, source, target = record.get("relation"), record.get("source"), record.get("target")
@@ -684,17 +698,24 @@ def task_extent(view: StoreView) -> tuple[float, float] | None:
 def recording_language(view: StoreView) -> str:
     """The language the recording's hint declares (its ``metadata.language``), as ADMIT recorded the hint.
 
+    The record is ADMIT's (:func:`~senselab.audio.workflows.triage.identity.admit_choice`): the ``recording`` stream,
+    or ADMIT's activity where it refused the recording.
+
     Args:
         view: The store view.
 
     Returns:
         The declared code as written (``en``, ``es``, ``es-419``), or ``""`` where the hint declares none or the
-        run recorded no hint.
+        run recorded no hint (a run from before ADMIT recorded hints, until it is replayed).
     """
-    recording = view.last("stream", name="recording")
-    hint = recording.attributes.get(HINT) if recording is not None else None
+    recording = view.last("stream", name=RECORDING_STREAM)
+    record = admit_choice(
+        recording.attributes if recording is not None else None,
+        [activity["parameters"] for activity in view.activities if activity.get("node") == ADMIT_NODE],
+    )
+    hint = record[0].get(HINT) if record is not None else None
     metadata = hint.get("metadata") if isinstance(hint, Mapping) else None
-    return str((metadata or {}).get("language") or "") if isinstance(metadata, Mapping) else ""
+    return str(metadata.get("language") or "") if isinstance(metadata, Mapping) else ""
 
 
 def language_name(code: str) -> str:
@@ -956,19 +977,57 @@ def _worker(payload: tuple[str, list[str]]) -> dict[str, Any] | None:
 def candidates_under(
     corpus: Path, families: frozenset[str], *, walk_threads: int = fastio.DEFAULT_THREADS
 ) -> list[Path]:
-    """Every run directory under the tree; :func:`recording_record` keeps those whose recorded task is in scope.
+    """The run directories whose recorded task, read at admission, is in ``families``.
 
-    A recording's task is the one its run recorded, so no directory is ruled out by its name (plan step 8).
+    A recording's task is the one its run recorded, never its name (plan step 8). Only the head of each store is
+    read, up to ADMIT's ``recording`` stream (:func:`admitted_family`); :func:`recording_record` reads the whole
+    store of each candidate and decides from its latest record.
 
     Args:
         corpus: The run tree.
-        families: The family names to keep, applied per recording by :func:`recording_record`.
+        families: The family names to keep.
         walk_threads: How many participants are listed at once.
 
     Returns:
         The directories, in walk order.
     """
-    return list(recording_dirs(corpus, threads=walk_threads))
+    return [
+        run_root
+        for run_root in recording_dirs(corpus, threads=walk_threads)
+        if admitted_family(run_root / RUN_SUBDIR / STORE_NAME) in families
+    ]
+
+
+def admitted_family(store: Path) -> str | None:
+    """The task family ADMIT recorded, read from the store's head: its first ``recording`` stream.
+
+    Args:
+        store: The run's ``store.jsonl``.
+
+    Returns:
+        The family, or None where the store is unreadable or holds no such record before its end (a refused
+        recording's ADMIT activity is read where no stream follows).
+    """
+    refused: str | None = None
+    try:
+        with store.open(encoding="utf-8") as handle:
+            for line in handle:
+                if DECLARED_TASK_ID not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if (
+                    record.get("record") == "entity"
+                    and (record.get("attributes") or {}).get("name") == RECORDING_STREAM
+                ):
+                    return task_family(str(record["attributes"].get(DECLARED_TASK_ID) or UNKNOWN_TASK))
+                if record.get("record") == "activity" and record.get("node") == ADMIT_NODE:
+                    refused = str((record.get("parameters") or {}).get(DECLARED_TASK_ID) or UNKNOWN_TASK)
+    except OSError:
+        return None
+    return task_family(refused) if refused is not None else None
 
 
 def _rows(payloads: Sequence[tuple[str, list[str]]], workers: int) -> Iterator[dict[str, Any] | None]:

@@ -33,6 +33,7 @@ from typing import Mapping, Sequence
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
 from senselab.audio.workflows.triage.label_membership import LabelMembership
+from senselab.audio.workflows.triage.recording_vectors import read_store, view_identity
 from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
@@ -117,15 +118,12 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
             run_root = str(summary.get("run_root") or "")
             stem = str(summary.get("stem") or summary_path.name.removesuffix(".summary.json"))
             local = summary_path.parent / Path(run_root).name if run_root else None
-            task = str((summary.get("recording") or {}).get("task_type") or UNKNOWN_TASK)
             handle.write(
                 json.dumps(
                     {
                         "stem": stem,
                         "run_root": run_root,
                         "store": str(local / "run" / "store.jsonl") if local else "",
-                        "task_id": task,
-                        "family": task_family(task),
                     }
                 )
             )
@@ -136,6 +134,19 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
     temporary.replace(manifest)
     print(f"[manifest] {len(summaries)} rows in {time.time() - started:.0f}s", flush=True)
     return manifest
+
+
+def recorded_task_id(store: Path) -> str:
+    """The task id the run recorded (ADMIT's identity record), never read off a file name.
+
+    Args:
+        store: The run's ``store.jsonl``.
+
+    Returns:
+        The task id, or :data:`UNKNOWN_TASK` where the run records none.
+    """
+    identity = view_identity(read_store(store))
+    return identity.task_id if identity is not None else UNKNOWN_TASK
 
 
 def _extract_one(
@@ -157,12 +168,13 @@ def _extract_one(
     if not store.is_file():
         return None
     try:
+        task = recorded_task_id(store)
         return extract_features(
             store,
             row["stem"],
             row["run_root"],
-            row["task_id"],
-            row["family"],
+            task,
+            task_family(task),
             memberships,
             onomatopoeic=onomatopoeic,
         )

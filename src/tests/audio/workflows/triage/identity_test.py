@@ -45,6 +45,9 @@ from tests.audio.workflows.triage.conftest import hint_for
 REC = "rec-0001"
 """A recording's plain file stem, which names no identity."""
 
+DECOY = "sub-x9_ses-y9_task-voluntary-cough-3"
+"""A BIDS-looking stem that names a participant, a session and a task no test declares (plan step 8)."""
+
 TASK = "respiration-and-cough-fivebreaths"
 TOKEN = "respiration-and-cough-fivebreaths-2"
 """The task id the hint declares: :data:`TASK` and its take."""
@@ -127,7 +130,7 @@ class TestRecordedOnTheRun:
     def test_a_store_without_a_declaration_has_no_identity(self) -> None:
         """The stem is not read: a store from before ADMIT recorded identity records none."""
         store = ProvStore(run_id="old")
-        _recording(store, f"/data/{REC}.wav")
+        _recording(store, f"/data/{DECOY}.wav")
         assert recorded_identity(store) is None
         assert declared_session_key(store) is None
 
@@ -160,21 +163,21 @@ class TestDeclaredTaskId:
     def test_without_a_recorded_declaration_nothing_is_read_off_the_file_name(self) -> None:
         """A store that recorded no identity names no task, however its file is named: a replay records one."""
         store = ProvStore(run_id="c")
-        _recording(store, f"/data/{REC}.wav")
+        _recording(store, f"/data/{DECOY}.wav")
         assert declared_task_id(store) == UNKNOWN_TASK
 
     def test_a_task_recorded_from_a_hint_wins_over_the_stem(self) -> None:
         """A reader without the hint still sees what it declared."""
         store = ProvStore(run_id="c")
         declared = identity_of(AudioHints(metadata={TASK_TOKEN_KEY: "loudness"}))
-        _recording(store, f"/data/{REC}.wav", **declared.as_attributes())
+        _recording(store, f"/data/{DECOY}.wav", **declared.as_attributes())
         assert declared_task_id(store) == "loudness"
 
     def test_a_hint_that_declares_an_unknown_task_is_not_overruled_by_the_stem(self) -> None:
         """The hint is the declaration: a task it names as unknown stays unknown."""
         store = ProvStore(run_id="c")
         declared = identity_of(AudioHints(metadata={TASK_TOKEN_KEY: "unknown"}))
-        _recording(store, f"/data/{REC}.wav", **declared.as_attributes())
+        _recording(store, f"/data/{DECOY}.wav", **declared.as_attributes())
         assert declared_task_id(store) == UNKNOWN_TASK
 
     def test_a_task_recorded_from_the_stem_is_the_stem(self) -> None:
@@ -202,7 +205,7 @@ class TestDeclaredTaskId:
     def test_a_refused_recording_without_a_declaration_names_no_task(self) -> None:
         """A store from before ADMIT recorded declarations on its activity: no task, whatever the file's name."""
         store = ProvStore(run_id="c")
-        store.activity(node="ADMIT", step=None, parameters={"audio_file": f"/data/{REC}.wav"})
+        store.activity(node="ADMIT", step=None, parameters={"audio_file": f"/data/{DECOY}.wav"})
         assert declared_task_id(store) == UNKNOWN_TASK
 
     def test_no_admit_record_is_unknown(self) -> None:

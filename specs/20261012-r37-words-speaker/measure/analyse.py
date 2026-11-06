@@ -15,7 +15,7 @@ from senselab.audio.workflows.triage.decision import reason_of
 from senselab.audio.workflows.triage.task_catalogue import is_kind
 from senselab.audio.workflows.triage.task_speech import item_set_family, narrative_family
 
-B2AI_PROFILE = Path(__file__).resolve().parents[3] / "src/tests/audio/workflows/triage/profiles/bridge2ai_voice_adult"
+B2AI_PROFILE = Path(__file__).resolve().parents[3] / "src/tests/audio/workflows/triage/profiles/adult_speech_fixture"
 activate_profile(load_profile(B2AI_PROFILE))
 
 rows = [json.loads(line) for f in sorted(glob.glob(sys.argv[1])) for line in open(f)]

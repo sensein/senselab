@@ -1066,9 +1066,9 @@ class TestAdmitFailShortCircuits:
     def test_a_refused_recording_with_no_declared_family_records_no_absence(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A hint naming no task is not a missing extent."""
+        """A hint naming no task is not a missing extent, whatever task the file name spells."""
         graph(admit_outcome=Outcome.FAIL)
-        result = run_triage(tmp_path / "rec-0001.wav", tmp_path / "out", config)
+        result = run_triage(tmp_path / "sub-x9_ses-y9_task-respiration-and-cough-breath.wav", tmp_path / "out", config)
         store = ProvStore.read_jsonl(result.store_path)
         assert not [e for e in store.entities("measurement") if e.attributes.get("name") == "task_extent_absent"]
 

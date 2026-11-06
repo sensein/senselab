@@ -29,6 +29,9 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 import numpy as np
 from scipy.stats import spearmanr
 
+from senselab.audio.workflows.triage.extend import run_root_of
+from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, read_store, view_identity
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
 from senselab.audio.workflows.triage.task_squim import branch_of_family
 
 HEADS = ("squim_pesq", "squim_stoi", "squim_si_sdr")
@@ -254,6 +257,25 @@ def join(old_rows: Sequence[Mapping[str, str]], new_rows: Sequence[Mapping[str, 
     return out
 
 
+def logged_family(record: Mapping[str, Any]) -> str:
+    """The task family a driver-log row's recording recorded, read from its run's store.
+
+    Args:
+        record: One driver-log row: the manifest row (``stem``, ``enhanced``) and the driver's outcome.
+
+    Returns:
+        The family of the task the run recorded; else the row's ``declared_family``; else ``""``.
+    """
+    try:
+        run_root = run_root_of(Path(str(record.get("enhanced") or "")))
+        identity = view_identity(read_store(run_root / RUN_SUBDIR / STORE_NAME))
+    except (OSError, ValueError):
+        identity = None
+    if identity is not None and identity.task_id != UNKNOWN_TASK:
+        return task_family(identity.task_id)
+    return str(record.get("declared_family") or "")
+
+
 def report(joined: Sequence[Mapping[str, Any]], logs: Sequence[Mapping[str, Any]], min_group: int) -> list[str]:
     """The verification report.
 
@@ -374,7 +396,7 @@ def report(joined: Sequence[Mapping[str, Any]], logs: Sequence[Mapping[str, Any]
         lines += ["### Driver outcomes, by branch", ""]
         outcome: dict[str, Counter[str]] = defaultdict(Counter)
         for record in logs:
-            branch = branch_of_family(str(record.get("declared_family") or "")) or "none"
+            branch = branch_of_family(logged_family(record)) or "none"
             status = str(record["status"])
             if status == "absent":
                 status = "absent: " + absent_kind(str(record.get("reason") or ""))

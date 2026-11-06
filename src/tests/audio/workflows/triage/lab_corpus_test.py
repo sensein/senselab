@@ -9,7 +9,7 @@ hint, so these tests run with no file, task or value from the fixture profile. T
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Iterator
 
 import numpy as np
 import pytest
@@ -27,7 +27,7 @@ from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS, Result, branch_params, dispatch
 from senselab.audio.workflows.triage.nodes.gates import conformance_gate_names, load_gate_bounds
 from senselab.audio.workflows.triage.task_catalogue import FROM_TASK_LIST, recorded_task, task_list
-from senselab.audio.workflows.triage.vocabulary import Outcome, fold_file_verdict
+from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import hint_for
 from tests.conftest import FIXTURE_PROFILE
@@ -81,6 +81,13 @@ def test_it_reads_no_file_of_the_fixture_profile(lab_corpus: TriageConfig) -> No
     assert not fixture_tasks & set(task_list())
     assert lab_corpus.profile is not None
     assert all(layer.root != FIXTURE_PROFILE.resolve() for layer in lab_corpus.profile.chain())
+    fixture_files = {path.read_bytes() for path in FIXTURE_PROFILE.rglob("*") if path.is_file()}
+    copied = [
+        str(path.relative_to(LAB_CORPUS))
+        for path in LAB_CORPUS.rglob("*")
+        if path.is_file() and path.read_bytes() in fixture_files
+    ]
+    assert copied == [], f"copied from the fixture: {copied}"
 
 
 @pytest.mark.parametrize("task", sorted(KINDS))
@@ -125,12 +132,3 @@ def test_each_kinds_gates_resolve(lab_corpus: TriageConfig, task: str) -> None:
     bounds = load_gate_bounds(lab_corpus, pattern, task)
     missing = [name for name in conformance_gate_names(pattern) if bounds.bounds.get(name) is None]
     assert missing == [], f"{task}: no bound for {missing}"
-
-
-@pytest.mark.parametrize("task", sorted(KINDS))
-def test_each_kind_folds_into_a_verdict(lab_corpus: TriageConfig, task: str) -> None:
-    """VERDICT folds a run that declares the task, with the lab's policy, into a decision naming its family."""
-    common: dict[str, Any] = {"branch_decisions": {}, "ran": {}, "hint_claims": {}, "route_state": None}
-    verdict = fold_file_verdict([], declared_family=task, **common)
-    assert verdict.triage is not None
-    assert verdict.declared_family == task

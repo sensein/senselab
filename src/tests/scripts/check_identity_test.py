@@ -210,7 +210,8 @@ class TestBeforeARun:
         hints = _hints(
             tmp_path, "    return (AudioHints(task='humming' if path.stem == 'rec-0001' else 'rainbow-passage'),)\n"
         )
-        listing = _recordings(tmp_path, ["/c/rec-0001.wav", "/c/rec-0002.wav", "/c/rec-0003.wav"])
+        decoy = "sub-x9_ses-y9_task-voluntary-cough-3"  # names a listed task, which the check must not read
+        listing = _recordings(tmp_path, ["/c/rec-0001.wav", f"/c/{decoy}.wav", "/c/rec-0003.wav"])
         out = tmp_path / "report.json"
         assert cli.main(["--recordings", str(listing), "--hints", str(hints), "--out", str(out)]) == 0
         (finding,) = [each for each in _report(out)["findings"] if each["check"] == TASK_NOT_DESCRIBED]

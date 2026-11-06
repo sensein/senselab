@@ -137,3 +137,22 @@ class TestAnExtractThatReadsNothing:
 
         with pytest.raises(SystemExit, match="extracted 0 features"):
             cli.main([str(run_dir), str(tmp_path / "analysis"), "--workers", "1"])
+
+
+def test_the_task_is_the_one_the_run_recorded(tmp_path: Path) -> None:
+    """Review of step 8: the extractor takes the task from the run's identity record, not from any name."""
+    from tests.audio.workflows.triage.conftest import declared_identity_attributes
+
+    store = tmp_path / "store.jsonl"
+    attributes = {
+        "name": "recording",
+        "path": "rec-0001.wav",
+        **declared_identity_attributes("p01", "s1", "rainbow-passage"),
+    }
+    store.write_text(
+        json.dumps({"record": "entity", "id": "s", "prov_type": "stream", "extent": None, "attributes": attributes})
+        + "\n"
+    )
+    assert cli.recorded_task_id(store) == "rainbow-passage"
+    (tmp_path / "bare.jsonl").write_text("")
+    assert cli.recorded_task_id(tmp_path / "bare.jsonl") == "unknown"
