@@ -59,9 +59,61 @@ Boundary rule: a feature goes to pydra when it means something for a task that i
   Items are plan fragments (job, input refs, env, tunables), never pickled objects.
 - **Workers:** `senselab execute --pool <dir> --classes <list>` runs inside the env the queue
   needs. A worker claims a batch from one queue, runs it, commits per-item results by atomic
-  rename, and renews its lease (design item for Phase 3: `Lease` has no renewal, so a holder past `stale_after` can be broken).
+  rename, and renews its lease.
 - **Batches return a result per item.** A failing batch is bisected so one item cannot fail its
   batch-mates.
+
+**As built (Phase 3 Task 15a, P3-35, P3-36).** `runtime/execution/pool_worker.py`; `senselab execute --pool <run
+dir>/queues --classes <list> [--profile NAME]` runs `serve_pool`.
+
+- **One host process, one protocol.** The pool worker is a host `senselab_core` process. It builds each claimed
+  item's jobs from the run's plan (`run_plan`, latest placement) and bound inputs (`bind_sources`), groups the jobs
+  of one claim by plan, node and placement, and sends each group through `execute` and the process's `WorkerSet`,
+  so every backend is reached by the one worker protocol. It logs each job `claimed` under the current epoch's
+  attempt (`Epoch.attempt`), and commits each item with `report` once all its jobs have outcomes. An item whose
+  jobs cannot be built (no plan, another plan, an input that no longer binds) is given the outcome `dead` with
+  that failure, so the `Pool` applies the class's effect.
+- **Quantum.** The worker claims from the class whose oldest waiting item (`Queue.oldest_age_s`) is oldest, up to
+  `pool.quantum_items` items. It stays on that class until it has claimed `quantum_items` items or `quantum_s`
+  seconds have passed, then takes the class with the oldest work again, which may be the same one. Items of a held
+  env are not claimable. It exits once nothing has been claimable for three polls of `pool.poll_s` (`IDLE_POLLS`).
+- **Renewal.** Claim leases beat from their own renewers (Task 12); the worker also proves them (`Claim.renew`)
+  every renewal interval (`lease.renew_fraction × lease.stale_after_s`) while it waits for a claim's outcomes,
+  which run on a thread. An item whose lease was lost is not reported; another claimer takes it.
+- **Load failures are the env's (fix round 1).** A worker that fails to start or load raises `WorkerLoadFailed`
+  (an `infrastructure` fault, its cause chained) from `WorkerSet`, whatever it raised: a `WorkerFatal` at load, a
+  load timeout, a worker lost before ready, and a server that did not start or attests another model
+  (`VllmStartError`, `AttestationMismatch`; fix round 2). A server's start lease that is busy or unreadable
+  (`LeaseTimeout`, `LeaseUnavailable`) is not a load failure and keeps its own class (fix round 3); a pool worker
+  gives an item whose start lease is busy back unreported, so a busy lease never charges an env's
+  `infrastructure_replacements`. The public API's envelope for a load failure is `worker_load_failed`, naming its
+  cause's type and message, or `server_start_failed` or `attestation_mismatch` when the cause is one of those, so a
+  load failure is never reported as `invalid_call`. It is never bisected: the jobs of the request get it once, and the
+  `Pool` counts it toward the env's infrastructure budget and holds the env. A broken env costs one worker start
+  per claim, not 2n-1.
+- **Bisection (P3-36).** Only a request to a loaded worker that fails as a whole is bisected: `WorkerLost`,
+  `WorkerFatal`, `ProtocolError`, or any exception whose class is `resource` (`WorkerTimeout`, `WorkerOOMKilled`,
+  `ValueTooLarge`, a `MemoryError` in the host). The jobs are split in halves, each sent again, until the failing
+  job is alone; it is reported `Failed` with that failure under its own key (`job_key`), and the `Pool` applies the
+  effect. A failure of one item inside a request is reported as it is. Any other exception, a load failure among
+  them, fails every job of the request that raised it and only those: a half that completed keeps its outcomes and
+  is committed. `ProtocolError` is included beyond the ruling's list because the host discards the worker after
+  one, exactly as after `WorkerLost`.
+- **A lost claim stops its request (fix round 1).** When a claim's lease is lost (`Claim.renew` gives up an
+  item), the worker releases the claim's other items at once, so an in-process request that cannot be stopped never
+  holds their leases past the stale bound (fix round 2); it then cancels the claim's remaining work, abandons the
+  request in flight (`WorkerSet.abandon(thread)` closes the worker processes that the claim's own runner thread holds,
+  so their `run` raises `WorkerLost`, and leaves every other thread's workers alone; an in-process host or server
+  backend cannot be stopped and is waited for), commits nothing for it, and takes no new claim until the request's
+  thread has stopped.
+- **SIGTERM.** On the main thread `serve_pool` installs a SIGTERM handler for the call (`PoolWorker.halt`): it sets
+  `stop` and wakes the wait for outcomes. The worker abandons the request in flight, waits up to `join_s` (a worker
+  client's shutdown bound by default) for its thread, commits the items whose jobs finished, releases the rest
+  (their leases are removed, so they are claimable at once) and returns 0.
+- **Idle exit and respawn.** Items under another worker's live claim, and items of a held env, are not claimable,
+  so a worker with only such work exits after its idle polls even if that holder later dies. Keeping workers alive
+  is the substrate's job: the coordinator's substrate (`Substrate.ensure`, Task 16) starts workers again while its
+  queues hold work.
 
 ### 3.3 Fault taxonomy
 
@@ -72,7 +124,7 @@ and is reported as a classification gap.
 | Class | Examples | Effect |
 |---|---|---|
 | content | decoder error on this input, invalid params | charges the item's retry budget; after the budget, the item goes to `dead/` and its descendants become typed failures |
-| infrastructure | handshake refusal (version skew), lost service, preemption, storage error | the worker stops claiming; the item is re-placed without charging its budget; the plan reports the fault |
+| infrastructure | handshake refusal (version skew), lost service, preemption, storage error | the item is re-placed without charging its budget; the plan reports the fault; claims of the env stop once the `Pool` holds it (a pool worker itself keeps claiming other envs' items) |
 | resource | OOM, timeout from contention | re-placed with a larger grant or a smaller batch; not charged |
 
 When one env or one worker is broken, the fault is reported against the env or worker, never
@@ -205,7 +257,11 @@ are recorded here (R-200).
   call on the default model needs no network and the license comes from the reviewed catalogue entry. Any other model
   is `resolve()`d. The planner then rewrites a hub reference to its commit, so the plan names exactly what is loaded.
 - **One worker per model.** A worker process loads one model; host backends share one `ModelCache` per budget, so two
-  tasks on one model share the weights. The pool is keyed by backend, env, init and budget (host) or network
+  tasks on one model and one backend code share the weights. A host cache key names its backend code,
+  `<name>:<worker module>@<version>`, so backends of different code never share a loaded state, and its identity is
+  the model's; a host backend without a model takes the digest of its task, name, version and env as its identity.
+  Pooled workers are keyed by task, name, version and module too (Task 15a fix rounds 2 and 3; before them, a
+  same-named backend of another task got the first one's state). The pool is keyed by backend, env, init and budget (host) or network
   (isolated): a worker started under another budget lacks that budget's sizing, and a worker started offline must not
   serve an online run.
 - **Server attestation without a start.** A server backend's context carries the attestation its env lock, model and

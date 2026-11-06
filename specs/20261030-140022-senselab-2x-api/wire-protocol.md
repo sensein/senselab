@@ -1,8 +1,18 @@
-# Wire protocol v2
+# Wire protocol v3
 
 The protocol between a host (`WorkerClient` in core) and a worker (`senselab_worker.serve`) in an
-isolated env. `WIRE_VERSION = 2`. Closes R-37; implements I-2 (design §4.12) and the typed faults of
+isolated env. `WIRE_VERSION = 3`. Closes R-37; implements I-2 (design §4.12) and the typed faults of
 ADR-009.
+
+**v3 against v2 (Phase 3 Task 15a; R-119, R-161, R-189).** The `init` record carries the
+backend's device, its dtype and, for a call with a model, the model's identity, so a worker loads
+through its process's `ModelCache` under `(backend module, identity, device, dtype)` (R-161); `dtype` is
+removed before a backend's `load`, so no backend's `init` changes. A host
+timeout is `WorkerTimeout`, a typed `resource` fault rather than a fallback-table `TimeoutError`, and
+a worker killed by SIGKILL while its cgroup records an out-of-memory kill is `WorkerOOMKilled`, a
+`resource` fault rather than `WorkerLost` (R-189, R-119). An error record's traceback holds 8 frames
+in total across the cause chain, not 8 per exception (R-119). A v2 worker and a v3 host refuse each
+other at the handshake.
 
 **v2 against v1.** A response is one line per item result, then a `done` line, instead of one line
 holding every result. The line budget therefore applies per item, and one large result can no
@@ -101,8 +111,8 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
 
 | Direction | Kind | Shape |
 |---|---|---|
-| W → H | hello (first line) | `{"hello": {"wire": 2, "runtime": "<sha256>", "python": "3.10.14", "numpy": "1.23.5", "pid": 123}}`; `wire` and `pid` are ints, the others strings |
-| H → W | init | `{"init": {"array_dir": "<abs path>", ...}}` |
+| W → H | hello (first line) | `{"hello": {"wire": 3, "runtime": "<sha256>", "python": "3.10.14", "numpy": "1.23.5", "pid": 123}}`; `wire` and `pid` are ints, the others strings |
+| H → W | init | `{"init": {"array_dir": "<abs path>", "device": "cpu", "dtype": "default", "model": {"source": "...", "id": "...", "identity": "<40 or 64 hex>"}, ...}}`; `model` only for a call with a model |
 | W → H | ready | `{"ready": {"load_s": <int or float>}}` |
 | H → W | request | `{"id": "<uuid>", "items": [{"id": "<item>", "inputs": {...}}], "params": {...}}`; item ids unique |
 | W → H | result (one per item) | `{"id": "<uuid>", "item": "<item>", "outputs": {...}}` or `{"id": "<uuid>", "item": "<item>", "error": {...}}`; exactly one of `outputs` and `error`; the error is a complete error record |
@@ -121,19 +131,28 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
 2. Lines that are not JSON objects before the first JSON object (a `.pth` file or
    `sitecustomize` printing at interpreter start, before the launcher claims fd 1) are logged and
    discarded. The first JSON object must be a valid hello (`validate_message`, so `"wire": true`
-   or `1.0` is refused). The host accepts only if `wire` is the int `2` and `runtime` equals its
+   or `1.0` is refused). The host accepts only if `wire` is the int `3` and `runtime` equals its
    own. Otherwise, or if the first JSON object is not a valid hello, or none
    arrives within 60 s while the worker is alive, it sends `{"stop": true}` and raises
    `ProtocolMismatch` (an `infrastructure` fault) naming both values. A worker that exits or
    closes its output before its hello is `WorkerLost` with its exit code, like a loss at any later
    point: `ProtocolMismatch` is only for a worker that answered wrongly or stayed silent. Nothing
    else is decoded.
-3. The host sends `init`. `array_dir` is reserved; every other key is the backend's. `run_call` sends
-   `device` (the placement's device kind) and, for a call with a model, `model: {source, id, identity}`, the
-   pinned identity the backend loads by; a request's `params` are the task params with the backend params under
-   `backend_params`.
+3. The host sends `init`. `array_dir` is reserved; every other key is the backend's. The job engine
+   (`workers.worker_init`) sends `device` (the placement's device kind), `dtype` (the precision the job
+   records, `default` until a backend declares another) and, for a call with a model,
+   `model: {source, id, identity}`, the pinned identity the backend loads by; a request's `params` are the
+   task params with the backend params under `backend_params`. `dtype` is the launcher's: it is removed
+   before the backend's `load` is called (`serve.backend_init`, `HOST_KEYS`), in a worker and in a host or
+   server backend's in-process worker alike, so every backend's `init` is what it was under v2. `device`
+   and `model` reach `load` as before. The validator does not type these keys.
 4. The worker calls `load(init)` and answers `ready` with the load time in seconds, or `fatal`
-   and exits non-zero.
+   and exits non-zero. When `init` names a `model`, the launcher's load goes through the process's
+   `ModelCache` (`serve.cached_load`) under `(backend module, identity, device, dtype)`: a key loaded
+   before is served from the cache. An init naming a model whose `identity`, `device` or `dtype` is
+   missing or not a string is refused as a `ProtocolError`, and an identity that is not a 40-hex commit
+   or a 64-hex weights digest as a `ValueError`; both are `fatal` and nothing is loaded. An init naming
+   no model loads directly.
 
 ## Requests and responses
 
@@ -182,7 +201,7 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
   `fatal` (`ProtocolError`), and the worker exits `EXIT_FATAL`. In particular a message with a
   top-level `stop` key whose value is not exactly `true` is such a violation, not a stop: the
   worker answers it with a `fatal` `ProtocolError` and exits `EXIT_FATAL`, never 0 and never
-  without a reply (ruling H-R13). v2 has no non-fatal message-level error, so an invalid host
+  without a reply (ruling H-R13). v3, like v2, has no non-fatal message-level error, so an invalid host
   message cannot be answered without ending the session.
 
 ## Kernel values
@@ -262,13 +281,21 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
   `KeyError` from a backend bug is `content` by the table, but its gap says the class was guessed
   (R-83; the executor's rule that a gap fault is never cached is Phase 3).
 - **The record is total** (`error_record`). `type` is the class name; `message` is `str(exc)`,
-  else `repr(exc)`, else `<unprintable TypeName>`; `traceback` is the last 8 frames, formatted
-  under the same guard. Each text field has every code point UTF-8 cannot encode, such as a lone
+  else `repr(exc)`, else `<unprintable TypeName>`; `traceback` holds the 8 most recent frames in total
+  across the cause chain (`TRACEBACK_FRAMES`), formatted under the same guard: the frames are spent
+  from the raised exception outward along its causes and contexts, so a wrapped exception whose own
+  traceback already has 8 frames shows its causes' messages without their frames (R-119). Each text field has every code point UTF-8 cannot encode, such as a lone
   surrogate from a `surrogateescape` filename, backslash-escaped, and is cut to 65 536 characters
   (`MAX_TEXT_CHARS`), so a record always encodes and always fits the line budget.
 - Faults the host raises itself: `ProtocolMismatch`, `ProtocolError`, `WorkerLost` and
-  `WorkerFatal` are `infrastructure`; a host timeout is `resource` (`TimeoutError`). Each fails
-  every item of the request in flight, and the worker is discarded.
+  `WorkerFatal` are `infrastructure`; a host timeout is `WorkerTimeout` (a `ResourceFault` and a
+  `TimeoutError`, so `resource` with `gap: false`). A worker whose reaped exit code is `-9` (SIGKILL)
+  while the cgroup v2 `memory.events` of the host process records more `oom_kill`s than when the
+  client started is `WorkerOOMKilled` (`resource`, `gap: false`, carrying `returncode`), not
+  `WorkerLost`; where no cgroup v2 file is readable (macOS, cgroup v1) an exit `-9` stays `WorkerLost`.
+  `WorkerClient(memory_events=...)` names the file; the tests plant it. Each fails every item of the
+  request in flight, and the worker is discarded. A pool worker bisects such a request (`execution.md`
+  §3.2).
 - **Fatal.** On a `fatal` line, during load or a request, the host raises
   `WorkerFatal(RuntimeError)` carrying the worker's error object; its fault is `infrastructure`,
   whatever the error object's `fault` says. The decode of a fatal's error object is total: `type`
@@ -278,10 +305,11 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
 
 ## Timeouts and shutdown
 
-- Load and request timeouts are arguments to `WorkerClient` (default: none). One deadline covers
+- Load and request timeouts are arguments to `WorkerClient` (default: none); the job engine passes
+  the profile's `timeouts.load_s` and `timeouts.request_s` (R-189). One deadline covers
   each phase end to end: sending `init` and receiving `ready`; sending a request (by non-blocking
   writes, so a worker that has stopped reading cannot hold the host), receiving its response and
-  reading its arrays. On expiry the host raises `TimeoutError` and stops the worker.
+  reading its arrays. On expiry the host raises `WorkerTimeout` and stops the worker.
 - **Process group.** The worker is started in a new session, so it leads its own process group,
   and the group is the unit of kill. The host notices the worker's exit without reaping it
   (`waitid(WNOWAIT)` on Linux, a kqueue `NOTE_EXIT` on macOS) and reaps it only after the group has
@@ -401,8 +429,8 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
 ## Example
 
 ```text
-W→H {"hello": {"wire": 2, "runtime": "9f2c…e1", "python": "3.10.14", "numpy": "1.23.5", "pid": 4711}}
-H→W {"init": {"array_dir": "/tmp/sl-w-4711", "model": "fake"}}
+W→H {"hello": {"wire": 3, "runtime": "9f2c…e1", "python": "3.10.14", "numpy": "1.23.5", "pid": 4711}}
+H→W {"init": {"array_dir": "/tmp/sl-w-4711", "device": "cpu", "dtype": "default", "model": {"source": "hf", "id": "org/fake", "identity": "0123…cdef"}}}
 W→H {"ready": {"load_s": 0.042}}
 H→W {"id": "6d1f0c3a-5b7e-4c2d-9a10-3e8f2b7c4d55", "items": [{"id": "a", "inputs": {"x": {"__array__": {"path": "/tmp/sl-w-4711/3b5d…7a.npy", "sha256": "3b5d…7a", "dtype": "<f4", "shape": [1, 16000]}}}}, {"id": "b", "inputs": {}}], "params": {"faults": {"fail_items": ["b"]}}}
 W→H {"id": "6d1f0c3a-5b7e-4c2d-9a10-3e8f2b7c4d55", "item": "a", "outputs": {"value": "c0ff…ee"}}
