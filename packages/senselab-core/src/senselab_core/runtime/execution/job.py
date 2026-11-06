@@ -140,7 +140,8 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
         InconsistentInputs: a job's inputs contradict a constraint the task declares.
         AmbiguousClock: two recording inputs of one job's content carry different anchors.
         LicenseRefused: `run.licenses` refuses the license of the backend's env or of the model.
-        VllmStartError, LeaseTimeout, LeaseUnavailable, AttestationMismatch: a server backend's server did not start.
+        LeaseTimeout, LeaseUnavailable: a server backend's start lease is busy or cannot be read.
+        WorkerLoadFailed: the backend's worker or server did not start or load.
         OutputTypeMismatch: an output of a kernel-typed port is not a wire form of its declared type.
         WireFormatRetired: a stored output is in a retired wire format.
         WorkerFatal, WorkerLost, ProtocolError: as the worker reports them.

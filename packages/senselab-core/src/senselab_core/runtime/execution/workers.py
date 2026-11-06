@@ -17,6 +17,7 @@ from senselab_core.kernel.declare import BackendSpec
 from senselab_core.kernel.identity import ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.host_worker import HostWorker
+from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.vllm_server import (
@@ -180,8 +181,9 @@ class WorkerSet:
 
         Raises:
             ValueError: a server backend without `expected`; a budgeted host backend without `state_bytes`.
-            WorkerLoadFailed: a worker or a server failed to start or load, whatever it raised (`VllmStartError`,
-                `LeaseTimeout`, `LeaseUnavailable` and `AttestationMismatch` from a server start among them).
+            LeaseTimeout, LeaseUnavailable: a server's start lease is busy or cannot be read.
+            WorkerLoadFailed: a worker or a server failed to start or load, whatever else it raised
+                (`VllmStartError` and `AttestationMismatch` from a server start among them).
         """
         init = worker_init(device, model)
         if backend.env.kind == "server":
@@ -356,10 +358,11 @@ class WorkerSet:
 
 
 def host_model_key(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | None, device: str) -> ModelKey:
-    """Return the process `ModelCache` key of a host backend, as (name, identity, device, dtype).
+    """Return the process `ModelCache` key of a host backend, as (backend code, identity, device, dtype).
 
-    The identity is its model's; without a model it is the digest of the backend's task, name, version and env, so
-    two same-named backends never share a loaded state.
+    The backend code is `<name>:<worker module>@<version>`, so backends of different code never share a loaded state.
+    The identity is the model's, so two tasks on one backend code and one model share it; without a model it is the
+    digest of the backend's task, name, version and env.
     """
     identity = (
         model.identity
@@ -368,17 +371,20 @@ def host_model_key(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | 
             "backend", {"task": backend.task, "name": backend.name, "version": backend.version, "env": env.python}
         )
     )
-    return (backend.name, identity, device, PRECISION)
+    return (f"{backend.name}:{backend.worker}@{backend.version}", identity, device, PRECISION)
 
 
 def _loaded(start: Callable[[], Started]) -> Started:
     """Return the worker `start` starts and loads.
 
     Raises:
-        WorkerLoadFailed: whatever the start or load raised, as its cause.
+        LeaseTimeout, LeaseUnavailable: a start lease is busy or cannot be read, as raised.
+        WorkerLoadFailed: whatever else the start or load raised, as its cause.
     """
     try:
         return start()
+    except (LeaseTimeout, LeaseUnavailable):
+        raise
     except Exception as exc:
         failed = WorkerLoadFailed(f"{type(exc).__name__}: {exc}")
         for note in getattr(exc, "__notes__", ()):

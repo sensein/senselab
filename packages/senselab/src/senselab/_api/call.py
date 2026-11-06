@@ -75,6 +75,9 @@ class ApiError(Exception):
         return self.envelope.model_dump(mode="json")
 
 
+_LOAD_FIX = "the backend's worker did not start or load; this is a fault of the host or its env, not of the input"
+"""The fix of a `WorkerLoadFailed` envelope (`worker_load_failed`)."""
+
 ERROR_CODES: tuple[tuple[type[Exception], str, str], ...] = (
     (InconsistentInputs, "inconsistent_inputs", "give inputs and params that agree; `describe` lists the constraints"),
     (UnknownTask, "unknown_task", "name a declared task; `tasks()` lists them"),
@@ -93,8 +96,8 @@ ERROR_CODES: tuple[tuple[type[Exception], str, str], ...] = (
     (AttestationMismatch, "attestation_mismatch", "start the server as the backend declares it"),
     (LeaseTimeout, "resource_busy", "retry when the other holder of the resource has finished"),
     (LeaseUnavailable, "resource_busy", "retry when the other holder of the resource has finished"),
+    (WorkerLoadFailed, "worker_load_failed", _LOAD_FIX),
     (WorkerFatal, "worker_failed", "the worker stopped; this is a fault of the host, not of the input"),
-    (WorkerLoadFailed, "worker_failed", "the worker did not load; this is a fault of the host, not of the input"),
     (WorkerLost, "worker_failed", "the worker stopped; this is a fault of the host, not of the input"),
     (ProtocolError, "worker_failed", "the worker broke its protocol; report the backend"),
     (
@@ -114,9 +117,17 @@ _FAULT_FIX = {
 
 
 def api_error(error: Exception) -> ApiError | None:
-    """Return the `ApiError` for an error `InProcess.call` documents, or None when it documents none such."""
-    if isinstance(error, WorkerLoadFailed) and isinstance(error.__cause__, Exception):
-        return api_error(error.__cause__)
+    """Return the `ApiError` for an error `InProcess.call` documents, or None when it documents none such.
+
+    A `WorkerLoadFailed` is `worker_load_failed` with its cause's type and message, or the envelope of its cause
+    when that is a server that did not start (`server_start_failed`) or attests another model (`attestation_mismatch`).
+    """
+    if isinstance(error, WorkerLoadFailed):
+        cause = error.__cause__
+        if isinstance(cause, (VllmStartError, AttestationMismatch)):
+            return api_error(cause)
+        detail = f"{type(cause).__name__}: {cause}" if cause is not None else str(error)
+        return ApiError("worker_load_failed", " ".join(detail.split()), _LOAD_FIX)
     if isinstance(error, CallFailed):
         fault = error.failure.fault_class
         return ApiError(f"{fault.value}_fault", str(error), _FAULT_FIX[fault])

@@ -24,6 +24,7 @@ from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, i
 from senselab_core.runtime.execution.run import prepare
 from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
 from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
@@ -403,3 +404,23 @@ def test_a_lost_claim_releases_its_other_items_before_its_request_ends(tmp_path:
         for claim in taken:
             claim.release()
     assert kept in seen and _outcomes(pool_dir, profile) == []
+
+
+@pytest.mark.logic
+def test_a_busy_start_lease_gives_the_item_back_and_charges_nothing(tmp_path: Path) -> None:
+    """A request whose start lease is busy gives its item back unreported, so no failure reaches the env's budget."""
+    profile = _profile()
+    placed, store, pool_dir = _run(tmp_path, profile, ["one"])
+    _put(placed, pool_dir, 0)
+    send, sends = _sender(store, profile), []
+
+    def busy_once(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+        sends.append(len(jobs))
+        if len(sends) == 1:
+            raise LeaseTimeout("another holder is starting this server")
+        return send(jobs, placement)
+
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=busy_once)
+    assert worker.serve() == 0
+    refs = _refs(pool_dir, profile)
+    assert sends == [1, 1] and len(worker.served) == 2 and [r.failure for r in refs] == [None]

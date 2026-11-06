@@ -341,8 +341,8 @@ class InProcess:
             ValueError: the fragment's admission is not held or is of another plan, names a node the plan lacks or a
                 graph input with no value, or its placement names an undeclared backend; and as `execute`.
             InconsistentInputs, AmbiguousClock: as `execute`.
-            LicenseRefused, VllmStartError, LeaseTimeout, LeaseUnavailable, AttestationMismatch, OutputTypeMismatch,
-                WireFormatRetired, WorkerFatal, WorkerLost, ProtocolError: as `execute`.
+            LicenseRefused, LeaseTimeout, LeaseUnavailable, WorkerLoadFailed, OutputTypeMismatch, WireFormatRetired,
+                WorkerFatal, WorkerLost, ProtocolError: as `execute`.
         """
         jobs, placement = self._jobs(fragment)
         handle = Handle(id=f"fragment-{next(self._ids)}")
@@ -413,7 +413,9 @@ class InProcess:
                 for its port's type or, for an isolated or server backend, no wire form; or a server backend got no
                 model.
             WireFormatRetired, OutputTypeMismatch: a stored or computed output is not of its declared form.
-            VllmStartError, LeaseTimeout, LeaseUnavailable, AttestationMismatch: the backend's server did not start.
+            LeaseTimeout, LeaseUnavailable: the backend's server start lease is busy or cannot be read.
+            WorkerLoadFailed: the backend's worker or server did not start or load (`VllmStartError` and
+                `AttestationMismatch` among its causes).
             WorkerFatal, WorkerLost, ProtocolError: as the worker reports them.
             CallFailed: the backend failed the item.
         """

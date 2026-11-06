@@ -11,6 +11,7 @@ from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.workers import PRECISION, WorkerLoadFailed, WorkerSet, host_model_key
+from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.vllm_server import Attestation, VllmStartError
 from senselab_core.runtime.worker_client import WorkerClient
@@ -165,9 +166,43 @@ def test_same_named_host_backends_of_two_tasks_never_share_a_loaded_state() -> N
         for e in (ENV, dataclasses.replace(ENV, python="other"))
     }
     assert len(keys) == 4
+
+
+@pytest.mark.logic
+def test_a_model_is_shared_by_one_backend_code_across_tasks_and_never_by_two() -> None:
+    """Two tasks on one backend code and model share its loaded state; a same-named backend of other code never does."""
     model = _model("a" * 40)
-    assert host_model_key(first, ENV, model, "cpu") == host_model_key(second, ENV, model, "cpu")
-    assert host_model_key(first, ENV, model, "cpu") == ("dsp", "a" * 40, "cpu", PRECISION)
+    first = _host("dsp").model_copy(update={"worker": "backends.load_counter_backend_fixture"})
+    same_code = first.model_copy(update={"task": "worker_set_test.other"})
+    other_code = first.model_copy(update={"worker": "backends.sizes_backend_fixture"})
+    key = host_model_key(first, ENV, model, "cpu")
+    assert key == ("dsp:backends.load_counter_backend_fixture@1", "a" * 40, "cpu", PRECISION)
+    assert host_model_key(same_code, ENV, model, "cpu") == key != host_model_key(other_code, ENV, model, "cpu")
+    assert host_model_key(first.model_copy(update={"version": "2"}), ENV, model, "cpu") != key
+    workers, states = WorkerSet(4), []
+    for backend in (first, same_code):
+        with workers.checkout(backend, ENV, model, device="cpu", profile=PROFILE) as worker:
+            states.append(worker.run([{"id": "a", "inputs": {}}], {})[0]["outputs"]["state"])
+    workers.close()
+    assert states[0] == states[1]
+
+
+@pytest.mark.logic
+def test_a_busy_server_start_lease_is_not_a_load_failure() -> None:
+    """A server start whose lease is busy raises `LeaseTimeout` as it is: a busy resource, never a broken env."""
+
+    def start(*_: Any) -> Any:  # noqa: ANN401 - a ServerStart
+        raise LeaseTimeout("another holder is starting this server")
+
+    backend = _host("served").model_copy(
+        update={"env": Env.server("s"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
+    )
+    model = _model("c" * 40)
+    with pytest.raises(LeaseTimeout):
+        with WorkerSet(1, start_server=start).checkout(
+            backend, ENV, model, device="cpu", profile=PROFILE, expected=_attestation(model)
+        ):
+            pass
 
 
 @pytest.mark.logic

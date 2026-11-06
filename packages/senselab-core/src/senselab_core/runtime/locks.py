@@ -389,10 +389,19 @@ class Lease:
         except (FileNotFoundError, WrongKindError):
             return None
         except OSError as err:
-            if err.errno in GONE_ERRNOS:
-                return None
-            raise
+            if err.errno not in GONE_ERRNOS:
+                raise
+            self._withdraw(token)
+            return None
         return token if self._has(token) else None
+
+    def _withdraw(self, token: str) -> None:
+        """Remove `token` and then the lease, each only if it is still there and the lease holds nothing else."""
+        directory = self._directory()
+        with contextlib.suppress(OSError, WrongKindError), directory.child(self._name) as lease:
+            lease.remove_dir(token, grammar=UUID_HEX)
+        with contextlib.suppress(OSError):
+            directory.remove_dir(self._name, grammar=LEASE_NAME)
 
     def holder(self) -> Optional[dict[str, Any]]:
         """Return the token and owning user of the lease's token directory, None if no token is there."""

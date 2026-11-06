@@ -38,6 +38,7 @@ from senselab_core.runtime.execution.pool import report, run_plan
 from senselab_core.runtime.execution.queue import Claim, QueueSet
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
@@ -89,6 +90,7 @@ def bisect(
 
     Raises:
         Abandoned: `cancelled` was set before a request, or while one ran.
+        LeaseTimeout: a start lease the request needs is busy; nothing failed.
     """
     if cancelled is not None and cancelled.is_set():
         raise Abandoned
@@ -97,6 +99,8 @@ def bisect(
     except Exception as exc:
         if cancelled is not None and cancelled.is_set():
             raise Abandoned from exc
+        if isinstance(exc, LeaseTimeout):
+            raise
         if not whole(exc) or len(members) == 1:
             if len(members) == 1:
                 logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)
@@ -114,8 +118,9 @@ class _Group:
     members: list[Member]
 
 
-Finished: TypeAlias = "queue.SimpleQueue[list[tuple[Member, JobOutcome]] | None]"
-"""The outcomes of a claim's groups as they finish, then None; an empty batch only wakes the wait."""
+Finished: TypeAlias = "queue.SimpleQueue[list[tuple[Member, JobOutcome | None]] | None]"
+"""The outcomes of a claim's groups as they finish, then None; an empty batch only wakes the wait, and a member's
+outcome None gives its item back unreported (a busy start lease)."""
 
 
 class PoolWorker:
@@ -261,14 +266,20 @@ class PoolWorker:
     def _commit(
         self,
         claim: Claim,
-        batch: list[tuple[Member, JobOutcome]],
+        batch: list[tuple[Member, JobOutcome | None]],
         outcomes: dict[str, dict[int, JobOutcome]],
         pending: dict[str, int],
     ) -> None:
-        """Record `batch`'s outcomes; commit each item still held whose every job has one."""
+        """Record `batch`'s outcomes; commit each item still held whose every job has one.
+
+        An item with a job whose outcome is None (a busy start lease) is released, unreported.
+        """
+        busy = {m.digest for m, outcome in batch if outcome is None}
+        claim.release([d for d in busy if d in claim.items])
         for member, outcome in batch:
-            outcomes[member.digest][member.index] = outcome
-        for digest in {m.digest for m, _ in batch}:
+            if outcome is not None:
+                outcomes[member.digest][member.index] = outcome
+        for digest in {m.digest for m, _ in batch} - busy:
             if len(outcomes[digest]) == pending[digest] and digest in claim.items:
                 report(claim, digest, [outcomes[digest][i] for i in range(pending[digest])])
 
@@ -277,7 +288,11 @@ class PoolWorker:
         try:
             for group in groups:
                 send = self._send or functools.partial(self._execute, run=group.run)
-                outcomes = bisect(group.members, group.placement, send, cancelled)
+                try:
+                    outcomes: list[JobOutcome | None] = list(bisect(group.members, group.placement, send, cancelled))
+                except LeaseTimeout as busy:
+                    logger.info("pool worker %s gives its items back: %s", self.name, busy)
+                    outcomes = [None] * len(group.members)
                 finished.put(list(zip(group.members, outcomes, strict=True)))
         except Abandoned:
             logger.info("pool worker %s abandoned the rest of its claim", self.name)

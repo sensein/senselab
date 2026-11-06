@@ -765,7 +765,11 @@ def test_a_judge_listing_during_a_claim_ages_the_lease_fresh(tmp_path: Path, mon
 def test_a_lease_judged_while_another_node_removes_it_reads_estale_as_gone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: tuple[str, ...]
 ) -> None:
-    """`ESTALE` on a `gone-` entry's `lstat` or the lease's `listdir` while judging reads as gone; the taker holds."""
+    """`ESTALE` on a `gone-` entry's `lstat` or the lease's `listdir` while judging reads as gone; the taker holds.
+
+    On NFS `ESTALE` answers only for an object that no longer exists, so a token it drops from the judged listing
+    is gone, not live; the judge reads the lease again on a fresh clock before it breaks anything.
+    """
     lease_dir = _lease_dir(tmp_path / "thing")
     claimed = lease_dir / f"gone-{uuid.uuid4().hex}"
     claimed.mkdir(parents=True)
@@ -793,3 +797,20 @@ def test_a_lease_judged_while_another_node_removes_it_reads_estale_as_gone(
     with Lease(tmp_path / "thing", timeout=5, stale_after=60) as lease:
         assert lease.owns()
     assert sorted(raised) == sorted(where)
+
+
+def test_a_take_that_reads_estale_after_its_mkdir_withdraws_and_takes_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A token `mkdir` that lands but answers `ESTALE` leaves no orphan: the taker withdraws, then holds the lease."""
+    real_mkdir, raised = os.mkdir, list[str]()
+
+    def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        real_mkdir(path, mode, dir_fd=dir_fd)
+        if not raised and len(os.fsdecode(path)) == UUID_LEN and dir_fd is not None:
+            raised.append(os.fsdecode(path))
+            raise OSError(errno.ESTALE, "Stale file handle", os.fsdecode(path))
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    with Lease(tmp_path / "thing", timeout=5, stale_after=60) as lease:
+        assert lease.owns() and raised and lease.broke == []

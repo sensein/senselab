@@ -31,8 +31,11 @@ from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.executor import FaultRecord
 from senselab_core.runtime.execution.in_process import CallFailed, InProcess
+from senselab_core.runtime.execution.workers import WorkerLoadFailed
 from senselab_core.runtime.licenses import backend_license, packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.vllm_server import AttestationMismatch, VllmStartError
+from senselab_core.runtime.worker_client import ProtocolMismatch, WorkerOOMKilled, WorkerTimeout
 from senselab_core.testing.workers import mit_lock_records
 
 import senselab
@@ -740,3 +743,25 @@ def test_validate_takes_a_graph_its_json_or_its_mapping() -> None:
     assert [(i.code, i.node, i.port) for i in issues] == [("unmapped_list", "e", "audio")]
     assert senselab.validate(json.dumps(document), _registry()) == issues
     assert senselab.validate(Graph.model_validate(document), _registry()) == issues
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("cause", "code"),
+    [
+        (WorkerTimeout("loading the backend did not finish within 1 s"), "worker_load_failed"),
+        (WorkerOOMKilled("killed for memory", returncode=-9), "worker_load_failed"),
+        (ProtocolMismatch("worker hello gave wire 2"), "worker_load_failed"),
+        (ValueError("no stub model"), "worker_load_failed"),
+        (VllmStartError("timeout", "the server did not come up"), "server_start_failed"),
+        (AttestationMismatch("the server attests 9.9.9"), "attestation_mismatch"),
+    ],
+)
+def test_a_load_failure_has_its_own_envelope_naming_its_cause(cause: Exception, code: str) -> None:
+    """A `WorkerLoadFailed` is `worker_load_failed` naming its cause, or its server cause's code, never invalid."""
+    try:
+        raise WorkerLoadFailed(f"{type(cause).__name__}: {cause}") from cause
+    except WorkerLoadFailed as failed:
+        envelope = api_error(failed)
+    assert envelope is not None and envelope.envelope.code == code
+    assert type(cause).__name__ in envelope.envelope.message or code != "worker_load_failed"
