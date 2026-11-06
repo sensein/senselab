@@ -38,6 +38,7 @@ from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.planner import Plan, check_mapped_outputs
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import attempt_scope
+from senselab_core.runtime.storage import PRIVATE_DIR_MODE
 
 RECORDS = "records"
 """The pydra node split over the manifest's rows; every mapped node reads its row from it."""
@@ -560,23 +561,17 @@ class PydraRunner:
         cancel: threading.Event | None,
     ) -> RunOutcome:
         root = self.work_dir if self.work_dir is not None else run_dir_of(placed.hash) / "pydra"
+        _private_dir(root)
         store = store if store is not None else SenselabStore(root)
         admission = executor.admit(placed, values)
         run = _Run(placed, admission, executor, store, events, cancel if cancel is not None else threading.Event())
         for node, element in run.expected():
             run.log("queued", node, element)
         classes = sorted({p.resource_class for p in placed.placement.nodes.values()})
-        workers = {name: ExecutorWorker(run_state=run, resource_class=name) for name in classes}
         try:
             with (
                 _no_telemetry(),
-                Submitter(
-                    store=store,
-                    worker=ExecutorWorker(run_state=run),
-                    workers=workers,
-                    router=tag_router({name: name for name in classes}),
-                    on_error="raise_at_end",
-                ) as submitter,
+                _submitter(run, store, classes) as submitter,
             ):
                 submitter(compile_plan(placed), raise_errors=True)
         except WorkflowError as error:
@@ -590,6 +585,23 @@ class PydraRunner:
             executor.release(admission)
             run.close()
         return _outcome(placed, run)
+
+
+def _submitter(run: _Run, store: SenselabStore, classes: Sequence[str]) -> Submitter:
+    """Return the pydra `Submitter` over `store` with one `ExecutorWorker` per resource class."""
+    return Submitter(
+        store=store,
+        worker=ExecutorWorker(run_state=run),
+        workers={name: ExecutorWorker(run_state=run, resource_class=name) for name in classes},
+        router=tag_router({name: name for name in classes}),
+        on_error="raise_at_end",
+    )
+
+
+def _private_dir(path: Path) -> None:
+    """Create `path` and its missing parents, and set `path` to mode `0o700` whatever the umask."""
+    path.mkdir(mode=PRIVATE_DIR_MODE, parents=True, exist_ok=True)
+    path.chmod(PRIVATE_DIR_MODE)
 
 
 def _errored_job(entry: str) -> str | None:

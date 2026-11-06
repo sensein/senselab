@@ -4,6 +4,8 @@ import asyncio
 import dataclasses
 import os
 import platform
+import stat
+import threading
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -480,3 +482,49 @@ def test_a_set_cancel_sends_no_further_fragment(tmp_path: Path) -> None:
             placed, executor, values=values, events=EventLog(tmp_path / "run", "a1", 1), cancel=cancel
         )
     assert executor.fragments == []
+
+
+@pytest.mark.contract
+def test_a_run_completes_with_pydra_pickle_loading_refused_and_leaves_no_pickle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every cloudpickle load fails; the run completes and writes no result, error or return-value pickle."""
+
+    def refuse(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("pydra unpickled")
+
+    monkeypatch.setattr("cloudpickle.load", refuse)
+    monkeypatch.setattr("cloudpickle.loads", refuse)
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "two")])
+    status, _, _ = _run(placed, values, tmp_path)
+    assert status.done and {p.name for p in (tmp_path / "pydra").rglob("*.pklz")} <= {"_job.pklz"}
+
+
+@pytest.mark.contract
+def test_the_pydra_work_dir_is_private_under_a_permissive_umask(tmp_path: Path) -> None:
+    """The work dir the runner creates is mode `0o700` under umask `0o022`, and it is kept after the run."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "one"}])
+    before = os.umask(0o022)
+    try:
+        status, _, _ = _run(placed, values, tmp_path)
+    finally:
+        os.umask(before)
+    assert status.done and stat.S_IMODE((tmp_path / "pydra").stat().st_mode) == 0o700
+
+
+@pytest.mark.logic
+def test_the_submitter_is_built_over_a_senselab_store_with_no_readonly_caches(tmp_path: Path) -> None:
+    """`PydraRunner` submits through `SenselabStore` and passes no `readonly_caches`, so no cache is read."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "one"}])
+    store = runner.SenselabStore(tmp_path / "pydra")
+    run = runner._Run(
+        placed,
+        Recording(ResultStore(tmp_path / "store"), PROFILE).admit(placed, values),
+        Recording(ResultStore(tmp_path / "store"), PROFILE),
+        store,
+        EventLog(tmp_path / "run", "a1", 1),
+        threading.Event(),
+    )
+    submitter = runner._submitter(run, store, ["cpu"])
+    assert type(submitter.store) is runner.SenselabStore
+    assert submitter.readonly_caches is None and not hasattr(submitter.store, "readonly_caches")
