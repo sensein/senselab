@@ -16,7 +16,7 @@ from senselab.audio.workflows.triage import task_squim
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.nodes.common import find_measurement, path_attributes, write_stream
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_task_squim.py"
@@ -27,7 +27,8 @@ sys.modules["extend_task_squim_under_test"] = cli
 _spec.loader.exec_module(cli)
 
 RATE = 16_000
-STEM = "sub-a_ses-b_task-caterpillar-passage"
+STEM = "rec-0001"
+TASK = "caterpillar-passage"
 
 
 def _fake(audios: Sequence[Audio]) -> list[dict[str, float]]:
@@ -35,7 +36,7 @@ def _fake(audios: Sequence[Audio]) -> list[dict[str, float]]:
 
 
 def _run(tree: Path) -> Path:
-    run_root = tree / "sub-a" / "ses-b" / f"{STEM}_20000101-000000"
+    run_root = tree / "p01" / "s1" / f"{STEM}_20000101-000000"
     run_dir = run_root / "run"
     (run_dir / "streams").mkdir(parents=True)
     (run_dir / "derivatives").mkdir()
@@ -51,7 +52,7 @@ def _run(tree: Path) -> Path:
             attributes={
                 "name": name,
                 **path_attributes(relative, run_dir),
-                **(b2ai_identity_attributes(run_root.name) if name == "recording" else {}),
+                **(declared_identity_attributes("p01", "s1", TASK) if name == "recording" else {}),
             },
         )
     store.entity(prov_type="span", extent=(1.0, 11.0), attributes={"role": "task_extent", "branch": "SPEECH"})
@@ -84,7 +85,7 @@ def test_out_root_leaves_the_finished_store_untouched(tmp_path: Path) -> None:
     [record] = cli.process([row], load_triage_config(), out_root=tmp_path / "mirror")
     assert record["status"] == "ok"
     assert (run_root / "run" / "store.jsonl").read_bytes() == before
-    mirrored = tmp_path / "mirror" / "sub-a" / "ses-b" / run_root.name
+    mirrored = tmp_path / "mirror" / "p01" / "s1" / run_root.name
     assert (mirrored / "run" / "streams").is_symlink() and (mirrored / "summary").is_symlink()
     assert not (mirrored / "run" / "store.jsonl").is_symlink()
     store = ProvStore.read_jsonl(mirrored / "run" / "store.jsonl", run_id=run_root.name)

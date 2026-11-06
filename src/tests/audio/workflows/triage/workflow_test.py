@@ -46,7 +46,7 @@ class TestTheStageTable:
         }
 
     def test_senselab_runs_every_stage_by_default(self) -> None:
-        """Without a profile the workflow is the whole graph, so B2AI's runs are unchanged."""
+        """Without a profile the workflow is the whole graph, so a dataset's runs are unchanged."""
         config = load_triage_config()
         assert listed_stages(config.values) == STAGE_NAMES
         assert off_notes(config.values) == {}

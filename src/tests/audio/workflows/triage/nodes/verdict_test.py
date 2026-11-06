@@ -48,7 +48,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Triage,
 )
 from senselab.utils.prov_store import Entity, ProvStore
-from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 
@@ -104,7 +104,7 @@ def _evaluation(
 ) -> RouteEvaluation:
     """One ruleset reading, standing in for the reduction the real ROUTING would run."""
     return RouteEvaluation(
-        stem="sub-01",
+        stem="rec-0001",
         family=family,
         routed=routed,
         declared=declared,
@@ -134,6 +134,7 @@ def make_verdict_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Calla
         declared: Sequence[str] = (),
         family: str = "",
         recording_path: str | None = None,
+        declared_task: str | None = None,
         words_n: int | None = None,
         scanned: bool | None = None,
         pii_n: int = 0,
@@ -146,7 +147,15 @@ def make_verdict_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Calla
             store.entity(
                 prov_type="stream",
                 extent=(0.0, 1.0),
-                attributes={"name": "recording", "path": recording_path, **b2ai_identity_attributes(recording_path)},
+                attributes={
+                    "name": "recording",
+                    "path": recording_path,
+                    **(
+                        declared_identity_attributes("p01", "s1", declared_task)
+                        if declared_task
+                        else declared_identity_attributes()
+                    ),
+                },
             )
         if route:
             reading = _evaluation(tuple(routed), route_state, unavailable or {}, tuple(declared), family)
@@ -593,11 +602,12 @@ class TestHintsAreReadThroughRoutingsMap:
     def test_a_declared_task_no_decision_survived_to_read_is_named_without_any_hint(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """ROUTING errored on a BIDS-named recording: the declaration exists and went unread."""
+        """ROUTING errored on a recording whose hint declared a task: the declaration exists and went unread."""
         store = make_verdict_store(
             concluded=[("ADMIT", Outcome.PASS, None)],
             route=False,
-            recording_path="sub-01_ses-1_task-voluntary-cough.wav",
+            recording_path="rec-0001.wav",
+            declared_task="voluntary-cough",
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.hints == {}
@@ -606,7 +616,7 @@ class TestHintsAreReadThroughRoutingsMap:
     def test_a_stem_declaring_no_task_and_no_hint_is_not_an_unread_declaration(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """The control: without a task token on the path there was no declaration to lose."""
+        """The control: a hint declaring no task left no declaration to lose."""
         store = make_verdict_store(
             concluded=[("ADMIT", Outcome.PASS, None)], route=False, recording_path="some-recording.wav"
         )
@@ -1599,7 +1609,7 @@ class TestTheGatesDecideTheDeclaredTask:
 
         Args:
             tmp_path: Unused; kept so every builder here takes the same first argument.
-            family: The declared task family, written onto the recording's path.
+            family: The declared task family, recorded in the recording's identity.
             branch: The reporting node.
             readings: Measurement name to value.
             in_family: What the report says about its own mode.
@@ -1616,8 +1626,8 @@ class TestTheGatesDecideTheDeclaredTask:
             extent=(0.0, 12.0),
             attributes={
                 "name": "recording",
-                "path": f"sub-a_ses-1_task-{family}.wav",
-                **b2ai_identity_attributes(f"sub-a_ses-1_task-{family}.wav"),
+                "path": "rec-0001.wav",
+                **declared_identity_attributes("p01", "s1", family),
             },
         )
         activity = store.activity(node=branch, step="seed", parameters={})
@@ -1971,8 +1981,8 @@ class TestAnotherSpeakerInsideTheTaskExtentIsAFlag:
             extent=(0.0, 12.0),
             attributes={
                 "name": "recording",
-                "path": f"sub-a_ses-1_task-{family}.wav",
-                **b2ai_identity_attributes(f"sub-a_ses-1_task-{family}.wav"),
+                "path": "rec-0001.wav",
+                **declared_identity_attributes("p01", "s1", family),
             },
         )
         activity = store.activity(node="SPEECH", step="seed", parameters={})

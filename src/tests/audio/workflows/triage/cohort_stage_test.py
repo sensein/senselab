@@ -98,7 +98,7 @@ def _facts(  # noqa: ANN202
     extent=None,  # noqa: ANN001
     removed=(),  # noqa: ANN001
     events=(),  # noqa: ANN001
-    session="sub-a_ses-1",  # noqa: ANN001
+    session="pa/s1",  # noqa: ANN001
 ) -> RecordingFacts:
     """A recording's facts."""
     return RecordingFacts(
@@ -121,7 +121,7 @@ def _session() -> tuple[list, RecordingFacts, AudioLoader]:
     speech = [
         (
             _facts(
-                f"sub-a_ses-1_task-rainbow-passage-{i}",
+                f"rec-000{i}",
                 "rainbow-passage",
                 diarization=[(1.0, 9.0, "A")],
                 lexical=[(1.0, 9.0)],
@@ -132,7 +132,7 @@ def _session() -> tuple[list, RecordingFacts, AudioLoader]:
         for i in range(2)
     ]
     breath = _facts(
-        "sub-a_ses-1_task-respiration-and-cough-breath-1",
+        "rec-0009",
         "respiration-and-cough-breath",
         diarization=[(2.0, 4.0, "A"), (10.0, 13.0, "B")],
         lexical=[(10.2, 10.8), (11.0, 12.5)],
@@ -144,7 +144,7 @@ def _session() -> tuple[list, RecordingFacts, AudioLoader]:
 
 def _enroll(members: list) -> Enrollment:
     return enroll_session(
-        "sub-a_ses-1", members, _embed, model_id="m", commit="c" * 40, cut=CUT, min_s=MIN_S, lexical_gap_s=0.5
+        "pa/s1", members, _embed, model_id="m", commit="c" * 40, cut=CUT, min_s=MIN_S, lexical_gap_s=0.5
     )
 
 
@@ -177,7 +177,7 @@ def test_a_speech_task_pools_its_extent_and_a_mismatch_is_not_non_task_speech() 
     """A speech task's target pool under the cut raises the ground; redaction reads no non-task speech from it."""
     speech, _, _ = _session()
     enrollment = _enroll(speech)
-    facts = _facts("sub-a_ses-1_task-rainbow-passage-9", "rainbow-passage", target=[(1.0, 5.0)])
+    facts = _facts("rec-0010", "rainbow-passage", target=[(1.0, 5.0)])
     block = _compare(facts, _loader([(1.0, 5.0, TALKER)], 20.0), enrollment)
     assert block[POOL_TARGET]["status"] == MEASURED and not block[POOL_TARGET]["match"]
     assert block[POOL_NON_TASK]["status"] == NOT_APPLICABLE
@@ -193,7 +193,7 @@ def test_a_pool_under_two_seconds_is_not_measured_and_never_flags() -> None:
     """Owner, 2026-10-11: speaker identification needs 2 s; a shorter pool is an annotation."""
     speech, _, _ = _session()
     facts = _facts(
-        "sub-a_ses-1_task-respiration-and-cough-breath-1",
+        "rec-0009",
         "respiration-and-cough-breath",
         non_task=[(10.0, 10.8), (11.0, 11.9)],
     )
@@ -235,13 +235,13 @@ def test_leave_one_out_drops_a_recording_another_speaker_holds() -> None:
     """With three enrolling recordings, one voiced by someone else is left out of the pool."""
     members = [
         (
-            _facts(f"sub-a_ses-1_task-rainbow-passage-{i}", "rainbow-passage", diarization=[(1.0, 9.0, "A")]),
+            _facts(f"rec-000{i}", "rainbow-passage", diarization=[(1.0, 9.0, "A")]),
             _loader([(1.0, 9.0, TALKER if i == 2 else PARTICIPANT)], 20.0),
         )
         for i in range(3)
     ]
     enrollment = _enroll(members)
-    assert enrollment.left_out == ["sub-a_ses-1_task-rainbow-passage-2"]
+    assert enrollment.left_out == ["rec-0002"]
     assert float(enrollment.vector @ _direction(PARTICIPANT)) > 0.99
 
 
@@ -298,7 +298,7 @@ def _store() -> ProvStore:
     store.entity(
         prov_type="stream",
         extent=(0.0, 20.0),
-        attributes={"name": "recording", "path": "/x/sub-a_ses-1_task-prolonged-vowel.wav"},
+        attributes={"name": "recording", "path": "/x/rec-0005.wav"},
     )
     return store
 
@@ -319,7 +319,7 @@ def test_a_single_file_run_records_cohort_unavailable_and_folds_nothing() -> Non
 def test_a_corpus_reading_is_not_overwritten_by_the_single_file_fallback_and_rewrites_settle() -> None:
     """A measured reading stands against the fallback; a changed one supersedes it; an equal one mints nothing."""
     store = _store()
-    facts = _facts("sub-a_ses-1_task-prolonged-vowel", "prolonged-vowel")
+    facts = _facts("rec-0005", "prolonged-vowel")
     measured = cohort_attributes(
         facts, other_speaker={"status": MEASURED, "nonmatch": []}, checks={}, quantiles=None, key="a"
     )
@@ -386,7 +386,7 @@ def test_the_fold_reviews_on_a_cohort_ground_and_passes_on_an_unavailable_readin
 def test_a_voice_task_without_words_compares_nothing() -> None:
     """Diarized phonation with no word of speech outside the task offers no pool."""
     speech, _, _ = _session()
-    vowel = _facts("sub-a_ses-1_task-prolonged-vowel", "prolonged-vowel", diarization=[(1.0, 6.0, "A")])
+    vowel = _facts("rec-0005", "prolonged-vowel", diarization=[(1.0, 6.0, "A")])
     block = _compare(vowel, _loader([(1.0, 6.0, TALKER)], 20.0), _enroll(speech))
     assert block[POOL_TARGET]["status"] == NOT_APPLICABLE and block[POOL_NON_TASK]["status"] == NOT_APPLICABLE
     assert block["nonmatch"] == []
@@ -408,7 +408,8 @@ def test_removed_speech_holding_a_non_task_word_joins_the_pool_less_task_events(
 
 
 def _speech(session: str, index: int, level: float = PARTICIPANT) -> tuple[RecordingFacts, AudioLoader]:
-    stem = f"{session}_task-rainbow-passage-{index}"
+    """A rainbow-passage recording of ``session`` (``pa/s<n>``), its stem distinct per session and index."""
+    stem = f"rec-{session[-1]}{index:03d}"
     facts = _facts(
         stem,
         "rainbow-passage",
@@ -421,8 +422,9 @@ def _speech(session: str, index: int, level: float = PARTICIPANT) -> tuple[Recor
 
 
 def _breath(session: str) -> tuple[RecordingFacts, AudioLoader]:
+    """A breath recording of ``session`` (``pa/s<n>``), its stem distinct per session."""
     facts = _facts(
-        f"{session}_task-respiration-and-cough-breath-1",
+        f"rec-{session[-1]}900",
         "respiration-and-cough-breath",
         diarization=[(2.0, 4.0, "A"), (10.0, 13.0, "B")],
         lexical=[(10.2, 10.8), (11.0, 12.5)],
@@ -434,13 +436,13 @@ def _breath(session: str) -> tuple[RecordingFacts, AudioLoader]:
 
 def _participant(sessions: list, embed: Any = _embed) -> ParticipantEnrollments:  # noqa: ANN401
     return enroll_participant(
-        "sub-a", sessions, embed, model_id="m", commit="c" * 40, cut=CUT, min_s=MIN_S, lexical_gap_s=0.5
+        "pa", sessions, embed, model_id="m", commit="c" * 40, cut=CUT, min_s=MIN_S, lexical_gap_s=0.5
     )
 
 
 def _read(sessions: list) -> tuple[ParticipantEnrollments | None, dict]:
     settings = EnrollmentConfig(model_id="m", commit="c" * 40, cut=CUT, min_s=MIN_S, lexical_gap_s=0.5)
-    return read_participant("sub-a", sessions, settings=settings, embed=_embed, artefact=None, quantiles_ref=None)
+    return read_participant("pa", sessions, settings=settings, embed=_embed, artefact=None, quantiles_ref=None)
 
 
 def test_participant_enrollment_pools_every_session_and_embeds_each_recording_once() -> None:
@@ -451,10 +453,10 @@ def test_participant_enrollment_pools_every_session_and_embeds_each_recording_on
         calls.append(samples.size)
         return _embed(samples, rate)
 
-    sessions = [(s, [_speech(s, i) for i in range(2)]) for s in ("sub-a_ses-1", "sub-a_ses-2")]
+    sessions = [(s, [_speech(s, i) for i in range(2)]) for s in ("pa/s1", "pa/s2")]
     found = _participant(sessions, counting)
     assert found.pooled.scope == SCOPE_PARTICIPANT
-    assert len(found.pooled.recordings) == 4 and found.pooled.sessions == ["sub-a_ses-1", "sub-a_ses-2"]
+    assert len(found.pooled.recordings) == 4 and found.pooled.sessions == ["pa/s1", "pa/s2"]
     assert found.pooled.single_speaker_only and found.pooled.vector is not None
     assert float(found.pooled.vector @ _direction(PARTICIPANT)) > 0.99
     assert len(calls) == 4, "four recordings of one span each, embedded once across five pools"
@@ -462,32 +464,32 @@ def test_participant_enrollment_pools_every_session_and_embeds_each_recording_on
 
 def test_leave_one_session_out_excludes_the_session_compared() -> None:
     """Each session's participant enrollment is pooled from the other sessions only."""
-    sessions = [(s, [_speech(s, i) for i in range(2)]) for s in ("sub-a_ses-1", "sub-a_ses-2", "sub-a_ses-3")]
+    sessions = [(s, [_speech(s, i) for i in range(2)]) for s in ("pa/s1", "pa/s2", "pa/s3")]
     found = _participant(sessions)
-    for session, _ in sessions:
+    for session, members in sessions:
         other = found.other_sessions[session]
         assert other.excluded_session == session
         assert session not in other.sessions and len(other.sessions) == 2
-        assert not any(stem.startswith(session) for stem in other.recordings)
+        assert not {facts.stem for facts, _ in members} & set(other.recordings)
         assert len(other.recordings) == 4
 
 
 def test_a_session_far_from_the_other_sessions_is_inconsistent_and_reviewed() -> None:
     """A session voiced by someone else falls under the bound against the rest; the others pass."""
     sessions = [
-        ("sub-a_ses-1", [_speech("sub-a_ses-1", i) for i in range(2)]),
-        ("sub-a_ses-2", [_speech("sub-a_ses-2", i) for i in range(2)]),
-        ("sub-a_ses-3", [_speech("sub-a_ses-3", i, TALKER) for i in range(2)]),
+        ("pa/s1", [_speech("pa/s1", i) for i in range(2)]),
+        ("pa/s2", [_speech("pa/s2", i) for i in range(2)]),
+        ("pa/s3", [_speech("pa/s3", i, TALKER) for i in range(2)]),
     ]
     _, readings = _read(sessions)
     outcomes = {s: readings[s][0]["checks"][CONSISTENCY_CHECK]["outcome"] for s, _ in sessions}
-    assert outcomes == {"sub-a_ses-1": "pass", "sub-a_ses-2": "pass", "sub-a_ses-3": REVIEW}
-    flagged = readings["sub-a_ses-3"][1]
+    assert outcomes == {"pa/s1": "pass", "pa/s2": "pass", "pa/s3": REVIEW}
+    flagged = readings["pa/s3"][1]
     assert KEY_SESSION_SPEAKER_INCONSISTENT in [key for _, key in cohort_grounds(flagged)]
     items = {entry.name: entry for entry in cohort_evidence(flagged)}
     assert items["cohort.session_vs_other_sessions_cosine"].effect == REVIEW
     assert items["cohort.session_vs_other_sessions_cosine"].value < CUT
-    assert KEY_SESSION_SPEAKER_INCONSISTENT not in [key for _, key in cohort_grounds(readings["sub-a_ses-1"][0])]
+    assert KEY_SESSION_SPEAKER_INCONSISTENT not in [key for _, key in cohort_grounds(readings["pa/s1"][0])]
 
 
 def test_the_fold_reviews_an_inconsistent_session_as_other_speaker() -> None:
@@ -495,12 +497,12 @@ def test_the_fold_reviews_an_inconsistent_session_as_other_speaker() -> None:
     from senselab.audio.workflows.triage.vocabulary import Triage, fold_file_verdict
 
     sessions = [
-        ("sub-a_ses-1", [_speech("sub-a_ses-1", i) for i in range(2)]),
-        ("sub-a_ses-2", [_speech("sub-a_ses-2", i, TALKER) for i in range(2)]),
+        ("pa/s1", [_speech("pa/s1", i) for i in range(2)]),
+        ("pa/s2", [_speech("pa/s2", i, TALKER) for i in range(2)]),
     ]
     _, readings = _read(sessions)
     common: dict[str, Any] = {"branch_decisions": {}, "ran": {}, "hint_claims": {}, "route_state": None}
-    folded = fold_file_verdict([], cohort=readings["sub-a_ses-2"][0], **common)
+    folded = fold_file_verdict([], cohort=readings["pa/s2"][0], **common)
     assert folded.triage is Triage.REVIEW and "other_speaker" in folded.reason_keys
     assert KEY_SESSION_SPEAKER_INCONSISTENT in folded.ground_keys
 
@@ -508,37 +510,37 @@ def test_the_fold_reviews_an_inconsistent_session_as_other_speaker() -> None:
 def test_a_session_without_an_enrollment_falls_back_to_the_other_sessions() -> None:
     """No lexical speech in the session: its members are compared against the other sessions' pool."""
     sessions = [
-        ("sub-a_ses-1", [_speech("sub-a_ses-1", i) for i in range(2)]),
-        ("sub-a_ses-2", [_breath("sub-a_ses-2")]),
+        ("pa/s1", [_speech("pa/s1", i) for i in range(2)]),
+        ("pa/s2", [_breath("pa/s2")]),
     ]
     found, readings = _read(sessions)
-    assert found is not None and found.sessions["sub-a_ses-2"].vector is None
-    block = readings["sub-a_ses-2"][0]["other_speaker"]
+    assert found is not None and found.sessions["pa/s2"].vector is None
+    block = readings["pa/s2"][0]["other_speaker"]
     assert block["status"] == MEASURED and block["enrollment_source"] == SOURCE_PARTICIPANT_OTHER_SESSIONS
-    assert block["enrollment"]["excluded_session"] == "sub-a_ses-2"
+    assert block["enrollment"]["excluded_session"] == "pa/s2"
     assert block["nonmatch_spans"] == [[10.2, 12.5]]
-    assert readings["sub-a_ses-1"][0]["other_speaker"]["enrollment_source"] == SOURCE_SESSION
-    assert readings["sub-a_ses-2"][0]["checks"][CONSISTENCY_CHECK]["status"] == NOT_APPLICABLE, "one enrolled session"
+    assert readings["pa/s1"][0]["other_speaker"]["enrollment_source"] == SOURCE_SESSION
+    assert readings["pa/s2"][0]["checks"][CONSISTENCY_CHECK]["status"] == NOT_APPLICABLE, "one enrolled session"
 
 
 def test_a_session_compared_with_its_own_enrollment_also_reports_the_participant_cosine() -> None:
     """Each measured pool carries its cosine against the other sessions' pool too."""
     sessions = [
-        ("sub-a_ses-1", [_speech("sub-a_ses-1", i) for i in range(2)] + [_breath("sub-a_ses-1")]),
-        ("sub-a_ses-2", [_speech("sub-a_ses-2", i) for i in range(2)]),
+        ("pa/s1", [_speech("pa/s1", i) for i in range(2)] + [_breath("pa/s1")]),
+        ("pa/s2", [_speech("pa/s2", i) for i in range(2)]),
     ]
     _, readings = _read(sessions)
-    block = readings["sub-a_ses-1"][2]["other_speaker"]
+    block = readings["pa/s1"][2]["other_speaker"]
     assert block[POOL_NON_TASK]["participant_cosine"] < CUT
-    assert readings["sub-a_ses-1"][0]["other_speaker"][POOL_TARGET]["participant_cosine"] > 0.99
+    assert readings["pa/s1"][0]["other_speaker"][POOL_TARGET]["participant_cosine"] > 0.99
 
 
 def test_a_single_session_participant_has_no_consistency_check() -> None:
     """One session: its own enrollment, no participant cosine, and the check is not applicable."""
-    sessions = [("sub-a_ses-1", [_speech("sub-a_ses-1", i) for i in range(2)] + [_breath("sub-a_ses-1")])]
+    sessions = [("pa/s1", [_speech("pa/s1", i) for i in range(2)] + [_breath("pa/s1")])]
     found, readings = _read(sessions)
     assert found is not None and found.other_sessions == {}
-    reading = readings["sub-a_ses-1"][2]
+    reading = readings["pa/s1"][2]
     assert reading["other_speaker"]["enrollment_source"] == SOURCE_SESSION
     assert all("participant_cosine" not in reading["other_speaker"][pool] for pool in (POOL_TARGET, POOL_NON_TASK))
     assert reading["checks"][CONSISTENCY_CHECK]["status"] == NOT_APPLICABLE
@@ -548,44 +550,41 @@ def test_a_single_session_participant_has_no_consistency_check() -> None:
 
 def test_a_participant_with_no_enrollment_anywhere_compares_nothing() -> None:
     """No session enrolls: the source is none and the block names why."""
-    _, readings = _read([("sub-a_ses-1", [_breath("sub-a_ses-1")]), ("sub-a_ses-2", [_breath("sub-a_ses-2")])])
-    block = readings["sub-a_ses-1"][0]["other_speaker"]
+    _, readings = _read([("pa/s1", [_breath("pa/s1")]), ("pa/s2", [_breath("pa/s2")])])
+    block = readings["pa/s1"][0]["other_speaker"]
     assert block["status"] == UNAVAILABLE and block["enrollment_source"] == SOURCE_NONE
     assert block["reason"] == NO_ENROLLMENT_SPANS
 
 
 def test_a_recording_is_compared_with_its_session_enrollment_left_out() -> None:
     """Two enrolling recordings, one voiced by someone else: each is compared with the other's enrollment only."""
-    sessions = [("sub-a_ses-1", [_speech("sub-a_ses-1", 0), _speech("sub-a_ses-1", 1, TALKER)])]
+    sessions = [("pa/s1", [_speech("pa/s1", 0), _speech("pa/s1", 1, TALKER)])]
     found, readings = _read(sessions)
-    assert found is not None and sorted(found.sessions["sub-a_ses-1"].recordings) == [
-        "sub-a_ses-1_task-rainbow-passage-0",
-        "sub-a_ses-1_task-rainbow-passage-1",
-    ]
-    talker = readings["sub-a_ses-1"][1]["other_speaker"]
-    assert talker["enrollment"]["excluded_recording"] == "sub-a_ses-1_task-rainbow-passage-1"
-    assert talker["enrollment"]["recordings"] == ["sub-a_ses-1_task-rainbow-passage-0"]
+    assert found is not None and sorted(found.sessions["pa/s1"].recordings) == ["rec-1000", "rec-1001"]
+    talker = readings["pa/s1"][1]["other_speaker"]
+    assert talker["enrollment"]["excluded_recording"] == "rec-1001"
+    assert talker["enrollment"]["recordings"] == ["rec-1000"]
     assert not talker[POOL_TARGET]["match"] and talker["nonmatch"] == [POOL_TARGET]
 
 
 def test_recordings_declaring_no_session_are_no_session_to_the_condition_checks() -> None:
     """A participant's session-less pool has no session summary and is no other session's."""
     sessions = [
-        ("sub-a/ses-1", [_facts("a", "rainbow-passage", session="sub-a/ses-1")]),
-        (undeclared_session("sub-a"), [_facts("b", "rainbow-passage", session=None)]),
+        ("pa/s1", [_facts("a", "rainbow-passage", session="pa/s1")]),
+        (undeclared_session("pa"), [_facts("b", "rainbow-passage", session=None)]),
     ]
     blocks = condition_blocks(sessions)
-    assert blocks[undeclared_session("sub-a")]["session"] is None
-    assert blocks[undeclared_session("sub-a")]["other_sessions"] is None
-    assert blocks["sub-a/ses-1"]["other_sessions"] is None
+    assert blocks[undeclared_session("pa")]["session"] is None
+    assert blocks[undeclared_session("pa")]["other_sessions"] is None
+    assert blocks["pa/s1"]["other_sessions"] is None
 
 
 def test_the_cohort_key_follows_the_task_list(monkeypatch: pytest.MonkeyPatch) -> None:
     """A task's kinds decide its cohort readings, so changing an entry's branch or description changes the key."""
-    members = [_facts("sub-a_ses-1_task-rainbow-passage", "rainbow-passage")]
+    members = [_facts("rec-0001", "rainbow-passage")]
 
     def key() -> str:
-        return cohort_stage.cohort_key(group="sub-a", members=members, quantiles_sha256=None, enrollment_config={})
+        return cohort_stage.cohort_key(group="pa", members=members, quantiles_sha256=None, enrollment_config={})
 
     before = key()
     assert key() == before

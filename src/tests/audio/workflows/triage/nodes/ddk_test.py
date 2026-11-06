@@ -253,8 +253,8 @@ def seed_ddk_store(tmp_path: Path) -> Callable[..., dict[str, str]]:
 
     Every argument defaults to writing nothing for that derivative, which is how a test sets up an
     absence. A seeded posteriorgram brings a background view whose level follows its phonemes unless
-    ``background`` is False. ``task`` is the task ADMIT records the hint naming (``record_task``), also written
-    into the stem as its ``task-`` entity, which no stage reads; None records none.
+    ``background`` is False. ``task`` is the task ADMIT records the hint naming (``record_task``); the stem names
+    no task. None records none.
     """
 
     def _seed(
@@ -285,8 +285,6 @@ def seed_ddk_store(tmp_path: Path) -> Callable[..., dict[str, str]]:
             store.was_attributed_to(entity_id, agent)
             return entity_id
 
-        if task is not None:
-            stem = f"sub-a_ses-1_task-{task}"
         for name in ("recording", "plain"):
             ids[name] = _write(
                 "stream",

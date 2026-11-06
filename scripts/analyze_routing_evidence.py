@@ -30,11 +30,10 @@ from functools import partial
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from senselab.audio.workflows.triage.b2ai_hints import task_id_of
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
 from senselab.audio.workflows.triage.label_membership import LabelMembership
-from senselab.audio.workflows.triage.routing_analysis.families import task_family
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     extract_features,
@@ -118,14 +117,15 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
             run_root = str(summary.get("run_root") or "")
             stem = str(summary.get("stem") or summary_path.name.removesuffix(".summary.json"))
             local = summary_path.parent / Path(run_root).name if run_root else None
+            task = str((summary.get("recording") or {}).get("task_type") or UNKNOWN_TASK)
             handle.write(
                 json.dumps(
                     {
                         "stem": stem,
                         "run_root": run_root,
                         "store": str(local / "run" / "store.jsonl") if local else "",
-                        "task_id": task_id_of(stem),
-                        "family": task_family(task_id_of(stem)),
+                        "task_id": task,
+                        "family": task_family(task),
                     }
                 )
             )

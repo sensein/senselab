@@ -15,7 +15,7 @@ import pytest
 from senselab.text.tasks.pii_detection import redaction_review as rr
 from senselab.text.tasks.pii_detection import redaction_review_vllm as rv
 
-pytestmark = pytest.mark.usefixtures("b2ai_triage_profile")  # these tests run triage nodes on B2AI fixtures
+pytestmark = pytest.mark.usefixtures("triage_profile")  # these tests run triage nodes on the fixture profile
 
 SHA = "c" * 40
 

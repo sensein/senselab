@@ -35,9 +35,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-DATA = (
-    Path(__file__).resolve().parents[1] / "src/tests/audio/workflows/triage/profiles/bridge2ai_voice_adult/evaluation"
-)
+DATA = Path(__file__).resolve().parents[1] / "src/tests/audio/workflows/triage/profiles/adult_speech_fixture/evaluation"
 """The Bridge2AI-Voice adult listening labels and split, which live in the B2AI dataset profile."""
 SPLIT_SEED = 20261007
 HELDOUT_FRACTION = 0.3

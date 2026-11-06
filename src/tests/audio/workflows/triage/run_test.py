@@ -25,7 +25,6 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage import run as run_module
 from senselab.audio.workflows.triage import vocabulary as vocabulary_module
-from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import DatasetDataMissing
 from senselab.audio.workflows.triage.dataset_profile import require_dataset_values as real_require_dataset_values
@@ -71,6 +70,7 @@ from senselab.audio.workflows.triage.vocabulary import (
 )
 from senselab.audio.workflows.triage.workflow import OFF_IN_WORKFLOW, STAGE_NAMES
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import hint_for
 
 
 @pytest.fixture(autouse=True)
@@ -693,7 +693,7 @@ class TestConditionalExecution:
         evaluated DDK is gone, so exactly one branch report is written.
         """
         calls = graph(routed=(), declared=("SPEECH",), family="diadochokinesis-pa")
-        result = run_triage(tmp_path / "sub-a_ses-1_task-diadochokinesis-pa.wav", tmp_path / "out", config)
+        result = run_triage(tmp_path / "rec-0001.wav", tmp_path / "out", config)
         assert calls.count("SPEECH") == 1
         assert "AIRWAY" not in calls and "VOICE" not in calls
         assert result.ran["SPEECH"] is RunState.COMPLETED
@@ -710,9 +710,7 @@ class TestConditionalExecution:
     ) -> None:
         """A breath task AIRWAY never ran on carries ``task_extent_absent`` naming the branch, not nothing."""
         graph(routed=("SPEECH",), routing_outcome="none")
-        result = run_triage(
-            tmp_path / "sub-a_ses-1_task-breath-sounds.wav", tmp_path / "out", config, AudioHints(task="breath-sounds")
-        )
+        result = run_triage(tmp_path / "rec-0001.wav", tmp_path / "out", config, AudioHints(task="breath-sounds"))
         assert result.ran["AIRWAY"] is RunState.SKIPPED
         store = ProvStore.read_jsonl(result.store_path)
         absent = [
@@ -727,7 +725,7 @@ class TestConditionalExecution:
     ) -> None:
         """AIRWAY skipped on a speaking task is not a missing airway extent."""
         graph(routed=(), declared=("SPEECH",), family="diadochokinesis-pa")
-        result = run_triage(tmp_path / "sub-a_ses-1_task-diadochokinesis-pa.wav", tmp_path / "out", config)
+        result = run_triage(tmp_path / "rec-0001.wav", tmp_path / "out", config)
         assert result.ran["AIRWAY"] is RunState.SKIPPED
         store = ProvStore.read_jsonl(result.store_path)
         assert not [e for e in store.entities("measurement") if e.attributes.get("name") == "task_extent_absent"]
@@ -843,13 +841,13 @@ class TestTheWorkflow:
 
     @pytest.fixture(autouse=True)
     def _any_task_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Skip the start check: B2AI's task list names every branch; the refusal has its own test below."""
+        """Skip the start check: the fixture's task list names every branch; the refusal has its own test below."""
         monkeypatch.setattr(run_module, "require_dataset_values", lambda values: None)
 
     def test_the_start_check_refuses_a_task_list_naming_an_off_branch(
         self, graph: Callable[..., list[str]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """B2AI's breathing tasks under a workflow without AIRWAY: refused before any node runs."""
+        """The fixture's breathing tasks under a workflow without AIRWAY: refused before any node runs."""
         monkeypatch.setattr(run_module, "require_dataset_values", real_require_dataset_values)
         calls = graph()
         with pytest.raises(DatasetDataMissing, match="its branch AIRWAY is off"):
@@ -912,7 +910,7 @@ class TestTheWorkflow:
         """A breath task under a workflow without AIRWAY names the workflow as the reason in the store."""
         graph(routed=("SPEECH",), routing_outcome="none")
         result = run_triage(
-            tmp_path / "sub-a_ses-1_task-breath-sounds.wav",
+            tmp_path / "rec-0001.wav",
             tmp_path / "out",
             _workflow(tmp_path, "AIRWAY"),
             AudioHints(task="breath-sounds"),
@@ -1054,9 +1052,7 @@ class TestAdmitFailShortCircuits:
         """A breath task ADMIT refused carries ``task_extent_absent`` naming AIRWAY, not nothing."""
         graph(admit_outcome=Outcome.FAIL)
         hint = AudioHints(task="respiration-and-cough-fivebreaths", task_variant={"route": "nose"}, task_take=3)
-        result = run_triage(
-            tmp_path / "sub-a_ses-1_task-respiration-and-cough-fivebreaths-3.wav", tmp_path / "out", config, hint
-        )
+        result = run_triage(tmp_path / "rec-0001.wav", tmp_path / "out", config, hint)
         store = ProvStore.read_jsonl(result.store_path)
         absent = [
             e.attributes
@@ -1070,11 +1066,9 @@ class TestAdmitFailShortCircuits:
     def test_a_refused_recording_with_no_declared_family_records_no_absence(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A hint naming no task is not a missing extent, whatever task the path names."""
+        """A hint naming no task is not a missing extent."""
         graph(admit_outcome=Outcome.FAIL)
-        result = run_triage(
-            tmp_path / "sub-a_ses-1_task-respiration-and-cough-fivebreaths-3.wav", tmp_path / "out", config
-        )
+        result = run_triage(tmp_path / "rec-0001.wav", tmp_path / "out", config)
         store = ProvStore.read_jsonl(result.store_path)
         assert not [e for e in store.entities("measurement") if e.attributes.get("name") == "task_extent_absent"]
 
@@ -1124,25 +1118,13 @@ class TestFreshArtifactsDir:
 class TestTheEntityPath:
     """Run roots nest under the recording's participant and session, as ADMIT records them."""
 
-    @pytest.mark.parametrize(
-        ("stem", "expected"),
-        [
-            ("sub-01_ses-02_task-vowel", ("sub-01", "ses-02")),
-            ("sub-01_task-vowel", ("sub-01",)),
-            ("recording", ()),
-            ("nothing_bids_here", ()),
-            (
-                "sub-SUBJ01_ses-SES01_task-diadochokinesis-ka",
-                ("sub-SUBJ01", "ses-SES01"),
-            ),
-            ("ses-02_task-vowel", ("ses-02",)),
-            ("sub-_ses-_task-vowel", ()),
-            ("sub-01_ses-_task-vowel", ("sub-01",)),
-        ],
-    )
-    def test_it_reads_the_subject_and_session_entities(self, stem: str, expected: tuple[str, ...]) -> None:
-        """With no hint, the stem's entities place the run: a label may contain hyphens, an empty one is none."""
-        assert entity_subdir(identity_from_name(stem)) == (Path(*expected) if expected else Path("."))
+    def test_a_name_contradicting_the_hint_does_not_place_the_run(self, tmp_path: Path) -> None:
+        """Decoy (plan step 8): the run goes under the hint's participant and session, not the name's."""
+        from tests.audio.workflows.triage.conftest import hint_for
+
+        stem = "sub-x9_ses-y9_task-voluntary-cough-3"
+        layout = prepare_run_layout(tmp_path, stem, identity_of(hint_for("p07", "s2", "rainbow-passage")))
+        assert layout.root.parent == tmp_path / "p07" / "s2" and layout.root.name.startswith(stem)
 
     def test_a_declared_identity_places_the_run_whatever_the_stem(self) -> None:
         """A hint's participant and session are the folders, as declared."""
@@ -1155,17 +1137,17 @@ class TestTheEntityPath:
             entity_subdir(RecordingIdentity(participant="../x", session=None, task_id="t"))
 
     def test_a_stem_carrying_neither_entity_stays_flat(self, tmp_path: Path) -> None:
-        """A non-BIDS filename lands directly under the out dir."""
-        layout = prepare_run_layout(tmp_path / "out", "recording", identity_from_name("recording"))
+        """A recording declaring no participant or session lands directly under the out dir."""
+        layout = prepare_run_layout(tmp_path / "out", "recording", identity_of(hint_for()))
         assert layout.entity_dir == tmp_path / "out"
         assert layout.root.parent == tmp_path / "out"
 
     def test_it_creates_the_nested_root_and_names_its_parent(self, tmp_path: Path) -> None:
         """``entity_dir`` is the run root's parent, and every directory exists."""
         out_dir = tmp_path / "out"
-        stem = "sub-SUBJ01_ses-SES01_task-ka"
-        layout = prepare_run_layout(out_dir, stem, identity_from_name(stem))
-        assert layout.entity_dir == out_dir / "sub-SUBJ01" / ("ses-SES01")
+        stem = "rec-0001"
+        layout = prepare_run_layout(out_dir, stem, identity_of(hint_for("p01", "s01", "diadochokinesis-ka")))
+        assert layout.entity_dir == out_dir / "p01" / "s01"
         assert layout.root.parent == layout.entity_dir
         assert layout.root.name.startswith(f"{stem}_")
         assert layout.run_dir.is_dir()
@@ -1174,22 +1156,22 @@ class TestTheEntityPath:
     def test_two_runs_in_one_second_stay_apart_under_the_same_entity_dir(self, tmp_path: Path) -> None:
         """The collision suffix applies to the leaf; the shared parents are reused, not refused."""
         out_dir = tmp_path / "out"
-        stem = "sub-01_ses-02_task-vowel"
-        first = prepare_run_layout(out_dir, stem, identity_from_name(stem))
-        second = prepare_run_layout(out_dir, stem, identity_from_name(stem))
+        stem = "rec-0001"
+        first = prepare_run_layout(out_dir, stem, identity_of(hint_for("p01", "s02", "prolonged-vowel")))
+        second = prepare_run_layout(out_dir, stem, identity_of(hint_for("p01", "s02", "prolonged-vowel")))
         assert first.entity_dir == second.entity_dir
         assert first.root != second.root
 
     def test_the_runner_places_its_run_under_the_entity_path(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A whole run lands under ``out/sub-.../ses-...``, not as a direct child of ``out``."""
+        """A whole run lands under ``out/<participant>/<session>``, not as a direct child of ``out``."""
         graph()
         out_dir = tmp_path / "out"
-        hint = AudioHints(metadata={PARTICIPANT_KEY: "sub-01", SESSION_KEY: "ses-02"})
-        result = run_triage(tmp_path / "sub-01_ses-02_task-vowel.wav", out_dir, config, hint)
-        assert result.run_dir.parent.parent == out_dir / "sub-01" / "ses-02"
-        assert [p.name for p in out_dir.iterdir()] == ["sub-01"]
+        hint = AudioHints(metadata={PARTICIPANT_KEY: "p01", SESSION_KEY: "s02"})
+        result = run_triage(tmp_path / "rec-0001.wav", out_dir, config, hint)
+        assert result.run_dir.parent.parent == out_dir / "p01" / "s02"
+        assert [p.name for p in out_dir.iterdir()] == ["p01"]
 
 
 def _cli() -> types.ModuleType:
@@ -1358,7 +1340,7 @@ class TestCli:
 
 
 ENROLLMENT_YAML = f"""\
-subject_id: sub-01
+subject_id: p01
 task: sustained-vowel
 vector: [1.0, 0.0]
 provenance:
@@ -1391,7 +1373,7 @@ class TestTheEnrollmentDriver:
         monkeypatch.setattr(cli, "run_triage", _fake_run)
         assert cli.main([str(source), "--enrollment", str(enrollment_file)]) == 0
         enrollment = seen["enrollment"]
-        assert enrollment.subject_id == "sub-01"
+        assert enrollment.subject_id == "p01"
         assert enrollment.vector == [1.0, 0.0]
         assert enrollment.provenance.model_id == "speechbrain/spkrec-ecapa-voxceleb"
         assert enrollment.provenance.model_commit_sha == "a" * 40
@@ -1421,13 +1403,13 @@ class TestTheEnrollmentDriver:
         path.write_text(
             json.dumps(
                 {
-                    "subject_id": "sub-01",
+                    "subject_id": "p01",
                     "vector": [1.0, 0.0],
                     "provenance": {"model_id": "m", "model_commit_sha": "b" * 40, "source_files": ["a.wav"]},
                 }
             )
         )
-        assert cli.load_enrollment(path).subject_id == "sub-01"
+        assert cli.load_enrollment(path).subject_id == "p01"
 
     def test_an_unknown_top_level_key_is_refused_loudly(self, tmp_path: Path) -> None:
         """Pydantic ignores an extra key, so a misspelled field would enrol a different vector silently."""
@@ -1449,15 +1431,15 @@ class TestTheEnrollmentDriver:
         """A per-subject table is the shape an estimator naturally writes; it is not this file."""
         cli = _cli()
         path = tmp_path / "enrollments.json"
-        path.write_text(json.dumps({"sub-01": {"subject_id": "sub-01", "vector": [1.0]}}))
-        with pytest.raises(ValueError, match="sub-01"):
+        path.write_text(json.dumps({"p01": {"subject_id": "p01", "vector": [1.0]}}))
+        with pytest.raises(ValueError, match="p01"):
             cli.load_enrollment(path)
 
     def test_a_file_that_is_not_a_mapping_is_refused(self, tmp_path: Path) -> None:
         """A list of enrollments is the other shape, and is refused with the same message."""
         cli = _cli()
         path = tmp_path / "enrollments.json"
-        path.write_text(json.dumps([{"subject_id": "sub-01"}]))
+        path.write_text(json.dumps([{"subject_id": "p01"}]))
         with pytest.raises(ValueError, match="mapping"):
             cli.load_enrollment(path)
 
@@ -1469,7 +1451,7 @@ class TestTheEnrollmentDriver:
         source = tmp_path / "recording.wav"
         source.write_bytes(b"")
         path = tmp_path / "enrollment.yaml"
-        path.write_text("subject_id: sub-01\n")
+        path.write_text("subject_id: p01\n")
 
         def _never(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
             raise AssertionError("the graph must not run against an enrollment that did not load")

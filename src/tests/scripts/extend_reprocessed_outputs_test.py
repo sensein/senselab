@@ -323,6 +323,8 @@ def _seed_run(
     words: str = "null",
     asr_span: bool = False,
     voiced: bool = True,
+    participant: str | None = None,
+    session: str | None = None,
 ) -> None:
     """Write one finished run in the shape the corpus is in, or one of its variations.
 
@@ -338,6 +340,8 @@ def _seed_run(
         asr_span: Whether the store carries a span the ASR proposer contributed.
         voiced: Whether the conditioned streams carry pitch. False is a cough, a breath or a 0.33 s
             fragment: no F0 range can be derived from it, so it has no phonation track.
+        participant: The participant the recording's hint declares, recorded as ADMIT records it.
+        session: The session the recording's hint declares.
     """
     run_dir = root / "run"
     (run_dir / "streams").mkdir(parents=True, exist_ok=True)
@@ -346,7 +350,7 @@ def _seed_run(
     sf.write(str(run_dir / "streams" / "enhanced.flac"), samples, SR)
 
     store = ProvStore(run_id=root.name)
-    seed_recorded_identity(store, root.name)
+    seed_recorded_identity(store, root.name, participant, session)
     agent = software_agent(store)
     condition = store.activity(node="PREPROCESS", step="condition", parameters={"target_hz": SR})
     store.was_associated_with(condition, agent)
@@ -449,9 +453,9 @@ def corpus(tmp_path: Path) -> Callable[..., tuple[Path, list[Path]]]:
     def _build(count: int, **kwargs: Any) -> tuple[Path, list[Path]]:  # noqa: ANN401 — _seed_run's own keywords
         roots = []
         for index in range(count):
-            root = tmp_path / "corpus" / f"sub-{index:02d}_ses-1_20260912-000000"
+            root = tmp_path / "corpus" / f"rec-{index:04d}_20260912-000000"
             root.mkdir(parents=True, exist_ok=True)
-            _seed_run(root, **kwargs)
+            _seed_run(root, participant=f"p{index:02d}", session="s1", **kwargs)
             roots.append(root)
         return _manifest(tmp_path / "manifest.jsonl", roots), roots
 
@@ -884,7 +888,7 @@ class TestRebracketingTheWords:
 
         fresh_root = tmp_path / "fresh" / roots[0].name
         fresh_root.mkdir(parents=True)
-        _seed_run(fresh_root, words="current")
+        _seed_run(fresh_root, words="current", participant="p00", session="s1")
 
         extended, fresh = _store_of(roots[0]), _store_of(fresh_root)
         assert [word.id for word in consensus_words(extended)] == [word.id for word in consensus_words(fresh)]

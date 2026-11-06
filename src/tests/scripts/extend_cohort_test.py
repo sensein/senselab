@@ -12,18 +12,17 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.cohort_fold import COHORT_READING, MEASURED
 from senselab.audio.workflows.triage.extend import read_store, write_store
-from senselab.audio.workflows.triage.identity import ManifestWithoutIdentity, identity_columns
+from senselab.audio.workflows.triage.identity import ManifestWithoutIdentity, identity_columns, identity_of
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import hint_for
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 RATE = 16000
 DIM = 8
-SESSION = "sub-a_ses-1"
 TALKER_WORDS = ((6.5, 7.0), (7.5, 8.0))
 
 
@@ -51,14 +50,16 @@ def _embed(samples: np.ndarray, rate: int) -> np.ndarray | None:
 
 def _run(  # noqa: ANN202
     root: Path,
-    task: str,
+    stem: str,
+    task_id: str,
     duration: float,
     speech: list[tuple[float, float, str, float]],
     extent,  # noqa: ANN001
-    session: str = SESSION,
+    participant: str = "pa",
+    session: str = "s1",
     words: tuple[tuple[float, float], ...] = (),
 ):
-    stem = f"{session}_task-{task}"
+    """One finished run of ``stem``, its hint declaring ``participant``/``session`` and the task id ``task_id``."""
     run_root = root / f"{stem}_20261010-000000"
     streams = run_root / "run" / "streams"
     derivatives = run_root / "run" / "derivatives"
@@ -83,7 +84,7 @@ def _run(  # noqa: ANN202
         extent=None,
         attributes={"name": "yamnet_scores", "signal": "plain", "path": "derivatives/yamnet_scores.json"},
     )
-    identity = identity_from_name(stem)
+    identity = identity_of(hint_for(participant, session, token=task_id))
     store.entity(
         prov_type="stream",
         extent=(0.0, duration),
@@ -111,10 +112,11 @@ def _run(  # noqa: ANN202
 def corpus(tmp_path: Path) -> Path:
     """Three speech-bearing recordings and four vowels of one session, the last far longer than the rest."""
     rows = [
-        _run(tmp_path, "rainbow-passage", 12.0, [(1.0, 9.0, "A", 0.1)], (1.0, 9.0)),
-        _run(tmp_path, "caterpillar-passage", 12.0, [(1.0, 10.0, "A", 0.1)], (1.0, 10.0)),
+        _run(tmp_path, "rec-0001", "rainbow-passage", 12.0, [(1.0, 9.0, "A", 0.1)], (1.0, 9.0)),
+        _run(tmp_path, "rec-0002", "caterpillar-passage", 12.0, [(1.0, 10.0, "A", 0.1)], (1.0, 10.0)),
         _run(
             tmp_path,
+            "rec-0003",
             "respiration-and-cough-breath-1",
             10.0,
             [(2.0, 4.0, "A", 0.1), (6.0, 9.0, "B", 0.2)],
@@ -122,8 +124,8 @@ def corpus(tmp_path: Path) -> Path:
             words=TALKER_WORDS,
         ),
     ]
-    rows += [_run(tmp_path, f"prolonged-vowel-{i}", 10.0, [], (1.0, 9.0)) for i in range(1, 4)]
-    rows.append(_run(tmp_path, "prolonged-vowel-4", 50.0, [], (1.0, 9.0)))
+    rows += [_run(tmp_path, f"rec-000{i + 3}", f"prolonged-vowel-{i}", 10.0, [], (1.0, 9.0)) for i in range(1, 4)]
+    rows.append(_run(tmp_path, "rec-0007", "prolonged-vowel-4", 50.0, [], (1.0, 9.0)))
     manifest = tmp_path / "manifest.jsonl"
     manifest.write_text("".join(json.dumps(r) + "\n" for r in rows))
     return manifest
@@ -211,29 +213,30 @@ def test_readings_out_writes_no_store(
     rows = [json.loads(line) for line in corpus.read_text().splitlines()]
     stores = [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows]
     out = tmp_path / "readings"
-    assert _apply(corpus, config, quantiles, "--readings-out", str(out), "--participants", "sub-a") == 0
+    assert _apply(corpus, config, quantiles, "--readings-out", str(out), "--participants", "pa") == 0
     assert [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows] == stores
-    written = [json.loads(line) for line in (out / "sub-a.jsonl").read_text().splitlines()]
+    written = [json.loads(line) for line in (out / "pa.jsonl").read_text().splitlines()]
     assert len(written) == len(rows)
     assert sum(1 for record in written if record["nonmatch"]) == 1
 
 
 def _two_participants(root: Path) -> Path:
-    """sub-a with two sessions (the second has only a breath task, its talker on level 0.2), sub-b with one."""
+    """``pa`` with two sessions (the second has only a breath task, its talker on level 0.2), ``pb`` with one."""
     rows = [
-        _run(root, "rainbow-passage", 12.0, [(1.0, 9.0, "A", 0.1)], (1.0, 9.0)),
-        _run(root, "caterpillar-passage", 12.0, [(1.0, 10.0, "A", 0.1)], (1.0, 10.0)),
+        _run(root, "rec-0001", "rainbow-passage", 12.0, [(1.0, 9.0, "A", 0.1)], (1.0, 9.0)),
+        _run(root, "rec-0002", "caterpillar-passage", 12.0, [(1.0, 10.0, "A", 0.1)], (1.0, 10.0)),
         _run(
             root,
+            "rec-0003",
             "respiration-and-cough-breath-1",
             10.0,
             [(2.0, 4.0, "A", 0.1), (6.0, 9.0, "B", 0.2)],
             (1.0, 5.0),
-            session="sub-a_ses-2",
+            session="s2",
             words=TALKER_WORDS,
         ),
-        _run(root, "rainbow-passage", 12.0, [(1.0, 9.0, "A", 0.3)], (1.0, 9.0), session="sub-b_ses-1"),
-        _run(root, "caterpillar-passage", 12.0, [(1.0, 9.0, "A", 0.3)], (1.0, 9.0), session="sub-b_ses-1"),
+        _run(root, "rec-0004", "rainbow-passage", 12.0, [(1.0, 9.0, "A", 0.3)], (1.0, 9.0), participant="pb"),
+        _run(root, "rec-0005", "caterpillar-passage", 12.0, [(1.0, 9.0, "A", 0.3)], (1.0, 9.0), participant="pb"),
     ]
     manifest = root / "manifest.jsonl"
     manifest.write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -248,8 +251,8 @@ def test_apply_shards_by_participant_and_falls_back_across_sessions(
     manifest = _two_participants(tmp_path)
     grouped = cli.participants_of([json.loads(line) for line in manifest.read_text().splitlines()])
     assert [(p, [s for s, _ in sessions]) for p, sessions in grouped] == [
-        ("sub-a", ["sub-a/ses-1", "sub-a/ses-2"]),
-        ("sub-b", ["sub-b/ses-1"]),
+        ("pa", ["pa/s1", "pa/s2"]),
+        ("pb", ["pb/s1"]),
     ]
     quantiles = _quantiles(manifest)
     out = tmp_path / "readings"
@@ -282,15 +285,15 @@ def test_apply_shards_by_participant_and_falls_back_across_sessions(
         ]
         for i in range(2)
     ]
-    assert [sorted({r["participant"] for r in records}) for records in slices] == [["sub-a"], ["sub-b"]]
-    assert sorted({r["session"] for r in slices[0]}) == ["sub-a/ses-1", "sub-a/ses-2"]
+    assert [sorted({r["participant"] for r in records}) for records in slices] == [["pa"], ["pb"]]
+    assert sorted({r["session"] for r in slices[0]}) == ["pa/s1", "pa/s2"]
     sources = {r["session"]: r["enrollment_source"] for r in slices[0]}
-    assert sources == {"sub-a/ses-1": "session", "sub-a/ses-2": "participant_other_sessions"}
-    breath = next(r for r in slices[0] if r["session"] == "sub-a/ses-2")
+    assert sources == {"pa/s1": "session", "pa/s2": "participant_other_sessions"}
+    breath = next(r for r in slices[0] if r["session"] == "pa/s2")
     assert breath["nonmatch"] == ["non_task"], "the talker's words and the removed speech around them, pooled"
     assert breath["pools"]["non_task"]["pooled_s"] == 3.0 and breath["pools"]["target"]["status"] == "not_applicable"
     assert {r["consistency"]["status"] for r in slices[1]} == {"not_applicable"}
-    assert sorted(p.name for p in out.glob("*.jsonl")) == ["sub-a.jsonl", "sub-b.jsonl"]
+    assert sorted(p.name for p in out.glob("*.jsonl")) == ["pa.jsonl", "pb.jsonl"]
     assert cli.main(["consistency", str(tmp_path / "logs")]) == 0
 
 
@@ -323,25 +326,23 @@ def test_a_stale_manifest_row_refuses_its_whole_participant(
     manifest.write_text("".join(json.dumps(r) + "\n" for r in rows))
     quantiles = _quantiles(manifest)
     stores = {r["stem"]: (Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows}
-    _apply(manifest, config, quantiles, "--participants", "sub-a")
-    sub_a = [r for r in rows if r["participant"] == "sub-a"]
-    assert all(
-        (Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() == stores[r["stem"]] for r in sub_a
-    )
+    _apply(manifest, config, quantiles, "--participants", "pa")
+    pa = [r for r in rows if r["participant"] == "pa"]
+    assert all((Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() == stores[r["stem"]] for r in pa)
 
 
 def test_a_manifest_without_identity_columns_is_refused(tmp_path: Path) -> None:
     """Grouping never parses a stem: a manifest from before rows carried identity is rebuilt."""
     with pytest.raises(ManifestWithoutIdentity):
-        cli.participants_of([{"stem": "sub-a_ses-1_task-x", "enhanced": "/x"}])
+        cli.participants_of([{"stem": "rec-0001", "enhanced": "/x"}])
 
 
 def test_recordings_declaring_no_session_pool_under_their_participant() -> None:
-    """A participant's session-less recordings form one pool, not one session each; a nameless one is its own."""
+    """A participant's session-less recordings form one pool, not one session each; one declaring none is its own."""
     rows = [
-        {"stem": "a", "enhanced": "/x/a", **identity_columns(identity_from_name("sub-a_task-x"))},
-        {"stem": "b", "enhanced": "/x/b", **identity_columns(identity_from_name("sub-a_task-y"))},
-        {"stem": "c", "enhanced": "/x/c", **identity_columns(identity_from_name("recording-c"))},
+        {"stem": "a", "enhanced": "/x/a", **identity_columns(identity_of(hint_for("pa", token="x")))},
+        {"stem": "b", "enhanced": "/x/b", **identity_columns(identity_of(hint_for("pa", token="y")))},
+        {"stem": "c", "enhanced": "/x/c", **identity_columns(identity_of(hint_for()))},
     ]
     grouped = {p: [s for s, _ in sessions] for p, sessions in cli.participants_of(rows)}
-    assert grouped == {"sub-a": ["sub-a/"], "c": ["c"]}
+    assert grouped == {"pa": ["pa/"], "c": ["c"]}

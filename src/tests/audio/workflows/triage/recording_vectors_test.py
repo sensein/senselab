@@ -11,10 +11,10 @@ import pytest
 import soundfile
 
 from senselab.audio.workflows.triage import recording_vectors as rv
-from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
-from senselab.audio.workflows.triage.identity import FROM_HINT, FROM_STEM, RecordingIdentity, identity_of
+from senselab.audio.workflows.triage.identity import FROM_HINT, RecordingIdentity, identity_of
 from senselab.audio.workflows.triage.nodes import figure as figure_module
 from senselab.audio.workflows.triage.vocabulary import BRANCHES, Release, Triage
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
 
 MEASURE_STATS = Path(__file__).parents[5] / "specs" / "20260817-triage-workflow-dag" / "measure-stats-20260921.json"
 
@@ -134,11 +134,14 @@ def _write_npz(path: Path, **arrays: np.ndarray) -> None:
 
 def build_recording(
     root: Path,
-    stem: str = "sub-a1_ses-b2_task-diadochokinesis-pa",
+    stem: str = "rec-0001",
     timestamp: str = "20260920-030735",
     duration_s: float = 4.0,
     sampling_rate: int = 16000,
     *,
+    participant: str = "p01",
+    session: str = "s2",
+    task: str = "diadochokinesis-pa",
     with_preprocess: bool = True,
     with_transcript: bool = True,
     with_pii_scan: bool = True,
@@ -157,9 +160,12 @@ def build_recording(
     """A run directory carrying only what one test needs.
 
     Args:
-        root: Where the ``sub-*/ses-*/<stem>_<timestamp>`` tree goes.
-        stem: The BIDS stem.
+        root: Where the ``<participant>/<session>/<stem>_<timestamp>`` tree goes.
+        stem: The recording's file stem, a plain name that carries no identity.
         timestamp: The launch timestamp the run directory's name carries.
+        participant: The participant the recording's hint declares.
+        session: The session it declares.
+        task: The task it declares.
         duration_s: The recording's duration.
         sampling_rate: Its sampling rate.
         with_preprocess: Whether PREPROCESS's verdict and its spans exist.
@@ -175,12 +181,11 @@ def build_recording(
         with_stream_file: Whether the conditioned flac exists.
         measurements: ``(name, value)`` pairs to write as measurement entities.
         with_identity: Whether the ``recording`` stream records an identity, as ADMIT writes it.
-        identity: The identity it records, or None for the one the stem alone names.
+        identity: The identity it records, or None for the one ``participant``, ``session`` and ``task`` declare.
 
     Returns:
         The run root, the directory holding ``run/``.
     """
-    participant, session = stem.split("_")[0], stem.split("_")[1]
     run_root = root / participant / session / f"{stem}_{timestamp}"
     run_dir = run_root / "run"
     (run_dir / "streams").mkdir(parents=True, exist_ok=True)
@@ -188,7 +193,12 @@ def build_recording(
     samples = int(duration_s * sampling_rate)
     lines: list[str] = []
 
-    declared = (identity or identity_from_name(stem)).as_attributes() if with_identity else {}
+    if not with_identity:
+        declared: dict[str, Any] = {}
+    elif identity is not None:
+        declared = identity.as_attributes()
+    else:
+        declared = declared_identity_attributes(participant, session, task)
     lines.append(
         _entity("stream-rec", "stream", [0.0, duration_s], name="recording", sampling_rate=sampling_rate, **declared)
     )
@@ -491,17 +501,17 @@ def test_the_three_identity_columns_come_first_and_in_the_directed_order() -> No
 
 def test_identity_is_the_runs_record_and_the_verdict_the_folds(one_row: dict[str, Any]) -> None:
     """Participant, session and task are what ADMIT recorded, with their sources; the verdict is the fold's triage."""
-    assert one_row["participant"] == "sub-a1"
-    assert one_row["session"] == "ses-b2"
+    assert one_row["participant"] == "p01"
+    assert one_row["session"] == "s2"
     assert one_row["task"] == "diadochokinesis-pa"
-    assert (one_row["participant_from"], one_row["session_from"], one_row["task_from"]) == (FROM_STEM,) * 3
+    assert (one_row["participant_from"], one_row["session_from"], one_row["task_from"]) == (FROM_HINT,) * 3
     assert one_row["verdict"] == Triage.REVIEW.value
     assert one_row["release"] == Release.WITHHELD.value
     assert one_row["declared_family"] == "diadochokinesis-pa"
 
 
 def test_a_declared_identity_is_read_from_the_record_not_from_the_stem(tmp_path: Path) -> None:
-    """A hint that names another participant and an upper-case task wins over the stem, as ADMIT recorded it."""
+    """The identity ADMIT recorded is the row's, with only the sources the hint declared; no name is read."""
     declared = RecordingIdentity("P7", "visit-2", "free-speech-3", {"participant": FROM_HINT, "session": FROM_HINT})
     row = rv.extract(build_recording(tmp_path, identity=declared), tmp_path)
     assert row is not None
@@ -514,12 +524,12 @@ def test_a_refused_recording_s_identity_is_read_from_admits_activity(tmp_path: P
     run_root = build_recording(tmp_path, with_identity=False)
     store = run_root / "run" / "store.jsonl"
     lines = [line for line in store.read_text().splitlines() if '"stream-rec"' not in line]
-    parameters = {"audio_file": "/data/x.wav", **identity_from_name("sub-z9_ses-y8_task-x").as_attributes()}
+    parameters = {"audio_file": "/data/x.wav", **declared_identity_attributes("p09", "s8", "x")}
     lines.append(json.dumps({"record": "activity", "node": "ADMIT", "step": None, "parameters": parameters}))
     store.write_text("\n".join(lines) + "\n")
     row = rv.extract(run_root, tmp_path)
     assert row is not None
-    assert (row["participant"], row["session"], row["task"]) == ("sub-z9", "ses-y8", "x")
+    assert (row["participant"], row["session"], row["task"]) == ("p09", "s8", "x")
 
 
 def test_a_run_that_records_no_identity_is_a_row_with_null_identity_and_is_counted(tmp_path: Path) -> None:
@@ -800,9 +810,9 @@ def test_shards_written_from_the_same_schema_concatenate(tmp_path: Path) -> None
 
 def test_the_scan_shards_by_stem_and_covers_every_recording_exactly_once(tmp_path: Path) -> None:
     """Content-addressed sharding, so a tree that grows between shards does not shift a row."""
-    stems = [f"sub-{i:02d}_ses-b_task-t{i}" for i in range(20)]
-    for stem in stems:
-        build_recording(tmp_path, stem=stem)
+    stems = [f"rec-{i:04d}" for i in range(20)]
+    for i, stem in enumerate(stems):
+        build_recording(tmp_path, stem=stem, participant=f"p{i:02d}", session="sb", task=f"t{i}")
     seen: list[str] = []
     for index in range(4):
         rows, report = rv.scan(tmp_path, index, 4)
@@ -813,8 +823,8 @@ def test_the_scan_shards_by_stem_and_covers_every_recording_exactly_once(tmp_pat
 
 def test_a_growing_tree_does_not_move_a_recording_between_shards(tmp_path: Path) -> None:
     """A stem's shard depends on the stem alone, not on how many siblings exist."""
-    assert rv.shard_of("sub-a1_ses-b2_task-x", 32) == rv.shard_of("sub-a1_ses-b2_task-x", 32)
-    assignments = {stem: rv.shard_of(stem, 32) for stem in (f"sub-{i}_ses-b_task-t" for i in range(50))}
+    assert rv.shard_of("rec-0001", 32) == rv.shard_of("rec-0001", 32)
+    assignments = {stem: rv.shard_of(stem, 32) for stem in (f"rec-{i:04d}" for i in range(50))}
     assert all(0 <= value < 32 for value in assignments.values())
     assert len(set(assignments.values())) > 1
 
@@ -826,16 +836,16 @@ def test_a_rerun_supersedes_its_earlier_run(tmp_path: Path) -> None:
     rows, report = rv.scan(tmp_path)
     assert len(rows) == 1
     assert rows[0]["run_dir"].endswith("20260921-101010")
-    assert report.superseded == ["sub-a1_ses-b2_task-diadochokinesis-pa_20260920-030735"]
+    assert report.superseded == ["rec-0001_20260920-030735"]
 
 
 def test_run_directories_are_found_at_any_depth_and_not_below_a_run(tmp_path: Path) -> None:
-    """A run at the root's top level, one nested four deep, and the BIDS-shaped three are all found."""
-    shallow = build_recording(tmp_path / "flat", stem="sub-a_ses-b_task-x")
+    """A run at the root's top level, one nested four deep, and the participant/session-shaped three are all found."""
+    shallow = build_recording(tmp_path / "flat", stem="rec-0001", participant="pa", session="sb", task="x")
     flat = tmp_path / "flat" / shallow.name
     shallow.rename(flat)
-    deep = build_recording(tmp_path / "site" / "batch", stem="sub-c_ses-d_task-y")
-    bids = build_recording(tmp_path, stem="sub-e_ses-f_task-z")
+    deep = build_recording(tmp_path / "site" / "batch", stem="rec-0002", participant="pc", session="sd", task="y")
+    bids = build_recording(tmp_path, stem="rec-0003", participant="pe", session="sf", task="z")
     (bids / "run" / "nested" / "run").mkdir(parents=True)
     (bids / "run" / "nested" / "run" / "store.jsonl").write_text("")
     assert list(rv.recording_dirs(tmp_path)) == sorted([flat, deep, bids])
@@ -854,8 +864,8 @@ def test_the_same_stem_in_two_folders_is_two_recordings(tmp_path: Path) -> None:
 
 def test_an_unfinished_recording_is_counted_rather_than_written(tmp_path: Path) -> None:
     """One slice still running must show up as a number, not as a silently short table."""
-    build_recording(tmp_path, stem="sub-a1_ses-b2_task-done")
-    build_recording(tmp_path, stem="sub-a2_ses-b2_task-running", with_fold=False)
+    build_recording(tmp_path, stem="rec-0001", participant="p01", task="done")
+    build_recording(tmp_path, stem="rec-0002", participant="p02", task="running", with_fold=False)
     rows, report = rv.scan(tmp_path)
     assert report.written == 1 == len(rows)
     assert len(report.incomplete) == 1
@@ -1536,3 +1546,13 @@ def test_the_word_rate_counts_no_filler_and_no_unconfirmed_word(tmp_path: Path) 
     ]
     store.write_text(store.read_text() + "\n".join(extra) + "\n")
     assert rv._lexical_words_per_s(rv.read_store(store), 2.0) == 1.0
+
+
+def test_a_name_contradicting_the_declared_identity_does_not_reach_the_table(tmp_path: Path) -> None:
+    """Decoy (plan step 8): the row's participant, session and task are the declared ones, not the name's."""
+    run_root = build_recording(
+        tmp_path, "sub-x9_ses-y9_task-voluntary-cough-3", participant="p07", session="s2", task="rainbow-passage"
+    )
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert (row["participant"], row["session"], row["task"]) == ("p07", "s2", "rainbow-passage")

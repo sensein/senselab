@@ -42,10 +42,10 @@ from tests.audio.workflows.triage.cohort_stage_test import (
 )
 from tests.audio.workflows.triage.nodes.redact_test import _seed_redact_store, _word_extent
 
-BREATH_STEM = "sub-x_ses-y_task-respiration-and-cough-v2-threebreathsnose"
-DDK_STEM = "sub-x_ses-y_task-diadochokinesis-pa"
-SPEECH_STEM = "sub-x_ses-y_task-rainbow-passage"
-LOUDNESS_STEM = "sub-x_ses-y_task-loudness"
+BREATH_TASK = "respiration-and-cough-v2-threebreathsnose"
+DDK_TASK = "diadochokinesis-pa"
+SPEECH_TASK = "rainbow-passage"
+LOUDNESS_TASK = "loudness"
 
 
 def _reading(store: ProvStore, name: str, events: list[tuple[float, float]]) -> None:
@@ -63,7 +63,7 @@ def _reading(store: ProvStore, name: str, events: list[tuple[float, float]]) -> 
 
 def test_a_breath_task_qualifies_its_talker_words_and_not_its_bracketed_ones(store: ProvStore, tmp_path: Path) -> None:
     """With no stored speech reading, the lexical words off the breath events are the talker's."""
-    _seed_redact_store(store, tmp_path, words=["[breath]", "so", "where", "did"], recording_stem=BREATH_STEM)
+    _seed_redact_store(store, tmp_path, words=["[breath]", "so", "where", "did"], task=BREATH_TASK)
     _reading(store, "airway_breath_reading", [_word_extent(0)])
     family = "respiration-and-cough-v2-threebreathsnose"
     assert len(speech_outside_task(store, family)) == 3
@@ -73,7 +73,7 @@ def test_a_breath_task_qualifies_its_talker_words_and_not_its_bracketed_ones(sto
 
 def test_the_stored_speech_reading_names_the_qualifying_words(store: ProvStore, tmp_path: Path) -> None:
     """The owning branch's reading decides which words are speech outside the task."""
-    _seed_redact_store(store, tmp_path, words=["so", "where", "did"], recording_stem=BREATH_STEM)
+    _seed_redact_store(store, tmp_path, words=["so", "where", "did"], task=BREATH_TASK)
     words = speech_outside_task(store, "respiration-and-cough-v2-threebreathsnose")
     activity = store.activity(node="AIRWAY", step="speech", parameters={})
     write_measurement(
@@ -89,7 +89,7 @@ def test_the_stored_speech_reading_names_the_qualifying_words(store: ProvStore, 
 
 def test_a_ddk_word_on_a_syllable_event_does_not_qualify(store: ProvStore, tmp_path: Path) -> None:
     """In a syllable-repetition task any word on its events is the task misread; one off them is speech."""
-    _seed_redact_store(store, tmp_path, words=["pa", "pa", "hello"], recording_stem=DDK_STEM)
+    _seed_redact_store(store, tmp_path, words=["pa", "pa", "hello"], task=DDK_TASK)
     _reading(store, "ddk_task_reading", [_word_extent(0), _word_extent(1)])
     facts = facts_of(store, None)
     assert facts.non_task == (_word_extent(2),)
@@ -97,7 +97,7 @@ def test_a_ddk_word_on_a_syllable_event_does_not_qualify(store: ProvStore, tmp_p
 
 def test_agreed_syllable_words_off_the_events_are_task_text_in_a_ddk_task(store: ProvStore, tmp_path: Path) -> None:
     """Recognisers agreeing on the syllables is still the task's text; a dictionary word beside them is speech."""
-    _seed_redact_store(store, tmp_path, words=["Pa-ta-ka", "pataka", "okay"], recording_stem=DDK_STEM)
+    _seed_redact_store(store, tmp_path, words=["Pa-ta-ka", "pataka", "okay"], task=DDK_TASK)
     assert [w.attributes["text"] for w in speech_outside_task(store, "diadochokinesis-pataka")] == ["okay"]
 
 
@@ -111,7 +111,7 @@ def test_task_syllables_spell_only_their_own_family() -> None:
 
 def test_a_loudness_target_is_its_hey(store: ProvStore, tmp_path: Path) -> None:
     """Owner, 2026-10-11: loudness is compared on its "hey", the target speaker's task text."""
-    _seed_redact_store(store, tmp_path, words=["hey", "Hey!", "HEY-HEY"], recording_stem=LOUDNESS_STEM)
+    _seed_redact_store(store, tmp_path, words=["hey", "Hey!", "HEY-HEY"], task=LOUDNESS_TASK)
     facts = facts_of(store, None)
     assert facts.family == "loudness" and not facts.lexical_task
     assert target_rule("loudness") == target_rule("loudness-v2") == "task_text"
@@ -120,15 +120,15 @@ def test_a_loudness_target_is_its_hey(store: ProvStore, tmp_path: Path) -> None:
 
 def test_a_loudness_word_other_than_hey_is_masked_and_pooled_apart(store: ProvStore, tmp_path: Path) -> None:
     """Any other word is speech outside the task: flagged and masked by SPEECH, and in the non-task pool only."""
-    _seed_redact_store(store, tmp_path, words=["hey", "okay", "hey"], recording_stem=LOUDNESS_STEM)
+    _seed_redact_store(store, tmp_path, words=["hey", "okay", "hey"], task=LOUDNESS_TASK)
     facts = facts_of(store, None)
     assert facts.target == (_word_extent(0), _word_extent(2)) and facts.non_task == (_word_extent(1),)
     assert task_speech_of(store, "loudness").words_n == 1
 
 
 def _loudness_facts(store: ProvStore, tmp_path: Path, words: list[str]) -> RecordingFacts:
-    _seed_redact_store(store, tmp_path, words=words, recording_stem=LOUDNESS_STEM)
-    return dataclasses.replace(facts_of(store, None), session="sub-a_ses-1")
+    _seed_redact_store(store, tmp_path, words=words, task=LOUDNESS_TASK)
+    return dataclasses.replace(facts_of(store, None), session="p01/s1")
 
 
 def _compare(facts: RecordingFacts, level: float) -> dict[str, Any]:
@@ -185,8 +185,8 @@ def test_loudness_never_enrolls_and_prolonged_vowel_is_unchanged() -> None:
     members = [
         (
             RecordingFacts(
-                stem=f"sub-a_ses-1_task-{family}",
-                session="sub-a_ses-1",
+                stem=f"rec-{number:04d}",
+                session="p01/s1",
                 family=family,
                 lexical_task=lexical_task(family),
                 duration_s=3.0,
@@ -195,7 +195,7 @@ def test_loudness_never_enrolls_and_prolonged_vowel_is_unchanged() -> None:
             ),
             lambda: None,
         )
-        for family in ("loudness", "loudness-v2", "rainbow-passage")
+        for number, family in enumerate(("loudness", "loudness-v2", "rainbow-passage"), start=1)
     ]
     enrolled = enrollment_candidates(members, min_s=MIN_S, lexical_gap_s=0.5)
     assert [candidate.facts.family for candidate in enrolled] == ["rainbow-passage"]
@@ -203,10 +203,10 @@ def test_loudness_never_enrolls_and_prolonged_vowel_is_unchanged() -> None:
 
 def test_a_speech_task_pools_its_extent_and_the_words_outside_it(store: ProvStore, tmp_path: Path) -> None:
     """A lexical speech task's target holds its words; with no task extent, nothing is outside the task."""
-    _seed_redact_store(store, tmp_path, words=["the", "rainbow", "[noise]"], recording_stem=SPEECH_STEM)
+    _seed_redact_store(store, tmp_path, words=["the", "rainbow", "[noise]"], task=SPEECH_TASK)
     facts = facts_of(store, None)
     assert len(facts.lexical) == 2 and facts.target == facts.lexical and facts.non_task == ()
-    block = _compare(dataclasses.replace(facts, session="sub-a_ses-1"), PARTICIPANT)
+    block = _compare(dataclasses.replace(facts, session="p01/s1"), PARTICIPANT)
     assert block[POOL_NON_TASK]["status"] == NOT_APPLICABLE
 
 

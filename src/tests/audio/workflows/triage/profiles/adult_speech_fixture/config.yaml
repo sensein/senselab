@@ -1,15 +1,15 @@
-# The Bridge2AI-Voice adult settings: what is B2AI's own, merged over senselab's packaged triage config and the
+# The fixture's settings: what is its own, merged over senselab's packaged triage config and the
 # adult_clinical_speech reference profile this profile extends (plan step 5c). Every value is the one triage used
 # before profiles existed (senselab alpha 98c8048b6). The owner's policy carries its date; the derivations are in
 # specs/20260817-triage-workflow-dag/config-derivations.md.
 speech:
-  target_match_cosine: 0.231 # differs from senselab's 0.25: midpoint of same-speaker p5 and between-speaker p95 at 1.0 s windows on B2AI's speaker vectors
+  target_match_cosine: 0.231 # differs from senselab's 0.25: midpoint of same-speaker p5 and between-speaker p95 at 1.0 s windows on the source corpus's speaker vectors
 verdict:
   llm_reset_redactions: true             # owner, 2026-09-27: a reading's release entries unmask exactly the words they name
   condition_categories: [CONDITION]      # owner, 2026-10-03 (policy v7): a listed health condition is never masked and never withholds
   person_name_review_flags: true         # owner, 2026-10-03 (policy v7): a masked person's name flags for a human's review of name tags
   trim_protected_categories: [PERSON, NAME, LOCATION, LOC]  # owner, 2026-09-27: a marked word written as a proper noun is never trimmed
-  recruited_conditions: bridge2ai_voice_adult_2026-09-04       # the study's recruited conditions (recruited_conditions/)
+  recruited_conditions: adult_speech_fixture_2026-09-04       # the study's recruited conditions (recruited_conditions/)
   llm_second_speaker_flags: true         # owner, 2026-09-27: a reading that heard more than one speaker flags the recording for review
   llm_contradiction_flags: true          # owner, 2026-09-28: a flagged reading that names no words flags the recording for review
   llm_instructions_spoken_flags: true    # owner, 2026-10-01: a reading quoting the task's instructions spoken in the recording flags for review

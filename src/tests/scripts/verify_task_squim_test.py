@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "verify_task_squim.py"
 _spec = importlib.util.spec_from_file_location("verify_task_squim_under_test", _CLI)
@@ -49,8 +51,8 @@ def _rows(new: bool, *, airway_value: bool = False, voice_value: bool = False) -
         snr = 5.0 + i
         rows.append(
             {
-                "participant_id": f"sub-secret{i:03d}",
-                "session_id": "ses-x",
+                "participant_id": f"secret-p{i:03d}",
+                "session_id": "secret-s1",
                 "task": "caterpillar-passage",
                 "task_family": "caterpillar-passage",
                 "branch": "SPEECH",
@@ -69,7 +71,7 @@ def _rows(new: bool, *, airway_value: bool = False, voice_value: bool = False) -
     rows.append(
         {
             **rows[0],
-            "participant_id": "sub-airway",
+            "participant_id": "secret-airway",
             "task": "voluntary-cough",
             "task_family": "voluntary-cough",
             "branch": "AIRWAY",
@@ -81,7 +83,7 @@ def _rows(new: bool, *, airway_value: bool = False, voice_value: bool = False) -
     rows.append(
         {
             **rows[0],
-            "participant_id": "sub-voice",
+            "participant_id": "secret-voice",
             "task": "prolonged-vowel",
             "task_family": "prolonged-vowel",
             "branch": "VOICE",
@@ -94,7 +96,10 @@ def _rows(new: bool, *, airway_value: bool = False, voice_value: bool = False) -
 
 
 def test_the_report_is_aggregates_only_and_reads_the_trend(tmp_path: Path) -> None:
-    """No participant appears; new rises with SNR and old falls."""
+    """No participant appears; new rises with SNR and old falls.
+
+    The driver-log row carries the manifest's declared family, which the report groups the driver outcomes by.
+    """
     old = _write(tmp_path / "old.tsv", _rows(False))
     new = _write(tmp_path / "new.tsv", _rows(True))
     logs = tmp_path / "logs" / "slices"
@@ -102,7 +107,8 @@ def test_the_report_is_aggregates_only_and_reads_the_trend(tmp_path: Path) -> No
     (logs / "task-squim-slice-0-of-1.jsonl").write_text(
         json.dumps(
             {
-                "stem": "sub-secret000_ses-x_task-caterpillar-passage_20000101-000000",
+                "stem": "rec-0001_20000101-000000",
+                "declared_family": "caterpillar-passage",
                 "status": "ok",
                 "windows_n": 2,
                 "covered_s": 20.0,
@@ -116,7 +122,7 @@ def test_the_report_is_aggregates_only_and_reads_the_trend(tmp_path: Path) -> No
     out = tmp_path / "verify.md"
     assert cli.main(["--old", str(old), "--new", str(new), "--logs", str(tmp_path / "logs"), "--out", str(out)]) == 0
     text = out.read_text()
-    assert "sub-secret" not in text and "ses-x" not in text and "sub-airway" not in text
+    assert "secret-p" not in text and "secret-s1" not in text and "secret-airway" not in text
     assert "| snr_db | PESQ | 40 | -1.000 | 40 | +1.000 |" in text
     assert "| SPEECH | ok | 1 |" in text, "a timestamped manifest stem resolves to its branch"
     assert "### Median by snr_db decile (SPEECH rows only, deciles of SPEECH)" in text

@@ -17,14 +17,14 @@ from pathlib import Path
 
 import pytest
 
-from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.extend import REPLAY_MARKER_STEP, REPLAY_NODE, live_decisions, retire_decisions
-from senselab.audio.workflows.triage.identity import identity_columns
+from senselab.audio.workflows.triage.identity import RecordingIdentity, identity_columns, identity_of
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.replay_diff import NO_STORE, OK
 from senselab.audio.workflows.triage.run import entity_subdir
 from senselab.audio.workflows.triage.vocabulary import FileVerdict, Release, Triage
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import hint_for
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "triage_replay_diff.py"
@@ -36,6 +36,11 @@ _spec.loader.exec_module(cli)
 
 TIMESTAMP = "20260919-000000"
 """The suffix the corpus run gave every run directory."""
+
+DECLARED: dict[str, RecordingIdentity] = {
+    f"rec-000{n}": identity_of(hint_for(f"p0{n}", "s1", "vowel")) for n in range(1, 5)
+}
+"""What each recording's hint declares, which the corpus run placed it under: participant ``p0<n>``, session ``s1``."""
 
 
 def _decide(store: ProvStore, triage: Triage) -> None:
@@ -70,7 +75,7 @@ def _corpus_run(root: Path, stem: str) -> Path:
     Returns:
         The run root.
     """
-    run_root = root / entity_subdir(identity_from_name(stem)) / f"{stem}_{TIMESTAMP}"
+    run_root = root / entity_subdir(DECLARED[stem]) / f"{stem}_{TIMESTAMP}"
     (run_root / "run" / "streams").mkdir(parents=True)
     (run_root / "run" / "streams" / "enhanced.flac").write_bytes(b"")
     store = ProvStore(run_id=run_root.name)
@@ -95,7 +100,7 @@ def _replay_into(corpus_run: Path, out_root: Path, stem: str, triage: Triage) ->
     Returns:
         The replayed run root.
     """
-    target = out_root / entity_subdir(identity_from_name(stem)) / corpus_run.name
+    target = out_root / entity_subdir(DECLARED[stem]) / corpus_run.name
     (target / "run").mkdir(parents=True)
     store = ProvStore.read_jsonl(corpus_run / "run" / "store.jsonl", run_id=f"{corpus_run.name}+replay-cafe")
     agent = software_agent(store)
@@ -127,7 +132,7 @@ def _manifest(path: Path, runs: dict[str, Path]) -> Path:
                 {
                     "stem": stem,
                     "enhanced": str(run / "run" / "streams" / "enhanced.flac"),
-                    **identity_columns(identity_from_name(stem)),
+                    **identity_columns(DECLARED[stem]),
                 }
             )
             + "\n"
@@ -144,7 +149,7 @@ class TestRows:
     def test_a_task_takes_its_stride_and_names_the_replayed_root(self, tmp_path: Path) -> None:
         """The mirrored root is derived the way the replay derived it, from the stem and the manifest."""
         corpus, out = tmp_path / "corpus", tmp_path / "replay"
-        runs = {f"sub-{index}_ses-1_task-vowel": _corpus_run(corpus, f"sub-{index}_ses-1_task-vowel") for index in "ab"}
+        runs = {f"rec-000{index}": _corpus_run(corpus, f"rec-000{index}") for index in "12"}
         for stem, run in runs.items():
             _replay_into(run, out, stem, Triage.PASS)
         manifest = _manifest(tmp_path / "manifest.jsonl", runs)
@@ -156,7 +161,7 @@ class TestRows:
             json.loads(line)
             for line in (tmp_path / "slices" / "replay-diff-slice-0-of-2.jsonl").read_text().splitlines()
         ]
-        assert [row["stem"] for row in rows] == ["sub-a_ses-1_task-vowel"]
+        assert [row["stem"] for row in rows] == ["rec-0001"]
         assert rows[0]["status"] == OK
         assert rows[0]["transitions"]["triage"] == "review->pass"
         assert Path(rows[0]["run_root"]).is_relative_to(out)
@@ -164,7 +169,7 @@ class TestRows:
     def test_a_recording_the_replay_has_not_reached_is_a_status(self, tmp_path: Path) -> None:
         """Reading the tree while the array is still running does not fail the task."""
         corpus, out = tmp_path / "corpus", tmp_path / "replay"
-        stem = "sub-c_ses-1_task-vowel"
+        stem = "rec-0003"
         manifest = _manifest(tmp_path / "manifest.jsonl", {stem: _corpus_run(corpus, stem)})
 
         assert (
@@ -179,7 +184,7 @@ class TestRows:
     def test_nothing_is_written_under_either_tree(self, tmp_path: Path) -> None:
         """The rows go where the log directory names and nowhere else."""
         corpus, out, logs = tmp_path / "corpus", tmp_path / "replay", tmp_path / "logs"
-        stem = "sub-d_ses-1_task-vowel"
+        stem = "rec-0004"
         run = _corpus_run(corpus, stem)
         _replay_into(run, out, stem, Triage.PASS)
         manifest = _manifest(tmp_path / "manifest.jsonl", {stem: run})
@@ -213,8 +218,8 @@ class TestReport:
         """The JSON is what was counted and the Markdown leads with the recordings that did not move."""
         corpus, out = tmp_path / "corpus", tmp_path / "replay"
         runs = {}
-        for index, triage in (("a", Triage.REVIEW), ("b", Triage.PASS)):
-            stem = f"sub-{index}_ses-1_task-vowel"
+        for index, triage in (("1", Triage.REVIEW), ("2", Triage.PASS)):
+            stem = f"rec-000{index}"
             runs[stem] = _corpus_run(corpus, stem)
             _replay_into(runs[stem], out, stem, triage)
         manifest = _manifest(tmp_path / "manifest.jsonl", runs)
@@ -225,7 +230,7 @@ class TestReport:
         assert counted["compared"] == 2
         assert counted["identical"] == 1
         assert counted["triage"] == {"review->review": 1, "review->pass": 1}
-        assert counted["moved_stems"]["triage"] == {"review->pass": ["sub-b_ses-1_task-vowel"]}
+        assert counted["moved_stems"]["triage"] == {"review->pass": ["rec-0002"]}
         assert "1 decisions did not move at all" in (tmp_path / "report" / "replay_diff.md").read_text()
 
     def test_an_empty_tree_is_reported_as_empty(self, tmp_path: Path) -> None:

@@ -170,7 +170,7 @@ class TestNamedModels:
     """The model choices PREPROCESS once fixed in code are settings (plan step 11c)."""
 
     def test_the_defaults_are_the_models_triage_has_always_run(self) -> None:
-        """B2AI's runs are unchanged: the two recognizers, AST and FRCRN, at the same refs."""
+        """The fixture's runs are unchanged: the two recognizers, AST and FRCRN, at the same refs."""
         cfg = load_triage_config()
         recognizers = cfg.require("asr.recognizers")
         assert [(r["name"], r["model"], r["timestamps"]) for r in recognizers] == [

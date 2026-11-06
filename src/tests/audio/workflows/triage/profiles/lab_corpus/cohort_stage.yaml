@@ -1,0 +1,4 @@
+checks:
+  recording_duration_outlier:
+    duration_ratio_max: 3.0
+    extent_fraction_min: 0.5

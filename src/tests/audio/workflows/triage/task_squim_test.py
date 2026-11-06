@@ -26,7 +26,7 @@ from senselab.audio.workflows.triage.task_squim import (
     task_windows,
 )
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
 
 RATE = 16_000
 CONFIG = WindowConfig(window_s=10.0, min_window_s=3.0, floor_s=1.0)
@@ -243,7 +243,7 @@ def test_without_the_folds_family_the_recorded_task_is_read_and_never_the_stem(t
         attributes={
             "name": "recording",
             "path": "r.wav",
-            **b2ai_identity_attributes("sub-a_ses-b_task-voluntary-cough-2"),
+            **declared_identity_attributes("p01", "s1", "voluntary-cough", token="voluntary-cough-2"),
         },
     )
     assert declared_family(store) == "voluntary-cough"

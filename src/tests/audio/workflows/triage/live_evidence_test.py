@@ -42,11 +42,11 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     load_ruleset,
 )
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
-from tests.conftest import B2AI_TRIAGE_PROFILE
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
+from tests.conftest import FIXTURE_PROFILE
 
-STEM = "sub-01_ses-01_task-free-speech"
-"""The stem the synthetic recordings carry; its ``task-`` id is the recording's own declaration."""
+STEM = "rec-0001"
+"""The stem the synthetic recordings carry: a plain name; the task is declared beside it, as ADMIT records it."""
 
 
 @pytest.fixture(scope="module")
@@ -56,7 +56,7 @@ def config() -> TriageConfig:
     Returns:
         The configuration as ``data/config/default.yaml`` declares it.
     """
-    return load_triage_config(profile=B2AI_TRIAGE_PROFILE)
+    return load_triage_config(profile=FIXTURE_PROFILE)
 
 
 @pytest.fixture(scope="module")
@@ -104,7 +104,11 @@ def _base_store(run_dir: Path) -> ProvStore:
     store.entity(
         prov_type="stream",
         extent=(0.0, 4.0),
-        attributes={"name": "recording", "path": str(run_dir.parent / f"{STEM}.wav"), **b2ai_identity_attributes(STEM)},
+        attributes={
+            "name": "recording",
+            "path": str(run_dir.parent / f"{STEM}.wav"),
+            **declared_identity_attributes("p01", "s1", "free-speech"),
+        },
     )
     for index, (text, outcome, bracketed) in enumerate(
         [
@@ -347,7 +351,7 @@ class TestWhatTheReaderReads:
         assert evaluation.stem == STEM
 
     def test_a_stem_with_no_task_entity_declares_nothing(self, config: TriageConfig, tmp_path: Path) -> None:
-        """The control: the same reduction on a path carrying no ``task-`` id reads no declaration."""
+        """The control: the same reduction on a recording that records no identity reads no declaration."""
         run_dir = _run_dir(tmp_path)
         store = _base_store(run_dir)
         store.entity(

@@ -22,7 +22,7 @@ _spec.loader.exec_module(cli)
 def _corpus(tmp_path: Path) -> Path:
     """Two finished runs, one with a task extent and one without, and their manifest."""
     rows = []
-    for stem, tasks in (("sub-a_task-reading", ((2.0, 7.5),)), ("sub-b_task-free", ())):
+    for stem, tasks in (("rec-0001", ((2.0, 7.5),)), ("rec-0002", ())):
         run_root = tmp_path / stem
         store, run_dir = _seed(run_root, tasks=tasks)
         store.write_jsonl(run_dir / "store.jsonl")
@@ -42,10 +42,10 @@ def test_a_slice_cuts_then_a_resubmission_finds_every_cut_present(tmp_path: Path
     manifest = _corpus(tmp_path)
     assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
     first = {row["stem"]: row for row in _log(tmp_path)}
-    assert first["sub-a_task-reading"]["status"] == "ok"
-    assert first["sub-a_task-reading"]["task_plain"] == "written"
-    assert first["sub-b_task-free"]["status"] == "absent"
-    run_root = tmp_path / "sub-a_task-reading"
+    assert first["rec-0001"]["status"] == "ok"
+    assert first["rec-0001"]["task_plain"] == "written"
+    assert first["rec-0002"]["status"] == "absent"
+    run_root = tmp_path / "rec-0001"
     stored = read_store(run_root)
     assert any(e.attributes.get("name") == "task_plain" for e in stored.entities("stream"))
     assert (run_root / "prov").is_dir()
@@ -53,8 +53,8 @@ def test_a_slice_cuts_then_a_resubmission_finds_every_cut_present(tmp_path: Path
 
     assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
     second = {row["stem"]: row for row in _log(tmp_path)}
-    assert second["sub-a_task-reading"]["status"] == "present"
-    assert {second["sub-a_task-reading"][f"task_{n}"] for n in ("plain", "enhanced", "redacted")} == {"present"}
+    assert second["rec-0001"]["status"] == "present"
+    assert {second["rec-0001"][f"task_{n}"] for n in ("plain", "enhanced", "redacted")} == {"present"}
     assert (run_root / "run" / "store.jsonl").read_bytes() == before
 
 

@@ -40,7 +40,7 @@ def _manifest(out_dir: Path, stores: list[Path]) -> Path:
         "".join(
             json.dumps(
                 {
-                    "stem": f"sub-{index:02d}",
+                    "stem": f"rec-{index:04d}",
                     "run_root": str(store.parent.parent),
                     "store": str(store),
                     "task_id": "1",
@@ -77,7 +77,7 @@ class TestAReusedManifest:
         """This is the relocated corpus: every row intact, every path pointing at nothing."""
         out_dir = tmp_path / "analysis"
         manifest = _manifest(
-            out_dir, [tmp_path / "moved" / f"sub-{index:02d}" / "run" / "store.jsonl" for index in range(200)]
+            out_dir, [tmp_path / "moved" / f"rec-{index:04d}" / "run" / "store.jsonl" for index in range(200)]
         )
 
         with pytest.raises(FileNotFoundError, match="none of the"):
@@ -87,7 +87,7 @@ class TestAReusedManifest:
     def test_a_manifest_that_still_resolves_is_reused(self, tmp_path: Path) -> None:
         """The guard must not cost a legitimate resume its manifest."""
         out_dir = tmp_path / "analysis"
-        stores = [_store(tmp_path / "runs" / f"sub-{index:02d}") for index in range(4)]
+        stores = [_store(tmp_path / "runs" / f"rec-{index:04d}") for index in range(4)]
         manifest = _manifest(out_dir, stores)
 
         assert cli.build_manifest(tmp_path / "runs", out_dir) == manifest
@@ -95,7 +95,7 @@ class TestAReusedManifest:
     def test_a_few_missing_recordings_do_not_refuse_the_manifest(self, tmp_path: Path) -> None:
         """A recording deleted since the manifest was built is the extract's ``missing``, not a refusal."""
         out_dir = tmp_path / "analysis"
-        stores = [_store(tmp_path / "runs" / f"sub-{index:02d}") for index in range(4)]
+        stores = [_store(tmp_path / "runs" / f"rec-{index:04d}") for index in range(4)]
         stores[0].unlink()
         _manifest(out_dir, stores)
 
@@ -121,10 +121,10 @@ class TestAnExtractThatReadsNothing:
         incident, and reading them is what the shard directory being empty already says.
         """
         run_dir = tmp_path / "runs"
-        summary_dir = run_dir / "sub-00"
+        summary_dir = run_dir / "p00"
         summary_dir.mkdir(parents=True)
-        (summary_dir / "sub-00_task-1.summary.json").write_text(
-            json.dumps({"stem": "sub-00_task-1", "run_root": str(summary_dir / "sub-00_task-1_20260912-000000")}),
+        (summary_dir / "rec-0001.summary.json").write_text(
+            json.dumps({"stem": "rec-0001", "run_root": str(summary_dir / "rec-0001_20260912-000000")}),
             encoding="utf-8",
         )
         shard_dir = tmp_path / "analysis" / cli.SHARD_DIR

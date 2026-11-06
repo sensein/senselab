@@ -1940,7 +1940,7 @@ class TestAnUnscannedTranscriptIsNotACleanOne:
 class TestTheTitleIsShort:
     """The title carries the decision at a glance; the run id is provenance and belongs in the block."""
 
-    _RUN_ID = "sub-SUBJ05_ses-SES03_task-Respiration-and-cough-(v2)-Breath_20260825-123640"
+    _RUN_ID = "rec-0001_20260825-123640"
 
     def test_it_names_the_task_token_the_date_and_the_decision(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
