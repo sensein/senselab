@@ -64,11 +64,12 @@ substrate:
   kind: slurm
   qos_cpu_cap:
   exclude_nodes: []
-# How pool workers claim, yield, poll and roll index segments.
+# How pool workers claim, yield, poll and roll index segments, and how often a coordinator first reads an outcome.
 pool:
   quantum_items: 100
   quantum_s: 300
   poll_s: 30
+  first_poll_s: 1
   segment_items: 512
 # Every lease: seconds after which another process breaks it, the share of that between beats, and the
 # storage's attribute delay; load refuses 2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.

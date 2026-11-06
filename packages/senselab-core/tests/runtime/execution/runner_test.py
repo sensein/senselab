@@ -8,7 +8,7 @@ import stat
 import threading
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from senselab_core.kernel.dataset import Record, ValueInput
@@ -92,6 +92,12 @@ def packaged() -> Iterator[None]:
 
 class Recording:
     """An `Executor` over `InProcess` that records each fragment it is given, in order."""
+
+    logs_claims: ClassVar[bool] = False
+
+    def bind_epoch(self, epoch: int, events: EventLog) -> None:
+        """Bind through `InProcess`."""
+        self.inner.bind_epoch(epoch, events)
 
     def __init__(self, store: ResultStore, profile: ExecutionProfile = PROFILE) -> None:
         """Run on an `InProcess` executor over `store` under `profile`."""

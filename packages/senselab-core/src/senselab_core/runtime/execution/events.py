@@ -64,10 +64,11 @@ class Event(Formatted):
 
     `job` names the job (None for an event of the node as a whole), `key` its key digest, `attempt` the id of the
     attempt (run or resume) that wrote it, `ordinal` that attempt's place among the run's attempts (taken when it was
-    claimed), `writer` the writer whose file holds it, `seq` its position in that file, `placement_digest` the digest of
-    the node's placement, `fault` the class of a failure, `failure` the record of it, `reuse` the policy that served a
-    `cache_hit` (its value), `env` the env the job ran in, `output` the output identity of a `finished` or
-    `cache_hit` job and `t_ns` the wall-clock nanoseconds of the event.
+    claimed), `epoch` the coordinator epoch the attempt belongs to (0 for none), `writer` the writer whose file holds
+    it, `seq` its position in that file, `placement_digest` the digest of the node's placement, `fault` the class of a
+    failure, `failure` the record of it, `reuse` the policy that served a `cache_hit` (its value), `env` the env the job
+    ran in, `output` the output identity of a `finished` or `cache_hit` job and `t_ns` the wall-clock nanoseconds of the
+    event.
     """
 
     format: FormatTag = RUN_EVENT_FORMAT
@@ -78,6 +79,7 @@ class Event(Formatted):
     job: JobRef | None = None
     attempt: NonEmptyStr
     ordinal: Annotated[int, Field(ge=1)]
+    epoch: Annotated[int, Field(ge=0)] = 0
     writer: NonEmptyStr
     seq: Annotated[int, Field(ge=0)]
     placement_digest: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
@@ -131,9 +133,9 @@ class RunStatus:
 
 
 def _latest(events: Sequence[Event]) -> list[Event]:
-    """Return the events of a job's latest attempt, the one with the highest `ordinal`."""
-    latest = max((e.ordinal, e.attempt) for e in events)
-    return [e for e in events if (e.ordinal, e.attempt) == latest]
+    """Return the events of a job's latest attempt: the highest `epoch`, then the highest `ordinal` within it."""
+    latest = max((e.epoch, e.ordinal, e.attempt) for e in events)
+    return [e for e in events if (e.epoch, e.ordinal, e.attempt) == latest]
 
 
 def _superseded(event: Event, events: Sequence[Event]) -> bool:
@@ -154,7 +156,7 @@ def _latest_terminal(events: Sequence[Event]) -> Event | None:
     terminal = [e for e in mine if e.kind in TERMINAL and not _superseded(e, mine)]
     if not terminal:
         terminal = [e for e in events if e.kind in RESULTS]
-    return max(terminal, key=lambda e: (TERMINAL[e.kind], e.ordinal, e.writer, e.seq)) if terminal else None
+    return max(terminal, key=lambda e: (TERMINAL[e.kind], e.epoch, e.ordinal, e.writer, e.seq)) if terminal else None
 
 
 def _job_state(events: Sequence[Event]) -> JobState:
@@ -190,12 +192,12 @@ def terminal_events(events: Iterable[Event]) -> dict[tuple[str, tuple[int, ...]]
 def status_from(events: Iterable[Event], *, broken_after: int | None = None) -> RunStatus:
     """Return the status of a run from its `events`, each writer's in file order (`read_events`).
 
-    A job's state is the terminal event of its latest attempt (highest `ordinal`) with precedence (`TERMINAL`), a
-    failure queued again excepted, else a result of an earlier attempt, else running or queued as the latest attempt's
-    claims and submissions count (`_job_state`); `verify` changes none. `seq` is compared within one writer only and
-    no clock order is assumed for terminal states. `faults` counts every `failed` event by
-    its class; an env with `broken_after` infrastructure failures (the packaged profile's
-    `infrastructure_replacements` when None) is `broken`. Cancelled and blocked jobs are not faults.
+    A job's state is the terminal event of its latest attempt (highest `epoch`, then `ordinal`) with precedence
+    (`TERMINAL`), a failure queued again excepted, else a result of an earlier attempt, else running or queued as the
+    latest attempt's claims and submissions count (`_job_state`); `verify` changes none. `seq` is compared within one
+    writer only and no clock order is assumed for terminal states. `faults` counts every `failed` event by its class; an
+    env with `broken_after` infrastructure failures (the packaged profile's `infrastructure_replacements` when None) is
+    `broken`. Cancelled and blocked jobs are not faults.
     """
     if broken_after is None:
         from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - read only when needed
@@ -235,16 +237,20 @@ def status_from(events: Iterable[Event], *, broken_after: int | None = None) -> 
 class EventLog:
     """One writer's append-only log of a run: `<run dir>/events/<writer uuid>.jsonl`, written by this writer only.
 
-    `attempt` is the id of the attempt every event of this log belongs to and `ordinal` its claim order, `clock` gives
+    `attempt` is the id of the attempt every event of this log belongs to, `ordinal` its claim order and `epoch` its
+    coordinator's epoch (0 for none), `clock` gives
     the `t_ns` of an event `record` makes, and each event gets the next `seq` of this writer. A writer used after a
     `fork` is a new writer in the child.
     """
 
-    def __init__(self, run_dir: Path, attempt: str, ordinal: int, *, clock: Callable[[], int] = time.time_ns) -> None:
-        """Log to `run_dir` as attempt `attempt`, the `ordinal`-th; nothing is created until the first append."""
+    def __init__(
+        self, run_dir: Path, attempt: str, ordinal: int, *, epoch: int = 0, clock: Callable[[], int] = time.time_ns
+    ) -> None:
+        """Log to `run_dir` as attempt `attempt`, the `ordinal`-th, of `epoch`; nothing is created until an append."""
         self.run_dir = Path(run_dir)
         self.attempt = attempt
         self.ordinal = ordinal
+        self.epoch = epoch
         self.clock = clock
         self._writer = (os.getpid(), uuid.uuid4().hex)
         self._seq = 0
@@ -299,6 +305,7 @@ class EventLog:
             key=key,
             attempt=self.attempt,
             ordinal=self.ordinal,
+            epoch=self.epoch,
             writer=writer,
             seq=seq,
             placement_digest=placement_digest,

@@ -18,7 +18,8 @@
 - `claims/<digest>.lease`: the `Lease` of a claim on the item.
 - `outcome/<digest>`: the item's one outcome, a JCS record `{"outcome": "done" | "dead", ...}` linked from a staged
   file, so the first writer wins and an item is never both done and dead.
-- `held-<epoch>`: the mark, made by the coordinator of that epoch, that no item of the queue is claimed.
+- `held-<epoch>-<env label>`: the mark, made by the coordinator of that epoch, that no item placed in that env is
+  claimed; the env label is `identity_digest("label@1", env)`. Only a hold of the current epoch or a newer one counts.
 
 A claim walks the segments from the oldest live one, lists each, and takes the lease of the first slot that is
 neither marked nor under a live claim; the outcome is checked again once the lease is held. An outcome is staged,
@@ -30,7 +31,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from pathlib import Path
 from typing import Optional
 
@@ -73,8 +74,8 @@ RETIRED_MARK = "retired"
 """The mark of a retired segment, inside it."""
 RETIRED_NAME = re.compile(r"^retired$")
 """The grammar of `RETIRED_MARK`."""
-HELD_NAME = re.compile(r"^held-([1-9][0-9]*)$")
-"""The mark of a held queue, naming the epoch that held it."""
+HELD_NAME = re.compile(r"^held-([1-9][0-9]*)-([0-9a-f]{64})$")
+"""The mark of an env held on a queue, naming the epoch that held it and the env's label."""
 NAME_FILE = re.compile(r"^name$")
 """The file holding a queue's name."""
 DIRECTORIES = ("items", "segments", "slotted", "claims", "outcome")
@@ -272,8 +273,12 @@ class Queue:
         backoffs: How many times a claim found an item under another live claim and moved on.
     """
 
-    def __init__(self, root: Path, name: str, profile: ExecutionProfile) -> None:
+    def __init__(
+        self, root: Path, name: str, profile: ExecutionProfile, epoch: Optional[Callable[[], int]] = None
+    ) -> None:
         """Open, creating it if missing, the queue `name` under `root`; use `QueueSet.queue`.
+
+        `epoch` gives the current coordinator epoch, below which a hold does not count; every hold counts when None.
 
         Raises:
             ValueError: `name` is not a resource class with an optional `#<model identity>`.
@@ -290,6 +295,9 @@ class Queue:
         self._judged: dict[str, float] = {}
         self._missing: dict[str, float] = {}
         self._targets: dict[tuple[int, int], str] = {}
+        self._envs: dict[str, str] = {}
+        self._skip: set[str] = set()
+        self._epoch = epoch
         self._head = 0
         self._oldest = 0
         with StorageDir.open_root(self.path, create=True, mode=STAGING_DIR_MODE) as q:
@@ -387,15 +395,25 @@ class Queue:
             digests = sorted(m.group(1) for n in items.listdir() if (m := ITEM_NAME.fullmatch(n)))
             return self._index(q, digests)
 
-    def hold(self, epoch: int) -> None:
-        """Mark the queue held by the coordinator of `epoch`: no item is claimed until the mark is removed."""
+    def hold(self, epoch: int, env: str) -> None:
+        """Hold `env` on this queue for the coordinator of `epoch`: no item placed in it is claimed while it counts."""
         with self.open() as q:
-            q.make_dir(f"held-{epoch}", grammar=HELD_NAME, mode=STAGING_DIR_MODE, exist_ok=True)
+            name = f"held-{epoch}-{identity_digest(LABEL_TAG, env)}"
+            q.make_dir(name, grammar=HELD_NAME, mode=STAGING_DIR_MODE, exist_ok=True)
 
-    def held(self) -> Optional[int]:
-        """Return the newest epoch that holds the queue, None when it is not held."""
+    def _holds(self) -> dict[str, int]:
+        """Return each env label held by the current epoch or a newer one, with the newest such epoch."""
+        current = self._epoch() if self._epoch is not None else 0
+        found: dict[str, int] = {}
         with self.open() as q:
-            return max((int(m.group(1)) for n in q.listdir() if (m := HELD_NAME.fullmatch(n))), default=None)
+            for name in q.listdir():
+                if (m := HELD_NAME.fullmatch(name)) and int(m.group(1)) >= current:
+                    found[m.group(2)] = max(found.get(m.group(2), 0), int(m.group(1)))
+        return found
+
+    def held(self, env: str) -> Optional[int]:
+        """Return the newest counting epoch that holds `env` on this queue, None when it is not held."""
+        return self._holds().get(identity_digest(LABEL_TAG, env))
 
     def unhold(self, before: int) -> None:
         """Remove every hold made by an epoch older than `before`."""
@@ -404,6 +422,13 @@ class Queue:
                 if (m := HELD_NAME.fullmatch(name)) and int(m.group(1)) < before:
                     with contextlib.suppress(FileNotFoundError):
                         q.remove_dir(name, grammar=HELD_NAME)
+
+    def claimed_any(self) -> bool:
+        """Return whether any item of this queue is under a claim stamped within the stale bound."""
+        with self.open() as q, q.child("claims") as claims:
+            now = q.dir_now()
+            leased = [n.removesuffix(".lease") for n in claims.listdir() if n.endswith(".lease")]
+            return any(self._live(claims, digest, now) for digest in leased)
 
     def claimed(self, digest: str) -> bool:
         """Return whether `digest` is under a claim stamped within the stale bound, on the storage clock."""
@@ -415,16 +440,15 @@ class Queue:
 
         Each item is held under a `Lease` beating from its own renewer until the claim commits, kills or releases
         it. An item under a live claim is skipped; a stale claim is broken, within one renewal interval of going
-        stale, and its item claimed again. A missing item is left ready and recorded in `faults`. A held queue
-        (`hold`) gives no claim.
+        stale, and its item claimed again. A missing item is left ready and recorded in `faults`. An item whose env is
+        held (`hold`) is skipped.
 
         Raises:
             ValueError: `max_items` is below 1.
         """
         if max_items < 1:
             raise ValueError(f"a claim takes at least one item (got {max_items})")
-        if self.held() is not None:
-            return None
+        self._skip = set(self._holds())
         taken: list[_Held] = []
         try:
             with self.open() as q, q.child("segments") as segments, q.child("claims") as claims:
@@ -494,6 +518,8 @@ class Queue:
                 digest = self._target(segment, seq, n)
                 if digest is None or digest in self._judged or digest in self._missing:
                     continue
+                if self._envs.get(digest) in self._skip:
+                    continue
                 held = self._take(q, claims, (seq, n), digest)
                 if held is not None:
                     taken.append(held)
@@ -531,7 +557,9 @@ class Queue:
                     stack.close()
                     return None
             fragment = self._fragment(q, lease, slot, digest)
-            if fragment is None:
+            if fragment is not None:
+                self._envs[digest] = identity_digest(LABEL_TAG, fragment.placement.env)
+            if fragment is None or self._envs[digest] in self._skip:
                 stack.close()
                 return None
             state = stack.enter_context(lease.keep_alive(self._renew_fraction))
@@ -624,30 +652,41 @@ class QueueSet:
             profile when None.
     """
 
-    def __init__(self, root: Path, profile: Optional[ExecutionProfile] = None) -> None:
-        """Hold the queues under `root`."""
+    def __init__(
+        self, root: Path, profile: Optional[ExecutionProfile] = None, *, epoch: Optional[Callable[[], int]] = None
+    ) -> None:
+        """Hold the queues under `root`; `epoch` gives the current coordinator epoch, as `Queue` reads it."""
         self.root = Path(root)
         self.profile = profile if profile is not None else ExecutionProfile.load()
+        self.epoch = epoch
         self._queues: dict[str, Queue] = {}
 
     def queue(self, name: str) -> Queue:
         """Return the queue `name`, made if missing."""
         if name not in self._queues:
-            self._queues[name] = Queue(self.root, name, self.profile)
+            self._queues[name] = Queue(self.root, name, self.profile, self.epoch)
         return self._queues[name]
 
-    def reconcile(self) -> int:
-        """Put again every item of every queue under `root` that has neither a slot nor an outcome; return how many."""
+    def names(self) -> list[str]:
+        """Return the name of every queue under `root`, sorted."""
         if not self.root.is_dir():
-            return 0
-        total = 0
+            return []
+        found = []
         with StorageDir.open_root(self.root) as root:
             for label in sorted(n for n in root.listdir() if DIGEST_NAME.fullmatch(n)):
                 with root.child(label) as directory:
                     name = directory.read_regular("name")
                 if name is not None and identity_digest(LABEL_TAG, name.decode()) == label:
-                    total += self.queue(name.decode()).reconcile()
-        return total
+                    found.append(name.decode())
+        return sorted(found)
+
+    def claimed_any(self) -> bool:
+        """Return whether any item of any queue is under a live claim, on the storage clock."""
+        return any(self.queue(name).claimed_any() for name in self.names())
+
+    def reconcile(self) -> int:
+        """Put again every item of every queue under `root` that has neither a slot nor an outcome; return how many."""
+        return sum(self.queue(name).reconcile() for name in self.names())
 
 
 __all__ = ["ITEM_TAG", "LABEL_TAG", "OUTCOMES", "RUN_QUEUES", "Claim", "Queue", "QueueSet", "item_digest", "settle"]

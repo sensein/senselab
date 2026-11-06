@@ -72,11 +72,16 @@ class SubstrateSpec(Frozen):
 
 
 class PoolSettings(Frozen):
-    """How pool workers claim and yield: the quantum, the empty-queue poll and the index segment."""
+    """How pool workers claim and yield, and how a coordinator polls: the quantum, the polls and the index segment.
+
+    `poll_s` is a worker's empty-queue poll and the longest wait between a coordinator's reads of an outcome, which
+    start at `first_poll_s` and double.
+    """
 
     quantum_items: PositiveInt
     quantum_s: PositiveSeconds
     poll_s: PositiveSeconds
+    first_poll_s: PositiveSeconds
     segment_items: PositiveInt
 
 

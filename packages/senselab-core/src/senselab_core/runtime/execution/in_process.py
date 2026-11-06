@@ -6,12 +6,14 @@ import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
+from typing import ClassVar
 
 from senselab_core.kernel.declare import Registry, TaskSpec
 from senselab_core.kernel.graph import Edge, Node
 from senselab_core.kernel.identity import InputIdentity, LogicalKey, ReusePolicy, gather_identity
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.call import Result, RunConfig, TaskCall, bind_input, packaged
+from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import (
     Admission,
     FaultRecord,
@@ -274,6 +276,11 @@ class InProcess:
         self._outcomes: dict[str, list[JobOutcome]] = {}
         self._status: dict[str, Status] = {}
         self._ids = itertools.count()
+
+    logs_claims: ClassVar[bool] = False
+
+    def bind_epoch(self, epoch: int, events: EventLog) -> None:
+        """Do nothing: an in-process run has no queue for an older coordinator to write."""
 
     def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:
         """Hold `placed` and the values of the graph-input identities its fragments name, until `release`.

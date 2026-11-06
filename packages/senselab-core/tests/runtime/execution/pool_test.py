@@ -25,19 +25,22 @@ from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
-from senselab_core.runtime.execution.events import EventLog, read_events, status_from
+from senselab_core.runtime.execution.events import EventLog, read_events, run_dir_of, status_from
 from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment, QueueHeld, ResultRef
 from senselab_core.runtime.execution.in_process import InProcess, job_key, node_fragment
 from senselab_core.runtime.execution.job import Failed, JobOutcome
 from senselab_core.runtime.execution.pool import Pool, report
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet
-from senselab_core.runtime.execution.run import INPUTS_FILE, Run, prepare, record_sources
+from senselab_core.runtime.execution.run import INPUTS_FILE, RECORD_ATTEMPTS, Run, prepare, record_sources
 from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.licenses import license_record
+from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.interpreter import source_tree_python
+from syscall_faults_fixture import displace_before_proof, pause_replaces
 
 SCORE = TaskSpec(
     name="pool_test.score",
@@ -76,7 +79,12 @@ OOM = FaultRecord(fault="resource", type="ResourceFault", message="out of memory
 
 
 def _profile(**faults: int) -> ExecutionProfile:
-    override = {"devices": ["cpu"], "resource_classes": CLASSES, "pool": {"poll_s": 0.02}, "faults": faults}
+    override = {
+        "devices": ["cpu"],
+        "resource_classes": CLASSES,
+        "pool": {"poll_s": 0.2, "first_poll_s": 0.01},
+        "faults": faults,
+    }
     return ExecutionProfile.load("laptop", override)
 
 
@@ -127,7 +135,8 @@ class FakeWorkers:
 
     def __init__(self, run_dir: Path, store: ResultStore, placed: Plan, values: Mapping[InputIdentity, object]) -> None:
         """Serve the queues of `run_dir` for `placed`, its graph inputs `values`."""
-        self.queues = QueueSet(run_dir / RUN_QUEUES, placed.execution)
+        self.epochs = Epoch(run_dir)
+        self.queues = QueueSet(run_dir / RUN_QUEUES, placed.execution, epoch=self.epochs.current)
         self.run_dir = run_dir
         self.store, self.placed, self.values = store, placed, values
         self.act: Act = lambda fragment: None
@@ -158,10 +167,10 @@ class FakeWorkers:
                 time.sleep(0.01)
 
     def _log(self) -> EventLog:
-        """Return a log of the run's latest claimed attempt, `a1` when none was claimed."""
-        claimed = sorted((int(p.name), p.read_text()) for p in self.run_dir.glob("attempts/*"))
-        ordinal, attempt = claimed[-1] if claimed else (1, "a1")
-        return EventLog(self.run_dir, attempt, ordinal)
+        """Return a log of the current epoch's attempt (`Epoch.attempt`), `a<epoch>` when it recorded none."""
+        epoch = self.epochs.current()
+        attempt, ordinal = self.epochs.attempt(epoch) or (f"a{epoch}", max(epoch, 1))
+        return EventLog(self.run_dir, attempt, ordinal, epoch=epoch)
 
     def _serve(self, claim: Claim) -> None:
         log = self._log()
@@ -190,16 +199,25 @@ def _stack(
     return placed, values, store, FakeWorkers(tmp_path / "run", store, placed, values)
 
 
-def _pool(tmp_path: Path, store: ResultStore, workers: FakeWorkers | Any, profile: ExecutionProfile) -> Pool:  # noqa: ANN401
+def _pool(
+    tmp_path: Path,
+    store: ResultStore,
+    workers: FakeWorkers | Any,  # noqa: ANN401
+    profile: ExecutionProfile,
+    epoch: int | None = None,
+) -> Pool:
+    """Return a pool of the next epoch over `tmp_path/run` (of `epoch`, as a restart within it, when given)."""
     run_dir = tmp_path / "run"
+    epochs = Epoch(run_dir)
+    epoch = epochs.take() if epoch is None else epoch
     return Pool(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile),
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=epochs.current),
         store=store,
-        events=EventLog(run_dir, "a1", 1),
+        events=EventLog(run_dir, f"a{epoch}", epoch, epoch=epoch),
         profile=profile,
         substrate=workers,
-        epoch=Epoch(run_dir).take(),
+        epoch=epoch,
     )
 
 
@@ -214,20 +232,21 @@ def _kinds(run_dir: Path) -> list[str]:
 
 @pytest.mark.contract
 def test_two_coordinators_one_result_per_key(tmp_path: Path) -> None:
-    """Two coordinators put one plan: one item per fragment, executed once, both read one stored result per key."""
+    """Two coordinators put one plan: one item, executed once, one result per key; the older one stops waiting."""
     profile = _profile(**CONTENT)
     placed, values, store, workers = _stack(tmp_path, profile, ["one", "two"])
     first = _pool(tmp_path, store, workers, profile)
-    fragment = node_fragment(placed, first.admit(placed, values))
-    early = first.submit(fragment)
+    early = first.submit(node_fragment(placed, first.admit(placed, values)))
     second = _pool(tmp_path, store, workers, profile)
     late = second.submit(node_fragment(placed, second.admit(placed, values)))
     try:
-        both = [list(second.results(late)), list(first.results(early))]
+        refs = list(second.results(late))
+        with pytest.raises(StaleCoordinator):
+            list(first.results(early))
     finally:
         workers.stop()
-    assert both[0] == both[1] and all(r.failure is None for r in both[0]) and len(workers.served) == 1
-    for ref in both[0]:
+    assert all(r.failure is None for r in refs) and len(refs) == 2 and len(workers.served) == 1
+    for ref in refs:
         entries = list((store.root).rglob(f"{ref.key_digest}/*"))
         assert len([e for e in entries if e.parent.name == ref.key_digest]) == 1
 
@@ -305,7 +324,7 @@ def test_resource_fault_moves_to_larger_class_uncharged(tmp_path: Path) -> None:
 
 @pytest.mark.contract
 def test_broken_env_reported_once(tmp_path: Path) -> None:
-    """Two infrastructure faults of one env break it: reported once, its queue held, no job failed or dead."""
+    """Two infrastructure faults of one env break it: reported once, held on its queue, no job failed or dead."""
     profile = _profile(content_attempts=2, infrastructure_replacements=2, resource_replacements=0)
     placed, values, store, workers = _stack(tmp_path, profile, ["one", "two", "three"])
     workers.act = lambda fragment: LOST
@@ -322,10 +341,11 @@ def test_broken_env_reported_once(tmp_path: Path) -> None:
     [broken] = pool.broken.values()
     assert broken.env == "host" and broken.failures == 2 and broken.fault == LOST
     events = read_events(tmp_path / "run")
-    assert [e.kind for e in events if e.kind in ("failed", "queued")] == ["failed", "queued", "failed"]
+    assert [e.kind for e in events if e.kind == "failed"] == ["failed", "failed"]
+    assert status_from(events).counts["failed"] == 0
     assert [b.env for b in status_from(events, broken_after=2).broken] == ["host"]
     queue = pool.queues.queue("cpu")
-    assert queue.held() == pool.epoch and queue.claim("w") is None
+    assert queue.held("host") == pool.epoch and queue.claim("w") is None
     assert not any((tmp_path / "run").glob("dead/*"))
     with pytest.raises(QueueHeld):
         pool.submit(node_fragment(placed, admission, elements=[(0,)]))
@@ -376,30 +396,37 @@ def _heard(source: object, profile: ExecutionProfile) -> Plan:
 
 @pytest.mark.contract
 def test_two_starters_keep_every_durable_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A starter holding audio in memory, its write delayed, and one giving the path merge one after the other.
+    """A starter holding audio in memory, its write paused, and one giving the path merge one after the other.
 
-    The memory starter takes the lease first and stalls before its rename; the path starter waits for the lease, reads
+    The memory starter takes the lease first and is held at its rename; the path starter waits for the lease, reads
     the memory marker and keeps its path, so the durable source survives whichever finishes last.
     """
     profile = _profile(**CONTENT)
     path = _wav(tmp_path / "a.wav")
     memory, durable = _heard(open_audio(path), profile), _heard(path, profile)
     run_dir = tmp_path / "run"
-    real, entered = os.replace, threading.Event()
-
-    def delayed(src: Any, dst: Any, **kw: Any) -> None:  # noqa: ANN401
-        if threading.current_thread().name == "memory" and os.fspath(dst).endswith(INPUTS_FILE):
-            entered.set()
-            time.sleep(1.0)
-        real(src, dst, **kw)
-
-    monkeypatch.setattr(os, "replace", delayed)
-    first = threading.Thread(target=record_sources, args=(memory, run_dir), name="memory")
+    [(reached, go)] = pause_replaces(monkeypatch, INPUTS_FILE, 1)
+    first = threading.Thread(target=record_sources, args=(memory, run_dir))
     first.start()
-    assert entered.wait(30)
-    record_sources(durable, run_dir)
+    assert reached.wait(30)
+    second = threading.Thread(target=record_sources, args=(durable, run_dir))
+    second.start()
+    second.join(0.5)
+    assert second.is_alive()
+    go.set()
     first.join(30)
+    second.join(30)
     assert json.loads((run_dir / INPUTS_FILE).read_text())["rows"][0]["audio"] == str(path)
+
+
+@pytest.mark.contract
+def test_a_merge_whose_lease_fails_every_proof_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A merge whose `inputs.json` lease is displaced at each proof is tried `RECORD_ATTEMPTS` times."""
+    profile = _profile(**CONTENT)
+    displaced = displace_before_proof(monkeypatch, f"{INPUTS_FILE}.lease")
+    with pytest.raises(LeaseUnavailable):
+        record_sources(_heard(_wav(tmp_path / "a.wav"), profile), tmp_path / "run")
+    assert len(displaced) == RECORD_ATTEMPTS and not (tmp_path / "run" / INPUTS_FILE).exists()
 
 
 CRASH = """
@@ -407,8 +434,9 @@ import os, sys
 from pathlib import Path
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution_settings import JobLease
+lease = JobLease(stale_after_s=1.0, renew_fraction=0.2, attribute_delay_s=0)
 epochs = Epoch(Path(sys.argv[1]))
-with epochs.held(epochs.take(), JobLease(stale_after_s=1.0, renew_fraction=0.2, attribute_delay_s=0)):
+with epochs.held(epochs.take(lease), lease):
     os._exit(9)
 """
 
@@ -438,7 +466,9 @@ def _admitted(tmp_path: Path) -> tuple[Plan, Any]:
 
 @pytest.mark.contract
 def test_coordinate_runs_a_plan_on_the_pool_as_the_next_epoch(tmp_path: Path) -> None:
-    """`coordinate` takes epoch 1, runs every job through the pool, and ends its epoch; status reads claims, not starts.
+    """`coordinate` takes the next epoch, then its attempt, runs every job through the pool and ends its epoch.
+
+    Status reads claims, not starts.
 
     The `fail` record is dead after its two content attempts and its descendants are none; the others are done.
     """
@@ -448,7 +478,7 @@ def test_coordinate_runs_a_plan_on_the_pool_as_the_next_epoch(tmp_path: Path) ->
     profile = _profile(**CONTENT)
     placed, values, store, workers = _stack(tmp_path, profile, ["one", "fail", "two"])
     run_dir = tmp_path / "run"
-    prepare(placed, run_dir, store)
+    assert prepare(placed, run_dir, store)[0] == 1
     try:
         outcome = coordinate(run_dir, substrate=workers, profile=profile, store=store)
     finally:
@@ -456,8 +486,263 @@ def test_coordinate_runs_a_plan_on_the_pool_as_the_next_epoch(tmp_path: Path) ->
     failed = [r.job.element for r in outcome.results["a"] if r.failure is not None]
     assert failed == [(1,)] and len(outcome.results["a"]) == 3
     events = read_events(run_dir)
-    assert "started" not in {e.kind for e in events} and {e.ordinal for e in events} == {2}
+    assert "started" not in {e.kind for e in events} and {(e.epoch, e.ordinal) for e in events} == {(2, 2)}
     status = Run(run_dir).wait(None)
     assert status.counts["done"] == 2 and status.counts["failed"] == 1 and status.done and not status.interrupted
-    assert Epoch(run_dir).current() == 1 and Epoch(run_dir).stopped()
+    assert Epoch(run_dir).current() == 2 and Epoch(run_dir).attempt(2) == (events[0].attempt, 2)
+    assert Epoch(run_dir).stopped()
     assert cli_main(["coordinate", str(tmp_path / "absent")]) == 1
+
+
+@pytest.mark.contract
+def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(tmp_path: Path) -> None:
+    """An older coordinator whose env breaks after a newer epoch was taken stops; no hold of its epoch counts."""
+    profile = _profile(content_attempts=2, infrastructure_replacements=1, resource_replacements=0)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one", "two"])
+    stale = _pool(tmp_path, store, _Idle(), profile)
+    early = stale.submit(node_fragment(placed, stale.admit(placed, values), elements=[(0,)]))
+    workers.act = lambda fragment: LOST
+    queue = stale.queues.queue("cpu")
+    claim = queue.claim("w")
+    assert claim is not None
+    workers._serve(claim)  # noqa: SLF001 - one item served by hand, before the newer epoch
+    live = _pool(tmp_path, store, workers, profile)
+    late = live.submit(node_fragment(placed, live.admit(placed, values), elements=[(1,)]))
+    with pytest.raises(StaleCoordinator):
+        list(stale.results(early))
+    queue.hold(stale.epoch, "host")
+    assert queue.held("host") is None and not stale.broken
+    workers.act = lambda fragment: None
+    try:
+        [ref] = list(live.results(late))
+    finally:
+        workers.stop()
+    assert ref.failure is None and ref.job.element == (1,)
+
+
+@pytest.mark.contract
+def test_an_env_broken_on_one_queue_is_held_on_another(tmp_path: Path) -> None:
+    """An env broken on `cpu` and failing again on `cpu:large` is held there too; nothing is failed or dead."""
+    profile = _profile(content_attempts=2, infrastructure_replacements=1, resource_replacements=0)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one", "two"])
+    pool = _pool(tmp_path, store, _Idle(), profile)
+    admission = pool.admit(placed, values)
+    small = node_fragment(placed, admission, elements=[(0,)])
+    large = node_fragment(placed, admission, elements=[(1,)])
+    grant = {"resource_class": "cpu:large", "partition": profile.resource_classes["cpu:large"].partition}
+    large = large.model_copy(update={"placement": large.placement.model_copy(update=grant)})
+    handles = [pool.submit(small), pool.submit(large)]
+    workers.act = lambda fragment: LOST
+    for name in ("cpu", "cpu:large"):
+        claim = pool.queues.queue(name).claim("w")
+        assert claim is not None
+        workers._serve(claim)  # noqa: SLF001 - served by hand, so both outcomes exist before either is read
+    for handle, name in zip(handles, ("cpu", "cpu:large"), strict=True):
+        with pytest.raises(QueueHeld) as raised:
+            list(pool.results(handle))
+        assert (raised.value.queue, raised.value.env) == (name, "host")
+        assert pool.queues.queue(name).held("host") == pool.epoch
+    assert [e.kind for e in read_events(tmp_path / "run") if e.kind == "failed"] == ["failed"]
+    assert not any((tmp_path / "run").glob("dead/*"))
+
+
+@pytest.mark.contract
+def test_a_result_under_another_jobs_key_is_never_yielded(tmp_path: Path) -> None:
+    """An outcome giving job 0 the key and outputs of job 1 is a content fault of job 0, dead under its own key."""
+    profile = _profile(content_attempts=1, infrastructure_replacements=6, resource_replacements=0)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one", "two"])
+    try:
+        first, second = _all(_pool(tmp_path, store, workers, profile), placed, values)
+    finally:
+        workers.stop()
+    pool = _pool(tmp_path / "other", store, _Idle(), profile)
+    handle = pool.submit(node_fragment(placed, pool.admit(placed, values), elements=[(0,)]))
+    claim = pool.queues.queue("cpu").claim("w")
+    assert claim is not None
+    forged = second.model_copy(update={"job": first.job})
+    claim.commit(claim.items, {"jobs": [forged.model_dump(mode="json")]})
+    [got] = list(pool.results(handle))
+    assert got.failure is not None and got.failure.type == "WrongKey" and got.failure.fault == "content"
+    assert got.key_digest == first.key_digest != second.key_digest and got.output_identity is None
+    assert (tmp_path / "other" / "run" / "dead" / f"{first.key_digest}.json").is_file()
+
+
+@pytest.mark.contract
+def test_a_broken_env_holds_only_its_own_items(tmp_path: Path) -> None:
+    """With `host` broken on `cpu`, an item of another env on `cpu` is still claimed and completes."""
+    profile = _profile(content_attempts=2, infrastructure_replacements=1, resource_replacements=0)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one", "two"])
+    workers.act = lambda fragment: LOST if fragment.placement.env == "host" else None
+    pool = _pool(tmp_path, store, workers, profile)
+    admission = pool.admit(placed, values)
+    other = node_fragment(placed, admission, elements=[(1,)])
+    other = other.model_copy(update={"placement": other.placement.model_copy(update={"env": "venv:other"})})
+    broken = pool.submit(node_fragment(placed, admission, elements=[(0,)]))
+    try:
+        with pytest.raises(QueueHeld):
+            list(pool.results(broken))
+        [ref] = list(pool.results(pool.submit(other)))
+    finally:
+        workers.stop()
+    assert ref.failure is None and list(pool.broken) == ["host"]
+    assert pool.queues.queue("cpu").held("venv:other") is None
+
+
+@pytest.mark.contract
+def test_infrastructure_failures_are_counted_per_epoch_from_disk(tmp_path: Path) -> None:
+    """A coordinator restarted within its epoch counts the failures already logged; a new epoch counts afresh."""
+    profile = _profile(content_attempts=2, infrastructure_replacements=2, resource_replacements=0)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one", "two"])
+    workers.act = lambda fragment: LOST if fragment.jobs[0].element == (1,) or fragment.attempt == 1 else None
+    first = _pool(tmp_path, store, workers, profile)
+    try:
+        [done] = _all_of(first, placed, values, (0,))
+        restarted = _pool(tmp_path, store, workers, profile, epoch=first.epoch)
+        with pytest.raises(QueueHeld) as held:
+            _all_of(restarted, placed, values, (1,))
+        newer = _pool(tmp_path, store, workers, profile)
+        with pytest.raises(QueueHeld) as again:
+            _all_of(newer, placed, values, (1,))
+    finally:
+        workers.stop()
+    assert done.failure is None and held.value.failures == 2 and again.value.failures == 2
+    failed = [e.epoch for e in read_events(tmp_path / "run") if e.kind == "failed"]
+    assert failed == [1, 1, 2, 2]
+
+
+def _all_of(pool: Pool, placed: Plan, values: Mapping[InputIdentity, object], element: tuple[int, ...]) -> list[Any]:
+    fragment = node_fragment(placed, pool.admit(placed, values), elements=[element])
+    return list(pool.results(pool.submit(fragment)))
+
+
+@pytest.mark.contract
+def test_content_and_resource_charges_replay_after_restart(tmp_path: Path) -> None:
+    """A restarted coordinator with no worker reads the same dead failures from the queues' outcomes on disk."""
+    content = _profile(**CONTENT)
+    placed, values, store, workers = _stack(tmp_path, content, ["fail"])
+    try:
+        [dead] = _all(_pool(tmp_path, store, workers, content), placed, values)
+    finally:
+        workers.stop()
+    assert dead.failure is not None and dead.failure.fault == "content" and len(workers.served) == 2
+    assert _all(_pool(tmp_path, store, _Idle(), content), placed, values) == [dead]
+
+    moves = _profile(content_attempts=1, infrastructure_replacements=6, resource_replacements=1)
+    placed, values, store, workers = _stack(tmp_path / "moves", moves, ["one"])
+    workers.act = lambda fragment: OOM
+    try:
+        [oom] = _all(_pool(tmp_path / "moves", store, workers, moves), placed, values)
+    finally:
+        workers.stop()
+    assert oom.failure == OOM and [f.placement.resource_class for f in workers.served] == ["cpu", "cpu:large"]
+    assert _all(_pool(tmp_path / "moves", store, _Idle(), moves), placed, values) == [oom]
+    assert len(workers.served) == 2
+
+
+@pytest.mark.contract
+def test_prepare_takes_the_epoch_before_the_attempt_and_records_it(tmp_path: Path) -> None:
+    """Each `prepare` takes the next epoch, then claims an attempt ordinal and records it in that epoch."""
+    profile = _profile(**CONTENT)
+    placed, _ = _planned(profile, ["one"])
+    run_dir, store = tmp_path / "run", ResultStore(tmp_path / "store")
+    first, second = prepare(placed, run_dir, store), prepare(placed, run_dir, store)
+    assert (first[0], first[2], second[0], second[2]) == (1, 1, 2, 2)
+    assert Epoch(run_dir).attempt(2) == second[1:] and json.loads((run_dir / "epoch" / "2" / "lease.json").read_text())
+
+
+@pytest.mark.contract
+def test_wait_never_reports_a_running_run_interrupted(tmp_path: Path) -> None:
+    """A stopped latest epoch does not interrupt `wait` while this `Run`'s thread lives or a claim is live."""
+    profile = _profile(**CONTENT)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one"])
+    run_dir = tmp_path / "run"
+    pool = _pool(tmp_path, store, _Idle(), profile)
+    job = node_fragment(placed, pool.admit(placed, values)).jobs[0]
+    pool.events.record("queued", job.node, job=job)
+    pool.submit(node_fragment(placed, pool.admit(placed, values)))
+    epochs = Epoch(run_dir)
+    (run_dir / "epoch" / str(pool.epoch) / "ended").touch()
+    assert epochs.stopped()
+    run = Run(run_dir)
+    run.launch(threading.Thread(target=time.sleep, args=(1.0,), daemon=True))
+    assert not run.wait(0.3, poll=0.05).interrupted
+    claim = pool.queues.queue("cpu").claim("w")
+    assert claim is not None
+    assert not Run(run_dir).wait(0.3, poll=0.05).interrupted
+    claim.release()
+    assert Run(run_dir).wait(None, poll=0.05).interrupted
+
+
+@pytest.mark.contract
+def test_an_epoch_taken_but_never_held_ends_a_wait(tmp_path: Path) -> None:
+    """A coordinator that died between taking its epoch and holding it: `wait(None)` ends one lease bound later."""
+    run_dir = tmp_path / "run"
+    log = EventLog(run_dir, "a1", 1, epoch=1)
+    job = node_fragment(*_admitted(tmp_path)).jobs[0]
+    Epoch(run_dir).take(JobLease(stale_after_s=0.5, renew_fraction=0.2, attribute_delay_s=0))
+    log.record("queued", job.node, job=job)
+    started = time.monotonic()
+    assert Run(run_dir).wait(None, poll=0.05).interrupted and time.monotonic() - started < 30
+
+
+@pytest.mark.contract
+def test_a_stale_pool_stops_the_runner_without_failing_or_blocking_a_job(tmp_path: Path) -> None:
+    """The runner treats `StaleCoordinator` as an interruption: it raises it and logs no terminal event."""
+    pytest.importorskip("pydra")
+    from senselab_core.runtime.execution.runner import PydraRunner  # noqa: PLC0415 - after the pydra check
+
+    profile = _profile(**CONTENT)
+    placed, values, store, _ = _stack(tmp_path, profile, ["one", "two"])
+    stale = _pool(tmp_path, store, _Idle(), profile)
+    Epoch(tmp_path / "run").take()
+    with pytest.raises(StaleCoordinator):
+        PydraRunner(profile=profile, work_dir=tmp_path / "pydra").run_plan(
+            placed, stale, values=values, events=stale.events
+        )
+    assert {e.kind for e in read_events(tmp_path / "run")} == {"queued"}
+
+
+@pytest.mark.contract
+def test_plan_run_with_a_pool_binds_it_to_the_runs_own_epoch(tmp_path: Path) -> None:
+    """`Plan.run` with a pool built beforehand takes the next epoch, binds the pool to it, and completes."""
+    pytest.importorskip("pydra")
+    profile = _profile(**CONTENT)
+    placed, values = _planned(profile, ["one", "two"])
+    run_dir, store = run_dir_of(placed.hash), ResultStore(tmp_path / "store")
+    workers = FakeWorkers(run_dir, store, placed, values)
+    pool = Pool(
+        run_dir,
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+        store=store,
+        events=EventLog(run_dir, "a0", 1, epoch=0),
+        profile=profile,
+        substrate=workers,
+        epoch=0,
+    )
+    try:
+        status = placed.run(pool, store=store).wait(60)
+    finally:
+        workers.stop()
+    assert status.done and status.counts["done"] == 2 and pool.epoch == 1
+    assert {e.epoch for e in read_events(run_dir)} == {1}
+
+
+@pytest.mark.contract
+def test_a_held_env_leaves_its_jobs_queued_and_the_wait_interrupted(tmp_path: Path) -> None:
+    """`coordinate` stopped by a broken env raises `QueueHeld`; its jobs stay queued and `wait` ends interrupted."""
+    pytest.importorskip("pydra")
+    from senselab_core.runtime.execution.pool import coordinate  # noqa: PLC0415 - after the pydra check
+
+    profile = _profile(content_attempts=2, infrastructure_replacements=1, resource_replacements=0)
+    placed, _, store, workers = _stack(tmp_path, profile, ["one", "two"])
+    workers.act = lambda fragment: LOST
+    run_dir = tmp_path / "run"
+    prepare(placed, run_dir, store)
+    try:
+        with pytest.raises(QueueHeld):
+            coordinate(run_dir, substrate=workers, profile=profile, store=store)
+    finally:
+        workers.stop()
+    assert not {"blocked", "cancelled"} & {e.kind for e in read_events(run_dir)}
+    status = Run(run_dir).wait(None, poll=0.05)
+    assert status.interrupted and status.counts["queued"] == 2 and status.counts["failed"] == 0

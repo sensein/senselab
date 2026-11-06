@@ -154,6 +154,25 @@ def test_queued_or_running_across_writers_reads_claims_not_clocks() -> None:
 
 
 @pytest.mark.logic
+def test_a_stale_epoch_never_overrides_the_live_one_whatever_its_ordinal() -> None:
+    """A stale coordinator of epoch 1 that claimed ordinal 2 cannot fail or block what epoch 2 (ordinal 1) finished."""
+    stale = [
+        _event("queued", writer="s", attempt="a2", epoch=1),
+        _event("failed", writer="s", seq=1, attempt="a2", epoch=1, fault="infrastructure", failure=INFRA),
+        _event("blocked", (0,), node="b", writer="s", seq=2, attempt="a2", epoch=1),
+    ]
+    live = [
+        _event("queued", writer="l", attempt="a1", epoch=2),
+        _event("finished", writer="l", seq=1, attempt="a1", epoch=2),
+        _event("queued", (0,), node="b", writer="l", seq=2, attempt="a1", epoch=2),
+    ]
+    for events in ([*stale, *live], [*live, *stale]):
+        status = status_from(events)
+        assert status.counts["done"] == 1 and status.counts["queued"] == 1 and not status.done
+        assert status.counts["failed"] == 0 and status.counts["blocked"] == 0
+
+
+@pytest.mark.logic
 def test_a_resume_in_progress_shows_an_earlier_result_done() -> None:
     """A job finished in attempt one is done while attempt two has only queued it; a later terminal state wins."""
     first = [_event("queued"), _event("finished", seq=1)]

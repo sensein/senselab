@@ -31,6 +31,7 @@ from pydra.workers.base import Worker
 
 from senselab_core.kernel.graph import Edge, fan_out_issues, mapped_nodes, order, split
 from senselab_core.kernel.identity import InputIdentity, gather_identity, port_output_identity
+from senselab_core.runtime.execution.epoch import StaleCoordinator
 from senselab_core.runtime.execution.events import TERMINAL, EventKind, EventLog, run_dir_of
 from senselab_core.runtime.execution.executor import Admission, Executor, FaultRecord, JobRef, QueueHeld, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
@@ -57,6 +58,10 @@ class ElementFailed(RuntimeError):
         """Hold the failure and name it in the message."""
         super().__init__(f"{failure.type} ({failure.fault}): {failure.message}")
         self.failure = failure
+
+
+Interrupted = (QueueHeld, StaleCoordinator)
+"""The errors that stop a run without failing its unsent jobs: a held env, a newer coordinator."""
 
 
 class RunCancelled(RuntimeError):
@@ -319,7 +324,12 @@ class _Run:
         ]
 
     def close(self) -> None:
-        """Give every job with no terminal event its own: `cancelled` once cancelled, else `blocked`."""
+        """Give every job with no terminal event its own: `cancelled` once cancelled, else `blocked`.
+
+        A run stopped by a held env or a newer coordinator (`Interrupted`) leaves them without one, for a later epoch.
+        """
+        if any(isinstance(e, Interrupted) for e in self.errors):
+            return
         for node, element in self.expected():
             if (node, element) not in self.ended:
                 self.log("cancelled" if self.cancel.is_set() else "blocked", node, element)
@@ -353,7 +363,7 @@ class _Run:
         fragment = node_fragment(
             self.placed, self.admission, node, upstream=_upstream(self.placed, node, batch), elements=elements
         )
-        if not getattr(self.executor, "logs_claims", False):
+        if not self.executor.logs_claims:
             for job, element, _ in batch:
                 self.log("started", node, element, key=job.checksum)
         for ref in self.executor.results(self.executor.submit(fragment)):
@@ -488,7 +498,7 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
             await asyncio.to_thread(run.dispatch, node, batch, lambda ref: loop.call_soon_threadsafe(settle, ref))
         except Exception as error:  # noqa: BLE001 - every waiting job is failed with it, and the run re-raises it
             run.errors.append(error)
-            if not isinstance(error, RunCancelled | QueueHeld):
+            if not isinstance(error, (RunCancelled, *Interrupted)):
                 run.fail_batch(node, list(futures), error)
         except BaseException as signal:
             for future in futures.values():

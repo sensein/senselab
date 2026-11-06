@@ -10,7 +10,7 @@ import sys
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import numpy
 import pytest
@@ -24,7 +24,7 @@ from senselab_core.runtime.call import Packaged, RunConfig, TaskCall, use_packag
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.events import Event, read_events, run_dir_of
+from senselab_core.runtime.execution.events import Event, EventLog, read_events, run_dir_of
 from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status
 from senselab_core.runtime.execution.in_process import InProcess
 from senselab_core.runtime.execution.run import ConflictingSources, InputChanged, Output, Run, load_plan
@@ -293,6 +293,12 @@ def test_activity_had_plan(tmp_path: Path) -> None:
 
 class Delegating:
     """An `Executor` that is not `InProcess`: it hands every call to one it holds."""
+
+    logs_claims: ClassVar[bool] = False
+
+    def bind_epoch(self, epoch: int, events: EventLog) -> None:
+        """Bind through `inner`."""
+        self.inner.bind_epoch(epoch, events)
 
     def __init__(self, inner: InProcess) -> None:
         """Hold `inner`."""

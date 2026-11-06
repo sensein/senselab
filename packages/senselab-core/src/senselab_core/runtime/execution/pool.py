@@ -10,10 +10,11 @@ profile's `faults` section:
 - **resource**, not a gap: the job is queued again on the next larger memory class of its device, uncharged, at most
   `resource_replacements` times; then, or with no larger class, it is dead;
 - **infrastructure**, or any gap: queued again uncharged (a gap is logged as a classification gap); at
-  `infrastructure_replacements` failures of one env the env is reported once as broken (`BrokenEnv`) and its queue
-  held (`Queue.hold`), so its jobs wait for a later attempt and none is failed.
+  `infrastructure_replacements` failures of one env in this epoch the env is reported once as broken (`BrokenEnv`) and
+  held on each queue it is seen on (`Queue.hold`), so its jobs wait for a later epoch and none is failed.
 
-A retry is a one-job fragment of the next `attempt`, logged `failed` then `queued` by this coordinator.
+A retry is a one-job fragment of the next `attempt`, logged `failed` then `queued` by this coordinator; a job held
+with its env is logged `queued` again, so it reads as waiting, never as failed.
 """
 
 import contextlib
@@ -34,7 +35,7 @@ from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
-from senselab_core.runtime.execution.events import BrokenEnv, EventLog
+from senselab_core.runtime.execution.events import BrokenEnv, EventLog, read_events
 from senselab_core.runtime.execution.executor import (
     Admission,
     FaultRecord,
@@ -148,16 +149,16 @@ class Pool:
     """An `Executor` over the queues of the run in `run_dir`, its jobs run by pool workers a `substrate` starts.
 
     `submit` puts a fragment on its queue unless a newer epoch than `epoch` was taken (`StaleCoordinator`); `results`
-    polls the item's outcome every `profile.pool.poll_s` seconds and applies each fault's effect. An admission holds
-    the plan only: workers bind graph inputs from the run's `inputs.json`.
+    polls the item's outcome, from `profile.pool.first_poll_s` doubling up to `poll_s`, and applies each fault's
+    effect. An admission holds the plan only: workers bind graph inputs from the run's `inputs.json`. `events` is the
+    log of `epoch`'s attempt; an env's infrastructure failures are counted from that epoch's events on disk.
 
     Attributes:
-        broken: Each env reported broken, once.
-        gaps: Each job given a fault the worker's fallback table classified, with its fault.
+        broken: Each env this pool reported broken, once.
+        gaps: Each job given a fault with `gap` set, with its fault.
     """
 
     logs_claims: ClassVar[bool] = True
-    """Workers log a job `claimed` as they claim it, so the runner does not log it `started` as it is sent."""
 
     def __init__(  # noqa: PLR0913 - the run, then keyword-only parts
         self,
@@ -170,26 +171,35 @@ class Pool:
         substrate: Substrate,
         epoch: int,
     ) -> None:
-        """Coordinate the run in `run_dir` as epoch `epoch`."""
+        """Coordinate the run in `run_dir` as epoch `epoch`.
+
+        Raises:
+            ValueError: `events` is not a log of `epoch`.
+        """
         self.run_dir = Path(run_dir)
-        self.queues, self.store, self.events = queues, store, events
-        self.profile, self.substrate, self.epoch = profile, substrate, epoch
+        self.queues, self.store, self.profile, self.substrate = queues, store, profile, substrate
+        self.bind_epoch(epoch, events)
         self.broken: dict[str, BrokenEnv] = {}
         self.gaps: list[tuple[JobRef, FaultRecord]] = []
         self._epochs = Epoch(self.run_dir)
         self._plans: dict[str, Plan] = {}
         self._admitted: Counter[str] = Counter()
         self._followed: dict[str, _Followed] = {}
-        self._failures: Counter[str] = Counter()
-        self._holds: dict[str, QueueHeld] = {}
         self._ids = itertools.count()
         self._lock = threading.Lock()
 
+    def bind_epoch(self, epoch: int, events: EventLog) -> None:
+        """Coordinate as `epoch` from now on, logging to `events`, a log of that epoch's attempt.
+
+        Raises:
+            ValueError: `events` is not a log of `epoch`.
+        """
+        if events.epoch != epoch:
+            raise ValueError(f"the pool coordinates epoch {epoch}; its event log is of epoch {events.epoch}")
+        self.epoch, self.events = epoch, events
+
     def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:  # noqa: ARG002
         """Hold `placed` until it is released as often as it was admitted; its id is the run's, `run-<plan hash>`.
-
-        Every worker binds the graph inputs from the run's records, so every admission of one plan in one run reads
-        the same values; one id keeps a fragment one queue item whichever coordinator puts it.
 
         Raises:
             ValueError: the plan was placed under another execution profile than this pool's.
@@ -216,18 +226,18 @@ class Pool:
             raise StaleCoordinator(self.epoch, current)
 
     def _put(self, fragment: PlanFragment) -> _Flight:
-        """Put `fragment` on its queue and have it served; refused by a newer epoch or a hold of this one.
+        """Put `fragment` on its queue and have it served; refused by a newer epoch or a hold of its env.
 
         Raises:
             StaleCoordinator: a newer epoch was taken.
-            QueueHeld: this coordinator held the fragment's queue.
+            QueueHeld: the fragment's env is held on its queue by this epoch or a newer one.
         """
         self._fence()
-        name = fragment.placement.resource_class
+        name, env = fragment.placement.resource_class, fragment.placement.env
         queue = self.queues.queue(name)
         queue.unhold(before=self.epoch)
-        if queue.held() is not None:
-            raise self._holds.get(name) or QueueHeld(name, fragment.placement.env, 0)
+        if queue.held(env) is not None:
+            raise QueueHeld(name, env, self._env_failures(env))
         queue.put(fragment)
         self.substrate.ensure(name)
         return _Flight(name, item_digest(fragment), fragment)
@@ -237,7 +247,7 @@ class Pool:
 
         Raises:
             StaleCoordinator: a newer epoch than this coordinator's was taken; nothing is put.
-            QueueHeld: the fragment's queue is held, its env broken; nothing is put.
+            QueueHeld: the fragment's env is held on its queue; nothing is put.
         """
         flight = self._put(fragment)
         handle = Handle(id=f"pool-{self.epoch}-{next(self._ids)}")
@@ -267,21 +277,26 @@ class Pool:
 
         Raises:
             KeyError: the handle is not this pool's.
-            StaleCoordinator: a retry was due after a newer epoch was taken.
-            QueueHeld: a job's queue is held, its env broken; the jobs not yielded wait in the queue.
+            StaleCoordinator: a newer epoch was taken while this pool waited.
+            QueueHeld: a job's env is held; the jobs not yielded wait in their queues.
         """
         followed = self._followed[handle.id]
+        pause = self.profile.pool.first_poll_s
         while followed.flights and not followed.cancelled:
+            self._fence()
             landed = [(f, r) for f in followed.flights if (r := self.queues.queue(f.queue).outcome(f.digest))]
             for flight, record in landed:
                 followed.flights.remove(flight)
                 followed.seen = True
                 yield from self._settle(followed, flight, record)
-            held = followed.held + [self._holds[f.queue] for f in followed.flights if f.queue in self._holds]
+            held = followed.held + [self._held(f) for f in followed.flights if f.fragment.placement.env in self.broken]
             if held:
                 raise held[0]
-            if followed.flights and not landed:
-                time.sleep(self.profile.pool.poll_s)
+            if landed:
+                pause = self.profile.pool.first_poll_s
+            elif followed.flights:
+                time.sleep(pause)
+                pause = min(2 * pause, self.profile.pool.poll_s)
         followed.done = not followed.cancelled
 
     def close(self) -> None:
@@ -289,15 +304,27 @@ class Pool:
         self.substrate.stop()
 
     def _settle(self, followed: _Followed, flight: _Flight, record: Mapping[str, object]) -> Iterator[ResultRef]:
-        """Yield the results of `flight`'s jobs from its outcome `record`, applying each failure's effect."""
+        """Yield the results of `flight`'s jobs from its outcome `record`, applying each failure's effect.
+
+        A reported result is taken only when it names the job's own key and the store holds its outputs.
+        """
         fragment = flight.fragment
         jobs = record.get("jobs") if record.get("outcome") == "done" else None
         given = {r.job: r for r in (ResultRef.model_validate(j) for j in jobs)} if isinstance(jobs, list) else {}
         dead = FaultRecord.model_validate(record["fault"]) if record.get("outcome") == "dead" else None
         for index, job in enumerate(fragment.jobs):
+            key = self._key(fragment, index)
             ref = given.get(job)
-            if ref is not None and ref.failure is None and ref.output_identity is not None:
-                if self.store.outputs_of(ref.key_digest, ref.output_identity) is not None:
+            if ref is not None and ref.key_digest != key:
+                fault = FaultRecord(
+                    fault="content",
+                    type="WrongKey",
+                    message=f"the outcome gives {job} the key {ref.key_digest}, not its own {key}",
+                    gap=False,
+                    charged=True,
+                )
+            elif ref is not None and ref.failure is None and ref.output_identity is not None:
+                if self.store.outputs_of(key, ref.output_identity) is not None:
                     yield ref
                     continue
                 fault = _gap("MissingOutput", f"the outputs of {job} are not in the result store")
@@ -305,7 +332,6 @@ class Pool:
                 fault = ref.failure
             else:
                 fault = dead or _gap("MissingResult", f"the outcome of the item gives no result for {job}")
-            key = ref.key_digest if ref is not None else self._key(fragment, index)
             yield from self._effect(followed, flight, index, key, fault)
 
     def _key(self, fragment: PlanFragment, index: int) -> str:
@@ -317,7 +343,7 @@ class Pool:
     def _effect(  # noqa: PLR0913 - the followed fragment, the item and the job's failure
         self, followed: _Followed, flight: _Flight, index: int, key: str, fault: FaultRecord
     ) -> Iterator[ResultRef]:
-        """Apply `fault`'s effect to job `index` of `flight`: retry it, hold its queue, or yield it dead."""
+        """Apply `fault`'s effect to job `index` of `flight`: retry it, hold its env, or yield it dead."""
         fragment, budgets = flight.fragment, self.profile.faults
         job, placement = fragment.jobs[index], fragment.placement
         if fault.gap or fault.fault == "infrastructure":
@@ -327,7 +353,8 @@ class Pool:
             if self._infrastructure(flight, job, key, fault):
                 self._again(followed, flight, index)
             else:
-                followed.held.append(self._holds[flight.queue])
+                self.events.record("queued", job.node, job=job, env=placement.env)
+                followed.held.append(self._held(flight))
             return
         if fault.fault == "resource":
             followed.moved[job.element] += 1
@@ -345,21 +372,45 @@ class Pool:
                 return
         yield self._dead(job, key, fault)
 
-    def _infrastructure(self, flight: _Flight, job: JobRef, key: str, fault: FaultRecord) -> bool:
-        """Count an infrastructure fault of `flight`'s env; return False once the env is broken and its queue held."""
+    def _env_failures(self, env: str) -> int:
+        """Return the infrastructure and gap failures of `env` this epoch's events on disk record."""
+        return sum(
+            1
+            for e in read_events(self.run_dir)
+            if e.kind == "failed"
+            and e.epoch == self.epoch
+            and e.env == env
+            and e.failure is not None
+            and (e.failure.gap or e.failure.fault == "infrastructure")
+        )
+
+    def _held(self, flight: _Flight) -> QueueHeld:
         env = flight.fragment.placement.env
+        return QueueHeld(flight.queue, env, self.broken[env].failures)
+
+    def _infrastructure(self, flight: _Flight, job: JobRef, key: str, fault: FaultRecord) -> bool:
+        """Count an infrastructure fault of `flight`'s env this epoch; return False once the env is broken and held.
+
+        A broken env is held on `flight`'s queue (each queue it is seen on), after the fence.
+
+        Raises:
+            StaleCoordinator: a newer epoch was taken.
+        """
+        env, budget = flight.fragment.placement.env, self.profile.faults.infrastructure_replacements
         with self._lock:
-            if env in self.broken:
-                return False
-            self._failures[env] += 1
-            failures = self._failures[env]
-            self._failed(job, key, fault, env)
-            if failures < self.profile.faults.infrastructure_replacements:
-                return True
-            self.broken[env] = BrokenEnv(env=env, fault=fault, failures=failures)
-            self._holds[flight.queue] = QueueHeld(flight.queue, env, failures)
-        self.queues.queue(flight.queue).hold(self.epoch)
-        logger.error("env %s is broken after %d infrastructure faults; queue %s is held", env, failures, flight.queue)
+            failures = self._env_failures(env)
+            if env not in self.broken and failures < budget:
+                self._failed(job, key, fault, env)
+                failures += 1
+                if failures < budget:
+                    return True
+            reported = env in self.broken
+            if not reported:
+                self.broken[env] = BrokenEnv(env=env, fault=fault, failures=failures)
+        self._fence()
+        self.queues.queue(flight.queue).hold(self.epoch, env)
+        if not reported:
+            logger.error("env %s is broken after %d infrastructure faults; it is held", env, failures)
         return False
 
     def _failed(self, job: JobRef, key: str, fault: FaultRecord, env: str) -> None:
@@ -408,13 +459,14 @@ def coordinate(
     """Coordinate the run in `run_dir` on a `Pool`: take the next epoch, hold its lease, and run the plan's jobs.
 
     The plan and its latest placement are read from the run directory, its inputs bound again (`bind_sources`), and a
-    new attempt prepared (`prepare`); the run's queues are reconciled and every job is sent through the pool, whose
-    workers `substrate` starts. `profile` defaults to the packaged one; `store` to the one `manifest.json` names.
+    new epoch and its attempt prepared (`prepare`); the run's queues are reconciled and every job is sent through the
+    pool, whose workers `substrate` starts. `profile` defaults to the packaged one; `store` to the one `manifest.json`
+    names.
 
     Raises:
         ValueError: the plan was placed under another profile than `profile`.
         StaleCoordinator: a newer coordinator took an epoch while this one ran.
-        QueueHeld: an env broke and its queue was held.
+        QueueHeld: an env broke and was held.
         InputChanged, InputsUnavailable, ConflictingSources: as `start`.
     """
     from senselab_core.runtime.execution.run import RESULTS_DIR, Run, bind_sources, load_plan, prepare  # noqa: PLC0415
@@ -431,12 +483,11 @@ def coordinate(
         named = Run(run_dir).manifest().get("store")
         store = ResultStore(Path(named) if isinstance(named, str) else cache_root() / RESULTS_DIR)
     values = bind_sources(placed)
-    attempt, ordinal = prepare(placed, run_dir, store)
-    queues = QueueSet(run_dir / RUN_QUEUES, profile)
-    queues.reconcile()
+    epoch, attempt, ordinal = prepare(placed, run_dir, store)
     epochs = Epoch(run_dir)
-    epoch = epochs.take()
-    events = EventLog(run_dir, attempt, ordinal)
+    queues = QueueSet(run_dir / RUN_QUEUES, profile, epoch=epochs.current)
+    queues.reconcile()
+    events = EventLog(run_dir, attempt, ordinal, epoch=epoch)
     with epochs.held(epoch, profile.lease):
         pool = Pool(
             run_dir, queues=queues, store=store, events=events, profile=profile, substrate=substrate, epoch=epoch

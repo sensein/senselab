@@ -1,7 +1,8 @@
 """A run's coordinator epochs: `epoch/<n>`, each taken by one `mkdir`, held under a beating lease (ADR-003).
 
-`epoch/<n>/` holds `lease.json` (the stale bound its coordinator's lease is judged by), `coordinator.lease` (the
-`Lease` its coordinator keeps alive) and, once that coordinator ends, `ended`. The highest `n` is the current epoch;
+`epoch/<n>/` holds `lease.json` (the stale bound its coordinator's lease is judged by, written as it is taken),
+`attempt.json` (the attempt id and ordinal the coordinator claimed under it), `coordinator.lease` (the `Lease` its
+coordinator keeps alive) and, once that coordinator ends, `ended`. The highest `n` is the current epoch;
 a coordinator of an older one releases no further work.
 """
 
@@ -14,6 +15,7 @@ from pathlib import Path
 
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import Lease, LeaseState
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.storage import StorageDir
 
 EPOCH_DIR = "epoch"
@@ -21,6 +23,7 @@ EPOCH_DIR = "epoch"
 EPOCH_NAME = re.compile(r"^[1-9][0-9]*$")
 """An epoch: its number, from 1."""
 BOUND_FILE = "lease.json"
+ATTEMPT_FILE = "attempt.json"
 COORDINATOR = "coordinator"
 ENDED = "ended"
 
@@ -43,6 +46,13 @@ def _create(path: Path, data: bytes) -> None:
             handle.write(data)
 
 
+def _bound(lease: JobLease | None) -> bytes:
+    """Return the stale bound `lease` (the packaged profile's when None) is judged by, as `lease.json` holds it."""
+    if lease is None:
+        lease = ExecutionProfile.load().lease
+    return json.dumps({"stale_after_s": lease.stale_after_s, "attribute_delay_s": lease.attribute_delay_s}).encode()
+
+
 class Epoch:
     """The epochs of the run in `run_dir`."""
 
@@ -56,8 +66,11 @@ class Epoch:
             return 0
         return max((int(n) for n in os.listdir(self.root) if EPOCH_NAME.fullmatch(n)), default=0)
 
-    def take(self) -> int:
-        """Take the next epoch by `mkdir epoch/<n>` and return `n`; a number another coordinator made is skipped."""
+    def take(self, lease: JobLease | None = None) -> int:
+        """Take the next epoch by `mkdir epoch/<n>`, record `lease`'s bound in it, and return `n`.
+
+        A number another coordinator made is skipped. `lease` is the packaged profile's `lease` section when None.
+        """
         self.root.mkdir(parents=True, exist_ok=True)
         n = self.current() + 1
         while True:
@@ -66,7 +79,20 @@ class Epoch:
             except FileExistsError:
                 n += 1
                 continue
+            _create(self.root / str(n) / BOUND_FILE, _bound(lease))
             return n
+
+    def bind(self, n: int, attempt: str, ordinal: int) -> None:
+        """Record that epoch `n`'s coordinator claimed attempt `attempt`, the `ordinal`-th; written once."""
+        _create(self.root / str(n) / ATTEMPT_FILE, json.dumps({"attempt": attempt, "ordinal": ordinal}).encode())
+
+    def attempt(self, n: int) -> tuple[str, int] | None:
+        """Return the attempt id and ordinal epoch `n`'s coordinator claimed, None before it claimed one."""
+        try:
+            found = json.loads((self.root / str(n) / ATTEMPT_FILE).read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            return None
+        return str(found["attempt"]), int(found["ordinal"])
 
     @contextlib.contextmanager
     def held(self, n: int, lease: JobLease) -> Iterator[LeaseState]:
@@ -76,8 +102,7 @@ class Epoch:
             LeaseTimeout: another coordinator holds epoch `n`.
         """
         directory = self.root / str(n)
-        bound = {"stale_after_s": lease.stale_after_s, "attribute_delay_s": lease.attribute_delay_s}
-        _create(directory / BOUND_FILE, json.dumps(bound).encode())
+        _create(directory / BOUND_FILE, _bound(lease))
         held = Lease(directory / COORDINATOR, timeout=0, stale_after=lease.stale_after_s)
         try:
             with held, held.keep_alive(lease.renew_fraction) as state:
@@ -88,8 +113,8 @@ class Epoch:
     def stopped(self) -> bool:
         """Return whether the current epoch's coordinator ended, or its lease is older than its stale bound.
 
-        A lease is aged on the storage clock; an epoch whose lease was never taken is aged by its directory. False
-        when no epoch was taken.
+        A lease is aged on the storage clock; an epoch whose lease was never taken is aged by its directory, against the
+        packaged profile's bound when it records none. False when no epoch was taken.
         """
         n = self.current()
         if n == 0:
@@ -100,10 +125,10 @@ class Epoch:
         try:
             bound = json.loads((directory / BOUND_FILE).read_text(encoding="utf-8"))
         except (FileNotFoundError, ValueError):
-            return False
+            bound = json.loads(_bound(None))
         age = Lease(directory / COORDINATOR, stale_after=bound["stale_after_s"]).age()
         if age is None:
-            with StorageDir.open_root(directory) as opened:
+            with StorageDir.open_root(self.root) as opened:
                 age = opened.dir_now() - directory.stat().st_mtime
         return bool(age > float(bound["stale_after_s"]) + float(bound["attribute_delay_s"]))
 

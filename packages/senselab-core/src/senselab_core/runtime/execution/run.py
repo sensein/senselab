@@ -44,6 +44,7 @@ from senselab_core.runtime.execution.events import (
 from senselab_core.runtime.execution.executor import Executor, FaultRecord
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
+from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import Lease, LeaseUnavailable
 from senselab_core.runtime.planner import ExecutorUnavailable, Plan
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -471,9 +472,10 @@ class Run:
         """Wait up to `timeout` seconds for the run to be done and return its status.
 
         A run started here is waited on through its thread; any run is then polled, reading the event log every `poll`
-        seconds, until its events say it is done, so a run another process drives can be waited for. A run whose
-        current coordinator ended, or whose coordinator lease is past its stale bound (`Epoch.stopped`), is not waited
-        for further: its status is returned with `interrupted` set.
+        seconds, until its events say it is done, so a run another process drives can be waited for. While no thread of
+        this `Run` is alive, a run whose latest coordinator ended or whose lease is past its stale bound
+        (`Epoch.stopped`), with no live claim on any of its queues, is not waited for further: its status is returned
+        with `interrupted` set.
 
         Raises:
             BaseException: the error that stopped a run started here, other than its cancellation.
@@ -485,13 +487,16 @@ class Run:
             if not thread.is_alive() and self._error is not None:
                 raise self._error
         status = self.status()
-        epochs = Epoch(self.run_dir)
         while not status.done and (deadline is None or time.monotonic() < deadline):
-            if epochs.stopped():
+            if (thread is None or not thread.is_alive()) and self._stopped():
                 return dataclasses.replace(self.status(), interrupted=True)
             time.sleep(poll if deadline is None else max(0.0, min(poll, deadline - time.monotonic())))
             status = self.status()
         return status
+
+    def _stopped(self) -> bool:
+        """Return whether the latest coordinator stopped (`Epoch.stopped`) and no worker holds a live claim."""
+        return Epoch(self.run_dir).stopped() and not QueueSet(self.run_dir / RUN_QUEUES).claimed_any()
 
     @property
     def cancelled(self) -> threading.Event:
@@ -674,7 +679,7 @@ def record_sources(placed: Plan, run_dir: Path) -> None:
         LeaseUnavailable: the merge's lease was lost on every attempt.
         LeaseTimeout: another holder kept the lease for its whole timeout.
     """
-    lease = (placed.execution if placed.execution is not None else ExecutionProfile.load()).lease
+    lease = _lease_of(placed)
     run_dir.mkdir(parents=True, exist_ok=True)
     for _ in range(RECORD_ATTEMPTS):
         held = Lease(run_dir / INPUTS_FILE, stale_after=lease.stale_after_s)
@@ -686,10 +691,11 @@ def record_sources(placed: Plan, run_dir: Path) -> None:
     raise LeaseUnavailable(run_dir / INPUTS_FILE, f"the lease on {run_dir / INPUTS_FILE} was lost on every merge")
 
 
-def prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[str, int]:
-    """Write the plan once, record its input sources (`record_sources`) and the manifest, and claim an attempt.
+def prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[int, str, int]:
+    """Write the plan once, record its input sources (`record_sources`) and the manifest, then take an epoch.
 
-    Returns the attempt id and its ordinal.
+    The epoch (`Epoch.take`, under the plan's profile's `lease` bound) is taken before the attempt's ordinal is
+    claimed, and the attempt is recorded in it (`Epoch.bind`). Returns the epoch, the attempt id and its ordinal.
 
     Raises:
         ValueError: `run_dir` holds another plan.
@@ -701,7 +707,15 @@ def prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[str
     for name in POOL_DIRS:
         (run_dir / name).mkdir(exist_ok=True)
     _write(run_dir / MANIFEST_FILE, {"plan_hash": placed.hash, "store": None if store is None else str(store.root)})
-    return _claim_attempt(run_dir, placed.placement)
+    epochs = Epoch(run_dir)
+    epoch = epochs.take(_lease_of(placed))
+    attempt, ordinal = _claim_attempt(run_dir, placed.placement)
+    epochs.bind(epoch, attempt, ordinal)
+    return epoch, attempt, ordinal
+
+
+def _lease_of(placed: Plan) -> JobLease:
+    return (placed.execution if placed.execution is not None else ExecutionProfile.load()).lease
 
 
 def _plan_document(placed: Plan) -> dict[str, object]:
@@ -728,7 +742,8 @@ def start(
     is written: from their paths or JSON values, or from the values the plan holds in memory; `values` gives them
     already bound. The sources are merged into `inputs.json` under its lease (`record_sources`), also before anything
     else is written. Every item in the run's `queues/` with neither a slot nor an outcome is put again
-    (`QueueSet.reconcile`). The run takes the next epoch (`Epoch.take`) and holds its coordinator lease while it runs.
+    (`QueueSet.reconcile`). The run takes the next epoch before its attempt (`prepare`), hands it to the executor
+    (`bind_epoch`), and holds its coordinator lease while it runs.
 
     Raises:
         ExecutorUnavailable: no executor is given and the substrate is not local.
@@ -749,18 +764,18 @@ def start(
     executor = _executor(placed, executor, store)
     values = bind_sources(placed) if values is None else values
     run_dir = run_dir_of(placed.hash)
-    attempt, ordinal = prepare(placed, run_dir, store)
-    QueueSet(run_dir / RUN_QUEUES, placed.execution).reconcile()
+    epoch, attempt, ordinal = prepare(placed, run_dir, store)
     epochs = Epoch(run_dir)
-    epoch = epochs.take()
+    QueueSet(run_dir / RUN_QUEUES, placed.execution, epoch=epochs.current).reconcile()
     run = Run(run_dir, store=store)
-    log = EventLog(run_dir, attempt, ordinal)
+    log = EventLog(run_dir, attempt, ordinal, epoch=epoch)
+    executor.bind_epoch(epoch, log)
     runner = PydraRunner(profile=placed.execution, work_dir=run_dir / "pydra")
     written = provenance if store is None else store.provenance
     add_plan_entity(written, placed.hash)
 
     def body() -> None:
-        with epochs.held(epoch, (placed.execution or ExecutionProfile.load()).lease):
+        with epochs.held(epoch, _lease_of(placed)):
             try:
                 runner.run_plan(placed, executor, values=values, events=log, cancel=run.cancelled)
             except BaseException as err:  # noqa: BLE001 - held for `wait`

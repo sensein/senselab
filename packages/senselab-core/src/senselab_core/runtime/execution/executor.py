@@ -2,7 +2,7 @@
 
 from collections.abc import Iterator, Mapping
 from enum import Enum
-from typing import Annotated, Any, ClassVar, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Protocol
 
 from pydantic import AfterValidator, BeforeValidator, Field, PlainSerializer, StringConstraints, model_validator
 from senselab_worker.faults import FaultClass
@@ -20,6 +20,9 @@ from senselab_core.kernel.identity import (
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.kernel.plan import ReuseName
 from senselab_core.runtime.planner import Plan
+
+if TYPE_CHECKING:
+    from senselab_core.runtime.execution.events import EventLog
 
 Hex64 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
@@ -224,8 +227,14 @@ class Executor(Protocol):
     """Runs plan fragments of admitted plans: `admit` a plan, `submit` its fragments, follow, stop and read them.
 
     An admission holds the values of the plan's graph inputs by content identity, until it is released; an
-    `output:` input is read from the result store. Two admissions of one plan are independent.
+    `output:` input is read from the result store. Two admissions of one plan are independent. `logs_claims` says
+    whether the executor's workers log each job `claimed`, in which case the runner logs no `started` as it sends one.
     """
+
+    logs_claims: ClassVar[bool]
+
+    def bind_epoch(self, epoch: int, events: "EventLog") -> None:
+        """Run what follows as the coordinator of `epoch`, logging to `events` (that epoch's attempt)."""
 
     def admit(self, plan: Plan, values: Mapping[InputIdentity, object]) -> Admission:
         """Hold `plan` and the value of each graph-input identity its fragments name, and return the admission."""
