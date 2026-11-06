@@ -279,3 +279,16 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
 - 2026-11-01: services are process-scoped in Phase 2; the leased registry and `svc` pool worker arrive with lease renewal in Phase 3 (P2-14, P2-38; Task 9b).
 - 2026-11-03: a lease is a directory taken by `mkdir` with the holder's token, renewed by beat directories from a renewer independent of the work; replaces the `O_EXCL` link (owner item 58).
 - 2026-11-06: renewal as built: probe-directory clock, fresh re-read before a break, claim by rename before a break or release (tokenless leases included; empty ones by `rmdir`), withdrawn leases removed, no put-back, `keep_alive` renewer on a monotonic cadence held by every lease caller, `prove()` before every commit, `ESTALE` as lost, the beat bound (one missed beat allowed) checked at profile load, `StorageUnsupported` on an unsupported `mkdir`; closes R-111.
+
+## Amendment 2026-11-06: queues of plan fragments (Phase 3 Task 13)
+
+- A queue segment is a directory; a put takes `slot-<n>` by an exclusive `symlink` (taking `n+1` on `EEXIST`), so no
+  shared file is appended to. A segment retires only when it is full and every slot is resolved, and it retires in
+  place: an exclusive `retired` mark inside `segments/<seq>/`, never a rename, so a segment number is made once and a
+  stale lookup cannot make it again. A slot is marked resolved only once `outcome/<digest>` exists and the slot, read
+  again, names that digest. Each item has one
+  first-writer-wins outcome, `outcome/<digest>` (done or dead); the outcome record is staged, then the claim is proven,
+  then one link is made. A run re-puts every unfinished fragment on start and resume.
+- **Not guaranteed.** A crash, or a lost NFS reply on the `symlink`, between taking a slot and writing the item's
+  `slotted` marker gives the item a second slot on a later put or reconcile. Exactly-once still holds (one outcome per
+  digest); `depth()`, an upper bound, counts the item twice until a claimer resolves the second slot.

@@ -54,6 +54,19 @@ Unported in Task 14, each at its `alpha` source `36aa9615:src/senselab/audio/tas
 
 Unported in Task 17a, each at its `alpha` source `36aa9615:src/senselab/text/tasks/pii_detection/`: `redaction_review.py` (the review prompt, its REASONING/PROPOSAL/CONDITION/SPEAKERS headings and states, `ReviewResult`, the stdin worker script and its `ReviewWorker` process, `review_transcript`, the transcript block and haystack quoting): the task marks spans and holds no judgement, route or proposal; `redaction_policy.py` and `data/redaction_policy.yaml` (the fold's masking and release by kind: dates, ages, places, kinship) and `data/safe_harbor.yaml` (`safe_harbor_codes`): the policy is the fold's, not a measurement, and the identifier list is condensed into the slice's instruction and categories; `data/task_guidance.yaml` becomes `families` of the slice, its `natures` are dropped. Still in `src/`, unported: `rules.py`, `local_llm.py`, `subprocess_backend.py`, `api.py`, `redaction_review_vllm.py` (Task 17b), `__init__.py`, `doc.md`.
 
+Rewritten in Phase 3 Task 13, not moved (ruling P3-31): `src/senselab/utils/work_pool.py` stays in `src/`, because
+`src/senselab/utils/reproduce/{slurm,spec,restricted}.py` and five 1.x tests still import it (R-128). It is the named
+source of `packages/senselab-core/src/senselab_core/runtime/execution/queue.py`, rewritten from the ADR-003 design:
+items are plan fragments under the fragment digest, claims are `Lease`s (`runtime/locks.py`), claim order comes from
+slots in segment directories (`segments/<seq>/slot-<n>`, each made by an exclusive `symlink`, never appended; a full,
+resolved segment is retired in place by a `retired` mark) rather than a directory scan, and each item has one
+first-writer-wins outcome, `outcome/<digest>`, `done` or `dead`. Not carried over: `Item` and its `payload_digest`,
+`WorkPool.create` and its pool settings (lease and heartbeat seconds, attempt budgets, success codes; the profile's
+`pool` and `lease` sections replace them), staged claims by rename, `heartbeat` (the lease's renewer replaces it),
+`reap` (a stale claim is broken by the next claimer), `fail` exit-code budgets (`Claim.dead` takes a `FaultRecord`;
+budgets are the `Pool`'s, P3-33), the separate `done/` and `dead/` trees (one outcome name replaces them), the
+host-check failure log, `status`, and `pool_tag` (the label digest replaces it).
+
 Unported in Task 9a1 (ruling P2-3), each at its `alpha` source `36aa9615:src/senselab/utils/<module>`:
 
 - `subprocess_venv.py`: `FileRef`, `call_in_venv`, `_SHIM`, `_pack_value`, `_unpack_value`, `parse_subprocess_result`,
@@ -261,8 +274,8 @@ An earlier count of 32 included four `dict.update` calls fed by `str()` (`cohort
 | `src/senselab/utils/venv_worker.py:116` | `_digest` | short digest of a worker call payload (`default=str`) | the worker wire's canonical form: `identity_digest("value@2", …)` with non-JSON values refused |
 | `src/senselab/utils/vllm_server.py:476` | `_path_label` | path digest shown in an error message instead of the name, a label only | a label, not a key: `identity_digest` under a registered label tag, or `sha256_bytes` of the path's UTF-8 |
 | `src/senselab/utils/vllm_server.py:527` | `content_part` | digest of the media directory shown in an error message, a label only | as the row above |
-| `src/senselab/utils/work_pool.py:286` | `Item.payload_digest` | idempotence key of a work-pool item | `identity_digest` under a registered work-item tag |
-| `src/senselab/utils/work_pool.py:1315` | `pool_tag` | eight-hex pool name in Slurm job names, from the resolved root path | a label, not a key: `identity_digest` under a registered label tag |
+| `src/senselab/utils/work_pool.py:286` | `Item.payload_digest` | idempotence key of a work-pool item | done (Phase 3 Task 13, replaced): a queue item is named by the fragment digest, `identity_digest("plan-fragment@1", …)` of its `plan-fragment@1.0` JSON form, in `runtime/execution/queue.py` |
+| `src/senselab/utils/work_pool.py:1315` | `pool_tag` | eight-hex pool name in Slurm job names, from the resolved root path | done (Phase 3 Task 13, replaced): a queue's directory is the label digest of its name, `identity_digest("label@1", …)`, in `runtime/execution/queue.py` |
 
 ## Name-based digests in 1.x (H9e, H-R36)
 

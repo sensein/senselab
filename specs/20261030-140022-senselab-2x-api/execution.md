@@ -267,3 +267,22 @@ are recorded here (R-200).
 - **Open (Task 14): queued against running across writers.** Within one attempt, a job's non-terminal state (queued,
   claimed, started) is read from the time-merged events, so clock skew between a controller and a pool worker can show
   a running job as queued; terminal states do not depend on any cross-writer order.
+- **Queues (Task 13, ADR-003).** `runtime/execution/queue.py` holds one queue per resource class, with `#<model
+  identity>` for a resident model, in a directory named by `identity_digest("label@1", name)`. An item is a plan
+  fragment's JCS under `identity_digest("plan-fragment@1", …)`, first writer wins. The index is slots, never appended
+  lines: a put takes `segments/<seq>/slot-<n>`, a symlink to the item's digest made by an exclusive `symlink` at the
+  next free `n` (`n + 1` on `EEXIST`), and makes `segments/<seq+1>` once `pool.segment_items` slots are taken; a slot
+  is made only in a segment with a free number, so nothing lands in a full one. `slotted/<digest>`, made after the
+  first slot, keeps a second put from taking another. Claims walk segments, then slots, in order: the first slot not
+  marked resolved (`res-<n>`) and not under a live claim is taken under a `Lease` on the item, and its outcome checked
+  again under it. Each item has one outcome, `outcome/<digest>`, `done` or `dead`, first writer wins: the record is
+  staged and fsynced, the lease proven, and the record linked in the one call after the proof; an `EEXIST` whose
+  entry is this claim's own record (a lost reply) is this claim's outcome. A slot is marked resolved only once
+  `outcome/<digest>` exists and the slot, read again, names that digest. A full segment whose slots are all resolved
+  is retired in place by an exclusive `retired` mark inside it and is never renamed, so a segment number is made
+  once. A missing item file is an infrastructure fault: the item stays ready and the
+  queue records the fault; an item that is not its digest's fragment is dead with a content fault. `depth()` is an
+  upper bound from slot counts; `oldest_age_s()` counts an item behind a stale claim as waiting. A run's queues live
+  in `<run dir>/queues/` (`queue.RUN_QUEUES`), where the pool and `senselab execute --pool` also look. A run's `start`
+  puts again, in digest order and at O(items) cost, every item in its `queues/` with neither a slot nor an outcome (`QueueSet.reconcile`), which repairs a
+  put interrupted between its item and its slot.

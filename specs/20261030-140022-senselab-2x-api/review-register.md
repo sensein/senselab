@@ -232,6 +232,7 @@ Their owners are the tasks of [`plans/phase-1-hardening.md`](plans/phase-1-harde
 | R-209 | 9b | `uv.lock` holds `fileformats==0.22.3` through a root `constraint-dependencies` entry, because 0.22.4 and 0.22.5 were under two weeks old at lock time. | Lift the constraint once fileformats 0.22.5 (uploaded 2026-11-04) is two weeks old, re-lock and regenerate the host license rows. | open, trigger: 2026-11-18 |
 | R-210 | 9b | `PydraRunner` holds the profile's `lease.stale_after_s` and `lease.renew_fraction` but passes nothing to pydra: the pin `c8541fc5` has no `LeaseSettings` (Task 45 delivers them). | When the pin includes Task 45, pass the profile's lease settings to `LeaseSettings`; the test that fails once the pin gains `LeaseSettings` marks the change. | open, owner: Phase 3 Task 45 |
 | R-211 | 11 | Two attempts that start one plan at once each merge `inputs.json` and replace it atomically; the last writer wins, so a durable source can fall back to a memory marker until a later attempt repairs it. | Hold a file lock (ADR-003 lease) around the merge and write of `inputs.json` before several workers can start one plan. | open, owner: Phase 3 Task 14 |
+| R-212 | 13 | Queues never collect: retired segments (`retired/`), `outcome/`, `slotted/` and item files stay after every item of a plan is resolved. | Collect a plan's queue entries once its run is done and its results are in the store (a run-level sweep), under the run's lease. | open, owner: Phase 3 |
 
 ## R-130: the 14 items classified (2026-11-02)
 
