@@ -11,7 +11,9 @@
   is followed, a mutable file is only ever replaced whole by a fresh file renamed over its name, every file
   name written matches a grammar the caller passes, and modes are set only through a
   descriptor (`set_mode`).
-- `StorageDir.fs_now` reads the current time from the filesystem itself, from a fresh sentinel file.
+- `StorageDir.fs_now` reads the current time from the filesystem itself, from a fresh sentinel file;
+  `StorageDir.dir_now` reads it from a fresh probe directory and writes no file.
+- `StorageUnsupported` is a root without a primitive the runtime needs, such as an atomic `mkdir`.
 - `write_atomically` replaces a caller's file so a reader sees the old or the new bytes, never a mix.
 - An `AddressedFormat` is a persisted artifact whose location names its content. `ADDRESSED_FORMATS`
   lists every one: the store entry, the fetch blob and the fetch dataset marker.
@@ -50,6 +52,7 @@ CLOCK = re.compile(re.escape(CLOCK_NAME))
 """The grammar of the storage clock's sentinel."""
 
 _FULL_ERRNOS = frozenset({errno.ENOSPC, errno.EDQUOT})
+_UNSUPPORTED_ERRNOS = frozenset({errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS})
 _WORLD_READ = 0o004
 _WORLD_READ_SEARCH = 0o005
 
@@ -64,6 +67,13 @@ class StoreUnavailable(OSError):
 
 class StorageFull(StoreUnavailable):
     """The storage is out of space or over quota (`ENOSPC`, `EDQUOT`)."""
+
+
+class StorageUnsupported(OSError):
+    """The storage root lacks a primitive the runtime needs; the message names the primitive and the root.
+
+    `errno` and `filename` are those of the original error, which is the `__cause__`.
+    """
 
 
 def storage_fault(err: OSError, path: Path, *, hint: str | None = None) -> StoreUnavailable:
@@ -550,6 +560,38 @@ class StorageDir:
             with _Naming(self.path / name):
                 os.utime(path_component(name), dir_fd=self.fd, follow_symlinks=False)
 
+    def make_dir(self, name: str, *, grammar: re.Pattern[str], mode: int | None = None, exist_ok: bool = False) -> None:
+        """Create the directory `name`; with `mode`, set through its descriptor whatever the umask.
+
+        With `exist_ok`, a directory already at `name` is taken as made (and given `mode`).
+
+        Raises:
+            ValueError: `name` does not match `grammar`.
+            FileExistsError: something is at `name`, and it is not a directory or `exist_ok` is False.
+            StorageUnsupported: the filesystem refuses `mkdir` as an operation it does not support.
+        """
+        _owned(name, grammar)
+        try:
+            with _Naming(self.path / name):
+                os.mkdir(name, 0o700 if mode is not None else 0o777, dir_fd=self.fd)
+        except FileExistsError:
+            if not exist_ok or self.kind(name) != "directory":
+                raise
+        except OSError as err:
+            if err.errno not in _UNSUPPORTED_ERRNOS:
+                raise
+            unsupported = StorageUnsupported(err.errno, f"no atomic mkdir: {err.strerror}", str(self.path / name))
+            raise unsupported from err
+        if mode is not None:
+            with self.child(name) as made:
+                made.set_mode(mode)
+
+    def remove_dir(self, name: str, *, grammar: re.Pattern[str]) -> None:
+        """Remove the empty directory `name`, never following it."""
+        _owned(name, grammar)
+        with _Naming(self.path / name):
+            os.rmdir(name, dir_fd=self.fd)
+
     def write_new(self, name: str, data: bytes, mode: int, *, grammar: re.Pattern[str]) -> None:
         """Create the file `name` holding `data`, fsynced, with `mode` (`open_new`)."""
         with os.fdopen(self.open_new(name, mode, grammar=grammar), "wb") as handle:
@@ -666,6 +708,23 @@ class StorageDir:
         """
         return self.write_atomically(CLOCK_NAME, b"", grammar=CLOCK, mode=STAGING_FILE_MODE).st_mtime
 
+    def dir_now(self) -> float:
+        """Return the current time as the filesystem stamps it: the mtime of a fresh `ASIDE_NAME` directory, removed.
+
+        Raises:
+            StorageUnsupported: the filesystem has no `mkdir` here.
+            OSError: the probe cannot be made or read.
+        """
+        probe = uuid.uuid4().hex
+        self.make_dir(probe, grammar=ASIDE_NAME)
+        try:
+            made = self.lstat(probe)
+        finally:
+            self.remove_dir(probe, grammar=ASIDE_NAME)
+        if made is None:
+            raise FileNotFoundError(errno.ENOENT, "the clock probe was removed before it was read", str(self.path))
+        return made.st_mtime
+
 
 def write_atomically(target: Path, data: bytes, *, mode: int | None = None) -> None:
     """Replace the caller's file `target` with `data` as `StorageDir.write_atomically` does, beside it.
@@ -777,6 +836,7 @@ __all__ = [
     "Staging",
     "AddressedFormat",
     "StorageFull",
+    "StorageUnsupported",
     "StorePolicy",
     "StoreUnavailable",
     "committed_modes",

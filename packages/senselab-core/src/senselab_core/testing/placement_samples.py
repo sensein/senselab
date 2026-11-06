@@ -140,10 +140,10 @@ def _register_settings(register: Register) -> None:
         ),
         PoolSettings: (
             [
-                PoolSettings(quantum_items=100, quantum_s=300, poll_s=30, lease_renew_fraction=0.33, segment_items=10),
-                PoolSettings(quantum_items=1, quantum_s=1, poll_s=0.5, lease_renew_fraction=0.5, segment_items=1),
+                PoolSettings(quantum_items=100, quantum_s=300, poll_s=30, segment_items=10),
+                PoolSettings(quantum_items=1, quantum_s=1, poll_s=0.5, segment_items=1),
             ],
-            [{"lease_renew_fraction": 1.0}, {"quantum_items": 0}],
+            [{"poll_s": 0}, {"quantum_items": 0}],
         ),
         JobLease: (
             [JobLease(stale_after_s=300, renew_fraction=0.33), JobLease(stale_after_s=0.5, renew_fraction=0.9)],

@@ -21,13 +21,12 @@ from typing import Optional
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import COMMIT_HEX
 
-from senselab_core.runtime.locks import Lease, LeaseUnavailable
+from senselab_core.runtime.locks import LEASE_SUFFIX, Lease, LeaseUnavailable
 from senselab_core.runtime.network import Network, require_online
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
-    STAGING_FILE_MODE,
     TEMPORARY_NAME,
     StorageDir,
     StorePolicy,
@@ -46,7 +45,7 @@ MANIFEST_NAME = "resolutions@2.json"
 """The run manifest's file name; its `@<major>` is the format of its keys (`manifest_key`)."""
 MANIFEST = re.compile(re.escape(MANIFEST_NAME))
 _MANIFEST_TEMPORARY = re.compile(re.escape(f".{MANIFEST_NAME}.") + r"[0-9]+\.[0-9]+\.[0-9a-f]{32}\.tmp")
-"""The manifest's own temporaries, and not its lease's, which a live taker may be writing."""
+"""The manifest's own temporaries."""
 MANIFEST_LIMIT = 1 << 24
 """The most bytes a run manifest is read to."""
 RECORD_ATTEMPTS = 3
@@ -234,8 +233,8 @@ def record_resolution(
 
     Append-if-absent under a `Lease` on the manifest: a concurrent writer's entries are kept, and an
     existing commit SHA for the key wins over ``sha``. ``2x/runs/<run>/`` is reached through `StorageDir`
-    and made with the `StorePolicy`'s `shared_dir_mode`; the manifest and its lease get the policy's file
-    modes, whatever the umask. Under the lease, a dead writer's temporaries beside the manifest are removed,
+    and made with the `StorePolicy`'s `shared_dir_mode`, as is the manifest's lease; the manifest gets the policy's
+    file mode, whatever the umask. Under the lease, a dead writer's temporaries beside the manifest are removed,
     as are objects moved aside under ``2x/runs/`` past the quarantine age.
 
     Raises:
@@ -271,10 +270,9 @@ def _record_in(runs: StorageDir, run_dir: StorageDir, key: str, sha: str, policy
     Raises:
         LeaseUnavailable: the lease was displaced on every one of `RECORD_ATTEMPTS` takes.
     """
-    lease_mode = STAGING_FILE_MODE | (0o004 if policy.world_readable else 0)
     path = run_dir.path / MANIFEST_NAME
     for _ in range(RECORD_ATTEMPTS):
-        with Lease(path, file_mode=lease_mode, directory=run_dir) as lease:
+        with Lease(path, mode=shared_dir_mode(policy), directory=run_dir) as lease:
             _remove_leftovers(runs, run_dir, policy)
             current = _read_in(run_dir)
             winner = current.get(key)
@@ -296,7 +294,7 @@ def _record_in(runs: StorageDir, run_dir: StorageDir, key: str, sha: str, policy
                     return sha
         logger.warning("run manifest %s: lease displaced; re-reading and merging", path)
     raise LeaseUnavailable(
-        path.with_name(MANIFEST_NAME + ".lease"),
+        path.with_name(MANIFEST_NAME + LEASE_SUFFIX),
         f"the lease on {path} was displaced on each of {RECORD_ATTEMPTS} takes; its stale_after is shorter than a "
         "manifest write, or another process keeps breaking it",
     )

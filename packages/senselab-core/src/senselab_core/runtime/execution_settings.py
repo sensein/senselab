@@ -72,17 +72,16 @@ class SubstrateSpec(Frozen):
 
 
 class PoolSettings(Frozen):
-    """How pool workers claim and yield: the quantum, the empty-queue poll, the lease renewal and the index segment."""
+    """How pool workers claim and yield: the quantum, the empty-queue poll and the index segment."""
 
     quantum_items: PositiveInt
     quantum_s: PositiveSeconds
     poll_s: PositiveSeconds
-    lease_renew_fraction: Annotated[float, Field(gt=0, lt=1)]
     segment_items: PositiveInt
 
 
 class JobLease(Frozen):
-    """How a running job's lease is kept: its stale bound in seconds, and the share of that between renewals."""
+    """How a lease is kept (`Lease.keep_alive`): its stale bound in seconds, and the share of that between renewals."""
 
     stale_after_s: PositiveSeconds
     renew_fraction: Annotated[float, Field(gt=0, lt=1)]

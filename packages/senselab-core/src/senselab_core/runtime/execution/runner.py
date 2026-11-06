@@ -515,7 +515,7 @@ def _upstream(placed: Plan, node: str, batch: list[tuple[Any, tuple[int, ...], A
 class PydraRunner:
     """Runs placed plans through an `Executor`: pydra expands the graph and orders its jobs (on `raise_at_end`).
 
-    `lease` is the profile's job-lease setting; it is held and not passed to pydra.
+    `lease` is the profile's `lease` section; it is held and not passed to pydra.
     """
 
     def __init__(self, *, profile: ExecutionProfile | None = None, work_dir: Path | None = None) -> None:

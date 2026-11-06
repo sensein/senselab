@@ -7,7 +7,9 @@ meets the error at the call that real storage fails at.
 import errno
 import io
 import os
+import shutil
 import threading
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
@@ -197,19 +199,29 @@ def pause_replaces(
     return gates
 
 
-def displace_on_link(monkeypatch: pytest.MonkeyPatch, name: str) -> list[str]:
-    """Unlink `name` (last path component) just after every `os.link` that makes it, as a breaker would.
+def displace_after_take(monkeypatch: pytest.MonkeyPatch, name: str) -> list[str]:
+    """Remove the lease directory `name` at the first file created after each take of it, as a breaker would.
 
-    Returns the list each displacement appends `name` to.
+    A take is the `os.mkdir` of `name` and then of a token in it; the removal renames `name` aside in its parent
+    and removes the tree. Returns the list each displacement appends `name` to.
     """
-    real = os.link
+    real_mkdir, real_open = os.mkdir, os.open
+    parent: list[int] = []
     displaced: list[str] = []
 
-    def link(src: Any, dst: Any, **kwargs: Any) -> None:  # noqa: ANN401
-        real(src, dst, **kwargs)
-        if os.path.basename(os.fsdecode(dst)) == name:
-            os.unlink(dst, dir_fd=kwargs.get("dst_dir_fd"))
-            displaced.append(name)
+    def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        real_mkdir(path, mode, dir_fd=dir_fd)
+        if os.fsdecode(path) == name and dir_fd is not None:
+            parent[:] = [dir_fd]
 
-    monkeypatch.setattr(os, "link", link)
+    def opened(path: Any, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:  # noqa: ANN401
+        if parent and flags & os.O_CREAT:
+            aside = uuid.uuid4().hex
+            os.rename(name, aside, src_dir_fd=parent[0], dst_dir_fd=parent[0])
+            shutil.rmtree(aside, dir_fd=parent.pop())
+            displaced.append(name)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    monkeypatch.setattr(os, "open", opened)
     return displaced

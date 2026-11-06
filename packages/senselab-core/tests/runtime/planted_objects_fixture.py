@@ -668,7 +668,7 @@ def _at(name: Any, dir_fd: int | None) -> Path:  # noqa: ANN401
 
 
 def _recording() -> list[Path]:
-    """Record in this child the path of every name created through `os` (open, link, symlink, rename); return it.
+    """Record in this child every name created through `os` (open, link, symlink, rename, a lease's mkdir); return it.
 
     `shutil` is imported first: it decides at import whether `os.open` takes `dir_fd`.
     """
@@ -676,7 +676,7 @@ def _recording() -> list[Path]:
 
     written: list[Path] = []
     real_open, real_link, real_symlink = os.open, os.link, os.symlink
-    real_rename, real_replace = os.rename, os.replace
+    real_rename, real_replace, real_mkdir = os.rename, os.replace, os.mkdir
 
     def opened(path: Any, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:  # noqa: ANN401
         if flags & os.O_CREAT:
@@ -698,7 +698,13 @@ def _recording() -> list[Path]:
 
         return moved
 
+    def made(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if os.fsdecode(path).endswith(".lease"):
+            written.append(_at(path, dir_fd))
+        real_mkdir(path, mode, dir_fd=dir_fd)
+
     os.open = opened
+    os.mkdir = made
     os.link = linked
     os.symlink = symlinked
     os.rename = moving(real_rename)
@@ -725,8 +731,7 @@ def _names(op: str, scratch: Path, written: list[Path]) -> list[str]:
     real_root = root.resolve()
     rels = {Path(os.path.realpath(p.parent)).relative_to(real_root) / p.name for p in written}
     final = {Path(c).relative_to(root) / n for c, _, files in os.walk(root) for n in files}
-    clocks = {r.with_name(".clock") for r in rels if r.name.endswith(".lease")}
-    return sorted(str(r) for r in rels | final | clocks if not _ephemeral(r))
+    return sorted(str(r) for r in rels | final if not _ephemeral(r))
 
 
 def _plant(target: Path, plant: str, victim: Path) -> None:

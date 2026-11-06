@@ -3,6 +3,7 @@
 import json
 import multiprocessing as mp
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -34,7 +35,7 @@ from senselab_core.runtime.revision import (
     resolve_revision,
 )
 from senselab_core.runtime.storage import NAME_MAX
-from syscall_faults_fixture import displace_on_link, pause_replaces
+from syscall_faults_fixture import displace_after_take, pause_replaces
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -519,7 +520,7 @@ def test_attempt_id_over_name_max_refused(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_a_lease_displaced_on_every_take_is_a_typed_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A holder displaced on each of `RECORD_ATTEMPTS` takes raises `LeaseUnavailable` and writes nothing."""
-    displaced = displace_on_link(monkeypatch, f"{MANIFEST_NAME}.lease")
+    displaced = displace_after_take(monkeypatch, f"{MANIFEST_NAME}.lease")
     with pytest.raises(LeaseUnavailable, match="displaced"):
         record_resolution("org/m", "main", SHA_A, run="r", root=tmp_path)
     assert len(displaced) == RECORD_ATTEMPTS
@@ -530,7 +531,7 @@ def test_a_lease_displaced_on_every_take_is_a_typed_error(tmp_path: Path, monkey
 def test_displaced_lease_keeps_manifest_update(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A holder displaced while it writes re-reads and merges under the lease: both holders' entries are kept.
 
-    A is held at its manifest write while its lease is removed, as a late breaker's link-back removes it;
+    A is held at its manifest write while its lease is removed, as a breaker removes it;
     B then takes the lease, removes A's temporary as a dead writer's, and is held at its own write.
     """
     (a_reached, a_go), (b_reached, b_go) = pause_replaces(monkeypatch, MANIFEST_NAME, 2)
@@ -545,7 +546,7 @@ def test_displaced_lease_keeps_manifest_update(tmp_path: Path, monkeypatch: pyte
     a = threading.Thread(target=record, args=("a", SHA_A))
     a.start()
     assert a_reached.wait(60)
-    (manifest_path("r", root=tmp_path).parent / f"{MANIFEST_NAME}.lease").unlink()
+    shutil.rmtree(manifest_path("r", root=tmp_path).parent / f"{MANIFEST_NAME}.lease")
     b = threading.Thread(target=record, args=("b", SHA_B))
     b.start()
     assert b_reached.wait(60)

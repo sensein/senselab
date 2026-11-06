@@ -282,10 +282,10 @@ def test_other_venv_failure_is_not_managed_python_missing(
 def _plant_lease(tmp_path: Path, age_s: float) -> Path:
     overlay = identity_digest(OVERLAY_DIGEST_TAG, [senselab_worker.runtime_identity(), []])
     lease = tmp_path / "envs" / f"demo-cu128-{overlay[:16]}.lease"
-    lease.parent.mkdir(parents=True, exist_ok=True)
-    lease.write_text(json.dumps({"user": "u", "host": "h", "pid": 1, "token": "0" * 32}))
+    (lease / ("0" * 32)).mkdir(parents=True)
     then = time.time() - age_s
-    os.utime(lease, (then, then))
+    for path in (lease / ("0" * 32), lease):
+        os.utime(path, (then, then))
     return lease
 
 

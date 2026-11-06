@@ -40,14 +40,13 @@ resource_classes:
 # What starts pool workers.
 substrate:
   kind: local
-# How pool workers claim, yield, poll, renew leases and roll index segments.
+# How pool workers claim, yield, poll and roll index segments.
 pool:
   quantum_items: 100
   quantum_s: 300
   poll_s: 30
-  lease_renew_fraction: 0.33
   segment_items: 10000
-# A running job's lease: seconds after which another process breaks it, and the share of that between renewals.
+# Every lease a pool keeps: seconds after which another process breaks it, and the share of that between renewals.
 lease:
   stale_after_s: 300
   renew_fraction: 0.33

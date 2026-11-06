@@ -108,8 +108,8 @@ class ExecutionProfile(Formatted):
         network: `online`, or `offline` to forbid any fetch.
         resource_classes: The worker classes a node is placed on, by name (`cpu`, `gpu:<type>`, `mps`, `svc:<id>`).
         substrate: What starts workers: `local` processes or `slurm` jobs.
-        pool: How pool workers claim, yield and renew.
-        lease: How the graph runner's engine keeps a running job's lease.
+        pool: How pool workers claim and yield.
+        lease: How a lease is kept alive: its stale bound and renewal share, for job and pool leases alike.
         faults: The retry budget of each fault class.
         timeouts: A worker's load and request timeouts.
         services: When an idle service exits.

@@ -38,7 +38,7 @@ PRIVATE_DIR = "private"
 LABELS_NAME = "labels@1.json"
 """The label map's file name in `<run>/private/`."""
 LABELS_MODE = 0o600
-"""The mode of the label map and of its lease."""
+"""The mode of the label map."""
 _LABELS_FILE = re.compile(re.escape(LABELS_NAME))
 _KINDS = {"prov:Entity", "prov:Activity", "prov:Agent"}
 
@@ -131,7 +131,7 @@ class LabelMap:
         with (
             StorageDir.open_root(self._run, create=True) as run,
             run.walk(PRIVATE_DIR, create=True, mode=PRIVATE_DIR_MODE, aside=None) as private,
-            Lease(private.path / LABELS_NAME, file_mode=LABELS_MODE, directory=private),
+            Lease(private.path / LABELS_NAME, mode=PRIVATE_DIR_MODE, directory=private),
         ):
             labels = _read_labels(private)
             by_address = {address: label for label, (address, _) in labels.items()}
