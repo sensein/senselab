@@ -477,3 +477,37 @@ profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`)
 - Identity tag `port-gather@1` (new): a gathered input's identity is `"gather:" + identity_digest("port-gather@1",
   [<element port-output identities, in element order>])`. A logical key's input is now `content:`, `output:` or
   `gather:` and 64 hex digits.
+
+## Amendment 2026-11-04: run events (Phase 3 Task 10)
+
+- **`run-event@1.0`** (new). One state change of one job, a line of `<run>/events/<writer uuid>.jsonl` (a writer appends
+  to its own file only): `{format, kind: queued | claimed | started | finished | failed | yielded | cache_hit | verify |
+  blocked | cancelled, node: NodeId, key: <64hex> | null, job: JobRef | null, attempt: <attempt id>, ordinal: int >= 1,
+  writer: <writer uuid>, seq: int >= 0, placement_digest: <64hex> | null, fault: "content" | "resource" |
+  "infrastructure" | null, failure: FaultRecord | null, reuse: "exact" | "equivalent" | "tolerant" | null, env: <string>
+  | null, output: "output:<64hex>" | null, t_ns: int >= 0}`.
+  - `attempt` is the id of the run or resume that wrote the event (never the fragment submission count); `ordinal` is
+    that attempt's place among the run's attempts, taken when it is claimed (`attempts/<n>` created exclusively);
+    `writer` names the file the event is in; `seq` is the event's position in that file, from 0.
+  - A `failed` event carries its `failure`, and `fault` is that record's class; no other kind carries either.
+    `reuse` is held as the policy's value string and only a `cache_hit` carries it. `job`, when present, names `node`.
+  - A job's state machine is queued, then claimed, started, then one terminal kind: `finished`, `cache_hit`, `failed`,
+    `blocked` (a descendant of a failed element) or `cancelled` (not released after a cancel). `yielded` returns a job
+    to queued; `verify` changes no state. A job's state is that of its latest attempt (highest `ordinal`): the terminal
+    event with precedence `finished` = `cache_hit` > `failed` > `blocked` > `cancelled` (ties: greater `writer`, then
+    greater `seq`), so a result is never hidden by another writer's not-run event; else that attempt's last other event
+    in the time merge. `seq` is compared within one writer only, and no clock order decides a terminal state. A run is
+    done when every job it queued has a terminal event; it is cancelled when any job is cancelled. Cancelled and blocked
+    jobs are not faults.
+  - Not an identity: no identity tag; the plan hash is unchanged. `port_value: false`.
+- A run directory is `$SENSELAB_CACHE/2x/runs/<plan hash>/`: `plan.json`, `inputs.json` (what each record's inputs are
+  read from: a path, a JSON value, or `{"memory": <input identity>}` for an object given in the planning process, which
+  only that process can run; the rest are re-bound and identity-checked on every run, before anything is written),
+  `manifest.json` (plan hash and result store; no status), `placements/<attempt>.json`, `attempts/<n>` (the attempt id
+  claimed `n`-th), `events/`, `dead/`, `prov/`, `queues/`, `epoch/`. The provenance `run_id` is the plan hash; each
+  `run()` or `resume` has a fresh attempt id (the one `SENSELAB_RUN_ID` or Slurm pins, with `-<n>` for a second attempt
+  in one process, else a uuid4), which names its placement file; placement files are never replaced (ruling P3-17).
+  While an attempt runs, `revision.attempt_id()` (read by equivalence evidence and the revision manifest) is that
+  attempt's id; outside a run it is the process's.
+- `ResultRef` gains `served: "exact" | "equivalent" | "tolerant" | null`: the reuse policy under which a stored
+  result gave it; the runner logs it as `cache_hit`.

@@ -264,3 +264,6 @@ are recorded here (R-200).
 - **Servers are per worker set.** A second `WorkerSet` (such as a test's own) starts its own server for a key the
   process set already serves, and a `close()` racing a `server()` may hand back a stopped server. Neither arises with
   the one process set `process_workers` returns.
+- **Open (Task 14): queued against running across writers.** Within one attempt, a job's non-terminal state (queued,
+  claimed, started) is read from the time-merged events, so clock skew between a controller and a pool worker can show
+  a running job as queued; terminal states do not depend on any cross-writer order.

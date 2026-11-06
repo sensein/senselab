@@ -28,3 +28,12 @@ corpus run could not be debugged except by reading worker stderr.
 ## Alternatives rejected
 - **Free-text logs only.** Not machine-readable for agents.
 - **A metrics server.** It adds an operated dependency.
+
+## Amendment 2026-11-04: OpenTelemetry export deferred (Phase 3 Task 10)
+
+- The optional OpenTelemetry export of the events (Decision, Export) is deferred; it is not built in Phase 3
+  (ruling P3-28). The events (`run-event@1.0`, ADR-006) are the single source of status, metrics and `explain`, and
+  an exporter reads them, so adding it later changes no event.
+- `status_from(events)` derives every metric of a run (counts by state, faults by class, broken envs) from the events
+  alone (a run's `done` and `cancelled` included, and `last_event_ns` for one whose process died; no status file
+  exists to race on); `senselab status <run>` and `senselab explain <run> <node|key>` read the run directory and nothing else.
