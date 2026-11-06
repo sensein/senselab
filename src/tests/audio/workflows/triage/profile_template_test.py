@@ -16,7 +16,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     unfitted_values,
 )
 from senselab.audio.workflows.triage.profile_template import REFERENCE_PROFILE, values_to_supply, write_template
-from tests.conftest import B2AI_TRIAGE_PROFILE
+from tests.conftest import FIXTURE_PROFILE
 
 
 @pytest.mark.usefixtures("without_triage_profile")
@@ -92,17 +92,17 @@ class TestTheTemplate:
 
     def test_starting_from_another_profile_copies_it_and_says_so(self, tmp_path: Path) -> None:
         """The copy is renamed and records which profile it came from."""
-        root = write_template(tmp_path / "copy", name="my-adult-study", start_from=B2AI_TRIAGE_PROFILE)
+        root = write_template(tmp_path / "copy", name="my-adult-study", start_from=FIXTURE_PROFILE)
         manifest = yaml.safe_load((root / "profile.yaml").read_text())
         assert manifest["name"] == "my-adult-study"
-        assert manifest["provenance"]["copied_from_profile"] == "bridge2ai-voice-adult"
+        assert manifest["provenance"]["copied_from_profile"] == "adult-speech-fixture"
         assert (root / "tasks.yaml").is_file()
 
     def test_extending_a_complete_profile_asks_for_nothing_and_hides_none_of_its_files(self, tmp_path: Path) -> None:
         """No skeleton overrides a dataset file the base already supplies (review finding 2)."""
-        root = write_template(tmp_path / "on-b2ai", name="b2ai-variant", extends=B2AI_TRIAGE_PROFILE)
+        root = write_template(tmp_path / "on-fixture", name="fixture-variant", extends=FIXTURE_PROFILE)
         assert not (root / "tasks.yaml").exists()
-        assert values_to_supply(B2AI_TRIAGE_PROFILE) == {}
+        assert values_to_supply(FIXTURE_PROFILE) == {}
         assert missing_dataset_values(load_triage_config(profile=root).values) == []
 
     def test_a_relative_base_is_recorded_so_the_profile_loads_from_anywhere(
@@ -151,4 +151,4 @@ class TestTheTemplate:
     def test_a_copy_keeps_its_own_workflow(self, tmp_path: Path) -> None:
         """Copying a profile and leaving stages off at once is refused; the copy is edited instead."""
         with pytest.raises(ValueError, match="start_from"):
-            write_template(tmp_path / "copy", name="copy", start_from=B2AI_TRIAGE_PROFILE, off=("AIRWAY",))
+            write_template(tmp_path / "copy", name="copy", start_from=FIXTURE_PROFILE, off=("AIRWAY",))

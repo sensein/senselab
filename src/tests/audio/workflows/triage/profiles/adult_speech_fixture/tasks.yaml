@@ -1,4 +1,4 @@
-# What each Bridge2AI-Voice adult task asks for: one entry per task, keyed by the name B2AI's hints declare.
+# What each of the fixture's tasks asks for: one entry per task, keyed by the name its hints declare.
 # `branch` is the analysis that reads the task; `expects` is senselab's description of the instruction
 # (nodes/branches.py Expectation; a field left out takes its default). `unused_voice_reading` is a voice-branch
 # description written for four lexical tasks and never applied (user, 2026-11-02: they stay speech tasks).
@@ -9,7 +9,7 @@
 # task's hint may declare (AudioHints.item_category): each one's rule (list: its `words` file; letters; numbers: digits
 # and its `number_words`; initial_letter: its `letter`), and `repetition_allowed` where the category's own instruction
 # permits saying an item twice (Letters, Numbers: senselab's REPETITION_ALLOWED_CATEGORIES before step 4). The ten are
-# B2AI's questionnaire field random_item_generation_category, as its phenotype table spells them.
+# The source dataset's questionnaire field random_item_generation_category, as its phenotype table spells them.
 # `traits` (step 5a) name what an entry says about its task beyond its description (task_catalogue.TRAITS).
 # Why each task carries its traits, and the airway and word-task rules that replaced per-task lists:
 # specs/20261022-triage-dataset-profile/plan.md, step 5, section 1.

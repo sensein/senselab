@@ -1,11 +1,11 @@
-# The health conditions the Bridge2AI-Voice adult study recruits for, one entry per diagnosis file in
+# The health conditions the fixture's study recruits for, one entry per diagnosis file in
 # the release's phenotype/diagnosis/ (control excluded). Read by
 # `senselab.audio.workflows.triage.cohort`: a reviewer CONDITION proposal any of whose patterns match
 # is a cohort condition; every other is an "other" condition. Derivation, the release the list was
 # read from and the r6 phrases each pattern was checked against:
 # specs/20260927-pii-span-ledger/design.md, section 10.
 schema_version: '1'
-release: b2aivoice/4.0-release/adult/bids_adult_2026_09_04
+release: adult release 2026-09-04
 # Patterns are Python regular expressions, searched case-insensitively in the proposal's text with
 # curly apostrophes straightened and whitespace collapsed.
 conditions:

@@ -132,6 +132,7 @@ def _seed_run(
     seconds: float = 0.5,
     hz: float = 120.0,
     transcript: Optional[Sequence[str]] = _HEARD,
+    participant: str = "p01",
 ) -> Path:
     """Write one finished run: an ``enhanced`` stream on disk and a store that names it.
 
@@ -141,6 +142,7 @@ def _seed_run(
         hz: Its fundamental, so Praat finds a pitch.
         transcript: The consensus surfaces this run heard; ``()`` for a consensus that heard
             nothing, and None for a run whose consensus block never wrote a transcript at all.
+        participant: The participant the run's recorded identity declares (session ``s1``, no task).
 
     Returns:
         The enhanced stream's path.
@@ -154,7 +156,7 @@ def _seed_run(
     sf.write(str(enhanced), wave.astype(np.float32), PPGS_SAMPLE_RATE)
 
     store = ProvStore(run_id=root.name)
-    seed_recorded_identity(store, root.name)
+    seed_recorded_identity(store, root.name, participant, "s1")
     agent = software_agent(store)
     activity = store.activity(node="PREPROCESS", step="residual", parameters={})
     store.was_associated_with(activity, agent)
@@ -231,9 +233,10 @@ def corpus(tmp_path: Path) -> Callable[..., tuple[Path, list[Path]]]:
             raise ValueError(f"{len(transcripts)} transcripts for {count} runs")
         roots = []
         for index in range(count):
-            root = tmp_path / "corpus" / f"sub-{index:02d}_ses-1_20260911-000000"
+            root = tmp_path / "corpus" / f"rec-{index + 1:04d}_20260911-000000"
             _seed_run(
                 root,
+                participant=f"p{index:02d}",
                 hz=110.0 + 10.0 * index,
                 transcript=_HEARD if transcripts is None else transcripts[index],
             )
@@ -260,7 +263,7 @@ class TestTheRunRoot:
 
     def test_the_run_root_is_the_enhanced_streams_third_parent(self) -> None:
         """``<root>/run/streams/enhanced.flac`` resolves to ``<root>``."""
-        assert cli.run_root_of(Path("/corpus/sub-01_x/run/streams/enhanced.flac")) == Path("/corpus/sub-01_x")
+        assert cli.run_root_of(Path("/corpus/rec-0001_x/run/streams/enhanced.flac")) == Path("/corpus/rec-0001_x")
 
     def test_a_path_of_another_shape_is_refused_rather_than_guessed(self) -> None:
         """A stream somewhere else names no run, and a wrong guess would extend the wrong store."""

@@ -73,7 +73,12 @@ def stub_diarizer(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
 
 
 def _seed_run(
-    root: Path, *, seconds: float = 0.5, hz: float = 120.0, streams: Sequence[str] = ("enhanced", "residual")
+    root: Path,
+    *,
+    participant: str = "p01",
+    seconds: float = 0.5,
+    hz: float = 120.0,
+    streams: Sequence[str] = ("enhanced", "residual"),
 ) -> Path:
     """Write one finished run: the named streams on disk and a store that names them.
 
@@ -83,6 +88,7 @@ def _seed_run(
 
     Args:
         root: The run root, created if absent.
+        participant: The participant the recording's hint declares, in session ``s1``.
         seconds: Each stream's duration.
         hz: The enhanced stream's fundamental.
         streams: Which streams to write.
@@ -96,7 +102,7 @@ def _seed_run(
     grid = np.arange(int(seconds * SR)) / SR
 
     store = ProvStore(run_id=root.name)
-    seed_recorded_identity(store, root.name)
+    seed_recorded_identity(store, root.name, participant, "s1")
     agent = software_agent(store)
     activity = store.activity(node="PREPROCESS", step="residual", parameters={})
     store.was_associated_with(activity, agent)
@@ -163,8 +169,8 @@ def corpus(tmp_path: Path) -> Callable[..., tuple[Path, list[Path]]]:
     def _build(count: int, streams: Sequence[str] = ("enhanced", "residual")) -> tuple[Path, list[Path]]:
         roots = []
         for index in range(count):
-            root = tmp_path / "corpus" / f"sub-{index:02d}_ses-1_20260915-000000"
-            _seed_run(root, hz=110.0 + 10.0 * index, streams=streams)
+            root = tmp_path / "corpus" / f"rec-{index + 1:04d}_20260915-000000"
+            _seed_run(root, participant=f"p{index + 1:02d}", hz=110.0 + 10.0 * index, streams=streams)
             roots.append(root)
         return _manifest(tmp_path / "manifest.jsonl", roots), roots
 

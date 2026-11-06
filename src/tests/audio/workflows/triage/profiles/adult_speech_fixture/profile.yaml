@@ -1,14 +1,11 @@
-# The Bridge2AI-Voice adult triage profile: the data and settings triage was built and fitted on.
-#
-# Extracted on 2026-10-22 from senselab alpha 98c8048b6 (triage data/ and data/config/default.yaml), unchanged, so a
-# run with this profile decides exactly as triage did before profiles existed. Which file and key moved, and why, is
-# in specs/20261022-triage-dataset-profile/inventory.md. Kept here as a test fixture until the profile moves to
-# b2aiprep (plan step 6).
-name: bridge2ai-voice-adult
+# A test fixture: a real adult clinical-speech dataset's triage profile, the data and settings triage was built and
+# fitted on, extracted on 2026-10-22 and kept with each plan step's changes through step 10; renamed for the tests on
+# 2026-11-06 (plan step 8). The tests that use it read its tasks and values.
+name: adult-speech-fixture
 extends: senselab:adult_clinical_speech   # the detector and model tuning it shares with any adult clinical speech dataset
 version: "2026-10-22"
 provenance:
-  dataset: Bridge2AI-Voice adult release, bids_adult_2026_09_04 (62,550 recordings)
+  snapshot_of: an adult clinical-speech dataset's profile (62,550 recordings), kept through plan step 10
   extracted_from: senselab alpha 98c8048b6
   fitted_on: triage campaigns r8 to r37 and the owner's listening sessions, per each file's derivation comments
 config: config.yaml

@@ -30,11 +30,11 @@ from functools import partial
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from senselab.audio.workflows.triage.b2ai_hints import task_id_of
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
 from senselab.audio.workflows.triage.label_membership import LabelMembership
-from senselab.audio.workflows.triage.routing_analysis.families import task_family
+from senselab.audio.workflows.triage.recording_vectors import read_store, view_identity
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     extract_features,
@@ -124,8 +124,6 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
                         "stem": stem,
                         "run_root": run_root,
                         "store": str(local / "run" / "store.jsonl") if local else "",
-                        "task_id": task_id_of(stem),
-                        "family": task_family(task_id_of(stem)),
                     }
                 )
             )
@@ -136,6 +134,19 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
     temporary.replace(manifest)
     print(f"[manifest] {len(summaries)} rows in {time.time() - started:.0f}s", flush=True)
     return manifest
+
+
+def recorded_task_id(store: Path) -> str:
+    """The task id the run recorded (ADMIT's identity record), never read off a file name.
+
+    Args:
+        store: The run's ``store.jsonl``.
+
+    Returns:
+        The task id, or :data:`UNKNOWN_TASK` where the run records none.
+    """
+    identity = view_identity(read_store(store))
+    return identity.task_id if identity is not None else UNKNOWN_TASK
 
 
 def _extract_one(
@@ -157,12 +168,13 @@ def _extract_one(
     if not store.is_file():
         return None
     try:
+        task = recorded_task_id(store)
         return extract_features(
             store,
             row["stem"],
             row["run_root"],
-            row["task_id"],
-            row["family"],
+            task,
+            task_family(task),
             memberships,
             onomatopoeic=onomatopoeic,
         )

@@ -172,9 +172,9 @@ def _seed(  # noqa: C901 — one independent block per derivative, as PREPROCESS
     Args:
         store: The store to seed.
         tmp_path: The run directory; sidecars go under ``streams/`` and ``derivatives/``.
-        task: The task ADMIT records the hint naming (``record_task``), also written into the ``recording``
-            stream's path as its ``task-`` entity, which no stage reads. None records no task and writes a stem
-            carrying none, which is what takes the out-of-family mode.
+        task: The task ADMIT records the hint naming (``record_task``), also written as the ``recording``
+            stream's file name, which no stage reads. None records no task and writes a plain stem naming
+            none, which is what takes the out-of-family mode.
         variant: The task's declared variants, e.g. ``{"route": "mouth"}``.
         spans: ``[(start, end), ...]`` amplitude spans, in the order ``scores`` indexes.
         scores: One ``span_hear`` ``raw_scores`` mapping per span; a None entry writes no
@@ -217,7 +217,7 @@ def _seed(  # noqa: C901 — one independent block per derivative, as PREPROCESS
         store.was_attributed_to(entity_id, agent)
         return entity_id
 
-    stem = f"sub-a_ses-b_task-{task}" if task is not None else "sub-a_ses-b_recording"
+    stem = task if task is not None else "rec-0001"
     ids["recording"] = _write(
         "stream",
         (0.0, duration_s),
@@ -500,7 +500,7 @@ class TestTheModeComesFromTheDeclaration:
         assert mode_of("AIRWAY", store) == ("detect", None)
 
     def test_the_recorded_task_outranks_the_path(self, store: ProvStore, tmp_path: Path) -> None:
-        """The task ADMIT recorded from the hint is read; the path's ``task-`` entity is not."""
+        """The task ADMIT recorded from the hint is read; the task the file name spells is not."""
         _seed(store, tmp_path, task="harvard-sentences-list")
         record_task(store, "respiration-and-cough-breath")
         assert mode_of("AIRWAY", store) == ("align", "respiration-and-cough-breath")
@@ -513,7 +513,7 @@ class TestTheModeComesFromTheDeclaration:
             extent=(0.0, 5.0),
             attributes={
                 "name": "recording",
-                "path": str(tmp_path / "sub-a_ses-b_task-respiration-and-cough-cough.wav"),
+                "path": str(tmp_path / "respiration-and-cough-cough.wav"),
             },
         )
         assert mode_of("AIRWAY", store) == ("detect", None)

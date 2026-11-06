@@ -1227,7 +1227,7 @@ class TestAConditionNeverWithholds:
             policy=policy,
         )
 
-    _POLICY = FoldPolicy(llm_redaction_withholds=True, recruited_conditions="bridge2ai_voice_adult_2026-09-04")
+    _POLICY = FoldPolicy(llm_redaction_withholds=True, recruited_conditions="adult_speech_fixture_2026-09-04")
 
     @staticmethod
     def _conditions(*texts: str) -> dict[str, Any]:
@@ -1260,12 +1260,12 @@ class TestAConditionNeverWithholds:
         assert FoldPolicy.from_config(load_triage_config()).condition_categories == ("CONDITION",)
 
     def test_the_packaged_config_names_the_study_s_cohort_profile(self) -> None:
-        """The shipped key names the Bridge2AI-Voice adult profile, and it loads."""
+        """The shipped key names the fixture's recruited-conditions profile, and it loads."""
         from senselab.audio.workflows.triage.config import load_triage_config
         from senselab.audio.workflows.triage.recruited_conditions import load_recruited_conditions
 
         name = FoldPolicy.from_config(load_triage_config()).recruited_conditions
-        assert name == "bridge2ai_voice_adult_2026-09-04"
+        assert name == "adult_speech_fixture_2026-09-04"
         assert load_recruited_conditions(name).diagnosis("spasmodic dysphonia") == "laryngeal_dystonia"
 
 
@@ -1739,7 +1739,7 @@ class TestSecondOpinionDisagreementFlagsForReview:
         assert self._grounds(folded) == [f"{SECOND_OPINION_DISAGREES}: policy_identifier_present p=0.05 reviewer=yes"]
 
     def test_a_listed_condition_is_never_a_disagreement(self) -> None:
-        """r12, sub-SUBJ01 free-speech-2: conditions listed, an old named_diagnosis p=0.96; no flag."""
+        """r12, a free-speech-2 recording: conditions listed, an old named_diagnosis p=0.96; no flag."""
         reading = self._reading(
             status="flagged",
             conditions=[{"text": "essential tremors", "why": "x"}, {"text": "synovial joint cyst", "why": "y"}],

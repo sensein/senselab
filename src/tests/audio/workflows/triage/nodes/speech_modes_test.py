@@ -108,15 +108,15 @@ def _store(*, family: str | None = None, duration_s: float = 20.0) -> ProvStore:
     """A store carrying only the ``recording`` stream the mode selector reads.
 
     Args:
-        family: The task ADMIT records the hint naming (``record_task``), also written into a BIDS stem that no
-            stage reads; or None for no declaration.
+        family: The task ADMIT records the hint naming (``record_task``); or None for no declaration. The path is
+            a plain name either way: no stage reads a task off it.
         duration_s: The recording's duration.
 
     Returns:
         The store.
     """
     store = ProvStore(run_id="speech-modes-test")
-    path = "input.wav" if family is None else f"sub-abc123_ses-1_task-{family}.wav"
+    path = "input.wav" if family is None else "rec-0001.wav"
     store.entity(
         prov_type="stream",
         extent=(0.0, duration_s),
@@ -255,19 +255,21 @@ def _unmeasured(result: Result) -> list[str]:
     return list(found[0].evidence["value"]) if found else []
 
 
-B2AI_PROFILE = Path(__file__).parents[1] / "profiles" / "bridge2ai_voice_adult"
-_B2AI_SPEECH_TASKS = sorted(
+FIXTURE_PROFILE = Path(__file__).parents[1] / "profiles" / "adult_speech_fixture"
+_FIXTURE_SPEECH_TASKS = sorted(
     name
-    for name, entry in read_task_list((B2AI_PROFILE / "tasks.yaml").read_text(encoding="utf-8"), "tasks.yaml").items()
+    for name, entry in read_task_list(
+        (FIXTURE_PROFILE / "tasks.yaml").read_text(encoding="utf-8"), "tasks.yaml"
+    ).items()
     if entry.branch == "SPEECH"
 )
-"""The B2AI profile's SPEECH tasks, read from its file: parameters are collected before any profile is active."""
+"""The fixture profile's SPEECH tasks, read from its file: parameters are collected before any profile is active."""
 
 
 class TestTheDeclarationPicksTheMode:
     """The declared family selects the mode and never supplies the answer."""
 
-    @pytest.mark.parametrize("family", _B2AI_SPEECH_TASKS)
+    @pytest.mark.parametrize("family", _FIXTURE_SPEECH_TASKS)
     def test_every_in_family_declaration_takes_align(self, family: str) -> None:
         """All 31 rows are reachable: a family in the table never falls through to detect."""
         assert mode_of("SPEECH", _store(family=family)) == ("align", family)
@@ -280,7 +282,7 @@ class TestTheDeclarationPicksTheMode:
         )
 
     def test_no_declaration_takes_detect(self) -> None:
-        """A path that is not a BIDS stem names no family, which is the safe arm."""
+        """A recording ADMIT recorded no task for names no family, which is the safe arm."""
         assert mode_of("SPEECH", _store()) == ("detect", None)
 
     def test_dispatch_runs_align_on_a_declared_speech_task(self, tmp_path: Path) -> None:
@@ -707,7 +709,7 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
         assert _of_kind(result, "measure", "repetition_rule") == []
 
     def test_nothing_is_read_out_of_the_instructions(self, tmp_path: Path) -> None:
-        """A ``Category:`` line is the dataset's to read (B2AI's builder does); senselab reads the hint's field."""
+        """A ``Category:`` line is the dataset's to read (a dataset's builder may); senselab reads the hint's field."""
         store = self._listed("random-item-generation", ["a", "a"])
         hint = AudioHints(instructions="Category: Letters.")
         result = align_speech("random-item-generation", store, hint, branch_params(_config(tmp_path)))

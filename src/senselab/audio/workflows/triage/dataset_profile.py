@@ -19,7 +19,7 @@ rules (:func:`set_run_data`); ``load_triage_config`` sets it, and the configurat
 
 A dataset profile is a directory holding ``profile.yaml`` and the files it supplies::
 
-    name: bridge2ai-voice-adult      # required
+    name: my-dataset                 # required
     version: "1"                     # required
     provenance: {...}                # optional, free-form: what the values were fitted on
     config: config.yaml              # optional: a config override, merged between the packaged config and a run's

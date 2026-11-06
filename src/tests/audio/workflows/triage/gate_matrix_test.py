@@ -6,6 +6,7 @@ sees so each expected count and percentile can be worked out by hand from the do
 
 from __future__ import annotations
 
+import itertools
 from pathlib import Path
 
 import numpy as np
@@ -51,7 +52,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     load_ruleset,
 )
 from senselab.audio.workflows.triage.vocabulary import BRANCHES
-from tests.conftest import B2AI_TRIAGE_PROFILE
+from tests.conftest import FIXTURE_PROFILE
 
 COUGH_KEY = "yamnet.cough_labels.peak_over_floor_db_max"
 """Where the ``airway.cough`` gate reads its dB from, and the one key a fixture drops to unread it."""
@@ -64,7 +65,20 @@ def ruleset() -> Ruleset:
     Returns:
         The ruleset as ``data/config/default.yaml`` declares it.
     """
-    return load_ruleset(load_triage_config(profile=B2AI_TRIAGE_PROFILE))
+    return load_ruleset(load_triage_config(profile=FIXTURE_PROFILE))
+
+
+_STEMS = itertools.count(1)
+"""Numbers the plain stems records are given by default, so no two records anywhere share one."""
+
+
+def _plain_stem() -> str:
+    """A stem that carries no identity and that no other record has, e.g. ``rec-0007``.
+
+    Returns:
+        The stem.
+    """
+    return f"rec-{next(_STEMS):04d}"
 
 
 def _features(family: str, stem: str = "", **overrides: object) -> RecordingFeatures:
@@ -72,14 +86,14 @@ def _features(family: str, stem: str = "", **overrides: object) -> RecordingFeat
 
     Args:
         family: The task family.
-        stem: The stem, defaulting to one built from the family.
+        stem: The stem, defaulting to a fresh plain one (:func:`_plain_stem`).
         overrides: Fields to replace wholesale.
 
     Returns:
         The record.
     """
     record = RecordingFeatures(
-        stem=stem or f"sub-1_ses-1_task-{family}",
+        stem=stem or _plain_stem(),
         run_root="run",
         task_id=family,
         family=family,
@@ -105,12 +119,12 @@ def _sustained(family: str, seconds: float, stem: str = "") -> RecordingFeatures
     Args:
         family: The task family.
         seconds: The longest live amplitude span, which is what ``voice.sustained`` reads.
-        stem: The stem, defaulting to one built from the family and the length.
+        stem: The stem, defaulting to a fresh plain one (:func:`_plain_stem`).
 
     Returns:
         The record.
     """
-    return _features(family, stem or f"sub-1_ses-1_task-{family}-{seconds}", span_longest_s={"amplitude": seconds})
+    return _features(family, stem, span_longest_s={"amplitude": seconds})
 
 
 def _cell(cells: list[FamilyRouting], family: str, branch: str) -> FamilyRouting:

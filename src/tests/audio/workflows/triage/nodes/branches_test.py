@@ -108,10 +108,13 @@ from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.conftest import declare_hint_identity, record_admitted_hint, record_task
 
 BIDS_STEM = "sub-abc123_ses-1_task-harvard-sentences-list-10-3"
-"""A real stem shape: two trailing numeric segments. No stage reads a task off it."""
+"""A BIDS-like stem naming a task, with two trailing numeric segments. No stage reads a task off it."""
+
+PLAIN_PATH = "rec-0001.wav"
+"""A recording's path that carries no identity: the default every store here is seeded at."""
 
 
-def _store(*, path: str | None = BIDS_STEM + ".wav", task: str | None = None, duration_s: float = 20.0) -> ProvStore:
+def _store(*, path: str | None = PLAIN_PATH, task: str | None = None, duration_s: float = 20.0) -> ProvStore:
     """A store holding only what the mode selector reads.
 
     Args:
@@ -694,8 +697,8 @@ class TestTheDeclaredFamilyIsDerivedInOnePlace:
         assert declared_task_family(_store(task="harvard-sentences-list")) == "harvard-sentences-list"
 
     def test_a_path_naming_a_task_with_none_recorded_names_no_family(self) -> None:
-        """Nothing is read off the file name: a BIDS stem with no recorded task takes the safe arm."""
-        assert declared_task_family(_store()) is None
+        """Nothing is read off the file name: a BIDS-like stem with no recorded task takes the safe arm."""
+        assert declared_task_family(_store(path=BIDS_STEM + ".wav")) is None
 
     def test_a_non_bids_path_names_no_family(self) -> None:
         """A path with no ``task-`` entity is not a declaration; None takes the safe arm."""
@@ -708,7 +711,7 @@ class TestTheDeclaredFamilyIsDerivedInOnePlace:
     def test_a_refused_recording_is_named_by_the_task_admit_recorded_on_its_activity(self) -> None:
         """ADMIT wrote no stream for an all-zero recording; its activity still records the hint's task."""
         store = _store(path=None)
-        audio_file = "/data/sub-a_ses-1_task-respiration-and-cough-fivebreaths-3.wav"
+        audio_file = "/data/rec-0001.wav"
         declared = task_attributes(AudioHints(task="respiration-and-cough-fivebreaths", task_take=3))
         store.activity(node="ADMIT", step=None, parameters={"audio_file": audio_file, **declared})
         assert declared_task_family(store) == "respiration-and-cough-fivebreaths"
@@ -728,13 +731,13 @@ class TestTheDeclaredFamilyIsDerivedInOnePlace:
 
     def test_the_hint_task_is_read_over_the_path(self) -> None:
         """The task the hint names, as ADMIT records it, wins over the stem's ``task-`` entity."""
-        store = _store()
+        store = _store(path=BIDS_STEM + ".wav")
         record_admitted_hint(store, AudioHints(task="prolonged-vowel", task_variant={"index": "2"}))
         assert declared_task_family(store) == "prolonged-vowel"
 
     def test_a_hint_naming_no_task_does_not_fall_through_to_the_path(self) -> None:
         """A recorded "no task" is a declaration of no family; the stem does not speak in its place."""
-        store = _store()
+        store = _store(path=BIDS_STEM + ".wav")
         record_task(store, None)
         assert declared_task_family(store) is None
 

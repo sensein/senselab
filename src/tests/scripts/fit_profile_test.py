@@ -100,7 +100,7 @@ def test_a_pilot_table_is_fitted_into_the_profile(no_profile: None, tmp_path: Pa
 def test_a_value_the_profile_sets_itself_is_named_as_winning(
     no_profile: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """B2AI's count-in gap: fitted at the percentile, kept at the profile's own value."""
+    """A dataset's count-in gap: fitted at the percentile, kept at the profile's own value."""
     root = _profile(tmp_path / "lab", {"task_extent.yaml": "count_in:\n  gap_max_s: 3.0\n"})
     assert cli.main([str(_table(tmp_path / "rv.parquet", _rows())), "--profile", str(root)]) == 0
     line = next(line for line in capsys.readouterr().out.splitlines() if "count_in.gap_max_s" in line)

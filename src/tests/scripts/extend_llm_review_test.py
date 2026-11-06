@@ -32,7 +32,7 @@ from senselab.audio.workflows.triage.run import LOG_FILE
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.text.tasks.pii_detection.redaction_review import ReviewProposal, ReviewResult
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -56,7 +56,7 @@ def _config(tmp_path: Path, text: str = LLM_ON) -> Any:  # noqa: ANN401 — Tria
 
 def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> Path:
     """One finished run in miniature: a store with consensus words, SPEECH's scan of them, and the streams."""
-    run_root = root / "sub-a_task-free-speech_20260924-000000"
+    run_root = root / "rec-0001_20260924-000000"
     streams = run_root / "run" / "streams"
     streams.mkdir(parents=True, exist_ok=True)
     wave = (0.05 * np.random.default_rng(0).standard_normal(SR * 5)).astype(np.float32)
@@ -76,7 +76,7 @@ def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> 
                 "path": f"streams/{name}.flac",
                 "sampling_rate": SR,
                 "channels": 1,
-                **(b2ai_identity_attributes(run_root.name) if name == "recording" else {}),
+                **(declared_identity_attributes("p01", None, "free-speech") if name == "recording" else {}),
             },
         )
         store.was_generated_by(stream, activity)

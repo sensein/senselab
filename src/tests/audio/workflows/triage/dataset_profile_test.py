@@ -29,7 +29,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     run_data,
 )
 from senselab.audio.workflows.triage.workflow import OPTIONAL_STAGES, STAGE_NAMES
-from tests.conftest import B2AI_TRIAGE_PROFILE
+from tests.conftest import FIXTURE_PROFILE
 
 
 def _profile(root: Path, manifest: dict, files: dict[str, str] | None = None) -> Path:
@@ -69,7 +69,7 @@ class TestSenselabShipsNoDatasetData:
         with pytest.raises(DatasetDataMissing, match="no dataset profile"):
             require_dataset_values(config.values)
 
-    def test_the_b2ai_profile_supplies_everything_a_run_needs(self) -> None:
+    def test_the_fixture_profile_supplies_everything_a_run_needs(self) -> None:
         """The suite's own profile leaves nothing missing."""
         assert missing_dataset_values(load_triage_config().values) == []
 
@@ -165,7 +165,7 @@ class TestActivation:
     def test_a_config_loaded_without_a_profile_names_the_active_one(self) -> None:
         """The configuration always names the profile its data files are read from."""
         profile = active_profile()
-        assert profile is not None and profile.root == B2AI_TRIAGE_PROFILE.resolve()
+        assert profile is not None and profile.root == FIXTURE_PROFILE.resolve()
         assert load_triage_config().profile == profile
 
     def test_a_failed_load_leaves_no_profile_active(self, without_triage_profile: None, tmp_path: Path) -> None:
@@ -277,8 +277,8 @@ class TestSenselabShipsNoFittedValue:
             assert shipped == [], relative
 
     def test_senselab_data_names_no_dataset_task(self) -> None:
-        """No key or value of a packaged data file is a B2AI task name (the vendored registry moves in step 7)."""
-        tasks = set(yaml.safe_load((B2AI_TRIAGE_PROFILE / "tasks.yaml").read_text())["tasks"])
+        """No key or value of a packaged data file is a fixture task name (the vendored registry moves in step 7)."""
+        tasks = set(yaml.safe_load((FIXTURE_PROFILE / "tasks.yaml").read_text())["tasks"])
 
         def strings(node: Any) -> list[str]:  # noqa: ANN401 -- a YAML value
             if isinstance(node, dict):
@@ -294,8 +294,8 @@ class TestSenselabShipsNoFittedValue:
         }
         assert {path: names for path, names in named.items() if names} == {}
 
-    def test_the_reference_and_b2ai_profiles_supply_every_required_value(self) -> None:
-        """With B2AI's profile (which extends the reference profile) active, the start check finds nothing missing."""
+    def test_the_reference_and_fixture_profiles_supply_every_required_value(self) -> None:
+        """With the fixture profile (extending the reference profile) active, the start check finds nothing missing."""
         assert missing_dataset_values(load_triage_config().values) == []
 
     def test_the_reference_profile_alone_leaves_only_a_datasets_own_values(self, without_triage_profile: None) -> None:
@@ -430,7 +430,7 @@ class TestValuesFollowTheWorkflow:
         assert not needed({"path": ["x"], "required": False}, None)
 
     def test_a_task_whose_branch_is_off_is_refused_by_name(self, tmp_path: Path) -> None:
-        """B2AI's breathing tasks under a workflow without AIRWAY: the start check names each one."""
+        """The fixture's breathing tasks under a workflow without AIRWAY: the start check names each one."""
         override = tmp_path / "run.yaml"
         stages = [name for name in STAGE_NAMES if name != "AIRWAY"]
         override.write_text(yaml.safe_dump({"workflow": {"stages": stages}}))
@@ -457,7 +457,7 @@ class TestValuesFollowTheWorkflow:
     ) -> None:
         """tasks.yaml goes after the profile loaded (loading refuses it sooner): the start check names it (review 6)."""
         root = tmp_path / "p"
-        shutil.copytree(B2AI_TRIAGE_PROFILE, root)
+        shutil.copytree(FIXTURE_PROFILE, root)
         config = load_triage_config(profile=root)
         (root / "tasks.yaml").unlink()
         missing = missing_dataset_values(config.values)

@@ -134,7 +134,7 @@ class TestSpeechInANonLexicalTask:
         store.entity(
             prov_type="stream",
             extent=(0.0, 10.0),
-            attributes={"name": "recording", "path": f"streams/sub-x_ses-y_task-{BREATH_TASK}.wav"},
+            attributes={"name": "recording", "path": "streams/rec-0001.wav"},
         )
         record_task(store, BREATH_TASK)
         store.entity(
@@ -270,7 +270,7 @@ def _timed_words(store: ProvStore, task: str, words: Sequence[tuple[str, float]]
     store.entity(
         prov_type="stream",
         extent=(0.0, 60.0),
-        attributes={"name": "recording", "path": f"streams/sub-x_ses-y_task-{task}.wav"},
+        attributes={"name": "recording", "path": "streams/rec-0001.wav"},
     )
     record_task(store, task)
     for index, (text, start) in enumerate(words):

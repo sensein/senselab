@@ -21,7 +21,7 @@ from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import _audio, _line, _seed_admit, _stub_models, word_attributes
 
-BREATH_STEM = "sub-x_ses-y_task-respiration-and-cough-v2-threebreathsnose"
+BREATH_STEM = "rec-0001"
 BREATH = "respiration-and-cough-v2-threebreathsnose"
 
 

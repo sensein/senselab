@@ -26,9 +26,14 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
-from senselab.audio.workflows.triage.b2ai_hints import read_sidecars, task_id_of
-from senselab.audio.workflows.triage.extend import source_of
-from senselab.audio.workflows.triage.identity import participant_group
+from senselab.audio.workflows.triage.hint_record import HINT
+from senselab.audio.workflows.triage.identity import (
+    ADMIT_NODE,
+    DECLARED_TASK_ID,
+    RECORDING_STREAM,
+    admit_choice,
+    participant_group,
+)
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS, expected_names
 from senselab.audio.workflows.triage.nodes.gates import Pattern
 from senselab.audio.workflows.triage.recording_vectors import (
@@ -49,7 +54,7 @@ from senselab.audio.workflows.triage.recruited_conditions import (
     ledger_value,
 )
 from senselab.audio.workflows.triage.residue import is_content_word
-from senselab.audio.workflows.triage.routing_analysis.families import task_family
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
 from senselab.utils import fastio
 
 PII_LABEL = "pii"
@@ -148,6 +153,14 @@ def read_store_light(path: Path, extra_markers: Sequence[str] = ()) -> StoreView
                         extent=(float(extent[0]), float(extent[1])) if extent else None,
                         attributes=record.get("attributes") or {},
                     )
+                )
+            elif kind == "activity":
+                view.activities.append(
+                    {
+                        "node": record.get("node"),
+                        "step": record.get("step"),
+                        "parameters": record.get("parameters") or {},
+                    }
                 )
             elif kind == "relation":
                 relation, source, target = record.get("relation"), record.get("source"), record.get("target")
@@ -682,34 +695,34 @@ def task_extent(view: StoreView) -> tuple[float, float] | None:
     return (float(span.extent[0]), float(span.extent[1]))
 
 
-def recording_language(run_root: Path) -> str:
-    """The language the recording's BIDS sidecar declares, or the empty string.
+def recording_language(view: StoreView) -> str:
+    """The language the recording's hint declares (its ``metadata.language``), as ADMIT recorded the hint.
 
-    The store does not carry it; the sidecar does. The recording is found through the run's own
-    ``run.json``, either in this run root or, for a mirrored tree, in the finished run its
-    ``run/derivatives`` link points into.
+    The record is ADMIT's (:func:`~senselab.audio.workflows.triage.identity.admit_choice`): the ``recording`` stream,
+    or ADMIT's activity where it refused the recording.
 
     Args:
-        run_root: The directory holding ``run/store.jsonl``.
+        view: The store view.
 
     Returns:
-        The sidecar's ``language`` value as written (``en``, ``es``, ``es-419``), or ``""``.
+        The declared code as written (``en``, ``es``, ``es-419``), or ``""`` where the hint declares none or the
+        run recorded no hint (a run from before ADMIT recorded hints, until it is replayed).
     """
-    candidates = [run_root, (run_root / RUN_SUBDIR / "derivatives").resolve().parent.parent]
-    for root in candidates:
-        try:
-            fields = read_sidecars(source_of(root))
-        except (OSError, ValueError):
-            continue
-        return str(fields.get("language") or "")
-    return ""
+    recording = view.last("stream", name=RECORDING_STREAM)
+    record = admit_choice(
+        recording.attributes if recording is not None else None,
+        [activity["parameters"] for activity in view.activities if activity.get("node") == ADMIT_NODE],
+    )
+    hint = record[0].get(HINT) if record is not None else None
+    metadata = hint.get("metadata") if isinstance(hint, Mapping) else None
+    return str(metadata.get("language") or "") if isinstance(metadata, Mapping) else ""
 
 
 def language_name(code: str) -> str:
     """The facet a language code falls under: English, Spanish, the code itself, or ``unknown``.
 
     Args:
-        code: A sidecar ``language`` value.
+        code: A declared ``language`` value.
 
     Returns:
         ``English`` for ``en`` and its regional forms, ``Spanish`` for ``es`` and its regional forms
@@ -730,17 +743,14 @@ def recording_record(run_root: Path, families: frozenset[str] | None) -> dict[st
         The row, or None when the recording declares no family or one outside ``families``.
     """
     stem = stem_of(run_root)
-    task = task_id_of(stem)
-    if families is not None and task_family(task) not in families:
-        return None
     view = read_store_light(run_root / RUN_SUBDIR / STORE_NAME)
     verdict = view.last("verdict", node=VERDICT_NODE)
     attributes = verdict.attributes if verdict is not None else {}
-    declared = attributes.get("declared_family") or task_family(task)
-    if not declared or (families is not None and declared not in families):
+    recorded = view_identity(view)
+    declared = attributes.get("declared_family") or (task_family(recorded.task_id) if recorded is not None else None)
+    if not declared or declared == UNKNOWN_TASK or (families is not None and declared not in families):
         return None
     declared = str(declared)
-    recorded = view_identity(view)
     participant = participant_group(recorded, stem) if recorded is not None else stem
     session = recorded.session if recorded is not None else None
     marked = marked_words(view)
@@ -783,10 +793,10 @@ def recording_record(run_root: Path, families: frozenset[str] | None) -> dict[st
     return {
         "p": participant or "",
         "ses": session or "",
-        "task": task,
+        "task": recorded.task_id if recorded is not None else UNKNOWN_TASK,
         "stem": stem,
         "fam": declared,
-        "lang": recording_language(run_root),
+        "lang": recording_language(view),
         "rel": str(attributes.get("release") or ""),
         "rg": attributes.get("release_ground"),
         "tri": str(attributes.get("triage") or attributes.get("outcome") or ""),
@@ -967,7 +977,11 @@ def _worker(payload: tuple[str, list[str]]) -> dict[str, Any] | None:
 def candidates_under(
     corpus: Path, families: frozenset[str], *, walk_threads: int = fastio.DEFAULT_THREADS
 ) -> list[Path]:
-    """The run directories whose stem names a free-response family.
+    """The run directories whose recorded task, read at admission, is in ``families``.
+
+    A recording's task is the one its run recorded, never its name (plan step 8). Only the head of each store is
+    read, up to ADMIT's ``recording`` stream (:func:`admitted_family`); :func:`recording_record` reads the whole
+    store of each candidate and decides from its latest record.
 
     Args:
         corpus: The run tree.
@@ -980,8 +994,40 @@ def candidates_under(
     return [
         run_root
         for run_root in recording_dirs(corpus, threads=walk_threads)
-        if task_family(task_id_of(stem_of(run_root))) in families
+        if admitted_family(run_root / RUN_SUBDIR / STORE_NAME) in families
     ]
+
+
+def admitted_family(store: Path) -> str | None:
+    """The task family ADMIT recorded, read from the store's head: its first ``recording`` stream.
+
+    Args:
+        store: The run's ``store.jsonl``.
+
+    Returns:
+        The family, or None where the store is unreadable or holds no such record before its end (a refused
+        recording's ADMIT activity is read where no stream follows).
+    """
+    refused: str | None = None
+    try:
+        with store.open(encoding="utf-8") as handle:
+            for line in handle:
+                if DECLARED_TASK_ID not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if (
+                    record.get("record") == "entity"
+                    and (record.get("attributes") or {}).get("name") == RECORDING_STREAM
+                ):
+                    return task_family(str(record["attributes"].get(DECLARED_TASK_ID) or UNKNOWN_TASK))
+                if record.get("record") == "activity" and record.get("node") == ADMIT_NODE:
+                    refused = str((record.get("parameters") or {}).get(DECLARED_TASK_ID) or UNKNOWN_TASK)
+    except OSError:
+        return None
+    return task_family(refused) if refused is not None else None
 
 
 def _rows(payloads: Sequence[tuple[str, list[str]]], workers: int) -> Iterator[dict[str, Any] | None]:
@@ -2461,7 +2507,7 @@ const POLICY_WHY={date:'a date element the policy always masks',age:'an age the 
 function cardAccount(a,card){
   const out=['<h4>on this card</h4>'];
   if(a.why)out.push('<p class="note">deciding reason: '+esc(a.why)+'</p>');
-  out.push('<p>language: '+(a.lang?esc(a.lang):'none declared in the sidecar')+'</p>');
+  out.push('<p>language: '+(a.lang?esc(a.lang):'none declared in the hint')+'</p>');
   if(a.ss){
     out.push('<p><b>'+esc(a.ss.src)+' only.</b> The consensus transcript carries no words, so the card '
       +'shows this recogniser\\'s own transcript ('+esc(a.ss.n)+' recogniser(s) left words; the '

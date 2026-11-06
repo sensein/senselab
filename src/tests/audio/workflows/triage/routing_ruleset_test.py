@@ -26,7 +26,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     unreadable_branches,
 )
 from senselab.audio.workflows.triage.vocabulary import BRANCHES, GRAPH_ORDER, QUALITY
-from tests.conftest import B2AI_TRIAGE_PROFILE
+from tests.conftest import FIXTURE_PROFILE
 
 
 @pytest.fixture(scope="module")
@@ -36,7 +36,7 @@ def ruleset() -> Ruleset:
     Returns:
         The ruleset as ``data/config/default.yaml`` declares it.
     """
-    return load_ruleset(load_triage_config(profile=B2AI_TRIAGE_PROFILE))
+    return load_ruleset(load_triage_config(profile=FIXTURE_PROFILE))
 
 
 def _features(family: str, **overrides: object) -> RecordingFeatures:
@@ -50,7 +50,7 @@ def _features(family: str, **overrides: object) -> RecordingFeatures:
         The record.
     """
     record = RecordingFeatures(
-        stem=f"sub-1_ses-1_task-{family}",
+        stem="rec-0001",
         run_root="run",
         task_id=family,
         family=family,

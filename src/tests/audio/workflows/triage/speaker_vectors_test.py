@@ -13,8 +13,9 @@ import soundfile
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage import speaker_vectors as sv
-from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
+from senselab.audio.workflows.triage.identity import RECORDING_STREAM, identity_from_attributes
 from senselab.audio.workflows.triage.recording_vectors import recording_dirs
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
 
 PROFILE = Path(sv.__file__).parent / "data" / "speaker_vector_profile" / "2026-09-22.yaml"
 
@@ -34,24 +35,30 @@ def _relation(relation: str, source: str, target: str) -> str:
 
 def build_recording(
     root: Path,
-    stem: str = "sub-a1_ses-b2_task-prolonged-vowel",
+    stem: str = "rec-0001",
     timestamp: str = "20260920-030735",
     duration_s: float = 12.0,
     sampling_rate: int = 16000,
     *,
+    participant: str = "p01",
+    session: str = "s2",
+    task: str = "prolonged-vowel",
     extents: tuple[tuple[float, float, str], ...] = ((1.0, 9.0, "voice"),),
     duplicate_extent: bool = False,
     invalidate_extent: bool = False,
     with_stream_file: bool = True,
 ) -> Path:
-    """A run directory carrying a plain stream and whatever task extents a test needs.
+    """A run directory carrying the identity ADMIT recorded, a plain stream and whatever task extents a test needs.
 
     Args:
-        root: Where the ``sub-*/ses-*/<stem>_<timestamp>`` tree goes.
-        stem: The BIDS stem.
+        root: Where the ``<participant>/<session>/<stem>_<timestamp>`` tree goes.
+        stem: The recording's file stem, a plain name that carries no identity.
         timestamp: The launch timestamp in the run directory's name.
         duration_s: Length of the plain stream.
         sampling_rate: Its sampling rate.
+        participant: The participant the recording's hint declares.
+        session: The session it declares.
+        task: The task it declares.
         extents: ``(start_s, end_s, family)`` per task extent to mint.
         duplicate_extent: Whether to write each extent twice under different entity ids.
         invalidate_extent: Whether to invalidate the first extent.
@@ -60,7 +67,6 @@ def build_recording(
     Returns:
         The run root, the directory holding ``run/``.
     """
-    participant, session = stem.split("_")[0], stem.split("_")[1]
     run_root = root / participant / session / f"{stem}_{timestamp}"
     run_dir = run_root / "run"
     (run_dir / "streams").mkdir(parents=True, exist_ok=True)
@@ -72,6 +78,14 @@ def build_recording(
 
     lines = [
         _entity(
+            "stream-recording",
+            "stream",
+            [0.0, duration_s],
+            name=RECORDING_STREAM,
+            path=f"{stem}.wav",
+            **declared_identity_attributes(participant, session, task),
+        ),
+        _entity(
             "stream-plain",
             "stream",
             [0.0, duration_s],
@@ -79,7 +93,7 @@ def build_recording(
             path="streams/plain.flac",
             sampling_rate=sampling_rate,
             channels=1,
-        )
+        ),
     ]
     for index, (start_s, end_s, family) in enumerate(extents):
         lines.append(_entity(f"span-{index}", "span", [start_s, end_s], role="task_extent", family=family))
@@ -98,13 +112,16 @@ def build_subject(root: Path, subject: str, spans: tuple[tuple[str, float, float
 
     Args:
         root: The corpus root.
-        subject: The ``sub-*`` label.
-        spans: ``(task, start_s, end_s)`` per recording.
+        subject: The participant label.
+        spans: ``(task, start_s, end_s)`` per recording, each in its own session ``s<index>``.
     """
     for index, (task, start_s, end_s) in enumerate(spans):
         build_recording(
             root,
-            stem=f"{subject}_ses-s{index}_task-{task}",
+            stem=f"rec-{index + 1:04d}",
+            participant=subject,
+            session=f"s{index}",
+            task=task,
             duration_s=end_s + 2.0,
             extents=((start_s, end_s, "speech"),),
         )
@@ -114,7 +131,7 @@ _TIMESTAMP = re.compile(r"_\d{8}-\d{6}(?:-\d+)?$")
 
 
 def _recording(run_root: Path, root: Path, **identity: Any) -> dict[str, Any]:  # noqa: ANN401 -- column values
-    """A run's corpus-table row, its identity the one its stem names unless a test overrides it.
+    """A run's corpus-table row, its identity the one its run records unless a test overrides it.
 
     Args:
         run_root: The run directory.
@@ -125,8 +142,14 @@ def _recording(run_root: Path, root: Path, **identity: Any) -> dict[str, Any]:  
         The row, in :data:`speaker_vectors.TABLE_COLUMNS`.
     """
     stem = _TIMESTAMP.sub("", run_root.name)
-    named = identity_from_name(stem)
-    row = {"participant": named.participant, "session": named.session, "task": named.task_id}
+    entities = [json.loads(line) for line in (run_root / "run" / "store.jsonl").read_text().splitlines() if line]
+    (recorded,) = [
+        identity_from_attributes(entry["attributes"])
+        for entry in entities
+        if entry.get("record") == "entity" and entry["attributes"].get("name") == RECORDING_STREAM
+    ]
+    assert recorded is not None
+    row = {"participant": recorded.participant, "session": recorded.session, "task": recorded.task_id}
     return {**row, **identity, "stem": stem, "run_dir": str(run_root.relative_to(root))}
 
 
@@ -157,8 +180,8 @@ def test_a_task_extent_is_read_with_its_seconds_family_and_audio_path(tmp_path: 
     assert (extent.start_s, extent.end_s) == (1.5, 7.25)
     assert extent.duration_s == pytest.approx(5.75)
     assert extent.family == "voice"
-    assert extent.subject == "sub-a1"
-    assert extent.session == "ses-b2"
+    assert extent.subject == "p01"
+    assert extent.session == "s2"
     assert extent.task == "prolonged-vowel"
     assert extent.audio_path == run_root / "run" / "streams" / "plain.flac"
 
@@ -193,7 +216,7 @@ def test_an_extent_carries_the_table_s_identity_not_the_run_directory_s_name(tmp
     row = _recording(run_root, tmp_path, participant="P1", session="visit-1", task="reading-2")
     (extent,) = sv.read_task_extents(run_root, row)
     assert (extent.subject, extent.session, extent.task) == ("P1", "visit-1", "reading-2")
-    assert extent.stem == "sub-a1_ses-b2_task-prolonged-vowel"
+    assert extent.stem == "rec-0001"
     assert extent.run_dir == str(run_root.relative_to(tmp_path))
 
 
@@ -225,11 +248,11 @@ def test_a_profile_with_the_wrong_schema_version_raises(tmp_path: Path) -> None:
 def test_an_extent_below_the_floor_is_refused_and_counted(tmp_path: Path) -> None:
     """A refused extent is excluded from the estimate and visible in the report."""
     floor = sv.load_min_extent_s()
-    build_subject(tmp_path, "sub-short", (("a", 0.5, 0.5 + floor / 2),))
+    build_subject(tmp_path, "p-short", (("a", 0.5, 0.5 + floor / 2),))
     grouped, report = sv.gather(tmp_path, _table(tmp_path))
     assert grouped == {}
     assert report.extents_refused_short == 1
-    assert report.subjects_all_refused == ["sub-short"]
+    assert report.subjects_all_refused == ["p-short"]
     assert report.subjects_without_extent == []
 
 
@@ -237,12 +260,14 @@ def test_only_speech_extents_are_embedded_and_the_rest_are_counted(tmp_path: Pat
     """A non-vocalic or out-of-domain extent is refused by family, not quietly pooled."""
     build_recording(
         tmp_path,
-        stem="sub-mix_ses-s0_task-x",
+        participant="p-mix",
+        session="s0",
+        task="x",
         duration_s=40.0,
         extents=((1.0, 12.0, "speech"), (13.0, 24.0, "airway"), (25.0, 36.0, "voice")),
     )
     grouped, report = sv.gather(tmp_path, _table(tmp_path))
-    assert [extent.family for extent in grouped["sub-mix"]] == ["speech"]
+    assert [extent.family for extent in grouped["p-mix"]] == ["speech"]
     assert report.extents_refused_family == {"airway": 1, "voice": 1}
     assert report.extents_admitted == 1
 
@@ -251,23 +276,25 @@ def test_a_subject_whose_whole_supply_is_out_of_family_is_refused_not_dropped(tm
     """Refusing every extent by family is a reported outcome, never an absent subject."""
     build_recording(
         tmp_path,
-        stem="sub-airway_ses-s0_task-x",
+        participant="p-airway",
+        session="s0",
+        task="x",
         duration_s=30.0,
         extents=((1.0, 20.0, "airway"),),
     )
     grouped, report = sv.gather(tmp_path, _table(tmp_path))
     assert grouped == {}
-    assert report.subjects_all_refused == ["sub-airway"]
+    assert report.subjects_all_refused == ["p-airway"]
     assert report.subjects_without_extent == []
     assert report.extents_refused_family == {"airway": 1}
 
 
 def test_a_subject_that_minted_no_extent_is_reported_apart_from_one_that_was_refused(tmp_path: Path) -> None:
     """Nothing to embed and everything too short are different facts about a speaker."""
-    build_recording(tmp_path, stem="sub-none_ses-s0_task-x", extents=())
+    build_recording(tmp_path, participant="p-none", session="s0", task="x", extents=())
     grouped, report = sv.gather(tmp_path, _table(tmp_path))
     assert grouped == {}
-    assert report.subjects_without_extent == ["sub-none"]
+    assert report.subjects_without_extent == ["p-none"]
     assert report.subjects_all_refused == []
 
 
@@ -275,7 +302,9 @@ def test_an_extent_whose_stream_is_missing_is_refused_and_counted(tmp_path: Path
     """A span with no audio behind it must not silently become a thinner estimate."""
     build_recording(
         tmp_path,
-        stem="sub-nofile_ses-s0_task-x",
+        participant="p-nofile",
+        session="s0",
+        task="x",
         duration_s=20.0,
         extents=((1.0, 15.0, "speech"),),
         with_stream_file=False,
@@ -291,33 +320,35 @@ def test_an_extent_whose_stream_is_missing_is_refused_and_counted(tmp_path: Path
 def test_a_subject_lands_in_one_shard_and_the_shards_cover_the_tree(tmp_path: Path) -> None:
     """Four shards partition the subjects exactly once each."""
     for index in range(12):
-        build_subject(tmp_path, f"sub-{index:02d}", (("x", 1.0, 15.0),))
+        build_subject(tmp_path, f"p{index:02d}", (("x", 1.0, 15.0),))
     seen: list[str] = []
     for shard in range(4):
         grouped, _ = sv.gather(tmp_path, _table(tmp_path), shard, 4)
         seen.extend(grouped)
-    assert sorted(seen) == sorted(f"sub-{index:02d}" for index in range(12))
+    assert sorted(seen) == sorted(f"p{index:02d}" for index in range(12))
 
 
 def test_shard_assignment_depends_only_on_the_subject(tmp_path: Path) -> None:
     """A growing tree must never reshuffle a subject into another worker."""
-    assert sv.shard_of("sub-abc", 64) == sv.shard_of("sub-abc", 64)
-    assert sv.shard_of("sub-abc", 1) == 0
+    assert sv.shard_of("p-abc", 64) == sv.shard_of("p-abc", 64)
+    assert sv.shard_of("p-abc", 1) == 0
 
 
 def test_a_rerun_of_one_recording_contributes_once_at_its_latest_timestamp(tmp_path: Path) -> None:
     """Two runs of the same stem are one recording, not two extents from one reading."""
-    build_recording(tmp_path, stem="sub-r_ses-s_task-x", timestamp="20260920-010000", extents=((1.0, 9.0, "speech"),))
-    build_recording(tmp_path, stem="sub-r_ses-s_task-x", timestamp="20260920-020000", extents=((2.0, 9.0, "speech"),))
+    rerun = {"participant": "p-r", "session": "s", "task": "x"}
+    build_recording(tmp_path, timestamp="20260920-010000", extents=((1.0, 9.0, "speech"),), **rerun)
+    build_recording(tmp_path, timestamp="20260920-020000", extents=((2.0, 9.0, "speech"),), **rerun)
     grouped, _ = sv.gather(tmp_path, _table(tmp_path))
-    (extent,) = grouped["sub-r"]
+    (extent,) = grouped["p-r"]
     assert extent.start_s == 2.0
 
 
 def test_speakers_are_the_table_s_participants_wherever_the_runs_sit(tmp_path: Path) -> None:
     """Runs in folders that name no subject are grouped by the participant the table records for them."""
-    first = build_recording(tmp_path / "site-a", stem="x_y_task-one", extents=((1.0, 9.0, "speech"),))
-    second = build_recording(tmp_path / "site-b", stem="x_y_task-one", extents=((1.0, 8.0, "speech"),))
+    elsewhere = {"participant": "x", "session": "y", "task": "one"}
+    first = build_recording(tmp_path / "site-a", extents=((1.0, 9.0, "speech"),), **elsewhere)
+    second = build_recording(tmp_path / "site-b", extents=((1.0, 8.0, "speech"),), **elsewhere)
     rows = [_recording(run_root, tmp_path, participant="P1") for run_root in (first, second)]
     grouped, report = sv.gather(tmp_path, _table(tmp_path, rows))
     assert sorted(extent.end_s for extent in grouped["P1"]) == [8.0, 9.0]
@@ -326,15 +357,19 @@ def test_speakers_are_the_table_s_participants_wherever_the_runs_sit(tmp_path: P
 
 def test_a_row_with_no_participant_or_no_run_directory_is_skipped_and_counted(tmp_path: Path) -> None:
     """A run that records no identity has no speaker; a row naming no run cannot be read. Both are counted."""
-    unnamed = build_recording(tmp_path, stem="sub-n_ses-s_task-x", extents=((1.0, 9.0, "speech"),))
-    named = build_recording(tmp_path, stem="sub-k_ses-s_task-x", extents=((1.0, 9.0, "speech"),))
+    unnamed = build_recording(
+        tmp_path, "rec-0001", participant="p-n", session="s", task="x", extents=((1.0, 9.0, "speech"),)
+    )
+    named = build_recording(
+        tmp_path, "rec-0002", participant="p-k", session="s", task="x", extents=((1.0, 9.0, "speech"),)
+    )
     rows = [
         _recording(unnamed, tmp_path, participant=None, session=None, task=None),
         {**_recording(named, tmp_path), "run_dir": None},
         _recording(named, tmp_path),
     ]
     grouped, report = sv.gather(tmp_path, _table(tmp_path, rows))
-    assert list(grouped) == ["sub-k"]
+    assert list(grouped) == ["p-k"]
     assert (report.recordings_without_participant, report.recordings_without_run_dir) == (1, 1)
     assert report.recordings_seen == 1
 
@@ -349,10 +384,10 @@ def test_a_table_without_the_identity_columns_is_refused(tmp_path: Path) -> None
 
 def test_every_admitted_extent_is_counted_in_the_report(tmp_path: Path) -> None:
     """The report's arithmetic must close: what was seen, what carried a span, what was admitted."""
-    build_subject(tmp_path, "sub-many", (("a", 1.0, 15.0), ("b", 1.0, 20.0)))
-    build_recording(tmp_path, stem="sub-many_ses-s9_task-c", extents=())
+    build_subject(tmp_path, "p-many", (("a", 1.0, 15.0), ("b", 1.0, 20.0)))
+    build_recording(tmp_path, "rec-0003", participant="p-many", session="s9", task="c", extents=())
     grouped, report = sv.gather(tmp_path, _table(tmp_path))
-    assert len(grouped["sub-many"]) == 2
+    assert len(grouped["p-many"]) == 2
     assert report.recordings_seen == 3
     assert report.recordings_with_extent == 2
     assert report.extents_admitted == 2
@@ -463,11 +498,11 @@ def _embedding(extent_ids: list[str]) -> Any:  # noqa: ANN401 -- a stand-in Targ
 def _extents(n: int) -> list[sv.Extent]:
     return [
         sv.Extent(
-            subject="sub-a1",
-            session=f"ses-s{i}",
-            task=f"task-t{i}",
-            stem=f"sub-a1_ses-s{i}_task-t{i}",
-            run_dir=f"sub-a1_ses-s{i}_task-t{i}_20260920-03073{i}",
+            subject="p01",
+            session=f"s{i}",
+            task=f"t{i}",
+            stem=f"rec-{i + 1:04d}",
+            run_dir=f"rec-{i + 1:04d}_20260920-03073{i}",
             audio_path=Path(f"/tmp/{i}.flac"),
             start_s=1.0,
             end_s=9.0,
@@ -480,7 +515,7 @@ def _extents(n: int) -> list[sv.Extent]:
 
 def _row(n_extents: int = 1, root: Optional[Path] = None) -> dict[str, Any]:
     extents = _extents(n_extents)
-    return sv.row_for("sub-a1", extents, _embedding([e.extent_id for e in extents]), root or Path("/corpus"))
+    return sv.row_for("p01", extents, _embedding([e.extent_id for e in extents]), root or Path("/corpus"))
 
 
 def test_a_row_counts_the_extents_recordings_and_seconds_that_went_in(tmp_path: Path) -> None:
@@ -496,7 +531,7 @@ def test_a_row_counts_the_extents_recordings_and_seconds_that_went_in(tmp_path: 
 def test_a_row_names_the_recordings_that_contributed(tmp_path: Path) -> None:
     """Provenance a reader needs to go back to the audio."""
     row = _row(n_extents=2)
-    assert row["extent_stem"] == ["sub-a1_ses-s0_task-t0", "sub-a1_ses-s1_task-t1"]
+    assert row["extent_stem"] == ["rec-0001", "rec-0002"]
     assert row["extent_start_s"] == [1.0, 1.0]
     assert row["extent_end_s"] == [9.0, 9.0]
 
@@ -528,7 +563,7 @@ def test_a_subject_whose_estimate_raises_is_recorded_with_its_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An opaque failure count would hide the one case the floor does not cover."""
-    build_subject(tmp_path, "sub-boom", (("a", 1.0, 15.0),))
+    build_subject(tmp_path, "p-boom", (("a", 1.0, 15.0),))
 
     def _boom(*_args: object, **_kwargs: object) -> dict[str, Any]:
         raise ValueError("need at least 2 non-zero vectors to describe a distribution; got 1")
@@ -537,8 +572,8 @@ def test_a_subject_whose_estimate_raises_is_recorded_with_its_reason(
     rows, report = sv.scan(tmp_path, _table(tmp_path))
     assert rows == []
     assert report.subjects_written == 0
-    assert "sub-boom" in report.subjects_failed
-    assert "2 non-zero vectors" in report.subjects_failed["sub-boom"]
+    assert "p-boom" in report.subjects_failed
+    assert "2 non-zero vectors" in report.subjects_failed["p-boom"]
 
 
 def test_one_writer_of_a_duplicated_interval_surviving_keeps_the_extent(tmp_path: Path) -> None:
@@ -555,10 +590,26 @@ def test_a_long_extent_does_not_outvote_a_short_one(tmp_path: Path, monkeypatch:
     import senselab.audio.tasks.speaker_embeddings.windowing as windowing
     from senselab.audio.tasks.speaker_embeddings.windowing import WindowEmbedding
 
-    build_recording(tmp_path, stem="sub-w_ses-s0_task-long", duration_s=20.0, extents=((1.0, 19.0, "speech"),))
-    build_recording(tmp_path, stem="sub-w_ses-s1_task-short", duration_s=8.0, extents=((1.0, 6.0, "speech"),))
+    build_recording(
+        tmp_path,
+        "rec-0001",
+        participant="p-w",
+        session="s0",
+        task="long",
+        duration_s=20.0,
+        extents=((1.0, 19.0, "speech"),),
+    )
+    build_recording(
+        tmp_path,
+        "rec-0002",
+        participant="p-w",
+        session="s1",
+        task="short",
+        duration_s=8.0,
+        extents=((1.0, 6.0, "speech"),),
+    )
     grouped, _ = sv.gather(tmp_path, _table(tmp_path))
-    extents = sorted(grouped["sub-w"], key=lambda e: e.duration_s)
+    extents = sorted(grouped["p-w"], key=lambda e: e.duration_s)
 
     # Two orthogonal directions, one per extent, with eight windows against two.
     east, north = np.zeros(sv.EMBEDDING_DIM), np.zeros(sv.EMBEDDING_DIM)
@@ -572,7 +623,7 @@ def test_a_long_extent_does_not_outvote_a_short_one(tmp_path: Path, monkeypatch:
         return {sv.MODEL_ID: [WindowEmbedding(float(i), float(i) + 2.0, direction) for i in range(count)]}
 
     monkeypatch.setattr(windowing, "extract_per_window_embeddings", _windows)
-    row = sv.embed_subject("sub-w", extents, tmp_path)
+    row = sv.embed_subject("p-w", extents, tmp_path)
 
     vector = np.asarray(row["vector"])
     # Equal weighting puts the centroid exactly between the two directions; window weighting
@@ -593,13 +644,24 @@ def test_two_overlapping_extents_of_one_recording_cast_one_vote(
     # One recording minting two near-identical extents, and one minting a single extent.
     build_recording(
         tmp_path,
-        stem="sub-v_ses-s0_task-narrative",
+        stem="rec-0001",
+        participant="p-v",
+        session="s0",
+        task="narrative",
         duration_s=30.0,
         extents=((2.24, 25.74, "speech"), (2.24, 26.69, "speech")),
     )
-    build_recording(tmp_path, stem="sub-v_ses-s1_task-harvard", duration_s=12.0, extents=((1.0, 9.0, "speech"),))
+    build_recording(
+        tmp_path,
+        "rec-0002",
+        participant="p-v",
+        session="s1",
+        task="harvard",
+        duration_s=12.0,
+        extents=((1.0, 9.0, "speech"),),
+    )
     grouped, _ = sv.gather(tmp_path, _table(tmp_path))
-    extents = sorted(grouped["sub-v"], key=lambda e: e.stem)
+    extents = sorted(grouped["p-v"], key=lambda e: e.stem)
     assert len(extents) == 3
 
     east, north = np.zeros(sv.EMBEDDING_DIM), np.zeros(sv.EMBEDDING_DIM)
@@ -612,7 +674,7 @@ def test_two_overlapping_extents_of_one_recording_cast_one_vote(
         return {sv.MODEL_ID: [WindowEmbedding(0.0, 2.0, direction), WindowEmbedding(1.0, 3.0, direction)]}
 
     monkeypatch.setattr(windowing, "extract_per_window_embeddings", _windows)
-    vector = np.asarray(sv.embed_subject("sub-v", extents, tmp_path)["vector"])
+    vector = np.asarray(sv.embed_subject("p-v", extents, tmp_path)["vector"])
 
     # Two recordings, one vote each: the centroid sits exactly between the two directions.
     # Per-extent weighting would have given the two-extent recording two of three votes (0.89/0.45).

@@ -9,7 +9,6 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage import decision_tables
-from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.identity import RecordingIdentity, identity_of
 from senselab.audio.workflows.triage.vocabulary import (
     ROUTED,
@@ -20,10 +19,11 @@ from senselab.audio.workflows.triage.vocabulary import (
     Triage,
     fold_file_verdict,
 )
+from tests.audio.workflows.triage.conftest import hint_for
 
-STEM = "sub-SUBJ13_ses-01_task-respiration-and-cough-breath"
-RECORDED = identity_from_name(STEM)
-"""What ADMIT records for the stem when no hint declares an identity."""
+STEM = "rec-0013"
+RECORDED = identity_of(hint_for("p13", "s01", "respiration-and-cough-breath"))
+"""What ADMIT records for the recording, as its hint declares it."""
 
 
 def _fold(**task: Any) -> dict[str, Any]:  # noqa: ANN401 -- TaskEvidence fields
@@ -56,7 +56,7 @@ def _run_root(root: Path, decision: dict[str, Any], identity: RecordingIdentity 
     Returns:
         The run root.
     """
-    run_root = root / "sub-SUBJ13" / "ses-01" / f"{STEM}_20261007-120000"
+    run_root = root / "p13" / "s01" / f"{STEM}_20261007-120000"
     (run_root / "run").mkdir(parents=True)
     (run_root / "summary").mkdir()
     (run_root / "summary" / "summary.pdf").write_bytes(b"%PDF")

@@ -1,0 +1,35 @@
+version: 1
+# The lab corpus: a made-up dataset, one invented task per kind of task triage reads (plan step 8c).
+tasks:
+  hold-a-tone:
+    branch: VOICE
+    expects: {pattern: sustained, declared_duration_s: 5.0}
+  slide-up:
+    branch: VOICE
+    expects: {pattern: glide, declared_direction: up}
+  read-the-card:
+    branch: SPEECH
+    expects: {pattern: ordered_tokens, token_source: stimulus_text}
+  tell-a-story:
+    branch: SPEECH
+    expects: {pattern: free_response, connected: true}
+  name-some-fruit:
+    branch: SPEECH
+    categories:
+      Fruit: {rule: list, words: task_lexicon/categories/fruit.yaml}
+    expects: {pattern: item_list, item_category: Fruit, declared_duration_s: 30.0, repetition_allowed: false}
+  pa-pa-pa:
+    branch: SPEECH
+    expects: {pattern: syllable_train, required_count: {unit: repetitions, value: 8}, sequence: [p, aa]}
+  pa-ta-ka:
+    branch: SPEECH
+    expects: {pattern: syllable_sequence, required_count: {unit: repetitions, value: 8}, sequence: [p, aa, t, aa, k, aa]}
+  three-coughs:
+    branch: AIRWAY
+    expects: {pattern: event_series, label_set: cough, required_count: {unit: events, value: 3}}
+  cough-then-breathe:
+    branch: AIRWAY
+    expects: {pattern: event_alternation, label_set: cough, required_count: {unit: events, value: 2}}
+  quiet-breathing:
+    branch: AIRWAY
+    expects: {pattern: sound_coverage, label_set: breath, declared_duration_s: 20.0}

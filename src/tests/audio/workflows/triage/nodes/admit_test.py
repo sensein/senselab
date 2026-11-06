@@ -194,6 +194,21 @@ class TestStoreWrites:
         assert identity is not None
         assert (identity.participant, identity.session, identity.task_family) == ("P7", "s1", "cough")
 
+    def test_a_name_contradicting_the_hint_is_not_read(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """Decoy (plan step 8): a BIDS-looking name naming another participant, session and task; the hint's win."""
+        from senselab.audio.workflows.triage.task_catalogue import recorded_task
+        from tests.audio.workflows.triage.conftest import hint_for
+
+        path = wav_writer("sub-x9_ses-y9_task-voluntary-cough-3.wav", _sine())
+        admit(store, path, config, hint_for("p07", "s2", "rainbow-passage"), run_dir=tmp_path)
+        identity = recorded_identity(store)
+        assert identity is not None
+        assert (identity.participant, identity.session, identity.task_id) == ("p07", "s2", "rainbow-passage")
+        task = recorded_task(store)
+        assert task is not None and task.name == "rainbow-passage"
+
     def test_pass_records_the_hint_and_its_field_digests(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
     ) -> None:
@@ -212,7 +227,7 @@ class TestStoreWrites:
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
     ) -> None:
         """No hint is recorded as such, which is not the same as a store that predates the record."""
-        path = wav_writer("sub-01_ses-02_task-loudness-1.wav", _sine())
+        path = wav_writer("rec-0001.wav", _sine())
         admit(store, path, config, run_dir=tmp_path)
         assert recorded_hint_digest(store) == NO_HINT
         assert recorded_hint(store) is None

@@ -13,14 +13,13 @@ import yaml
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage import task_catalogue
-from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import (
     DatasetDataMissing,
     deactivate_profile,
     missing_dataset_values,
 )
-from senselab.audio.workflows.triage.identity import identity_of
+from senselab.audio.workflows.triage.identity import FROM_STEM, RecordingIdentity, identity_of
 from senselab.audio.workflows.triage.identity_check import TASK_NOT_DESCRIBED, IdentityRecord, check_identities
 from senselab.audio.workflows.triage.live_evidence import declared_task_of
 from senselab.audio.workflows.triage.nodes import branches
@@ -39,6 +38,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
 )
 from senselab.audio.workflows.triage.nodes.gates import Pattern
 from senselab.audio.workflows.triage.profile_template import values_to_supply, write_template
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK
 from senselab.audio.workflows.triage.task_catalogue import (
     DECLARED_TASK,
     DEFINES_A_CUE_WORD,
@@ -69,11 +69,11 @@ from senselab.audio.workflows.triage.task_catalogue import (
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore
 
-B2AI_PROFILE = Path(__file__).parent / "profiles" / "bridge2ai_voice_adult"
+FIXTURE_PROFILE = Path(__file__).parent / "profiles" / "adult_speech_fixture"
 
-# The task sets senselab wrote out by hand for B2AI before step 4 (routing_analysis/families.py at 6fc1c8011).
-# The task list's kinds must reproduce them exactly.
-B2AI_KINDS: dict[str, frozenset[str]] = {
+# The task sets senselab wrote out by hand for the fixture's dataset before step 4 (routing_analysis/families.py
+# at 6fc1c8011). The task list's kinds must reproduce them exactly.
+HAND_WRITTEN_KINDS: dict[str, frozenset[str]] = {
     "speech": frozenset(
         {
             "animal-fluency",
@@ -257,7 +257,7 @@ class TestTheTaskList:
         with pytest.raises(ValueError, match=message):
             read_task_list(text, "t")
 
-    def test_the_b2ai_profile_supplies_every_task_senselab_applied(self) -> None:
+    def test_the_fixture_profile_supplies_every_task_senselab_applied(self) -> None:
         """48 tasks over three branches, each in exactly one, and the four unused voice readings."""
         tasks = task_list()
         assert len(tasks) == 48
@@ -295,9 +295,9 @@ class TestKinds:
     """Which tasks are speech, voice, airway and their sub-kinds, worked out from each task's entry."""
 
     @pytest.mark.parametrize("kind", KINDS)
-    def test_the_b2ai_task_list_reproduces_the_hand_written_sets(self, kind: str) -> None:
+    def test_the_fixture_task_list_reproduces_the_hand_written_sets(self, kind: str) -> None:
         """Each kind's tasks are the ones senselab named by hand before."""
-        assert TASKS_BY_KIND[kind] == B2AI_KINDS[kind]
+        assert TASKS_BY_KIND[kind] == HAND_WRITTEN_KINDS[kind]
 
     def test_a_task_has_its_branch_and_one_sub_kind(self) -> None:
         """Airway carries a breath/cough sub-kind, voice a glide/sustained one, speech a lexical/syllable one."""
@@ -327,7 +327,7 @@ class TestKinds:
 class TestTraits:
     """What an entry says about its task beyond its description (plan step 5a)."""
 
-    def test_the_b2ai_entries_carry_the_five_traits_senselab_listed_by_hand(self) -> None:
+    def test_the_fixture_entries_carry_the_five_traits_senselab_listed_by_hand(self) -> None:
         """Each trait is on exactly the tasks the deleted senselab and profile lists named."""
         named = {trait: {name for name in task_list() if has_trait(name, trait)} for trait in TRAITS}
         assert named == {
@@ -344,7 +344,7 @@ class TestTraits:
             has_trait("productive-vocabulary", "defines_a_word")
 
     def test_the_lists_the_task_list_now_works_out_equal_the_deleted_ones(self) -> None:
-        """The eight lists B2AI's profile held before step 5a, task for task."""
+        """The eight lists the fixture's profile held before step 5a, task for task."""
         listed_words = {"cinderella-story", "animal-fluency", "random-item-generation", "random-item-generation-v2"}
         assert {name for name in task_list() if has_own_words(name)} == listed_words
         assert {name for name in task_list() if generates_items(name)} == listed_words - {"cinderella-story"}
@@ -415,7 +415,7 @@ class TestTheTaskAHintDeclares:
         assert recorded_task(store) is None
 
 
-# ------------------------------------------------------------------ a dataset that is not B2AI
+# ------------------------------------------------------------------ a dataset with its own task list
 
 LAB_TASKS = """
 version: 1
@@ -427,7 +427,7 @@ tasks:
     branch: SPEECH
     expects: {pattern: ordered_tokens, token_source: stimulus_text}
 """
-"""A made-up lab corpus: two tasks under its own names, none of them B2AI's."""
+"""A made-up lab corpus: two tasks under its own names, none of them the fixture's."""
 
 
 def _set(document: dict, path: list[str], value: Any) -> None:  # noqa: ANN401 -- a YAML value
@@ -437,9 +437,9 @@ def _set(document: dict, path: list[str], value: Any) -> None:  # noqa: ANN401 -
     document[last] = value
 
 
-def _b2ai_value(relative: str, path: list[str]) -> Any:  # noqa: ANN401 -- a YAML value
+def _fixture_value(relative: str, path: list[str]) -> Any:  # noqa: ANN401 -- a YAML value
     document = yaml.safe_load(
-        (B2AI_PROFILE / ("config.yaml" if relative == "config/default.yaml" else relative)).read_text()
+        (FIXTURE_PROFILE / ("config.yaml" if relative == "config/default.yaml" else relative)).read_text()
     )
     for part in path:
         document = document[part]
@@ -450,8 +450,8 @@ def _lab_profile(root: Path) -> Path:
     """The lab corpus's profile, written from senselab's template and filled in by hand (plan step 5, check 4).
 
     The template extends senselab's reference profile, so it asks only for the lab's own values. The lab writes its
-    own task list; its policy and statistics are B2AI's here, a stand-in for the choices a real dataset makes and the
-    statistics it fits (step 10). No entry names a B2AI task.
+    own task list; its policy and statistics are the fixture's here, a stand-in for the choices a real dataset makes
+    and the statistics it fits (step 10). No entry names a fixture task.
 
     Args:
         root: Where the profile directory goes.
@@ -463,13 +463,13 @@ def _lab_profile(root: Path) -> Path:
     (root / "tasks.yaml").write_text(LAB_TASKS)
     (root / "airway_event_tokens.yaml").write_text("version: 3\ncough: [cough]\n")
     (root / "review_policy.txt").write_text("LAB POLICY. Remove every name and every date.\n\n")
-    shutil.copy(B2AI_PROFILE / "time_release.yaml", root / "time_release.yaml")
+    shutil.copy(FIXTURE_PROFILE / "time_release.yaml", root / "time_release.yaml")
     for relative, entries in values_to_supply().items():
         target = root / ("config.yaml" if relative == "config/default.yaml" else relative)
         document = yaml.safe_load(target.read_text()) or {}
         for entry in entries:
             path = [str(part) for part in entry["path"]]
-            value = ["t", "d"] if path[-1] == "alveolar" else _b2ai_value(relative, path)
+            value = ["t", "d"] if path[-1] == "alveolar" else _fixture_value(relative, path)
             _set(document, path, value)
         target.write_text(yaml.safe_dump(document))
     return root
@@ -483,6 +483,16 @@ def lab_corpus(without_triage_profile: None, tmp_path: Path) -> Iterator[TriageC
     deactivate_profile()
 
 
+def _lab_name_reader(stem: str) -> RecordingIdentity:
+    """The lab's file-name reader: its plain names (``clip_0001``) name no participant, session or task."""
+    return RecordingIdentity(
+        participant=None,
+        session=None,
+        task_id=UNKNOWN_TASK,
+        sources={"participant": FROM_STEM, "session": FROM_STEM, "task_id": FROM_STEM},
+    )
+
+
 def _admitted(config: TriageConfig, wav: Path, hint: AudioHints) -> ProvStore:
     """A recording through the real ADMIT node."""
     store = ProvStore(run_id=wav.stem)
@@ -493,19 +503,19 @@ def _admitted(config: TriageConfig, wav: Path, hint: AudioHints) -> ProvStore:
     return store
 
 
-class TestADatasetThatIsNotB2AI:
+class TestADatasetWithItsOwnTasks:
     """A made-up dataset, its own task names, no BIDS-like file names: triaged from its own task list.
 
     Plan step 4, check 6.
     """
 
     def test_its_profile_is_all_a_run_needs(self, lab_corpus: TriageConfig) -> None:
-        """Written from the template and filled in, it names no B2AI task and the run's start check finds nothing."""
+        """Written from the template and filled in, it names no fixture task and the run's start check finds nothing."""
         assert missing_dataset_values(lab_corpus.values) == []
         assert set(task_list()) == {"hum-a-note", "read-the-card"}
 
     def test_its_tasks_are_grouped_from_its_own_entries(self, lab_corpus: TriageConfig) -> None:
-        """The kinds are worked out from the two entries; no B2AI task is in any of them."""
+        """The kinds are worked out from the two entries; no fixture task is in any of them."""
         assert TASKS_BY_KIND["voice"] == TASKS_BY_KIND["sustained"] == {"hum-a-note"}
         assert TASKS_BY_KIND["speech"] == TASKS_BY_KIND["lexical_speech"] == {"read-the-card"}
         assert TASKS_BY_KIND["airway"] == TASKS_BY_KIND["syllable_repetition"] == frozenset()
@@ -541,7 +551,7 @@ class TestADatasetThatIsNotB2AI:
             assert ran == ([f"align {task}"] if branch == aligned_by else ["detect"]), branch
 
     def test_a_task_its_list_lacks_is_read_by_no_branch(self, lab_corpus: TriageConfig, tmp_path: Path) -> None:
-        """B2AI's own task name means nothing to this dataset: every branch detects."""
+        """The fixture's own task name means nothing to this dataset: every branch detects."""
         store = _admitted(lab_corpus, tmp_path / "clip_0008.wav", AudioHints(task="prolonged-vowel"))
         recorded = recorded_task(store)
         assert recorded is not None and (recorded.source, recorded.branch) == (NOT_IN_TASK_LIST, None)
@@ -558,7 +568,7 @@ class TestADatasetThatIsNotB2AI:
                     stem,
                     f"/lab/{stem}.wav",
                     identity_of(hint),
-                    identity_from_name(stem),
+                    _lab_name_reader(stem),
                     task=resolved.name,
                     task_source=resolved.source,
                 )

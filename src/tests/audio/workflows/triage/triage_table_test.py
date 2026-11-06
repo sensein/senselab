@@ -131,6 +131,7 @@ SPEECH_STORE = [
 
 def _recording(
     root: Path,
+    stem: str,
     task: str,
     family: str,
     verdict: str,
@@ -139,9 +140,8 @@ def _recording(
     cuts: list[str],
     store: list[dict] | None = None,
 ) -> dict[str, Any]:
-    """One run directory in the tree, and its ``triage_decisions`` row."""
-    participant, session = "sub-SUBJ13", "ses-01"
-    stem = f"{participant}_{session}_task-{task}"
+    """One run directory in the tree, and its ``triage_decisions`` row: ``stem`` declared ``p13``/``s01``/``task``."""
+    participant, session = "p13", "s01"
     run_dir = Path(participant) / session / f"{stem}_20261008-000000"
     streams = root / "out" / run_dir / "run" / "streams"
     streams.mkdir(parents=True)
@@ -210,6 +210,7 @@ def _tables(root: Path) -> tuple[pa.Table, pa.Table]:
     """Three recordings, one per branch and verdict, with their evidence."""
     breath = _recording(
         root,
+        "rec-0001",
         "respiration-and-cough-breath-1",
         "respiration-and-cough-breath",
         "review",
@@ -222,6 +223,7 @@ def _tables(root: Path) -> tuple[pa.Table, pa.Table]:
     )
     speech = _recording(
         root,
+        "rec-0002",
         "free-speech-1",
         "free-speech",
         "pass",
@@ -231,7 +233,14 @@ def _tables(root: Path) -> tuple[pa.Table, pa.Table]:
         SPEECH_STORE,
     )
     vowel = _recording(
-        root, "prolonged-vowel", "prolonged-vowel", "discard", "as_is", [_item("phonation_found", False, "discard")], []
+        root,
+        "rec-0003",
+        "prolonged-vowel",
+        "prolonged-vowel",
+        "discard",
+        "as_is",
+        [_item("phonation_found", False, "discard")],
+        [],
     )
     evidence = [
         _evidence(breath["stem"], "capture.level_rel_db", -3.217),
@@ -342,9 +351,7 @@ def test_lists_are_joined_and_acquisition_readings_fill_their_columns(tmp_path: 
     assert (breath["task_events_found"], breath["task_events_instructed"]) == ("3", "5")
     assert (breath["level_rel_session_db"], breath["active_s"]) == ("-3.217", "7.5")
     assert (breath["recording_duration_s"], breath["task_start_s"], breath["task_end_s"]) == ("12.5", "1.13", "9.58")
-    assert breath["source_path"] == (
-        "sub-SUBJ13/ses-01/audio/sub-SUBJ13_ses-01_task-respiration-and-cough-breath-1.wav"
-    )
+    assert breath["source_path"] == "p13/s01/audio/rec-0001.wav"
     assert breath["task_audio_plain"].endswith("run/streams/task_plain.flac")
     assert breath["task_audio_enhanced"].endswith("run/streams/task_enhanced.flac")
     assert breath["task_audio_redacted"] == ""

@@ -12,8 +12,9 @@ from typing import Any
 
 import pytest
 
-from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.identity import identity_of
+from senselab.audio.workflows.triage.routing_analysis.families import task_family
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
 
 _SCRIPT = Path(__file__).resolve().parents[5] / "scripts" / "free_speech_review_page.py"
 _SPEC = importlib.util.spec_from_file_location("free_speech_review_page", _SCRIPT)
@@ -59,29 +60,48 @@ def _word(index: int, text: str, *, bracketed: bool = False) -> dict[str, Any]:
     )
 
 
-def _store(tmp_path: Path, stem: str, records: list[dict[str, Any]], *, identity: bool = True) -> Path:
-    """Write a run directory holding one store.
+def _stem(token: str, recording: str = "rec-0001") -> str:
+    """A recording's stem: a plain name; its task is the one its run records, never read off the name."""
+    return recording
+
+
+def _store(
+    tmp_path: Path,
+    token: str,
+    records: list[dict[str, Any]],
+    *,
+    recording: str = "rec-0001",
+    participant: str = "p01",
+    session: str = "s1",
+    identity: bool = True,
+) -> Path:
+    """Write a run directory holding one store, under the declared participant and session.
 
     Args:
         tmp_path: The temporary root.
-        stem: The BIDS stem, without a timestamp.
+        token: The task id the recording's hint declares, with any trailing index (``free-speech-1``).
         records: The store's records.
-        identity: Whether a ``recording`` stream records the identity the stem names, as ADMIT writes it.
+        recording: The recording's plain name; its stem is :func:`_stem`.
+        participant: The declared participant.
+        session: The declared session.
+        identity: Whether a ``recording`` stream records the identity the hint declares, as ADMIT writes it.
 
     Returns:
         The run directory.
     """
-    participant, session = stem.split("_")[0], stem.split("_")[1]
+    stem = _stem(token, recording)
     run_root = tmp_path / participant / session / f"{stem}_20260101-000000"
     (run_root / "run").mkdir(parents=True)
     if identity:
-        attributes = {"name": "recording", **identity_from_name(stem).as_attributes()}
+        declared = declared_identity_attributes(participant, session, task_family(token), token=token)
+        attributes = {"name": "recording", **declared}
         records = [_entity("stream-recording", "stream", attributes, [0.0, 1.0]), *records]
     (run_root / "run" / "store.jsonl").write_text("\n".join(json.dumps(record) for record in records) + "\n")
     return run_root
 
 
-_FAMILY_STEM = "sub-aaa_ses-bbb_task-free-speech-1"
+_FAMILY_TOKEN = "free-speech-1"
+_FAMILY_STEM = _stem(_FAMILY_TOKEN)
 
 
 def _verdict(release: str, ground: str | None = None, family: str = "free-speech") -> dict[str, Any]:
@@ -125,7 +145,7 @@ def test_read_store_light_drops_measurement_payloads_but_keeps_the_scan(tmp_path
     """The heavy derivative measurements are skipped; the pii_scan measurement survives."""
     run_root = _store(
         tmp_path,
-        _FAMILY_STEM,
+        _FAMILY_TOKEN,
         [
             _entity("measurement-big", "measurement", {"name": "gammatone", "values": [0.0] * 32}),
             _entity("measurement-scan", "measurement", {"name": "pii_scan", "scanned_by": ["gliner"]}),
@@ -141,7 +161,7 @@ def test_scan_state_reads_a_declined_scan(tmp_path: Path) -> None:
     """A record in which no detector ran reads as False, not as an absence or as a scan."""
     run_root = _store(
         tmp_path,
-        _FAMILY_STEM,
+        _FAMILY_TOKEN,
         [_entity("measurement-scan", "measurement", {"name": "pii_scan", "scanned_by": [], "residue_content": False})],
     )
     view = page.read_store_light(run_root / "run" / "store.jsonl")
@@ -150,7 +170,7 @@ def test_scan_state_reads_a_declined_scan(tmp_path: Path) -> None:
 
 def test_scan_state_is_none_without_a_measurement(tmp_path: Path) -> None:
     """No pii_scan measurement is unknown, which is not the same as a scan that found nothing."""
-    run_root = _store(tmp_path, _FAMILY_STEM, [_word(0, "hello")])
+    run_root = _store(tmp_path, _FAMILY_TOKEN, [_word(0, "hello")])
     view = page.read_store_light(run_root / "run" / "store.jsonl")
     assert page.scan_state(page.pii_scan_of(view)) is None
     assert page.residue_of(page.pii_scan_of(view), []) is None
@@ -168,7 +188,7 @@ def test_residue_names_the_words_the_detectors_read(tmp_path: Path) -> None:
     }
     run_root = _store(
         tmp_path,
-        _FAMILY_STEM,
+        _FAMILY_TOKEN,
         [_entity("measurement-scan", "measurement", scan), _word(0, "Alice"), _word(1, "the"), _word(2, "Smith")],
     )
     view = page.read_store_light(run_root / "run" / "store.jsonl")
@@ -215,7 +235,7 @@ def test_marked_words_follows_the_live_label_assertions(tmp_path: Path) -> None:
         {"record": "relation", "relation": "wasDerivedFrom", "source": "assertion-dead", "target": "word-0"},
         {"record": "relation", "relation": "wasInvalidatedBy", "source": "assertion-dead", "target": "act-replay"},
     ]
-    view = page.read_store_light(_store(tmp_path, _FAMILY_STEM, records) / "run" / "store.jsonl")
+    view = page.read_store_light(_store(tmp_path, _FAMILY_TOKEN, records) / "run" / "store.jsonl")
     assert page.marked_words(view) == {"word-1": ["DATE_TIME"]}
 
 
@@ -295,11 +315,11 @@ def test_recording_record_reads_the_live_generation(tmp_path: Path) -> None:
         {"record": "relation", "relation": "wasInvalidatedBy", "source": "verdict-old", "target": "act-replay"},
         _verdict("withheld"),
     ]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     assert row["rel"] == "withheld"
-    assert row["p"] == "sub-aaa"
-    assert row["ses"] == "ses-bbb"
+    assert row["p"] == "p01"
+    assert row["ses"] == "s1"
     assert row["fam"] == "free-speech"
     assert row["stem"] == _FAMILY_STEM
     assert row["nw"] == 3
@@ -311,7 +331,7 @@ def test_recording_record_reads_the_live_generation(tmp_path: Path) -> None:
 def test_recording_record_reads_the_recorded_identity_and_none_without_one(tmp_path: Path) -> None:
     """The participant and session are what the run recorded; a store that records none is its own group."""
     records = [_word(0, "hello"), _verdict("as_is")]
-    row = page.recording_record(_store(tmp_path / "old", _FAMILY_STEM, records, identity=False), None)
+    row = page.recording_record(_store(tmp_path / "old", _FAMILY_TOKEN, records, identity=False), None)
     assert row is not None
     assert (row["p"], row["ses"], row["stem"]) == (_FAMILY_STEM, "", _FAMILY_STEM)
 
@@ -328,15 +348,15 @@ def test_the_jump_list_shortens_any_participant_label(tmp_path: Path) -> None:
 
 def test_recording_record_skips_a_family_outside_the_pattern(tmp_path: Path) -> None:
     """An item-list task under the same tree is not a free response."""
-    run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-animal-fluency", [_verdict("redacted", family="animal-fluency")])
+    run_root = _store(tmp_path, "animal-fluency", [_verdict("redacted", family="animal-fluency")])
     assert page.recording_record(run_root, page.free_response_families()) is None
 
 
 def test_recording_record_with_no_family_filter_keeps_an_airway_family(tmp_path: Path) -> None:
     """``families=None`` keeps any declared family: an airway task with consensus words carries them."""
-    stem = "sub-aaa_ses-bbb_task-respiration-and-cough-breath"
+    token = "respiration-and-cough-breath"
     records = [_word(0, "one"), _word(1, "two"), _verdict("as_is", family="respiration-and-cough-breath")]
-    run_root = _store(tmp_path, stem, records)
+    run_root = _store(tmp_path, token, records)
     assert page.recording_record(run_root, page.free_response_families()) is None
     row = page.recording_record(run_root, None)
     assert row is not None
@@ -352,7 +372,7 @@ def test_recording_record_builds_one_mark_with_its_detector(tmp_path: Path) -> N
         *_label("assertion-1", "DATE_TIME", "word-0"),
         _verdict("withheld"),
     ]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     assert row["pii"] == [{"c": "DATE_TIME", "s": "presidio", "h": "consensus", "stim": False}]
     assert row["w"][0] == ["Tuesday", 0, 0]
@@ -374,7 +394,7 @@ def test_a_mark_prefers_the_tightest_finding_that_contains_it(tmp_path: Path) ->
         *_label("assertion-1", "PERSON", "word-0"),
         _verdict("withheld"),
     ]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     assert row["f"][0]["d"] == ["presidio", "gliner/name"]
     assert row["f"][0]["dn"] == 2
@@ -388,7 +408,7 @@ def test_a_mark_records_a_bracketed_token_it_covers(tmp_path: Path) -> None:
         *_label("assertion-1", "PERSON", "word-0"),
         _verdict("withheld"),
     ]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     assert row["f"][0]["brk"] == 1
 
@@ -406,7 +426,7 @@ def test_task_extent_comes_from_the_branch_span_not_the_duration(tmp_path: Path)
         *_label("assertion-2", "LOCATION", "word-1"),
         _verdict("withheld"),
     ]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     assert [mark["tx"] for mark in row["f"]] == [1, 0]
 
@@ -419,17 +439,17 @@ def test_task_extent_absent_reads_as_unknown_not_outside(tmp_path: Path) -> None
         *_label("assertion-1", "PERSON", "word-0"),
         _verdict("withheld"),
     ]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     assert row["f"][0]["tx"] == -1
 
 
 def test_finding_key_is_stable_and_position_independent() -> None:
     """The review key is content-addressed, so re-extraction and re-filtering keep a judgment."""
-    first = page.finding_key("sub-a_ses-b_task-free-speech-1", ["PERSON"], 3, 5)
-    again = page.finding_key("sub-a_ses-b_task-free-speech-1", ["PERSON"], 3, 5)
-    other = page.finding_key("sub-a_ses-b_task-free-speech-1", ["PERSON"], 4, 5)
-    elsewhere = page.finding_key("sub-c_ses-b_task-free-speech-1", ["PERSON"], 3, 5)
+    first = page.finding_key("rec-0001", ["PERSON"], 3, 5)
+    again = page.finding_key("rec-0001", ["PERSON"], 3, 5)
+    other = page.finding_key("rec-0001", ["PERSON"], 4, 5)
+    elsewhere = page.finding_key("rec-0002", ["PERSON"], 3, 5)
     assert first == again
     assert first != other
     assert first != elsewhere
@@ -437,15 +457,23 @@ def test_finding_key_is_stable_and_position_independent() -> None:
 
 def test_extract_writes_one_line_per_recording(tmp_path: Path) -> None:
     """The sweep keeps the free-response recordings and reports its counts."""
-    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("redacted")])
+    _store(tmp_path, _FAMILY_TOKEN, [_word(0, "one"), _verdict("redacted")])
     _store(
         tmp_path,
-        "sub-ccc_ses-ddd_task-cinderella-story",
+        "cinderella-story",
         [_word(0, "two"), _verdict("as_is", "x", "cinderella-story")],
+        recording="rec-0002",
+        participant="p02",
     )
-    _store(tmp_path, "sub-eee_ses-fff_task-animal-fluency", [_verdict("redacted", family="animal-fluency")])
+    _store(
+        tmp_path,
+        "animal-fluency",
+        [_verdict("redacted", family="animal-fluency")],
+        recording="rec-0003",
+        participant="p03",
+    )
     report = page.extract(tmp_path, tmp_path / "out.jsonl", workers=1)
-    assert report["candidates"] == 2
+    assert report["candidates"] == 2, "the task each run recorded at admission, not its name, picks the candidates"
     assert report["participants"] == 2
     assert report["counts"]["recordings"] == 2
     assert report["counts"]["family:cinderella-story"] == 1
@@ -559,9 +587,9 @@ def _row(participant: str, **rest: Any) -> dict[str, Any]:  # noqa: ANN401 -- mi
     """
     row: dict[str, Any] = {
         "p": participant,
-        "ses": "ses-b",
+        "ses": "s1",
         "task": "free-speech-1",
-        "stem": f"{participant}_ses-b_task-free-speech-1",
+        "stem": "rec-0001",
         "fam": "free-speech",
         "rel": "redacted",
         "rg": None,
@@ -588,7 +616,7 @@ def test_render_is_self_contained_and_groups_by_participant(tmp_path: Path) -> N
             json.dumps(row)
             for row in (
                 _row(
-                    "sub-aaa",
+                    "p01",
                     rel="withheld",
                     why="w",
                     rwhy="r",
@@ -599,7 +627,8 @@ def test_render_is_self_contained_and_groups_by_participant(tmp_path: Path) -> N
                     ch=7,
                 ),
                 _row(
-                    "sub-ccc",
+                    "p02",
+                    stem="rec-0002",
                     task="cinderella-story",
                     fam="cinderella-story",
                     rel="as_is",
@@ -615,7 +644,7 @@ def test_render_is_self_contained_and_groups_by_participant(tmp_path: Path) -> N
     document = page.render(corpus, "Review")
     assert corpus.recordings == 2
     assert corpus.marks == 1
-    assert 'id="sub-aaa"' in document and 'id="sub-ccc"' in document
+    assert 'id="p01"' in document and 'id="p02"' in document
     assert "http://" not in document and "https://" not in document
     assert "<img" not in document and "<link" not in document
     assert "src=" not in document
@@ -626,9 +655,9 @@ def test_render_is_self_contained_and_groups_by_participant(tmp_path: Path) -> N
 def test_render_offers_a_facet_for_every_category_and_detector(tmp_path: Path) -> None:
     """The facet lists are built from what the corpus actually holds."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a", f=[_mark("k1", ["PERSON"], ["gliner/name"], 0, 1)]))
-    corpus.add(_row("sub-b", f=[_mark("k2", ["DATE_TIME"], ["presidio"], 0, 1)]))
-    corpus.add(_row("sub-c", f=[_mark("k3", ["MISC"], [], 0, 1)]))
+    corpus.add(_row("p01", f=[_mark("k1", ["PERSON"], ["gliner/name"], 0, 1)]))
+    corpus.add(_row("p02", stem="rec-0002", f=[_mark("k2", ["DATE_TIME"], ["presidio"], 0, 1)]))
+    corpus.add(_row("p03", stem="rec-0003", f=[_mark("k3", ["MISC"], [], 0, 1)]))
     document = page.render(corpus, "Review")
     assert corpus.detectors["unattributed"] == 1
     for value in ('class="cat-f" value="PERSON"', 'class="cat-f" value="DATE_TIME"'):
@@ -643,7 +672,7 @@ def test_render_offers_a_facet_for_every_category_and_detector(tmp_path: Path) -
 def test_render_carries_the_review_layer(tmp_path: Path) -> None:
     """The page ships the verdict buttons, the per-recording note and the export controls."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a", f=[_mark("k1", ["PERSON"], ["presidio"], 0, 1)], w=[["word", 0, 0]]))
+    corpus.add(_row("p01", f=[_mark("k1", ["PERSON"], ["presidio"], 0, 1)], w=[["word", 0, 0]]))
     document = page.render(corpus, "Review")
     for name, key, _ in page.VERDICTS:
         assert f'data-v="{name}"' in document
@@ -651,14 +680,14 @@ def test_render_carries_the_review_layer(tmp_path: Path) -> None:
     assert 'class="rnote"' in document
     assert 'id="export"' in document and 'id="import"' in document and 'id="file"' in document
     assert "localStorage" in document
-    assert 'data-stem="sub-a_ses-b_task-free-speech-1"' in document
+    assert 'data-stem="rec-0001"' in document
 
 
 def test_write_pages_shards_by_participant_with_an_index(tmp_path: Path) -> None:
     """Sharding splits participants into files and writes an index over them, all mode 600."""
     corpus = page.Corpus()
     for number in range(5):
-        corpus.add(_row(f"sub-{number}"))
+        corpus.add(_row(f"p{number + 1:02d}", stem=f"rec-{number + 1:04d}"))
     written = page.write_pages(corpus, tmp_path / "pages", "Review", shard_size=2)
     shards = list(written["shards"])
     assert [item["participants"] for item in shards] == [2, 2, 1]
@@ -671,7 +700,7 @@ def test_write_pages_shards_by_participant_with_an_index(tmp_path: Path) -> None
 def test_write_pages_single_file_is_private(tmp_path: Path) -> None:
     """The unsharded page is written mode 600."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a"))
+    corpus.add(_row("p01"))
     out = tmp_path / "page.html"
     page.write_pages(corpus, out, "Review", shard_size=0)
     assert out.stat().st_mode & 0o777 == 0o600
@@ -715,7 +744,7 @@ def test_a_finding_on_a_task_with_no_stimulus_reports_the_unchecked_state(tmp_pa
         *_label("assertion-1", "NAME", "word-0"),
         _verdict("withheld", family="cinderella-story"),
     ]
-    run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
+    run_root = _store(tmp_path, "cinderella-story", records)
     row = page.recording_record(run_root, page.free_response_families())
     assert row is not None
     assert row["pii"][0]["stim"] == -1
@@ -786,7 +815,7 @@ def _determined_store(tmp_path: Path) -> Path:
         ),
         verdict,
     ]
-    return _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
+    return _store(tmp_path, "cinderella-story", records)
 
 
 def test_determination_records_who_decided_and_what_never_ran(tmp_path: Path) -> None:
@@ -809,7 +838,7 @@ def test_the_measurement_kept_is_the_exemption_one_too(tmp_path: Path) -> None:
     """read_store_light must not drop redaction_exemptions along with the derivative arrays."""
     run_root = _store(
         tmp_path,
-        _FAMILY_STEM,
+        _FAMILY_TOKEN,
         [
             _entity("measurement-big", "measurement", {"name": "gammatone", "values": [0.0] * 8}),
             _entity("measurement-ex", "measurement", {"name": "redaction_exemptions", "n": 0}),
@@ -898,7 +927,7 @@ def test_render_carries_the_determination_payload() -> None:
     corpus = page.Corpus()
     corpus.add(
         _row(
-            "sub-a",
+            "p01",
             rel="withheld",
             d={
                 "redact": {"outcome": "fail", "why": "pii survived"},
@@ -913,7 +942,7 @@ def test_render_carries_the_determination_payload() -> None:
     )
     document = page.render(corpus, "Review")
     assert 'id="whydata"' in document
-    assert 'class="whybtn" data-stem="sub-a_ses-b_task-free-speech-1"' in document
+    assert 'class="whybtn" data-stem="rec-0001"' in document
     assert "what determined this status" in document
     assert '"pool"' in document and '"rows"' in document
 
@@ -1002,11 +1031,11 @@ def test_the_flag_key_does_not_collide_with_the_finding_keys() -> None:
 def test_a_card_carries_the_review_flag() -> None:
     """Every recording gets one flag toggle, independent of its release decision."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a"))
+    corpus.add(_row("p01"))
     document = page.render(corpus, "Review")
     assert document.count('class="flagtoggle"') == 1
     assert f"<kbd>{page.FLAG_KEY}</kbd>" in document
-    assert 'data-stem="sub-a_ses-b_task-free-speech-1"' in document
+    assert 'data-stem="rec-0001"' in document
 
 
 def test_the_flag_markup_does_not_repeat_the_stem() -> None:
@@ -1040,7 +1069,7 @@ def test_the_flag_toggles_and_never_touches_the_release_decision() -> None:
 def test_the_flag_reaches_the_filters_and_the_progress_line() -> None:
     """The reader can sweep what they flagged, or everything they did not."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a"))
+    corpus.add(_row("p01"))
     document = page.render(corpus, "Review")
     assert 'id="flag"' in document
     for value in ("flagged", "unflagged"):
@@ -1080,7 +1109,7 @@ def test_the_release_decision_keys_collide_with_nothing_else_on_the_page() -> No
 def test_a_card_carries_the_release_decision_controls() -> None:
     """A human reading the recording says which release it warrants, on the card itself."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a"))
+    corpus.add(_row("p01"))
     document = page.render(corpus, "Review")
     assert document.count('class="decgroup"') == 1
     for value, key, slug, label in page.RELEASE_DECISIONS:
@@ -1114,7 +1143,7 @@ def test_re_pressing_a_release_decision_clears_it() -> None:
 def test_the_release_decision_reaches_the_filters_and_the_progress_line() -> None:
     """A reviewer must be able to sweep what they have not yet decided."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a"))
+    corpus.add(_row("p01"))
     document = page.render(corpus, "Review")
     assert 'id="dec"' in document
     for value in ("decided", "undecided", "withheld", "as_is", "redacted"):
@@ -1125,7 +1154,7 @@ def test_the_release_decision_reaches_the_filters_and_the_progress_line() -> Non
 def test_the_release_decision_does_not_overwrite_the_graphs_own() -> None:
     """The card shows both: what the graph concluded, and what the reviewer says it warrants."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a"))
+    corpus.add(_row("p01"))
     document = page.render(corpus, "Review")
     assert 'data-rel="' in document
     assert "card.dataset.dec" in page._SCRIPT
@@ -1135,7 +1164,7 @@ def test_the_release_decision_does_not_overwrite_the_graphs_own() -> None:
 def test_the_release_decision_keys_are_discoverable() -> None:
     """A control nobody can find is a control nobody uses."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a"))
+    corpus.add(_row("p01"))
     document = page.render(corpus, "Review")
     for _, key, _, _ in page.RELEASE_DECISIONS:
         assert f"<kbd>{key}</kbd>" in document
@@ -1183,7 +1212,7 @@ def test_the_row_keys_are_inert_while_typing() -> None:
 def test_the_reviewer_facet_offers_every_state_and_a_did_it_run_shortcut() -> None:
     """The page must be ready to show real verdicts when a GPU pass lands."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a"))
+    corpus.add(_row("p01"))
     document = page.render(corpus, "Review")
     assert 'id="llm"' in document
     for state in page.LLM_STATES:
@@ -1195,8 +1224,8 @@ def test_the_reviewer_facet_offers_every_state_and_a_did_it_run_shortcut() -> No
 def test_a_card_carries_the_reviewer_state_for_the_facet() -> None:
     """The facet filters recordings, so the state rides on the card."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a", d={"llm": {"status": "clean"}}))
-    corpus.add(_row("sub-b", d={"llm": {}}))
+    corpus.add(_row("p01", d={"llm": {"status": "clean"}}))
+    corpus.add(_row("p02", stem="rec-0002", d={"llm": {}}))
     document = page.render(corpus, "Review")
     assert 'data-llm="clean"' in document
     assert 'data-llm="unrecorded"' in document
@@ -1250,7 +1279,7 @@ def test_a_filter_that_hides_the_target_drops_it() -> None:
 def test_the_keys_are_discoverable_in_the_page() -> None:
     """A reader should not need the spec to find them."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a"))
+    corpus.add(_row("p01"))
     document = page.render(corpus, "Review")
     assert 'id="keys"' in document
     assert "<dt>j / k</dt>" in document
@@ -1263,8 +1292,8 @@ def test_the_keys_are_discoverable_in_the_page() -> None:
 def test_the_outline_extends_the_rail_rather_than_duplicating_it() -> None:
     """One participant list, carrying progress; a second would duplicate the filter logic."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a"))
-    corpus.add(_row("sub-b"))
+    corpus.add(_row("p01"))
+    corpus.add(_row("p02", stem="rec-0002"))
     document = page.render(corpus, "Review")
     assert document.count('id="jump"') == 1
     assert 'id="outline"' in document
@@ -1321,7 +1350,7 @@ def test_the_why_tables_scroll_inside_their_own_box() -> None:
 def test_the_rail_collapses_on_a_narrow_screen() -> None:
     """A 1,514-entry outline must not be the first screen on a phone."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a"))
+    corpus.add(_row("p01"))
     document = page.render(corpus, "Review")
     assert 'id="railtoggle"' in document
     assert 'id="railbody"' in document
@@ -1372,7 +1401,7 @@ def test_the_stimulus_tally_reports_the_answer_not_the_declaration(tmp_path: Pat
         ),
         _verdict("withheld", family="cinderella-story"),
     ]
-    run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
+    run_root = _store(tmp_path, "cinderella-story", records)
     row = page.recording_record(run_root, page.free_response_families())
     assert row is not None
     assert row["d"]["stim"] == [1, 1, 1]
@@ -1430,7 +1459,7 @@ def test_census_counts_what_a_rebuild_is_judged_by(tmp_path: Path) -> None:
         "\n".join(
             [
                 _census_row(
-                    "sub-a",
+                    "p01",
                     rel="withheld",
                     pii=[
                         {"c": "NAME", "s": "rules/ner", "h": "consensus", "stim": 1},
@@ -1439,7 +1468,7 @@ def test_census_counts_what_a_rebuild_is_judged_by(tmp_path: Path) -> None:
                     f=[_mark("k1", ["PERSON"], ["presidio"], 0, 1, brk=1)],
                     d={"llm": {"status": "disabled"}},
                 ),
-                _census_row("sub-b", rel="redacted", d={"llm": {"status": "clean"}}),
+                _census_row("p02", stem="rec-0002", rel="redacted", d={"llm": {"status": "clean"}}),
             ]
         )
         + "\n"
@@ -1463,8 +1492,8 @@ def test_compare_reports_each_count_in_both_with_its_delta(tmp_path: Path) -> No
     """The rebuild has to be measurable against the extract the current page was built from."""
     before = tmp_path / "before.jsonl"
     after = tmp_path / "after.jsonl"
-    before.write_text(_census_row("sub-a", pii=[{"c": "NAME", "s": "rules/ner", "h": "consensus", "stim": -1}]) + "\n")
-    after.write_text(_census_row("sub-a", pii=[{"c": "NAME", "s": "rules/ner", "h": "consensus", "stim": 1}]) + "\n")
+    before.write_text(_census_row("p01", pii=[{"c": "NAME", "s": "rules/ner", "h": "consensus", "stim": -1}]) + "\n")
+    after.write_text(_census_row("p01", pii=[{"c": "NAME", "s": "rules/ner", "h": "consensus", "stim": 1}]) + "\n")
     moved = page.compare(before, after)
     assert moved["totals"]["unchecked"] == [1, 0, -1]
     assert moved["totals"]["in_stimulus"] == [0, 1, 1]
@@ -1474,7 +1503,7 @@ def test_compare_reports_each_count_in_both_with_its_delta(tmp_path: Path) -> No
 
 def test_an_extract_carries_its_schema_version(tmp_path: Path) -> None:
     """The header is what lets the page know which graph the rows came from."""
-    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("redacted")])
+    _store(tmp_path, _FAMILY_TOKEN, [_word(0, "one"), _verdict("redacted")])
     out = tmp_path / "out.jsonl"
     report = page.extract(tmp_path, out, workers=1)
     assert report["version"] == page.EXTRACT_VERSION
@@ -1488,7 +1517,7 @@ def test_an_extract_carries_its_schema_version(tmp_path: Path) -> None:
 def test_an_extract_without_a_header_reads_as_the_older_version(tmp_path: Path) -> None:
     """The extract the current page was built from predates the header."""
     data = tmp_path / "old.jsonl"
-    data.write_text(json.dumps(_row("sub-a")) + "\n")
+    data.write_text(json.dumps(_row("p01")) + "\n")
     corpus = page.load(data)
     assert corpus.version == 2
     assert corpus.recordings == 1
@@ -1497,12 +1526,12 @@ def test_an_extract_without_a_header_reads_as_the_older_version(tmp_path: Path) 
 def test_the_page_refuses_to_describe_a_reviewer_it_cannot_vouch_for(tmp_path: Path) -> None:
     """Version 2 rows under version 3 wording would make the not_run sentence a false claim."""
     data = tmp_path / "old.jsonl"
-    data.write_text(json.dumps(_row("sub-a")) + "\n")
+    data.write_text(json.dumps(_row("p01")) + "\n")
     document = page.render(page.load(data), "Review")
     assert "written before the release axis and the reviewer ladder changed" in document
     fresh = page.Corpus()
     fresh.version = page.EXTRACT_VERSION
-    fresh.add(_row("sub-a"))
+    fresh.add(_row("p01"))
     assert "written before the reviewer ladder changed" not in page.render(fresh, "Review")
 
 
@@ -1518,7 +1547,7 @@ def test_the_page_states_corpus_wide_that_no_review_happened() -> None:
     corpus = page.Corpus()
     corpus.version = page.EXTRACT_VERSION
     for number in range(3):
-        corpus.add(_row(f"sub-{number}", d={"llm": {"status": "disabled"}}))
+        corpus.add(_row(f"p{number + 1:02d}", stem=f"rec-{number + 1:04d}", d={"llm": {"status": "disabled"}}))
     document = page.render(corpus, "Review")
     assert "did not run on any of these 3 recordings" in document
     assert "disabled 3" in document
@@ -1530,8 +1559,8 @@ def test_the_banner_goes_away_once_a_reviewer_actually_ran() -> None:
     """One real reading is enough to make the corpus-wide claim false."""
     corpus = page.Corpus()
     corpus.version = page.EXTRACT_VERSION
-    corpus.add(_row("sub-a", d={"llm": {"status": "disabled"}}))
-    corpus.add(_row("sub-b", d={"llm": {"status": "clean"}}))
+    corpus.add(_row("p01", d={"llm": {"status": "disabled"}}))
+    corpus.add(_row("p02", stem="rec-0002", d={"llm": {"status": "clean"}}))
     assert "did not run on any of these" not in page.render(corpus, "Review")
 
 
@@ -1548,7 +1577,7 @@ def test_a_marks_stimulus_state_is_tri_state_like_its_findings(tmp_path: Path) -
         *_label("assertion-1", "NAME", "word-0"),
         _verdict("withheld", family="cinderella-story"),
     ]
-    run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
+    run_root = _store(tmp_path, "cinderella-story", records)
     row = page.recording_record(run_root, page.free_response_families())
     assert row is not None
     assert row["f"][0]["stim"] == -1
@@ -1585,7 +1614,7 @@ def test_a_mark_matched_by_the_stimulus_reads_as_matched(tmp_path: Path) -> None
         *_label("assertion-1", "NAME", "word-0"),
         _verdict("redacted", family="cinderella-story"),
     ]
-    run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
+    run_root = _store(tmp_path, "cinderella-story", records)
     row = page.recording_record(run_root, page.free_response_families())
     assert row is not None
     assert row["f"][0]["stim"] == 1
@@ -1736,7 +1765,7 @@ def test_the_marks_are_the_ledgers_spans_each_with_its_state(tmp_path: Path) -> 
         ),
         _verdict("redacted"),
     ]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     states = [(mark["c"], mark["s"], mark["i"]) for mark in row["f"]]
     assert states == [
@@ -1785,7 +1814,7 @@ def test_a_word_released_by_kind_is_a_green_labelled_mark(tmp_path: Path) -> Non
         ),
         _verdict("as_is"),
     ]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     assert [(mark["c"], mark["s"], mark["i"]) for mark in row["f"]] == [(["DATE_TIME"], "released_by_kind", [0, 2])]
     card = page.recording_html(row)
@@ -1828,7 +1857,7 @@ def test_a_condition_over_a_detector_mask_is_released(tmp_path: Path) -> None:
         ),
         _verdict("as_is"),
     ]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     assert [(mark["c"], mark["s"]) for mark in row["f"]] == [
         (["PERSON"], "released_condition"),
@@ -1848,7 +1877,7 @@ def test_a_word_two_detectors_mark_differently_is_two_single_category_marks(tmp_
         *_label("assertion-2", "ORG", "word-0"),
         _verdict("as_is"),
     ]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     rendered = page.recording_html(row)
     assert "PERSON+ORG" not in rendered
@@ -1858,7 +1887,7 @@ def test_a_word_two_detectors_mark_differently_is_two_single_category_marks(tmp_
 def test_a_store_without_a_ledger_says_so_and_keeps_the_detectors_marks(tmp_path: Path) -> None:
     """A store folded before the ledger existed shows what the detectors marked, labelled as such."""
     records = [_word(0, "Tuesday"), *_label("assertion-1", "DATE_TIME", "word-0"), _verdict("withheld")]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     assert [mark["s"] for mark in row["f"]] == ["detected"]
     assert "no PII ledger" not in page.recording_html(row)
@@ -1892,7 +1921,7 @@ def test_a_detector_mark_on_a_task_word_is_not_drawn(tmp_path: Path) -> None:
         *_label("assertion-2", "PERSON", "word-2"),
         _verdict("as_is"),
     ]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     assert [(mark["s"], mark["i"]) for mark in row["f"]] == [("detected", [2, 3])]
     assert 'class="pii u-green"' in page.recording_html(row)
@@ -1918,7 +1947,7 @@ def test_a_card_with_no_consensus_words_shows_one_recogniser_s_stream(tmp_path: 
         ),
         _verdict("withheld"),
     ]
-    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    row = page.recording_record(_store(tmp_path, _FAMILY_TOKEN, records), page.free_response_families())
     assert row is not None
     assert row["ss"] == {"src": "asr_qwen", "n": 1}
     assert [entry[0] for entry in row["w"]] == ["When", "the"] and row["f"] == []
@@ -2078,7 +2107,7 @@ def test_the_ledgers_content_ids_decide_which_proposal_words_mark() -> None:
 def test_every_checkbox_facet_has_all_and_none(tmp_path: Path) -> None:
     """Each checkbox facet group in the rail carries an all and a none control wired to its class."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a", f=[_mark("k1", ["PERSON"], ["presidio"], 0, 1)]))
+    corpus.add(_row("p01", f=[_mark("k1", ["PERSON"], ["presidio"], 0, 1)]))
     document = page.render(corpus, "Review")
     classes = {"fam-f", "rel-f", "lang-f", "cat-f", "det-f"}
     for cls in classes:
@@ -2108,8 +2137,8 @@ def test_a_language_code_falls_under_english_spanish_or_itself() -> None:
 def test_the_language_facet_filters_cards_and_the_card_shows_the_code(tmp_path: Path) -> None:
     """Each language present is a checkbox; a card carries its facet name and keeps the code as a title."""
     corpus = page.Corpus()
-    corpus.add(_row("sub-a", lang="en"))
-    corpus.add(_row("sub-b", lang="es-419"))
+    corpus.add(_row("p01", lang="en"))
+    corpus.add(_row("p02", stem="rec-0002", lang="es-419"))
     document = page.render(corpus, "Review")
     assert '<input type="checkbox" class="lang-f" value="English" checked>' in document
     assert '<input type="checkbox" class="lang-f" value="Spanish" checked>' in document
@@ -2117,18 +2146,14 @@ def test_the_language_facet_filters_cards_and_the_card_shows_the_code(tmp_path: 
     assert "langs.has(r.dataset.lang)" in document
 
 
-def test_the_language_comes_from_the_recording_sidecar(tmp_path: Path) -> None:
-    """The run's run.json names the recording; its acoustic-task sidecar carries the language."""
-    audio = tmp_path / "bids" / "sub-a" / "ses-b" / "audio"
-    audio.mkdir(parents=True)
-    wav = audio / "sub-a_ses-b_task-free-speech-1.wav"
-    wav.write_bytes(b"")
-    (audio / "sub-a_ses-b_task-free-speech-1_acoustictask-metadata.json").write_text(json.dumps({"language": "es-419"}))
-    run_root = tmp_path / "out" / "run-a"
-    (run_root / "run").mkdir(parents=True)
-    (run_root / "run" / "run.json").write_text(json.dumps({"source": str(wav)}))
-    assert page.recording_language(run_root) == "es-419"
-    assert page.recording_language(tmp_path / "missing") == ""
+def test_the_language_comes_from_the_recorded_hint(tmp_path: Path) -> None:
+    """The hint ADMIT recorded declares the language; a run that recorded no hint declares none."""
+    attributes = {"name": "recording", "hint": {"metadata": {"language": "es-419"}}}
+    run_root = _store(tmp_path, _FAMILY_TOKEN, [_entity("stream-recording-hint", "stream", attributes, [0.0, 1.0])])
+    view = page.read_store_light(run_root / "run" / "store.jsonl")
+    assert page.recording_language(view) == "es-419"
+    bare = _store(tmp_path, _FAMILY_TOKEN, [], recording="rec-0002")
+    assert page.recording_language(page.read_store_light(bare / "run" / "store.jsonl")) == ""
 
 
 def test_every_condition_kind_has_its_explanation_on_the_page() -> None:
@@ -2138,3 +2163,11 @@ def test_every_condition_kind_has_its_explanation_on_the_page() -> None:
     found = re.search(r"const KIND_WHY=\{([^}]*)\}", page._SCRIPT)
     assert found is not None
     assert set(re.findall(r"(\w+):'", found.group(1))) == set(CONDITION_KINDS)
+
+
+def test_a_candidate_is_picked_by_the_task_admit_recorded(tmp_path: Path) -> None:
+    """Review of step 8: the head of a store names the task; a name naming another task is not read."""
+    run_root = _store(tmp_path, _FAMILY_TOKEN, [], recording="sub-x9_ses-y9_task-animal-fluency")
+    assert page.admitted_family(run_root / "run" / "store.jsonl") == "free-speech"
+    bare = _store(tmp_path, _FAMILY_TOKEN, [], recording="rec-0002", identity=False)
+    assert page.admitted_family(bare / "run" / "store.jsonl") is None

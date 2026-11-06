@@ -448,7 +448,7 @@ def _ddk_run(
         tmp_path,
         seed_preprocess_store,
         monkeypatch,
-        hint=AudioHints(metadata={"task_token": DDK_TASK}),
+        hint=AudioHints(task=DDK_TASK, metadata={"task_token": DDK_TASK}),
     )
 
 

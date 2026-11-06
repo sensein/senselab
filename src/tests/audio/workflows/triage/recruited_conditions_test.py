@@ -12,7 +12,7 @@ from senselab.audio.workflows.triage.recruited_conditions import (
     load_recruited_conditions,
 )
 
-PROFILE = "bridge2ai_voice_adult_2026-09-04"
+PROFILE = "adult_speech_fixture_2026-09-04"
 
 
 @pytest.mark.parametrize(

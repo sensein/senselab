@@ -15,7 +15,7 @@ from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.vocabulary import BRANCH_ROUTE_STATES, BRANCHES, RULESET_ROUTING, Outcome
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
 
 
 def _config(tmp_path: Path, entries: str) -> TriageConfig:
@@ -56,7 +56,7 @@ def _evaluation(
 ) -> RouteEvaluation:
     """One ruleset reading, as ``evaluate_live_routes`` would return it."""
     return RouteEvaluation(
-        stem="sub-01_task-x",
+        stem="rec-0001",
         family=family,
         routed=tuple(routed),
         declared=tuple(declared),
@@ -227,7 +227,7 @@ class TestTheDeclaredTaskAlwaysAddsItsBranch:
     def test_the_added_route_needs_no_hint_at_all(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
-        """The declaration is the task on the recording's own stem, not something the caller passes."""
+        """The declaration is the task ADMIT recorded for the recording, not something the caller passes."""
         reads(_evaluation([], declared=["AIRWAY"], family="voluntary-cough"))
         assert routing(store, None, _map(tmp_path), None, run_dir=tmp_path).runs == ("AIRWAY",)
 
@@ -305,7 +305,7 @@ class TestTheDeclaredTaskAlwaysAddsItsBranch:
     def test_no_declaration_and_no_hint_routes_by_content_alone(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
-        """A recording whose stem declares nothing behaves exactly as it did before this decision."""
+        """A recording that declares nothing behaves exactly as it did before this decision."""
         reads(_evaluation(["SPEECH"]))
         result = routing(store, None, config, None, run_dir=tmp_path)
         assert result.runs == ("SPEECH",)
@@ -328,21 +328,21 @@ class TestTheDeclaredTaskAlwaysAddsItsBranch:
         assert result.empty_set is False
 
 
-class TestTheDeclaredTaskIsReadOffTheStem:
-    """The route comes from the recording's own path, through the ruleset's family sets."""
+class TestTheDeclaredTaskIsReadFromTheRecordedIdentity:
+    """The route comes from the identity ADMIT recorded for the recording, through the ruleset's family sets."""
 
-    def test_a_bids_stem_declares_its_branch_without_any_mocking(
+    def test_a_declared_task_declares_its_branch_without_any_mocking(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """The whole chain: ADMIT's stream path -> task id -> family -> reference set -> the route."""
+        """The whole chain: ADMIT's recorded task id -> family -> reference set -> the route."""
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two"])
         store.entity(
             prov_type="stream",
             extent=(0.0, 1.0),
             attributes={
                 "name": "recording",
-                "path": "sub-01_ses-1_task-prolonged-vowel-1.wav",
-                **b2ai_identity_attributes("sub-01_ses-1_task-prolonged-vowel-1.wav"),
+                "path": "rec-0001.wav",
+                **declared_identity_attributes("p01", "s1", "prolonged-vowel", token="prolonged-vowel-1"),
             },
         )
         result = routing(store, None, _map(tmp_path), run_dir=tmp_path)

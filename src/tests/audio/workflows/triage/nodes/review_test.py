@@ -51,7 +51,7 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     parse_completion,
 )
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import record_admitted_hint
+from tests.audio.workflows.triage.conftest import hint_for, record_admitted_hint
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 
@@ -240,7 +240,7 @@ class TestTheReviewerReadsTheResidue:
         """A lexical family's words with no PII scan: absent with pii_scan_missing, never bypassed, no model asked."""
         from senselab.audio.data_structures import AudioHints
 
-        for hint in (None, AudioHints(metadata={"task_token": "free-speech"})):
+        for hint in (None, hint_for(task="free-speech")):
             store = ProvStore(run_id="review-test")
             _seed(store, scan=None)
             seen = _stub(monkeypatch, [_clean()])
@@ -266,7 +266,7 @@ class TestTheReviewerReadsTheResidue:
         store = ProvStore(run_id="review-test")
         _seed(store, scan=None)
         seen = _stub(monkeypatch, [_clean()])
-        review(store, _config(tmp_path), AudioHints(metadata={"task_token": task}))
+        review(store, _config(tmp_path), hint_for(task=task))
         assert seen == []
         annotation = _annotation(store)
         assert (annotation["status"], annotation["bypass_reason"], annotation["absent_reason"]) == (
@@ -287,7 +287,7 @@ class TestTheReviewerReadsTheResidue:
             store = ProvStore(run_id="review-test")
             _seed(store, words=["hey", "HEY!"], scan=scan, residue=residue)
             seen = _stub(monkeypatch, [_clean()])
-            review(store, _config(tmp_path), AudioHints(metadata={"task_token": task}))
+            review(store, _config(tmp_path), hint_for(task=task))
             assert seen == []
             annotation = _annotation(store)
             assert (annotation["status"], annotation["bypass_reason"]) == ("bypassed", "non_lexical_task")
@@ -300,7 +300,7 @@ class TestTheReviewerReadsTheResidue:
 
         store = ProvStore(run_id="review-test")
         _seed(store, words=["one", "two", "three"], scan="ran", residue=[])
-        review(store, _config(tmp_path), AudioHints(metadata={"task_token": "prolonged-vowel"}))
+        review(store, _config(tmp_path), hint_for(task="prolonged-vowel"))
         assert (_annotation(store)["status"], _annotation(store)["bypass_reason"]) == ("bypassed", "task_content_only")
 
     def test_no_bypass_reason_names_a_missing_scan(self) -> None:
@@ -401,10 +401,11 @@ class TestTheReviewerSeesEveryRecogniserSReading:
         answer.other_speaker_quotes = ["world"]
         answer.task_content_quotes = ["hello world"]
         _stub(monkeypatch, [answer])
-        hint = AudioHints(
+        hint = hint_for(
+            task="animal-fluency",
             instructions="Say it.",
             speech_type="elicited",
-            metadata={"task_token": "animal-fluency", "task_name": "Animal fluency"},
+            metadata={"task_name": "Animal fluency"},
         )
         review(store, _config(tmp_path), hint)
         annotation = _annotation(store)
@@ -1250,11 +1251,11 @@ def test_the_cache_key_names_the_engine() -> None:
     assert key != review_module.review_cache_key("a b", None, {"task": "t"}, shared, sha)
 
 
-class TestBridge2AIsReviewPolicy:
-    """The B2AI profile's review policy reaches the reviewer unchanged (plan step 6b moved it out of senselab)."""
+class TestTheFixturesReviewPolicy:
+    """The fixture profile's review policy reaches the reviewer unchanged (plan step 6b moved it out of senselab)."""
 
     def test_its_policy_prose_is_in_the_prompt(self) -> None:
-        """B2AI's rules and examples, then the Safe Harbor identifiers senselab adds."""
+        """The fixture's rules and examples, then the Safe Harbor identifiers senselab adds."""
         from senselab.audio.workflows.triage.review_inputs import review_policy
         from senselab.text.tasks.pii_detection.redaction_review import review_prompt
 

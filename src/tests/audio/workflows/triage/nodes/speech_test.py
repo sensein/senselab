@@ -1306,7 +1306,7 @@ class TestAFreeResponseIsReadOffTheWords:
         Returns:
             The hints.
         """
-        return AudioHints(metadata={"task_token": family})
+        return AudioHints(task=family, metadata={"task_token": family})
 
     def test_a_spoken_response_conforms_when_no_asr_span_survived_deduplication(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1430,7 +1430,9 @@ class TestAFreeResponseIsReadOffTheWords:
         Returns:
             The hints.
         """
-        return AudioHints(metadata={"task_token": family}, expected_speech=[ExpectedSpeech(text=self.SOURCE_STORY)])
+        return AudioHints(
+            task=family, metadata={"task_token": family}, expected_speech=[ExpectedSpeech(text=self.SOURCE_STORY)]
+        )
 
     def _retelling(self) -> list[str]:
         """Forty-nine words of a retelling that reuses none of the source's own words.
@@ -1532,7 +1534,7 @@ class TestTheSpeakersInsideTheTaskExtent:
         Returns:
             The hints.
         """
-        return AudioHints(metadata={"task_token": family})
+        return AudioHints(task=family, metadata={"task_token": family})
 
     def _readings(self, store: ProvStore) -> dict[str, Entity]:
         """The two within-extent readings, by name.
@@ -2367,7 +2369,7 @@ class TestTheMultiSpeakerInstrument:
         Returns:
             The hints.
         """
-        return AudioHints(metadata={"task_token": "picture-description"})
+        return AudioHints(task="picture-description", metadata={"task_token": "picture-description"})
 
 
 class TestPiiOnTheConsensus:
@@ -2960,6 +2962,7 @@ class TestTheNodeRunsOneModeAndProposesWhatItFinds:
             The hints.
         """
         return AudioHints(
+            task=family,
             metadata={"task_token": family},
             expected_speech=[ExpectedSpeech(text=self.HARVARD)] if read else [],
         )
@@ -3149,7 +3152,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         Returns:
             The hints.
         """
-        return AudioHints(metadata={"task_token": family})
+        return AudioHints(task=family, metadata={"task_token": family})
 
     def test_a_declared_diadochokinesis_pa_gets_a_syllable_train_conformance(
         self, store: ProvStore, syllable_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3242,7 +3245,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
             store,
             "plain",
             syllable_config,
-            AudioHints(metadata={"task_token": "harvard-sentences-list"}),
+            AudioHints(task="harvard-sentences-list", metadata={"task_token": "harvard-sentences-list"}),
             run_dir=tmp_path,
         )
         detail = _report_entity(store, "SPEECH").attributes
@@ -3419,6 +3422,7 @@ class TestPiiRunsOnlyOnWordsTheTaskDidNotAskFor:
         scanned = _stub_pii(monkeypatch, findings=[("PERSON", "day")])
         hint = AudioHints(
             expected_speech=[ExpectedSpeech(text="tell me about your day")],
+            task="free-speech-v2",
             metadata={"task_token": "free-speech-v2"},
         )
         speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
@@ -3497,7 +3501,7 @@ class TestTheCarrierIsPartOfWhatTheTaskAskedFor:
         _seed_speech_store(store, tmp_path, words=["pa", "pa", "pa"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         scanned = _stub_pii(monkeypatch, findings=[("PERSON", "pa")])
-        hint = AudioHints(metadata={"task_token": "diadochokinesis-pa"})
+        hint = AudioHints(task="diadochokinesis-pa", metadata={"task_token": "diadochokinesis-pa"})
         speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
         assert scanned == [], "a carrier train must not reach the detector"
         assert live_entities(store, "pii") == []
@@ -3509,7 +3513,7 @@ class TestTheCarrierIsPartOfWhatTheTaskAskedFor:
         _seed_speech_store(store, tmp_path, words=["pa", "pa", "alice"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         scanned = _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
-        hint = AudioHints(metadata={"task_token": "diadochokinesis-pa"})
+        hint = AudioHints(task="diadochokinesis-pa", metadata={"task_token": "diadochokinesis-pa"})
         speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
         assert scanned, "one word outside the carrier must bring the scan"
         assert len(live_entities(store, "pii")) == 1
