@@ -1,0 +1,59 @@
+"""The batch invariance probe on the fake stack: held-out items at batch 1 and batch N, one line per backend."""
+
+import importlib.util
+import platform
+import sys
+from collections.abc import Iterator
+from pathlib import Path
+from types import ModuleType
+
+import pytest
+from senselab_core.kernel.declare import REGISTRY, BackendSpec
+from senselab_core.runtime import fake_backend
+from senselab_core.runtime.call import Packaged, use_packaged
+from senselab_core.runtime.catalogue import Catalogue
+from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.testing.workers import mit_lock_records
+
+BENCHMARKS = Path(__file__).resolve().parents[4] / "benchmarks"
+
+
+def _probe_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("batch_invariance_under_test", BENCHMARKS / "batch_invariance.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+probe = _probe_module()
+
+
+def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+    return EnvHandle(sys.executable, platform.python_version(), "1" * 64, "2" * 64, None)
+
+
+@pytest.fixture(autouse=True)
+def packaged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The probe reads the registry declaring the fake stack, opens every env as this interpreter, caches in tmp."""
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
+    assert fake_backend.FAKE in REGISTRY.backends(fake_backend.ECHO.name)
+    previous = use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, REGISTRY, mit_lock_records))
+    yield
+    use_packaged(previous)
+
+
+@pytest.mark.logic
+def test_probe_runs_plumbing_suite_end_to_end(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The plumbing suite's held-out echoes agree at batch 1 and at batch N, N their one formation's population."""
+    suite = BENCHMARKS / "suites" / "plumbing.yaml"
+    [bench] = probe.harness().Suite.load(suite).benchmarks
+    held = sum(probe.harness().split_of(f"echo-{n:02d}") == probe.HELDOUT for n in range(bench.items))
+    code = probe.main([str(suite), "--out", str(tmp_path / "out"), "--sha", "abc", "--job", "7"])
+    assert code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        f"abc 7 fake.echo/fake: agree {held}/{held}, batch {held}, max diff none"
+    ]
+    assert (tmp_path / "out" / "echo" / "batch-1").is_dir() and (tmp_path / "out" / "echo" / f"batch-{held}").is_dir()
