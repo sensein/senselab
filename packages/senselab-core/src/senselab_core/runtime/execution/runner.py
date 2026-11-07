@@ -477,8 +477,8 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
             sending.add_done_callback(run.sending.discard)
 
     async def _send(self, run: _Run, node: str, batch: list[tuple[Any, tuple[int, ...], Any]]) -> None:
+        """Dispatch `batch` as one fragment; once every result it gave is settled, fail the elements it gave none."""
         futures = {element: future for _, element, future in batch}
-        loop = asyncio.get_running_loop()
 
         def settle(ref: ResultRef) -> None:
             run.results.setdefault(node, {})[ref.job.element] = ref
@@ -495,21 +495,46 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
             futures[ref.job.element].set_result(ref)
 
         try:
-            await asyncio.to_thread(run.dispatch, node, batch, lambda ref: loop.call_soon_threadsafe(settle, ref))
-        except Exception as error:  # noqa: BLE001 - every waiting job is failed with it, and the run re-raises it
-            run.errors.append(error)
-            if not isinstance(error, (RunCancelled, *Interrupted)):
-                run.fail_batch(node, list(futures), error)
+            error = await _dispatched(run, node, batch, settle)
         except BaseException as signal:
             for future in futures.values():
                 if not future.done():
                     future.set_exception(signal)
             raise
+        if error is not None:
+            run.errors.append(error)
+            if not isinstance(error, (RunCancelled, *Interrupted)):
+                run.fail_batch(node, list(futures), error)
         missing = [element for element, future in futures.items() if not future.done()]
         if missing and not run.errors:
             run.errors.append(RuntimeError(f"the executor gave node {node!r} no result for elements {missing}"))
         for element in missing:
             futures[element].set_exception(run.errors[-1])
+
+
+async def _dispatched(
+    run: _Run, node: str, batch: list[tuple[Any, tuple[int, ...], Any]], settle: Callable[[ResultRef], None]
+) -> Exception | None:
+    """Dispatch `batch` in a thread, each result passed to `settle` on this loop; return once every one is settled.
+
+    Returns the error the dispatch raised, or None.
+    """
+    loop = asyncio.get_running_loop()
+    drained: asyncio.Future[None] = loop.create_future()
+
+    def dispatch() -> None:
+        try:
+            run.dispatch(node, batch, lambda ref: loop.call_soon_threadsafe(settle, ref))
+        finally:
+            loop.call_soon_threadsafe(drained.set_result, None)
+
+    error: Exception | None = None
+    try:
+        await asyncio.to_thread(dispatch)
+    except Exception as raised:  # noqa: BLE001 - the caller fails the batch with it, and the run re-raises it
+        error = raised
+    await drained
+    return error
 
 
 def _upstream(placed: Plan, node: str, batch: list[tuple[Any, tuple[int, ...], Any]]) -> dict[str, list[ResultRef]]:

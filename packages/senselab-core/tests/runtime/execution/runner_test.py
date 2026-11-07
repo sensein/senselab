@@ -1,14 +1,15 @@
 """`PydraRunner`: a placed plan run through an `Executor`, batched, per element, keyed by senselab (fake stack)."""
 
 import asyncio
+import concurrent.futures
 import dataclasses
 import os
 import platform
 import stat
 import threading
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 
 import pytest
 from senselab_core.kernel.dataset import Record, ValueInput
@@ -29,6 +30,8 @@ from senselab_core.runtime.planner import Plan, UnmappedOutput, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.interpreter import source_tree_python
+
+T = TypeVar("T")
 
 runner = pytest.importorskip("senselab_core.runtime.execution.runner", exc_type=ImportError)
 
@@ -230,6 +233,44 @@ def test_errored_element_fails_only_its_descendants(tmp_path: Path) -> None:
     assert status.blocked["d"] == ((1,),) and status.blocked["g"] == ((),) and not status.done
     assert {(e.node, e.job.element) for e in events if e.kind == "failed" and e.job} == {("a", (1,))}
     assert {(n, e) for n, elements in status.blocked.items() for e in elements} == {("b", (1,)), ("d", (1,)), ("g", ())}
+
+
+class Finishing(asyncio.SelectorEventLoop):
+    """An event loop whose `run_in_executor` runs the call at once and returns its future already done."""
+
+    def run_in_executor(
+        self, executor: concurrent.futures.Executor | None, func: Callable[..., T], *args: object
+    ) -> asyncio.Future[T]:
+        """Run `func` in this thread and return its finished future, as a pool that finished before it was awaited."""
+        future: asyncio.Future[T] = self.create_future()
+        try:
+            future.set_result(func(*args))
+        except BaseException as error:  # noqa: BLE001 - held by the future, as a pool thread holds it
+            future.set_exception(error)
+        return future
+
+
+@pytest.mark.contract
+def test_every_result_settles_its_own_element_when_the_fragment_ends_before_it_is_awaited(tmp_path: Path) -> None:
+    """A fragment whose call has ended before the loop awaits it still gives each element its result, failure too."""
+    placed, values = _plan(
+        _graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "fail", "two")]
+    )
+    loop = Finishing()
+    asyncio.set_event_loop(loop)
+    try:
+        status, _, events = _run(placed, values, tmp_path)
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+    assert [(r.job.element, r.failure is None) for r in status.results["a"]] == [
+        ((0,), True),
+        ((1,), False),
+        ((2,), True),
+    ]
+    assert status.blocked["b"] == ((1,),)
+    terminal = [(e.node, e.job.element) for e in events if e.kind in ("finished", "failed") and e.job]
+    assert sorted(terminal) == [("a", (0,)), ("a", (1,)), ("a", (2,)), ("b", (0,)), ("b", (2,))]
 
 
 @pytest.mark.contract
