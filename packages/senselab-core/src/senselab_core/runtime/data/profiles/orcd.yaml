@@ -25,7 +25,7 @@ retry:
   first_backoff_s: 1.0
 # online, or offline to forbid any fetch.
 network: online
-# The worker classes nodes are placed on, by name, each with its grant and caps.
+# The worker classes nodes are placed on, by name, each with its grant, caps and items per request.
 resource_classes:
   cpu:
     device: cpu
@@ -34,6 +34,7 @@ resource_classes:
     time_s: 21600
     partition: ${CPU_PARTITION}
     max_workers: 32
+    batch_size: 1
   cpu:large:
     device: cpu
     cpus: 8
@@ -41,6 +42,7 @@ resource_classes:
     time_s: 21600
     partition: ${CPU_PARTITION}
     max_workers: 8
+    batch_size: 1
   gpu:h100:
     device: cuda
     gpu_type: h100
@@ -51,6 +53,7 @@ resource_classes:
     gres: gpu:h100:1
     max_workers: 4
     memory_cap_bytes: 85899345920
+    batch_size: 1
   gpu:
     device: cuda
     cpus: 8
@@ -59,6 +62,7 @@ resource_classes:
     partition: ${GPU_PARTITION}
     gres: gpu:1
     max_workers: 4
+    batch_size: 1
 # What starts pool workers; the first and longest wait after a failed start; each Slurm command's timeout,
 # tries and first retry wait.
 substrate:

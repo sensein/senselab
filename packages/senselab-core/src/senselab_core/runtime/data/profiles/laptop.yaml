@@ -25,17 +25,20 @@ retry:
   first_backoff_s: 1.0
 # online, or offline to forbid any fetch.
 network: online
-# The worker classes nodes are placed on, by name, each with its grant and caps.
+# The worker classes nodes are placed on, by name, each with its grant, caps and items per request.
 resource_classes:
   cpu:
     device: cpu
     max_workers: 1
+    batch_size: 1
   mps:
     device: mps
     max_workers: 1
+    batch_size: 1
   gpu:
     device: cuda
     max_workers: 1
+    batch_size: 1
 # What starts pool workers; the first and longest wait after a failed start.
 substrate:
   kind: local

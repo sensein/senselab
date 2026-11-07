@@ -110,6 +110,20 @@ def test_profile_digest_not_in_key() -> None:
 
 
 @pytest.mark.logic
+def test_batch_size_is_the_resource_classs_and_not_in_key() -> None:
+    """The placed class's `batch_size` reaches the placement and its record, never the key; it defaults to one."""
+    registry = _registry(_backend("b1", "one"))
+    cpu = ExecutionProfile.load("laptop").resource_classes["cpu"].model_dump()
+    sized = _profile(resource_classes={"cpu": {**cpu, "batch_size": 3}})
+    placements = [resolve_execution(TASK, _entry(), p, NO_GPU, registry, CAT) for p in (_profile(), sized)]
+    assert [(p.batch_size, p.record().batch_size) for p in placements] == [(1, 1), (3, 3)]
+    call, _ = base_call(TASK, placements[0].backend)
+    assert len({build_key(call, p, BASE).digest() for p in placements}) == 1
+    with pytest.raises(ValueError, match="batch_size"):
+        _profile(resource_classes={"cpu": {**cpu, "batch_size": 0}})
+
+
+@pytest.mark.logic
 def test_gpu_only_without_gpu_fails() -> None:
     """A CUDA-only backend on a node without a GPU fails naming the node; with a GPU it runs there."""
     registry = _registry(_backend("b1", "one", devices=("cuda",)))

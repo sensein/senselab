@@ -27,6 +27,7 @@ class ResourceClass(Frozen):
         gres: The scheduler's generic-resource request, such as `gpu:h100:1`; None for none.
         max_workers: Workers of the class alive at once.
         memory_cap_bytes: The static memory the models resident at once on one worker may hold; None for no cap.
+        batch_size: The most items of one node a worker of the class is sent per request (`form_batches`).
     """
 
     device: Literal["cpu", "cuda", "mps"]
@@ -38,6 +39,7 @@ class ResourceClass(Frozen):
     gres: NonEmptyStr | None = None
     max_workers: PositiveInt
     memory_cap_bytes: PositiveInt | None = None
+    batch_size: PositiveInt = 1
 
     @model_validator(mode="after")
     def _check_gpu(self) -> "ResourceClass":

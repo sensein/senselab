@@ -342,7 +342,7 @@ def resolve_execution(  # noqa: PLR0913 - the brief fixes the signature and the 
 
     The first stack of `profile.stack_preferences[task.name]` with a backend serving `model_entry` wins, or the
     first declared backend when the profile lists none. The resource class is `resource_class`'s, judged against
-    `hardware` (None when a scheduler places the worker); the device is the class's.
+    `hardware` (None when a scheduler places the worker); the device and batch size are the class's.
 
     Raises:
         UnlistedSource: the model's organisation is neither in `model_sources` nor, when that is None, in `catalogue`.
@@ -369,5 +369,6 @@ def resolve_execution(  # noqa: PLR0913 - the brief fixes the signature and the 
         env_root=root,
         why=f"{why}; resource class {name!r} is the first that runs it",
         resource_class=name,
+        batch_size=resource.batch_size,
         partition=resource.partition,
     )
