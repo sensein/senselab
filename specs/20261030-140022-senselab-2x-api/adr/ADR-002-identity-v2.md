@@ -45,8 +45,11 @@ Principle P-38.
   unions and nested params). The registry refuses `set`, `frozenset`, `Decimal`, `datetime`,
   `Path`, `bytes`, `Any` and `object`. A generated contract builds every declared backend's key
   under two `PYTHONHASHSEED` values and requires one digest.
-- **The digest is taken at construction** (`identity_digest("logical-key@6", fields)`, ADR-006), so a
+- **The digest is taken at construction** (`identity_digest("logical-key@7", fields)`, ADR-006), so a
   key that validates can be digested.
+- **A server backend's key holds its service's attestation** (`service`: engine version, served model, model
+  identity, config digest), as design I-8 requires; `key_for` refuses a server backend's call without it and any
+  other backend's call with it (ADR-003, amendment 2026-11-07).
 - **Versions are declared, not hashed.** `task_version` and `backend_version` are bumped by
   developers. A CI check fails when a task's or backend's source changes without a version bump,
   comparing a source digest against the last released one.
@@ -161,6 +164,8 @@ Rulings P2-23, P2-43, P2-60, P2-83, P2-89 (Phase 2 Task 21; R-112, R-155). This 
 
 ## Amendment log
 
+- 2026-11-07: a server backend's key holds the attestation of the service answering the call (`service`,
+  `logical-key@7`), implementing I-8's "the key uses the attested value" (Phase 3 Task 17, P3-40).
 - 2026-11-01: model key is the weights digest or hub repo plus commit; source is context (`logical-key@5`,
   `execution-context@2.0`; H-R56); `equivalent` applied by default; equivalence classes are data with a
   derivation; verify sampling unowned (F1, F3, F4).

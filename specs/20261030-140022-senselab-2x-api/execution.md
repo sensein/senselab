@@ -170,10 +170,10 @@ current one.
 ### 3.5 Services
 - **What a service is:** a resident resource in a pool worker of class `svc`. Its process runs in
   an `Env.server` env.
-- **Registration:** a service is a registry entry `{identity, endpoint, heartbeat}` under a lease
-  (ADR-003).
+- **Registration:** a service is a registry entry `{identity, endpoint}` under a renewed lease,
+  whose beats are its liveness (ADR-003, amended 2026-11-07).
 - **Lifecycle:** each consumer holds a lease on the service. The service exits when no consumer
-  lease has been live for T. Queue depth does not decide this.
+  lease has been live for `services.idle_exit_s`. Queue depth does not decide this.
 - **Identity:** every response carries the service's attested identity (I-8).
 
 ### 3.6 Substrates

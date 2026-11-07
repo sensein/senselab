@@ -87,7 +87,7 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
   `digests-are-tagged` forbids hash modules everywhere except the digest module, and `raw-digest-owners`
   names the few owners allowed to hash bytes already in memory.
 
-  **Registered identity tags:** `logical-key@6`, `output@3`, `context@3`, `content-root@2`, `audio@4`, `audio-file@1`,
+  **Registered identity tags:** `logical-key@7`, `output@3`, `context@3`, `content-root@2`, `audio@4`, `audio-file@1`,
   `weights@3`, `value@2`, `provenance-id@4`, `data-manifest@3`, `worker-runtime@1`, `fake-output@1`,
   `contract-probe@1`, `prov-activity@1`, `prov-node@1`, `wheel-set@1`, `env-lock@1`, `env-overlay@1`, `launch-env@1`, `vllm-config@1`, `source@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
   `format:` line in a packaged YAML file or in a store entry): `equivalence@2.0`, `equivalence-evidence@1.0`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, and
@@ -225,6 +225,8 @@ Phase 2 Task 22f.
 ## Amendment 2026-11-01: backend params in the logical key
 
 - 2026-11-01: `logical-key@5` → `@6`: the key gains `backend_params` (ADR-002 amendment, Phase 2 Task 5b).
+- 2026-11-07: `logical-key@6` → `@7`: the key gains `service`, a server backend's attestation (I-8; Phase 3 Task 17).
+  New data format `service-entry@1.0`, a service's registry entry `{identity, endpoint}` (ADR-003).
 
 ## Amendment 2026-11-01: env builds
 

@@ -35,9 +35,9 @@ The protocol uses only primitives that `work_pool` has measured on NFS v4.2: ato
     re-places the job and does not charge the item). The token budget is added when the scale
     ladder shows the need (design §6.4).
 - **Services.**
-  - A service is a registry entry `{identity, endpoint, heartbeat}` under a lease.
+  - A service is a registry entry `{identity, endpoint}` under a renewed lease (amended 2026-11-07).
   - Each consumer holds its own lease on the service. The service exits when no consumer lease has
-    been live for T.
+    been live for `services.idle_exit_s`.
   - The service identity is attested on every response (I-8).
 - **Packed tier (deferred, design §6.4).** When added: per-shard append-only segments, written only
   by that shard's lease holder, plus an index committed by rename. Readers trust only indexed
@@ -279,6 +279,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
 - 2026-11-01: services are process-scoped in Phase 2; the leased registry and `svc` pool worker arrive with lease renewal in Phase 3 (P2-14, P2-38; Task 9b).
 - 2026-11-03: a lease is a directory taken by `mkdir` with the holder's token, renewed by beat directories from a renewer independent of the work; replaces the `O_EXCL` link (owner item 58).
 - 2026-11-06: renewal as built: probe-directory clock, fresh re-read before a break, claim by rename before a break or release (tokenless leases included; empty ones by `rmdir`), withdrawn leases removed, no put-back, `keep_alive` renewer on a monotonic cadence held by every lease caller, `prove()` before every commit, `ESTALE` as lost, the beat bound (one missed beat allowed) checked at profile load, `StorageUnsupported` on an unsupported `mkdir`; closes R-111.
+- 2026-11-07: the Phase 3 service stage built: registry entries `{identity, endpoint}` under renewed leases, consumer leases, the `svc` pool worker; drops `heartbeat` (Phase 3 Task 17, P3-40).
 - 2026-11-07: the lease constants this ADR names are profile keys (`lease.record_attempts`, `lease.dir_mode`, `lease.missed_beats`), per P-34 as amended; `PRIVATE_DIR_MODE` stays an invariant (a security property). The other code constants move into the profile, with derivations in `config-derivations.md`, under the fixed-parameter audit.
 
 ## Amendment 2026-11-06: queues of plan fragments (Phase 3 Task 13)
@@ -296,3 +297,38 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
 - **Not guaranteed.** A crash, or a lost NFS reply on the `symlink`, between taking a slot and writing the item's
   `slotted` marker gives the item a second slot on a later put or reconcile. Exactly-once still holds (one outcome per
   digest); `depth()`, an upper bound, counts the item twice until a claimer resolves the second slot.
+
+## Amendment 2026-11-07: the Phase 3 service stage built (Task 17, P3-40)
+
+Completes the 2026-11-01 staging. A registry entry is `{identity, endpoint}` under a renewed lease, replacing
+`{identity, endpoint, heartbeat}`: the lease's beats are the liveness (2026-11-03 amendment).
+
+- **Registry.** One directory per host, `<server env root>/services/<host>`, because a server listens on loopback
+  only. A service is named `svc-<canonical digest of its Attestation>`: `<name>.json` is its `service-entry@1.0`
+  entry, written by atomic replace after `prove()`, and `<name>.lease` is its server process's lease, renewed by
+  `keep_alive`. An entry is live only while that lease is held and younger than `stale_after`. A provider reserves
+  the lease before it starts its server, removing an entry a dead holder left, and publishes the entry once the
+  server is up, so a provider that loses the race starts nothing and no consumer is sent to a dead holder's endpoint.
+  A second reservation of an identity whose lease is live fails at once (`LeaseTimeout`).
+- **Consumers.** Each consumer holds `<name>.consumers/<uuid>.lease`, renewed the same way; counting the live ones
+  removes the stale ones. A process's worker set consumes a live entry that attests what its backend, env lock,
+  model and settings declare instead of starting a server; with none live it starts a process-scoped server as in
+  Phase 2.
+- **The `svc` pool worker.** A pool worker of `svc:<id>` classes registers each server it starts. Once it holds one,
+  empty queues decide nothing: it exits when no consumer lease of any service it holds has been seen live for
+  `services.idle_exit_s`, read every `pool.poll_s` (so the exit can come up to one poll early); the jobs it runs
+  itself count as consumption, and a lost registration lease ends it. The scaler never stops a running worker of a
+  service class for an empty queue (it still stops pending ones); a coordinator closing its run still stops every
+  worker it started.
+- **Per-reply check (I-8).** A consumer reads the entry before and after each request. The reply is refused
+  (`StaleAttestation`) unless the entry is live both times at the same endpoint and the reply names the attested
+  model; a connection the server drops is `StaleAttestation` too. A restart with another config is another identity,
+  so another name, and the old identity's consumers find no live entry. Not covered: between the two reads, another server of the same model bound on the old port while
+  the old entry's lease is still live.
+- **The key uses the attested value (I-8).** A server backend's call carries the attestation of the service
+  answering it (`Call.service`), and its logical key holds it (`LogicalKey.service`, ADR-002). The attestation is
+  computed before any server starts or entry is read, from the env lock the declaring package names
+  (`Packaged.env_lock`), the model and the server settings, so a store lookup needs no server and a coordinator's
+  key agrees with its workers'. The registry is keyed by that attestation, so the entry a call consumes attests
+  exactly it, and a started server that attests anything else is refused (`AttestationMismatch`). A restart with a
+  new config changes the key; a restart with the same config keeps it.
