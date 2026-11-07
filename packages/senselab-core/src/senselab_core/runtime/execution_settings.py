@@ -112,14 +112,18 @@ class SizingSettings(Frozen):
         load_share: The largest share of a quantum's time its model load may take.
         memory_headroom: The share of a worker's memory a batch may fill.
         target_wall_s: The wall time the workers of one queue aim to finish its waiting work in.
-        calibration_items: The one-job items a unit without a measure runs first on one worker; the first carries
-            the model load and the rest give the median per item.
+        calibration_items: The one-job items a unit without a measure runs first; the first carries the model load
+            and the rest give the median per item.
+        calibration_workers: The workers a queue whose units are all unmeasured is given for their rounds.
+        device_query_s: Seconds a pool worker's per-claim read of its processes' device memory may take.
     """
 
     load_share: Annotated[float, Field(gt=0, lt=1)]
     memory_headroom: Annotated[float, Field(gt=0, le=1)]
     target_wall_s: PositiveSeconds
     calibration_items: Annotated[int, Field(ge=2)]
+    calibration_workers: PositiveInt
+    device_query_s: PositiveSeconds
 
 
 class LeaseBoundError(ValueError):

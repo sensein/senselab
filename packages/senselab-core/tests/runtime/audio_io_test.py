@@ -337,7 +337,7 @@ def _flac(tmp_path: Path) -> Path:
 @pytest.mark.logic
 @pytest.mark.parametrize("kind", ["wav", "flac"])
 def test_range_read_reads_only_its_chunks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
-    """A range read reads, at the `os` boundary, whole chunks only, and an eighth of the file at most."""
+    """A range read reads, at the `os` boundary, whole chunks only, twice its distinct chunks at most."""
     p = write_wav(tmp_path, frames=8 * RATE) if kind == "wav" else _flac(tmp_path)
     group = source_group(audio_channels(2), RATE, p, audio_io.stamp(p, chunk_size=CHUNK))
     expected = soundfile.read(p, dtype="float32", always_2d=True)[0].T[:, 4 * RATE : 4 * RATE + 80]
@@ -356,6 +356,7 @@ def test_range_read_reads_only_its_chunks(tmp_path: Path, monkeypatch: pytest.Mo
     offsets = [offset for offset, _ in preads]
     assert 0 in offsets and all(offset % CHUNK == 0 for offset in offsets)
     assert sum(n for _, n in preads) < p.stat().st_size // 8
+    assert sum(n for _, n in preads) <= 2 * len(set(offsets)) * CHUNK
 
 
 @pytest.mark.logic

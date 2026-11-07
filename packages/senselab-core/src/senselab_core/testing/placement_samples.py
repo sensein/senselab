@@ -228,10 +228,31 @@ def _register_sizing(register: Register) -> None:
     classes: Mapping[type[Frozen], tuple[Sequence[Frozen], Sequence[Mapping[str, object]]]] = {
         SizingSettings: (
             [
-                SizingSettings(load_share=0.05, memory_headroom=0.9, target_wall_s=1800, calibration_items=4),
-                SizingSettings(load_share=0.5, memory_headroom=1.0, target_wall_s=0.5, calibration_items=2),
+                SizingSettings(
+                    load_share=0.05,
+                    memory_headroom=0.9,
+                    target_wall_s=1800,
+                    calibration_items=4,
+                    calibration_workers=1,
+                    device_query_s=30,
+                ),
+                SizingSettings(
+                    load_share=0.5,
+                    memory_headroom=1.0,
+                    target_wall_s=0.5,
+                    calibration_items=2,
+                    calibration_workers=3,
+                    device_query_s=0.5,
+                ),
             ],
-            [{"load_share": 1.0}, {"memory_headroom": 0}, {"target_wall_s": 0}, {"calibration_items": 1}],
+            [
+                {"load_share": 1.0},
+                {"memory_headroom": 0},
+                {"target_wall_s": 0},
+                {"calibration_items": 1},
+                {"calibration_workers": 0},
+                {"device_query_s": 0},
+            ],
         ),
         Measure: (
             [

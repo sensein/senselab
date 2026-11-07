@@ -33,13 +33,14 @@ Count = Annotated[int, Field(ge=1)]
 class Measure(Frozen):
     """What one item costs on one resource class: seconds to load and to claim, memory resident and per item, seconds.
 
-    `on_device` says the memory pair is the device's, sized against the class's device memory cap.
+    `on_device` says the memory pair is the device's, sized against the class's device memory cap; the pair is None
+    when unmeasured.
     """
 
     load_s: Seconds
     claim_s: Seconds
-    resident_bytes: Bytes
-    bytes_per_item: Bytes
+    resident_bytes: Bytes | None
+    bytes_per_item: Bytes | None
     s_per_item: Seconds
     on_device: bool = False
 
@@ -89,7 +90,7 @@ def size(measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 
       them;
     - `quantum_s`: the quantum's jobs plus the load and claim, within `quantum_s`;
     - `batch_size`: the most items whose memory beside the resident memory fits `memory_headroom` of the grant's,
-      at most a quantum; 1 when the grant's memory is unknown or `batchable` is False;
+      at most a quantum; 1 when the grant's or the unit's memory is unmeasured or `batchable` is False;
     - `workers`: as many as end `work` within `target_wall_s`, at most a quantum each and `max_workers`; 0 for none.
     """
     per, load, ceiling = measure.s_per_item, measure.load_s + measure.claim_s, grant.quantum_items
@@ -98,9 +99,9 @@ def size(measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 
     fits = _held((grant.quantum_s - load) / per, ceiling, math.floor) if per else ceiling
     quantum = max(1, min(wanted, fits))
     batch = 1
-    if batchable and grant.memory_bytes is not None:
+    if batchable and grant.memory_bytes is not None and measure.resident_bytes is not None:
         room = config.memory_headroom * grant.memory_bytes - measure.resident_bytes
-        per_bytes = measure.bytes_per_item
+        per_bytes = measure.bytes_per_item or 0
         batch = 1 if room < 0 else quantum if per_bytes == 0 else max(1, _held(room / per_bytes, quantum, math.floor))
     workers = 0
     if work > 0:
@@ -129,12 +130,11 @@ def measure_of(row: ResourceMeasure, *, on_device: bool = False) -> Measure:
     resident, peak = (
         (row.device_resident_bytes, row.device_peak_bytes) if device else (row.resident_bytes, row.peak_memory_bytes)
     )
-    assert resident is not None and peak is not None
     return Measure(
         load_s=row.load_s,
         claim_s=row.claim_s,
         resident_bytes=resident,
-        bytes_per_item=peak - resident,
+        bytes_per_item=None if resident is None or peak is None else peak - resident,
         s_per_item=seconds,
         on_device=device,
     )
@@ -176,8 +176,9 @@ def calibrated(samples: Sequence[Sample]) -> ResourceMeasure | None:
 
     Seconds per item are the median over warm items (over cold ones when none is warm), the load the median of what
     a cold item took beyond its jobs, the claim the median claim. The resident host memory is the lowest after a warm
-    item (after any item when none is warm), else the lowest baseline; the peak is the highest. The device pair is
-    the lowest device baseline and the highest device use, when the items ran on a device.
+    item (after any item when none is warm) and the peak the highest; with no resident figure the host pair is
+    unmeasured. The device pair is the lowest device baseline and the highest device use, when the items ran on a
+    device.
     """
     if not samples:
         return None
@@ -189,7 +190,7 @@ def calibrated(samples: Sequence[Sample]) -> ResourceMeasure | None:
     item_s = statistics.median(inputs) if len(inputs) == len(samples) and all(inputs) else None
     after = [s.resident_bytes for s in samples if s.resident_bytes is not None and not s.cold]
     after = after or [s.resident_bytes for s in samples if s.resident_bytes is not None]
-    resident = min(after) if after else min(s.baseline_bytes for s in samples)
+    resident = min(after) if after else None
     devices = [s for s in samples if s.device_baseline_bytes is not None and s.device_bytes is not None]
     device = (
         (min(s.device_baseline_bytes or 0 for s in devices), max(s.device_bytes or 0 for s in devices))
@@ -200,7 +201,7 @@ def calibrated(samples: Sequence[Sample]) -> ResourceMeasure | None:
         load_s=load,
         claim_s=statistics.median([s.claim_s for s in samples]),
         resident_bytes=resident,
-        peak_memory_bytes=max(1, resident, *(s.peak_memory_bytes for s in samples)),
+        peak_memory_bytes=None if resident is None else max(1, resident, *(s.peak_memory_bytes for s in samples)),
         device_resident_bytes=device[0],
         device_peak_bytes=None if device[1] is None else max(1, device[0] or 0, device[1]),
         s_per_input_s=per if item_s is None else per / item_s,

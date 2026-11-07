@@ -14,7 +14,7 @@ import resource
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Final, Mapping, Optional
+from typing import Callable, Collection, Final, Iterator, Mapping, Optional
 
 logger = logging.getLogger("senselab")
 
@@ -26,8 +26,10 @@ _NVIDIA_SMI_FORMAT = "--format=csv,noheader,nounits"
 _NVIDIA_SMI_GPU_QUERY = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS},compute_cap", _NVIDIA_SMI_FORMAT]
 _NVIDIA_SMI_GPU_QUERY_NO_CAP = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS}", _NVIDIA_SMI_FORMAT]
 _CHIP_QUERY = ["sysctl", "-n", "machdep.cpu.brand_string"]
-_MEMORY_FIELDS = ("index", "uuid", "memory.used")
-_NVIDIA_SMI_MEMORY_QUERY = ["nvidia-smi", f"--query-gpu={','.join(_MEMORY_FIELDS)}", _NVIDIA_SMI_FORMAT]
+_APPS_FIELDS = ("pid", "used_memory")
+_NVIDIA_SMI_APPS_QUERY = ["nvidia-smi", f"--query-compute-apps={','.join(_APPS_FIELDS)}", _NVIDIA_SMI_FORMAT]
+_STAT_PPID = 1
+"""The field index of the parent pid in `/proc/<pid>/stat` after the parenthesised command name."""
 
 
 class DeviceResolutionError(ValueError):
@@ -275,15 +277,53 @@ def memory_bytes(proc_cgroup: Path = Path("/proc/self/cgroup")) -> tuple[Optiona
     )
 
 
-def device_memory_bytes(run: Callable[[list[str]], str] = _run) -> Optional[int]:
-    """Return the device memory used on the GPUs this process sees (`CUDA_VISIBLE_DEVICES`), None without one."""
+def proc_stats() -> Iterator[tuple[int, list[bytes]]]:
+    """Yield each process's pid and the fields of its `/proc/<pid>/stat` after the command name; none off `/proc`."""
+    for entry in os.listdir("/proc") if os.path.isdir("/proc/self") else ():
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat", "rb") as f:
+                data = f.read()
+        except OSError:
+            continue
+        yield int(entry), data[data.rfind(b")") + 2 :].split()
+
+
+def process_tree(root: Optional[int] = None) -> set[int]:
+    """Return the pid `root` (this process by default) and its descendants from `/proc`; `root` alone elsewhere."""
+    root = os.getpid() if root is None else root
+    parents: dict[int, list[int]] = {}
+    for pid, fields in proc_stats():
+        if len(fields) > _STAT_PPID:
+            parents.setdefault(int(fields[_STAT_PPID]), []).append(pid)
+    found, todo = {root}, [root]
+    while todo:
+        for child in parents.get(todo.pop(), ()):
+            if child not in found:
+                found.add(child)
+                todo.append(child)
+    return found
+
+
+def _bounded(cmd: list[str], timeout_s: float) -> str:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, check=True).stdout
+
+
+def device_memory_bytes(
+    pids: Collection[int], *, timeout_s: float, run: Callable[[list[str], float], str] = _bounded
+) -> Optional[int]:
+    """Return the device memory the processes `pids` hold on their GPUs, None where `nvidia-smi` cannot answer.
+
+    Read from `nvidia-smi --query-compute-apps` within `timeout_s`; other processes' memory is never counted.
+    """
     try:
-        output = run(_NVIDIA_SMI_MEMORY_QUERY)
+        output = run(_NVIDIA_SMI_APPS_QUERY, timeout_s)
     except (OSError, subprocess.SubprocessError):
         return None
     rows = [[p.strip() for p in line.split(",")] for line in output.splitlines()]
-    used = [(r[0], r[1], int(r[2]) * _MIB) for r in rows if len(r) == len(_MEMORY_FIELDS) and r[2].isdigit()]
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    names = None if visible is None else {v.strip() for v in visible.split(",") if v.strip()}
-    chosen = [n for index, uuid, n in used if names is None or index in names or uuid in names]
-    return sum(chosen) if chosen else None
+    return sum(
+        int(r[1]) * _MIB
+        for r in rows
+        if len(r) == len(_APPS_FIELDS) and r[0].isdigit() and r[1].isdigit() and int(r[0]) in pids
+    )

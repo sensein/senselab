@@ -80,12 +80,15 @@ pool:
   segment_items: 512
 # The fractions and targets each unit's batch, quantum and worker count are derived from: the load's largest share of a
 # quantum, the share of a worker's memory a batch fills, the wall time a queue's work aims to end in, and the one-job
-# items a unit without a measure runs first.
+# items a unit without a measure runs first, the workers its queue is given for them, and the seconds a worker's read
+# of its processes' device memory may take.
 sizing:
   load_share: 0.05
   memory_headroom: 0.9
   target_wall_s: 1800
   calibration_items: 4
+  calibration_workers: 1
+  device_query_s: 30
 # Every lease: seconds after which another process breaks it, the share of that between beats, and the
 # storage's attribute delay; load refuses 2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.
 lease:

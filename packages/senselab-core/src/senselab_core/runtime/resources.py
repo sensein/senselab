@@ -31,8 +31,8 @@ class ResourceMeasure(Frozen):
     Attributes:
         load_s: Seconds from a worker's start to its model loaded.
         claim_s: Seconds a worker takes to claim one item.
-        resident_bytes: Host memory held once loaded, between requests.
-        peak_memory_bytes: The host high-water memory over the measured requests.
+        resident_bytes: Host memory held once loaded, between requests; None where it could not be read.
+        peak_memory_bytes: The host high-water memory over the measured requests; None with `resident_bytes`.
         device_resident_bytes: Device memory held before the first request; None off a device.
         device_peak_bytes: The device memory used once requests ran; None off a device.
         s_per_input_s: Seconds of work per second of recording input; per item when `input_s_per_item` is None.
@@ -41,8 +41,8 @@ class ResourceMeasure(Frozen):
 
     load_s: Seconds
     claim_s: Seconds
-    resident_bytes: Annotated[int, Field(ge=0)]
-    peak_memory_bytes: Annotated[int, Field(gt=0)]
+    resident_bytes: Annotated[int, Field(ge=0)] | None
+    peak_memory_bytes: Annotated[int, Field(gt=0)] | None
     device_resident_bytes: Annotated[int, Field(ge=0)] | None = None
     device_peak_bytes: Annotated[int, Field(gt=0)] | None = None
     s_per_input_s: Seconds
@@ -53,6 +53,8 @@ class ResourceMeasure(Frozen):
         pairs = [(self.resident_bytes, self.peak_memory_bytes), (self.device_resident_bytes, self.device_peak_bytes)]
         if (self.device_resident_bytes is None) != (self.device_peak_bytes is None):
             raise ValueError("device resident and peak memory are both measured, or neither")
+        if (self.resident_bytes is None) != (self.peak_memory_bytes is None):
+            raise ValueError("host resident and peak memory are both measured, or neither")
         for resident, peak in pairs:
             if resident is not None and peak is not None and resident > peak:
                 raise ValueError(f"resident {resident} bytes exceed the peak {peak}")

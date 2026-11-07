@@ -19,7 +19,14 @@ from senselab_core.runtime.resources import (
 )
 from senselab_core.runtime.sizing import Grant, Measure, Measures, Sample, calibrated, measure_of, size
 
-SETTINGS = SizingSettings(load_share=0.05, memory_headroom=0.9, target_wall_s=60, calibration_items=4)
+SETTINGS = SizingSettings(
+    load_share=0.05,
+    memory_headroom=0.9,
+    target_wall_s=60,
+    calibration_items=4,
+    calibration_workers=1,
+    device_query_s=30,
+)
 UNIT = Unit("t", "b", "org/m", "a" * 40, "cpu")
 MEASURED = Measured(sha=None, run="r", jobs=("7",))
 FOUND = ResourceMeasure(
@@ -31,7 +38,7 @@ measures = st.builds(
     Measure,
     load_s=seconds,
     claim_s=seconds,
-    resident_bytes=st.integers(0, 2**36),
+    resident_bytes=st.none() | st.integers(0, 2**36),
     bytes_per_item=st.integers(0, 2**32),
     s_per_item=seconds,
 )
@@ -48,6 +55,8 @@ settings = st.builds(
     memory_headroom=st.floats(min_value=1e-3, max_value=1.0),
     target_wall_s=st.floats(min_value=1e-3, max_value=1e5, allow_nan=False),
     calibration_items=st.integers(2, 8),
+    calibration_workers=st.integers(1, 4),
+    device_query_s=st.just(30.0),
 )
 
 
@@ -68,10 +77,10 @@ def test_sizing_keeps_every_bound(measure: Measure, grant: Grant, config: Sizing
     )
     assert q == 1 or per == 0 or fixed == 0 or (q - 1) * per < share * (1 + eps)
     assert 1 <= sized.batch_size <= q
-    if grant.memory_bytes is None:
+    if grant.memory_bytes is None or measure.resident_bytes is None:
         assert sized.batch_size == 1
     elif sized.batch_size > 1:
-        used = measure.resident_bytes + sized.batch_size * measure.bytes_per_item
+        used = measure.resident_bytes + sized.batch_size * (measure.bytes_per_item or 0)
         assert used <= config.memory_headroom * grant.memory_bytes * (1 + eps)
     assert sized.workers == 0 if work == 0 else 1 <= sized.workers <= min(grant.max_workers, work)
     assert sized.workers <= math.ceil(work / q)
@@ -152,7 +161,11 @@ def test_calibrated_separates_the_load_and_the_model_from_the_items() -> None:
     alone = calibrated([_sample(10, cold=True)])
     assert alone is not None and (alone.load_s, alone.s_per_input_s, alone.resident_bytes) == (0.0, 2.5, 10_000)
     unread = calibrated([_sample(10, cold=True, resident=None), _sample(2, resident=None)])
-    assert unread is not None and unread.resident_bytes == 500
+    assert unread is not None and (unread.resident_bytes, unread.peak_memory_bytes) == (None, None)
+    unmeasured = measure_of(unread)
+    assert (unmeasured.resident_bytes, unmeasured.bytes_per_item) == (None, None)
+    grant = Grant(max_workers=1, memory_bytes=2**36, quantum_items=100, quantum_s=300)
+    assert size(unmeasured, grant, SETTINGS).batch_size == 1
     devices = [s.model_copy(update={"device_baseline_bytes": 7, "device_bytes": 70}) for s in (_sample(2), _sample(2))]
     on_device = calibrated(devices)
     assert on_device is not None and (on_device.device_resident_bytes, on_device.device_peak_bytes) == (7, 70)

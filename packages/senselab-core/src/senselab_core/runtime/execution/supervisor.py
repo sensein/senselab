@@ -42,6 +42,7 @@ from types import TracebackType
 from typing import IO, Any, Self
 
 from senselab_core.runtime.execution_settings import SupervisorSettings
+from senselab_core.runtime.hardware import proc_stats
 from senselab_core.runtime.profiles import ExecutionProfile
 
 logger = logging.getLogger(__name__)
@@ -197,18 +198,10 @@ _STAT_PGRP = 2
 def live_members(pgid: int) -> bool:
     """Whether group `pgid` has a member that is neither a zombie nor exiting: by `/proc`, else by `killpg(pgid, 0)`."""
     if os.path.isdir("/proc/self/task"):
-        for entry in os.listdir("/proc"):
-            if not entry.isdigit():
-                continue
-            try:
-                with open(f"/proc/{entry}/stat", "rb") as f:
-                    data = f.read()
-            except OSError:
-                continue
-            fields = data[data.rfind(b")") + 2 :].split()
-            if len(fields) > _STAT_PGRP and int(fields[_STAT_PGRP]) == pgid and fields[_STAT_STATE] not in (b"Z", b"X"):
-                return True
-        return False
+        return any(
+            len(fields) > _STAT_PGRP and int(fields[_STAT_PGRP]) == pgid and fields[_STAT_STATE] not in (b"Z", b"X")
+            for _, fields in proc_stats()
+        )
     try:
         os.killpg(pgid, 0)
     except (ProcessLookupError, PermissionError):

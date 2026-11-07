@@ -50,7 +50,7 @@ from senselab_core.runtime.execution.substrates import (
 )
 from senselab_core.runtime.execution.supervisor import Supervisor
 from senselab_core.runtime.execution.workers import WorkerSet
-from senselab_core.runtime.hardware import device_memory_bytes, memory_bytes
+from senselab_core.runtime.hardware import device_memory_bytes, memory_bytes, process_tree
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
@@ -161,7 +161,7 @@ class PoolWorker:
         name: str | None = None,
         join_s: float = DEFAULT_GRACES.bound,
         memory: Callable[[], tuple[int | None, int]] = memory_bytes,
-        device_memory: Callable[[], int | None] = device_memory_bytes,
+        device_memory: Callable[[], int | None] | None = None,
     ) -> None:
         """Serve `classes` under `profile`, storing into `store`; jobs go through `send` (`execute` when None).
 
@@ -183,7 +183,10 @@ class PoolWorker:
         self._plans: dict[str, tuple[Plan, Mapping[InputIdentity, object]]] = {}
         self._finished: Finished = queue.SimpleQueue()
         self.join_s = join_s
-        self._memory, self._device_memory = memory, device_memory
+        self._memory = memory
+        self._device_memory = device_memory or (
+            lambda: device_memory_bytes(process_tree(), timeout_s=profile.sizing.device_query_s)
+        )
         self._baseline = memory()[0] or memory()[1]
         self._device_baseline: int | None = None
         self._warm: set[str] = set()
@@ -260,18 +263,18 @@ class PoolWorker:
         sent, and this returns only after the thread stopped. Once `stop` is set, the request is abandoned too, the
         thread is given `join_s`, and the items whose jobs finished by then are committed.
         """
-        began = time.monotonic()
+        walls: dict[str, float] = {}
         with claim:
             self._log_claimed(claim)
             groups, dead = self._groups(claim)
-            sample = self._sampler(claim, groups, began, claim_s)
+            sample = self._sampler(claim, groups, walls, claim_s)
             for digest, failure in dead.items():
                 claim.dead(failure, [digest])
             pending = {d: len(f.jobs) for d, f in zip(claim.items, claim.fragments, strict=True)}
             outcomes: dict[str, dict[int, JobOutcome]] = {d: {} for d in claim.items}
             finished: Finished = queue.SimpleQueue()
             self._finished, cancelled = finished, threading.Event()
-            runner = threading.Thread(target=self._run_groups, args=(groups, finished, cancelled), daemon=True)
+            runner = threading.Thread(target=self._run_groups, args=(groups, finished, cancelled, walls), daemon=True)
             runner.start()
             interval = self.profile.lease.renew_fraction * self.profile.lease.stale_after_s
             running = True
@@ -291,11 +294,13 @@ class PoolWorker:
                 self._commit(claim, finished.get_nowait() or [], outcomes, pending, sample)
         self._warm.add(claim.queue.name)
 
-    def _sampler(self, claim: Claim, groups: list["_Group"], began: float, claim_s: float) -> Callable[[str], Sample]:
+    def _sampler(
+        self, claim: Claim, groups: list["_Group"], walls: Mapping[str, float], claim_s: float
+    ) -> Callable[[str], Sample]:
         """Return what measures an item of `claim` once its jobs ran.
 
-        Its share of the wall since `began`, its inputs and host memory; on a `cuda` class also device memory, its
-        baseline read before the worker's first `cuda` claim ran.
+        Its wall (`walls`, by the group spans it ran in), inputs and host memory; on a `cuda` class also the device
+        memory of this worker's processes, read once per claim, its baseline before the worker's first `cuda` claim.
         """
         inputs: dict[str, float | None] = {}
         for member in (m for g in groups for m in g.members):
@@ -306,7 +311,7 @@ class PoolWorker:
             known = inputs.get(member.digest, 0.0)
             inputs[member.digest] = None if length is None or known is None else known + length / NS_PER_S
         cold = claim.queue.name not in self._warm
-        total = sum(len(f.jobs) for f in claim.fragments)
+        device: list[int | None] = []
         grant = self.profile.resource_classes.get(class_of(claim.queue.name))
         on_device = grant is not None and grant.device == "cuda"
         if on_device and self._device_baseline is None:
@@ -315,17 +320,19 @@ class PoolWorker:
         def sample(digest: str) -> Sample:
             jobs = len(claim.fragments[claim.items.index(digest)].jobs)
             current, peak = self._memory()
-            device = self._device_memory() if on_device and self._device_baseline is not None else None
+            if on_device and self._device_baseline is not None and not device:
+                device.append(self._device_memory())
+            used = device[0] if device else None
             return Sample(
-                wall_s=(time.monotonic() - began) * jobs / total,
+                wall_s=walls.get(digest, 0.0),
                 claim_s=claim_s,
                 jobs=jobs,
                 input_s=inputs.get(digest),
                 baseline_bytes=self._baseline,
                 resident_bytes=current,
                 peak_memory_bytes=peak,
-                device_baseline_bytes=None if device is None else self._device_baseline,
-                device_bytes=device,
+                device_baseline_bytes=None if used is None else self._device_baseline,
+                device_bytes=used,
                 cold=cold,
                 job=worker_id(),
             )
@@ -368,16 +375,25 @@ class PoolWorker:
             if len(outcomes[digest]) == pending[digest] and digest in claim.items:
                 report(claim, digest, [outcomes[digest][i] for i in range(pending[digest])], sample(digest))
 
-    def _run_groups(self, groups: list[_Group], finished: Finished, cancelled: threading.Event) -> None:
-        """Run each group until `cancelled`, putting its members' outcomes on `finished`; then put None."""
+    def _run_groups(
+        self, groups: list[_Group], finished: Finished, cancelled: threading.Event, walls: dict[str, float]
+    ) -> None:
+        """Run each group until `cancelled`, putting its members' outcomes on `finished`; then put None.
+
+        Each item is given in `walls`, before its outcomes are put, its share by jobs of each group span it ran in.
+        """
         try:
             for group in groups:
                 send = self._send or functools.partial(self._execute, run=group.run)
+                began = time.monotonic()
                 try:
                     outcomes: list[JobOutcome | None] = list(bisect(group.members, group.placement, send, cancelled))
                 except LeaseTimeout as busy:
                     logger.info("pool worker %s gives its items back: %s", self.name, busy)
                     outcomes = [None] * len(group.members)
+                share = (time.monotonic() - began) / len(group.members)
+                for member in group.members:
+                    walls[member.digest] = walls.get(member.digest, 0.0) + share
                 finished.put(list(zip(group.members, outcomes, strict=True)))
         except Abandoned:
             logger.info("pool worker %s abandoned the rest of its claim", self.name)

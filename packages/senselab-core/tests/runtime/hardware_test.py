@@ -3,8 +3,10 @@
 The probes take an injected runner; no test shells out to ``nvidia-smi``.
 """
 
+import os
 import subprocess
 import sys
+from pathlib import Path
 from typing import Callable
 
 import pytest
@@ -13,8 +15,10 @@ from senselab_core.runtime.hardware import (
     GpuInfo,
     HardwareInfo,
     device_memory_bytes,
+    memory_bytes,
     numerics_class,
     probe_hardware,
+    process_tree,
 )
 
 # ── probe_hardware ───────────────────────────────────────────────────
@@ -227,17 +231,37 @@ def test_numerics_class_mps_reports_chip() -> None:
 
 
 @pytest.mark.logic
-def test_device_memory_is_the_used_memory_of_the_visible_gpus(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`nvidia-smi` used memory sums over the GPUs `CUDA_VISIBLE_DEVICES` names, by index or uuid; None without one."""
-    listing = "0, GPU-a, 1024\n1, GPU-b, 2048\n"
-    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
-    assert device_memory_bytes(run=lambda _: listing) == 3072 * 2**20
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-b")
-    assert device_memory_bytes(run=lambda _: listing) == 2048 * 2**20
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "7")
-    assert device_memory_bytes(run=lambda _: listing) is None
+def test_device_memory_counts_only_the_given_processes() -> None:
+    """Device memory sums the compute apps of the given pids within the given timeout; a foreign pid never counts."""
+    seen: list[float] = []
 
-    def absent(_: list[str]) -> str:
+    def listing(cmd: list[str], timeout_s: float) -> str:
+        seen.append(timeout_s)
+        return "100, 1024\n200, 2048\n300, 4096\n"
+
+    assert device_memory_bytes({100, 200}, timeout_s=7.0, run=listing) == 3072 * 2**20 and seen == [7.0]
+    assert device_memory_bytes({999}, timeout_s=7.0, run=listing) == 0
+
+    def absent(cmd: list[str], timeout_s: float) -> str:
         raise FileNotFoundError("nvidia-smi")
 
-    assert device_memory_bytes(run=absent) is None
+    assert device_memory_bytes({100}, timeout_s=7.0, run=absent) is None
+
+
+@pytest.mark.logic
+def test_process_tree_holds_this_process() -> None:
+    """The tree of this process holds it (and, where `/proc` is read, a child it started)."""
+    child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+    try:
+        tree = process_tree()
+        assert os.getpid() in tree and (child.pid in tree or not os.path.isdir("/proc/self"))
+    finally:
+        child.kill()
+        child.wait()
+
+
+@pytest.mark.logic
+def test_memory_without_a_readable_cgroup_has_no_current_figure(tmp_path: Path) -> None:
+    """With no cgroup v2 to read, the current memory is None and only the high-water is given."""
+    current, peak = memory_bytes(tmp_path / "absent-cgroup")
+    assert current is None and peak > 0

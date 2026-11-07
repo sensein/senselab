@@ -36,7 +36,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Final
+from typing import TYPE_CHECKING, ClassVar
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement
@@ -93,7 +93,6 @@ class ScalerFailed(RuntimeError):
     """The pool's scaler thread ended on an error that is not a substrate failure; the cause is chained."""
 
 
-CALIBRATION_WORKERS: Final = 1  # invariant: one worker runs a round, so its cold and warm items are one worker's
 DEAD_DIR = "dead"
 """The directory of a run's dead jobs, one `<key digest>.json` each."""
 
@@ -440,7 +439,7 @@ class Pool:
         with self._lock:
             measures = [self._sized[u] for u in self._queue_units.get(queue, ()) if u in self._sized]
         if not measures:
-            return min(CALIBRATION_WORKERS, work)
+            return min(self.profile.sizing.calibration_workers, work)
         return self._sizing(queue, max(measures, key=lambda m: m.s_per_item), work).workers
 
     def _calibrate(self) -> None:
@@ -657,12 +656,13 @@ class Pool:
         found = self.measures.get(unit)
         if found is None or not isinstance(worker, str):
             return
-        update = {
-            "peak_memory_bytes": found.resident_bytes + 2 * max(1, found.peak_memory_bytes - found.resident_bytes)
-        }
-        if found.device_resident_bytes is not None and found.device_peak_bytes is not None:
-            per_item = max(1, found.device_peak_bytes - found.device_resident_bytes)
-            update["device_peak_bytes"] = found.device_resident_bytes + 2 * per_item
+        update: dict[str, int] = {}
+        for resident, peak, key in (
+            (found.resident_bytes, found.peak_memory_bytes, "peak_memory_bytes"),
+            (found.device_resident_bytes, found.device_peak_bytes, "device_peak_bytes"),
+        ):
+            if resident is not None and peak is not None:
+                update[key] = resident + 2 * max(1, peak - resident)
         grown = ResourceMeasure.model_validate({**found.model_dump(exclude={"measured"}), **update})
         self.measures.put(unit, grown, self._measured((worker,)))
         with self._lock:

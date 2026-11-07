@@ -180,6 +180,73 @@ def test_samples_leave_the_resident_model_out_of_the_per_item_memory(tmp_path: P
 
 
 @pytest.mark.logic
+def test_each_gathered_item_is_timed_by_the_requests_it_ran_in(tmp_path: Path) -> None:
+    """Three one-job items gathered into one claim but sent one at a time each read at least their own request."""
+    profile = _profile()
+    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(4)])
+    _put(placed, pool_dir, 0)
+    for element in range(1, 4):
+        _put(placed, pool_dir, element, why=f"own request {element}")
+    send, took = _sender(store, profile), 0.05
+
+    def slow(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+        time.sleep(took * len(jobs))
+        return send(jobs, placement)
+
+    PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=slow, device_memory=lambda: None).serve()
+    warm = [s for s in (Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)) if not s.cold]
+    assert len(warm) == 3 and all(s.wall_s >= took for s in warm)
+
+
+@pytest.mark.logic
+def test_device_memory_is_read_once_per_claim_on_a_cuda_class(tmp_path: Path) -> None:
+    """A gathered claim of three one-job items on a `cuda` class reads its processes' device memory once."""
+    classes = {**OVERRIDE["resource_classes"], "gpu": {"device": "cuda", "max_workers": 1}}
+    pool = {**OVERRIDE["pool"], "quantum_items": 4}
+    profile = ExecutionProfile.load("laptop", {**OVERRIDE, "resource_classes": classes, "pool": pool})
+    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(4)])
+    for element in range(4):
+        _put(placed, pool_dir, element, "gpu")
+    reads: list[int] = []
+
+    def device() -> int:
+        reads.append(1)
+        return 2**30 * len(reads)
+
+    worker = PoolWorker(
+        pool_dir, ["gpu"], profile=profile, store=store, send=_sender(store, profile), device_memory=device
+    )
+    assert worker.serve() == 0
+    samples = [Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile, "gpu")]
+    assert len(reads) == 1 + 2 and len(samples) == 4
+    assert {s.device_baseline_bytes for s in samples} == {2**30} and {s.device_bytes for s in samples} == {
+        2**31,
+        3 * 2**30,
+    }
+
+
+@pytest.mark.logic
+def test_an_unreadable_resident_memory_leaves_the_host_memory_unmeasured(tmp_path: Path) -> None:
+    """With only a high-water readable (no cgroup v2), the calibrated measure has no host memory pair."""
+    profile = _profile()
+    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(3)])
+    for element in range(3):
+        _put(placed, pool_dir, element)
+    worker = PoolWorker(
+        pool_dir,
+        ["cpu"],
+        profile=profile,
+        store=store,
+        send=_sender(store, profile),
+        memory=lambda: (None, 5000),
+        device_memory=lambda: None,
+    )
+    assert worker.serve() == 0
+    found = calibrated([Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)])
+    assert found is not None and (found.resident_bytes, found.peak_memory_bytes) == (None, None)
+
+
+@pytest.mark.logic
 def test_failing_batch_bisected(tmp_path: Path) -> None:
     """One poisoned job of an 8-job item fails alone with `WorkerLost`; the other 7 commit their results."""
     profile = _profile(quantum_items=8)

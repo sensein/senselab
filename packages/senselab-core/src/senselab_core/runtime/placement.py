@@ -166,7 +166,10 @@ def check_caps(
         if measured is None:
             continue
         pair = (placement.backend.name, None if model is None else model.identity)
-        resident.setdefault(placement.resource_class, {})[pair] = measured[1].peak_memory_bytes
+        peak = measured[1].peak_memory_bytes
+        if peak is None:
+            continue
+        resident.setdefault(placement.resource_class, {})[pair] = peak
         nodes.setdefault(placement.resource_class, []).append(node_id)
     for name, peaks in sorted(resident.items()):
         cap = profile.resource_classes[name].memory_cap_bytes
