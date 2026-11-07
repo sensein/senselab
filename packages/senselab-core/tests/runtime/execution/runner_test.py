@@ -569,6 +569,7 @@ def test_the_submitter_is_built_over_a_senselab_store_with_no_readonly_caches(tm
     run = runner._Run(
         placed,
         executor.admit(placed, values),
+        values,
         executor,
         store,
         EventLog(tmp_path / "run", "a1", 1),
