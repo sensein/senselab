@@ -56,9 +56,30 @@ def claim_and_finish(root: str, override: dict[str, Any], start_at: float, stall
     return {"claimed": True, "finished": list(finished), "outcomes": claim.outcomes, "broke": broke}
 
 
-def put_stalled(root: str, override: dict[str, Any], admission: str, stall_s: float) -> int:
-    """Put one fragment whose first slot `symlink` sleeps `stall_s` first; return the slots taken."""
-    stall("symlink", "slot-", stall_s, times=1)
+def _gated_symlink(gate: Path, bound_s: float, poll_s: float) -> None:
+    """Make this process's first `os.symlink` of a `slot-` name touch `gate/stalled`, then wait for `gate/release`."""
+    real = os.symlink
+    left = [1]
+
+    def symlink(src: Any, dst: Any, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+        if left[0] and os.path.basename(os.fsdecode(dst)).startswith("slot-"):
+            left[0] = 0
+            (gate / "stalled").touch()
+            deadline = time.monotonic() + bound_s
+            while not (gate / "release").exists():
+                assert time.monotonic() < deadline, "the stalled putter was never released"
+                time.sleep(poll_s)
+        real(src, dst, *args, **kwargs)
+
+    setattr(os, "symlink", symlink)
+
+
+def put_stalled(root: str, override: dict[str, Any], admission: str, gate: str, wait: tuple[float, float]) -> int:
+    """Put one fragment whose first slot `symlink` waits for `release` in `gate`; return the slots taken.
+
+    The wait begins by creating `stalled` in `gate` and gives up after `wait[0]` seconds, polling every `wait[1]`.
+    """
+    _gated_symlink(Path(gate), *wait)
     return _queue(root, override).put_all([fragment(admission)])
 
 
