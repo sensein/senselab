@@ -125,7 +125,8 @@ without trading away P-31..P-39.
   second on one task, the next round goes to a fresh agent one tier up (sonnet to opus), and the ledger line
   says `escalated`. A 429 or usage-limit error is not a failure and is not escalated. Use fable only after
   opus has failed on the same item, or for proofs about the lease and store protocol (ADR-003). Fix rounds
-  on one symptom are counted separately (P-35).
+  on one symptom are counted separately (P-35); when the task counter and the symptom counter disagree, the
+  stricter one wins.
 - **Reviewer independence.** A review never runs on the model and context that produced the work.
   Pair a sonnet implementation with an opus review on the kernel, and an opus implementation with
   a fresh sonnet reviewer, or a fresh opus reviewer on a kernel item (P-40 Check). A reviewer gets the code and the principles, not the
@@ -204,8 +205,8 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   QOS cap.
 - **Amended 2026-11-07** (the shared local venv):
   - The local `.venv` is rebuilt by the controller alone, with `uv sync --locked --all-extras --group dev`,
-    whenever `uv.lock` or any `pyproject.toml` on the integration branch changes. Agents run
-    `uv run --no-sync` and never sync.
+    whenever `uv.lock` or any `pyproject.toml` on the current code branch (`STATE.md`) changes. Agents run
+    `uv run --no-sync` and never sync. ORCD jobs use the sync line of the phase plan's job shape.
   - The sync writes `uv.lock`'s digest to `.venv/senselab-lock.sha`. A test run whose branch `uv.lock` digest
     differs prints `STALE VENV`, and its result is not evidence. Planned, not yet built: the check, as a
     wrapper around `uv run --no-sync pytest` or a conftest hook.
@@ -346,5 +347,6 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   P-ids and the checklist.
   Amended 2026-11-07: the reviewer runs in a fresh context; its model differs from the implementer's
   unless both are the top tier for a kernel item, and the PR says so. `scripts/check_pr_models.py` is to
-  encode exactly this (planned; today it checks only that the models differ). Briefs take the three-heading form and
+  encode exactly this (planned; today it checks only that the models differ). The top tier is opus or
+  fable: an opus+opus or fable+fable pairing is allowed on a kernel item only. Briefs take the three-heading form and
   reviews the checklist table set out under Rules above.

@@ -214,7 +214,8 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
   claimed and is not broken: the wait ends in `LeaseUnavailable` naming the owner. That is unreachable with the
   packaged modes: every
   lease is `shared_dir_mode` or `lease.dir_mode` (group-listable), except the label map's, which is
-  `lease.private_dir_mode` under a `0o700` directory that no other user can reach.
+  `PRIVATE_DIR_MODE` under a `0o700` directory that no other user can reach. `PRIVATE_DIR_MODE` is an invariant
+  in the P-34 form, not config: the label map is readable by its owner only, and no profile may open it.
 - **Take.** After `mkdir <name>.lease/<token>`, the taker lists the lease. Another token beside its own means its
   lease directory was swapped under it; it removes its token and does not hold. It then `rmdir`s `<name>.lease`,
   which succeeds only if the directory is empty, so two takers that both see each other's token and both withdraw
@@ -278,7 +279,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
 - 2026-11-01: services are process-scoped in Phase 2; the leased registry and `svc` pool worker arrive with lease renewal in Phase 3 (P2-14, P2-38; Task 9b).
 - 2026-11-03: a lease is a directory taken by `mkdir` with the holder's token, renewed by beat directories from a renewer independent of the work; replaces the `O_EXCL` link (owner item 58).
 - 2026-11-06: renewal as built: probe-directory clock, fresh re-read before a break, claim by rename before a break or release (tokenless leases included; empty ones by `rmdir`), withdrawn leases removed, no put-back, `keep_alive` renewer on a monotonic cadence held by every lease caller, `prove()` before every commit, `ESTALE` as lost, the beat bound (one missed beat allowed) checked at profile load, `StorageUnsupported` on an unsupported `mkdir`; closes R-111.
-- 2026-11-07: the lease constants this ADR names are profile keys (`lease.record_attempts`, `lease.dir_mode`, `lease.private_dir_mode`, `lease.missed_beats`), per P-34 as amended; the code constants move into the profile, with derivations in `config-derivations.md`, under the fixed-parameter audit.
+- 2026-11-07: the lease constants this ADR names are profile keys (`lease.record_attempts`, `lease.dir_mode`, `lease.missed_beats`), per P-34 as amended; `PRIVATE_DIR_MODE` stays an invariant (a security property). The other code constants move into the profile, with derivations in `config-derivations.md`, under the fixed-parameter audit.
 
 ## Amendment 2026-11-06: queues of plan fragments (Phase 3 Task 13)
 

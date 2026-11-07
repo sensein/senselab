@@ -48,8 +48,9 @@ yet merged into `2.x`), → `2.x` after `2x/phase-2` merges. Spec changes, ADR a
 
 - **Interpreters are uv-managed only** (Phase 2, unchanged): `--python-preference only-managed` and a named version on
   every interpreter-selecting `uv venv`, in senselab and in pydra work.
-- **Default Python is Colab's, 3.13** (owner items 54, 55): every CI job runs on 3.13; the rest of 3.11–3.15 runs when
-  a release-tagged PR merges (owner item 54) and nightly.
+- **Default Python is Colab's, 3.13** (owner items 54, 55): every CI job runs on 3.13; 3.11–3.14 run nightly and on a
+  PR labelled `full-matrix`. 3.15 and the release-tagged-merge trigger of owner item 54 are not yet in CI
+  (`testing.md` §5).
 - **No backwards compatibility** (P-14, P2-44): no shims, aliases, re-exports or readers of retired formats. A retired
   format is refused with a typed error naming the migration. `run_call` is removed, not wrapped (P2-16).
 - **One implementation per behaviour** (P-37): one graph runner (the one the gate selects), one job engine, one queue,

@@ -353,9 +353,10 @@ amending its origin.
   flags numeric literals in any task that have no profile key.
 - **Amended 2026-11-07** (where a derivation lives): a config file carries values and a one-line `#`
   description per key. Derivations live in [`config-derivations.md`](config-derivations.md), a `##` section
-  per config file or profile and a `###` section per key. No YAML carries a `derivation:` key; a checker that
-  wants a derivation reads the spec section. A value not yet measured says so there and names the task that
-  measures it.
+  per config file or profile and a `###` section per key. A checker that wants a derivation reads the spec
+  section. A value not yet measured says so there and names the task that measures it. YAML files that still
+  carry an inline `derivation:` or `derivations:` key are migrated to `config-derivations.md` by the
+  fixed-parameter audit's code task; no new one is added.
 
 ### P-18 Configuration, not flags
 - **Status**: active. **Statement**: entry points take inputs and configuration, and the merged
