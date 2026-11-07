@@ -6,7 +6,3 @@ seed: 0
 long_s: 7200
 tasks:
 - {task: signal.resample, port: series, data: synthetic, params: {target_rate: 8000}, points: [1, 100, 10000, long]}
-- {task: speech_to_text, port: audio, data: librispeech, manifest: librispeech-test-clean, params: {timestamps: none}, points: [1, 100]}
-- {task: speaker_embeddings, port: audio, data: librispeech, manifest: librispeech-test-clean, points: [1, 100]}
-- {task: diarize, port: audio, data: librispeech, manifest: librispeech-test-clean, points: [1, 100]}
-- {task: pii_spans, port: text, data: gretel, manifest: gretel-synthetic-pii, points: [1, 100]}

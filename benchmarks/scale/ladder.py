@@ -3,10 +3,10 @@
 `uv run python benchmarks/scale/ladder.py run SUITE --execution PROFILE`
 
 A suite (`scale-suite@1.0`, `suites/<name>.yaml`; `suites/fake.yaml` runs with `fake_stack/` on PYTHONPATH) names a
-seed, the long signal's seconds and its tasks. Each task names the input port its data binds to, its params and model,
-its data (`synthetic` tones, `librispeech` utterances of a manifest, `gretel` documents of a manifest, or `payloads`,
-JSON records for the fake stack) and its scale points: item counts, or `long`, one recording of the long seconds.
-`PROFILE` is a packaged execution profile, or a YAML file merged over the packaged profile its `name` names
+seed, the long signal's seconds and its tasks. Each task names the input port its data binds to, its params, model and
+stack, its data (`synthetic` tones, `librispeech` utterances of a manifest, `gretel` documents of a manifest, or
+`payloads`, JSON records for the fake stack) and its scale points: item counts, or `long`, one recording of the long
+seconds. `PROFILE` is a packaged execution profile, or a YAML file merged over the packaged profile its `name` names
 (`orcd-local.yaml` runs the orcd classes as local workers of one allocation). Each point is planned, run on a `Pool`
 over the profile's substrate into a store of its own, and measured from its events, its files and the sample each pool
 worker reported with each item; one `scale-result@1.0` document per point is written under
@@ -64,7 +64,7 @@ RECORDING = {"synthetic": "Audio", "librispeech": "Audio"}
 
 @dataclass(frozen=True)
 class Entry:
-    """One task of a suite: its port, data, points, params and model."""
+    """One task of a suite: its port, data, points, params, model, and its stack (the profile's choice when None)."""
 
     task: str
     port: str
@@ -73,6 +73,7 @@ class Entry:
     params: Mapping[str, Any] = field(default_factory=dict)
     model: str | None = None
     manifest: str | None = None
+    stack: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,10 +123,22 @@ def dataset_of(entry: Entry, point: int | str, suite: Suite, work: Path) -> tupl
 
 
 def graph_of(entry: Entry) -> Graph:
-    """Return the one-node graph mapping `entry`'s task over the records' input `x`."""
-    spec = packaged().registry.spec(entry.task)
+    """Return the one-node graph mapping `entry`'s task over the records' input `x`.
+
+    With a stack, the node names its backend's params (its defaults), so each stack's plan has a run of its own.
+    """
+    registry = packaged().registry
+    spec = registry.spec(entry.task)
     kind = RECORDING.get(entry.data, spec.inputs[entry.port])
-    node = Node(id="a", task=entry.task, task_version=spec.version, params=dict(entry.params), model=entry.model)
+    chosen = [b.name for b in registry.backends(entry.task) if b.stack == entry.stack]
+    node = Node(
+        id="a",
+        task=entry.task,
+        task_version=spec.version,
+        params=dict(entry.params),
+        model=entry.model,
+        backend_params={name: {} for name in chosen},
+    )
     return Graph(
         inputs={"x": f"list[{kind}]"},
         nodes=(node,),
@@ -167,6 +180,9 @@ def measure_point(entry: Entry, point: int | str, suite: Suite, profile: Executi
         FileExistsError: the point's run directory exists, so its results would be reused.
     """
     dataset, root = dataset_of(entry, point, suite, out)
+    if entry.stack is not None:
+        stacks = {**profile.stack_preferences, entry.task: (entry.stack,)}
+        profile = profile.model_copy(update={"stack_preferences": stacks})
     placed = plan(graph_of(entry), dataset, execution=profile, bind=None if root is None else {"x": "audio"})
     run_dir = run_dir_of(placed.hash)
     if run_dir.exists():
