@@ -28,7 +28,7 @@ from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, Upstrea
 from senselab_core.runtime.execution.outputs import anchors_of
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.services import service_registry
-from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.execution.workers import WorkerSet, service_of
 from senselab_core.runtime.keys import Call, Placement, call_key, request_components, request_size
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -237,6 +237,7 @@ def job_key(
     call = replace(_node_call(placed, node, registry), inputs=dict(inputs))
     record = placed.placement.nodes[node] if placement is None else placement
     placed_on = placement_of_record(record, call.task, registry)
+    call = replace(call, service=service_of(placed_on.backend, call.model))
     size = request_size(placed_on.backend, placed_on.batch_size)
     return call_key(call, replace(placed_on, **request_components(placed_on.backend, size)))
 

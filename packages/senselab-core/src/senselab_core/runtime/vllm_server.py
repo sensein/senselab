@@ -35,8 +35,7 @@ from typing import IO, Any
 
 from senselab_worker.digest import identity_digest
 
-from senselab_core.kernel._base import Frozen, NonEmptyStr
-from senselab_core.kernel.identity import ResolvedModel
+from senselab_core.kernel.identity import Attestation, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.supervisor import current
 from senselab_core.runtime.execution_settings import JobLease
@@ -114,30 +113,6 @@ class StaleAttestation(RuntimeError):
     """A reply the attested server did not give: the server is no longer running, or another model answered."""
 
 
-class Attestation(Frozen):
-    """What a running server is.
-
-    `engine_version` and `served_model` are observed: what the server reports at `/version` and `/v1/models`.
-    `model_identity` and `config_digest` are asserted: the pinned model and the settings the client launched it with.
-    """
-
-    engine_version: NonEmptyStr
-    served_model: NonEmptyStr
-    model_identity: NonEmptyStr
-    config_digest: NonEmptyStr
-
-    def driver(self) -> dict[str, str]:
-        """Return the attestation as `ExecutionContext.driver` entries; `observed` names the observed ones."""
-        return {
-            "engine": ENGINE,
-            "engine_version": self.engine_version,
-            "served_model": self.served_model,
-            "model_identity": self.model_identity,
-            "config_digest": self.config_digest,
-            "observed": "engine_version served_model",
-        }
-
-
 @dataclass(frozen=True)
 class Attested:
     """A server's parsed reply and the attestation of the server that gave it."""
@@ -158,16 +133,16 @@ def attest_reply(body: Any, attestation: Attestation, label: str) -> Attested:  
     return Attested(body, attestation)
 
 
-def expected_attestation(env: EnvHandle, model: ResolvedModel, settings: Mapping[str, Any]) -> Attestation:
-    """Return what a server of `model` with `settings` in `env` must attest, without starting it.
+def expected_attestation(lock: Path | None, model: ResolvedModel, settings: Mapping[str, Any]) -> Attestation:
+    """Return what a server of `model` with `settings` in an env built from `lock` must attest, without starting it.
 
-    The engine version is the ``vllm==`` pin of the env's lock.
+    The engine version is the ``vllm==`` pin of the lock.
 
     Raises:
-        VllmStartError: ``version``, the env has no lock or the lock pins no ``vllm``.
+        VllmStartError: ``version``, there is no lock or the lock pins no ``vllm``.
         ValueError: as `server_args`.
     """
-    text = env.lock.read_text("utf-8") if env.lock is not None else ""
+    text = lock.read_text("utf-8") if lock is not None else ""
     pin = re.search(r"^vllm==([^\s\\;]+)", text, re.MULTILINE)
     if pin is None:
         raise VllmStartError("version", "the env's lock pins no vllm")
@@ -188,7 +163,8 @@ def server_launch(env: EnvHandle, variables: Mapping[str, str], devices: Sequenc
 def attested_fields(env: EnvHandle, attestation: Attestation, launched: Launch) -> dict[str, Any]:
     """Return the env's `ExecutionContext` fields with `attestation` and the launch's digest added to `driver`."""
     fields = env.context_fields()
-    return {**fields, "driver": {**fields["driver"], **attestation.driver(), "launch_env": launched.digest}}
+    driver = {**fields["driver"], "engine": ENGINE, **attestation.driver(), "launch_env": launched.digest}
+    return {**fields, "driver": driver}
 
 
 def config_digest(settings: Mapping[str, Any]) -> str:

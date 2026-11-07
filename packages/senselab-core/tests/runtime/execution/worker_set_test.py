@@ -8,12 +8,12 @@ from typing import Any
 import pytest
 import senselab_core.runtime.fake_backend as fake
 from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
-from senselab_core.kernel.identity import ModelRef, ResolvedModel
+from senselab_core.kernel.identity import Attestation, ModelRef, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.workers import PRECISION, WorkerLoadFailed, WorkerSet, host_model_key
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.vllm_server import Attestation, VllmStartError
+from senselab_core.runtime.vllm_server import VllmStartError
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_worker.faults import FaultClass, classify

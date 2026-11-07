@@ -6,6 +6,7 @@ from typing import Any, TypedDict
 
 from senselab_core.kernel.declare import BackendParams, BackendSpec, TaskParams, TaskSpec, key_for
 from senselab_core.kernel.identity import (
+    Attestation,
     ExecutionContext,
     InputIdentity,
     LogicalKey,
@@ -18,13 +19,17 @@ from senselab_core.kernel.plan import slice_identity
 
 @dataclass(frozen=True)
 class Call:
-    """A task call: the task, its params, input identities, resolved model and profile slices."""
+    """A task call: the task, its params, input identities, resolved model and profile slices.
+
+    `service` is the attestation of the service answering a server backend's call, None for any other backend.
+    """
 
     task: TaskSpec
     params: TaskParams
     inputs: Mapping[str, InputIdentity]
     model: ResolvedModel | None = None
     profile_slices: Mapping[str, ProfileSliceIdentity] = field(default_factory=dict)
+    service: Attestation | None = None
 
 
 class MissingProfileSlice(LookupError):
@@ -178,4 +183,5 @@ def call_key(call: Call, placement: Placement) -> LogicalKey:
         profile_slices=call.profile_slices,
         batch_formation=placement.batch_formation if "batch_formation" in declared else None,
         chunk_grid=placement.chunk_grid if "chunk_grid" in declared else None,
+        service=call.service,
     )

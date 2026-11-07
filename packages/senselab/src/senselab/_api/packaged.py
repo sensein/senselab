@@ -63,6 +63,11 @@ def open_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
     )
 
 
+def env_lock(backend: BackendSpec) -> Path:
+    """Return the lock under `data/env_locks/` the isolated or server env `backend` declares is built from."""
+    return _built_from(backend)[0]
+
+
 def _built_from(backend: BackendSpec) -> tuple[Path, dict[str, Path]]:
     """Return the lock an isolated or server env is built from and the worker modules overlaid on it."""
     env_lock = Path(str(_DATA.joinpath("env_locks", f"{backend.env.name}.txt")))
@@ -81,7 +86,9 @@ def is_built(backend: BackendSpec, profile: ExecutionProfile) -> bool:
     return env_built(backend.env, env_lock, profile.env_root(backend.env.kind), settings=profile.envs, workers=workers)
 
 
-PACKAGED = Packaged(CATALOGUE, open_env, lock_records=packaged_lock_records("senselab"), env_built=is_built)
+PACKAGED = Packaged(
+    CATALOGUE, open_env, lock_records=packaged_lock_records("senselab"), env_built=is_built, env_lock=env_lock
+)
 
 
 def register(registry: Registry) -> Packaged:

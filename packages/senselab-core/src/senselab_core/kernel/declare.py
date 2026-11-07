@@ -28,6 +28,7 @@ import senselab_core.kernel.time  # noqa: F401 - importing it defines the time t
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
 from senselab_core.kernel.formats import Formatted
 from senselab_core.kernel.identity import (
+    Attestation,
     InputIdentity,
     LogicalKey,
     Params,
@@ -631,6 +632,7 @@ def key_for(  # noqa: PLR0913 - keyword-only, one argument per key component
     profile_slices: Mapping[str, ProfileSliceIdentity] | None = None,
     batch_formation: str | None = None,
     chunk_grid: str | None = None,
+    service: Attestation | None = None,
 ) -> LogicalKey:
     """Return the logical key of calling `backend` for `task` (ADR-002).
 
@@ -639,11 +641,13 @@ def key_for(  # noqa: PLR0913 - keyword-only, one argument per key component
     `output:` identity; `model` is the resolved model, which enters the key as its `key_identity()`;
     `profile_slices` maps each profile slice the call reads to its `profile:` identity.
     `batch_formation` and `chunk_grid` are given exactly when the backend declares them
-    output-affecting. The runtime builds keys with `senselab_core.runtime.keys.build_key`.
+    output-affecting. `service` is the attestation of the service answering the call, given exactly when the
+    backend is a server backend. The runtime builds keys with `senselab_core.runtime.keys.build_key`.
 
     Raises:
         ValueError: if the backend implements another task, params, backend params or inputs do not
-            match the declarations, or an output-affecting component is given undeclared or missing.
+            match the declarations, an output-affecting component is given undeclared or missing, or `service` is
+            given for a backend that is not a server backend or missing for one that is.
         UnpinnedModel: if `model` is not pinned.
         pydantic.ValidationError: if an identity is not of its typed form.
     """
@@ -659,6 +663,9 @@ def key_for(  # noqa: PLR0913 - keyword-only, one argument per key component
         if (name in backend.output_affecting) != (component is not None):
             state = "declares" if name in backend.output_affecting else "does not declare"
             raise ValueError(f"backend {backend.name!r} {state} {name} output-affecting, got {component!r}")
+    if (backend.server is not None) != (service is not None):
+        state = "is" if backend.server is not None else "is not"
+        raise ValueError(f"backend {backend.name!r} {state} a server backend, got service {service!r}")
     return LogicalKey(
         task=task.name,
         task_version=task.version,
@@ -669,5 +676,6 @@ def key_for(  # noqa: PLR0913 - keyword-only, one argument per key component
         backend_params=backend_params.model_dump(mode="json"),
         inputs=inputs,
         profile_slices=profile_slices or {},
+        service=service,
         **components,
     )

@@ -27,11 +27,12 @@ from pydantic import ValidationError
 
 from senselab_core.kernel._base import NonEmptyStr
 from senselab_core.kernel.formats import SERVICE_ENTRY_FORMAT, FormatTag, Formatted
+from senselab_core.kernel.identity import Attestation
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import LEASE_SUFFIX, Lease, LeaseState, LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.storage import write_atomically
-from senselab_core.runtime.vllm_server import Attestation, Attested, StaleAttestation, attest_reply, chat, complete
+from senselab_core.runtime.vllm_server import Attested, StaleAttestation, attest_reply, chat, complete
 
 logger = logging.getLogger("senselab")
 

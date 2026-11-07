@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 from lease_time_fixture import install
-from senselab_core.kernel.identity import ExecutionContext, ModelRef, ResolvedModel
+from senselab_core.kernel.identity import Attestation, ExecutionContext, ModelRef, ResolvedModel
 from senselab_core.runtime import vllm_server as vs
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution_settings import JobLease
@@ -109,7 +109,7 @@ def test_attestation_enters_context(env: EnvHandle, tmp_path: Path) -> None:
     """The served version, the model commit and the config digest reach the context and every reply."""
     with _server(env, tmp_path) as server:
         attestation = server.attestation
-        assert attestation == vs.Attestation(
+        assert attestation == Attestation(
             engine_version="0.31.0",
             served_model="org/model",
             model_identity=SHA,

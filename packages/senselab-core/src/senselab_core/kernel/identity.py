@@ -247,14 +247,38 @@ Params = Annotated[
 """A JSON object held in its RFC 8785 canonical value, deeply read-only (objects as mappings, arrays as tuples)."""
 
 
+class Attestation(Frozen):
+    """What a running model server is.
+
+    `engine_version` and `served_model` are observed: what the server reports at `/version` and `/v1/models`.
+    `model_identity` and `config_digest` are asserted: the pinned model and the settings the server was launched with.
+    """
+
+    engine_version: NonEmptyStr
+    served_model: NonEmptyStr
+    model_identity: NonEmptyStr
+    config_digest: NonEmptyStr
+
+    def driver(self) -> dict[str, str]:
+        """Return the attestation as `ExecutionContext.driver` entries; `observed` names the observed ones."""
+        return {
+            "engine_version": self.engine_version,
+            "served_model": self.served_model,
+            "model_identity": self.model_identity,
+            "config_digest": self.config_digest,
+            "observed": "engine_version served_model",
+        }
+
+
 class LogicalKey(Frozen):
     """The exact, portable identity of a task call (ADR-002).
 
     `model` is a pinned model's identity; `params` and `backend_params` are canonicalised (NFC strings,
     JCS numbers) at construction and refused if they are not JSON; `inputs` maps input names to `content:` or
-    `output:` identities and `profile_slices` slice names to `profile:` identities. The digest is
-    computed at construction, so a key that validates can be digested. No execution context, code
-    or environment is part of the key.
+    `output:` identities and `profile_slices` slice names to `profile:` identities; `service` is the attestation of
+    the service a server backend's call is answered by, None for any other backend. The digest is computed at
+    construction, so a key that validates can be digested. No execution context, code or environment is part of the
+    key.
     """
 
     schema_version: Annotated[int, Strict(), Field(ge=1)] = 1
@@ -271,12 +295,13 @@ class LogicalKey(Frozen):
     ] = FrozenMapping({})
     batch_formation: NonEmptyStr | None = None
     chunk_grid: NonEmptyStr | None = None
+    service: Attestation | None = None
 
     def _derived(self) -> Mapping[str, object]:
-        return {**super()._derived(), "_digest": identity_digest("logical-key@6", self.model_dump())}
+        return {**super()._derived(), "_digest": identity_digest("logical-key@7", self.model_dump())}
 
     def digest(self) -> str:
-        """Return `identity_digest("logical-key@6", fields)`, computed at construction."""
+        """Return `identity_digest("logical-key@7", fields)`, computed at construction."""
         return str(self.__pydantic_private__["_digest"])  # type: ignore[index]
 
 

@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -14,16 +15,17 @@ from typing import Any
 import pytest
 import senselab_core.runtime.fake_backend as fake
 from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
-from senselab_core.kernel.identity import ModelRef, ResolvedModel
+from senselab_core.kernel.identity import Attestation, ModelRef, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.pool_worker import IDLE_POLLS, PoolWorker
 from senselab_core.runtime.execution.queue import RUN_QUEUES
 from senselab_core.runtime.execution.services import ConsumerLease, ServiceEntry, ServiceRegistry
-from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.execution.workers import WorkerSet, expected_of
+from senselab_core.runtime.keys import Call, Placement, call_key
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
-from senselab_core.runtime.vllm_server import Attestation, StaleAttestation
+from senselab_core.runtime.vllm_server import StaleAttestation
 from senselab_core.testing.interpreter import source_tree_python
 
 pytestmark = pytest.mark.logic
@@ -104,9 +106,9 @@ def starts() -> Iterator[list[StandIn]]:
         server.stop()
 
 
-def _provider(registry: ServiceRegistry, starts: list[StandIn]) -> WorkerSet:
+def _provider(registry: ServiceRegistry, starts: list[StandIn], identity: Attestation = IDENTITY) -> WorkerSet:
     def start(backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profile: ExecutionProfile) -> StandIn:  # noqa: ARG001 - a ServerStart
-        starts.append(StandIn(IDENTITY))
+        starts.append(StandIn(identity))
         return starts[-1]
 
     return WorkerSet(1, start_server=start, registry=registry, provide=True)
@@ -208,3 +210,55 @@ def test_attestation_checked_per_reply(registry: ServiceRegistry, starts: list[S
     finally:
         consumer.stop()
         service.close()
+
+
+SETTINGS: dict[str, Any] = {
+    "max_model_len": 4096,
+    "max_num_seqs": 4,
+    "gpu_memory_utilization": 0.9,
+    "kv_cache_dtype": "auto",
+    "generation_config": "vllm",
+    "limit_mm_per_prompt": {"image": 0},
+    "enable_prefix_caching": False,
+    "flashinfer_sampler": False,
+}
+
+
+def test_the_key_takes_the_attestation_of_the_service_entry(
+    tmp_path: Path, registry: ServiceRegistry, starts: list[StandIn]
+) -> None:
+    """A call's key takes the entry's attestation: two configs give two keys, a restart of one config the same key."""
+    lock = tmp_path / "vllm-server.txt"
+    lock.write_text("vllm==0.31.0\n")
+    call = Call(task=fake.ECHO, params=fake.EchoParams(), inputs={"payload": "content:" + "a" * 64}, model=MODEL)
+    keys = []
+    for seqs in (4, 8, 4):
+        backend = BACKEND.model_copy(
+            update={"server": ServerConfig(settings={**SETTINGS, "max_num_seqs": seqs}, startup_timeout_s=1.0)}
+        )
+        expected = expected_of(backend, lock, MODEL)
+        provider, consumer = _provider(registry, starts, expected), WorkerSet(1, registry=registry)
+        try:
+            provider.server(backend, ENV, MODEL, PROFILE, expected)
+            served = consumer.server(backend, ENV, MODEL, PROFILE, expected)
+            assert isinstance(served, ConsumerLease) and served.attestation == expected
+            placement = Placement(backend=backend, backend_params=backend.params(), device="cpu")
+            keys.append(call_key(replace(call, service=served.attestation), placement).digest())
+            with pytest.raises(ValueError, match="is a server backend"):
+                call_key(call, placement)
+        finally:
+            consumer.close()
+            provider.close()
+    assert keys[0] != keys[1] and keys[0] == keys[2] and len(starts) == 3
+
+
+def test_a_dead_consumer_counts_until_its_lease_is_stale(registry: ServiceRegistry) -> None:
+    """A consumer that died without releasing counts as live until its lease is stale, then is removed."""
+    consumers = registry.root / f"{registry.name(IDENTITY)}.consumers"
+    token = consumers / f"{uuid.uuid4().hex}.lease" / uuid.uuid4().hex
+    token.mkdir(parents=True)
+    assert registry.live_consumers(IDENTITY) == 1
+    past = time.time() - 10 * PROFILE.lease.stale_after_s
+    for path in (token, token.parent):
+        os.utime(path, (past, past))
+    assert registry.live_consumers(IDENTITY) == 0 and list(consumers.iterdir()) == []

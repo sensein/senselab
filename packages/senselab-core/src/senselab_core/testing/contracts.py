@@ -45,7 +45,7 @@ from senselab_worker.units import NS_PER_S
 
 from senselab_core.kernel._base import thawed
 from senselab_core.kernel.declare import OUTPUT_AFFECTING, BackendSpec, Registry, TaskParams, TaskSpec
-from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelRef, ResolvedModel
+from senselab_core.kernel.identity import Attestation, ExecutionContext, LogicalKey, ModelRef, ResolvedModel
 from senselab_core.kernel.results import Intervals, TextSpans, Transcript, TranscriptNode, Trials
 from senselab_core.kernel.signals import PlainText
 from senselab_core.kernel.time import Span
@@ -71,6 +71,13 @@ BASE_MODEL = ResolvedModel(ref=ModelRef.parse("contract/model@main"), identity="
 
 VARIED_MODEL = ResolvedModel(ref=ModelRef.parse("contract/model@main"), identity="1" * 40)
 """The pinned model `key_changes_with_model` puts in place of `BASE_MODEL`."""
+
+BASE_SERVICE = Attestation(
+    engine_version="0", served_model="contract/model", model_identity="0" * 40, config_digest="c"
+)
+"""The service attestation every key case of a server backend starts from."""
+VARIED_SERVICE = BASE_SERVICE.model_copy(update={"config_digest": "d"})
+"""The attestation `key_changes_with_service` puts in place of `BASE_SERVICE`."""
 
 KEY_FORMAT_FIELDS: frozenset[str] = frozenset({"schema_version"})
 """Key fields fixed by the key format rather than by a call; their case varies the key directly."""
@@ -325,12 +332,16 @@ def _params_reject_unknown(task: TaskSpec) -> None:
 
 
 def base_call(task: TaskSpec, backend: BackendSpec) -> tuple[Call, Placement]:
-    """Return the call and placement every key case starts from: default params, `BASE_MODEL`, every component set."""
+    """Return the call and placement every key case starts from: default params, `BASE_MODEL`, every component set.
+
+    A server backend's call carries `BASE_SERVICE`.
+    """
     call = Call(
         task=task,
         params=probe_params(task),
         inputs={port: "content:" + identity_digest("contract-probe@1", ["input", port]) for port in task.inputs},
         model=BASE_MODEL,
+        service=None if backend.server is None else BASE_SERVICE,
     )
     placement = Placement(
         backend=backend,
@@ -419,12 +430,15 @@ def _varied_call(field: str, call: Call, placement: Placement) -> tuple[Call, Pl
         port = sorted(call.inputs)[0]
         varied = "content:" + identity_digest("contract-probe@1", ["varied"])
         return replace(call, inputs={**call.inputs, port: varied}), placement
-    if field == "model":
-        return replace(call, model=VARIED_MODEL), placement
-    if field == "profile_slices":
-        return replace(
-            call, profile_slices={"profile": "profile:" + identity_digest("contract-probe@1", ["slice"])}
-        ), placement
+    varied_call: dict[str, Any] = {
+        "model": VARIED_MODEL,
+        "profile_slices": {"profile": "profile:" + identity_digest("contract-probe@1", ["slice"])},
+        "service": VARIED_SERVICE,
+    }
+    if field in varied_call:
+        if field == "service" and call.service is None:
+            raise unittest.SkipTest(f"{backend.name!r} is not a server backend; no service to vary")
+        return replace(call, **{field: varied_call[field]}), placement
     if field in OUTPUT_AFFECTING:
         return call, _placed(placement, field, f"{getattr(placement, field)}~")
     raise AssertionError(f"LogicalKey.{field} has no contract variation: add it to _varied_call or KEY_FORMAT_FIELDS")

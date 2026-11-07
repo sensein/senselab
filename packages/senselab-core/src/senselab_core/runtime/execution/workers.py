@@ -8,6 +8,7 @@ import contextlib
 import importlib
 import threading
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
 from senselab_worker.canonical import jcs_dumps
@@ -17,7 +18,8 @@ from senselab_worker.serve import backend_init
 
 from senselab_core.kernel._base import value_digest
 from senselab_core.kernel.declare import BackendSpec
-from senselab_core.kernel.identity import ResolvedModel
+from senselab_core.kernel.identity import Attestation, ResolvedModel
+from senselab_core.runtime.call import packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.services import ServiceLease, ServiceRegistry
 from senselab_core.runtime.host_worker import HostWorker
@@ -25,7 +27,6 @@ from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.vllm_server import (
-    Attestation,
     AttestationMismatch,
     StaleAttestation,
     VllmServer,
@@ -92,16 +93,31 @@ def start_vllm(backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profi
     return server.__enter__()
 
 
-def expected_of(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | None) -> Attestation:
-    """Return the attestation a server of this backend must give, computed without starting it.
+def expected_of(backend: BackendSpec, lock: Path | None, model: ResolvedModel | None) -> Attestation:
+    """Return the attestation a server of this backend in an env built from `lock` must give, without starting it.
 
     Raises:
         ValueError: there is no model.
-        VllmStartError: the env's lock pins no vllm.
+        VllmStartError: the lock pins no vllm.
     """
     if model is None or backend.server is None:
         raise ValueError(f"backend {backend.name!r} serves a model through a server, and the call resolved none")
-    return expected_attestation(env, model, backend.server.settings)
+    return expected_attestation(lock, model, backend.server.settings)
+
+
+def service_of(backend: BackendSpec, model: ResolvedModel | None) -> Attestation | None:
+    """Return what the service answering a call of `backend` on `model` attests, from its packaged env lock.
+
+    None for a backend that is not a server backend. A call's key takes it (`Call.service`); the registry entry a
+    call consumes, or the server it starts, attests it.
+
+    Raises:
+        LookupError: no declaring package names the backend's env lock.
+        ValueError, VllmStartError: as `expected_of`.
+    """
+    if backend.server is None:
+        return None
+    return expected_of(backend, packaged().env_lock(backend), model)
 
 
 def worker_init(device: str, model: ResolvedModel | None) -> dict[str, Any]:

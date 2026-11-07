@@ -18,7 +18,14 @@ from senselab_worker.faults import error_record
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.declare import InconsistentInputs
-from senselab_core.kernel.identity import ExecutionContext, InputIdentity, LogicalKey, OutputIdentity, ReusePolicy
+from senselab_core.kernel.identity import (
+    Attestation,
+    ExecutionContext,
+    InputIdentity,
+    LogicalKey,
+    OutputIdentity,
+    ReusePolicy,
+)
 from senselab_core.kernel.license import License
 from senselab_core.kernel.signals import Recording, StaleSource
 from senselab_core.kernel.wire import WireFormatRetired
@@ -46,7 +53,7 @@ from senselab_core.runtime.execution.records import (
     verify,
 )
 from senselab_core.runtime.execution.records import verify_attributes as verify_settings
-from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, expected_of
+from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, service_of
 from senselab_core.runtime.hardware import numerics_class
 from senselab_core.runtime.keys import Call, Placement, build_key, request_components, request_size
 from senselab_core.runtime.launch import launch
@@ -54,7 +61,7 @@ from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore, StoredResult
 from senselab_core.runtime.store import output_identity as store_output_identity
-from senselab_core.runtime.vllm_server import Attestation, attested_fields, server_launch, server_variables
+from senselab_core.runtime.vllm_server import attested_fields, server_launch, server_variables
 from senselab_core.runtime.vocabulary import core_vocabulary
 
 
@@ -152,7 +159,8 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     backend = placement.backend
     code_license = _code_license(run, placement, call)
     env = packaged().open_env(backend, profile)
-    expected = expected_of(backend, env, call.model) if backend.env.kind == "server" else None
+    expected = service_of(backend, call.model)
+    jobs = [replace(j, call=replace(j.call, service=expected)) for j in jobs]
     size = request_size(backend, placement.batch_size)
     keyed = replace(placement, **request_components(backend, size))
     outcomes: dict[int, JobOutcome] = {}

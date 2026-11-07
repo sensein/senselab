@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from importlib.metadata import entry_points
 from os import PathLike
+from pathlib import Path
 from typing import Annotated, Any, Literal, get_type_hints
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer, ValidationInfo, model_validator
@@ -161,19 +162,26 @@ EnvOpener = Callable[[BackendSpec, ExecutionProfile], EnvHandle]
 """Open the env a backend declares under a profile, building it if needed."""
 EnvProbe = Callable[[BackendSpec, ExecutionProfile], bool]
 """Whether the env a backend declares is built under a profile, building nothing."""
+EnvLock = Callable[[BackendSpec], Path]
+"""The lock file the isolated or server env a backend declares is built from, reading nothing."""
 
 
 def _unbuilt(backend: BackendSpec, profile: ExecutionProfile) -> bool:  # noqa: ARG001 - an EnvProbe
     return False
 
 
+def _no_lock(backend: BackendSpec) -> Path:
+    raise LookupError(f"no package has said which lock the env of backend {backend.name!r} is built from")
+
+
 @dataclass(frozen=True)
 class Packaged:
-    """What a declaring package hands the runtime: catalogue, env opener, registry, lock records and env probe.
+    """What a declaring package hands the runtime: catalogue, env opener, registry, lock records, env probe and locks.
 
     `lock_records` gives each backend's env-lock package license records, from which `env_license` derives; without
     them no stored result is served unless the run's license policy allows unlicensed hits. `env_built` says whether
-    a backend's env is built (by default none is).
+    a backend's env is built (by default none is). `env_lock` names the lock a non-host env is built from (by default
+    none is known).
     """
 
     catalogue: Catalogue
@@ -181,6 +189,7 @@ class Packaged:
     registry: Registry = REGISTRY
     lock_records: LockRecords | None = None
     env_built: EnvProbe = _unbuilt
+    env_lock: EnvLock = _no_lock
 
 
 def env_license(backend: BackendSpec) -> License | None:

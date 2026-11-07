@@ -85,7 +85,7 @@ class RealWorkers:
             model = ResolvedModel(
                 ref=ModelRef.parse(f"{entry.id}@{entry.revision}"), identity=entry.revision, license=entry.license
             )
-            server = self.servers.server(backend, env, model, self.profile, expected_of(backend, env, model))
+            server = self.servers.server(backend, env, model, self.profile, expected_of(backend, env.lock, model))
             return self.servers.server_worker(backend, init, server)
         worker = WorkerClient(env.python, backend.worker, init=init)
         self.started.append(worker)

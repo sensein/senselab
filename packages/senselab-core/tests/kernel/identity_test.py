@@ -115,6 +115,7 @@ def test_context_is_not_in_key() -> None:
         "profile_slices",
         "batch_formation",
         "chunk_grid",
+        "service",
     }
     assert not set(LogicalKey.model_fields) & set(ExecutionContext.model_fields)
 
@@ -136,9 +137,10 @@ def test_digest_is_the_tagged_digest_of_the_fields() -> None:
         "profile_slices": {},
         "batch_formation": None,
         "chunk_grid": None,
+        "service": None,
     }
     assert k.model_dump() == expected
-    assert k.digest() == identity_digest("logical-key@6", expected)
+    assert k.digest() == identity_digest("logical-key@7", expected)
     assert len(k.digest()) == 64
 
 

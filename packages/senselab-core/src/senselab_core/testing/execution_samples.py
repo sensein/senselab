@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 
-from senselab_core.kernel.identity import gather_identity
+from senselab_core.kernel.identity import Attestation, gather_identity
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.execution.events import BrokenEnv, Event
 from senselab_core.runtime.execution.executor import (
@@ -15,7 +15,6 @@ from senselab_core.runtime.execution.executor import (
     UpstreamRef,
 )
 from senselab_core.runtime.execution.services import ServiceEntry
-from senselab_core.runtime.vllm_server import Attestation
 
 Register = Callable[..., None]
 
