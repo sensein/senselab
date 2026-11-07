@@ -1,7 +1,7 @@
 """The ruff limits on package source, scripts and benchmarks: statements per function, literals in comparisons."""
 
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,9 +13,18 @@ WHERE = ["packages/senselab-core/src/senselab_core/probe.py", "benchmarks/probe.
 
 
 def _codes(source: str, where: str) -> set[str]:
-    ruff = shutil.which("ruff")
-    assert ruff, "ruff is not on PATH"
-    args = [ruff, "check", "--no-cache", "--output-format", "concise", "--stdin-filename", where, "-"]
+    args = [
+        sys.executable,
+        "-m",
+        "ruff",
+        "check",
+        "--no-cache",
+        "--output-format",
+        "concise",
+        "--stdin-filename",
+        where,
+        "-",
+    ]
     done = subprocess.run(args, input=source, capture_output=True, text=True, cwd=REPO, check=False)
     return {word for line in done.stdout.splitlines() for word in line.split() if word[:2] in ("PL", "C9")}
 
