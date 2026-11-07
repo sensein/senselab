@@ -2,9 +2,9 @@
 
 Flags ``/Users/<name>/``, ``/home/<name>/`` and ``C:\\Users\\<name>\\`` (or ``C:/Users/<name>/``) in
 text file contents and in file paths, except for the generic accounts ``user``, ``runner`` and
-``ec2-user``. Output names the file, line and kind of match, never the value. Keep real values in
-the untracked ``references.local.yaml``; tracked text uses the placeholder names listed in
-``references.example.yaml``.
+``ec2-user``; and ``~/<name>/``, except for the tool and cluster conventions in ``_GENERIC_HOME_DIRS``.
+Output names the file, line and kind of match, never the value. Keep real values in the untracked
+``references.local.yaml``; tracked text uses the placeholder names listed in ``references.example.yaml``.
 
 Usage::
 
@@ -24,9 +24,11 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCAL_VALUES_FILE = "references.local.yaml"
 _GENERIC_ACCOUNTS = r"(?:user|runner|ec2-user)(?![\w-])"
 _NOT_PART_OF_WORD = r"(?<![\w~.$}-])"
+_GENERIC_HOME_DIRS = r"(?:\.cache|\.local|\.config|\.ssh|\.cargo|ffmpeg|orcd/scratch|orcd/pool)(?![\w.-])"
 
 PATTERNS: dict[str, re.Pattern[str]] = {
     "user home path": re.compile(rf"{_NOT_PART_OF_WORD}(?<![A-Za-z]:)/(?:Users|home)/(?!{_GENERIC_ACCOUNTS})\w[\w.-]*"),
+    "home-relative path": re.compile(rf"{_NOT_PART_OF_WORD}~/(?!{_GENERIC_HOME_DIRS})[\w.][\w.-]*/"),
     "Windows user home path": re.compile(
         rf"(?<![\w])[A-Za-z]:[\\/]+Users[\\/]+(?!{_GENERIC_ACCOUNTS})\w[\w.-]*", re.IGNORECASE
     ),
