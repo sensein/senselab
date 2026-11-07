@@ -2,13 +2,15 @@
 
 Two forms are refused under ``packages/*/src``:
 
-- a module-level numeric assignment whose name ends in one of ``SUFFIXES``;
+- a module-level numeric assignment (in the module body or under its ``if``/``try``/``with`` blocks, not in a class
+  or function) whose name ends in one of ``SUFFIXES``;
 - a numeric literal other than ``0`` (no wait) passed to ``sleep(...)``, ``wait(...)``, ``join(...)`` or as
   ``timeout=``.
 
 An invariant is declared ``NAME: Final = ...  # invariant: <why it cannot vary>`` and listed under ``invariants`` in
-``scripts/data/invariants.yaml`` with its reason. A site listed under ``pending`` names the register entry that moves
-it to config. A listed entry that matches no site is refused too.
+``scripts/data/invariants.yaml`` with its reason. An entry under ``pending`` names the register entry that moves it to
+config and the ``count`` of sites it admits (default 1); a file whose number of sites differs is refused, and so is a
+listed entry that matches no site.
 
 Usage::
 
@@ -22,6 +24,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from collections.abc import Iterator
 from typing import NamedTuple
 
 import yaml
@@ -30,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ALLOWED = Path(__file__).resolve().parent / "data" / "invariants.yaml"
 ALLOWED_FORMAT = "invariants@1.0"
 SOURCE = re.compile(r"^packages/[^/]+/src/.+\.py$")
-SUFFIXES = ("_S", "_MS", "_BYTES", "_ATTEMPTS", "_RETRIES", "_WORKERS", "_ITEMS", "_POLLS", "_BUDGET")
+SUFFIXES = ("_S", "_MS", "_BYTES", "_ATTEMPTS", "_RETRIES", "_WORKERS", "_ITEMS", "_POLLS", "_BUDGET", "_MODE")
 CALLS = ("sleep", "wait", "join")
 DECLARED = re.compile(r"#\s*invariant:\s*\S")
 
@@ -64,18 +67,31 @@ def _callee(node: ast.Call) -> str:
     return func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
 
 
+def _module_level(body: list[ast.stmt]) -> Iterator[ast.stmt]:
+    """The statements of `body`, and of the ``if``, ``try`` and ``with`` blocks in it, outside classes and functions."""
+    for stmt in body:
+        yield stmt
+        blocks: list[list[ast.stmt]] = []
+        if isinstance(stmt, (ast.If, ast.With)):
+            blocks = [stmt.body, getattr(stmt, "orelse", [])]
+        elif isinstance(stmt, ast.Try):
+            blocks = [stmt.body, stmt.orelse, stmt.finalbody, *(h.body for h in stmt.handlers)]
+        for block in blocks:
+            yield from _module_level(block)
+
+
 def sites(path: str, source: str) -> list[tuple[Site, bool]]:
     """Each fixed parameter in `source`, with whether its line declares it an invariant."""
     lines = source.splitlines()
     tree = ast.parse(source)
     found: list[Site] = []
-    for stmt in tree.body:
+    for stmt in _module_level(tree.body):
         target, value = None, None
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
             target, value = stmt.targets[0], stmt.value
         elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
             target, value = stmt.target, stmt.value
-        if isinstance(target, ast.Name) and target.id.endswith(SUFFIXES) and _numeric(value):
+        if isinstance(target, ast.Name) and target.id.endswith(SUFFIXES) and value is not None and _numeric(value):
             found.append(Site(path, stmt.lineno, target.id))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -86,30 +102,48 @@ def sites(path: str, source: str) -> list[tuple[Site, bool]]:
     return [(s, bool(DECLARED.search(lines[s.line - 1]))) for s in found]
 
 
-def load_allowed(path: Path = ALLOWED) -> tuple[frozenset[tuple[str, str]], frozenset[tuple[str, str]]]:
-    """Return the ``(path, name)`` pairs listed as invariants and as pending; an entry without its reason is refused."""
+Key = tuple[str, str]
+
+
+def load_allowed(path: Path = ALLOWED) -> tuple[frozenset[Key], dict[Key, int]]:
+    """Return the ``(path, name)`` pairs listed as invariants, and the pending ones with the count each admits.
+
+    Raises:
+        ValueError: the format is wrong, an entry lacks its reason or register entry, or a count is not positive.
+    """
     raw = yaml.safe_load(path.read_text())
     if raw.get("format") != ALLOWED_FORMAT:
         raise ValueError(f"{path}: format is {raw.get('format')!r}, not {ALLOWED_FORMAT!r}")
-    out = []
+    entries = {}
     for section, why in (("invariants", "reason"), ("pending", "register")):
-        pairs = set()
         for entry in raw.get(section) or []:
+            where = f"{path}: {section} {entry.get('path')}::{entry.get('name')}"
             if not str(entry.get(why, "")).strip():
-                raise ValueError(f"{path}: {section} {entry.get('path')}::{entry.get('name')} needs a {why}")
-            pairs.add((entry["path"], entry["name"]))
-        out.append(frozenset(pairs))
-    return out[0], out[1]
+                raise ValueError(f"{where} needs a {why}")
+            count = entry.get("count", 1)
+            if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+                raise ValueError(f"{where}: count is not a positive integer")
+            entries[section, entry["path"], entry["name"]] = count
+    invariants = frozenset((p, n) for s, p, n in entries if s == "invariants")
+    return invariants, {(p, n): c for (s, p, n), c in entries.items() if s == "pending"}
 
 
-def problems(
-    found: list[tuple[Site, bool]], invariants: frozenset[tuple[str, str]], pending: frozenset[tuple[str, str]]
-) -> list[str]:
-    """One message per site that is neither a declared, listed invariant nor pending, and per unmatched entry."""
-    seen = {(site.path, site.name) for site, _ in found}
+def problems(found: list[tuple[Site, bool]], invariants: frozenset[Key], pending: dict[Key, int]) -> list[str]:
+    """One message per site that is neither a declared, listed invariant nor pending, and per unmatched entry.
+
+    A pending entry whose number of sites differs from its count is reported.
+    """
+    counts: dict[Key, int] = {}
+    for site, _ in found:
+        counts[site.path, site.name] = counts.get((site.path, site.name), 0) + 1
     out = [
         f"{p}::{n} is listed in {ALLOWED.name} but not found; remove it"
-        for p, n in sorted((invariants | pending) - seen)
+        for p, n in sorted((invariants | set(pending)) - set(counts))
+    ]
+    out += [
+        f"{p}::{n} has {counts[p, n]} sites; {ALLOWED.name} admits {c}"
+        for (p, n), c in sorted(pending.items())
+        if (p, n) in counts and counts[p, n] != c
     ]
     for site, declared in found:
         key = (site.path, site.name)

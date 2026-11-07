@@ -13,7 +13,7 @@ import unicodedata
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from senselab_worker.canonical import jcs_dumps, jcs_loads
 
@@ -39,7 +39,7 @@ PRIVATE_DIR = "private"
 """The run subdirectory that holds the label map; nothing in it is exported."""
 LABELS_NAME = "labels@1.json"
 """The label map's file name in `<run>/private/`."""
-LABELS_MODE = 0o600
+LABELS_MODE: Final = 0o600  # invariant: owner-only, whatever the site's group policy
 """The mode of the label map."""
 _LABELS_FILE = re.compile(re.escape(LABELS_NAME))
 _KINDS = {"prov:Entity", "prov:Activity", "prov:Agent"}

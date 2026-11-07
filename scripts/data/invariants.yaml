@@ -3,6 +3,12 @@ format: invariants@1.0
 # invariants: declared `NAME: Final = ...  # invariant: <why>`; each entry's reason says why it cannot vary.
 # pending: fixed parameters still in code; each names the register entry that moves it to config.
 invariants:
+- path: packages/senselab-core/src/senselab_core/runtime/bep028.py
+  name: LABELS_MODE
+  reason: The label map holds participant identifiers; owner-only access does not vary by site.
+- path: packages/senselab-core/src/senselab_core/runtime/storage.py
+  name: PRIVATE_DIR_MODE
+  reason: A private directory is owner-only whatever the site's group policy.
 - path: packages/senselab-core/src/senselab_core/runtime/placement.py
   name: _HOUR_S
   reason: 'Seconds in one hour: a unit conversion.'
@@ -19,6 +25,15 @@ invariants:
   name: NS_PER_S
   reason: 'Nanoseconds in one second: a unit conversion.'
 pending:
+- path: packages/senselab-core/src/senselab_core/runtime/locks.py
+  name: LEASE_DIR_MODE
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/storage.py
+  name: STAGING_FILE_MODE
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/storage.py
+  name: STAGING_DIR_MODE
+  register: R-219
 - path: packages/senselab-core/src/senselab_core/runtime/envs.py
   name: timeout=
   register: R-219
