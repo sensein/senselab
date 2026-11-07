@@ -132,6 +132,7 @@ def test_batch_size_is_sized_from_the_measure_and_not_in_key() -> None:
         resolve_execution(TASK, _entry(), _profile(), None, registry, measured),
     ]
     batch = placements[1].batch_size
+    assert measure.resident_bytes is not None and measure.peak_memory_bytes is not None
     room = _profile().sizing.memory_headroom * host.memory_bytes - measure.resident_bytes
     per_item = measure.peak_memory_bytes - measure.resident_bytes
     assert batch * per_item <= room < (batch + 1) * per_item
