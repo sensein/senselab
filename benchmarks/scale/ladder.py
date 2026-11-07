@@ -32,14 +32,14 @@ import soundfile
 from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.runtime.bids import bids_dataset
 from senselab_core.runtime.call import packaged
-from senselab_core.runtime.config import load_yaml
+from senselab_core.runtime.config import ConfigError, load_yaml
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog, read_events, run_dir_of
 from senselab_core.runtime.execution.pool import Pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.substrates import substrate_of, worker_id
-from senselab_core.runtime.fetch import DataManifest, default_cache_root, fetch
+from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
 from senselab_core.runtime.hardware import memory_bytes
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -124,10 +124,23 @@ def dataset_of(entry: Entry, point: int | str, suite: Suite, work: Path) -> tupl
     return bids_dataset(root), root
 
 
+def pinned(model_id: str) -> str:
+    """Return `model_id` at its catalogue revision, `<id>@<revision>`; the catalogue is the one source of the pin.
+
+    Raises:
+        UnknownModel: the catalogue holds no entry `model_id`.
+        ValueError: `model_id` names a revision itself.
+    """
+    if "@" in model_id:
+        raise ValueError(f"a suite names a model by its id alone, got {model_id!r}; the catalogue pins its revision")
+    return f"{model_id}@{packaged().catalogue.entry(model_id).revision}"
+
+
 def graph_of(entry: Entry) -> Graph:
     """Return the one-node graph mapping `entry`'s task over the records' input `x`.
 
-    With a stack, the node names its backend's params (its defaults), so each stack's plan has a run of its own.
+    With a stack, the node names its backend's params (its defaults), so each stack's plan has a run of its own. A
+    model is named by its id and pinned to its catalogue revision (`pinned`).
     """
     registry = packaged().registry
     spec = registry.spec(entry.task)
@@ -138,7 +151,7 @@ def graph_of(entry: Entry) -> Graph:
         task=entry.task,
         task_version=spec.version,
         params=dict(entry.params),
-        model=entry.model,
+        model=None if entry.model is None else pinned(entry.model),
         backend_params={name: {} for name in chosen},
     )
     return Graph(
@@ -180,10 +193,10 @@ class SuiteRefused(ValueError):
 
 
 def placed_point(
-    entry: Entry, point: int | str, suite: Suite, profile: ExecutionProfile, out: Path
+    entry: Entry, point: int | str, suite: Suite, profile: ExecutionProfile, data: Path
 ) -> tuple[Plan, Path | None, ExecutionProfile]:
-    """Return `entry` planned at `point`, the BIDS root its data is read from, and the profile it is placed under."""
-    dataset, root = dataset_of(entry, point, suite, out)
+    """Return `entry` planned at `point` over its data under `data`, the BIDS root it is read from, and the profile."""
+    dataset, root = dataset_of(entry, point, suite, data)
     if entry.stack is not None:
         stacks = {**profile.stack_preferences, entry.task: (entry.stack,)}
         profile = profile.model_copy(update={"stack_preferences": stacks})
@@ -191,22 +204,31 @@ def placed_point(
     return placed, root, profile
 
 
-def check_suite(suite: Suite, profile: ExecutionProfile, out: Path) -> None:
-    """Plan every entry of `suite` at its smallest point, measuring nothing.
+def check_suite(suite: Suite, profile: ExecutionProfile, data: Path) -> None:
+    """Fetch and plan every entry of `suite` at its smallest point, its data under `data`, measuring nothing.
 
     Raises:
-        SuiteRefused: an entry does not plan; every such entry is listed with its error.
+        SuiteRefused: an entry's data cannot be had, or it does not plan; every such entry is listed with the stage
+            and its error.
     """
     bad = []
     for index, entry in enumerate(suite.tasks):
         counts = [p for p in entry.points if p != LONG]
+        point = min(counts) if counts else LONG
+        name = f"entry {index} ({entry.task}{'' if entry.stack is None else f', stack {entry.stack}'})"
         try:
-            placed_point(entry, min(counts) if counts else LONG, suite, profile, out)
-        except Exception as err:  # noqa: BLE001 - each entry's error is listed, then the whole suite is refused
-            stack = "" if entry.stack is None else f", stack {entry.stack}"
-            bad.append(f"entry {index} ({entry.task}{stack}): {type(err).__name__}: {err}")
+            dataset_of(entry, point, suite, data)
+        except (OSError, ValueError, ConfigError, FetchError, ManifestError) as err:
+            bad.append(f"{name}: data: {type(err).__name__}: {err}")
+            continue
+        try:
+            placed_point(entry, point, suite, profile, data)
+        except Exception as err:  # noqa: BLE001 - every planning error of every entry is listed, then the suite refused
+            bad.append(f"{name}: plan: {type(err).__name__}: {err}")
     if bad:
-        raise SuiteRefused(f"{suite.name}: {len(bad)} entries do not plan, nothing was measured:\n" + "\n".join(bad))
+        raise SuiteRefused(
+            f"{suite.name}: {len(bad)} entries do not fetch or plan, nothing was measured:\n" + "\n".join(bad)
+        )
 
 
 def measure_point(entry: Entry, point: int | str, suite: Suite, profile: ExecutionProfile, out: Path) -> dict[str, Any]:
@@ -215,7 +237,7 @@ def measure_point(entry: Entry, point: int | str, suite: Suite, profile: Executi
     Raises:
         FileExistsError: the point's run directory exists, so its results would be reused.
     """
-    placed, root, profile = placed_point(entry, point, suite, profile, out)
+    placed, root, profile = placed_point(entry, point, suite, profile, out.parent)
     run_dir = run_dir_of(placed.hash)
     if run_dir.exists():
         raise FileExistsError(f"{run_dir} exists; remove it to measure {entry.task} at {point} afresh")
@@ -332,8 +354,8 @@ def run(suite_path: Path, profile: ExecutionProfile) -> list[dict[str, Any]]:
     """
     suite = Suite.load(suite_path)
     out = cache_root() / NAMESPACE / "benchmarks" / "scale" / suite.name / commit()
+    check_suite(suite, profile, out.parent)
     out.mkdir(parents=True, exist_ok=True)
-    check_suite(suite, profile, out)
     results = []
     for entry in suite.tasks:
         for point in entry.points:

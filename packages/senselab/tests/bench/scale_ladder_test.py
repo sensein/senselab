@@ -16,7 +16,7 @@ import soundfile
 from senselab_core.kernel.declare import REGISTRY, BackendSpec
 from senselab_core.runtime import fake_backend
 from senselab_core.runtime.call import Packaged, use_packaged
-from senselab_core.runtime.catalogue import Catalogue
+from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -172,10 +172,25 @@ def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHan
 def test_a_suite_with_entries_that_do_not_plan_is_refused_before_anything_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every entry is planned first: two bad entries are both named, and no point is measured or written."""
+    """Every entry is planned first: each bad entry is named, a catalogued model plans, and nothing is written."""
     ladder = _module("scale_ladder_refusal_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
-    previous = use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, REGISTRY, mit_lock_records))
+    known = CatalogueEntry.model_validate(
+        {
+            "id": "org/known",
+            "revision": "c" * 40,
+            "tasks": [fake_backend.ECHO.name],
+            "backends": [fake_backend.FAKE.name],
+            "stacks": [fake_backend.FAKE.stack],
+            "license": {
+                "expression": "MIT",
+                "source": "card",
+                "verified": {"date": "2026-11-07", "how": "hf-card"},
+                "gated": False,
+            },
+        }
+    )
+    previous = use_packaged(Packaged(Catalogue(entries=(known,)), _this_interpreter, REGISTRY, mit_lock_records))
     assert fake_backend.FAKE in REGISTRY.backends(fake_backend.ECHO.name)
     suite = tmp_path / "bad.yaml"
     suite.write_text(
@@ -183,14 +198,19 @@ def test_a_suite_with_entries_that_do_not_plan_is_refused_before_anything_runs(
         "- {task: fake.echo, port: payload, data: payloads, points: [1, 100]}\n"
         "- {task: fake.echo, stack: absent, port: payload, data: payloads, points: [1]}\n"
         "- {task: no.such.task, port: x, data: payloads, points: [1]}\n"
+        "- {task: fake.echo, model: org/known, port: payload, data: payloads, points: [1]}\n"
+        "- {task: fake.echo, model: org/unknown, port: payload, data: payloads, points: [1]}\n"
     )
     try:
-        with pytest.raises(ladder.SuiteRefused, match="2 entries do not plan") as refused:
+        with pytest.raises(ladder.SuiteRefused, match="3 entries do not fetch or plan") as refused:
             ladder.run(suite, ExecutionProfile.load("laptop"))
+        assert ladder.pinned("org/known") == "org/known@" + "c" * 40
     finally:
         use_packaged(previous)
     lines = str(refused.value).splitlines()[1:]
-    assert [line.split(":")[0] for line in lines] == ["entry 1 (fake.echo, stack absent)", "entry 2 (no.such.task)"]
-    assert "NoBackend" in lines[0] and "UnknownTask" in lines[1]
+    named = ["entry 1 (fake.echo, stack absent)", "entry 2 (no.such.task)", "entry 4 (fake.echo)"]
+    assert [line.split(":")[0] for line in lines] == named
+    assert "NoBackend" in lines[0] and "UnknownTask" in lines[1] and "UnknownModel" in lines[2]
+    assert not list((tmp_path / "cache").rglob(ladder.commit()))
     runs = tmp_path / "cache" / "2x" / "runs"
     assert not list((tmp_path / "cache").rglob("*@*.json")) and not (runs.is_dir() and any(runs.iterdir()))
