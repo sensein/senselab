@@ -1,5 +1,6 @@
 """`Pool.submit` queues a fragment as items of at most `pool.quantum_items` jobs, and `results` joins them."""
 
+import os
 import threading
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
@@ -12,10 +13,10 @@ from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
-from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment, ResultRef
+from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment, QueueHeld, ResultRef
 from senselab_core.runtime.execution.in_process import InProcess, job_key, node_fragment
 from senselab_core.runtime.execution.job import Failed, JobOutcome
-from senselab_core.runtime.execution.pool import Pool, report, split
+from senselab_core.runtime.execution.pool import DEAD_DIR, Pool, report, split
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, Queue, QueueSet
 from senselab_core.runtime.execution.substrates import WorkerHandle, scale
 from senselab_core.runtime.execution.workers import WorkerSet
@@ -40,16 +41,18 @@ STRICT_REGISTRY.add_backend(
 )
 WORKERS = WorkerSet(2)
 CONTENT = FaultRecord(fault="content", type="ValueError", message="bad input", gap=False, charged=True)
+OOM = FaultRecord(fault="resource", type="ResourceFault", message="out of memory", gap=False, charged=False)
+LOST = FaultRecord(fault="infrastructure", type="WorkerLost", message="gone", gap=False, charged=False)
 
 
-def _profile(quantum: int = 10, cap: int | None = None, max_workers: int = 32) -> ExecutionProfile:
-    cpu = {"device": "cpu", "cpus": 4, "mem_bytes": 2**33, "time_s": 3600, "max_workers": max_workers}
+def _profile(quantum: int = 10, cap: int | None = None, **faults: int) -> ExecutionProfile:
+    cpu = {"device": "cpu", "cpus": 4, "mem_bytes": 2**33, "time_s": 3600, "max_workers": 32, "partition": "cpuq"}
     override: dict[str, Any] = {
         "devices": ["cpu"],
-        "resource_classes": {"cpu": {**cpu, "partition": "cpuq"}},
+        "resource_classes": {"cpu": cpu, "cpu:large": {**cpu, "mem_bytes": 2**34, "max_workers": 2}},
         "substrate": {"kind": "slurm", "qos_cpu_cap": cap},
         "pool": {"quantum_items": quantum, "first_poll_s": 0.01, "poll_s": 0.2},
-        "faults": {"content_attempts": 1},
+        "faults": {"content_attempts": 1, **faults},
     }
     return ExecutionProfile.load("orcd", override)
 
@@ -260,3 +263,80 @@ def test_a_non_invariant_backends_requests_are_never_split(tmp_path: Path) -> No
         whole = [job_key(placed, fragment.node, inputs, fragment.placement).digest() for inputs in fragment.inputs]
     assert [len(i.jobs) for i in items] == [3, 3, 1] and [j for i in items for j in i.jobs] == list(fragment.jobs)
     assert keys == whole and split(fragment, 7) == [fragment]
+
+
+def _serve_by_item(pool: Pool, placed: Plan, values: Mapping[InputIdentity, object], faulted: FaultRecord) -> None:
+    """Commit the first item of the `cpu` queue with `faulted` for each of its jobs and execute every other item."""
+    for index, claim in enumerate(_claim_all(pool.queues.queue("cpu"))):
+        item = claim.fragments[0]
+        outcomes = _failed(placed, item, faulted) if index == 0 else _executed(placed, values, pool.store, item)
+        with claim:
+            report(claim, claim.items[0], outcomes)
+
+
+@pytest.mark.contract
+def test_a_resource_fault_moves_only_its_items_jobs(tmp_path: Path) -> None:
+    """The first item's jobs move to `cpu:large` one by one; the second item's jobs are yielded where they ran."""
+    placed, values, pool, fragment = _submitted(tmp_path, _profile(quantum=2, resource_replacements=1), 4)
+    handle = pool.submit(fragment)
+    _serve_by_item(pool, placed, values, OOM)
+    given = pool.results(handle)
+    first = [next(given), next(given)]
+    assert [r.job for r in first] == list(fragment.jobs[2:]) and all(r.failure is None for r in first)
+    moved = _claim_all(pool.queues.queue("cpu:large"))
+    assert [c.fragments[0].jobs for c in moved] == [fragment.jobs[:1], fragment.jobs[1:2]]
+    assert pool.queues.queue("cpu").work() == 0
+    for claim in moved:
+        with claim:
+            report(claim, claim.items[0], _executed(placed, values, pool.store, claim.fragments[0]))
+    rest = list(given)
+    assert [r.job for r in rest] == list(fragment.jobs[:2]) and all(r.failure is None for r in rest)
+
+
+@pytest.mark.contract
+def test_a_broken_env_holds_only_the_jobs_of_its_failing_item(tmp_path: Path) -> None:
+    """The first item breaks its env: the second item's jobs are yielded, the hold is raised, and nothing is dead."""
+    placed, values, pool, fragment = _submitted(tmp_path, _profile(quantum=2, infrastructure_replacements=1), 4)
+    handle = pool.submit(fragment)
+    _serve_by_item(pool, placed, values, LOST)
+    given: list[ResultRef] = []
+    with pytest.raises(QueueHeld):
+        given.extend(pool.results(handle))
+    assert [r.job for r in given] == list(fragment.jobs[2:]) and all(r.failure is None for r in given)
+    assert list(pool.broken) == [fragment.placement.env] and not (tmp_path / "run" / DEAD_DIR).exists()
+
+
+@pytest.mark.logic
+def test_work_counts_from_the_slots_and_reads_an_item_only_without_a_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh queue's work opens no item; a slot without a count is read, an unreadable or missing item counts one."""
+    _, _, pool, fragment = _submitted(tmp_path, _profile(), 200)
+    pool.submit(fragment)
+    path = pool.queues.queue("cpu").path
+    segment = path / "segments" / "000000000000"
+    unreadable, missing, readable = (path / "items" / f"{os.readlink(segment / f'slot-{n}')}.json" for n in range(3))
+    unreadable.write_bytes(b"{")
+    opened: list[str] = []
+    real_open = os.open
+
+    def counting(name: Any, flags: int, *args: Any, **kwargs: Any) -> int:  # noqa: ANN401
+        opened.append(os.path.basename(os.fsdecode(name)))
+        return real_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", counting)
+    assert QueueSet(tmp_path / "run" / RUN_QUEUES, _profile()).queue("cpu").work() == 200
+    assert not [n for n in opened if n.endswith(".json")]
+    missing.unlink()
+    for n in range(3):
+        (segment / f"jobs-{n}-10").unlink()
+    assert QueueSet(tmp_path / "run" / RUN_QUEUES, _profile()).queue("cpu").work() == 200 - 30 + 1 + 1 + 10
+    assert readable.name in opened and unreadable.name in opened
+
+
+@pytest.mark.logic
+def test_items_end_on_request_boundaries_when_a_request_fits(tmp_path: Path) -> None:
+    """Nine jobs at a quantum of 5 are 4 + 4 + 1 under requests of 2, and 5 + 4 under requests of 8."""
+    _, _, _, fragment = _submitted(tmp_path, _profile(), 9)
+    assert [len(i.jobs) for i in split(fragment, 5, request=2)] == [4, 4, 1]
+    assert [len(i.jobs) for i in split(fragment, 5, request=8)] == [5, 4]

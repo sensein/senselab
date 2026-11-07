@@ -19,6 +19,7 @@ from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.executor import Admission, PlanFragment, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
 from senselab_core.runtime.execution.job import Job, JobOutcome, execute
+from senselab_core.runtime.execution.pool import split
 from senselab_core.runtime.execution.pool_worker import PoolWorker, Send, serve_pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest
 from senselab_core.runtime.execution.run import prepare
@@ -116,6 +117,26 @@ def test_worker_yields_after_quantum_to_older_queue(tmp_path: Path) -> None:
     assert worker.serve() == 0
     assert [name for name, _ in worker.served] == ["cpu", "cpu", "cpu:b", "cpu", "cpu"]
     assert len(_outcomes(pool_dir, profile)) == 4 and len(_outcomes(pool_dir, profile, "cpu:b")) == 1
+
+
+@pytest.mark.logic
+def test_a_worker_claims_a_quantum_of_jobs(tmp_path: Path) -> None:
+    """With a quantum of 4 jobs, a 1-job item and two 4-job items are claimed as 1, 4 and 4 jobs, never 1 + 4."""
+    profile = _profile(quantum_items=4)
+    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(9)])
+    admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
+    queue = QueueSet(pool_dir, profile).queue("cpu")
+    queue.put(node_fragment(placed, admission, elements=[(0,)]))
+    queue.put_all(split(node_fragment(placed, admission, elements=[(i,) for i in range(1, 9)]), 4))
+    send, sizes = _sender(store, profile), []
+
+    def recorded(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+        sizes.append(len(jobs))
+        return send(jobs, placement)
+
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=recorded)
+    assert worker.serve() == 0
+    assert sizes == [1, 4, 4] and len(worker.served) == 3 and queue.work() == 0
 
 
 @pytest.mark.logic

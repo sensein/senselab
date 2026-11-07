@@ -240,6 +240,18 @@ def job_key(
     return call_key(call, replace(placed_on, **request_components(placed_on.backend, size)))
 
 
+def node_request_size(placed: Plan, node: str, placement: NodePlacement | None = None) -> int:
+    """Return the jobs per request `execute` sends node `node` of `placed` on `placement` (the plan's when None).
+
+    Raises:
+        ValueError: as `placement_of_record`, or the plan has no such node.
+    """
+    registry = packaged().registry
+    record = placed.placement.nodes[node] if placement is None else placement
+    placed_on = placement_of_record(record, _node_call(placed, node, registry).task, registry)
+    return request_size(placed_on.backend, placed_on.batch_size)
+
+
 def result_ref(outcome: JobOutcome) -> ResultRef:
     """Return the `ResultRef` of one job's outcome: its key digest and output identity, or its failure."""
     if isinstance(outcome, Failed):

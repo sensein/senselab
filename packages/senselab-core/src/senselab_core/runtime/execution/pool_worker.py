@@ -209,7 +209,7 @@ class PoolWorker:
         order += [n for n in self._by_age() if n != prefer]
         for name in order:
             size = left if name == prefer else self.profile.pool.quantum_items
-            claim = self.queues.queue(name).claim(self.name, max_items=max(size, 1), max_jobs=max(size, 1))
+            claim = self.queues.queue(name).claim(self.name, max_jobs=max(size, 1))
             if claim is not None:
                 return claim
         return None

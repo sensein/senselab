@@ -1,11 +1,12 @@
 """`Pool`: the `Executor` that puts fragments on a run's queues and reads what pool workers made of them.
 
 A fragment goes to the queue of its placement's resource class under `<run dir>/queues/`, named `<class>#<model
-identity>` when its node has a resident model, as items of at most `pool.quantum_items` jobs each (`split`), in job
-order; a `Substrate` has workers serve that queue (`scale`, each round). A worker records each job's `ResultRef` in the
-item's outcome (`report`). The `Pool` yields a result only once the result store holds its outputs, and a failure only
-as `dead/<key digest>.json` holds it, so a restarted coordinator reads the same state from disk. Each fault class has
-its effect here, with the budgets of the profile's `faults` section:
+identity>` when its node has a resident model, as items of at most `pool.quantum_items` jobs each, ending on request
+boundaries when a request fits in one (`split`), in job order; a `Substrate` has workers serve that queue (`scale`, each
+round). A worker records each job's `ResultRef` in the item's outcome (`report`). The `Pool` yields a result only once
+the result store holds its outputs, and a failure only as `dead/<key digest>.json` holds it, so a restarted coordinator
+reads the same state from disk. Each fault class has its effect here, with the budgets of the profile's `faults`
+section:
 
 - **content**, not a gap: charged; the job is queued again until `content_attempts` charges, then it is dead;
 - **resource**, not a gap: the job is queued again on the next larger memory class of its device, uncharged, at most
@@ -48,7 +49,7 @@ from senselab_core.runtime.execution.executor import (
     Status,
     WorkersBroken,
 )
-from senselab_core.runtime.execution.in_process import job_key, result_ref
+from senselab_core.runtime.execution.in_process import job_key, node_request_size, result_ref
 from senselab_core.runtime.execution.job import JobOutcome
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest
 from senselab_core.runtime.execution.substrates import (
@@ -117,31 +118,32 @@ def _jobs_of(fragment: PlanFragment, indices: Sequence[int], **update: object) -
     )
 
 
-def split(fragment: PlanFragment, quantum: int) -> list[PlanFragment]:
+def split(fragment: PlanFragment, quantum: int, request: int = 1) -> list[PlanFragment]:
     """Return `fragment` as items of at most `quantum` jobs each, in job order; `[fragment]` when it fits in one.
 
-    An item ends only between jobs, and a backend that is not batch-invariant is sent one job per request
-    (`request_size`), so no item holds part of such a request.
+    `request` is the jobs per request of the fragment's backend (`node_request_size`). When it is at most `quantum`,
+    every item but the last holds the most whole requests that fit, so no request is cut; a larger request is cut at
+    `quantum` jobs, which only a batch-invariant backend can have.
 
     Raises:
-        ValueError: `quantum` is below 1.
+        ValueError: `quantum` or `request` is below 1.
     """
-    if quantum < 1:
-        raise ValueError(f"an item holds at least one job, got a quantum of {quantum}")
+    if quantum < 1 or request < 1:
+        raise ValueError(f"an item and a request hold at least one job, got {quantum} and {request}")
     count = len(fragment.jobs)
     if count <= quantum:
         return [fragment]
-    return [_jobs_of(fragment, range(start, min(start + quantum, count))) for start in range(0, count, quantum)]
+    size = quantum - quantum % request if request <= quantum else quantum
+    return [_jobs_of(fragment, range(start, min(start + size, count))) for start in range(0, count, size)]
 
 
 @dataclass
 class _Flight:
-    """One item on a queue, by its digest, and the digest of the fragment it was split from."""
+    """One item on a queue, by its digest."""
 
     queue: str
     digest: str
     fragment: PlanFragment
-    parent: str
 
 
 @dataclass
@@ -260,6 +262,7 @@ class Pool:
         Raises:
             StaleCoordinator: a newer epoch was taken.
             QueueHeld: the fragment's env is held on its queue by this epoch or a newer one.
+            ValueError: the fragment's admission is not held by this pool.
         """
         self._fence()
         name, env = self._queue_name(fragment), fragment.placement.env
@@ -267,11 +270,11 @@ class Pool:
         queue.unhold(before=self.epoch)
         if queue.held(env) is not None:
             raise QueueHeld(name, env, self._env_failures(env))
-        items = split(fragment, self.profile.pool.quantum_items)
+        request = node_request_size(self._admitted_plan(fragment), fragment.node, fragment.placement)
+        items = split(fragment, self.profile.pool.quantum_items, request)
         queue.put_all(items)
         self._scale()
-        parent = item_digest(fragment)
-        return [_Flight(name, item_digest(item), item, parent) for item in items]
+        return [_Flight(name, item_digest(item), item) for item in items]
 
     def _queue_name(self, fragment: PlanFragment) -> str:
         """Return the queue of `fragment`: its class, with `#<model identity>` for its node's resident model."""
@@ -318,6 +321,7 @@ class Pool:
         Raises:
             StaleCoordinator: a newer epoch than this coordinator's was taken; nothing is put.
             QueueHeld: the fragment's env is held on its queue; nothing is put.
+            ValueError: the fragment's admission is not held by this pool; nothing is put.
         """
         flights = self._put(fragment)
         handle = Handle(id=f"pool-{self.epoch}-{next(self._ids)}")
@@ -410,10 +414,14 @@ class Pool:
                 fault = dead or _gap("MissingResult", f"the outcome of the item gives no result for {job}")
             yield from self._effect(followed, flight, index, key, fault)
 
-    def _key(self, fragment: PlanFragment, index: int) -> str:
+    def _admitted_plan(self, fragment: PlanFragment) -> Plan:
         placed = self._plans.get(fragment.admission)
         if placed is None:
             raise ValueError(f"admission {fragment.admission} is not held by this pool")
+        return placed
+
+    def _key(self, fragment: PlanFragment, index: int) -> str:
+        placed = self._admitted_plan(fragment)
         return job_key(placed, fragment.node, fragment.inputs[index], fragment.placement).digest()
 
     def _effect(  # noqa: PLR0913 - the followed fragment, the item and the job's failure

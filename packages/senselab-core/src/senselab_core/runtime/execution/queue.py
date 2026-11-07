@@ -10,6 +10,8 @@
   the next free `n`; `n` runs from 0 to `pool.segment_items - 1`, and a put that finds them all taken makes
   `segments/<seq+1>`. Order is slot order within a segment and segment order across segments. Nothing in a segment is
   written in place.
+- `segments/<seq>/jobs-<n>-<count>`: the number of jobs of slot `n`'s item, written by the put that took the slot,
+  so a listing of the segment gives the queue's work without reading an item.
 - `segments/<seq>/res-<n>`: the mark that slot `n`'s item has an outcome, written only once `outcome/<digest>`
   exists and the slot, read again, names that digest.
 - `slotted/<digest>`: a symlink to `<seq>/<n>`, made after the item's first slot; a put of a slotted item adds none.
@@ -31,7 +33,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Callable, Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Optional
 
@@ -69,6 +71,8 @@ SEQ_NAME = re.compile(r"^[0-9]{12}$")
 """A segment: `<seq>`, twelve digits."""
 SLOT_NAME = re.compile(r"^slot-([0-9]+)$")
 """A slot of a segment: `slot-<n>`."""
+JOBS_NAME = re.compile(r"^jobs-([0-9]+)-([1-9][0-9]*)$")
+"""The job count of a slot's item: `jobs-<n>-<count>`."""
 RESOLVED_NAME = re.compile(r"^res-([0-9]+)$")
 """The mark of a slot whose item has an outcome: `res-<n>`."""
 RETIRED_MARK = "retired"
@@ -121,15 +125,17 @@ def _resolve(q: StorageDir, seq: int, n: int, digest: str) -> None:
                 segment.write_new(f"res-{n}", b"", STAGING_FILE_MODE, grammar=RESOLVED_NAME)
 
 
-def _slots(segment: StorageDir) -> tuple[list[int], set[int]]:
-    """Return the slot numbers of a segment, in order, and the resolved ones."""
-    slots, resolved = [], set()
+def _slots(segment: StorageDir) -> tuple[list[int], set[int], dict[int, int]]:
+    """Return the slot numbers of a segment, in order, the resolved ones, and each recorded job count by slot."""
+    slots, resolved, jobs = [], set(), {}
     for name in segment.listdir():
         if m := SLOT_NAME.fullmatch(name):
             slots.append(int(m.group(1)))
         elif m := RESOLVED_NAME.fullmatch(name):
             resolved.add(int(m.group(1)))
-    return sorted(slots), resolved
+        elif m := JOBS_NAME.fullmatch(name):
+            jobs[int(m.group(1))] = int(m.group(2))
+    return sorted(slots), resolved, jobs
 
 
 def settle(lease: Lease, q: StorageDir, digest: str, record: dict[str, object]) -> Optional[bool]:
@@ -154,14 +160,23 @@ def settle(lease: Lease, q: StorageDir, digest: str, record: dict[str, object]) 
             outcome.remove_owned(temporary, pattern=TEMPORARY_NAME)
 
 
-def _bound(max_items: int, max_jobs: Optional[int]) -> Callable[[list["_Held"]], bool]:
-    """Return whether items taken fill a claim of at most `max_items` items, stopping at `max_jobs` jobs if given."""
+class _Bound:
+    """The size of a claim: at most `items` items and, when `jobs` is set, at most `jobs` jobs beyond its first item."""
 
-    def full(taken: list[_Held]) -> bool:
+    def __init__(self, items: Optional[int], jobs: Optional[int]) -> None:
+        self.items = items if items is not None else (1 if jobs is None else None)
+        self.jobs = jobs
+
+    def fits(self, taken: list["_Held"], count: Optional[int]) -> bool:
+        """Whether an item of `count` jobs (None when unknown) may join `taken`."""
+        if not taken or self.jobs is None or count is None:
+            return True
+        return sum(len(h.fragment.jobs) for h in taken) + count <= self.jobs
+
+    def full(self, taken: list["_Held"]) -> bool:
+        """Whether `taken` fills the claim."""
         jobs = sum(len(h.fragment.jobs) for h in taken)
-        return len(taken) >= max_items or (max_jobs is not None and jobs >= max_jobs)
-
-    return full
+        return (self.items is not None and len(taken) >= self.items) or (self.jobs is not None and jobs >= self.jobs)
 
 
 class _Held:
@@ -344,33 +359,43 @@ class Queue:
         Raises:
             TypeError: an element is not a `PlanFragment`.
         """
-        digests: dict[str, None] = {}
+        digests: dict[str, Optional[int]] = {}
         with self.open() as q, q.child("items") as items:
             for fragment in fragments:
                 if not isinstance(fragment, PlanFragment):
                     raise TypeError(f"a queue item is a PlanFragment, not {type(fragment).__name__}")
                 digest = item_digest(fragment)
-                self._jobs[digest] = len(fragment.jobs)
                 if items.lstat(f"{digest}.json") is None:
                     _publish(items, f"{digest}.json", jcs_dumps(fragment.model_dump(mode="json")), ITEM_NAME)
-                digests[digest] = None
-            return self._index(q, list(digests))
+                digests[digest] = len(fragment.jobs)
+            return self._index(q, digests)
 
-    def _index(self, q: StorageDir, digests: list[str]) -> int:
-        """Give each of `digests` that has neither a slot nor an outcome a slot, in order; return how many."""
+    def _index(self, q: StorageDir, digests: Mapping[str, Optional[int]]) -> int:
+        """Give each of `digests` that has neither a slot nor an outcome a slot, in order; return how many.
+
+        Each maps to its item's job count, read from the item when None.
+        """
         taken = 0
-        with q.child("outcome") as outcome, q.child("slotted") as slotted, q.child("segments") as segments:
-            for digest in digests:
+        with (
+            q.child("outcome") as outcome,
+            q.child("slotted") as slotted,
+            q.child("segments") as segments,
+            q.child("items") as items,
+        ):
+            for digest, count in digests.items():
                 if slotted.lstat(digest) is not None or outcome.lstat(digest) is not None:
                     continue
-                seq, n = self._take_slot(segments, digest)
+                jobs = count if count is not None else self._job_count(items, digest)
+                seq, n = self._take_slot(segments, digest, jobs)
                 with contextlib.suppress(FileExistsError):
                     slotted.symlink(f"{_seq(seq)}/{n}", digest, grammar=DIGEST_NAME)
                 taken += 1
         return taken
 
-    def _take_slot(self, segments: StorageDir, digest: str) -> tuple[int, int]:
+    def _take_slot(self, segments: StorageDir, digest: str, jobs: int) -> tuple[int, int]:
         """Make the next free slot of the head segment point at `digest`, rolling to a new segment when it is full.
+
+        The slot's job count `jobs` is recorded beside it once the slot is taken.
 
         A segment's directory is made by `mkdir`, which the storage refuses for a number made before, so a segment
         number, retired or not, is opened and never made again.
@@ -379,7 +404,7 @@ class Queue:
         while True:
             segment = segments.child(_seq(seq), create=True, mode=STAGING_DIR_MODE)
             with segment:
-                slots, _ = _slots(segment)
+                slots, _, _ = _slots(segment)
                 n = slots[-1] + 1 if slots else 0
                 while n < self._segment_items:
                     try:
@@ -387,6 +412,8 @@ class Queue:
                     except FileExistsError:
                         n += 1
                         continue
+                    with contextlib.suppress(FileExistsError):
+                        segment.write_new(f"jobs-{n}-{jobs}", b"", STAGING_FILE_MODE, grammar=JOBS_NAME)
                     self._head = seq
                     return seq, n
             seq += 1
@@ -405,7 +432,7 @@ class Queue:
         """
         with self.open() as q, q.child("items") as items:
             digests = sorted(m.group(1) for n in items.listdir() if (m := ITEM_NAME.fullmatch(n)))
-            return self._index(q, digests)
+            return self._index(q, dict.fromkeys(digests))
 
     def hold(self, epoch: int, env: str) -> None:
         """Hold `env` on this queue for the coordinator of `epoch`: no item placed in it is claimed while it counts."""
@@ -447,10 +474,11 @@ class Queue:
         with self.open() as q, q.child("claims") as claims:
             return self._live(claims, digest, q.dir_now())
 
-    def claim(self, worker: str, max_items: int = 1, max_jobs: Optional[int] = None) -> Optional[Claim]:
+    def claim(self, worker: str, max_items: Optional[int] = None, max_jobs: Optional[int] = None) -> Optional[Claim]:
         """Claim up to `max_items` items without an outcome, oldest first, for `worker`; None when none is claimable.
 
-        With `max_jobs`, the claim stops once its items hold that many jobs or more; it always takes one item.
+        `max_items` is 1 when neither bound is given and unbounded when only `max_jobs` is. With `max_jobs`, an item
+        whose recorded job count would take the claim past it is passed over, except as the claim's first item.
 
         Each item is held under a `Lease` beating from its own renewer until the claim commits, kills or releases
         it. An item under a live claim is skipped; a stale claim is broken, within one renewal interval of going
@@ -460,20 +488,22 @@ class Queue:
         Raises:
             ValueError: `max_items` or `max_jobs` is below 1.
         """
-        if max_items < 1 or (max_jobs is not None and max_jobs < 1):
+        if (max_items is not None and max_items < 1) or (max_jobs is not None and max_jobs < 1):
             raise ValueError(f"a claim takes at least one item of one job (got {max_items}, {max_jobs})")
         skip = set(self._holds())
         taken: list[_Held] = []
         try:
             with self.open() as q, q.child("segments") as segments, q.child("claims") as claims:
-                self._fill(q, segments, claims, taken, _bound(max_items, max_jobs), skip)
+                self._fill(q, segments, claims, taken, _Bound(max_items, max_jobs), skip)
         except BaseException:
             for held in taken:
                 held.stack.close()
             raise
         return Claim(self, worker, taken) if taken else None
 
-    def _segments(self, segments: StorageDir) -> Generator[tuple[int, StorageDir, list[int], set[int]], None, None]:
+    def _segments(
+        self, segments: StorageDir
+    ) -> Generator[tuple[int, StorageDir, list[int], set[int], dict[int, int]], None, None]:
         """Yield each live segment, open, oldest first from the oldest this queue has seen live; retire full ones.
 
         A segment is retired by its `retired` mark, made in place once all its slots are taken and marked.
@@ -487,14 +517,14 @@ class Queue:
             with segment:
                 live = segment.lstat(RETIRED_MARK) is None
                 if live:
-                    slots, resolved = _slots(segment)
+                    slots, resolved, jobs = _slots(segment)
                     live = len(slots) < self._segment_items or not resolved.issuperset(slots)
                     if not live:
                         with contextlib.suppress(FileExistsError):
                             segment.write_new(RETIRED_MARK, b"", STAGING_FILE_MODE, grammar=RETIRED_NAME)
                 if live:
                     prefix = False
-                    yield seq, segment, slots, resolved
+                    yield seq, segment, slots, resolved, jobs
                 elif prefix:
                     self._oldest = seq + 1
                     self._targets = {k: d for k, d in self._targets.items() if k[0] > seq}
@@ -506,30 +536,30 @@ class Queue:
         segments: StorageDir,
         claims: StorageDir,
         taken: list[_Held],
-        full: Callable[[list[_Held]], bool],
+        bound: _Bound,
         skip: set[str],
     ) -> None:
-        """Take claims into `taken`, oldest first, until it is `full` or no live segment has a claimable item."""
+        """Take claims into `taken`, oldest first, until `bound` is full or no live segment has an item that fits."""
         leased = {n.removesuffix(".lease") for n in claims.listdir() if n.endswith(".lease")}
         now = time.monotonic()
         self._judged = {d: at for d, at in self._judged.items() if d in leased and now - at < self._interval}
         self._missing = {d: at for d, at in self._missing.items() if now - at < self._interval}
         walk = self._segments(segments)
         with contextlib.closing(walk):
-            self._fill_from(q, claims, walk, taken, full, skip)
+            self._fill_from(q, claims, walk, taken, bound, skip)
 
     def _fill_from(  # noqa: PLR0913 - as `_fill`, with the walk of live segments
         self,
         q: StorageDir,
         claims: StorageDir,
-        walk: Iterator[tuple[int, StorageDir, list[int], set[int]]],
+        walk: Iterator[tuple[int, StorageDir, list[int], set[int], dict[int, int]]],
         taken: list[_Held],
-        full: Callable[[list[_Held]], bool],
+        bound: _Bound,
         skip: set[str],
     ) -> None:
-        for seq, segment, slots, resolved in walk:
+        for seq, segment, slots, resolved, jobs in walk:
             for n in slots:
-                if n in resolved:
+                if n in resolved or not bound.fits(taken, jobs.get(n)):
                     continue
                 digest = self._target(segment, seq, n)
                 if digest is None or digest in self._judged or digest in self._missing:
@@ -539,7 +569,7 @@ class Queue:
                 held = self._take(q, claims, (seq, n), digest, skip)
                 if held is not None:
                     taken.append(held)
-                    if full(taken):
+                    if bound.full(taken):
                         return
 
     @property
@@ -580,7 +610,6 @@ class Queue:
             fragment = self._fragment(q, lease, slot, digest)
             if fragment is not None:
                 self._envs[digest] = identity_digest(LABEL_TAG, fragment.placement.env)
-                self._jobs[digest] = len(fragment.jobs)
             if fragment is None or self._envs[digest] in skip:
                 stack.close()
                 return None
@@ -624,23 +653,30 @@ class Queue:
 
         Claimed items, items given two slots and items whose slot is not yet marked are counted.
         """
-        with self.open() as q, q.child("segments") as segments:
-            return sum(1 for _ in self._waiting(segments))
+        return sum(1 for _ in self._waiting())
 
     def work(self) -> int:
-        """Return an upper bound on the jobs of the items `depth` counts; an item that cannot be read counts one."""
-        with self.open() as q, q.child("segments") as segments, q.child("items") as items:
-            return sum(1 if d is None else self._job_count(items, d) for d in self._waiting(segments))
+        """Return an upper bound on the jobs of the items `depth` counts, from the slots' recorded job counts.
 
-    def _waiting(self, segments: StorageDir) -> Iterator[Optional[str]]:
-        """Yield the digest of each taken, unresolved slot of each live segment; None for a slot naming no item."""
-        for name in segments.listdir():
-            if SEQ_NAME.fullmatch(name):
-                with contextlib.suppress(FileNotFoundError), segments.child(name) as segment:
-                    if segment.lstat(RETIRED_MARK) is None:
-                        slots, resolved = _slots(segment)
-                        for n in sorted(set(slots) - resolved):
-                            yield self._target(segment, int(name), n)
+        A slot without a recorded count is counted from its item, and as one job when the item cannot be read.
+        """
+        return sum(self._waiting())
+
+    def _waiting(self) -> Iterator[int]:
+        """Yield the job count of each taken, unresolved slot of each live segment."""
+        with self.open() as q, q.child("segments") as segments, q.child("items") as items:
+            for name in segments.listdir():
+                if SEQ_NAME.fullmatch(name):
+                    with contextlib.suppress(FileNotFoundError), segments.child(name) as segment:
+                        if segment.lstat(RETIRED_MARK) is None:
+                            slots, resolved, jobs = _slots(segment)
+                            for n in sorted(set(slots) - resolved):
+                                yield jobs[n] if n in jobs else self._unrecorded(items, segment, int(name), n)
+
+    def _unrecorded(self, items: StorageDir, segment: StorageDir, seq: int, n: int) -> int:
+        """Return the job count of slot `n` of segment `seq`, which has none recorded, from its item."""
+        digest = self._target(segment, seq, n)
+        return 1 if digest is None else self._job_count(items, digest)
 
     def _job_count(self, items: StorageDir, digest: str) -> int:
         """Return the jobs of item `digest`, read once per process; 1 while it cannot be read."""
@@ -667,7 +703,7 @@ class Queue:
                 with contextlib.suppress(FileNotFoundError), segments.child(name) as segment:
                     if segment.lstat(RETIRED_MARK) is not None:
                         continue
-                    slots, resolved = _slots(segment)
+                    slots, resolved, _ = _slots(segment)
                     for n in slots:
                         digest = None if n in resolved else self._target(segment, int(name), n)
                         if digest is not None and not self._live(claims, digest, now):
