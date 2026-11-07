@@ -7,7 +7,6 @@ import stat
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +16,7 @@ from senselab_core.kernel.identity import ExecutionContext, ModelRef, ResolvedMo
 from senselab_core.runtime import vllm_server as vs
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.testing.processes import group_gone
 from senselab_worker.digest import identity_digest
 
 pytestmark = pytest.mark.logic
@@ -105,17 +105,6 @@ def _context(fields: dict[str, Any]) -> ExecutionContext:
     )
 
 
-def _group_gone(pgid: int, timeout_s: float = 30.0) -> bool:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(pgid, 0)
-        except (ProcessLookupError, PermissionError):  # macOS: EPERM once every member is a zombie or exiting
-            return True
-        time.sleep(0.1)
-    return False
-
-
 def test_attestation_enters_context(env: EnvHandle, tmp_path: Path) -> None:
     """The served version, the model commit and the config digest reach the context and every reply."""
     with _server(env, tmp_path) as server:
@@ -176,7 +165,7 @@ def test_server_stops_with_owner(env: EnvHandle, tmp_path: Path) -> None:
         (record,) = _records(tmp_path)
         holder.send_signal(signal.SIGKILL)
         holder.wait()
-        assert _group_gone(record["pgid"])
+        assert group_gone(record["pgid"], 30)
     finally:
         holder.kill()
         holder.wait()
@@ -187,7 +176,7 @@ def test_server_stops_on_exit(env: EnvHandle, tmp_path: Path) -> None:
     with _server(env, tmp_path) as server:
         pass
     (record,) = _records(tmp_path)
-    assert _group_gone(record["pgid"], 5)
+    assert group_gone(record["pgid"], 5)
     assert server.attestation is None
     with pytest.raises(vs.StaleAttestation):
         server.context_fields()
@@ -213,7 +202,7 @@ def test_start_failure_is_typed_and_stops(
         server.__enter__()
     assert raised.value.kind == kind and server.url is None
     for record in _records(tmp_path):
-        assert _group_gone(record["pgid"], 5)
+        assert group_gone(record["pgid"], 5)
 
 
 @pytest.mark.parametrize(

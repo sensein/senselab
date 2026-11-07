@@ -10,10 +10,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from lifecycle_probes_fixture import alive, group_alive
-from senselab_core.runtime.execution.supervisor import Supervisor, subreaper_supported
+from senselab_core.runtime.execution.supervisor import Keeper, Supervisor, subreaper_supported
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
+from senselab_core.testing.processes import alive, group_alive
 
 PYTHON = source_tree_python()
 ESCAPING = "backends.escaping_backend_fixture"
@@ -156,3 +156,43 @@ def test_supervisor_host_sigkill_leaves_no_descendant(backends_importable: None,
         host.kill()
         host.wait()
         host.stdout.close()
+
+
+def _exited(pid: int) -> bool:
+    return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+
+
+@linux_only
+@pytest.mark.contract
+def test_released_leader_keeps_its_exit_status(backends_importable: None) -> None:
+    """A leader released while the reaper runs is never reaped by it: its `Popen` and its client read -9."""
+    with Supervisor(poll_s=0.001) as sup:
+        for _ in range(20):
+            leader = sup.popen([sys.executable, "-c", SLEEPER])
+            leader.kill()
+            _until(lambda: _exited(leader.pid), "the leader has exited")
+            sup.released(leader.pid)
+            sup.reap()
+            assert leader.wait() == -signal.SIGKILL
+        client = WorkerClient(PYTHON, ESCAPING, init={}, supervisor=sup)
+        os.kill(client.hello["pid"], signal.SIGKILL)
+        client.close()
+        assert client.returncode == -signal.SIGKILL
+
+
+@pytest.mark.contract
+def test_keeper_kills_only_groups_it_still_owns() -> None:
+    """At its end the keeper SIGKILLs a recorded group whose leader has the recorded start time, never another."""
+    owned = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
+    reused = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
+    try:
+        keeper = Keeper()
+        keeper.record("+", "g", owned.pid)
+        keeper.record("+", "g", reused.pid, start="another-start")
+        keeper.stop(SETTLE_S)
+        assert owned.wait(SETTLE_S) == -signal.SIGKILL
+        assert reused.poll() is None
+    finally:
+        for proc in (owned, reused):
+            proc.kill()
+            proc.wait()

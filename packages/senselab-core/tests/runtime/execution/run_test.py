@@ -252,27 +252,36 @@ def test_a_fresh_process_reads_and_binds_a_run_from_its_directory(tmp_path: Path
 
 
 class Gated(Recording):
-    """A `Recording` executor whose fragments of node `a` wait until `gate` is set."""
+    """A `Recording` executor whose fragments of node `a` wait until `gate` is set.
 
-    def __init__(self, store: ResultStore) -> None:
+    `entered` is set once fragments holding `jobs` jobs of `a` are waiting at the gate.
+    """
+
+    def __init__(self, store: ResultStore, jobs: int) -> None:
         """Hold the gate."""
         super().__init__(store)
         self.entered = threading.Event()
         self.gate = threading.Event()
+        self._jobs = jobs
+        self._held = 0
+        self._lock = threading.Lock()
 
     def submit(self, fragment: PlanFragment) -> Handle:
         """Wait at the gate before submitting a fragment of node `a`."""
         if fragment.node == "a":
-            self.entered.set()
+            with self._lock:
+                self._held += len(fragment.jobs)
+                if self._held >= self._jobs:
+                    self.entered.set()
             assert self.gate.wait(30)
         return super().submit(fragment)
 
 
 @pytest.mark.contract
 def test_cancel_stops_release(tmp_path: Path) -> None:
-    """Cancelled while `a` is in flight, `a` finishes, no fragment of `b` is sent, and status says cancelled."""
+    """Cancelled while every job of `a` is in flight, `a` finishes, no fragment of `b` is sent, and status says so."""
     placed, _ = _plan(GRAPH, [{"text": t} for t in ("one", "two")])
-    executor = Gated(ResultStore(tmp_path / "store"))
+    executor = Gated(ResultStore(tmp_path / "store"), jobs=2)
     run = placed.run(executor, store=executor.store)
     assert executor.entered.wait(30)
     run.cancel()
@@ -288,7 +297,7 @@ def test_cancel_stops_release(tmp_path: Path) -> None:
 def test_wait_polls_the_events_of_a_run_another_object_drives(tmp_path: Path) -> None:
     """`Run(run_dir).wait(timeout)` returns not done at the timeout, and done once the other run's events say so."""
     placed, _ = _plan(GRAPH, [{"text": "one"}])
-    executor = Gated(ResultStore(tmp_path / "store"))
+    executor = Gated(ResultStore(tmp_path / "store"), jobs=1)
     driver = placed.run(executor, store=executor.store)
     assert executor.entered.wait(30)
     watcher = Run(driver.run_dir)

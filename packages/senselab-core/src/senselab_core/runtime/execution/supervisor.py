@@ -11,8 +11,8 @@ other group is held for the groups launched when it was adopted and is SIGKILLed
 at once when there were none. A child started in its own session by code that bypasses the supervisor is taken for
 such an orphan.
 A group is live while its leader has not exited or one of its orphans has not (`group_live`). Orphans are reaped
-one by one, by pid; a launched leader is reaped by its owner. Children that were already running when it was
-entered, their groups, and children of this process's own group are never adopted.
+one by one, by pid; a launched process is never adopted or reaped here until its owner has reaped it. Children that
+were already running when it was entered, their groups, and children of this process's own group are never adopted.
 
 Elsewhere, and in the process-wide supervisor, a group is supervised by its process group: a `setsid` escapee is not
 reached, and liveness is probed by group (`live_members`).
@@ -51,10 +51,10 @@ REAPED_KEPT = 256
 """How many reaped orphans' exit statuses the table keeps, the oldest dropped first."""
 
 KEEPER = r"""
-import os, select, signal, sys
+import os, select, signal, subprocess, sys
 
 owner = int(sys.argv[1])
-held = {"g": set(), "p": set()}
+held = {"g": {}, "p": {}}
 rest = b""
 
 
@@ -67,12 +67,31 @@ def on_term(signum, frame):
         raise Gone
 
 
+def started(pid):
+    if os.path.isdir("/proc/self"):
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as f:
+                data = f.read()
+        except OSError:
+            return None
+        return data[data.rfind(b")") + 2 :].split()[19].decode()
+    try:
+        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+    except Exception:
+        return "?"
+    return " ".join(out.stdout.split()) or None
+
+
 def apply(data):
     global rest
     *lines, rest = (rest + data).split(b"\n")
     for line in lines:
-        sign, kind, number = line[:1], line[1:2].decode(), int(line[2:])
-        (held[kind].add if sign == b"+" else held[kind].discard)(number)
+        sign, kind, (number, _, given) = line[:1], line[1:2].decode(), line[2:].decode().partition(" ")
+        number = int(number)
+        if sign == b"+":
+            held[kind][number] = given or started(number)
+        else:
+            held[kind].pop(number, None)
 
 
 def drain():
@@ -85,6 +104,18 @@ def drain():
         if not data:
             return
         apply(data)
+
+
+def kill(kind, number, recorded):
+    now = started(number)
+    if now is not None and now != recorded:
+        return
+    if now is None and kind == "p":
+        return
+    try:
+        (os.killpg if kind == "g" else os.kill)(number, signal.SIGKILL)
+    except OSError:
+        pass
 
 
 signal.signal(signal.SIGTERM, on_term)
@@ -104,18 +135,17 @@ try:
 except Gone:
     pass
 drain()
-for group in held["g"]:
-    try:
-        os.killpg(group, signal.SIGKILL)
-    except OSError:
-        pass
-for pid in held["p"]:
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except OSError:
-        pass
+for kind in ("g", "p"):
+    for number, recorded in held[kind].items():
+        kill(kind, number, recorded)
 """
-"""Run as ``python -I -c KEEPER <owner pid>`` with the records on stdin: ``+g``/``-g`` a group, ``+p``/``-p`` a pid."""
+"""Run as ``python -I -c KEEPER <owner pid>`` with records on stdin: ``+g``/``-g`` a group, ``+p``/``-p`` a pid.
+
+A ``+`` record may carry the start time after the number; otherwise the keeper reads the process's start time
+(`/proc/<pid>/stat` field 22, else `ps -o lstart=`). At the end it SIGKILLs a recorded pid only while a process of
+that pid has the recorded start time, and a recorded group while its leader has it or no process has the group's
+number.
+"""
 
 _STAT_STATE = 0
 _STAT_PGRP = 2
@@ -226,8 +256,11 @@ class Keeper:
         self.proc: subprocess.Popen[bytes] | None = None
         self._broken = False
 
-    def record(self, sign: str, kind: str, number: int) -> None:
-        """Record (`+`) or drop (`-`) group or pid `number` (`kind` `g` or `p`); a dead keeper is logged once."""
+    def record(self, sign: str, kind: str, number: int, start: str | None = None) -> None:
+        """Record (`+`) or drop (`-`) group or pid `number` (`kind` `g` or `p`); a dead keeper is logged once.
+
+        `start` is the recorded start time of the group leader or pid; the keeper reads it when None.
+        """
         if self._broken or (self.proc is None and sign == "-"):
             return
         if self.proc is None:
@@ -240,7 +273,7 @@ class Keeper:
         stdin: IO[bytes] | None = self.proc.stdin
         try:
             assert stdin is not None
-            stdin.write(f"{sign}{kind}{number}\n".encode())
+            stdin.write(f"{sign}{kind}{number}{'' if start is None else ' ' + start}\n".encode())
             stdin.flush()
         except (OSError, ValueError) as exc:
             self._broken = True
@@ -284,6 +317,7 @@ class Supervisor:
         self._poll_s = poll_s
         self._lock = threading.RLock()
         self._groups: dict[int, subprocess.Popen[bytes]] = {}
+        self._launched: dict[int, subprocess.Popen[bytes]] = {}
         self._orphans: dict[int, Orphan] = {}
         self._ended: set[int] = set()
         self._foreign: set[int] = set()
@@ -307,10 +341,15 @@ class Supervisor:
         with self._lock:
             self._entered = True
             if self._want_subreaper:
-                self._previous_flag = _subreaper_flag()
-                self._foreign = self._children()
+                try:
+                    self._previous_flag = _subreaper_flag()
+                    _prctl(PR_SET_CHILD_SUBREAPER, 1)
+                except OSError as exc:
+                    logger.warning("cannot become a subreaper; supervising by process group only: %s", exc)
+                    self._want_subreaper = False
+            if self._want_subreaper:
+                self._foreign = self._children() - self._launched.keys()
                 self._foreign_groups = {g for g in map(_group_of, self._foreign) if g is not None}
-                _prctl(PR_SET_CHILD_SUBREAPER, 1)
                 self._adopting = True
                 self._stop.clear()
                 self._reaper = threading.Thread(target=self._reap_loop, name="senselab-supervisor", daemon=True)
@@ -341,13 +380,16 @@ class Supervisor:
                 if (not self._orphans and not leaders) or time.monotonic() > deadline:
                     break
                 time.sleep(self._poll_s)
-            self._keeper.stop(max(deadline - time.monotonic(), 0.0))
             for proc in self._groups.values():
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     proc.wait(max(deadline - time.monotonic(), 0.0))
+            self._prune()
+            self._keeper.stop(max(deadline - time.monotonic(), 0.0))
             self._groups.clear()
+            self._launched.clear()
             if self._adopting:
-                _prctl(PR_SET_CHILD_SUBREAPER, self._previous_flag)
+                with contextlib.suppress(OSError):
+                    _prctl(PR_SET_CHILD_SUBREAPER, self._previous_flag)
             self._adopting = self._entered = False
 
     def popen(self, argv: Sequence[str], *, keep: bool = False, **popen: Any) -> "subprocess.Popen[bytes]":  # noqa: ANN401
@@ -357,7 +399,8 @@ class Supervisor:
         """
         with self._lock:
             proc: subprocess.Popen[bytes] = subprocess.Popen(argv, **{**popen, "start_new_session": True})  # noqa: S603
-            self._groups[proc.pid] = proc
+            self._prune()
+            self._groups[proc.pid] = self._launched[proc.pid] = proc
             self._ended.discard(proc.pid)
             if self._entered or keep:
                 self._keeper.record("+", "g", proc.pid)
@@ -366,18 +409,9 @@ class Supervisor:
     def released(self, pgid: int) -> None:
         """Drop launched group `pgid` before its leader is reaped; SIGKILL its orphans and those held only for it."""
         with self._lock:
-            if self._groups.pop(pgid, None) is None:
-                return
-            self._keeper.record("-", "g", pgid)
-            self._ended.add(pgid)
-            if not self._adopting:
-                return
-            self._adopt()
-            for orphan in self._orphans.values():
-                if orphan.pgid == pgid or pgid in orphan.owners:
-                    orphan.owners.discard(pgid)
-                    if orphan.pgid == pgid or not orphan.owners:
-                        self._end(orphan)
+            self._prune()
+            if pgid in self._groups:
+                self._drop(pgid)
 
     def group_live(self, pgid: int) -> bool:
         """Whether group `pgid` can still run code: from the table when adopting, else by probing the group."""
@@ -399,6 +433,7 @@ class Supervisor:
     def reap(self) -> None:
         """Adopt new orphans and reap each that has exited, recording its status in `reaped`."""
         with self._lock:
+            self._prune()
             self._adopt()
             for pid in list(self._orphans):
                 if not _exited(pid):
@@ -414,7 +449,8 @@ class Supervisor:
             return
         listed = self._children()
         self._foreign &= listed
-        known = self._groups.keys() | self._orphans.keys() | self._foreign
+        self._launched = {pid: proc for pid, proc in self._launched.items() if proc.returncode is None}
+        known = self._launched.keys() | self._orphans.keys() | self._foreign
         if self._keeper.proc is not None:
             known.add(self._keeper.proc.pid)
         for pid in listed - known:
@@ -426,6 +462,25 @@ class Supervisor:
             self._keeper.record("+", "p", pid)
             if pgid not in self._groups and (pgid in self._ended or not owners):
                 self._end(orphan)
+
+    def _prune(self) -> None:
+        """Drop each launched group whose leader its owner has reaped."""
+        for pgid in [g for g, proc in self._groups.items() if proc.returncode is not None]:
+            self._drop(pgid)
+
+    def _drop(self, pgid: int) -> None:
+        """Forget group `pgid`, with the keeper too; SIGKILL its orphans and those held only for it."""
+        del self._groups[pgid]
+        self._keeper.record("-", "g", pgid)
+        self._ended.add(pgid)
+        if not self._adopting:
+            return
+        self._adopt()
+        for orphan in self._orphans.values():
+            if orphan.pgid == pgid or pgid in orphan.owners:
+                orphan.owners.discard(pgid)
+                if orphan.pgid == pgid or not orphan.owners:
+                    self._end(orphan)
 
     def _end(self, orphan: Orphan) -> None:
         """SIGKILL `orphan` and, when it leads a group of its own, that group."""

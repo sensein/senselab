@@ -4,7 +4,6 @@ import json
 import os
 import stat
 import sys
-import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -32,6 +31,7 @@ from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.vllm_server import AttestationMismatch, VllmServer, config_digest, server_args
 from senselab_core.testing.contracts import contract_cases
+from senselab_core.testing.processes import group_gone
 from senselab_core.testing.workers import RealWorkers
 from senselab_worker.faults import FaultClass
 
@@ -289,14 +289,7 @@ def test_closing_the_worker_set_stops_the_server_it_started(
     _run(_call(), execution=_profile(tmp_path, "vllm"), store=ResultStore(tmp_path / "results"))
     (record,) = [json.loads(p.read_text()) for p in (tmp_path / "fake").glob("*.json")]
     WORKERS.close()
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(record["pgid"], 0)
-        except (ProcessLookupError, PermissionError):  # macOS: EPERM once every member is a zombie or exiting
-            return
-        time.sleep(0.1)
-    pytest.fail("the server's process group outlived closing the worker set")
+    assert group_gone(record["pgid"], 5), "the server's process group outlived closing the worker set"
 
 
 @pytest.mark.logic
@@ -316,15 +309,7 @@ def test_real_workers_close_and_the_next_start_stop_the_server(
             stop()
         except Exception:  # noqa: BLE001 - the transformers worker may not start here; only the server's stop is asked
             pass
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            try:
-                os.killpg(pgid, 0)
-            except (ProcessLookupError, PermissionError):  # macOS: EPERM once every member is a zombie or exiting
-                break
-            time.sleep(0.1)
-        else:
-            pytest.fail("the server outlived the stop")
+        assert group_gone(pgid, 5), "the server outlived the stop"
     workers.close()
 
 

@@ -84,7 +84,7 @@ jobs:
         UV_PROJECT_ENVIRONMENT: .core
       run: uv sync --locked --no-editable --python "$PYTHON_VERSION" --package senselab-core --group test
     - name: Run core tests
-      run: .core/bin/pytest packages/senselab-core packages/senselab-worker -m "(logic or contract) and not model" -p no:cacheprovider --timeout=300
+      run: .core/bin/pytest packages/senselab-core packages/senselab-worker -m "(logic or contract) and not model" -p no:cacheprovider --timeout=300 -rs
     - name: Build each sdist into a wheel on its own
       run: |
         for src in packages/senselab-worker packages/senselab-core .; do

@@ -21,7 +21,7 @@ import senselab_worker
 from backends.subdir_backend_fixture import ARRAY_LIKE
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from lifecycle_probes_fixture import alive, gate, group_alive, interpreter, listing, recorded_pids, state
+from lifecycle_probes_fixture import gate, interpreter, listing, recorded_pids
 from senselab_core.kernel.declare import Env
 from senselab_core.runtime import worker_client
 from senselab_core.runtime.fake_backend import FAKE as FAKE_SPEC
@@ -37,6 +37,7 @@ from senselab_core.runtime.worker_client import (
     WorkerTimeout,
 )
 from senselab_core.testing.interpreter import source_tree_python
+from senselab_core.testing.processes import alive, group_alive, state
 from senselab_worker import codec, runtime_identity
 from senselab_worker.canonical import MAX_DEPTH, canonical_npy_bytes
 from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_LINE_BYTES, LineTooLarge, to_wire

@@ -26,6 +26,7 @@ from senselab_core.runtime.worker_client import (
     WorkerLost,
 )
 from senselab_core.testing.interpreter import source_tree_python
+from senselab_core.testing.processes import group_alive
 from senselab_worker.fake import FAULT_KEY
 from shutdown_schedule_fixture import (
     CASE_BOUND_S,
@@ -302,7 +303,7 @@ def test_an_interrupted_idle_close_still_reaps_and_removes_the_files(
     with pytest.raises(SystemExit):
         client.close()
     assert client.returncode is not None and not client.array_dir.exists()
-    assert not lifecycle_probes_fixture.group_alive(pgid)
+    assert not group_alive(pgid)
 
 
 @pytest.mark.logic
@@ -328,7 +329,7 @@ def test_collecting_a_client_whose_shutdown_was_cut_short_finishes_it(
     monkeypatch.undo()
     box.clear()
     gc.collect()
-    assert not array_dir.exists() and not lifecycle_probes_fixture.group_alive(pgid)
+    assert not array_dir.exists() and not group_alive(pgid)
 
 
 _HELD_THEN_ESCALATED = """

@@ -8,10 +8,11 @@ from pathlib import Path
 import numpy
 import pytest
 from backends.subdir_backend_fixture import ARRAY_LIKE
-from lifecycle_probes_fixture import alive, gate, group_alive, listing, recorded_pids
+from lifecycle_probes_fixture import gate, listing, recorded_pids
 from senselab_core.runtime import worker_client
 from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerClient, WorkerLost
 from senselab_core.testing.interpreter import source_tree_python
+from senselab_core.testing.processes import alive, group_alive
 
 PYTHON = source_tree_python()
 

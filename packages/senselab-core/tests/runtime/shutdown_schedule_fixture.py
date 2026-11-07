@@ -26,10 +26,11 @@ from typing import Any, Callable, Iterator
 
 import numpy
 from bounded_probe_fixture import limit_file_size
-from lifecycle_probes_fixture import alive, group_alive, recorded_pids
+from lifecycle_probes_fixture import recorded_pids
 from senselab_core.runtime import worker_client
 from senselab_core.runtime.worker_client import DEFAULT_GRACES, ShutdownGraces, WorkerClient, WorkerLost, _Pump
 from senselab_core.testing.interpreter import source_tree_python
+from senselab_core.testing.processes import alive, group_alive
 from senselab_worker.fake import FAULT_KEY
 
 PYTHON = source_tree_python()

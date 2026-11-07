@@ -1044,6 +1044,7 @@ class WorkerClient:
             )
         else:
             logger.warning("worker %d was reaped outside this client; its process group is not signalled", pgid)
+            self._supervisor.released(pgid)
         if self._exited.is_set() and proc.returncode is None:
             self._supervisor.released(pgid)
             proc.wait()

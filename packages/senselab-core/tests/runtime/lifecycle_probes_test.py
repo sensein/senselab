@@ -8,7 +8,7 @@ import time
 from collections.abc import Iterator
 
 import pytest
-from lifecycle_probes_fixture import alive, can_run, group_alive, state
+from senselab_core.testing.processes import alive, can_run, group_alive, state
 
 SETTLE_S = 10.0
 SLEEPER = "import time; time.sleep(3600)"
