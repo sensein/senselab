@@ -8,7 +8,8 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, Registry
+from pydantic import Field
+from senselab_core.kernel.declare import REGISTRY, BackendParams, BackendSpec, Env, Registry, TaskParams
 from senselab_core.runtime import fake_backend
 from senselab_core.runtime.call import Packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
@@ -54,9 +55,10 @@ def test_probe_runs_plumbing_suite_end_to_end(tmp_path: Path, capsys: pytest.Cap
     code = probe.main([str(suite), "--out", str(tmp_path / "out"), "--sha", "abc", "--job", "7"])
     assert code == 0
     assert capsys.readouterr().out.splitlines() == [
-        f"abc 7 fake.echo/fake: agree {held}/{held}, formation mixed, batch {held}, max diff none"
+        f"abc 7 fake.echo/fake: agree {held}/{held}, formation mixed, batch {held}, max diff none; "
+        f"repeat agree {held}/{held}, max diff none"
     ]
-    assert (tmp_path / "out" / "echo" / "batch-1").is_dir() and (tmp_path / "out" / "echo" / f"batch-{held}").is_dir()
+    assert {p.name for p in (tmp_path / "out" / "echo").iterdir()} == {"batch-1", f"batch-{held}", "batch-1-repeat"}
 
 
 @pytest.mark.logic
@@ -86,9 +88,35 @@ SIZED = BackendSpec(
 UNKEYED = SIZED.model_copy(update={"name": "unkeyed", "stack": "unkeyed", "batch_invariant": False})
 
 
+class StepParams(TaskParams):
+    """Params of the scored task: the confidence per item of the forward's batch size."""
+
+    step: float
+
+
+class ForwardParams(BackendParams):
+    """Backend params of the scored backend: items per forward."""
+
+    batch_size: int = Field(default=1, ge=1)
+
+
+SCORED_TASK = SIZED_TASK.model_copy(
+    update={"name": "probe_test.scored", "outputs": {"transcript": "Transcript"}, "params": StepParams}
+)
+SCORED = SIZED.model_copy(
+    update={
+        "task": SCORED_TASK.name,
+        "name": "scored",
+        "stack": "scored",
+        "worker": "scored_backend_fixture",
+        "params": ForwardParams,
+    }
+)
+
+
 def _sized_registry(backend: BackendSpec) -> Registry:
     registry = Registry()
-    registry.add_task(SIZED_TASK)
+    registry.add_task(SCORED_TASK if backend is SCORED else SIZED_TASK)
     registry.add_backend(backend)
     return registry
 
@@ -106,7 +134,8 @@ def test_probe_reports_disagreement_of_a_batch_dependent_backend(
     found = probe.probe(jobs, placement, run=run, execution=execution, work=tmp_path)
     assert (
         found.line("abc", "7")
-        == f"abc 7 {SIZED_TASK.name}/sized: agree 0/3, formation mixed, batch 3, max diff value=n/a"
+        == f"abc 7 {SIZED_TASK.name}/sized: agree 0/3, formation mixed, batch 3, max diff value=n/a; "
+        "repeat agree 3/3, max diff none"
     )
 
 
@@ -124,3 +153,22 @@ def test_probe_marks_a_single_formation_as_no_evidence(tmp_path: Path, monkeypat
         == f"abc 7 {SIZED_TASK.name}/unkeyed: not batched — no evidence (formation single, batch 3)"
     )
     assert not tmp_path.joinpath("batch-1").exists()
+
+
+@pytest.mark.logic
+def test_probe_compares_wire_forms_under_their_rules_with_a_batched_forward(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transcript whose confidence moves with the forward's batch size, within its threshold, agrees on every item.
+
+    The gap is `step` times N - 1, so the backend's own `batch_size` param was N in the batched run and 1 at batch 1.
+    """
+    monkeypatch.syspath_prepend(str(Path(__file__).parent))
+    use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, _sized_registry(SCORED), mit_lock_records))
+    run, execution = probe.RunConfig(), ExecutionProfile.load()
+    inputs = [{"payload": {"n": n}} for n in range(3)]
+    step = run.thresholds.by_name["probability"].atol / (2 * len(inputs))
+    jobs, placement = probe.node_jobs(SCORED_TASK.name, inputs, {"step": step}, None, run=run, execution=execution)
+    found = probe.probe(jobs, placement, run=run, execution=execution, work=tmp_path)
+    assert (found.agree, found.repeat, found.batch, found.repeat_largest) == (3, 3, 3, {})
+    assert found.largest == {"transcript.segments[*].confidence": pytest.approx(step * (found.batch - 1))}

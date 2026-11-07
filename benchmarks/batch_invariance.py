@@ -3,11 +3,15 @@
 `uv run python benchmarks/batch_invariance.py SUITE --execution orcd [--override FILE] --out DIR --sha SHA --job JOB`
 
 For each benchmark of the suite (`benchmark-suite@1.0`), its held-out items are keyed and sent as one node's jobs,
-once in batches of one and once in batches of N, each into a store of its own under `DIR`. N is the largest number of
-those jobs sharing one formation (`formation` over the packaged bucket grid), so every bucket is sent whole. Each
-item's outputs are compared (`compare`) under the run config's thresholds. One line per backend is printed:
-`<sha> <job> <task>/<backend>: agree k/n, formation <mixed|bucket>, batch N, max diff <path>=<absolute> ...` (`none`
-when nothing differs); `... : not batched — no evidence (formation <kind>, batch N)` when no request would hold more
+in batches of one twice and in batches of N once, each into a store of its own under `DIR`. N is the largest number
+of those jobs sharing one formation (`formation` over the packaged bucket grid), so every bucket is sent whole; a
+backend whose params declare `batch_size` gets the request's batch size there too, so its forward is batched. Each
+item's stored outputs (wire forms, as verify reads them) are compared (`compare`) under the run config's thresholds:
+batch 1 against batch N, and batch 1 against its repeat, which measures run-to-run noise. One line per backend is
+printed: `<sha> <job> <task>/<backend>: agree k/n, formation <mixed|bucket>, batch N, max diff <path>=<absolute> ...;
+repeat agree k/n, max diff ...`, a max diff being the largest gap of a leaf that differs, within its threshold or
+not (`none` when nothing differs); `... : not batched — no evidence (formation <kind>,
+batch N)` when no request would hold more
 than one item, the formation being `single` or N 1, and nothing is run; or `<sha> <job> <task>: not placeable:
 <reason>` for a task no device here runs.
 """
@@ -17,13 +21,13 @@ import importlib.util
 import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 from senselab_core.runtime.call import RunConfig, TaskCall, bind_input, packaged, placement_of
-from senselab_core.runtime.compare import compare, index_free
+from senselab_core.runtime.compare import Threshold, Thresholds, compare, index_free
 from senselab_core.runtime.execution.batching import BucketGrid, formation
 from senselab_core.runtime.execution.executor import Admission, JobRef
 from senselab_core.runtime.execution.in_process import fragment_jobs, node_fragment, process_workers
@@ -36,6 +40,8 @@ from senselab_core.runtime.store import ResultStore
 
 ROOT = Path(__file__).resolve().parents[1]
 HELDOUT = "heldout"
+BATCH_PARAM = "batch_size"
+"""The backend param, when its params declare it, that sets how many items one forward holds."""
 
 
 def harness() -> ModuleType:
@@ -55,7 +61,8 @@ def harness() -> ModuleType:
 class Probe:
     """One backend's comparison: agreeing items of all held-out items, formation kind, batch N, largest gap per field.
 
-    It is evidence only when N > 1 and the kind is not `single` (`batched`).
+    `repeat` and `repeat_largest` are the same for batch 1 against its repeat. It is evidence only when N > 1 and the
+    kind is not `single` (`batched`).
     """
 
     task: str
@@ -65,6 +72,8 @@ class Probe:
     formation: str
     batch: int
     largest: Mapping[str, float | None]
+    repeat: int = 0
+    repeat_largest: Mapping[str, float | None] = field(default_factory=dict)
 
     @property
     def batched(self) -> bool:
@@ -77,8 +86,14 @@ class Probe:
         shape = f"formation {self.formation}, batch {self.batch}"
         if not self.batched:
             return f"{head}: not batched — no evidence ({shape})"
-        gaps = " ".join(f"{p}={'n/a' if v is None else f'{v:.3g}'}" for p, v in sorted(self.largest.items()))
-        return f"{head}: agree {self.agree}/{self.items}, {shape}, max diff {gaps or 'none'}"
+        return (
+            f"{head}: agree {self.agree}/{self.items}, {shape}, max diff {_gaps(self.largest)}; "
+            f"repeat agree {self.repeat}/{self.items}, max diff {_gaps(self.repeat_largest)}"
+        )
+
+
+def _gaps(largest: Mapping[str, float | None]) -> str:
+    return " ".join(f"{p}={'n/a' if v is None else f'{v:.3g}'}" for p, v in sorted(largest.items())) or "none"
 
 
 @dataclass(frozen=True)
@@ -128,8 +143,28 @@ def node_jobs(  # noqa: PLR0913 - the call, then keyword-only run inputs
     ], placement
 
 
+def agreement(
+    first: Sequence[Mapping[str, object] | None], second: Sequence[Mapping[str, object] | None], run: RunConfig
+) -> tuple[int, dict[str, float | None]]:
+    """Return how many items' outputs agree (`compare`) and the largest gap per index-free path; a None never agrees.
+
+    A gap is measured for every leaf that differs, within its threshold or not.
+    """
+    exact = Thresholds(by_name=dict.fromkeys(run.thresholds.by_name, Threshold(rtol=0, atol=0)))
+    agree, largest = 0, dict[str, float | None]()
+    for one, other in zip(first, second, strict=True):
+        if one is None or other is None:
+            continue
+        agree += compare(one, other, run.thresholds).agree
+        for d in compare(one, other, exact).differences:
+            path = index_free(d.path)
+            gaps = [g for g in (largest.get(path), d.absolute) if g is not None]
+            largest[path] = max(gaps) if gaps else None
+    return agree, largest
+
+
 def probe(jobs: list[Job], placement: Placement, *, run: RunConfig, execution: ExecutionProfile, work: Path) -> Probe:
-    """Run `jobs` at batch 1 and at the largest formation population, and compare each item's outputs.
+    """Run `jobs` at batch 1, at the largest formation population and at batch 1 again, and compare each item's outputs.
 
     Nothing runs when no request would hold more than one item (`Probe.batched`).
     """
@@ -142,23 +177,25 @@ def probe(jobs: list[Job], placement: Placement, *, run: RunConfig, execution: E
         return unrun
     workers = process_workers(execution)
 
-    def sent(size: int) -> list[JobOutcome]:
-        store = ResultStore(work / f"batch-{size}")
-        return execute(
-            jobs, replace(placement, batch_size=size), store=store, run=run, profile=execution, workers=workers
-        )
+    params = placement.backend_params
 
-    agree, largest = 0, dict[str, float | None]()
-    for one, many in zip(sent(1), sent(batch), strict=True):
-        if not (isinstance(one, Completed) and isinstance(many, Completed)):
-            continue
-        result = compare(one.result.outputs, many.result.outputs, run.thresholds)
-        agree += result.agree
-        for d in result.differences:
-            path = index_free(d.path)
-            gaps = [g for g in (largest.get(path), d.absolute) if g is not None]
-            largest[path] = max(gaps) if gaps else None
-    return Probe(backend.task, backend.name, agree, len(jobs), kind, batch, largest)
+    def sent(size: int, name: str) -> list[Mapping[str, object] | None]:
+        store = ResultStore(work / name)
+        forward = params.model_copy(update={BATCH_PARAM: size}) if BATCH_PARAM in type(params).model_fields else params
+        sized = replace(placement, batch_size=size, backend_params=forward)
+        outcomes = execute(jobs, sized, store=store, run=run, profile=execution, workers=workers)
+        return [_stored(store, o) for o in outcomes]
+
+    one = sent(1, "batch-1")
+    agree, largest = agreement(one, sent(batch, f"batch-{batch}"), run)
+    repeat, repeat_largest = agreement(one, sent(1, "batch-1-repeat"), run)
+    return Probe(backend.task, backend.name, agree, len(jobs), kind, batch, largest, repeat, repeat_largest)
+
+
+def _stored(store: ResultStore, outcome: JobOutcome) -> dict[str, object] | None:
+    if not isinstance(outcome, Completed):
+        return None
+    return store.outputs_of(outcome.result.key.digest(), outcome.result.output_identity)
 
 
 def probe_suite(
