@@ -13,7 +13,7 @@ from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, PlanFragment
 from senselab_core.runtime.execution.queue import Queue, QueueSet
 from senselab_core.runtime.profiles import ExecutionProfile
-from syscall_faults_fixture import exit_at, stall
+from syscall_faults_fixture import exit_at, gate_pause, stall
 
 FAULT = FaultRecord(fault="content", type="ContentFault", message="bad", gap=False, charged=True)
 
@@ -56,30 +56,12 @@ def claim_and_finish(root: str, override: dict[str, Any], start_at: float, stall
     return {"claimed": True, "finished": list(finished), "outcomes": claim.outcomes, "broke": broke}
 
 
-def _gated_symlink(gate: Path, bound_s: float, poll_s: float) -> None:
-    """Make this process's first `os.symlink` of a `slot-` name touch `gate/stalled`, then wait for `gate/release`."""
-    real = os.symlink
-    left = [1]
-
-    def symlink(src: Any, dst: Any, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
-        if left[0] and os.path.basename(os.fsdecode(dst)).startswith("slot-"):
-            left[0] = 0
-            (gate / "stalled").touch()
-            deadline = time.monotonic() + bound_s
-            while not (gate / "release").exists():
-                assert time.monotonic() < deadline, "the stalled putter was never released"
-                time.sleep(poll_s)
-        real(src, dst, *args, **kwargs)
-
-    setattr(os, "symlink", symlink)
-
-
 def put_stalled(root: str, override: dict[str, Any], admission: str, gate: str, wait: tuple[float, float]) -> int:
     """Put one fragment whose first slot `symlink` waits for `release` in `gate`; return the slots taken.
 
     The wait begins by creating `stalled` in `gate` and gives up after `wait[0]` seconds, polling every `wait[1]`.
     """
-    _gated_symlink(Path(gate), *wait)
+    stall("symlink", "slot-", gate_pause(Path(gate), *wait), times=1)
     return _queue(root, override).put_all([fragment(admission)])
 
 
