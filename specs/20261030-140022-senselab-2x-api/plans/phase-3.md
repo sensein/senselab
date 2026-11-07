@@ -57,8 +57,8 @@ yet merged into `2.x`), → `2.x` after `2x/phase-2` merges. Spec changes, ADR a
 - **Rationale lives in specs** (P-21, P-31): docstrings say what and how; no register, round or ruling id outside
   `specs/`.
 - **Thresholds and budgets are data with a derivation** (P-17): quanta, lease renewal fractions, retry budgets,
-  bucket edges, idle timeouts, worker and request timeouts, scale budgets. A value not yet measured says so in its
-  derivation and names the task that measures it.
+  bucket edges, idle timeouts, worker and request timeouts, scale budgets. Where the derivation lives and what an
+  unmeasured value says: P-17 (amended 2026-11-07).
 - **Agreement is a standard comparison** (P2-95, owner item 48): hash equality, exact equality or `isclose` under
   run-config thresholds, by kernel type. No tolerance is fitted. Where a spec says "measured tolerance", read this.
 - **Env versions are distinct agents** (P2-92, owner item 45); **licenses are transparent and the user's policy

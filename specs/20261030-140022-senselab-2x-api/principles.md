@@ -348,6 +348,11 @@ amending its origin.
 - **Status**: active. **Statement**: decision constants live in versioned data profiles with a
   derivation, and are regenerated rather than hand-edited. **Source**: `CLAUDE.md`. **Check**: a lint
   flags numeric literals in any task that have no profile key.
+- **Amended 2026-11-07** (where a derivation lives): a config file carries values and a one-line `#`
+  description per key. Derivations live in [`config-derivations.md`](config-derivations.md), a `##` section
+  per config file or profile and a `###` section per key. No YAML carries a `derivation:` key; a checker that
+  wants a derivation reads the spec section. A value not yet measured says so there and names the task that
+  measures it.
 
 ### P-18 Configuration, not flags
 - **Status**: active. **Statement**: entry points take inputs and configuration, and the merged

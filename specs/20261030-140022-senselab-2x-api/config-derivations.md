@@ -1,6 +1,6 @@
-# Execution-profile derivations
+# Config derivations
 
-Why each key of the packaged execution profiles (`packages/senselab-core/src/senselab_core/runtime/data/profiles/`) has the value it has, by profile and top-level key. The YAML files carry a one-line `#` comment per key; the measurement and the reasoning are here.
+Why each key of a config file has the value it has (P-17). The packaged execution profiles (`packages/senselab-core/src/senselab_core/runtime/data/profiles/`) come first, by profile and top-level key; every other run config or data file gets a `##` section of its own. The YAML files carry a one-line `#` comment per key; the measurement and the reasoning are here.
 
 ## laptop
 

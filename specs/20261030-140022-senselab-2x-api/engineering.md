@@ -271,7 +271,7 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   Amended 2026-11-07 (owner): no fixed parameters. A value that can vary by execution scenario (host,
   partition, storage, substrate) or pipeline — a poll interval, retry count or backoff, timeout, join
   wait, start budget, quantum, batch size, worker count, test slack — is config (execution profile,
-  run config or data file) with its derivation in `config-derivations.md`, never a code constant.
+  run config or data file) with its derivation where P-17 puts it, never a code constant.
   Execution is optimized before it is scaled: per-item cost and resources are measured, and quantum,
   batch and worker counts are chosen from the measurement, not from a fixed guess. Owner: "we don't
   want any fixed parameters. parameters should become configs as they can vary across execution
