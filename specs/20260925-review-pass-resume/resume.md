@@ -9,10 +9,10 @@ Read this section first. Everything below it is history.
 | | |
 |---|---|
 | Code branch | `fix/policy-v8` (PR #581 into `triage`). Tip at writing: `8b068a02`. |
-| Corpus | `/orcd/scratch/bcs/002/satra/triage_r9_20260929/out` (62,550 runs), re-folded in place (r17c re-fold) |
-| Latest parquet | `recording_vectors_r17` (schema 23), at `/orcd/scratch/bcs/002/satra/recording_vectors_r17/`; local copy `~/Downloads/recording_vectors_20261006_r17/` |
+| Corpus | `${ORCD_GROUP_SCRATCH}/triage_r9_20260929/out` (62,550 runs), re-folded in place (r17c re-fold) |
+| Latest parquet | `recording_vectors_r17` (schema 23), at `${ORCD_GROUP_SCRATCH}/recording_vectors_r17/`; local copy `${LOCAL_INPUT}/recording_vectors_20261006_r17/` |
 | Pinned checkout | `senselab-r26` (moved forward through `c3e97dd4` → `a8a95cea` → `8b068a02`, each time only with nothing running from it) |
-| Owner labels | `~/Downloads/triage_listening_labels_20261006.csv` (~180 rows), plus per-set `index.csv` in `voice_check_20261006/` (and `discard_cause/`), `discard_contested_check_20261006/` and `breath_review_check_20261006/` |
+| Owner labels | `${LOCAL_INPUT}/triage_listening_labels_20261006.csv` (~180 rows), plus per-set `index.csv` in `voice_check_20261006/` (and `discard_cause/`), `discard_contested_check_20261006/` and `breath_review_check_20261006/` |
 | Derivatives | still at the r11 state; the r17 sync is next |
 
 **Vocabulary (feat/task-events, 2026-10-07; recording_vectors schema 25).** Verdict is
@@ -88,11 +88,11 @@ From r16 (3,914 / 6,741 / 51,435 / 460):
 | | |
 |---|---|
 | Code branch | `fix/policy-v8` (PR #581 into `triage`; #567 merged 2026-10-04). Tip at writing: `217b22fb`. |
-| Corpus | `/orcd/scratch/bcs/002/satra/triage_r9_20260929/out` (62,550 runs), re-folded in place |
-| Latest parquet | `recording_vectors_r16` (schema 21, policy 9, built at `1a73d8d0`); local `~/Downloads/recording_vectors_20261006_r16/`. Superseded by the work below; not yet re-built. |
+| Corpus | `${ORCD_GROUP_SCRATCH}/triage_r9_20260929/out` (62,550 runs), re-folded in place |
+| Latest parquet | `recording_vectors_r16` (schema 21, policy 9, built at `1a73d8d0`); local `${LOCAL_INPUT}/recording_vectors_20261006_r16/`. Superseded by the work below; not yet re-built. |
 | Pinned checkouts | `senselab-r15` … `senselab-r25`, one per run (job ids in `triage_r9_20260929/jobs.txt`) |
-| Owner labels | `~/Downloads/triage_listening_labels_20261006.csv` (103 rows: breath, empty-route, cough listens, each with the owner's note); copy at `/orcd/scratch/bcs/002/satra/tmp_bext/` |
-| Review figures | `~/Downloads/breath_extent_check_20261006/` (`fixed/`, `fixed2/` pending) and `~/Downloads/cough_check_20261006/fixed/` |
+| Owner labels | `${LOCAL_INPUT}/triage_listening_labels_20261006.csv` (103 rows: breath, empty-route, cough listens, each with the owner's note); copy at `${ORCD_GROUP_SCRATCH}/tmp_bext/` |
+| Review figures | `${LOCAL_INPUT}/breath_extent_check_20261006/` (`fixed/`, `fixed2/` pending) and `${LOCAL_INPUT}/cough_check_20261006/fixed/` |
 | Derivatives | still at the r11 state (finalized 2026-10-03); not re-synced since |
 
 ### Settled since r11 (all on `fix/policy-v8`)
@@ -178,9 +178,9 @@ r11 is r10 with Nimble replaced by Clef 27B (`ollama clef:27b`, Ollama 0.35.1, w
 model-neutral `second_opinion_*` columns, parquet schema 18 (`4266c2db`); load the model by a decision
 request, not `/api/generate` (`af416ba0`); `second_opinion.load_timeout_s` 1200 (`72a45e6e`). Run:
 Clef over the 15,113 review recordings from `senselab-r13`/`senselab-r14`, then a full re-fold and
-`recording_vectors_r11` (local `~/Downloads/recording_vectors_20261003_r11/`). 13 slices first failed
+`recording_vectors_r11` (local `${LOCAL_INPUT}/recording_vectors_20261003_r11/`). 13 slices first failed
 on the 300 s model load, with weights read from the /orcd/data capacity tier by several slices per
-node; the store is now copied to flash at `/orcd/scratch/bcs/002/satra/ollama-models-flash/`.
+node; the store is now copied to flash at `${ORCD_GROUP_SCRATCH}/ollama-models-flash/`.
 
 Result: 15,111 answered, 2 nothing to read. Release unchanged (60,297 / 1,140 / 1,081 / 32); flagged
 9,315 (−104), all from the second-opinion ground, 315 → 147 recordings (named diagnosis 70, another
@@ -197,14 +197,14 @@ and cut to task extents. r9c and r9d are superseded.
 
 | | path |
 |---|---|
-| corpus (62,550 = every in-scope BIDS WAV) | `/orcd/scratch/bcs/002/satra/triage_r9_20260929/out` |
+| corpus (62,550 = every in-scope BIDS WAV) | `${ORCD_GROUP_SCRATCH}/triage_r9_20260929/out` |
 | checkouts, pinned | `senselab-r5` @ `29357489` (v6 review); `senselab-r10` @ `ac0bd3ba` (r10 chain, parquet, page); `senselab-r11` @ `b013e274` (fix17); `senselab-r12` @ `9095b81a` (fix20) |
 | job ids, submit order | `triage_r9_20260929/jobs.txt`, `RUN.md` |
 | review manifest (15,113) / v6 readings | `triage_r9_20260929/review/`, `rows_v6/` |
 | Nimble readings | `triage_r9_20260929/second_opinion/rows/` |
-| parquet, schema 17, dictionary embedded | `recording_vectors_r10/`; laptop `~/Downloads/recording_vectors_20261002_r10/` |
-| page / evaluations | `free_speech_page_20261002_r10/`, `evaluations_r10_20261002/README.md`; laptop `~/Downloads/free_speech_review_20261002_r10/` |
-| derivatives (inside the release) | `/orcd/data/satra/002/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04/derivatives/senselab-triage/` |
+| parquet, schema 17, dictionary embedded | `recording_vectors_r10/`; laptop `${LOCAL_INPUT}/recording_vectors_20261002_r10/` |
+| page / evaluations | `free_speech_page_20261002_r10/`, `evaluations_r10_20261002/README.md`; laptop `${LOCAL_INPUT}/free_speech_review_20261002_r10/` |
+| derivatives (inside the release) | `${ORCD_DATA}/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04/derivatives/senselab-triage/` |
 
 Code since r9c, on `design/triage-workflow-dag`:
 
@@ -243,7 +243,7 @@ on both sides, 0 symlinks, 0 of 62,550 stores naming `/orcd/scratch`, checked by
 `scripts/verify_derivatives_copy.py` (threaded walk, `senselab.utils.fastio`; ~8 min where serial `find`
 and `grep -r` passes ran over 3 h). The earlier ~200 MB gap was `du` counting directory sizes.
 `tmp_deriv/finalize_r10.sbatch` rewrites the top level (parquet, summary, dictionary, viewer, review page,
-evaluations with `--delete`) and `dataset_description.json`, sets group `orcd_rg_hstor004_pi_satra`
+evaluations with `--delete`) and `dataset_description.json`, sets group `orcd_rg_hstor004_${CPU_PARTITION}`
 2775/664 on them, and runs the verifier from the `senselab-verify` checkout.
 
 Subprocess venvs install from committed hashed locks (`src/senselab/utils/data/venv_locks/`, 601f7670,
@@ -272,12 +272,12 @@ The cache commits (`7089b05f`..`e4301967`) sit on top and are merged; r7 predate
 
 | | path |
 |---|---|
-| corpus (r7, 62,550 = every in-scope BIDS WAV) | `/orcd/scratch/bcs/002/satra/triage_r7_20260927/out` |
-| checkout, pinned | `/orcd/scratch/bcs/002/satra/senselab-r5` @ `77e9273e` |
+| corpus (r7, 62,550 = every in-scope BIDS WAV) | `${ORCD_GROUP_SCRATCH}/triage_r7_20260927/out` |
+| checkout, pinned | `${ORCD_GROUP_SCRATCH}/senselab-r5` @ `77e9273e` |
 | job ids, submit order | `triage_r7_20260927/jobs.txt`, `RUN.md` |
 | review manifest (15,193) / readings | `triage_r7_20260927/review/` |
-| parquet, schema 11, dictionary embedded | `recording_vectors_r7/`; laptop `~/Downloads/recording_vectors_20260928_r7/` |
-| page / evaluations | `free_speech_page_20260928_r7/`, `evaluations_r7_20260928/` (laptop `~/Downloads/…`) |
+| parquet, schema 11, dictionary embedded | `recording_vectors_r7/`; laptop `${LOCAL_INPUT}/recording_vectors_20260928_r7/` |
+| page / evaluations | `free_speech_page_20260928_r7/`, `evaluations_r7_20260928/` (laptop `${LOCAL_INPUT}/…`) |
 
 What r7 carries beyond r6: SPEECH places each finding on its own words (no whole-transcript or bridged
 spans; unplaced findings stored with their text); one mask per finding; a reviewer redact entry on words
@@ -310,13 +310,13 @@ a **REVIEW** activity comes back `present` and costs nothing. So a cancelled or 
 resumed by resubmitting the same sbatch — never by starting over.
 
 ```bash
-ssh orcd 'cd /orcd/scratch/bcs/002/satra/triage_review_20260925 && sbatch review.sbatch'
+ssh orcd 'cd ${ORCD_GROUP_SCRATCH}/triage_review_20260925 && sbatch review.sbatch'
 ```
 
 Watch it:
 
 ```bash
-ssh orcd 'ls /orcd/scratch/bcs/002/satra/triage_review_20260925/rows/slices/*.summary.json | wc -l'
+ssh orcd 'ls ${ORCD_GROUP_SCRATCH}/triage_review_20260925/rows/slices/*.summary.json | wc -l'
 ```
 
 ## Monitors do not survive the session — restart them first
@@ -334,7 +334,7 @@ job is deleted. Treat them as disposable and rewrite them; the shape is what mat
 prev=-1
 while :; do
   read -r slices rows state <<<"$(ssh orcd '
-    R=/orcd/scratch/bcs/002/satra/triage_review_20260925
+    R=${ORCD_GROUP_SCRATCH}/triage_review_20260925
     s=$(ls $R/rows/slices/*.summary.json 2>/dev/null | wc -l)
     r=$(cat $R/rows/slices/*.jsonl 2>/dev/null | wc -l)
     q=$(squeue -j <JOBID> -h -r -o "%T" 2>/dev/null | wc -l)
@@ -362,8 +362,8 @@ a job runs from it fails that job's guard (`exit 74`), and I did exactly this on
 
 | checkout | used by | pin |
 |---|---|---|
-| `/orcd/scratch/bcs/002/satra/senselab-review` | the REVIEW array | `5165925f` |
-| `/orcd/scratch/bcs/002/satra/senselab-rvec` | parquet, re-fold, page | current HEAD |
+| `${ORCD_GROUP_SCRATCH}/senselab-review` | the REVIEW array | `5165925f` |
+| `${ORCD_GROUP_SCRATCH}/senselab-rvec` | parquet, re-fold, page | current HEAD |
 
 Both now have `origin` at GitHub. `senselab-rvec` pointed at another scratch checkout until today.
 
@@ -371,14 +371,14 @@ Both now have `origin` at GitHub. `senselab-rvec` pointed at another scratch che
 
 | | path |
 |---|---|
-| corpus (r4, verified 62,548) | `/orcd/scratch/bcs/002/satra/triage_r4_20260924/out` |
-| original corpus, for `run.json` | `/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out` |
-| hints (required by every driver) | `/orcd/scratch/bcs/002/satra/triage_design_20260919/scope` |
-| review manifest, 62,519 rows | `/orcd/scratch/bcs/002/satra/triage_review_20260925/review_manifest.jsonl` |
-| reviewer-on config | `/orcd/scratch/bcs/002/satra/triage_review_20260925/review_on.yaml` |
-| parquet shards | `/orcd/scratch/bcs/002/satra/recording_vectors_r4` |
-| page extract + html | `/orcd/scratch/bcs/002/satra/free_speech_page_20260925` |
-| **on the laptop** | `~/Downloads/recording_vectors_20260925/`, `~/Downloads/free_speech_review_20260925/` |
+| corpus (r4, verified 62,548) | `${ORCD_GROUP_SCRATCH}/triage_r4_20260924/out` |
+| original corpus, for `run.json` | `${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/out` |
+| hints (required by every driver) | `${ORCD_GROUP_SCRATCH}/triage_design_20260919/scope` |
+| review manifest, 62,519 rows | `${ORCD_GROUP_SCRATCH}/triage_review_20260925/review_manifest.jsonl` |
+| reviewer-on config | `${ORCD_GROUP_SCRATCH}/triage_review_20260925/review_on.yaml` |
+| parquet shards | `${ORCD_GROUP_SCRATCH}/recording_vectors_r4` |
+| page extract + html | `${ORCD_GROUP_SCRATCH}/free_speech_page_20260925` |
+| **on the laptop** | `${LOCAL_INPUT}/recording_vectors_20260925/`, `${LOCAL_INPUT}/free_speech_review_20260925/` |
 
 The r4 tree is a **mirror**: `store.jsonl`, `streams/`, a `derivatives` symlink, and **no
 `run.json`**. That is why the manifest carries `source` — `source_of()` has nothing to read there.
@@ -391,13 +391,13 @@ taken while the array writes is a snapshot mid-write; that contaminated the r4 r
 **1. Final re-fold**, to make the whole corpus one fold. See the open question below for the config.
 
 ```bash
-ssh orcd 'cd /orcd/scratch/bcs/002/satra/triage_refold_20260925 && sbatch refold.sbatch'
+ssh orcd 'cd ${ORCD_GROUP_SCRATCH}/triage_refold_20260925 && sbatch refold.sbatch'
 ```
 
 **2. Parquet at schema 6**, then merge and retrieve mode 600.
 
 ```bash
-ssh orcd 'cd /orcd/scratch/bcs/002/satra/recording_vectors_r4 && sbatch rvec_r4.sbatch'
+ssh orcd 'cd ${ORCD_GROUP_SCRATCH}/recording_vectors_r4 && sbatch rvec_r4.sbatch'
 # then
 ssh orcd '... python scripts/triage_recording_vectors.py --merge <dir> --out <dir>'
 ```

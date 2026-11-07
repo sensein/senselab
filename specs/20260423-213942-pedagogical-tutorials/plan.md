@@ -153,7 +153,7 @@ src/tests/audio/tasks/
 - Minor: This notebook is already up to date from the prior tutorial fix PR
 
 **4b: Create shbt205_lab.ipynb** (new file adapted from course materials):
-- Start from `~/Downloads/drive-download-20260424T013242Z-3-001/SHBT205-Lab.ipynb`
+- Start from `${LOCAL_INPUT}/drive-download-20260424T013242Z-3-001/SHBT205-Lab.ipynb`
 - Replace raw Whisper ASR → `transcribe_audios()`
 - Replace raw promonet PPG → `extract_ppgs_from_audios()` + PR #431 functions
 - Replace raw SPARC calls → `SparcFeatureExtractor.extract_sparc_features()`

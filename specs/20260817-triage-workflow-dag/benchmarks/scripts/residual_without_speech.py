@@ -8,7 +8,7 @@ recordings -- eight respiration/cough recordings across three subjects plus two 
 directly for the lag search, gain fit, subtraction and band split, and runs one batched YAMNet call
 over every original/enhanced/residual file.
 
-This used to go through ``~/Downloads/buzz_separation_20260906/residual/subtract.py`` (imported
+This used to go through ``${LOCAL_INPUT}/buzz_separation_20260906/residual/subtract.py`` (imported
 from its path at runtime) rather than duplicating its logic. That script now itself calls
 ``compute_residual`` rather than reimplementing the same math, so calling either would compute the
 same numbers; this script now calls the library function directly, per the same one-implementation
@@ -20,7 +20,7 @@ Writes:
     - ``<out-dir>/yamnet_by_file.json``    (max score per label, per file, over all windows)
 
 Usage:
-    uv run python residual_without_speech.py --out-dir ~/Downloads/frcrn_residual_no_speech_20260907
+    uv run python residual_without_speech.py --out-dir ${LOCAL_INPUT}/frcrn_residual_no_speech_20260907
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
-BIDS_ROOT = Path("~/Downloads/b2ai_v31_bids_07_01_v3").expanduser()
+BIDS_ROOT = Path("${LOCAL_INPUT}/b2ai_v31_bids_07_01_v3").expanduser()
 BANDS_HZ = [(0.0, 200.0), (200.0, 1000.0), (1000.0, 4000.0), (4000.0, 8000.0)]
 
 # key, subject, task, is_speech, path relative to BIDS_ROOT

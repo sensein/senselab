@@ -13,22 +13,22 @@ nothing is hard-coded — the list moves when the graph's declaration moves.
 
 ## Extract, on the cluster
 
-Never on a login node. `pi_satra` or `mit_normal`; the sweep is I/O bound, not CPU bound, so the
+Never on a login node. `${CPU_PARTITION}` or `mit_normal`; the sweep is I/O bound, not CPU bound, so the
 core count is about how many stores can be read at once.
 
 ```bash
 #!/bin/bash
 #SBATCH --job-name=fsreview
-#SBATCH --partition=pi_satra
+#SBATCH --partition=${CPU_PARTITION}
 #SBATCH --qos=normal
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=48G
 #SBATCH --time=03:00:00
 set -euo pipefail
-CHECKOUT=/orcd/scratch/bcs/002/satra/senselab-rerun
-WORK=/orcd/scratch/bcs/002/satra/free_speech_review
+CHECKOUT=${ORCD_GROUP_SCRATCH}/senselab-rerun
+WORK=${ORCD_GROUP_SCRATCH}/free_speech_review
 "$CHECKOUT/.venv/bin/python" "$WORK/free_speech_review_page.py" extract \
-  /orcd/scratch/bcs/002/satra/triage_rerun_20260923/out \
+  ${ORCD_GROUP_SCRATCH}/triage_rerun_20260923/out \
   --out "$WORK/free_speech_rows.jsonl" --workers 16 | tee "$WORK/extract_report.json"
 ```
 
@@ -42,10 +42,10 @@ printed before any page exists.
 ## Render, locally
 
 ```bash
-scp orcd:.../free_speech_rows.jsonl ~/Downloads/free-speech-review/
+scp orcd:.../free_speech_rows.jsonl ${LOCAL_INPUT}/free-speech-review/
 uv run python scripts/free_speech_review_page.py render \
-  ~/Downloads/free-speech-review/free_speech_rows.jsonl \
-  --out ~/Downloads/free-speech-review/free-speech-review.html \
+  ${LOCAL_INPUT}/free-speech-review/free_speech_rows.jsonl \
+  --out ${LOCAL_INPUT}/free-speech-review/free-speech-review.html \
   --title "Free-speech review"
 ```
 
@@ -92,7 +92,7 @@ which is the whole reason the marks are inline and the brackets are styled apart
 
 ```bash
 npm install --no-save jsdom
-node --max-old-space-size=8192 <check.mjs> ~/Downloads/free-speech-review/free-speech-review.html
+node --max-old-space-size=8192 <check.mjs> ${LOCAL_INPUT}/free-speech-review/free-speech-review.html
 ```
 
 Loading the document under jsdom with `runScripts: "dangerously"` exercises the real filter code:
@@ -102,8 +102,8 @@ search box all report counts that must reconcile with the extract report — 6,6
 
 ## Measured again, 2026-09-23, with findings as first-class objects
 
-Job 23549767 on `pi_satra`, same corpus and pinned checkout. `pi_satra` takes `--qos=normal` for
-this account; `--qos=pi_satra` is rejected, and **`mit_preemptible` does not exist — the partition
+Job 23549767 on `${CPU_PARTITION}`, same corpus and pinned checkout. `${CPU_PARTITION}` takes `--qos=normal` for
+this account; `--qos=${CPU_PARTITION}` is rejected, and **`mit_preemptible` does not exist — the partition
 is `mit_preemptable`**.
 
 | | |
@@ -131,7 +131,7 @@ No browser extension was reachable, so the page was driven under jsdom with
 
 ```bash
 npm install --no-save jsdom
-node --max-old-space-size=12288 <harness.mjs> ~/Downloads/free-speech-review/free-speech-review.html
+node --max-old-space-size=12288 <harness.mjs> ${LOCAL_INPUT}/free-speech-review/free-speech-review.html
 ```
 
 What the harness exercised, and what reconciles:
@@ -156,7 +156,7 @@ untested; the textarea fallback is what was exercised.
 
 ## Measured again, 2026-09-23, with the determination panel
 
-Job 23556083 on `pi_satra` (`--qos=normal`). Same corpus, same pinned checkout `71324c35`.
+Job 23556083 on `${CPU_PARTITION}` (`--qos=normal`). Same corpus, same pinned checkout `71324c35`.
 
 | | |
 | --- | --- |

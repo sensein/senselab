@@ -1,6 +1,6 @@
 # Taxonomy against task — ten b2ai v3.1 recordings, run of 2026-09-07
 
-What was read, and from where. The run is `~/Downloads/triage_10subj_20260907/` (ADMIT → PREPROCESS →
+What was read, and from where. The run is `${LOCAL_INPUT}/triage_10subj_20260907/` (ADMIT → PREPROCESS →
 TAXONOMY → figure, config hash `0a6c6915e764adf1`, every ADMIT `PASS`). Each recording's
 `run/store.jsonl` was read with `ProvStore.read_jsonl` from this branch; the whole-file summaries
 (`yamnet_label_summary`, `ast_label_summary`, `hear_label_summary`), `consensus_taxonomy`,
@@ -8,8 +8,8 @@ TAXONOMY → figure, config hash `0a6c6915e764adf1`, every ADMIT `PASS`). Each r
 `span_hear` measurements come from the store; per-window scores come from
 `run/derivatives/{yamnet,ast,hear}_scores.json`, which the summaries were derived from. The
 `<stem>_recording-metadata.json` sidecars were read from the ORCD tree
-(`/orcd/data/satra/002/datasets/b2aivoice/post_3.0/v3.1/adult/bids_07_01_v3/`); only three of the
-ten are in the local `~/Downloads/b2ai_v31_bids_07_01_v3/` copy. Nothing was run and nothing was
+(`${ORCD_DATA}/datasets/b2aivoice/post_3.0/v3.1/adult/bids_07_01_v3/`); only three of the
+ten are in the local `${LOCAL_INPUT}/b2ai_v31_bids_07_01_v3/` copy. Nothing was run and nothing was
 listened to: every "cannot tell" below is a statement about what the store holds.
 
 Two task families and one odd one. Nine sidecars say `story-recall` (grandfather passage, 136
@@ -46,7 +46,7 @@ are over the whole-file windows (YAMNet 0.96 s / 0.48 s hop; AST 10.24 s; HeAR 2
 
 Three files reach 0.0 dBFS peak (`SUBJ04`, `SUBJ08`, `SUBJ17`; `SUBJ15` is −0.01) with
 `clipped_runs` 0 in every case — consistent with the tree's known one-isolated-full-scale-sample
-per file (`~/Downloads/b2ai_v31_bids_07_01_v3/PROVENANCE.md`), not with clipping.
+per file (`${LOCAL_INPUT}/b2ai_v31_bids_07_01_v3/PROVENANCE.md`), not with clipping.
 
 ## 1. Do the top labels match the task?
 

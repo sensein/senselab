@@ -511,3 +511,16 @@ profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`)
   attempt's id; outside a run it is the process's.
 - `ResultRef` gains `served: "exact" | "equivalent" | "tolerant" | null`: the reuse policy under which a stored
   result gave it; the runner logs it as `cache_hit`.
+
+## Amendment 2026-11-07: config files hold values (Phase 3 Task ENF)
+
+Each data file below drops its inline `derivation`/`derivations` keys, which move to a `##` section of
+`config-derivations.md` keyed by the file's path (P-17); the major version moves because the shape changes:
+`store-policy@2.0`, `launch-environment@2.0` and `fixture-budget@2.0` and `size-budget@2.0` (a key maps to its value),
+`run-config@2.0` (a threshold is exactly `rtol` and `atol`; a user's run config may not carry a derivation either),
+`env-lock-inputs@2.0` (`quarantine` and `base_requirements` are lists), `license-policy@2.0` (a set is its `ids`),
+`default-python@2.0` (`default` alone), and `equivalence@4.0` (a class is exactly its `members`; `@3.0` is retired
+and refused, and `scripts/regenerate_equivalence.py` prints each class's derivation for the spec). No identity tag
+changes: none of these values entered a digest with its derivation. `signal/data/resample.yaml` carries no format tag
+and loses its `derivations` block. `spdx-licenses@1.0` still holds one derivation per group; its groups are unnamed,
+so moving them needs a format change, left open.

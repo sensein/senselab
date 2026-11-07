@@ -354,9 +354,10 @@ amending its origin.
 - **Amended 2026-11-07** (where a derivation lives): a config file carries values and a one-line `#`
   description per key. Derivations live in [`config-derivations.md`](config-derivations.md), a `##` section
   per config file or profile and a `###` section per key. A checker that wants a derivation reads the spec
-  section. A value not yet measured says so there and names the task that measures it. YAML files that still
-  carry an inline `derivation:` or `derivations:` key are migrated to `config-derivations.md` by the
-  fixed-parameter audit's code task; no new one is added.
+  section. A value not yet measured says so there and names the task that measures it.
+  `scripts/check_config_derivations.py` refuses an inline `derivation:` or `derivations:` key in any YAML file
+  tracked under a `data/` directory of `packages/` or `scripts/`, and a key without its section; the files outside
+  either check are listed in it with their reasons (R-220).
 
 ### P-18 Configuration, not flags
 - **Status**: active. **Statement**: entry points take inputs and configuration, and the merged

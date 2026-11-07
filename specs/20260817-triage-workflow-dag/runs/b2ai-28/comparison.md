@@ -6,8 +6,8 @@ Nothing here was recomputed; this is a join of three finished runs.
 | lane | what it is | where |
 |---|---|---|
 | **SL·mac** | senselab triage workflow, local (macOS), commit `9e4ab8bc`, config_hash `e7893648350055d1` | `artifacts/triage_b2ai28_v2/summary.json` |
-| **SL·eng** | the same workflow and the same config hash on Engaging | `/orcd/scratch/orcd/013/satra/triage_b2ai28/b2ai28-v2-20260823/` |
-| **LLM** | agentharness comparator — deliberately weaker instruments: one recognizer, one audio classifier, no HeAR, no pyannote, no SQUIM | `/orcd/scratch/orcd/013/satra/agentharness-triage-comparator/b2ai-28-combined-20260823/outcomes.jsonl` |
+| **SL·eng** | the same workflow and the same config hash on Engaging | `${ORCD_PERSONAL_SCRATCH}/triage_b2ai28/b2ai28-v2-20260823/` |
+| **LLM** | agentharness comparator — deliberately weaker instruments: one recognizer, one audio classifier, no HeAR, no pyannote, no SQUIM | `${ORCD_PERSONAL_SCRATCH}/agentharness-triage-comparator/b2ai-28-combined-20260823/outcomes.jsonl` |
 
 Two files are read from a later Engaging run: **Diadochokinesis-PA** and **Diadochokinesis-Pataka**
 errored on `REDACT` and `SPEECH` in the v2 pass (`ValueError: extent ends at 11.32s, past the
@@ -19,7 +19,7 @@ The LLM lane has **no release axis**. It reports triage, three kinds, and a bool
 does not model artifact release, redaction verification, or scan completeness. Every release figure
 below is SL·mac against SL·eng only. No LLM counterpart is constructed, because there is none.
 
-Figure: `~/Downloads/triage_threeway_28.png`.
+Figure: `${LOCAL_INPUT}/triage_threeway_28.png`.
 
 ## Per-file table
 
