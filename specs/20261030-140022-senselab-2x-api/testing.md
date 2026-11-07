@@ -46,8 +46,8 @@ on. The default run is `-m logic`; contract, limits, use case and env are desele
 
 | Tier | Marker | Exercises | Inputs | Runs where | Gate |
 |---|---|---|---|---|---|
-| **Logic** | `logic` (default) | Behaviour of code: data types, identity and keys, params validation, planner decisions, graph semantics, decision rules, codecs | small synthetic signals; the `fake` stack | every PR on Python 3.11 and 3.14 from a core-only install (`core-only` job, `-m "(logic or contract) and not model"`); worker tests on the 3.10 floor from the built wheel (`worker-floor`); a wider Python matrix is not yet in CI | blocking |
-| **Contract** | `contract` | Every declared task, backend, env and profile meets the framework contract | declarations | every PR (`-m "logic or contract"`, `core-only` on 3.11 and 3.14; worker contract on 3.10) | blocking |
+| **Logic** | `logic` (default) | Behaviour of code: data types, identity and keys, params validation, planner decisions, graph semantics, decision rules, codecs | small synthetic signals; the `fake` stack | every PR on Python 3.13, Colab's default (`scripts/data/default_python.yaml`; owner items 54, 55), from a core-only install (`core-only` job, `-m "(logic or contract) and not model"`); 3.11–3.14 nightly and on a PR labelled `full-matrix`; worker tests on the 3.10 floor from the built wheel (`worker-floor`) | blocking |
+| **Contract** | `contract` | Every declared task, backend, env and profile meets the framework contract | declarations | every PR (`-m "logic or contract"`, `core-only` on 3.13, and 3.11–3.14 nightly and on `full-matrix`; worker contract on 3.10) | blocking |
 | **Limits** | `limits` | Parameter boundaries and edge inputs against real backends | synthetic edge signals + 3–4 shared fixtures | GitHub: limits that need no model, nightly and on a PR carrying the `limits` label (`-m "limits and not model"`). ORCD only, submitted from a pinned SHA: every limit that loads a model or needs a backend env, and the GPU subset | blocking for touched backends |
 | **Use case** | `usecase` | One realistic end-to-end pipeline per use case | small public or synthetic recordings with licenses recorded | ORCD only, submitted from a pinned SHA; never in GitHub CI, on a PR, a label or nightly (H-R54, P2-33) | blocking for release |
 | **Env** | `env` | Each locked env builds, imports the worker runtime and round-trips every data type | lock files | GitHub: the model-free release-gate packaging build on every PR (`core-env`, `-m "env and not slow and not model"`), which builds wheels and a venv of the senselab distributions and no backend env. ORCD only: every backend env build, per-lock builds for changed locks, full builds weekly | blocking for that env |
@@ -91,6 +91,11 @@ module over the registry, with ids equal to the task, backend or profile name.
 - span algebra laws (union and intersection associativity, clipping to extent);
 - `TimeMap` composition and inversion;
 - identity hashes ignore container format and are stable across numpy versions.
+
+**Bad input at every boundary** (P-34). Each kernel and runtime boundary is exercised with: empty input, the
+wrong type, NaN and inf, a negative value, an oversize value, a non-UTF-8 path, a symlink out of the root, a
+truncated file, a concurrent writer, and `ESTALE` or `ENOENT` in the middle of the call. Backends add the edge
+set in §4.
 
 **Example tests** for decision logic: small tables, one row per behaviour.
 - Ids describe the behaviour (`"short_vowel_routes_to_review"`), never a register or round number.
@@ -171,9 +176,9 @@ module over the registry, with ids equal to the task, backend or profile name.
 ## 5. Where and how tests run (P-29)
 
 **Local**
-- `uv run pytest` runs logic tests in under a few minutes on a laptop, serially, scoped to the
-  package changed.
-- `uv run pytest -m limits -k <backend>` runs one backend's limits.
+- `uv run --no-sync pytest` runs logic tests in under a few minutes on a laptop, serially, scoped to the
+  package changed. `--no-sync` because a plain `uv run` re-syncs the shared venv (P-29).
+- `uv run --no-sync pytest -m limits -k <backend>` runs one backend's limits.
 - The nightly job is `2x-nightly.yaml` on the default branch (`alpha`), which checks out `2.x`: GitHub runs `schedule` workflows only from the default branch. It calls `2x-tests.yaml@2.x` with `ref: 2.x` (every PR job) and runs `limits and not model`.
 - A test that builds a wheel or sdist, creates a venv or installs from an index carries `network`
   beside its tier, so `-m "not network"` runs none of them. The release-gate and packaging ones
@@ -191,9 +196,9 @@ module over the registry, with ids equal to the task, backend or profile name.
 
 | When | What |
 |---|---|
-| every PR | `pre-commit`; logic + contract, model-free, on 3.11 and 3.14 from a locked core-only install (`uv sync --locked`), with import contracts and per-distribution sdist-to-wheel builds (`core-only`); the source-digest check (`source-digests`, `scripts/check_source_digests.py`); the implementer and reviewer models differ (`pr-models`, `scripts/check_pr_models.py`); the model-free release-gate packaging tests (`core-env`); worker logic, env and contract tests on 3.10 (`worker-floor`, the one job that does not install from `uv.lock`: the lock requires Python 3.11 or later, so a locked 3.10 constraints file is a follow). A guard test (`ci_tiers_test.py`) refuses any other unlocked install. Not yet in CI: per-lock env builds, CPU smoke benchmarks (<15 min) when a task is touched |
-| label on a PR (`limits`) | model-free limits only, on 3.12 (`core-limits`); never use cases (H-R54) |
-| nightly (`schedule`, `workflow_dispatch`; `2x-nightly.yaml` on `alpha`) | every PR job against `2.x`, and `limits and not model` on 3.12. No use case and no model test: those are ORCD. Not yet in CI: a wider Python matrix, the scale ladder (`benchmarks/scale`, P-33), CPU smoke benchmarks |
+| every PR | `pre-commit`; logic + contract, model-free, on 3.13 (3.11–3.14 on a PR labelled `full-matrix`) from a locked core-only install (`uv sync --locked`), with import contracts and per-distribution sdist-to-wheel builds (`core-only`); the source-digest check (`source-digests`, `scripts/check_source_digests.py`); the implementer and reviewer models differ (`pr-models`, `scripts/check_pr_models.py`); the model-free release-gate packaging tests (`core-env`); worker logic, env and contract tests on 3.10 (`worker-floor`, the one job that does not install from `uv.lock`: the lock requires Python 3.11 or later, so a locked 3.10 constraints file is a follow). A guard test (`ci_tiers_test.py`) refuses any other unlocked install. Not yet in CI: per-lock env builds, CPU smoke benchmarks (<15 min) when a task is touched |
+| label on a PR (`limits`) | model-free limits only, on 3.13 (`core-limits`); never use cases (H-R54) |
+| nightly (`schedule`, `workflow_dispatch`; `2x-nightly.yaml` on `alpha`) | every PR job against `2.x` with the 3.11–3.14 matrix, and `limits and not model` on 3.13. No use case and no model test: those are ORCD. Not yet in CI: the scale ladder (`benchmarks/scale`, P-33), CPU smoke benchmarks, and 3.15 and the release-tagged-merge trigger of owner item 54 |
 | every pushed SHA on a task or backend change (ORCD) | the model, backend-env and GPU tiers the change touches, and the use cases, submitted from a pinned SHA |
 | weekly (ORCD) | GPU smoke benchmarks; core CPU benchmark suite; full env builds; use cases |
 | per release (ORCD) | full benchmarks; GPU limits |

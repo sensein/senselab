@@ -221,6 +221,9 @@ it is amended here.
   relying on system libraries. i.e. one requirement is to install senselab into a venv".
 - **Check**: every activity in provenance names its env in the recorded execution context (ADR-002).
   The env tier audits each env's imports against its lock.
+- **Amended 2026-11-07** (owner, 2026-11-01: "no environments should use system python, always uv"): the
+  interpreter of every env is uv-managed (`uv python install <version>`, `--python-preference
+  only-managed`); a system interpreter is refused. A new env targets the newest Python its lock resolves on.
 
 ### P-26 Signals generalise; modality-specific tasks stay specific
 - **Status**: active

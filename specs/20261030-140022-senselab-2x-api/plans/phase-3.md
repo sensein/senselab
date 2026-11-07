@@ -71,7 +71,8 @@ yet merged into `2.x`), → `2.x` after `2x/phase-2` merges. Spec changes, ADR a
   `licenses`, `worker-floor`; import contracts run inside `core-only`. Under Route A a `core-pydra` job (3.13) installs
   the `pydra` extra from `uv.lock` and runs every test that walks a plan.
 - **Local machine** (owner items 27, 28, 42; P2-85): logic, contract and bounded model-free limits only, `uv run
-  --no-sync`, scoped to the changed files, serial, never `pytest -n auto`. No `uv sync`, no new venvs, no model or
+  --no-sync`, scoped to the changed files, serial, never `pytest -n auto`. No `uv sync` (the controller alone rebuilds
+  the shared `.venv`, P-29 amended 2026-11-07), no new venvs, no model or
   dataset downloads, no backend envs, no full suites. Under Route A, tests that walk a plan need pydra and run in CI and
   on ORCD; executor, queue and pool tests submit fragments directly, so they run locally. Watch load, memory and disk; a
   local probe bounds its wall time and resident memory and stops on breach.

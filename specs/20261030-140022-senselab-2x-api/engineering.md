@@ -202,6 +202,16 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   keep load across agents in mind, and orcd partitions in mind".
 - **Check**: test jobs name a partition and resource class; concurrent agent jobs stay within the
   QOS cap.
+- **Amended 2026-11-07** (the shared local venv):
+  - The local `.venv` is rebuilt by the controller alone, with `uv sync --locked --all-extras --group dev`,
+    whenever `uv.lock` or any `pyproject.toml` on the integration branch changes. Agents run
+    `uv run --no-sync` and never sync.
+  - The sync writes `uv.lock`'s digest to `.venv/senselab-lock.sha`. A test run whose branch `uv.lock` digest
+    differs prints `STALE VENV`, and its result is not evidence. Planned, not yet built: the check, as a
+    wrapper around `uv run --no-sync pytest` or a conftest hook.
+  - A branch that changes dependencies is tested in CI and on ORCD only; its local run is lint.
+  - A ledger line that cites a local pass names the lock digest. A local/CI disagreement is diagnosed (which
+    env, which dependency) before either side is called local-only.
 
 <a id="p-30"></a>
 ### P-30 Tests are tiered; benchmarks are separate
@@ -258,6 +268,9 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
 - **Source**: owner, 2026-10-30: "profiling should detect inefficiencies at different scales".
 - **Check**: the `benchmarks/scale/` ladder with per-item budgets as data; Scalene profiles on
   regression.
+  Amended 2026-11-07: flat means per-item cost at 10⁴ items ÷ at 10² items ≤ `scale.flat_ratio`; the
+  regression band is `scale.regression_band` per module. Both are data with derivations (P-17). Until
+  Phase 3 Task 20 lands they do not exist, and a PR calls its scale behaviour unmeasured.
 
 <a id="p-34"></a>
 ### P-34 Brittleness is always checked
