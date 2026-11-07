@@ -318,6 +318,7 @@ class InProcess:
         self._ids = itertools.count()
 
     logs_claims: ClassVar[bool] = False
+    splits_fragments: ClassVar[bool] = False
 
     def bind_epoch(self, epoch: int, events: EventLog) -> None:
         """Do nothing: an in-process run has no queue for an older coordinator to write."""

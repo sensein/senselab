@@ -340,3 +340,56 @@ def test_items_end_on_request_boundaries_when_a_request_fits(tmp_path: Path) -> 
     _, _, _, fragment = _submitted(tmp_path, _profile(), 9)
     assert [len(i.jobs) for i in split(fragment, 5, request=2)] == [4, 4, 1]
     assert [len(i.jobs) for i in split(fragment, 5, request=8)] == [5, 4]
+
+
+class Gated(Recording):
+    """A `Recording` whose `serve` thread runs the `cpu` queue's items once `want` workers were started, or `wait_s`."""
+
+    def __init__(self, want: int, wait_s: float) -> None:
+        """Serve once `want` workers were started, or after `wait_s` seconds."""
+        super().__init__()
+        self.started = 0
+        self.want, self.wait_s = want, wait_s
+        self.opened = threading.Event()
+
+    def start(self, resource_class: str, count: int) -> list[WorkerHandle]:
+        """Hold `count` pending workers and count them."""
+        made = super().start(resource_class, count)
+        self.started += len(made)
+        if self.started >= self.want:
+            self.opened.set()
+        return made
+
+    def serve(self, pool: Pool, placed: Plan, values: Mapping[InputIdentity, object], done: threading.Event) -> None:
+        """Execute each item of the `cpu` queue until `done`, from when the gate opens."""
+        self.opened.wait(self.wait_s)
+        queue = QueueSet(pool.run_dir / RUN_QUEUES, placed.execution).queue("cpu")
+        while not done.is_set():
+            claim = queue.claim("gated", max_items=1)
+            if claim is None:
+                done.wait(0.01)
+                continue
+            with claim:
+                report(claim, claim.items[0], _executed(placed, values, pool.store, claim.fragments[0]))
+
+
+@pytest.mark.contract
+def test_the_runner_queues_a_map_nodes_ready_jobs_so_scale_wants_a_worker_per_quantum(tmp_path: Path) -> None:
+    """A 200-row map node run by `PydraRunner` on a pool reaches 20 items of 10 jobs, so 20 workers are started."""
+    runner = pytest.importorskip("senselab_core.runtime.execution.runner", exc_type=ImportError)
+    profile = _profile()
+    gated = Gated(want=20, wait_s=10.0)
+    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(200)])
+    pool = _pool(tmp_path, profile, gated)
+    done = threading.Event()
+    server = threading.Thread(target=gated.serve, args=(pool, placed, values, done), daemon=True)
+    server.start()
+    try:
+        outcome = runner.PydraRunner(profile=profile, work_dir=tmp_path / "pydra").run_plan(
+            placed, pool, values=values, events=pool.events
+        )
+    finally:
+        done.set()
+        server.join(30)
+    assert len(outcome.results["a"]) == 200 and all(r.failure is None for r in outcome.results["a"])
+    assert gated.started == 20

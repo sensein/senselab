@@ -173,6 +173,7 @@ class Pool:
     """
 
     logs_claims: ClassVar[bool] = True
+    splits_fragments: ClassVar[bool] = True
 
     def __init__(  # noqa: PLR0913 - the run, then keyword-only parts
         self,

@@ -5,7 +5,8 @@ graph node (a `map` edge reads the row, so every mapped node shares the one reco
 mapped upstreams is split over them zipped), and, for each node a `gather` edge reads, a copy of it combined over the
 rows. Each node's checksum is the job's senselab key digest (`job_key`), so pydra hashes no senselab code.
 `ExecutorWorker` runs pydra's jobs: it sends a node's ready elements to the `Executor` as fragments of the placement's
-batch size (`node_fragment`) and raises on a failed element, so pydra fails only that element's descendants.
+batch size (`node_fragment`), or as one fragment to an executor that splits fragments, and raises on a failed
+element, so pydra fails only that element's descendants.
 `SenselabStore` holds the run's completion records; no result is pickled.
 """
 
@@ -323,6 +324,10 @@ class _Run:
             (n, ()) for n in order(graph) if n not in mapped
         ]
 
+    def fragment_size(self, node: str) -> int | None:
+        """Return the most jobs of `node` one fragment holds: its batch size, None for an executor that splits."""
+        return None if self.executor.splits_fragments else self.placed.placement.nodes[node].batch_size
+
     def close(self) -> None:
         """Give every job with no terminal event its own: `cancelled` once cancelled, else `blocked`.
 
@@ -411,7 +416,8 @@ def _element(placed: Plan, node: str, job: Any) -> tuple[int, ...]:  # noqa: ANN
 class ExecutorWorker(Worker):  # type: ignore[misc]
     """A pydra worker sending a compiled node's jobs to a senselab `Executor`, in fragments of the batch size.
 
-    Jobs of one node that become ready together are sent as fragments of at most the placement's batch size; a job
+    Jobs of one node that become ready together are sent as fragments of at most the placement's batch size, or as one
+    fragment when the executor splits fragments (`splits_fragments`); a job
     returns when its element's result arrives and raises `ElementFailed` when the executor failed it.
     """
 
@@ -457,7 +463,8 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
         future: asyncio.Future[ResultRef] = loop.create_future()
         element = _element(run.placed, node, job)
         run.pending.setdefault(node, []).append((job, element, future))
-        if len(run.pending[node]) >= run.placed.placement.nodes[node].batch_size:
+        size = run.fragment_size(node)
+        if size is not None and len(run.pending[node]) >= size:
             self._flush(run, node)
         elif node not in run.scheduled:
             run.scheduled.add(node)
@@ -469,8 +476,8 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
 
     def _flush(self, run: _Run, node: str) -> None:
         run.scheduled.discard(node)
-        size = run.placed.placement.nodes[node].batch_size
         waiting = run.pending.pop(node, [])
+        size = run.fragment_size(node) or max(1, len(waiting))
         for start in range(0, len(waiting), size):
             sending = asyncio.ensure_future(self._send(run, node, waiting[start : start + size]))
             run.sending.add(sending)

@@ -245,9 +245,12 @@ class Executor(Protocol):
     An admission holds the values of the plan's graph inputs by content identity, until it is released; an
     `output:` input is read from the result store. Two admissions of one plan are independent. `logs_claims` says
     whether the executor's workers log each job `claimed`, in which case the runner logs no `started` as it sends one.
+    `splits_fragments` says whether the executor splits a fragment into its own units of work, in which case the runner
+    sends the jobs of a node that are ready together as one fragment, not in fragments of the batch size.
     """
 
     logs_claims: ClassVar[bool]
+    splits_fragments: ClassVar[bool]
 
     def bind_epoch(self, epoch: int, events: "EventLog") -> None:
         """Run what follows as the coordinator of `epoch`, logging to `events` (that epoch's attempt)."""

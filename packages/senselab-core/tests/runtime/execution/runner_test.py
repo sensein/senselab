@@ -97,6 +97,7 @@ class Recording:
     """An `Executor` over `InProcess` that records each fragment it is given, in order."""
 
     logs_claims: ClassVar[bool] = False
+    splits_fragments: ClassVar[bool] = False
 
     def bind_epoch(self, epoch: int, events: EventLog) -> None:
         """Bind through `InProcess`."""

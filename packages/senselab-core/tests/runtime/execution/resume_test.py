@@ -351,6 +351,7 @@ class Delegating:
     """An `Executor` that is not `InProcess`: it hands every call to one it holds."""
 
     logs_claims: ClassVar[bool] = False
+    splits_fragments: ClassVar[bool] = False
 
     def bind_epoch(self, epoch: int, events: EventLog) -> None:
         """Bind through `inner`."""
