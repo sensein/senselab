@@ -11,7 +11,7 @@ from pydantic import Field, model_validator
 from senselab_worker.units import NS_PER_S
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
-from senselab_core.kernel.declare import BackendSpec
+from senselab_core.kernel.declare import BackendSpec, kernel_types
 from senselab_core.kernel.signals import IrregularGroup, Recording, RegularGroup
 from senselab_core.runtime.keys import BUCKET, SINGLE, fixed_formation
 from senselab_core.runtime.storage import load_policy_values
@@ -45,9 +45,18 @@ class BucketGrid(Frozen):
         """
         return cls.model_validate(load_policy_values("senselab_core.runtime", "batching.yaml", BATCHING_FORMAT))
 
+    @property
+    def unindexed(self) -> str:
+        """The formation `bucket:<id>` naming this grid but no bucket, for a job whose length is unknown."""
+        return f"{BUCKET}:{self.id}"
+
     def formation(self, length_ns: int) -> str:
         """Return the formation `bucket:<id>:<index>` of the bucket holding `length_ns`."""
         return f"{BUCKET}:{self.id}:{bisect.bisect_right(self.edges_ns, length_ns)}"
+
+
+class LengthUnrecorded(LookupError):
+    """An upstream recording input's ref carries no recorded length, so the job's bucket is unknown."""
 
 
 @dataclass(frozen=True)
@@ -70,14 +79,27 @@ def recording_span_ns(value: object) -> int | None:
     return max(_span_ns(g) for g in value.groups.values()) if isinstance(value, Recording) else None
 
 
+def _recording_type(declared: str) -> bool:
+    found = kernel_types().get(declared)
+    return isinstance(found, type) and issubclass(found, Recording)
+
+
 def job_length_ns(job: "Job") -> int | None:
     """Return the longest span of `job`'s recording inputs in ns, None when it has none.
 
     A held input is measured; an upstream input is its ref's recorded `length_ns`, so no stored value is read. A
     gathered (list) input does not count.
+
+    Raises:
+        LengthUnrecorded: an upstream input declared a recording type has a ref with no recorded length.
     """
     held = [recording_span_ns(v) for port, v in job.values.items() if port not in job.upstream]
-    read = [r.length_ns for up in job.upstream.values() if not up.gathered for r in up.refs]
+    read = []
+    for port, up in job.upstream.items():
+        for ref in () if up.gathered else up.refs:
+            if ref.length_ns is None and _recording_type(up.declared):
+                raise LengthUnrecorded(f"input {port!r} reads recording {ref.outputs}, whose length was not recorded")
+            read.append(ref.length_ns)
     lengths = [n for n in (*held, *read) if n is not None]
     return max(lengths) if lengths else None
 
@@ -86,12 +108,23 @@ def formation(job: "Job", backend: BackendSpec, grid: BucketGrid) -> str:
     """Return the formation `job` is sent and keyed in: the backend's fixed one, else its length's bucket in `grid`.
 
     A job with no recording input (`job_length_ns`) to a backend that keys a bucket is `single`.
+
+    Raises:
+        LengthUnrecorded: as `job_length_ns`, for a backend that keys a bucket.
     """
     fixed = fixed_formation(backend)
     if fixed is not None:
         return fixed
     length = job_length_ns(job)
     return SINGLE if length is None else grid.formation(length)
+
+
+def keyed_formation(job: "Job", backend: BackendSpec, grid: BucketGrid) -> tuple[str, LengthUnrecorded | None]:
+    """Return the formation `job` is keyed under and, when its length is unrecorded, why: then `grid.unindexed`."""
+    try:
+        return formation(job, backend, grid), None
+    except LengthUnrecorded as exc:
+        return grid.unindexed, exc
 
 
 def one_node(jobs: Sequence["Job"]) -> None:

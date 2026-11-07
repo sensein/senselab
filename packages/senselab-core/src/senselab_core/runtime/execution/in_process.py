@@ -32,7 +32,6 @@ from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.services import service_registry
 from senselab_core.runtime.execution.workers import WorkerSet, service_of
 from senselab_core.runtime.keys import (
-    BUCKET,
     Call,
     FormationUnknown,
     Placement,
@@ -277,7 +276,7 @@ def fragment_keys(fragment: PlanFragment, placed: Plan, values: Mapping[InputIde
     jobs, _ = fragment_jobs(fragment, placed, values)
     grid = BucketGrid.load_default()
     return [
-        job_key(placed, fragment.node, i, record, formation=batching.formation(j, backend, grid)).digest()
+        job_key(placed, fragment.node, i, record, formation=batching.keyed_formation(j, backend, grid)[0]).digest()
         for i, j in zip(fragment.inputs, jobs, strict=True)
     ]
 
@@ -295,7 +294,7 @@ def job_checksum(placed: Plan, node: str, inputs: Mapping[str, InputIdentity]) -
     try:
         return job_key(placed, node, inputs).digest()
     except FormationUnknown:
-        return job_key(placed, node, inputs, formation=f"{BUCKET}:{BucketGrid.load_default().id}").digest()
+        return job_key(placed, node, inputs, formation=BucketGrid.load_default().unindexed).digest()
 
 
 def node_request_size(placed: Plan, node: str, placement: NodePlacement | None = None) -> int:

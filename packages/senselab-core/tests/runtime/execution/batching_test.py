@@ -22,10 +22,16 @@ from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_pack
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.batching import BucketGrid, form_batches, formation
+from senselab_core.runtime.execution.batching import (
+    BucketGrid,
+    LengthUnrecorded,
+    form_batches,
+    formation,
+    keyed_formation,
+)
 from senselab_core.runtime.execution.executor import JobRef, UpstreamRef
 from senselab_core.runtime.execution.in_process import job_key, plan_keys, result_ref
-from senselab_core.runtime.execution.job import Completed, Job, Upstream, execute
+from senselab_core.runtime.execution.job import Completed, Failed, Job, Upstream, execute
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.fake_backend import EchoParams
 from senselab_core.runtime.keys import MIXED, SINGLE, Call, Placement, build_key, request_components
@@ -208,6 +214,34 @@ def test_upstream_length_is_its_refs_never_a_stored_read(tmp_path: Path, sizes: 
     sizes.clear()
     assert [o.result.key.batch_formation for o in _execute(jobs, BUCKETED, store, batch_size=2)] == expected
     assert (sizes, store.reads - before) == ([1, 1], len(jobs))
+
+
+@pytest.mark.logic
+def test_upstream_recording_without_recorded_length_is_a_gap(tmp_path: Path, sizes: list[int]) -> None:
+    """An upstream audio input whose ref records no length fails as an uncharged gap, never sent nor keyed `single`."""
+    store = ResultStore(tmp_path)
+    [upstream] = _execute(_jobs([SHORT], task=PASS_TASK), PASS, store, batch_size=1)
+    ref = UpstreamRef(key_digest=upstream.result.key.digest(), outputs=upstream.result.output_identity, port="audio")
+    job = Job(
+        JobRef(plan_hash="0" * 64, node="b", element=(0,)),
+        Call(AUDIO_TASK, EchoParams(), {"audio": ref.identity()}),
+        {},
+        upstream={"audio": Upstream((ref,), PASS_TASK.name, "Audio")},
+    )
+    with pytest.raises(LengthUnrecorded):
+        formation(job, BUCKETED, GRID)
+    assert keyed_formation(job, BUCKETED, GRID)[0] == GRID.unindexed
+    sizes.clear()
+    placement = Placement(backend=BUCKETED, backend_params=BUCKETED.params(), device="cpu", batch_size=2)
+    workers = WorkerSet(1)
+    try:
+        [failed] = execute(
+            [job], placement, store=store, run=RunConfig(), profile=ExecutionProfile.load(), workers=workers
+        )
+    finally:
+        workers.close()
+    assert isinstance(failed, Failed) and sizes == []
+    assert (failed.failure.type, failed.failure.gap, failed.failure.charged) == ("LengthUnrecorded", True, False)
 
 
 @pytest.mark.logic

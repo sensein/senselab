@@ -32,7 +32,7 @@ from senselab_core.runtime import audio_io
 from senselab_core.runtime.call import Result, RunConfig, env_license, host_hardware, packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import sampled
-from senselab_core.runtime.execution.batching import BucketGrid, form_batches, formation, one_node
+from senselab_core.runtime.execution.batching import BucketGrid, form_batches, keyed_formation, one_node
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, UpstreamRef
 from senselab_core.runtime.execution.outputs import (
     AmbiguousClock,
@@ -137,7 +137,8 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     `run.reuse`, unless its env's license is refused or it is a sampled cross-context hit (`run.verify`), which is
     recomputed and compared before anything is stored. An upstream input is read from `store` by its output
     identity, and the inputs are checked against the task's constraints. A file-backed input is checked against its
-    stamp (`audio_io.check`) before its job is keyed; a stale or missing one fails the job. The jobs not served are
+    stamp (`audio_io.check`) before its job is keyed; a stale or missing one fails the job, as does an upstream
+    recording whose length was not recorded (`LengthUnrecorded`, a gap). The jobs not served are
     sent in batches of at most `placement.batch_size` items (`form_batches`) through `workers`; each item's outputs
     are stored, and each execution writes one activity associated with its agent (the model's source included),
     naming its job's node and plan.
@@ -167,9 +168,11 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     pending: list[_Pending] = []
     for index, given in enumerate(jobs):
         job, unread = _resolved(given, store)
-        keyed = replace(placement, **request_components(backend, formation(job, backend, grid)))
+        picked, unrecorded = keyed_formation(job, backend, grid)
+        keyed = replace(placement, **request_components(backend, picked))
         context = _context(keyed, env, expected, profile, job, code_license)
-        stale = unread or _stale(job)
+        gap = None if unrecorded is None else _upstream_gap(type(unrecorded).__name__, str(unrecorded))
+        stale = unread or gap or _stale(job)
         key = build_key(job.call, keyed, context)
         if stale is not None:
             outcomes[index] = Failed(job.ref, key.digest(), stale)
