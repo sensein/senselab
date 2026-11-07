@@ -49,7 +49,7 @@ robust (worker errors carried to the caller, a bounded pool, explicit cancellati
 | **Clean, robust, reusable, efficient code** (P-32) | Follow the sources above: deep modules with thin surfaces, a functional core with an imperative shell, one implementation per concept, typed explicit errors, and algorithms chosen for the cost model (the fastio lesson), not naive loops. No duplicated logic: a second copy is factored before merge. No dead code, no flags for removed behaviour (P-14). Dependencies stay out of core (P-13). | ruff, with complexity (`C90`) and pylint (`PL`) limits planned and not yet configured; mypy strict on core, a duplicate-code check, and file and function size budgets reported per PR |
 | **One implementation per behaviour** (P-37) | Two functions must not do the "same" thing, and code must not be copied with variants. A variant of a behaviour is a typed parameter, a strategy object or a backend over **one** engine. Consolidation must not create brittleness: the merged function never branches on its caller, a dataset or a model id; it has no flag that only one caller uses; and each variant keeps its own contract test. Prefer deleting a redundant function to wrapping it. | a duplicate-code check (token- and AST-similarity across the tree, with a threshold); the task registry refuses two tasks with the same declared operation and port types; an adversarial "find the duplicates" agent pass each phase; review checks flag count and caller-specific branches |
 | **Efficient at every scale** (P-33) | Code is measured at four scale points: 1 item, 10², 10⁴, and a long signal (hours of audio, days of actigraphy). Time, peak memory, files written and bytes moved per item must not grow with scale. Profiles find the hot spots, not guesses. | until Phase 3 Task 20: the PR quotes the measurement. After it: the `benchmarks/scale/` ladder runs per PR on touched modules (small points) and nightly (large points), with Scalene profiles attached on regression. Flatness and the regression band are data (P-33); a regression beyond the band blocks merge |
-| **Brittleness checked always** (P-34) | A change must not make the system depend on an accident: timing, ordering, one dataset, one host, one model's quirk, a magic number, a string match on output. Every boundary is exercised with bad input. Failures are typed and isolated. | property tests and fault injection in the logic tier (killed worker, stale lease, NFS rename race, network off, missing license, corrupted cache entry, truncated audio). A brittleness checklist in the PR template. Review rejects special-casing |
+| **Brittleness checked always** (P-34) | A change must not make the system depend on an accident: timing, ordering, one dataset, one host, one model's quirk, a magic number, a string match on output. Every boundary is exercised with bad input. Failures are typed and isolated. | property tests and fault injection in the logic tier (killed worker, stale lease, NFS rename race, network off, missing license, corrupted cache entry, truncated audio), over the bad-input set in `testing.md` §3. A brittleness checklist in the PR template. Review rejects special-casing. Planned, not yet built: `scripts/check_fixed_parameters.py` in pre-commit and ruff `PLR2004` (P-34 Check) |
 | **Adversarial agents set standards** (P-35) | Agents are used to break the system: hostile inputs, races, scale, misuse of the API, and attempts to make a test pass by special-casing. Each break is fixed **by an architectural change**, not a patch for that case: a new invariant, a type, a contract test or a lint rule. The fix is generalised into the standards here or into a principle. | each phase ends with an adversarial round scoped to its new surfaces (`design.md` §6.2). Findings go to [`review-register.md`](review-register.md) with their architectural resolution. A fix that only adds an `if` for the found case is rejected |
 
 ## Per-commit checklist
@@ -68,7 +68,7 @@ copies the list from here. Pre-commit and CI check what they can.
   test). An unmeasured change says so (P-33).
 - [ ] New boundaries have bad-input, fault and property tests; there is no special-casing (P-34).
 - [ ] No fixed parameters: every numeric literal in runtime, execution and test-bound code is either an invariant
-  of the code (stated as such) or config (profile, run config or data file) with its derivation; sizing comes
+  in the form P-34 defines or config (profile, run config or data file) with its derivation; sizing comes
   from measurement before scaling (P-34, amended 2026-11-07).
 - [ ] No identifiers, no local paths and no content copied from a referenced local file in any committed text: code, specs, tests, data, commit messages, PR bodies; placeholders instead (P-28). Tests are scoped and serial (P-29).
 - [ ] Every new task, backend or profile is declared, so contract tests cover it (P-30).
@@ -277,6 +277,15 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   want any fixed parameters. parameters should become configs as they can vary across execution
   scenarios and pipelines. what senselab and/or pydra should contain is to be able to optimize
   execution before scaling."
+  Amended 2026-11-07 (form): an invariant is a unit conversion, a protocol constant bound to a format
+  tag (ADR-006), or a mathematical identity, declared as `NAME: Final = ...  # invariant: <why it cannot
+  vary>`. Anything with a unit of seconds, bytes, attempts, workers, items or polls is config. Test slack
+  is read from a `data/*.yaml` beside the test package. Specs name profile keys (`lease.record_attempts`),
+  never identifiers in capitals. Planned, not yet built: `scripts/check_fixed_parameters.py` fails
+  pre-commit on a module-level numeric assignment under `packages/*/src` whose name ends in `_S`, `_MS`,
+  `_BYTES`, `_ATTEMPTS`, `_RETRIES`, `_WORKERS`, `_ITEMS`, `_POLLS` or `_BUDGET`, or on a literal argument
+  to `sleep`, `timeout=`, `wait(` or `join(`, with exceptions in `scripts/data/invariants.yaml` each
+  carrying a reason; ruff `PLR2004` is on. Until both land, the reviewer's P-34 line is the check.
 
 <a id="p-35"></a>
 ### P-35 Agents break the system to raise standards, not to add brittleness

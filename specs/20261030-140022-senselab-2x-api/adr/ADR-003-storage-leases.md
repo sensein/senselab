@@ -213,8 +213,8 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
   it is empty, as a crash between a lease's `mkdir` and its mode change leaves it; one that holds entries cannot be
   claimed and is not broken: the wait ends in `LeaseUnavailable` naming the owner. That is unreachable with the
   packaged modes: every
-  lease is `shared_dir_mode` or `LEASE_DIR_MODE` (group-listable), except the label map's, which is
-  `PRIVATE_DIR_MODE` under a `0o700` directory that no other user can reach.
+  lease is `shared_dir_mode` or `lease.dir_mode` (group-listable), except the label map's, which is
+  `lease.private_dir_mode` under a `0o700` directory that no other user can reach.
 - **Take.** After `mkdir <name>.lease/<token>`, the taker lists the lease. Another token beside its own means its
   lease directory was swapped under it; it removes its token and does not hold. It then `rmdir`s `<name>.lease`,
   which succeeds only if the directory is empty, so two takers that both see each other's token and both withdraw
@@ -249,7 +249,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
   removed. Every commit under a lease is preceded by `prove()`, and a holder whose proof fails is lost and does not
   commit. The run manifest and the label map are read-merge-write, so each commit is one atomic replace of the
   merged content (`write_atomically`) made after a successful proof. The manifest's holder re-takes the lease,
-  re-reads and merges, up to `RECORD_ATTEMPTS` times; the label map's raises `RunIOError`.
+  re-reads and merges, up to `lease.record_attempts` times; the label map's raises `RunIOError`.
 - **Callers.** Every lease holder beats under the profile's `lease` section (`envs.lease_stale_after_s` is folded
   into it). On a lost lease, or a failed `prove()` right before publishing, the env build is used but its record
   is not published; the manifest and the label map
@@ -257,8 +257,8 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
   start is refused; lost after it, the healthy server is kept and the loss is logged.
 - **The beat bound is checked at load.** `lease.attribute_delay_s` is data (the NFS default acdirmax, 60 s, on
   `orcd`; 0 on local disk) and a floor: `probe_capabilities` measures, from one client, how long a directory's mtime takes to show a new entry, and `check_storage` checks the bound at plan time against the larger of the two. One client cannot see another's stale attribute cache, so the probe only ever raises the floor. `ExecutionProfile.load` refuses a profile where
-  `2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s` with `LeaseBoundError`; the factor 2
-  allows one missed beat. Both packaged profiles load (orcd: 198 + 60 = 258 < 300).
+  `(1 + lease.missed_beats) × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s` with
+  `LeaseBoundError`; the packaged profiles allow one missed beat (`lease.missed_beats` 1). Both packaged profiles load (orcd: 198 + 60 = 258 < 300).
 - **Unsupported roots.** `StorageUnsupported` is raised when `mkdir` fails as an unsupported operation (`ENOTSUP`,
   `EOPNOTSUPP`, `ENOSYS`). `probe_capabilities` measures directory rename, server-clock mtimes, file rename, exclusive `link` and the attribute delay on the root, and `require` raises the same type naming each missing primitive.
 - **Not guaranteed.** On NFS a breaker's `lstat` of a token may be served from its attribute cache for up to
@@ -278,6 +278,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
 - 2026-11-01: services are process-scoped in Phase 2; the leased registry and `svc` pool worker arrive with lease renewal in Phase 3 (P2-14, P2-38; Task 9b).
 - 2026-11-03: a lease is a directory taken by `mkdir` with the holder's token, renewed by beat directories from a renewer independent of the work; replaces the `O_EXCL` link (owner item 58).
 - 2026-11-06: renewal as built: probe-directory clock, fresh re-read before a break, claim by rename before a break or release (tokenless leases included; empty ones by `rmdir`), withdrawn leases removed, no put-back, `keep_alive` renewer on a monotonic cadence held by every lease caller, `prove()` before every commit, `ESTALE` as lost, the beat bound (one missed beat allowed) checked at profile load, `StorageUnsupported` on an unsupported `mkdir`; closes R-111.
+- 2026-11-07: the lease constants this ADR names are profile keys (`lease.record_attempts`, `lease.dir_mode`, `lease.private_dir_mode`, `lease.missed_beats`), per P-34 as amended; the code constants move into the profile, with derivations in `config-derivations.md`, under the fixed-parameter audit.
 
 ## Amendment 2026-11-06: queues of plan fragments (Phase 3 Task 13)
 

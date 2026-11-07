@@ -77,7 +77,7 @@ dir>/queues --classes <list> [--profile NAME]` runs `serve_pool`.
   `pool.quantum_items` jobs (`Queue.claim(max_jobs=)`: an item whose slot's job count would take the claim past the
   bound is passed over, except as the claim's first item; Task 16 split). It stays on that class until it has claimed
   `quantum_items` jobs or `quantum_s` seconds have passed, then takes the class with the oldest work again, which may
-  be the same one. Items of a held env are not claimable. It exits once nothing has been claimable for three polls of `pool.poll_s` (`IDLE_POLLS`).
+  be the same one. Items of a held env are not claimable. It exits once nothing has been claimable for `pool.idle_polls` polls of `pool.poll_s`.
 - **Renewal.** Claim leases beat from their own renewers (Task 12); the worker also proves them (`Claim.renew`)
   every renewal interval (`lease.renew_fraction × lease.stale_after_s`) while it waits for a claim's outcomes,
   which run on a thread. An item whose lease was lost is not reported; another claimer takes it.
@@ -416,7 +416,7 @@ are recorded here (R-200).
   flight. `Executor.results` is gone; `follow(executor, handle)` is the blocking loop over `poll`. An executor that
   splits fragments (`splits_fragments`, the Pool) is sent one fragment per ready set, which keeps the follower's
   handles few; `split` dumps a fragment once and slices it, so it is linear in jobs. A cancel ends every followed
-  handle within `CANCEL_CHECK_S` and leaves its items queued. The Pool owns one scaler thread: it ticks every
+  handle within `pool.cancel_check_s` and leaves its items queued. The Pool owns one scaler thread: it ticks every
   `pool.poll_s` while a fragment is followed, a submit or retry wakes it, `close` stops it, and it is the only caller
   of `scale`, so a slow `sbatch` never delays settling or a cancel and concurrent submits cannot over-start. `poll`
   reads the epoch fence at most once per `first_poll_s`. The sender threads are explicit: the profile's summed
@@ -427,7 +427,7 @@ are recorded here (R-200).
   the outcome record carries `jobs`, one `ResultRef` per job. A queue `dead` outcome (a corrupt item) is a content
   fault of each of its jobs. A held queue (`Queue.hold`) gives no claim.
 - **`inputs.json` under a lease (R-211).** `record_sources` merges and writes `inputs.json` under a lease on it,
-  proven before the write and retried up to `RECORD_ATTEMPTS` times, so two coordinators starting one plan both keep
+  proven before the write and retried up to `lease.record_attempts` times, so two coordinators starting one plan both keep
   every durable source.
 - **Queues (Task 13, ADR-003).** `runtime/execution/queue.py` holds one queue per resource class, with `#<model
   identity>` for a resident model, in a directory named by `identity_digest("label@1", name)`. An item is a plan
