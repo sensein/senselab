@@ -13,7 +13,7 @@ import stat
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Final, Literal
 
 import numpy
 
@@ -41,7 +41,7 @@ from senselab_worker.faults import (
 )
 from senselab_worker.ownership import ARRAY_TEMP_NAME, remove_owned
 
-MAX_LINE_BYTES = 16 * 2**20
+MAX_LINE_BYTES: Final = 16 * 2**20  # invariant: the wire protocol line limit, bound to its format tag
 MAX_ID_CHARS = 1024
 Kind = Literal["hello", "init", "ready", "request", "result", "done", "fatal", "stop"]
 Slot = Literal["line", "init", "params", "inputs", "outputs"]

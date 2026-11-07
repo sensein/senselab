@@ -7,6 +7,7 @@ resource class whose resident models exceed its memory cap; `plan_cost` sums the
 
 from collections.abc import Callable, Mapping
 from dataclasses import replace
+from typing import Final
 
 from pydantic import ValidationError
 
@@ -24,7 +25,7 @@ from senselab_core.runtime.licenses import LicensePolicy
 from senselab_core.runtime.profiles import ExecutionProfile, NoBackend, NoDevice, resolve_execution
 from senselab_core.runtime.resources import ResourceMeasure, ResourceRow
 
-_HOUR_S = 3600.0
+_HOUR_S: Final = 3600.0  # invariant: seconds in one hour
 
 
 class BackendParamsMismatch(ValueError):

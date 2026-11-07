@@ -188,6 +188,12 @@ repos:
     language: system
     pass_filenames: false
     always_run: true
+  - id: fixed-parameters
+    name: No fixed parameters in package source (P-34).
+    entry: uv run --frozen --no-sync python scripts/check_fixed_parameters.py
+    language: system
+    pass_filenames: false
+    files: ^(packages/[^/]+/src/.*\.py|scripts/(check_fixed_parameters\.py|data/invariants\.yaml))$
   - id: spec-ids
     name: No ruling, finding or review-round ids under packages/.
     entry: uv run --frozen --no-sync python scripts/check_spec_ids.py

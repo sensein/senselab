@@ -1,0 +1,120 @@
+format: invariants@1.0
+# Exceptions to scripts/check_fixed_parameters.py.
+# invariants: declared `NAME: Final = ...  # invariant: <why>`; each entry's reason says why it cannot vary.
+# pending: fixed parameters still in code; each names the register entry that moves it to config.
+invariants:
+- path: packages/senselab-core/src/senselab_core/runtime/placement.py
+  name: _HOUR_S
+  reason: 'Seconds in one hour: a unit conversion.'
+- path: packages/senselab-worker/src/senselab_worker/codec.py
+  name: MAX_LINE_BYTES
+  reason: The line limit of the wire protocol, bound to its format tag (wire-protocol.md).
+- path: packages/senselab-worker/src/senselab_worker/fake.py
+  name: _NONCE_BYTES
+  reason: A 128-bit random nonce in the test fake; its width is not a tunable.
+- path: packages/senselab-worker/src/senselab_worker/serve.py
+  name: UNBOUNDED_BYTES
+  reason: 'The largest signed 64-bit size, read as no bound: a sentinel, not a size.'
+- path: packages/senselab-worker/src/senselab_worker/units.py
+  name: NS_PER_S
+  reason: 'Nanoseconds in one second: a unit conversion.'
+pending:
+- path: packages/senselab-core/src/senselab_core/runtime/envs.py
+  name: timeout=
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/execution/pool_worker.py
+  name: IDLE_POLLS
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/execution/run.py
+  name: POLL_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/execution/run.py
+  name: RECORD_ATTEMPTS
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/execution/runner.py
+  name: CANCEL_CHECK_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/execution/substrates.py
+  name: STOP_GRACE_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/execution/supervisor.py
+  name: EXIT_BOUND_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/execution/supervisor.py
+  name: REAP_POLL_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/fetch.py
+  name: timeout=
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/hardware.py
+  name: _GPU_QUERY_TIMEOUT_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/locks.py
+  name: POLL_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/locks.py
+  name: REMOVE_ATTEMPTS
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/locks.py
+  name: STALE_AFTER_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/locks.py
+  name: TIMEOUT_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/revision.py
+  name: RECORD_ATTEMPTS
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/storage.py
+  name: PROBE_BOUND_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/storage.py
+  name: PROBE_POLL_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/storage.py
+  name: _CLOCK_TOLERANCE_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/store.py
+  name: COMMIT_ATTEMPTS
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/vllm_server.py
+  name: POLL_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/vllm_server.py
+  name: REQUEST_TIMEOUT_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/vllm_server.py
+  name: STOP_TIMEOUT_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/vllm_server.py
+  name: timeout=
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/worker_client.py
+  name: HELLO_TIMEOUT_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/worker_client.py
+  name: LEADER_PROBE_TIMEOUT_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/worker_client.py
+  name: _GROUP_POLL_MAX_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/worker_client.py
+  name: _LOGGED_LINE_BYTES
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/worker_client.py
+  name: _READ_BYTES
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/worker_client.py
+  name: _STDERR_LINE_BYTES
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/testing/contracts.py
+  name: HASH_SEED_TIMEOUT_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/testing/contracts.py
+  name: WORKER_TIMEOUT_S
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/testing/processes.py
+  name: POLL_S
+  register: R-219
+- path: packages/senselab-worker/src/senselab_worker/codec.py
+  name: READ_CHUNK_BYTES
+  register: R-219

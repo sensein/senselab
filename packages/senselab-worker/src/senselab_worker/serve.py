@@ -4,7 +4,7 @@ import os
 import platform
 import time
 from pathlib import Path
-from typing import Any, BinaryIO, Callable
+from typing import Any, BinaryIO, Callable, Final
 
 import numpy
 
@@ -32,7 +32,7 @@ Load = Callable[[dict[str, Any]], object]
 Handle = Callable[[object, list[dict[str, Any]], dict[str, Any]], list[dict[str, Any]]]
 
 EXIT_FATAL = 1
-UNBOUNDED_BYTES = 2**63 - 1
+UNBOUNDED_BYTES: Final = 2**63 - 1  # invariant: the largest signed 64-bit size, read as no bound
 """The budget of a worker process's model cache: unbounded."""
 
 

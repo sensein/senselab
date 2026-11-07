@@ -10,7 +10,7 @@ import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 import numpy
 
@@ -22,7 +22,7 @@ from senselab_worker.faults import ContentFault, ResourceFault
 FAULT_KEY = "_fault"
 """The request param that carries the faults to inject; reserved, never a task or backend param."""
 EXIT_CRASH = 70
-_NONCE_BYTES = 16
+_NONCE_BYTES: Final = 16  # invariant: a 128-bit random nonce
 
 
 @dataclass(frozen=True)

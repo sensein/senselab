@@ -34,7 +34,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Annotated, Final, Protocol, Self, runtime_checkable
 
 from pydantic import Field, StrictBool
 from senselab_worker.ownership import UUID_HEX, remove_owned
@@ -48,7 +48,7 @@ logger = logging.getLogger("senselab")
 POLICY_FORMAT = "store-policy@1.0"
 STAGING_FILE_MODE = 0o660
 STAGING_DIR_MODE = 0o2770
-PRIVATE_DIR_MODE = 0o700
+PRIVATE_DIR_MODE: Final = 0o700  # invariant: owner-only access, whatever the site's group policy
 """The mode of a `Staging` directory that only this process's user can write."""
 CLOCK_NAME = ".clock"
 """The sentinel `StorageDir.fs_now` replaces in a directory."""
