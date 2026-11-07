@@ -501,7 +501,7 @@ class Pool:
         return admitted
 
     def _keys(self, fragment: PlanFragment) -> list[str]:
-        return fragment_keys(fragment, *self._admitted_plan(fragment), self.store)
+        return fragment_keys(fragment, *self._admitted_plan(fragment))
 
     def _effect(  # noqa: PLR0913 - the followed fragment, the item and the job's failure
         self, followed: _Followed, flight: _Flight, index: int, key: str, fault: FaultRecord

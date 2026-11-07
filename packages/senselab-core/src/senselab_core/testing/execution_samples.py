@@ -93,7 +93,7 @@ def register_execution_samples(register: Register) -> None:
             ),
         ],
         invalid_updates=[
-            {"format": "plan-fragment@2.0"},
+            {"format": "plan-fragment@3.0"},
             {"inputs": ()},
             {"attempt": 0},
             {"jobs": ()},
@@ -107,18 +107,19 @@ def register_execution_samples(register: Register) -> None:
         lambda: [
             ResultRef(job=jobs[0], key_digest=_PLAN, output_identity=_OUTPUT),
             ResultRef(job=jobs[1], key_digest=_PLAN, failure=faults[0]),
-            ResultRef(job=jobs[0], key_digest=_PLAN, output_identity=_OUTPUT, served="exact"),
+            ResultRef(job=jobs[0], key_digest=_PLAN, output_identity=_OUTPUT, served="exact", lengths_ns={"audio": 0}),
         ],
         invalid_updates=[
             {"key_digest": "k"},
             {"output_identity": _OUTPUT, "failure": faults[0].model_dump()},
             {"served": "other"},
+            {"lengths_ns": {"audio": -1}},
         ],
     )
     register(
         UpstreamRef,
-        lambda: [_STORED, UpstreamRef(key_digest="cd" * 32, outputs=_OUTPUT, port="spans")],
-        invalid_updates=[{"key_digest": "k"}, {"outputs": _INPUT}, {"port": ""}],
+        lambda: [_STORED, UpstreamRef(key_digest="cd" * 32, outputs=_OUTPUT, port="audio", length_ns=5)],
+        invalid_updates=[{"key_digest": "k"}, {"outputs": _INPUT}, {"port": ""}, {"length_ns": -1}],
     )
     register(
         Admission,

@@ -90,12 +90,20 @@ class FaultRecord(Frozen):
         )
 
 
+SpanNs = Annotated[int, Field(strict=True, ge=0)]
+"""A recording's span in ns."""
+
+
 class UpstreamRef(Frozen):
-    """Where an `output:` input is stored: the upstream job's key digest, its entry's output identity, and the port."""
+    """Where an `output:` input is stored: the upstream job's key digest, its entry's output identity, and the port.
+
+    `length_ns` is the span of the port's value when it is a recording (`ResultRef.lengths_ns`), else None.
+    """
 
     key_digest: Hex64
     outputs: OutputIdentity
     port: NonEmptyStr
+    length_ns: SpanNs | None = None
 
     def identity(self) -> OutputIdentity:
         """Return the input identity of this port (`port_output_identity`)."""
@@ -132,7 +140,7 @@ class Admission(Frozen):
 
 
 class PlanFragment(Formatted):
-    """A `plan-fragment@1.0` document: jobs of one node of one admitted plan, their input identities, the placement.
+    """A `plan-fragment@2.0` document: jobs of one node of one admitted plan, their input identities, the placement.
 
     `inputs` holds one mapping per job, in the order of `jobs`; every job names `plan_hash` and `node`. `admission`
     names the admission whose graph-input values the jobs read; `upstream` gives, for each `output:` input
@@ -177,7 +185,8 @@ class PlanFragment(Formatted):
 class ResultRef(Frozen):
     """What one job gave: its key's digest and either its output identity or its failure.
 
-    `served` is the reuse policy under which a stored result gave it, None when the job executed.
+    `served` is the reuse policy under which a stored result gave it, None when the job executed. `lengths_ns` holds
+    the span of each recording output, by port, taken when the result was given.
     """
 
     job: JobRef
@@ -185,6 +194,9 @@ class ResultRef(Frozen):
     output_identity: OutputIdentity | None = None
     failure: FaultRecord | None = None
     served: ReuseName | None = None
+    lengths_ns: Annotated[Mapping[str, SpanNs], AfterValidator(FrozenMapping), PlainSerializer(dict)] = FrozenMapping(
+        {}
+    )
 
     @model_validator(mode="after")
     def _check_one(self) -> "ResultRef":

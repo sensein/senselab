@@ -121,7 +121,7 @@ def _register_settings(register: Register) -> None:
     classes: Mapping[type[Frozen], tuple[Sequence[Frozen], Sequence[Mapping[str, object]]]] = {
         ResourceClass: (
             [
-                ResourceClass(device="cpu", max_workers=1),
+                ResourceClass(device="cpu", max_workers=1, batch_size=1),
                 ResourceClass(
                     device="cuda",
                     gpu_type="h100",
@@ -131,10 +131,11 @@ def _register_settings(register: Register) -> None:
                     partition="${GPU_PARTITION}",
                     gres="gpu:h100:1",
                     max_workers=4,
+                    batch_size=1,
                     memory_cap_bytes=2**36,
                 ),
             ],
-            [{"max_workers": 0}, {"gpu_type": "h100", "device": "cpu"}, {"device": "tpu"}],
+            [{"max_workers": 0}, {"batch_size": 0}, {"gpu_type": "h100", "device": "cpu"}, {"device": "tpu"}],
         ),
         SubstrateSpec: (
             [

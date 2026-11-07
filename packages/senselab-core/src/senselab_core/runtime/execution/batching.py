@@ -2,7 +2,7 @@
 
 import bisect
 import functools
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import TYPE_CHECKING, Annotated
@@ -65,21 +65,32 @@ def _span_ns(group: RegularGroup | IrregularGroup) -> int:
     return int(Fraction(group.frames) * NS_PER_S / Fraction(group.sampling_rate))
 
 
-def length_ns(values: Mapping[str, object]) -> int | None:
-    """Return the longest span of the recordings among `values`, in ns; None when none is a recording."""
-    lengths = [_span_ns(g) for v in values.values() if isinstance(v, Recording) for g in v.groups.values()]
+def recording_span_ns(value: object) -> int | None:
+    """Return the longest span of `value`'s groups in ns when it is a recording, else None."""
+    return max(_span_ns(g) for g in value.groups.values()) if isinstance(value, Recording) else None
+
+
+def job_length_ns(job: "Job") -> int | None:
+    """Return the longest span of `job`'s recording inputs in ns, None when it has none.
+
+    A held input is measured; an upstream input is its ref's recorded `length_ns`, so no stored value is read. A
+    gathered (list) input does not count.
+    """
+    held = [recording_span_ns(v) for port, v in job.values.items() if port not in job.upstream]
+    read = [r.length_ns for up in job.upstream.values() if not up.gathered for r in up.refs]
+    lengths = [n for n in (*held, *read) if n is not None]
     return max(lengths) if lengths else None
 
 
 def formation(job: "Job", backend: BackendSpec, grid: BucketGrid) -> str:
     """Return the formation `job` is sent and keyed in: the backend's fixed one, else its length's bucket in `grid`.
 
-    A job with no recording input to a backend that keys a bucket is `single`.
+    A job with no recording input (`job_length_ns`) to a backend that keys a bucket is `single`.
     """
     fixed = fixed_formation(backend)
     if fixed is not None:
         return fixed
-    length = length_ns(job.values)
+    length = job_length_ns(job)
     return SINGLE if length is None else grid.formation(length)
 
 

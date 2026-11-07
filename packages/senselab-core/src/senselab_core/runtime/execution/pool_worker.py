@@ -328,7 +328,7 @@ class PoolWorker:
             except Exception as exc:  # noqa: BLE001 - an item that cannot be built fails with what it raised
                 dead[digest] = failure_of(exc)
                 continue
-            keys = fragment_keys(fragment, placed, values, self.store)
+            keys = fragment_keys(fragment, placed, values)
             label = (fragment.plan_hash, fragment.node, fragment.placement.canonical_digest())
             run = placed.config or RunConfig(reuse=ReusePolicy(placed.logical.reuse))
             group = groups.setdefault(label, _Group(placement, run, []))

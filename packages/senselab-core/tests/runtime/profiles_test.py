@@ -251,7 +251,7 @@ def test_resource_class_follows_device_order_and_host() -> None:
 def test_resource_class_names_match_their_device() -> None:
     """A class named for one device but declaring another is refused, as is a misspelt class key."""
     with pytest.raises(ValueError, match="not named for their device"):
-        _profile(resource_classes={"gpu:h100": {"device": "cuda", "max_workers": 1}})
+        _profile(resource_classes={"gpu:h100": {"device": "cuda", "max_workers": 1, "batch_size": 1}})
     with pytest.raises(UnknownProfileKey, match="resource_classes.cpu.max_worker.*did you mean 'max_workers'"):
         _profile(resource_classes={"cpu": {"max_worker": 2}})
     with pytest.raises(UnknownProfileKey, match="'pool.quantum'"):

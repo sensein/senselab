@@ -57,6 +57,7 @@ CLASSES: dict[str, Any] = {
         "time_s": 3600,
         "partition": "${CPU_PARTITION}",
         "max_workers": 32,
+        "batch_size": 1,
     },
     "gpu:h100": {
         "device": "cuda",
@@ -67,6 +68,7 @@ CLASSES: dict[str, Any] = {
         "partition": "${GPU_PARTITION}",
         "gres": "gpu:h100:1",
         "max_workers": 4,
+        "batch_size": 1,
     },
 }
 
@@ -480,7 +482,7 @@ def test_local_pool_runs_toy_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         "laptop",
         {
             "devices": ["cpu"],
-            "resource_classes": {"cpu": {"device": "cpu", "max_workers": 2}},
+            "resource_classes": {"cpu": {"device": "cpu", "max_workers": 2, "batch_size": 1}},
             "pool": {"quantum_items": 1, "poll_s": 0.2, "first_poll_s": 0.02},
         },
     )
@@ -507,7 +509,7 @@ def _worker_profile(**faults: int) -> ExecutionProfile:
         "laptop",
         {
             "devices": ["cpu"],
-            "resource_classes": {"cpu": {"device": "cpu", "max_workers": 2}},
+            "resource_classes": {"cpu": {"device": "cpu", "max_workers": 2, "batch_size": 1}},
             "pool": {"quantum_items": 1, "first_poll_s": 0.01, "poll_s": 0.2},
             "faults": {"infrastructure_replacements": 2, **faults},
         },
@@ -629,7 +631,10 @@ def test_pending_surplus_is_cancelled_first_and_running_ones_only_when_drained(t
 @pytest.mark.logic
 def test_an_empty_service_queue_never_stops_its_running_worker(tmp_path: Path) -> None:
     """A `svc` queue with nothing waiting stops its pending workers only; the running one exits on its own."""
-    classes = {**CLASSES, "svc:pii": {"device": "cpu", "cpus": 1, "partition": "${CPU_PARTITION}", "max_workers": 1}}
+    classes = {
+        **CLASSES,
+        "svc:pii": {"device": "cpu", "cpus": 1, "partition": "${CPU_PARTITION}", "max_workers": 1, "batch_size": 1},
+    }
     profile = ExecutionProfile.load("orcd", {"devices": ["cpu"], "resource_classes": classes})
     empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile)
     empty.queue("svc:pii")

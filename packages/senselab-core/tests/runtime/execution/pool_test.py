@@ -40,8 +40,8 @@ HEAR = SCORE.model_copy(update={"name": "pool_test.hear", "inputs": {"audio": "A
 REGISTRY = registry(SCORE, HEAR)
 REGISTRY.add_backend(REGISTRY.backends(SCORE.name)[0].model_copy(update={"name": "alt"}))
 CLASSES = {
-    "cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1},
-    "cpu:large": {"device": "cpu", "mem_bytes": 2**33, "max_workers": 1},
+    "cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1, "batch_size": 1},
+    "cpu:large": {"device": "cpu", "mem_bytes": 2**33, "max_workers": 1, "batch_size": 1},
 }
 WORKERS = WorkerSet(4)
 CONTENT = {"content_attempts": 2, "infrastructure_replacements": 6, "resource_replacements": 1}
@@ -785,8 +785,8 @@ def test_the_expected_key_is_the_key_of_the_placement_sent(tmp_path: Path) -> No
 def test_a_resource_fault_never_moves_a_job_to_a_class_the_qos_cap_cannot_start(tmp_path: Path) -> None:
     """With a cap of 4 CPUs, `cpu:large` (8 CPUs) is not a move: the resource fault is dead, and nothing hangs."""
     classes = {
-        "cpu": {"device": "cpu", "cpus": 4, "mem_bytes": 2**30, "max_workers": 1},
-        "cpu:large": {"device": "cpu", "cpus": 8, "mem_bytes": 2**33, "max_workers": 1},
+        "cpu": {"device": "cpu", "cpus": 4, "mem_bytes": 2**30, "max_workers": 1, "batch_size": 1},
+        "cpu:large": {"device": "cpu", "cpus": 8, "mem_bytes": 2**33, "max_workers": 1, "batch_size": 1},
     }
     profile = ExecutionProfile.load(
         "laptop",

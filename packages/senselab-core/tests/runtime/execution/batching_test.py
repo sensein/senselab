@@ -9,21 +9,27 @@ from typing import Any
 
 import numpy
 import pytest
+import soundfile
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
+from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskSpec
-from senselab_core.kernel.identity import ExecutionContext
+from senselab_core.kernel.graph import Edge, Graph, Node
+from senselab_core.kernel.identity import ExecutionContext, OutputIdentity
 from senselab_core.kernel.signals import Audio
 from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
+from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.batching import BucketGrid, form_batches, formation
 from senselab_core.runtime.execution.executor import JobRef, UpstreamRef
-from senselab_core.runtime.execution.job import Completed, Job, Upstream, execute, job_formation
+from senselab_core.runtime.execution.in_process import job_key, plan_keys, result_ref
+from senselab_core.runtime.execution.job import Completed, Job, Upstream, execute
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.fake_backend import EchoParams
 from senselab_core.runtime.keys import MIXED, SINGLE, Call, Placement, build_key, request_components
+from senselab_core.runtime.planner import plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.contracts import BASE_CONTEXT
@@ -134,8 +140,11 @@ def test_noninvariant_backend_batches_by_keyed_bucket_or_single(tmp_path: Path, 
     assert sizes == [2, 1, 1]
     expected = [GRID.formation(n) for n in (SHORT, LONG, SHORT, SHORT)]
     assert [o.result.key.batch_formation for o in outcomes] == expected
-    alone = _execute(_jobs([SHORT, LONG, SHORT, SHORT])[3:], BUCKETED, ResultStore(tmp_path / "b"), batch_size=2)
-    assert alone[0].result.key.digest() == outcomes[3].result.key.digest()
+    alone = _execute(_jobs([SHORT, LONG, SHORT, SHORT])[:1], BUCKETED, ResultStore(tmp_path / "b"), batch_size=2)
+    assert (alone[0].result.key.digest(), alone[0].result.outputs) == (
+        outcomes[0].result.key.digest(),
+        outcomes[0].result.outputs,
+    )
     sizes.clear()
     unkeyed = _execute(_jobs([SHORT, SHORT]), UNKEYED, ResultStore(tmp_path / "c"), batch_size=2)
     assert sizes == [1, 1]
@@ -158,13 +167,30 @@ def test_invariant_backend_formation_not_in_key(tmp_path: Path, sizes: list[int]
     assert [o.result.key.digest() for o in alone] == [o.result.key.digest() for o in batched]
 
 
+class _CountingStore(ResultStore):
+    """A result store that counts the stored outputs read through it."""
+
+    reads = 0
+
+    def outputs_of(self, key_digest: str, identity: OutputIdentity) -> dict[str, object] | None:
+        """Count the read, then read."""
+        self.reads += 1
+        return super().outputs_of(key_digest, identity)
+
+
 @pytest.mark.logic
-def test_upstream_length_picks_the_bucket(tmp_path: Path, sizes: list[int]) -> None:
-    """A job reading its audio from an upstream entry is bucketed by that audio's length, before and when sent."""
-    store = ResultStore(tmp_path)
+def test_upstream_length_is_its_refs_never_a_stored_read(tmp_path: Path, sizes: list[int]) -> None:
+    """A job reading audio from upstream is keyed by the length its upstream result recorded, reading no stored value.
+
+    Sending it reads each upstream value once, to run it, and keys it as before it was sent.
+    """
+    store = _CountingStore(tmp_path)
     upstream = _execute(_jobs([SHORT, LONG], task=PASS_TASK), PASS, store, batch_size=2)
+    given = [result_ref(u) for u in upstream]
+    assert [r.lengths_ns for r in given] == [{"audio": SHORT}, {"audio": LONG}]
     refs = [
-        UpstreamRef(key_digest=u.result.key.digest(), outputs=u.result.output_identity, port="audio") for u in upstream
+        UpstreamRef(key_digest=r.key_digest, outputs=r.output_identity, port="audio", length_ns=r.lengths_ns["audio"])
+        for r in given
     ]
     jobs = [
         Job(
@@ -176,10 +202,46 @@ def test_upstream_length_picks_the_bucket(tmp_path: Path, sizes: list[int]) -> N
         for i, ref in enumerate(refs)
     ]
     expected = [GRID.formation(SHORT), GRID.formation(LONG)]
-    assert [job_formation(j, BUCKETED, store, GRID) for j in jobs] == expected
+    before = store.reads
+    assert [formation(j, BUCKETED, GRID) for j in jobs] == expected
+    assert store.reads == before
     sizes.clear()
     assert [o.result.key.batch_formation for o in _execute(jobs, BUCKETED, store, batch_size=2)] == expected
-    assert sizes == [1, 1]
+    assert (sizes, store.reads - before) == ([1, 1], len(jobs))
+
+
+@pytest.mark.logic
+def test_plan_keys_a_bucketed_node_on_graph_inputs_only(tmp_path: Path) -> None:
+    """Before a run, a bucketed node on graph inputs is keyed by their lengths; one on upstream audio is not."""
+    paths = []
+    for i, length in enumerate((SHORT, LONG)):
+        paths.append(tmp_path / f"r{i}.wav")
+        soundfile.write(paths[-1], _audio(length, i).read()[0], RATE)
+    graph = Graph(
+        inputs={"audio": "list[Audio]"},
+        nodes=(
+            Node(id="pass", task=PASS_TASK.name, task_version="1"),
+            Node(id="direct", task=AUDIO_TASK.name, task_version="1"),
+            Node(id="after", task=AUDIO_TASK.name, task_version="1"),
+        ),
+        edges=(
+            Edge(source="input.audio", target="pass.audio", kind="map"),
+            Edge(source="input.audio", target="direct.audio", kind="map"),
+            Edge(source="pass.audio", target="after.audio"),
+        ),
+        outputs={"direct": "direct.value", "after": "after.value"},
+    )
+    rows = [Record(id=f"r{i}", inputs={"audio": ValueInput(value=str(p))}) for i, p in enumerate(paths)]
+    profile = ExecutionProfile.load("laptop", {"stack_preferences": {AUDIO_TASK.name: ["bucketed"]}})
+    placed = plan(graph, RecordSet(rows), config=RunConfig(), execution=profile)
+    values = {identity: value for identity, value, _ in (bind_input("audio", "Audio", str(p)) for p in paths)}
+    keys = plan_keys(placed, values)
+    assert {n for n, _ in keys} == {"pass", "direct"}
+    calls = {(0,): SHORT, (1,): LONG}
+    for element, length in calls.items():
+        inputs = {"audio": placed.manifest.rows[element[0]].inputs["audio"]}
+        expected = job_key(placed, "direct", inputs, formation=GRID.formation(length)).digest()
+        assert keys[("direct", element)] == expected
 
 
 @pytest.mark.logic

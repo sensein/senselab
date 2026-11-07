@@ -40,8 +40,8 @@ WORKERS = WorkerSet(2)
 OVERRIDE: dict[str, Any] = {
     "devices": ["cpu"],
     "resource_classes": {
-        "cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1},
-        "cpu:b": {"device": "cpu", "mem_bytes": 2**31, "max_workers": 1},
+        "cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1, "batch_size": 1},
+        "cpu:b": {"device": "cpu", "mem_bytes": 2**31, "max_workers": 1, "batch_size": 1},
     },
     "pool": {"poll_s": 0.05, "first_poll_s": 0.01, "quantum_items": 2, "quantum_s": 60},
     "lease": {"stale_after_s": 0.4, "renew_fraction": 0.2, "attribute_delay_s": 0},

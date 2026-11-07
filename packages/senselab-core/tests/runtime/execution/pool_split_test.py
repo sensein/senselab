@@ -54,10 +54,18 @@ LOST = FaultRecord(fault="infrastructure", type="WorkerLost", message="gone", ga
 
 
 def _profile(quantum: int = 10, cap: int | None = None, **faults: int) -> ExecutionProfile:
-    cpu = {"device": "cpu", "cpus": 4, "mem_bytes": 2**33, "time_s": 3600, "max_workers": 32, "partition": "cpuq"}
+    cpu = {
+        "device": "cpu",
+        "cpus": 4,
+        "mem_bytes": 2**33,
+        "time_s": 3600,
+        "max_workers": 32,
+        "batch_size": 1,
+        "partition": "cpuq",
+    }
     override: dict[str, Any] = {
         "devices": ["cpu"],
-        "resource_classes": {"cpu": cpu, "cpu:large": {**cpu, "mem_bytes": 2**34, "max_workers": 2}},
+        "resource_classes": {"cpu": cpu, "cpu:large": {**cpu, "mem_bytes": 2**34, "max_workers": 2, "batch_size": 1}},
         "substrate": {"kind": "slurm", "qos_cpu_cap": cap},
         "pool": {"quantum_items": quantum, "first_poll_s": 0.01, "poll_s": 0.2},
         "faults": {"content_attempts": 1, **faults},
@@ -268,8 +276,8 @@ def test_a_bucketed_backends_jobs_keep_their_keys_across_items(tmp_path: Path) -
         backend = STRICT_REGISTRY.backends(STRICT.name)[0]
         assert request_size(backend, fragment.placement.batch_size) == fragment.placement.batch_size
         items = split(fragment, 3)
-        keys = [k for i in items for k in fragment_keys(i, placed, values, pool.store)]
-        whole = fragment_keys(fragment, placed, values, pool.store)
+        keys = [k for i in items for k in fragment_keys(i, placed, values)]
+        whole = fragment_keys(fragment, placed, values)
     assert [len(i.jobs) for i in items] == [3, 3, 1] and [j for i in items for j in i.jobs] == list(fragment.jobs)
     assert keys == whole and split(fragment, 7) == [fragment]
 

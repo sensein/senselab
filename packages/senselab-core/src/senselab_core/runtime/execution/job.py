@@ -16,7 +16,7 @@ from senselab_worker import WIRE_VERSION
 from senselab_worker.faults import error_record
 
 from senselab_core.kernel import prov as kprov
-from senselab_core.kernel.declare import BackendSpec, InconsistentInputs
+from senselab_core.kernel.declare import InconsistentInputs
 from senselab_core.kernel.identity import (
     Attestation,
     ExecutionContext,
@@ -55,7 +55,7 @@ from senselab_core.runtime.execution.records import (
 from senselab_core.runtime.execution.records import verify_attributes as verify_settings
 from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, service_of
 from senselab_core.runtime.hardware import numerics_class
-from senselab_core.runtime.keys import Call, Placement, build_key, fixed_formation, request_components
+from senselab_core.runtime.keys import Call, Placement, build_key, request_components
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -208,17 +208,6 @@ def _one_call(jobs: Sequence[Job]) -> Call:
         ):
             raise ValueError(f"the jobs of one execution are of one call; {job.ref} differs from {jobs[0].ref}")
     return head
-
-
-def job_formation(job: Job, backend: BackendSpec, store: ResultStore, grid: BucketGrid) -> str:
-    """Return the formation `execute` keys `job` under in `grid`, reading its upstream inputs from `store` if needed.
-
-    A job whose inputs cannot be read or break the task's constraints is formed over the inputs it holds, as
-    `execute` forms it.
-    """
-    if fixed_formation(backend) is None and job.upstream:
-        job = _resolved(job, store)[0]
-    return formation(job, backend, grid)
 
 
 def _code_license(run: RunConfig, placement: Placement, call: Call) -> License | None:

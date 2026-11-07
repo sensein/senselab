@@ -39,7 +39,7 @@ class ResourceClass(Frozen):
     gres: NonEmptyStr | None = None
     max_workers: PositiveInt
     memory_cap_bytes: PositiveInt | None = None
-    batch_size: PositiveInt = 1
+    batch_size: PositiveInt
 
     @model_validator(mode="after")
     def _check_gpu(self) -> "ResourceClass":

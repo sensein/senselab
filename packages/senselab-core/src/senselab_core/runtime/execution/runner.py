@@ -47,7 +47,7 @@ from senselab_core.runtime.execution.executor import (
     QueueHeld,
     ResultRef,
 )
-from senselab_core.runtime.execution.in_process import job_checksum, node_fragment, plan_keys
+from senselab_core.runtime.execution.in_process import fragment_keys, job_checksum, node_fragment, plan_keys
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.planner import Plan, check_mapped_outputs
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -313,10 +313,11 @@ def _wired(placed: Plan, node: str, classes: Mapping[str, Any], added: Mapping[s
 
 @dataclass
 class _Run:
-    """One run's state, shared by its workers: the plan, admission, executor, batches waiting and outcomes."""
+    """One run's state, shared by its workers: the plan, admission and its values, executor, batches and outcomes."""
 
     placed: Plan
     admission: Admission
+    values: Mapping[InputIdentity, object]
     executor: Executor
     store: SenselabStore
     events: EventLog
@@ -383,8 +384,8 @@ class _Run:
             self.placed, self.admission, node, upstream=_upstream(self.placed, node, batch), elements=elements
         )
         if not self.executor.logs_claims:
-            for job, element, _ in batch:
-                self.log("started", node, element, key=job.checksum)
+            for job, key in zip(fragment.jobs, fragment_keys(fragment, self.placed, self.values), strict=True):
+                self.log("started", node, job.element, key=key)
         return self.executor.submit(fragment)
 
     def log(  # noqa: PLR0913 - the fields of an event
@@ -734,8 +735,8 @@ class PydraRunner:
         pool = self.profile.pool
         senders = ThreadPoolExecutor(self.senders, thread_name_prefix="senselab-send")
         follower = Follower(executor, cancel, first_s=pool.first_poll_s, max_s=pool.poll_s)
-        run = _Run(placed, admission, executor, store, events, cancel, senders, follower)
-        keys = plan_keys(placed)
+        run = _Run(placed, admission, values, executor, store, events, cancel, senders, follower)
+        keys = plan_keys(placed, values)
         for node, element in run.expected():
             run.log("queued", node, element, key=keys.get((node, element)))
         classes = sorted({p.resource_class for p in placed.placement.nodes.values()})
