@@ -22,7 +22,7 @@ from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.events import EventLog, read_events
-from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status
+from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status, follow
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.licenses import license_record
@@ -131,10 +131,6 @@ class Recording:
     def cancel(self, handle: Handle) -> None:
         """Cancel through `InProcess`."""
         self.inner.cancel(handle)
-
-    def results(self, handle: Handle) -> Iterator[ResultRef]:
-        """Yield the results `InProcess` gives."""
-        return self.inner.results(handle)
 
     def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
         """Poll through `InProcess`."""
@@ -351,8 +347,8 @@ def test_inprocess_and_pool_give_same_store(tmp_path: Path) -> None:
     status, executor, _ = _run(placed, values, tmp_path / "run")
     by_hand = InProcess(store=ResultStore(tmp_path / "hand"), profile=PROFILE, run=RunConfig(), workers=WORKERS)
     admission = by_hand.admit(placed, values)
-    upstream = list(by_hand.results(by_hand.submit(node_fragment(placed, admission, "a"))))
-    downstream = list(by_hand.results(by_hand.submit(node_fragment(placed, admission, "b", upstream={"a": upstream}))))
+    upstream = list(follow(by_hand, by_hand.submit(node_fragment(placed, admission, "a"))))
+    downstream = list(follow(by_hand, by_hand.submit(node_fragment(placed, admission, "b", upstream={"a": upstream}))))
     by_hand.release(admission)
     ran = {(r.key_digest, r.output_identity) for refs in status.results.values() for r in refs}
     assert ran == {(r.key_digest, r.output_identity) for r in (*upstream, *downstream)} and status.done

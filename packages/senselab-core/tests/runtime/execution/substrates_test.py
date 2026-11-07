@@ -16,7 +16,7 @@ from pool_stack_fixture import packaged, planned, registry, scoring
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog, read_events
-from senselab_core.runtime.execution.executor import WorkersBroken
+from senselab_core.runtime.execution.executor import WorkersBroken, follow
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.pool import Pool
 from senselab_core.runtime.execution.pool_worker import serve_pool
@@ -170,14 +170,19 @@ class Recording:
         self.handles = [h for h in self.handles if h.id not in gone]
 
 
-def _queued(
+def _queued(  # noqa: PLR0913 - the plan's shape, then where it is queued
     profile: ExecutionProfile,
     tmp_path: Path,
     items: int,
     model: bool = False,
     substrate: Any = None,  # noqa: ANN401
+    scaled: bool = False,
 ) -> tuple[Plan, Pool, Recording]:
-    """Return a plan of `items` jobs, one fragment per job on a pool over `substrate` (a recording one by default)."""
+    """Return a plan of `items` jobs, one fragment per job, and a pool over `substrate` (a recording one by default).
+
+    The fragments are submitted through a closed pool over `ExternalWorkers`, so the pool returned has not scaled;
+    with `scaled` they are submitted through the pool returned, once its scaler has started workers.
+    """
     placed, values = planned(SCORE, profile, [f"t{i}" for i in range(items)])
     if model:
         models = {n: MODEL for n in placed.logical.models}
@@ -185,18 +190,29 @@ def _queued(
     run_dir = tmp_path / "run"
     recording = substrate if substrate is not None else Recording()
     epoch = Epoch(run_dir).take()
-    pool = Pool(
-        run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
-        store=ResultStore(tmp_path / "store"),
-        events=EventLog(run_dir, "a1", epoch, epoch=epoch),
-        profile=profile,
-        substrate=recording,
-        epoch=epoch,
-    )
-    admission = pool.admit(placed, values)
+
+    def pool_over(workers: Any) -> Pool:  # noqa: ANN401
+        return Pool(
+            run_dir,
+            queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+            store=ResultStore(tmp_path / "store"),
+            events=EventLog(run_dir, "a1", epoch, epoch=epoch),
+            profile=profile,
+            substrate=workers,
+            epoch=epoch,
+        )
+
+    pool = pool_over(recording)
+    feeder = pool if scaled else pool_over(ExternalWorkers())
+    admission = feeder.admit(placed, values)
     for element in range(items):
-        pool.submit(node_fragment(placed, admission, elements=[(element,)]))
+        feeder.submit(node_fragment(placed, admission, elements=[(element,)]))
+    if scaled:
+        deadline = time.monotonic() + 10
+        while not recording.starts and time.monotonic() < deadline:
+            time.sleep(0.01)
+    else:
+        feeder.close()
     return placed, pool, recording
 
 
@@ -340,7 +356,7 @@ def test_a_store_missing_a_primitive_or_delaying_too_long_is_refused(tmp_path: P
 def test_a_queue_is_named_by_class_and_resident_model(tmp_path: Path) -> None:
     """A node with a resident model queues on `<class>#<identity>`; scaling starts workers of that queue."""
     profile = _profile()
-    _, pool, recording = _queued(profile, tmp_path, 3, model=True)
+    _, pool, recording = _queued(profile, tmp_path, 3, model=True, scaled=True)
     assert pool.queues.names() == [f"cpu#{'c' * 40}"]
     assert recording.starts and {name for name, _ in recording.starts} == {f"cpu#{'c' * 40}"}
     assert class_of(f"cpu#{'c' * 40}") == "cpu" == class_of("cpu")
@@ -515,7 +531,7 @@ def test_a_pool_whose_workers_never_start_holds_its_jobs(tmp_path: Path) -> None
     placed, values = planned(SCORE, profile, ["one"])
     handle = pool.submit(node_fragment(placed, pool.admit(placed, values)))
     with pytest.raises(WorkersBroken, match="failed to start"):
-        list(pool.results(handle))
+        list(follow(pool, handle))
     assert "cpu" in pool.broken_workers and pool.queues.queue("cpu").depth() == 1
     pool.bind_epoch(pool.epoch + 1, EventLog(tmp_path / "run", "a2", pool.epoch + 1, epoch=pool.epoch + 1))
     assert pool._fleet.broken == {}  # noqa: SLF001 - the budget a new epoch resets
@@ -603,7 +619,7 @@ def test_a_transient_slurm_failure_is_retried_and_a_lasting_one_holds_the_run(tm
     placed, values = planned(SCORE, profile, ["one"])
     handle = pool.submit(node_fragment(placed, pool.admit(placed, values)))
     with pytest.raises(WorkersBroken) as held:
-        list(pool.results(handle))
+        list(follow(pool, handle))
     assert held.value.resource_class == "*" and pool.queues.queue("cpu").depth() == 1
 
 

@@ -1,5 +1,6 @@
 """The `Executor` protocol and the documents it carries: plan fragments in, result references out."""
 
+import time
 from collections.abc import Iterator, Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Protocol
@@ -270,8 +271,24 @@ class Executor(Protocol):
     def cancel(self, handle: Handle) -> None:
         """Stop the jobs of `handle` not yet run."""
 
-    def results(self, handle: Handle) -> Iterator[ResultRef]:
-        """Yield one result per job of `handle` as each finishes."""
-
     def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
         """Return the results of `handle` landed and not yet given, and whether every one is given; never wait."""
+
+
+def follow(executor: Executor, handle: Handle, *, first_s: float = 0.01, max_s: float = 1.0) -> Iterator[ResultRef]:
+    """Yield each result of `handle` as `executor.poll` gives it, until every one is given.
+
+    A poll that gives nothing is followed by a wait of `first_s`, doubling up to `max_s`; one that gives a result
+    resets it. Errors `poll` raises are raised here, after the results given before them.
+    """
+    pause = first_s
+    while True:
+        given, done = executor.poll(handle)
+        yield from given
+        if done:
+            return
+        if given:
+            pause = first_s
+        else:
+            time.sleep(pause)
+            pause = min(2 * pause, max_s)

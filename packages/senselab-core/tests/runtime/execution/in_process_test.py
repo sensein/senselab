@@ -47,7 +47,7 @@ from senselab_core.runtime.compare import Thresholds
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import SAMPLING
-from senselab_core.runtime.execution.executor import JobRef, PlanFragment, ResultRef, Status
+from senselab_core.runtime.execution.executor import JobRef, PlanFragment, ResultRef, Status, follow
 from senselab_core.runtime.execution.in_process import CallFailed, InProcess, node_fragment, process_workers
 from senselab_core.runtime.execution.job import Completed, Job, lost_race
 from senselab_core.runtime.execution.outputs import AmbiguousClock, OutputTypeMismatch
@@ -871,8 +871,10 @@ def test_fragment_is_a_document_and_results_reference_each_job(store: ResultStor
     assert fragment.jobs == (JobRef(plan_hash=placed.hash, node="call", element=(0,)),)
     handle = executor.submit(fragment)
     assert executor.status(handle) is Status.DONE
-    [ref] = executor.results(handle)
     [outcome] = executor.outcomes(handle)
+    [ref] = follow(executor, handle)
+    with pytest.raises(KeyError):
+        executor.status(handle)
     assert isinstance(outcome, Completed) and ref.job == fragment.jobs[0] and ref.failure is None
     assert ref.output_identity == outcome.result.output_identity
     assert ref.key_digest == outcome.result.key.digest()
@@ -922,13 +924,13 @@ def test_two_node_graph_run_by_hand_reads_upstream_outputs_from_the_store(store:
     with pytest.raises(ValueError, match="give its results"):
         node_fragment(placed, admission, "b")
     upstream = executor.submit(node_fragment(placed, admission, "a"))
-    refs = list(executor.results(upstream))
+    computed = [o.result for o in executor.outcomes(upstream) if isinstance(o, Completed)]
+    refs = list(follow(executor, upstream))
     fragment = node_fragment(placed, admission, "b", upstream={"a": refs})
     assert PlanFragment.model_validate_json(fragment.model_dump_json()) == fragment
     stored = {port_output_identity(r.key_digest, "value"): (r.key_digest, r.output_identity, "value") for r in refs}
     assert {i: (u.key_digest, u.outputs, u.port) for i, u in fragment.upstream.items()} == stored
     downstream = executor.outcomes(executor.submit(fragment))
-    computed = [o.result for o in executor.outcomes(upstream) if isinstance(o, Completed)]
     served = [o.result for o in downstream if isinstance(o, Completed)]
     assert [r.outputs["value"] for r in served] == [str(r.outputs["value"]) for r in computed]
     assert [r.key.inputs["value"] for r in served] == [port_output_identity(r.key.digest(), "value") for r in computed]
@@ -979,7 +981,7 @@ def test_an_output_identity_names_one_port(store: ResultStore) -> None:
         )
         placed = plan(graph, records, config=executor.run, execution=executor.profile)
         admission = executor.admit(placed, {bind_input("text", "json", "v")[0]: "v"})
-        [upstream] = executor.results(executor.submit(node_fragment(placed, admission, "a")))
+        [upstream] = follow(executor, executor.submit(node_fragment(placed, admission, "a")))
         [outcome] = executor.outcomes(
             executor.submit(node_fragment(placed, admission, "b", upstream={"a": [upstream]}))
         )
@@ -1005,7 +1007,7 @@ def _gathered_run(executor: InProcess, texts: tuple[str, ...]) -> tuple[list[Res
     records = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(texts)]
     placed = plan(graph, RecordSet(records), config=executor.run, execution=executor.profile)
     admission = executor.admit(placed, {bind_input("text", "json", t)[0]: t for t in texts})
-    refs = list(executor.results(executor.submit(node_fragment(placed, admission, "a"))))
+    refs = list(follow(executor, executor.submit(node_fragment(placed, admission, "a"))))
     fragment = node_fragment(placed, admission, "b", upstream={"a": refs})
     assert PlanFragment.model_validate_json(fragment.model_dump_json()) == fragment
     [outcome] = executor.outcomes(executor.submit(fragment))

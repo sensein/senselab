@@ -27,6 +27,7 @@ import os
 import threading
 import time
 import uuid
+import weakref
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -194,10 +195,12 @@ class _Followed:
 class Pool:
     """An `Executor` over the queues of the run in `run_dir`, its jobs run by pool workers a `substrate` starts.
 
-    `submit` puts a fragment on its queue unless a newer epoch than `epoch` was taken (`StaleCoordinator`); `results`
-    polls the item's outcome, from `profile.pool.first_poll_s` doubling up to `poll_s`, and applies each fault's
-    effect. An admission holds the plan only: workers bind graph inputs from the run's `inputs.json`. `events` is the
-    log of `epoch`'s attempt; an env's infrastructure failures are counted from that epoch's events on disk.
+    `submit` puts a fragment on its queue unless a newer epoch than `epoch` was taken (`StaleCoordinator`); `poll`
+    reads its items' outcomes once, never waiting, and applies each fault's effect. One scaler thread, started by the
+    first submit and stopped by `close`, sizes the substrate's workers once per `pool.poll_s` while a fragment is
+    followed, and at once after each submit or retry; nothing else scales. An admission holds the plan only: workers
+    bind graph inputs from the run's `inputs.json`. `events` is the log of `epoch`'s attempt; an env's infrastructure
+    failures are counted from that epoch's events on disk.
 
     Attributes:
         broken: Each env this pool reported broken, once.
@@ -236,7 +239,11 @@ class Pool:
         self.broken_workers: dict[str, BrokenClass] = {}
         self._surplus: dict[str, float] = {}
         self._relogged: set[str] = set()
-        self._scaled = float("-inf")
+        self._scaler: threading.Thread | None = None
+        self._scale_wake = threading.Event()
+        self._closing = False
+        self._scaling = False
+        self._fenced: tuple[float, int] | None = None
         self.bind_epoch(epoch, events)
         self.broken: dict[str, BrokenEnv] = {}
         self.gaps: list[tuple[JobRef, FaultRecord]] = []
@@ -284,13 +291,21 @@ class Pool:
                 self._plans.pop(admission.id, None)
                 del self._admitted[admission.id]
 
-    def _fence(self) -> None:
-        current = self._epochs.current()
+    def _fence(self, *, recent: bool = False) -> None:
+        """Raise `StaleCoordinator` once a newer epoch is taken; `recent` reuses a read younger than `first_poll_s`."""
+        now, fenced = time.monotonic(), self._fenced
+        if recent and fenced is not None and now - fenced[0] < self.profile.pool.first_poll_s:
+            current = fenced[1]
+        else:
+            current = self._epochs.current()
+            self._fenced = (now, current)
         if current > self.epoch:
             raise StaleCoordinator(self.epoch, current)
 
     def _put(self, fragment: PlanFragment) -> list[_Flight]:
-        """Put `fragment` on its queue as its items (`split`) and have them served; refused by a newer epoch or a hold.
+        """Put `fragment` on its queue as its items (`split`); refused by a newer epoch or a hold.
+
+        The caller wakes the scaler (`_wake_scaler`) once it follows the items.
 
         Raises:
             StaleCoordinator: a newer epoch was taken.
@@ -306,7 +321,6 @@ class Pool:
         request = node_request_size(self._admitted_plan(fragment), fragment.node, fragment.placement)
         items = split(fragment, self.profile.pool.quantum_items, request)
         queue.put_all(items)
-        self._scale()
         return [_Flight(name, item_digest(item), item) for item in items]
 
     def _queue_name(self, fragment: PlanFragment) -> str:
@@ -316,16 +330,35 @@ class Pool:
         name = fragment.placement.resource_class
         return name if model is None else f"{name}#{model.identity}"
 
+    def _wake_scaler(self) -> None:
+        """Have the scaler thread size the workers now, starting it the first time."""
+        with self._lock:
+            if self._scaler is None and not self._closing:
+                rounds = (weakref.ref(self), self._scale_wake, self.profile.pool.poll_s)
+                self._scaler = threading.Thread(target=_scale_rounds, args=rounds, name="senselab-scaler", daemon=True)
+                self._scaler.start()
+        self._scale_wake.set()
+
+    def _open(self) -> bool:
+        """Return whether any followed fragment is neither ended nor cancelled."""
+        with self._lock:
+            return any(not (f.done or f.cancelled) for f in self._followed.values())
+
+    def _scale_round(self) -> None:
+        """Scale once; an error is logged and the next round tries again."""
+        try:
+            self._scale()
+        except Exception:
+            logger.exception("scaling the pool's workers failed; it is retried next round")
+
     def _scale(self) -> None:
-        """Have the substrate size its workers to the queues: at once the first time, then once per `pool.poll_s`.
+        """Have the substrate size its workers to the queues; only the scaler thread calls it, never re-entered.
 
         A failing substrate is retried next round and counted (`Fleet.fail_substrate`); once it keeps failing the
         run is held (`WorkersBroken`), never failed.
         """
-        now = time.monotonic()
-        if self._scaled != float("-inf") and now - self._scaled < self.profile.pool.poll_s:
-            return
-        self._scaled = now
+        assert threading.current_thread() is self._scaler and not self._scaling, "only the scaler thread scales"
+        self._scaling = True
         try:
             scale(self.queues, self._fleet, self.profile, surplus_since=self._surplus)
         except SlurmError as err:
@@ -333,6 +366,8 @@ class Pool:
             self._fleet.fail_substrate(err)
         else:
             self._fleet.substrate_ok()
+        finally:
+            self._scaling = False
 
     def _workers_broken(self, flight: _Flight) -> WorkersBroken | None:
         """Return the hold of `flight`'s queue by a broken class of workers, noting the break once."""
@@ -360,6 +395,7 @@ class Pool:
         handle = Handle(id=f"pool-{self.epoch}-{next(self._ids)}")
         with self._lock:
             self._followed[handle.id] = _Followed(flights)
+        self._wake_scaler()
         return handle
 
     def status(self, handle: Handle) -> Status:
@@ -379,28 +415,6 @@ class Pool:
         """Stop following `handle`: its items stay queued, for a later attempt to claim or read."""
         self._followed[handle.id].cancelled = True
 
-    def results(self, handle: Handle) -> Iterator[ResultRef]:
-        """Yield the result of each job of `handle` as its item's outcome is read, retrying faults by their class.
-
-        Items whose outcomes are read in one poll are taken in job order.
-
-        Raises:
-            KeyError: the handle is not this pool's.
-            StaleCoordinator: a newer epoch was taken while this pool waited.
-            QueueHeld: a job's env is held; the jobs not yielded wait in their queues.
-        """
-        pause = self.profile.pool.first_poll_s
-        while True:
-            given, done = self.poll(handle)
-            yield from given
-            if done:
-                return
-            if given:
-                pause = self.profile.pool.first_poll_s
-            else:
-                time.sleep(pause)
-                pause = min(2 * pause, self.profile.pool.poll_s)
-
     def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
         """Read the outcomes of `handle`'s items once, applying each fault's effect, and return the results landed.
 
@@ -415,8 +429,7 @@ class Pool:
         followed = self._followed[handle.id]
         if followed.cancelled or followed.done:
             return [], True
-        self._fence()
-        self._scale()
+        self._fence(recent=True)
         given: list[ResultRef] = []
         landed = [(f, r) for f in followed.flights if (r := self.queues.queue(f.queue).outcome(f.digest))]
         for flight, record in landed:
@@ -431,7 +444,13 @@ class Pool:
         return given, followed.done
 
     def close(self) -> None:
-        """Stop the workers the substrate started."""
+        """Stop the scaler thread, then the workers the substrate started."""
+        with self._lock:
+            self._closing = True
+            scaler = self._scaler
+        self._scale_wake.set()
+        if scaler is not None:
+            scaler.join()
         self._fleet.close()
 
     def _settle(self, followed: _Followed, flight: _Flight, record: Mapping[str, object]) -> Iterator[ResultRef]:
@@ -558,6 +577,7 @@ class Pool:
             update["placement"] = placement.model_dump(mode="json")
         retry = _jobs_of(flight.fragment, [index], **update)
         followed.flights.extend(self._put(retry))
+        self._wake_scaler()
         job, placed = retry.jobs[0], retry.placement
         key = self._key(retry, 0)
         self.events.record(
@@ -579,6 +599,20 @@ class Pool:
             staging.unlink()
         held = json.loads(path.read_text(encoding="utf-8"))
         return ResultRef(job=job, key_digest=key, failure=FaultRecord.model_validate(held["failure"]))
+
+
+def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float) -> None:
+    """Scale the pool `ref` names on each wake, and once per `poll_s` while it follows a fragment.
+
+    Ends once the pool is closed or collected; the pool is held only during a round.
+    """
+    woken = True
+    while (pool := ref()) is not None and not pool._closing:  # noqa: SLF001 - the pool's own scaler
+        if woken or pool._open():  # noqa: SLF001
+            pool._scale_round()  # noqa: SLF001
+        del pool
+        woken = wake.wait(poll_s)
+        wake.clear()
 
 
 def _gap(kind: str, message: str) -> FaultRecord:

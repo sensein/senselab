@@ -20,7 +20,7 @@ from senselab_core.runtime.call import RunConfig, bind_input
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
-from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment, QueueHeld, ResultRef
+from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment, QueueHeld, ResultRef, follow
 from senselab_core.runtime.execution.in_process import InProcess, job_key, node_fragment
 from senselab_core.runtime.execution.job import Failed, JobOutcome
 from senselab_core.runtime.execution.pool import DEAD_DIR, Pool, report, split
@@ -167,6 +167,7 @@ def test_scale_wants_a_worker_per_quantum_of_jobs(tmp_path: Path, cap: int | Non
     recording = Recording()
     _, _, pool, fragment = _submitted(tmp_path, profile, 200, recording)
     pool.submit(fragment)
+    pool.close()
     recording.handles.clear()
     scale(pool.queues, recording, profile)
     assert len(recording.handles) == expected
@@ -236,7 +237,7 @@ def test_results_join_the_items_in_job_order(tmp_path: Path) -> None:
     for claim in reversed(_claim_all(pool.queues.queue("cpu"))):
         with claim:
             report(claim, claim.items[0], _executed(placed, values, pool.store, claim.fragments[0]))
-    refs = list(pool.results(handle))
+    refs = list(follow(pool, handle))
     assert [r.job for r in refs] == list(fragment.jobs) and all(r.failure is None for r in refs)
 
 
@@ -250,7 +251,7 @@ def test_a_content_fault_in_one_item_fails_only_its_jobs(tmp_path: Path) -> None
         outcomes = _failed(placed, item, CONTENT) if index == 1 else _executed(placed, values, pool.store, item)
         with claim:
             report(claim, claim.items[0], outcomes)
-    refs = {r.job: r for r in pool.results(handle)}
+    refs = {r.job: r for r in follow(pool, handle)}
     assert [j for j, r in refs.items() if r.failure is not None] == list(fragment.jobs[2:4])
     assert all(refs[j].failure == CONTENT for j in fragment.jobs[2:4])
     assert pool.queues.queue("cpu").depth() == 0
@@ -288,7 +289,7 @@ def test_a_resource_fault_moves_only_its_items_jobs(tmp_path: Path) -> None:
     placed, values, pool, fragment = _submitted(tmp_path, _profile(quantum=2, resource_replacements=1), 4)
     handle = pool.submit(fragment)
     _serve_by_item(pool, placed, values, OOM)
-    given = pool.results(handle)
+    given = follow(pool, handle)
     first = [next(given), next(given)]
     assert [r.job for r in first] == list(fragment.jobs[2:]) and all(r.failure is None for r in first)
     moved = _claim_all(pool.queues.queue("cpu:large"))
@@ -309,7 +310,7 @@ def test_a_broken_env_holds_only_the_jobs_of_its_failing_item(tmp_path: Path) ->
     _serve_by_item(pool, placed, values, LOST)
     given: list[ResultRef] = []
     with pytest.raises(QueueHeld):
-        given.extend(pool.results(handle))
+        given.extend(follow(pool, handle))
     assert [r.job for r in given] == list(fragment.jobs[2:]) and all(r.failure is None for r in given)
     assert list(pool.broken) == [fragment.placement.env] and not (tmp_path / "run" / DEAD_DIR).exists()
 
@@ -380,21 +381,26 @@ def test_a_fragment_of_ten_thousand_jobs_is_dumped_once_to_split(tmp_path: Path)
 class Gated(Recording):
     """A `Recording` whose `serve` thread runs the `cpu` queue's items once its gate opens, or after `wait_s`.
 
-    The gate opens once `want` workers were started. With `hold` set, items of that node are held and every other
-    item is served at once; the gate then opens once `want` workers are alive and `hold`'s jobs on the queue are
-    `held_jobs`, which `peak` records.
+    The gate opens once `want` workers were started (at once for 0). With `hold` set, items of that node are held and
+    every other item is served at once; the gate then opens once `want` workers are alive and `hold`'s jobs on the
+    queue are `held_jobs`, which `peak` records. Each `start` takes `delay` seconds, as a slow `sbatch` does.
     """
 
-    def __init__(self, want: int, wait_s: float, hold: str | None = None, held_jobs: int = 0) -> None:
+    def __init__(  # noqa: PLR0913 - the gate's settings
+        self, want: int, wait_s: float, hold: str | None = None, held_jobs: int = 0, delay: float = 0.0
+    ) -> None:
         """Serve once `want` workers were started (and `hold` has `held_jobs` queued), or after `wait_s` seconds."""
         super().__init__()
         self.started = 0
-        self.want, self.wait_s, self.hold, self.held_jobs = want, wait_s, hold, held_jobs
+        self.want, self.wait_s, self.hold, self.held_jobs, self.delay = want, wait_s, hold, held_jobs, delay
         self.opened = threading.Event()
+        if hold is None and want <= 0:
+            self.opened.set()
         self.peak = (0, 0)
 
     def start(self, resource_class: str, count: int) -> list[WorkerHandle]:
-        """Hold `count` pending workers and count them."""
+        """Hold `count` pending workers, after `delay` seconds, and count them."""
+        time.sleep(self.delay)
         made = super().start(resource_class, count)
         self.started += len(made)
         if self.hold is None and self.started >= self.want:
@@ -535,3 +541,68 @@ def test_a_cancel_stops_following_the_pool_at_once_and_leaves_its_items_queued(t
         _run_gated(tmp_path, profile, placed, values, gated, cancel)
     assert time.monotonic() - began < 10 and not gated.opened.is_set()
     assert queue.depth() == 20 and queue.work() == 200
+
+
+@pytest.mark.contract
+def test_a_slow_substrate_never_delays_settling(tmp_path: Path) -> None:
+    """With each start taking 8 s, a 60-job node whose items are served at once ends well before the start does."""
+    profile = _profile()
+    gated = Gated(want=0, wait_s=0.0, delay=8.0)
+    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(60)])
+    began = time.monotonic()
+    outcome = _run_gated(tmp_path, profile, placed, values, gated)
+    assert time.monotonic() - began < 6 and gated.started == 0
+    assert len(outcome.results["a"]) == 60 and all(r.failure is None for r in outcome.results["a"])
+
+
+@pytest.mark.contract
+def test_a_slow_substrate_never_delays_a_cancel(tmp_path: Path) -> None:
+    """With each start taking 20 s, a cancel set once the items are queued ends the run within its bound."""
+    runner = pytest.importorskip("senselab_core.runtime.execution.runner", exc_type=ImportError)
+    profile = _profile()
+    gated = Gated(want=10**6, wait_s=30.0, delay=20.0)
+    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(200)])
+    cancel = threading.Event()
+    queue = QueueSet(tmp_path / "run" / RUN_QUEUES, profile).queue("cpu")
+
+    def cancel_once_queued() -> None:
+        while True:
+            with contextlib.suppress(OSError):
+                if queue.depth() >= 20:
+                    break
+            time.sleep(0.01)
+        cancel.set()
+
+    threading.Thread(target=cancel_once_queued, daemon=True).start()
+    began = time.monotonic()
+    with pytest.raises(runner.RunCancelled):
+        _run_gated(tmp_path, profile, placed, values, gated, cancel)
+    assert time.monotonic() - began < 5 and queue.work() == 200
+
+
+@pytest.mark.logic
+def test_concurrent_submits_never_start_more_workers_than_the_target(tmp_path: Path) -> None:
+    """48 senders submit a 10-job fragment each at once; the class's 32 workers are started, never more."""
+    profile = _profile()
+    gated = Gated(want=10**6, wait_s=0.0, delay=0.05)
+    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(480)])
+    pool = _pool(tmp_path, profile, gated)
+    admission = pool.admit(placed, values)
+    fragments = [node_fragment(placed, admission, elements=[(i,) for i in range(s, s + 10)]) for s in range(0, 480, 10)]
+    barrier = threading.Barrier(len(fragments))
+
+    def send(fragment: PlanFragment) -> None:
+        barrier.wait()
+        pool.submit(fragment)
+
+    senders = [threading.Thread(target=send, args=(f,)) for f in fragments]
+    for sender in senders:
+        sender.start()
+    for sender in senders:
+        sender.join(30)
+    deadline = time.monotonic() + 10
+    while gated.started < 32 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    time.sleep(3 * profile.pool.poll_s)
+    pool.close()
+    assert pool.queues.queue("cpu").work() == 480 and gated.started == 32

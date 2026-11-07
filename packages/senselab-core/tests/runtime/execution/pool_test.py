@@ -20,7 +20,7 @@ from senselab_core.runtime.audio_io import open_audio
 from senselab_core.runtime.call import RunConfig, TaskCall
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import EventLog, read_events, run_dir_of, status_from
-from senselab_core.runtime.execution.executor import Admission, FaultRecord, PlanFragment, QueueHeld, ResultRef
+from senselab_core.runtime.execution.executor import Admission, FaultRecord, PlanFragment, QueueHeld, ResultRef, follow
 from senselab_core.runtime.execution.in_process import InProcess, job_key, node_fragment
 from senselab_core.runtime.execution.job import Failed, JobOutcome
 from senselab_core.runtime.execution.pool import Pool, larger_class, report
@@ -181,7 +181,7 @@ def _pool(
 
 def _all(pool: Pool, placed: Plan, values: Mapping[InputIdentity, object]) -> list[ResultRef]:
     fragment = node_fragment(placed, pool.admit(placed, values))
-    return list(pool.results(pool.submit(fragment)))
+    return list(follow(pool, pool.submit(fragment)))
 
 
 def _kinds(run_dir: Path) -> list[str]:
@@ -198,9 +198,9 @@ def test_two_coordinators_one_result_per_key(tmp_path: Path) -> None:
     second = _pool(tmp_path, store, workers, profile)
     late = second.submit(node_fragment(placed, second.admit(placed, values)))
     try:
-        refs = list(second.results(late))
+        refs = list(follow(second, late))
         with pytest.raises(StaleCoordinator):
-            list(first.results(early))
+            list(follow(first, early))
     finally:
         workers.stop()
     assert all(r.failure is None for r in refs) and len(refs) == 2 and len(workers.served) == 1
@@ -292,7 +292,7 @@ def test_broken_env_reported_once(tmp_path: Path) -> None:
     try:
         for handle in handles:
             with pytest.raises(QueueHeld) as raised:
-                list(pool.results(handle))
+                list(follow(pool, handle))
             assert (raised.value.queue, raised.value.failures) == ("cpu", 2)
     finally:
         workers.stop()
@@ -476,12 +476,12 @@ def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(tm
     live = _pool(tmp_path, store, workers, profile)
     late = live.submit(node_fragment(placed, live.admit(placed, values), elements=[(1,)]))
     with pytest.raises(StaleCoordinator):
-        list(stale.results(early))
+        list(follow(stale, early))
     queue.hold(stale.epoch, "host")
     assert queue.held("host") is None and not stale.broken
     workers.act = lambda fragment: None
     try:
-        [ref] = list(live.results(late))
+        [ref] = list(follow(live, late))
     finally:
         workers.stop()
     assert ref.failure is None and ref.job.element == (1,)
@@ -506,7 +506,7 @@ def test_an_env_broken_on_one_queue_is_held_on_another(tmp_path: Path) -> None:
         workers._serve(claim)  # noqa: SLF001 - served by hand, so both outcomes exist before either is read
     for handle, name in zip(handles, ("cpu", "cpu:large"), strict=True):
         with pytest.raises(QueueHeld) as raised:
-            list(pool.results(handle))
+            list(follow(pool, handle))
         assert (raised.value.queue, raised.value.env) == (name, "host")
         assert pool.queues.queue(name).held("host") == pool.epoch
     assert [e.kind for e in read_events(tmp_path / "run") if e.kind == "failed"] == ["failed"]
@@ -528,7 +528,7 @@ def test_a_result_under_another_jobs_key_is_never_yielded(tmp_path: Path) -> Non
     assert claim is not None
     forged = second.model_copy(update={"job": first.job})
     claim.commit(claim.items, {"jobs": [forged.model_dump(mode="json")]})
-    [got] = list(pool.results(handle))
+    [got] = list(follow(pool, handle))
     assert got.failure is not None and got.failure.type == "WrongKey" and got.failure.fault == "content"
     assert got.key_digest == first.key_digest != second.key_digest and got.output_identity is None
     assert (tmp_path / "other" / "run" / "dead" / f"{first.key_digest}.json").is_file()
@@ -547,8 +547,8 @@ def test_a_broken_env_holds_only_its_own_items(tmp_path: Path) -> None:
     broken = pool.submit(node_fragment(placed, admission, elements=[(0,)]))
     try:
         with pytest.raises(QueueHeld):
-            list(pool.results(broken))
-        [ref] = list(pool.results(pool.submit(other)))
+            list(follow(pool, broken))
+        [ref] = list(follow(pool, pool.submit(other)))
     finally:
         workers.stop()
     assert ref.failure is None and list(pool.broken) == ["host"]
@@ -579,7 +579,7 @@ def test_infrastructure_failures_are_counted_per_epoch_from_disk(tmp_path: Path)
 
 def _all_of(pool: Pool, placed: Plan, values: Mapping[InputIdentity, object], element: tuple[int, ...]) -> list[Any]:
     fragment = node_fragment(placed, pool.admit(placed, values), elements=[element])
-    return list(pool.results(pool.submit(fragment)))
+    return list(follow(pool, pool.submit(fragment)))
 
 
 @pytest.mark.contract
@@ -744,7 +744,7 @@ def test_the_expected_key_is_the_key_of_the_placement_sent(tmp_path: Path) -> No
     fragment = node_fragment(placed, pool.admit(placed, values))
     moved = fragment.model_copy(update={"placement": fragment.placement.model_copy(update={"backend": "alt"})})
     try:
-        [ref] = list(pool.results(pool.submit(moved)))
+        [ref] = list(follow(pool, pool.submit(moved)))
     finally:
         workers.stop()
     planned = job_key(placed, "a", fragment.inputs[0]).digest()

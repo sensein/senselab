@@ -381,10 +381,6 @@ class Delegating:
         """Cancel through `inner`."""
         self.inner.cancel(handle)
 
-    def results(self, handle: Handle) -> Iterator[ResultRef]:
-        """Yield the results `inner` gives."""
-        return self.inner.results(handle)
-
     def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
         """Poll through `inner`."""
         return self.inner.poll(handle)

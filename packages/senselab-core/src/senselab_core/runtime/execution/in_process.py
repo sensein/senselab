@@ -4,7 +4,7 @@ import atexit
 import itertools
 import threading
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import ClassVar
 
@@ -315,7 +315,6 @@ class InProcess:
         self._admissions: dict[str, tuple[Plan, dict[InputIdentity, object]]] = {}
         self._outcomes: dict[str, list[JobOutcome]] = {}
         self._status: dict[str, Status] = {}
-        self._polled: set[str] = set()
         self._ids = itertools.count()
 
     logs_claims: ClassVar[bool] = False
@@ -387,26 +386,16 @@ class InProcess:
     def cancel(self, handle: Handle) -> None:
         """Do nothing: every job of a fragment has run once `submit` returns its handle."""
 
-    def results(self, handle: Handle) -> Iterator[ResultRef]:
-        """Yield one result per job of `handle`, in the fragment's order.
-
-        Raises:
-            KeyError: the handle is not this executor's, or was forgotten.
-        """
-        for outcome in self.outcomes(handle):
-            yield result_ref(outcome)
-
     def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
-        """Return every result of `handle` the first time, none after; every one is given once `submit` returned.
+        """Return every result of `handle`, in the fragment's order, and forget the handle (`forget`).
 
         Raises:
             KeyError: the handle is not this executor's, or was forgotten.
         """
         with self._lock:
-            outcomes = self._outcomes[handle.id]
-            first = handle.id not in self._polled
-            self._polled.add(handle.id)
-        return ([result_ref(o) for o in outcomes] if first else []), True
+            outcomes = self._outcomes.pop(handle.id)
+            self._status.pop(handle.id, None)
+        return [result_ref(o) for o in outcomes], True
 
     def outcomes(self, handle: Handle) -> list[JobOutcome]:
         """Return the outcome of each job of `handle`, results and their outputs included, in the fragment's order.
@@ -422,7 +411,6 @@ class InProcess:
         with self._lock:
             self._outcomes.pop(handle.id, None)
             self._status.pop(handle.id, None)
-            self._polled.discard(handle.id)
 
     def call(self, call: TaskCall) -> Result:
         """Run `call`: plan it as one node under this executor's profile and run config, submit its one fragment.
