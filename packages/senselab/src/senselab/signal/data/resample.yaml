@@ -1,6 +1,7 @@
 stopband_attenuation_db: 80.0
 transition_fraction: 0.1
 max_block_elements: 4194304
+ripple_margin: 1.2
 derivations:
   kaiser: >-
     Window shape beta and length follow Kaiser's design formulas (Kaiser and Schafer 1980, IEEE Trans. ASSP 28(1)):
@@ -17,6 +18,11 @@ derivations:
     Nyquist (the stop-band edge) and starts below it, so a component that aliases lands at or above the
     pass-band edge and is attenuated by A. 0.1 keeps the pass band flat to 90 % of the lower Nyquist
     (14.4 kHz of 16 kHz audio resampled to 32 kHz) at about 16 000 taps for 44.1 to 48 kHz.
+  ripple_margin: >-
+    The factor by which the realised filter's worst ripple, in either band, may exceed the Kaiser target delta.
+    Kaiser's length and beta formulas are an approximation and `ceil` rounds the length up; measured on the
+    FFT of the taps of every pair of 8000, 11025, 16000, 22050, 32000, 44100 and 48000 Hz, the worst pass-band
+    deviation is 1.160 delta (16000 to 48000 Hz) and the worst stop-band peak 1.040 delta. 1.2 bounds both.
   max_block_elements: >-
     The most (channels x outputs x taps) values one gather holds at once, 2**22 float64 values (32 MiB):
     a memory bound that changes no output.
