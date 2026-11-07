@@ -133,3 +133,11 @@ idle_exit_s 600: ten minutes, twice the pool quantum, so a service outlives a co
 ### orcd.supervisor
 
 start_time_probe_s 5: as laptop; the longest `ps -o lstart= -p <pid>` may take when a supervisor reads a launched process's start time off Linux (Linux reads /proc/<pid>/stat field 22 and needs no bound). Over 200 calls on a 10-core laptop at load average 4.4 it took a median 2.9 ms and at most 4.8 ms (2026-11-07), so 5 s is about a thousand times the slowest call and only a hung or starved `ps` reaches it. A read that does is an unknown start time; the owner records it as unknown, and the keeper never kills a process whose start time is unknown at launch or at the end, so a bound set too low leaks a process at its owner's death rather than killing one that reused its pid. `lstart` has one-second resolution: a pid reused within the same second as the original start would match, which needs the pid space to wrap within a second.
+
+## test_slack
+
+`packages/senselab-core/tests/data/test_slack.yaml`, layered over the packaged orcd profile by the execution tests.
+
+### test_slack.substrate
+
+commands.timeout_s 1: the time the hang test gives a fake `sbatch` that queues its job and never answers. The fake is one Python process that writes its job with a single rename before it waits, so every positive value leaves exactly one job: killed before the rename it queued nothing and the retry queues one; killed after, the lookup finds its job. The value only decides whether the test exercises the second case, which needs the interpreter to start and rename within it. Starting the interpreter with the fake's imports took a median 24 ms and at most 28 ms over 50 runs on a 10-core laptop at load average 4.6 (2026-11-07); 1 s is about 35 times the slowest, and the test takes about that long. The same timeout bounds the fake `squeue` and `scancel`, which are the same interpreter start with no wait, so the same measurement covers them; a timed-out call there raises `SlurmError` and fails the test, which is the signal that the margin was wrong.
