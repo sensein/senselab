@@ -239,7 +239,7 @@ max-statements = 50
 # Complexity over the limits, pending a split: specs/.../review-register.md R-218.
 "scripts/profile_imports.py" = ["C901", "PLR0912", "PLR0915"]
 # Notebooks: cells share state but ruff lints per-cell, causing false positives
-"tutorials/**/*.ipynb" = ["F401", "F821", "E402", "I001", "F811", "ANN001", "ANN201", "D103"]
+"tutorials/**/*.ipynb" = ["F401", "F821", "E402", "I001", "F811", "ANN001", "ANN201", "D103", "PLC0415", "PLR2004"]
 
 [tool.ruff.format]
 exclude = ["scripts/**"]
