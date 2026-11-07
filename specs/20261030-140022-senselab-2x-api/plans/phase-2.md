@@ -34,9 +34,9 @@ extra of the root distribution for the one host backend, and per-backend uv lock
 `migration-ledger.md`; `review-register.md` rows owned by Phase 2; `rulings.md` H-R49..H-R59. Pre-flight findings
 (a-*, b-*, c-*, d-*, Table 1 #n, Table 2 rows) are resolved by rulings P2-33..P2-86.
 
-**Branches.** Code: `2x/phase-2` → `2.x` (worktree `~/software/sensein/senselab-2x-impl`). Spec changes, ADR
-amendments, register rows and `STATE.md`: `2x/phase-2-spec` → `2.x` (worktree `~/software/sensein/senselab-2x`;
-D-7). pydra: `~/software/nipype/pydra-ext`, per-PR branches merged into `enh/execution-extensions` (ruling P2-31).
+**Branches.** Code: `2x/phase-2` → `2.x` (worktree `${SOFTWARE_ROOT}/sensein/senselab-2x-impl`). Spec changes, ADR
+amendments, register rows and `STATE.md`: `2x/phase-2-spec` → `2.x` (worktree `${SOFTWARE_ROOT}/sensein/senselab-2x`;
+D-7). pydra: `${SOFTWARE_ROOT}/nipype/pydra-ext`, per-PR branches merged into `enh/execution-extensions` (ruling P2-31).
 
 ## Global Constraints
 
@@ -1000,7 +1000,7 @@ ruling P2-39. **Depends on:** Task 23a.
 
 ### pydra gate prerequisites (Tasks 24–31b)
 
-Work in `~/software/nipype/pydra-ext`. Each PR is a branch `enh/ee-<id>-<slug>` cut from pydra `main`, or from the
+Work in `${SOFTWARE_ROOT}/nipype/pydra-ext`. Each PR is a branch `enh/ee-<id>-<slug>` cut from pydra `main`, or from the
 branch it depends on; a **draft** PR to `nipype/pydra` `main` citing proposal 0001 (#891); merged into
 `enh/execution-extensions` once green so Phase 3 pins one commit (ruling P2-31). senselab takes no pydra dependency in
 Phase 2 (ruling P2-32). Tests: pydra's own CI on each draft PR, plus ORCD (CPU node3805) runs in a locked venv built

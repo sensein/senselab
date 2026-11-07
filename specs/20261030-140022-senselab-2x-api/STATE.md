@@ -12,7 +12,7 @@ task or decision changes state. Newest log entries go first.
 | Code (current) | `2x/phase-3`, cut from the head of `2x/phase-2` → `2.x` (P-27, ruling P3-5). Code and tests only. Phase 1 used `2x/phase-1` (PR #619). |
 | 2.x workflows | merged: #620 (on `alpha`, 1.x and 2.x workflows separated) and #621 (on `2.x`). Previews are at `sensein.group/senselab/2x/pr-<N>/`. |
 | 1.x | developed on `alpha`; freeze branch `freeze-1x-2026-10-30` → `19834fdd` (= `1.4.0-alpha.11`). |
-| pydra proposal | branch `enh/execution-extensions` → draft PR nipype/pydra#891; worktree `~/software/nipype/pydra-ext`. |
+| pydra proposal | branch `enh/execution-extensions` → draft PR nipype/pydra#891; worktree `${SOFTWARE_ROOT}/nipype/pydra-ext`. |
 
 ## Where the records are (this directory)
 

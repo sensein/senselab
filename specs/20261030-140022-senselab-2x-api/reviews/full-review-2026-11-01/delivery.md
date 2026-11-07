@@ -27,7 +27,7 @@ Counts: Critical 0, Important 6, Minor 7.
   - "ADR-001..009" (Document map). ADR-010 exists and the log omits it.
   - Phase row says "T0-T15a done ... H1-H8 before Phase 1 exit". The ledger shows H1-H10 done (H9a-f, H9-compat, H10), H11 test conformance queued, and CI green at 97b617c5. STATE does not mention H-R1..H-R52, #619, #620, #621, the `2.x` integration branch, H11, or the full review now running.
   - Log entry for 2026-11-01 stops at H-R50.
-  - Resume step 1 points at `~/software/sensein/senselab-2x` on `senselab-2x-api`, not the impl worktree on `2x/phase-1`, and gives personal paths (`~/software/...`) rather than a clone recipe.
+  - Resume step 1 points at `${SOFTWARE_ROOT}/sensein/senselab-2x` on `senselab-2x-api`, not the impl worktree on `2x/phase-1`, and gives personal paths (`${SOFTWARE_ROOT}/...`) rather than a clone recipe.
 - The ledger and STATE disagree, and STATE is the one a fresh session reads. Deviation. Correction: rewrite Where-things-are, Status, Next actions and How-to-resume from the current facts, and log H-R48..H-R52 and ADR-010.
 
 ### D-3. Plans and engineering.md still direct 2.x work to `alpha`
