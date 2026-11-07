@@ -20,7 +20,7 @@ from senselab_core.runtime.execution.executor import FaultRecord, JobRef, Upstre
 from senselab_core.runtime.execution.job import Completed, Failed, Job, JobOutcome, Upstream, execute
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.fake_backend import EchoParams
-from senselab_core.runtime.keys import Call, Placement, request_components, request_size
+from senselab_core.runtime.keys import Call, Placement, request_size
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.interpreter import source_tree_python
@@ -122,22 +122,11 @@ def test_request_components_match_request_sent(tmp_path: Path, sizes: list[int])
     """An invariant backend is sent requests of the batch size; each result names the formation it was sent in."""
     outcomes = _completed(_execute(_jobs("a", "b", "c"), INVARIANT, ResultStore(tmp_path), batch_size=2))
     assert sizes == [2, 1]
-    assert [o.result.placement.batch_formation for o in outcomes] == ["items:2", "items:2", "single"]
+    assert {o.result.placement.batch_formation for o in outcomes} == {"mixed"}
     assert {o.result.key.batch_formation for o in outcomes} == {None}
-    assert request_components(INVARIANT, 1)["batch_formation"] == "single"
-    assert (request_size(INVARIANT, 5), request_size(BATCHED, 5)) == (5, 1)
+    assert (request_size(INVARIANT, 5), request_size(BATCHED, 5)) == (5, 5)
     with pytest.raises(ValueError, match="at least one item"):
         request_size(INVARIANT, 0)
-
-
-@pytest.mark.logic
-def test_noninvariant_backend_sent_single_until_buckets(tmp_path: Path, sizes: list[int]) -> None:
-    """A backend that is not batch-invariant is sent one item per request whatever the batch size, keyed `single`."""
-    outcomes = _completed(_execute(_jobs("a", "b", "c"), BATCHED, ResultStore(tmp_path), batch_size=4))
-    assert sizes == [1, 1, 1]
-    assert {o.result.key.batch_formation for o in outcomes} == {"single"}
-    with pytest.raises(ValueError, match="one item per request"):
-        request_components(BATCHED, 2)
 
 
 @pytest.mark.logic

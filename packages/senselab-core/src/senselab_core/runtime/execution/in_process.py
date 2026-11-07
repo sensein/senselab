@@ -13,6 +13,7 @@ from senselab_core.kernel.graph import Edge, Node, order
 from senselab_core.kernel.identity import InputIdentity, LogicalKey, ReusePolicy, gather_identity
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.call import Result, RunConfig, TaskCall, bind_input, packaged
+from senselab_core.runtime.execution.batching import BucketGrid
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import (
     Admission,
@@ -24,12 +25,21 @@ from senselab_core.runtime.execution.executor import (
     Status,
     UpstreamRef,
 )
-from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, Upstream, execute
+from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, Upstream, execute, job_formation
 from senselab_core.runtime.execution.outputs import anchors_of
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.services import service_registry
 from senselab_core.runtime.execution.workers import WorkerSet, service_of
-from senselab_core.runtime.keys import Call, Placement, call_key, request_components, request_size
+from senselab_core.runtime.keys import (
+    BUCKET,
+    Call,
+    FormationUnknown,
+    Placement,
+    call_key,
+    fixed_formation,
+    request_components,
+    request_size,
+)
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
@@ -224,26 +234,67 @@ def _node_call(placed: Plan, node_id: str, registry: Registry) -> Call:
 
 
 def job_key(
-    placed: Plan, node: str, inputs: Mapping[str, InputIdentity], placement: NodePlacement | None = None
+    placed: Plan,
+    node: str,
+    inputs: Mapping[str, InputIdentity],
+    placement: NodePlacement | None = None,
+    *,
+    formation: str | None = None,
 ) -> LogicalKey:
     """Return the logical key `execute` gives the job of `node` of `placed` that reads `inputs`, sent on `placement`.
 
-    `placement` is the node's placement in the plan when None.
+    `placement` is the node's placement in the plan when None. `formation` is the job's batch formation
+    (`job_formation`), needed only when its length picks it.
 
     Raises:
-        ValueError: as `placement_of_record`, or the plan has no such node.
+        FormationUnknown: the job's length picks its formation and none is given.
+        ValueError: as `placement_of_record` or `request_components`, or the plan has no such node.
     """
     registry = packaged().registry
     call = replace(_node_call(placed, node, registry), inputs=dict(inputs))
     record = placed.placement.nodes[node] if placement is None else placement
     placed_on = placement_of_record(record, call.task, registry)
+    if formation is None and fixed_formation(placed_on.backend) is None:
+        raise FormationUnknown(f"node {node!r}: the batch formation of backend {placed_on.backend.name!r} is its job's")
     call = replace(call, service=service_of(placed_on.backend, call.model))
-    size = request_size(placed_on.backend, placed_on.batch_size)
-    return call_key(call, replace(placed_on, **request_components(placed_on.backend, size)))
+    return call_key(call, replace(placed_on, **request_components(placed_on.backend, formation)))
+
+
+def fragment_keys(
+    fragment: PlanFragment, placed: Plan, values: Mapping[InputIdentity, object], store: ResultStore
+) -> list[str]:
+    """Return the key digest `execute` gives each job of `fragment`.
+
+    A job whose length picks its formation is read from its graph-input `values` and its upstream entries in `store`.
+
+    Raises:
+        ValueError: as `job_key` or `fragment_jobs`.
+    """
+    registry, record = packaged().registry, fragment.placement
+    backend = placement_of_record(record, _node_call(placed, fragment.node, registry).task, registry).backend
+    if fixed_formation(backend) is not None:
+        return [job_key(placed, fragment.node, i, record).digest() for i in fragment.inputs]
+    jobs, _ = fragment_jobs(fragment, placed, values)
+    grid = BucketGrid.load_default()
+    return [
+        job_key(placed, fragment.node, i, record, formation=job_formation(j, backend, store, grid)).digest()
+        for i, j in zip(fragment.inputs, jobs, strict=True)
+    ]
+
+
+def job_checksum(placed: Plan, node: str, inputs: Mapping[str, InputIdentity]) -> str:
+    """Return the digest of the job's key (`job_key`), its bucket left out when its length picks its formation.
+
+    The bucket is a function of the inputs the key names, so the digest still names one job.
+    """
+    try:
+        return job_key(placed, node, inputs).digest()
+    except FormationUnknown:
+        return job_key(placed, node, inputs, formation=f"{BUCKET}:{BucketGrid.load_default().id}").digest()
 
 
 def node_request_size(placed: Plan, node: str, placement: NodePlacement | None = None) -> int:
-    """Return the jobs per request `execute` sends node `node` of `placed` on `placement` (the plan's when None).
+    """Return the most jobs per request `execute` sends node `node` of `placed` on `placement` (the plan's when None).
 
     Raises:
         ValueError: as `placement_of_record`, or the plan has no such node.
@@ -271,7 +322,8 @@ def plan_keys(placed: Plan) -> dict[tuple[str, tuple[int, ...]], str]:
     """Return the key digest of every job of `placed` by (node, element), as `job_key` gives it under the plan.
 
     An upstream input is identified by its upstream job's key digest and port, never by its outputs, so every key is
-    known before any job runs. A node with no job (mapped over no record) has no key.
+    known before any job runs. A node with no job (mapped over no record) has no key, nor does a node whose jobs'
+    lengths pick their formation, or any node below it.
     """
     admission = Admission(id="keys", plan_hash=placed.hash)
     keys: dict[tuple[str, tuple[int, ...]], str] = {}
@@ -283,8 +335,12 @@ def plan_keys(placed: Plan) -> dict[tuple[str, tuple[int, ...]], str]:
             fragment = node_fragment(placed, admission, node, upstream=refs)
         except ValueError:
             continue
-        for job, inputs in zip(fragment.jobs, fragment.inputs, strict=True):
-            key = job_key(placed, node, inputs).digest()
+        try:
+            known = [job_key(placed, node, inputs).digest() for inputs in fragment.inputs]
+        except FormationUnknown:
+            del refs[node]
+            continue
+        for job, key in zip(fragment.jobs, known, strict=True):
             keys[(node, job.element)] = key
             refs[node].append(ResultRef(job=job, key_digest=key, output_identity=unread))
     return keys
@@ -295,9 +351,9 @@ class InProcess:
 
     A fragment is submitted under an admission of its plan (`admit`), which holds the value of each graph-input
     identity its jobs name; an upstream input is read from the store.
-    Jobs are sent in requests of the placement's batch size (one item per request for a backend that is not
-    batch-invariant). `None` means the packaged default: the store under `cache_root()/results`, the `laptop`
-    profile, `RunConfig()` and this process's worker set for the profile (`process_workers`).
+    Jobs are sent in batches of at most the placement's batch size (`form_batches`). `None` means the packaged
+    default: the store under `cache_root()/results`, the `laptop` profile, `RunConfig()` and this process's worker
+    set for the profile (`process_workers`).
     """
 
     def __init__(

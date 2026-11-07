@@ -45,7 +45,7 @@ from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownMo
 from senselab_core.runtime.compare import Thresholds
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.hardware import HardwareInfo, probe_hardware
-from senselab_core.runtime.keys import Placement, request_components, request_size
+from senselab_core.runtime.keys import Placement, request_components
 from senselab_core.runtime.licenses import LicensePolicy, LockRecords, backend_license
 from senselab_core.runtime.models import resolve
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
@@ -314,8 +314,7 @@ def placement_of(task: str, model: ModelRef | None, execution: ExecutionProfile)
     spec = packaged().registry.spec(task)
     _, entry = _resolve_model(spec, model, execution, packaged().catalogue)
     placement = resolve_execution(spec, entry, execution, host_hardware(), packaged().registry, packaged().catalogue)
-    size = request_size(placement.backend, placement.batch_size)
-    return replace(placement, **request_components(placement.backend, size))
+    return replace(placement, **request_components(placement.backend))
 
 
 def _resolve_model(

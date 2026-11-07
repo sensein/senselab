@@ -20,7 +20,7 @@ from senselab_core.kernel.placement import Cost
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.hardware import HardwareInfo
-from senselab_core.runtime.keys import Placement, request_components, request_size
+from senselab_core.runtime.keys import Placement, request_components
 from senselab_core.runtime.licenses import LicensePolicy
 from senselab_core.runtime.profiles import ExecutionProfile, NoBackend, NoDevice, resolve_execution
 from senselab_core.runtime.resources import ResourceMeasure, ResourceRow
@@ -94,8 +94,7 @@ def place_nodes(
         except (NoBackend, NoDevice) as err:
             raise type(err)(f"node {node.id!r}: {err}") from err
         params = _params(node, placement.backend, registry)
-        size = request_size(placement.backend, placement.batch_size)
-        placed[node.id] = replace(placement, backend_params=params, **request_components(placement.backend, size))
+        placed[node.id] = replace(placement, backend_params=params, **request_components(placement.backend))
     return placed
 
 

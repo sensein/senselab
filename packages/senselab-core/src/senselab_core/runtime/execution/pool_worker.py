@@ -34,7 +34,7 @@ from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment
-from senselab_core.runtime.execution.in_process import fragment_jobs, job_key, process_workers
+from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, process_workers
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool import report, run_plan
 from senselab_core.runtime.execution.queue import Claim, QueueSet
@@ -328,7 +328,7 @@ class PoolWorker:
             except Exception as exc:  # noqa: BLE001 - an item that cannot be built fails with what it raised
                 dead[digest] = failure_of(exc)
                 continue
-            keys = [job_key(placed, fragment.node, i, fragment.placement).digest() for i in fragment.inputs]
+            keys = fragment_keys(fragment, placed, values, self.store)
             label = (fragment.plan_hash, fragment.node, fragment.placement.canonical_digest())
             run = placed.config or RunConfig(reuse=ReusePolicy(placed.logical.reuse))
             group = groups.setdefault(label, _Group(placement, run, []))

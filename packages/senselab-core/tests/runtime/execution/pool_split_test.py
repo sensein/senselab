@@ -21,7 +21,7 @@ from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment, QueueHeld, ResultRef, follow
-from senselab_core.runtime.execution.in_process import InProcess, job_key, node_fragment
+from senselab_core.runtime.execution.in_process import InProcess, fragment_keys, job_key, node_fragment
 from senselab_core.runtime.execution.job import Failed, JobOutcome
 from senselab_core.runtime.execution.pool import DEAD_DIR, Pool, report, split
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, Queue, QueueSet
@@ -258,18 +258,18 @@ def test_a_content_fault_in_one_item_fails_only_its_jobs(tmp_path: Path) -> None
 
 
 @pytest.mark.logic
-def test_a_non_invariant_backends_requests_are_never_split(tmp_path: Path) -> None:
-    """Its requests are one job each, so every item holds whole requests; each job lands in one item with its key."""
+def test_a_bucketed_backends_jobs_keep_their_keys_across_items(tmp_path: Path) -> None:
+    """A backend keying its batch formation is split like any other; each job lands in one item with its own key."""
     profile = _profile(quantum=3)
     with packaged(STRICT_REGISTRY, tmp_path / "strict"):
         placed, values = planned(STRICT, profile, [f"t{i}" for i in range(7)])
         pool = _pool(tmp_path, profile)
         fragment = node_fragment(placed, pool.admit(placed, values))
         backend = STRICT_REGISTRY.backends(STRICT.name)[0]
-        assert request_size(backend, fragment.placement.batch_size) == 1
+        assert request_size(backend, fragment.placement.batch_size) == fragment.placement.batch_size
         items = split(fragment, 3)
-        keys = [job_key(placed, i.node, inputs, i.placement).digest() for i in items for inputs in i.inputs]
-        whole = [job_key(placed, fragment.node, inputs, fragment.placement).digest() for inputs in fragment.inputs]
+        keys = [k for i in items for k in fragment_keys(i, placed, values, pool.store)]
+        whole = fragment_keys(fragment, placed, values, pool.store)
     assert [len(i.jobs) for i in items] == [3, 3, 1] and [j for i in items for j in i.jobs] == list(fragment.jobs)
     assert keys == whole and split(fragment, 7) == [fragment]
 

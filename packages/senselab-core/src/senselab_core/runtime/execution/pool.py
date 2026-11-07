@@ -50,7 +50,7 @@ from senselab_core.runtime.execution.executor import (
     Status,
     WorkersBroken,
 )
-from senselab_core.runtime.execution.in_process import job_key, node_request_size, result_ref
+from senselab_core.runtime.execution.in_process import fragment_keys, node_request_size, result_ref
 from senselab_core.runtime.execution.job import JobOutcome
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest
 from senselab_core.runtime.execution.substrates import (
@@ -160,7 +160,7 @@ def split(fragment: PlanFragment, quantum: int, request: int = 1) -> list[PlanFr
 
     `request` is the jobs per request of the fragment's backend (`node_request_size`). When it is at most `quantum`,
     every item but the last holds the most whole requests that fit, so no request is cut; a larger request is cut at
-    `quantum` jobs, which only a batch-invariant backend can have.
+    `quantum` jobs.
 
     Raises:
         ValueError: `quantum` or `request` is below 1.
@@ -255,7 +255,7 @@ class Pool:
         self.broken: dict[str, BrokenEnv] = {}
         self.gaps: list[tuple[JobRef, FaultRecord]] = []
         self._epochs = Epoch(self.run_dir)
-        self._plans: dict[str, Plan] = {}
+        self._plans: dict[str, tuple[Plan, Mapping[InputIdentity, object]]] = {}
         self._admitted: Counter[str] = Counter()
         self._followed: dict[str, _Followed] = {}
         self._ids = itertools.count()
@@ -276,8 +276,8 @@ class Pool:
         self.broken_workers.clear()
         self._relogged.clear()
 
-    def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:  # noqa: ARG002
-        """Hold `placed` until it is released as often as it was admitted; its id is the run's, `run-<plan hash>`.
+    def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:
+        """Hold `placed` and its graph-input `values` until released as often as admitted; its id is `run-<plan hash>`.
 
         Raises:
             ValueError: the plan was placed under another execution profile than this pool's.
@@ -286,7 +286,7 @@ class Pool:
             raise ValueError(f"plan {placed.hash} was placed under another execution profile than this pool's")
         admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
         with self._lock:
-            self._plans[admission.id] = placed
+            self._plans[admission.id] = (placed, values)
             self._admitted[admission.id] += 1
         return admission
 
@@ -325,15 +325,15 @@ class Pool:
         queue.unhold(before=self.epoch)
         if queue.held(env) is not None:
             raise QueueHeld(name, env, self._env_failures(env))
-        request = node_request_size(self._admitted_plan(fragment), fragment.node, fragment.placement)
+        request = node_request_size(self._admitted_plan(fragment)[0], fragment.node, fragment.placement)
         items = split(fragment, self.profile.pool.quantum_items, request)
         queue.put_all(items)
         return [_Flight(name, item_digest(item), item) for item in items]
 
     def _queue_name(self, fragment: PlanFragment) -> str:
         """Return the queue of `fragment`: its class, with `#<model identity>` for its node's resident model."""
-        placed = self._plans.get(fragment.admission)
-        model = placed.logical.models.get(fragment.node) if placed is not None else None
+        admitted = self._plans.get(fragment.admission)
+        model = admitted[0].logical.models.get(fragment.node) if admitted is not None else None
         name = fragment.placement.resource_class
         return name if model is None else f"{name}#{model.identity}"
 
@@ -382,8 +382,8 @@ class Pool:
             self.broken_workers[found.resource_class] = found
         if (flight.digest) not in self._relogged:
             self._relogged.add(flight.digest)
-            for index, job in enumerate(flight.fragment.jobs):
-                key = self._key(flight.fragment, index)
+            keys = self._keys(flight.fragment)
+            for job, key in zip(flight.fragment.jobs, keys, strict=True):
                 self.events.record("queued", job.node, job=job, key=key, env=flight.fragment.placement.env)
         return WorkersBroken(flight.queue, found.resource_class, found.failures, found.reason)
 
@@ -472,8 +472,8 @@ class Pool:
         jobs = record.get("jobs") if record.get("outcome") == "done" else None
         given = {r.job: r for r in (ResultRef.model_validate(j) for j in jobs)} if isinstance(jobs, list) else {}
         dead = FaultRecord.model_validate(record["fault"]) if record.get("outcome") == "dead" else None
-        for index, job in enumerate(fragment.jobs):
-            key = self._key(fragment, index)
+        keys = self._keys(fragment)
+        for index, (job, key) in enumerate(zip(fragment.jobs, keys, strict=True)):
             ref = given.get(job)
             if ref is not None and ref.key_digest != key:
                 fault = FaultRecord(
@@ -494,15 +494,14 @@ class Pool:
                 fault = dead or _gap("MissingResult", f"the outcome of the item gives no result for {job}")
             yield from self._effect(followed, flight, index, key, fault)
 
-    def _admitted_plan(self, fragment: PlanFragment) -> Plan:
-        placed = self._plans.get(fragment.admission)
-        if placed is None:
+    def _admitted_plan(self, fragment: PlanFragment) -> tuple[Plan, Mapping[InputIdentity, object]]:
+        admitted = self._plans.get(fragment.admission)
+        if admitted is None:
             raise ValueError(f"admission {fragment.admission} is not held by this pool")
-        return placed
+        return admitted
 
-    def _key(self, fragment: PlanFragment, index: int) -> str:
-        placed = self._admitted_plan(fragment)
-        return job_key(placed, fragment.node, fragment.inputs[index], fragment.placement).digest()
+    def _keys(self, fragment: PlanFragment) -> list[str]:
+        return fragment_keys(fragment, *self._admitted_plan(fragment), self.store)
 
     def _effect(  # noqa: PLR0913 - the followed fragment, the item and the job's failure
         self, followed: _Followed, flight: _Flight, index: int, key: str, fault: FaultRecord
@@ -585,7 +584,7 @@ class Pool:
         followed.flights.extend(self._put(retry))
         self._wake_scaler()
         job, placed = retry.jobs[0], retry.placement
-        key = self._key(retry, 0)
+        key = self._keys(retry)[0]
         self.events.record(
             "queued", job.node, job=job, key=key, placement_digest=placed.canonical_digest(), env=placed.env
         )

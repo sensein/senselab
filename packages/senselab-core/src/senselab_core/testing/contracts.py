@@ -50,7 +50,7 @@ from senselab_core.kernel.results import Intervals, TextSpans, Transcript, Trans
 from senselab_core.kernel.signals import PlainText
 from senselab_core.kernel.time import Span
 from senselab_core.kernel.wire import wire_form
-from senselab_core.runtime.keys import Call, Placement, build_key, request_components
+from senselab_core.runtime.keys import SINGLE, Call, Placement, build_key, fixed_formation, request_components
 from senselab_core.runtime.licenses import LockRecords, backend_license, check_license
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
@@ -291,7 +291,7 @@ def _backend_cases(
 
 
 def _output_affecting_produced(task: TaskSpec, backend: BackendSpec) -> None:
-    produced: dict[str, object] = dict(request_components(backend, 1))
+    produced: dict[str, object] = dict(request_components(backend, fixed_formation(backend) or SINGLE))
     missing = [c for c in backend.output_affecting if produced[c] is None]
     assert not missing, f"{backend.name!r} declares {missing} output-affecting, and no request produces a value for it"
     assert backend.batch_invariant or "batch_formation" in backend.output_affecting, (

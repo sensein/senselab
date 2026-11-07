@@ -61,41 +61,65 @@ def profile_slices(
     return cut
 
 
-SINGLE_ITEM = "single"
-"""The batch formation of a request holding one item."""
+SINGLE = "single"
+"""The batch formation of a request to a backend that is not batch-invariant and keys no bucket: one item."""
+
+MIXED = "mixed"
+"""The batch formation of a request to a batch-invariant backend: any items, never keyed."""
+
+BUCKET = "bucket"
+"""The prefix of a bucketed batch formation, `bucket:<grid id>:<index>`."""
+
+
+class FormationUnknown(ValueError):
+    """A job's key was asked for without its batch formation, which its inputs' length picks."""
 
 
 class RequestComponents(TypedDict):
     """The batch formation and chunk grid of a request sent to a backend."""
 
-    batch_formation: str
+    batch_formation: str | None
     chunk_grid: str | None
 
 
+def keys_bucket(backend: BackendSpec) -> bool:
+    """Whether `backend` is not batch-invariant and declares its batch formation output-affecting."""
+    return not backend.batch_invariant and "batch_formation" in backend.output_affecting
+
+
+def fixed_formation(backend: BackendSpec) -> str | None:
+    """Return the formation of every request to `backend`: `mixed`, `single`, or None when each job's length picks."""
+    if backend.batch_invariant:
+        return MIXED
+    return None if keys_bucket(backend) else SINGLE
+
+
 def request_size(backend: BackendSpec, batch_size: int) -> int:
-    """Return the items per request `backend` is sent under a placement of `batch_size`: 1 unless it is batch-invariant.
+    """Return the most items per request to `backend` under a placement of `batch_size`: 1 for formation `single`.
 
     Raises:
         ValueError: `batch_size` is below 1.
     """
     if batch_size < 1:
         raise ValueError(f"a request holds at least one item, got batch size {batch_size}")
-    return batch_size if backend.batch_invariant else 1
+    return 1 if fixed_formation(backend) == SINGLE else batch_size
 
 
-def request_components(backend: BackendSpec, request_size: int) -> RequestComponents:
-    """Return the batch formation and chunk grid of a request of `request_size` items sent to `backend`.
+def request_components(backend: BackendSpec, formation: str | None = None) -> RequestComponents:
+    """Return the batch formation and chunk grid of a request to `backend` of a batch of `formation` (`form_batches`).
 
-    One item is `single`, `n` items `items:<n>`; the chunk grid is the backend's.
+    `formation` omitted is the backend's `fixed_formation`. The chunk grid is the backend's.
 
     Raises:
-        ValueError: `request_size` is below 1, or above 1 for a backend that is not batch-invariant.
+        ValueError: `formation` is not one `backend` is sent in: `mixed` exactly when it is batch-invariant, a bucket
+            only when it keys one.
     """
-    if request_size < 1:
-        raise ValueError(f"a request holds at least one item, got {request_size}")
-    if request_size > 1 and not backend.batch_invariant:
-        raise ValueError(f"backend {backend.name!r} is not batch-invariant and is sent one item per request")
-    formation = SINGLE_ITEM if request_size == 1 else f"items:{request_size}"
+    if formation is None:
+        formation = fixed_formation(backend)
+    elif backend.batch_invariant != (formation == MIXED) or (
+        formation.startswith(f"{BUCKET}:") and not keys_bucket(backend)
+    ):
+        raise ValueError(f"backend {backend.name!r} is not sent batches of formation {formation!r}")
     return {"batch_formation": formation, "chunk_grid": backend.chunk_grid}
 
 
@@ -104,9 +128,10 @@ class Placement:
     """Where a call runs: the backend and its params, the device, the resource class, and how batches are formed.
 
     `batch_formation` and `chunk_grid` describe the placement whether or not the backend declares them
-    output-affecting. `env_root` is the directory the backend's env is built under (None for a host env),
-    `resource_class` the class of worker it runs on, `batch_size` the items per request, `partition` the scheduler
-    partition as the profile names it, and `why` the reason `explain` gives; none of these reaches a key.
+    output-affecting; `batch_formation` is None while each job's length picks it. `env_root` is the directory the
+    backend's env is built under (None for a host env), `resource_class` the class of worker it runs on, `batch_size`
+    the most items per request, `partition` the scheduler partition as the profile names it, and `why` the reason
+    `explain` gives; none of these reaches a key.
     """
 
     backend: BackendSpec

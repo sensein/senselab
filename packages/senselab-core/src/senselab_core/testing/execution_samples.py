@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from senselab_core.kernel.identity import Attestation, gather_identity
 from senselab_core.kernel.placement import NodePlacement
+from senselab_core.runtime.execution.batching import BucketGrid
 from senselab_core.runtime.execution.events import BrokenEnv, Event
 from senselab_core.runtime.execution.executor import (
     Admission,
@@ -41,6 +42,8 @@ def _placement() -> NodePlacement:
 
 def register_execution_samples(register: Register) -> None:
     """Register the samples of every type here through `register` (`values.register_samples`)."""
+    grids = (BucketGrid.load_default(), BucketGrid(id="g", edges_ns=(5,)))
+    register(BucketGrid, lambda: list(grids), invalid_updates=[{"id": ""}, {"edges_ns": ()}, {"edges_ns": (2, 1)}])
     jobs = (JobRef(plan_hash=_PLAN, node="n", element=(0,)), JobRef(plan_hash=_PLAN, node="n", element=(1,)))
     register(JobRef, lambda: list(jobs), invalid_updates=[{"plan_hash": "x"}, {"element": (-1,)}, {"node": "a.b"}])
     faults = (

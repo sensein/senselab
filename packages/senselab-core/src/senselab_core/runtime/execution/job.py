@@ -1,9 +1,8 @@
 """The one job engine: jobs keyed, served from the result store or sent to a worker, stored and recorded (`execute`).
 
-A key holds the batch formation of the request a job is actually sent in (`request_components`); a backend that is
-not batch-invariant is sent one item per request. A stored result is served under the run's reuse policy unless its
-env's license is refused, and a sampled cross-context hit is recomputed and compared instead. A failure is never
-stored.
+A key holds the batch formation of the request a job is sent in (`request_components`), which the job alone picks
+(`batching.formation`). A stored result is served under the run's reuse policy unless its env's license is refused,
+and a sampled cross-context hit is recomputed and compared instead. A failure is never stored.
 """
 
 import platform
@@ -17,7 +16,7 @@ from senselab_worker import WIRE_VERSION
 from senselab_worker.faults import error_record
 
 from senselab_core.kernel import prov as kprov
-from senselab_core.kernel.declare import InconsistentInputs
+from senselab_core.kernel.declare import BackendSpec, InconsistentInputs
 from senselab_core.kernel.identity import (
     Attestation,
     ExecutionContext,
@@ -33,6 +32,7 @@ from senselab_core.runtime import audio_io
 from senselab_core.runtime.call import Result, RunConfig, env_license, host_hardware, packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import sampled
+from senselab_core.runtime.execution.batching import BucketGrid, form_batches, formation, one_node
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, UpstreamRef
 from senselab_core.runtime.execution.outputs import (
     AmbiguousClock,
@@ -55,7 +55,7 @@ from senselab_core.runtime.execution.records import (
 from senselab_core.runtime.execution.records import verify_attributes as verify_settings
 from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, service_of
 from senselab_core.runtime.hardware import numerics_class
-from senselab_core.runtime.keys import Call, Placement, build_key, request_components, request_size
+from senselab_core.runtime.keys import Call, Placement, build_key, fixed_formation, request_components
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -138,12 +138,13 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     recomputed and compared before anything is stored. An upstream input is read from `store` by its output
     identity, and the inputs are checked against the task's constraints. A file-backed input is checked against its
     stamp (`audio_io.check`) before its job is keyed; a stale or missing one fails the job. The jobs not served are
-    sent in requests of `request_size` items through `workers`; each item's outputs are stored, and each execution
-    writes one activity associated with its agent (the model's source included), naming its job's node and plan.
+    sent in batches of at most `placement.batch_size` items (`form_batches`) through `workers`; each item's outputs
+    are stored, and each execution writes one activity associated with its agent (the model's source included),
+    naming its job's node and plan.
     An item the backend fails gives `Failed`.
 
     Raises:
-        ValueError: the jobs are not of one call; a server backend has no model.
+        ValueError: the jobs are not of one call or of one node; a server backend has no model.
         InconsistentInputs: a job's inputs contradict a constraint the task declares.
         AmbiguousClock: two recording inputs of one job's content carry different anchors.
         LicenseRefused: `run.licenses` refuses the license of the backend's env or of the model.
@@ -161,12 +162,12 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     env = packaged().open_env(backend, profile)
     expected = service_of(backend, call.model)
     jobs = [replace(j, call=replace(j.call, service=expected)) for j in jobs]
-    size = request_size(backend, placement.batch_size)
-    keyed = replace(placement, **request_components(backend, size))
+    grid = BucketGrid.load_default()
     outcomes: dict[int, JobOutcome] = {}
     pending: list[_Pending] = []
     for index, given in enumerate(jobs):
         job, unread = _resolved(given, store)
+        keyed = replace(placement, **request_components(backend, formation(job, backend, grid)))
         context = _context(keyed, env, expected, profile, job, code_license)
         stale = unread or _stale(job)
         key = build_key(job.call, keyed, context)
@@ -178,9 +179,10 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
             outcomes[index] = Completed(job.ref, served)
         else:
             pending.append(_Pending(index, job, context, hit))
-    for start in range(0, len(pending), size):
-        chunk = pending[start : start + size]
-        sent = replace(placement, **request_components(backend, len(chunk)))
+    by_job = {id(p.job): p for p in pending}
+    for batch in form_batches([p.job for p in pending], backend, batch_size=placement.batch_size, grid=grid):
+        chunk = [by_job[id(j)] for j in batch.jobs]
+        sent = replace(placement, **request_components(backend, batch.formation))
         began = datetime.now(timezone.utc)
         results = _send([p.job for p in chunk], sent, env, profile, workers, expected)
         for item, result in zip(chunk, results):
@@ -192,8 +194,9 @@ def _one_call(jobs: Sequence[Job]) -> Call:
     """Return the call every job shares but for its inputs.
 
     Raises:
-        ValueError: two jobs differ in task, params, model or profile slices.
+        ValueError: two jobs differ in node, task, params, model or profile slices.
     """
+    one_node(jobs)
     head = jobs[0].call
     for job in jobs[1:]:
         c = job.call
@@ -205,6 +208,17 @@ def _one_call(jobs: Sequence[Job]) -> Call:
         ):
             raise ValueError(f"the jobs of one execution are of one call; {job.ref} differs from {jobs[0].ref}")
     return head
+
+
+def job_formation(job: Job, backend: BackendSpec, store: ResultStore, grid: BucketGrid) -> str:
+    """Return the formation `execute` keys `job` under in `grid`, reading its upstream inputs from `store` if needed.
+
+    A job whose inputs cannot be read or break the task's constraints is formed over the inputs it holds, as
+    `execute` forms it.
+    """
+    if fixed_formation(backend) is None and job.upstream:
+        job = _resolved(job, store)[0]
+    return formation(job, backend, grid)
 
 
 def _code_license(run: RunConfig, placement: Placement, call: Call) -> License | None:

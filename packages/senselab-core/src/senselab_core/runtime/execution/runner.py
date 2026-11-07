@@ -3,7 +3,7 @@
 `compile_plan` turns a plan into a pydra workflow: a `records` node split over the manifest's rows, one node per
 graph node (a `map` edge reads the row, so every mapped node shares the one record axis, and a node with several
 mapped upstreams is split over them zipped), and, for each node a `gather` edge reads, a copy of it combined over the
-rows. Each node's checksum is the job's senselab key digest (`job_key`), so pydra hashes no senselab code.
+rows. Each node's checksum is the job's senselab key digest (`job_checksum`), so pydra hashes no senselab code.
 `ExecutorWorker` runs pydra's jobs: it sends a node's ready elements to the `Executor` as fragments of the placement's
 batch size (`node_fragment`), or as one fragment to an executor that splits fragments, and raises on a failed
 element, so pydra fails only that element's descendants. A fragment is submitted and returns at once; one `Follower`
@@ -47,7 +47,7 @@ from senselab_core.runtime.execution.executor import (
     QueueHeld,
     ResultRef,
 )
-from senselab_core.runtime.execution.in_process import job_key, node_fragment, plan_keys
+from senselab_core.runtime.execution.in_process import job_checksum, node_fragment, plan_keys
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.planner import Plan, check_mapped_outputs
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -180,7 +180,7 @@ def _refs(value: object) -> list[ResultRef]:
 
 
 class _NodeKey:
-    """The checksum of a compiled node's job: its senselab key digest, from the identities its inputs resolve to."""
+    """The checksum of a compiled node's job (`job_checksum`), from the identities its inputs resolve to."""
 
     def __init__(self, placed: Plan, node: str) -> None:
         """Key jobs of `node` of `placed`."""
@@ -204,8 +204,8 @@ class _NodeKey:
         return found
 
     def checksum(self, inputs: Mapping[str, object]) -> str:
-        """Return the digest of the job's logical key (`job_key`)."""
-        return job_key(self.placed, self.node, self.identities(inputs)).digest()
+        """Return the job's `job_checksum`."""
+        return job_checksum(self.placed, self.node, self.identities(inputs))
 
 
 def _node_checksum(key: _NodeKey) -> Callable[[object, Mapping[str, object]], str]:
