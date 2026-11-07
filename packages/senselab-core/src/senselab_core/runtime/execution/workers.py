@@ -347,21 +347,55 @@ class WorkerSet:
                     with self._lock:
                         self._servers.pop(key, None)
                     self._retire(key, server)
-            registry = self._registry
-            if registry is not None and not self._provide and registry.lookup(expected) is not None:
-                server = registry.consume(expected)
-            else:
-                server = self._started(backend, env, model, profile, expected)
-                if self._provide:
-                    assert registry is not None and server.url is not None
-                    try:
-                        self._provided[key] = registry.register(expected, server.url)
-                    except BaseException:
-                        server.stop()
-                        raise
+            server = self._consumed(expected) if not self._provide else None
+            if server is None:
+                server = self._provided_server(key, backend, env, model, profile, expected)
             with self._lock:
                 self._servers[key] = server
             return server
+
+    def _consumed(self, expected: Attestation) -> Server | None:
+        """Return a consumer lease on a live registered service attesting `expected`; None without one."""
+        if self._registry is None:
+            return None
+        consumer = self._registry.consume(expected)
+        if self._registry.lookup(expected) is None:
+            consumer.stop()
+            return None
+        return consumer
+
+    def _provided_server(  # noqa: PLR0913 - the server's key and what starts it
+        self,
+        key: tuple[str, str, str],
+        backend: BackendSpec,
+        env: EnvHandle,
+        model: ResolvedModel,
+        profile: ExecutionProfile,
+        expected: Attestation,
+    ) -> Server:
+        """Start the server; a providing set reserves its registration first and publishes it once started.
+
+        Raises:
+            LeaseTimeout: another live registration of `expected` exists; nothing was started.
+        """
+        if not self._provide:
+            return self._started(backend, env, model, profile, expected)
+        assert self._registry is not None
+        service = self._registry.reserve(expected)
+        try:
+            server = self._started(backend, env, model, profile, expected)
+            try:
+                assert server.url is not None
+                service.publish(server.url)
+            except BaseException:
+                server.stop()
+                raise
+        except BaseException:
+            service.close()
+            raise
+        with self._lock:
+            self._provided[key] = service
+        return server
 
     def _started(
         self,

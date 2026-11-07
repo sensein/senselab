@@ -13,11 +13,13 @@ A consumer (`ConsumerLease`) sends each request to the entry's endpoint and chec
 """
 
 import contextlib
+import http.client
 import logging
 import math
 import re
 import socket
 import time
+import urllib.error
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -97,24 +99,37 @@ class ServiceRegistry:
         age = self._lease(resource, 0).age()
         return age is not None and age <= self.lease.stale_after_s
 
+    def reserve(self, identity: Attestation) -> "ServiceLease":
+        """Take the registration lease of `identity`, renewed until the `ServiceLease` closes, and publish nothing yet.
+
+        An entry a dead holder left is removed, so no entry is live until `ServiceLease.publish`.
+
+        Raises:
+            LeaseTimeout: a live registration of this identity exists.
+        """
+        name = self.name(identity)
+        lease, stack, state = self._kept(self.root / name)
+        try:
+            (self.root / f"{name}.json").unlink(missing_ok=True)
+        except BaseException:
+            stack.close()
+            raise
+        return ServiceLease(self, identity, lease, stack, state)
+
     def register(self, identity: Attestation, endpoint: str) -> "ServiceLease":
-        """Register the server attesting `identity` at `endpoint` under a lease renewed until the `ServiceLease` closes.
+        """Register the server attesting `identity` at `endpoint`: `reserve`, then `ServiceLease.publish`.
 
         Raises:
             LeaseTimeout: a live registration of this identity exists.
             LeaseUnavailable: the lease was lost before the entry was written.
         """
-        name = self.name(identity)
-        lease, stack, state = self._kept(self.root / name)
+        service = self.reserve(identity)
         try:
-            entry = ServiceEntry(identity=identity, endpoint=endpoint)
-            if state.lost or not lease.prove():
-                raise LeaseUnavailable(lease.path, f"the service lease {lease.path} was lost before it registered")
-            write_atomically(self.root / f"{name}.json", entry.model_dump_json().encode())
+            service.publish(endpoint)
         except BaseException:
-            stack.close()
+            service.close()
             raise
-        return ServiceLease(self, entry, lease, stack, state)
+        return service
 
     def lookup(self, identity: Attestation) -> ServiceEntry | None:
         """Return the entry of the service attesting `identity`, None unless it is registered under a live lease."""
@@ -153,25 +168,44 @@ class ServiceRegistry:
 
 
 class ServiceLease:
-    """A registered service: its entry, kept live by its lease's renewer until `close`.
+    """A service's registration of `identity`, kept by its lease's renewer until `close`; its entry once published.
 
     Attributes:
-        entry: The registered entry.
+        identity: What the service attests.
+        entry: The published entry; None until `publish`.
         state: The lease's renewer state; once it is lost the entry is not live.
     """
 
     def __init__(
         self,
         registry: ServiceRegistry,
-        entry: ServiceEntry,
+        identity: Attestation,
         lease: Lease,
         stack: contextlib.ExitStack,
         state: LeaseState,
     ) -> None:
-        """Hold the registration of `entry` by `lease`, released by `stack`; consumed as of now."""
-        self.registry, self.entry, self.state = registry, entry, state
+        """Hold the registration of `identity` by `lease`, released by `stack`; consumed as of now."""
+        self.registry, self.identity, self.state = registry, identity, state
+        self.entry: ServiceEntry | None = None
         self._lease, self._stack = lease, stack
         self._consumed = time.monotonic()
+
+    def publish(self, endpoint: str) -> ServiceEntry:
+        """Write the entry `{identity, endpoint}` while the lease is proven held; consumed as of now.
+
+        Raises:
+            LeaseUnavailable: the lease was lost.
+        """
+        entry = ServiceEntry(identity=self.identity, endpoint=endpoint)
+        if self.state.lost or not self._lease.prove():
+            raise LeaseUnavailable(
+                self._lease.path, f"the service lease {self._lease.path} was lost before it published"
+            )
+        write_atomically(
+            self.registry.root / f"{self.registry.name(self.identity)}.json", entry.model_dump_json().encode()
+        )
+        self.entry, self._consumed = entry, time.monotonic()
+        return entry
 
     def touch(self) -> None:
         """Count the service as consumed now: its own worker ran jobs on it."""
@@ -184,14 +218,14 @@ class ServiceLease:
         """
         if self.state.lost:
             return math.inf
-        if self.registry.live_consumers(self.entry.identity):
+        if self.registry.live_consumers(self.identity):
             self._consumed = time.monotonic()
         return time.monotonic() - self._consumed
 
     def close(self) -> None:
         """Remove the entry while the lease still holds it, then release the lease; safe to call twice."""
         if self._lease.owns() and self._lease.prove():
-            (self.registry.root / f"{self.registry.name(self.entry.identity)}.json").unlink(missing_ok=True)
+            (self.registry.root / f"{self.registry.name(self.identity)}.json").unlink(missing_ok=True)
         self._stack.close()
 
 
@@ -214,7 +248,7 @@ class ConsumerLease:
 
     @property
     def attestation(self) -> Attestation | None:
-        """The service's identity; None once stopped."""
+        """The identity consumed; None once stopped. The provider registers only a server that attests it."""
         return None if self._stopped else self.identity
 
     @property
@@ -240,7 +274,12 @@ class ConsumerLease:
 
     def _request(self, send: Callable[[str], Any]) -> Attested:
         entry = self._entry()
-        body = send(entry.endpoint)
+        try:
+            body = send(entry.endpoint)
+        except urllib.error.HTTPError:
+            raise
+        except (OSError, http.client.HTTPException) as exc:
+            raise StaleAttestation(f"the service of {self.label} did not answer: {type(exc).__name__}") from exc
         if self._entry().endpoint != entry.endpoint:
             raise StaleAttestation(f"the service of {self.label} was replaced while it answered")
         return attest_reply(body, self.identity, self.label)
@@ -249,7 +288,9 @@ class ConsumerLease:
         """`chat` with the service's model; the reply carries the service's attestation.
 
         Raises:
-            StaleAttestation: the entry is not live, was replaced, or the reply names another model.
+            StaleAttestation: the entry is not live, was replaced, the server did not answer, or the reply names
+                another model.
+            urllib.error.HTTPError: the server refused the request.
         """
         return self._request(lambda url: chat(url, self.identity.served_model, messages, sampling=sampling))
 
@@ -257,7 +298,9 @@ class ConsumerLease:
         """`complete` with the service's model; the reply carries the service's attestation.
 
         Raises:
-            StaleAttestation: the entry is not live, was replaced, or the reply names another model.
+            StaleAttestation: the entry is not live, was replaced, the server did not answer, or the reply names
+                another model.
+            urllib.error.HTTPError: the server refused the request.
         """
         return self._request(lambda url: complete(url, self.identity.served_model, prompt_token_ids, sampling=sampling))
 

@@ -5,6 +5,7 @@ import os
 import platform
 import threading
 import time
+import urllib.error
 import uuid
 from collections.abc import Iterator
 from dataclasses import replace
@@ -51,11 +52,15 @@ CHAT = [{"role": "user", "content": "hi"}]
 
 
 class StandIn:
-    """A stdlib HTTP server answering chat requests as `reply_model`; a `workers.Server` attesting `identity`."""
+    """A stdlib HTTP server answering chat requests as `reply_model`; a `workers.Server` attesting `identity`.
+
+    With `drop` it closes each connection unanswered, as a server dying mid-request; with `status` it refuses it.
+    """
 
     def __init__(self, identity: Attestation) -> None:
         """Listen on a free loopback port."""
         self.label, self.identity, self.reply_model = identity.served_model, identity, identity.served_model
+        self.drop, self.status = False, 200
         stand_in = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -64,8 +69,11 @@ class StandIn:
 
             def do_POST(self) -> None:  # noqa: N802 - the http.server hook name
                 self.rfile.read(int(self.headers["Content-Length"]))
+                if stand_in.drop:
+                    self.close_connection = True
+                    return
                 body = json.dumps({"model": stand_in.reply_model, "choices": [{"message": {"content": "ok"}}]})
-                self.send_response(200)
+                self.send_response(stand_in.status)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body.encode())
@@ -262,3 +270,76 @@ def test_a_dead_consumer_counts_until_its_lease_is_stale(registry: ServiceRegist
     for path in (token, token.parent):
         os.utime(path, (past, past))
     assert registry.live_consumers(IDENTITY) == 0 and list(consumers.iterdir()) == []
+
+
+def test_two_providers_racing_start_one_server(registry: ServiceRegistry) -> None:
+    """Two providing sets of one identity: one reserves, starts and publishes; the other starts nothing."""
+    starts: list[StandIn] = []
+    barrier = threading.Barrier(2)
+
+    def start(backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profile: ExecutionProfile) -> StandIn:  # noqa: ARG001 - a ServerStart
+        time.sleep(PROFILE.lease.stale_after_s / 4)
+        starts.append(StandIn(IDENTITY))
+        return starts[-1]
+
+    providers = [WorkerSet(1, start_server=start, registry=registry, provide=True) for _ in range(2)]
+    outcomes: list[object] = []
+
+    def provide(workers: WorkerSet) -> None:
+        barrier.wait()
+        try:
+            outcomes.append(workers.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY))
+        except LeaseTimeout as busy:
+            outcomes.append(busy)
+
+    threads = [threading.Thread(target=provide, args=(p,)) for p in providers]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert len(starts) == 1 and sum(isinstance(o, LeaseTimeout) for o in outcomes) == 1
+        assert registry.lookup(IDENTITY) == ServiceEntry(identity=IDENTITY, endpoint=str(starts[0].url))
+    finally:
+        for workers in providers:
+            workers.close()
+        for server in starts:
+            server.stop()
+
+
+def test_a_reservation_withdraws_a_dead_holders_entry(registry: ServiceRegistry) -> None:
+    """Taking over a dead holder's registration removes its entry before the new one is published."""
+    name = registry.name(IDENTITY)
+    registry.root.mkdir(parents=True)
+    (registry.root / f"{name}.json").write_text(
+        ServiceEntry(identity=IDENTITY, endpoint="http://dead").model_dump_json()
+    )
+    token = registry.root / f"{name}.lease" / uuid.uuid4().hex
+    token.mkdir(parents=True)
+    past = time.time() - 10 * PROFILE.lease.stale_after_s
+    for path in (token, token.parent):
+        os.utime(path, (past, past))
+    service = registry.reserve(IDENTITY)
+    try:
+        assert registry.lookup(IDENTITY) is None and not (registry.root / f"{name}.json").exists()
+        service.publish("http://127.0.0.1:4")
+        assert registry.lookup(IDENTITY) == ServiceEntry(identity=IDENTITY, endpoint="http://127.0.0.1:4")
+    finally:
+        service.close()
+
+
+def test_a_server_dying_mid_request_is_a_stale_attestation(registry: ServiceRegistry, starts: list[StandIn]) -> None:
+    """A connection the server drops is `StaleAttestation`; a request it refuses stays its HTTP error."""
+    starts.append(StandIn(IDENTITY))
+    service = registry.register(IDENTITY, str(starts[0].url))
+    consumer = registry.consume(IDENTITY)
+    try:
+        starts[0].drop = True
+        with pytest.raises(StaleAttestation, match="did not answer"):
+            consumer.chat(CHAT, sampling={})
+        starts[0].drop, starts[0].status = False, 400
+        with pytest.raises(urllib.error.HTTPError):
+            consumer.chat(CHAT, sampling={})
+    finally:
+        consumer.stop()
+        service.close()
