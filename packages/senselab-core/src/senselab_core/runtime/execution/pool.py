@@ -58,8 +58,8 @@ from senselab_core.runtime.execution.substrates import (
     BrokenClass,
     Fleet,
     Slurm,
-    SlurmError,
     Substrate,
+    SubstrateError,
     scale,
 )
 from senselab_core.runtime.planner import Plan, check_storage
@@ -228,13 +228,12 @@ class Pool:
         """
         self.run_dir = Path(run_dir)
         self.queues, self.store, self.profile, self.substrate = queues, store, profile, substrate
-        pool_settings = profile.pool
         self._fleet = Fleet(
             substrate,
             workers_dir=self.run_dir / WORKERS_DIR,
             budget=profile.faults.infrastructure_replacements,
-            first_s=pool_settings.first_poll_s,
-            max_s=pool_settings.poll_s,
+            first_s=profile.substrate.start_backoff_first_s,
+            max_s=profile.substrate.start_backoff_max_s,
         )
         self.broken_workers: dict[str, BrokenClass] = {}
         self._surplus: dict[str, float] = {}
@@ -243,6 +242,7 @@ class Pool:
         self._scale_wake = threading.Event()
         self._closing = False
         self._scaling = False
+        self._scale_error: Exception | None = None
         self._fenced: tuple[float, int] | None = None
         self.bind_epoch(epoch, events)
         self.broken: dict[str, BrokenEnv] = {}
@@ -344,24 +344,21 @@ class Pool:
         with self._lock:
             return any(not (f.done or f.cancelled) for f in self._followed.values())
 
-    def _scale_round(self) -> None:
-        """Scale once; an error is logged and the next round tries again."""
-        try:
-            self._scale()
-        except Exception:
-            logger.exception("scaling the pool's workers failed; it is retried next round")
-
     def _scale(self) -> None:
         """Have the substrate size its workers to the queues; only the scaler thread calls it, never re-entered.
 
-        A failing substrate is retried next round and counted (`Fleet.fail_substrate`); once it keeps failing the
-        run is held (`WorkersBroken`), never failed.
+        A `SubstrateError` is counted (`Fleet.fail_substrate`) and the substrate is not used again until its backoff
+        has passed; past `faults.infrastructure_replacements` failures in a row it is broken, the run is held
+        (`WorkersBroken`) and nothing is scaled again this epoch. Any other error ends the scaler and is raised by
+        `poll`.
         """
         assert threading.current_thread() is self._scaler and not self._scaling, "only the scaler thread scales"
+        if not self._fleet.substrate_due():
+            return
         self._scaling = True
         try:
             scale(self.queues, self._fleet, self.profile, surplus_since=self._surplus)
-        except SlurmError as err:
+        except SubstrateError as err:
             logger.warning("the substrate failed: %s", err)
             self._fleet.fail_substrate(err)
         else:
@@ -425,7 +422,10 @@ class Pool:
             KeyError: the handle is not this pool's.
             StaleCoordinator: a newer epoch was taken.
             QueueHeld: a job's env is held, or its class's workers are broken; the jobs not given wait in their queues.
+            Exception: the error that ended the scaler thread.
         """
+        if self._scale_error is not None:
+            raise self._scale_error
         followed = self._followed[handle.id]
         if followed.cancelled or followed.done:
             return [], True
@@ -604,12 +604,17 @@ class Pool:
 def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float) -> None:
     """Scale the pool `ref` names on each wake, and once per `poll_s` while it follows a fragment.
 
-    Ends once the pool is closed or collected; the pool is held only during a round.
+    Ends once the pool is closed or collected, or on an error other than a `SubstrateError`, which the pool keeps for
+    `poll` to raise; the pool is held only during a round.
     """
     woken = True
     while (pool := ref()) is not None and not pool._closing:  # noqa: SLF001 - the pool's own scaler
         if woken or pool._open():  # noqa: SLF001
-            pool._scale_round()  # noqa: SLF001
+            try:
+                pool._scale()  # noqa: SLF001
+            except Exception as err:  # noqa: BLE001 - carried to the thread that polls
+                pool._scale_error = err  # noqa: SLF001
+                return
         del pool
         woken = wake.wait(poll_s)
         wake.clear()

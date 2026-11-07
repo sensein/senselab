@@ -11,6 +11,7 @@ from senselab_core.runtime.execution_settings import (
     PoolSettings,
     ResourceClass,
     ServiceSettings,
+    SlurmCommands,
     SubstrateSpec,
     Timeouts,
 )
@@ -135,8 +136,30 @@ def _register_settings(register: Register) -> None:
             [{"max_workers": 0}, {"gpu_type": "h100", "device": "cpu"}, {"device": "tpu"}],
         ),
         SubstrateSpec: (
-            [SubstrateSpec(kind="local"), SubstrateSpec(kind="slurm", qos_cpu_cap=64, exclude_nodes=("n1",))],
-            [{"kind": "k8s"}, {"kind": "local", "qos_cpu_cap": 4}],
+            [
+                SubstrateSpec(kind="local", start_backoff_first_s=0.05, start_backoff_max_s=30),
+                SubstrateSpec(
+                    kind="slurm",
+                    qos_cpu_cap=64,
+                    exclude_nodes=("n1",),
+                    start_backoff_first_s=1,
+                    start_backoff_max_s=30,
+                    commands=SlurmCommands(timeout_s=60, attempts=3, retry_first_s=0.5),
+                ),
+            ],
+            [
+                {"kind": "k8s"},
+                {"kind": "local", "qos_cpu_cap": 4},
+                {"kind": "slurm", "commands": None},
+                {"start_backoff_first_s": 0},
+            ],
+        ),
+        SlurmCommands: (
+            [
+                SlurmCommands(timeout_s=60, attempts=3, retry_first_s=0.5),
+                SlurmCommands(timeout_s=0.5, attempts=1, retry_first_s=0.01),
+            ],
+            [{"timeout_s": 0}, {"attempts": 0}, {"retry_first_s": -1}],
         ),
         PoolSettings: (
             [

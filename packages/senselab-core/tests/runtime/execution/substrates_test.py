@@ -2,9 +2,11 @@
 
 import contextlib
 import errno
+import logging
 import os
 import stat
 import sys
+import threading
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
@@ -29,13 +31,14 @@ from senselab_core.runtime.execution.substrates import (
     Local,
     Slurm,
     SlurmError,
+    Substrate,
     WorkerHandle,
     class_of,
     profile_argument,
     scale,
 )
 from senselab_core.runtime.execution.supervisor import Supervisor
-from senselab_core.runtime.execution_settings import LeaseBoundError
+from senselab_core.runtime.execution_settings import LeaseBoundError, SlurmCommands
 from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile, QosCapTooSmall
 from senselab_core.runtime.storage import StorageCapabilities, StorageUnsupported
@@ -131,10 +134,26 @@ def _profile(**substrate: Any) -> ExecutionProfile:  # noqa: ANN401 - substrate 
     override = {
         "devices": ["cpu"],
         "resource_classes": CLASSES,
-        "substrate": {"kind": kind, **substrate},
+        "substrate": {"kind": kind, "commands": {"retry_first_s": 0.001}, **substrate},
         "pool": {"quantum_items": 1, "first_poll_s": 0.01, "poll_s": 0.2},
     }
     return ExecutionProfile.load("orcd", override)
+
+
+def _commands(**update: float) -> SlurmCommands:
+    commands = _profile().substrate.commands
+    assert commands is not None
+    return commands.model_copy(update=update)
+
+
+def _fleet(substrate: Substrate, profile: ExecutionProfile, workers_dir: Path | None = None) -> Fleet:
+    return Fleet(
+        substrate,
+        workers_dir=workers_dir,
+        budget=profile.faults.infrastructure_replacements,
+        first_s=profile.substrate.start_backoff_first_s,
+        max_s=profile.substrate.start_backoff_max_s,
+    )
 
 
 class Recording:
@@ -261,16 +280,14 @@ def test_slurm_args_from_resource_class(tmp_path: Path) -> None:
         plan_hash=HASH,
         run_dir=tmp_path,
         attempt="a7",
+        commands=_commands(),
     )
     handles = slurm.start("gpu:h100#" + "c" * 40, 2)
     assert [h.id for h in handles] == ["100", "101"]
-    [first, _] = _submitted(tmp_path)
-    assert first[:4] == [
-        "--parsable",
-        f"--job-name={slurm.job_name}",
-        f"--comment=gpu:h100#{'c' * 40}",
-        "--partition=gpuq",
-    ]
+    [first, second] = _submitted(tmp_path)
+    assert first[0] == "--parsable" and first[2:4] == [f"--comment=gpu:h100#{'c' * 40}", "--partition=gpuq"]
+    names = [call[1].removeprefix("--job-name=") for call in (first, second)]
+    assert all(n.startswith(f"{slurm.prefix}a7-") and n.endswith("-e0") for n in names) and names[0] != names[1]
     assert {"--gres=gpu:h100:1", "--cpus-per-task=8", "--mem=65536M", "--time=120"} <= set(first)
     assert first[-2] == "--wrap" and first[-1] == f"senselab execute --classes 'gpu:h100#{'c' * 40}'"
     assert slurm.running("cpu") == 0 and slurm.running(f"gpu:h100#{'c' * 40}") == 2
@@ -283,7 +300,9 @@ def test_slurm_refuses_an_unset_placeholder_and_an_unknown_class(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A partition naming an unset variable, or a queue of no class, submits nothing."""
-    slurm = Slurm(_profile().resource_classes, None, command=["x"], plan_hash=HASH, run_dir=tmp_path)
+    slurm = Slurm(
+        _profile().resource_classes, None, command=["x"], plan_hash=HASH, run_dir=tmp_path, commands=_commands()
+    )
     monkeypatch.delenv("CPU_PARTITION")
     with pytest.raises(ValueError, match="CPU_PARTITION"):
         slurm.start("cpu", 1)
@@ -296,7 +315,9 @@ def test_slurm_refuses_an_unset_placeholder_and_an_unknown_class(
 def test_slurm_names_a_failed_submission(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A failing `sbatch` raises `SlurmError` with its message."""
     (tmp_path / "bin" / "sbatch").write_text("#!/bin/sh\necho 'invalid partition' >&2\nexit 1\n")
-    slurm = Slurm(_profile().resource_classes, None, command=["x"], plan_hash=HASH, run_dir=tmp_path)
+    slurm = Slurm(
+        _profile().resource_classes, None, command=["x"], plan_hash=HASH, run_dir=tmp_path, commands=_commands()
+    )
     with pytest.raises(SlurmError, match="invalid partition"):
         slurm.start("cpu", 1)
 
@@ -313,6 +334,7 @@ def test_excluded_node_never_targeted(monkeypatch: pytest.MonkeyPatch, tmp_path:
         plan_hash=HASH,
         run_dir=tmp_path,
         exclude_nodes=profile.substrate.exclude_nodes,
+        commands=_commands(),
     )
     slurm.start("cpu", 1)
     slurm.start("gpu:h100", 1)
@@ -324,7 +346,9 @@ def test_excluded_node_never_targeted(monkeypatch: pytest.MonkeyPatch, tmp_path:
 @pytest.mark.logic
 def test_slurm_stays_within_its_qos_cap(tmp_path: Path) -> None:
     """With a cap of 10 CPUs and 4 per worker, a request for 5 submits 2, and none while they are alive."""
-    slurm = Slurm(_profile().resource_classes, 10, command=["x"], plan_hash=HASH, run_dir=tmp_path)
+    slurm = Slurm(
+        _profile().resource_classes, 10, command=["x"], plan_hash=HASH, run_dir=tmp_path, commands=_commands()
+    )
     assert len(slurm.start("cpu", 5)) == 2
     assert slurm.start("cpu", 5) == []
     assert len(_submitted(tmp_path)) == 2
@@ -381,7 +405,7 @@ def test_a_pool_names_its_slurm_jobs_by_its_attempt(tmp_path: Path) -> None:
     """The pool binds its attempt to the substrate, so jobs are named by the plan hash and that attempt."""
     profile = _profile()
     run_dir = tmp_path / "run"
-    slurm = Slurm(profile.resource_classes, None, command=["x"], plan_hash=HASH, run_dir=run_dir)
+    slurm = Slurm(profile.resource_classes, None, command=["x"], plan_hash=HASH, run_dir=run_dir, commands=_commands())
     pool = Pool(
         run_dir,
         queues=QueueSet(run_dir / RUN_QUEUES, profile),
@@ -392,7 +416,7 @@ def test_a_pool_names_its_slurm_jobs_by_its_attempt(tmp_path: Path) -> None:
         epoch=0,
     )
     pool.bind_epoch(3, EventLog(run_dir, "attempt-3", 3, epoch=3))
-    assert slurm.job_name.startswith(slurm.prefix) and slurm.job_name.endswith("-attempt-3-e3")
+    assert slurm.job_name("t") == f"{slurm.prefix}attempt-3-t-e3"
 
 
 @pytest.mark.logic
@@ -416,7 +440,7 @@ def test_local_runs_at_most_max_workers_and_stops_them(tmp_path: Path) -> None:
     finally:
         local.stop(handles)
     assert local.running("cpu") == 0
-    fleet = Fleet(local)
+    fleet = _fleet(local, _profile())
     assert len(fleet.start("cpu", 1)) == 1 and local.running("cpu") == 1
     fleet.close()
     assert local.running("cpu") == 0
@@ -553,7 +577,7 @@ def test_a_worker_that_reaches_the_run_marks_itself_and_one_that_cannot_exits_ty
     assert not (other / "workers").exists()
 
 
-def _slurm(tmp_path: Path, epoch: int = 1, plan_hash: str = HASH, **kw: Any) -> Slurm:  # noqa: ANN401
+def _slurm(tmp_path: Path, epoch: int = 1, plan_hash: str = HASH, commands: SlurmCommands | None = None) -> Slurm:
     return Slurm(
         _profile().resource_classes,
         None,
@@ -562,8 +586,7 @@ def _slurm(tmp_path: Path, epoch: int = 1, plan_hash: str = HASH, **kw: Any) -> 
         run_dir=tmp_path / "run",
         attempt="a1",
         epoch=epoch,
-        retry_s=0.01,
-        **kw,
+        commands=commands or _commands(),
     )
 
 
@@ -613,7 +636,7 @@ def test_a_transient_slurm_failure_is_retried_and_a_lasting_one_holds_the_run(tm
     (tmp_path / "slurm" / "fail-squeue").write_text("")
     profile = _worker_profile(infrastructure_replacements=1)
     slurm = Slurm(
-        profile.resource_classes, None, command=["x"], plan_hash=HASH, run_dir=tmp_path / "run", retry_s=0.001
+        profile.resource_classes, None, command=["x"], plan_hash=HASH, run_dir=tmp_path / "run", commands=_commands()
     )
     _, pool, _ = _queued(profile, tmp_path, 0, substrate=slurm)
     placed, values = planned(SCORE, profile, ["one"])
@@ -627,11 +650,11 @@ def test_a_transient_slurm_failure_is_retried_and_a_lasting_one_holds_the_run(tm
 def test_one_squeue_serves_a_scale_round(tmp_path: Path) -> None:
     """A round that lists and then starts workers makes one `squeue` call."""
     profile = _profile()
-    slurm = Slurm(profile.resource_classes, None, command=["x"], plan_hash=HASH, run_dir=tmp_path / "run")
-    _, pool, _ = _queued(profile, tmp_path, 3, substrate=Fleet(slurm))
+    slurm = _slurm(tmp_path, epoch=0)
+    _, pool, _ = _queued(profile, tmp_path, 3, substrate=_fleet(slurm, profile))
     log = tmp_path / "slurm" / "squeue.log"
     log.unlink(missing_ok=True)
-    scale(pool.queues, Fleet(slurm), profile)
+    scale(pool.queues, _fleet(slurm, profile), profile)
     assert len(log.read_text().splitlines()) == 1 and slurm.running("cpu") >= 1
     assert len(log.read_text().splitlines()) == 1
 
@@ -752,3 +775,97 @@ def test_start_refuses_a_result_store_without_directories(tmp_path: Path, monkey
     refuse_call(monkeypatch, "mkdir", ".senselab-probe", OSError(errno.ENOTSUP, "Operation not supported"))
     with pytest.raises(StorageUnsupported, match="atomic mkdir"):
         placed.run(store=ResultStore(tmp_path / "elsewhere"))
+
+
+@pytest.mark.logic
+def test_a_submission_that_times_out_after_queueing_its_job_leaves_one_job(tmp_path: Path) -> None:
+    """An `sbatch` that queues its job and then hangs past the timeout is found by name, never submitted again."""
+    bin_dir = tmp_path / "bin"
+    queues = bin_dir / "sbatch-queues"
+    (bin_dir / "sbatch").rename(queues)
+    (bin_dir / "sbatch").write_text(
+        "#!/bin/sh\n"
+        f'[ -f "$FAKE_SLURM/hung" ] && exec "{queues}" "$@"\n'
+        ': > "$FAKE_SLURM/hung"\n'
+        f'"{queues}" "$@" > /dev/null\n'
+        "exec tail -f /dev/null\n"
+    )
+    (bin_dir / "sbatch").chmod(stat.S_IRWXU)
+    slurm = _slurm(tmp_path, commands=_commands(timeout_s=0.5))
+    [handle] = slurm.start("cpu", 1)
+    jobs = sorted(p.name for p in (tmp_path / "slurm" / "jobs").iterdir())
+    assert jobs == [handle.id] and len(_submitted(tmp_path)) == 1
+    assert "--name=" in (tmp_path / "slurm" / "squeue.log").read_text()
+
+
+@pytest.mark.logic
+def test_substrate_failures_back_off_and_break_it_after_the_budget() -> None:
+    """Each failure of the substrate's commands delays its next use, doubling; past the budget it is broken once."""
+    now = [0.0]
+    fleet = Fleet(Recording(), workers_dir=None, budget=2, first_s=1.0, max_s=4.0, clock=lambda: now[0])
+    due: list[float] = []
+    for step in range(40):
+        now[0] = step * 0.5
+        if fleet.substrate_due():
+            due.append(now[0])
+            fleet.fail_substrate(SlurmError("squeue timed out"))
+    assert due == [0.0, 1.0, 3.0] and fleet.broken["*"].failures == 3
+    assert fleet.broken_for("cpu") is fleet.broken["*"]
+
+
+class _Down(Recording):
+    """A substrate whose listing raises `error` the first `failures` times (always when None), counting its calls."""
+
+    def __init__(self, error: Exception, failures: int | None = None) -> None:
+        """Raise `error` from the first `failures` calls of `live`."""
+        super().__init__()
+        self.error, self.failures, self.calls, self.called = error, failures, 0, threading.Event()
+
+    def live(self) -> list[WorkerHandle]:
+        """Count the call; raise while failures remain."""
+        self.calls += 1
+        self.called.set()
+        if self.failures is None or self.calls <= self.failures:
+            raise self.error
+        return super().live()
+
+
+class _Bug(Exception):
+    """An error no substrate raises."""
+
+
+@pytest.mark.logic
+def test_a_lasting_substrate_failure_is_reported_once_and_ends_scaling(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A substrate failing past the budget holds the run, is logged broken once, and is not called again."""
+    profile = _worker_profile(infrastructure_replacements=1)
+    down = _Down(SlurmError("squeue timed out"))
+    _, pool, _ = _queued(profile, tmp_path, 0, substrate=down)
+    placed, values = planned(SCORE, profile, ["one", "two"])
+    admission = pool.admit(placed, values)
+    with caplog.at_level(logging.ERROR, logger="senselab"):
+        handle = pool.submit(node_fragment(placed, admission, elements=[(0,)]))
+        with pytest.raises(WorkersBroken) as held:
+            list(follow(pool, handle))
+        pool.submit(node_fragment(placed, admission, elements=[(1,)]))
+        time.sleep(2 * profile.pool.poll_s)
+        calls = down.calls
+        pool.close()
+    assert held.value.resource_class == "*" and calls == 2
+    assert len([r for r in caplog.records if "broken" in r.getMessage()]) == 1
+
+
+@pytest.mark.logic
+def test_an_unexpected_scaler_error_is_raised_by_poll(tmp_path: Path) -> None:
+    """An error that is not a substrate failure ends the scaler and is raised to the caller, never retried."""
+    profile = _worker_profile()
+    down = _Down(_Bug("no such class"), failures=1)
+    _, pool, _ = _queued(profile, tmp_path, 0, substrate=down)
+    placed, values = planned(SCORE, profile, ["one"])
+    handle = pool.submit(node_fragment(placed, pool.admit(placed, values)))
+    down.called.wait()
+    pool.close()
+    with pytest.raises(_Bug, match="no such class"):
+        pool.poll(handle)
+    assert down.calls == 2

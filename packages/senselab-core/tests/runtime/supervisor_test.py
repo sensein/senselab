@@ -3,6 +3,7 @@
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -10,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from senselab_core.runtime.execution.supervisor import Keeper, Supervisor, subreaper_supported
+from senselab_core.runtime.execution.supervisor import Keeper, Supervisor, SupervisorPolicy, subreaper_supported
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import alive, group_alive, group_gone
@@ -196,6 +197,61 @@ def test_keeper_kills_only_groups_it_still_owns() -> None:
         for proc in (owned, reused):
             proc.kill()
             proc.wait()
+
+
+FAULTY_PS = {
+    "missing": None,
+    "failing": "#!/bin/sh\necho 'ps: cannot read the process table' >&2\nexit 1\n",
+    "hung": f"#!{sys.executable}\nimport signal\nsignal.pause()\n",
+}
+"""A `ps` that is not on `PATH`, that fails, or that never answers."""
+
+
+def _path_with_ps(tmp_path: Path, body: str | None) -> str:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if body is not None:
+        (bin_dir / "ps").write_text(body)
+        (bin_dir / "ps").chmod(stat.S_IRWXU)
+    return str(bin_dir)
+
+
+@pytest.mark.skipif(sys.platform == "linux", reason="off Linux the keeper reads start times with ps")
+@pytest.mark.contract
+@pytest.mark.parametrize("fault", sorted(FAULTY_PS))
+def test_a_start_time_the_keeper_cannot_read_never_kills(
+    fault: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With `ps` missing, failing or hung, the keeper kills neither a recorded pid nor a recorded group."""
+    pid = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
+    group = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
+    monkeypatch.setenv("PATH", _path_with_ps(tmp_path, FAULTY_PS[fault]))
+    try:
+        keeper = Keeper(SupervisorPolicy(start_time_probe_s=0.5))
+        keeper.record("+", "p", pid.pid)
+        keeper.record("+", "g", group.pid)
+        keeper.stop(SETTLE_S)
+        assert pid.poll() is None and group.poll() is None
+    finally:
+        for proc in (pid, group):
+            proc.kill()
+            proc.wait()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the keeper reads /proc on Linux only")
+@pytest.mark.contract
+def test_the_keeper_reads_start_times_from_proc_on_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Linux the keeper needs no `ps`: with none on `PATH` it still kills the group it owns."""
+    owned = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
+    monkeypatch.setenv("PATH", _path_with_ps(tmp_path, None))
+    try:
+        keeper = Keeper()
+        keeper.record("+", "g", owned.pid)
+        keeper.stop(SETTLE_S)
+        assert owned.wait(SETTLE_S) == -signal.SIGKILL
+    finally:
+        owned.kill()
+        owned.wait()
 
 
 UNSUPERVISED = """

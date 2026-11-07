@@ -19,7 +19,7 @@ reached, and liveness is probed by group (`live_members`).
 
 Every launch, and every orphan an entered supervisor adopts, is also recorded with the keeper, one process per
 supervisor, in its own session, that reads the records on its stdin. Once this process has died, by any signal, the
-keeper SIGKILLs every group and orphan still recorded.
+keeper SIGKILLs every group and orphan still recorded whose start time it reads unchanged.
 Leaving an entered supervisor SIGKILLs every group and orphan it holds, reaps the orphans and the leaders, stops the
 keeper and restores the subreaper flag.
 """
@@ -39,6 +39,10 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import IO, Any, Self
 
+from senselab_core.kernel._base import Frozen
+from senselab_core.runtime.execution_settings import PositiveSeconds
+from senselab_core.runtime.storage import load_policy_values
+
 logger = logging.getLogger(__name__)
 
 PR_SET_CHILD_SUBREAPER = 36
@@ -49,11 +53,14 @@ EXIT_BOUND_S = 5.0
 """Seconds leaving a supervisor waits for its killed orphans, leaders and keeper to be reaped."""
 REAPED_KEPT = 256
 """How many reaped orphans' exit statuses the table keeps, the oldest dropped first."""
+SUPERVISOR_POLICY_FORMAT = "supervisor-policy@1.0"
+"""The format of `data/supervisor_policy.yaml`."""
 
 KEEPER = r"""
 import os, select, signal, subprocess, sys
 
-owner = int(sys.argv[1])
+owner, probe_s = int(sys.argv[1]), float(sys.argv[2])
+UNKNOWN = object()
 try:
     os.setsid()
 except OSError:
@@ -67,18 +74,27 @@ def on_term(signum, frame):
 
 
 def started(pid):
-    if os.path.isdir("/proc/self"):
+    if sys.platform == "linux":
         try:
             with open(f"/proc/{pid}/stat", "rb") as f:
                 data = f.read()
-        except OSError:
+        except (FileNotFoundError, ProcessLookupError):
             return None
+        except OSError:
+            return UNKNOWN
         return data[data.rfind(b")") + 2 :].split()[19].decode()
     try:
-        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
-    except Exception:
-        return "?"
-    return " ".join(out.stdout.split()) or None
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        pass
+    try:
+        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=probe_s)
+    except (OSError, subprocess.SubprocessError):
+        return UNKNOWN
+    found = " ".join(out.stdout.split())
+    return found if out.returncode == 0 and found else UNKNOWN
 
 
 def apply(data):
@@ -106,10 +122,10 @@ def drain():
 
 
 def kill(kind, number, recorded):
-    now = started(number)
-    if now is not None and now != recorded:
+    if recorded is UNKNOWN:
         return
-    if now is None and kind == "p":
+    now = started(number)
+    if now is UNKNOWN or (now is not None and now != recorded) or (now is None and kind == "p"):
         return
     try:
         (os.killpg if kind == "g" else os.kill)(number, signal.SIGKILL)
@@ -135,13 +151,35 @@ for kind in ("g", "p"):
     for number, recorded in held[kind].items():
         kill(kind, number, recorded)
 """
-"""Run as ``python -I -c KEEPER <owner pid>`` with records on stdin: ``+g``/``-g`` a group, ``+p``/``-p`` a pid.
+"""Run as ``python -I -c KEEPER <owner pid> <probe seconds>`` with records on stdin: ``+g``/``-g`` a group,
+``+p``/``-p`` a pid.
 
 A ``+`` record may carry the start time after the number; otherwise the keeper reads the process's start time
-(`/proc/<pid>/stat` field 22, else `ps -o lstart=`). At the end it SIGKILLs a recorded pid only while a process of
-that pid has the recorded start time, and a recorded group while its leader has it or no process has the group's
-number.
+(`/proc/<pid>/stat` field 22 on Linux, else `ps -o lstart=` within the probe seconds). At the end it SIGKILLs a
+recorded pid only while a process of that pid has the recorded start time, and a recorded group while its leader has
+it or no process has the group's number. A start time it cannot read, when recorded or at the end, kills nothing.
 """
+
+
+class SupervisorPolicy(Frozen):
+    """How the keeper reads a process's start time.
+
+    Attributes:
+        start_time_probe_s: Seconds the keeper's `ps -o lstart=` may take; past it the start time is unknown.
+    """
+
+    start_time_probe_s: PositiveSeconds
+
+    @classmethod
+    def load_default(cls) -> Self:
+        """Return the policy in `data/supervisor_policy.yaml`.
+
+        Raises:
+            ValueError: the file lacks the format, an entry, or an entry's derivation.
+        """
+        values = load_policy_values("senselab_core.runtime", "supervisor_policy.yaml", SUPERVISOR_POLICY_FORMAT)
+        return cls.model_validate(values)
+
 
 _STAT_STATE = 0
 _STAT_PGRP = 2
@@ -250,8 +288,13 @@ class Keeper:
     In a process forked from its owner, the next record starts that process's own keeper.
     """
 
-    def __init__(self) -> None:
-        """Start no process yet."""
+    def __init__(self, policy: SupervisorPolicy | None = None) -> None:
+        """Start no process yet; the keeper reads start times under `policy`, the packaged one when None.
+
+        Raises:
+            ValueError: `policy` is None and the packaged policy is invalid.
+        """
+        self._policy = policy if policy is not None else SupervisorPolicy.load_default()
         self.pid: int | None = None
         self._owner = os.getpid()
         self._stdin: IO[bytes] | None = None
@@ -298,7 +341,7 @@ class Keeper:
         try:
             self.pid = os.posix_spawn(
                 sys.executable,
-                [sys.executable, "-I", "-c", KEEPER, str(os.getpid())],
+                [sys.executable, "-I", "-c", KEEPER, str(os.getpid()), repr(self._policy.start_time_probe_s)],
                 os.environ,
                 file_actions=[
                     (os.POSIX_SPAWN_DUP2, read, 0),
@@ -561,6 +604,7 @@ __all__ = [
     "Keeper",
     "Orphan",
     "Supervisor",
+    "SupervisorPolicy",
     "current",
     "live_members",
     "own_children",

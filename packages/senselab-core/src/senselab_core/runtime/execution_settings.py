@@ -57,17 +57,36 @@ class ResourceClass(Frozen):
         return {"cpu": "cpu", "mps": "mps"}.get(kind) == self.device
 
 
+class SlurmCommands(Frozen):
+    """How each Slurm command is run: its timeout, its tries, and the first wait between tries, which doubles."""
+
+    timeout_s: PositiveSeconds
+    attempts: PositiveInt
+    retry_first_s: PositiveSeconds
+
+
 class SubstrateSpec(Frozen):
-    """What starts pool workers: `local` processes, or `slurm` jobs within a QOS CPU cap, never on excluded nodes."""
+    """What starts pool workers: `local` processes, or `slurm` jobs within a QOS CPU cap, never on excluded nodes.
+
+    Attributes:
+        start_backoff_first_s: Seconds a class, or the substrate itself, waits after its first failure in a row.
+        start_backoff_max_s: Most seconds that wait doubles to.
+        commands: How each Slurm command is run; required for `slurm`.
+    """
 
     kind: Literal["local", "slurm"]
     qos_cpu_cap: PositiveInt | None = None
     exclude_nodes: tuple[NonEmptyStr, ...] = ()
+    start_backoff_first_s: PositiveSeconds
+    start_backoff_max_s: PositiveSeconds
+    commands: SlurmCommands | None = None
 
     @model_validator(mode="after")
-    def _check_local(self) -> "SubstrateSpec":
+    def _check_kind(self) -> "SubstrateSpec":
         if self.kind == "local" and (self.qos_cpu_cap is not None or self.exclude_nodes):
             raise ValueError("a local substrate has no QOS cap and no excluded nodes")
+        if self.kind == "slurm" and self.commands is None:
+            raise ValueError("a slurm substrate needs its commands settings")
         return self
 
 

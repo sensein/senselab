@@ -2,9 +2,9 @@
 
 A `Substrate` starts workers for a queue, lists those alive, counts them and stops given ones. `Local` runs each worker
 as a `senselab execute` process under the supervisor that launched it; `Slurm` submits one `sbatch` job per worker, with
-the class's partition, gres, CPUs, memory and time, named by plan hash, run, attempt and epoch, and never on an excluded
-node. A queue is named by its resource class, with `#<model identity>` for a resident model; every worker serves one
-queue.
+the class's partition, gres, CPUs, memory and time, named by plan hash, run, attempt, epoch and a token of its own, and
+never on an excluded node. A queue is named by its resource class, with `#<model identity>` for a resident model;
+every worker serves one queue.
 
 `scale` is called by the coordinator each round, with one `live()` listing: per queue, the workers wanted are the jobs
 waiting on the queue (`Queue.work`) over `pool.quantum_items`, within the class's `max_workers` and the QOS CPU cap over
@@ -34,7 +34,7 @@ from typing import Protocol
 
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.supervisor import Supervisor, current
-from senselab_core.runtime.execution_settings import ResourceClass
+from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands
 from senselab_core.runtime.profiles import ExecutionProfile, expand
 
 logger = logging.getLogger("senselab")
@@ -53,14 +53,18 @@ EXIT_UNREACHABLE = 75
 """The exit status of a worker that cannot reach its run directory or store."""
 SQUEUE_FIELDS = 4
 """The fields of a `squeue` row: id, state, comment, name."""
-SLURM_TRIES = 3
-"""Attempts of one Slurm command before it is reported failed."""
-SLURM_TIMEOUT_S = 60.0
-"""Seconds one Slurm command may take."""
+SQUEUE_FORMAT = "--format=%i|%T|%k|%j"
+"""The `squeue` row format: id, state, comment, name."""
+TOKEN_HEX = 12
+"""Hex digits of the token that names one intended worker's job: 48 random bits, a format width."""
 EPOCH_SUFFIX = re.compile(r"-e(\d+)$")
 
 
-class SlurmError(RuntimeError):
+class SubstrateError(RuntimeError):
+    """A substrate's command failed; the scaler counts it against the substrate's budget."""
+
+
+class SlurmError(SubstrateError):
     """A Slurm command kept failing; the message gives the command and what it printed."""
 
 
@@ -215,16 +219,28 @@ def _minutes(seconds: float) -> int:
     return max(1, math.ceil(seconds / 60))
 
 
+def _rows(out: str) -> list[tuple[str, str, str, str]]:
+    """Return the `(id, state, comment, name)` of each row of `squeue` output in `SQUEUE_FORMAT`."""
+    rows = []
+    for line in out.splitlines():
+        parts = [part.strip() for part in line.split("|", SQUEUE_FIELDS - 1)]
+        if len(parts) == SQUEUE_FIELDS:
+            rows.append((parts[0], parts[1], parts[2], parts[3]))
+    return rows
+
+
 class Slurm:
     """A `Substrate` of Slurm jobs: one `sbatch` job per worker, within a QOS CPU cap, never on an excluded node.
 
-    A job is named `senselab-<plan hash prefix>-<run digest>-<attempt>-e<epoch>`, unique per coordinator, and carries
-    its queue as its comment. The jobs of this run, whatever their attempt or epoch, are those of the user (`squeue
-    --me`) whose name starts `senselab-<plan hash prefix>-<run digest>-`. `live` cancels those of an earlier epoch,
-    ignores those of a later one, and returns this epoch's. The class's `partition`, `gres`, `cpus`, `mem_bytes` and
-    `time_s` become the job's `--partition`, `--gres`, `--cpus-per-task`, `--mem` and `--time`; `${VAR}` in a
-    partition, a gres or an excluded node is expanded from the environment where the job is submitted. A Slurm
-    command that fails is tried `SLURM_TRIES` times, `retry_s` apart and doubling, before `SlurmError`.
+    A job is named `senselab-<plan hash prefix>-<run digest>-<attempt>-<token>-e<epoch>`, the token drawn per intended
+    worker, and carries its queue as its comment. The jobs of this run, whatever their attempt or epoch, are those of
+    the user (`squeue --me`) whose name starts `senselab-<plan hash prefix>-<run digest>-`. `live` cancels those of an
+    earlier epoch, ignores those of a later one, and returns this epoch's. The class's `partition`, `gres`, `cpus`,
+    `mem_bytes` and `time_s` become the job's `--partition`, `--gres`, `--cpus-per-task`, `--mem` and `--time`; `${VAR}`
+    in a partition, a gres or an excluded node is expanded from the environment where the job is submitted. A Slurm
+    command runs within `commands.timeout_s` and is tried `commands.attempts` times, `commands.retry_first_s` apart and
+    doubling, before `SlurmError`. A submission that fails or times out is looked up by its name before it is tried
+    again; a job found under that name is the one submitted.
 
     Attributes:
         attempt: The attempt id the jobs are named by; the pool sets it to its attempt's.
@@ -243,7 +259,7 @@ class Slurm:
         epoch: int = 0,
         exclude_nodes: Sequence[str] = (),
         log_dir: Path | None = None,
-        retry_s: float = 0.5,
+        commands: SlurmCommands,
     ) -> None:
         """Submit workers of `classes`, each `command` plus `--classes <queue>`, at most `qos_cpu_cap` CPUs alive."""
         self.classes = dict(classes)
@@ -255,7 +271,7 @@ class Slurm:
         self.epoch = epoch
         self.exclude_nodes = tuple(exclude_nodes)
         self.log_dir = log_dir
-        self.retry_s = retry_s
+        self.commands = commands
         self._cache: list[WorkerHandle] | None = None
 
     @property
@@ -264,10 +280,9 @@ class Slurm:
         run = uuid.uuid5(uuid.NAMESPACE_URL, str(self.run_dir.resolve())).hex[:8]
         return f"senselab-{self.plan_hash[:12]}-{run}-"
 
-    @property
-    def job_name(self) -> str:
-        """The name of this coordinator's jobs."""
-        return f"{self.prefix}{self.attempt}-e{self.epoch}"
+    def job_name(self, token: str) -> str:
+        """Return the name of this coordinator's job drawn under `token`."""
+        return f"{self.prefix}{self.attempt}-{token}-e{self.epoch}"
 
     def _class(self, queue: str) -> ResourceClass:
         try:
@@ -277,14 +292,14 @@ class Slurm:
                 f"queue {queue!r} is of no resource class of this substrate: {sorted(self.classes)}"
             ) from None
 
-    def sbatch_args(self, queue: str) -> list[str]:
-        """Return the `sbatch` command line of one worker of `queue`.
+    def sbatch_args(self, queue: str, name: str) -> list[str]:
+        """Return the `sbatch` command line of one worker of `queue`, named `name`.
 
         Raises:
             ValueError: the queue's class is unknown, or names a variable that is not set.
         """
         grant = self._class(queue)
-        args = [SBATCH, "--parsable", f"--job-name={self.job_name}", f"--comment={queue}"]
+        args = [SBATCH, "--parsable", f"--job-name={name}", f"--comment={queue}"]
         if grant.partition is not None:
             args.append(f"--partition={expand(grant.partition)}")
         if grant.gres is not None:
@@ -301,34 +316,65 @@ class Slurm:
             args.append(f"--output={self.log_dir}/%x-%j.out")
         return [*args, "--wrap", shlex.join([*self.command, "--classes", queue])]
 
-    def _run(self, argv: Sequence[str]) -> str:
-        wait, last = self.retry_s, ""
-        for attempt in range(SLURM_TRIES):
-            try:
-                done = subprocess.run(  # noqa: S603
-                    argv, capture_output=True, text=True, check=False, timeout=SLURM_TIMEOUT_S
-                )
-                if done.returncode == 0:
-                    return done.stdout
-                last = f"exited {done.returncode}: {(done.stderr or done.stdout).strip()}"
-            except subprocess.TimeoutExpired:
-                last = f"timed out after {SLURM_TIMEOUT_S} s"
-            if attempt + 1 < SLURM_TRIES:
-                time.sleep(wait)
-                wait *= 2
+    def _try(self, argv: Sequence[str]) -> tuple[str | None, str]:
+        """Run `argv` once; return its output, or None and why it failed."""
+        timeout = self.commands.timeout_s
+        try:
+            done = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout)  # noqa: S603
+        except subprocess.TimeoutExpired:
+            return None, f"timed out after {timeout} s"
+        if done.returncode == 0:
+            return done.stdout, ""
+        return None, f"exited {done.returncode}: {(done.stderr or done.stdout).strip()}"
+
+    def _run(self, argv: Sequence[str], recover: Callable[[], str | None] | None = None) -> str:
+        """Run `argv` until it succeeds, at most `commands.attempts` times, `commands.retry_first_s` apart and doubling.
+
+        Without `recover` the command must be idempotent. With it, each failed try is followed, after the wait, by
+        `recover()`, which returns the output the try had when it took effect after all; that ends the tries.
+
+        Raises:
+            SlurmError: no try succeeded and `recover` found nothing.
+        """
+        wait, last = self.commands.retry_first_s, ""
+        for attempt in range(self.commands.attempts):
+            out, last = self._try(argv)
+            if out is not None:
+                return out
+            if recover is None and attempt + 1 == self.commands.attempts:
+                break
+            time.sleep(wait)
+            wait *= 2
+            if recover is not None and (found := recover()) is not None:
+                return found
         raise SlurmError(f"{shlex.join(argv)} {last}")
+
+    def _submit(self, queue: str) -> str:
+        """Submit one worker of `queue` under a name of its own; return its job id.
+
+        A failed try is followed by a lookup of the name (`squeue --me --name`); a job found is the one submitted.
+
+        Raises:
+            SlurmError: no try submitted a job found under its name, or the lookup failed, so the outcome is unknown.
+        """
+        name = self.job_name(uuid.uuid4().hex[:TOKEN_HEX])
+
+        def lookup() -> str | None:
+            out = self._run([SQUEUE, "--me", "--noheader", "--states=all", f"--name={name}", SQUEUE_FORMAT])
+            return next((job for job, _, _, job_name in _rows(out) if job_name == name), None)
+
+        return self._run(self.sbatch_args(queue, name), recover=lookup).strip().split(";")[0]
 
     def live(self) -> list[WorkerHandle]:
         """Return this epoch's live jobs of the run, from one `squeue`; cancel those of an earlier epoch."""
-        out = self._run([SQUEUE, "--me", "--noheader", f"--states={LIVE_STATES}", "--format=%i|%T|%k|%j"])
+        out = self._run([SQUEUE, "--me", "--noheader", f"--states={LIVE_STATES}", SQUEUE_FORMAT])
         mine, stale = [], []
-        for line in out.splitlines():
-            parts = line.split("|", 3)
-            if len(parts) != SQUEUE_FIELDS or not parts[3].strip().startswith(self.prefix):
+        for job, state, comment, name in _rows(out):
+            if not name.startswith(self.prefix):
                 continue
-            found = EPOCH_SUFFIX.search(parts[3].strip())
+            found = EPOCH_SUFFIX.search(name)
             epoch = int(found[1]) if found else 0
-            handle = WorkerHandle(parts[2].strip(), parts[0].strip(), pending=parts[1].strip() == "PENDING")
+            handle = WorkerHandle(comment, job, pending=state == "PENDING")
             if epoch == self.epoch:
                 mine.append(handle)
             elif epoch < self.epoch:
@@ -361,8 +407,7 @@ class Slurm:
             self.log_dir.mkdir(parents=True, exist_ok=True)
         handles = []
         for _ in range(max(0, count)):
-            job = self._run(self.sbatch_args(resource_class)).strip().split(";")[0]
-            handles.append(WorkerHandle(resource_class, job, pending=True))
+            handles.append(WorkerHandle(resource_class, self._submit(resource_class), pending=True))
             cached.append(handles[-1])
         return handles
 
@@ -384,7 +429,7 @@ class Fleet:
     fleet did not stop is a failed start of its class: the class's next start waits `first_s`, doubling per failure up
     to `max_s`, and after `budget` failures in a row the class is broken (`broken`) and starts no more workers.
     A worker that marked itself ready ends the run of failures. `fail_substrate` counts the same way the failures of
-    the substrate's own commands, under the class `*`.
+    the substrate's own commands, under the class `*`; `substrate_due` says when the substrate may be used again.
 
     Attributes:
         broken: Each broken class (and `*`), once.
@@ -394,10 +439,10 @@ class Fleet:
         self,
         substrate: Substrate,
         *,
-        workers_dir: Path | None = None,
-        budget: int = 6,
-        first_s: float = 1.0,
-        max_s: float = 30.0,
+        workers_dir: Path | None,
+        budget: int,
+        first_s: float,
+        max_s: float,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Wrap `substrate`; `budget` consecutive failed starts of a class break it."""
@@ -431,6 +476,10 @@ class Fleet:
     def fail_substrate(self, err: Exception) -> None:
         """Count a failure of the substrate's own commands; the substrate is broken after `budget` in a row."""
         self._fail("*", str(err))
+
+    def substrate_due(self) -> bool:
+        """Whether the substrate may be used now: it is not broken, and its latest failure's wait has passed."""
+        return "*" not in self.broken and self._clock() >= self._not_before.get("*", 0.0)
 
     def substrate_ok(self) -> None:
         """End the run of the substrate's failures."""
@@ -506,7 +555,7 @@ class Fleet:
         """Stop every worker still alive that this fleet started."""
         try:
             alive = {h.id for h in self.substrate.live()}
-        except SlurmError:
+        except SubstrateError:
             alive = set(self._tracked)
         self.stop([h for h in self._tracked.values() if h.id in alive])
 
@@ -598,6 +647,8 @@ def substrate_of(profile: ExecutionProfile, run_dir: Path, plan_hash: str) -> Su
     spec = profile.substrate
     if spec.kind == "local":
         return Local(sum(c.max_workers for c in profile.resource_classes.values()), command=command)
+    if spec.commands is None:
+        raise ValueError("a slurm substrate needs its commands settings")
     return Slurm(
         profile.resource_classes,
         spec.qos_cpu_cap,
@@ -606,6 +657,7 @@ def substrate_of(profile: ExecutionProfile, run_dir: Path, plan_hash: str) -> Su
         run_dir=Path(run_dir),
         exclude_nodes=spec.exclude_nodes,
         log_dir=Path(run_dir) / "slurm",
+        commands=spec.commands,
     )
 
 
@@ -621,6 +673,7 @@ __all__ = [
     "SlurmError",
     "StoreUnreachable",
     "Substrate",
+    "SubstrateError",
     "WorkerHandle",
     "class_of",
     "mark_ready",

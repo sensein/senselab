@@ -36,9 +36,11 @@ resource_classes:
   gpu:
     device: cuda
     max_workers: 1
-# What starts pool workers.
+# What starts pool workers; the first and longest wait after a failed start.
 substrate:
   kind: local
+  start_backoff_first_s: 0.05
+  start_backoff_max_s: 30
 # How pool workers claim, yield, poll and roll index segments, and how often a coordinator first reads an outcome.
 pool:
   quantum_items: 100

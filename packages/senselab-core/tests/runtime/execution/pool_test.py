@@ -764,7 +764,7 @@ def test_a_resource_fault_never_moves_a_job_to_a_class_the_qos_cap_cannot_start(
         {
             "devices": ["cpu"],
             "resource_classes": classes,
-            "substrate": {"kind": "slurm", "qos_cpu_cap": 4},
+            "substrate": {**ExecutionProfile.load("orcd").substrate.model_dump(mode="json"), "qos_cpu_cap": 4},
             "pool": {"poll_s": 0.2, "first_poll_s": 0.01},
             "faults": {**CONTENT, "resource_replacements": 1},
         },

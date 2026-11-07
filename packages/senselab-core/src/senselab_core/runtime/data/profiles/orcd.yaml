@@ -59,11 +59,18 @@ resource_classes:
     partition: ${GPU_PARTITION}
     gres: gpu:1
     max_workers: 4
-# What starts pool workers.
+# What starts pool workers; the first and longest wait after a failed start; each Slurm command's timeout,
+# tries and first retry wait.
 substrate:
   kind: slurm
   qos_cpu_cap:
   exclude_nodes: []
+  start_backoff_first_s: 1
+  start_backoff_max_s: 30
+  commands:
+    timeout_s: 60
+    attempts: 3
+    retry_first_s: 0.5
 # How pool workers claim, yield, poll and roll index segments, and how often a coordinator first reads an outcome.
 pool:
   quantum_items: 100
