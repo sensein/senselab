@@ -22,7 +22,7 @@ import statistics
 import subprocess
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -45,6 +45,7 @@ from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import NAMESPACE, cache_root
 from senselab_core.runtime.sizing import Sample, calibrated
 from senselab_core.runtime.store import ResultStore
+from senselab_worker.units import NS_PER_S
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -207,7 +208,7 @@ def measure_point(entry: Entry, point: int | str, suite: Suite, profile: Executi
     samples = _samples(run_dir)
     events = read_events(run_dir)
     queued = {e.job: e.t_ns for e in events if e.kind == "queued" and e.job is not None}
-    waits = [(e.t_ns - queued[e.job]) / 1e9 for e in events if e.kind == "claimed" and e.job in queued]
+    waits = [(e.t_ns - queued[e.job]) / NS_PER_S for e in events if e.kind == "claimed" and e.job in queued]
     workers = {s.job for s in samples}
     files, written = _tally(store_root, run_dir)
     entries, stored = _tally(store_root)
@@ -251,16 +252,39 @@ def commit() -> str:
     ).stdout.strip()
 
 
+PER_ITEM: Mapping[str, Callable[[Mapping[str, Any]], float]] = {
+    "per_item_s": lambda r: r["per_item_s"],
+    "peak_rss_bytes": lambda r: r["peak_rss_bytes"],
+    "files_per_item": lambda r: r["files_written"] / r["items"],
+    "bytes_per_item": lambda r: r["bytes_written"] / r["items"],
+}
+"""What must stay flat with scale (P-33), read from a result: per-item time, peak memory, files and bytes written."""
+
+
+def _verdict(value: float | None, bound: float | None, what: str) -> str:
+    if value is None:
+        return f"{what} n/a"
+    return f"{what} unmeasured" if bound is None else (f"{what} ok" if value <= bound else f"{what} EXCEEDED ({bound})")
+
+
 def flatness(results: Sequence[Mapping[str, Any]], budgets: Mapping[str, Any]) -> list[str]:
-    """Return one line per task: its per-item cost at 10⁴ over that at 10², against `flat_ratio`."""
+    """Return one line per task and measure: its flatness and its ceiling.
+
+    Flatness is the value at 10⁴ over at 10² against `flat_ratio`; the ceiling is the largest value over the points
+    against its `per_item` budget. An unset budget reads unmeasured.
+    """
     lines = []
     for task in sorted({r["task"] for r in results}):
-        cost = {r["point"]: r["per_item_s"] for r in results if r["task"] == task}
-        if not all(p in cost for p in FLAT_POINTS):
-            continue
-        ratio, bound = cost[FLAT_POINTS[1]] / cost[FLAT_POINTS[0]], budgets.get("flat_ratio")
-        verdict = "unmeasured budget" if bound is None else ("flat" if ratio <= bound else f"NOT FLAT (> {bound})")
-        lines.append(f"{task}: per item at {FLAT_POINTS[1]} / at {FLAT_POINTS[0]} = {ratio:.3f}, {verdict}")
+        at = {r["point"]: r for r in results if r["task"] == task}
+        ceilings = (budgets.get("per_item") or {}).get(task) or {}
+        for name, read in PER_ITEM.items():
+            values = {p: read(r) for p, r in at.items()}
+            low, high = (values.get(p) for p in FLAT_POINTS)
+            ratio = high / low if low and high is not None else None
+            flat = _verdict(ratio, budgets.get("flat_ratio"), "flat")
+            ceiling = _verdict(max(values.values()), ceilings.get(name), "ceiling")
+            shown = "n/a" if ratio is None else f"{ratio:.3f}"
+            lines.append(f"{task} {name}: at {FLAT_POINTS[1]} / at {FLAT_POINTS[0]} = {shown}, {flat}, {ceiling}")
     return lines
 
 

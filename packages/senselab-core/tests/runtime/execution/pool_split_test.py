@@ -33,7 +33,7 @@ from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.store import ResultStore
-from senselab_core.testing.measures import CEILED_SIZING, FixedMeasures
+from senselab_core.testing.measures import CEILED, CEILED_SIZING, FixedMeasures
 
 SCORE = scoring("pool_split_test.score")
 CHAIN = SCORE.model_copy(update={"name": "pool_split_test.chain", "inputs": {"value": "sha256"}})
@@ -170,7 +170,9 @@ def test_a_fragment_of_200_jobs_is_queued_as_20_items_of_10(tmp_path: Path) -> N
     assert [j for f in items for j in f.jobs] == list(fragment.jobs)
     keys = [job_key(placed, f.node, i, f.placement).digest() for f in items for i in f.inputs]
     assert keys == [job_key(placed, fragment.node, i, fragment.placement).digest() for i in fragment.inputs]
-    assert all(f.placement == fragment.placement for f in items)
+    batch = fragment.placement.batch_size
+    assert all(f.placement.model_copy(update={"batch_size": batch}) == fragment.placement for f in items)
+    assert {f.placement.batch_size for f in items} == {10}
 
 
 @pytest.mark.logic
@@ -190,9 +192,11 @@ def test_an_unmeasured_unit_calibrates_on_one_worker_and_its_samples_size_the_re
             cold = index == 0
             sample = Sample(
                 wall_s=4.5 if cold else 4.0,
+                claim_s=0.1,
                 jobs=1,
                 input_s=None,
                 baseline_bytes=10,
+                resident_bytes=15,
                 peak_memory_bytes=20,
                 cold=cold,
                 job="7",
@@ -201,13 +205,41 @@ def test_an_unmeasured_unit_calibrates_on_one_worker_and_its_samples_size_the_re
     results, done = pool.poll(first)
     [(unit, measure, measured)] = measures.puts
     assert len(results) == 4 and not done and (unit.task, unit.resource_class) == (SCORE.name, "cpu")
-    assert (measure.load_s, measure.s_per_input_s, measure.peak_memory_bytes) == (0.5, 4.0, 20)
-    assert measured.sha is None and measured.jobs == ("7",)
-    quantum = math.ceil(0.5 / (profile.sizing.load_share * 4.0))
+    assert (measure.load_s, measure.claim_s, measure.s_per_input_s) == (0.5, 0.1, 4.0)
+    assert (measure.resident_bytes, measure.peak_memory_bytes) == (15, 20)
+    assert (
+        measured.sha is None
+        and measured.jobs == ("7",)
+        and measured.run is not None
+        and "senselab-core" in measured.run
+    )
+    quantum = math.ceil((0.5 + 0.1) / (profile.sizing.load_share * 4.0))
     assert [len(c.fragments[0].jobs) for c in _claim_all(queue)] == [2, quantum, 4 - quantum]
     assert pool.workers_wanted("cpu", 6) == min(
         math.ceil(6 * 4.0 / profile.sizing.target_wall_s), math.ceil(6 / quantum)
     )
+
+
+@pytest.mark.logic
+def test_a_resource_fault_halves_the_batch_later_items_are_sent_in(tmp_path: Path) -> None:
+    """A resource fault on an item in batches of 8 writes doubled per-item memory; later items go in batches of 4."""
+    room = _profile(quantum=100).sizing.memory_headroom * 2**33
+    per_item = int(room // 8)
+    measure = CEILED.model_copy(update={"peak_memory_bytes": per_item})
+    profile, measures = _profile(quantum=100, resource_replacements=0), FixedMeasures(measure)
+    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(32)])
+    pool = _pool(tmp_path, profile, measures=measures)
+    admission = pool.admit(placed, values)
+    handle = pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(16)]))
+    [claim] = _claim_all(pool.queues.queue("cpu"))
+    assert claim.fragments[0].placement.batch_size == 8
+    with claim:
+        report(claim, claim.items[0], _failed(placed, claim.fragments[0], OOM))
+    list(follow(pool, handle))
+    [(_, grown, derivation)] = measures.puts
+    assert grown.peak_memory_bytes == 2 * per_item and derivation.jobs == ("w",)
+    pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(16, 32)]))
+    assert {c.fragments[0].placement.batch_size for c in _claim_all(pool.queues.queue("cpu"))} == {4}
 
 
 @pytest.mark.parametrize(("cap", "expected"), [(None, 20), (16, 4)], ids=["class-max", "qos-cap"])

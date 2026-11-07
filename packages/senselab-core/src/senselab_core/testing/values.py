@@ -958,7 +958,7 @@ def _register_runtime_samples() -> None:
         invalid_updates=[
             {"network": "maybe"},
             {"devices": ("tpu",)},
-            {"format": "execution-profile@3.0"},
+            {"format": "execution-profile@4.0"},
             {"resource_classes": {"gpu:h100": ResourceClass(device="cpu", max_workers=1)}},
         ],
     )

@@ -26,6 +26,8 @@ _NVIDIA_SMI_FORMAT = "--format=csv,noheader,nounits"
 _NVIDIA_SMI_GPU_QUERY = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS},compute_cap", _NVIDIA_SMI_FORMAT]
 _NVIDIA_SMI_GPU_QUERY_NO_CAP = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS}", _NVIDIA_SMI_FORMAT]
 _CHIP_QUERY = ["sysctl", "-n", "machdep.cpu.brand_string"]
+_MEMORY_FIELDS = ("index", "uuid", "memory.used")
+_NVIDIA_SMI_MEMORY_QUERY = ["nvidia-smi", f"--query-gpu={','.join(_MEMORY_FIELDS)}", _NVIDIA_SMI_FORMAT]
 
 
 class DeviceResolutionError(ValueError):
@@ -252,11 +254,11 @@ def oom_kills(memory_events: Optional[Path]) -> Optional[int]:
     return int(found) if found.isdigit() else None
 
 
-def memory_bytes(proc_cgroup: Path = Path("/proc/self/cgroup")) -> tuple[int, int]:
-    """Return this process's memory now and its high-water, in bytes.
+def memory_bytes(proc_cgroup: Path = Path("/proc/self/cgroup")) -> tuple[Optional[int], int]:
+    """Return this process's memory now (None where unreadable) and its high-water, in bytes.
 
-    From its cgroup v2 (`memory.current`, `memory.peak`), which counts every process of the cgroup; elsewhere the
-    largest resident set of this process and of its waited-for children, for both.
+    From its cgroup v2 (`memory.current`, `memory.peak`), which counts every process of the cgroup; elsewhere no
+    current figure and the largest resident set of this process and of its waited-for children.
     """
     events = cgroup_memory_events(proc_cgroup)
     if events is not None:
@@ -268,5 +270,20 @@ def memory_bytes(proc_cgroup: Path = Path("/proc/self/cgroup")) -> tuple[int, in
         else:
             return current, max(current, peak)
     unit = 1 if platform.system() == "Darwin" else _KIB
-    used = unit * max(resource.getrusage(who).ru_maxrss for who in (resource.RUSAGE_SELF, resource.RUSAGE_CHILDREN))
-    return used, used
+    return None, unit * max(
+        resource.getrusage(who).ru_maxrss for who in (resource.RUSAGE_SELF, resource.RUSAGE_CHILDREN)
+    )
+
+
+def device_memory_bytes(run: Callable[[list[str]], str] = _run) -> Optional[int]:
+    """Return the device memory used on the GPUs this process sees (`CUDA_VISIBLE_DEVICES`), None without one."""
+    try:
+        output = run(_NVIDIA_SMI_MEMORY_QUERY)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    rows = [[p.strip() for p in line.split(",")] for line in output.splitlines()]
+    used = [(r[0], r[1], int(r[2]) * _MIB) for r in rows if len(r) == len(_MEMORY_FIELDS) and r[2].isdigit()]
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    names = None if visible is None else {v.strip() for v in visible.split(",") if v.strip()}
+    chosen = [n for index, uuid, n in used if names is None or index in names or uuid in names]
+    return sum(chosen) if chosen else None

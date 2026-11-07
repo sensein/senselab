@@ -66,9 +66,9 @@ RUN_EVENT_FORMAT = "run-event@1.0"
 SERVICE_ENTRY_FORMAT = "service-entry@1.0"
 """The format of a service's registry entry, `<registry>/svc-<identity digest>.json`: its identity and endpoint."""
 
-EXECUTION_PROFILE_FORMAT = "execution-profile@2.0"
+EXECUTION_PROFILE_FORMAT = "execution-profile@3.0"
 """The format of an execution profile, `runtime/data/profiles/<name>.yaml` or a user's override."""
-RETIRED_EXECUTION_PROFILE_FORMATS = frozenset({"execution-profile@1"})
+RETIRED_EXECUTION_PROFILE_FORMATS = frozenset({"execution-profile@1", "execution-profile@2"})
 """Execution-profile formats 2.x no longer reads, as `<name>@<major>`."""
 
 CATALOGUE_FORMAT = "catalogue@2.0"

@@ -191,21 +191,31 @@ def check(recorded: SourceStamp, path: str | os.PathLike[str]) -> None:
 class _ChunkChecked:
     """A read-only binary file over `fd` that serves bytes only from chunks whose digest the stamp records.
 
-    Each chunk a read touches is read whole by `os.pread` once, hashed and compared before any of its bytes is
-    served, and kept while the file is open, so a decoder that seeks back and forth reads no chunk twice. A chunk
-    that differs ends the read short and is held in `stale`, since the decoder's callback cannot raise through it.
+    Each chunk a read touches is read whole by `os.pread`, hashed and compared before any of its bytes is served.
+    Two chunks are kept: the one read last, and the one the last seek landed in, which a decoder searching for a
+    frame returns to; so a read of any length holds two chunks at most. A chunk that differs ends the read short and
+    is held in `stale`, since the decoder's callback cannot raise through it.
     """
 
     def __init__(self, fd: int, stamp: SourceStamp, path: object) -> None:
         self._fd, self._stamp, self._path = fd, stamp, path
         self._pos = 0
         self._chunks: dict[int, bytes] = {}
+        self._anchor = 0
         self.stale: StaleSource | None = None
 
     def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
         base = {os.SEEK_SET: 0, os.SEEK_CUR: self._pos, os.SEEK_END: self._stamp.size}[whence]
-        self._pos = max(base + offset, 0)
+        target = max(base + offset, 0)
+        if target != self._pos:
+            self._anchor = target // self._stamp.chunk_size
+        self._pos = target
         return self._pos
+
+    @property
+    def held(self) -> int:
+        """How many verified chunks are kept."""
+        return len(self._chunks)
 
     def tell(self) -> int:
         return self._pos
@@ -235,6 +245,7 @@ class _ChunkChecked:
             chunk = b"".join(parts)
             if chunk_digest(chunk) != self._stamp.chunks[index]:
                 raise StaleSource(f"{self._path} changed since it was opened: chunk {index} differs")
+            self._chunks = {i: c for i, c in self._chunks.items() if i == self._anchor}
             self._chunks[index] = chunk
         return self._chunks[index]
 

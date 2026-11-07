@@ -19,7 +19,7 @@ from senselab_core.runtime.profiles import (
     UnlistedSource,
     resolve_execution,
 )
-from senselab_core.runtime.resources import Measured, ResourceMeasure, ResourceRow, ResourceTable
+from senselab_core.runtime.resources import ClassMeasure, Measured, ResourceRow, ResourceTable
 from senselab_core.testing.contracts import BASE, base_call
 
 TASK = TaskSpec(
@@ -114,16 +114,16 @@ def test_profile_digest_not_in_key() -> None:
 def test_batch_size_is_sized_from_the_measure_and_not_in_key() -> None:
     """The batch fills the memory headroom beside the resident model; 1 unmeasured or unknown; never in the key."""
     registry = _registry(_backend("b1", "one"))
-    measure = ResourceMeasure(
-        load_s=2.5, resident_bytes=1024, peak_memory_bytes=1280, s_per_input_s=0.1, input_s_per_item=5.0
-    )
-    row = ResourceRow(
-        id="org/m",
-        revision="a" * 40,
-        download_bytes=None,
-        classes={"cpu": measure},
+    measure = ClassMeasure(
+        load_s=2.5,
+        claim_s=0.01,
+        resident_bytes=1024,
+        peak_memory_bytes=1280,
+        s_per_input_s=0.1,
+        input_s_per_item=5.0,
         measured=Measured(sha="1" * 40, jobs=("1",)),
     )
+    row = ResourceRow(id="org/m", revision="a" * 40, download_bytes=None, classes={"cpu": measure})
     measured = Catalogue(entries=CAT.entries, resource_tables=(ResourceTable(task="t", backend="b1", rows=(row,)),))
     host = HardwareInfo(cpu_count=1, memory_bytes=10_000, gpus=(), apple_silicon=False, platform="linux-x86_64")
     placements = [
@@ -240,14 +240,15 @@ def test_retry_block_keeps_its_format_identity() -> None:
 
 @pytest.mark.logic
 def test_profile1_refused(tmp_path: Path) -> None:
-    """An `execution-profile@1.0` override or file is refused as retired, naming the rewrite; 2.0 is what ships."""
-    with pytest.raises(ProfileFormatRetired, match="execution-profile@2.0"):
-        ExecutionProfile.load("laptop", {"format": "execution-profile@1.0"})
+    """An `execution-profile@1.0` or `@2.0` override or file is refused as retired, naming the rewrite; 3.0 ships."""
+    for retired in ("execution-profile@1.0", "execution-profile@2.0"):
+        with pytest.raises(ProfileFormatRetired, match="execution-profile@3.0"):
+            ExecutionProfile.load("laptop", {"format": retired})
     path = tmp_path / "site.yaml"
     path.write_text("format: execution-profile@1.0\nnetwork: offline\n")
     with pytest.raises(ProfileFormatRetired, match="retired format execution-profile@1.0"):
         ExecutionProfile.load("orcd", path)
-    assert {ExecutionProfile.load(n).format for n in ("laptop", "orcd")} == {"execution-profile@2.0"}
+    assert {ExecutionProfile.load(n).format for n in ("laptop", "orcd")} == {"execution-profile@3.0"}
 
 
 @pytest.mark.logic

@@ -106,7 +106,14 @@ def _result(
 @pytest.mark.logic
 def test_resource_table_derivation_names_jobs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The largest point's measure is written with the commit and every job of the unit; a measureless one is listed."""
-    small = {"load_s": 9.0, "resident_bytes": 1, "peak_memory_bytes": 2, "s_per_input_s": 0.2, "input_s_per_item": 7.0}
+    small = {
+        "load_s": 9.0,
+        "claim_s": 0.01,
+        "resident_bytes": 1,
+        "peak_memory_bytes": 2,
+        "s_per_input_s": 0.2,
+        "input_s_per_item": 7.0,
+    }
     large = {**small, "load_s": 8.0, "s_per_input_s": 0.1}
     results = tmp_path / "results"
     results.mkdir()
@@ -122,7 +129,28 @@ def test_resource_table_derivation_names_jobs(tmp_path: Path, capsys: pytest.Cap
     [row] = table.rows
     assert (row.id, row.revision, row.download_bytes) == ("org/m", "b" * 40, None)
     assert row.classes["gpu:h100"].load_s == 8.0 and row.classes["gpu:h100"].s_per_input_s == 0.1
-    assert row.measured.sha == "a" * 40 and row.measured.jobs == ("101", "102", "103")
+    measured = row.classes["gpu:h100"].measured
+    assert measured.sha == "a" * 40 and measured.jobs == ("101", "102", "103")
     (results / "c@1.json").write_text(json.dumps(_result(1, 1, ["105"], small, sha="c" * 40)))
     with pytest.raises(ValueError, match="several commits"):
         generate.main([str(results), "--out", str(tmp_path / "out")])
+
+
+@pytest.mark.logic
+def test_flatness_covers_time_memory_files_and_bytes_against_budgets() -> None:
+    """Each measure's value at 10⁴ over at 10² is judged against `flat_ratio`, its largest against its ceiling."""
+    ladder = _module("scale_ladder_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+
+    def point(at: int, wall: float, peak: int, files: int, written: int) -> dict[str, Any]:
+        keys = ("per_item_s", "peak_rss_bytes", "files_written", "bytes_written")
+        return {"task": "t", "point": at, "items": at, **dict(zip(keys, (wall, peak, files, written), strict=True))}
+
+    results = [point(100, 1.0, 1000, 200, 10_000), point(10_000, 1.2, 1000, 30_000, 1_000_000)]
+    budgets = {"flat_ratio": 1.25, "per_item": {"t": {"per_item_s": 1.1, "peak_rss_bytes": None}}}
+    assert ladder.flatness(results, budgets) == [
+        "t per_item_s: at 10000 / at 100 = 1.200, flat ok, ceiling EXCEEDED (1.1)",
+        "t peak_rss_bytes: at 10000 / at 100 = 1.000, flat ok, ceiling unmeasured",
+        "t files_per_item: at 10000 / at 100 = 1.500, flat EXCEEDED (1.25), ceiling unmeasured",
+        "t bytes_per_item: at 10000 / at 100 = 1.000, flat ok, ceiling unmeasured",
+    ]
+    assert all("unmeasured" in line for line in ladder.flatness(results, {})[:1])

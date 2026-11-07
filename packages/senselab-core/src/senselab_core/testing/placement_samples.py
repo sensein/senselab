@@ -17,7 +17,7 @@ from senselab_core.runtime.execution_settings import (
     SupervisorSettings,
     Timeouts,
 )
-from senselab_core.runtime.resources import Measured, ResourceMeasure, ResourceRow, ResourceTable
+from senselab_core.runtime.resources import ClassMeasure, Measured, ResourceMeasure, ResourceRow, ResourceTable
 from senselab_core.runtime.sizing import Grant, Measure, Sample, Sizing
 
 Register = Callable[..., None]
@@ -25,8 +25,9 @@ Register = Callable[..., None]
 _COMMIT = "0" * 40
 _MEASURED = Measured(sha="1" * 40, jobs=("100", "101"))
 _MEASURE = ResourceMeasure(
-    load_s=2.5, resident_bytes=1024, peak_memory_bytes=4096, s_per_input_s=0.1, input_s_per_item=8.0
+    load_s=2.5, claim_s=0.01, resident_bytes=1024, peak_memory_bytes=4096, s_per_input_s=0.1, input_s_per_item=8.0
 )
+_CLASS = ClassMeasure(**_MEASURE.model_dump(), measured=_MEASURED)
 
 
 def resource_table(task: str, backend: str, model_id: str | None, revision: str | None = _COMMIT) -> ResourceTable:
@@ -35,8 +36,7 @@ def resource_table(task: str, backend: str, model_id: str | None, revision: str 
         id=model_id,
         revision=None if model_id is None else revision,
         download_bytes=1000,
-        classes={"cpu": _MEASURE},
-        measured=_MEASURED,
+        classes={"cpu": _CLASS},
     )
     return ResourceTable(task=task, backend=backend, rows=(row,))
 
@@ -100,14 +100,31 @@ def _register_resources(register: Register) -> None:
         ResourceMeasure,
         lambda: [
             _MEASURE,
-            ResourceMeasure(load_s=0, resident_bytes=0, peak_memory_bytes=1, s_per_input_s=0, input_s_per_item=None),
+            ResourceMeasure(
+                load_s=0,
+                claim_s=0,
+                resident_bytes=0,
+                peak_memory_bytes=1,
+                device_resident_bytes=2**30,
+                device_peak_bytes=2**31,
+                s_per_input_s=0,
+                input_s_per_item=None,
+            ),
         ],
         invalid_updates=[
             {"peak_memory_bytes": 0},
             {"load_s": -1.0},
+            {"claim_s": -1.0},
             {"resident_bytes": 8192},
             {"input_s_per_item": 0.0},
+            {"device_resident_bytes": 1, "device_peak_bytes": None},
+            {"device_resident_bytes": 2**32, "device_peak_bytes": 2**31},
         ],
+    )
+    register(
+        ClassMeasure,
+        lambda: [_CLASS, _CLASS.model_copy(update={"measured": Measured(sha=None, run="r", jobs=("7",))})],
+        invalid_updates=[{"measured": None}, {"load_s": -1.0}],
     )
     register(
         Measured,
@@ -121,7 +138,7 @@ def _register_resources(register: Register) -> None:
     register(
         ResourceRow,
         lambda: list(rows),
-        invalid_updates=[{"revision": "main"}, {"classes": {}}, {"classes": {"tpu": _MEASURE}}],
+        invalid_updates=[{"revision": "main"}, {"classes": {}}, {"classes": {"tpu": _CLASS}}],
     )
     register(
         ResourceTable,
@@ -218,8 +235,8 @@ def _register_sizing(register: Register) -> None:
         ),
         Measure: (
             [
-                Measure(load_s=2.5, resident_bytes=1024, bytes_per_item=256, s_per_item=0.5),
-                Measure(load_s=0, resident_bytes=0, bytes_per_item=0, s_per_item=0),
+                Measure(load_s=2.5, claim_s=0.01, resident_bytes=1024, bytes_per_item=256, s_per_item=0.5),
+                Measure(load_s=0, claim_s=0, resident_bytes=0, bytes_per_item=0, s_per_item=0, on_device=True),
             ],
             [{"load_s": -1.0}, {"bytes_per_item": -1}],
         ),
@@ -240,11 +257,31 @@ def _register_sizing(register: Register) -> None:
         Sample: (
             [
                 Sample(
-                    wall_s=3.0, jobs=1, input_s=8.0, baseline_bytes=1024, peak_memory_bytes=4096, cold=True, job="7"
+                    wall_s=3.0,
+                    claim_s=0.01,
+                    jobs=1,
+                    input_s=8.0,
+                    baseline_bytes=1024,
+                    resident_bytes=2048,
+                    peak_memory_bytes=4096,
+                    device_baseline_bytes=0,
+                    device_bytes=2**30,
+                    cold=True,
+                    job="7",
                 ),
-                Sample(wall_s=0, jobs=2, input_s=None, baseline_bytes=0, peak_memory_bytes=1, cold=False, job="h:1"),
+                Sample(
+                    wall_s=0,
+                    claim_s=0,
+                    jobs=2,
+                    input_s=None,
+                    baseline_bytes=0,
+                    resident_bytes=None,
+                    peak_memory_bytes=0,
+                    cold=False,
+                    job="h:1",
+                ),
             ],
-            [{"jobs": 0}, {"peak_memory_bytes": 0}, {"job": ""}],
+            [{"jobs": 0}, {"peak_memory_bytes": -1}, {"job": ""}, {"claim_s": -1.0}],
         ),
     }
     for cls, (samples, invalid) in classes.items():

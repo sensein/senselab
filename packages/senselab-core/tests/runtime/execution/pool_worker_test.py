@@ -28,7 +28,7 @@ from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.sizing import Sample
+from senselab_core.runtime.sizing import Sample, calibrated, measure_of
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import WorkerClient, WorkerLost, WorkerOOMKilled
 from senselab_core.testing.interpreter import source_tree_python
@@ -122,14 +122,15 @@ def test_worker_yields_after_quantum_to_older_queue(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a_worker_claims_one_item_at_a_time(tmp_path: Path) -> None:
-    """A 1-job item and two 4-job items are claimed as 1, 4 and 4 jobs, never 1 + 4; each outcome holds its sample."""
+def test_a_worker_gathers_one_job_items_once_warm(tmp_path: Path) -> None:
+    """A cold queue's first item is claimed alone; then one-job items gather into one claim, never a 4-job item."""
     profile = _profile(quantum_items=4)
-    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(9)])
+    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(11)])
     admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
     queue = QueueSet(pool_dir, profile).queue("cpu")
-    queue.put(node_fragment(placed, admission, elements=[(0,)]))
-    queue.put_all(split(node_fragment(placed, admission, elements=[(i,) for i in range(1, 9)]), 4))
+    for element in range(3):
+        _put(placed, pool_dir, element)
+    queue.put_all(split(node_fragment(placed, admission, elements=[(i,) for i in range(3, 11)]), 4))
     send, sizes = _sender(store, profile), []
 
     def recorded(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
@@ -138,10 +139,44 @@ def test_a_worker_claims_one_item_at_a_time(tmp_path: Path) -> None:
 
     worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=recorded)
     assert worker.serve() == 0
-    assert sizes == [1, 4, 4] and len(worker.served) == 3 and queue.work() == 0
+    assert sizes == [1, 2, 4, 4] and len(worker.served) == 5 and queue.work() == 0
     samples = [Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)]
-    assert sorted((s.jobs, s.cold) for s in samples) == [(1, True), (4, False), (4, False)]
-    assert all(s.input_s is None and s.peak_memory_bytes >= s.baseline_bytes and s.wall_s > 0 for s in samples)
+    assert sorted((s.jobs, s.cold) for s in samples) == [(1, False), (1, False), (1, True), (4, False), (4, False)]
+    assert all(s.input_s is None and s.wall_s > 0 and s.claim_s >= 0 for s in samples)
+
+
+@pytest.mark.logic
+def test_samples_leave_the_resident_model_out_of_the_per_item_memory(tmp_path: Path) -> None:
+    """A stand-in loading a 1000-byte model and holding 10 bytes a job gives a resident model and 10 bytes an item.
+
+    The model loads on the first request and stays; each job holds 10 bytes while it runs.
+    """
+    profile = _profile()
+    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(3)])
+    for element in range(3):
+        _put(placed, pool_dir, element)
+    memory = {"current": 100, "peak": 100}
+    send = _sender(store, profile)
+
+    def standing_in(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+        if memory["current"] == 100:
+            memory["current"] += 1000
+        memory["peak"] = max(memory["peak"], memory["current"] + 10)
+        return send(jobs, placement)
+
+    worker = PoolWorker(
+        pool_dir,
+        ["cpu"],
+        profile=profile,
+        store=store,
+        send=standing_in,
+        memory=lambda: (memory["current"], memory["peak"]),
+        device_memory=lambda: None,
+    )
+    assert worker.serve() == 0
+    found = calibrated([Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)])
+    assert found is not None and (found.resident_bytes, found.peak_memory_bytes) == (1100, 1110)
+    assert measure_of(found).bytes_per_item == 10
 
 
 @pytest.mark.logic

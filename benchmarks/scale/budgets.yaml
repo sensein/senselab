@@ -4,11 +4,11 @@ format: scale-budgets@1.0
 flat_ratio:
 # Per module, the share a per-item cost may rise over its last measured value before a merge is blocked.
 regression_band: {}
-# Per task, per-item ceilings: wall seconds and peak memory bytes; null until the first idle-node run.
+# Per task, ceilings: wall seconds per item, peak memory bytes, files and bytes written per item; null until measured.
 per_item:
-  signal.resample: {per_item_s: null, peak_rss_bytes: null}
-  fake.echo: {per_item_s: null, peak_rss_bytes: null}
-  speech_to_text: {per_item_s: null, peak_rss_bytes: null}
-  speaker_embeddings: {per_item_s: null, peak_rss_bytes: null}
-  diarize: {per_item_s: null, peak_rss_bytes: null}
-  pii_spans: {per_item_s: null, peak_rss_bytes: null}
+  signal.resample: {per_item_s: null, peak_rss_bytes: null, files_per_item: null, bytes_per_item: null}
+  fake.echo: {per_item_s: null, peak_rss_bytes: null, files_per_item: null, bytes_per_item: null}
+  speech_to_text: {per_item_s: null, peak_rss_bytes: null, files_per_item: null, bytes_per_item: null}
+  speaker_embeddings: {per_item_s: null, peak_rss_bytes: null, files_per_item: null, bytes_per_item: null}
+  diarize: {per_item_s: null, peak_rss_bytes: null, files_per_item: null, bytes_per_item: null}
+  pii_spans: {per_item_s: null, peak_rss_bytes: null, files_per_item: null, bytes_per_item: null}

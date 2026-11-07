@@ -1,4 +1,4 @@
-"""The execution profile (`execution-profile@2`) and `resolve_execution`, which places a task call under it.
+"""The execution profile (`execution-profile@3`) and `resolve_execution`, which places a task call under it.
 
 A profile holds stack preferences per task, device preference, env roots, the torch index override, the model-source
 allowlist, the model-cache budget, the retry policy, the network policy, the resource classes, the substrate, the
@@ -67,7 +67,7 @@ class NoDevice(RuntimeError):
 
 
 class ProfileFormatRetired(ValueError):
-    """A profile in a retired format; it is rewritten as `execution-profile@2.0`."""
+    """A profile in a retired format; it is rewritten as `execution-profile@3.0`."""
 
     def __init__(self, found: str) -> None:
         """Name the declared format."""

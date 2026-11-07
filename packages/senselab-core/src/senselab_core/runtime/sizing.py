@@ -5,6 +5,7 @@ run first on one worker, the first carrying the model load (`calibrated`, from e
 the packaged tables, then the ones calibration rounds wrote under the cache.
 """
 
+import importlib.metadata
 import math
 import statistics
 from collections.abc import Callable, Sequence
@@ -30,12 +31,17 @@ Count = Annotated[int, Field(ge=1)]
 
 
 class Measure(Frozen):
-    """What one item costs on one resource class: seconds to load, bytes resident after it, bytes and seconds each."""
+    """What one item costs on one resource class: seconds to load and to claim, memory resident and per item, seconds.
+
+    `on_device` says the memory pair is the device's, sized against the class's device memory cap.
+    """
 
     load_s: Seconds
+    claim_s: Seconds
     resident_bytes: Bytes
     bytes_per_item: Bytes
     s_per_item: Seconds
+    on_device: bool = False
 
 
 class Grant(Frozen):
@@ -47,12 +53,19 @@ class Grant(Frozen):
     quantum_s: Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
     @classmethod
-    def of(cls, resource: ResourceClass, pool: PoolSettings, host_memory_bytes: int | None = None) -> "Grant":
-        """Return the grant of a worker of `resource`: its memory cap, else its memory, else `host_memory_bytes`.
+    def of(
+        cls,
+        resource: ResourceClass,
+        pool: PoolSettings,
+        host_memory_bytes: int | None = None,
+        *,
+        on_device: bool = False,
+    ) -> "Grant":
+        """Return the grant of a worker of `resource`: its device memory cap `on_device`, else its memory or the host's.
 
         The quantum ceilings are the pool's, `quantum_s` within the class's wall-time limit.
         """
-        memory = resource.memory_cap_bytes or resource.mem_bytes or host_memory_bytes or None
+        memory = resource.memory_cap_bytes if on_device else resource.mem_bytes or host_memory_bytes or None
         time_s = pool.quantum_s if resource.time_s is None else min(pool.quantum_s, resource.time_s)
         return cls(
             max_workers=resource.max_workers, memory_bytes=memory, quantum_items=pool.quantum_items, quantum_s=time_s
@@ -71,16 +84,17 @@ class Sizing(Frozen):
 def size(measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 0, batchable: bool = True) -> Sizing:
     """Return the sizing of a unit measured as `measure` under `grant`, for `work` waiting jobs.
 
-    - `quantum_items`: the fewest jobs whose time keeps the load within `load_share` of the quantum, within the
-      ceilings: `quantum_items`, and as many jobs as fit in `quantum_s` after the load;
-    - `quantum_s`: the quantum's jobs plus the load, within `quantum_s`;
+    - `quantum_items`: the fewest jobs whose time keeps the load and the claim within `load_share` of the quantum
+      (the ceiling when both are 0), within the ceilings: `quantum_items`, and the jobs that fit in `quantum_s` after
+      them;
+    - `quantum_s`: the quantum's jobs plus the load and claim, within `quantum_s`;
     - `batch_size`: the most items whose memory beside the resident memory fits `memory_headroom` of the grant's,
       at most a quantum; 1 when the grant's memory is unknown or `batchable` is False;
     - `workers`: as many as end `work` within `target_wall_s`, at most a quantum each and `max_workers`; 0 for none.
     """
-    per, load, ceiling = measure.s_per_item, measure.load_s, grant.quantum_items
+    per, load, ceiling = measure.s_per_item, measure.load_s + measure.claim_s, grant.quantum_items
     paid = config.load_share * per
-    wanted = 1 if load == 0 else _held(load / paid, ceiling, math.ceil) if paid else ceiling
+    wanted = _held(load / paid, ceiling, math.ceil) if paid and load else ceiling
     fits = _held((grant.quantum_s - load) / per, ceiling, math.floor) if per else ceiling
     quantum = max(1, min(wanted, fits))
     batch = 1
@@ -105,14 +119,24 @@ def _held(x: float, bound: int, rounded: Callable[[float], int]) -> int:
     return bound if x >= bound else rounded(max(x, 0.0))
 
 
-def measure_of(row: ResourceMeasure) -> Measure:
-    """Return the per-item measure of a resource-table measure, at its median item's input seconds."""
+def measure_of(row: ResourceMeasure, *, on_device: bool = False) -> Measure:
+    """Return the per-item measure of a resource-table measure, at its median item's input seconds.
+
+    `on_device` takes the device memory pair when the row measured one, else the host pair.
+    """
     seconds = row.s_per_input_s if row.input_s_per_item is None else row.s_per_input_s * row.input_s_per_item
+    device = on_device and row.device_resident_bytes is not None and row.device_peak_bytes is not None
+    resident, peak = (
+        (row.device_resident_bytes, row.device_peak_bytes) if device else (row.resident_bytes, row.peak_memory_bytes)
+    )
+    assert resident is not None and peak is not None
     return Measure(
         load_s=row.load_s,
-        resident_bytes=row.resident_bytes,
-        bytes_per_item=row.peak_memory_bytes - row.resident_bytes,
+        claim_s=row.claim_s,
+        resident_bytes=resident,
+        bytes_per_item=peak - resident,
         s_per_item=seconds,
+        on_device=device,
     )
 
 
@@ -120,20 +144,29 @@ class Sample(Frozen):
     """What a pool worker measured of one item it ran.
 
     Attributes:
-        wall_s: Seconds from the claim to the item's outcomes.
+        wall_s: The item's share, by jobs, of the seconds from its claim to its claim's outcomes.
+        claim_s: Seconds the claim holding the item took to take.
         jobs: The item's jobs.
         input_s: Their recording seconds; None when a job has no recording input or its length is unrecorded.
-        baseline_bytes: The worker's memory before it ran anything.
-        peak_memory_bytes: Its high-water memory once the item ran.
+        baseline_bytes: The worker's host memory before it ran anything.
+        resident_bytes: Its host memory once the item's outcomes were in, the model loaded and the item freed; None
+            where only a high-water is readable.
+        peak_memory_bytes: Its host high-water memory once the item ran.
+        device_baseline_bytes: The device memory used before the worker ran anything; None off a device.
+        device_bytes: The device memory used once the item ran; None off a device.
         cold: Whether the worker had run nothing of the item's queue before, so the item carried the model load.
         job: The scheduler job id or process id of the worker.
     """
 
     wall_s: Seconds
+    claim_s: Seconds
     jobs: Count
     input_s: Seconds | None
     baseline_bytes: Bytes
-    peak_memory_bytes: Count
+    resident_bytes: Bytes | None
+    peak_memory_bytes: Bytes
+    device_baseline_bytes: Bytes | None = None
+    device_bytes: Bytes | None = None
     cold: bool
     job: NonEmptyStr
 
@@ -141,8 +174,10 @@ class Sample(Frozen):
 def calibrated(samples: Sequence[Sample]) -> ResourceMeasure | None:
     """Return the measure a calibration round's `samples` give; None for none.
 
-    Seconds per item are the median over warm items (over cold ones when none is warm), the load is the median of
-    what a cold item took beyond its jobs, the resident memory is the lowest baseline and the peak the highest.
+    Seconds per item are the median over warm items (over cold ones when none is warm), the load the median of what
+    a cold item took beyond its jobs, the claim the median claim. The resident host memory is the lowest after a warm
+    item (after any item when none is warm), else the lowest baseline; the peak is the highest. The device pair is
+    the lowest device baseline and the highest device use, when the items ran on a device.
     """
     if not samples:
         return None
@@ -152,41 +187,58 @@ def calibrated(samples: Sequence[Sample]) -> ResourceMeasure | None:
     load = max(0.0, statistics.median([s.wall_s - per * s.jobs for s in cold])) if cold else 0.0
     inputs = [s.input_s / s.jobs for s in samples if s.input_s is not None]
     item_s = statistics.median(inputs) if len(inputs) == len(samples) and all(inputs) else None
-    resident = min(s.baseline_bytes for s in samples)
+    after = [s.resident_bytes for s in samples if s.resident_bytes is not None and not s.cold]
+    after = after or [s.resident_bytes for s in samples if s.resident_bytes is not None]
+    resident = min(after) if after else min(s.baseline_bytes for s in samples)
+    devices = [s for s in samples if s.device_baseline_bytes is not None and s.device_bytes is not None]
+    device = (
+        (min(s.device_baseline_bytes or 0 for s in devices), max(s.device_bytes or 0 for s in devices))
+        if devices
+        else (None, None)
+    )
     return ResourceMeasure(
         load_s=load,
+        claim_s=statistics.median([s.claim_s for s in samples]),
         resident_bytes=resident,
-        peak_memory_bytes=max(resident, *(s.peak_memory_bytes for s in samples)),
+        peak_memory_bytes=max(1, resident, *(s.peak_memory_bytes for s in samples)),
+        device_resident_bytes=device[0],
+        device_peak_bytes=None if device[1] is None else max(1, device[0] or 0, device[1]),
         s_per_input_s=per if item_s is None else per / item_s,
         input_s_per_item=item_s,
     )
 
 
-class Measures:
-    """The measures of the packaged resource tables, then of those calibration rounds wrote under `root`.
+def code_version() -> str:
+    """Return the installed senselab-core version, which names the commit it was built from."""
+    return importlib.metadata.version("senselab-core")
 
-    `root` defaults to `<cache root>/2x/resources`; `packaged` to the packaged catalogue's tables, read on first use.
+
+class Measures:
+    """The measures calibration rounds of this code version wrote under `root`, then the packaged resource tables'.
+
+    `root` defaults to `<cache root>/2x/resources/<code version>`, so a row written by other code is never read;
+    `packaged` defaults to the packaged catalogue's tables, read on first use.
     """
 
     def __init__(self, root: Path | None = None, packaged: Sequence[ResourceTable] | None = None) -> None:
-        """Read `packaged` tables first, then the tables under `root`; write under `root`."""
+        """Read the tables under `root` first, then `packaged`; write under `root`."""
         if root is None:
             from senselab_core.runtime.revision import (  # noqa: PLC0415 - revision imports profiles
                 NAMESPACE,
                 cache_root,
             )
 
-            root = cache_root() / NAMESPACE / "resources"
+            root = cache_root() / NAMESPACE / "resources" / code_version()
         self.root = Path(root)
         self._packaged = packaged
 
     def get(self, unit: Unit) -> ResourceMeasure | None:
-        """Return the measure of `unit`: a packaged table's, else a written one's, else None."""
+        """Return the measure of `unit`: a written table's, which is newer, else a packaged one's, else None."""
         if self._packaged is None:
             from senselab_core.runtime.call import packaged  # noqa: PLC0415 - call imports the planner
 
             self._packaged = packaged().catalogue.resource_tables
-        for tables in (self._packaged, load_resource_tables(self.root)):
+        for tables in (load_resource_tables(self.root), self._packaged):
             table = next((t for t in tables if (t.task, t.backend) == (unit.task, unit.backend)), None)
             row = None if table is None else table.row(unit.model_id, unit.revision)
             if row is not None and unit.resource_class in row.classes:

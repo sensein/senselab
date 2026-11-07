@@ -36,7 +36,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Final
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement
@@ -69,8 +69,18 @@ from senselab_core.runtime.execution.substrates import (
 )
 from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.resources import Measured, MeasureSource, Unit
-from senselab_core.runtime.sizing import Grant, Measure, Measures, Sample, Sizing, calibrated, measure_of, size
+from senselab_core.runtime.resources import Measured, MeasureSource, ResourceMeasure, Unit
+from senselab_core.runtime.sizing import (
+    Grant,
+    Measure,
+    Measures,
+    Sample,
+    Sizing,
+    calibrated,
+    code_version,
+    measure_of,
+    size,
+)
 from senselab_core.runtime.store import ResultStore
 
 if TYPE_CHECKING:
@@ -83,6 +93,7 @@ class ScalerFailed(RuntimeError):
     """The pool's scaler thread ended on an error that is not a substrate failure; the cause is chained."""
 
 
+CALIBRATION_WORKERS: Final = 1  # invariant: one worker runs a round, so its cold and warm items are one worker's
 DEAD_DIR = "dead"
 """The directory of a run's dead jobs, one `<key digest>.json` each."""
 
@@ -330,9 +341,10 @@ class Pool:
     ) -> tuple[list[_Flight], list[tuple[Unit, PlanFragment]]]:
         """Put `fragment` on its queue as its items (`split`); return them and the part held for a calibration.
 
-        A unit with a measure is split by its sized quantum. One without starts a calibration round with the first
-        `sizing.calibration_items` jobs, or, while its round runs, holds the whole fragment; a `retry` is put at once,
-        one job per item. The caller wakes the scaler (`_wake_scaler`) once it follows the items.
+        A unit with a measure is split by its sized quantum, its placement's batch the sized one. One without starts
+        a calibration round with the first `sizing.calibration_items` jobs, or, while its round runs, holds the whole
+        fragment; a `retry` is put at once, one job per item. The caller wakes the scaler (`_wake_scaler`) once it
+        follows the items.
 
         Raises:
             StaleCoordinator: a newer epoch was taken.
@@ -345,14 +357,18 @@ class Pool:
         queue.unhold(before=self.epoch)
         if queue.held(env) is not None:
             raise QueueHeld(name, env, self._env_failures(env))
-        request = node_request_size(self._admitted_plan(fragment)[0], fragment.node, fragment.placement)
         unit = self._unit(fragment)
         measure = self._measure(unit, name)
+        quantum = 1
+        if measure is not None:
+            sized = self._sizing(name, measure)
+            placement = fragment.placement.model_copy(update={"batch_size": sized.batch_size})
+            fragment, quantum = fragment.model_copy(update={"placement": placement}), sized.quantum_items
+        request = node_request_size(self._admitted_plan(fragment)[0], fragment.node, fragment.placement)
         part: PlanFragment | None = fragment
         waiting: list[tuple[Unit, PlanFragment]] = []
         if measure is None and not retry:
             part, waiting = self._calibration_part(unit, name, fragment)
-        quantum = 1 if measure is None else self._sizing(name, measure).quantum_items
         items = [] if part is None else split(part, quantum, request)
         reserved = measure is None and not retry and bool(items)
         try:
@@ -386,11 +402,15 @@ class Pool:
         if found is None:
             return None
         with self._lock:
-            return self._sized.setdefault(unit, measure_of(found))
+            return self._sized.setdefault(unit, self._per_item(found, queue))
+
+    def _per_item(self, found: ResourceMeasure, queue: str) -> Measure:
+        """Return `found` per item, by device memory on a `cuda` class."""
+        return measure_of(found, on_device=self.profile.resource_classes[class_of(queue)].device == "cuda")
 
     def _sizing(self, queue: str, measure: Measure, work: int = 0) -> Sizing:
         """Return the sizing of `measure` on `queue`'s resource class for `work` waiting jobs."""
-        grant = Grant.of(self.profile.resource_classes[class_of(queue)], self.profile.pool)
+        grant = Grant.of(self.profile.resource_classes[class_of(queue)], self.profile.pool, on_device=measure.on_device)
         return size(measure, grant, self.profile.sizing, work=work)
 
     def _calibration_part(
@@ -412,11 +432,15 @@ class Pool:
         return first, rest
 
     def workers_wanted(self, queue: str, work: int) -> int:
-        """Return the workers `queue`'s `work` jobs want: by its slowest measured unit, else one, to calibrate."""
+        """Return the workers `queue`'s `work` jobs want: by its slowest measured unit, else one, to calibrate.
+
+        A queue holding a measured unit beside a calibrating one is sized by the measured one, so the calibrating
+        unit's round may be run by several workers, each giving a cold sample.
+        """
         with self._lock:
             measures = [self._sized[u] for u in self._queue_units.get(queue, ()) if u in self._sized]
         if not measures:
-            return min(1, work)
+            return min(CALIBRATION_WORKERS, work)
         return self._sizing(queue, max(measures, key=lambda m: m.s_per_item), work).workers
 
     def _calibrate(self) -> None:
@@ -435,11 +459,11 @@ class Pool:
             found = calibrated(samples)
             if found is not None:
                 jobs = tuple(sorted({s.job for s in samples}))
-                self.measures.put(unit, found, Measured(sha=None, run=self.run_dir.name, jobs=jobs))
+                self.measures.put(unit, found, self._measured(jobs))
             with self._lock:
                 del self._calibrating[unit]
                 if found is not None:
-                    self._sized[unit] = measure_of(found)
+                    self._sized[unit] = self._per_item(found, queue)
                 held = [(f, p) for f in self._followed.values() for u, p in f.waiting if u == unit]
                 for followed in self._followed.values():
                     followed.waiting = [(u, p) for u, p in followed.waiting if u != unit]
@@ -625,16 +649,28 @@ class Pool:
             yield from self._effect(followed, flight, index, key, fault)
 
     def _grow(self, fragment: PlanFragment, record: Mapping[str, object]) -> None:
-        """Double the per-item memory of `fragment`'s unit's measure after a resource fault, so its batch halves."""
+        """Double the per-item memory of `fragment`'s unit's measure after a resource fault, so its batch halves.
+
+        Both memory pairs the measure holds are grown; the grown measure is written back and sizes every later put.
+        """
         unit, worker = self._unit(fragment), record.get("worker")
         found = self.measures.get(unit)
         if found is None or not isinstance(worker, str):
             return
-        per_item = max(1, found.peak_memory_bytes - found.resident_bytes)
-        grown = found.model_copy(update={"peak_memory_bytes": found.resident_bytes + 2 * per_item})
-        self.measures.put(unit, grown, Measured(sha=None, run=self.run_dir.name, jobs=(worker,)))
+        update = {
+            "peak_memory_bytes": found.resident_bytes + 2 * max(1, found.peak_memory_bytes - found.resident_bytes)
+        }
+        if found.device_resident_bytes is not None and found.device_peak_bytes is not None:
+            per_item = max(1, found.device_peak_bytes - found.device_resident_bytes)
+            update["device_peak_bytes"] = found.device_resident_bytes + 2 * per_item
+        grown = ResourceMeasure.model_validate({**found.model_dump(exclude={"measured"}), **update})
+        self.measures.put(unit, grown, self._measured((worker,)))
         with self._lock:
-            self._sized[unit] = measure_of(grown)
+            self._sized[unit] = self._per_item(grown, fragment.placement.resource_class)
+
+    def _measured(self, jobs: tuple[str, ...]) -> Measured:
+        """Return the derivation of a measure this pool writes: the code version and run, and the worker jobs."""
+        return Measured(sha=None, run=f"senselab-core {code_version()}, run {self.run_dir.name}", jobs=jobs)
 
     def _admitted_plan(self, fragment: PlanFragment) -> tuple[Plan, Mapping[InputIdentity, object]]:
         admitted = self._plans.get(fragment.admission)

@@ -1,6 +1,6 @@
 # Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, by profile and key.
 # The profile's format.
-format: execution-profile@2.0
+format: execution-profile@3.0
 # The packaged profile's name.
 name: laptop
 # Per task, its stacks best first; empty lets each task's declared backend order decide.

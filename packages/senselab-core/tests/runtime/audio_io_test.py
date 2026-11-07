@@ -337,7 +337,7 @@ def _flac(tmp_path: Path) -> Path:
 @pytest.mark.logic
 @pytest.mark.parametrize("kind", ["wav", "flac"])
 def test_range_read_reads_only_its_chunks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
-    """A range read reads, at the `os` boundary, whole chunks only, each once, and an eighth of the file at most."""
+    """A range read reads, at the `os` boundary, whole chunks only, and an eighth of the file at most."""
     p = write_wav(tmp_path, frames=8 * RATE) if kind == "wav" else _flac(tmp_path)
     group = source_group(audio_channels(2), RATE, p, audio_io.stamp(p, chunk_size=CHUNK))
     expected = soundfile.read(p, dtype="float32", always_2d=True)[0].T[:, 4 * RATE : 4 * RATE + 80]
@@ -354,8 +354,26 @@ def test_range_read_reads_only_its_chunks(tmp_path: Path, monkeypatch: pytest.Mo
     window = group.read(4 * 10**9, 4 * 10**9 + 10**7, reader=READER)
     assert numpy.array_equal(window, expected)
     offsets = [offset for offset, _ in preads]
-    assert 0 in offsets and all(offset % CHUNK == 0 for offset in offsets) and len(set(offsets)) == len(offsets)
+    assert 0 in offsets and all(offset % CHUNK == 0 for offset in offsets)
     assert sum(n for _, n in preads) < p.stat().st_size // 8
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("kind", ["wav", "flac"])
+def test_a_full_read_keeps_two_chunks_at_most(tmp_path: Path, kind: str) -> None:
+    """Decoding a whole file through the checked reader keeps at most two verified chunks, never the file."""
+    p = write_wav(tmp_path, frames=64 * RATE) if kind == "wav" else _flac(tmp_path)
+    stamp = audio_io.stamp(p, chunk_size=CHUNK)
+    fd = os.open(p, os.O_RDONLY)
+    held: list[int] = []
+    try:
+        checked = audio_io._ChunkChecked(fd, stamp, p)
+        with soundfile.SoundFile(checked) as f:
+            while len(f.read(RATE, dtype="float32")):
+                held.append(checked.held)
+    finally:
+        os.close(fd)
+    assert len(held) == 64 and max(held) <= 2 < len(stamp.chunks)
 
 
 @pytest.mark.logic

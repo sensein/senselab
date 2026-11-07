@@ -12,6 +12,7 @@ from senselab_core.runtime.hardware import (
     DeviceResolutionError,
     GpuInfo,
     HardwareInfo,
+    device_memory_bytes,
     numerics_class,
     probe_hardware,
 )
@@ -223,3 +224,20 @@ def test_numerics_class_mps_reports_chip() -> None:
     """On mps the architecture is the chip; unknown chip omits it."""
     assert numerics_class(_info(chip="Apple M2 Max"), "mps", "fp16")["gpu_architecture"] == "Apple M2 Max"
     assert "gpu_architecture" not in numerics_class(_info(), "mps", "fp16")
+
+
+@pytest.mark.logic
+def test_device_memory_is_the_used_memory_of_the_visible_gpus(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`nvidia-smi` used memory sums over the GPUs `CUDA_VISIBLE_DEVICES` names, by index or uuid; None without one."""
+    listing = "0, GPU-a, 1024\n1, GPU-b, 2048\n"
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    assert device_memory_bytes(run=lambda _: listing) == 3072 * 2**20
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-b")
+    assert device_memory_bytes(run=lambda _: listing) == 2048 * 2**20
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "7")
+    assert device_memory_bytes(run=lambda _: listing) is None
+
+    def absent(_: list[str]) -> str:
+        raise FileNotFoundError("nvidia-smi")
+
+    assert device_memory_bytes(run=absent) is None

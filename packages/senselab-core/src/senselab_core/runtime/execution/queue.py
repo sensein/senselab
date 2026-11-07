@@ -161,15 +161,23 @@ def settle(lease: Lease, q: StorageDir, digest: str, record: dict[str, object]) 
 
 
 class _Bound:
-    """The size of a claim: at most `items` items and, when `jobs` is set, at most `jobs` jobs beyond its first item."""
+    """The size of a claim: at most `items` items and, when `jobs` is set, at most `jobs` jobs beyond its first item.
 
-    def __init__(self, items: Optional[int], jobs: Optional[int]) -> None:
+    With `singles`, only one-job items join a one-job first item.
+    """
+
+    def __init__(self, items: Optional[int], jobs: Optional[int], singles: bool = False) -> None:
         self.items = items if items is not None else (1 if jobs is None else None)
         self.jobs = jobs
+        self.singles = singles
 
     def fits(self, taken: list["_Held"], count: Optional[int]) -> bool:
         """Whether an item of `count` jobs (None when unknown) may join `taken`."""
-        if not taken or self.jobs is None or count is None:
+        if not taken:
+            return True
+        if self.singles and (count != 1 or len(taken[0].fragment.jobs) != 1):
+            return False
+        if self.jobs is None or count is None:
             return True
         return sum(len(h.fragment.jobs) for h in taken) + count <= self.jobs
 
@@ -474,11 +482,14 @@ class Queue:
         with self.open() as q, q.child("claims") as claims:
             return self._live(claims, digest, q.dir_now())
 
-    def claim(self, worker: str, max_items: Optional[int] = None, max_jobs: Optional[int] = None) -> Optional[Claim]:
+    def claim(
+        self, worker: str, max_items: Optional[int] = None, max_jobs: Optional[int] = None, *, singles: bool = False
+    ) -> Optional[Claim]:
         """Claim up to `max_items` items without an outcome, oldest first, for `worker`; None when none is claimable.
 
         `max_items` is 1 when neither bound is given and unbounded when only `max_jobs` is. With `max_jobs`, an item
-        whose recorded job count would take the claim past it is passed over, except as the claim's first item.
+        whose recorded job count would take the claim past it is passed over, except as the claim's first item. With
+        `singles`, items join a claim only while it and they hold one job each.
 
         Each item is held under a `Lease` beating from its own renewer until the claim commits, kills or releases
         it. An item under a live claim is skipped; a stale claim is broken, within one renewal interval of going
@@ -494,7 +505,7 @@ class Queue:
         taken: list[_Held] = []
         try:
             with self.open() as q, q.child("segments") as segments, q.child("claims") as claims:
-                self._fill(q, segments, claims, taken, _Bound(max_items, max_jobs), skip)
+                self._fill(q, segments, claims, taken, _Bound(max_items, max_jobs, singles), skip)
         except BaseException:
             for held in taken:
                 held.stack.close()

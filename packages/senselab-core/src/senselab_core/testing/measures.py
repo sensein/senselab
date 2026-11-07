@@ -2,7 +2,9 @@
 
 from senselab_core.runtime.resources import Measured, ResourceMeasure, Unit
 
-CEILED = ResourceMeasure(load_s=1e-3, resident_bytes=0, peak_memory_bytes=1, s_per_input_s=1e-6, input_s_per_item=None)
+CEILED = ResourceMeasure(
+    load_s=1e-3, claim_s=0, resident_bytes=0, peak_memory_bytes=1, s_per_input_s=1e-6, input_s_per_item=None
+)
 """A measure under which the pool's quantum ceilings bind: a load many items long, each item far under a second."""
 
 CEILED_SIZING = {"target_wall_s": 1e-12}

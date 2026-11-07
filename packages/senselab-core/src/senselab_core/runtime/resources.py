@@ -30,31 +30,47 @@ class ResourceMeasure(Frozen):
 
     Attributes:
         load_s: Seconds from a worker's start to its model loaded.
-        resident_bytes: Memory held once loaded, before any request.
-        peak_memory_bytes: The high-water memory over the measured requests.
+        claim_s: Seconds a worker takes to claim one item.
+        resident_bytes: Host memory held once loaded, between requests.
+        peak_memory_bytes: The host high-water memory over the measured requests.
+        device_resident_bytes: Device memory held before the first request; None off a device.
+        device_peak_bytes: The device memory used once requests ran; None off a device.
         s_per_input_s: Seconds of work per second of recording input; per item when `input_s_per_item` is None.
         input_s_per_item: The median recording seconds of a measured item; None for items without a recording.
     """
 
     load_s: Seconds
+    claim_s: Seconds
     resident_bytes: Annotated[int, Field(ge=0)]
     peak_memory_bytes: Annotated[int, Field(gt=0)]
+    device_resident_bytes: Annotated[int, Field(ge=0)] | None = None
+    device_peak_bytes: Annotated[int, Field(gt=0)] | None = None
     s_per_input_s: Seconds
     input_s_per_item: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None
 
     @model_validator(mode="after")
     def _check_memory(self) -> "ResourceMeasure":
-        if self.resident_bytes > self.peak_memory_bytes:
-            raise ValueError(f"resident {self.resident_bytes} bytes exceed the peak {self.peak_memory_bytes}")
+        pairs = [(self.resident_bytes, self.peak_memory_bytes), (self.device_resident_bytes, self.device_peak_bytes)]
+        if (self.device_resident_bytes is None) != (self.device_peak_bytes is None):
+            raise ValueError("device resident and peak memory are both measured, or neither")
+        for resident, peak in pairs:
+            if resident is not None and peak is not None and resident > peak:
+                raise ValueError(f"resident {resident} bytes exceed the peak {peak}")
         return self
 
 
 class Measured(Frozen):
-    """Where a row was measured: the 40-hex commit run (None for a calibration round), the run and the job ids."""
+    """Where a class was measured: the 40-hex commit run (None for a calibration round), the run and the job ids."""
 
     sha: Annotated[str, StringConstraints(pattern=rf"^{COMMIT_HEX.pattern}$")] | None
     run: NonEmptyStr | None = None
     jobs: tuple[NonEmptyStr, ...] = Field(min_length=1)
+
+
+class ClassMeasure(ResourceMeasure):
+    """A resource class's measure in a table, with where it was measured."""
+
+    measured: Measured
 
 
 def _frozen(v: Mapping[str, object]) -> Mapping[str, object]:
@@ -67,8 +83,7 @@ class ResourceRow(Frozen):
     id: NonEmptyStr | None
     revision: NonEmptyStr | None
     download_bytes: Annotated[int, Field(ge=0)] | None
-    classes: Annotated[Mapping[ResourceClassName, ResourceMeasure], AfterValidator(_frozen), PlainSerializer(thawed)]
-    measured: Measured
+    classes: Annotated[Mapping[ResourceClassName, ClassMeasure], AfterValidator(_frozen), PlainSerializer(thawed)]
 
     @model_validator(mode="after")
     def _check_model(self) -> "ResourceRow":
@@ -147,21 +162,20 @@ class MeasureSource(Protocol):
 def write_row(root: Path, unit: Unit, measure: ResourceMeasure, measured: Measured) -> Path:
     """Write `measure` of `unit` into the table `<root>/<task>/<backend>.yaml`; return the file.
 
-    The row of the unit's model keeps its download bytes, and its other classes when they were measured as
-    `measured` too, so a row's derivation names every class it holds; the file is replaced whole.
+    Only the unit's class of its model's row is replaced, with `measured` as its derivation; the row keeps its other
+    classes and its download bytes. The file is replaced whole.
     """
     path = Path(root) / unit.task / f"{unit.backend}.yaml"
     table = ResourceTable.model_validate(load_yaml(path, "resource table")) if path.is_file() else None
     rows = list(table.rows) if table is not None else []
     old = next((r for r in rows if (r.id, r.revision) == (unit.model_id, unit.revision)), None)
-    kept = dict(old.classes) if old is not None and old.measured == measured else {}
-    classes = {**kept, unit.resource_class: measure}
+    entry = ClassMeasure(**ResourceMeasure.model_validate(measure.model_dump()).model_dump(), measured=measured)
+    classes = {**(dict(old.classes) if old is not None else {}), unit.resource_class: entry}
     row = ResourceRow(
         id=unit.model_id,
         revision=unit.revision,
         download_bytes=None if old is None else old.download_bytes,
         classes=classes,
-        measured=measured,
     )
     rows = [r for r in rows if r is not old] + [row]
     doc = ResourceTable(task=unit.task, backend=unit.backend, rows=tuple(sorted(rows, key=_row_order)))

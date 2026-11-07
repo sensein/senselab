@@ -9,6 +9,9 @@ invariants:
 - path: packages/senselab-core/src/senselab_core/runtime/storage.py
   name: PRIVATE_DIR_MODE
   reason: A private directory is owner-only whatever the site's group policy.
+- path: packages/senselab-core/src/senselab_core/runtime/execution/pool.py
+  name: CALIBRATION_WORKERS
+  reason: A calibration round runs on one worker, so its cold and warm items are one worker's.
 - path: packages/senselab-core/src/senselab_core/runtime/placement.py
   name: _HOUR_S
   reason: 'Seconds in one hour: a unit conversion.'

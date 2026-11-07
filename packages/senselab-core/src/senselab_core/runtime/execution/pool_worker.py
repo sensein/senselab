@@ -50,7 +50,7 @@ from senselab_core.runtime.execution.substrates import (
 )
 from senselab_core.runtime.execution.supervisor import Supervisor
 from senselab_core.runtime.execution.workers import WorkerSet
-from senselab_core.runtime.hardware import memory_bytes
+from senselab_core.runtime.hardware import device_memory_bytes, memory_bytes
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
@@ -160,6 +160,8 @@ class PoolWorker:
         send: Send | None = None,
         name: str | None = None,
         join_s: float = DEFAULT_GRACES.bound,
+        memory: Callable[[], tuple[int | None, int]] = memory_bytes,
+        device_memory: Callable[[], int | None] = device_memory_bytes,
     ) -> None:
         """Serve `classes` under `profile`, storing into `store`; jobs go through `send` (`execute` when None).
 
@@ -181,7 +183,9 @@ class PoolWorker:
         self._plans: dict[str, tuple[Plan, Mapping[InputIdentity, object]]] = {}
         self._finished: Finished = queue.SimpleQueue()
         self.join_s = join_s
-        self._baseline = memory_bytes()[0]
+        self._memory, self._device_memory = memory, device_memory
+        self._baseline = memory()[0] or memory()[1]
+        self._device_baseline: int | None = None
         self._warm: set[str] = set()
 
     def halt(self) -> None:
@@ -197,6 +201,7 @@ class PoolWorker:
         while not self.stop.is_set():
             ended = current is not None and (spent >= pool.quantum_items or time.monotonic() - began >= pool.quantum_s)
             prefer = None if ended else current
+            asked = time.monotonic()
             claim = self._next(prefer, pool.quantum_items - spent)
             if claim is None:
                 current, idle = None, idle if idle is not None else time.monotonic()
@@ -216,7 +221,7 @@ class PoolWorker:
                 current, spent, began = claim.queue.name, 0, time.monotonic()
             spent += sum(len(f.jobs) for f in claim.fragments)
             self.served.extend((claim.queue.name, d) for d in claim.items)
-            self.run_claim(claim)
+            self.run_claim(claim, claim_s=time.monotonic() - asked)
             for service in self._workers.provided() if self._workers is not None else []:
                 service.touch()
         return 0
@@ -227,17 +232,26 @@ class PoolWorker:
         return [n for _, n in sorted(ages, key=lambda a: -a[0])]
 
     def _next(self, prefer: str | None, left: int) -> Claim | None:
-        """Claim one item of up to `left` jobs from `prefer`, else from the class with the oldest work; None if none."""
+        """Claim up to `left` jobs from `prefer`, else from the class with the oldest work; None if none.
+
+        A claim holds one item, or one-job items up to the bound; on a queue this worker has not run, one item, so
+        the model load falls on one item alone.
+        """
         order = [prefer] if prefer is not None else []
         order += [n for n in self._by_age() if n != prefer]
         for name in order:
             size = left if name == prefer else self.profile.pool.quantum_items
-            claim = self.queues.queue(name).claim(self.name, max_items=1, max_jobs=max(size, 1))
+            queue = self.queues.queue(name)
+            claim = (
+                queue.claim(self.name, max_jobs=max(size, 1), singles=True)
+                if name in self._warm
+                else queue.claim(self.name, max_items=1, max_jobs=max(size, 1))
+            )
             if claim is not None:
                 return claim
         return None
 
-    def run_claim(self, claim: Claim) -> None:
+    def run_claim(self, claim: Claim, claim_s: float = 0.0) -> None:
         """Run every item of `claim`, committing each as its jobs finish; release what is held at the end.
 
         An item whose jobs cannot be built is given the outcome `dead` with that failure. The jobs run on a thread
@@ -250,7 +264,7 @@ class PoolWorker:
         with claim:
             self._log_claimed(claim)
             groups, dead = self._groups(claim)
-            sample = self._sampler(claim, groups, began)
+            sample = self._sampler(claim, groups, began, claim_s)
             for digest, failure in dead.items():
                 claim.dead(failure, [digest])
             pending = {d: len(f.jobs) for d, f in zip(claim.items, claim.fragments, strict=True)}
@@ -277,8 +291,12 @@ class PoolWorker:
                 self._commit(claim, finished.get_nowait() or [], outcomes, pending, sample)
         self._warm.add(claim.queue.name)
 
-    def _sampler(self, claim: Claim, groups: list["_Group"], began: float) -> Callable[[str], Sample]:
-        """Return what measures an item of `claim` once its jobs ran: wall time since `began`, inputs and memory."""
+    def _sampler(self, claim: Claim, groups: list["_Group"], began: float, claim_s: float) -> Callable[[str], Sample]:
+        """Return what measures an item of `claim` once its jobs ran.
+
+        Its share of the wall since `began`, its inputs and host memory; on a `cuda` class also device memory, its
+        baseline read before the worker's first `cuda` claim ran.
+        """
         inputs: dict[str, float | None] = {}
         for member in (m for g in groups for m in g.members):
             try:
@@ -288,15 +306,26 @@ class PoolWorker:
             known = inputs.get(member.digest, 0.0)
             inputs[member.digest] = None if length is None or known is None else known + length / NS_PER_S
         cold = claim.queue.name not in self._warm
+        total = sum(len(f.jobs) for f in claim.fragments)
+        grant = self.profile.resource_classes.get(class_of(claim.queue.name))
+        on_device = grant is not None and grant.device == "cuda"
+        if on_device and self._device_baseline is None:
+            self._device_baseline = self._device_memory()
 
         def sample(digest: str) -> Sample:
             jobs = len(claim.fragments[claim.items.index(digest)].jobs)
+            current, peak = self._memory()
+            device = self._device_memory() if on_device and self._device_baseline is not None else None
             return Sample(
-                wall_s=time.monotonic() - began,
+                wall_s=(time.monotonic() - began) * jobs / total,
+                claim_s=claim_s,
                 jobs=jobs,
                 input_s=inputs.get(digest),
                 baseline_bytes=self._baseline,
-                peak_memory_bytes=max(1, memory_bytes()[1]),
+                resident_bytes=current,
+                peak_memory_bytes=peak,
+                device_baseline_bytes=None if device is None else self._device_baseline,
+                device_bytes=device,
                 cold=cold,
                 job=worker_id(),
             )
