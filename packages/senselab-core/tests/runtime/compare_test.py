@@ -8,13 +8,14 @@ from typing import Any
 
 import numpy
 import pytest
-from senselab_core.kernel.results import Intervals
+from senselab_core.kernel.results import Intervals, Transcript, TranscriptNode
 from senselab_core.kernel.wire import WIRE_FORMATS, wire_form
 from senselab_core.runtime.audio_io import READER
 from senselab_core.runtime.compare import (
     COMPARISONS,
     FLATTEN_VERSION,
     Fields,
+    NotWireForm,
     Threshold,
     Thresholds,
     UndeclaredComparison,
@@ -243,6 +244,23 @@ def test_flatten2_leaves() -> None:
     assert len(flat) == 1001 and flat["label[1000]"] == '"B"'
     assert flatten({"m": numpy.zeros((2, 2))}) == {"m": [0.0, 0.0, 0.0, 0.0]}
     assert index_free("t.segments[12].words[3].text") == "t.segments[*].words[*].text"
+
+
+@pytest.mark.logic
+def test_a_decoded_kernel_value_is_refused_and_its_wire_form_compares_under_its_rules() -> None:
+    """A kernel value or other object is no wire form; as its wire form a confidence within its threshold agrees."""
+
+    def transcript(confidence: float) -> Transcript:
+        return Transcript(segments=(TranscriptNode(text="a", confidence=confidence),))
+
+    one, other = transcript(ATOL / 2), transcript(0.0)
+    for leaf in (one, Path("x"), object()):
+        with pytest.raises(NotWireForm, match=f"t.u is a {type(leaf).__name__}"):
+            compare({"t": {"u": leaf}}, {"t": {"u": leaf}}, THRESHOLDS)
+    found = compare({"t": wire_form(one, READER)}, {"t": wire_form(other, READER)}, THRESHOLDS)
+    assert found.agree and found.differences == ()
+    beyond = compare({"t": wire_form(transcript(1.0), READER)}, {"t": wire_form(other, READER)}, THRESHOLDS)
+    assert beyond.paths == ("t.segments[0].confidence",)
 
 
 @pytest.mark.logic

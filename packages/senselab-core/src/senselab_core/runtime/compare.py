@@ -61,11 +61,18 @@ def _numeric(value: object) -> bool:
     return True
 
 
+class NotWireForm(TypeError):
+    """A value `flatten` reads that is not a wire form, such as a decoded kernel value."""
+
+
 def flatten(value: object, prefix: str = "") -> Fields:
-    """Return the leaves of `value` by dotted path (`FLATTEN_VERSION`).
+    """Return the leaves of a wire form `value` by dotted path (`FLATTEN_VERSION`).
 
     Numbers, None and numeric arrays are float lists, a None (or NaN) where a value is absent; a non-numeric
-    array is flattened element by element, like a list; anything else is its JSON.
+    array is flattened element by element, like a list; a string or bool is its JSON.
+
+    Raises:
+        NotWireForm: a leaf is none of these (a kernel value compares as its `wire_form`); it names the path.
     """
     if isinstance(value, numpy.ndarray) and not _numeric(value):
         return flatten(value.tolist(), prefix)
@@ -82,7 +89,9 @@ def flatten(value: object, prefix: str = "") -> Fields:
     if _numeric(value):
         floats = numpy.asarray(value, dtype=float).ravel().tolist()
         return {prefix: [None if math.isnan(x) else x for x in floats]}
-    return {prefix: json.dumps(value, sort_keys=True, default=str)}
+    if isinstance(value, (str, bool)):
+        return {prefix: json.dumps(value)}
+    raise NotWireForm(f"{prefix or 'the value'} is a {type(value).__name__}, not a wire form")
 
 
 class Threshold(Frozen):
@@ -618,6 +627,7 @@ def compare(
     Every kernel value in either output must have a comparison in `comparisons`, equal hashes or not.
 
     Raises:
+        NotWireForm: either output holds a value that is not a wire form (`flatten`).
         UndeclaredComparison: a kernel value's type has no entry in `comparisons` (default `COMPARISONS`).
         KeyError: a rule names a threshold `thresholds` lacks.
     """
