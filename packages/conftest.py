@@ -7,7 +7,9 @@ A `gpu` test is skipped on a host with no GPU. A test with no `timeout` mark get
 
 from __future__ import annotations
 
+import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,33 @@ TIERS = frozenset({"logic", "contract", "limits", "usecase", "env"})
 MODEL_TIERS = frozenset({"limits", "usecase", "env"})
 PACKAGES = Path(__file__).resolve().parent
 BUDGETS = PACKAGES / "senselab" / "tests" / "data" / "tier_budgets.json"
+LOCK = PACKAGES.parent / "uv.lock"
+LOCK_DIGEST = "senselab-lock.sha"
+"""Beside the venv's interpreter prefix: the digest of the uv.lock it was synced from (scripts/sync_local_venv.sh)."""
+
+
+def venv_status(prefix: Path, lock: Path) -> str:
+    """`STALE VENV ...` when the venv at `prefix` was synced from another `lock`; else whether its digest matches."""
+    recorded = prefix / LOCK_DIGEST
+    if not recorded.is_file():
+        return f"venv lock digest: unrecorded ({recorded} is missing)"
+    want = hashlib.sha256(lock.read_bytes()).hexdigest()
+    have = recorded.read_text().strip()
+    if have != want:
+        return f"STALE VENV: synced from uv.lock {have[:12]}, this tree's is {want[:12]}; results are not evidence"
+    return f"venv lock digest: {want[:12]}"
+
+
+def pytest_report_header() -> str:
+    """The venv's lock status, first line of every run."""
+    return venv_status(Path(sys.prefix), LOCK)
+
+
+def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
+    """Repeat a stale venv at the end of the run, beside the result."""
+    status = venv_status(Path(sys.prefix), LOCK)
+    if status.startswith("STALE VENV"):
+        terminalreporter.write_line(status, red=True)
 
 
 def tier_budgets() -> dict[str, float]:
