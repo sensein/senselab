@@ -23,7 +23,7 @@ from senselab_core.runtime.execution.events import EventLog, read_events, run_di
 from senselab_core.runtime.execution.executor import Admission, FaultRecord, PlanFragment, QueueHeld, ResultRef
 from senselab_core.runtime.execution.in_process import InProcess, job_key, node_fragment
 from senselab_core.runtime.execution.job import Failed, JobOutcome
-from senselab_core.runtime.execution.pool import Pool, report
+from senselab_core.runtime.execution.pool import Pool, larger_class, report
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet
 from senselab_core.runtime.execution.run import INPUTS_FILE, RECORD_ATTEMPTS, Run, prepare, record_sources
 from senselab_core.runtime.execution.substrates import WorkerHandle
@@ -750,3 +750,31 @@ def test_the_expected_key_is_the_key_of_the_placement_sent(tmp_path: Path) -> No
     planned = job_key(placed, "a", fragment.inputs[0]).digest()
     sent = job_key(placed, "a", fragment.inputs[0], moved.placement).digest()
     assert ref.failure is None and ref.key_digest == sent != planned and len(workers.served) == 1
+
+
+@pytest.mark.contract
+def test_a_resource_fault_never_moves_a_job_to_a_class_the_qos_cap_cannot_start(tmp_path: Path) -> None:
+    """With a cap of 4 CPUs, `cpu:large` (8 CPUs) is not a move: the resource fault is dead, and nothing hangs."""
+    classes = {
+        "cpu": {"device": "cpu", "cpus": 4, "mem_bytes": 2**30, "max_workers": 1},
+        "cpu:large": {"device": "cpu", "cpus": 8, "mem_bytes": 2**33, "max_workers": 1},
+    }
+    profile = ExecutionProfile.load(
+        "laptop",
+        {
+            "devices": ["cpu"],
+            "resource_classes": classes,
+            "substrate": {"kind": "slurm", "qos_cpu_cap": 4},
+            "pool": {"poll_s": 0.2, "first_poll_s": 0.01},
+            "faults": {**CONTENT, "resource_replacements": 1},
+        },
+    )
+    assert larger_class(profile, "cpu") is None
+    placed, values, store, workers = _stack(tmp_path, profile, ["one"])
+    workers.act = lambda fragment: OOM
+    try:
+        [failed] = _all(_pool(tmp_path, store, workers, profile), placed, values)
+    finally:
+        workers.stop()
+    assert failed.failure == OOM and [f.placement.resource_class for f in workers.served] == ["cpu"]
+    assert (tmp_path / "run" / "dead" / f"{failed.key_digest}.json").is_file()

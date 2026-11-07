@@ -81,8 +81,10 @@ def report(claim: Claim, digest: str, outcomes: Sequence[JobOutcome]) -> bool:
 def larger_class(profile: ExecutionProfile, name: str) -> str | None:
     """Return the resource class of `profile` with the least memory above class `name`'s, on its device and GPU type.
 
-    None when `name` is not a class of the profile, states no memory, or no class of its kind has more.
+    A class whose `cpus` exceed the substrate's `qos_cpu_cap` is skipped: no worker of it could start. None when
+    `name` is not a class of the profile, states no memory, or no startable class of its kind has more.
     """
+    cap = profile.substrate.qos_cpu_cap
     current = profile.resource_classes.get(name)
     if current is None or current.mem_bytes is None:
         return None
@@ -92,6 +94,7 @@ def larger_class(profile: ExecutionProfile, name: str) -> str | None:
         if (c.device, c.gpu_type) == (current.device, current.gpu_type)
         and c.mem_bytes is not None
         and c.mem_bytes > current.mem_bytes
+        and (cap is None or c.cpus is None or c.cpus <= cap)
     )
     return larger[0][1] if larger else None
 
