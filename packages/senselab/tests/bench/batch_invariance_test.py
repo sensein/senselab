@@ -57,3 +57,15 @@ def test_probe_runs_plumbing_suite_end_to_end(tmp_path: Path, capsys: pytest.Cap
         f"abc 7 fake.echo/fake: agree {held}/{held}, batch {held}, max diff none"
     ]
     assert (tmp_path / "out" / "echo" / "batch-1").is_dir() and (tmp_path / "out" / "echo" / f"batch-{held}").is_dir()
+
+
+@pytest.mark.logic
+def test_probe_reports_a_task_no_device_here_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A suite task whose backend runs on no device the profile lists is one `not placeable` line, nothing run."""
+    override = tmp_path / "mps.yaml"
+    override.write_text("devices: [mps]\n")
+    suite = str(BENCHMARKS / "suites" / "plumbing.yaml")
+    args = [suite, "--override", str(override), "--out", str(tmp_path / "out"), "--sha", "abc", "--job", "7"]
+    assert probe.main(args) == 0
+    [line] = capsys.readouterr().out.splitlines()
+    assert line.startswith("abc 7 fake.echo: not placeable: ") and not (tmp_path / "out" / "echo").exists()

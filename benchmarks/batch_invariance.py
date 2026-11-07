@@ -6,7 +6,8 @@ For each benchmark of the suite (`benchmark-suite@1.0`), its held-out items are 
 once in batches of one and once in batches of N, each into a store of its own under `DIR`. N is the largest number of
 those jobs sharing one formation (`formation` over the packaged bucket grid), so every bucket is sent whole. Each
 item's outputs are compared (`compare`) under the run config's thresholds. One line per backend is printed:
-`<sha> <job> <task>/<backend>: agree k/n, batch N, max diff <path>=<absolute> ...` (`none` when nothing differs).
+`<sha> <job> <task>/<backend>: agree k/n, batch N, max diff <path>=<absolute> ...` (`none` when nothing differs),
+or `<sha> <job> <task>: not placeable: <reason>` for a task no device here runs.
 """
 
 import argparse
@@ -19,7 +20,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from senselab_core.runtime.call import RunConfig, TaskCall, bind_input, packaged
+from senselab_core.runtime.call import RunConfig, TaskCall, bind_input, packaged, placement_of
 from senselab_core.runtime.compare import compare, index_free
 from senselab_core.runtime.execution.batching import BucketGrid, formation
 from senselab_core.runtime.execution.executor import Admission, JobRef
@@ -28,7 +29,7 @@ from senselab_core.runtime.execution.job import Completed, Job, JobOutcome, exec
 from senselab_core.runtime.fetch import DataManifest, default_cache_root, fetch
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.planner import plan
-from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.profiles import ExecutionProfile, NoDevice
 from senselab_core.runtime.store import ResultStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +65,18 @@ class Probe:
         gaps = " ".join(f"{p}={'n/a' if v is None else f'{v:.3g}'}" for p, v in sorted(self.largest.items()))
         head = f"{sha} {job} {self.task}/{self.backend}: agree {self.agree}/{self.items}, batch {self.batch}"
         return f"{head}, max diff {gaps or 'none'}"
+
+
+@dataclass(frozen=True)
+class NotPlaceable:
+    """A benchmark whose task this profile places on no device here."""
+
+    task: str
+    reason: str
+
+    def line(self, sha: str, job: str) -> str:
+        """Return the benchmark's report line."""
+        return f"{sha} {job} {self.task}: not placeable: {' '.join(self.reason.split())}"
 
 
 def node_jobs(  # noqa: PLR0913 - the call, then keyword-only run inputs
@@ -128,12 +141,17 @@ def probe(jobs: list[Job], placement: Placement, *, run: RunConfig, execution: E
 
 def probe_suite(
     suite: Path, *, execution: ExecutionProfile, out: Path, manifests: Path, data_cache: Path
-) -> list[Probe]:
-    """Return one `Probe` per benchmark of `suite` over its held-out items."""
+) -> list[Probe | NotPlaceable]:
+    """Return one `Probe` per benchmark of `suite` over its held-out items, or why its task is not placeable."""
     bench = harness()
     run = RunConfig()
-    probes = []
+    probes: list[Probe | NotPlaceable] = []
     for entry in bench.Suite.load(suite).benchmarks:
+        try:
+            placement_of(entry.task, TaskCall.parse_model(entry.model), execution)
+        except NoDevice as err:
+            probes.append(NotPlaceable(entry.task, str(err)))
+            continue
         files = (
             {}
             if entry.manifest is None
