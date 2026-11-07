@@ -3,7 +3,7 @@
 The PREPROCESS step under development computes a background stream as
 `residual = original - g*FRCRN_SE_16K(original)`. That formula is validated on speech: on
 `sub-SUBJ03-…_task-Story-recall.wav` (the standing reference,
-`~/Downloads/buzz_separation_20260906/00_original.wav`) it raises `Buzz` 0.066 → 0.372, leaves
+`${LOCAL_INPUT}/buzz_separation_20260906/00_original.wav`) it raises `Buzz` 0.066 → 0.372, leaves
 1.57% of the input's energy, and fits a gain of 1.003 at zero lag. `FRCRN_SE_16K` is a
 **speech**-enhancement model; the b2ai `Respiration-and-cough-*` tasks contain no speech at all, so
 its behaviour there is outside its training target, and whether the residual formula still means
@@ -29,7 +29,7 @@ mode looks like "background"; both are covered in detail below.
    (the ClearerVoice subprocess venv) — all ten recordings in **one call** (209.35 s of audio total),
    so the ~22 s/recording cost from the venv startup is paid once, not ten times.
 3. For each recording, run the existing, already-validated
-   `~/Downloads/buzz_separation_20260906/residual/subtract.py` on `(original, enhanced)`: it
+   `${LOCAL_INPUT}/buzz_separation_20260906/residual/subtract.py` on `(original, enhanced)`: it
    cross-correlates to find the lag, fits `g = <original, enhanced> / <enhanced, enhanced>` on the
    aligned overlap, and writes `residual_direct = original - g*enhanced` plus a JSON report (gain,
    lag, peak/RMS dBFS, energy fraction and dB, four-band energy split). This benchmark uses the
@@ -37,7 +37,7 @@ mode looks like "background"; both are covered in detail below.
    residual is not used here.
 4. One batched `classify_audios(model="yamnet", top_k=521)` call over all 30 files (10 original + 10
    enhanced + 10 residual). YAMNet returns per-0.96 s-window scores; each file's label score below is
-   the **max over that file's windows** — the same aggregation `~/Downloads/buzz_separation_20260906/residual/yamnet_report.json`
+   the **max over that file's windows** — the same aggregation `${LOCAL_INPUT}/buzz_separation_20260906/residual/yamnet_report.json`
    used for the speech reference, so the two are comparable.
 5. Band energy fractions (0-200 / 200-1000 / 1000-4000 / 4000-8000 Hz) come straight out of the
    `subtract.py` report for original and residual.
@@ -52,7 +52,7 @@ no changes were needed to run FRCRN. `uv sync --all-extras --group dev` was run 
 
 ## Files used
 
-Source tree `~/Downloads/b2ai_v31_bids_07_01_v3/`. All ten files are 16 kHz mono PCM_16, no
+Source tree `${LOCAL_INPUT}/b2ai_v31_bids_07_01_v3/`. All ten files are 16 kHz mono PCM_16, no
 resampling needed. Eight non-speech recordings across three subjects, plus two `Story-recall`
 speech comparators (one of which is the standing buzz-separation reference recording, subject
 `sub-SUBJ03`, already measured against FRCRN elsewhere — reused here rather than re-run, and
@@ -264,7 +264,7 @@ recover — the "nothing there" control the method should show on a clean record
 
 ## Audio
 
-Written to `~/Downloads/frcrn_residual_no_speech_20260907/` (16 kHz PCM_16, no clipping — two files
+Written to `${LOCAL_INPUT}/frcrn_residual_no_speech_20260907/` (16 kHz PCM_16, no clipping — two files
 needed peak-safety scaling on write, both under 0.2 dB, reported in `subtract_reports.json`): for
 each key above, `<key>__original.wav`, `<key>__frcrn.wav` (the enhanced output) and
 `<key>__residual.wav`. Also `subtract_reports.json` (one `subtract.py` report per recording) and
@@ -297,7 +297,7 @@ Lag search, gain fit, subtraction, band split and correlation were extracted int
 `senselab.audio.tasks.speech_enhancement.residual` (`find_lag`, `align`, `fit_gain`,
 `band_energy_fractions`, `correlation`, `compute_residual`); PREPROCESS's `_residual` block and this
 benchmark's own script (`scripts/residual_without_speech.py`) both call it now, and
-`~/Downloads/buzz_separation_20260906/residual/subtract.py` — the owner's separate working
+`${LOCAL_INPUT}/buzz_separation_20260906/residual/subtract.py` — the owner's separate working
 tool — was ported to call the same shared functions for the parts that overlap (lag/align/gain/bands/
 correlation), keeping its own broader scope (multi-stream summing, the spectral-subtraction
 alternative, its CLI) that the pipeline's residual block does not need. `subtract.py` is not
@@ -348,14 +348,14 @@ null/pass-through split a recording lands on. **This rules out "what is fed to F
 the local/cluster contradiction.**
 
 Script: `raw_vs_plain_diagnosis.py` (run ad hoc, not checked in — the comparison above is the
-artifact that matters). Audio written to `~/Downloads/frcrn_raw_vs_plain_20260907/`: for each of the
+artifact that matters). Audio written to `${LOCAL_INPUT}/frcrn_raw_vs_plain_20260907/`: for each of the
 16 (recording × feed) combinations, `<key>__<feed>__input.wav`, `__enhanced.wav`, `__residual.wav`
 (16 kHz PCM_16, no clipping), plus `raw_vs_plain_report.json` carrying every number in the table
 above.
 
 ### Cross-checking against the cluster's own files
 
-`~/Downloads/frcrn_cluster_residuals_20260907/` holds `plain.wav`/`residual.wav` for the 98 (of 388)
+`${LOCAL_INPUT}/frcrn_cluster_residuals_20260907/` holds `plain.wav`/`residual.wav` for the 98 (of 388)
 cluster recordings whose residual passed both gates and was written — of the three subjects measured
 locally, only `sub-SUBJ03`'s `Respiration-and-cough-Cough-1`/`-2` runs are among them; every
 breath/long-cough run for these three subjects on the cluster hit the `min_energy_fraction` gate and

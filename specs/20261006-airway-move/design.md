@@ -90,7 +90,7 @@ scores and `[breath]` tokens each passed three silent recordings. An earlier gro
 too short, acoustically empty) is not contested, and a contested recording does not fall through
 to `declared_task_absent`.
 
-Agreement on the owner labels (`~/Downloads/triage_listening_labels_20261006.csv`, airway rows,
+Agreement on the owner labels (`${LOCAL_INPUT}/triage_listening_labels_20261006.csv`, airway rows,
 joined to the r16 parquet): twelve labelled recordings carry an event-ground discard in r16, all
 breath. Nine were heard without breath (8 `no_breath`, 1 not judged); three were heard with breath
 too soft or little (9d16c147 very soft, 167ac3f5 little, 0dc15213, which the owner accepted as
@@ -168,7 +168,7 @@ family; the answers are still recorded on the verdict.
 ## Before and after on the owner labels
 
 Measured locally, in memory, over the 80 owner-labelled airway stores copied from the r9 tree
-(`~/Downloads/airway_move_eval_20261006/`: 56 breath from `tmp_bxt/labels.jsonl`, 24 cough from
+(`${LOCAL_INPUT}/airway_move_eval_20261006/`: 56 breath from `tmp_bxt/labels.jsonl`, 24 cough from
 `tmp_bxt/eval_labelled_cough.jsonl` with the owner labels of
 `triage_listening_labels_20261006.csv`). "Before" reads each measure over the store as VERDICT saw
 it, every branch's task-extent span live; "after" retires the SPEECH and VOICE task-extent spans

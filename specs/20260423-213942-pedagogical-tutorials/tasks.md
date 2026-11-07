@@ -104,7 +104,7 @@
 ### Implementation
 
 - [x] T032 [US3] Verify tutorials/audio/00_getting_started.ipynb uses current conventions — check install cell, restart admonition, device auto-detect, HF_TOKEN setup; fix if needed
-- [x] T033 [US3] Create tutorials/audio/shbt205_lab.ipynb from ~/Downloads/drive-download-20260424T013242Z-3-001/SHBT205-Lab.ipynb — copy and begin adaptation
+- [x] T033 [US3] Create tutorials/audio/shbt205_lab.ipynb from ${LOCAL_INPUT}/drive-download-20260424T013242Z-3-001/SHBT205-Lab.ipynb — copy and begin adaptation
 - [x] T034 [US3] Update install cell and add restart admonition in tutorials/audio/shbt205_lab.ipynb — `!pip install -q uv` + `!uv pip install --pre --system "senselab"`, restart admonition, auto-detect device
 - [x] T035 [US3] Replace raw Whisper ASR with senselab API in tutorials/audio/shbt205_lab.ipynb — replace `whisper.load_model()`, `whisper.decode()` with `transcribe_audios([audio], model=HFModel("openai/whisper-base"))`
 - [x] T036 [US3] Replace raw SPARC calls with senselab API in tutorials/audio/shbt205_lab.ipynb — replace `coder.encode()` with `SparcFeatureExtractor.extract_sparc_features([audio])`, adapt articulatory feature plotting

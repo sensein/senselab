@@ -280,7 +280,7 @@ circulate. They live in two places:
   `pii_surfaces_by_spread.jsonl` (each distinct surface with the number of recordings it was
   detected in — the file to start from when judging the detector), plus `pii_summary.json` and
   `pii_by_expectation.json`.
-- `~/Downloads/pii_census/` on the owner's laptop: the same four files.
+- `${LOCAL_INPUT}/pii_census/` on the owner's laptop: the same four files.
 
 ### 1c. Language, and where the CJK glyphs come from
 

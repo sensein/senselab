@@ -1,7 +1,7 @@
 # A fragment is not the task: truncated captures and the declared task's own branch
 
 2026-10-05. Owner, after listening to 16 empty-route recordings (gain-lifted copies in
-`~/Downloads/empty_route_check_20261005/`):
+`${LOCAL_INPUT}/empty_route_check_20261005/`):
 
 > all of the ones brought in can be discarded. they are all too short relative to the task, and none
 > of them contain the task. how is it that the task branch found a task match. and if the only output
@@ -78,7 +78,7 @@ had passed (2.0 s and 19.7 s) in which AIRWAY found no activity at all. A DDK-ka
 
 ## 2026-10-05: an owner that could not look is owed a rerun
 
-The two breath recordings above were pulled and listened to (`~/Downloads/breath_absent_check_20261005/`).
+The two breath recordings above were pulled and listened to (`${LOCAL_INPUT}/breath_absent_check_20261005/`).
 The 1.98 s breath-2 recording is real audio at a normal level. AIRWAY found nothing because the
 `hear_scores` derivative its event search needs never reached the store (`event_instrument` records
 `absent: [hear_scores]`); it never looked. `declared_task_absent` read only that the owning branch's
@@ -100,7 +100,7 @@ empty-route recordings are unchanged (all still discard; none had an owner lacki
 ## 2026-10-05: a breath task is decided on detected breaths
 
 The owner listened to ten breath recordings, with gain-lifted copies and HeAR/YAMNet readings
-(`~/Downloads/contrast_check_20261005/index.csv`). Only one held a breath: `7c169ccc`
+(`${LOCAL_INPUT}/contrast_check_20261005/index.csv`). Only one held a breath: `7c169ccc`
 threequickbreaths-2, one long breath where three quick ones were asked. `9d16c147` v2-threebreathsmouth
 may hold breaths too quiet to hear. The other eight held none, yet six of them passed. AIRWAY's
 breath-event walk was the one reading that matched every listen (one event in 7c169ccc, none in the

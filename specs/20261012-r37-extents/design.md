@@ -1,6 +1,6 @@
 # r37 extents: complete in both directions (sections A, E2, E3)
 
-2026-10-12. Owner-approved r37 plan v2 (`~/Downloads/b2ai-reviews/r37_plan.md`, sections A, E and H), with
+2026-10-12. Owner-approved r37 plan v2 (`${LOCAL_INPUT}/b2ai-reviews/r37_plan.md`, sections A, E and H), with
 the review against the owner's notes (`r37_plan_review.md`). Inputs read: the 62 extent labels
 (`extent_check_9e550e2026a7.json` joined to `extent_check_listen.tsv`) and the 24 triage notes
 (`triage_review_be5d2593d524.json`). Code: `task_extent.py`, `data/task_extent.yaml` (v1), and the owning

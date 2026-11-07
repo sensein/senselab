@@ -7,7 +7,7 @@ repeated in it, per CLAUDE.md.
 ## Where it came from
 
 A scratch generator, `preprocess_figure_tool.py`, lived in a session job directory
-(`~/.claude/jobs/c1a50c05/tmp/`) and called itself "not a shipped script". It was the right figure —
+(`${AGENT_SCRATCH}/`) and called itself "not a shipped script". It was the right figure —
 it ran the real `admit()+preprocess()` rather than an approximation, and its panels were sound — but
 it could not survive a machine restart, and it broke one rule badly enough to make its output
 misleading.

@@ -1,9 +1,9 @@
 # r37 words and speaker (sections B, C and G)
 
-2026-10-12. Owner-approved r37 plan v2 (`~/Downloads/b2ai-reviews/r37_plan.md`, sections B, C, G, H), its
+2026-10-12. Owner-approved r37 plan v2 (`${LOCAL_INPUT}/b2ai-reviews/r37_plan.md`, sections B, C, G, H), its
 review (`r37_plan_review.md`), the trace of the 24 notes (`trace_notes.md`, scripts in
 `${ORCD_GROUP_SCRATCH}/r18d_20261010/trace_notes_20261012/`), the earlier 6 notes
-(`earlier_notes_r36.md`), and the owner labels in `~/Downloads/b2ai-reviews/owner_labels/`
+(`earlier_notes_r36.md`), and the owner labels in `${LOCAL_INPUT}/b2ai-reviews/owner_labels/`
 (`triage_review_be5d2593d524.json`, `triage_review_7423bffbc3c9.json`). Every rule is general; nothing is
 fitted to a labelled file. Measured read-only over the r36 stores before any run (below).
 

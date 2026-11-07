@@ -44,7 +44,7 @@ Two scripts, both under `scripts/`:
   entry point that runs both x86_64 cells (`torch==2.13.*`, `torch==2.14.*`) in one job on group flash
   scratch.
 
-Inputs: the three files at `~/Downloads/frcrn_gated_probe_20260907/*__cluster_plain.wav` named in the
+Inputs: the three files at `${LOCAL_INPUT}/frcrn_gated_probe_20260907/*__cluster_plain.wav` named in the
 brief, copied byte-identical to the cluster (`md5` verified equal on both ends before any run — see
 below) and used unmodified in every cell.
 
@@ -318,7 +318,7 @@ any single batch.
 # Local (arm64), either torch version:
 uv run python specs/20260817-triage-workflow-dag/benchmarks/scripts/frcrn_torch_vs_arch_2026_09_08.py \
   --venv-name clearvoice-exp214-arm64 --torch-spec "torch==2.14.*" \
-  --inputs ~/Downloads/frcrn_gated_probe_20260907/*__cluster_plain.wav \
+  --inputs ${LOCAL_INPUT}/frcrn_gated_probe_20260907/*__cluster_plain.wav \
   --repeats 2 --out-dir /tmp/frcrn_arm64_214 --out-json /tmp/frcrn_arm64_214/result.json
 
 # Cluster (x86_64), both torch versions in one job:
@@ -328,7 +328,7 @@ sbatch --partition=${CPU_PARTITION} --cpus-per-task=8 --mem=32G --time=2:00:00 \
 
 # Actual production venv, either machine:
 uv run python specs/20260817-triage-workflow-dag/benchmarks/scripts/frcrn_production_venv_check_2026_09_08.py \
-  --inputs ~/Downloads/frcrn_gated_probe_20260907/*__cluster_plain.wav \
+  --inputs ${LOCAL_INPUT}/frcrn_gated_probe_20260907/*__cluster_plain.wav \
   --out-dir /tmp/frcrn_prod_check --out-json /tmp/frcrn_prod_check/result.json
 ```
 

@@ -219,7 +219,7 @@ measurements needing isolation applies in full. Model:
 
 ### Speaker counts on real recordings
 
-48 recordings from `~/Downloads/b2ai_v31_bids_07_01_v3`, three subjects, every `Story-recall`,
+48 recordings from `${LOCAL_INPUT}/b2ai_v31_bids_07_01_v3`, three subjects, every `Story-recall`,
 `Harvard-Sentences` and `Respiration-and-cough` file they carry, conditioned exactly as the block
 conditions them (these are raw session audio, so this is a single-stream reading, not the
 `enhanced`/`residual` pair):
@@ -240,7 +240,7 @@ counted segments would have read three of those twenty as multi-voice.
 
 ### The one complete store, through the extend driver
 
-`~/Downloads/triage_prov_sample/` (copied), `sub-SUBJ08…_task-Story-recall`, 88.07 s, run end to
+`${LOCAL_INPUT}/triage_prov_sample/` (copied), `sub-SUBJ08…_task-Story-recall`, 88.07 s, run end to
 end through `scripts/extend_diarization.py` with the real model on both streams:
 
 | stream | `n_speakers` | segments | `speech_s` | `overlap_s` | model time |
@@ -273,7 +273,7 @@ caveat in "Three consequences" below: that is a property of this recording's lag
 ### Settling it with speaker embeddings
 
 Second pass, same day, same host. The store's `derivatives/` was never written back to
-`~/Downloads/triage_prov_sample/` and `store.jsonl` carries no diarization measurement, so there was
+`${LOCAL_INPUT}/triage_prov_sample/` and `store.jsonl` carries no diarization measurement, so there was
 no sidecar to reuse: **the diarization was regenerated** from `streams/{enhanced,residual,plain}.flac`
 of a copy, conditioned as `diarization_input` conditions it (mono, 16 kHz) and run through
 `diarize_audios` at the same commit `3533c8cf8e369892e6b79ff1bf80f7b0286a54ee` with

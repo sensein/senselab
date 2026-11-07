@@ -313,9 +313,9 @@ The task-specific type tests keep their existing fitted values. Nothing is tuned
 ## Evaluation protocol
 
 **Labels:**
-- every row of `~/Downloads/triage_listening_labels_20261006.csv`, covering all listen sets
+- every row of `${LOCAL_INPUT}/triage_listening_labels_20261006.csv`, covering all listen sets
   (breath, cough, voice, discard-cause, contested, empty-route, contrast, veto, modspec);
-- `~/Downloads/breath_review_check_20261006/index.csv`;
+- `${LOCAL_INPUT}/breath_review_check_20261006/index.csv`;
 - each mapped to a three-way target: present, review-acceptable or absent. Owner phrases such as
   "OK if flagged or discarded" map to review-acceptable;
 - only 8-hex prefixes are written into the repo.
@@ -2499,7 +2499,7 @@ By pooled duration the mean's 1% bound is 0.626 (2-4 s, 0.14% rejected), 0.585 (
 the average Hausdorff tie, so the rule is the **mean**, which the pooled embedding already is, at the 1%
 cross-acceptance bound: **`comparison.cosine_min.default: 0.398`**. Loudness's target keeps 0.231 (previous
 section). Distributions per comparison, stratum and metric: `speaker_fit_distributions.tsv`; figure
-`speaker_fit.png` (both in the fit directory and `~/Downloads/b2ai-reviews/`).
+`speaker_fit.png` (both in the fit directory and `${LOCAL_INPUT}/b2ai-reviews/`).
 
 **Under the rule** (all r34 recordings): speech targets 28,442 compared, 113 under 0.398 (17 under 0.231).
 Non-task pools reaching 2.0 s are rare: airway 130 (112 under), lexical speech 381 (45), voice 53 (25), loudness 9

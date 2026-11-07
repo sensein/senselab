@@ -42,10 +42,10 @@ printed before any page exists.
 ## Render, locally
 
 ```bash
-scp orcd:.../free_speech_rows.jsonl ~/Downloads/free-speech-review/
+scp orcd:.../free_speech_rows.jsonl ${LOCAL_INPUT}/free-speech-review/
 uv run python scripts/free_speech_review_page.py render \
-  ~/Downloads/free-speech-review/free_speech_rows.jsonl \
-  --out ~/Downloads/free-speech-review/free-speech-review.html \
+  ${LOCAL_INPUT}/free-speech-review/free_speech_rows.jsonl \
+  --out ${LOCAL_INPUT}/free-speech-review/free-speech-review.html \
   --title "Free-speech review"
 ```
 
@@ -92,7 +92,7 @@ which is the whole reason the marks are inline and the brackets are styled apart
 
 ```bash
 npm install --no-save jsdom
-node --max-old-space-size=8192 <check.mjs> ~/Downloads/free-speech-review/free-speech-review.html
+node --max-old-space-size=8192 <check.mjs> ${LOCAL_INPUT}/free-speech-review/free-speech-review.html
 ```
 
 Loading the document under jsdom with `runScripts: "dangerously"` exercises the real filter code:
@@ -131,7 +131,7 @@ No browser extension was reachable, so the page was driven under jsdom with
 
 ```bash
 npm install --no-save jsdom
-node --max-old-space-size=12288 <harness.mjs> ~/Downloads/free-speech-review/free-speech-review.html
+node --max-old-space-size=12288 <harness.mjs> ${LOCAL_INPUT}/free-speech-review/free-speech-review.html
 ```
 
 What the harness exercised, and what reconciles:

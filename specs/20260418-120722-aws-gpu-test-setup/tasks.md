@@ -103,7 +103,7 @@
 
 ### Implementation for User Story 4
 
-- [x] T012 [US4] Launch a test instance from the AMI (`aws ec2 run-instances --profile senselab --image-id <ami-id> --instance-type g4dn.xlarge`), SSH in, verify: `nvidia-smi` shows GPU, `~/senselab-env/bin/python -c "import torch; assert torch.cuda.is_available()"` succeeds, `uv` is available. Terminate the test instance.
+- [x] T012 [US4] Launch a test instance from the AMI (`aws ec2 run-instances --profile senselab --image-id <ami-id> --instance-type g4dn.xlarge`), SSH in, verify: `nvidia-smi` shows GPU, `/home/ec2-user/senselab-env/bin/python -c "import torch; assert torch.cuda.is_available()"` succeeds, `uv` is available. Terminate the test instance.
 
 - [x] T013 [US4] Measure startup time: from the T008 test run, extract timestamps from the Actions log to calculate time from workflow trigger to first test execution. Verify < 5 minutes.
 

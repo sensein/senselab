@@ -10,9 +10,9 @@ Read this section first. Everything below it is history.
 |---|---|
 | Code branch | `fix/policy-v8` (PR #581 into `triage`). Tip at writing: `8b068a02`. |
 | Corpus | `${ORCD_GROUP_SCRATCH}/triage_r9_20260929/out` (62,550 runs), re-folded in place (r17c re-fold) |
-| Latest parquet | `recording_vectors_r17` (schema 23), at `${ORCD_GROUP_SCRATCH}/recording_vectors_r17/`; local copy `~/Downloads/recording_vectors_20261006_r17/` |
+| Latest parquet | `recording_vectors_r17` (schema 23), at `${ORCD_GROUP_SCRATCH}/recording_vectors_r17/`; local copy `${LOCAL_INPUT}/recording_vectors_20261006_r17/` |
 | Pinned checkout | `senselab-r26` (moved forward through `c3e97dd4` → `a8a95cea` → `8b068a02`, each time only with nothing running from it) |
-| Owner labels | `~/Downloads/triage_listening_labels_20261006.csv` (~180 rows), plus per-set `index.csv` in `voice_check_20261006/` (and `discard_cause/`), `discard_contested_check_20261006/` and `breath_review_check_20261006/` |
+| Owner labels | `${LOCAL_INPUT}/triage_listening_labels_20261006.csv` (~180 rows), plus per-set `index.csv` in `voice_check_20261006/` (and `discard_cause/`), `discard_contested_check_20261006/` and `breath_review_check_20261006/` |
 | Derivatives | still at the r11 state; the r17 sync is next |
 
 **Vocabulary (feat/task-events, 2026-10-07; recording_vectors schema 25).** Verdict is
@@ -89,10 +89,10 @@ From r16 (3,914 / 6,741 / 51,435 / 460):
 |---|---|
 | Code branch | `fix/policy-v8` (PR #581 into `triage`; #567 merged 2026-10-04). Tip at writing: `217b22fb`. |
 | Corpus | `${ORCD_GROUP_SCRATCH}/triage_r9_20260929/out` (62,550 runs), re-folded in place |
-| Latest parquet | `recording_vectors_r16` (schema 21, policy 9, built at `1a73d8d0`); local `~/Downloads/recording_vectors_20261006_r16/`. Superseded by the work below; not yet re-built. |
+| Latest parquet | `recording_vectors_r16` (schema 21, policy 9, built at `1a73d8d0`); local `${LOCAL_INPUT}/recording_vectors_20261006_r16/`. Superseded by the work below; not yet re-built. |
 | Pinned checkouts | `senselab-r15` … `senselab-r25`, one per run (job ids in `triage_r9_20260929/jobs.txt`) |
-| Owner labels | `~/Downloads/triage_listening_labels_20261006.csv` (103 rows: breath, empty-route, cough listens, each with the owner's note); copy at `${ORCD_GROUP_SCRATCH}/tmp_bext/` |
-| Review figures | `~/Downloads/breath_extent_check_20261006/` (`fixed/`, `fixed2/` pending) and `~/Downloads/cough_check_20261006/fixed/` |
+| Owner labels | `${LOCAL_INPUT}/triage_listening_labels_20261006.csv` (103 rows: breath, empty-route, cough listens, each with the owner's note); copy at `${ORCD_GROUP_SCRATCH}/tmp_bext/` |
+| Review figures | `${LOCAL_INPUT}/breath_extent_check_20261006/` (`fixed/`, `fixed2/` pending) and `${LOCAL_INPUT}/cough_check_20261006/fixed/` |
 | Derivatives | still at the r11 state (finalized 2026-10-03); not re-synced since |
 
 ### Settled since r11 (all on `fix/policy-v8`)
@@ -178,7 +178,7 @@ r11 is r10 with Nimble replaced by Clef 27B (`ollama clef:27b`, Ollama 0.35.1, w
 model-neutral `second_opinion_*` columns, parquet schema 18 (`4266c2db`); load the model by a decision
 request, not `/api/generate` (`af416ba0`); `second_opinion.load_timeout_s` 1200 (`72a45e6e`). Run:
 Clef over the 15,113 review recordings from `senselab-r13`/`senselab-r14`, then a full re-fold and
-`recording_vectors_r11` (local `~/Downloads/recording_vectors_20261003_r11/`). 13 slices first failed
+`recording_vectors_r11` (local `${LOCAL_INPUT}/recording_vectors_20261003_r11/`). 13 slices first failed
 on the 300 s model load, with weights read from the /orcd/data capacity tier by several slices per
 node; the store is now copied to flash at `${ORCD_GROUP_SCRATCH}/ollama-models-flash/`.
 
@@ -202,8 +202,8 @@ and cut to task extents. r9c and r9d are superseded.
 | job ids, submit order | `triage_r9_20260929/jobs.txt`, `RUN.md` |
 | review manifest (15,113) / v6 readings | `triage_r9_20260929/review/`, `rows_v6/` |
 | Nimble readings | `triage_r9_20260929/second_opinion/rows/` |
-| parquet, schema 17, dictionary embedded | `recording_vectors_r10/`; laptop `~/Downloads/recording_vectors_20261002_r10/` |
-| page / evaluations | `free_speech_page_20261002_r10/`, `evaluations_r10_20261002/README.md`; laptop `~/Downloads/free_speech_review_20261002_r10/` |
+| parquet, schema 17, dictionary embedded | `recording_vectors_r10/`; laptop `${LOCAL_INPUT}/recording_vectors_20261002_r10/` |
+| page / evaluations | `free_speech_page_20261002_r10/`, `evaluations_r10_20261002/README.md`; laptop `${LOCAL_INPUT}/free_speech_review_20261002_r10/` |
 | derivatives (inside the release) | `${ORCD_DATA}/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04/derivatives/senselab-triage/` |
 
 Code since r9c, on `design/triage-workflow-dag`:
@@ -276,8 +276,8 @@ The cache commits (`7089b05f`..`e4301967`) sit on top and are merged; r7 predate
 | checkout, pinned | `${ORCD_GROUP_SCRATCH}/senselab-r5` @ `77e9273e` |
 | job ids, submit order | `triage_r7_20260927/jobs.txt`, `RUN.md` |
 | review manifest (15,193) / readings | `triage_r7_20260927/review/` |
-| parquet, schema 11, dictionary embedded | `recording_vectors_r7/`; laptop `~/Downloads/recording_vectors_20260928_r7/` |
-| page / evaluations | `free_speech_page_20260928_r7/`, `evaluations_r7_20260928/` (laptop `~/Downloads/…`) |
+| parquet, schema 11, dictionary embedded | `recording_vectors_r7/`; laptop `${LOCAL_INPUT}/recording_vectors_20260928_r7/` |
+| page / evaluations | `free_speech_page_20260928_r7/`, `evaluations_r7_20260928/` (laptop `${LOCAL_INPUT}/…`) |
 
 What r7 carries beyond r6: SPEECH places each finding on its own words (no whole-transcript or bridged
 spans; unplaced findings stored with their text); one mask per finding; a reviewer redact entry on words
@@ -378,7 +378,7 @@ Both now have `origin` at GitHub. `senselab-rvec` pointed at another scratch che
 | reviewer-on config | `${ORCD_GROUP_SCRATCH}/triage_review_20260925/review_on.yaml` |
 | parquet shards | `${ORCD_GROUP_SCRATCH}/recording_vectors_r4` |
 | page extract + html | `${ORCD_GROUP_SCRATCH}/free_speech_page_20260925` |
-| **on the laptop** | `~/Downloads/recording_vectors_20260925/`, `~/Downloads/free_speech_review_20260925/` |
+| **on the laptop** | `${LOCAL_INPUT}/recording_vectors_20260925/`, `${LOCAL_INPUT}/free_speech_review_20260925/` |
 
 The r4 tree is a **mirror**: `store.jsonl`, `streams/`, a `derivatives` symlink, and **no
 `run.json`**. That is why the manifest carries `source` — `source_of()` has nothing to read there.

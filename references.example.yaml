@@ -4,6 +4,7 @@
 
 SOFTWARE_ROOT:            # directory holding local checkouts of sibling repositories
 AGENT_SCRATCH:            # scratch directory of a local agent session or job
+AGENT_MEMORY:             # memory directory of a local agent
 LOCAL_INPUT:              # local folder holding input files and exported figures
 XDG_DATA_HOME:            # per-user data directory
 ORCD_GROUP_SCRATCH:       # shared group scratch directory on the compute cluster

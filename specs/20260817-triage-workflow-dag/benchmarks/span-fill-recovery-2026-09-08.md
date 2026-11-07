@@ -66,8 +66,8 @@ uv run python specs/20260817-triage-workflow-dag/benchmarks/scripts/summarize_sp
 
 ## Data
 
-Stores: `~/Downloads/triage_10subj_20260908/out/<subject>/<run>/run/store.jsonl` (10 subjects, one
-run each). Audio: `~/Downloads/b2ai_v31_bids_07_01_v3/<subject>/<session>/audio/*.wav`, matched to a
+Stores: `${LOCAL_INPUT}/triage_10subj_20260908/out/<subject>/<run>/run/store.jsonl` (10 subjects, one
+run each). Audio: `${LOCAL_INPUT}/b2ai_v31_bids_07_01_v3/<subject>/<session>/audio/*.wav`, matched to a
 store by the basename of its `recording` stream entity's `path` attribute.
 
 **Only 3 of the 10 subjects had a locally-present matching recording** at the time of this

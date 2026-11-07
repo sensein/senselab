@@ -151,5 +151,5 @@ Pre-fix, all four fail for `.mp3` and pass for `.wav` and `.flac`. The window be
 inside the quiet half, which is far enough for the codec ringing at the step to have decayed to
 0.0016 and near enough that a 1105-sample shift reaches back into content peaking at 1.81.
 
-Raw measurements: `~/Downloads/senselab-io-audit/raw/invariants_run{1,2,3}.txt`, scripts in that
+Raw measurements: `${LOCAL_INPUT}/senselab-io-audit/raw/invariants_run{1,2,3}.txt`, scripts in that
 audit's `scripts/`.

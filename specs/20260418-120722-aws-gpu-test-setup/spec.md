@@ -3,7 +3,7 @@
 **Feature Branch**: `20260418-120722-aws-gpu-test-setup`
 **Created**: 2026-04-18
 **Status**: Draft
-**Input**: User description: "re-setup gpu test orchestration on aws. read ~/software/neuronets/nobrainer to understand what was needed. we are going to replace the current setup. when providing aws commands or running them use --profile senselab. to the extent it can be automated (using aws and gh) for other repos in the future generate a script to do so without leaking any credentials."
+**Input**: User description: "re-setup gpu test orchestration on aws. read ${SOFTWARE_ROOT}/neuronets/nobrainer to understand what was needed. we are going to replace the current setup. when providing aws commands or running them use --profile senselab. to the extent it can be automated (using aws and gh) for other repos in the future generate a script to do so without leaking any credentials."
 
 ## User Scenarios & Testing *(mandatory)*
 

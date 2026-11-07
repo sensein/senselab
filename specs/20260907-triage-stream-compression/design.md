@@ -31,7 +31,7 @@ followed by both `soundfile.read` and `AudioDecoder`/raw `ffmpeg -f f32le` on th
 
 ## Compression, measured on the 98 real cluster residuals
 
-`~/Downloads/frcrn_cluster_residuals_20260907/` — 98 `(plain.wav, residual.wav)` pairs, 196 files,
+`${LOCAL_INPUT}/frcrn_cluster_residuals_20260907/` — 98 `(plain.wav, residual.wav)` pairs, 196 files,
 224.57 MB of float32 WAV.
 
 | format | total size | ratio | size reduction |

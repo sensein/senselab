@@ -22,8 +22,8 @@ audio for:
 
 Usage:
     uv run python span_fill_recovery.py \
-        --stores "~/Downloads/triage_10subj_20260908/out/*/*/run/store.jsonl" \
-        --bids-root ~/Downloads/b2ai_v31_bids_07_01_v3 \
+        --stores "${LOCAL_INPUT}/triage_10subj_20260908/out/*/*/run/store.jsonl" \
+        --bids-root ${LOCAL_INPUT}/b2ai_v31_bids_07_01_v3 \
         --supplement-glob "*Respiration-and-cough*.wav" \
         --out results.json
 
@@ -281,8 +281,8 @@ def classify_in_chunks(audios: list[Audio], chunk_size: int) -> list[list[dict[s
 def main() -> None:
     """Build the reference set, build every fragment, classify, and write the raw results JSON."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stores", default="~/Downloads/triage_10subj_20260908/out/*/*/run/store.jsonl")
-    parser.add_argument("--bids-root", default="~/Downloads/b2ai_v31_bids_07_01_v3")
+    parser.add_argument("--stores", default="${LOCAL_INPUT}/triage_10subj_20260908/out/*/*/run/store.jsonl")
+    parser.add_argument("--bids-root", default="${LOCAL_INPUT}/b2ai_v31_bids_07_01_v3")
     parser.add_argument("--min-confidence", type=float, default=0.5)
     parser.add_argument("--chunk-size", type=int, default=1000)
     parser.add_argument(

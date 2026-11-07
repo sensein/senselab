@@ -19,7 +19,7 @@ The LLM lane has **no release axis**. It reports triage, three kinds, and a bool
 does not model artifact release, redaction verification, or scan completeness. Every release figure
 below is SL·mac against SL·eng only. No LLM counterpart is constructed, because there is none.
 
-Figure: `~/Downloads/triage_threeway_28.png`.
+Figure: `${LOCAL_INPUT}/triage_threeway_28.png`.
 
 ## Per-file table
 

@@ -8,11 +8,11 @@ task or decision changes state. Newest log entries go first.
 | What | Where |
 |---|---|
 | Integration branch | `2.x`. All 2.x work merges here, never into `alpha` (owner item 30). It carries the 2.x workflows (`2x-tests.yaml`, `2x-docs-preview.yaml`). |
-| Design (docs PR) | `senselab-2x-api` → `2.x`, draft PR sensein/senselab#617. Every spec change is made here: ADRs, principles, design, plans, registers, rulings, reviews and this file (D-7). Worktree `~/software/sensein/senselab-2x`. |
-| Code (code PR) | `2x/phase-1` → `senselab-2x-api` today, draft PR sensein/senselab#619. Code and tests only; it merges `senselab-2x-api` to stay current and is retargeted to `2.x` once #617 merges (D-7). Worktree `~/software/sensein/senselab-2x-impl`. |
+| Design (docs PR) | `senselab-2x-api` → `2.x`, draft PR sensein/senselab#617. Every spec change is made here: ADRs, principles, design, plans, registers, rulings, reviews and this file (D-7). Worktree `${SOFTWARE_ROOT}/sensein/senselab-2x`. |
+| Code (code PR) | `2x/phase-1` → `senselab-2x-api` today, draft PR sensein/senselab#619. Code and tests only; it merges `senselab-2x-api` to stay current and is retargeted to `2.x` once #617 merges (D-7). Worktree `${SOFTWARE_ROOT}/sensein/senselab-2x-impl`. |
 | 2.x workflows | merged: #620 (on `alpha`, 1.x and 2.x workflows separated) and #621 (on `2.x`). Previews are at `sensein.group/senselab/2x/pr-<N>/`. |
 | 1.x | developed on `alpha`; freeze branch `freeze-1x-2026-10-30` → `19834fdd` (= `1.4.0-alpha.11`). |
-| pydra proposal | branch `enh/execution-extensions` → draft PR nipype/pydra#891; worktree `~/software/nipype/pydra-ext`. |
+| pydra proposal | branch `enh/execution-extensions` → draft PR nipype/pydra#891; worktree `${SOFTWARE_ROOT}/nipype/pydra-ext`. |
 
 ## Where the records are (this directory)
 
@@ -122,9 +122,9 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
 
 ## How to resume
 
-1. `cd ~/software/sensein/senselab-2x && git pull`. Read this file, then `decisions-2026-11-01.md`, then
+1. `cd ${SOFTWARE_ROOT}/sensein/senselab-2x && git pull`. Read this file, then `decisions-2026-11-01.md`, then
    `principles.md` and `engineering.md` (roster and checklist).
-2. Code work happens in `~/software/sensein/senselab-2x-impl` on `2x/phase-1`. Spec changes happen here,
+2. Code work happens in `${SOFTWARE_ROOT}/sensein/senselab-2x-impl` on `2x/phase-1`. Spec changes happen here,
    on `senselab-2x-api`, and reach the code branch by merge.
 3. Check 1.x drift: `git fetch origin alpha && git log 19834fdd..origin/alpha --oneline -- src scripts tutorials`.
 4. PR state: `gh pr view 617`, `gh pr view 619`; 2.x CI runs on both.

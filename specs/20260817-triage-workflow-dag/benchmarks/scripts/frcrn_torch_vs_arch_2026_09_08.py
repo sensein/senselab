@@ -22,8 +22,8 @@ Usage:
         --torch-spec "torch==2.14.*" \\
         --inputs a.wav b.wav c.wav \\
         --repeats 2 \\
-        --out-dir ~/scratch/frcrn_cell_out \\
-        --out-json ~/scratch/frcrn_cell_out/result.json
+        --out-dir ${ORCD_PERSONAL_SCRATCH}/frcrn_cell_out \\
+        --out-json ${ORCD_PERSONAL_SCRATCH}/frcrn_cell_out/result.json
 """
 
 from __future__ import annotations
