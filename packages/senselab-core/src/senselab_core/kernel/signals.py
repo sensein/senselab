@@ -22,6 +22,7 @@ from pydantic import (
 from senselab_worker.canonical import canonical_text
 from senselab_worker.digest import identity_digest
 from senselab_worker.faults import ContentFault
+from senselab_worker.units import NS_PER_S
 
 from senselab_core.kernel._base import (
     ArrayForm,
@@ -55,7 +56,6 @@ SIGNAL_DTYPES: Mapping[str, float | None] = FrozenMapping(
 Integer PCM maps to float32 full scale as the decoder maps it (`x / 2**(bits - 1)`); floats are cast.
 """
 
-_NS_PER_S = 10**9
 SignalArray = Annotated[
     numpy.ndarray,
     BeforeValidator(lambda v: require_finite(as_numeric_array(v, 2), "signal samples", nan_is_missing=True)),
@@ -144,7 +144,7 @@ def _check_channels(channels: tuple[ChannelInfo, ...], rows: int) -> None:
 
 def _frame_at(t_ns: int, sampling_rate: float) -> int:
     """Index of the first sample at or after `t_ns`, sample k lying at k / sampling_rate seconds."""
-    return math.ceil(Fraction(t_ns) * Fraction(sampling_rate) / _NS_PER_S)
+    return math.ceil(Fraction(t_ns) * Fraction(sampling_rate) / NS_PER_S)
 
 
 class RegularGroup(Frozen):

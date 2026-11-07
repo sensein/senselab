@@ -7,8 +7,7 @@ import numpy
 from senselab_worker.digest import COMMIT_HEX
 from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import ContentFault, ResourceFault
-
-NS_PER_S = 1_000_000_000
+from senselab_worker.units import NS_PER_S
 
 
 def clamp_ns(start_s: float | None, end_s: float | None, floor_ns: int, duration_ns: int) -> tuple[int, int]:

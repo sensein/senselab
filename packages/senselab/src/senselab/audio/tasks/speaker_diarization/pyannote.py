@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy
 from senselab_worker.fake import injected
+from senselab_worker.units import NS_PER_S
 
 from senselab.item_faults import init_model, mono_samples
 
@@ -23,9 +24,8 @@ EXPECTED_RATE = 16_000
 _INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 _HINTS = ("num_speakers", "min_speakers", "max_speakers")
 _BACKEND_PARAMS = ("exclusive",)
-_NS_PER_S = 1_000_000_000
 SEGMENTATION_RECEPTIVE_FIELD_SAMPLES = 991
-MIN_INPUT_NS = SEGMENTATION_RECEPTIVE_FIELD_SAMPLES * _NS_PER_S // EXPECTED_RATE
+MIN_INPUT_NS = SEGMENTATION_RECEPTIVE_FIELD_SAMPLES * NS_PER_S // EXPECTED_RATE
 
 Turns = list[tuple[str, float, float]]
 
@@ -113,7 +113,7 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
             samples, clock_id = mono_samples(item, faults, EXPECTED_RATE, "pyannote", MIN_INPUT_NS)
             turns = state.model.diarize(samples, hints, exclusive)
             results.append(
-                {"outputs": {"turns": intervals(turns, clock_id, round(samples.size / EXPECTED_RATE * _NS_PER_S))}}
+                {"outputs": {"turns": intervals(turns, clock_id, round(samples.size / EXPECTED_RATE * NS_PER_S))}}
             )
         except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
             results.append({"error": exc})
@@ -123,8 +123,8 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
 def intervals(turns: Turns, clock_id: str, duration_ns: int) -> dict[str, Any]:
     """Return the `intervals@1.0` wire form of `turns`, by start; times are integer ns clamped to `duration_ns`."""
     ordered = sorted(turns, key=lambda turn: (turn[1], turn[2], turn[0]))
-    start = [min(duration_ns, max(0, round(s * _NS_PER_S))) for _, s, _ in ordered]
-    end = [min(duration_ns, max(b, round(e * _NS_PER_S))) for b, (_, _, e) in zip(start, ordered)]
+    start = [min(duration_ns, max(0, round(s * NS_PER_S))) for _, s, _ in ordered]
+    end = [min(duration_ns, max(b, round(e * NS_PER_S))) for b, (_, _, e) in zip(start, ordered)]
     return {
         "format": "intervals@1.0",
         "start_ns": numpy.array(start, dtype=numpy.int64),

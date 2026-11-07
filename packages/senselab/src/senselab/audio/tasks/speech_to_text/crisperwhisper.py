@@ -23,9 +23,10 @@ from typing import Any, Literal, get_args
 
 import numpy
 from senselab_worker.fake import injected
+from senselab_worker.units import NS_PER_S
 
 from senselab.audio.tasks.speech_to_text.whisper_frontend import MIN_INPUT_NS
-from senselab.item_faults import NS_PER_S, clamp_ns, init_model, mono_samples
+from senselab.item_faults import clamp_ns, init_model, mono_samples
 
 WORKER_MODULE = "senselab.audio.tasks.speech_to_text.crisperwhisper"
 MODEL_ID = "nyralabs/CrisperWhisper2.0_turbo"

@@ -20,6 +20,7 @@ from senselab_core.kernel.time import Span
 from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.audio_io import READER
 from senselab_worker.fake import FakeFaults, injected, without_fault
+from senselab_worker.units import NS_PER_S
 
 from senselab._api.declarations import SpeechToTextParams
 from senselab.audio.tasks.speech_to_text.token_confidence import (
@@ -30,7 +31,6 @@ from senselab.audio.tasks.speech_to_text.token_confidence import (
 )
 from senselab.audio.tasks.speech_to_text.whisper_frontend import MIN_INPUT_NS
 from senselab.item_faults import (
-    NS_PER_S,
     clamp_ns,
     init_model,
     mono_check,

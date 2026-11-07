@@ -7,8 +7,7 @@ from dataclasses import dataclass
 from senselab_core.kernel.results import Embedding
 from senselab_core.kernel.signals import Audio
 from senselab_core.runtime.call import Result
-
-_NS_PER_S = 1_000_000_000
+from senselab_worker.units import NS_PER_S
 
 
 @dataclass(frozen=True)
@@ -39,7 +38,7 @@ def window_starts(duration_s: float, window_s: float, hop_s: float) -> list[floa
 
 def slice_audio(audio: Audio, start_s: float, end_s: float) -> Audio:
     """Return the audio over `[start_s, end_s)`, clamped to its bounds."""
-    return Audio.from_array(audio.read(round(start_s * _NS_PER_S), round(end_s * _NS_PER_S)), audio.sampling_rate)
+    return Audio.from_array(audio.read(round(start_s * NS_PER_S), round(end_s * NS_PER_S)), audio.sampling_rate)
 
 
 def embed_windows(

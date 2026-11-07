@@ -41,6 +41,7 @@ from pydantic import BaseModel, ValidationError
 from senselab_worker.digest import identity_digest, npy_digest
 from senselab_worker.fake import FAULT_KEY
 from senselab_worker.faults import FaultClass
+from senselab_worker.units import NS_PER_S
 
 from senselab_core.kernel._base import thawed
 from senselab_core.kernel.declare import OUTPUT_AFFECTING, BackendSpec, Registry, TaskParams, TaskSpec
@@ -557,7 +558,7 @@ def _input_below_minimum(task: TaskSpec, backend: BackendSpec) -> None:
     assert backend.min_input_ns is not None
     ports = [p for p, t in task.inputs.items() if t == "Audio"]
     assert ports, f"{backend.name!r} declares min_input_ns but {task.name!r} takes no Audio input"
-    minimum = -(-backend.min_input_ns * AUDIO_RATE // 1_000_000_000)
+    minimum = -(-backend.min_input_ns * AUDIO_RATE // NS_PER_S)
     assert minimum > 1, f"min_input_ns {backend.min_input_ns} is under two samples at {AUDIO_RATE} Hz"
 
     def item(frames: int) -> dict[str, Any]:
