@@ -11,7 +11,7 @@
 # [uh] name no family's own event and corroborate nothing.
 #
 # 2026-10-05, version 2: the breath tokens are removed. The owner listened to ten breath recordings
-# (~/Downloads/contrast_check_20261005/): [breath] was written on three with no breath in them
+# (${LOCAL_INPUT}/contrast_check_20261005/): [breath] was written on three with no breath in them
 # (254e47be, 29be45ea, 0b8dcad5), so for a breath task it is context, never evidence. The cough
 # tokens stay: no listening has contradicted the owner's [cough] rule.
 version: 2

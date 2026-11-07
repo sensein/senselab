@@ -9,8 +9,8 @@
 # absent reruns.
 #
 # derivation: owner, 2026-10-05. The owner listened to 23 breath recordings with gain-lifted copies
-# (~/Downloads/contrast_check_20261005/, ~/Downloads/breath_absent_check_20261005/,
-# ~/Downloads/breath_pattern_check_20261005/): ten confirmed breathing ("they all have breathing"),
+# (${LOCAL_INPUT}/contrast_check_20261005/, ${LOCAL_INPUT}/breath_absent_check_20261005/,
+# ${LOCAL_INPUT}/breath_pattern_check_20261005/): ten confirmed breathing ("they all have breathing"),
 # one with a single long breath where three quick breaths were asked (7c169ccc), ten with no breath
 # (including 517381e9, a 0.48 s burst inside speech the HeAR-scored detector counted as one breath
 # event, and 9d16c147, breaths too quiet to hear clearly, which the owner said to discard). With these
