@@ -9,8 +9,9 @@ derivations:
     taps = (A - 7.95) / (14.36 * width) for transition width in cycles per sample.
   stopband_attenuation_db: >-
     The Kaiser design target A: the filter's stop band lies at least this far below its pass band, and its
-    pass-band ripple is at most -20*log10(1 - delta) dB with delta = 10**(-A/20), the single
-    ripple a Kaiser-windowed sinc has in both bands. 80 dB puts delta at 1e-4, a ripple of 0.00087 dB and
+    pass-band ripple is at most -20*log10(1 - delta) dB with delta = 10**(-A/20), the
+    Kaiser target for the ripple in both bands; the realised ripple is within ripple_margin times it. 80 dB puts
+    delta at 1e-4, a ripple of 0.00087 dB and
     an aliasing floor below the 16-bit quantisation floor of 98 dB relative to full scale for content within
     18 dB of full scale; it is a design choice, not a fit to any recording.
   transition_fraction: >-
@@ -22,7 +23,9 @@ derivations:
     The factor by which the realised filter's worst ripple, in either band, may exceed the Kaiser target delta.
     Kaiser's length and beta formulas are an approximation and `ceil` rounds the length up; measured on the
     FFT of the taps of every pair of 8000, 11025, 16000, 22050, 32000, 44100 and 48000 Hz, the worst pass-band
-    deviation is 1.160 delta (16000 to 48000 Hz) and the worst stop-band peak 1.040 delta. 1.2 bounds both.
+    deviation is 1.160 delta (16000 to 48000 Hz) and the worst stop-band peak 1.040 delta. The worst over every
+    up and down ratio up to 8, for five further base rates, is the same 1.160. 1.2 is that maximum rounded up to one
+    decimal, a headroom of 3.5 %.
   max_block_elements: >-
     The most (channels x outputs x taps) values one gather holds at once, 2**22 float64 values (32 MiB):
     a memory bound that changes no output.

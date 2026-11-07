@@ -17,10 +17,12 @@ from senselab_core.testing.contracts import contract_cases
 LOCK_RECORDS = packaged_lock_records("senselab")
 
 RATES = [8000, 11025, 16000, 22050, 32000, 44100, 48000]
-PAIRS = st.tuples(st.sampled_from(RATES), st.sampled_from(RATES)).filter(lambda p: p[0] != p[1])
+ALL_PAIRS = [(a, b) for a in RATES for b in RATES if a != b]
+PAIRS = st.sampled_from(ALL_PAIRS)
 SLOW = settings(max_examples=20, deadline=None)
 DELTA = 10.0 ** (-rs.design_bounds()[1] / 20.0)
 N_IN = 4000
+EPS = float(numpy.finfo(numpy.float64).eps)
 
 
 def _ratio(rate: int, target: int) -> tuple[int, int]:
@@ -42,18 +44,21 @@ def _tone_amplitude(y: numpy.ndarray, target: int, f: float) -> float:
     return float(math.hypot(*coef))
 
 
-def _image_gain_sum(rate: int, target: int, f: float) -> float:
-    """The sum of the realised filter's gain at every image of a unit tone at `f`: a bound on the output's peak."""
+def _image_gains(rate: int, target: int, f: float) -> tuple[float, float, float]:
+    """The filter's gain at a unit tone `f`, the summed gain at its other images, and the float64 rounding."""
     up, down = _ratio(rate, target)
     h = rs.design(rate, up, down).taps / up
     j = numpy.arange(h.size) - (h.size - 1) // 2
     k = numpy.arange(up + 1)
-    images = numpy.concatenate([k * rate + f, k * rate - f])
-    images = images[(images >= 0) & (images <= rate * up / 2)]
-    total = 0.0
-    for chunk in numpy.array_split(images, max(1, images.size // 16)):
-        total += float(numpy.abs(numpy.cos(2 * numpy.pi * numpy.outer(chunk, j) / (rate * up)) @ h).sum())
-    return total
+    images = numpy.concatenate([k * rate + f, k[1:] * rate - f])
+    images = images[images <= rate * up / 2]
+    gains = numpy.concatenate(
+        [
+            numpy.abs(numpy.cos(2 * numpy.pi * numpy.outer(chunk, j) / (rate * up)) @ h)
+            for chunk in numpy.array_split(images, max(1, images.size // 16))
+        ]
+    )
+    return float(gains[0]), float(gains[1:].sum()), EPS * (h.size + 4 * math.pi * f * N_IN / rate)
 
 
 def _tone(rate: int, f: float, n: int = N_IN) -> numpy.ndarray:
@@ -99,22 +104,23 @@ def test_passband_tone_matches_ideal_sine(pair: tuple[int, int], fraction: float
     """A pass-band tone comes out as the ideal sine at `m / target`: no delay or phase error beyond the design."""
     rate, target = pair
     f = fraction * rs.passband_edge(rate, target)
-    assert _residual(rate, target, f) <= (math.ceil(target / rate) + 2) * DELTA
+    in_band, images, rounding = _image_gains(rate, target, f)
+    assert _residual(rate, target, f) <= abs(in_band - 1) + images + rounding
 
 
 @pytest.mark.logic
 @SLOW
 @given(pair=PAIRS.filter(lambda p: p[1] > p[0]), fraction=st.floats(0.5, 1.0))
 def test_upsampling_images_below_design_attenuation(pair: tuple[int, int], fraction: float) -> None:
-    """Images of a tone near the input's pass-band edge, above the input's Nyquist, stay at the stop-band level."""
+    """Images of a tone near the input's pass-band edge, above the input's Nyquist, stay within their filter gains."""
     rate, target = pair
     f = fraction * rs.passband_edge(rate, target)
     y = rs.resample_array(_tone(rate, f), rate, target)[0]
     window = _interior(rate, target, y.size)
+    in_band, images, rounding = _image_gains(rate, target, f)
     t = numpy.arange(y.size) / target
-    basis = numpy.stack([numpy.cos(2 * numpy.pi * f * t), numpy.sin(2 * numpy.pi * f * t)], axis=1)[window]
-    coef, *_ = numpy.linalg.lstsq(basis, y[window], rcond=None)
-    assert numpy.abs(y[window] - basis @ coef).max() <= (math.ceil(target / rate) + 1) * DELTA
+    tone = y - in_band * numpy.sin(2 * numpy.pi * f * t)
+    assert numpy.abs(tone[window]).max() <= images + rounding
 
 
 @pytest.mark.logic
@@ -127,7 +133,7 @@ def test_stopband_below_design_attenuation(pair: tuple[int, int], fraction: floa
     f = target / 2 + fraction * (rate / 2 - target / 2) * 0.999
     y = rs.resample_array(_tone(rate, f), rate, target)[0]
     interior = y[_interior(rate, target, y.size)]
-    assert numpy.abs(interior).max() <= _image_gain_sum(rate, target, f) + 1e-12
+    assert numpy.abs(interior).max() <= sum(_image_gains(rate, target, f))
 
 
 @pytest.mark.logic
@@ -176,7 +182,7 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("pair", [(a, b) for a in RATES for b in RATES if a != b], ids=lambda p: f"{p[0]}-{p[1]}")
+@pytest.mark.parametrize("pair", ALL_PAIRS, ids=lambda p: f"{p[0]}-{p[1]}")
 def test_realised_ripple_within_margin(pair: tuple[int, int]) -> None:
     """The taps' pass-band deviation and stop-band peak are each within `ripple_margin` times the Kaiser target."""
     rate, target = pair
