@@ -1,0 +1,294 @@
+"""The scale ladder: each task of a suite run at its scale points and measured per item (`scale-result@1.0`).
+
+`uv run python benchmarks/scale/ladder.py run SUITE --execution PROFILE`
+
+A suite (`scale-suite@1.0`, `suites/<name>.yaml`; `suites/fake.yaml` runs with `fake_stack/` on PYTHONPATH) names a
+seed, the long signal's seconds and its tasks. Each task names the input port its data binds to, its params and model,
+its data (`synthetic` tones, `librispeech` utterances of a manifest, `gretel` documents of a manifest, or `payloads`,
+JSON records for the fake stack) and its scale points: item counts, or `long`, one recording of the long seconds.
+`PROFILE` is a packaged execution profile, or a YAML file merged over the packaged profile its `name` names
+(`orcd-local.yaml` runs the orcd classes as local workers of one allocation). Each point is planned, run on a `Pool`
+over the profile's substrate into a store of its own, and measured from its events, its files and the sample each pool
+worker reported with each item; one `scale-result@1.0` document per point is written under
+`$SENSELAB_CACHE/2x/benchmarks/scale/<suite>/<commit>/` and one line printed per point, then each task's flatness
+against `budgets.yaml` (`scale-budgets@1.0`). A point whose run directory already exists is refused, so no point is
+measured from reused results.
+"""
+
+import argparse
+import json
+import os
+import statistics
+import subprocess
+import sys
+import time
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import soundfile
+from senselab_core.kernel.graph import Edge, Graph, Node
+from senselab_core.runtime.bids import bids_dataset
+from senselab_core.runtime.call import packaged
+from senselab_core.runtime.config import load_yaml
+from senselab_core.runtime.datasets import from_records
+from senselab_core.runtime.execution.epoch import Epoch
+from senselab_core.runtime.execution.events import EventLog, read_events, run_dir_of
+from senselab_core.runtime.execution.pool import Pool
+from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
+from senselab_core.runtime.execution.substrates import substrate_of, worker_id
+from senselab_core.runtime.fetch import DataManifest, default_cache_root, fetch
+from senselab_core.runtime.hardware import memory_bytes
+from senselab_core.runtime.planner import plan
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.revision import NAMESPACE, cache_root
+from senselab_core.runtime.sizing import Sample, calibrated
+from senselab_core.runtime.store import ResultStore
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+sys.path[:0] = [str(HERE), str(HERE.parent)]
+import bids_tree  # noqa: E402 - beside this script
+from batch_invariance import harness  # noqa: E402 - the suites' adapters
+
+SUITE_FORMAT = "scale-suite@1.0"
+RESULT_FORMAT = "scale-result@1.0"
+BUDGETS_FORMAT = "scale-budgets@1.0"
+LONG = "long"
+FLAT_POINTS = (100, 10_000)
+"""The points whose per-item costs the flatness rule compares (P-33)."""
+RECORDING = {"synthetic": "Audio", "librispeech": "Audio"}
+"""The graph input type of each data kind read from a BIDS tree; `payloads` take the port's declared type."""
+
+
+@dataclass(frozen=True)
+class Entry:
+    """One task of a suite: its port, data, points, params and model."""
+
+    task: str
+    port: str
+    data: str
+    points: tuple[int | str, ...]
+    params: Mapping[str, Any] = field(default_factory=dict)
+    model: str | None = None
+    manifest: str | None = None
+
+
+@dataclass(frozen=True)
+class Suite:
+    """A `scale-suite@1.0` file: its name, seed, long seconds and tasks."""
+
+    name: str
+    seed: int
+    long_s: int
+    tasks: tuple[Entry, ...]
+
+    @classmethod
+    def load(cls, path: Path) -> "Suite":
+        """Read a suite file.
+
+        Raises:
+            ValueError: the file is not of the format, or an entry is malformed.
+        """
+        raw = load_yaml(path, "scale suite")
+        if raw.get("format") != SUITE_FORMAT:
+            raise ValueError(f"{path.name} is not a {SUITE_FORMAT} file")
+        tasks = tuple(Entry(**{**t, "points": tuple(t["points"])}) for t in raw["tasks"])
+        bad = [p for t in tasks for p in t.points if p != LONG and not (isinstance(p, int) and p >= 1)]
+        if bad:
+            raise ValueError(f"{path.name}: a point is an item count or {LONG!r}, got {bad}")
+        return cls(str(raw["name"]), int(raw["seed"]), int(raw["long_s"]), tasks)
+
+
+def dataset_of(entry: Entry, point: int | str, suite: Suite, work: Path) -> tuple[Any, Path | None]:
+    """Return the dataset of `entry` at `point`, and the BIDS root it is read from (None for payloads)."""
+    count = 1 if point == LONG else int(point)
+    if entry.data == "payloads":
+        return from_records({"id": f"p{i}", "inputs": {"x": {"n": i}}} for i in range(count)), None
+    if entry.data == "gretel" and point != LONG and entry.manifest is not None:
+        manifest = DataManifest.load(ROOT / "benchmarks" / "manifests" / f"{entry.manifest}.yaml")
+        items = harness().GretelPii().items(fetch(manifest, cache_root=default_cache_root()), count, work, None)
+        return from_records({"id": i.id, "inputs": {"x": i.inputs["text"].content}} for i in items), None
+    root = work / "data" / f"{entry.data}-{suite.seed}-{point}"
+    if not (root / "dataset_description.json").is_file():
+        if entry.data == "synthetic":
+            bids_tree.synthetic(root, count, suite.seed, seconds=suite.long_s if point == LONG else None)
+        elif entry.data == "librispeech" and point != LONG and entry.manifest is not None:
+            bids_tree.from_librispeech(root, ROOT / "benchmarks" / "manifests" / f"{entry.manifest}.yaml", count)
+        else:
+            raise ValueError(f"{entry.task}: data {entry.data!r} has no point {point!r}")
+    return bids_dataset(root), root
+
+
+def graph_of(entry: Entry) -> Graph:
+    """Return the one-node graph mapping `entry`'s task over the records' input `x`."""
+    spec = packaged().registry.spec(entry.task)
+    kind = RECORDING.get(entry.data, spec.inputs[entry.port])
+    node = Node(id="a", task=entry.task, task_version=spec.version, params=dict(entry.params), model=entry.model)
+    return Graph(
+        inputs={"x": f"list[{kind}]"},
+        nodes=(node,),
+        edges=(Edge(source="input.x", target=f"a.{entry.port}", kind="map"),),
+        outputs={o: f"a.{o}" for o in spec.outputs},
+    )
+
+
+def _tally(*roots: Path) -> tuple[int, int]:
+    """Return the regular files under `roots` and their bytes."""
+    files = size = 0
+    for root in roots:
+        for directory, _, names in os.walk(root):
+            for name in names:
+                files, size = files + 1, size + os.lstat(os.path.join(directory, name)).st_size
+    return files, size
+
+
+def _samples(run_dir: Path) -> list[Sample]:
+    """Return the sample of each item outcome of the run's queues."""
+    found = []
+    for path in sorted((run_dir / RUN_QUEUES).glob("*/outcome/*")):
+        if path.name.startswith("."):
+            continue
+        record = json.loads(path.read_bytes())
+        if isinstance(record, dict) and "measure" in record:
+            found.append(Sample.model_validate(record["measure"]))
+    return found
+
+
+def _median(values: Sequence[float]) -> float | None:
+    return statistics.median(values) if values else None
+
+
+def measure_point(entry: Entry, point: int | str, suite: Suite, profile: ExecutionProfile, out: Path) -> dict[str, Any]:
+    """Plan, run and measure `entry` at `point` under `profile`; return its `scale-result@1.0` document.
+
+    Raises:
+        FileExistsError: the point's run directory exists, so its results would be reused.
+    """
+    dataset, root = dataset_of(entry, point, suite, out)
+    placed = plan(graph_of(entry), dataset, execution=profile, bind=None if root is None else {"x": "audio"})
+    run_dir = run_dir_of(placed.hash)
+    if run_dir.exists():
+        raise FileExistsError(f"{run_dir} exists; remove it to measure {entry.task} at {point} afresh")
+    store_root = out / f"{entry.task}@{point}" / "store"
+    store = ResultStore(store_root)
+    pool = Pool(
+        run_dir,
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+        store=store,
+        events=EventLog(run_dir, "a0", 1, epoch=0),
+        profile=profile,
+        substrate=substrate_of(profile, run_dir, placed.hash),
+        epoch=0,
+    )
+    began = time.monotonic()
+    try:
+        status = placed.run(pool, store=store).wait()
+    finally:
+        pool.close()
+    wall = time.monotonic() - began
+    samples = _samples(run_dir)
+    events = read_events(run_dir)
+    queued = {e.job: e.t_ns for e in events if e.kind == "queued" and e.job is not None}
+    waits = [(e.t_ns - queued[e.job]) / 1e9 for e in events if e.kind == "claimed" and e.job in queued]
+    workers = {s.job for s in samples}
+    files, written = _tally(store_root, run_dir)
+    entries, stored = _tally(store_root)
+    node, model = placed.placement.nodes["a"], placed.logical.models["a"]
+    items = len(placed.manifest.rows)
+    found = calibrated(samples)
+    return {
+        "format": RESULT_FORMAT,
+        "suite": suite.name,
+        "task": entry.task,
+        "point": point,
+        "items": items,
+        "backend": node.backend,
+        "model": None if model is None else {"id": model.ref.id, "revision": model.identity},
+        "resource_class": node.resource_class,
+        "batch_size": node.batch_size,
+        "profile": profile.name,
+        "profile_digest": profile.canonical_digest(),
+        "sha": commit(),
+        "jobs": sorted(workers | {worker_id()}),
+        "done": status.done,
+        "counts": dict(status.counts),
+        "wall_s": wall,
+        "per_item_s": wall / items,
+        "input_s": None if root is None else sum(soundfile.info(p).duration for p in sorted(root.rglob("*_audio.*"))),
+        "job_s": _median([s.wall_s / s.jobs for s in samples if not s.cold]),
+        "queue_wait_s": _median(waits),
+        "coordinator_s": wall - sum(s.wall_s for s in samples) / len(workers) if workers else None,
+        "peak_rss_bytes": max((s.peak_memory_bytes for s in samples), default=memory_bytes()[1]),
+        "files_written": files,
+        "bytes_written": written,
+        "store": {"entries": entries, "bytes": stored},
+        "measure": None if found is None else found.model_dump(mode="json"),
+    }
+
+
+def commit() -> str:
+    """Return the 40-hex commit of this checkout."""
+    return subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def flatness(results: Sequence[Mapping[str, Any]], budgets: Mapping[str, Any]) -> list[str]:
+    """Return one line per task: its per-item cost at 10⁴ over that at 10², against `flat_ratio`."""
+    lines = []
+    for task in sorted({r["task"] for r in results}):
+        cost = {r["point"]: r["per_item_s"] for r in results if r["task"] == task}
+        if not all(p in cost for p in FLAT_POINTS):
+            continue
+        ratio, bound = cost[FLAT_POINTS[1]] / cost[FLAT_POINTS[0]], budgets.get("flat_ratio")
+        verdict = "unmeasured budget" if bound is None else ("flat" if ratio <= bound else f"NOT FLAT (> {bound})")
+        lines.append(f"{task}: per item at {FLAT_POINTS[1]} / at {FLAT_POINTS[0]} = {ratio:.3f}, {verdict}")
+    return lines
+
+
+def _profile(argument: str) -> ExecutionProfile:
+    if Path(argument).is_file():
+        return ExecutionProfile.load(str(load_yaml(Path(argument), "execution profile")["name"]), Path(argument))
+    return ExecutionProfile.load(argument)
+
+
+def run(suite_path: Path, profile: ExecutionProfile) -> list[dict[str, Any]]:
+    """Measure every point of every task of the suite at `suite_path`; write and return the results."""
+    suite = Suite.load(suite_path)
+    out = cache_root() / NAMESPACE / "benchmarks" / "scale" / suite.name / commit()
+    out.mkdir(parents=True, exist_ok=True)
+    results = []
+    for entry in suite.tasks:
+        for point in entry.points:
+            result = measure_point(entry, point, suite, profile, out)
+            (out / f"{entry.task}@{point}.json").write_text(json.dumps(result, indent=1, sort_keys=True) + "\n")
+            print(
+                f"{result['sha']} {','.join(result['jobs'])} {entry.task}@{point}: {result['items']} items, "
+                f"{result['per_item_s']:.4f} s/item, peak {result['peak_rss_bytes']} B, "
+                f"{result['files_written']} files, {result['bytes_written']} B written, done {result['done']}"
+            )
+            results.append(result)
+    budgets = load_yaml(HERE / "budgets.yaml", "scale budgets")
+    if budgets.get("format") != BUDGETS_FORMAT:
+        raise ValueError(f"budgets.yaml is not a {BUDGETS_FORMAT} file")
+    for line in flatness(results, budgets):
+        print(line)
+    return results
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run `ladder.py run SUITE --execution PROFILE`; return 0."""
+    parser = argparse.ArgumentParser(prog="ladder.py")
+    commands = parser.add_subparsers(dest="command", required=True)
+    running = commands.add_parser("run", help="measure every point of a scale suite")
+    running.add_argument("suite", type=Path, help="a scale-suite@1.0 file")
+    running.add_argument("--execution", required=True, help="a packaged execution profile, or a YAML file over one")
+    args = parser.parse_args(argv)
+    run(args.suite, _profile(args.execution))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

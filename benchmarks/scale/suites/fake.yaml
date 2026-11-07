@@ -1,0 +1,9 @@
+format: scale-suite@1.0
+name: fake
+# Run with benchmarks/scale/fake_stack on PYTHONPATH, so the ladder and its pool workers read the fake stack.
+# The seed of the synthetic trees; unused by payloads.
+seed: 0
+# The long signal's seconds; the fake stack has no recording input, so no long point.
+long_s: 7200
+tasks:
+- {task: fake.echo, port: payload, data: payloads, params: {salt: x}, points: [1, 100, 10000]}

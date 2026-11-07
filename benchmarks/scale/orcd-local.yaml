@@ -1,0 +1,4 @@
+# The orcd profile with its classes run as local pool workers of one allocation, for an isolated ladder run.
+name: orcd
+substrate:
+  kind: local

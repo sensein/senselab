@@ -1,0 +1,14 @@
+format: scale-budgets@1.0
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under benchmarks/scale/budgets.yaml.
+# Per-item cost at 10⁴ items over per-item cost at 10² items, at most; null until the first idle-node run.
+flat_ratio:
+# Per module, the share a per-item cost may rise over its last measured value before a merge is blocked.
+regression_band: {}
+# Per task, per-item ceilings: wall seconds and peak memory bytes; null until the first idle-node run.
+per_item:
+  signal.resample: {per_item_s: null, peak_rss_bytes: null}
+  fake.echo: {per_item_s: null, peak_rss_bytes: null}
+  speech_to_text: {per_item_s: null, peak_rss_bytes: null}
+  speaker_embeddings: {per_item_s: null, peak_rss_bytes: null}
+  diarize: {per_item_s: null, peak_rss_bytes: null}
+  pii_spans: {per_item_s: null, peak_rss_bytes: null}

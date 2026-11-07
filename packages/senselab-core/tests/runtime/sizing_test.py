@@ -111,7 +111,7 @@ def test_calibrated_separates_the_load_from_the_items() -> None:
 
 @pytest.mark.logic
 def test_measures_read_packaged_tables_first_and_write_calibration_rows(tmp_path: Path) -> None:
-    """A put row is read back and keeps its row's other classes; a packaged row of the unit wins over it."""
+    """A put row is read back and keeps the classes measured alike; a packaged row of the unit wins over it."""
     found = ResourceMeasure(load_s=1, resident_bytes=1, peak_memory_bytes=2, s_per_input_s=0.5, input_s_per_item=None)
     measures = Measures(tmp_path, packaged=())
     assert measures.get(UNIT) is None
@@ -120,6 +120,8 @@ def test_measures_read_packaged_tables_first_and_write_calibration_rows(tmp_path
     assert measures.get(UNIT) == found and Measures(tmp_path, packaged=()).get(UNIT) == found
     written = (tmp_path / "t" / "b.yaml").read_text()
     assert "cpu:" in written and "gpu:" in written and "run: r" in written
+    measures.put(UNIT, found, Measured(sha=None, run="s", jobs=("8",)))
+    assert "gpu:" not in (tmp_path / "t" / "b.yaml").read_text()
     row = ResourceRow(
         id="org/m",
         revision="a" * 40,

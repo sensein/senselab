@@ -147,13 +147,15 @@ class MeasureSource(Protocol):
 def write_row(root: Path, unit: Unit, measure: ResourceMeasure, measured: Measured) -> Path:
     """Write `measure` of `unit` into the table `<root>/<task>/<backend>.yaml`; return the file.
 
-    The row of the unit's model keeps its other classes and download bytes; the file is replaced whole.
+    The row of the unit's model keeps its download bytes, and its other classes when they were measured as
+    `measured` too, so a row's derivation names every class it holds; the file is replaced whole.
     """
     path = Path(root) / unit.task / f"{unit.backend}.yaml"
     table = ResourceTable.model_validate(load_yaml(path, "resource table")) if path.is_file() else None
     rows = list(table.rows) if table is not None else []
     old = next((r for r in rows if (r.id, r.revision) == (unit.model_id, unit.revision)), None)
-    classes = {**(dict(old.classes) if old is not None else {}), unit.resource_class: measure}
+    kept = dict(old.classes) if old is not None and old.measured == measured else {}
+    classes = {**kept, unit.resource_class: measure}
     row = ResourceRow(
         id=unit.model_id,
         revision=unit.revision,
