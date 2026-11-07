@@ -384,7 +384,7 @@ are recorded here (R-200).
   a `Pool` queue is named by `resource_class` alone; the suffix arrives with resident models and `svc:<id>` queues
   (Task 16). `senselab coordinate` runs the plan's latest placement under the
   packaged profile (or `--profile`), with workers started separately (`ExternalWorkers`) until Tasks 15 and 16 add
-  substrates; `Plan.run` on a slurm substrate still raises `ExecutorUnavailable`.
+  substrates; `Plan.run` on a slurm substrate runs on a `Pool` over `Slurm` (Task 16).
 - **Worker report (Task 14, for Task 15a).** A pool worker commits each item with `report(claim, digest, outcomes)`:
   the outcome record carries `jobs`, one `ResultRef` per job. A queue `dead` outcome (a corrupt item) is a content
   fault of each of its jobs. A held queue (`Queue.hold`) gives no claim.

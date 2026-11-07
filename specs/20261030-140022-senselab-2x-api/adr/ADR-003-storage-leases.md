@@ -256,12 +256,11 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
   are not written. The vLLM start lease only orders starts: lost before the launch (checked by `prove()`), the
   start is refused; lost after it, the healthy server is kept and the loss is logged.
 - **The beat bound is checked at load.** `lease.attribute_delay_s` is data (the NFS default acdirmax, 60 s, on
-  `orcd`; 0 on local disk) until Task 16 measures it. `ExecutionProfile.load` refuses a profile where
+  `orcd`; 0 on local disk) and a floor: `probe_capabilities` measures, from one client, how long a directory's mtime takes to show a new entry, and `check_storage` checks the bound at plan time against the larger of the two. One client cannot see another's stale attribute cache, so the probe only ever raises the floor. `ExecutionProfile.load` refuses a profile where
   `2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s` with `LeaseBoundError`; the factor 2
   allows one missed beat. Both packaged profiles load (orcd: 198 + 60 = 258 < 300).
 - **Unsupported roots.** `StorageUnsupported` is raised when `mkdir` fails as an unsupported operation (`ENOTSUP`,
-  `EOPNOTSUPP`, `ENOSYS`). The full capability probe (directory rename, server-clock mtimes, the attribute delay)
-  is Task 16's `probe_capabilities`, which raises the same type.
+  `EOPNOTSUPP`, `ENOSYS`). `probe_capabilities` measures directory rename, server-clock mtimes, file rename, exclusive `link` and the attribute delay on the root, and `require` raises the same type naming each missing primitive.
 - **Not guaranteed.** On NFS a breaker's `lstat` of a token may be served from its attribute cache for up to
   `acdirmax`; the load-time check holds only as far as `attribute_delay_s` is right. On the holder's side, `owns()`
   and the beat's reopen by name are dentry lookups that the client may trust for up to `attribute_delay_s`, so a
