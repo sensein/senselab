@@ -200,6 +200,12 @@ repos:
     language: python
     pass_filenames: false
     files: ^(\.github/PULL_REQUEST_TEMPLATE/2x\.md|specs/20261030-140022-senselab-2x-api/engineering\.md|scripts/check_pr_template\.py)$
+  - id: config-derivations
+    name: Config files hold values; their derivations are sections of config-derivations.md.
+    entry: uv run --frozen --no-sync python scripts/check_config_derivations.py
+    language: system
+    pass_filenames: false
+    files: (^|/)data/.*\.yaml$|config-derivations\.md$|^scripts/check_config_derivations\.py$
   - id: spec-ids
     name: No ruling, finding or review-round ids under packages/.
     entry: uv run --frozen --no-sync python scripts/check_spec_ids.py
