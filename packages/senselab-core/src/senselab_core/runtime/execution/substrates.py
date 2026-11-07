@@ -260,7 +260,7 @@ class Slurm:
     @property
     def prefix(self) -> str:
         """The start of the name of every job of this run."""
-        run = uuid.uuid5(uuid.NAMESPACE_URL, str(self.run_dir)).hex[:8]
+        run = uuid.uuid5(uuid.NAMESPACE_URL, str(self.run_dir.resolve())).hex[:8]
         return f"senselab-{self.plan_hash[:12]}-{run}-"
 
     @property
@@ -461,16 +461,23 @@ class Fleet:
     def start(self, resource_class: str, count: int) -> list[WorkerHandle]:
         """Start through the substrate unless the class is broken or backing off; record the workers.
 
-        At most `budget + 1` less the class's failures less its workers not yet ready are started, so a command that
-        fails at once is run at most `budget + 1` times.
+        Once the class has a failed start on record, at most `budget + 1` less its failures less its started workers
+        not yet ready (pending jobs excluded) are started, so a command that fails at once is run at most `budget + 1`
+        times; before that only `max_workers` and the QOS cap bound starts.
         """
         cls = class_of(resource_class)
         if self.broken_for(resource_class) is not None or self._clock() < self._not_before.get(cls, 0.0):
             return []
-        unproven = sum(1 for h in self._tracked.values() if class_of(h.queue) == cls and not self._ready(h))
-        count = min(count, self.budget + 1 - self._failures[cls] - unproven)
-        if count <= 0:
-            return []
+        if self._failures[cls] > 0:
+            pending = {h.id for h in self._snapshot or [] if h.pending}
+            unproven = sum(
+                1
+                for h in self._tracked.values()
+                if class_of(h.queue) == cls and h.id not in pending and not self._ready(h)
+            )
+            count = min(count, self.budget + 1 - self._failures[cls] - unproven)
+            if count <= 0:
+                return []
         started = self.substrate.start(resource_class, count)
         for handle in started:
             if self.workers_dir is not None:

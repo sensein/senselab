@@ -178,6 +178,7 @@ class Pool:
         )
         self.broken_workers: dict[str, BrokenClass] = {}
         self._surplus: dict[str, float] = {}
+        self._relogged: set[str] = set()
         self._scaled = float("-inf")
         self.bind_epoch(epoch, events)
         self.broken: dict[str, BrokenEnv] = {}
@@ -200,9 +201,9 @@ class Pool:
         self.epoch, self.events = epoch, events
         if isinstance(self.substrate, Slurm):
             self.substrate.attempt, self.substrate.epoch = events.attempt, epoch
-        if hasattr(self, "_fleet"):
-            self._fleet.reset()
-            self.broken_workers.clear()
+        self._fleet.reset()
+        self.broken_workers.clear()
+        self._relogged.clear()
 
     def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:  # noqa: ARG002
         """Hold `placed` until it is released as often as it was admitted; its id is the run's, `run-<plan hash>`.
@@ -280,6 +281,8 @@ class Pool:
             return None
         if found.resource_class not in self.broken_workers:
             self.broken_workers[found.resource_class] = found
+        if (flight.digest) not in self._relogged:
+            self._relogged.add(flight.digest)
             for index, job in enumerate(flight.fragment.jobs):
                 key = self._key(flight.fragment, index)
                 self.events.record("queued", job.node, job=job, key=key, env=flight.fragment.placement.env)

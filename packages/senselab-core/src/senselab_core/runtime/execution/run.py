@@ -15,6 +15,7 @@ import contextlib
 import dataclasses
 import importlib.util
 import json
+import logging
 import os
 import re
 import threading
@@ -66,6 +67,8 @@ POLL_S = 0.5
 RECORD_ATTEMPTS = 3
 """Times the merge of `inputs.json` is taken again after its lease failed its proof."""
 _LIST = re.compile(r"^list\[(.+)\]$")
+
+logger = logging.getLogger("senselab")
 
 
 class MissingExtra(ImportError):
@@ -754,6 +757,21 @@ def _check_store(placed: Plan, store: ResultStore | None) -> None:
         check_storage(placed.execution if placed.execution is not None else ExecutionProfile.load(), store.root)
 
 
+def _close_owned(executor: Executor, owned: bool, run: "Run", failed: bool) -> None:
+    """Close an executor the run created, so provenance and `Run.fail` still run if the close fails.
+
+    A close error is logged; it is handed to `run.fail` only when the run had not failed (`failed`) already.
+    """
+    if not (owned and hasattr(executor, "close")):
+        return
+    try:
+        executor.close()
+    except Exception as err:  # noqa: BLE001 - cleanup must not skip the run's bookkeeping
+        logger.error("closing the executor of run %s failed: %s", run.run_dir.name, err)
+        if not failed:
+            run.fail(err)
+
+
 def start(
     placed: Plan,
     executor: Executor | None = None,
@@ -810,15 +828,16 @@ def start(
         raise
 
     def body() -> None:
+        failed = False
         with held:
             try:
                 runner.run_plan(placed, executor, values=values, events=log, cancel=run.cancelled)
             except BaseException as err:  # noqa: BLE001 - held for `wait`
                 if not isinstance(err, RunCancelled):
+                    failed = True
                     run.fail(err)
             finally:
-                if owned and hasattr(executor, "close"):
-                    executor.close()
+                _close_owned(executor, owned, run, failed)
             try:
                 written.write(run_dir)
             except Exception as err:  # noqa: BLE001 - held for `wait`

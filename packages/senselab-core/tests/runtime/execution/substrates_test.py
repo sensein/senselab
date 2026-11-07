@@ -21,7 +21,7 @@ from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.pool import Pool
 from senselab_core.runtime.execution.pool_worker import serve_pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
-from senselab_core.runtime.execution.run import Run, default_executor, prepare
+from senselab_core.runtime.execution.run import Run, _close_owned, default_executor, prepare
 from senselab_core.runtime.execution.substrates import (
     EXIT_UNREACHABLE,
     ExternalWorkers,
@@ -621,11 +621,69 @@ def test_one_squeue_serves_a_scale_round(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a_class_needing_more_cpus_than_the_qos_cap_is_refused() -> None:
-    """A profile whose class has more CPUs per worker than the cap names the class, its CPUs and the cap."""
-    with pytest.raises(QosCapTooSmall, match=r"'cpu'.*4 CPUs.*cap is 3") as raised:
-        _profile(qos_cpu_cap=3)
+def test_a_placed_class_needing_more_cpus_than_the_qos_cap_is_refused_at_plan(tmp_path: Path) -> None:
+    """A plan placed on a class with more CPUs per worker than the cap names the node, class, CPUs and cap."""
+    profile = _profile(qos_cpu_cap=3)
+    with pytest.raises(QosCapTooSmall, match=r"'cpu' \(node 'a'\).*4 CPUs.*cap is 3") as raised:
+        planned(SCORE, profile, ["one"])
     assert (raised.value.resource_class, raised.value.cpus, raised.value.cap) == ("cpu", 4, 3)
+
+
+@pytest.mark.logic
+def test_unplaced_classes_do_not_count_against_the_qos_cap(tmp_path: Path) -> None:
+    """The packaged orcd profile loads under a cap of 2, and a CPU plan under a cap of 4 ignores the 8-CPU classes."""
+    assert ExecutionProfile.load("orcd", {"substrate": {"qos_cpu_cap": 2}}).substrate.qos_cpu_cap == 2
+    placed, _ = planned(SCORE, _profile(qos_cpu_cap=4), ["one"])
+    assert placed.placement.nodes["a"].resource_class == "cpu"
+
+
+@pytest.mark.logic
+def test_pending_jobs_scale_to_max_workers_and_a_failure_switches_the_cap_on(tmp_path: Path) -> None:
+    """Pending jobs never use the start budget: a 32-worker class reaches 32; after one failed start it is capped."""
+    profile = _profile()
+    _, pool, recording = _queued(profile, tmp_path, 40)
+    recording.handles.clear()
+    fleet = Fleet(recording, workers_dir=None, budget=2, first_s=0.0, max_s=0.0)
+    for _ in range(8):
+        scale(pool.queues, fleet, profile)
+    assert len(recording.handles) == 32
+    capped = Fleet(Recording(), workers_dir=None, budget=2, first_s=0.0, max_s=0.0)
+    capped.substrate.live = lambda: []  # type: ignore[method-assign]
+    assert len(capped.start("cpu", 2)) == 2
+    capped.live()
+    assert len(capped.start("cpu", 5)) == 1
+
+
+class _Failing:
+    """An executor whose `close` raises."""
+
+    def close(self) -> None:
+        """Raise."""
+        raise SlurmError("scancel failed")
+
+
+class _Handed:
+    """A run that records what it is told failed."""
+
+    run_dir = Path("run")
+
+    def __init__(self) -> None:
+        """Start with no error."""
+        self.errors: list[Exception] = []
+
+    def fail(self, err: Exception) -> None:
+        """Record `err`."""
+        self.errors.append(err)
+
+
+@pytest.mark.logic
+def test_a_failing_close_is_logged_and_handed_to_the_run_only_when_nothing_failed_before() -> None:
+    """The close error never escapes; it fails the run only when the run had not failed already."""
+    clean, failed = _Handed(), _Handed()
+    _close_owned(_Failing(), True, clean, False)  # type: ignore[arg-type]
+    _close_owned(_Failing(), True, failed, True)  # type: ignore[arg-type]
+    _close_owned(_Failing(), False, failed, False)  # type: ignore[arg-type]
+    assert [str(e) for e in clean.errors] == ["scancel failed"] and failed.errors == []
 
 
 @pytest.mark.logic

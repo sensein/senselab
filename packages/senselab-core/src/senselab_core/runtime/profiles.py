@@ -78,10 +78,13 @@ class ProfileFormatRetired(ValueError):
 class QosCapTooSmall(ValueError):
     """A resource class whose workers need more CPUs than the substrate's QOS CPU cap allows at all."""
 
-    def __init__(self, resource_class: str, cpus: int, cap: int) -> None:
-        """Name the class, its CPUs per worker and the cap."""
-        super().__init__(f"resource class {resource_class!r} needs {cpus} CPUs per worker; the QOS CPU cap is {cap}")
-        self.resource_class, self.cpus, self.cap = resource_class, cpus, cap
+    def __init__(self, resource_class: str, cpus: int, cap: int, node: str | None = None) -> None:
+        """Name the class, its CPUs per worker, the cap and the node placed there."""
+        where = "" if node is None else f" (node {node!r})"
+        super().__init__(
+            f"resource class {resource_class!r}{where} needs {cpus} CPUs per worker; the QOS CPU cap is {cap}"
+        )
+        self.resource_class, self.cpus, self.cap, self.node = resource_class, cpus, cap, node
 
 
 class Envs(Frozen):
@@ -164,12 +167,16 @@ class ExecutionProfile(Formatted):
             raise ValueError(f"resource classes {wrong} are not named for their device and GPU type")
         return self
 
-    def check_qos_cap(self) -> None:
-        """Raise `QosCapTooSmall` for the first resource class whose `cpus` exceed the substrate's `qos_cpu_cap`."""
+    def check_qos_cap(self, placed: Mapping[str, str]) -> None:
+        """Raise `QosCapTooSmall` for a placed class whose `cpus` exceed the substrate's `qos_cpu_cap`.
+
+        `placed` maps each node to the resource class it is placed on; the error names the first such node.
+        """
         cap = self.substrate.qos_cpu_cap
-        for name, grant in self.resource_classes.items():
-            if cap is not None and grant.cpus is not None and grant.cpus > cap:
-                raise QosCapTooSmall(name, grant.cpus, cap)
+        for node, name in placed.items():
+            grant = self.resource_classes.get(name)
+            if cap is not None and grant is not None and grant.cpus is not None and grant.cpus > cap:
+                raise QosCapTooSmall(name, grant.cpus, cap, node)
 
     @classmethod
     def load(cls, name: str = DEFAULT_PROFILE, override: Mapping[str, Any] | Path | None = None) -> "ExecutionProfile":
@@ -179,7 +186,6 @@ class ExecutionProfile(Formatted):
             ProfileFormatRetired: `override` declares a retired format.
             UnknownProfileKey: a key of `override` that the format does not define, naming the closest one.
             LeaseBoundError: two of the lease's beat intervals plus its attribute delay are not below its stale bound.
-            QosCapTooSmall: a resource class needs more CPUs than the QOS CPU cap.
             ValueError: the merged mapping is invalid.
         """
         packaged = _read(resources.files("senselab_core.runtime").joinpath("data", "profiles", f"{name}.yaml"))
@@ -192,7 +198,6 @@ class ExecutionProfile(Formatted):
         _check_keys(merged, cls.model_fields)
         profile = cls.model_validate(merged)
         profile.lease.check_bound()
-        profile.check_qos_cap()
         return profile
 
     def env_root(self, kind: str) -> Path:

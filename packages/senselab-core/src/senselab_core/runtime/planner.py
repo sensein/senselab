@@ -409,7 +409,6 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
     """
     config = config if config is not None else RunConfig()
     profile = execution if execution is not None else ExecutionProfile.load()
-    profile.check_qos_cap()
     check_storage(profile, *storage_roots())
     catalogue = packaged().catalogue
     found = resolve_bound(
@@ -452,7 +451,8 @@ def check_storage(
 
     Each root is probed (`probe`, by default `probe_capabilities`, once per root in this process). The effective
     attribute delay is the larger of the profile's `lease.attribute_delay_s`, which is a floor, and the greatest
-    measured one; it is returned. A root whose nearest existing ancestor cannot be written is not judged.
+    measured one; it is returned. A root is made if missing; one whose nearest existing ancestor cannot be written
+    is not judged.
 
     Raises:
         StorageUnsupported: a root lacks a primitive; names it.
@@ -466,6 +466,7 @@ def check_storage(
             ancestor = ancestor.parent
         if not os.access(ancestor, os.W_OK | os.X_OK):
             continue
+        root.mkdir(parents=True, exist_ok=True)
         if probe is not None:
             found = probe(root)
         else:
@@ -491,6 +492,7 @@ def place(logical: LogicalPlan, profile: ExecutionProfile, hardware: HardwareInf
         LicenseRefused: the run config's license policy refuses a record of a node's license set.
         LicenseConflict: one subject reaches a node with two license records.
         MemoryCapExceeded: a resource class's resident models exceed its memory cap.
+        QosCapTooSmall: a placed resource class needs more CPUs than the substrate's QOS CPU cap.
     """
     registry, catalogue = packaged().registry, packaged().catalogue
     placed = place_nodes(logical, profile, hardware, registry, catalogue)
@@ -504,6 +506,7 @@ def place(logical: LogicalPlan, profile: ExecutionProfile, hardware: HardwareInf
             if p.backend.env.kind != "host" and not packaged().env_built(p.backend, profile)
         }
     )
+    profile.check_qos_cap({n: p.resource_class for n, p in placed.items()})
     return PlanPlacement(
         profile_digest=profile.canonical_digest(),
         nodes={n: p.record() for n, p in placed.items()},

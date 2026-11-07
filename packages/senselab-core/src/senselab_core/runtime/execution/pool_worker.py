@@ -378,21 +378,22 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
 
     The worker runs under a `Supervisor`, so every process it launches, and every orphan they leave, ends with it.
     A worker that cannot reach the run directory or the store returns `EXIT_UNREACHABLE` and marks nothing; one that can
-    marks itself ready (`mark_ready`) before it serves. On the main thread SIGTERM halts the worker
-    (`PoolWorker.halt`); the previous handler is restored after.
+    marks itself ready (`mark_ready`) once its worker is built and supervised, just before it serves. On the main
+    thread SIGTERM halts the worker (`PoolWorker.halt`); the previous handler is restored after.
     """
     try:
         check_reachable(Path(pool_dir).parent, store)
     except StoreUnreachable as err:
         logger.error("pool worker cannot start: %s", err)
         return EXIT_UNREACHABLE
-    mark_ready(Path(pool_dir).parent)
     worker = PoolWorker(pool_dir, classes, profile=profile, store=store, workers=workers, send=send, join_s=join_s)
     with Supervisor():
         if threading.current_thread() is not threading.main_thread():
+            mark_ready(Path(pool_dir).parent)
             return worker.serve()
         previous = signal.signal(signal.SIGTERM, lambda *_: worker.halt())
         try:
+            mark_ready(Path(pool_dir).parent)
             return worker.serve()
         finally:
             signal.signal(signal.SIGTERM, previous)
