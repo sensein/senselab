@@ -42,6 +42,19 @@ def tier_budget_s() -> dict[str, float]:
     return tier_budgets()
 
 
+@pytest.fixture
+def slack(request: pytest.FixtureRequest) -> Path:
+    """The test slack file of the requesting test's package: `<package>/tests/data/test_slack.yaml`.
+
+    Test slack is a profile override (P-34); its derivations are in config-derivations.md.
+    """
+    tests = next(p for p in Path(str(request.path)).resolve().parents if p.name == "tests")
+    path = tests / "data" / "test_slack.yaml"
+    if not path.is_file():
+        raise FileNotFoundError(f"{path}: this package has no test slack file")
+    return path
+
+
 def _apply_budgets(items: list[pytest.Item]) -> None:
     if not items:
         return

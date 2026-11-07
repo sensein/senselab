@@ -140,10 +140,6 @@ def _profile(**substrate: Any) -> ExecutionProfile:  # noqa: ANN401 - substrate 
     return ExecutionProfile.load("orcd", override)
 
 
-TEST_SLACK = Path(__file__).parents[2] / "data" / "test_slack.yaml"
-"""Test slack over the packaged orcd profile: the time a fake Slurm command that never answers is given."""
-
-
 def _commands(**update: float) -> SlurmCommands:
     commands = _profile().substrate.commands
     assert commands is not None
@@ -821,16 +817,16 @@ def _jobs(tmp_path: Path) -> list[str]:
 
 
 @pytest.mark.logic
-def test_a_submission_that_times_out_after_queueing_its_job_leaves_one_job(tmp_path: Path) -> None:
+def test_a_submission_that_times_out_after_queueing_its_job_leaves_one_job(tmp_path: Path, slack: Path) -> None:
     """An `sbatch` that queues its job and then hangs past the timeout is found by name, never submitted again.
 
     A duplicate the controller registers late under the same name is cancelled when the fleet closes.
     """
     _replace_sbatch(tmp_path, HANGS_AFTER_QUEUEING)
     profile = _profile()
-    slack = ExecutionProfile.load("orcd", TEST_SLACK).substrate.commands
-    assert slack is not None
-    fleet = _fleet(_slurm(tmp_path, commands=_commands(timeout_s=slack.timeout_s)), profile)
+    commands = ExecutionProfile.load("orcd", slack).substrate.commands
+    assert commands is not None
+    fleet = _fleet(_slurm(tmp_path, commands=_commands(timeout_s=commands.timeout_s)), profile)
     [handle] = fleet.start("cpu", 1)
     assert _jobs(tmp_path) == [handle.id] and "--name=" in (tmp_path / "slurm" / "squeue.log").read_text()
     late = tmp_path / "slurm" / "jobs" / "late"
