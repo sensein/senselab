@@ -29,7 +29,7 @@ import time
 import uuid
 import weakref
 from collections import Counter
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
@@ -225,8 +225,9 @@ class Pool:
         profile: ExecutionProfile,
         substrate: Substrate,
         epoch: int,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        """Coordinate the run in `run_dir` as epoch `epoch`.
+        """Coordinate the run in `run_dir` as epoch `epoch`; `clock` dates each epoch read for its reuse.
 
         Raises:
             ValueError: `events` is not a log of `epoch`.
@@ -249,6 +250,7 @@ class Pool:
         self._scaling = False
         self._scale_error: Exception | None = None
         self._fenced: tuple[float, int] | None = None
+        self._clock = clock
         self.bind_epoch(epoch, events)
         self.broken: dict[str, BrokenEnv] = {}
         self.gaps: list[tuple[JobRef, FaultRecord]] = []
@@ -298,7 +300,7 @@ class Pool:
 
     def _fence(self, *, recent: bool = False) -> None:
         """Raise `StaleCoordinator` once a newer epoch is taken; `recent` reuses a read younger than `first_poll_s`."""
-        now, fenced = time.monotonic(), self._fenced
+        now, fenced = self._clock(), self._fenced
         if recent and fenced is not None and now - fenced[0] < self.profile.pool.first_poll_s:
             current = fenced[1]
         else:
@@ -421,7 +423,8 @@ class Pool:
         """Read the outcomes of `handle`'s items once, applying each fault's effect, and return the results landed.
 
         Returns the results not yet given, items read in one poll in job order, and whether the fragment is ended:
-        every result given, or the handle cancelled. A hold is raised once the results landed with it are given.
+        every result given, or the handle cancelled. A hold is raised once the results landed with it are given. The
+        epoch is read afresh once outcomes have landed, before any effect is applied.
 
         Raises:
             KeyError: the handle is not this pool's.
@@ -437,6 +440,8 @@ class Pool:
         self._fence(recent=True)
         given: list[ResultRef] = []
         landed = [(f, r) for f in followed.flights if (r := self.queues.queue(f.queue).outcome(f.digest))]
+        if landed:
+            self._fence()
         for flight, record in landed:
             followed.flights.remove(flight)
             followed.seen = True
@@ -550,11 +555,7 @@ class Pool:
     def _infrastructure(self, flight: _Flight, job: JobRef, key: str, fault: FaultRecord) -> bool:
         """Count an infrastructure fault of `flight`'s env this epoch; return False once the env is broken and held.
 
-        The epoch is read afresh before the env is reported broken, so a stale coordinator reports nothing; a broken
-        env is held on `flight`'s queue (each queue it is seen on).
-
-        Raises:
-            StaleCoordinator: a newer epoch was taken.
+        A broken env is held on `flight`'s queue (each queue it is seen on); `poll` has fenced afresh before.
         """
         env, budget = flight.fragment.placement.env, self.profile.faults.infrastructure_replacements
         with self._lock:
@@ -564,8 +565,6 @@ class Pool:
                 failures += 1
                 if failures < budget:
                     return True
-        self._fence()
-        with self._lock:
             reported = env in self.broken
             if not reported:
                 self.broken[env] = BrokenEnv(env=env, fault=fault, failures=failures)

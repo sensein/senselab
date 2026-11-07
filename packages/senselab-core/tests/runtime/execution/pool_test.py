@@ -46,6 +46,7 @@ CLASSES = {
 WORKERS = WorkerSet(4)
 CONTENT = {"content_attempts": 2, "infrastructure_replacements": 6, "resource_replacements": 1}
 GAP = FaultRecord(fault="infrastructure", type="RuntimeError", message="unclassified", gap=True, charged=False)
+CHARGED = FaultRecord(fault="content", type="ValueError", message="bad input", gap=False, charged=True)
 LOST = FaultRecord(fault="infrastructure", type="WorkerLost", message="gone", gap=False, charged=False)
 OOM = FaultRecord(fault="resource", type="ResourceFault", message="out of memory", gap=False, charged=False)
 
@@ -157,12 +158,13 @@ def _stack(
     return placed, values, store, FakeWorkers(tmp_path / "run", store, placed, values)
 
 
-def _pool(
+def _pool(  # noqa: PLR0913 - the run, its parts, and the epoch and clock a restart or a frozen clock sets
     tmp_path: Path,
     store: ResultStore,
     workers: FakeWorkers | Any,  # noqa: ANN401
     profile: ExecutionProfile,
     epoch: int | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> Pool:
     """Return a pool of the next epoch over `tmp_path/run` (of `epoch`, as a restart within it, when given)."""
     run_dir = tmp_path / "run"
@@ -176,6 +178,7 @@ def _pool(
         profile=profile,
         substrate=workers,
         epoch=epoch,
+        clock=clock,
     )
 
 
@@ -465,13 +468,13 @@ def test_coordinate_runs_a_plan_on_the_pool_as_the_next_epoch(tmp_path: Path) ->
 def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(tmp_path: Path) -> None:
     """An older coordinator whose env breaks after a newer epoch was taken stops; no hold of its epoch counts.
 
-    Its epoch read is reused for `first_poll_s`, set here to the longest poll, so its poll sees no newer epoch and the
-    break itself must find it.
+    Its clock is frozen, so every poll may reuse its submit-time epoch read; the outcome that lands must find the newer
+    epoch.
     """
     profile = _profile(content_attempts=2, infrastructure_replacements=1, resource_replacements=0)
-    profile = profile.model_copy(update={"pool": profile.pool.model_copy(update={"first_poll_s": profile.pool.poll_s})})
     placed, values, store, workers = _stack(tmp_path, profile, ["one", "two"])
-    stale = _pool(tmp_path, store, _Idle(), profile)
+    frozen = time.monotonic()
+    stale = _pool(tmp_path, store, _Idle(), profile, clock=lambda: frozen)
     early = stale.submit(node_fragment(placed, stale.admit(placed, values), elements=[(0,)]))
     workers.act = lambda fragment: LOST
     queue = stale.queues.queue("cpu")
@@ -490,6 +493,27 @@ def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(tm
     finally:
         workers.stop()
     assert ref.failure is None and ref.job.element == (1,)
+
+
+@pytest.mark.contract
+def test_a_stale_coordinator_writes_no_dead_record(tmp_path: Path) -> None:
+    """A charged fault past the budget lands on a coordinator a newer epoch replaced: it stops and `dead/` stays empty.
+
+    Its clock is frozen, so its polls may reuse its submit-time epoch read.
+    """
+    profile = _profile(content_attempts=1, infrastructure_replacements=6, resource_replacements=0)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one"])
+    frozen = time.monotonic()
+    stale = _pool(tmp_path, store, _Idle(), profile, clock=lambda: frozen)
+    handle = stale.submit(node_fragment(placed, stale.admit(placed, values)))
+    workers.act = lambda fragment: CHARGED
+    claim = stale.queues.queue("cpu").claim("w")
+    assert claim is not None
+    workers._serve(claim)  # noqa: SLF001 - one item served by hand, before the newer epoch
+    Epoch(tmp_path / "run").take()
+    with pytest.raises(StaleCoordinator):
+        stale.poll(handle)
+    assert not (tmp_path / "run" / "dead").exists()
 
 
 @pytest.mark.contract
