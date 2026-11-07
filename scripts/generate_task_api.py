@@ -40,7 +40,7 @@ class _Imports:
         return [f"from {m} import {', '.join(sorted(n))}" for m, n in sorted(self.names.items())]
 
 
-def _annotation(t: object, imports: _Imports) -> str:
+def _annotation(t: object, imports: _Imports) -> str:  # noqa: PLR0911 - one return per annotation form
     origin = typing.get_origin(t)
     args = typing.get_args(t)
     if t is None or t is type(None):

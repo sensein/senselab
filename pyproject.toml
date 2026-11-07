@@ -213,7 +213,7 @@ indent-width = 4
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["ANN", "D", "E", "F", "I", "B009", "S102", "S307"]
+select = ["ANN", "D", "E", "F", "I", "B009", "S102", "S307", "C901", "PLC", "PLE", "PLR", "PLW"]
 fixable = ["ALL"]
 unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
@@ -221,10 +221,23 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, section pyproject.toml.
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-returns = 6
+max-branches = 12
+max-args = 5
+max-statements = 50
+
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["B009", "S102", "S307"]
-"**/conftest.py" = ["B009", "S102", "S307"]
-"**/scripts/**" = ["ANN", "D", "E", "I", "F541"]
+"**/tests/**" = ["B009", "S102", "S307", "PLC0415", "PLR2004"]
+"**/conftest.py" = ["B009", "S102", "S307", "PLC0415", "PLR2004"]
+"**/scripts/**" = ["ANN", "D", "E", "I", "F541", "PLC0415", "PLR2004"]
+"benchmarks/**" = ["PLC0415"]
+# Complexity over the limits, pending a split: specs/.../review-register.md R-218.
+"scripts/profile_imports.py" = ["C901", "PLR0912", "PLR0915"]
 # Notebooks: cells share state but ruff lints per-cell, causing false positives
 "tutorials/**/*.ipynb" = ["F401", "F821", "E402", "I001", "F811", "ANN001", "ANN201", "D103"]
 

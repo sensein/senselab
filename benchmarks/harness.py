@@ -213,7 +213,7 @@ class LibriSpeechTrials:
     per_speaker = 5
 
     def unit_of(self, item_id: str) -> str:
-        return item_id.split("-")[0]
+        return item_id.split("-", maxsplit=1)[0]
 
     def items(self, files: Mapping[str, Path], count: int, work: Path, seconds: float | None) -> list[Item]:
         tar_path = _libri(files)

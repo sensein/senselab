@@ -185,7 +185,7 @@ class Finding(NamedTuple):
     problem: str
 
 
-def _judge(
+def _judge(  # noqa: PLR0913 - the subject, its record and users, the policy, and the version and bundling
     subject: str, record: Record | None, needed_by: set[str], policy: Policy, version: str = "", bundled: bool = False
 ) -> Finding:
     users = tuple(sorted(needed_by))

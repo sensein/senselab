@@ -191,7 +191,7 @@ def check_pins(files: list[Path]) -> None:
 
 
 def _run(*args: str, cwd: str) -> str:
-    done = subprocess.run(args, capture_output=True, text=True, cwd=cwd)
+    done = subprocess.run(args, capture_output=True, text=True, cwd=cwd, check=False)
     if done.returncode != 0:
         raise GateError(f"{' '.join(args)} failed ({done.returncode}):\n{done.stdout}{done.stderr}")
     return done.stdout
