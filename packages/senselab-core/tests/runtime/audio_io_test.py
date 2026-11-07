@@ -327,10 +327,20 @@ def _window_group(tmp_path: Path) -> tuple[Path, RegularGroup]:
     return p, source_group(audio_channels(2), RATE, p, audio_io.stamp(p, chunk_size=CHUNK))
 
 
+def _flac(tmp_path: Path) -> Path:
+    noise = numpy.random.default_rng(0).uniform(-0.5, 0.5, (64 * RATE, 2)).astype(numpy.float32)
+    path = tmp_path / "x.flac"
+    soundfile.write(path, noise, RATE, subtype="PCM_16")
+    return path
+
+
 @pytest.mark.logic
-def test_window_read_hashes_touched_chunks_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A window read reads, at the `os` boundary, whole chunks only: the header's and the window's, never the file."""
-    p, group = _window_group(tmp_path)
+@pytest.mark.parametrize("kind", ["wav", "flac"])
+def test_range_read_reads_only_its_chunks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+    """A range read reads, at the `os` boundary, whole chunks only, each once, and an eighth of the file at most."""
+    p = write_wav(tmp_path, frames=8 * RATE) if kind == "wav" else _flac(tmp_path)
+    group = source_group(audio_channels(2), RATE, p, audio_io.stamp(p, chunk_size=CHUNK))
+    expected = soundfile.read(p, dtype="float32", always_2d=True)[0].T[:, 4 * RATE : 4 * RATE + 80]
     preads: list[tuple[int, int]] = []
     original = os.pread
 
@@ -341,14 +351,11 @@ def test_window_read_hashes_touched_chunks_only(tmp_path: Path, monkeypatch: pyt
 
     monkeypatch.setattr(os, "pread", spy)
     monkeypatch.setattr(builtins, "open", lambda *a, **_: pytest.fail(f"opened {a[0]} by path"))
-    size = p.stat().st_size
     window = group.read(4 * 10**9, 4 * 10**9 + 10**7, reader=READER)
-    k = numpy.arange(4 * RATE, 4 * RATE + 80)
-    assert numpy.array_equal(window, numpy.stack([(k % 100 + c) / 1000 for c in range(2)]).astype(numpy.float32))
+    assert numpy.array_equal(window, expected)
     offsets = [offset for offset, _ in preads]
-    assert all(offset % CHUNK == 0 for offset in offsets) and len(set(offsets)) == len(offsets)
-    assert 0 in offsets and (4 * RATE * 8 // CHUNK) * CHUNK in offsets
-    assert sum(n for _, n in preads) <= 3 * CHUNK < size // 8
+    assert 0 in offsets and all(offset % CHUNK == 0 for offset in offsets) and len(set(offsets)) == len(offsets)
+    assert sum(n for _, n in preads) < p.stat().st_size // 8
 
 
 @pytest.mark.logic

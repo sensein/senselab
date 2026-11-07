@@ -191,16 +191,15 @@ def check(recorded: SourceStamp, path: str | os.PathLike[str]) -> None:
 class _ChunkChecked:
     """A read-only binary file over `fd` that serves bytes only from chunks whose digest the stamp records.
 
-    Each chunk a read touches is read whole by `os.pread`, hashed and compared before any of its bytes is
-    served; the last chunk read is kept for the reads that follow. A chunk that differs ends the read short and is
-    held in `stale`, since the decoder's callback cannot raise through it.
+    Each chunk a read touches is read whole by `os.pread` once, hashed and compared before any of its bytes is
+    served, and kept while the file is open, so a decoder that seeks back and forth reads no chunk twice. A chunk
+    that differs ends the read short and is held in `stale`, since the decoder's callback cannot raise through it.
     """
 
     def __init__(self, fd: int, stamp: SourceStamp, path: object) -> None:
         self._fd, self._stamp, self._path = fd, stamp, path
         self._pos = 0
-        self._index = -1
-        self._chunk = b""
+        self._chunks: dict[int, bytes] = {}
         self.stale: StaleSource | None = None
 
     def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
@@ -228,7 +227,7 @@ class _ChunkChecked:
         return done
 
     def _verified(self, index: int) -> bytes:
-        if index != self._index:
+        if index not in self._chunks:
             size = self._stamp.chunk_size
             parts: list[bytes] = []
             while (got := sum(map(len, parts))) < size and (part := os.pread(self._fd, size - got, index * size + got)):
@@ -236,8 +235,8 @@ class _ChunkChecked:
             chunk = b"".join(parts)
             if chunk_digest(chunk) != self._stamp.chunks[index]:
                 raise StaleSource(f"{self._path} changed since it was opened: chunk {index} differs")
-            self._index, self._chunk = index, chunk
-        return self._chunk
+            self._chunks[index] = chunk
+        return self._chunks[index]
 
 
 @contextmanager
