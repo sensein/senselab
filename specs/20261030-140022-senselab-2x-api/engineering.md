@@ -1,7 +1,8 @@
 # Engineering standards for senselab 2.x
 
-These apply to every commit, by humans and agents alike. Principles P-31..P-35 in
-[`principles.md`](principles.md); testing tiers in [`testing.md`](testing.md).
+These apply to every commit, by humans and agents alike. This file holds the authoritative text of P-27..P-35,
+P-39 and P-40; [`principles.md`](principles.md) keeps their ids and stubs. Testing tiers are in
+[`testing.md`](testing.md).
 
 ## Exemplar and sources
 
@@ -43,29 +44,34 @@ robust (worker errors carried to the caller, a bounded pool, explicit cancellati
 
 | Standard | Rule | Enforced by |
 |---|---|---|
-| **Minimal verbosity** (P-31) | Say a thing once, in the fewest words that are exact. A docstring states what and how to call it. A comment exists only where code cannot say it. History, measurements and rejected alternatives go to `specs/` (P-21). The same applies to logs, errors, CLI output and agent-facing text: an error names the cause and the fix in one line. | **model and agent review, not word lists.** In CI, a small pinned model (the owner suggested "nimble", to be evaluated alongside alternatives) reads the prose in the diff: docstrings, comments, messages, errors and docs. It scores the prose against the P-31 rubric and posts suggested tighter rewrites as advisory review comments; it never fails CI. Agents apply or sharpen the suggestions. The reviewer model is pinned by commit (P-16) and license-checked (P-23). Accepted and rejected suggestions become its evaluation labels. The one blocking rule is structural: an exact-pattern check for spec, register and round ids (`F-n`, `R-n`, `rNN`) outside `specs/`, like the identifier hook. |
-| **Clean, robust, reusable, efficient code** (P-32) | Follow the sources above: deep modules with thin surfaces, a functional core with an imperative shell, one implementation per concept, typed explicit errors, and algorithms chosen for the cost model (the fastio lesson), not naive loops. No duplicated logic: a second copy is factored before merge. No dead code, no flags for removed behaviour (P-14). Dependencies stay out of core (P-13). | ruff (including complexity `C901` and `PL` limits), mypy strict on core, a duplicate-code check, and file and function size budgets reported per PR |
+| **Minimal verbosity** (P-31) | Say a thing once, in the fewest words that are exact. A docstring states what and how to call it. A comment exists only where code cannot say it. History, measurements and rejected alternatives go to `specs/` (P-21). The same applies to logs, errors, CLI output and agent-facing text: an error names the cause and the fix in one line. | development-time review by the per-PR reviewer (roster below), who compacts prose before commit. No word lists and no model in CI (P-31). The one blocking rule is the exact-pattern check for spec, register and round ids (`F-n`, `R-n`, `rNN`) outside `specs/` (`spec-ids` hook). |
+| **Clean, robust, reusable, efficient code** (P-32) | Follow the sources above: deep modules with thin surfaces, a functional core with an imperative shell, one implementation per concept, typed explicit errors, and algorithms chosen for the cost model (the fastio lesson), not naive loops. No duplicated logic: a second copy is factored before merge. No dead code, no flags for removed behaviour (P-14). Dependencies stay out of core (P-13). | ruff, with complexity (`C90`) and pylint (`PL`) limits planned and not yet configured; mypy strict on core, a duplicate-code check, and file and function size budgets reported per PR |
 | **One implementation per behaviour** (P-37) | Two functions must not do the "same" thing, and code must not be copied with variants. A variant of a behaviour is a typed parameter, a strategy object or a backend over **one** engine. Consolidation must not create brittleness: the merged function never branches on its caller, a dataset or a model id; it has no flag that only one caller uses; and each variant keeps its own contract test. Prefer deleting a redundant function to wrapping it. | a duplicate-code check (token- and AST-similarity across the tree, with a threshold); the task registry refuses two tasks with the same declared operation and port types; an adversarial "find the duplicates" agent pass each phase; review checks flag count and caller-specific branches |
-| **Efficient at every scale** (P-33) | Code is measured at four scale points: 1 item, 10², 10⁴, and a long signal (hours of audio, days of actigraphy). Time, peak memory, files written and bytes moved per item must not grow with scale. Profiles find the hot spots, not guesses. | `benchmarks/scale/` ladder runs per PR on touched modules (small points) and nightly (large points). Scalene profiles attached on regression. Per-item budgets stored as data with derivations (P-17); a regression beyond a band blocks merge |
+| **Efficient at every scale** (P-33) | Code is measured at four scale points: 1 item, 10², 10⁴, and a long signal (hours of audio, days of actigraphy). Time, peak memory, files written and bytes moved per item must not grow with scale. Profiles find the hot spots, not guesses. | until Phase 3 Task 20: the PR quotes the measurement. After it: the `benchmarks/scale/` ladder runs per PR on touched modules (small points) and nightly (large points), with Scalene profiles attached on regression. Flatness and the regression band are data (P-33); a regression beyond the band blocks merge |
 | **Brittleness checked always** (P-34) | A change must not make the system depend on an accident: timing, ordering, one dataset, one host, one model's quirk, a magic number, a string match on output. Every boundary is exercised with bad input. Failures are typed and isolated. | property tests and fault injection in the logic tier (killed worker, stale lease, NFS rename race, network off, missing license, corrupted cache entry, truncated audio). A brittleness checklist in the PR template. Review rejects special-casing |
 | **Adversarial agents set standards** (P-35) | Agents are used to break the system: hostile inputs, races, scale, misuse of the API, and attempts to make a test pass by special-casing. Each break is fixed **by an architectural change**, not a patch for that case: a new invariant, a type, a contract test or a lint rule. The fix is generalised into the standards here or into a principle. | each phase ends with an adversarial round scoped to its new surfaces (`design.md` §6.2). Findings go to [`review-register.md`](review-register.md) with their architectural resolution. A fix that only adds an `if` for the found case is rejected |
 
 ## Per-commit checklist
 
-The PR template carries this checklist. Pre-commit and CI check what they can.
+The 2.x PR template (`.github/PULL_REQUEST_TEMPLATE/2x.md`) carries this checklist as a hand copy, which drifts
+from this section. Planned, not yet built: the template section is generated from this section, and
+`scripts/check_pr_models.py` (the `pr-models` job) refuses a PR body missing a line of it. Until then the PR author
+copies the list from here. Pre-commit and CI check what they can.
 
 - [ ] Prose is minimal: no history, no ids, docstrings say what and how (P-31).
 - [ ] No duplicated logic; surfaces are thin over shared engines (P-32).
 - [ ] No second function for an existing behaviour, and no copied variant. Variants are
   parameters, strategies or backends, with no caller-specific branches (P-37).
-- [ ] The scale ladder passes for touched modules; per-item cost is flat (P-33).
+- [ ] Per-item time and peak memory at 1 and 10² items are measured for touched modules and quoted in the PR
+  (`benchmarks/scale/` once Phase 3 Task 20 lands; until then `scripts/profile_with_scalene.py` output or a timed
+  test). An unmeasured change says so (P-33).
 - [ ] New boundaries have bad-input, fault and property tests; there is no special-casing (P-34).
 - [ ] No fixed parameters: every numeric literal in runtime, execution and test-bound code is either an invariant
   of the code (stated as such) or config (profile, run config or data file) with its derivation; sizing comes
   from measurement before scaling (P-34, amended 2026-11-07).
 - [ ] No identifiers, no local paths and no content copied from a referenced local file in any committed text: code, specs, tests, data, commit messages, PR bodies; placeholders instead (P-28). Tests are scoped and serial (P-29).
 - [ ] Every new task, backend or profile is declared, so contract tests cover it (P-30).
-- [ ] The PR records the implementer and reviewer models, and they differ (P-40).
+- [ ] The PR records the implementer and reviewer models; the reviewer ran in a fresh context on a different model, or both are the top tier on a kernel item and the PR says so (P-40).
 - [ ] The ledger mark is current for any 1.x area touched (P-39).
 
 ### Size budgets
@@ -73,7 +79,8 @@ The PR template carries this checklist. Pre-commit and CI check what they can.
 `scripts/check_size_budgets.py` reads three limits (the function limit serves source and tests) from `scripts/data/size_budget.yaml`; each follows from a standard
 here, not from the tree.
 
-- **Function, 100 lines (source and test).** ruff caps a function at 50 statements (`PLR0915`, P-32). A wrapped call or
+- **Function, 100 lines (source and test).** ruff will cap a function at 50 statements (`PLR0915`, P-32; planned,
+  not yet configured). A wrapped call or
   a literal takes two lines, so 50 statements fit in 100 lines; past that a function holds more than one idea. A
   test function past it is a scenario that wants splitting.
 - **Source file, 1200 lines.** A reviewer reads a module whole in one pass (P-32). The read tool returns 2000 lines at a
@@ -116,7 +123,7 @@ without trading away P-31..P-39.
   protocol (ADR-003).
 - **Reviewer independence.** A review never runs on the model and context that produced the work.
   Pair a sonnet implementation with an opus review on the kernel, and an opus implementation with
-  a fresh sonnet or opus reviewer. A reviewer gets the code and the principles, not the
+  a fresh sonnet reviewer, or a fresh opus reviewer on a kernel item (P-40 Check). A reviewer gets the code and the principles, not the
   implementer's conclusions.
 - **Every brief carries:**
   - the P-ids and ADRs the task touches;
@@ -142,9 +149,11 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
 ### P-27 Commit and push early and often
 - **Status**: active
 - **Statement**: Each unit of work is committed when done and pushed promptly. Work in progress
-  stays visible on a branch with a PR. 2.x is built on the `2.x` branch: design is decided in the docs
-  PR (#617, `senselab-2x-api`), code and tests go in the code PR (#619, `2x/phase-1`), which merges
-  `senselab-2x-api` to stay current. A change to an ADR's decision is a dated amendment (ADR-000).
+  stays visible on a branch with a PR. 2.x is built on the `2.x` branch. A change to an ADR's decision is a
+  dated amendment (ADR-000).
+- **Amended 2026-11-07**: Phase N code is on `2x/phase-N`, cut from the previous phase's head; spec work is on
+  `2x/phase-N-spec`; both merge to `2.x`. [`STATE.md`](STATE.md) names the current pair. This replaces the
+  docs-PR and code-PR pair (#617, #619) of Phase 1.
 - **Source**: owner, 2026-10-30: "commit+push early often"; "in place on alpha". Amended by the
   owner, 2026-11-01: "are PRs being merged into a 2.x branch or to alpha? should be the former"; and
   decision D-7, "move specs to the docs PR" ([`decisions-2026-11-01.md`](decisions-2026-11-01.md)).
@@ -297,3 +306,6 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   in principles) in tow".
 - **Check**: each PR records its implementer and reviewer models, and they differ. Briefs cite
   P-ids and the checklist.
+  Amended 2026-11-07: the reviewer runs in a fresh context; its model differs from the implementer's
+  unless both are the top tier for a kernel item, and the PR says so. `scripts/check_pr_models.py` is to
+  encode exactly this (planned; today it checks only that the models differ).
