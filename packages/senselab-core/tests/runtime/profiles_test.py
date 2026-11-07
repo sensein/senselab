@@ -137,7 +137,9 @@ def test_batch_size_is_sized_from_the_measure_and_not_in_key() -> None:
     assert batch * per_item <= room < (batch + 1) * per_item
     assert [p.batch_size for p in placements] == [1, batch, 1] and placements[1].record().batch_size == batch > 1
     call, _ = base_call(TASK, placements[0].backend)
-    assert len({build_key(call, p, BASE).digest() for p in placements}) == 1
+    keys = [build_key(call, p, BASE) for p in placements]
+    assert len({k.digest() for k in keys}) == 1 and all("batch_size" not in str(k.model_dump()) for k in keys)
+    assert len({p.backend_params.model_dump_json() for p in placements}) == 1 and "batch" not in str(call.params)
 
 
 @pytest.mark.logic
