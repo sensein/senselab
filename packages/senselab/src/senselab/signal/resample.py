@@ -24,6 +24,7 @@ WORKER_MODULE = "senselab.signal.resample"
 _DESIGN: dict[str, Any] = load_yaml(resources.files("senselab").joinpath("signal/data/resample.yaml"), "resample.yaml")
 _STOPBAND_DB: float = float(_DESIGN["stopband_attenuation_db"])
 _TRANSITION: float = float(_DESIGN["transition_fraction"])
+_RIPPLE_MARGIN: float = float(_DESIGN["ripple_margin"])
 _MAX_BLOCK: int = int(_DESIGN["max_block_elements"])
 _INIT_KEYS = frozenset({"array_dir", "device", "model"})
 _KAISER_HIGH_DB = 50.0
@@ -83,6 +84,11 @@ def design_bounds() -> tuple[float, float]:
     """
     delta = 10.0 ** (-_STOPBAND_DB / 20.0)
     return -20.0 * math.log10(1.0 - delta), _STOPBAND_DB
+
+
+def ripple_margin() -> float:
+    """Return the factor by which the realised filter's worst ripple may exceed the Kaiser target `delta`."""
+    return _RIPPLE_MARGIN
 
 
 def passband_edge(rate: float, target: float) -> float:

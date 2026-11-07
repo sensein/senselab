@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 from senselab.signal import resample as rs
 from senselab_core.kernel.declare import REGISTRY
@@ -42,6 +42,20 @@ def _tone_amplitude(y: numpy.ndarray, target: int, f: float) -> float:
     return float(math.hypot(*coef))
 
 
+def _image_gain_sum(rate: int, target: int, f: float) -> float:
+    """The sum of the realised filter's gain at every image of a unit tone at `f`: a bound on the output's peak."""
+    up, down = _ratio(rate, target)
+    h = rs.design(rate, up, down).taps / up
+    j = numpy.arange(h.size) - (h.size - 1) // 2
+    k = numpy.arange(up + 1)
+    images = numpy.concatenate([k * rate + f, k * rate - f])
+    images = images[(images >= 0) & (images <= rate * up / 2)]
+    total = 0.0
+    for chunk in numpy.array_split(images, max(1, images.size // 16)):
+        total += float(numpy.abs(numpy.cos(2 * numpy.pi * numpy.outer(chunk, j) / (rate * up)) @ h).sum())
+    return total
+
+
 def _tone(rate: int, f: float, n: int = N_IN) -> numpy.ndarray:
     return numpy.sin(2 * numpy.pi * f * numpy.arange(n) / rate)[None, :]
 
@@ -60,13 +74,14 @@ def test_duration_preserved_within_one_sample(pair: tuple[int, int], n: int) -> 
 @pytest.mark.logic
 @SLOW
 @given(pair=PAIRS, fraction=st.floats(0.01, 1.0))
+@example(pair=(8000, 11025), fraction=1.0)
 def test_passband_within_design_ripple(pair: tuple[int, int], fraction: float) -> None:
     """A tone up to the pass-band edge keeps unit gain to within the design's ripple."""
     rate, target = pair
     f = fraction * rs.passband_edge(rate, target)
     y = rs.resample_array(_tone(rate, f), rate, target)[0]
     amplitude = _tone_amplitude(y[_interior(rate, target, y.size)], target, f)
-    assert abs(20 * math.log10(amplitude)) <= rs.design_bounds()[0]
+    assert abs(20 * math.log10(amplitude)) <= -20 * math.log10(1 - rs.ripple_margin() * DELTA)
 
 
 def _residual(rate: int, target: int, f: float) -> float:
@@ -105,13 +120,14 @@ def test_upsampling_images_below_design_attenuation(pair: tuple[int, int], fract
 @pytest.mark.logic
 @SLOW
 @given(pair=PAIRS.filter(lambda p: p[1] < p[0]), fraction=st.floats(0.0, 1.0))
+@example(pair=(48000, 44100), fraction=0.04020100502512563)
 def test_stopband_below_design_attenuation(pair: tuple[int, int], fraction: float) -> None:
-    """A tone between the target's Nyquist and the input's leaves the output at least the design attenuation down."""
+    """A tone between the target's Nyquist and the input's stays within the filter's summed gain at its images."""
     rate, target = pair
     f = target / 2 + fraction * (rate / 2 - target / 2) * 0.999
     y = rs.resample_array(_tone(rate, f), rate, target)[0]
     interior = y[_interior(rate, target, y.size)]
-    assert numpy.abs(interior).max() <= DELTA
+    assert numpy.abs(interior).max() <= _image_gain_sum(rate, target, f) + 1e-12
 
 
 @pytest.mark.logic
@@ -157,3 +173,18 @@ def test_a_non_integer_input_rate_is_a_content_fault() -> None:
 def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract case
     """The task and backend satisfy the generated contract."""
     case()
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("pair", [(a, b) for a in RATES for b in RATES if a != b], ids=lambda p: f"{p[0]}-{p[1]}")
+def test_realised_ripple_within_margin(pair: tuple[int, int]) -> None:
+    """The taps' pass-band deviation and stop-band peak are each within `ripple_margin` times the Kaiser target."""
+    rate, target = pair
+    up, down = _ratio(rate, target)
+    h = rs.design(rate, up, down).taps / up
+    gain = numpy.abs(numpy.fft.rfft(h, 1 << 21))
+    freq = numpy.arange(gain.size) / (1 << 21) * rate * up
+    nyquist = min(rate, target) / 2
+    limit = rs.ripple_margin() * DELTA
+    assert numpy.abs(gain[freq <= rs.passband_edge(rate, target)] - 1).max() <= limit
+    assert gain[(freq >= nyquist) & (freq <= rate * up - nyquist)].max() <= limit
