@@ -73,11 +73,13 @@ dir>/queues --classes <list> [--profile NAME]` runs `serve_pool`.
   attempt (`Epoch.attempt`), and commits each item with `report` once all its jobs have outcomes. An item whose
   jobs cannot be built (no plan, another plan, an input that no longer binds) is given the outcome `dead` with
   that failure, so the `Pool` applies the class's effect.
-- **Quantum.** The worker claims from the class whose oldest waiting item (`Queue.oldest_age_s`) is oldest, up to
-  `pool.quantum_items` jobs (`Queue.claim(max_jobs=)`: an item whose slot's job count would take the claim past the
-  bound is passed over, except as the claim's first item; Task 16 split). It stays on that class until it has claimed
-  `quantum_items` jobs or `quantum_s` seconds have passed, then takes the class with the oldest work again, which may
-  be the same one. Items of a held env are not claimable. It exits once nothing has been claimable for `pool.idle_polls` polls of `pool.poll_s`.
+- **Quantum.** The coordinator splits a fragment into items of its unit's sized quantum, each item's placement carrying
+  the sized batch (`size`, Task 20). The worker claims from the class whose oldest waiting item (`Queue.oldest_age_s`)
+  is oldest: one item, or one-job items gathered up to `pool.quantum_items` jobs (`Queue.claim(max_jobs=,
+  singles=True)`); on a queue it has not run yet, one item alone, so the model load falls on one item. It stays on that class until it has claimed
+  `quantum_items` jobs or `quantum_s` seconds have passed (the ceilings), then takes the class with the oldest work
+  again, which may be the same one. Each item's outcome carries the worker's `Sample` of it (wall, jobs, input
+  seconds, baseline and peak memory, cold or warm), from which a calibration round's measure is read. Items of a held env are not claimable. It exits once nothing has been claimable for `pool.idle_polls` polls of `pool.poll_s`.
 - **Renewal.** Claim leases beat from their own renewers (Task 12); the worker also proves them (`Claim.renew`)
   every renewal interval (`lease.renew_fraction × lease.stale_after_s`) while it waits for a claim's outcomes,
   which run on a thread. An item whose lease was lost is not reported; another claimer takes it.
