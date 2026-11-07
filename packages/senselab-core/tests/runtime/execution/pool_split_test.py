@@ -1,16 +1,23 @@
 """`Pool.submit` queues a fragment as items of at most `pool.quantum_items` jobs, and `results` joins them."""
 
+import asyncio
+import contextlib
 import os
 import threading
+import time
 from collections.abc import Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from pool_stack_fixture import packaged, planned, registry, scoring
+from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import BackendSpec, Registry
+from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.identity import InputIdentity
-from senselab_core.runtime.call import RunConfig
+from senselab_core.runtime.call import RunConfig, bind_input
+from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment, QueueHeld, ResultRef
@@ -21,12 +28,13 @@ from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, Queue, Queu
 from senselab_core.runtime.execution.substrates import WorkerHandle, scale
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.keys import request_size
-from senselab_core.runtime.planner import Plan
+from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 
 SCORE = scoring("pool_split_test.score")
-REGISTRY = registry(SCORE)
+CHAIN = SCORE.model_copy(update={"name": "pool_split_test.chain", "inputs": {"value": "sha256"}})
+REGISTRY = registry(SCORE, CHAIN)
 STRICT = scoring("pool_split_test.strict")
 STRICT_REGISTRY = Registry()
 STRICT_REGISTRY.add_task(STRICT)
@@ -342,54 +350,188 @@ def test_items_end_on_request_boundaries_when_a_request_fits(tmp_path: Path) -> 
     assert [len(i.jobs) for i in split(fragment, 5, request=8)] == [5, 4]
 
 
-class Gated(Recording):
-    """A `Recording` whose `serve` thread runs the `cpu` queue's items once `want` workers were started, or `wait_s`."""
+class CountingFragment(PlanFragment):
+    """A `PlanFragment` that counts the times it is dumped whole."""
 
-    def __init__(self, want: int, wait_s: float) -> None:
-        """Serve once `want` workers were started, or after `wait_s` seconds."""
+    dumps: ClassVar[list[int]] = [0]
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        """Count the dump, then dump."""
+        self.dumps[0] += 1
+        return super().model_dump(**kwargs)
+
+
+@pytest.mark.logic
+def test_a_fragment_of_ten_thousand_jobs_is_dumped_once_to_split(tmp_path: Path) -> None:
+    """Splitting 10**4 jobs into 1000 items dumps the fragment once; each item holds its own ten jobs and inputs."""
+    _, _, _, one = _submitted(tmp_path, _profile(), 1)
+    document = one.model_dump(mode="json")
+    job, inputs = document["jobs"][0], document["inputs"][0]
+    document["jobs"] = [{**job, "element": [i]} for i in range(10**4)]
+    document["inputs"] = [inputs] * 10**4
+    fragment = CountingFragment.model_validate(document)
+    CountingFragment.dumps[0] = 0
+    items = split(fragment, 10)
+    assert CountingFragment.dumps[0] == 1
+    assert len(items) == 1000 and all(len(i.jobs) == len(i.inputs) == 10 for i in items)
+    assert [j.element for i in items for j in i.jobs] == [(n,) for n in range(10**4)]
+
+
+class Gated(Recording):
+    """A `Recording` whose `serve` thread runs the `cpu` queue's items once its gate opens, or after `wait_s`.
+
+    The gate opens once `want` workers were started. With `hold` set, items of that node are held and every other
+    item is served at once; the gate then opens once `want` workers are alive and `hold`'s jobs on the queue are
+    `held_jobs`, which `peak` records.
+    """
+
+    def __init__(self, want: int, wait_s: float, hold: str | None = None, held_jobs: int = 0) -> None:
+        """Serve once `want` workers were started (and `hold` has `held_jobs` queued), or after `wait_s` seconds."""
         super().__init__()
         self.started = 0
-        self.want, self.wait_s = want, wait_s
+        self.want, self.wait_s, self.hold, self.held_jobs = want, wait_s, hold, held_jobs
         self.opened = threading.Event()
+        self.peak = (0, 0)
 
     def start(self, resource_class: str, count: int) -> list[WorkerHandle]:
         """Hold `count` pending workers and count them."""
         made = super().start(resource_class, count)
         self.started += len(made)
-        if self.started >= self.want:
+        if self.hold is None and self.started >= self.want:
             self.opened.set()
         return made
 
     def serve(self, pool: Pool, placed: Plan, values: Mapping[InputIdentity, object], done: threading.Event) -> None:
-        """Execute each item of the `cpu` queue until `done`, from when the gate opens."""
-        self.opened.wait(self.wait_s)
+        """Execute each item of the `cpu` queue until `done`: `hold`'s items only once the gate opens."""
+        began = time.monotonic()
         queue = QueueSet(pool.run_dir / RUN_QUEUES, placed.execution).queue("cpu")
         while not done.is_set():
+            if not self.opened.is_set() and time.monotonic() - began >= self.wait_s:
+                self.opened.set()
+            if self.hold is None and not self.opened.is_set():
+                done.wait(0.01)
+                continue
             claim = queue.claim("gated", max_items=1)
+            if claim is not None and claim.fragments[0].node == self.hold and not self.opened.is_set():
+                self._watch(queue)
+                claim.release()
+                claim = None
             if claim is None:
                 done.wait(0.01)
                 continue
             with claim:
                 report(claim, claim.items[0], _executed(placed, values, pool.store, claim.fragments[0]))
 
+    def _watch(self, queue: Queue) -> None:
+        """Record the held node's queued jobs and the workers alive; open the gate once both are reached."""
+        work, alive = queue.work(), len(self.handles)
+        self.peak = max(self.peak, (work, alive))
+        if work >= self.held_jobs and alive >= self.want:
+            self.opened.set()
 
-@pytest.mark.contract
-def test_the_runner_queues_a_map_nodes_ready_jobs_so_scale_wants_a_worker_per_quantum(tmp_path: Path) -> None:
-    """A 200-row map node run by `PydraRunner` on a pool reaches 20 items of 10 jobs, so 20 workers are started."""
+
+def _chained(profile: ExecutionProfile, rows: int) -> tuple[Plan, dict[InputIdentity, object]]:
+    """Return the plan `a` (`SCORE`, mapped over `rows` texts) then `b` (`CHAIN`, reading `a.value`), and its values."""
+    graph = Graph(
+        inputs={"text": "list[json]"},
+        nodes=(Node(id="a", task=SCORE.name, task_version="1"), Node(id="b", task=CHAIN.name, task_version="1")),
+        edges=(
+            Edge(source="input.text", target="a.text", kind="map"),
+            Edge(source="a.value", target="b.value", kind="plain"),
+        ),
+        outputs={"value": "b.value"},
+    )
+    texts = [f"t{i}" for i in range(rows)]
+    records = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(texts)]
+    placed = plan(graph, RecordSet(records), config=RunConfig(), execution=profile)
+    return placed, {bind_input("x", "json", t)[0]: t for t in texts}
+
+
+@contextlib.contextmanager
+def _default_threads(count: int) -> Iterator[None]:
+    """Run the next pydra loop with a default executor of `count` threads, as a coordinator of few CPUs has."""
+    loop = asyncio.new_event_loop()
+    loop.set_default_executor(ThreadPoolExecutor(count))
+    asyncio.set_event_loop(loop)
+    try:
+        yield
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+
+def _run_gated(  # noqa: PLR0913 - the plan and its gate, then the run's seams
+    tmp_path: Path,
+    profile: ExecutionProfile,
+    placed: Plan,
+    values: Mapping[InputIdentity, object],
+    gated: Gated,
+    cancel: threading.Event | None = None,
+) -> Any:  # noqa: ANN401 - a `RunOutcome`
+    """Run `placed` by `PydraRunner` on a pool over `gated`, its serving thread alongside, with 2 default threads."""
     runner = pytest.importorskip("senselab_core.runtime.execution.runner", exc_type=ImportError)
-    profile = _profile()
-    gated = Gated(want=20, wait_s=10.0)
-    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(200)])
     pool = _pool(tmp_path, profile, gated)
     done = threading.Event()
     server = threading.Thread(target=gated.serve, args=(pool, placed, values, done), daemon=True)
     server.start()
     try:
-        outcome = runner.PydraRunner(profile=profile, work_dir=tmp_path / "pydra").run_plan(
-            placed, pool, values=values, events=pool.events
-        )
+        with _default_threads(2):
+            return runner.PydraRunner(profile=profile, work_dir=tmp_path / "pydra").run_plan(
+                placed, pool, values=values, events=pool.events, cancel=cancel
+            )
     finally:
         done.set()
         server.join(30)
+
+
+@pytest.mark.contract
+def test_the_runner_queues_a_map_nodes_ready_jobs_so_scale_wants_a_worker_per_quantum(tmp_path: Path) -> None:
+    """A 200-row map node run by `PydraRunner` on a pool reaches 20 items of 10 jobs, so 20 workers are started."""
+    profile = _profile()
+    gated = Gated(want=20, wait_s=10.0)
+    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(200)])
+    outcome = _run_gated(tmp_path, profile, placed, values, gated)
     assert len(outcome.results["a"]) == 200 and all(r.failure is None for r in outcome.results["a"])
     assert gated.started == 20
+
+
+@pytest.mark.contract
+def test_a_downstream_nodes_jobs_queue_as_their_upstream_lands_so_scale_wants_a_worker_per_quantum(
+    tmp_path: Path,
+) -> None:
+    """With `a`'s items served at once and `b`'s held, every one of `b`'s 200 jobs is queued and 20 workers are alive.
+
+    The pydra loop has two default threads, so no thread may be held per fragment while it waits.
+    """
+    profile = _profile()
+    gated = Gated(want=20, wait_s=10.0, hold="b", held_jobs=200)
+    placed, values = _chained(profile, 200)
+    outcome = _run_gated(tmp_path, profile, placed, values, gated)
+    assert len(outcome.results["b"]) == 200 and all(r.failure is None for r in outcome.results["b"])
+    assert gated.peak == (200, 20)
+
+
+@pytest.mark.contract
+def test_a_cancel_stops_following_the_pool_at_once_and_leaves_its_items_queued(tmp_path: Path) -> None:
+    """A cancel set while a 200-job node waits on closed gates ends the run cancelled before the gate opens."""
+    runner = pytest.importorskip("senselab_core.runtime.execution.runner", exc_type=ImportError)
+    profile = _profile()
+    gated = Gated(want=10**6, wait_s=30.0)
+    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(200)])
+    cancel = threading.Event()
+    queue = QueueSet(tmp_path / "run" / RUN_QUEUES, profile).queue("cpu")
+
+    def cancel_once_queued() -> None:
+        while True:
+            with contextlib.suppress(OSError):
+                if queue.depth() >= 20:
+                    break
+            time.sleep(0.01)
+        cancel.set()
+
+    threading.Thread(target=cancel_once_queued, daemon=True).start()
+    began = time.monotonic()
+    with pytest.raises(runner.RunCancelled):
+        _run_gated(tmp_path, profile, placed, values, gated, cancel)
+    assert time.monotonic() - began < 10 and not gated.opened.is_set()
+    assert queue.depth() == 20 and queue.work() == 200

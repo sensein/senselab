@@ -315,6 +315,7 @@ class InProcess:
         self._admissions: dict[str, tuple[Plan, dict[InputIdentity, object]]] = {}
         self._outcomes: dict[str, list[JobOutcome]] = {}
         self._status: dict[str, Status] = {}
+        self._polled: set[str] = set()
         self._ids = itertools.count()
 
     logs_claims: ClassVar[bool] = False
@@ -395,6 +396,18 @@ class InProcess:
         for outcome in self.outcomes(handle):
             yield result_ref(outcome)
 
+    def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
+        """Return every result of `handle` the first time, none after; every one is given once `submit` returned.
+
+        Raises:
+            KeyError: the handle is not this executor's, or was forgotten.
+        """
+        with self._lock:
+            outcomes = self._outcomes[handle.id]
+            first = handle.id not in self._polled
+            self._polled.add(handle.id)
+        return ([result_ref(o) for o in outcomes] if first else []), True
+
     def outcomes(self, handle: Handle) -> list[JobOutcome]:
         """Return the outcome of each job of `handle`, results and their outputs included, in the fragment's order.
 
@@ -409,6 +422,7 @@ class InProcess:
         with self._lock:
             self._outcomes.pop(handle.id, None)
             self._status.pop(handle.id, None)
+            self._polled.discard(handle.id)
 
     def call(self, call: TaskCall) -> Result:
         """Run `call`: plan it as one node under this executor's profile and run config, submit its one fragment.

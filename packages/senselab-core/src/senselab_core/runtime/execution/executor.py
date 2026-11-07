@@ -272,3 +272,6 @@ class Executor(Protocol):
 
     def results(self, handle: Handle) -> Iterator[ResultRef]:
         """Yield one result per job of `handle` as each finishes."""
+
+    def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
+        """Return the results of `handle` landed and not yet given, and whether every one is given; never wait."""

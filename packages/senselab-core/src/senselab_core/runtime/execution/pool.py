@@ -101,25 +101,56 @@ def larger_class(profile: ExecutionProfile, name: str) -> str | None:
     return larger[0][1] if larger else None
 
 
+_PER_JOB = frozenset({"jobs", "inputs", "upstream", "gathered"})
+
+
+@dataclass(frozen=True)
+class _Dumped:
+    """A fragment dumped once: the fields its parts share, and its jobs, inputs, upstream and gathers to slice from."""
+
+    shared: dict[str, object]
+    jobs: list[object]
+    inputs: list[dict[str, str]]
+    upstream: dict[str, object]
+    gathered: dict[str, list[str]]
+
+    @classmethod
+    def of(cls, fragment: PlanFragment) -> "_Dumped":
+        """Dump `fragment` once."""
+        return cls(
+            fragment.model_dump(mode="json", exclude=set(_PER_JOB)),
+            [j.model_dump(mode="json") for j in fragment.jobs],
+            [dict(i) for i in fragment.inputs],
+            {i: r.model_dump(mode="json") for i, r in fragment.upstream.items()},
+            {g: list(e) for g, e in fragment.gathered.items()},
+        )
+
+    def part(self, indices: Sequence[int], **update: object) -> PlanFragment:
+        """Return the fragment of jobs `indices`, in that order, with the inputs they read and `update`."""
+        named = {i for index in indices for i in self.inputs[index].values()}
+        gathered = {g: self.gathered[g] for g in named if g in self.gathered}
+        read = {i for i in named if i.startswith("output:")} | {e for es in gathered.values() for e in es}
+        return PlanFragment.model_validate(
+            {
+                **self.shared,
+                "jobs": [self.jobs[i] for i in indices],
+                "inputs": [self.inputs[i] for i in indices],
+                "upstream": {i: self.upstream[i] for i in sorted(read) if i in self.upstream},
+                "gathered": gathered,
+                **update,
+            }
+        )
+
+
 def _jobs_of(fragment: PlanFragment, indices: Sequence[int], **update: object) -> PlanFragment:
     """Return the fragment of jobs `indices` of `fragment`, in that order, with the inputs they read and `update`."""
-    named = {i for index in indices for i in fragment.inputs[index].values()}
-    gathered = {g: e for g, e in fragment.gathered.items() if g in named}
-    read = {i for i in named if i.startswith("output:")} | {e for es in gathered.values() for e in es}
-    return PlanFragment.model_validate(
-        {
-            **fragment.model_dump(mode="json"),
-            "jobs": [fragment.jobs[i].model_dump(mode="json") for i in indices],
-            "inputs": [dict(fragment.inputs[i]) for i in indices],
-            "upstream": {i: r.model_dump(mode="json") for i, r in fragment.upstream.items() if i in read},
-            "gathered": {g: list(e) for g, e in gathered.items()},
-            **update,
-        }
-    )
+    return _Dumped.of(fragment).part(indices, **update)
 
 
 def split(fragment: PlanFragment, quantum: int, request: int = 1) -> list[PlanFragment]:
     """Return `fragment` as items of at most `quantum` jobs each, in job order; `[fragment]` when it fits in one.
+
+    The fragment is dumped once and each item is built from its own slice, so the work is linear in the jobs.
 
     `request` is the jobs per request of the fragment's backend (`node_request_size`). When it is at most `quantum`,
     every item but the last holds the most whole requests that fit, so no request is cut; a larger request is cut at
@@ -134,7 +165,8 @@ def split(fragment: PlanFragment, quantum: int, request: int = 1) -> list[PlanFr
     if count <= quantum:
         return [fragment]
     size = quantum - quantum % request if request <= quantum else quantum
-    return [_jobs_of(fragment, range(start, min(start + size, count))) for start in range(0, count, size)]
+    dumped = _Dumped.of(fragment)
+    return [dumped.part(range(start, min(start + size, count))) for start in range(0, count, size)]
 
 
 @dataclass
@@ -357,28 +389,46 @@ class Pool:
             StaleCoordinator: a newer epoch was taken while this pool waited.
             QueueHeld: a job's env is held; the jobs not yielded wait in their queues.
         """
-        followed = self._followed[handle.id]
         pause = self.profile.pool.first_poll_s
-        while followed.flights and not followed.cancelled:
-            self._fence()
-            self._scale()
-            landed = [(f, r) for f in followed.flights if (r := self.queues.queue(f.queue).outcome(f.digest))]
-            for flight, record in landed:
-                followed.flights.remove(flight)
-                followed.seen = True
-                yield from self._settle(followed, flight, record)
-            held = followed.held + [self._held(f) for f in followed.flights if f.fragment.placement.env in self.broken]
-            if held:
-                raise held[0]
-            stopped = [b for f in followed.flights if (b := self._workers_broken(f)) is not None]
-            if stopped:
-                raise stopped[0]
-            if landed:
+        while True:
+            given, done = self.poll(handle)
+            yield from given
+            if done:
+                return
+            if given:
                 pause = self.profile.pool.first_poll_s
-            elif followed.flights:
+            else:
                 time.sleep(pause)
                 pause = min(2 * pause, self.profile.pool.poll_s)
-        followed.done = not followed.cancelled
+
+    def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
+        """Read the outcomes of `handle`'s items once, applying each fault's effect, and return the results landed.
+
+        Returns the results not yet given, items read in one poll in job order, and whether the fragment is ended:
+        every result given, or the handle cancelled. A hold is raised once the results landed with it are given.
+
+        Raises:
+            KeyError: the handle is not this pool's.
+            StaleCoordinator: a newer epoch was taken.
+            QueueHeld: a job's env is held, or its class's workers are broken; the jobs not given wait in their queues.
+        """
+        followed = self._followed[handle.id]
+        if followed.cancelled or followed.done:
+            return [], True
+        self._fence()
+        self._scale()
+        given: list[ResultRef] = []
+        landed = [(f, r) for f in followed.flights if (r := self.queues.queue(f.queue).outcome(f.digest))]
+        for flight, record in landed:
+            followed.flights.remove(flight)
+            followed.seen = True
+            given.extend(self._settle(followed, flight, record))
+        held = followed.held + [self._held(f) for f in followed.flights if f.fragment.placement.env in self.broken]
+        stopped = [b for f in followed.flights if (b := self._workers_broken(f)) is not None]
+        if (held or stopped) and not given:
+            raise (held or stopped)[0]
+        followed.done = not followed.flights and not held
+        return given, followed.done
 
     def close(self) -> None:
         """Stop the workers the substrate started."""

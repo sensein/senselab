@@ -136,6 +136,10 @@ class Recording:
         """Yield the results `InProcess` gives."""
         return self.inner.results(handle)
 
+    def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
+        """Poll through `InProcess`."""
+        return self.inner.poll(handle)
+
     def sizes(self, node: str) -> list[int]:
         """Return the number of jobs of each fragment of `node`, in submission order."""
         return [len(f.jobs) for f in self.fragments if f.node == node]
@@ -565,13 +569,16 @@ def test_the_submitter_is_built_over_a_senselab_store_with_no_readonly_caches(tm
     """`PydraRunner` submits through `SenselabStore` and passes no `readonly_caches`, so no cache is read."""
     placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "one"}])
     store = runner.SenselabStore(tmp_path / "pydra")
+    executor, cancel = Recording(ResultStore(tmp_path / "store"), PROFILE), threading.Event()
     run = runner._Run(
         placed,
-        Recording(ResultStore(tmp_path / "store"), PROFILE).admit(placed, values),
-        Recording(ResultStore(tmp_path / "store"), PROFILE),
+        executor.admit(placed, values),
+        executor,
         store,
         EventLog(tmp_path / "run", "a1", 1),
-        threading.Event(),
+        cancel,
+        concurrent.futures.ThreadPoolExecutor(1),
+        runner.Follower(executor, cancel, first_s=0.01, max_s=0.1),
     )
     submitter = runner._submitter(run, store, ["cpu"])
     assert type(submitter.store) is runner.SenselabStore

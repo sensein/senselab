@@ -385,6 +385,10 @@ class Delegating:
         """Yield the results `inner` gives."""
         return self.inner.results(handle)
 
+    def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
+        """Poll through `inner`."""
+        return self.inner.poll(handle)
+
 
 def _linked_to_one_plan(provenance: ProvStore, plan_hash: str) -> None:
     [entity] = provenance.plans()
