@@ -3,7 +3,7 @@
 import importlib.util
 import platform
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from types import ModuleType
 
@@ -172,3 +172,35 @@ def test_probe_compares_wire_forms_under_their_rules_with_a_batched_forward(
     found = probe.probe(jobs, placement, run=run, execution=execution, work=tmp_path)
     assert (found.agree, found.repeat, found.batch, found.repeat_largest) == (3, 3, 3, {})
     assert found.largest == {"transcript.segments[*].confidence": pytest.approx(step * (found.batch - 1))}
+
+
+FAILING = SIZED.model_copy(update={"name": "failing", "stack": "failing", "worker": "failing_backend_fixture"})
+
+
+def _failing_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fails: Sequence[bool]) -> str:
+    monkeypatch.syspath_prepend(str(Path(__file__).parent))
+    use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, _sized_registry(FAILING), mit_lock_records))
+    run, execution = probe.RunConfig(), ExecutionProfile.load()
+    inputs = [{"payload": {"n": n, "fail": fail}} for n, fail in enumerate(fails)]
+    jobs, placement = probe.node_jobs(SIZED_TASK.name, inputs, {}, None, run=run, execution=execution)
+    return str(probe.probe(jobs, placement, run=run, execution=execution, work=tmp_path).line("abc", "7"))
+
+
+@pytest.mark.logic
+def test_probe_reports_items_whose_job_failed_as_unavailable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A backend failing every item agrees on none and is not evidence; its error type and count are on the line."""
+    assert _failing_line(tmp_path, monkeypatch, [True] * 3) == (
+        f"abc 7 {SIZED_TASK.name}/failing: agree 0/0, unavailable 3/3 (ValueError: 3), formation mixed, batch 3, "
+        "max diff none; repeat agree 0/0, unavailable 3/3 (ValueError: 3), max diff none — no evidence"
+    )
+
+
+@pytest.mark.logic
+def test_probe_counts_agreement_over_the_items_available_in_both_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With one of three items failing, the other two agree and the failure is counted apart."""
+    assert _failing_line(tmp_path, monkeypatch, [False, True, False]) == (
+        f"abc 7 {SIZED_TASK.name}/failing: agree 2/2, unavailable 1/3 (ValueError: 1), formation mixed, batch 3, "
+        "max diff none; repeat agree 2/2, unavailable 1/3 (ValueError: 1), max diff none — no evidence"
+    )

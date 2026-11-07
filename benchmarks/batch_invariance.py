@@ -8,9 +8,12 @@ of those jobs sharing one formation (`formation` over the packaged bucket grid),
 backend whose params declare `batch_size` gets the request's batch size there too, so its forward is batched. Each
 item's stored outputs (wire forms, as verify reads them) are compared (`compare`) under the run config's thresholds:
 batch 1 against batch N, and batch 1 against its repeat, which measures run-to-run noise. One line per backend is
-printed: `<sha> <job> <task>/<backend>: agree k/n, formation <mixed|bucket>, batch N, max diff <path>=<absolute> ...;
-repeat agree k/n, max diff ...`, a max diff being the largest gap of a leaf that differs, within its threshold or
-not (`none` when nothing differs); `... : not batched — no evidence (formation <kind>,
+printed: `<sha> <job> <task>/<backend>: agree k/a, [unavailable u/n (<error type>: count, ...), ]formation
+<mixed|bucket>, batch N, max diff <path>=<absolute> ...; repeat agree k/a, [unavailable u/n (...), ]max diff ...`, a
+max diff being the largest gap of a leaf that differs, within its threshold or not (`none` when nothing differs).
+An item is unavailable when its job failed or stored nothing in either of the two runs compared; `a` counts the items
+available in both, and a line with any unavailable item ends `— no evidence`. `... : not batched — no evidence
+(formation <kind>,
 batch N)` when no request would hold more
 than one item, the formation being `single` or N 1, and nothing is run; or `<sha> <job> <task>: not placeable:
 <reason>` for a task no device here runs.
@@ -24,14 +27,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 from senselab_core.runtime.call import RunConfig, TaskCall, bind_input, packaged, placement_of
 from senselab_core.runtime.compare import Threshold, Thresholds, compare, index_free
 from senselab_core.runtime.execution.batching import BucketGrid, formation
 from senselab_core.runtime.execution.executor import Admission, JobRef
 from senselab_core.runtime.execution.in_process import fragment_jobs, node_fragment, process_workers
-from senselab_core.runtime.execution.job import Completed, Job, JobOutcome, execute
+from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
 from senselab_core.runtime.fetch import DataManifest, default_cache_root, fetch
 from senselab_core.runtime.keys import SINGLE, Placement
 from senselab_core.runtime.planner import plan
@@ -74,6 +77,8 @@ class Probe:
     largest: Mapping[str, float | None]
     repeat: int = 0
     repeat_largest: Mapping[str, float | None] = field(default_factory=dict)
+    unavailable: Mapping[str, int] = field(default_factory=dict)
+    repeat_unavailable: Mapping[str, int] = field(default_factory=dict)
 
     @property
     def batched(self) -> bool:
@@ -86,14 +91,35 @@ class Probe:
         shape = f"formation {self.formation}, batch {self.batch}"
         if not self.batched:
             return f"{head}: not batched — no evidence ({shape})"
-        return (
-            f"{head}: agree {self.agree}/{self.items}, {shape}, max diff {_gaps(self.largest)}; "
-            f"repeat agree {self.repeat}/{self.items}, max diff {_gaps(self.repeat_largest)}"
+        found = (
+            f"{head}: agree {self.agree}/{self.items - sum(self.unavailable.values())}, "
+            f"{_unavailable(self.unavailable, self.items)}{shape}, max diff {_gaps(self.largest)}; "
+            f"repeat agree {self.repeat}/{self.items - sum(self.repeat_unavailable.values())}, "
+            f"{_unavailable(self.repeat_unavailable, self.items)}max diff {_gaps(self.repeat_largest)}"
         )
+        return found + ("" if not (self.unavailable or self.repeat_unavailable) else " — no evidence")
 
 
 def _gaps(largest: Mapping[str, float | None]) -> str:
     return " ".join(f"{p}={'n/a' if v is None else f'{v:.3g}'}" for p, v in sorted(largest.items())) or "none"
+
+
+def _unavailable(reasons: Mapping[str, int], items: int) -> str:
+    if not reasons:
+        return ""
+    return (
+        f"unavailable {sum(reasons.values())}/{items} ({', '.join(f'{r}: {n}' for r, n in sorted(reasons.items()))}), "
+    )
+
+
+@dataclass(frozen=True)
+class Unavailable:
+    """An item whose job failed or stored nothing in one run, and why."""
+
+    reason: str
+
+
+Stored = Mapping[str, object] | Unavailable
 
 
 @dataclass(frozen=True)
@@ -144,23 +170,25 @@ def node_jobs(  # noqa: PLR0913 - the call, then keyword-only run inputs
 
 
 def agreement(
-    first: Sequence[Mapping[str, object] | None], second: Sequence[Mapping[str, object] | None], run: RunConfig
-) -> tuple[int, dict[str, float | None]]:
-    """Return how many items' outputs agree (`compare`) and the largest gap per index-free path; a None never agrees.
+    first: Sequence[Stored], second: Sequence[Stored], run: RunConfig
+) -> tuple[int, dict[str, float | None], dict[str, int]]:
+    """Return how many items' outputs agree (`compare`), the largest gap per index-free path and the unavailable items.
 
+    An item unavailable in either run is counted by its reason, the first run's when both are, and is not compared.
     A gap is measured for every leaf that differs, within its threshold or not.
     """
     exact = Thresholds(by_name=dict.fromkeys(run.thresholds.by_name, Threshold(rtol=0, atol=0)))
-    agree, largest = 0, dict[str, float | None]()
+    agree, largest, unavailable = 0, dict[str, float | None](), Counter[str]()
     for one, other in zip(first, second, strict=True):
-        if one is None or other is None:
+        if isinstance(one, Unavailable) or isinstance(other, Unavailable):
+            unavailable[(one if isinstance(one, Unavailable) else cast(Unavailable, other)).reason] += 1
             continue
         agree += compare(one, other, run.thresholds).agree
         for d in compare(one, other, exact).differences:
             path = index_free(d.path)
             gaps = [g for g in (largest.get(path), d.absolute) if g is not None]
             largest[path] = max(gaps) if gaps else None
-    return agree, largest
+    return agree, largest, dict(unavailable)
 
 
 def probe(jobs: list[Job], placement: Placement, *, run: RunConfig, execution: ExecutionProfile, work: Path) -> Probe:
@@ -179,7 +207,7 @@ def probe(jobs: list[Job], placement: Placement, *, run: RunConfig, execution: E
 
     params = placement.backend_params
 
-    def sent(size: int, name: str) -> list[Mapping[str, object] | None]:
+    def sent(size: int, name: str) -> list[Stored]:
         store = ResultStore(work / name)
         forward = params.model_copy(update={BATCH_PARAM: size}) if BATCH_PARAM in type(params).model_fields else params
         sized = replace(placement, batch_size=size, backend_params=forward)
@@ -187,15 +215,18 @@ def probe(jobs: list[Job], placement: Placement, *, run: RunConfig, execution: E
         return [_stored(store, o) for o in outcomes]
 
     one = sent(1, "batch-1")
-    agree, largest = agreement(one, sent(batch, f"batch-{batch}"), run)
-    repeat, repeat_largest = agreement(one, sent(1, "batch-1-repeat"), run)
-    return Probe(backend.task, backend.name, agree, len(jobs), kind, batch, largest, repeat, repeat_largest)
+    agree, largest, lost = agreement(one, sent(batch, f"batch-{batch}"), run)
+    repeat, repeat_largest, repeat_lost = agreement(one, sent(1, "batch-1-repeat"), run)
+    return Probe(
+        backend.task, backend.name, agree, len(jobs), kind, batch, largest, repeat, repeat_largest, lost, repeat_lost
+    )
 
 
-def _stored(store: ResultStore, outcome: JobOutcome) -> dict[str, object] | None:
-    if not isinstance(outcome, Completed):
-        return None
-    return store.outputs_of(outcome.result.key.digest(), outcome.result.output_identity)
+def _stored(store: ResultStore, outcome: JobOutcome) -> Stored:
+    if isinstance(outcome, Failed):
+        return Unavailable(outcome.failure.type)
+    stored = store.outputs_of(outcome.result.key.digest(), outcome.result.output_identity)
+    return Unavailable("no stored output") if stored is None else stored
 
 
 def probe_suite(
