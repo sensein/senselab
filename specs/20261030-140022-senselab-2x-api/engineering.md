@@ -58,11 +58,16 @@ The PR template carries this checklist. Pre-commit and CI check what they can.
 - [ ] No duplicated logic; surfaces are thin over shared engines (P-32).
 - [ ] No second function for an existing behaviour, and no copied variant. Variants are
   parameters, strategies or backends, with no caller-specific branches (P-37).
-- [ ] The scale ladder passes for touched modules; per-item cost is flat (P-33).
+- [ ] Per-item time and peak memory at 1 and 10² items are measured for touched modules and quoted in the PR
+  (`benchmarks/scale/` once Phase 3 Task 20 lands; until then `scripts/profile_with_scalene.py` output or a timed
+  test). An unmeasured change says so (P-33).
 - [ ] New boundaries have bad-input, fault and property tests; there is no special-casing (P-34).
-- [ ] No identifiers; tests are scoped and serial (P-28, P-29).
+- [ ] No fixed parameters: every numeric literal in runtime, execution and test-bound code is either an invariant
+  in the form P-34 defines or config (profile, run config or data file) with its derivation; sizing comes
+  from measurement before scaling (P-34, amended 2026-11-07).
+- [ ] No identifiers, no local paths and no content copied from a referenced local file in any committed text: code, specs, tests, data, commit messages, PR bodies; placeholders instead (P-28). Tests are scoped and serial (P-29).
 - [ ] Every new task, backend or profile is declared, so contract tests cover it (P-30).
-- [ ] The PR records the implementer and reviewer models, and they differ (P-40).
+- [ ] The PR records the implementer and reviewer models; the reviewer ran in a fresh context on a different model, or both are the top tier on a kernel item and the PR says so (P-40).
 - [ ] The ledger mark is current for any 1.x area touched (P-39).
 
 ## What "special-casing" means (rejected in review)
