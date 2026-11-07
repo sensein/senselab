@@ -6,8 +6,10 @@ For each benchmark of the suite (`benchmark-suite@1.0`), its held-out items are 
 once in batches of one and once in batches of N, each into a store of its own under `DIR`. N is the largest number of
 those jobs sharing one formation (`formation` over the packaged bucket grid), so every bucket is sent whole. Each
 item's outputs are compared (`compare`) under the run config's thresholds. One line per backend is printed:
-`<sha> <job> <task>/<backend>: agree k/n, batch N, max diff <path>=<absolute> ...` (`none` when nothing differs),
-or `<sha> <job> <task>: not placeable: <reason>` for a task no device here runs.
+`<sha> <job> <task>/<backend>: agree k/n, formation <mixed|bucket>, batch N, max diff <path>=<absolute> ...` (`none`
+when nothing differs); `... : not batched — no evidence (formation <kind>, batch N)` when no request would hold more
+than one item, the formation being `single` or N 1, and nothing is run; or `<sha> <job> <task>: not placeable:
+<reason>` for a task no device here runs.
 """
 
 import argparse
@@ -27,7 +29,7 @@ from senselab_core.runtime.execution.executor import Admission, JobRef
 from senselab_core.runtime.execution.in_process import fragment_jobs, node_fragment, process_workers
 from senselab_core.runtime.execution.job import Completed, Job, JobOutcome, execute
 from senselab_core.runtime.fetch import DataManifest, default_cache_root, fetch
-from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.keys import SINGLE, Placement
 from senselab_core.runtime.planner import plan
 from senselab_core.runtime.profiles import ExecutionProfile, NoDevice
 from senselab_core.runtime.store import ResultStore
@@ -51,20 +53,32 @@ def harness() -> ModuleType:
 
 @dataclass(frozen=True)
 class Probe:
-    """One backend's comparison: agreeing items of all held-out items, the batch N, and the largest gap per field."""
+    """One backend's comparison: agreeing items of all held-out items, formation kind, batch N, largest gap per field.
+
+    It is evidence only when N > 1 and the kind is not `single` (`batched`).
+    """
 
     task: str
     backend: str
     agree: int
     items: int
+    formation: str
     batch: int
     largest: Mapping[str, float | None]
 
+    @property
+    def batched(self) -> bool:
+        """Whether any request held more than one item, so the comparison is evidence."""
+        return self.batch > 1 and self.formation != SINGLE
+
     def line(self, sha: str, job: str) -> str:
         """Return the probe's report line."""
+        head = f"{sha} {job} {self.task}/{self.backend}"
+        shape = f"formation {self.formation}, batch {self.batch}"
+        if not self.batched:
+            return f"{head}: not batched — no evidence ({shape})"
         gaps = " ".join(f"{p}={'n/a' if v is None else f'{v:.3g}'}" for p, v in sorted(self.largest.items()))
-        head = f"{sha} {job} {self.task}/{self.backend}: agree {self.agree}/{self.items}, batch {self.batch}"
-        return f"{head}, max diff {gaps or 'none'}"
+        return f"{head}: agree {self.agree}/{self.items}, {shape}, max diff {gaps or 'none'}"
 
 
 @dataclass(frozen=True)
@@ -115,9 +129,17 @@ def node_jobs(  # noqa: PLR0913 - the call, then keyword-only run inputs
 
 
 def probe(jobs: list[Job], placement: Placement, *, run: RunConfig, execution: ExecutionProfile, work: Path) -> Probe:
-    """Run `jobs` at batch 1 and at the largest formation population, and compare each item's outputs."""
+    """Run `jobs` at batch 1 and at the largest formation population, and compare each item's outputs.
+
+    Nothing runs when no request would hold more than one item (`Probe.batched`).
+    """
     grid = BucketGrid.load_default()
-    batch = max(Counter(formation(j, placement.backend, grid) for j in jobs).values())
+    [(top, batch)] = Counter(formation(j, placement.backend, grid) for j in jobs).most_common(1)
+    kind = top.split(":")[0]
+    backend = placement.backend
+    unrun = Probe(backend.task, backend.name, 0, len(jobs), kind, batch, {})
+    if not unrun.batched:
+        return unrun
     workers = process_workers(execution)
 
     def sent(size: int) -> list[JobOutcome]:
@@ -136,7 +158,7 @@ def probe(jobs: list[Job], placement: Placement, *, run: RunConfig, execution: E
             path = index_free(d.path)
             gaps = [g for g in (largest.get(path), d.absolute) if g is not None]
             largest[path] = max(gaps) if gaps else None
-    return Probe(placement.backend.task, placement.backend.name, agree, len(jobs), batch, largest)
+    return Probe(backend.task, backend.name, agree, len(jobs), kind, batch, largest)
 
 
 def probe_suite(
