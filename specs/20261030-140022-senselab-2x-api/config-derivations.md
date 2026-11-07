@@ -42,7 +42,7 @@ One class per device the laptop may have, each the host's own CPUs and memory wi
 
 ### laptop.substrate
 
-local: a laptop starts its pool workers as processes on itself.
+local: a laptop starts its pool workers as processes on itself. start_backoff_first_s 0.05 and start_backoff_max_s 30: the wait after a class's first failed start (a worker that exits before it marks itself ready), doubling per failure in a row up to the maximum; the same wait follows each failure of the substrate's own commands, during which the scaler does not use the substrate. Not measured: the values the pool used before the keys existed, when it took this wait from pool.first_poll_s and pool.poll_s; the basis to measure is a worker's start-to-ready latency on the host. commands: none, a local substrate runs no scheduler command.
 
 ### laptop.pool
 
@@ -104,7 +104,7 @@ Partitions are site placeholders (${CPU_PARTITION}, ${GPU_PARTITION}), expanded 
 
 ### orcd.substrate
 
-slurm: workers are Slurm jobs submitted per resource class. qos_cpu_cap null: the cap is the group's QOS MaxTRESPU CPU limit, which is account-specific and set in a site override; exclude_nodes empty, a site lists nodes it has found broken.
+slurm: workers are Slurm jobs submitted per resource class. qos_cpu_cap null: the cap is the group's QOS MaxTRESPU CPU limit, which is account-specific and set in a site override; exclude_nodes empty, a site lists nodes it has found broken. start_backoff_first_s 1 and start_backoff_max_s 30: the wait after a class's first failed start, or after a failure of a Slurm command, doubling per failure in a row up to the maximum; the scaler does not use the substrate until it has passed, and past faults.infrastructure_replacements failures in a row the substrate is broken for the epoch. Not measured: the values the pool used before the keys existed, when it took this wait from pool.first_poll_s and pool.poll_s; the basis to measure is the site's submit-to-ready latency and how long a controller outage lasts. commands.timeout_s 60, commands.attempts 3, commands.retry_first_s 0.5: one Slurm command may take a minute, is tried three times, and waits half a second, then a second, between tries. Not measured: the constants the substrate carried before (SLURM_TIMEOUT_S, SLURM_TRIES, retry_s); the basis to measure is the p99 latency of sbatch and squeue on the site and the controller's failure rate. A submission is idempotent under these settings: each intended worker's job carries a name of its own, and after a try that fails or times out the name is looked up with squeue before the next try, so a try whose job was queued is never submitted again.
 
 ### orcd.pool
 
