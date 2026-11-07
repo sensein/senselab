@@ -463,8 +463,13 @@ def test_coordinate_runs_a_plan_on_the_pool_as_the_next_epoch(tmp_path: Path) ->
 
 @pytest.mark.contract
 def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(tmp_path: Path) -> None:
-    """An older coordinator whose env breaks after a newer epoch was taken stops; no hold of its epoch counts."""
+    """An older coordinator whose env breaks after a newer epoch was taken stops; no hold of its epoch counts.
+
+    Its epoch read is reused for `first_poll_s`, set here to the longest poll, so its poll sees no newer epoch and the
+    break itself must find it.
+    """
     profile = _profile(content_attempts=2, infrastructure_replacements=1, resource_replacements=0)
+    profile = profile.model_copy(update={"pool": profile.pool.model_copy(update={"first_poll_s": profile.pool.poll_s})})
     placed, values, store, workers = _stack(tmp_path, profile, ["one", "two"])
     stale = _pool(tmp_path, store, _Idle(), profile)
     early = stale.submit(node_fragment(placed, stale.admit(placed, values), elements=[(0,)]))

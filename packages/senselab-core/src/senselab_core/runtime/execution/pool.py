@@ -550,7 +550,8 @@ class Pool:
     def _infrastructure(self, flight: _Flight, job: JobRef, key: str, fault: FaultRecord) -> bool:
         """Count an infrastructure fault of `flight`'s env this epoch; return False once the env is broken and held.
 
-        A broken env is held on `flight`'s queue (each queue it is seen on), after the fence.
+        The epoch is read afresh before the env is reported broken, so a stale coordinator reports nothing; a broken
+        env is held on `flight`'s queue (each queue it is seen on).
 
         Raises:
             StaleCoordinator: a newer epoch was taken.
@@ -563,10 +564,11 @@ class Pool:
                 failures += 1
                 if failures < budget:
                     return True
+        self._fence()
+        with self._lock:
             reported = env in self.broken
             if not reported:
                 self.broken[env] = BrokenEnv(env=env, fault=fault, failures=failures)
-        self._fence()
         self.queues.queue(flight.queue).hold(self.epoch, env)
         if not reported:
             logger.error("env %s is broken after %d infrastructure faults; it is held", env, failures)
