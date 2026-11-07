@@ -27,7 +27,6 @@ class ResourceClass(Frozen):
         gres: The scheduler's generic-resource request, such as `gpu:h100:1`; None for none.
         max_workers: Workers of the class alive at once.
         memory_cap_bytes: The static memory the models resident at once on one worker may hold; None for no cap.
-        batch_size: The most items of one node a worker of the class is sent per request (`form_batches`).
     """
 
     device: Literal["cpu", "cuda", "mps"]
@@ -39,7 +38,6 @@ class ResourceClass(Frozen):
     gres: NonEmptyStr | None = None
     max_workers: PositiveInt
     memory_cap_bytes: PositiveInt | None = None
-    batch_size: PositiveInt
 
     @model_validator(mode="after")
     def _check_gpu(self) -> "ResourceClass":
@@ -93,10 +91,11 @@ class SubstrateSpec(Frozen):
 
 
 class PoolSettings(Frozen):
-    """How pool workers claim and yield, and how a coordinator polls: the quantum, the polls and the index segment.
+    """How pool workers claim and yield, and how a coordinator polls: the quantum ceilings, the polls and the segment.
 
-    `poll_s` is a worker's empty-queue poll and the longest wait between a coordinator's reads of an outcome, which
-    start at `first_poll_s` and double.
+    `quantum_items` and `quantum_s` bound the quantum `size` derives; a worker stays on a class for at most that many
+    jobs or seconds. `poll_s` is a worker's empty-queue poll and the longest wait between a coordinator's reads of an
+    outcome, which start at `first_poll_s` and double.
     """
 
     quantum_items: PositiveInt
@@ -104,6 +103,23 @@ class PoolSettings(Frozen):
     poll_s: PositiveSeconds
     first_poll_s: PositiveSeconds
     segment_items: PositiveInt
+
+
+class SizingSettings(Frozen):
+    """The fractions and targets `size` derives a unit's batch, quantum and worker count from.
+
+    Attributes:
+        load_share: The largest share of a quantum's time its model load may take.
+        memory_headroom: The share of a worker's memory a batch may fill.
+        target_wall_s: The wall time the workers of one queue aim to finish its waiting work in.
+        calibration_items: The one-job items a unit without a measure runs first on one worker; the first carries
+            the model load and the rest give the median per item.
+    """
+
+    load_share: Annotated[float, Field(gt=0, lt=1)]
+    memory_headroom: Annotated[float, Field(gt=0, le=1)]
+    target_wall_s: PositiveSeconds
+    calibration_items: Annotated[int, Field(ge=2)]
 
 
 class LeaseBoundError(ValueError):

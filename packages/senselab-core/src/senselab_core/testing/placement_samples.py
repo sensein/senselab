@@ -11,18 +11,22 @@ from senselab_core.runtime.execution_settings import (
     PoolSettings,
     ResourceClass,
     ServiceSettings,
+    SizingSettings,
     SlurmCommands,
     SubstrateSpec,
     SupervisorSettings,
     Timeouts,
 )
 from senselab_core.runtime.resources import Measured, ResourceMeasure, ResourceRow, ResourceTable
+from senselab_core.runtime.sizing import Grant, Measure, Sample, Sizing
 
 Register = Callable[..., None]
 
 _COMMIT = "0" * 40
 _MEASURED = Measured(sha="1" * 40, jobs=("100", "101"))
-_MEASURE = ResourceMeasure(load_s=2.5, peak_memory_bytes=4096, s_per_input_s=0.1)
+_MEASURE = ResourceMeasure(
+    load_s=2.5, resident_bytes=1024, peak_memory_bytes=4096, s_per_input_s=0.1, input_s_per_item=8.0
+)
 
 
 def resource_table(task: str, backend: str, model_id: str | None, revision: str | None = _COMMIT) -> ResourceTable:
@@ -58,6 +62,7 @@ def register_placement_samples(register: Register, license_: License) -> None:
     _register_kernel(register, license_)
     _register_resources(register)
     _register_settings(register)
+    _register_sizing(register)
 
 
 def _register_kernel(register: Register, license_: License) -> None:
@@ -93,13 +98,21 @@ def _register_kernel(register: Register, license_: License) -> None:
 def _register_resources(register: Register) -> None:
     register(
         ResourceMeasure,
-        lambda: [_MEASURE, ResourceMeasure(load_s=0, peak_memory_bytes=1, s_per_input_s=0)],
-        invalid_updates=[{"peak_memory_bytes": 0}, {"load_s": -1.0}],
+        lambda: [
+            _MEASURE,
+            ResourceMeasure(load_s=0, resident_bytes=0, peak_memory_bytes=1, s_per_input_s=0, input_s_per_item=None),
+        ],
+        invalid_updates=[
+            {"peak_memory_bytes": 0},
+            {"load_s": -1.0},
+            {"resident_bytes": 8192},
+            {"input_s_per_item": 0.0},
+        ],
     )
     register(
         Measured,
-        lambda: [_MEASURED, Measured(sha="2" * 40, jobs=())],
-        invalid_updates=[{"sha": "main"}, {"jobs": ("",)}],
+        lambda: [_MEASURED, Measured(sha=None, run="0a" * 32, jobs=("host:1",))],
+        invalid_updates=[{"sha": "main"}, {"jobs": ("",)}, {"jobs": ()}],
     )
     rows: Sequence[ResourceRow] = (
         resource_table("t", "b", "org/m").rows[0],
@@ -121,7 +134,7 @@ def _register_settings(register: Register) -> None:
     classes: Mapping[type[Frozen], tuple[Sequence[Frozen], Sequence[Mapping[str, object]]]] = {
         ResourceClass: (
             [
-                ResourceClass(device="cpu", max_workers=1, batch_size=1),
+                ResourceClass(device="cpu", max_workers=1),
                 ResourceClass(
                     device="cuda",
                     gpu_type="h100",
@@ -131,11 +144,10 @@ def _register_settings(register: Register) -> None:
                     partition="${GPU_PARTITION}",
                     gres="gpu:h100:1",
                     max_workers=4,
-                    batch_size=1,
                     memory_cap_bytes=2**36,
                 ),
             ],
-            [{"max_workers": 0}, {"batch_size": 0}, {"gpu_type": "h100", "device": "cpu"}, {"device": "tpu"}],
+            [{"max_workers": 0}, {"gpu_type": "h100", "device": "cpu"}, {"device": "tpu"}],
         ),
         SubstrateSpec: (
             [
@@ -190,6 +202,50 @@ def _register_settings(register: Register) -> None:
             [{"start_time_probe_s": 0}, {"start_time_probe_s": float("inf")}],
         ),
         ServiceSettings: ([ServiceSettings(idle_exit_s=600), ServiceSettings(idle_exit_s=1.5)], [{"idle_exit_s": 0}]),
+    }
+    for cls, (samples, invalid) in classes.items():
+        register(cls, lambda samples=samples: list(samples), invalid_updates=invalid)
+
+
+def _register_sizing(register: Register) -> None:
+    classes: Mapping[type[Frozen], tuple[Sequence[Frozen], Sequence[Mapping[str, object]]]] = {
+        SizingSettings: (
+            [
+                SizingSettings(load_share=0.05, memory_headroom=0.9, target_wall_s=1800, calibration_items=4),
+                SizingSettings(load_share=0.5, memory_headroom=1.0, target_wall_s=0.5, calibration_items=2),
+            ],
+            [{"load_share": 1.0}, {"memory_headroom": 0}, {"target_wall_s": 0}, {"calibration_items": 1}],
+        ),
+        Measure: (
+            [
+                Measure(load_s=2.5, resident_bytes=1024, bytes_per_item=256, s_per_item=0.5),
+                Measure(load_s=0, resident_bytes=0, bytes_per_item=0, s_per_item=0),
+            ],
+            [{"load_s": -1.0}, {"bytes_per_item": -1}],
+        ),
+        Grant: (
+            [
+                Grant(max_workers=4, memory_bytes=2**36, quantum_items=100, quantum_s=300),
+                Grant(max_workers=1, memory_bytes=None, quantum_items=1, quantum_s=0.5),
+            ],
+            [{"max_workers": 0}, {"memory_bytes": 0}, {"quantum_s": 0}],
+        ),
+        Sizing: (
+            [
+                Sizing(batch_size=8, quantum_items=50, quantum_s=27.5, workers=4),
+                Sizing(batch_size=1, quantum_items=1, quantum_s=0, workers=0),
+            ],
+            [{"batch_size": 0}, {"workers": -1}],
+        ),
+        Sample: (
+            [
+                Sample(
+                    wall_s=3.0, jobs=1, input_s=8.0, baseline_bytes=1024, peak_memory_bytes=4096, cold=True, job="7"
+                ),
+                Sample(wall_s=0, jobs=2, input_s=None, baseline_bytes=0, peak_memory_bytes=1, cold=False, job="h:1"),
+            ],
+            [{"jobs": 0}, {"peak_memory_bytes": 0}, {"job": ""}],
+        ),
     }
     for cls, (samples, invalid) in classes.items():
         register(cls, lambda samples=samples: list(samples), invalid_updates=invalid)

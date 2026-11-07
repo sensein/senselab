@@ -949,7 +949,7 @@ def test_two_profiles_in_one_process_load_one_model_once(store: ResultStore) -> 
     small = _profile(stack_preferences={fake.ECHO.name: ["counting"]})
     large = _profile(
         stack_preferences={fake.ECHO.name: ["counting"]},
-        resource_classes={"gpu": {"device": "cuda", "max_workers": 9, "batch_size": 1}},
+        resource_classes={"gpu": {"device": "cuda", "max_workers": 9}},
     )
     workers = process_workers(small)
     assert process_workers(large) is workers

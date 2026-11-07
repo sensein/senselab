@@ -959,7 +959,7 @@ def _register_runtime_samples() -> None:
             {"network": "maybe"},
             {"devices": ("tpu",)},
             {"format": "execution-profile@3.0"},
-            {"resource_classes": {"gpu:h100": ResourceClass(device="cpu", max_workers=1, batch_size=1)}},
+            {"resource_classes": {"gpu:h100": ResourceClass(device="cpu", max_workers=1)}},
         ],
     )
     register_samples(

@@ -6,9 +6,9 @@ the class's partition, gres, CPUs, memory and time, named by plan hash, run, att
 never on an excluded node. A queue is named by its resource class, with `#<model identity>` for a resident model;
 every worker serves one queue.
 
-`scale` is called by the coordinator each round, with one `live()` listing: per queue, the workers wanted are the jobs
-waiting on the queue (`Queue.work`) over `pool.quantum_items`, within the class's `max_workers` and the QOS CPU cap over
-the class's CPUs per worker. A surplus is stopped, pending workers first, running ones only once the queue has no
+`scale` is called by the coordinator each round, with one `live()` listing: per queue, the workers its waiting jobs
+(`Queue.work`) want, as the coordinator sizes them, within the class's `max_workers` and the QOS CPU cap over the
+class's CPUs per worker. A surplus is stopped, pending workers first, running ones only once the queue has no
 unresolved item.
 
 A worker marks itself ready (`mark_ready`) once it can reach the run and its store. `Fleet` counts a worker that left
@@ -603,17 +603,18 @@ class Fleet:
         self.stop(alive)
 
 
-def scale(
+def scale(  # noqa: PLR0913 - the queues and substrate, then keyword-only sizing and surplus state
     queues: QueueSet,
     substrate: Substrate,
     profile: ExecutionProfile,
     *,
+    workers: Callable[[str, int], int],
     surplus_since: dict[str, float] | None = None,
     now: float | None = None,
 ) -> None:
     """Start or stop the workers each queue of `queues` needs, from one `live()` listing of `substrate`.
 
-    A queue wants `ceil(work / pool.quantum_items)` workers, `work` being the jobs of its unresolved items. Fewer alive
+    A queue wants `workers(name, work)` workers, `work` being the jobs of its unresolved items. Fewer alive
     start workers, within the room left in the class (`max_workers` less the workers alive on its queues) and, under a
     QOS cap, the CPUs left over the class's CPUs per worker. More alive stop the surplus, pending workers first; running
     ones are stopped only once the queue has no unresolved item, so none is working, and never on a service class,
@@ -637,7 +638,7 @@ def scale(
         if grant is None:
             continue
         work = queues.queue(name).work()
-        wanted = math.ceil(work / profile.pool.quantum_items)
+        wanted = workers(name, work)
         have = len(alive[name])
         if have > wanted:
             if surplus_since is not None:

@@ -2,12 +2,13 @@
 
 import contextlib
 import errno
+import math
 import os
 import stat
 import sys
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,7 @@ from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile, QosCapTooSmall
 from senselab_core.runtime.storage import StorageCapabilities, StorageUnsupported
 from senselab_core.runtime.store import ResultStore
+from senselab_core.testing.measures import CEILED_SIZING, FixedMeasures
 from syscall_faults_fixture import refuse_call
 
 SCORE = scoring("substrates_test.score")
@@ -57,7 +59,6 @@ CLASSES: dict[str, Any] = {
         "time_s": 3600,
         "partition": "${CPU_PARTITION}",
         "max_workers": 32,
-        "batch_size": 1,
     },
     "gpu:h100": {
         "device": "cuda",
@@ -68,7 +69,6 @@ CLASSES: dict[str, Any] = {
         "partition": "${GPU_PARTITION}",
         "gres": "gpu:h100:1",
         "max_workers": 4,
-        "batch_size": 1,
     },
 }
 
@@ -138,6 +138,7 @@ def _profile(**substrate: Any) -> ExecutionProfile:  # noqa: ANN401 - substrate 
         "resource_classes": CLASSES,
         "substrate": {"kind": kind, "commands": {"retry_first_s": 0.001}, **substrate},
         "pool": {"quantum_items": 1, "first_poll_s": 0.01, "poll_s": 0.2},
+        "sizing": CEILED_SIZING,
     }
     return ExecutionProfile.load("orcd", override)
 
@@ -221,6 +222,7 @@ def _queued(  # noqa: PLR0913 - the plan's shape, then where it is queued
             profile=profile,
             substrate=workers,
             epoch=epoch,
+            measures=FixedMeasures(),
         )
 
     pool = pool_over(recording)
@@ -249,9 +251,9 @@ def test_scale_bounded_by_qos_cap(tmp_path: Path, cap: int | None, depth: int, e
     _, pool, recording = _queued(profile, tmp_path, depth)
     recording.starts.clear()
     recording.handles.clear()
-    scale(pool.queues, recording, profile)
+    scale(pool.queues, recording, profile, workers=_per_quantum(profile))
     assert len(recording.handles) == expected
-    scale(pool.queues, recording, profile)
+    scale(pool.queues, recording, profile, workers=_per_quantum(profile))
     assert len(recording.handles) == expected
 
 
@@ -262,14 +264,19 @@ def test_scale_counts_workers_alive_and_a_quantum_of_items(tmp_path: Path) -> No
     _, pool, recording = _queued(profile, tmp_path, 5)
     recording.starts.clear()
     recording.handles = [WorkerHandle("cpu", "x")]
-    scale(pool.queues, recording, profile)
+    scale(pool.queues, recording, profile, workers=_per_quantum(profile))
     assert recording.starts == [("cpu", 2)]
-    scale(pool.queues, recording, profile)
+    scale(pool.queues, recording, profile, workers=_per_quantum(profile))
     assert recording.starts == [("cpu", 2)]
+
+
+def _per_quantum(profile: ExecutionProfile) -> Callable[[str, int], int]:
+    """A queue wants a worker per `pool.quantum_items` of its waiting jobs."""
+    return lambda _, work: math.ceil(work / profile.pool.quantum_items)
 
 
 def _override() -> dict[str, Any]:
-    return {"devices": ["cpu"], "resource_classes": CLASSES, "substrate": {"kind": "slurm"}}
+    return {"devices": ["cpu"], "resource_classes": CLASSES, "substrate": {"kind": "slurm"}, "sizing": CEILED_SIZING}
 
 
 @pytest.mark.logic
@@ -416,6 +423,7 @@ def test_a_pool_names_its_slurm_jobs_by_its_attempt(tmp_path: Path) -> None:
         profile=profile,
         substrate=slurm,
         epoch=0,
+        measures=FixedMeasures(),
     )
     pool.bind_epoch(3, EventLog(run_dir, "attempt-3", 3, epoch=3))
     assert slurm.job_name("t") == f"{slurm.prefix}attempt-3-t-e3"
@@ -482,7 +490,7 @@ def test_local_pool_runs_toy_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         "laptop",
         {
             "devices": ["cpu"],
-            "resource_classes": {"cpu": {"device": "cpu", "max_workers": 2, "batch_size": 1}},
+            "resource_classes": {"cpu": {"device": "cpu", "max_workers": 2}},
             "pool": {"quantum_items": 1, "poll_s": 0.2, "first_poll_s": 0.02},
         },
     )
@@ -509,7 +517,7 @@ def _worker_profile(**faults: int) -> ExecutionProfile:
         "laptop",
         {
             "devices": ["cpu"],
-            "resource_classes": {"cpu": {"device": "cpu", "max_workers": 2, "batch_size": 1}},
+            "resource_classes": {"cpu": {"device": "cpu", "max_workers": 2}},
             "pool": {"quantum_items": 1, "first_poll_s": 0.01, "poll_s": 0.2},
             "faults": {"infrastructure_replacements": 2, **faults},
         },
@@ -543,7 +551,7 @@ def test_a_worker_that_exits_at_once_makes_a_bounded_number_of_starts(tmp_path: 
     local = Local(2, command=[sys.executable, "-c", "raise SystemExit(1)"])
     fleet = Fleet(local, workers_dir=tmp_path / "run" / "workers", budget=2, first_s=0.0, max_s=0.0)
     for _ in range(40):
-        scale(pool.queues, fleet, profile)
+        scale(pool.queues, fleet, profile, workers=_per_quantum(profile))
         time.sleep(0.1)
     assert fleet.starts["cpu"] == 3 and fleet.broken["cpu"].failures == 3
 
@@ -616,15 +624,15 @@ def test_pending_surplus_is_cancelled_first_and_running_ones_only_when_drained(t
     _, pool, recording = _queued(profile, tmp_path, 1)
     recording.handles = [WorkerHandle("cpu", "p1", True), WorkerHandle("cpu", "r1"), WorkerHandle("cpu", "p2", True)]
     since: dict[str, float] = {}
-    scale(pool.queues, recording, profile, surplus_since=since, now=0.0)
+    scale(pool.queues, recording, profile, workers=_per_quantum(profile), surplus_since=since, now=0.0)
     assert recording.stops == [] and since == {"cpu": 0.0}
-    scale(pool.queues, recording, profile, surplus_since=since, now=10.0)
+    scale(pool.queues, recording, profile, workers=_per_quantum(profile), surplus_since=since, now=10.0)
     assert {h.id for h in recording.stops} == {"p1", "p2"} and [h.id for h in recording.handles] == ["r1"]
     empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile)
     empty.queue("cpu")
     recording.handles = [WorkerHandle("cpu", "r1"), WorkerHandle("cpu", "p3", True)]
     recording.stops.clear()
-    scale(empty, recording, profile)
+    scale(empty, recording, profile, workers=_per_quantum(profile))
     assert [h.id for h in recording.stops] == ["p3", "r1"] and recording.handles == []
 
 
@@ -633,14 +641,14 @@ def test_an_empty_service_queue_never_stops_its_running_worker(tmp_path: Path) -
     """A `svc` queue with nothing waiting stops its pending workers only; the running one exits on its own."""
     classes = {
         **CLASSES,
-        "svc:pii": {"device": "cpu", "cpus": 1, "partition": "${CPU_PARTITION}", "max_workers": 1, "batch_size": 1},
+        "svc:pii": {"device": "cpu", "cpus": 1, "partition": "${CPU_PARTITION}", "max_workers": 1},
     }
     profile = ExecutionProfile.load("orcd", {"devices": ["cpu"], "resource_classes": classes})
     empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile)
     empty.queue("svc:pii")
     recording = Recording()
     recording.handles = [WorkerHandle("svc:pii", "r1"), WorkerHandle("svc:pii", "p1", True)]
-    scale(empty, recording, profile)
+    scale(empty, recording, profile, workers=_per_quantum(profile))
     assert [h.id for h in recording.stops] == ["p1"] and [h.id for h in recording.handles] == ["r1"]
 
 
@@ -672,7 +680,7 @@ def test_one_squeue_serves_a_scale_round(tmp_path: Path) -> None:
     _, pool, _ = _queued(profile, tmp_path, 3, substrate=_fleet(slurm, profile))
     log = tmp_path / "slurm" / "squeue.log"
     log.unlink(missing_ok=True)
-    scale(pool.queues, _fleet(slurm, profile), profile)
+    scale(pool.queues, _fleet(slurm, profile), profile, workers=_per_quantum(profile))
     assert len(log.read_text().splitlines()) == 1 and slurm.running("cpu") >= 1
     assert len(log.read_text().splitlines()) == 1
 
@@ -702,7 +710,7 @@ def test_pending_jobs_scale_to_max_workers_and_a_failure_switches_the_cap_on(tmp
     recording.handles.clear()
     fleet = Fleet(recording, workers_dir=None, budget=2, first_s=0.0, max_s=0.0)
     for _ in range(8):
-        scale(pool.queues, fleet, profile)
+        scale(pool.queues, fleet, profile, workers=_per_quantum(profile))
     assert len(recording.handles) == 32
     capped = Fleet(Recording(), workers_dir=None, budget=2, first_s=0.0, max_s=0.0)
     capped.substrate.live = lambda: []  # type: ignore[method-assign]

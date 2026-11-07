@@ -25,7 +25,7 @@ retry:
   first_backoff_s: 1.0
 # online, or offline to forbid any fetch.
 network: online
-# The worker classes nodes are placed on, by name, each with its grant, caps and items per request.
+# The worker classes nodes are placed on, by name, each with its grant and caps.
 resource_classes:
   cpu:
     device: cpu
@@ -34,7 +34,6 @@ resource_classes:
     time_s: 21600
     partition: ${CPU_PARTITION}
     max_workers: 32
-    batch_size: 1
   cpu:large:
     device: cpu
     cpus: 8
@@ -42,7 +41,6 @@ resource_classes:
     time_s: 21600
     partition: ${CPU_PARTITION}
     max_workers: 8
-    batch_size: 1
   gpu:h100:
     device: cuda
     gpu_type: h100
@@ -53,7 +51,6 @@ resource_classes:
     gres: gpu:h100:1
     max_workers: 4
     memory_cap_bytes: 85899345920
-    batch_size: 1
   gpu:
     device: cuda
     cpus: 8
@@ -62,7 +59,6 @@ resource_classes:
     partition: ${GPU_PARTITION}
     gres: gpu:1
     max_workers: 4
-    batch_size: 1
 # What starts pool workers; the first and longest wait after a failed start; each Slurm command's timeout,
 # tries and first retry wait.
 substrate:
@@ -75,13 +71,21 @@ substrate:
     timeout_s: 60
     attempts: 3
     retry_first_s: 0.5
-# How pool workers claim, yield, poll and roll index segments, and how often a coordinator first reads an outcome.
+# The quantum ceilings, how pool workers poll and roll index segments, and how often a coordinator first reads an outcome.
 pool:
   quantum_items: 100
   quantum_s: 300
   poll_s: 30
   first_poll_s: 1
   segment_items: 512
+# The fractions and targets each unit's batch, quantum and worker count are derived from: the load's largest share of a
+# quantum, the share of a worker's memory a batch fills, the wall time a queue's work aims to end in, and the one-job
+# items a unit without a measure runs first.
+sizing:
+  load_share: 0.05
+  memory_headroom: 0.9
+  target_wall_s: 1800
+  calibration_items: 4
 # Every lease: seconds after which another process breaks it, the share of that between beats, and the
 # storage's attribute delay; load refuses 2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.
 lease:

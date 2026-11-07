@@ -19,6 +19,7 @@ from senselab_core.runtime.profiles import (
     UnlistedSource,
     resolve_execution,
 )
+from senselab_core.runtime.resources import Measured, ResourceMeasure, ResourceRow, ResourceTable
 from senselab_core.testing.contracts import BASE, base_call
 
 TASK = TaskSpec(
@@ -110,17 +111,33 @@ def test_profile_digest_not_in_key() -> None:
 
 
 @pytest.mark.logic
-def test_batch_size_is_the_resource_classs_and_not_in_key() -> None:
-    """The placed class's `batch_size` reaches the placement and its record, never the key; it defaults to one."""
+def test_batch_size_is_sized_from_the_measure_and_not_in_key() -> None:
+    """The batch fills the memory headroom beside the resident model; 1 unmeasured or unknown; never in the key."""
     registry = _registry(_backend("b1", "one"))
-    cpu = ExecutionProfile.load("laptop").resource_classes["cpu"].model_dump()
-    sized = _profile(resource_classes={"cpu": {**cpu, "batch_size": 3}})
-    placements = [resolve_execution(TASK, _entry(), p, NO_GPU, registry, CAT) for p in (_profile(), sized)]
-    assert [(p.batch_size, p.record().batch_size) for p in placements] == [(1, 1), (3, 3)]
+    measure = ResourceMeasure(
+        load_s=2.5, resident_bytes=1024, peak_memory_bytes=1280, s_per_input_s=0.1, input_s_per_item=5.0
+    )
+    row = ResourceRow(
+        id="org/m",
+        revision="a" * 40,
+        download_bytes=None,
+        classes={"cpu": measure},
+        measured=Measured(sha="1" * 40, jobs=("1",)),
+    )
+    measured = Catalogue(entries=CAT.entries, resource_tables=(ResourceTable(task="t", backend="b1", rows=(row,)),))
+    host = HardwareInfo(cpu_count=1, memory_bytes=10_000, gpus=(), apple_silicon=False, platform="linux-x86_64")
+    placements = [
+        resolve_execution(TASK, _entry(), _profile(), host, registry, CAT),
+        resolve_execution(TASK, _entry(), _profile(), host, registry, measured),
+        resolve_execution(TASK, _entry(), _profile(), None, registry, measured),
+    ]
+    batch = placements[1].batch_size
+    room = _profile().sizing.memory_headroom * host.memory_bytes - measure.resident_bytes
+    per_item = measure.peak_memory_bytes - measure.resident_bytes
+    assert batch * per_item <= room < (batch + 1) * per_item
+    assert [p.batch_size for p in placements] == [1, batch, 1] and placements[1].record().batch_size == batch > 1
     call, _ = base_call(TASK, placements[0].backend)
     assert len({build_key(call, p, BASE).digest() for p in placements}) == 1
-    with pytest.raises(ValueError, match="batch_size"):
-        _profile(resource_classes={"cpu": {**cpu, "batch_size": 0}})
 
 
 @pytest.mark.logic
@@ -251,7 +268,7 @@ def test_resource_class_follows_device_order_and_host() -> None:
 def test_resource_class_names_match_their_device() -> None:
     """A class named for one device but declaring another is refused, as is a misspelt class key."""
     with pytest.raises(ValueError, match="not named for their device"):
-        _profile(resource_classes={"gpu:h100": {"device": "cuda", "max_workers": 1, "batch_size": 1}})
+        _profile(resource_classes={"gpu:h100": {"device": "cuda", "max_workers": 1}})
     with pytest.raises(UnknownProfileKey, match="resource_classes.cpu.max_worker.*did you mean 'max_workers'"):
         _profile(resource_classes={"cpu": {"max_worker": 2}})
     with pytest.raises(UnknownProfileKey, match="'pool.quantum'"):

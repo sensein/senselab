@@ -25,32 +25,37 @@ retry:
   first_backoff_s: 1.0
 # online, or offline to forbid any fetch.
 network: online
-# The worker classes nodes are placed on, by name, each with its grant, caps and items per request.
+# The worker classes nodes are placed on, by name, each with its grant and caps.
 resource_classes:
   cpu:
     device: cpu
     max_workers: 1
-    batch_size: 1
   mps:
     device: mps
     max_workers: 1
-    batch_size: 1
   gpu:
     device: cuda
     max_workers: 1
-    batch_size: 1
 # What starts pool workers; the first and longest wait after a failed start.
 substrate:
   kind: local
   start_backoff_first_s: 0.05
   start_backoff_max_s: 30
-# How pool workers claim, yield, poll and roll index segments, and how often a coordinator first reads an outcome.
+# The quantum ceilings, how pool workers poll and roll index segments, and how often a coordinator first reads an outcome.
 pool:
   quantum_items: 100
   quantum_s: 300
   poll_s: 30
   first_poll_s: 0.05
   segment_items: 512
+# The fractions and targets each unit's batch, quantum and worker count are derived from: the load's largest share of a
+# quantum, the share of a worker's memory a batch fills, the wall time a queue's work aims to end in, and the one-job
+# items a unit without a measure runs first.
+sizing:
+  load_share: 0.05
+  memory_headroom: 0.9
+  target_wall_s: 1800
+  calibration_items: 4
 # Every lease: seconds after which another process breaks it, the share of that between beats, and the
 # storage's attribute delay; load refuses 2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.
 lease:

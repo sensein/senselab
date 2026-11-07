@@ -1,7 +1,8 @@
-"""`Pool.submit` queues a fragment as items of at most `pool.quantum_items` jobs, and `results` joins them."""
+"""`Pool.submit` queues a fragment as items of its sized quantum of jobs, and `results` joins them."""
 
 import asyncio
 import contextlib
+import math
 import os
 import threading
 import time
@@ -30,7 +31,9 @@ from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.keys import request_size
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.store import ResultStore
+from senselab_core.testing.measures import CEILED_SIZING, FixedMeasures
 
 SCORE = scoring("pool_split_test.score")
 CHAIN = SCORE.model_copy(update={"name": "pool_split_test.chain", "inputs": {"value": "sha256"}})
@@ -60,14 +63,14 @@ def _profile(quantum: int = 10, cap: int | None = None, **faults: int) -> Execut
         "mem_bytes": 2**33,
         "time_s": 3600,
         "max_workers": 32,
-        "batch_size": 1,
         "partition": "cpuq",
     }
     override: dict[str, Any] = {
         "devices": ["cpu"],
-        "resource_classes": {"cpu": cpu, "cpu:large": {**cpu, "mem_bytes": 2**34, "max_workers": 2, "batch_size": 1}},
+        "resource_classes": {"cpu": cpu, "cpu:large": {**cpu, "mem_bytes": 2**34, "max_workers": 2}},
         "substrate": {"kind": "slurm", "qos_cpu_cap": cap},
         "pool": {"quantum_items": quantum, "first_poll_s": 0.01, "poll_s": 0.2},
+        "sizing": CEILED_SIZING,
         "faults": {"content_attempts": 1, **faults},
     }
     return ExecutionProfile.load("orcd", override)
@@ -108,7 +111,9 @@ def stack(tmp_path: Path) -> Iterator[None]:
     WORKERS.close()
 
 
-def _pool(tmp_path: Path, profile: ExecutionProfile, substrate: Recording | None = None) -> Pool:
+def _pool(
+    tmp_path: Path, profile: ExecutionProfile, substrate: Recording | None = None, measures: FixedMeasures | None = None
+) -> Pool:
     run_dir = tmp_path / "run"
     epochs = Epoch(run_dir)
     epoch = epochs.take()
@@ -120,6 +125,7 @@ def _pool(tmp_path: Path, profile: ExecutionProfile, substrate: Recording | None
         profile=profile,
         substrate=substrate if substrate is not None else Recording(),
         epoch=epoch,
+        measures=measures if measures is not None else FixedMeasures(),
     )
 
 
@@ -167,6 +173,43 @@ def test_a_fragment_of_200_jobs_is_queued_as_20_items_of_10(tmp_path: Path) -> N
     assert all(f.placement == fragment.placement for f in items)
 
 
+@pytest.mark.logic
+def test_an_unmeasured_unit_calibrates_on_one_worker_and_its_samples_size_the_rest(tmp_path: Path) -> None:
+    """Four one-job items run first for one worker, the rest held; their samples are recorded and size the rest."""
+    profile, measures = _profile(quantum=100), FixedMeasures(None)
+    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(10)])
+    pool = _pool(tmp_path, profile, measures=measures)
+    admission = pool.admit(placed, values)
+    first = pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(6)]))
+    pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(6, 10)]))
+    queue = pool.queues.queue("cpu")
+    assert queue.work() == profile.sizing.calibration_items == 4 and pool.workers_wanted("cpu", 4) == 1
+    for index, claim in enumerate(_claim_all(queue)):
+        with claim:
+            [item] = claim.fragments
+            cold = index == 0
+            sample = Sample(
+                wall_s=4.5 if cold else 4.0,
+                jobs=1,
+                input_s=None,
+                baseline_bytes=10,
+                peak_memory_bytes=20,
+                cold=cold,
+                job="7",
+            )
+            report(claim, claim.items[0], _executed(placed, values, pool.store, item), sample)
+    results, done = pool.poll(first)
+    [(unit, measure, measured)] = measures.puts
+    assert len(results) == 4 and not done and (unit.task, unit.resource_class) == (SCORE.name, "cpu")
+    assert (measure.load_s, measure.s_per_input_s, measure.peak_memory_bytes) == (0.5, 4.0, 20)
+    assert measured.sha is None and measured.jobs == ("7",)
+    quantum = math.ceil(0.5 / (profile.sizing.load_share * 4.0))
+    assert [len(c.fragments[0].jobs) for c in _claim_all(queue)] == [2, quantum, 4 - quantum]
+    assert pool.workers_wanted("cpu", 6) == min(
+        math.ceil(6 * 4.0 / profile.sizing.target_wall_s), math.ceil(6 / quantum)
+    )
+
+
 @pytest.mark.parametrize(("cap", "expected"), [(None, 20), (16, 4)], ids=["class-max", "qos-cap"])
 @pytest.mark.logic
 def test_scale_wants_a_worker_per_quantum_of_jobs(tmp_path: Path, cap: int | None, expected: int) -> None:
@@ -177,7 +220,7 @@ def test_scale_wants_a_worker_per_quantum_of_jobs(tmp_path: Path, cap: int | Non
     pool.submit(fragment)
     pool.close()
     recording.handles.clear()
-    scale(pool.queues, recording, profile)
+    scale(pool.queues, recording, profile, workers=pool.workers_wanted)
     assert len(recording.handles) == expected
 
 
@@ -293,7 +336,7 @@ def _serve_by_item(pool: Pool, placed: Plan, values: Mapping[InputIdentity, obje
 
 @pytest.mark.contract
 def test_a_resource_fault_moves_only_its_items_jobs(tmp_path: Path) -> None:
-    """The first item's jobs move to `cpu:large` one by one; the second item's jobs are yielded where they ran."""
+    """The first item's jobs move to `cpu:large` one by one, its unit's per-item memory doubled; the second's yield."""
     placed, values, pool, fragment = _submitted(tmp_path, _profile(quantum=2, resource_replacements=1), 4)
     handle = pool.submit(fragment)
     _serve_by_item(pool, placed, values, OOM)
@@ -303,6 +346,8 @@ def test_a_resource_fault_moves_only_its_items_jobs(tmp_path: Path) -> None:
     moved = _claim_all(pool.queues.queue("cpu:large"))
     assert [c.fragments[0].jobs for c in moved] == [fragment.jobs[:1], fragment.jobs[1:2]]
     assert pool.queues.queue("cpu").work() == 0
+    assert isinstance(pool.measures, FixedMeasures)
+    assert [(u.resource_class, m.peak_memory_bytes, d.jobs) for u, m, d in pool.measures.puts] == [("cpu", 2, ("w",))]
     for claim in moved:
         with claim:
             report(claim, claim.items[0], _executed(placed, values, pool.store, claim.fragments[0]))

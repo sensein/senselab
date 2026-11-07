@@ -183,11 +183,12 @@ def plan_cost(
     """Return the plan's cost from the measured resource tables over `input_s` seconds of input per node.
 
     A node's wall time is its load plus `s_per_input_s` times `input_s`; GPU hours are the wall time of nodes on a
-    `cuda` class; download bytes sum once per model. A figure is None when any node or model is unmeasured, and wall
-    time and GPU hours are None when `input_s` is None; nothing is estimated.
+    `cuda` class; download bytes sum once per model. A figure is None when any node or model is unmeasured, download
+    bytes also when a row leaves them unmeasured, and wall time and GPU hours when `input_s` is None; nothing is
+    estimated.
     """
     unmeasured: set[str] = set()
-    downloads: dict[tuple[str, str | None], int] = {}
+    downloads: dict[tuple[str, str | None], int | None] = {}
     wall, gpu = 0.0, 0.0
     for node_id, placement in placed.items():
         model = plan.models[node_id]
@@ -204,6 +205,6 @@ def plan_cost(
     return Cost(
         wall_s=wall if timed else None,
         gpu_hours=gpu if timed else None,
-        download_bytes=None if unmeasured else sum(downloads.values()),
+        download_bytes=None if unmeasured or None in downloads.values() else sum(d or 0 for d in downloads.values()),
         unmeasured=tuple(sorted(unmeasured)),
     )

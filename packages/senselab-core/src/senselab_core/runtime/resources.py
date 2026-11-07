@@ -1,14 +1,17 @@
 """Resource tables (`resource-table@1.0`): what one task and backend measured per model and resource class.
 
-A table is a generated file `data/resources/<task>/<backend>.yaml`; it is never hand-edited. Each row names the
-model by `(id, revision)` (both None for a backend without a model), its download size, and per resource class the
-seconds to load, the peak memory and the seconds per input second, with the commit and jobs that measured them.
+A table is a generated file `<root>/<task>/<backend>.yaml`, never hand-edited: packaged under `data/resources` by
+`scripts/generate_resources.py` from scale-ladder results, or written under the cache by a calibration round
+(`Measures.put`). Each row names the model by `(id, revision)` (both None for a backend without a model), its download
+size, and per resource class the seconds to load, the memory resident after it and at peak, the seconds per input
+second and the input seconds per item, with the run and jobs that measured them.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Annotated, ClassVar
+from typing import Annotated, ClassVar, Protocol
 
 from pydantic import AfterValidator, Field, PlainSerializer, StringConstraints, model_validator
 from senselab_worker.digest import COMMIT_HEX, SHA256_HEX
@@ -16,24 +19,42 @@ from senselab_worker.digest import COMMIT_HEX, SHA256_HEX
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, thawed
 from senselab_core.kernel.formats import RESOURCE_TABLE_FORMAT, FormatTag, Formatted
 from senselab_core.kernel.placement import ResourceClassName
-from senselab_core.runtime.config import load_yaml
+from senselab_core.runtime.config import dump_yaml, load_yaml
+from senselab_core.runtime.storage import write_atomically
 
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
 class ResourceMeasure(Frozen):
-    """One model on one resource class: seconds to load, peak memory in bytes, seconds per input second."""
+    """One model on one resource class at one item per request.
+
+    Attributes:
+        load_s: Seconds from a worker's start to its model loaded.
+        resident_bytes: Memory held once loaded, before any request.
+        peak_memory_bytes: The high-water memory over the measured requests.
+        s_per_input_s: Seconds of work per second of recording input; per item when `input_s_per_item` is None.
+        input_s_per_item: The median recording seconds of a measured item; None for items without a recording.
+    """
 
     load_s: Seconds
+    resident_bytes: Annotated[int, Field(ge=0)]
     peak_memory_bytes: Annotated[int, Field(gt=0)]
     s_per_input_s: Seconds
+    input_s_per_item: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None
+
+    @model_validator(mode="after")
+    def _check_memory(self) -> "ResourceMeasure":
+        if self.resident_bytes > self.peak_memory_bytes:
+            raise ValueError(f"resident {self.resident_bytes} bytes exceed the peak {self.peak_memory_bytes}")
+        return self
 
 
 class Measured(Frozen):
-    """Where a row was measured: the 40-hex commit run and the scheduler job ids."""
+    """Where a row was measured: the 40-hex commit run (None for a calibration round), the run and the job ids."""
 
-    sha: Annotated[str, StringConstraints(pattern=rf"^{COMMIT_HEX.pattern}$")]
-    jobs: tuple[NonEmptyStr, ...]
+    sha: Annotated[str, StringConstraints(pattern=rf"^{COMMIT_HEX.pattern}$")] | None
+    run: NonEmptyStr | None = None
+    jobs: tuple[NonEmptyStr, ...] = Field(min_length=1)
 
 
 def _frozen(v: Mapping[str, object]) -> Mapping[str, object]:
@@ -41,11 +62,11 @@ def _frozen(v: Mapping[str, object]) -> Mapping[str, object]:
 
 
 class ResourceRow(Frozen):
-    """One model's measures: its `(id, revision)`, download bytes, and a measure per resource class."""
+    """One model's measures: its `(id, revision)`, download bytes (None unmeasured) and a measure per resource class."""
 
     id: NonEmptyStr | None
     revision: NonEmptyStr | None
-    download_bytes: Annotated[int, Field(ge=0)]
+    download_bytes: Annotated[int, Field(ge=0)] | None
     classes: Annotated[Mapping[ResourceClassName, ResourceMeasure], AfterValidator(_frozen), PlainSerializer(thawed)]
     measured: Measured
 
@@ -100,3 +121,52 @@ def load_resource_tables(root: Traversable | Path) -> tuple[ResourceTable, ...]:
                 raise ValueError(f"{task_dir.name}/{file.name} holds the table of {table.task}/{table.backend}")
             tables.append(table)
     return tuple(tables)
+
+
+@dataclass(frozen=True)
+class Unit:
+    """What one measure is of: a task's backend, its model as `(id, revision)` (None without one), a resource class."""
+
+    task: str
+    backend: str
+    model_id: str | None
+    revision: str | None
+    resource_class: str
+
+
+class MeasureSource(Protocol):
+    """Where a unit's measure is read, and a calibration round's written."""
+
+    def get(self, unit: Unit) -> ResourceMeasure | None:
+        """Return the measure of `unit`, None when unmeasured."""
+
+    def put(self, unit: Unit, measure: ResourceMeasure, measured: Measured) -> None:
+        """Record `measure` of `unit`, measured as `measured`."""
+
+
+def write_row(root: Path, unit: Unit, measure: ResourceMeasure, measured: Measured) -> Path:
+    """Write `measure` of `unit` into the table `<root>/<task>/<backend>.yaml`; return the file.
+
+    The row of the unit's model keeps its other classes and download bytes; the file is replaced whole.
+    """
+    path = Path(root) / unit.task / f"{unit.backend}.yaml"
+    table = ResourceTable.model_validate(load_yaml(path, "resource table")) if path.is_file() else None
+    rows = list(table.rows) if table is not None else []
+    old = next((r for r in rows if (r.id, r.revision) == (unit.model_id, unit.revision)), None)
+    classes = {**(dict(old.classes) if old is not None else {}), unit.resource_class: measure}
+    row = ResourceRow(
+        id=unit.model_id,
+        revision=unit.revision,
+        download_bytes=None if old is None else old.download_bytes,
+        classes=classes,
+        measured=measured,
+    )
+    rows = [r for r in rows if r is not old] + [row]
+    doc = ResourceTable(task=unit.task, backend=unit.backend, rows=tuple(sorted(rows, key=_row_order)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_atomically(path, dump_yaml(doc.model_dump(mode="json")).encode())
+    return path
+
+
+def _row_order(row: ResourceRow) -> tuple[str, str]:
+    return (row.id or "", row.revision or "")

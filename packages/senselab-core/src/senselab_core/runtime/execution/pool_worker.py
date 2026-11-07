@@ -1,16 +1,16 @@
 """Pool workers: a host process serving a run's queues of some resource classes (`senselab execute --pool`).
 
-A pool worker claims items from the queue of the class whose oldest waiting item is oldest, logs each job `claimed`
-under the run's current epoch and attempt, runs the jobs through the process's `WorkerSet` (`execute`), and commits
-each item with one `ResultRef` per job (`report`); the `Pool` applies each failure's effect. It stays on a class for
-a quantum, `pool.quantum_items` jobs or `pool.quantum_s` seconds, and then claims from the class with the oldest
-work. While a claim runs, its leases are proven every renewal interval; an item whose lease was lost is not
-reported. A request that fails as a whole (`whole`) is split in halves within the claim until the failing job is
-alone, which is reported with that failure; an item that fails inside a request is reported as it failed. The worker
-exits once its queues have had nothing to claim for `IDLE_POLLS` polls of `pool.poll_s`, or on SIGTERM, after
+A pool worker claims one item at a time from the queue of the class whose oldest waiting item is oldest, logs each job
+`claimed` under the run's current epoch and attempt, runs the jobs through the process's `WorkerSet` (`execute`), and
+commits each item with one `ResultRef` per job and a `Sample` of what the item took (`report`); the `Pool` applies each
+failure's effect. It stays on a class for at most `pool.quantum_items` jobs or `pool.quantum_s` seconds, and then claims
+from the class with the oldest work. While a claim runs, its leases are proven every renewal interval; an item whose
+lease was lost is not reported. A request that fails as a whole (`whole`) is split in halves within the claim until the
+failing job is alone, which is reported with that failure; an item that fails inside a request is reported as it failed.
+The worker exits once its queues have had nothing to claim for `IDLE_POLLS` polls of `pool.poll_s`, or on SIGTERM, after
 committing the items that finished and releasing the rest. A worker of `svc:<id>` classes registers each server it
-starts (`services`); once it holds one, its queues being empty decide nothing: it exits when no consumer lease of
-any service it holds has been live for `services.idle_exit_s`, the jobs it runs itself counting as consumption.
+starts (`services`); once it holds one, its queues being empty decide nothing: it exits when no consumer lease of any
+service it holds has been live for `services.idle_exit_s`, the jobs it runs itself counting as consumption.
 """
 
 import contextlib
@@ -28,9 +28,11 @@ from pathlib import Path
 from typing import TypeAlias
 
 from senselab_worker.faults import FaultClass, ProtocolError, classify, error_record
+from senselab_worker.units import NS_PER_S
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.runtime.call import RunConfig
+from senselab_core.runtime.execution.batching import LengthUnrecorded, job_length_ns
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment
@@ -39,13 +41,21 @@ from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool import report, run_plan
 from senselab_core.runtime.execution.queue import Claim, QueueSet
 from senselab_core.runtime.execution.services import is_service_class, service_registry
-from senselab_core.runtime.execution.substrates import EXIT_UNREACHABLE, StoreUnreachable, class_of, mark_ready
+from senselab_core.runtime.execution.substrates import (
+    EXIT_UNREACHABLE,
+    StoreUnreachable,
+    class_of,
+    mark_ready,
+    worker_id,
+)
 from senselab_core.runtime.execution.supervisor import Supervisor
 from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.hardware import memory_bytes
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.storage import StorageUnsupported, probe_capabilities
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerFatal, WorkerLost
@@ -171,6 +181,8 @@ class PoolWorker:
         self._plans: dict[str, tuple[Plan, Mapping[InputIdentity, object]]] = {}
         self._finished: Finished = queue.SimpleQueue()
         self.join_s = join_s
+        self._baseline = memory_bytes()[0]
+        self._warm: set[str] = set()
 
     def halt(self) -> None:
         """Set `stop` and wake the wait for a running claim's outcomes; safe in a signal handler."""
@@ -215,12 +227,12 @@ class PoolWorker:
         return [n for _, n in sorted(ages, key=lambda a: -a[0])]
 
     def _next(self, prefer: str | None, left: int) -> Claim | None:
-        """Claim up to `left` jobs from `prefer`, else a quantum from the class with the oldest work; None if none."""
+        """Claim one item of up to `left` jobs from `prefer`, else from the class with the oldest work; None if none."""
         order = [prefer] if prefer is not None else []
         order += [n for n in self._by_age() if n != prefer]
         for name in order:
             size = left if name == prefer else self.profile.pool.quantum_items
-            claim = self.queues.queue(name).claim(self.name, max_jobs=max(size, 1))
+            claim = self.queues.queue(name).claim(self.name, max_items=1, max_jobs=max(size, 1))
             if claim is not None:
                 return claim
         return None
@@ -234,9 +246,11 @@ class PoolWorker:
         sent, and this returns only after the thread stopped. Once `stop` is set, the request is abandoned too, the
         thread is given `join_s`, and the items whose jobs finished by then are committed.
         """
+        began = time.monotonic()
         with claim:
             self._log_claimed(claim)
             groups, dead = self._groups(claim)
+            sample = self._sampler(claim, groups, began)
             for digest, failure in dead.items():
                 claim.dead(failure, [digest])
             pending = {d: len(f.jobs) for d, f in zip(claim.items, claim.fragments, strict=True)}
@@ -251,7 +265,7 @@ class PoolWorker:
                 with contextlib.suppress(queue.Empty):
                     batch = finished.get(timeout=interval)
                     running = batch is not None
-                    self._commit(claim, batch or [], outcomes, pending)
+                    self._commit(claim, batch or [], outcomes, pending, sample)
                 if not claim.renew():
                     logger.warning(
                         "pool worker %s lost a claim on queue %s; its request is abandoned", self.name, claim.queue.name
@@ -260,7 +274,34 @@ class PoolWorker:
                     break
             self._stop_runner(runner, cancelled)
             while not finished.empty():
-                self._commit(claim, finished.get_nowait() or [], outcomes, pending)
+                self._commit(claim, finished.get_nowait() or [], outcomes, pending, sample)
+        self._warm.add(claim.queue.name)
+
+    def _sampler(self, claim: Claim, groups: list["_Group"], began: float) -> Callable[[str], Sample]:
+        """Return what measures an item of `claim` once its jobs ran: wall time since `began`, inputs and memory."""
+        inputs: dict[str, float | None] = {}
+        for member in (m for g in groups for m in g.members):
+            try:
+                length = job_length_ns(member.job)
+            except LengthUnrecorded:
+                length = None
+            known = inputs.get(member.digest, 0.0)
+            inputs[member.digest] = None if length is None or known is None else known + length / NS_PER_S
+        cold = claim.queue.name not in self._warm
+
+        def sample(digest: str) -> Sample:
+            jobs = len(claim.fragments[claim.items.index(digest)].jobs)
+            return Sample(
+                wall_s=time.monotonic() - began,
+                jobs=jobs,
+                input_s=inputs.get(digest),
+                baseline_bytes=self._baseline,
+                peak_memory_bytes=max(1, memory_bytes()[1]),
+                cold=cold,
+                job=worker_id(),
+            )
+
+        return sample
 
     def _stop_runner(self, runner: threading.Thread, cancelled: threading.Event) -> None:
         """Abandon what `runner` still runs and wait for it: `join_s` once halted, else until it stops."""
@@ -283,8 +324,9 @@ class PoolWorker:
         batch: list[tuple[Member, JobOutcome | None]],
         outcomes: dict[str, dict[int, JobOutcome]],
         pending: dict[str, int],
+        sample: Callable[[str], Sample],
     ) -> None:
-        """Record `batch`'s outcomes; commit each item still held whose every job has one.
+        """Record `batch`'s outcomes; commit each item still held whose every job has one, with its `sample`.
 
         An item with a job whose outcome is None (a busy start lease) is released, unreported.
         """
@@ -295,7 +337,7 @@ class PoolWorker:
                 outcomes[member.digest][member.index] = outcome
         for digest in {m.digest for m, _ in batch} - busy:
             if len(outcomes[digest]) == pending[digest] and digest in claim.items:
-                report(claim, digest, [outcomes[digest][i] for i in range(pending[digest])])
+                report(claim, digest, [outcomes[digest][i] for i in range(pending[digest])], sample(digest))
 
     def _run_groups(self, groups: list[_Group], finished: Finished, cancelled: threading.Event) -> None:
         """Run each group until `cancelled`, putting its members' outcomes on `finished`; then put None."""

@@ -42,7 +42,7 @@ PROFILE = ExecutionProfile.load(
     "laptop",
     {
         "devices": ["cpu"],
-        "resource_classes": {"svc:pii": {"device": "cpu", "max_workers": 1, "batch_size": 1}},
+        "resource_classes": {"svc:pii": {"device": "cpu", "max_workers": 1}},
         "pool": {"poll_s": 0.05, "first_poll_s": 0.01},
         "lease": {"stale_after_s": 0.4, "renew_fraction": 0.2, "attribute_delay_s": 0},
         "services": {"idle_exit_s": 0.15},

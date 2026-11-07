@@ -28,6 +28,7 @@ from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import WorkerClient, WorkerLost, WorkerOOMKilled
 from senselab_core.testing.interpreter import source_tree_python
@@ -40,8 +41,8 @@ WORKERS = WorkerSet(2)
 OVERRIDE: dict[str, Any] = {
     "devices": ["cpu"],
     "resource_classes": {
-        "cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1, "batch_size": 1},
-        "cpu:b": {"device": "cpu", "mem_bytes": 2**31, "max_workers": 1, "batch_size": 1},
+        "cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1},
+        "cpu:b": {"device": "cpu", "mem_bytes": 2**31, "max_workers": 1},
     },
     "pool": {"poll_s": 0.05, "first_poll_s": 0.01, "quantum_items": 2, "quantum_s": 60},
     "lease": {"stale_after_s": 0.4, "renew_fraction": 0.2, "attribute_delay_s": 0},
@@ -70,10 +71,11 @@ def _run(
     return placed, store, tmp_path / "run" / RUN_QUEUES
 
 
-def _put(placed: Plan, pool_dir: Path, element: int, queue: str = "cpu", why: str = "") -> str:
-    """Put the one-job fragment of `element` on `queue`, its placement's `why` set when given; return its digest."""
+def _put(placed: Plan, pool_dir: Path, element: int | range, queue: str = "cpu", why: str = "") -> str:
+    """Put the item of `element` (or of each in a range) on `queue`, its `why` set when given; return its digest."""
     admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
-    fragment = node_fragment(placed, admission, elements=[(element,)])
+    elements = [(e,) for e in element] if isinstance(element, range) else [(element,)]
+    fragment = node_fragment(placed, admission, elements=elements)
     update: dict[str, object] = {"resource_class": queue, **({"why": why} if why else {})}
     fragment = fragment.model_copy(update={"placement": fragment.placement.model_copy(update=update)})
     QueueSet(pool_dir, placed.execution).queue(queue).put(fragment)
@@ -120,8 +122,8 @@ def test_worker_yields_after_quantum_to_older_queue(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a_worker_claims_a_quantum_of_jobs(tmp_path: Path) -> None:
-    """With a quantum of 4 jobs, a 1-job item and two 4-job items are claimed as 1, 4 and 4 jobs, never 1 + 4."""
+def test_a_worker_claims_one_item_at_a_time(tmp_path: Path) -> None:
+    """A 1-job item and two 4-job items are claimed as 1, 4 and 4 jobs, never 1 + 4; each outcome holds its sample."""
     profile = _profile(quantum_items=4)
     placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(9)])
     admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
@@ -137,17 +139,19 @@ def test_a_worker_claims_a_quantum_of_jobs(tmp_path: Path) -> None:
     worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=recorded)
     assert worker.serve() == 0
     assert sizes == [1, 4, 4] and len(worker.served) == 3 and queue.work() == 0
+    samples = [Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)]
+    assert sorted((s.jobs, s.cold) for s in samples) == [(1, True), (4, False), (4, False)]
+    assert all(s.input_s is None and s.peak_memory_bytes >= s.baseline_bytes and s.wall_s > 0 for s in samples)
 
 
 @pytest.mark.logic
 def test_failing_batch_bisected(tmp_path: Path) -> None:
-    """One poisoned item among 8 claimed together fails alone with `WorkerLost`; the other 7 commit their results."""
+    """One poisoned job of an 8-job item fails alone with `WorkerLost`; the other 7 commit their results."""
     profile = _profile(quantum_items=8)
     texts = [f"t{i}" for i in range(8)]
     texts[5] = "poison"
     placed, store, pool_dir = _run(tmp_path, profile, texts)
-    for element in range(8):
-        _put(placed, pool_dir, element)
+    _put(placed, pool_dir, range(8))
     send, sizes = _sender(store, profile), []
 
     def poisoned(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
@@ -291,8 +295,7 @@ def test_a_broken_env_costs_one_load_per_claim(tmp_path: Path) -> None:
     profile = _profile(quantum_items=8)
     with packaged(registry(BROKEN, worker="backends.failing_load_backend_fixture", name="broken"), tmp_path / "cache"):
         placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(8)], BROKEN)
-        for element in range(8):
-            _put(placed, pool_dir, element)
+        _put(placed, pool_dir, range(8))
         send, sizes = _sender(store, profile), []
 
         def counted(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
@@ -310,8 +313,7 @@ def test_a_load_failure_during_bisection_keeps_the_first_halfs_commits(tmp_path:
     """A request lost as a whole is halved; the first half commits, and the second half, whose load fails, fails."""
     profile = _profile(quantum_items=8)
     placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(8)])
-    for element in range(8):
-        _put(placed, pool_dir, element)
+    _put(placed, pool_dir, range(8))
     send, sizes = _sender(store, profile), []
 
     def flaky(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:

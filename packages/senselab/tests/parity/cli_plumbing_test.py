@@ -142,4 +142,4 @@ def test_cli_items_records_the_task_default_model(tmp_path: Path) -> None:
     document = json.loads(items.read_text("utf-8"))
     assert document["model"] == {"id": default.id, "revision": default.revision}
     assert document["params"] == {"language": None, "timestamps": "word"}
-    assert document["backend_params"] == {"max_new_tokens": 128, "chunk_length_s": 30, "batch_size": 1}
+    assert document["backend_params"] == {"max_new_tokens": 128, "chunk_length_s": 30}

@@ -36,14 +36,16 @@ from senselab_core.runtime.execution_settings import (
     PoolSettings,
     ResourceClass,
     ServiceSettings,
+    SizingSettings,
     SubstrateSpec,
     SupervisorSettings,
     Timeouts,
 )
 from senselab_core.runtime.hardware import HardwareInfo
-from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.keys import SINGLE, Placement, fixed_formation
 from senselab_core.runtime.network import Network
 from senselab_core.runtime.retry import RetryPolicy
+from senselab_core.runtime.sizing import Grant, measure_of, size
 
 DEFAULT_PROFILE = "laptop"
 
@@ -136,7 +138,8 @@ class ExecutionProfile(Formatted):
         network: `online`, or `offline` to forbid any fetch.
         resource_classes: The worker classes a node is placed on, by name (`cpu`, `gpu:<type>`, `mps`, `svc:<id>`).
         substrate: What starts workers: `local` processes or `slurm` jobs.
-        pool: How pool workers claim and yield.
+        pool: How pool workers claim and yield, and the quantum ceilings.
+        sizing: The fractions and targets a unit's batch, quantum and worker count are derived from (`size`).
         lease: How a lease is kept alive: its stale bound and renewal share, for job and pool leases alike.
         faults: The retry budget of each fault class.
         timeouts: A worker's load and request timeouts.
@@ -157,6 +160,7 @@ class ExecutionProfile(Formatted):
     resource_classes: Mapping[NonEmptyStr, ResourceClass]
     substrate: SubstrateSpec
     pool: PoolSettings
+    sizing: SizingSettings
     lease: JobLease
     faults: FaultBudgets
     timeouts: Timeouts
@@ -342,7 +346,8 @@ def resolve_execution(  # noqa: PLR0913 - the brief fixes the signature and the 
 
     The first stack of `profile.stack_preferences[task.name]` with a backend serving `model_entry` wins, or the
     first declared backend when the profile lists none. The resource class is `resource_class`'s, judged against
-    `hardware` (None when a scheduler places the worker); the device and batch size are the class's.
+    `hardware` (None when a scheduler places the worker); the device is the class's, and the batch size is sized
+    (`size`) from the backend and model's resource table on that class, 1 when it is unmeasured.
 
     Raises:
         UnlistedSource: the model's organisation is neither in `model_sources` nor, when that is None, in `catalogue`.
@@ -369,6 +374,24 @@ def resolve_execution(  # noqa: PLR0913 - the brief fixes the signature and the 
         env_root=root,
         why=f"{why}; resource class {name!r} is the first that runs it",
         resource_class=name,
-        batch_size=resource.batch_size,
+        batch_size=_batch_size(backend, model_entry, (name, resource), profile, hardware, catalogue),
         partition=resource.partition,
     )
+
+
+def _batch_size(  # noqa: PLR0913 - the backend, its model, the class it is placed on, and what sizes it
+    backend: BackendSpec,
+    model_entry: CatalogueEntry | None,
+    placed: tuple[str, ResourceClass],
+    profile: ExecutionProfile,
+    hardware: HardwareInfo | None,
+    catalogue: Catalogue,
+) -> int:
+    """Return the batch size `size` derives from `backend` and its model's measure on class `placed`; 1 unmeasured."""
+    model = (None, None) if model_entry is None else (model_entry.id, model_entry.revision)
+    row = catalogue.resources(backend.task, backend.name, *model)
+    measured = None if row is None else row.classes.get(placed[0])
+    if measured is None:
+        return 1
+    grant = Grant.of(placed[1], profile.pool, None if hardware is None else hardware.memory_bytes)
+    return size(measure_of(measured), grant, profile.sizing, batchable=fixed_formation(backend) != SINGLE).batch_size

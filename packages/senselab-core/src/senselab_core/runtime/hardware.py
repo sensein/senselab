@@ -10,14 +10,16 @@ import logging
 import os
 import platform
 import re
+import resource
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping, Optional
+from typing import Callable, Final, Mapping, Optional
 
 logger = logging.getLogger("senselab")
 
 _MIB = 1024 * 1024
+_KIB: Final = 1024  # invariant: bytes in a kibibyte, the unit of Linux ru_maxrss
 _GPU_QUERY_TIMEOUT_S = 30.0
 _NVIDIA_SMI_FIELDS = "index,uuid,name,memory.total,driver_version"
 _NVIDIA_SMI_FORMAT = "--format=csv,noheader,nounits"
@@ -248,3 +250,23 @@ def oom_kills(memory_events: Optional[Path]) -> Optional[int]:
     counts = dict(line.split(maxsplit=1) for line in lines if len(line.split()) == 2)  # noqa: PLR2004 - name, count
     found = counts.get("oom_kill", "")
     return int(found) if found.isdigit() else None
+
+
+def memory_bytes(proc_cgroup: Path = Path("/proc/self/cgroup")) -> tuple[int, int]:
+    """Return this process's memory now and its high-water, in bytes.
+
+    From its cgroup v2 (`memory.current`, `memory.peak`), which counts every process of the cgroup; elsewhere the
+    largest resident set of this process and of its waited-for children, for both.
+    """
+    events = cgroup_memory_events(proc_cgroup)
+    if events is not None:
+        try:
+            current = int((events.parent / "memory.current").read_text(encoding="utf-8"))
+            peak = int((events.parent / "memory.peak").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        else:
+            return current, max(current, peak)
+    unit = 1 if platform.system() == "Darwin" else _KIB
+    used = unit * max(resource.getrusage(who).ru_maxrss for who in (resource.RUSAGE_SELF, resource.RUSAGE_CHILDREN))
+    return used, used

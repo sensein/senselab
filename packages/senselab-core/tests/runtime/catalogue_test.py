@@ -208,7 +208,7 @@ rows:
 - {model}
   download_bytes: 1000
   classes:
-    cpu: {{load_s: 2.0, peak_memory_bytes: 4096, s_per_input_s: 0.5}}
+    cpu: {{load_s: 2.0, resident_bytes: 1024, peak_memory_bytes: 4096, s_per_input_s: 0.5, input_s_per_item: 8.0}}
   measured: {{sha: {SHA}, jobs: ["1"]}}
 """
 
