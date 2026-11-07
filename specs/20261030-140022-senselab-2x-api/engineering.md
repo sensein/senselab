@@ -244,6 +244,15 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
 - **Source**: owner, 2026-10-30: "brittleness has to be checked for always".
 - **Check**: property tests and fault injection in the logic tier; the PR checklist; review rejects
   special-casing.
+  Amended 2026-11-07 (owner): no fixed parameters. A value that can vary by execution scenario (host,
+  partition, storage, substrate) or pipeline — a poll interval, retry count or backoff, timeout, join
+  wait, start budget, quantum, batch size, worker count, test slack — is config (execution profile,
+  run config or data file) with its derivation in `config-derivations.md`, never a code constant.
+  Execution is optimized before it is scaled: per-item cost and resources are measured, and quantum,
+  batch and worker counts are chosen from the measurement, not from a fixed guess. Owner: "we don't
+  want any fixed parameters. parameters should become configs as they can vary across execution
+  scenarios and pipelines. what senselab and/or pydra should contain is to be able to optimize
+  execution before scaling."
 
 <a id="p-35"></a>
 ### P-35 Agents break the system to raise standards, not to add brittleness
