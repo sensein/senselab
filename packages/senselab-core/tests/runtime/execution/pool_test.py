@@ -100,7 +100,11 @@ class FakeWorkers:
         if self._thread is None:
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
-        return [WorkerHandle(resource_class, "thread")]
+        return [WorkerHandle(resource_class, f"thread-{resource_class}")]
+
+    def live(self) -> list[WorkerHandle]:
+        """Return a handle for each queue the thread serves."""
+        return [WorkerHandle(name, f"thread-{name}") for name in sorted(self.names)]
 
     def running(self, resource_class: str) -> int:
         """Return 1 for a queue the thread serves."""
@@ -310,6 +314,10 @@ class _Idle:
 
     def start(self, resource_class: str, count: int) -> list[WorkerHandle]:  # noqa: ARG002
         """Start nothing."""
+        return []
+
+    def live(self) -> list[WorkerHandle]:
+        """List nothing."""
         return []
 
     def running(self, resource_class: str) -> int:  # noqa: ARG002

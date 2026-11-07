@@ -36,12 +36,14 @@ from senselab_core.runtime.execution.in_process import fragment_jobs, job_key, p
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool import report, run_plan
 from senselab_core.runtime.execution.queue import Claim, QueueSet
+from senselab_core.runtime.execution.substrates import EXIT_UNREACHABLE, StoreUnreachable, mark_ready
 from senselab_core.runtime.execution.supervisor import Supervisor
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.storage import StorageUnsupported, probe_capabilities
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerFatal, WorkerLost
 
@@ -349,6 +351,19 @@ class PoolWorker:
                 log.record("claimed", job.node, job=job)
 
 
+def check_reachable(run_dir: Path, store: ResultStore) -> None:
+    """Probe the run directory and the result store from this host.
+
+    Raises:
+        StoreUnreachable: either root cannot be read and written here, or lacks a primitive the leases need.
+    """
+    for root in (run_dir, store.root):
+        try:
+            probe_capabilities(root).require(root)
+        except (OSError, StorageUnsupported) as err:
+            raise StoreUnreachable(f"{root} is not reachable from this host: {err}") from err
+
+
 def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only parts and seams
     pool_dir: Path,
     classes: Sequence[str],
@@ -362,8 +377,16 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
     """Serve the queues of `classes` in `pool_dir` (a run's `queues` directory) as one `PoolWorker`; return 0.
 
     The worker runs under a `Supervisor`, so every process it launches, and every orphan they leave, ends with it.
-    On the main thread SIGTERM halts the worker (`PoolWorker.halt`); the previous handler is restored after.
+    A worker that cannot reach the run directory or the store returns `EXIT_UNREACHABLE` and marks nothing; one that can
+    marks itself ready (`mark_ready`) before it serves. On the main thread SIGTERM halts the worker
+    (`PoolWorker.halt`); the previous handler is restored after.
     """
+    try:
+        check_reachable(Path(pool_dir).parent, store)
+    except StoreUnreachable as err:
+        logger.error("pool worker cannot start: %s", err)
+        return EXIT_UNREACHABLE
+    mark_ready(Path(pool_dir).parent)
     worker = PoolWorker(pool_dir, classes, profile=profile, store=store, workers=workers, send=send, join_s=join_s)
     with Supervisor():
         if threading.current_thread() is not threading.main_thread():

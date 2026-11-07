@@ -32,17 +32,17 @@ def test_a_store_without_directories_fails_atomic_mkdir(tmp_path: Path, monkeypa
     assert raised.value.errno == errno.ENOTSUP and list(tmp_path.iterdir()) == []
 
 
-def test_a_mount_that_refuses_link_lacks_atomic_rename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A root that refuses `link(2)` is judged to lack `atomic_rename`, and `require` names it."""
+def test_a_mount_that_refuses_link_lacks_exclusive_link(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A root that refuses `link(2)` is judged to lack `exclusive_link`, and `require` names it."""
     refuse_call(monkeypatch, "link", "b", OSError(errno.EPERM, "Operation not permitted"))
     found = probe_capabilities(tmp_path)
-    assert found.atomic_rename is False and found.missing() == ["atomic_rename"]
-    with pytest.raises(StorageUnsupported, match="atomic_rename"):
+    assert found.exclusive_link is False and found.atomic_rename and found.missing() == ["exclusive_link"]
+    with pytest.raises(StorageUnsupported, match="exclusive_link"):
         found.require(tmp_path)
 
 
 def test_require_names_each_missing_primitive() -> None:
     """Every missing primitive is named, in a fixed order."""
-    found = StorageCapabilities(False, True, False, True, 0.0)
+    found = StorageCapabilities(False, True, False, True, True, 0.0)
     with pytest.raises(StorageUnsupported, match="atomic_mkdir, dir_mtime_server_clock"):
         found.require(Path("/store"))

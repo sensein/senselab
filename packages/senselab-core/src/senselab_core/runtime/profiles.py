@@ -75,6 +75,15 @@ class ProfileFormatRetired(ValueError):
         self.found = found
 
 
+class QosCapTooSmall(ValueError):
+    """A resource class whose workers need more CPUs than the substrate's QOS CPU cap allows at all."""
+
+    def __init__(self, resource_class: str, cpus: int, cap: int) -> None:
+        """Name the class, its CPUs per worker and the cap."""
+        super().__init__(f"resource class {resource_class!r} needs {cpus} CPUs per worker; the QOS CPU cap is {cap}")
+        self.resource_class, self.cpus, self.cap = resource_class, cpus, cap
+
+
 class Envs(Frozen):
     """Env settings.
 
@@ -155,6 +164,13 @@ class ExecutionProfile(Formatted):
             raise ValueError(f"resource classes {wrong} are not named for their device and GPU type")
         return self
 
+    def check_qos_cap(self) -> None:
+        """Raise `QosCapTooSmall` for the first resource class whose `cpus` exceed the substrate's `qos_cpu_cap`."""
+        cap = self.substrate.qos_cpu_cap
+        for name, grant in self.resource_classes.items():
+            if cap is not None and grant.cpus is not None and grant.cpus > cap:
+                raise QosCapTooSmall(name, grant.cpus, cap)
+
     @classmethod
     def load(cls, name: str = DEFAULT_PROFILE, override: Mapping[str, Any] | Path | None = None) -> "ExecutionProfile":
         """Return packaged profile `name` with `override` (a mapping or a YAML file) deep-merged over it.
@@ -163,6 +179,7 @@ class ExecutionProfile(Formatted):
             ProfileFormatRetired: `override` declares a retired format.
             UnknownProfileKey: a key of `override` that the format does not define, naming the closest one.
             LeaseBoundError: two of the lease's beat intervals plus its attribute delay are not below its stale bound.
+            QosCapTooSmall: a resource class needs more CPUs than the QOS CPU cap.
             ValueError: the merged mapping is invalid.
         """
         packaged = _read(resources.files("senselab_core.runtime").joinpath("data", "profiles", f"{name}.yaml"))
@@ -175,6 +192,7 @@ class ExecutionProfile(Formatted):
         _check_keys(merged, cls.model_fields)
         profile = cls.model_validate(merged)
         profile.lease.check_bound()
+        profile.check_qos_cap()
         return profile
 
     def env_root(self, kind: str) -> Path:

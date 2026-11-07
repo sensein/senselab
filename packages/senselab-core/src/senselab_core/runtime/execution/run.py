@@ -47,7 +47,7 @@ from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import Lease, LeaseUnavailable
-from senselab_core.runtime.planner import Plan
+from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import cache_root, fresh_attempt_id
@@ -576,7 +576,8 @@ def default_executor(placed: Plan, executor: Executor | None, store: ResultStore
     from senselab_core.runtime.execution.pool import Pool  # noqa: PLC0415 - imports the planner
     from senselab_core.runtime.execution.substrates import substrate_of  # noqa: PLC0415 - as above
 
-    assert store is not None
+    if store is None:
+        raise ValueError("a Pool over Slurm needs the result store it reads")
     run_dir = run_dir_of(placed.hash)
     return Pool(
         run_dir,
@@ -747,6 +748,12 @@ def _plan_document(placed: Plan) -> dict[str, object]:
     }
 
 
+def _check_store(placed: Plan, store: ResultStore | None) -> None:
+    """Refuse a run whose result store lacks a primitive leases need (`check_storage`)."""
+    if store is not None:
+        check_storage(placed.execution if placed.execution is not None else ExecutionProfile.load(), store.root)
+
+
 def start(
     placed: Plan,
     executor: Executor | None = None,
@@ -781,7 +788,9 @@ def start(
     provenance = ProvStore()
     if executor is None and store is None:
         store = ResultStore(cache_root() / RESULTS_DIR, provenance=provenance)
+    owned = executor is None
     executor = default_executor(placed, executor, store)
+    _check_store(placed, store)
     values = bind_sources(placed) if values is None else values
     run_dir = run_dir_of(placed.hash)
     epoch, attempt, ordinal = prepare(placed, run_dir, store)
@@ -807,6 +816,9 @@ def start(
             except BaseException as err:  # noqa: BLE001 - held for `wait`
                 if not isinstance(err, RunCancelled):
                     run.fail(err)
+            finally:
+                if owned and hasattr(executor, "close"):
+                    executor.close()
             try:
                 written.write(run_dir)
             except Exception as err:  # noqa: BLE001 - held for `wait`

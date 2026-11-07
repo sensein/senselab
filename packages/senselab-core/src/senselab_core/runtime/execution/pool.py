@@ -45,12 +45,21 @@ from senselab_core.runtime.execution.executor import (
     QueueHeld,
     ResultRef,
     Status,
+    WorkersBroken,
 )
 from senselab_core.runtime.execution.in_process import job_key, result_ref
 from senselab_core.runtime.execution.job import JobOutcome
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest
-from senselab_core.runtime.execution.substrates import Fleet, Slurm, Substrate, scale
-from senselab_core.runtime.planner import Plan
+from senselab_core.runtime.execution.substrates import (
+    WORKERS_DIR,
+    BrokenClass,
+    Fleet,
+    Slurm,
+    SlurmError,
+    Substrate,
+    scale,
+)
+from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 
@@ -159,7 +168,16 @@ class Pool:
         """
         self.run_dir = Path(run_dir)
         self.queues, self.store, self.profile, self.substrate = queues, store, profile, substrate
-        self._fleet = Fleet(substrate)
+        pool_settings = profile.pool
+        self._fleet = Fleet(
+            substrate,
+            workers_dir=self.run_dir / WORKERS_DIR,
+            budget=profile.faults.infrastructure_replacements,
+            first_s=pool_settings.first_poll_s,
+            max_s=pool_settings.poll_s,
+        )
+        self.broken_workers: dict[str, BrokenClass] = {}
+        self._surplus: dict[str, float] = {}
         self._scaled = float("-inf")
         self.bind_epoch(epoch, events)
         self.broken: dict[str, BrokenEnv] = {}
@@ -181,7 +199,10 @@ class Pool:
             raise ValueError(f"the pool coordinates epoch {epoch}; its event log is of epoch {events.epoch}")
         self.epoch, self.events = epoch, events
         if isinstance(self.substrate, Slurm):
-            self.substrate.attempt = events.attempt
+            self.substrate.attempt, self.substrate.epoch = events.attempt, epoch
+        if hasattr(self, "_fleet"):
+            self._fleet.reset()
+            self.broken_workers.clear()
 
     def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:  # noqa: ARG002
         """Hold `placed` until it is released as often as it was admitted; its id is the run's, `run-<plan hash>`.
@@ -235,11 +256,34 @@ class Pool:
         return name if model is None else f"{name}#{model.identity}"
 
     def _scale(self) -> None:
-        """Have the substrate start the workers the queues need, at most once per `pool.first_poll_s`."""
+        """Have the substrate size its workers to the queues: at once the first time, then once per `pool.poll_s`.
+
+        A failing substrate is retried next round and counted (`Fleet.fail_substrate`); once it keeps failing the
+        run is held (`WorkersBroken`), never failed.
+        """
         now = time.monotonic()
-        if now - self._scaled >= self.profile.pool.first_poll_s:
-            self._scaled = now
-            scale(self.queues, self._fleet, self.profile)
+        if self._scaled != float("-inf") and now - self._scaled < self.profile.pool.poll_s:
+            return
+        self._scaled = now
+        try:
+            scale(self.queues, self._fleet, self.profile, surplus_since=self._surplus)
+        except SlurmError as err:
+            logger.warning("the substrate failed: %s", err)
+            self._fleet.fail_substrate(err)
+        else:
+            self._fleet.substrate_ok()
+
+    def _workers_broken(self, flight: _Flight) -> WorkersBroken | None:
+        """Return the hold of `flight`'s queue by a broken class of workers, noting the break once."""
+        found = self._fleet.broken_for(flight.queue)
+        if found is None:
+            return None
+        if found.resource_class not in self.broken_workers:
+            self.broken_workers[found.resource_class] = found
+            for index, job in enumerate(flight.fragment.jobs):
+                key = self._key(flight.fragment, index)
+                self.events.record("queued", job.node, job=job, key=key, env=flight.fragment.placement.env)
+        return WorkersBroken(flight.queue, found.resource_class, found.failures, found.reason)
 
     def submit(self, fragment: PlanFragment) -> Handle:
         """Put `fragment` on the queue of its resource class and return its handle.
@@ -283,6 +327,7 @@ class Pool:
         pause = self.profile.pool.first_poll_s
         while followed.flights and not followed.cancelled:
             self._fence()
+            self._scale()
             landed = [(f, r) for f in followed.flights if (r := self.queues.queue(f.queue).outcome(f.digest))]
             for flight, record in landed:
                 followed.flights.remove(flight)
@@ -291,10 +336,12 @@ class Pool:
             held = followed.held + [self._held(f) for f in followed.flights if f.fragment.placement.env in self.broken]
             if held:
                 raise held[0]
+            stopped = [b for f in followed.flights if (b := self._workers_broken(f)) is not None]
+            if stopped:
+                raise stopped[0]
             if landed:
                 pause = self.profile.pool.first_poll_s
             elif followed.flights:
-                self._scale()
                 time.sleep(pause)
                 pause = min(2 * pause, self.profile.pool.poll_s)
         followed.done = not followed.cancelled
@@ -501,6 +548,7 @@ def coordinate(
     profile = profile if profile is not None else ExecutionProfile.load()
     placed = run_plan(run_dir, profile)
     store = store if store is not None else run_store(run_dir)
+    check_storage(profile, store.root)
     values = bind_sources(placed)
     epoch, attempt, ordinal = prepare(placed, run_dir, store)
     epochs = Epoch(run_dir)

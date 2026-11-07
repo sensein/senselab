@@ -826,7 +826,8 @@ class StorageCapabilities:
         atomic_mkdir: `mkdir` of a name that exists fails, so exactly one of two makers wins.
         directory_rename: A directory is renamed whole and a rename onto a non-empty directory fails.
         dir_mtime_server_clock: A directory's mtime moves to the present when an entry is made in it.
-        atomic_rename: A rename replaces a file whole, and `link` of a name that exists fails.
+        atomic_rename: A rename replaces a file whole.
+        exclusive_link: `link` of a name that exists fails, so exactly one of two linkers wins.
         attribute_delay_s: Seconds from an entry being made to the directory's mtime showing it, as this client saw.
     """
 
@@ -834,11 +835,12 @@ class StorageCapabilities:
     directory_rename: bool
     dir_mtime_server_clock: bool
     atomic_rename: bool
+    exclusive_link: bool
     attribute_delay_s: float
 
     def missing(self) -> list[str]:
         """Return the primitives this root lacks, by field name."""
-        names = ("atomic_mkdir", "directory_rename", "dir_mtime_server_clock", "atomic_rename")
+        names = ("atomic_mkdir", "directory_rename", "dir_mtime_server_clock", "atomic_rename", "exclusive_link")
         return [n for n in names if not getattr(self, n)]
 
     def require(self, root: Path) -> None:
@@ -848,14 +850,12 @@ class StorageCapabilities:
             raise StorageUnsupported(errno.ENOTSUP, f"no {', '.join(lacking)}", str(root))
 
 
-def _refused(call: Callable[[], object], exists: type[OSError] = FileExistsError) -> bool:
-    """Return whether `call` raised `exists`, or an error that says the operation is not allowed."""
+def _refused(call: Callable[[], object], *errnos: int) -> bool:
+    """Return whether `call` raised an `OSError` of one of `errnos`: the refusal an exclusive operation must give."""
     try:
         call()
-    except exists:
-        return True
     except OSError as err:
-        return err.errno in (errno.EPERM, errno.EACCES, errno.ENOTEMPTY, errno.EEXIST)
+        return err.errno in errnos
     return False
 
 
@@ -896,22 +896,27 @@ def probe_capabilities(root: Path) -> StorageCapabilities:
                 raise
             raise StorageUnsupported(err.errno, f"no atomic mkdir: {err.strerror}", str(root)) from err
         os.mkdir(work / "made")
-        atomic_mkdir = _refused(lambda: os.mkdir(work / "made"))
+        atomic_mkdir = _refused(lambda: os.mkdir(work / "made"), errno.EEXIST)
         os.mkdir(work / "from")
         os.mkdir(work / "full")
         (work / "full" / "x").write_bytes(b"")
         os.rename(work / "from", work / "to")
         directory_rename = (work / "to").is_dir() and not (work / "from").exists()
         os.mkdir(work / "again")
-        directory_rename = directory_rename and _refused(lambda: os.rename(work / "again", work / "full"))
+        directory_rename = directory_rename and _refused(
+            lambda: os.rename(work / "again", work / "full"), errno.ENOTEMPTY, errno.EEXIST
+        )
         (work / "a").write_bytes(b"new")
         (work / "b").write_bytes(b"old")
         os.rename(work / "a", work / "b")
         replaced = (work / "b").read_bytes() == b"new" and not (work / "a").exists()
-        linked = not _refused(lambda: os.link(work / "b", work / "c"))
-        atomic_rename = replaced and linked and _refused(lambda: os.link(work / "b", work / "c"))
+        try:
+            os.link(work / "b", work / "c")
+            exclusive_link = _refused(lambda: os.link(work / "b", work / "c"), errno.EEXIST)
+        except OSError:
+            exclusive_link = False
         server_clock, delay = _mtime_after_entry(work)
-        return StorageCapabilities(atomic_mkdir, directory_rename, server_clock, atomic_rename, delay)
+        return StorageCapabilities(atomic_mkdir, directory_rename, server_clock, replaced, exclusive_link, delay)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

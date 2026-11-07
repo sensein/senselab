@@ -404,10 +404,12 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
         UnlistedSource: a model's organisation is not an allowed source.
         BackendParamsMismatch, NoBackend, NoDevice, LicenseRefused, LicenseConflict, MemoryCapExceeded: as `place`.
         StorageUnsupported: the run directory's or the result store's root lacks a primitive the leases need.
-        LeaseBoundError: the root's measured attribute delay breaks the profile's lease bound.
+        LeaseBoundError: the effective attribute delay breaks the profile's lease bound.
+        QosCapTooSmall: a resource class needs more CPUs than the substrate's QOS cap.
     """
     config = config if config is not None else RunConfig()
     profile = execution if execution is not None else ExecutionProfile.load()
+    profile.check_qos_cap()
     check_storage(profile, *storage_roots())
     catalogue = packaged().catalogue
     found = resolve_bound(
@@ -440,28 +442,38 @@ def storage_roots() -> tuple[Path, ...]:
     return runs_root(), cache_root() / RESULTS_DIR
 
 
-def check_storage(
-    profile: ExecutionProfile, *roots: Path, probe: Callable[[Path], StorageCapabilities] = probe_capabilities
-) -> None:
-    """Refuse the plan unless each of `roots` has the primitives leases need and a delay the lease bound allows.
+_PROBED: dict[Path, StorageCapabilities] = {}
 
-    Each root is probed (`probe`, by default `probe_capabilities`). A root whose nearest existing ancestor cannot be
-    written is not judged: a run there could not write either.
+
+def check_storage(
+    profile: ExecutionProfile, *roots: Path, probe: Callable[[Path], StorageCapabilities] | None = None
+) -> float:
+    """Refuse the run unless each of `roots` has the primitives leases need and a delay the lease bound allows.
+
+    Each root is probed (`probe`, by default `probe_capabilities`, once per root in this process). The effective
+    attribute delay is the larger of the profile's `lease.attribute_delay_s`, which is a floor, and the greatest
+    measured one; it is returned. A root whose nearest existing ancestor cannot be written is not judged.
 
     Raises:
         StorageUnsupported: a root lacks a primitive; names it.
-        LeaseBoundError: a root's measured attribute delay makes `2 × renew_fraction × stale_after_s +
-            attribute_delay_s` not below `stale_after_s`.
+        LeaseBoundError: the effective delay makes `2 × renew_fraction × stale_after_s + attribute_delay_s` not below
+            `stale_after_s`.
     """
+    delay = profile.lease.attribute_delay_s
     for root in roots:
         ancestor = root
         while not ancestor.exists():
             ancestor = ancestor.parent
         if not os.access(ancestor, os.W_OK | os.X_OK):
             continue
-        found = probe(root)
+        if probe is not None:
+            found = probe(root)
+        else:
+            found = _PROBED.get(root) or _PROBED.setdefault(root, probe_capabilities(root))
         found.require(root)
-        profile.lease.model_copy(update={"attribute_delay_s": found.attribute_delay_s}).check_bound()
+        delay = max(delay, found.attribute_delay_s)
+    profile.lease.model_copy(update={"attribute_delay_s": delay}).check_bound()
+    return delay
 
 
 def place(logical: LogicalPlan, profile: ExecutionProfile, hardware: HardwareInfo, config: RunConfig) -> PlanPlacement:

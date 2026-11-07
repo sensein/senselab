@@ -223,6 +223,22 @@ class QueueHeld(RuntimeError):
         self.failures = failures
 
 
+class WorkersBroken(QueueHeld):
+    """The workers of a resource class (`*`: the substrate) failed to start `failures` times in a row.
+
+    The jobs are not failed; they wait in the queue for a later epoch, like a held env's. `reason` is the latest cause.
+    """
+
+    def __init__(self, queue: str, resource_class: str, failures: int, reason: str) -> None:
+        """Name the queue, the class (or `*`), its failures and the latest cause."""
+        super().__init__(queue, f"workers:{resource_class}", failures)
+        RuntimeError.__init__(
+            self, f"queue {queue!r} is held: workers of {resource_class!r} failed to start {failures} times: {reason}"
+        )
+        self.resource_class = resource_class
+        self.reason = reason
+
+
 class Executor(Protocol):
     """Runs plan fragments of admitted plans: `admit` a plan, `submit` its fragments, follow, stop and read them.
 
