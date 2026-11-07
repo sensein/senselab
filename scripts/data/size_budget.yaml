@@ -1,32 +1,15 @@
-format: size-budget@1.0
-# Length budgets for Python files tracked under packages/. Each value carries its derivation;
-# scripts/check_size_budgets.py refuses an entry without one. `exempt` names a function or file that is over a
-# limit on purpose, with the reason.
-
-src_file_max_lines:
-  value: 1200
-  derivation: >-
-    A reviewer reads a module whole in one pass (P-32). The read tool returns 2000 lines at a time; 1200 leaves the
-    reviewer's own notes and the module's test beside it inside one window. Derivation: engineering.md, size budgets.
-
-test_file_max_lines:
-  value: 1300
-  derivation: >-
-    A test file is read beside its subject, so it may exceed the source limit by one function limit: 1200 + 100.
-    Derivation: engineering.md, size budgets.
-
-src_function_max_lines:
-  value: 100
-  derivation: >-
-    ruff caps a function at 50 statements (PLR0915); at two lines a statement, for a wrapped call or a literal, that
-    is 100 lines. Derivation: engineering.md, size budgets.
-
-test_function_max_lines:
-  value: 100
-  derivation: >-
-    The same 100 as the source limit: a test function past it is a scenario that wants splitting. Derivation:
-    engineering.md, size budgets.
-
+format: size-budget@2.0
+# Length budgets for Python files tracked under packages/; scripts/check_size_budgets.py reads them.
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under this file's path.
+# Lines per source file.
+src_file_max_lines: 1200
+# Lines per test file.
+test_file_max_lines: 1300
+# Lines per source function.
+src_function_max_lines: 100
+# Lines per test function.
+test_function_max_lines: 100
+# A function or file over a limit on purpose, with the reason.
 exempt:
 - path: packages/senselab-core/src/senselab_core/testing/values.py
   function: _register_kernel_samples

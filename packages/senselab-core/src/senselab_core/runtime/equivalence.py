@@ -1,8 +1,9 @@
 """Measured equivalence classes (`equivalence@4.0`) and the verify-sampling evidence they are regenerated from.
 
 The packaged table is `runtime/data/equivalence.yaml`: per backend, classes whose members are a numerics class in
-one env lock (`member_key`), each with its derivation. `scripts/regenerate_equivalence.py` writes it from the
-`equivalence-evidence@4.0` records verify sampling leaves in result stores (`classes`, `render`).
+one env lock (`member_key`). `scripts/regenerate_equivalence.py` writes it from the `equivalence-evidence@4.0`
+records verify sampling leaves in result stores (`classes`, `render`), and prints each class's derivation for
+config-derivations.md.
 """
 
 import itertools
@@ -21,7 +22,7 @@ from senselab_core.runtime.compare import Difference
 from senselab_core.runtime.config import dump_yaml, load_yaml
 
 _REGENERATE = "regenerate it with scripts/regenerate_equivalence.py from equivalence-evidence@4.0 records"
-RETIRED_FORMATS = {"equivalence@1": _REGENERATE, "equivalence@2.0": _REGENERATE}
+RETIRED_FORMATS = {"equivalence@1": _REGENERATE, "equivalence@2.0": _REGENERATE, "equivalence@3.0": _REGENERATE}
 """Retired table formats and the statement that migrates each."""
 SAMPLING = "verify-sample"
 """The `value_digest` type over the key digest and both context fingerprints whose first 32 bits sample a hit."""
@@ -44,11 +45,9 @@ def _member(raw: object) -> str | None:
 
 
 def _members(where: str, raw: object) -> frozenset[str]:
-    if not isinstance(raw, Mapping) or set(raw) != {"members", "derivation"}:
-        raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} must be a mapping of exactly 'members' and 'derivation'")
-    derivation, listed = raw["derivation"], raw["members"]
-    if not isinstance(derivation, str) or not derivation.strip():
-        raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} needs a non-empty derivation")
+    if not isinstance(raw, Mapping) or set(raw) != {"members"}:
+        raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} must be a mapping of exactly 'members'")
+    listed = raw["members"]
     members = [_member(m) for m in listed] if isinstance(listed, list) else [None]
     if None in members:
         raise ValueError(
@@ -66,11 +65,11 @@ def parse_equivalence(text: str) -> Equivalence:
     """Return the read-only table an `equivalence@4.0` document declares.
 
     The document holds `format` and `backends`, a mapping of backend name to class name to
-    `{members: [{numerics: <numerics class>, env_lock: <lock sha>}, ...], derivation: ...}`. A class lists at least
-    two members and a non-empty derivation; within a backend a member is in at most one class.
+    `{members: [{numerics: <numerics class>, env_lock: <lock sha>}, ...]}`. A class lists at least two members;
+    within a backend a member is in at most one class.
 
     Raises:
-        EquivalenceFormatRetired: the document is `equivalence@1` or `equivalence@2.0`.
+        EquivalenceFormatRetired: the document is `equivalence@1`, `@2.0` or `@3.0`.
         ValueError: a repeated key at any level, or a document not of that form.
     """
     raw = load_yaml(text, "equivalence table")
@@ -215,10 +214,11 @@ def classes(evidence: Iterable[EquivalenceEvidence]) -> dict[str, list[set[str]]
     return out
 
 
-def render(evidence: Iterable[EquivalenceEvidence]) -> str:
-    """Return the `equivalence@4.0` document `evidence` measures, each class with its derivation."""
+def render(evidence: Iterable[EquivalenceEvidence]) -> tuple[str, str]:
+    """Return the `equivalence@4.0` document `evidence` measures, and a `<backend>.<class>: <derivation>` line each."""
     records = list(evidence)
     backends: dict[str, Any] = {}
+    derivations = []
     for backend, groups in classes(records).items():
         backends[backend] = {}
         for n, group in enumerate(groups):
@@ -230,6 +230,7 @@ def render(evidence: Iterable[EquivalenceEvidence]) -> str:
                 f" thresholds {', '.join(sorted({e.thresholds for e in used}))}"
             )
             members = [{"numerics": (m := json.loads(k))["numerics"], "env_lock": m["env_lock"]} for k in sorted(group)]
-            backends[backend][f"class-{n}"] = {"members": members, "derivation": derivation}
+            backends[backend][f"class-{n}"] = {"members": members}
+            derivations.append(f"{backend}.class-{n}: {derivation}")
     document = {"format": EQUIVALENCE_FORMAT, "backends": backends}
-    return HEADER + dump_yaml(document)
+    return HEADER + dump_yaml(document), "\n\n".join(derivations)

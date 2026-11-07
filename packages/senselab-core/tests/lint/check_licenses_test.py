@@ -70,7 +70,7 @@ def _broken(tmp_path: Path, name: str, mutate: Callable[[dict[str, Any]], object
 @pytest.mark.parametrize(
     ("name", "mutate"),
     [
-        ("derivation", lambda raw: raw["sets"]["permissive"].pop("derivation")),
+        ("ids", lambda raw: raw["sets"]["permissive"].pop("ids")),
         ("unknown_set", lambda raw: raw["distributions"]["senselab"].update(allow=["nonesuch"])),
         ("on_missing", lambda raw: raw.update(on_missing="ignore")),
         ("date", lambda raw: raw["manual"][0]["verified"].pop("date")),
@@ -81,7 +81,7 @@ def _broken(tmp_path: Path, name: str, mutate: Callable[[dict[str, Any]], object
 def test_a_policy_with_a_missing_field_is_refused(
     tmp_path: Path, name: str, mutate: Callable[[dict[str, Any]], object]
 ) -> None:
-    """A missing derivation, source or date, an unknown set name, a bad `on_missing` or a wrong format refuses."""
+    """Missing ids, source or date, an unknown set name, a bad `on_missing` or a wrong format refuses."""
     with pytest.raises(ValueError):
         lic.load_policy(_broken(tmp_path, name, mutate))
 

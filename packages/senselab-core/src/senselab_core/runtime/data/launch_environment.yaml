@@ -1,64 +1,26 @@
-format: launch-environment@1.0
+format: launch-environment@2.0
 # The ambient variables a worker or server process inherits, by family. A variable passes when a family names it or
 # one of its prefixes, and no `never` entry does. A family with `recorded: true` also enters the launch digest, which
-# the context records; the others are plumbing that cannot change a result. Each entry carries its derivation;
-# `launch_environment()` refuses one without.
-
-linker:
-  value: {names: [LD_LIBRARY_PATH], prefixes: [DYLD_], recorded: false}
-  derivation: >-
-    Cluster CUDA, cuDNN and MPI libraries are found through the dynamic linker's search path, set by `module load`;
-    without it a torch or vLLM import fails to load its shared objects. It selects which build of a library is
-    loaded, not what a pinned library computes.
-
-tls:
-  value: {names: [SSL_CERT_FILE, SSL_CERT_DIR, REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE], prefixes: [], recorded: false}
-  derivation: >-
-    Sites behind an inspecting proxy install their own certificate authority; a model or data download without it
-    fails verification. Trust roots change whether a connection opens, not the bytes a content-addressed fetch keeps.
-
+# the context records; the others are plumbing that cannot change a result.
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under this file's path.
+# Dynamic-linker search paths.
+linker: {names: [LD_LIBRARY_PATH], prefixes: [DYLD_], recorded: false}
+# Trust roots for TLS.
+tls: {names: [SSL_CERT_FILE, SSL_CERT_DIR, REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE], prefixes: [], recorded: false}
+# The site proxy, in both spellings.
 proxy:
-  value:
-    names: [http_proxy, HTTP_PROXY, https_proxy, HTTPS_PROXY, no_proxy, NO_PROXY, ALL_PROXY, all_proxy]
-    prefixes: []
-    recorded: false
-  derivation: >-
-    Compute nodes without direct egress reach the Hub only through the site proxy. Both spellings are read by
-    different HTTP clients. A proxy changes the route, not the pinned bytes.
-
-hugging_face:
-  value: {names: [], prefixes: [HF_, HUGGINGFACE_], recorded: false}
-  derivation: >-
-    The Hub cache location, token and offline switch. Every model load passes a commit, so these change where the
-    weights are read from and whether they may be fetched, never which weights are loaded.
-
-gpu:
-  value: {names: [], prefixes: [CUDA_, NVIDIA_], recorded: true}
-  derivation: >-
-    The scheduler hands a job its devices as `CUDA_VISIBLE_DEVICES`; a worker that drops it sees every device or
-    none. These select devices and CUDA behaviour (`CUDA_LAUNCH_BLOCKING`, `CUBLAS` workspace via `CUDA_`), which
-    can change numerics, so they are recorded.
-
-threads:
-  value: {names: [], prefixes: [OMP_, MKL_, OPENBLAS_], recorded: true}
-  derivation: >-
-    Slurm jobs set thread counts to their CPU allocation; without them BLAS oversubscribes the node. Thread counts
-    can change the order of floating-point reductions, so they are recorded.
-
-locale:
-  value: {names: [LANG], prefixes: [LC_], recorded: false}
-  derivation: >-
-    Text decoding of tool output and file names follows the locale. Results are computed on decoded values, not on
-    locale-formatted text.
-
-process:
-  value: {names: [HOME, TMPDIR, PATH], prefixes: [], recorded: false}
-  derivation: >-
-    The home directory holds caches and credentials, the temporary directory holds scratch files, and the path finds
-    tools such as ffmpeg. None of them reaches a value a backend computes.
-
-never:
-  value: {names: [VIRTUAL_ENV], prefixes: [PYTHON, CONDA_]}
-  derivation: >-
-    These choose which interpreter, packages and startup code run, so a caller's own would shadow the locked env and
-    make its recorded `env_lock` and `wheel_set` false. No family may pass them.
+  names: [http_proxy, HTTP_PROXY, https_proxy, HTTPS_PROXY, no_proxy, NO_PROXY, ALL_PROXY, all_proxy]
+  prefixes: []
+  recorded: false
+# The Hub cache, token and offline switch.
+hugging_face: {names: [], prefixes: [HF_, HUGGINGFACE_], recorded: false}
+# Device selection and CUDA behaviour; recorded.
+gpu: {names: [], prefixes: [CUDA_, NVIDIA_], recorded: true}
+# Thread counts; recorded.
+threads: {names: [], prefixes: [OMP_, MKL_, OPENBLAS_], recorded: true}
+# Text decoding of tool output and file names.
+locale: {names: [LANG], prefixes: [LC_], recorded: false}
+# Home, temporary directory and tool path.
+process: {names: [HOME, TMPDIR, PATH], prefixes: [], recorded: false}
+# Interpreter and package selection; never passed.
+never: {names: [VIRTUAL_ENV], prefixes: [PYTHON, CONDA_]}

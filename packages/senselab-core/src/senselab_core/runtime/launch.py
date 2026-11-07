@@ -16,7 +16,7 @@ from senselab_core.runtime.storage import load_policy_values
 LAUNCH_TAG = "launch-env@1"
 """The `identity_digest` tag of a launch: its recorded ambient variables and its declared variables."""
 
-LAUNCH_ENVIRONMENT_FORMAT = "launch-environment@1.0"
+LAUNCH_ENVIRONMENT_FORMAT = "launch-environment@2.0"
 """The format of `data/launch_environment.yaml`, the families of ambient variables a launched process inherits."""
 
 ISOLATED = {"PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"}
@@ -41,7 +41,7 @@ def launch_environment() -> tuple[dict[str, Family], Family]:
     """Return the packaged families by name, and the `never` family no launch passes.
 
     Raises:
-        ValueError: the file lacks its format, an entry or an entry's derivation.
+        ValueError: the file lacks its format.
     """
     values = load_policy_values("senselab_core.runtime", "launch_environment.yaml", LAUNCH_ENVIRONMENT_FORMAT)
     entries = cast("dict[str, dict[str, Any]]", values)

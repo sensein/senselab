@@ -1,45 +1,24 @@
-format: run-config@1.0
+format: run-config@2.0
 # The packaged run config, under which a user's run config is deep-merged (`Thresholds.load`). `thresholds` names the
 # `isclose` bounds the per-type comparisons (`comparison.yaml`) read: `|actual - expected| <= atol + rtol * |expected|`.
-# Each is a written value with its derivation; none is fitted at run time.
+# Each is a written value; none is fitted at run time.
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under this file's path.
 thresholds:
   time_ns:
     rtol: 0.0
     atol: 1000000.0
-    derivation: >-
-      One millisecond, in the nanoseconds every kernel time is held in. The ORCD runs behind the retired tolerance
-      profiles found no difference in turn and segment times across repeat, batch, CPU and CUDA (diarize pyannote,
-      jobs 27661203 and 27661204; speech_to_text transformers, 27661289 and 27661304; crisperwhisper, 27661305,
-      27661306 and 27661308). A boundary that moves by a millisecond or more is a different boundary.
   probability:
     rtol: 0.0
     atol: 0.01
-    derivation: >-
-      A confidence in [0, 1]. The largest CPU-against-CUDA difference measured in a segment confidence was 0.00385
-      (speech_to_text transformers, jobs 27661289 and 27661304) and 0.00079 (crisperwhisper, jobs 27661305, 27661306
-      and 27661308); 0.01 is above both and below any change a reader of a confidence acts on.
   score:
     rtol: 1.0e-06
     atol: 1.0e-06
-    derivation: >-
-      A span or annotation score. PII span scores did not differ across repeat and batch (pii_spans transformers,
-      job 27661205; vllm, job 27661206), so the bound is float32 rounding: six significant digits.
   embedding:
     rtol: 0.0
     atol: 0.1
-    derivation: >-
-      Each component of an embedding vector or trial row. The largest CPU-against-CUDA difference measured in a
-      speechbrain speaker embedding was 0.0858 (jobs 27663219 and 27663927, at 9d4a3304); repeat and batch differed
-      by 0. 0.1 is the next written value above it.
   samples:
     rtol: 0.0
     atol: 1.0e-06
-    derivation: >-
-      A signal sample. Resampled series did not differ across repeat and batch (signal.resample numpy-sinc, job
-      27663928). 1e-6 is about eight float32 steps at full scale (float32 epsilon is 1.19e-7).
   value:
     rtol: 1.0e-06
     atol: 1.0e-09
-    derivation: >-
-      Any other number a kernel type holds: a metric or annotation value, an uncertainty or a clock drift. Nothing
-      was measured for these; the bound is agreement to six significant digits.

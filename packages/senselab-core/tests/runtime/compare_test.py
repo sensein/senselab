@@ -251,7 +251,7 @@ def test_packaged_thresholds_cover_every_rule_and_a_run_config_overrides_one(tmp
     packaged = Thresholds.load()
     assert set(NAMES) <= set(packaged.by_name)
     config = tmp_path / "run.yaml"
-    config.write_text("thresholds:\n  embedding:\n    atol: 2\n    derivation: my own\n", "utf-8")
+    config.write_text("thresholds:\n  embedding:\n    atol: 2\n", "utf-8")
     mine = Thresholds.load(config)
     assert mine.by_name["embedding"] == Threshold(rtol=packaged.by_name["embedding"].rtol, atol=2.0)
     assert {n: b for n, b in mine.by_name.items() if n != "embedding"} == {
@@ -271,10 +271,11 @@ def test_packaged_thresholds_cover_every_rule_and_a_run_config_overrides_one(tmp
         ({"thresholds": {"embeddingz": {"atol": 1.0}}}, "did you mean 'embedding'"),
         ({"threshold": {}}, "did you mean 'thresholds'"),
         ({"thresholds": {"embedding": {"tol": 1.0}}}, "unknown key"),
+        ({"thresholds": {"embedding": {"atol": 1.0, "derivation": "mine"}}}, "unknown key"),
     ],
 )
 def test_an_unknown_threshold_is_refused(override: dict[str, Any], match: str) -> None:
-    """A misspelt threshold, run config key or bound is refused, naming the closest one."""
+    """A misspelt threshold, run config key or bound, or a derivation, is refused, naming the closest one."""
     with pytest.raises(UnknownThreshold, match=match):
         Thresholds.load(override)
 

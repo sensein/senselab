@@ -2,7 +2,7 @@
 
 - `storage_fault` is the one mapping from an `OSError` to a `StoreUnavailable` (or `StorageFull`), used by
   the result store and the data-fetch cache; whether it is transient is `faults.is_transient`.
-- `load_policy_values` reads a packaged policy file whose every value carries its derivation.
+- `load_policy_values` reads a packaged policy file.
 - `StorePolicy` holds the modes and retention ages, read from `data/store_policy.yaml`.
 - Committed objects (store entries, fetch blobs and completion markers) are read-only:
   `committed_modes` gives their file and directory modes. Staging objects are `STAGING_FILE_MODE`
@@ -45,7 +45,7 @@ from senselab_core.runtime.faults import is_transient
 
 logger = logging.getLogger("senselab")
 
-POLICY_FORMAT = "store-policy@1.0"
+POLICY_FORMAT = "store-policy@2.0"
 STAGING_FILE_MODE = 0o660
 STAGING_DIR_MODE = 0o2770
 PRIVATE_DIR_MODE: Final = 0o700  # invariant: owner-only access, whatever the site's group policy
@@ -105,23 +105,15 @@ def storage_fault(err: OSError, path: Path, *, hint: str | None = None) -> Store
 
 
 def load_policy_values(package: str, file_name: str, policy_format: str) -> dict[str, object]:
-    """Return `{name: value}` from the packaged `data/<file_name>` of `package`; each policy entry carries a derivation.
+    """Return `{name: value}` from the packaged `data/<file_name>` of `package`.
 
     Raises:
-        ValueError: if the file lacks `format: <policy_format>`, or an entry is not exactly a `value` and a
-            non-empty `derivation`.
+        ValueError: if the file lacks `format: <policy_format>`.
     """
     raw = load_yaml(resources.files(package).joinpath("data", file_name), file_name)
     if raw.pop("format", None) != policy_format:
         raise ValueError(f"{file_name} must carry format {policy_format!r}")
-    values = {}
-    for name, entry in raw.items():
-        if not isinstance(entry, dict) or set(entry) != {"value", "derivation"}:
-            raise ValueError(f"{policy_format} entry {name!r} must be a mapping of exactly 'value' and 'derivation'")
-        if not isinstance(entry["derivation"], str) or not entry["derivation"].strip():
-            raise ValueError(f"{policy_format} entry {name!r} needs a non-empty derivation")
-        values[name] = entry["value"]
-    return values
+    return dict(raw)
 
 
 class StorePolicy(Frozen):
@@ -144,7 +136,7 @@ class StorePolicy(Frozen):
         """Return the policy in `data/store_policy.yaml`.
 
         Raises:
-            ValueError: if the file lacks the format, an entry, or an entry's derivation.
+            ValueError: if the file lacks the format or an entry.
         """
         return cls.model_validate(load_policy_values("senselab_core.runtime", "store_policy.yaml", POLICY_FORMAT))
 

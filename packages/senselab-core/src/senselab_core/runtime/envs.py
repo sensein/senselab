@@ -76,7 +76,7 @@ OVERLAY_DIGEST_TAG = "env-overlay@1"
 """The `identity_digest` tag of an env's overlay: the worker runtime identity and each worker module's digest."""
 LOCK_DIGEST_TAG = "env-lock@1"
 """The `identity_digest` tag of a lock's inputs, recorded in its `# identity-digest:` header line."""
-LOCK_INPUTS_FORMAT = "env-lock-inputs@1.0"
+LOCK_INPUTS_FORMAT = "env-lock-inputs@2.0"
 TORCH_PACKAGES = frozenset({"torch", "torchaudio"})
 _TORCH_VARIANTS = ("nvidia-", "triton", "pytorch-triton", "cuda-")
 _LOCK_LINE = re.compile(r"^([A-Za-z0-9._-]+)(\[[^\]]*\])?\s*(==|@)\s*([^\s;#\\]+)")
@@ -549,7 +549,7 @@ class LockInputs:
 
 
 def read_lock_inputs(path: Path) -> dict[str, LockInputs]:
-    """Read the `env-lock-inputs@1.0` file at `path`: its `quarantine` and `base_requirements`, and each env's inputs.
+    """Read the `env-lock-inputs@2.0` file at `path`: its `quarantine` and `base_requirements`, and each env's inputs.
 
     Raises:
         EnvLockError: the format is not `LOCK_INPUTS_FORMAT`, or an env lacks `python`, `requirements` or
@@ -558,8 +558,8 @@ def read_lock_inputs(path: Path) -> dict[str, LockInputs]:
     raw = load_yaml(Path(path), "env lock inputs")
     if raw.get("format") != LOCK_INPUTS_FORMAT:
         raise EnvLockError(f"{path}: format is {raw.get('format')!r}, not {LOCK_INPUTS_FORMAT!r}")
-    quarantined = tuple(raw["quarantine"]["value"])
-    base = tuple(raw["base_requirements"]["value"])
+    quarantined = tuple(raw["quarantine"])
+    base = tuple(raw["base_requirements"])
     out = {}
     for name, spec in raw["envs"].items():
         missing = [k for k in ("python", "requirements", "exclude_newer") if k not in spec]

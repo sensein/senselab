@@ -3,7 +3,8 @@
 `sample` runs the held-out items of one suite benchmark on `InProcess` under `--reuse` and `--verify`, compared
 under the thresholds of `--config` (a run config merged over the packaged one), against `--store`, and prints how many
 calls executed, were reused and were verified. `regenerate` reads the `equivalence-evidence@4.0` records of every
-store named and writes `equivalence@3.0`; the table is never hand-edited.
+store named, writes `equivalence@4.0` and prints each class's derivation for the table's section of
+config-derivations.md; the table is never hand-edited.
 """
 
 import argparse
@@ -32,8 +33,10 @@ def _parity_script() -> ModuleType:
 
 
 def regenerate(stores: Sequence[Path], out: Path) -> Path:
-    """Write the table the evidence in `stores` measures to `out`."""
-    out.write_text(render(e for root in stores for e in ResultStore(root).evidence()), "utf-8")
+    """Write the table the evidence in `stores` measures to `out`, and print each class's derivation."""
+    document, derivations = render(e for root in stores for e in ResultStore(root).evidence())
+    out.write_text(document, "utf-8")
+    print(derivations)
     return out
 
 

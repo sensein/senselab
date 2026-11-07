@@ -44,7 +44,7 @@ ENV_LOCKS = ROOT / "packages/senselab/src/senselab/data/env_locks"
 ENV_LICENSES = ROOT / "packages/senselab/src/senselab/data/env_licenses.yaml"
 ENV_LICENSES_FORMAT = "env-licenses@1.0"
 INSTALLER = "env-lock"
-POLICY_FORMAT = "license-policy@1.2"
+POLICY_FORMAT = "license-policy@2.0"
 DISTRIBUTIONS = ("senselab", "senselab-core", "senselab-worker")
 ON_MISSING = ("raise", "warn")
 
@@ -93,8 +93,8 @@ def load_policy(path: Path = POLICY) -> Policy:
         raise ValueError(f"{path}: on_missing must be one of {ON_MISSING}")
     sets = {}
     for name, entry in raw["sets"].items():
-        if not str(entry.get("derivation", "")).strip() or not entry.get("ids"):
-            raise ValueError(f"{path}: set {name} needs ids and a derivation")
+        if not entry.get("ids"):
+            raise ValueError(f"{path}: set {name} needs ids")
         sets[name] = frozenset(i.lower() for i in entry["ids"])
     distributions = {}
     bundled_allow = {}

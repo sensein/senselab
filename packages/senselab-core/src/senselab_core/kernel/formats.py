@@ -33,7 +33,7 @@ BENCHMARK_RESULT_FORMAT = "benchmark-result@2.0"
 RETIRED_BENCHMARK_RESULT_FORMATS = frozenset({"benchmark-result@1"})
 """Result-document formats 2.x no longer reads, as `<name>@<major>`."""
 
-EQUIVALENCE_FORMAT = "equivalence@3.0"
+EQUIVALENCE_FORMAT = "equivalence@4.0"
 """The format of the measured equivalence classes, `runtime/data/equivalence.yaml`."""
 EQUIVALENCE_EVIDENCE_FORMAT = "equivalence-evidence@4.0"
 """The format of one verify-sampling comparison, a record in the result store."""

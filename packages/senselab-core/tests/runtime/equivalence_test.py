@@ -1,4 +1,4 @@
-"""Equivalence classes (`equivalence@3.0`), read by the runtime, and the verify evidence they are regenerated from."""
+"""Equivalence classes (`equivalence@4.0`), read by the runtime, and the verify evidence they are regenerated from."""
 
 from pathlib import Path
 
@@ -47,7 +47,7 @@ def test_a_store_defaults_to_the_packaged_table(tmp_path: object) -> None:
     assert ResultStore(tmp_path).equivalence is EQUIVALENCE  # type: ignore[arg-type]
 
 
-def _doc(backends: str, fmt: str = "equivalence@3.0") -> str:
+def _doc(backends: str, fmt: str = "equivalence@4.0") -> str:
     return f"format: {fmt}\nbackends:\n{backends}"
 
 
@@ -58,7 +58,6 @@ ONE_CLASS = """  b:
       members:
       - {numerics: {device_kind: cpu, precision: default}, env_lock: lock-1}
       - {numerics: {device_kind: cuda, precision: default}, env_lock: lock-1}
-      derivation: measured
 """
 
 
@@ -74,9 +73,9 @@ def test_a_class_lists_members() -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("fmt", ["equivalence@1", "equivalence@2.0"])
+@pytest.mark.parametrize("fmt", ["equivalence@1", "equivalence@2.0", "equivalence@3.0"])
 def test_retired_formats_refused(fmt: str) -> None:
-    """An `equivalence@1` or `@2.0` table, whose members carry no env lock, is refused naming its migration."""
+    """An `equivalence@1`, `@2.0` or `@3.0` table is refused naming its migration."""
     with pytest.raises(EquivalenceFormatRetired, match="regenerate_equivalence.py"):
         parse_equivalence(_doc("  b: {}\n", fmt))
 
@@ -89,7 +88,7 @@ def test_a_member_without_an_env_lock_refused(member: str) -> None:
     """A member is exactly a numerics class and a non-empty env lock."""
     body = f"  b:\n    c:\n      members: [{member}, {{numerics: {{device_kind: mps}}, env_lock: l}}]\n"
     with pytest.raises(ValueError, match="env_lock"):
-        parse_equivalence(_doc(body + "      derivation: measured\n"))
+        parse_equivalence(_doc(body))
 
 
 @pytest.mark.logic
@@ -99,11 +98,11 @@ def test_a_member_without_an_env_lock_refused(member: str) -> None:
         ONE_CLASS + "  b: {}\n",
         ONE_CLASS + ONE_CLASS.split("\n", 1)[1],
         ONE_CLASS + "    d:\n      members: [{numerics: {device_kind: cuda, precision: default}, env_lock: lock-1},"
-        " {numerics: {device_kind: mps}, env_lock: lock-1}]\n      derivation: measured\n",
+        " {numerics: {device_kind: mps}, env_lock: lock-1}]\n",
         "  b:\n    c:\n      members: [{numerics: {device_kind: cpu}, env_lock: l}, {numerics: {device_kind: cpu},"
-        " env_lock: l}, {numerics: {device_kind: mps}, env_lock: l}]\n      derivation: measured\n",
+        " env_lock: l}, {numerics: {device_kind: mps}, env_lock: l}]\n",
         "  b:\n    c:\n      members: [{numerics: {device_kind: cpu, device_kind: mps}, env_lock: l},"
-        " {numerics: {device_kind: cuda}, env_lock: l}]\n      derivation: measured\n",
+        " {numerics: {device_kind: cuda}, env_lock: l}]\n",
     ],
     ids=["backend", "class", "member-in-two-classes", "member-twice", "numerics-field"],
 )
@@ -114,14 +113,10 @@ def test_equivalence_duplicate_key_refused(backends: str) -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("derivation", ['""', "'  '", "null", None])
-def test_empty_derivation_refused(derivation: str | None) -> None:
-    """A class with an empty, blank, null or missing derivation is refused."""
-    body = ONE_CLASS.replace(
-        "      derivation: measured\n", "" if derivation is None else f"      derivation: {derivation}\n"
-    )
-    with pytest.raises(ValueError, match="derivation"):
-        parse_equivalence(_doc(body))
+def test_a_class_with_a_derivation_refused() -> None:
+    """A class is exactly its members: a derivation belongs in config-derivations.md, not in the table."""
+    with pytest.raises(ValueError, match="exactly 'members'"):
+        parse_equivalence(_doc(ONE_CLASS + "      derivation: measured\n"))
 
 
 def _evidence(  # noqa: PLR0913 - one comparison's sides
@@ -165,13 +160,13 @@ def test_regenerated_equivalence_matches_evidence(tmp_path: Path) -> None:
     store.add_evidence(_evidence("clique", CPU, CUDA))
     records = store.evidence()
     assert len(records) == 9
-    text = render(records)
+    text, derivations = render(records)
     assert text.startswith(HEADER)
     assert parse_equivalence(text) == {
         "clique": {"class-0": frozenset({key(CPU), key(CUDA), key(MPS)})},
         "chained": {"class-0": frozenset({key(CPU), key(CUDA)}), "class-1": frozenset({key(TPU), key(NPU)})},
     }
-    derivation = yaml.safe_load(text)["backends"]["clique"]["class-0"]["derivation"]
+    [derivation] = [line for line in derivations.split("\n\n") if line.startswith("clique.class-0: ")]
     assert "3 agreements and 0 disagreements over 3 keys" in derivation and "slurm-1" in derivation
 
 
@@ -193,7 +188,7 @@ def _context(numerics: dict[str, str], env_lock: str = L1) -> ExecutionContext:
 @pytest.mark.logic
 def test_an_unmeasured_pair_is_never_joined() -> None:
     """A~B and B~C with A-C never measured: A and C are in no one class, so A is not served for C."""
-    table = parse_equivalence(render([_evidence("b", CPU, CUDA), _evidence("b", CUDA, MPS, key="2")]))
+    table = parse_equivalence(render([_evidence("b", CPU, CUDA), _evidence("b", CUDA, MPS, key="2")])[0])
     assert table == {"b": {"class-0": frozenset({key(CPU), key(CUDA)})}}
     assert not acceptable(_context(CPU), _context(MPS), "equivalent", backend="b", equivalence=table)
     assert not acceptable(_context(CUDA), _context(MPS), "equivalent", backend="b", equivalence=table)
@@ -204,15 +199,15 @@ def test_an_unmeasured_pair_is_never_joined() -> None:
 def test_a_class_joins_two_env_locks_only_on_evidence_for_that_pair() -> None:
     """Agreement within each of two env locks never joins them; only a comparison across the pair does."""
     within_each = [_evidence("b", CPU, CUDA), _evidence("b", CPU, CUDA, key="2", locks=(L2, L2))]
-    table = parse_equivalence(render(within_each))
+    table = parse_equivalence(render(within_each)[0])
     assert table == {
         "b": {"class-0": frozenset({key(CPU), key(CUDA)}), "class-1": frozenset({key(CPU, L2), key(CUDA, L2)})}
     }
     assert not acceptable(_context(CPU), _context(CPU, L2), "equivalent", backend="b", equivalence=table)
-    across = parse_equivalence(render([_evidence("b", CPU, CPU, key="3", locks=(L1, L2))]))
+    across = parse_equivalence(render([_evidence("b", CPU, CPU, key="3", locks=(L1, L2))])[0])
     assert across == {"b": {"class-0": frozenset({key(CPU), key(CPU, L2)})}}
     assert acceptable(_context(CPU), _context(CPU, L2), "equivalent", backend="b", equivalence=across)
-    assert yaml.safe_load(render(within_each))["backends"]["b"]["class-1"]["members"][0]["env_lock"] == L2
+    assert yaml.safe_load(render(within_each)[0])["backends"]["b"]["class-1"]["members"][0]["env_lock"] == L2
 
 
 @pytest.mark.logic

@@ -2,7 +2,7 @@
 
 The budget is read from the git index: no tracked file under ``packages/`` exceeds the per-file limit, the data
 files (every file that is not ``.py``, ``.pyi`` or ``.ipynb``) stay within the total, and no tracked entry is a
-symlink or submodule. The two limits, with their derivations, are in ``scripts/data/fixture_budget.yaml``.
+symlink or submodule. The two limits are in ``scripts/data/fixture_budget.yaml``.
 
 Usage::
 
@@ -21,7 +21,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 BUDGET = Path(__file__).resolve().parent / "data" / "fixture_budget.yaml"
-BUDGET_FORMAT = "fixture-budget@1.0"
+BUDGET_FORMAT = "fixture-budget@2.0"
 BUDGETED = "packages/"
 CODE_SUFFIXES = (".py", ".pyi", ".ipynb")
 REGULAR_MODES = frozenset({"100644", "100755"})
@@ -31,27 +31,25 @@ _FIX = "generate it with senselab_core.testing.synth, or pull it through a data 
 
 
 def load_budget(path: Path = BUDGET) -> dict[str, int]:
-    """Return each limit in the budget file at ``path``; an entry without a derivation is refused."""
+    """Return each limit in the budget file at ``path``; a limit that is not a positive integer is refused."""
     raw = yaml.safe_load(path.read_text())
     if raw.get("format") != BUDGET_FORMAT:
         raise ValueError(f"{path}: format is {raw.get('format')!r}, not {BUDGET_FORMAT!r}")
     limits = {}
     for name in ("file_max_bytes", "data_total_max_bytes"):
-        entry = raw.get(name)
-        if not isinstance(entry, dict) or not str(entry.get("derivation", "")).strip():
-            raise ValueError(f"{path}: {name} needs a value and a derivation")
-        if not isinstance(entry.get("value"), int) or isinstance(entry["value"], bool) or entry["value"] <= 0:
+        value = raw.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{path}: {name} is not a positive integer")
-        limits[name] = entry["value"]
+        limits[name] = value
     return limits
 
 
 def load_exempt_prefix(path: Path = BUDGET) -> str:
-    """Return the path prefix whose files the budget does not count; an entry without a derivation is refused."""
-    entry = yaml.safe_load(path.read_text()).get("exempt_prefix")
-    if not isinstance(entry, dict) or not str(entry.get("derivation", "")).strip() or not entry.get("value"):
-        raise ValueError(f"{path}: exempt_prefix needs a value and a derivation")
-    return str(entry["value"])
+    """Return the path prefix whose files the budget does not count; an empty one is refused."""
+    value = yaml.safe_load(path.read_text()).get("exempt_prefix")
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{path}: exempt_prefix needs a path prefix")
+    return value
 
 
 _LIMITS = load_budget()

@@ -105,12 +105,12 @@ class Thresholds(Frozen):
     def load(cls, override: Mapping[str, Any] | Path | None = None) -> "Thresholds":
         """Return the packaged run config's `thresholds` with `override`'s (a run config mapping or YAML) merged over.
 
-        A threshold of `override` may set `rtol`, `atol` or both, and may carry a `derivation`.
+        A threshold of `override` may set `rtol`, `atol` or both.
 
         Raises:
             UnknownThreshold: `override` names a key or threshold the packaged run config lacks, naming the closest.
-            ValueError: the packaged file is not `run-config@1.0` with a derivation per threshold, or a merged bound
-                is not a finite non-negative number.
+            ValueError: the packaged file is not `run-config@2.0` with exactly `rtol` and `atol` per threshold, or a
+                merged bound is not a finite non-negative number.
         """
         merged = {name: dict(bound) for name, bound in _packaged_thresholds().items()}
         raw = load_yaml(override, "run config") if isinstance(override, Path) else dict(override or {})
@@ -118,12 +118,12 @@ class Thresholds(Frozen):
         given = raw.get("thresholds") or {}
         _known("threshold", set(given), set(merged))
         for name, bound in given.items():
-            _known(f"key of threshold {name!r}", set(bound), {"rtol", "atol", "derivation"})
-            merged[name] |= {k: v for k, v in bound.items() if k != "derivation"}
+            _known(f"key of threshold {name!r}", set(bound), {"rtol", "atol"})
+            merged[name] |= bound
         return cls(by_name={n: Threshold(**{k: _number(v) for k, v in b.items()}) for n, b in merged.items()})
 
 
-RUN_CONFIG_FORMAT = "run-config@1.0"
+RUN_CONFIG_FORMAT = "run-config@2.0"
 
 
 def _number(v: object) -> object:
@@ -143,10 +143,8 @@ def _packaged_thresholds() -> dict[str, dict[str, object]]:
         raise ValueError(f"run_config.yaml must carry format {RUN_CONFIG_FORMAT!r} and 'thresholds'")
     out = {}
     for name, entry in raw["thresholds"].items():
-        if not isinstance(entry, dict) or set(entry) != {"rtol", "atol", "derivation"}:
-            raise ValueError(f"{RUN_CONFIG_FORMAT} threshold {name!r} is exactly 'rtol', 'atol' and 'derivation'")
-        if not isinstance(entry["derivation"], str) or not entry["derivation"].strip():
-            raise ValueError(f"{RUN_CONFIG_FORMAT} threshold {name!r} needs a non-empty derivation")
+        if not isinstance(entry, dict) or set(entry) != {"rtol", "atol"}:
+            raise ValueError(f"{RUN_CONFIG_FORMAT} threshold {name!r} is exactly 'rtol' and 'atol'")
         out[str(name)] = {"rtol": entry["rtol"], "atol": entry["atol"]}
     return out
 

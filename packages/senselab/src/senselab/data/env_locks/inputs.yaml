@@ -1,19 +1,12 @@
-format: env-lock-inputs@1.0
+format: env-lock-inputs@2.0
 # What each lock beside this file is compiled from; scripts/lock_envs.py reads it. `max_cuda` is the CUDA index
 # ceiling (omitted: the default); `exclude_newer` is the pinned upload cutoff of the resolution.
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under this file's path.
 quarantine:
-  value:
-  - lightning!=2.6.2,!=2.6.3
-  - pytorch-lightning!=2.6.2,!=2.6.3
-  derivation: >-
-    PyPI withdrew lightning 2.6.2 and 2.6.3 as malicious; a resolution must never pick them, whichever package
-    pulls lightning in. The constraints are part of every lock's digest, so changing them stales every lock.
+- lightning!=2.6.2,!=2.6.3
+- pytorch-lightning!=2.6.2,!=2.6.3
 base_requirements:
-  value:
-  - numpy
-  derivation: >-
-    The worker runtime (senselab_worker.codec and every backend's arrays) imports numpy, and the worker overlay
-    adds no distribution, so the lock must provide it whether or not the backend requires it.
+- numpy
 envs:
   crisperwhisper:
     python: '3.12'
