@@ -1,6 +1,6 @@
 """Batch invariance probe: each benchmark's held-out items through `execute` at batch 1 and at batch N, compared.
 
-`uv run python benchmarks/batch_invariance.py SUITE --execution orcd --out DIR --sha SHA --job JOB`
+`uv run python benchmarks/batch_invariance.py SUITE --execution orcd [--override FILE] --out DIR --sha SHA --job JOB`
 
 For each benchmark of the suite (`benchmark-suite@1.0`), its held-out items are keyed and sent as one node's jobs,
 once in batches of one and once in batches of N, each into a store of its own under `DIR`. N is the largest number of
@@ -151,6 +151,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("suite", type=Path)
     parser.add_argument("--execution", default="laptop")
+    parser.add_argument("--override", type=Path, default=None, help="profile YAML deep-merged over --execution")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--sha", required=True)
     parser.add_argument("--job", required=True)
@@ -159,7 +160,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     probes = probe_suite(
         args.suite,
-        execution=ExecutionProfile.load(args.execution),
+        execution=ExecutionProfile.load(args.execution, args.override),
         out=args.out,
         manifests=args.manifests,
         data_cache=args.data_cache or default_cache_root(),
