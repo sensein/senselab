@@ -13,7 +13,7 @@ import pytest
 from senselab_core.runtime.execution.supervisor import Keeper, Supervisor, subreaper_supported
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
-from senselab_core.testing.processes import alive, group_alive
+from senselab_core.testing.processes import alive, group_alive, group_gone
 
 PYTHON = source_tree_python()
 ESCAPING = "backends.escaping_backend_fixture"
@@ -196,3 +196,31 @@ def test_keeper_kills_only_groups_it_still_owns() -> None:
         for proc in (owned, reused):
             proc.kill()
             proc.wait()
+
+
+UNSUPERVISED = """
+import json, sys, time
+from senselab_core.runtime.worker_client import WorkerClient
+
+client = WorkerClient(sys.argv[1], sys.argv[2], init={})
+member, _ = client.run([{"id": "a", "inputs": {}}], {})[0]["outputs"]["pids"]
+print(json.dumps([client.hello["pid"], member]), flush=True)
+time.sleep(3600)
+"""
+
+
+@pytest.mark.contract
+def test_an_unsupervised_owner_sigkill_leaves_no_group(backends_importable: None) -> None:
+    """With no supervisor entered, a SIGKILL of a worker's owner still takes the worker's group with it."""
+    host = subprocess.Popen([sys.executable, "-c", UNSUPERVISED, str(PYTHON), ESCAPING], stdout=subprocess.PIPE)
+    assert host.stdout is not None
+    try:
+        leader, member = json.loads(host.stdout.readline())
+        assert alive(leader) and alive(member)
+        host.kill()
+        host.wait()
+        assert group_gone(leader, SETTLE_S) and not alive(member)
+    finally:
+        host.kill()
+        host.wait()
+        host.stdout.close()

@@ -436,7 +436,6 @@ class VllmServer:
         self._server = started.start(
             [*command, *self._model_args, *self.args],
             supervisor=self._supervisor,
-            keep=True,
             stdin=subprocess.DEVNULL,
             stdout=sink,
             stderr=subprocess.STDOUT,

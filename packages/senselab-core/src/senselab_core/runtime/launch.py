@@ -82,15 +82,14 @@ class Launch:
         argv: Sequence[str],
         *,
         supervisor: Supervisor | None = None,
-        keep: bool = False,
         **popen: Any,  # noqa: ANN401
     ) -> "subprocess.Popen[bytes]":
         """Start `argv` with this launch's variables and directory through `supervisor` (`current()` when None).
 
-        `popen` is passed to `Supervisor.popen`, `keep` too.
+        `popen` is passed to `Supervisor.popen`.
         """
         chosen = supervisor if supervisor is not None else current()
-        return chosen.popen(argv, keep=keep, env=dict(self.variables), cwd=self.cwd, **popen)
+        return chosen.popen(argv, env=dict(self.variables), cwd=self.cwd, **popen)
 
 
 def launch(python: str | os.PathLike[str], declared: Mapping[str, str] | None = None) -> Launch:

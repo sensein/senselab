@@ -17,9 +17,9 @@ were already running when it was entered, their groups, and children of this pro
 Elsewhere, and in the process-wide supervisor, a group is supervised by its process group: a `setsid` escapee is not
 reached, and liveness is probed by group (`live_members`).
 
-A kept launch is also recorded with the keeper, a process in its own session that reads the supervisor's records on
-its stdin. Once this process has died, by any signal, the keeper SIGKILLs every group and orphan still recorded. An
-entered supervisor keeps every launch and adopted orphan; the process-wide one keeps the launches made with `keep`.
+Every launch, and every orphan an entered supervisor adopts, is also recorded with the keeper, one process per
+supervisor, in its own session, that reads the records on its stdin. Once this process has died, by any signal, the
+keeper SIGKILLs every group and orphan still recorded.
 Leaving an entered supervisor SIGKILLs every group and orphan it holds, reaps the orphans and the leaders, stops the
 keeper and restores the subreaper flag.
 """
@@ -54,17 +54,16 @@ KEEPER = r"""
 import os, select, signal, subprocess, sys
 
 owner = int(sys.argv[1])
+try:
+    os.setsid()
+except OSError:
+    pass
 held = {"g": {}, "p": {}}
 rest = b""
 
 
-class Gone(Exception):
-    pass
-
-
 def on_term(signum, frame):
-    if os.getppid() != owner:
-        raise Gone
+    pass
 
 
 def started(pid):
@@ -125,15 +124,12 @@ if sys.platform == "linux":
         ctypes.CDLL(None).prctl(1, signal.SIGTERM)
     except Exception:
         pass
-try:
-    while os.getppid() == owner:
-        if select.select([0], [], [], 1.0)[0]:
-            data = os.read(0, 65536)
-            if not data:
-                break
-            apply(data)
-except Gone:
-    pass
+while os.getppid() == owner:
+    if select.select([0], [], [], 0.2)[0]:
+        data = os.read(0, 65536)
+        if not data:
+            break
+        apply(data)
 drain()
 for kind in ("g", "p"):
     for number, recorded in held[kind].items():
@@ -249,11 +245,16 @@ class Orphan:
 
 
 class Keeper:
-    """The keeper process, started on the first record; records are written to its stdin."""
+    """The keeper process of this process, started on the first record; records are written to its stdin.
+
+    In a process forked from its owner, the next record starts that process's own keeper.
+    """
 
     def __init__(self) -> None:
         """Start no process yet."""
-        self.proc: subprocess.Popen[bytes] | None = None
+        self.pid: int | None = None
+        self._owner = os.getpid()
+        self._stdin: IO[bytes] | None = None
         self._broken = False
 
     def record(self, sign: str, kind: str, number: int, start: str | None = None) -> None:
@@ -261,37 +262,60 @@ class Keeper:
 
         `start` is the recorded start time of the group leader or pid; the keeper reads it when None.
         """
-        if self._broken or (self.proc is None and sign == "-"):
+        if os.getpid() != self._owner:
+            self._disown()
+        if self._broken or (self.pid is None and sign == "-"):
             return
-        if self.proc is None:
-            self.proc = subprocess.Popen(  # noqa: S603 - this interpreter
-                [sys.executable, "-I", "-c", KEEPER, str(os.getpid())],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        stdin: IO[bytes] | None = self.proc.stdin
         try:
-            assert stdin is not None
+            stdin = self._stdin if self._stdin is not None else self._start()
             stdin.write(f"{sign}{kind}{number}{'' if start is None else ' ' + start}\n".encode())
             stdin.flush()
         except (OSError, ValueError) as exc:
             self._broken = True
-            logger.warning("the supervisor's keeper is gone; launches are no longer kept: %s", exc)
+            logger.warning("the keeper is gone; launches are no longer kept: %s", exc)
 
     def stop(self, timeout: float) -> None:
         """Close the keeper's stdin, so it kills what is still recorded and exits; reap it within `timeout`."""
-        proc, self.proc = self.proc, None
-        if proc is None:
+        if os.getpid() != self._owner:
+            self._disown()
+        pid, stdin, self.pid, self._stdin = self.pid, self._stdin, None, None
+        if stdin is not None:
+            with contextlib.suppress(OSError):
+                stdin.close()
+        if pid is None:
             return
-        with contextlib.suppress(OSError, ValueError):
-            assert proc.stdin is not None
-            proc.stdin.close()
+        deadline = time.monotonic() + timeout
+        while os.waitpid(pid, os.WNOHANG) == (0, 0):
+            if time.monotonic() > deadline:
+                _kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+                return
+            time.sleep(REAP_POLL_S)
+
+    def _start(self) -> IO[bytes]:
+        read, write = os.pipe()
         try:
-            proc.wait(timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            self.pid = os.posix_spawn(
+                sys.executable,
+                [sys.executable, "-I", "-c", KEEPER, str(os.getpid())],
+                os.environ,
+                file_actions=[
+                    (os.POSIX_SPAWN_DUP2, read, 0),
+                    (os.POSIX_SPAWN_OPEN, 1, os.devnull, os.O_WRONLY, 0),
+                ],
+                setpgroup=0,
+            )
+        finally:
+            os.close(read)
+        self._stdin = os.fdopen(write, "wb")
+        return self._stdin
+
+    def _disown(self) -> None:
+        """In a forked copy, close this process's copy of the owner's keeper stdin and keep nothing of it."""
+        if self._stdin is not None:
+            with contextlib.suppress(OSError):
+                self._stdin.close()
+        self.pid, self._stdin, self._broken, self._owner = None, None, False, os.getpid()
 
 
 class Supervisor:
@@ -392,18 +416,17 @@ class Supervisor:
                     _prctl(PR_SET_CHILD_SUBREAPER, self._previous_flag)
             self._adopting = self._entered = False
 
-    def popen(self, argv: Sequence[str], *, keep: bool = False, **popen: Any) -> "subprocess.Popen[bytes]":  # noqa: ANN401
-        """Start `argv` in a new session as `subprocess.Popen` does with `popen`, and enter its group in the table.
+    def popen(self, argv: Sequence[str], **popen: Any) -> "subprocess.Popen[bytes]":  # noqa: ANN401
+        """Start `argv` in a new session as `subprocess.Popen` does with `popen`; enter its group in the table.
 
-        The group is recorded with the keeper when this supervisor is entered or `keep` is set.
+        The group is recorded with the keeper.
         """
         with self._lock:
             proc: subprocess.Popen[bytes] = subprocess.Popen(argv, **{**popen, "start_new_session": True})  # noqa: S603
             self._prune()
             self._groups[proc.pid] = self._launched[proc.pid] = proc
             self._ended.discard(proc.pid)
-            if self._entered or keep:
-                self._keeper.record("+", "g", proc.pid)
+            self._keeper.record("+", "g", proc.pid)
             return proc
 
     def released(self, pgid: int) -> None:
@@ -451,8 +474,8 @@ class Supervisor:
         self._foreign &= listed
         self._launched = {pid: proc for pid, proc in self._launched.items() if proc.returncode is None}
         known = self._launched.keys() | self._orphans.keys() | self._foreign
-        if self._keeper.proc is not None:
-            known.add(self._keeper.proc.pid)
+        if self._keeper.pid is not None:
+            known.add(self._keeper.pid)
         for pid in listed - known:
             pgid = _group_of(pid)
             if pgid is None or pgid == self._own_pgid or pgid in self._foreign_groups:
