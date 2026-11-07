@@ -37,7 +37,8 @@ robust (worker errors carried to the caller, a bounded pool, explicit cancellati
 - **Quality gates:**
   - static analysis (ruff, mypy, import-linter for layering);
   - property-based and fault-injection tests (P-34);
-  - small reviewed changes;
+  - reviewed changes: a review package over 1200 diff lines (the source-file budget) is split before dispatch,
+    or the reviewer is briefed per named chunk;
   - continuous profiling at scale.
 
 ## Standards
@@ -88,13 +89,15 @@ here, not from the tree.
 - **Test file, 1300 lines.** A test file is read beside its subject, so it may exceed the source limit by one function
   limit.
 
-A function or file over its limit is listed in `exempt` with a reason, or split. The tree is measured against these
+A function or file over its limit is split, or listed in `exempt` with one of two reasons: a literal table, or
+vendored code kept diffable. Each exemption is re-read at each phase gate and removed or re-justified. The tree is measured against these
 limits on every pre-commit run, which prints the five longest files and functions.
 
 ## What "special-casing" means (rejected in review)
 
 - A branch on a dataset, recording, subject, model id or host name.
-- A threshold literal tuned to make one case pass (P-17).
+- A numeric literal added or changed in the same PR as the test it makes pass, with no entry in
+  `config-derivations.md` (P-17).
 - A retry, sleep or timeout added to hide a race instead of removing it.
 - A test that asserts the current output of a model, or a measured number, outside `benchmarks/`.
 - A try/except that turns an unknown failure into a default value.
@@ -106,38 +109,45 @@ without trading away P-31..P-39.
 
 | Task | Agent | Model, effort | Isolation |
 |---|---|---|---|
-| Lookups, inventories, fact checks, `migration-ledger.md` drift scans (P-39) | Explore | haiku, lower | read-only |
-| Mechanical changes: rewires, renames, module moves, applying a spelled-out pattern, doc consistency fixes | general-purpose | sonnet, lower | worktree |
+| Lookups, inventories, fact checks, `migration-ledger.md` drift scans (P-39) | Explore | haiku, low | read-only; cites `file:line` |
+| Mechanical changes: rewires, renames, module moves, applying a spelled-out pattern, doc consistency fixes | general-purpose | sonnet, low | worktree |
 | Implementing a phase item outside the kernel: a backend port, a task, a dataset adapter, tests | general-purpose | sonnet | worktree |
 | Implementing kernel or concurrency code: identity, store and leases, graph format, worker protocol, planner | general-purpose | opus | worktree |
 | Design, ADRs, synthesis across threads | main thread or fork | opus | — |
 | Per-PR review (standards and checklist, P-31..P-37) | fresh general-purpose | sonnet; opus for kernel or concurrency PRs | read-only |
-| End-of-phase adversarial round (P-35) | general-purpose lead with up to 5 subagents | opus, higher; subagents sonnet | read-only |
-| Phase-gate architecture review | general-purpose lead with subagents | opus; verification subagents haiku, lower | read-only |
-| Verifying a reviewer's claims before acting on them | Explore | haiku or sonnet, lower | read-only |
-| ORCD jobs (benchmarks, GPU limits, env builds) | an agent submits; the main thread holds the wait | sonnet, lower | pinned checkout per job |
+| End-of-phase adversarial round (P-35) | general-purpose lead with up to 5 subagents | opus, high; subagents sonnet | read-only |
+| Phase-gate architecture review | general-purpose lead with subagents | opus; verification subagents haiku, low | read-only |
+| Verifying a reviewer's claims before acting on them | Explore | haiku or sonnet, low | read-only; cites `file:line` |
+| ORCD jobs (benchmarks, GPU limits, env builds) | an agent submits; the main thread holds the wait | sonnet, low | pinned checkout per job |
 
 **Rules**
-- **Escalation.** Move up one tier (sonnet to opus) after a task fails its tests or review twice.
-  Use fable only after opus has failed on the same item, or for proofs about the lease and store
-  protocol (ADR-003).
+- **Escalation.** Any review verdict other than approve, and any failing test run, is a failure. After the
+  second on one task, the next round goes to a fresh agent one tier up (sonnet to opus), and the ledger line
+  says `escalated`. A 429 or usage-limit error is not a failure and is not escalated. Use fable only after
+  opus has failed on the same item, or for proofs about the lease and store protocol (ADR-003). Fix rounds
+  on one symptom are counted separately (P-35).
 - **Reviewer independence.** A review never runs on the model and context that produced the work.
   Pair a sonnet implementation with an opus review on the kernel, and an opus implementation with
   a fresh sonnet reviewer, or a fresh opus reviewer on a kernel item (P-40 Check). A reviewer gets the code and the principles, not the
   implementer's conclusions.
-- **Every brief carries:**
-  - the P-ids and ADRs the task touches;
-  - the per-commit checklist above;
-  - the test tier expected (`testing.md`);
-  - P-28 (no identifiers) and P-29 (serial, scoped tests; cluster limits);
-  - the reconciliation mark to check (P-39);
-  - the exact files to read.
+- **Every brief is a file with three headings**, implementer and reviewer briefs alike:
+  - `## Principles`: P-31..P-40 by id, one line each; the other P-ids and ADRs the task touches; the test tier
+    expected (`testing.md`); P-28 (no identifiers) and P-29 (serial, scoped tests; cluster limits); the
+    reconciliation mark to check (P-39);
+  - `## Checklist`: the per-commit checklist above, verbatim;
+  - `## Files`: the exact files to read.
 
-  A task without that brief is not delegated.
-- **Parallelism.** Independent items fan out with `effort: lower`. Several agents on ORCD share
+  A task without that brief is not delegated. Planned, not yet built: the dispatch step refuses a brief missing
+  any of the three headings. Standing contracts that briefs include are generated from, or quote, this file, so
+  they cannot drift from it.
+- **A review reports against the checklist.** The reviewer's report carries one line per checklist item marked
+  `pass`, `fail` or `n.a.`, with evidence for each `pass` that a tool can give (for P-34, the fixed-parameter
+  lint's output once it exists). A review without that table is returned, not read.
+- **Parallelism.** Independent items fan out with `effort: low`. Several agents on ORCD share
   the QOS cap (P-29). Agents never hold cluster waits; the main thread does.
-- **Claims are verified before acting on them.** A finding that drives a change is checked
-  against the code first.
+- **Claims are verified before acting on them.** Before a fix round is dispatched on a blocking finding, the
+  controller, or a haiku verifier, quotes `file:line` for it in the ledger line. A finding without a quoted
+  location is not blocking.
 - **Record the tier used.** Each PR notes the implementer and reviewer models, so escalation rates
   per task type can be measured and the table tuned.
 
@@ -178,6 +188,8 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   only a generic backstop and names nothing specific to one developer, machine or cluster: the
   participant-id hook, and a home-directory check (`/Users/<name>/`, `/home/<name>/`,
   `C:\Users\<name>\`, the generic accounts excepted).
+  Amended 2026-11-07: the generic accounts are `user`, `runner` and `ec2-user`, the list
+  `scripts/check_local_paths.py` holds; synthetic examples use `user`.
 
 <a id="p-29"></a>
 ### P-29 Fast test cycles locally and on the cluster, within shared limits
@@ -280,6 +292,10 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   are the design's (import-linter contracts, the identifier check, the fixture budget, the
   workflow-expression guard); spelling-based lints over in-repo bypasses and tests whose only job is
   to make another test exist are not added.
+  Amended 2026-11-07: a symptom that survives a fix is a design question. Before a second fix round on
+  the same symptom the controller writes in the ledger the measurement, the component, and why the first
+  fix could not have changed it. The second round goes one tier up with that mechanism in its brief. A
+  third round on one symptom is not dispatched without an owner-visible ruling.
 
 <a id="p-39"></a>
 ### P-39 Concurrent 1.x work is reconciled, never lost
@@ -308,4 +324,5 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   P-ids and the checklist.
   Amended 2026-11-07: the reviewer runs in a fresh context; its model differs from the implementer's
   unless both are the top tier for a kernel item, and the PR says so. `scripts/check_pr_models.py` is to
-  encode exactly this (planned; today it checks only that the models differ).
+  encode exactly this (planned; today it checks only that the models differ). Briefs take the three-heading form and
+  reviews the checklist table set out under Rules above.

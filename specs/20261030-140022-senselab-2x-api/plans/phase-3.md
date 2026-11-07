@@ -108,6 +108,9 @@ yet merged into `2.x`), → `2.x` after `2x/phase-2` merges. Spec changes, ADR a
   "<tier>"`, serial. Check the next maintenance reservation before choosing `-t`.
 - **Evidence:** `COMPLETED` is not evidence: check elapsed time, grep the log for the summary line, record `<sha>
   <job id> <summary>`. Timing figures count only from an idle node (`benchmarks.md` §5).
+- **Property evidence** (amended 2026-11-07, D3 of the principles review): a step that measures a property names
+  the number it must show before it runs (for a pool scale run: peak workers ≥ min(cap, jobs ÷ quantum)). A
+  correctness pass alone is not a pass of that step.
 
 ## Review Focus
 
