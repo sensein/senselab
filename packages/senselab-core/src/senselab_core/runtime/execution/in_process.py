@@ -27,6 +27,7 @@ from senselab_core.runtime.execution.executor import (
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, Upstream, execute
 from senselab_core.runtime.execution.outputs import anchors_of
 from senselab_core.runtime.execution.records import add_plan_entity
+from senselab_core.runtime.execution.services import service_registry
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.keys import Call, Placement, call_key, request_components, request_size
 from senselab_core.runtime.planner import Plan, plan
@@ -51,13 +52,13 @@ _PROCESS_LOCK = threading.Lock()
 def process_workers(profile: ExecutionProfile) -> WorkerSet:
     """Return this process's one worker set, bounded by the workers `profile`'s resource classes keep alive at once.
 
-    The first profile sets the bound; a later profile with a smaller bound tightens it (`WorkerSet.tighten`), and a
-    larger one leaves it. The set is closed at exit.
+    The first profile sets the bound and the registry whose services it consumes (`service_registry`); a later profile
+    with a smaller bound tightens it (`WorkerSet.tighten`), and a larger one leaves it. The set is closed at exit.
     """
     bound = sum(c.max_workers for c in profile.resource_classes.values())
     with _PROCESS_LOCK:
         if not _PROCESS:
-            _PROCESS.append(WorkerSet(bound))
+            _PROCESS.append(WorkerSet(bound, registry=service_registry(profile)))
         workers = _PROCESS[0]
     workers.tighten(bound)
     return workers

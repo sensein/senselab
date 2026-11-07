@@ -91,6 +91,8 @@ def test_evicted_worker_process_is_closed() -> None:
 class _Server:
     """A started server that attests what it was given."""
 
+    url: str | None = None
+
     def __init__(self, attestation: Attestation) -> None:
         self.label = attestation.model_identity
         self._attestation: Attestation | None = attestation

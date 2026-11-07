@@ -5,7 +5,8 @@ devices, so servers that share a card start one at a time. It waits for ``/healt
 and holds an `Attestation` (engine version, model identity, config digest) that every reply it returns carries
 and that its `context_fields` put in the execution context. The server is launched through the supervisor in force
 (`Supervisor`), in its own process group, which the supervisor's keeper kills if the owner dies; leaving the context
-stops it (SIGTERM, then SIGKILL).
+stops it (SIGTERM, then SIGKILL). A `svc` pool worker starts one and registers it for other processes to consume
+(`execution.services`); a reply through the registry is checked against the attestation by `attest_reply`, as here.
 
 The clients `chat` (with `content_part` for text, image, video and audio parts) and `complete` call a running
 server's OpenAI-compatible endpoints over loopback and return the parsed JSON; they log nothing.
@@ -34,6 +35,7 @@ from typing import IO, Any
 
 from senselab_worker.digest import identity_digest
 
+from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.identity import ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.supervisor import current
@@ -112,18 +114,17 @@ class StaleAttestation(RuntimeError):
     """A reply the attested server did not give: the server is no longer running, or another model answered."""
 
 
-@dataclass(frozen=True)
-class Attestation:
+class Attestation(Frozen):
     """What a running server is.
 
     `engine_version` and `served_model` are observed: what the server reports at `/version` and `/v1/models`.
     `model_identity` and `config_digest` are asserted: the pinned model and the settings the client launched it with.
     """
 
-    engine_version: str
-    served_model: str
-    model_identity: str
-    config_digest: str
+    engine_version: NonEmptyStr
+    served_model: NonEmptyStr
+    model_identity: NonEmptyStr
+    config_digest: NonEmptyStr
 
     def driver(self) -> dict[str, str]:
         """Return the attestation as `ExecutionContext.driver` entries; `observed` names the observed ones."""
@@ -145,6 +146,18 @@ class Attested:
     attestation: Attestation
 
 
+def attest_reply(body: Any, attestation: Attestation, label: str) -> Attested:  # noqa: ANN401 - a JSON value
+    """Return `body` as a reply of the server attesting `attestation`; `label` names its model in the error.
+
+    Raises:
+        StaleAttestation: the reply names another model than the attested one.
+    """
+    served = body.get("model") if isinstance(body, dict) else None
+    if served != attestation.served_model:
+        raise StaleAttestation(f"a reply names another model than {label}")
+    return Attested(body, attestation)
+
+
 def expected_attestation(env: EnvHandle, model: ResolvedModel, settings: Mapping[str, Any]) -> Attestation:
     """Return what a server of `model` with `settings` in `env` must attest, without starting it.
 
@@ -158,7 +171,12 @@ def expected_attestation(env: EnvHandle, model: ResolvedModel, settings: Mapping
     pin = re.search(r"^vllm==([^\s\\;]+)", text, re.MULTILINE)
     if pin is None:
         raise VllmStartError("version", "the env's lock pins no vllm")
-    return Attestation(pin.group(1), _served(model)[0], model.identity, config_digest(settings))
+    return Attestation(
+        engine_version=pin.group(1),
+        served_model=_served(model)[0],
+        model_identity=model.identity,
+        config_digest=config_digest(settings),
+    )
 
 
 def server_launch(env: EnvHandle, variables: Mapping[str, str], devices: Sequence[str] | None = None) -> Launch:
@@ -395,7 +413,7 @@ class VllmServer:
             StaleAttestation: The server is not running, or the reply names another model.
         """
         attestation = self._live()
-        return self._attested(chat(str(self.url), self.target, messages, sampling=sampling), attestation)
+        return attest_reply(chat(str(self.url), self.target, messages, sampling=sampling), attestation, self.label)
 
     def complete(self, prompt_token_ids: Sequence[int], *, sampling: Mapping[str, Any]) -> Attested:
         """`complete` with this server's model; the reply carries this server's attestation.
@@ -404,18 +422,13 @@ class VllmServer:
             StaleAttestation: The server is not running, or the reply names another model.
         """
         attestation = self._live()
-        return self._attested(complete(str(self.url), self.target, prompt_token_ids, sampling=sampling), attestation)
+        reply = complete(str(self.url), self.target, prompt_token_ids, sampling=sampling)
+        return attest_reply(reply, attestation, self.label)
 
     def _live(self) -> Attestation:
         if self.attestation is None or self._server is None or self._server.poll() is not None:
             raise StaleAttestation(f"the vllm server of {self.label} is not running")
         return self.attestation
-
-    def _attested(self, body: Any, attestation: Attestation) -> Attested:  # noqa: ANN401 - a JSON value
-        served = body.get("model") if isinstance(body, dict) else None
-        if served != self.target:
-            raise StaleAttestation(f"a reply names another model than {self.label}")
-        return Attested(body, attestation)
 
     @property
     def launch(self) -> Launch:

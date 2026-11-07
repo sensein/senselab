@@ -110,7 +110,10 @@ def test_attestation_enters_context(env: EnvHandle, tmp_path: Path) -> None:
     with _server(env, tmp_path) as server:
         attestation = server.attestation
         assert attestation == vs.Attestation(
-            "0.31.0", "org/model", SHA, identity_digest(vs.CONFIG_TAG, [*server.args, "VLLM_USE_FLASHINFER_SAMPLER=0"])
+            engine_version="0.31.0",
+            served_model="org/model",
+            model_identity=SHA,
+            config_digest=identity_digest(vs.CONFIG_TAG, [*server.args, "VLLM_USE_FLASHINFER_SAMPLER=0"]),
         )
         driver = _context(server.context_fields()).driver
         assert {k: driver[k] for k in attestation.driver()} == attestation.driver()

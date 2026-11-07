@@ -14,6 +14,8 @@ from senselab_core.runtime.execution.executor import (
     ResultRef,
     UpstreamRef,
 )
+from senselab_core.runtime.execution.services import ServiceEntry
+from senselab_core.runtime.vllm_server import Attestation
 
 Register = Callable[..., None]
 
@@ -192,4 +194,17 @@ def register_event_samples(register: Register, jobs: tuple[JobRef, ...], faults:
         BrokenEnv,
         lambda: [BrokenEnv(env="venv:a", fault=broken, failures=6), BrokenEnv(env="venv:b", fault=broken, failures=9)],
         invalid_updates=[{"env": ""}, {"failures": 0}],
+    )
+    attested = [
+        Attestation(engine_version="0.31.0", served_model="org/m", model_identity="a" * 40, config_digest="c" * 64),
+        Attestation(engine_version="0.32.0", served_model="org/n", model_identity="b" * 40, config_digest="d" * 64),
+    ]
+    register(Attestation, lambda: list(attested), invalid_updates=[{"engine_version": ""}, {"config_digest": ""}])
+    register(
+        ServiceEntry,
+        lambda: [
+            ServiceEntry(identity=attested[0], endpoint="http://127.0.0.1:8000"),
+            ServiceEntry(identity=attested[1], endpoint="http://127.0.0.1:8001"),
+        ],
+        invalid_updates=[{"format": "service-entry@2.0"}, {"endpoint": ""}],
     )

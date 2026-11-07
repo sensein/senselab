@@ -1,4 +1,7 @@
-"""The workers a process runs jobs on: pooled per backend, env and model, bounded, and the servers they run over."""
+"""The workers a process runs jobs on: pooled per backend, env and model, bounded, and the servers they run over.
+
+A server is this set's own, or, with a registry, a registered service it consumes (`services`).
+"""
 
 import collections
 import contextlib
@@ -16,6 +19,7 @@ from senselab_core.kernel._base import value_digest
 from senselab_core.kernel.declare import BackendSpec
 from senselab_core.kernel.identity import ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.services import ServiceLease, ServiceRegistry
 from senselab_core.runtime.host_worker import HostWorker
 from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.network import network_variables
@@ -37,9 +41,13 @@ Worker = HostWorker | WorkerClient
 
 
 class Server(Protocol):
-    """A running model server: what it attests, how a message names it, its live context fields, and `stop`."""
+    """A running model server: what it attests, how a message names it, its endpoint, live context fields, `stop`."""
 
     label: str
+
+    @property
+    def url(self) -> str | None:
+        """Where the running server answers; None once stopped."""
 
     @property
     def attestation(self) -> Attestation | None:
@@ -126,18 +134,32 @@ class WorkerSet:
     worker is held by one job at a time. Host workers keep their state in this process's model cache of their budget
     (`process_cache`), shared by every set. A server is started once per (env, backend, model); its start holds a
     lease of that triple alone, so starts of other servers proceed. Servers are not counted in the bound.
+
+    With a `registry`, a server is consumed from the registry while a live service attests what it must, and started
+    otherwise; a set that `provide`s registers each server it starts there instead, and consumes none.
     """
 
-    def __init__(self, bound: int, *, start_server: ServerStart = start_vllm) -> None:
+    def __init__(
+        self,
+        bound: int,
+        *,
+        start_server: ServerStart = start_vllm,
+        registry: ServiceRegistry | None = None,
+        provide: bool = False,
+    ) -> None:
         """Keep at most `bound` pooled workers; servers start through `start_server`.
 
         Raises:
-            ValueError: `bound` is below 1.
+            ValueError: `bound` is below 1, or `provide` without a registry.
         """
         if bound < 1:
             raise ValueError(f"a worker set holds at least one worker, got bound {bound}")
+        if provide and registry is None:
+            raise ValueError("a worker set that provides services needs their registry")
         self.bound = bound
         self._start = start_server
+        self._registry, self._provide = registry, provide
+        self._provided: dict[tuple[str, str, str], ServiceLease] = {}
         self._lock = threading.Lock()
         self._pool: collections.OrderedDict[tuple[str, ...], Worker] = collections.OrderedDict()
         self._held: dict[tuple[str, ...], threading.Lock] = {}
@@ -288,10 +310,11 @@ class WorkerSet:
     ) -> Server:
         """Return the running server of this env, backend and model, starting it (or replacing a dead one) if needed.
 
-        The start holds the lease of this env, backend and model only.
+        The start holds the lease of this env, backend and model only. A consuming set returns a live registered
+        service attesting `expected` (`ConsumerLease`) instead; a providing set registers what it starts.
 
         Raises:
-            VllmStartError, LeaseTimeout, LeaseUnavailable: as the server start.
+            VllmStartError, LeaseTimeout, LeaseUnavailable: as the server start or its registration.
             AttestationMismatch: the server attests something other than `expected`.
         """
         key = (env.python, backend.name, model.identity)
@@ -307,17 +330,50 @@ class WorkerSet:
                 except StaleAttestation:
                     with self._lock:
                         self._servers.pop(key, None)
-                    server.stop()
-            server = self._start(backend, env, model, profile)
-            if server.attestation != expected:
-                attested = server.attestation
-                server.stop()
-                raise AttestationMismatch(
-                    f"the server of {server.label} attests {attested}, the lock declares {expected}"
-                )
+                    self._retire(key, server)
+            registry = self._registry
+            if registry is not None and not self._provide and registry.lookup(expected) is not None:
+                server = registry.consume(expected)
+            else:
+                server = self._started(backend, env, model, profile, expected)
+                if self._provide:
+                    assert registry is not None and server.url is not None
+                    try:
+                        self._provided[key] = registry.register(expected, server.url)
+                    except BaseException:
+                        server.stop()
+                        raise
             with self._lock:
                 self._servers[key] = server
             return server
+
+    def _started(
+        self,
+        backend: BackendSpec,
+        env: EnvHandle,
+        model: ResolvedModel,
+        profile: ExecutionProfile,
+        expected: Attestation,
+    ) -> Server:
+        server = self._start(backend, env, model, profile)
+        if server.attestation != expected:
+            attested = server.attestation
+            server.stop()
+            raise AttestationMismatch(f"the server of {server.label} attests {attested}, the lock declares {expected}")
+        return server
+
+    def _retire(self, key: tuple[str, str, str], server: Server) -> None:
+        """Withdraw the registration of `server` if this set provides it, then stop it."""
+        with self._lock:
+            provided = self._provided.pop(key, None)
+        if provided is not None:
+            provided.close()
+        server.stop()
+
+    def provided(self) -> list[ServiceLease]:
+        """Return the registrations of the servers this set started and provides."""
+        with self._lock:
+            return list(self._provided.values())
 
     @staticmethod
     def server_worker(backend: BackendSpec, init: dict[str, Any], server: Server) -> HostWorker:
@@ -345,16 +401,16 @@ class WorkerSet:
             worker.close()
 
     def close(self) -> None:
-        """Stop every pooled worker process and every server; a later checkout starts its own again."""
+        """Stop every pooled worker process and every server, withdrawing what it provides; a checkout starts again."""
         with self._lock:
-            workers, servers = list(self._pool.values()), list(self._servers.values())
+            workers, servers = list(self._pool.values()), list(self._servers.items())
             self._pool.clear()
             self._servers.clear()
         for worker in workers:
             if isinstance(worker, WorkerClient):
                 worker.close()
-        for server in servers:
-            server.stop()
+        for key, server in servers:
+            self._retire(key, server)
 
 
 def host_model_key(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | None, device: str) -> ModelKey:

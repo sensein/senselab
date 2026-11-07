@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Protocol
 
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
+from senselab_core.runtime.execution.services import is_service_class
 from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands
 from senselab_core.runtime.profiles import ExecutionProfile, expand
@@ -615,7 +616,8 @@ def scale(
     A queue wants `ceil(work / pool.quantum_items)` workers, `work` being the jobs of its unresolved items. Fewer alive
     start workers, within the room left in the class (`max_workers` less the workers alive on its queues) and, under a
     QOS cap, the CPUs left over the class's CPUs per worker. More alive stop the surplus, pending workers first; running
-    ones are stopped only once the queue has no unresolved item, so none is working. With `surplus_since` (the caller
+    ones are stopped only once the queue has no unresolved item, so none is working, and never on a service class,
+    whose workers exit when their consumers stop. With `surplus_since` (the caller
     keeps it between rounds) a surplus is stopped only once it has lasted `2 × pool.poll_s`, so a queue that briefly
     empties between items keeps its workers; without it a surplus is stopped at once. `now` is the clock,
     `time.monotonic` by default.
@@ -644,7 +646,7 @@ def scale(
                     continue
                 del surplus_since[name]
             victims = sorted(alive[name], key=lambda h: not h.pending)
-            victims = victims if work == 0 else [h for h in victims if h.pending]
+            victims = victims if work == 0 and not is_service_class(name) else [h for h in victims if h.pending]
             substrate.stop(victims[: have - wanted])
             continue
         if surplus_since is not None:

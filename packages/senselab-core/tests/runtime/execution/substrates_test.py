@@ -627,6 +627,19 @@ def test_pending_surplus_is_cancelled_first_and_running_ones_only_when_drained(t
 
 
 @pytest.mark.logic
+def test_an_empty_service_queue_never_stops_its_running_worker(tmp_path: Path) -> None:
+    """A `svc` queue with nothing waiting stops its pending workers only; the running one exits on its own."""
+    classes = {**CLASSES, "svc:pii": {"device": "cpu", "cpus": 1, "partition": "${CPU_PARTITION}", "max_workers": 1}}
+    profile = ExecutionProfile.load("orcd", {"devices": ["cpu"], "resource_classes": classes})
+    empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile)
+    empty.queue("svc:pii")
+    recording = Recording()
+    recording.handles = [WorkerHandle("svc:pii", "r1"), WorkerHandle("svc:pii", "p1", True)]
+    scale(empty, recording, profile)
+    assert [h.id for h in recording.stops] == ["p1"] and [h.id for h in recording.handles] == ["r1"]
+
+
+@pytest.mark.logic
 def test_a_transient_slurm_failure_is_retried_and_a_lasting_one_holds_the_run(tmp_path: Path) -> None:
     """A failing `sbatch` is tried three times; a pool over a failing `squeue` raises no error until it is held."""
     (tmp_path / "slurm" / "fail-sbatch").write_text("")

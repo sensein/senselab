@@ -63,6 +63,9 @@ PLAN_FRAGMENT_FORMAT = "plan-fragment@1.0"
 RUN_EVENT_FORMAT = "run-event@1.0"
 """The format of one run event, a line of `<run>/events/<writer>.jsonl`: a job's state change and its fault."""
 
+SERVICE_ENTRY_FORMAT = "service-entry@1.0"
+"""The format of a service's registry entry, `<registry>/svc-<identity digest>.json`: its identity and endpoint."""
+
 EXECUTION_PROFILE_FORMAT = "execution-profile@2.0"
 """The format of an execution profile, `runtime/data/profiles/<name>.yaml` or a user's override."""
 RETIRED_EXECUTION_PROFILE_FORMATS = frozenset({"execution-profile@1"})

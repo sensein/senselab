@@ -8,7 +8,9 @@ work. While a claim runs, its leases are proven every renewal interval; an item 
 reported. A request that fails as a whole (`whole`) is split in halves within the claim until the failing job is
 alone, which is reported with that failure; an item that fails inside a request is reported as it failed. The worker
 exits once its queues have had nothing to claim for `IDLE_POLLS` polls of `pool.poll_s`, or on SIGTERM, after
-committing the items that finished and releasing the rest.
+committing the items that finished and releasing the rest. A worker of `svc:<id>` classes registers each server it
+starts (`services`); once it holds one, its queues being empty decide nothing: it exits when no consumer lease of
+any service it holds has been live for `services.idle_exit_s`, the jobs it runs itself counting as consumption.
 """
 
 import contextlib
@@ -36,7 +38,8 @@ from senselab_core.runtime.execution.in_process import fragment_jobs, job_key, p
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool import report, run_plan
 from senselab_core.runtime.execution.queue import Claim, QueueSet
-from senselab_core.runtime.execution.substrates import EXIT_UNREACHABLE, StoreUnreachable, mark_ready
+from senselab_core.runtime.execution.services import is_service_class, service_registry
+from senselab_core.runtime.execution.substrates import EXIT_UNREACHABLE, StoreUnreachable, class_of, mark_ready
 from senselab_core.runtime.execution.supervisor import Supervisor
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.keys import Placement
@@ -185,6 +188,12 @@ class PoolWorker:
             claim = self._next(prefer, pool.quantum_items - spent)
             if claim is None:
                 current, idle = None, idle if idle is not None else time.monotonic()
+                provided = self._workers.provided() if self._workers is not None else []
+                if provided:
+                    if all(p.idle_s() >= self.profile.services.idle_exit_s for p in provided):
+                        break
+                    self.stop.wait(pool.poll_s)
+                    continue
                 left = IDLE_POLLS * pool.poll_s - (time.monotonic() - idle)
                 if left <= 0:
                     break
@@ -196,6 +205,8 @@ class PoolWorker:
             spent += sum(len(f.jobs) for f in claim.fragments)
             self.served.extend((claim.queue.name, d) for d in claim.items)
             self.run_claim(claim)
+            for service in self._workers.provided() if self._workers is not None else []:
+                service.touch()
         return 0
 
     def _by_age(self) -> list[str]:
@@ -377,6 +388,8 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
     """Serve the queues of `classes` in `pool_dir` (a run's `queues` directory) as one `PoolWorker`; return 0.
 
     The worker runs under a `Supervisor`, so every process it launches, and every orphan they leave, ends with it.
+    Without `workers`, a worker of service classes runs on a set that provides its servers to this host's registry
+    (`service_registry`), closed when it returns.
     A worker that cannot reach the run directory or the store returns `EXIT_UNREACHABLE` and marks nothing; one that can
     marks itself ready (`mark_ready`) once its worker is built and supervised, just before it serves. On the main
     thread SIGTERM halts the worker (`PoolWorker.halt`); the previous handler is restored after.
@@ -386,8 +399,14 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
     except StoreUnreachable as err:
         logger.error("pool worker cannot start: %s", err)
         return EXIT_UNREACHABLE
+    owned = None
+    if workers is None and any(is_service_class(c) for c in classes):
+        bound = sum(profile.resource_classes[class_of(c)].max_workers for c in classes)
+        workers = owned = WorkerSet(bound, registry=service_registry(profile), provide=True)
     worker = PoolWorker(pool_dir, classes, profile=profile, store=store, workers=workers, send=send, join_s=join_s)
-    with Supervisor(settings=profile.supervisor):
+    with Supervisor(settings=profile.supervisor), contextlib.ExitStack() as stack:
+        if owned is not None:
+            stack.callback(owned.close)
         if threading.current_thread() is not threading.main_thread():
             mark_ready(Path(pool_dir).parent)
             return worker.serve()
