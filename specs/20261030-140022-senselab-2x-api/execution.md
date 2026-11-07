@@ -74,9 +74,10 @@ dir>/queues --classes <list> [--profile NAME]` runs `serve_pool`.
   jobs cannot be built (no plan, another plan, an input that no longer binds) is given the outcome `dead` with
   that failure, so the `Pool` applies the class's effect.
 - **Quantum.** The worker claims from the class whose oldest waiting item (`Queue.oldest_age_s`) is oldest, up to
-  `pool.quantum_items` items. It stays on that class until it has claimed `quantum_items` items or `quantum_s`
-  seconds have passed, then takes the class with the oldest work again, which may be the same one. Items of a held
-  env are not claimable. It exits once nothing has been claimable for three polls of `pool.poll_s` (`IDLE_POLLS`).
+  `pool.quantum_items` jobs (`Queue.claim(max_jobs=)`: an item whose slot's job count would take the claim past the
+  bound is passed over, except as the claim's first item; Task 16 split). It stays on that class until it has claimed
+  `quantum_items` jobs or `quantum_s` seconds have passed, then takes the class with the oldest work again, which may
+  be the same one. Items of a held env are not claimable. It exits once nothing has been claimable for three polls of `pool.poll_s` (`IDLE_POLLS`).
 - **Renewal.** Claim leases beat from their own renewers (Task 12); the worker also proves them (`Claim.renew`)
   every renewal interval (`lease.renew_fraction × lease.stale_after_s`) while it waits for a claim's outcomes,
   which run on a thread. An item whose lease was lost is not reported; another claimer takes it.
@@ -154,7 +155,7 @@ current one.
 ### 3.4 Scheduling and memory
 - **Claim order.** Queues keep time-ordered index segments, and workers claim the oldest item
   first, in O(1) amortised (ADR-003).
-- **A resident model is a cache, not a reservation.** A worker yields after N items or T seconds
+- **A resident model is a cache, not a reservation.** A worker yields after N jobs or T seconds
   when another queue it can serve has older work.
   - Workers being alive is what guarantees progress.
   - Latency is not bounded when the cluster grants no workers.
@@ -385,6 +386,26 @@ are recorded here (R-200).
   (Task 16). `senselab coordinate` runs the plan's latest placement under the
   packaged profile (or `--profile`), with workers started separately (`ExternalWorkers`) until Tasks 15 and 16 add
   substrates; `Plan.run` on a slurm substrate runs on a `Pool` over `Slurm` (Task 16).
+- **A queue item is at most one quantum of jobs (Task 16 split).** The Step 5 probe on ORCD ran a 200-job node with
+  `pool.quantum_items` 10 and a cap of 4 workers: `Pool.submit` put the whole fragment as one item, the queue read one
+  deep, one worker was started and it ran all 200 jobs serially (about 11 minutes). `Pool.submit` now puts a fragment
+  as items of at most `quantum_items` jobs each, in job order (`split`); each item is a `plan-fragment@1.0` with its
+  own digest, so a re-put under the same profile (the same coordinator, another one, or a restart) makes no new item.
+  A run re-placed under a profile that changes only `quantum_items` splits into other digests; the old items stay
+  queued and are served as store hits or as duplicate compute, as after a `batch_size` change. `results` yields each
+  job's result as its item's outcome is read, items read in one poll in job order (across polls and retries, in the
+  order they land; the runner settles by element), and every fault effect (content charge, resource move, broken env)
+  is applied per item and per job as before, with the key computed under the item's own placement. An item ends only
+  between jobs. When the node's request size (`node_request_size`) is at most the quantum, items end on request
+  boundaries (`quantum - quantum % request` jobs); a larger request, which only a batch-invariant backend can have, is
+  cut at the quantum, so the item size caps that backend's effective batch. A backend that is not batch-invariant is
+  sent one job per request, so no item holds part of one. `scale` did need a change: it divided the queue's depth in
+  items by `quantum_items`, so 20 items wanted 2 workers. It now divides `Queue.work()`, the jobs of the unresolved
+  items, summed from `segments/<seq>/jobs-<n>-<count>` marks the put that took each slot writes beside it (first
+  writer wins), so neither `scale` nor `submit` reads an item; a slot without a mark (a put interrupted between the
+  slot and the mark) is counted from its item, as one job when the item cannot be read, and `reconcile` takes the
+  count from the item it slots. A pool worker's quantum and claim are bounded in jobs, so 200 jobs want `min(20, cap)`
+  workers and each claims one 10-job item, while a queue of single-job fragments scales and claims as before.
 - **Worker report (Task 14, for Task 15a).** A pool worker commits each item with `report(claim, digest, outcomes)`:
   the outcome record carries `jobs`, one `ResultRef` per job. A queue `dead` outcome (a corrupt item) is a content
   fault of each of its jobs. A held queue (`Queue.hold`) gives no claim.

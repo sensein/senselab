@@ -288,6 +288,9 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
   again, names that digest. Each item has one
   first-writer-wins outcome, `outcome/<digest>` (done or dead); the outcome record is staged, then the claim is proven,
   then one link is made. A run re-puts every unfinished fragment on start and resume.
+- Amended 2026-11-07 (Task 16 split): the put that takes `slot-<n>` then writes `jobs-<n>-<count>` in the same
+  segment by an exclusive create (`count` ≥ 1, the item's jobs), so a segment's listing gives the queue's work in jobs
+  without reading an item. A slot without the mark is counted from its item.
 - **Not guaranteed.** A crash, or a lost NFS reply on the `symlink`, between taking a slot and writing the item's
   `slotted` marker gives the item a second slot on a later put or reconcile. Exactly-once still holds (one outcome per
   digest); `depth()`, an upper bound, counts the item twice until a claimer resolves the second slot.
