@@ -406,6 +406,23 @@ are recorded here (R-200).
   slot and the mark) is counted from its item, as one job when the item cannot be read, and `reconcile` takes the
   count from the item it slots. A pool worker's quantum and claim are bounded in jobs, so 200 jobs want `min(20, cap)`
   workers and each claims one 10-job item, while a queue of single-job fragments scales and claims as before.
+- **The runner follows; the Pool scales (Task 16 scale-root fix rounds).** On ORCD a 200-job node ran on one worker
+  because each fragment held one of asyncio's default-executor threads until its last result landed: a 2-CPU
+  coordinator has `min(32, cpus + 4)` = 6, so at most 6 one-job items were ever queued and `scale` wanted 1 worker; a
+  downstream node, whose elements become ready one upstream item at a time, kept that cap after the first fix. Now a
+  fragment is submitted on the run's sender threads and returns at once, and one `Follower` thread per run polls every
+  open handle through `Executor.poll` (never waits; the results landed and not yet given, and whether the fragment is
+  done) and settles each element as its result lands, so only the queue and the workers bound the fragments in
+  flight. `Executor.results` is gone; `follow(executor, handle)` is the blocking loop over `poll`. An executor that
+  splits fragments (`splits_fragments`, the Pool) is sent one fragment per ready set, which keeps the follower's
+  handles few; `split` dumps a fragment once and slices it, so it is linear in jobs. A cancel ends every followed
+  handle within `CANCEL_CHECK_S` and leaves its items queued. The Pool owns one scaler thread: it ticks every
+  `pool.poll_s` while a fragment is followed, a submit or retry wakes it, `close` stops it, and it is the only caller
+  of `scale`, so a slow `sbatch` never delays settling or a cancel and concurrent submits cannot over-start. `poll`
+  reads the epoch fence at most once per `first_poll_s`. The sender threads are explicit: the profile's summed
+  `max_workers` (3 under `laptop`, 48 under `orcd`), or `PydraRunner(senders=...)`. For `InProcess` they are where
+  the jobs run, so they bound its concurrency at the `WorkerSet` bound; before, the default executor gave
+  `min(32, cpus + 4)` threads (14 on a 10-CPU laptop), whose extras only waited on leases.
 - **Worker report (Task 14, for Task 15a).** A pool worker commits each item with `report(claim, digest, outcomes)`:
   the outcome record carries `jobs`, one `ResultRef` per job. A queue `dead` outcome (a corrupt item) is a content
   fault of each of its jobs. A held queue (`Queue.hold`) gives no claim.
