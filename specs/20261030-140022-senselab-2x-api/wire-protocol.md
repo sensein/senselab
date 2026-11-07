@@ -395,12 +395,49 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
   when `close()` returns, members may still be finishing their exit or waiting to be reaped by
   `init`; neither is a survivor. Measured under a 40-60 process CPU load on a 10-core macOS host:
   4 of 80 timed-out forking workers still had a member in that state when `close()` returned, for
-  0.6-5 ms. The lifecycle tests' probes (`lifecycle_probes_fixture`) therefore read liveness from
+  0.6-5 ms. The lifecycle tests' probes (`senselab_core.testing.processes`) therefore read liveness from
   `ps` state, not from `killpg` errors: a test that read EPERM as alive asserted a state the OS
   does not reach by the time `close()` returns.
-- **Limit.** A descendant that calls `setsid` (or `setpgid`) leaves the group and is not reached;
-  if it holds the worker's stdout or stderr, the host leaves those pipes open and logs it rather
-  than block.
+- **Supervision (Phase 3 Task 15b, R-120, P3-37).** Every process the host starts (a worker, a
+  vLLM server) is launched through a `Supervisor` (`runtime/execution/supervisor.py`), which keeps
+  a table of the groups it launched. A pool worker (`serve_pool`) enters one for its lifetime;
+  any other process uses a process-wide one that supervises by group alone. On Linux the entered
+  supervisor sets `PR_SET_CHILD_SUBREAPER`, so a descendant orphaned by its parent's exit (a fork
+  that never execs, a `setsid` escapee whose parent has exited) is re-parented to the pool worker
+  and enters the table, found in the kernel's list of the pool worker's own children. An orphan in
+  a launched group is that group's member; any other is held for the groups launched when it was
+  adopted, and is SIGKILLed once each of them is released (at once if there were none). The
+  client releases its group after the group is gone and before it reaps the leader. While the
+  supervisor adopts, group liveness is read from its table, never from `ps` or a scan of `/proc`:
+  a group is live while its leader has not exited or one of its orphans has not, and a group it
+  did not launch is never live to it. Orphans are reaped one by one, by pid, and their exit
+  statuses recorded. A launched process is never adopted or reaped by the supervisor while its
+  `Popen` has no return code, released or not, so its owner reaps it and reads its true status
+  (the SIGKILL-under-OOM rule is unchanged). A group is dropped from the table, and from the
+  keeper, when it is released or once its owner has reaped its leader by any path. If
+  `PR_SET_CHILD_SUBREAPER` cannot be set, the supervisor logs a warning and supervises by group
+  alone. Leaving the supervisor
+  SIGKILLs every group and orphan it still holds and reaps them. Each launched group and adopted
+  orphan is also recorded with a keeper process in its own session, one per supervisor, whether
+  entered or process-wide, so a worker or server launched outside any pool worker is kept too;
+  it SIGKILLs every group and orphan still recorded once
+  the host has died, by any signal, on Linux and macOS. It reads each recorded process's start
+  time (`/proc/<pid>/stat` field 22, else `ps -o lstart=`) and kills a pid only while it has that
+  start time, and a group only while its leader has it or no process has the group's number, so
+  a reused pid or pgid is never killed.
+- **Limit.** Without an adopting supervisor (macOS, and any process that is not a pool worker), a
+  descendant that calls `setsid` (or `setpgid`) leaves the group and is not reached. On macOS the
+  pool worker supervises by process group and kills each launched group when it exits; a `setsid`
+  escapee is not caught there. Under an adopting supervisor, an escapee whose parent is still
+  alive is not yet the supervisor's child and is reached only once that parent exits, so on a host
+  SIGKILL the keeper misses an escapee whose parent was still running. A child that code bypassing
+  the supervisor starts in its own session is taken for an orphan and killed with the groups it
+  was adopted under. After `setsid` an escapee cannot be attributed to the worker it came from, so
+  it is held against every group launched when it was adopted: with several pooled workers, an
+  escapee can outlive its own worker until the others are released or the pool worker ends. A
+  fork without exec in the pool worker's own process may copy the supervisor's lock while another
+  thread holds it. If a descendant holds the worker's stdout or stderr, the host leaves those
+  pipes open and logs it rather than block.
 - **Worker lost.** EOF on the worker's stdout, or the exit of the worker process (after the
   lines it wrote are read), while a reply is awaited, including after some of a request's result
   lines and before its `done`, is `WorkerLost`, carrying the exit code as `returncode` and the
