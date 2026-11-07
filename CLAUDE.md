@@ -115,7 +115,8 @@ Key audio processing capabilities in `audio/tasks/`:
 - **Cache invalidation is free.** Bump `CACHE_SCHEMA_VERSION` in
   `src/senselab/utils/tasks/cached_inference.py` rather than reasoning about which
   `artifacts/analyze_audio_cache/` entries survive. A stale entry that *looks* readable costs far
-  more than recomputing one, and the wipe is automatic on every host.
+  more than recomputing one, and the wipe is automatic on every host. Do not add a golden-digest test
+  pinning cache keys: a test whose only purpose is "keys did not change" ossifies the payload shape.
 - **A cache key is the input's content plus the process, and nothing else (schema 24).** Keys carry
   the audio/text signature, the stage and its `STAGE_VERSIONS` number, the model id and its resolved
   40-hex commit, and every result-shaping parameter. The senselab version is provenance, not key:
