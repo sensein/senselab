@@ -12,7 +12,8 @@ over the profile's substrate into a store of its own, and measured from its even
 worker reported with each item; one `scale-result@1.0` document per point is written under
 `$SENSELAB_CACHE/2x/benchmarks/scale/<suite>/<commit>/` and one line printed per point, then each task's flatness
 against `budgets.yaml` (`scale-budgets@1.0`). A point whose run directory already exists is refused, so no point is
-measured from reused results.
+measured from reused results, and every entry is planned before any point is measured, so a suite with an entry that
+does not plan is refused, every such entry listed.
 """
 
 import argparse
@@ -40,7 +41,7 @@ from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.substrates import substrate_of, worker_id
 from senselab_core.runtime.fetch import DataManifest, default_cache_root, fetch
 from senselab_core.runtime.hardware import memory_bytes
-from senselab_core.runtime.planner import plan
+from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import NAMESPACE, cache_root
 from senselab_core.runtime.sizing import Sample, calibrated
@@ -174,17 +175,47 @@ def _median(values: Sequence[float]) -> float | None:
     return statistics.median(values) if values else None
 
 
+class SuiteRefused(ValueError):
+    """Entries of a suite that do not plan, each named with its reason; nothing was measured."""
+
+
+def placed_point(
+    entry: Entry, point: int | str, suite: Suite, profile: ExecutionProfile, out: Path
+) -> tuple[Plan, Path | None, ExecutionProfile]:
+    """Return `entry` planned at `point`, the BIDS root its data is read from, and the profile it is placed under."""
+    dataset, root = dataset_of(entry, point, suite, out)
+    if entry.stack is not None:
+        stacks = {**profile.stack_preferences, entry.task: (entry.stack,)}
+        profile = profile.model_copy(update={"stack_preferences": stacks})
+    placed = plan(graph_of(entry), dataset, execution=profile, bind=None if root is None else {"x": "audio"})
+    return placed, root, profile
+
+
+def check_suite(suite: Suite, profile: ExecutionProfile, out: Path) -> None:
+    """Plan every entry of `suite` at its smallest point, measuring nothing.
+
+    Raises:
+        SuiteRefused: an entry does not plan; every such entry is listed with its error.
+    """
+    bad = []
+    for index, entry in enumerate(suite.tasks):
+        counts = [p for p in entry.points if p != LONG]
+        try:
+            placed_point(entry, min(counts) if counts else LONG, suite, profile, out)
+        except Exception as err:  # noqa: BLE001 - each entry's error is listed, then the whole suite is refused
+            stack = "" if entry.stack is None else f", stack {entry.stack}"
+            bad.append(f"entry {index} ({entry.task}{stack}): {type(err).__name__}: {err}")
+    if bad:
+        raise SuiteRefused(f"{suite.name}: {len(bad)} entries do not plan, nothing was measured:\n" + "\n".join(bad))
+
+
 def measure_point(entry: Entry, point: int | str, suite: Suite, profile: ExecutionProfile, out: Path) -> dict[str, Any]:
     """Plan, run and measure `entry` at `point` under `profile`; return its `scale-result@1.0` document.
 
     Raises:
         FileExistsError: the point's run directory exists, so its results would be reused.
     """
-    dataset, root = dataset_of(entry, point, suite, out)
-    if entry.stack is not None:
-        stacks = {**profile.stack_preferences, entry.task: (entry.stack,)}
-        profile = profile.model_copy(update={"stack_preferences": stacks})
-    placed = plan(graph_of(entry), dataset, execution=profile, bind=None if root is None else {"x": "audio"})
+    placed, root, profile = placed_point(entry, point, suite, profile, out)
     run_dir = run_dir_of(placed.hash)
     if run_dir.exists():
         raise FileExistsError(f"{run_dir} exists; remove it to measure {entry.task} at {point} afresh")
@@ -295,10 +326,14 @@ def _profile(argument: str) -> ExecutionProfile:
 
 
 def run(suite_path: Path, profile: ExecutionProfile) -> list[dict[str, Any]]:
-    """Measure every point of every task of the suite at `suite_path`; write and return the results."""
+    """Measure every point of every task of the suite at `suite_path`; write and return the results.
+
+    Every entry is planned first (`check_suite`), so a suite with an entry that does not plan measures nothing.
+    """
     suite = Suite.load(suite_path)
     out = cache_root() / NAMESPACE / "benchmarks" / "scale" / suite.name / commit()
     out.mkdir(parents=True, exist_ok=True)
+    check_suite(suite, profile, out)
     results = []
     for entry in suite.tasks:
         for point in entry.points:

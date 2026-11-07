@@ -7,7 +7,7 @@ seed: 0
 long_s: 7200
 tasks:
 - {task: speech_to_text, stack: transformers, port: audio, data: librispeech, manifest: librispeech-test-clean, params: {timestamps: none}, points: [1, 100]}
-- {task: speech_to_text, stack: crisperwhisper, port: audio, data: librispeech, manifest: librispeech-test-clean, params: {timestamps: none}, points: [1, 100]}
+- {task: speech_to_text, stack: crisperwhisper, model: nyralabs/CrisperWhisper2.0_turbo, port: audio, data: librispeech, manifest: librispeech-test-clean, params: {timestamps: none}, points: [1, 100]}
 - {task: speaker_embeddings, stack: speechbrain, port: audio, data: librispeech, manifest: librispeech-test-clean, points: [1, 100]}
 - {task: diarize, stack: pyannote, port: audio, data: librispeech, manifest: librispeech-test-clean, points: [1, 100]}
 - {task: pii_spans, stack: vllm, port: text, data: gretel, manifest: gretel-synthetic-pii, points: [1, 100]}

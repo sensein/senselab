@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import platform
 import sys
 import tarfile
 from pathlib import Path
@@ -12,8 +13,15 @@ from typing import Any
 
 import pytest
 import soundfile
+from senselab_core.kernel.declare import REGISTRY, BackendSpec
+from senselab_core.runtime import fake_backend
+from senselab_core.runtime.call import Packaged, use_packaged
+from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.config import load_yaml
+from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.resources import ResourceTable
+from senselab_core.testing.workers import mit_lock_records
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -154,3 +162,35 @@ def test_flatness_covers_time_memory_files_and_bytes_against_budgets() -> None:
         "t bytes_per_item: at 10000 / at 100 = 1.000, flat ok, ceiling unmeasured",
     ]
     assert all("unmeasured" in line for line in ladder.flatness(results, {})[:1])
+
+
+def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+    return EnvHandle(sys.executable, platform.python_version(), "1" * 64, "2" * 64, None)
+
+
+@pytest.mark.logic
+def test_a_suite_with_entries_that_do_not_plan_is_refused_before_anything_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every entry is planned first: two bad entries are both named, and no point is measured or written."""
+    ladder = _module("scale_ladder_refusal_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
+    previous = use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, REGISTRY, mit_lock_records))
+    assert fake_backend.FAKE in REGISTRY.backends(fake_backend.ECHO.name)
+    suite = tmp_path / "bad.yaml"
+    suite.write_text(
+        "format: scale-suite@1.0\nname: bad\nseed: 0\nlong_s: 1\ntasks:\n"
+        "- {task: fake.echo, port: payload, data: payloads, points: [1, 100]}\n"
+        "- {task: fake.echo, stack: absent, port: payload, data: payloads, points: [1]}\n"
+        "- {task: no.such.task, port: x, data: payloads, points: [1]}\n"
+    )
+    try:
+        with pytest.raises(ladder.SuiteRefused, match="2 entries do not plan") as refused:
+            ladder.run(suite, ExecutionProfile.load("laptop"))
+    finally:
+        use_packaged(previous)
+    lines = str(refused.value).splitlines()[1:]
+    assert [line.split(":")[0] for line in lines] == ["entry 1 (fake.echo, stack absent)", "entry 2 (no.such.task)"]
+    assert "NoBackend" in lines[0] and "UnknownTask" in lines[1]
+    runs = tmp_path / "cache" / "2x" / "runs"
+    assert not list((tmp_path / "cache").rglob("*@*.json")) and not (runs.is_dir() and any(runs.iterdir()))
