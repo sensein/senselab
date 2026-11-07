@@ -97,6 +97,11 @@ def _make_env(root: Path, name: str) -> EnvHandle:
     )
 
 
+def _lock(env: EnvHandle) -> Path:
+    assert env.lock is not None
+    return env.lock
+
+
 def _knob(root: Path, **knobs: str) -> None:
     """Set `knobs` for every fake server under `root`."""
     path = root / "fake_vllm.json"
@@ -124,7 +129,9 @@ def served(fake_env: EnvHandle) -> Iterator[Registry]:
     for backend in REGISTRY.backends("pii_spans"):
         registry.add_backend(backend.model_copy(update={"devices": ("cpu",)}) if backend.name == "vllm" else backend)
     opened = [fake_env]
-    previous = use_packaged(Packaged(CATALOGUE, lambda _b, _p: opened[-1], registry, LOCK_RECORDS))
+    previous = use_packaged(
+        Packaged(CATALOGUE, lambda _b, _p: opened[-1], registry, LOCK_RECORDS, env_lock=lambda _b: _lock(opened[-1]))
+    )
     registry.opened = opened  # type: ignore[attr-defined]
     yield registry
     use_packaged(previous)
