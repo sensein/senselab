@@ -271,10 +271,18 @@ def _proc_can_be_hidden() -> bool:
     return done.returncode == 0
 
 
-@pytest.mark.skipif(not _proc_can_be_hidden(), reason="needs Linux and an unprivileged mount namespace")
+REQUIRE_NAMESPACES = "SENSELAB_REQUIRE_NAMESPACES"
+"""Set to `1` where unprivileged namespaces must work (CI), so the hidden-`/proc` test fails instead of skipping."""
+
+
 @pytest.mark.contract
 def test_a_keeper_without_a_readable_proc_never_kills() -> None:
     """With `/proc` unreadable, the keeper kills neither a pid nor a group, whatever start time was recorded."""
+    if not _proc_can_be_hidden():
+        reason = "needs Linux and an unprivileged user and mount namespace"
+        if os.environ.get(REQUIRE_NAMESPACES) == "1":
+            pytest.fail(f"{REQUIRE_NAMESPACES}=1 but the test cannot run: {reason}")
+        pytest.skip(reason)
     probe_s = packaged_settings().start_time_probe_s
     pid = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
     group = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)

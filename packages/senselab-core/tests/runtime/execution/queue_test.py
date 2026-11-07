@@ -1,9 +1,11 @@
 """Queues of plan fragments: items by identity, slots in segments, oldest-first claims and one outcome per item."""
 
 import errno
+import gc
 import multiprocessing
 import os
 import pickle
+import threading
 import time
 import uuid
 from collections.abc import Iterator
@@ -288,8 +290,7 @@ def _claim_cost(root: Path, items: int, claims: int, monkeypatch: pytest.MonkeyP
     queue.put_all(_fragments(items))
     calls = read = 0
     for _ in range(claims):
-        with monkeypatch.context() as patch:
-            totals = count_calls(patch)
+        with count_calls(monkeypatch) as totals:
             claim = queue.claim("w", 1)
         calls, read = calls + totals["calls"], read + totals["bytes"]
         assert claim is not None
@@ -302,6 +303,30 @@ def test_claim_cost_flat_in_queue_size(tmp_path: Path, monkeypatch: pytest.Monke
     small = _claim_cost(tmp_path / "small", 10**2, 100, monkeypatch)
     large = _claim_cost(tmp_path / "large", 10**4, 100, monkeypatch)
     assert small == large, (small, large)
+
+
+class _ClosesOnCollection:
+    """A pipe end in a reference cycle that closes its descriptor when the garbage collector frees it."""
+
+    def __init__(self) -> None:
+        """Open a pipe and refer to itself."""
+        self.fds, self.cycle = os.pipe(), self
+
+    def __del__(self) -> None:
+        """Close both ends."""
+        for fd in self.fds:
+            os.close(fd)
+
+
+def test_claim_cost_counts_only_the_code_under_test(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A collection inside the counted block, or another thread, adds no call: garbage left earlier is not counted."""
+    _ClosesOnCollection()
+    with count_calls(monkeypatch) as totals:
+        gc.collect()
+        worker = threading.Thread(target=os.stat, args=(os.curdir,))
+        worker.start()
+        worker.join()
+    assert totals == {"calls": 0, "bytes": 0}
 
 
 def test_fragment_is_never_pickled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -83,7 +83,13 @@ jobs:
         PYTHON_VERSION: ${{ matrix.python-version }}
         UV_PROJECT_ENVIRONMENT: .core
       run: uv sync --locked --no-editable --python "$PYTHON_VERSION" --package senselab-core --group test
+    # The keeper's hidden-/proc test runs in an unprivileged user and mount namespace, which Ubuntu's AppArmor
+    # restricts by default; SENSELAB_REQUIRE_NAMESPACES=1 makes that test fail rather than skip.
+    - name: Allow unprivileged user namespaces
+      run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
     - name: Run core tests
+      env:
+        SENSELAB_REQUIRE_NAMESPACES: '1'
       run: .core/bin/pytest packages/senselab-core packages/senselab-worker -m "(logic or contract) and not model" -p no:cacheprovider --timeout=300 -rs
     - name: Build each sdist into a wheel on its own
       run: |

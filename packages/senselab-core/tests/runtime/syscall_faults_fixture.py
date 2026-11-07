@@ -4,14 +4,16 @@ Each helper wraps one `os` function through `monkeypatch`, so the code under tes
 meets the error at the call that real storage fails at.
 """
 
+import contextlib
 import errno
+import gc
 import io
 import os
 import shutil
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Literal
 
@@ -260,34 +262,48 @@ COUNTED = (
 """The `os` functions `count_calls` counts."""
 
 
-def count_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
-    """Count calls to the `COUNTED` functions and the bytes they return; `calls` and `bytes` keep the totals.
+def _returned_bytes(result: object) -> int:
+    if isinstance(result, (bytes, str)):
+        return len(result)
+    if isinstance(result, list):
+        return sum(len(n) for n in result if isinstance(n, (bytes, str)))
+    return 0
 
-    The bytes are those `read` returns, the target `readlink` returns and the names `listdir` returns.
-    """
-    totals = {"calls": 0, "bytes": 0}
 
-    def size(result: object) -> int:
-        if isinstance(result, (bytes, str)):
-            return len(result)
-        if isinstance(result, list):
-            return sum(len(n) for n in result if isinstance(n, (bytes, str)))
-        return 0
-
-    def wrap(name: str, real: Callable[..., Any]) -> Callable[..., Any]:
-        def counted(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-            result = real(*args, **kwargs)
+def _counting(name: str, real: Callable[..., Any], totals: dict[str, int], owner: int) -> Callable[..., Any]:
+    def counted(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        result = real(*args, **kwargs)
+        if threading.get_ident() == owner:
             totals["calls"] += 1
             if name in ("read", "readlink", "listdir"):
-                totals["bytes"] += size(result)
-            return result
+                totals["bytes"] += _returned_bytes(result)
+        return result
 
-        return counted
+    return counted
 
-    for name in COUNTED:
-        if hasattr(os, name):
-            monkeypatch.setattr(os, name, wrap(name, getattr(os, name)))
-    return totals
+
+@contextlib.contextmanager
+def count_calls(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, int]]:
+    """Count calls to the `COUNTED` functions in the block and the bytes they return, as `calls` and `bytes`.
+
+    The bytes are those `read` returns, the target `readlink` returns and the names `listdir` returns. Only calls made
+    by this thread count, and the garbage collector is run before the block and held off during it, so a finalizer of
+    an object left by earlier code, or another thread, adds nothing.
+    """
+    totals = {"calls": 0, "bytes": 0}
+    owner = threading.get_ident()
+    gc.collect()
+    collecting = gc.isenabled()
+    gc.disable()
+    try:
+        with monkeypatch.context() as patch:
+            for name in COUNTED:
+                if hasattr(os, name):
+                    patch.setattr(os, name, _counting(name, getattr(os, name), totals, owner))
+            yield totals
+    finally:
+        if collecting:
+            gc.enable()
 
 
 def stall(function: str, prefix: str, seconds: float, *, times: int | None = None, after: bool = False) -> None:

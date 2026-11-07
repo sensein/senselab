@@ -140,6 +140,10 @@ def _profile(**substrate: Any) -> ExecutionProfile:  # noqa: ANN401 - substrate 
     return ExecutionProfile.load("orcd", override)
 
 
+TEST_SLACK = Path(__file__).parents[2] / "data" / "test_slack.yaml"
+"""Test slack over the packaged orcd profile: the time a fake Slurm command that never answers is given."""
+
+
 def _commands(**update: float) -> SlurmCommands:
     commands = _profile().substrate.commands
     assert commands is not None
@@ -824,8 +828,9 @@ def test_a_submission_that_times_out_after_queueing_its_job_leaves_one_job(tmp_p
     """
     _replace_sbatch(tmp_path, HANGS_AFTER_QUEUEING)
     profile = _profile()
-    slurm = _slurm(tmp_path)
-    fleet = _fleet(slurm, profile)
+    slack = ExecutionProfile.load("orcd", TEST_SLACK).substrate.commands
+    assert slack is not None
+    fleet = _fleet(_slurm(tmp_path, commands=_commands(timeout_s=slack.timeout_s)), profile)
     [handle] = fleet.start("cpu", 1)
     assert _jobs(tmp_path) == [handle.id] and "--name=" in (tmp_path / "slurm" / "squeue.log").read_text()
     late = tmp_path / "slurm" / "jobs" / "late"

@@ -1,0 +1,6 @@
+# Test slack layered over the packaged orcd profile.
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, section test_slack.
+# Seconds a fake Slurm command that never answers is given before it is killed.
+substrate:
+  commands:
+    timeout_s: 1
