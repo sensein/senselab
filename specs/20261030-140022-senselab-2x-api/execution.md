@@ -291,11 +291,12 @@ are recorded here (R-200).
   opens. A result from a refused env is never served, and a result whose context records no env license is recomputed
   unless the policy allows unlicensed hits; a reuse so allowed records `senselab:unlicensedReuse`, on every hit path
   including the lost race.
-- **The key is the request sent (R-187, P3-51).** A key holds the batch formation of the request a job is actually
-  sent in (`request_components(backend, request_size)`: `single` for one item, `items:<n>` otherwise) and the
-  backend's chunk grid. A backend that is not batch-invariant is sent one item per request until keyed buckets exist
-  (Task 18), so its key is always `single`; an invariant backend's multi-item formation is placement only, because
-  it does not declare `batch_formation` output-affecting.
+- **The key is the request sent (R-187, P3-51, I-3).** A key holds the batch formation of the batch a job is sent
+  in (`request_components(backend, formation)`) and the backend's chunk grid. `form_batches` groups one node's jobs:
+  a batch-invariant backend takes any jobs up to the batch size as `mixed`, which is placement only; a backend that
+  declares `batch_formation` output-affecting is batched per length bucket of `batching@1.0`, keyed
+  `bucket:<grid id>:<index>`; any other backend, or a job with no recording input, is sent alone as `single`. The
+  formation comes from the job's own inputs, so a key never depends on batch-mates (Task 18).
 - **File-backed inputs are checked at run (R-121, executor part).** A file-backed input is checked against its stamp
   (`audio_io.check`) before its job is keyed; a rewritten or vanished file fails that job with `StaleSource`, a typed
   content fault (charged, never re-placed, since re-placing cannot make the file match), and nothing is sent or
@@ -316,7 +317,7 @@ are recorded here (R-200).
   the peak is the budget rather than old plus new; a first load still loads and then evicts, since its size is unknown
   until it is loaded. The cache lock is reentrant and `used_bytes` is read under it. The in-process input copy R-160
   also names is not done: in-process backends still receive the caller's values.
-- **Plan fragments are documents.** `plan-fragment@1.0` holds identities, never values or pickled objects, so a fragment
+- **Plan fragments are documents.** `plan-fragment@2.0` holds identities, never values or pickled objects, so a fragment
   can cross a process or a scheduler. `admit` is part of the `Executor` protocol: it holds a plan and the values of its
   graph-input identities, and returns an admission (a unique id) that each fragment names, so two admissions of
   one plan (one content under two anchors, say) never replace each other's values. An `output:` input is read from the result
@@ -389,7 +390,7 @@ are recorded here (R-200).
 - **A queue item is at most one quantum of jobs (Task 16 split).** The Step 5 probe on ORCD ran a 200-job node with
   `pool.quantum_items` 10 and a cap of 4 workers: `Pool.submit` put the whole fragment as one item, the queue read one
   deep, one worker was started and it ran all 200 jobs serially (about 11 minutes). `Pool.submit` now puts a fragment
-  as items of at most `quantum_items` jobs each, in job order (`split`); each item is a `plan-fragment@1.0` with its
+  as items of at most `quantum_items` jobs each, in job order (`split`); each item is a `plan-fragment@2.0` with its
   own digest, so a re-put under the same profile (the same coordinator, another one, or a restart) makes no new item.
   A run re-placed under a profile that changes only `quantum_items` splits into other digests; the old items stay
   queued and are served as store hits or as duplicate compute, as after a `batch_size` change. `results` yields each
@@ -431,7 +432,7 @@ are recorded here (R-200).
   every durable source.
 - **Queues (Task 13, ADR-003).** `runtime/execution/queue.py` holds one queue per resource class, with `#<model
   identity>` for a resident model, in a directory named by `identity_digest("label@1", name)`. An item is a plan
-  fragment's JCS under `identity_digest("plan-fragment@1", …)`, first writer wins. The index is slots, never appended
+  fragment's JCS under `identity_digest("plan-fragment@2", …)`, first writer wins. The index is slots, never appended
   lines: a put takes `segments/<seq>/slot-<n>`, a symlink to the item's digest made by an exclusive `symlink` at the
   next free `n` (`n + 1` on `EEXIST`), and makes `segments/<seq+1>` once `pool.segment_items` slots are taken; a slot
   is made only in a segment with a free number, so nothing lands in a full one. `slotted/<digest>`, made after the

@@ -526,3 +526,11 @@ and refused, and `scripts/regenerate_equivalence.py` prints each class's derivat
 changes: none of these values entered a digest with its derivation. `signal/data/resample.yaml` carries no format tag
 and loses its `derivations` block. `spdx-licenses@1.0` still holds one derivation per group; its groups are unnamed,
 so moving them needs a format change, left open.
+
+## Amendment 2026-11-07: recorded lengths in results (Phase 3 Task 18)
+
+- **`plan-fragment@2.0`** replaces `@1.0` outright. `UpstreamRef` gains `length_ns: int >= 0 | null`, the span in ns
+  of the port's value when it is a recording. Results come back as `ResultRef{..., lengths_ns: {port: int >= 0}}`, the
+  span of each recording output, taken when the result is given. A job's batch formation is measured from these, so
+  keying reads no stored value. Queue items are named under identity tag `plan-fragment@2`, which replaces
+  `plan-fragment@1`. Logical keys and the plan hash are unchanged.

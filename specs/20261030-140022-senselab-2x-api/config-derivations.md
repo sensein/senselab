@@ -38,7 +38,7 @@ Online: a laptop reaches the Hub and the data mirrors directly.
 
 ### laptop.resource_classes
 
-One class per device the laptop may have, each the host's own CPUs and memory with no time limit and no partition: a laptop runs its workers as local processes. max_workers 1: one worker per class, since a second worker on one host competes for the same memory and device; the plan places a node on the first class of the first listed device the host has and the backend declares. memory_cap_bytes null: no table measures a model yet, and a laptop's free memory is not fixed, so no static cap is checked.
+One class per device the laptop may have, each the host's own CPUs and memory with no time limit and no partition: a laptop runs its workers as local processes. max_workers 1: one worker per class, since a second worker on one host competes for the same memory and device; the plan places a node on the first class of the first listed device the host has and the backend declares. memory_cap_bytes null: no table measures a model yet, and a laptop's free memory is not fixed, so no static cap is checked. batch_size 1: not measured; one item per request is the batching that needs no measurement. Phase 3 Task 20's calibrate-then-size replaces it with a size measured per class.
 
 ### laptop.substrate
 
@@ -104,7 +104,7 @@ Online: compute nodes reach the Hub and the data mirrors.
 
 ### orcd.resource_classes
 
-Partitions are site placeholders (${CPU_PARTITION}, ${GPU_PARTITION}), expanded where a worker is submitted; the site's values stay local. cpu: 4 CPUs and 16 GiB for 6 h, the CPU grant of the 1.x diarization jobs (specs/20260915-preprocess-diarization/design.md). cpu:large: 8 CPUs and 64 GiB, the host grant of scripts/speaker_ceiling/evaluate.sbatch, as the larger memory class a resource fault moves to. gpu:h100: one H100 with 8 CPUs and 96 GiB of host memory, the grant of specs/20260820-vlm-spectrogram/ job.sh; H100 because review arrays run there first. time_s 21600 on every class: not measured, the diarization grant's limit. memory_cap_bytes 85899345920 on gpu:h100: the H100's 80 GiB of device memory, which the models resident at once on one worker share. CPU classes have no static cap: their memory is the grant, and an OOM there is a resource fault that moves the item to cpu:large. gpu: any GPU type, with the gpu:h100 host grant and an untyped gres, listed after gpu:h100 so a plan never chooses it first; it is the class a call running on a GPU node of another type takes. Its device memory depends on the type, so it has no static cap. max_workers (32, 8, 4, 4): not measured; the substrate's QOS cap bounds them further.
+Partitions are site placeholders (${CPU_PARTITION}, ${GPU_PARTITION}), expanded where a worker is submitted; the site's values stay local. cpu: 4 CPUs and 16 GiB for 6 h, the CPU grant of the 1.x diarization jobs (specs/20260915-preprocess-diarization/design.md). cpu:large: 8 CPUs and 64 GiB, the host grant of scripts/speaker_ceiling/evaluate.sbatch, as the larger memory class a resource fault moves to. gpu:h100: one H100 with 8 CPUs and 96 GiB of host memory, the grant of specs/20260820-vlm-spectrogram/ job.sh; H100 because review arrays run there first. time_s 21600 on every class: not measured, the diarization grant's limit. memory_cap_bytes 85899345920 on gpu:h100: the H100's 80 GiB of device memory, which the models resident at once on one worker share. CPU classes have no static cap: their memory is the grant, and an OOM there is a resource fault that moves the item to cpu:large. gpu: any GPU type, with the gpu:h100 host grant and an untyped gres, listed after gpu:h100 so a plan never chooses it first; it is the class a call running on a GPU node of another type takes. Its device memory depends on the type, so it has no static cap. max_workers (32, 8, 4, 4): not measured; the substrate's QOS cap bounds them further. batch_size 1 on every class: not measured; one item per request is the batching that needs no measurement. Phase 3 Task 20's calibrate-then-size replaces it with a size measured per class; until then the Task 18 probe overrides it per run, from the held-out bucket populations.
 
 ### orcd.substrate
 
@@ -325,6 +325,16 @@ The lines `scripts/regenerate_equivalence.py` prints beside the table it writes,
 pyannote.class-0: verify sampling: 2 agreements and 0 disagreements over 2 keys, runs p2cmd-27735059, thresholds 674c9fc33cbd23871f5e182c9fc244d562a2fbdff4b66d31d201cc5cc72045c7
 
 transformers.class-0: verify sampling: 6 agreements and 0 disagreements over 6 keys, runs p2cmd-27735057, p2cmd-27735059, thresholds 674c9fc33cbd23871f5e182c9fc244d562a2fbdff4b66d31d201cc5cc72045c7
+
+## packages/senselab-core/src/senselab_core/runtime/data/batching.yaml
+
+### id
+
+The grid's name, which every bucketed formation `bucket:<id>:<index>` carries into its key. It names the edges below, so a change of edges takes a new id and never reuses keys made under the old buckets.
+
+### edges_ns
+
+1, 2, 4, 8, 16 and 30 s. Not measured. Doubling edges keep, in each interior bucket ([1, 2) s to [16, 30) s), a batch's shortest item at least half its longest, so padding stays under half of a padded batch's samples there; bucket 0 (under 1 s) and the last, unbounded bucket (30 s and over) have no such bound. The top edge is the 30 s input window of the Whisper encoder behind the transformers ASR backend, the one Phase 2 backend that keys its batch formation; longer inputs share the last, unbounded bucket. The basis to measure is the Phase 3 Task 18 ORCD comparison: batch of 1 against bucketed batches on the held-out split, by kernel type under the run-config thresholds. Batch sizes are not here: they are the placement's, sized from measurement (Task 20).
 
 ## packages/senselab/src/senselab/data/env_locks/inputs.yaml
 
