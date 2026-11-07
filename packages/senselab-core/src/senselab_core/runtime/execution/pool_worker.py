@@ -3,7 +3,7 @@
 A pool worker claims items from the queue of the class whose oldest waiting item is oldest, logs each job `claimed`
 under the run's current epoch and attempt, runs the jobs through the process's `WorkerSet` (`execute`), and commits
 each item with one `ResultRef` per job (`report`); the `Pool` applies each failure's effect. It stays on a class for
-a quantum, `pool.quantum_items` items or `pool.quantum_s` seconds, and then claims from the class with the oldest
+a quantum, `pool.quantum_items` jobs or `pool.quantum_s` seconds, and then claims from the class with the oldest
 work. While a claim runs, its leases are proven every renewal interval; an item whose lease was lost is not
 reported. A request that fails as a whole (`whole`) is split in halves within the claim until the failing job is
 alone, which is reported with that failure; an item that fails inside a request is reported as it failed. The worker
@@ -193,7 +193,7 @@ class PoolWorker:
             idle = None
             if claim.queue.name != current or ended:
                 current, spent, began = claim.queue.name, 0, time.monotonic()
-            spent += len(claim.items)
+            spent += sum(len(f.jobs) for f in claim.fragments)
             self.served.extend((claim.queue.name, d) for d in claim.items)
             self.run_claim(claim)
         return 0
@@ -204,12 +204,12 @@ class PoolWorker:
         return [n for _, n in sorted(ages, key=lambda a: -a[0])]
 
     def _next(self, prefer: str | None, left: int) -> Claim | None:
-        """Claim up to `left` items from `prefer`, else a quantum from the class with the oldest work; None if none."""
+        """Claim up to `left` jobs from `prefer`, else a quantum from the class with the oldest work; None if none."""
         order = [prefer] if prefer is not None else []
         order += [n for n in self._by_age() if n != prefer]
         for name in order:
             size = left if name == prefer else self.profile.pool.quantum_items
-            claim = self.queues.queue(name).claim(self.name, max_items=max(size, 1))
+            claim = self.queues.queue(name).claim(self.name, max_items=max(size, 1), max_jobs=max(size, 1))
             if claim is not None:
                 return claim
         return None

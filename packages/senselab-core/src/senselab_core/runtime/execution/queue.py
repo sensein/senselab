@@ -154,6 +154,16 @@ def settle(lease: Lease, q: StorageDir, digest: str, record: dict[str, object]) 
             outcome.remove_owned(temporary, pattern=TEMPORARY_NAME)
 
 
+def _bound(max_items: int, max_jobs: Optional[int]) -> Callable[[list["_Held"]], bool]:
+    """Return whether items taken fill a claim of at most `max_items` items, stopping at `max_jobs` jobs if given."""
+
+    def full(taken: list[_Held]) -> bool:
+        jobs = sum(len(h.fragment.jobs) for h in taken)
+        return len(taken) >= max_items or (max_jobs is not None and jobs >= max_jobs)
+
+    return full
+
+
 class _Held:
     """One item a claim holds: its digest, slot, fragment, lease and the stack that releases it."""
 
@@ -297,6 +307,7 @@ class Queue:
         self._missing: dict[str, float] = {}
         self._targets: dict[tuple[int, int], str] = {}
         self._envs: dict[str, str] = {}
+        self._jobs: dict[str, int] = {}
         self._epoch = epoch
         self._head = 0
         self._oldest = 0
@@ -339,6 +350,7 @@ class Queue:
                 if not isinstance(fragment, PlanFragment):
                     raise TypeError(f"a queue item is a PlanFragment, not {type(fragment).__name__}")
                 digest = item_digest(fragment)
+                self._jobs[digest] = len(fragment.jobs)
                 if items.lstat(f"{digest}.json") is None:
                     _publish(items, f"{digest}.json", jcs_dumps(fragment.model_dump(mode="json")), ITEM_NAME)
                 digests[digest] = None
@@ -435,8 +447,10 @@ class Queue:
         with self.open() as q, q.child("claims") as claims:
             return self._live(claims, digest, q.dir_now())
 
-    def claim(self, worker: str, max_items: int = 1) -> Optional[Claim]:
+    def claim(self, worker: str, max_items: int = 1, max_jobs: Optional[int] = None) -> Optional[Claim]:
         """Claim up to `max_items` items without an outcome, oldest first, for `worker`; None when none is claimable.
+
+        With `max_jobs`, the claim stops once its items hold that many jobs or more; it always takes one item.
 
         Each item is held under a `Lease` beating from its own renewer until the claim commits, kills or releases
         it. An item under a live claim is skipped; a stale claim is broken, within one renewal interval of going
@@ -444,15 +458,15 @@ class Queue:
         held (`hold`) is skipped.
 
         Raises:
-            ValueError: `max_items` is below 1.
+            ValueError: `max_items` or `max_jobs` is below 1.
         """
-        if max_items < 1:
-            raise ValueError(f"a claim takes at least one item (got {max_items})")
+        if max_items < 1 or (max_jobs is not None and max_jobs < 1):
+            raise ValueError(f"a claim takes at least one item of one job (got {max_items}, {max_jobs})")
         skip = set(self._holds())
         taken: list[_Held] = []
         try:
             with self.open() as q, q.child("segments") as segments, q.child("claims") as claims:
-                self._fill(q, segments, claims, taken, max_items, skip)
+                self._fill(q, segments, claims, taken, _bound(max_items, max_jobs), skip)
         except BaseException:
             for held in taken:
                 held.stack.close()
@@ -492,17 +506,17 @@ class Queue:
         segments: StorageDir,
         claims: StorageDir,
         taken: list[_Held],
-        most: int,
+        full: Callable[[list[_Held]], bool],
         skip: set[str],
     ) -> None:
-        """Take claims into `taken`, oldest first, until it holds `most` or no live segment has a claimable item."""
+        """Take claims into `taken`, oldest first, until it is `full` or no live segment has a claimable item."""
         leased = {n.removesuffix(".lease") for n in claims.listdir() if n.endswith(".lease")}
         now = time.monotonic()
         self._judged = {d: at for d, at in self._judged.items() if d in leased and now - at < self._interval}
         self._missing = {d: at for d, at in self._missing.items() if now - at < self._interval}
         walk = self._segments(segments)
         with contextlib.closing(walk):
-            self._fill_from(q, claims, walk, taken, most, skip)
+            self._fill_from(q, claims, walk, taken, full, skip)
 
     def _fill_from(  # noqa: PLR0913 - as `_fill`, with the walk of live segments
         self,
@@ -510,7 +524,7 @@ class Queue:
         claims: StorageDir,
         walk: Iterator[tuple[int, StorageDir, list[int], set[int]]],
         taken: list[_Held],
-        most: int,
+        full: Callable[[list[_Held]], bool],
         skip: set[str],
     ) -> None:
         for seq, segment, slots, resolved in walk:
@@ -525,7 +539,7 @@ class Queue:
                 held = self._take(q, claims, (seq, n), digest, skip)
                 if held is not None:
                     taken.append(held)
-                    if len(taken) == most:
+                    if full(taken):
                         return
 
     @property
@@ -566,6 +580,7 @@ class Queue:
             fragment = self._fragment(q, lease, slot, digest)
             if fragment is not None:
                 self._envs[digest] = identity_digest(LABEL_TAG, fragment.placement.env)
+                self._jobs[digest] = len(fragment.jobs)
             if fragment is None or self._envs[digest] in skip:
                 stack.close()
                 return None
@@ -610,14 +625,36 @@ class Queue:
         Claimed items, items given two slots and items whose slot is not yet marked are counted.
         """
         with self.open() as q, q.child("segments") as segments:
-            total = 0
-            for name in segments.listdir():
-                if SEQ_NAME.fullmatch(name):
-                    with contextlib.suppress(FileNotFoundError), segments.child(name) as segment:
-                        if segment.lstat(RETIRED_MARK) is None:
-                            slots, resolved = _slots(segment)
-                            total += len(set(slots) - resolved)
-        return total
+            return sum(1 for _ in self._waiting(segments))
+
+    def work(self) -> int:
+        """Return an upper bound on the jobs of the items `depth` counts; an item that cannot be read counts one."""
+        with self.open() as q, q.child("segments") as segments, q.child("items") as items:
+            return sum(1 if d is None else self._job_count(items, d) for d in self._waiting(segments))
+
+    def _waiting(self, segments: StorageDir) -> Iterator[Optional[str]]:
+        """Yield the digest of each taken, unresolved slot of each live segment; None for a slot naming no item."""
+        for name in segments.listdir():
+            if SEQ_NAME.fullmatch(name):
+                with contextlib.suppress(FileNotFoundError), segments.child(name) as segment:
+                    if segment.lstat(RETIRED_MARK) is None:
+                        slots, resolved = _slots(segment)
+                        for n in sorted(set(slots) - resolved):
+                            yield self._target(segment, int(name), n)
+
+    def _job_count(self, items: StorageDir, digest: str) -> int:
+        """Return the jobs of item `digest`, read once per process; 1 while it cannot be read."""
+        if digest not in self._jobs:
+            data = items.read_regular(f"{digest}.json")
+            try:
+                document = jcs_loads(data) if data is not None else None
+            except ValueError:
+                document = None
+            jobs = document.get("jobs") if isinstance(document, dict) else None
+            if not isinstance(jobs, list) or not jobs:
+                return 1
+            self._jobs[digest] = len(jobs)
+        return self._jobs[digest]
 
     def oldest_age_s(self) -> Optional[float]:
         """Return the storage-clock age of the oldest slot whose item has no outcome and no live claim.

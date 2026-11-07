@@ -1,10 +1,11 @@
 """`Pool`: the `Executor` that puts fragments on a run's queues and reads what pool workers made of them.
 
 A fragment goes to the queue of its placement's resource class under `<run dir>/queues/`, named `<class>#<model
-identity>` when its node has a resident model; a `Substrate` has workers serve that queue (`scale`, each round). A
-worker records each job's `ResultRef` in the item's outcome (`report`). The `Pool` yields a result only once the result
-store holds its outputs, and a failure only as `dead/<key digest>.json` holds it, so a restarted coordinator reads the
-same state from disk. Each fault class has its effect here, with the budgets of the profile's `faults` section:
+identity>` when its node has a resident model, as items of at most `pool.quantum_items` jobs each (`split`), in job
+order; a `Substrate` has workers serve that queue (`scale`, each round). A worker records each job's `ResultRef` in the
+item's outcome (`report`). The `Pool` yields a result only once the result store holds its outputs, and a failure only
+as `dead/<key digest>.json` holds it, so a restarted coordinator reads the same state from disk. Each fault class has
+its effect here, with the budgets of the profile's `faults` section:
 
 - **content**, not a gap: charged; the job is queued again until `content_attempts` charges, then it is dead;
 - **resource**, not a gap: the job is queued again on the next larger memory class of its device, uncharged, at most
@@ -99,16 +100,16 @@ def larger_class(profile: ExecutionProfile, name: str) -> str | None:
     return larger[0][1] if larger else None
 
 
-def _one_job(fragment: PlanFragment, index: int, **update: object) -> PlanFragment:
-    """Return the fragment of job `index` of `fragment` alone, with the inputs it reads and `update` applied."""
-    inputs = fragment.inputs[index]
-    gathered = {g: e for g, e in fragment.gathered.items() if g in inputs.values()}
-    read = {i for i in inputs.values() if i.startswith("output:")} | {e for es in gathered.values() for e in es}
+def _jobs_of(fragment: PlanFragment, indices: Sequence[int], **update: object) -> PlanFragment:
+    """Return the fragment of jobs `indices` of `fragment`, in that order, with the inputs they read and `update`."""
+    named = {i for index in indices for i in fragment.inputs[index].values()}
+    gathered = {g: e for g, e in fragment.gathered.items() if g in named}
+    read = {i for i in named if i.startswith("output:")} | {e for es in gathered.values() for e in es}
     return PlanFragment.model_validate(
         {
             **fragment.model_dump(mode="json"),
-            "jobs": [fragment.jobs[index].model_dump(mode="json")],
-            "inputs": [dict(inputs)],
+            "jobs": [fragment.jobs[i].model_dump(mode="json") for i in indices],
+            "inputs": [dict(fragment.inputs[i]) for i in indices],
             "upstream": {i: r.model_dump(mode="json") for i, r in fragment.upstream.items() if i in read},
             "gathered": {g: list(e) for g, e in gathered.items()},
             **update,
@@ -116,13 +117,31 @@ def _one_job(fragment: PlanFragment, index: int, **update: object) -> PlanFragme
     )
 
 
+def split(fragment: PlanFragment, quantum: int) -> list[PlanFragment]:
+    """Return `fragment` as items of at most `quantum` jobs each, in job order; `[fragment]` when it fits in one.
+
+    An item ends only between jobs, and a backend that is not batch-invariant is sent one job per request
+    (`request_size`), so no item holds part of such a request.
+
+    Raises:
+        ValueError: `quantum` is below 1.
+    """
+    if quantum < 1:
+        raise ValueError(f"an item holds at least one job, got a quantum of {quantum}")
+    count = len(fragment.jobs)
+    if count <= quantum:
+        return [fragment]
+    return [_jobs_of(fragment, range(start, min(start + quantum, count))) for start in range(0, count, quantum)]
+
+
 @dataclass
 class _Flight:
-    """One fragment on a queue, by its item digest."""
+    """One item on a queue, by its digest, and the digest of the fragment it was split from."""
 
     queue: str
     digest: str
     fragment: PlanFragment
+    parent: str
 
 
 @dataclass
@@ -235,8 +254,8 @@ class Pool:
         if current > self.epoch:
             raise StaleCoordinator(self.epoch, current)
 
-    def _put(self, fragment: PlanFragment) -> _Flight:
-        """Put `fragment` on its queue and have it served; refused by a newer epoch or a hold of its env.
+    def _put(self, fragment: PlanFragment) -> list[_Flight]:
+        """Put `fragment` on its queue as its items (`split`) and have them served; refused by a newer epoch or a hold.
 
         Raises:
             StaleCoordinator: a newer epoch was taken.
@@ -248,9 +267,11 @@ class Pool:
         queue.unhold(before=self.epoch)
         if queue.held(env) is not None:
             raise QueueHeld(name, env, self._env_failures(env))
-        queue.put(fragment)
+        items = split(fragment, self.profile.pool.quantum_items)
+        queue.put_all(items)
         self._scale()
-        return _Flight(name, item_digest(fragment), fragment)
+        parent = item_digest(fragment)
+        return [_Flight(name, item_digest(item), item, parent) for item in items]
 
     def _queue_name(self, fragment: PlanFragment) -> str:
         """Return the queue of `fragment`: its class, with `#<model identity>` for its node's resident model."""
@@ -292,16 +313,16 @@ class Pool:
         return WorkersBroken(flight.queue, found.resource_class, found.failures, found.reason)
 
     def submit(self, fragment: PlanFragment) -> Handle:
-        """Put `fragment` on the queue of its resource class and return its handle.
+        """Put `fragment` on the queue of its resource class, as quantum-sized items, and return its handle.
 
         Raises:
             StaleCoordinator: a newer epoch than this coordinator's was taken; nothing is put.
             QueueHeld: the fragment's env is held on its queue; nothing is put.
         """
-        flight = self._put(fragment)
+        flights = self._put(fragment)
         handle = Handle(id=f"pool-{self.epoch}-{next(self._ids)}")
         with self._lock:
-            self._followed[handle.id] = _Followed([flight])
+            self._followed[handle.id] = _Followed(flights)
         return handle
 
     def status(self, handle: Handle) -> Status:
@@ -322,7 +343,9 @@ class Pool:
         self._followed[handle.id].cancelled = True
 
     def results(self, handle: Handle) -> Iterator[ResultRef]:
-        """Yield the result of each job of `handle` as its outcome is read, retrying faults by their class.
+        """Yield the result of each job of `handle` as its item's outcome is read, retrying faults by their class.
+
+        Items whose outcomes are read in one poll are taken in job order.
 
         Raises:
             KeyError: the handle is not this pool's.
@@ -474,8 +497,8 @@ class Pool:
         update: dict[str, object] = {"attempt": flight.fragment.attempt + 1}
         if placement is not None:
             update["placement"] = placement.model_dump(mode="json")
-        retry = _one_job(flight.fragment, index, **update)
-        followed.flights.append(self._put(retry))
+        retry = _jobs_of(flight.fragment, [index], **update)
+        followed.flights.extend(self._put(retry))
         job, placed = retry.jobs[0], retry.placement
         key = self._key(retry, 0)
         self.events.record(
@@ -581,4 +604,5 @@ __all__ = [
     "report",
     "run_plan",
     "run_store",
+    "split",
 ]
