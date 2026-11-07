@@ -285,12 +285,13 @@ class Keeper:
         if pid is None:
             return
         deadline = time.monotonic() + timeout
-        while os.waitpid(pid, os.WNOHANG) == (0, 0):
-            if time.monotonic() > deadline:
-                _kill(pid, signal.SIGKILL)
-                os.waitpid(pid, 0)
-                return
-            time.sleep(REAP_POLL_S)
+        with contextlib.suppress(ChildProcessError):
+            while os.waitpid(pid, os.WNOHANG) == (0, 0):
+                if time.monotonic() > deadline:
+                    _kill(pid, signal.SIGKILL)
+                    os.waitpid(pid, 0)
+                    return
+                time.sleep(REAP_POLL_S)
 
     def _start(self) -> IO[bytes]:
         read, write = os.pipe()
@@ -303,7 +304,6 @@ class Keeper:
                     (os.POSIX_SPAWN_DUP2, read, 0),
                     (os.POSIX_SPAWN_OPEN, 1, os.devnull, os.O_WRONLY, 0),
                 ],
-                setpgroup=0,
             )
         finally:
             os.close(read)

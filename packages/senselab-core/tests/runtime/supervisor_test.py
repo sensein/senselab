@@ -224,3 +224,17 @@ def test_an_unsupervised_owner_sigkill_leaves_no_group(backends_importable: None
         host.kill()
         host.wait()
         host.stdout.close()
+
+
+@pytest.mark.contract
+def test_keeper_leads_its_own_session() -> None:
+    """The keeper is a session leader, and stopping it tolerates a keeper already reaped."""
+    keeper = Keeper()
+    keeper.record("+", "p", os.getpid(), start="never")
+    pid = keeper.pid
+    assert pid is not None
+    _until(lambda: os.getsid(pid) == pid, "the keeper leads its own session")
+    assert os.getsid(pid) != os.getsid(0)
+    keeper.stop(SETTLE_S)
+    keeper.pid = pid
+    keeper.stop(SETTLE_S)
