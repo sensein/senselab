@@ -71,6 +71,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("senselab")
 
+
+class ScalerFailed(RuntimeError):
+    """The pool's scaler thread ended on an error that is not a substrate failure; the cause is chained."""
+
+
 DEAD_DIR = "dead"
 """The directory of a run's dead jobs, one `<key digest>.json` each."""
 
@@ -422,10 +427,10 @@ class Pool:
             KeyError: the handle is not this pool's.
             StaleCoordinator: a newer epoch was taken.
             QueueHeld: a job's env is held, or its class's workers are broken; the jobs not given wait in their queues.
-            Exception: the error that ended the scaler thread.
+            ScalerFailed: the scaler thread ended on an error, chained as the cause.
         """
         if self._scale_error is not None:
-            raise self._scale_error
+            raise ScalerFailed(f"the pool's scaler failed: {self._scale_error!r}") from self._scale_error
         followed = self._followed[handle.id]
         if followed.cancelled or followed.done:
             return [], True
@@ -604,8 +609,9 @@ class Pool:
 def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float) -> None:
     """Scale the pool `ref` names on each wake, and once per `poll_s` while it follows a fragment.
 
-    Ends once the pool is closed or collected, or on an error other than a `SubstrateError`, which the pool keeps for
-    `poll` to raise; the pool is held only during a round.
+    While the substrate backs off, the next round comes when its wait ends, if sooner. Ends once the pool is closed or
+    collected, or on an error other than a `SubstrateError`, which the pool keeps for `poll` to raise; the pool is held
+    only during a round.
     """
     woken = True
     while (pool := ref()) is not None and not pool._closing:  # noqa: SLF001 - the pool's own scaler
@@ -615,8 +621,9 @@ def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float
             except Exception as err:  # noqa: BLE001 - carried to the thread that polls
                 pool._scale_error = err  # noqa: SLF001
                 return
+        backoff = pool._fleet.substrate_wait()  # noqa: SLF001
         del pool
-        woken = wake.wait(poll_s)
+        woken = wake.wait(min(poll_s, backoff) if backoff > 0 else poll_s)
         wake.clear()
 
 
@@ -697,6 +704,7 @@ def coordinate(
 __all__ = [
     "DEAD_DIR",
     "Pool",
+    "ScalerFailed",
     "coordinate",
     "larger_class",
     "report",

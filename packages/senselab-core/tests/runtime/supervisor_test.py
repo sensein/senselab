@@ -11,7 +11,15 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from senselab_core.runtime.execution.supervisor import Keeper, Supervisor, SupervisorPolicy, subreaper_supported
+from senselab_core.runtime.execution.supervisor import (
+    KEEPER,
+    Keeper,
+    Supervisor,
+    packaged_settings,
+    read_start_time,
+    subreaper_supported,
+)
+from senselab_core.runtime.execution_settings import SupervisorSettings
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import alive, group_alive, group_gone
@@ -188,7 +196,7 @@ def test_keeper_kills_only_groups_it_still_owns() -> None:
     reused = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
     try:
         keeper = Keeper()
-        keeper.record("+", "g", owned.pid)
+        keeper.record("+", "g", owned.pid, read_start_time(owned.pid, keeper.settings.start_time_probe_s))
         keeper.record("+", "g", reused.pid, start="another-start")
         keeper.stop(SETTLE_S)
         assert owned.wait(SETTLE_S) == -signal.SIGKILL
@@ -222,15 +230,17 @@ def _path_with_ps(tmp_path: Path, body: str | None) -> str:
 def test_a_start_time_the_keeper_cannot_read_never_kills(
     fault: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With `ps` missing, failing or hung, the keeper kills neither a recorded pid nor a recorded group."""
+    """With `ps` missing, failing or hung at the end, the keeper kills neither a recorded pid nor a recorded group."""
+    settings = SupervisorSettings(start_time_probe_s=packaged_settings().start_time_probe_s)
     pid = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
     group = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
+    starts = {p.pid: read_start_time(p.pid, settings.start_time_probe_s) for p in (pid, group)}
     monkeypatch.setenv("PATH", _path_with_ps(tmp_path, FAULTY_PS[fault]))
     try:
-        keeper = Keeper(SupervisorPolicy(start_time_probe_s=0.5))
-        keeper.record("+", "p", pid.pid)
-        keeper.record("+", "g", group.pid)
-        keeper.stop(SETTLE_S)
+        keeper = Keeper(settings)
+        keeper.record("+", "p", pid.pid, starts[pid.pid])
+        keeper.record("+", "g", group.pid, starts[group.pid])
+        keeper.stop(SETTLE_S + 2 * settings.start_time_probe_s)
         assert pid.poll() is None and group.poll() is None
     finally:
         for proc in (pid, group):
@@ -238,20 +248,48 @@ def test_a_start_time_the_keeper_cannot_read_never_kills(
             proc.wait()
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="the keeper reads /proc on Linux only")
-@pytest.mark.contract
-def test_the_keeper_reads_start_times_from_proc_on_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """On Linux the keeper needs no `ps`: with none on `PATH` it still kills the group it owns."""
-    owned = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
-    monkeypatch.setenv("PATH", _path_with_ps(tmp_path, None))
+HIDE_PROC = [
+    "unshare",
+    "--user",
+    "--map-root-user",
+    "--mount",
+    "sh",
+    "-c",
+    'mount -t tmpfs none /proc && exec "$@"',
+    "sh",
+]
+"""Run a command in its own mount namespace with an empty `/proc`, as a host without a readable `/proc` is."""
+
+
+def _proc_can_be_hidden() -> bool:
+    if sys.platform != "linux":
+        return False
     try:
-        keeper = Keeper()
-        keeper.record("+", "g", owned.pid)
-        keeper.stop(SETTLE_S)
-        assert owned.wait(SETTLE_S) == -signal.SIGKILL
+        done = subprocess.run([*HIDE_PROC, "sh", "-c", "test ! -e /proc/self/stat"], capture_output=True, check=False)
+    except OSError:
+        return False
+    return done.returncode == 0
+
+
+@pytest.mark.skipif(not _proc_can_be_hidden(), reason="needs Linux and an unprivileged mount namespace")
+@pytest.mark.contract
+def test_a_keeper_without_a_readable_proc_never_kills() -> None:
+    """With `/proc` unreadable, the keeper kills neither a pid nor a group, whatever start time was recorded."""
+    probe_s = packaged_settings().start_time_probe_s
+    pid = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
+    group = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
+    argv = [*HIDE_PROC, sys.executable, "-I", "-c", KEEPER, str(os.getpid()), repr(probe_s)]
+    keeper = subprocess.Popen(argv, stdin=subprocess.PIPE)
+    try:
+        assert keeper.stdin is not None
+        keeper.stdin.write(f"+p{pid.pid} {read_start_time(pid.pid, probe_s)}\n+g{group.pid} another-start\n".encode())
+        keeper.stdin.close()
+        assert keeper.wait(SETTLE_S) == 0
+        assert pid.poll() is None and group.poll() is None
     finally:
-        owned.kill()
-        owned.wait()
+        for proc in (pid, group, keeper):
+            proc.kill()
+            proc.wait()
 
 
 UNSUPERVISED = """

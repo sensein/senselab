@@ -27,6 +27,8 @@ keeper and restores the subreaper flag.
 import collections
 import contextlib
 import ctypes
+import functools
+import inspect
 import logging
 import os
 import signal
@@ -39,9 +41,8 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import IO, Any, Self
 
-from senselab_core.kernel._base import Frozen
-from senselab_core.runtime.execution_settings import PositiveSeconds
-from senselab_core.runtime.storage import load_policy_values
+from senselab_core.runtime.execution_settings import SupervisorSettings
+from senselab_core.runtime.profiles import ExecutionProfile
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,46 @@ EXIT_BOUND_S = 5.0
 """Seconds leaving a supervisor waits for its killed orphans, leaders and keeper to be reaped."""
 REAPED_KEPT = 256
 """How many reaped orphans' exit statuses the table keeps, the oldest dropped first."""
-SUPERVISOR_POLICY_FORMAT = "supervisor-policy@1.0"
-"""The format of `data/supervisor_policy.yaml`."""
 
-KEEPER = r"""
+
+def read_start_time(pid: int, probe_s: float) -> str | None:
+    """Return the start time of process `pid`, or None when no process has that pid.
+
+    On Linux it is field 22 of `/proc/<pid>/stat`; elsewhere it is `ps -o lstart=`, which may take `probe_s` seconds.
+    The keeper runs this function's source.
+
+    Raises:
+        LookupError: the start time cannot be read (`/proc` unreadable, `ps` missing, failing or too slow).
+    """
+    if sys.platform == "linux":
+        if not os.access("/proc/self/stat", os.R_OK):
+            raise LookupError("/proc is not readable")
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as f:
+                data = f.read()
+        except (FileNotFoundError, ProcessLookupError):
+            return None
+        except OSError as err:
+            raise LookupError(f"/proc/{pid}/stat: {err}") from err
+        return data[data.rfind(b")") + 2 :].split()[19].decode()
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        pass
+    try:
+        argv = ["ps", "-o", "lstart=", "-p", str(pid)]
+        out = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=probe_s)
+    except (OSError, subprocess.SubprocessError) as err:
+        raise LookupError(f"ps: {err}") from err
+    found = " ".join(out.stdout.split())
+    if out.returncode != 0 or not found:
+        raise LookupError(f"ps exited {out.returncode} with {found!r}")
+    return found
+
+
+_KEEPER_HEAD = r"""
 import os, select, signal, subprocess, sys
 
 owner, probe_s = int(sys.argv[1]), float(sys.argv[2])
@@ -73,29 +110,9 @@ def on_term(signum, frame):
     pass
 
 
-def started(pid):
-    if sys.platform == "linux":
-        try:
-            with open(f"/proc/{pid}/stat", "rb") as f:
-                data = f.read()
-        except (FileNotFoundError, ProcessLookupError):
-            return None
-        except OSError:
-            return UNKNOWN
-        return data[data.rfind(b")") + 2 :].split()[19].decode()
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return None
-    except PermissionError:
-        pass
-    try:
-        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=probe_s)
-    except (OSError, subprocess.SubprocessError):
-        return UNKNOWN
-    found = " ".join(out.stdout.split())
-    return found if out.returncode == 0 and found else UNKNOWN
+"""
 
+_KEEPER_BODY = r"""
 
 def apply(data):
     global rest
@@ -104,7 +121,7 @@ def apply(data):
         sign, kind, (number, _, given) = line[:1], line[1:2].decode(), line[2:].decode().partition(" ")
         number = int(number)
         if sign == b"+":
-            held[kind][number] = given or started(number)
+            held[kind][number] = given or UNKNOWN
         else:
             held[kind].pop(number, None)
 
@@ -124,8 +141,11 @@ def drain():
 def kill(kind, number, recorded):
     if recorded is UNKNOWN:
         return
-    now = started(number)
-    if now is UNKNOWN or (now is not None and now != recorded) or (now is None and kind == "p"):
+    try:
+        now = read_start_time(number, probe_s)
+    except LookupError:
+        return
+    if (now is not None and now != recorded) or (now is None and kind == "p"):
         return
     try:
         (os.killpg if kind == "g" else os.kill)(number, signal.SIGKILL)
@@ -151,34 +171,22 @@ for kind in ("g", "p"):
     for number, recorded in held[kind].items():
         kill(kind, number, recorded)
 """
+
+KEEPER = _KEEPER_HEAD + inspect.getsource(read_start_time) + _KEEPER_BODY
 """Run as ``python -I -c KEEPER <owner pid> <probe seconds>`` with records on stdin: ``+g``/``-g`` a group,
 ``+p``/``-p`` a pid.
 
-A ``+`` record may carry the start time after the number; otherwise the keeper reads the process's start time
-(`/proc/<pid>/stat` field 22 on Linux, else `ps -o lstart=` within the probe seconds). At the end it SIGKILLs a
-recorded pid only while a process of that pid has the recorded start time, and a recorded group while its leader has
-it or no process has the group's number. A start time it cannot read, when recorded or at the end, kills nothing.
+A ``+`` record carries the start time its owner read at launch (`read_start_time`) after the number; one without is
+of an unknown start time. At the end the keeper reads each start time again and SIGKILLs a recorded pid only while a
+process of that pid has the recorded start time, and a recorded group while its leader has it or no process has the
+group's number. A start time unknown when recorded, or unreadable at the end, kills nothing.
 """
 
 
-class SupervisorPolicy(Frozen):
-    """How the keeper reads a process's start time.
-
-    Attributes:
-        start_time_probe_s: Seconds the keeper's `ps -o lstart=` may take; past it the start time is unknown.
-    """
-
-    start_time_probe_s: PositiveSeconds
-
-    @classmethod
-    def load_default(cls) -> Self:
-        """Return the policy in `data/supervisor_policy.yaml`.
-
-        Raises:
-            ValueError: the file lacks the format, an entry, or an entry's derivation.
-        """
-        values = load_policy_values("senselab_core.runtime", "supervisor_policy.yaml", SUPERVISOR_POLICY_FORMAT)
-        return cls.model_validate(values)
+@functools.cache
+def packaged_settings() -> SupervisorSettings:
+    """Return the supervisor section of the packaged default execution profile."""
+    return ExecutionProfile.load().supervisor
 
 
 _STAT_STATE = 0
@@ -288,13 +296,9 @@ class Keeper:
     In a process forked from its owner, the next record starts that process's own keeper.
     """
 
-    def __init__(self, policy: SupervisorPolicy | None = None) -> None:
-        """Start no process yet; the keeper reads start times under `policy`, the packaged one when None.
-
-        Raises:
-            ValueError: `policy` is None and the packaged policy is invalid.
-        """
-        self._policy = policy if policy is not None else SupervisorPolicy.load_default()
+    def __init__(self, settings: SupervisorSettings | None = None) -> None:
+        """Start no process yet; the keeper reads start times under `settings` (`packaged_settings()` when None)."""
+        self.settings = settings if settings is not None else packaged_settings()
         self.pid: int | None = None
         self._owner = os.getpid()
         self._stdin: IO[bytes] | None = None
@@ -303,7 +307,8 @@ class Keeper:
     def record(self, sign: str, kind: str, number: int, start: str | None = None) -> None:
         """Record (`+`) or drop (`-`) group or pid `number` (`kind` `g` or `p`); a dead keeper is logged once.
 
-        `start` is the recorded start time of the group leader or pid; the keeper reads it when None.
+        `start` is the start time of the group leader or pid read at launch (`read_start_time`); None when unknown,
+        and then the keeper never kills it.
         """
         if os.getpid() != self._owner:
             self._disown()
@@ -341,7 +346,7 @@ class Keeper:
         try:
             self.pid = os.posix_spawn(
                 sys.executable,
-                [sys.executable, "-I", "-c", KEEPER, str(os.getpid()), repr(self._policy.start_time_probe_s)],
+                [sys.executable, "-I", "-c", KEEPER, str(os.getpid()), repr(self.settings.start_time_probe_s)],
                 os.environ,
                 file_actions=[
                     (os.POSIX_SPAWN_DUP2, read, 0),
@@ -374,10 +379,12 @@ class Supervisor:
         subreaper: bool | None = None,
         children: Callable[[], set[int]] = own_children,
         poll_s: float = REAP_POLL_S,
+        settings: SupervisorSettings | None = None,
     ) -> None:
         """Supervise; once entered, as a subreaper where `subreaper` (by default where `subreaper_supported`).
 
-        `children` lists this process's children; `poll_s` is the reaper's interval.
+        `children` lists this process's children; `poll_s` is the reaper's interval; `settings` bound the start-time
+        reads (`packaged_settings()` when None).
         """
         self._want_subreaper = subreaper_supported() if subreaper is None else subreaper
         self._children = children
@@ -390,7 +397,7 @@ class Supervisor:
         self._foreign: set[int] = set()
         self._foreign_groups: set[int] = set()
         self._own_pgid = os.getpgid(0)
-        self._keeper = Keeper()
+        self._keeper = Keeper(settings)
         self._entered = False
         self._adopting = False
         self._previous_flag = 0
@@ -469,7 +476,7 @@ class Supervisor:
             self._prune()
             self._groups[proc.pid] = self._launched[proc.pid] = proc
             self._ended.discard(proc.pid)
-            self._keeper.record("+", "g", proc.pid)
+            self._keeper.record("+", "g", proc.pid, self._start_of(proc.pid))
             return proc
 
     def released(self, pgid: int) -> None:
@@ -525,9 +532,17 @@ class Supervisor:
                 continue
             owners = set() if pgid in self._groups else set(self._groups)
             orphan = self._orphans[pid] = Orphan(pid, pgid, owners)
-            self._keeper.record("+", "p", pid)
+            self._keeper.record("+", "p", pid, self._start_of(pid))
             if pgid not in self._groups and (pgid in self._ended or not owners):
                 self._end(orphan)
+
+    def _start_of(self, pid: int) -> str | None:
+        """Return the start time of child `pid`, unreaped so its pid is not reused; None when it cannot be read."""
+        try:
+            return read_start_time(pid, self._keeper.settings.start_time_probe_s)
+        except LookupError as exc:
+            logger.warning("the start time of %d is unknown; the keeper will not kill it: %s", pid, exc)
+            return None
 
     def _prune(self) -> None:
         """Drop each launched group whose leader its owner has reaped."""
@@ -604,7 +619,8 @@ __all__ = [
     "Keeper",
     "Orphan",
     "Supervisor",
-    "SupervisorPolicy",
+    "packaged_settings",
+    "read_start_time",
     "current",
     "live_members",
     "own_children",

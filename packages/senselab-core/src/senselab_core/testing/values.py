@@ -97,7 +97,6 @@ from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.compare import Difference, Threshold, Thresholds
 from senselab_core.runtime.envs import EnvRecord
 from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide
-from senselab_core.runtime.execution.supervisor import SupervisorPolicy
 from senselab_core.runtime.execution_settings import ResourceClass
 from senselab_core.runtime.fetch import DataFile, DataManifest
 from senselab_core.runtime.profiles import Envs, ExecutionProfile
@@ -911,11 +910,6 @@ def _register_runtime_samples() -> None:
             {"format": "catalogue@3.0"},
             {"resource_tables": (resource_table("t", "b", "org/absent"),)},
         ],
-    )
-    register_samples(
-        SupervisorPolicy,
-        lambda: [SupervisorPolicy.load_default(), SupervisorPolicy(start_time_probe_s=0.5)],
-        invalid_updates=[{"start_time_probe_s": 0}, {"start_time_probe_s": float("inf")}],
     )
     register_samples(
         StorePolicy,

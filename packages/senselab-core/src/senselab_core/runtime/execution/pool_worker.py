@@ -387,7 +387,7 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
         logger.error("pool worker cannot start: %s", err)
         return EXIT_UNREACHABLE
     worker = PoolWorker(pool_dir, classes, profile=profile, store=store, workers=workers, send=send, join_s=join_s)
-    with Supervisor():
+    with Supervisor(settings=profile.supervisor):
         if threading.current_thread() is not threading.main_thread():
             mark_ready(Path(pool_dir).parent)
             return worker.serve()

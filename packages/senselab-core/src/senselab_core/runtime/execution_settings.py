@@ -149,6 +149,16 @@ class Timeouts(Frozen):
     request_s: PositiveSeconds | None = None
 
 
+class SupervisorSettings(Frozen):
+    """How a supervisor reads a launched process's start time.
+
+    Attributes:
+        start_time_probe_s: Seconds `ps -o lstart=` may take off Linux; past it the start time is unknown.
+    """
+
+    start_time_probe_s: PositiveSeconds
+
+
 class ServiceSettings(Frozen):
     """How long a service stays up after its last consumer lease lapsed."""
 

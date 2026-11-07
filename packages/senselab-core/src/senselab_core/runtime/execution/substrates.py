@@ -61,11 +61,24 @@ EPOCH_SUFFIX = re.compile(r"-e(\d+)$")
 
 
 class SubstrateError(RuntimeError):
-    """A substrate's command failed; the scaler counts it against the substrate's budget."""
+    """A substrate's command failed; the scaler counts it against the substrate's budget.
+
+    Attributes:
+        started: The workers the failing `start` had started before it failed.
+    """
+
+    def __init__(self, message: str, started: Sequence["WorkerHandle"] = ()) -> None:
+        """Fail with `message`, after starting `started`."""
+        super().__init__(message)
+        self.started = tuple(started)
 
 
 class SlurmError(SubstrateError):
-    """A Slurm command kept failing; the message gives the command and what it printed."""
+    """A Slurm command kept failing, or could not be run; the message gives the command and why."""
+
+
+class LocalError(SubstrateError):
+    """A local worker process could not be launched."""
 
 
 class StoreUnreachable(OSError):
@@ -74,11 +87,15 @@ class StoreUnreachable(OSError):
 
 @dataclass(frozen=True)
 class WorkerHandle:
-    """A started worker: the queue it serves, its id (a process id, or a Slurm job id) and whether it still waits."""
+    """A started worker: the queue it serves, its id (a process id, or a Slurm job id), whether it still waits.
+
+    `name` is a Slurm job's name; None for a process.
+    """
 
     queue: str
     id: str
     pending: bool = False
+    name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -179,13 +196,21 @@ class Local:
         return self._procs
 
     def start(self, resource_class: str, count: int) -> list[WorkerHandle]:
-        """Start workers of `resource_class`, as many as `count` and the room under `max_workers` allow."""
+        """Start workers of `resource_class`, as many as `count` and the room under `max_workers` allow.
+
+        Raises:
+            LocalError: a process could not be launched; those launched before it are kept and listed.
+        """
         with self._lock:
             room = self.max_workers - len(self._alive())
-            handles = []
+            handles: list[WorkerHandle] = []
             for _ in range(max(0, min(count, room))):
                 supervisor = current()
-                proc = supervisor.popen([*self.command, "--classes", resource_class])
+                argv = [*self.command, "--classes", resource_class]
+                try:
+                    proc = supervisor.popen(argv)
+                except OSError as err:
+                    raise LocalError(f"could not launch {shlex.join(argv)}: {err}", handles) from err
                 self._procs[str(proc.pid)] = (resource_class, proc, supervisor)
                 handles.append(WorkerHandle(resource_class, str(proc.pid)))
             return handles
@@ -323,6 +348,8 @@ class Slurm:
             done = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout)  # noqa: S603
         except subprocess.TimeoutExpired:
             return None, f"timed out after {timeout} s"
+        except OSError as err:
+            return None, f"could not run: {err}"
         if done.returncode == 0:
             return done.stdout, ""
         return None, f"exited {done.returncode}: {(done.stderr or done.stdout).strip()}"
@@ -349,8 +376,8 @@ class Slurm:
                 return found
         raise SlurmError(f"{shlex.join(argv)} {last}")
 
-    def _submit(self, queue: str) -> str:
-        """Submit one worker of `queue` under a name of its own; return its job id.
+    def _submit(self, queue: str) -> WorkerHandle:
+        """Submit one worker of `queue` under a name of its own; return its pending handle.
 
         A failed try is followed by a lookup of the name (`squeue --me --name`); a job found is the one submitted.
 
@@ -363,7 +390,8 @@ class Slurm:
             out = self._run([SQUEUE, "--me", "--noheader", "--states=all", f"--name={name}", SQUEUE_FORMAT])
             return next((job for job, _, _, job_name in _rows(out) if job_name == name), None)
 
-        return self._run(self.sbatch_args(queue, name), recover=lookup).strip().split(";")[0]
+        job = self._run(self.sbatch_args(queue, name), recover=lookup).strip().split(";")[0]
+        return WorkerHandle(queue, job, pending=True, name=name)
 
     def live(self) -> list[WorkerHandle]:
         """Return this epoch's live jobs of the run, from one `squeue`; cancel those of an earlier epoch."""
@@ -374,7 +402,7 @@ class Slurm:
                 continue
             found = EPOCH_SUFFIX.search(name)
             epoch = int(found[1]) if found else 0
-            handle = WorkerHandle(comment, job, pending=state == "PENDING")
+            handle = WorkerHandle(comment, job, pending=state == "PENDING", name=name)
             if epoch == self.epoch:
                 mine.append(handle)
             elif epoch < self.epoch:
@@ -396,7 +424,7 @@ class Slurm:
 
         Raises:
             ValueError: the queue's class is unknown, or names a variable that is not set.
-            SlurmError: `sbatch` kept failing.
+            SlurmError: `sbatch` kept failing; it carries the workers submitted before it (`started`).
         """
         self._class(resource_class)
         cached = self._cached()
@@ -405,9 +433,12 @@ class Slurm:
             count = min(count, (self.qos_cpu_cap - used) // self._cpus(resource_class))
         if self.log_dir is not None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
-        handles = []
+        handles: list[WorkerHandle] = []
         for _ in range(max(0, count)):
-            handles.append(WorkerHandle(resource_class, self._submit(resource_class), pending=True))
+            try:
+                handles.append(self._submit(resource_class))
+            except SlurmError as err:
+                raise SlurmError(str(err), handles) from err
             cached.append(handles[-1])
         return handles
 
@@ -528,13 +559,20 @@ class Fleet:
             count = min(count, self.budget + 1 - self._failures[cls] - unproven)
             if count <= 0:
                 return []
-        started = self.substrate.start(resource_class, count)
+        try:
+            started = self.substrate.start(resource_class, count)
+        except SubstrateError as err:
+            self._track(cls, err.started)
+            raise
+        self._track(cls, started)
+        return started
+
+    def _track(self, cls: str, started: Sequence[WorkerHandle]) -> None:
         for handle in started:
             if self.workers_dir is not None:
                 (self.workers_dir / handle.id).unlink(missing_ok=True)
             self._tracked[handle.id] = handle
         self.starts[cls] += len(started)
-        return started
 
     def running(self, resource_class: str) -> int:
         """Return the workers of the queue in the last listing."""
@@ -551,13 +589,17 @@ class Fleet:
         if self._snapshot is not None:
             self._snapshot = [h for h in self._snapshot if h.id not in gone]
 
+    def substrate_wait(self) -> float:
+        """Return the seconds until the substrate may be used again; 0 when it may be now or is broken."""
+        return max(0.0, self._not_before.get("*", 0.0) - self._clock())
+
     def close(self) -> None:
-        """Stop every worker still alive that this fleet started."""
+        """Stop every worker the substrate lists, late duplicates included; when it cannot list, every one tracked."""
         try:
-            alive = {h.id for h in self.substrate.live()}
+            alive = self.substrate.live()
         except SubstrateError:
-            alive = set(self._tracked)
-        self.stop([h for h in self._tracked.values() if h.id in alive])
+            alive = list(self._tracked.values())
+        self.stop(alive)
 
 
 def scale(
@@ -669,6 +711,7 @@ __all__ = [
     "ExternalWorkers",
     "Fleet",
     "Local",
+    "LocalError",
     "Slurm",
     "SlurmError",
     "StoreUnreachable",

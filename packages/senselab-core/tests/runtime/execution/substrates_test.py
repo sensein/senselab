@@ -2,7 +2,6 @@
 
 import contextlib
 import errno
-import logging
 import os
 import stat
 import sys
@@ -20,7 +19,7 @@ from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog, read_events
 from senselab_core.runtime.execution.executor import WorkersBroken, follow
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
-from senselab_core.runtime.execution.pool import Pool
+from senselab_core.runtime.execution.pool import Pool, ScalerFailed
 from senselab_core.runtime.execution.pool_worker import serve_pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.run import Run, _close_owned, default_executor, prepare
@@ -29,6 +28,7 @@ from senselab_core.runtime.execution.substrates import (
     ExternalWorkers,
     Fleet,
     Local,
+    LocalError,
     Slurm,
     SlurmError,
     Substrate,
@@ -777,25 +777,87 @@ def test_start_refuses_a_result_store_without_directories(tmp_path: Path, monkey
         placed.run(store=ResultStore(tmp_path / "elsewhere"))
 
 
-@pytest.mark.logic
-def test_a_submission_that_times_out_after_queueing_its_job_leaves_one_job(tmp_path: Path) -> None:
-    """An `sbatch` that queues its job and then hangs past the timeout is found by name, never submitted again."""
+HANGS_AFTER_QUEUEING = """#!{python}
+import os, signal, sys
+from pathlib import Path
+
+d = Path(os.environ["FAKE_SLURM"])
+if (d / "hung").exists():
+    os.execv("{queues}", ["{queues}", *sys.argv[1:]])
+(d / "hung").touch()
+n = int((d / "next").read_text()) if (d / "next").exists() else 100
+(d / "next").write_text(str(n + 1))
+given = dict(a[2:].split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
+(d / "jobs").mkdir(exist_ok=True)
+staged = d / f".job-{{n}}"
+staged.write_text(f"{{given['job-name']}}|{{given['comment']}}|RUNNING\\n")
+staged.rename(d / "jobs" / str(n))
+signal.pause()
+"""
+"""An `sbatch` whose first call queues its job in one rename and then never answers; later calls queue normally."""
+
+FAILS_AFTER_ONE = """#!/bin/sh
+[ -f "$FAKE_SLURM/submitted-one" ] && {{ echo "Socket timed out" >&2; exit 1; }}
+: > "$FAKE_SLURM/submitted-one"
+exec "{queues}" "$@"
+"""
+"""An `sbatch` that queues one job and fails every later call."""
+
+
+def _replace_sbatch(tmp_path: Path, template: str) -> None:
     bin_dir = tmp_path / "bin"
     queues = bin_dir / "sbatch-queues"
     (bin_dir / "sbatch").rename(queues)
-    (bin_dir / "sbatch").write_text(
-        "#!/bin/sh\n"
-        f'[ -f "$FAKE_SLURM/hung" ] && exec "{queues}" "$@"\n'
-        ': > "$FAKE_SLURM/hung"\n'
-        f'"{queues}" "$@" > /dev/null\n'
-        "exec tail -f /dev/null\n"
-    )
+    (bin_dir / "sbatch").write_text(template.format(python=sys.executable, queues=queues))
     (bin_dir / "sbatch").chmod(stat.S_IRWXU)
-    slurm = _slurm(tmp_path, commands=_commands(timeout_s=0.5))
-    [handle] = slurm.start("cpu", 1)
-    jobs = sorted(p.name for p in (tmp_path / "slurm" / "jobs").iterdir())
-    assert jobs == [handle.id] and len(_submitted(tmp_path)) == 1
-    assert "--name=" in (tmp_path / "slurm" / "squeue.log").read_text()
+
+
+def _jobs(tmp_path: Path) -> list[str]:
+    return sorted(p.name for p in (tmp_path / "slurm" / "jobs").iterdir())
+
+
+@pytest.mark.logic
+def test_a_submission_that_times_out_after_queueing_its_job_leaves_one_job(tmp_path: Path) -> None:
+    """An `sbatch` that queues its job and then hangs past the timeout is found by name, never submitted again.
+
+    A duplicate the controller registers late under the same name is cancelled when the fleet closes.
+    """
+    _replace_sbatch(tmp_path, HANGS_AFTER_QUEUEING)
+    profile = _profile()
+    slurm = _slurm(tmp_path)
+    fleet = _fleet(slurm, profile)
+    [handle] = fleet.start("cpu", 1)
+    assert _jobs(tmp_path) == [handle.id] and "--name=" in (tmp_path / "slurm" / "squeue.log").read_text()
+    late = tmp_path / "slurm" / "jobs" / "late"
+    late.write_text((tmp_path / "slurm" / "jobs" / handle.id).read_text())
+    fleet.close()
+    assert _jobs(tmp_path) == [] and sorted((tmp_path / "slurm" / "cancelled").read_text().split()) == [
+        handle.id,
+        "late",
+    ]
+
+
+@pytest.mark.logic
+def test_a_start_aborted_by_a_failed_submission_keeps_the_jobs_it_submitted(tmp_path: Path) -> None:
+    """The job submitted before a failing `sbatch` is recorded, so a close with `squeue` down still cancels it."""
+    _replace_sbatch(tmp_path, FAILS_AFTER_ONE)
+    fleet = _fleet(_slurm(tmp_path), _profile())
+    with pytest.raises(SlurmError, match="Socket timed out") as failed:
+        fleet.start("cpu", 2)
+    [first] = failed.value.started
+    (tmp_path / "slurm" / "fail-squeue").write_text("")
+    fleet.close()
+    assert (tmp_path / "slurm" / "cancelled").read_text().split() == [first.id]
+
+
+@pytest.mark.logic
+def test_a_substrate_command_that_cannot_be_launched_is_a_substrate_failure(tmp_path: Path) -> None:
+    """An `sbatch` that cannot be executed is a `SlurmError`; a local command that does not exist is a `LocalError`."""
+    (tmp_path / "bin" / "sbatch").chmod(stat.S_IRUSR | stat.S_IWUSR)
+    with pytest.raises(SlurmError, match="could not run"):
+        _slurm(tmp_path).start("cpu", 1)
+    with pytest.raises(LocalError, match="could not launch"):
+        Local(1, command=[str(tmp_path / "absent")]).start("cpu", 1)
 
 
 @pytest.mark.logic
@@ -835,25 +897,22 @@ class _Bug(Exception):
 
 
 @pytest.mark.logic
-def test_a_lasting_substrate_failure_is_reported_once_and_ends_scaling(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A substrate failing past the budget holds the run, is logged broken once, and is not called again."""
+def test_a_lasting_substrate_failure_is_reported_once_and_ends_scaling(tmp_path: Path) -> None:
+    """A substrate failing past the budget holds the run, is reported broken once, and is not called again."""
     profile = _worker_profile(infrastructure_replacements=1)
     down = _Down(SlurmError("squeue timed out"))
     _, pool, _ = _queued(profile, tmp_path, 0, substrate=down)
     placed, values = planned(SCORE, profile, ["one", "two"])
     admission = pool.admit(placed, values)
-    with caplog.at_level(logging.ERROR, logger="senselab"):
-        handle = pool.submit(node_fragment(placed, admission, elements=[(0,)]))
-        with pytest.raises(WorkersBroken) as held:
-            list(follow(pool, handle))
-        pool.submit(node_fragment(placed, admission, elements=[(1,)]))
-        time.sleep(2 * profile.pool.poll_s)
-        calls = down.calls
-        pool.close()
+    handle = pool.submit(node_fragment(placed, admission, elements=[(0,)]))
+    with pytest.raises(WorkersBroken) as held:
+        list(follow(pool, handle))
+    pool.submit(node_fragment(placed, admission, elements=[(1,)]))
+    time.sleep(2 * profile.pool.poll_s)
+    calls = down.calls
+    pool.close()
     assert held.value.resource_class == "*" and calls == 2
-    assert len([r for r in caplog.records if "broken" in r.getMessage()]) == 1
+    assert list(pool.broken_workers) == ["*"] and pool.broken_workers["*"].failures == 2
 
 
 @pytest.mark.logic
@@ -864,8 +923,8 @@ def test_an_unexpected_scaler_error_is_raised_by_poll(tmp_path: Path) -> None:
     _, pool, _ = _queued(profile, tmp_path, 0, substrate=down)
     placed, values = planned(SCORE, profile, ["one"])
     handle = pool.submit(node_fragment(placed, pool.admit(placed, values)))
-    down.called.wait()
+    assert down.called.wait(_commands().timeout_s)
     pool.close()
-    with pytest.raises(_Bug, match="no such class"):
+    with pytest.raises(ScalerFailed) as failed:
         pool.poll(handle)
-    assert down.calls == 2
+    assert isinstance(failed.value.__cause__, _Bug) and down.calls == 2

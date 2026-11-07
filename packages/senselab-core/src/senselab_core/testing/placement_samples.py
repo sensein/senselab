@@ -13,6 +13,7 @@ from senselab_core.runtime.execution_settings import (
     ServiceSettings,
     SlurmCommands,
     SubstrateSpec,
+    SupervisorSettings,
     Timeouts,
 )
 from senselab_core.runtime.resources import Measured, ResourceMeasure, ResourceRow, ResourceTable
@@ -183,6 +184,10 @@ def _register_settings(register: Register) -> None:
             [{"content_attempts": 0}, {"resource_replacements": -1}],
         ),
         Timeouts: ([Timeouts(), Timeouts(load_s=60.0, request_s=600.0)], [{"load_s": 0}, {"request_s": -1.0}]),
+        SupervisorSettings: (
+            [SupervisorSettings(start_time_probe_s=5), SupervisorSettings(start_time_probe_s=0.5)],
+            [{"start_time_probe_s": 0}, {"start_time_probe_s": float("inf")}],
+        ),
         ServiceSettings: ([ServiceSettings(idle_exit_s=600), ServiceSettings(idle_exit_s=1.5)], [{"idle_exit_s": 0}]),
     }
     for cls, (samples, invalid) in classes.items():

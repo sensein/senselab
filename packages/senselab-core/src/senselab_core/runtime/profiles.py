@@ -37,6 +37,7 @@ from senselab_core.runtime.execution_settings import (
     ResourceClass,
     ServiceSettings,
     SubstrateSpec,
+    SupervisorSettings,
     Timeouts,
 )
 from senselab_core.runtime.hardware import HardwareInfo
@@ -140,6 +141,7 @@ class ExecutionProfile(Formatted):
         faults: The retry budget of each fault class.
         timeouts: A worker's load and request timeouts.
         services: When an idle service exits.
+        supervisor: How a supervisor reads a launched process's start time.
     """
 
     format: FormatTag = EXECUTION_PROFILE_FORMAT
@@ -159,6 +161,7 @@ class ExecutionProfile(Formatted):
     faults: FaultBudgets
     timeouts: Timeouts
     services: ServiceSettings
+    supervisor: SupervisorSettings
 
     @model_validator(mode="after")
     def _check_classes(self) -> "ExecutionProfile":
@@ -252,6 +255,7 @@ _SECTIONS: Mapping[str, type[Frozen]] = {
     "faults": FaultBudgets,
     "timeouts": Timeouts,
     "services": ServiceSettings,
+    "supervisor": SupervisorSettings,
 }
 
 
