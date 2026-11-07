@@ -94,9 +94,9 @@ def consolidation_inventory(design: str) -> list[dict[str, str]]:
 
 
 def phase_states(state: str) -> dict[str, str]:
-    """Return the phase table of the working state file as `{phase: done | in progress | not started}`."""
+    """Return the phase table of the working state file as `{phase: done | in progress | not started}`, ids scrubbed."""
     rows = next((t for t in tables(state) if t[0][:2] == ["Phase", "State"]), [])
-    return {r[0]: _phase_word(r[1]) for r in rows[1:] if len(r) > 1}
+    return {scrub(r[0]).rstrip(" ,;"): _phase_word(r[1]) for r in rows[1:] if len(r) > 1}
 
 
 def _phase_word(cell: str) -> str:

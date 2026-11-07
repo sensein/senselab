@@ -87,6 +87,14 @@ def test_phase_exits_stop_at_the_next_phase_and_join_wrapped_lines() -> None:
 
 
 @pytest.mark.logic
+def test_phase_names_lose_their_ids() -> None:
+    """A phase name that cites an ADR is published without the id."""
+    state = "| Phase | State |\n|---|---|\n| 2: tasks, parity, ADR-010 | done 2026-11-03 |\n"
+    state += "| 3: plans (P3-1) | in progress |\n"
+    assert _specs.phase_states(state) == {"2: tasks, parity": "done", "3: plans": "in progress"}
+
+
+@pytest.mark.logic
 def test_absent_specs_read_as_empty() -> None:
     """Absent specs read as empty."""
     assert _specs.read_spec("migration-ledger.md", root=Path("/nonexistent")) == ""
