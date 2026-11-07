@@ -60,6 +60,9 @@ The PR template carries this checklist. Pre-commit and CI check what they can.
   parameters, strategies or backends, with no caller-specific branches (P-37).
 - [ ] The scale ladder passes for touched modules; per-item cost is flat (P-33).
 - [ ] New boundaries have bad-input, fault and property tests; there is no special-casing (P-34).
+- [ ] No fixed parameters: every numeric literal in runtime, execution and test-bound code is either an invariant
+  of the code (stated as such) or config (profile, run config or data file) with its derivation; sizing comes
+  from measurement before scaling (P-34, amended 2026-11-07).
 - [ ] No identifiers, no local paths and no content copied from a referenced local file in any committed text: code, specs, tests, data, commit messages, PR bodies; placeholders instead (P-28). Tests are scoped and serial (P-29).
 - [ ] Every new task, backend or profile is declared, so contract tests cover it (P-30).
 - [ ] The PR records the implementer and reviewer models, and they differ (P-40).
