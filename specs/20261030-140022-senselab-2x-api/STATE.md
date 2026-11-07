@@ -8,8 +8,8 @@ task or decision changes state. Newest log entries go first.
 | What | Where |
 |---|---|
 | Integration branch | `2.x`. All 2.x work merges here, never into `alpha` (owner item 30). It carries the 2.x workflows (`2x-tests.yaml`, `2x-docs-preview.yaml`). |
-| Design (docs PR) | `senselab-2x-api` → `2.x`, draft PR sensein/senselab#617. Every spec change is made here: ADRs, principles, design, plans, registers, rulings, reviews and this file (D-7). Worktree `${SOFTWARE_ROOT}/sensein/senselab-2x`. |
-| Code (code PR) | `2x/phase-1` → `senselab-2x-api` today, draft PR sensein/senselab#619. Code and tests only; it merges `senselab-2x-api` to stay current and is retargeted to `2.x` once #617 merges (D-7). Worktree `${SOFTWARE_ROOT}/sensein/senselab-2x-impl`. |
+| Spec (current) | `2x/phase-3-spec` → `2.x` (P-27, ruling P3-5). Every spec change is made here: ADRs, principles, design, plans, registers, rulings, reviews and this file. Phase 1 used `senselab-2x-api` (PR #617). |
+| Code (current) | `2x/phase-3`, cut from the head of `2x/phase-2` → `2.x` (P-27, ruling P3-5). Code and tests only. Phase 1 used `2x/phase-1` (PR #619). |
 | 2.x workflows | merged: #620 (on `alpha`, 1.x and 2.x workflows separated) and #621 (on `2.x`). Previews are at `sensein.group/senselab/2x/pr-<N>/`. |
 | 1.x | developed on `alpha`; freeze branch `freeze-1x-2026-10-30` → `19834fdd` (= `1.4.0-alpha.11`). |
 | pydra proposal | branch `enh/execution-extensions` → draft PR nipype/pydra#891; worktree `${SOFTWARE_ROOT}/nipype/pydra-ext`. |
@@ -30,7 +30,7 @@ task or decision changes state. Newest log entries go first.
   P-39, P-40).
 - **What to build:** `design.md`, `adr/` (ADR-001..010), `execution.md`, `testing.md`, `docs.md`,
   `wire-protocol.md`.
-- **Plans:** `plans/phase-1.md`, `plans/phase-1-hardening.md`.
+- **Plans:** `plans/phase-1.md`, `plans/phase-1-hardening.md`, `plans/phase-2.md`.
 - **Migration:** `migration-ledger.md`, a mark per 1.x area (P-39) and the triage classification.
 - The controller's working notes under `.superpowers/` in the code worktree are git-excluded scratch.
   Nothing here cites them; anything a later session needs is in the files above.
@@ -62,8 +62,10 @@ PR - clarify the decisions"):
 | Design | accepted 2026-10-30; amended 2026-10-31 and 2026-11-01 in #617 |
 | 0: freeze marker | done |
 | 1: kernel, worker runtime, identity, store, data fetch | T0–T15a done. Hardening done: H1–H8 (H8a–c), the H9 series (H9a–f, H9-compat, H9-collect, H9-cleanup, H9-ci), H10, **H11a** and **H11b** (including fix round 1). 2.x CI first fully green at `97b617c5`; Linux CI green after D-2 fix round 1 (`b76681a9`). Full review done 2026-11-01; its decisions are applied. **Phase 1 done 2026-11-01** at `195406b7`: CI green, exit adversarial round fixed (R-135..R-159), ORCD full packages suite and release gate green, cross-node NFS lock checks (a)-(f) pass. |
-| 2–5 | not started |
-| pydra PRs (A0…K2) | proposed in #891; none implemented. Owners named in design §6.2 (Phase 2: gate prerequisites; Phase 3: the rest); dates not set |
+| 2: tasks, backends, benchmarks, parity, ADR-010 | **done 2026-11-03** at `79b417a8`, except the pydra gate prerequisite K2, which was not delivered and moves to Phase 3 Task 0 (P3-1) (`2x/phase-2`): CI green; exit adversarial round fixed (R-168..R-195, groups A–E); ORCD verify A–D agree (equivalence classes from runs p2cmd-27735057, p2cmd-27735059); parity at `75a1c65c` 8 passed, 9 skipped (jobs 27748712..27748718), CrisperWhisper ct2 against transformers within 4e-6 on cpu and 4e-4 on H100 float16 |
+| 3: plans and executors | in progress. Plan `plans/phase-3.md` (41 tasks). **Task 0 gate passed 2026-11-03 at pydra `0c1bbcd9`: Route A** (`reviews/phase3-gate/evidence.md`; CI 41606617714, ORCD 27757266) |
+| 4–5 | not started |
+| pydra PRs (A0…K2) | Phase 2 prerequisites (D1, G1, K1, A1, F1, F2, E1a, E1b) merged into `enh/execution-extensions` and closed; CI speed #902 open for review; workflow-cache fix #903. #891 carries the branch to `main` as a draft |
 
 ## Next actions, in order
 
@@ -118,20 +120,22 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    7. Mark Phase 1 done, merge #617 into `2.x`, and retarget #619: done 2026-11-01 (owner: "do 2").
 4. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
    redaction) and the benchmark harness with its data manifest and smoke suite, alongside the tasks and
-   backends of design §6.2.
+   backends of design §6.2. Plan: [`plans/phase-2.md`](plans/phase-2.md) (Tasks 0–34); its planner rulings
+   P2-1..P2-32 await owner review.
 
 ## How to resume
 
-1. `cd ${SOFTWARE_ROOT}/sensein/senselab-2x && git pull`. Read this file, then `decisions-2026-11-01.md`, then
+1. In the spec checkout, `git pull`. Read this file, then `decisions-2026-11-01.md`, then
    `principles.md` and `engineering.md` (roster and checklist).
-2. Code work happens in `${SOFTWARE_ROOT}/sensein/senselab-2x-impl` on `2x/phase-1`. Spec changes happen here,
-   on `senselab-2x-api`, and reach the code branch by merge.
+2. Code work happens on the current code branch above; spec changes happen on the current spec branch.
 3. Check 1.x drift: `git fetch origin alpha && git log 19834fdd..origin/alpha --oneline -- src scripts tutorials`.
-4. PR state: `gh pr view 617`, `gh pr view 619`; 2.x CI runs on both.
+4. PR state: `gh pr list --base 2.x`; 2.x CI runs on every `2x/**` branch.
 5. Brief every delegated task as `engineering.md` requires; file-modifying agents use worktree isolation.
 
 ## Log
 
+- **2026-11-03 (Phase 3 gate):** K2 delivered as nipype/pydra#905 (Task 40); the gate passed at `0c1bbcd9` on all four criteria, so Task 9b builds `PydraRunner` (Route A). Fixes found on the way: #903 workflow-construction cache keyed by class, #904 cf workers never forked.
+- **2026-11-03 (Phase 2 done):** parity compared against 1.x for the first time (34i/34j) and found three differences: the 1.x embedding reference was one zero-padded batch, the 1.x ASR reference decoded with word timestamps, and the CrisperWhisper ct2 engine reported no confidence. Task 34k (`3ef57813..75a1c65c`) fixed all three; confidence is computed once per window on its final ids, by teacher forcing, on both engines. The 1.x producer takes its params from the items file, and `run` refuses an items file of another benchmark, backend or items. Rows R-196..R-201.
 - **2026-11-01 (final review, docs fixes):** the pydra environment fold corrected to ADR-002; as-built detail
   removed from ADR-003 and ADR-009; register rows R-132..R-134 added (prose review inert, config-guard tests,
   size budgets); stale plan text fixed.
