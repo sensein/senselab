@@ -11,9 +11,10 @@ from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.runtime.execution.epoch import StaleCoordinator
 from senselab_core.runtime.execution.events import Event, runs_root
 from senselab_core.runtime.execution.executor import QueueHeld
-from senselab_core.runtime.execution.pool import ExternalWorkers, coordinate, run_store
+from senselab_core.runtime.execution.pool import coordinate, run_plan, run_store
 from senselab_core.runtime.execution.pool_worker import serve_pool
 from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run, latest_placement
+from senselab_core.runtime.execution.substrates import ExternalWorkers, substrate_of
 from senselab_core.runtime.explain import node_line
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -145,11 +146,27 @@ def run_explain(args: argparse.Namespace) -> int:
     return 0
 
 
+def _profile(argument: str | None) -> ExecutionProfile:
+    """Return the profile `argument` names: a packaged profile, or a file holding a whole profile (`profile.json`)."""
+    if argument is None:
+        return ExecutionProfile.load()
+    if Path(argument).is_file():
+        return ExecutionProfile.model_validate_json(Path(argument).read_text(encoding="utf-8"))
+    return ExecutionProfile.load(argument)
+
+
 def run_coordinate(args: argparse.Namespace) -> int:
-    """Run a parsed ``coordinate``: take the run's next epoch and send its jobs to its queues, for pool workers."""
+    """Run a parsed ``coordinate``: take the run's next epoch and send its jobs to its queues, for pool workers.
+
+    The profile's substrate starts the workers unless ``--external`` says they are started on their own.
+    """
     try:
-        profile = ExecutionProfile.load(args.profile) if args.profile else None
-        outcome = coordinate(_run_directory(args.run_ref), substrate=ExternalWorkers(), profile=profile)
+        profile = _profile(args.profile)
+        run_dir = _run_directory(args.run_ref)
+        substrate = (
+            ExternalWorkers() if args.external else substrate_of(profile, run_dir, run_plan(run_dir, profile).hash)
+        )
+        outcome = coordinate(run_dir, substrate=substrate, profile=profile)
     except (OSError, ValueError, StaleCoordinator, QueueHeld) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
         return 1
@@ -164,7 +181,7 @@ def run_execute(args: argparse.Namespace) -> int:
     pool = Path(args.pool)
     classes = [c for c in args.classes.split(",") if c]
     try:
-        profile = ExecutionProfile.load(args.profile) if args.profile else ExecutionProfile.load()
+        profile = _profile(args.profile)
         return serve_pool(pool, classes, profile=profile, store=run_store(pool.parent))
     except (OSError, ValueError) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
@@ -187,11 +204,16 @@ def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
     coordinating = groups.add_parser("coordinate", help="coordinate a run on its queues, as the next epoch")
     coordinating.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
     coordinating.add_argument("--profile", default=None, help="the execution profile the run was placed under")
+    coordinating.add_argument(
+        "--external", action="store_true", help="start no workers: they are started on their own (execute --pool)"
+    )
     coordinating.set_defaults(run=run_coordinate)
     executing = groups.add_parser("execute", help="serve a run's queues as one pool worker")
     executing.add_argument("--pool", required=True, help="the run's queues directory, <run dir>/queues")
     executing.add_argument("--classes", required=True, help="the resource classes to serve, comma-separated")
-    executing.add_argument("--profile", default=None, help="the execution profile the run was placed under")
+    executing.add_argument(
+        "--profile", default=None, help="the execution profile the run was placed under: a packaged name, or a file"
+    )
     executing.set_defaults(run=run_execute)
 
 

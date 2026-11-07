@@ -14,6 +14,7 @@
 - `StorageDir.fs_now` reads the current time from the filesystem itself, from a fresh sentinel file;
   `StorageDir.dir_now` reads it from a fresh probe directory and writes no file.
 - `StorageUnsupported` is a root without a primitive the runtime needs, such as an atomic `mkdir`.
+- `probe_capabilities` measures the primitives the lease protocol needs on a root itself.
 - `write_atomically` replaces a caller's file so a reader sees the old or the new bytes, never a mix.
 - An `AddressedFormat` is a persisted artifact whose location names its content. `ADDRESSED_FORMATS`
   lists every one: the store entry, the fetch blob and the fetch dataset marker.
@@ -24,10 +25,13 @@ import logging
 import os
 import pwd
 import re
+import shutil
 import stat
 import threading
+import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Protocol, Self, runtime_checkable
@@ -807,6 +811,111 @@ class Staging:
             logger.warning("cannot remove staging directory %s: %s", self.root.path / self.name, err)
 
 
+PROBE_BOUND_S = 5.0
+"""Seconds `probe_capabilities` waits for a directory's mtime to show a change before it judges the clock."""
+PROBE_POLL_S = 0.005
+"""Seconds between the probe's reads of a directory's mtime."""
+_CLOCK_TOLERANCE_S = 3600.0
+
+
+@dataclass(frozen=True)
+class StorageCapabilities:
+    """What a root does, as measured: the primitives its leases and queues need, and its attribute delay.
+
+    Attributes:
+        atomic_mkdir: `mkdir` of a name that exists fails, so exactly one of two makers wins.
+        directory_rename: A directory is renamed whole and a rename onto a non-empty directory fails.
+        dir_mtime_server_clock: A directory's mtime moves to the present when an entry is made in it.
+        atomic_rename: A rename replaces a file whole, and `link` of a name that exists fails.
+        attribute_delay_s: Seconds from an entry being made to the directory's mtime showing it, as this client saw.
+    """
+
+    atomic_mkdir: bool
+    directory_rename: bool
+    dir_mtime_server_clock: bool
+    atomic_rename: bool
+    attribute_delay_s: float
+
+    def missing(self) -> list[str]:
+        """Return the primitives this root lacks, by field name."""
+        names = ("atomic_mkdir", "directory_rename", "dir_mtime_server_clock", "atomic_rename")
+        return [n for n in names if not getattr(self, n)]
+
+    def require(self, root: Path) -> None:
+        """Raise `StorageUnsupported` naming each primitive of `root` that is missing."""
+        lacking = self.missing()
+        if lacking:
+            raise StorageUnsupported(errno.ENOTSUP, f"no {', '.join(lacking)}", str(root))
+
+
+def _refused(call: Callable[[], object], exists: type[OSError] = FileExistsError) -> bool:
+    """Return whether `call` raised `exists`, or an error that says the operation is not allowed."""
+    try:
+        call()
+    except exists:
+        return True
+    except OSError as err:
+        return err.errno in (errno.EPERM, errno.EACCES, errno.ENOTEMPTY, errno.EEXIST)
+    return False
+
+
+def _mtime_after_entry(work: Path) -> tuple[bool, float]:
+    """Return whether a new entry moves `work`'s mtime to the present, and the seconds until it showed."""
+    old = time.time() - 86400
+    os.utime(work, (old, old))
+    before = work.stat().st_mtime_ns
+    (work / "entry").write_bytes(b"")
+    began = time.monotonic()
+    while True:
+        now = work.stat()
+        if now.st_mtime_ns != before:
+            return abs(now.st_mtime - time.time()) < _CLOCK_TOLERANCE_S, time.monotonic() - began
+        if time.monotonic() - began >= PROBE_BOUND_S:
+            return False, PROBE_BOUND_S
+        time.sleep(PROBE_POLL_S)
+
+
+def probe_capabilities(root: Path) -> StorageCapabilities:
+    """Measure `root` itself: `mkdir`, directory and file rename, `link` and the directory mtime, in a probe directory.
+
+    A root that does not exist yet is judged by its nearest existing ancestor. The probe directory is removed.
+
+    Raises:
+        StorageUnsupported: `mkdir` is refused as an operation the filesystem does not support.
+        OSError: the root cannot be written.
+    """
+    base = Path(root)
+    while not base.exists():
+        base = base.parent
+    work = base / f".senselab-probe-{uuid.uuid4().hex}"
+    try:
+        try:
+            os.mkdir(work)
+        except OSError as err:
+            if err.errno not in _UNSUPPORTED_ERRNOS:
+                raise
+            raise StorageUnsupported(err.errno, f"no atomic mkdir: {err.strerror}", str(root)) from err
+        os.mkdir(work / "made")
+        atomic_mkdir = _refused(lambda: os.mkdir(work / "made"))
+        os.mkdir(work / "from")
+        os.mkdir(work / "full")
+        (work / "full" / "x").write_bytes(b"")
+        os.rename(work / "from", work / "to")
+        directory_rename = (work / "to").is_dir() and not (work / "from").exists()
+        os.mkdir(work / "again")
+        directory_rename = directory_rename and _refused(lambda: os.rename(work / "again", work / "full"))
+        (work / "a").write_bytes(b"new")
+        (work / "b").write_bytes(b"old")
+        os.rename(work / "a", work / "b")
+        replaced = (work / "b").read_bytes() == b"new" and not (work / "a").exists()
+        linked = not _refused(lambda: os.link(work / "b", work / "c"))
+        atomic_rename = replaced and linked and _refused(lambda: os.link(work / "b", work / "c"))
+        server_clock, delay = _mtime_after_entry(work)
+        return StorageCapabilities(atomic_mkdir, directory_rename, server_clock, atomic_rename, delay)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 if TYPE_CHECKING:
     ADDRESSED_FORMATS: tuple[AddressedFormat, ...]
 
@@ -827,6 +936,7 @@ __all__ = [
     "WrongKindError",
     "owner_remedy",
     "path_component",
+    "probe_capabilities",
     "CLOCK_NAME",
     "NAME_MAX",
     "TEMPORARY_NAME",
@@ -835,6 +945,7 @@ __all__ = [
     "PRIVATE_DIR_MODE",
     "Staging",
     "AddressedFormat",
+    "StorageCapabilities",
     "StorageFull",
     "StorageUnsupported",
     "StorePolicy",

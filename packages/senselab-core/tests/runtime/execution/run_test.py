@@ -33,8 +33,6 @@ from senselab_core.runtime.execution.run import (
     bind_inputs,
     load_plan,
 )
-from senselab_core.runtime.planner import ExecutorUnavailable
-from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import attempt_id, attempt_scope, process_attempt_id
 from senselab_core.runtime.store import ResultStore
@@ -351,17 +349,6 @@ def test_a_failed_provenance_write_fails_the_run(tmp_path: Path) -> None:
     run = placed.run(Recording(store), store=store)
     with pytest.raises(OSError, match="No space"):
         run.wait(60)
-
-
-@pytest.mark.contract
-def test_a_slurm_substrate_without_an_executor_names_pool(tmp_path: Path) -> None:
-    """With no executor given, a slurm substrate is not run on `InProcess`: it raises, naming `Pool`."""
-    slurm = ExecutionProfile.load("orcd")
-    placed, _ = _plan(GRAPH, ROWS)
-    placed = type(placed)(**{**placed.__dict__, "execution": slurm})
-    with pytest.raises(ExecutorUnavailable, match="Pool") as raised:
-        placed.run()
-    assert raised.value.needs == "Pool" and not (tmp_path / "cache").exists()
 
 
 @pytest.mark.contract

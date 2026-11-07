@@ -26,6 +26,7 @@ from senselab_core.runtime.execution.job import Failed, JobOutcome
 from senselab_core.runtime.execution.pool import Pool, report
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet
 from senselab_core.runtime.execution.run import INPUTS_FILE, RECORD_ATTEMPTS, Run, prepare, record_sources
+from senselab_core.runtime.execution.substrates import WorkerHandle
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import LeaseUnavailable
@@ -93,14 +94,19 @@ class FakeWorkers:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def ensure(self, queue: str) -> None:
-        """Serve `queue` from the worker thread, started on the first call."""
-        self.names.add(queue)
+    def start(self, resource_class: str, count: int) -> list[WorkerHandle]:  # noqa: ARG002
+        """Serve `resource_class` from the worker thread, started on the first call."""
+        self.names.add(resource_class)
         if self._thread is None:
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
+        return [WorkerHandle(resource_class, "thread")]
 
-    def stop(self) -> None:
+    def running(self, resource_class: str) -> int:
+        """Return 1 for a queue the thread serves."""
+        return int(resource_class in self.names)
+
+    def stop(self, handles: Sequence[WorkerHandle] = ()) -> None:  # noqa: ARG002
         """Stop the worker thread."""
         self._stop.set()
         if self._thread is not None:
@@ -302,10 +308,15 @@ def test_broken_env_reported_once(tmp_path: Path) -> None:
 class _Idle:
     """A `Substrate` that starts no worker."""
 
-    def ensure(self, queue: str) -> None:
+    def start(self, resource_class: str, count: int) -> list[WorkerHandle]:  # noqa: ARG002
         """Start nothing."""
+        return []
 
-    def stop(self) -> None:
+    def running(self, resource_class: str) -> int:  # noqa: ARG002
+        """Count nothing."""
+        return 0
+
+    def stop(self, handles: Sequence[WorkerHandle]) -> None:
         """Stop nothing."""
 
 

@@ -143,7 +143,7 @@ def resume(target: Plan | Run | str) -> ResultSet:
     and store.
 
     Raises:
-        NoRun, ValueError, InputChanged, InputsUnavailable, ExecutorUnavailable: as `resume`; a run whose inputs were
+        NoRun, ValueError, InputChanged, InputsUnavailable: as `resume`; a run whose inputs were
             held in memory raises `InputsUnavailable`.
     """
     plan_hash = target if isinstance(target, str) else target.run_dir.name if isinstance(target, Run) else target.hash

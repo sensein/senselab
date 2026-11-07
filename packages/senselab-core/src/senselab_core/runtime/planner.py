@@ -37,7 +37,8 @@ from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
 from senselab_core.runtime.placement import check_caps, check_licenses, node_licenses, place_nodes, plan_cost
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
+from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver, cache_root
+from senselab_core.runtime.storage import StorageCapabilities, probe_capabilities
 
 if TYPE_CHECKING:
     from senselab_core.runtime.execution.executor import Executor
@@ -339,18 +340,6 @@ def resolve_bound(  # noqa: PLR0913 - as `resolve`
     return Resolved(plan, manifest, sources, live)
 
 
-class ExecutorUnavailable(RuntimeError):
-    """The executor a profile's substrate needs is not available yet; `needs` names it."""
-
-    def __init__(self, substrate: str, needs: str) -> None:
-        """Name the substrate and the executor it needs."""
-        super().__init__(
-            f"the {substrate!r} substrate runs on {needs}, which is not available; pass an executor to run"
-        )
-        self.substrate = substrate
-        self.needs = needs
-
-
 @dataclass(frozen=True)
 class Plan:
     """A placed plan: the logical plan and its manifest, its placement, and its hash, the run id (`plan_hash`).
@@ -373,11 +362,10 @@ class Plan:
         """Start this plan on `executor` and return its `Run`, which runs in the background.
 
         `None` means `InProcess` over the result store under `cache_root()/results`, under the plan's own profile and
-        run config, when the profile's substrate is local. `store` is the result store the run's results are read from;
-        give it with an executor that stores results.
+        run config, when the profile's substrate is local, and a `Pool` over `Slurm` when it is `slurm`. `store` is the
+        result store the run's results are read from; give it with an executor that stores results.
 
         Raises:
-            ExecutorUnavailable: no executor is given and the profile's substrate is `slurm`, which runs on `Pool`.
             ValueError: as `Executor.admit`.
             MissingExtra: the `pydra` extra is not installed.
         """
@@ -415,9 +403,12 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
         InvalidGraph, UnmappedOutput, RecordBinding, ValueError, MissingProfileSlice, UnpinnedModel: as `resolve`.
         UnlistedSource: a model's organisation is not an allowed source.
         BackendParamsMismatch, NoBackend, NoDevice, LicenseRefused, LicenseConflict, MemoryCapExceeded: as `place`.
+        StorageUnsupported: the run directory's or the result store's root lacks a primitive the leases need.
+        LeaseBoundError: the root's measured attribute delay breaks the profile's lease bound.
     """
     config = config if config is not None else RunConfig()
     profile = execution if execution is not None else ExecutionProfile.load()
+    check_storage(profile, *storage_roots())
     catalogue = packaged().catalogue
     found = resolve_bound(
         target,
@@ -439,6 +430,38 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
         sources=found.sources,
         live=found.live,
     )
+
+
+def storage_roots() -> tuple[Path, ...]:
+    """Return the roots a run writes under by default: the run directory root and the result store's."""
+    from senselab_core.runtime.execution.events import runs_root  # noqa: PLC0415 - execution imports the planner
+    from senselab_core.runtime.execution.run import RESULTS_DIR  # noqa: PLC0415 - as above
+
+    return runs_root(), cache_root() / RESULTS_DIR
+
+
+def check_storage(
+    profile: ExecutionProfile, *roots: Path, probe: Callable[[Path], StorageCapabilities] = probe_capabilities
+) -> None:
+    """Refuse the plan unless each of `roots` has the primitives leases need and a delay the lease bound allows.
+
+    Each root is probed (`probe`, by default `probe_capabilities`). A root whose nearest existing ancestor cannot be
+    written is not judged: a run there could not write either.
+
+    Raises:
+        StorageUnsupported: a root lacks a primitive; names it.
+        LeaseBoundError: a root's measured attribute delay makes `2 × renew_fraction × stale_after_s +
+            attribute_delay_s` not below `stale_after_s`.
+    """
+    for root in roots:
+        ancestor = root
+        while not ancestor.exists():
+            ancestor = ancestor.parent
+        if not os.access(ancestor, os.W_OK | os.X_OK):
+            continue
+        found = probe(root)
+        found.require(root)
+        profile.lease.model_copy(update={"attribute_delay_s": found.attribute_delay_s}).check_bound()
 
 
 def place(logical: LogicalPlan, profile: ExecutionProfile, hardware: HardwareInfo, config: RunConfig) -> PlanPlacement:
@@ -500,7 +523,7 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
     anything is written. The plan is started (`Plan.run`), the placement written to a new
     `placements/<attempt>.json`. The plan hash is unchanged; a node placed on another backend has another key and is
     computed again, and a job the store holds is served from it. `store` is where results are read and written: by
-    default the one `manifest.json` names. `executor` defaults to `InProcess` over that store for a local substrate.
+    default the one `manifest.json` names. `executor` defaults as in `Plan.run`.
     `config` defaults to `RunConfig()` under the plan's reuse policy; given with an executor, it is that executor's
     run config.
 
@@ -511,7 +534,7 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
         InputsUnavailable: an input was held in memory by the process that planned the run.
         UnlistedSource, BackendParamsMismatch, NoBackend, NoDevice, LicenseRefused, LicenseConflict,
             MemoryCapExceeded: as `place`.
-        ExecutorUnavailable, MissingExtra: as `Plan.run`.
+        MissingExtra: as `Plan.run`.
     """
     from senselab_core.runtime.execution.events import run_dir_of  # noqa: PLC0415 - execution imports the planner
     from senselab_core.runtime.execution.run import Run, bind_sources, load_plan, start  # noqa: PLC0415 - as above

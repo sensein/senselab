@@ -47,7 +47,7 @@ from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import Lease, LeaseUnavailable
-from senselab_core.runtime.planner import ExecutorUnavailable, Plan
+from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import cache_root, fresh_attempt_id
@@ -553,27 +553,40 @@ class Run:
         return ResultStore(Path(named) if isinstance(named, str) else cache_root() / RESULTS_DIR)
 
 
-def _executor(placed: Plan, executor: Executor | None, store: ResultStore | None) -> Executor:
-    """Return the executor to run `placed` on: the one given, else `InProcess` for a local substrate.
+def default_executor(placed: Plan, executor: Executor | None, store: ResultStore | None) -> Executor:
+    """Return the executor to run `placed` on: the one given, else `InProcess` (local substrate) or `Pool` (slurm).
 
     A plan read from disk carries no profile or run config: the packaged default profile is used if its digest is the
-    one the plan was placed under.
+    one the plan was placed under. The `Pool` is over `Slurm` and the run's own queues, bound to the run's epoch by
+    `start`.
 
     Raises:
-        ExecutorUnavailable: no executor is given and the substrate is not local.
         ValueError: the default profile is not the one the plan was placed under.
     """
     if executor is not None:
         return executor
     profile = placed.execution if placed.execution is not None else ExecutionProfile.load()
-    if profile.substrate.kind != "local":
-        raise ExecutorUnavailable(profile.substrate.kind, "Pool")
     if profile.canonical_digest() != placed.placement.profile_digest:
         raise ValueError(f"plan {placed.hash} was placed under another execution profile; give the executor to run on")
-    from senselab_core.runtime.execution.in_process import InProcess  # noqa: PLC0415 - imports the planner
-
     config = placed.config if placed.config is not None else RunConfig(reuse=ReusePolicy(placed.logical.reuse))
-    return InProcess(store=store, profile=profile, run=config)
+    if profile.substrate.kind == "local":
+        from senselab_core.runtime.execution.in_process import InProcess  # noqa: PLC0415 - imports the planner
+
+        return InProcess(store=store, profile=profile, run=config)
+    from senselab_core.runtime.execution.pool import Pool  # noqa: PLC0415 - imports the planner
+    from senselab_core.runtime.execution.substrates import substrate_of  # noqa: PLC0415 - as above
+
+    assert store is not None
+    run_dir = run_dir_of(placed.hash)
+    return Pool(
+        run_dir,
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+        store=store,
+        events=EventLog(run_dir, "a0", 1, epoch=0),
+        profile=profile,
+        substrate=substrate_of(profile, run_dir, placed.hash),
+        epoch=0,
+    )
 
 
 def _claim_ordinal(run_dir: Path, attempt: str) -> int:
@@ -743,18 +756,17 @@ def start(
 ) -> Run:
     """Start `placed` on `executor` in a background thread, as a new attempt, and return its `Run`.
 
-    With no executor, `InProcess` runs a plan under a local substrate, over `store` (default: the result store under
-    the cache root) with the plan's own profile and run config. `store` is also where the run's results are read from,
-    so it is given with any other executor that stores results, and it is the store that executor writes: the plan's
-    `senselab:Plan` entity is added to its provenance. The input values are bound (`bind_sources`) before anything
-    is written: from their paths or JSON values, or from the values the plan holds in memory; `values` gives them
-    already bound. The sources are merged into `inputs.json` under its lease (`record_sources`), also before anything
-    else is written. Every item in the run's `queues/` with neither a slot nor an outcome is put again
-    (`QueueSet.reconcile`). The run takes the next epoch before its attempt (`prepare`), holds its coordinator lease
-    from then until the run ends, and hands the epoch to the executor (`bind_epoch`).
+    With no executor, `InProcess` runs a plan under a local substrate, and a `Pool` over `Slurm` under a slurm one, over
+    `store` (default: the result store under the cache root) with the plan's own profile and run config. `store` is also
+    where the run's results are read from, so it is given with any other executor that stores results, and it is the
+    store that executor writes: the plan's `senselab:Plan` entity is added to its provenance. The input values are bound
+    (`bind_sources`) before anything is written: from their paths or JSON values, or from the values the plan holds in
+    memory; `values` gives them already bound. The sources are merged into `inputs.json` under its lease
+    (`record_sources`), also before anything else is written. Every item in the run's `queues/` with neither a slot nor
+    an outcome is put again (`QueueSet.reconcile`). The run takes the next epoch before its attempt (`prepare`), holds
+    its coordinator lease from then until the run ends, and hands the epoch to the executor (`bind_epoch`).
 
     Raises:
-        ExecutorUnavailable: no executor is given and the substrate is not local.
         ValueError: as `admit`.
         InputChanged: an input changed since the plan was made.
         InputsUnavailable: an input held in memory is not held by `placed` (a plan read from disk).
@@ -769,7 +781,7 @@ def start(
     provenance = ProvStore()
     if executor is None and store is None:
         store = ResultStore(cache_root() / RESULTS_DIR, provenance=provenance)
-    executor = _executor(placed, executor, store)
+    executor = default_executor(placed, executor, store)
     values = bind_sources(placed) if values is None else values
     run_dir = run_dir_of(placed.hash)
     epoch, attempt, ordinal = prepare(placed, run_dir, store)

@@ -90,6 +90,23 @@ class Envs(Frozen):
 _DEFAULTED = re.compile(r"\$\{(\w+):-([^}]*)\}")
 
 
+def _expanded(raw: str) -> str:
+    chosen = _DEFAULTED.sub(lambda m: os.environ.get(m[1]) or m[2], raw)
+    return os.path.expanduser(os.path.expandvars(chosen))
+
+
+def expand(raw: str) -> str:
+    """Return `raw` with `${VAR:-fallback}`, then `~` and `$VAR`, expanded from the environment.
+
+    Raises:
+        ValueError: `raw` names a variable that is not set.
+    """
+    expanded = _expanded(raw)
+    if "$" in expanded:
+        raise ValueError(f"{raw!r} names a variable that is not set")
+    return expanded
+
+
 class ExecutionProfile(Formatted):
     """Where and how calls run on one site.
 
@@ -170,8 +187,7 @@ class ExecutionProfile(Formatted):
             ValueError: the root names an unset variable.
         """
         raw = self.env_roots[kind]
-        chosen = _DEFAULTED.sub(lambda m: os.environ.get(m[1]) or m[2], raw)
-        expanded = os.path.expanduser(os.path.expandvars(chosen))
+        expanded = _expanded(raw)
         if "$" in expanded:
             raise ValueError(f"env root {raw!r} names a variable that is not set")
         return Path(expanded)

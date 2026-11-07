@@ -1,10 +1,10 @@
 """`Pool`: the `Executor` that puts fragments on a run's queues and reads what pool workers made of them.
 
-A fragment goes to the queue of its placement's resource class under `<run dir>/queues/`; a `Substrate` has workers
-serve that queue. A worker records each job's `ResultRef` in the item's outcome (`report`). The `Pool` yields a
-result only once the result store holds its outputs, and a failure only as `dead/<key digest>.json` holds it, so a
-restarted coordinator reads the same state from disk. Each fault class has its effect here, with the budgets of the
-profile's `faults` section:
+A fragment goes to the queue of its placement's resource class under `<run dir>/queues/`, named `<class>#<model
+identity>` when its node has a resident model; a `Substrate` has workers serve that queue (`scale`, each round). A
+worker records each job's `ResultRef` in the item's outcome (`report`). The `Pool` yields a result only once the result
+store holds its outputs, and a failure only as `dead/<key digest>.json` holds it, so a restarted coordinator reads the
+same state from disk. Each fault class has its effect here, with the budgets of the profile's `faults` section:
 
 - **content**, not a gap: charged; the job is queued again until `content_attempts` charges, then it is dead;
 - **resource**, not a gap: the job is queued again on the next larger memory class of its device, uncharged, at most
@@ -29,7 +29,7 @@ from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Protocol
+from typing import TYPE_CHECKING, ClassVar
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement
@@ -49,6 +49,7 @@ from senselab_core.runtime.execution.executor import (
 from senselab_core.runtime.execution.in_process import job_key, result_ref
 from senselab_core.runtime.execution.job import JobOutcome
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest
+from senselab_core.runtime.execution.substrates import Fleet, Slurm, Substrate, scale
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
@@ -60,26 +61,6 @@ logger = logging.getLogger("senselab")
 
 DEAD_DIR = "dead"
 """The directory of a run's dead jobs, one `<key digest>.json` each."""
-
-
-class Substrate(Protocol):
-    """What starts and stops the pool workers that serve a run's queues."""
-
-    def ensure(self, queue: str) -> None:
-        """Have a worker serve the queue `queue` of the run's queues."""
-
-    def stop(self) -> None:
-        """Stop the workers this substrate started."""
-
-
-class ExternalWorkers:
-    """A `Substrate` that starts nothing: workers are started on their own (`senselab execute --pool`)."""
-
-    def ensure(self, queue: str) -> None:
-        """Do nothing."""
-
-    def stop(self) -> None:
-        """Do nothing."""
 
 
 def report(claim: Claim, digest: str, outcomes: Sequence[JobOutcome]) -> bool:
@@ -178,6 +159,8 @@ class Pool:
         """
         self.run_dir = Path(run_dir)
         self.queues, self.store, self.profile, self.substrate = queues, store, profile, substrate
+        self._fleet = Fleet(substrate)
+        self._scaled = float("-inf")
         self.bind_epoch(epoch, events)
         self.broken: dict[str, BrokenEnv] = {}
         self.gaps: list[tuple[JobRef, FaultRecord]] = []
@@ -197,6 +180,8 @@ class Pool:
         if events.epoch != epoch:
             raise ValueError(f"the pool coordinates epoch {epoch}; its event log is of epoch {events.epoch}")
         self.epoch, self.events = epoch, events
+        if isinstance(self.substrate, Slurm):
+            self.substrate.attempt = events.attempt
 
     def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:  # noqa: ARG002
         """Hold `placed` until it is released as often as it was admitted; its id is the run's, `run-<plan hash>`.
@@ -233,14 +218,28 @@ class Pool:
             QueueHeld: the fragment's env is held on its queue by this epoch or a newer one.
         """
         self._fence()
-        name, env = fragment.placement.resource_class, fragment.placement.env
+        name, env = self._queue_name(fragment), fragment.placement.env
         queue = self.queues.queue(name)
         queue.unhold(before=self.epoch)
         if queue.held(env) is not None:
             raise QueueHeld(name, env, self._env_failures(env))
         queue.put(fragment)
-        self.substrate.ensure(name)
+        self._scale()
         return _Flight(name, item_digest(fragment), fragment)
+
+    def _queue_name(self, fragment: PlanFragment) -> str:
+        """Return the queue of `fragment`: its class, with `#<model identity>` for its node's resident model."""
+        placed = self._plans.get(fragment.admission)
+        model = placed.logical.models.get(fragment.node) if placed is not None else None
+        name = fragment.placement.resource_class
+        return name if model is None else f"{name}#{model.identity}"
+
+    def _scale(self) -> None:
+        """Have the substrate start the workers the queues need, at most once per `pool.first_poll_s`."""
+        now = time.monotonic()
+        if now - self._scaled >= self.profile.pool.first_poll_s:
+            self._scaled = now
+            scale(self.queues, self._fleet, self.profile)
 
     def submit(self, fragment: PlanFragment) -> Handle:
         """Put `fragment` on the queue of its resource class and return its handle.
@@ -295,13 +294,14 @@ class Pool:
             if landed:
                 pause = self.profile.pool.first_poll_s
             elif followed.flights:
+                self._scale()
                 time.sleep(pause)
                 pause = min(2 * pause, self.profile.pool.poll_s)
         followed.done = not followed.cancelled
 
     def close(self) -> None:
         """Stop the workers the substrate started."""
-        self.substrate.stop()
+        self._fleet.close()
 
     def _settle(self, followed: _Followed, flight: _Flight, record: Mapping[str, object]) -> Iterator[ResultRef]:
         """Yield the results of `flight`'s jobs from its outcome `record`, applying each failure's effect.
@@ -521,9 +521,7 @@ def coordinate(
 
 __all__ = [
     "DEAD_DIR",
-    "ExternalWorkers",
     "Pool",
-    "Substrate",
     "coordinate",
     "larger_class",
     "report",
