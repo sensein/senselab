@@ -58,6 +58,8 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
         "plan-fragment@2",
         "label@1",
         "measure-unit@1",
+        "hardware-class@1",
+        "hardware-declared@1",
     }
 )
 """The registered tags of `identity_digest`; no tag is a prefix of another."""
