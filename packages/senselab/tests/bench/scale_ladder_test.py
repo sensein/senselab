@@ -162,6 +162,8 @@ def test_flatness_covers_time_memory_files_and_bytes_against_budgets() -> None:
         "t bytes_per_item: at 10000 / at 100 = 1.000, flat ok, ceiling unmeasured",
     ]
     assert all("unmeasured" in line for line in ladder.flatness(results, {})[:1])
+    started = [point(1, 9.0, 1000, 20, 100), point(100, 1.0, 1000, 200, 10_000)]
+    assert ladder.flatness(started, budgets)[0] == "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling ok"
 
 
 def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
