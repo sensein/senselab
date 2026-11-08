@@ -134,7 +134,9 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
         lambda: [MemoryFit(resident=1024, m0=0.0, m1=2.5, n=3)],
         invalid_updates=[{"resident": -1}, {"n": 0}],
     )
-    register(StratumBatch, lambda: [StratumBatch(stratum=0, batch=8)], invalid_updates=[{"batch": 0}])
+    register(
+        StratumBatch, lambda: [StratumBatch(lo=2.0, hi=9.0, batch=8)], invalid_updates=[{"batch": 0}, {"lo": 99.0}]
+    )
     register(RegimeFactor, lambda: [RegimeFactor(k=2, rho=1.4, n=6)], invalid_updates=[{"rho": 0}, {"k": 0}, {"k": 1}])
     register(
         OomRecord,
@@ -159,7 +161,7 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
                 item_n=3,
                 single=_FIT,
                 batched=(RequestFit(batch=4, r=0.3, u=0.04, n=3, spread=0.1, lo=2.0, hi=9.0),),
-                batch=(StratumBatch(stratum=0, batch=4),),
+                batch=(StratumBatch(lo=2.0, hi=9.0, batch=4),),
                 device=MemoryFit(resident=1024, m0=0.0, m1=2.5, n=3),
                 regimes=(RegimeFactor(k=2, rho=1.4, n=6),),
                 oom=(
@@ -171,7 +173,7 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
         invalid_updates=[
             {"status": "measured", "single": None},
             {"reasons": (), "status": "unmeasured"},
-            {"batch": (StratumBatch(stratum=0, batch=4), StratumBatch(stratum=0, batch=8))},
+            {"batch": (StratumBatch(lo=2.0, hi=9.0, batch=4), StratumBatch(lo=9.0, hi=12.0, batch=8))},
             {"regimes": (RegimeFactor(k=2, rho=1.4, n=6),) * 2},
             {"reasons": ("lazy",)},
             {"estimator": "estimate@2"},

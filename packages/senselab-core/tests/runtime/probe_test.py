@@ -93,7 +93,7 @@ def _plan(
     formation: str = "mixed",
     edges: Sequence[float] = (),
 ) -> ProbePlan:  # noqa: B008
-    return Probe.plan(UNIT, candidates, prior, GRANT, config, formation, PROBE_S, bucket_edges=edges)
+    return Probe.plan(UNIT, candidates, prior, config, formation, PROBE_S, bucket_edges=edges)
 
 
 def _with_device(m0: float, m1: float, resident: int = 10**9) -> list[Observation]:
@@ -220,7 +220,7 @@ def test_the_estimate_is_invariant_to_the_order_of_observations(seed: int) -> No
 def test_reasons_are_a_declared_type() -> None:
     """An estimate refuses a reason outside the declared type; thin evidence gives only declared ones."""
     with pytest.raises(ValidationError):
-        Estimate(status="unmeasured", unit_kind="none", reasons=("lazy",))  # type: ignore[arg-type]
+        Estimate(status="unmeasured", unit_kind="none", reasons=("lazy",))
     for obs in ([], _line(0.2, 0.05)[:2], _line(0.2, 0.05), _line(0.2, 0.05) + _line(0.3, 0.04, batch=4)[:1]):
         got = Estimate.model_validate(_estimate(obs).model_dump())
         assert got == _estimate(obs)
@@ -300,7 +300,7 @@ def test_an_oom_record_is_lifted_by_a_later_probe_not_in_its_basis() -> None:
     thin = _estimate(base + _probe_of("p2", count=CONFIG.min_requests - 1), [_fault()])
     assert thin.device is not None and thin.device.m1 == raised.device.m1
     later = _estimate(base + _probe_of("p2"), [_fault()])
-    assert later.device == plain.device and later.oom == (_fault(),)
+    assert later.device == plain.device and later.oom == ()
 
 
 @pytest.mark.logic
@@ -327,6 +327,56 @@ def test_the_oom_raise_follows_the_headroom_given() -> None:
     assert low.device is not None and high.device is not None and high.device.m1 > low.device.m1
 
 
+@pytest.mark.logic
+def test_a_probes_own_batched_successes_do_not_lift_its_own_fault() -> None:
+    """A probe whose warmups never entered the sizing estimate is in its fault's basis, so its B₂ cannot lift its B₁."""
+    warmups = [
+        _obs(5.0, 0.5, since_load=i, probe=ProbeRef(id="p9", phase="WARMUP", stratum=0))
+        for i in range(CONFIG.warmup_requests)
+    ]
+    sizing = _estimate(_with_device(5000, 50) + warmups)
+    assert sizing.source.probe_ids == ("p1",) and sizing.fault_basis("p9") == ("p1", "p9")
+    fault = _fault(sizing.fault_basis("p9"))
+    own = _estimate(_with_device(5000, 50) + warmups + _probe_of("p9", batch=3), [fault])
+    raised = _estimate(_with_device(5000, 50), [fault])
+    assert own.device is not None and raised.device is not None and own.device.m1 == raised.device.m1
+    assert own.oom == (fault,) and sizing.fault_basis(None) == ("p1",)
+
+
+@pytest.mark.logic
+def test_a_shared_co_tenancy_record_stays_in_force_and_reopens_nothing() -> None:
+    """A probe runs alone: a co-tenancy 2 fault neither re-opens a stratum nor raises its fit, and stays in force."""
+    candidates = _candidates([float(i + 1) for i in range(40)])
+    obs = _covering([5.0, 30.0]) + _covering([5.0, 30.0], batch=4)
+    shared = _fault().model_copy(update={"cotenancy": 2})
+    plan = _plan(candidates, Prior(observations=tuple(obs), records=(shared,)))
+    assert plan.batched == () and plan.items == ()
+    got, plain = _estimate(obs + _with_device(5000, 50), [shared]), _estimate(obs + _with_device(5000, 50))
+    assert got.device is not None and got.device == plain.device and got.oom == (shared,)
+    lifted = _estimate(obs + _probe_of("p2"), [shared])
+    assert lifted.oom == (shared,)
+
+
+@pytest.mark.logic
+def test_strata_are_length_ranges_whatever_the_probes_label_them() -> None:
+    """Two probes at lengths 1-1.2 and 40-42 give one estimate whether both say stratum 0 or each its own."""
+
+    def probe(name: str, lengths: Sequence[float], stratum: int) -> list[Observation]:
+        out = []
+        for x in lengths:
+            for batch, r in ((1, 0.2), (8, 0.3)):
+                ref = ProbeRef(id=name, phase="SINGLE" if batch == 1 else "BATCHED", stratum=stratum)
+                out.append(_obs(x, r + 0.05 * x * batch, batch=batch, probe=ref))
+        return out
+
+    low = probe("pA", (1.0, 1.1, 1.2), 0)
+    same, apart = low + probe("pB", (40.0, 41.0, 42.0), 0), low + probe("pB", (40.0, 41.0, 42.0), 1)
+    a, b = _estimate(same), _estimate(apart)
+    assert a.model_dump() == b.model_dump()
+    assert a.single is not None and a.single.u == pytest.approx(0.05)
+    assert [(s.lo, s.hi) for s in a.batch] == [(1.0, 1.2), (40.0, 42.0)]
+
+
 # --- the strata ------------------------------------------------------------------------------------------------
 
 
@@ -338,12 +388,24 @@ def test_lengthless_jobs_are_one_extra_stratum_beside_the_sized_ones() -> None:
 
 
 @pytest.mark.logic
-def test_strata_are_cut_at_the_bucket_edge_nearest_the_equal_count_cut() -> None:
-    """Edge 15 is nearest the cut after 20 jobs among edges (15, 80): the strata are 1-14 and 15-40."""
-    plan = _plan(_candidates([float(i + 1) for i in range(40)]), formation="bucket:g", edges=(15.0, 80.0))
-    assert [(s.lo, s.hi) for s in plan.strata] == [(1.0, 14.0), (15.0, 40.0)]
+def test_bucket_edges_never_move_a_stratum_cut() -> None:
+    """Edge 39.5 over lengths 1..40 leaves the equal-count strata, and both strata get their singles."""
+    plan = _plan(_candidates([float(i + 1) for i in range(40)]), formation="bucket:g", edges=(39.5,))
+    assert [(s.lo, s.hi) for s in plan.strata] == [(1.0, 20.0), (21.0, 40.0)]
+    assert {i.stratum for i in plan.items if i.phase == "SINGLE"} == {0, 1}
     with pytest.raises(ValueError, match="bucket edges"):
         _plan(_candidates([1.0, 2.0]), formation="bucket:g")
+
+
+@pytest.mark.logic
+def test_narrow_buckets_still_plan_a_batched_phase_one_bucket_per_item() -> None:
+    """Width-2 buckets over 400 lengths: each item is two jobs of one bucket, drawn from many buckets."""
+    edges = tuple(float(e) for e in range(1, 402, 2))
+    plan = _plan(_candidates([float(i + 1) for i in range(400)]), formation="bucket:g", edges=edges)
+    batched = Probe.plan_batched(plan, _measured_single(1e3), GRANT, CONFIG, 1e6, memory_headroom=HEADROOM)
+    assert {i.stratum for i in batched.items} == {0, 1}
+    for item in batched.items:
+        assert len(item.jobs) == 2 and len({bisect_right(edges, j.units or 0.0) for j in item.jobs}) == 1
 
 
 @pytest.mark.logic
@@ -415,7 +477,7 @@ def test_a_failed_request_never_enters_the_per_item_time() -> None:
 
 @pytest.mark.logic
 def test_fixed_cost_is_fitted_not_shared() -> None:
-    """With item wall 0.040 + 0.0366 per job the estimate gives `u` 0.0366 and `a` 0.040; `calibrated` gives 0.075."""
+    """Item wall 0.040 + 0.0366 per job over 1-job and 4-job items: `u` 0.0366 and `a` 0.040; `calibrated` 0.0616."""
     fixed, per_job = 0.040, 0.0366
     obs = []
     for stratum, length in enumerate((1.0, 4.0)):
