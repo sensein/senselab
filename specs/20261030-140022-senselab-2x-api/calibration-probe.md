@@ -134,8 +134,10 @@ read, under the trust filter of §3.5):
 
 Writes and leases go to the **first writable root**. Writability is checked once at run start by the storage probe
 (ADR-003; `mkdir` of a probe directory), before any work, and the plan states where measures will be written
-(UX-10: missing write access is never discovered after computing). A permission failure on a later write to the
-shared root moves writing to the next root, logged once per run, and is never raised. A read-only group member
+(UX-10: missing write access is never discovered after computing). Any `OSError` on a measures root, on a read or a
+later write (permission, `ENOSPC`, `ESTALE`, an unreachable mount), is logged once per run per root and treated as that
+root unreadable or unwritable: reads go on over the other roots, writes move to the next writable root, else the
+measure is unmeasured. It is never raised (UX-37, UX-56). A read-only group member
 therefore reuses the group's measures and writes their own probes to their own root. The ladder sets one root, in
 its output directory (§9), so a table point measures afresh.
 
@@ -164,8 +166,8 @@ There is no estimate file. `Probe.estimate` runs over the unit's pooled observat
 - **Writes are write-once.** Every file is staged in `tmp/<uuid>/` with the store policy's modes and renamed onto a
   name no other writer uses (uuids). Nothing is modified in place, so concurrent writers never conflict and no lock
   guards an append. `unit.json` is first writer wins; a reader recomputes the digest from it and requires it to equal
-  the directory name, else the directory is quarantined as misfiled (the store's binding rule, ADR-003 amendment
-  2026-10-31).
+  the directory name, else the directory is misfiled (the store's binding rule, ADR-003 amendment 2026-10-31) and
+  handled by §3.5's malformed-file rule; a skipped unit directory takes no writes, which go to the next writable root.
 - **One probe per unit at a time, for efficiency only.** A coordinator that needs to probe `u` reads every root for a
   live `<u>/probe.lease` and, finding none, takes the lease in its write root (the 2026-11-03 directory lease, renewed
   by `keep_alive`, proven before it writes its observations). A coordinator finding a live lease waits for the
@@ -180,23 +182,27 @@ Measures size work; they never reach a key, a context fingerprint or an output. 
 mis-size: a batch too large is caught by bisection and the OOM record (§7.4); a cut too long overruns `quantum_s` and
 is caught by drift (§7.3). So shared records need provenance and a reader's choice, not signatures.
 
-- **Every record kind** (`obs`, `drift`, `supersede`, `regime`, `oom`, the hardware index entries) carries the same
-  provenance: `user` (the uid's name), `host`, `job`, `run`, `senselab` (version and 40-hex commit when known), the
-  profile's canonical digest and the worker's `HardwareClass`. Index entries, being empty, take it from the file's
-  owner.
+- **Every record kind** (`obs`, `drift`, `supersede`, `regime`, `oom`) carries the same provenance: `job` (the
+  scheduler job id, when there is one), `run`, `senselab` (version and 40-hex commit when known), the profile's
+  canonical digest and the worker's `HardwareClass`. **No record carries an account name or a hostname**: a measures
+  root is a location other users read, so its files follow the widest audience's rule (UX-57). A writer's identity is
+  its file's owner uid, read from the file system, never from content; index entries, being empty, have only that. A
+  host is identified, where diagnosis needs it, by its `HardwareClass` and the scheduler job id.
 - **One reader filter over all of them.** `calibration.trust` is `group` (read every file of every root) or `own`
-  (only the current user's). A `drift`, `supersede`, `regime` or `oom` record acts only for readers whose filter
+  (only files whose owner uid is the current user's). A `drift`, `supersede`, `regime` or `oom` record acts only for readers whose filter
   admits it; under `own`, another user's records never supersede or cap your measures.
 - **Who sets it.** The profile sets the site default (`orcd` `group`, `laptop` `own`). A user opts out per run with the
   run config key `calibration.trust: own`, which overrides the profile's value (P-34's run-config form; ruling O-3).
-- **`collect`** removes only files the collector wrote, or files a record it trusts supersedes and that the
-  collector wrote. It never removes another user's file.
-- **A malformed file** is quarantined (in a root the collector can write) or skipped (in one it cannot), logged with
-  its owner; it never fails a run.
+- **`collect`** removes only files the collector's uid owns, or files a record it trusts supersedes and that its uid
+  owns. It never removes another user's file.
+- **A file of a format tag the reader does not know** (a newer release's) is skipped, never moved. **A malformed or
+  misfiled file** is quarantined only when the reader's uid owns it and its root is writable; any other is skipped.
+  Each is logged once with its owner uid, rendered under the reader's audience rule, and never fails a run. One member
+  never makes others lose measures (UX-10, UX-61).
 - **What leaves the store** (UX-43, UX-45, P-28). Result and run provenance, `plan.explain()` and exports name an
-  estimate's source by probe ids and observation counts only, or by the packaged row's commit and probe ids. `user` and
-  `host` stay in the measures store and are shown only by the store's own listing, under the visibility policy.
-  `resource-table@2.0` rows carry commit, scheduler job ids and probe ids, never a user or a host.
+  estimate's source by probe ids and observation counts only, or by the packaged row's commit and probe ids. The store's
+  own listing renders owner uids under the visibility policy. `resource-table@2.0` rows carry commit, scheduler job ids
+  and probe ids, never a user or a host.
 
 ### 3.6 Invalidation
 

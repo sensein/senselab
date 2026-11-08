@@ -355,10 +355,11 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3, §4.4. Adds to th
   (the hardware index) and `units/<u[:2]>/<u>/` per `MeasureUnit` digest `u` (ADR-002 amendment of this date) with
   `unit.json` (first writer wins), `obs/`, `drift/`, `supersede/`, `regime/`, `oom/` and `probe.lease/`. The
   2026-10-31 rules apply unchanged: walks by descriptor, nothing modified in place, modes from the store policy, a
-  wrong kind at an owned path moved aside. A reader recomputes `u` from `unit.json` and quarantines a directory whose
-  digest disagrees.
+  wrong kind at an owned path moved aside. A reader recomputes `u` from `unit.json`; a directory whose digest disagrees
+  is misfiled, under the malformed-file rule below.
 - **Writes go to the first writable root.** Writability is probed once at run start, before any work, and the plan
-  names the write root. A later permission failure moves writing to the next root, logged once, never raised. A
+  names the write root. Any later `OSError` on a root (permission, quota, stale handle, unreachable) makes it unreadable
+  or unwritable for the run: logged once, never raised; reads use the other roots, writes the next writable one. A
   read-only member reuses the shared root and writes to their own.
 - **Write-once, so no lock guards a write.** Every file is staged under `tmp/<uuid>/` and renamed onto a uuid name no
   other writer uses.
@@ -370,12 +371,15 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3, §4.4. Adds to th
 - **The pin is a lease.** A probe's items go on a probe queue `<queue>~probe-<id>`. A worker claims from it only while
   holding its `serve.lease`, one item per claim. A dead holder's lease goes stale and another worker takes the rest;
   its first requests report a load.
-- **Trust is a reader's filter over every record kind.** `obs`, `drift`, `supersede`, `regime` and `oom` records and
-  index entries carry their writer's user, host, job, run, senselab version and commit, profile digest and hardware.
-  `calibration.trust` `group` reads all, `own` only the current user's (the run config overrides the profile); a
-  record acts only for readers that admit it. User and host never leave the measures store: run provenance and
-  packaged tables name probe ids and counts. A malformed file is quarantined or skipped, never fatal.
-- **`collect` removes only the collector's own files** (superseded observations beyond `observations_kept`, staging,
-  quarantine past the policy's ages).
+- **Trust is a reader's filter over every record kind, by owner uid.** `obs`, `drift`, `supersede`, `regime` and
+  `oom` records carry their writer's scheduler job id, run, senselab version and commit, profile digest and hardware
+  class, and no account name or hostname: the roots are readable by other users (ADR-007, 2026-11-08). The writer is
+  the file's owner uid. `calibration.trust` `group` reads all, `own` only files the current uid owns (the run config
+  overrides the profile); a record acts only for readers that admit it. Run provenance and packaged tables name probe
+  ids and counts.
+- **A reader moves only its own files.** A file of an unknown format tag is skipped and logged. A malformed or
+  misfiled file is quarantined when the reader's uid owns it, else skipped; never fatal.
+- **`collect` removes only files the collector's uid owns** (superseded observations beyond `observations_kept`,
+  staging, quarantine past the policy's ages).
 - **Not guaranteed.** One probe per unit; that a peer's estimate arrives within `peer_wait_s`; agreement between
   measures written by different senselab versions under one `MeasureUnit` (a confirming probe after drift settles it).
