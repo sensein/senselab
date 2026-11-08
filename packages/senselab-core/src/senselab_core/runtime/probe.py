@@ -84,12 +84,13 @@ def _inverted_pairs(z: Sequence[float]) -> list[tuple[int, int]]:
 
 def _ordered(value: float) -> int:
     """Map a double to an integer in the same order, so a bisection over integers halves the doubles."""
-    bits = struct.unpack("<q", struct.pack("<d", value))[0]
+    bits: int = struct.unpack("<q", struct.pack("<d", value))[0]
     return bits if bits >= 0 else -(2**63) - bits
 
 
 def _unordered(bits: int) -> float:
-    return struct.unpack("<d", struct.pack("<q", bits if bits >= 0 else -(2**63) - bits))[0]
+    value: float = struct.unpack("<d", struct.pack("<q", bits if bits >= 0 else -(2**63) - bits))[0]
+    return value
 
 
 def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
