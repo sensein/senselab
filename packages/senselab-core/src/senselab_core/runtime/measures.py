@@ -19,10 +19,9 @@ from senselab_core.kernel.identity import LogicalKey, ModelIdentity, Params, Pro
 from senselab_core.runtime.calibration import Estimate, HardwareClass, Observation
 from senselab_core.runtime.keys import Placement
 
-DRIVER_KEYS = frozenset({"torch_build", "launch_env", "engine", "config_digest", "engine_version"})
+DRIVER_KEYS = frozenset({"torch_build", "engine", "engine_version"})
 """The driver entries a measure holds."""
-ATTESTATION_TAG = "attestation@1"
-_SERVICE_DRIVER_KEYS = frozenset({"served_model", "model_identity", "observed"})
+_UNMEASURED_DRIVER_KEYS = frozenset({"launch_env", "served_model", "model_identity", "config_digest", "observed"})
 _BUILD_TAG = re.compile(r"cu\d+|cpu|rocm[\d.]+|xpu")
 
 Formation = Annotated[str, Field(pattern=r"^(mixed|single|bucket:\S+)$")]
@@ -35,8 +34,8 @@ OBSERVATION_FORMAT = MEASURE_OBSERVATIONS_FORMAT.split(".")[0]
 class MeasureEnv(Frozen):
     """The env's fingerprinted context fields that decide cost: its lock and wheels, driver, platform and numerics.
 
-    The driver holds only the tags and digests of `DRIVER_KEYS`: the torch build (`cu128`, `cpu`) in place of its
-    index URL, and the engine, its version, its config digest and the launch env's digest for a server.
+    The driver holds only `DRIVER_KEYS`: the torch build (`cu128`, `cpu`) in place of its index URL, and for a server
+    the engine and its version. `threads` are the worker launch's measured variables (`Launch.measured`).
     """
 
     env_lock: NonEmptyStr
@@ -45,6 +44,7 @@ class MeasureEnv(Frozen):
     platform: NonEmptyStr
     decoder: NonEmptyStr | None
     numerics: StrMap
+    threads: StrMap
 
     @model_validator(mode="after")
     def _check_driver(self) -> Self:
@@ -54,16 +54,16 @@ class MeasureEnv(Frozen):
 
     @classmethod
     def from_fields(cls, fields: Mapping[str, Any]) -> Self:
-        """Return the env of `fields` as `EnvHandle.context_fields()` and the ready mark give them.
+        """Return the env of `fields` as `EnvHandle.context_fields()`, the ready mark and `Launch.measured` give them.
 
-        The driver's `torch_index` URL is replaced by its build tag.
+        The driver's `torch_index` URL is replaced by its build tag; its launch digest and attestation are dropped.
 
         Raises:
             ValueError: a field is missing.
         """
         if missing := sorted(set(cls.model_fields) - set(fields)):
             raise ValueError(f"env fields lack {missing}")
-        driver = {k: v for k, v in fields["driver"].items() if k not in _SERVICE_DRIVER_KEYS}
+        driver = {k: v for k, v in fields["driver"].items() if k not in _UNMEASURED_DRIVER_KEYS}
         if (index := driver.pop("torch_index", None)) is not None:
             tag = urlsplit(index).path.rstrip("/").rsplit("/", 1)[-1]
             driver["torch_build"] = tag if _BUILD_TAG.fullmatch(tag) else "other"
@@ -100,7 +100,8 @@ class MeasureUnit(Frozen):
         """Return the unit of the call `key` run as `placement` in the env `env_fields` on `hardware`.
 
         `env_fields` holds `env_lock`, `wheel_set`, `driver` (`env.context_fields()`), `platform`, `decoder` and
-        `numerics` (the worker's ready mark).
+        `numerics` (the worker's ready mark), and `threads` (`Launch.measured`, `{}` for a host env). The service is
+        the attestation's `config_digest`.
 
         Raises:
             ValueError: an env field is missing, or the placement's formation is not yet decided.
@@ -119,7 +120,7 @@ class MeasureUnit(Frozen):
             chunk_grid=placement.chunk_grid,
             model=key.model,
             env=MeasureEnv.from_fields(env_fields),
-            service=None if key.service is None else identity_digest(ATTESTATION_TAG, key.service.model_dump()),
+            service=None if key.service is None else key.service.config_digest,
             hardware=hardware,
         )
 

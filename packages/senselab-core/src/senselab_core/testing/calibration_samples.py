@@ -34,6 +34,7 @@ ENV = MeasureEnv(
     platform="linux-x86_64",
     decoder=None,
     numerics={"device": "cuda"},
+    threads={"OMP_NUM_THREADS": "8"},
 )
 UNIT = MeasureUnit(
     task="speech_to_text",
@@ -174,6 +175,7 @@ def register_measure_samples(register: Register) -> None:
             {"env_lock": ""},
             {"platform": ""},
             {"driver": {"torch_index": "https://u:p@mirror.internal/whl/cu128"}},
+            {"driver": {"launch_env": "9" * 64}},
         ],
     )
     register(

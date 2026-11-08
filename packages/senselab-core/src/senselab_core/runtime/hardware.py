@@ -18,7 +18,7 @@ from typing import Callable, Collection, Final, Iterator, Mapping, Optional, Seq
 
 logger = logging.getLogger("senselab")
 
-MIB = 1024 * 1024
+MIB: Final = 1024 * 1024  # invariant: bytes in a mebibyte
 _KIB: Final = 1024  # invariant: bytes in a kibibyte, the unit of Linux ru_maxrss
 _GPU_QUERY_TIMEOUT_S = 30.0
 _NVIDIA_SMI_FIELDS = "index,uuid,name,memory.total,driver_version"
@@ -65,6 +65,7 @@ class HardwareInfo:
     (``gpus`` is then present without capabilities). ``probe_error`` carries a failed memory or chip
     probe; ``memory_bytes`` is 0 and ``chip`` None in that case. ``chip`` is the Apple silicon brand
     string, e.g. ``"Apple M2 Max"``; ``cpu_model`` the CPU's model string, None where the host does not name it.
+    ``cpu_count`` is the CPUs the probing process may run on (``process_cpus``), not the node's.
     """
 
     cpu_count: int
@@ -181,13 +182,26 @@ def _cpu_model(
         return None
 
 
+def process_cpus(
+    affinity: Optional[Callable[[int], Collection[int]]] = getattr(os, "sched_getaffinity", None),
+    count: Callable[[], Optional[int]] = os.cpu_count,
+) -> int:
+    """Return the CPUs this process may run on: its ``affinity`` where the platform has one, else ``count``."""
+    if affinity is not None:
+        return len(affinity(0))
+    return count() or 1
+
+
 def probe_hardware(
-    *, run: Callable[[list[str]], str] = _run, cpuinfo: Callable[[], str] = _read_cpuinfo
+    *,
+    run: Callable[[list[str]], str] = _run,
+    cpuinfo: Callable[[], str] = _read_cpuinfo,
+    cpus: Callable[[], int] = process_cpus,
 ) -> HardwareInfo:
     """Probe CPU, memory, GPUs, Apple chip and platform; never imports ``torch``.
 
     ``run`` executes a command (the ``nvidia-smi`` query, ``sysctl`` on Apple silicon) and returns
-    stdout; ``cpuinfo`` reads ``/proc/cpuinfo``; tests inject both.
+    stdout; ``cpuinfo`` reads ``/proc/cpuinfo``; ``cpus`` counts the process's CPUs; tests inject all three.
     """
     system = platform.system()
     machine = platform.machine()
@@ -197,7 +211,7 @@ def probe_hardware(
     chip, chip_error = _probe_chip(run) if apple_silicon else (None, None)
     errors = [e for e in (memory_error, chip_error) if e]
     return HardwareInfo(
-        cpu_count=os.cpu_count() or 1,
+        cpu_count=cpus(),
         memory_bytes=memory,
         gpus=gpus,
         apple_silicon=apple_silicon,

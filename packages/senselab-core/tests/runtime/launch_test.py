@@ -25,6 +25,14 @@ def test_each_family_passes_and_only_recorded_ones_reach_the_digest(
     after = launch("/env/bin/python")
     assert after.variables[name] == "senselab-probe"
     assert (after.digest != before.digest) is FAMILIES[family].recorded
+    assert (after.measured.get(name) == "senselab-probe") is FAMILIES[family].measured
+
+
+def test_only_thread_counts_are_measured() -> None:
+    """A measure holds the thread counts a launch sets; device selection is never measured."""
+    assert FAMILIES["threads"].measured and not FAMILIES["gpu"].measured
+    started = launch("/env/bin/python", {"CUDA_VISIBLE_DEVICES": "1", "OMP_NUM_THREADS": "4"})
+    assert started.measured["OMP_NUM_THREADS"] == "4" and "CUDA_VISIBLE_DEVICES" not in started.measured
 
 
 @pytest.mark.parametrize(

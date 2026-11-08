@@ -6,6 +6,7 @@ observations of one unit. `HardwareClass` is the normalised report of the hardwa
 `RunCalibration` is the run config's `calibration` section.
 """
 
+from collections.abc import Mapping
 from typing import Annotated, Literal, Self
 
 from pydantic import Field, model_validator
@@ -45,7 +46,7 @@ class HardwareGrant(Frozen):
 
     Attributes:
         device: `cuda`, `mps` or `cpu`.
-        cpus: The resource class's CPUs; None takes the host's count.
+        cpus: The resource class's CPUs; None takes the CPUs the worker's process may run on (`process_cpus`).
         gpu: The position among the visible GPUs of the one granted, for `cuda`.
     """
 
@@ -72,15 +73,15 @@ class HardwareClass(Frozen):
     cpus: Positive
 
     @classmethod
-    def from_report(cls, report: HardwareInfo, grant: HardwareGrant) -> Self:
-        """Return the class of the hardware `report` describes, as `grant` allots it.
+    def from_report(cls, report: HardwareInfo, grant: HardwareGrant, environ: Mapping[str, str] | None = None) -> Self:
+        """Return the class of the hardware `report` describes, as `grant` allots it under `environ` (`os.environ`).
 
         Raises:
             ValueError: the grant names a device or GPU the report does not have, or the report lacks a name for it.
         """
         cpus = grant.cpus or report.cpu_count
         if grant.device == "cuda":
-            gpus = visible_gpus(report)
+            gpus = visible_gpus(report, environ)
             if grant.gpu >= len(gpus):
                 raise ValueError(f"the grant names visible GPU {grant.gpu}; the host shows {len(gpus)}")
             gpu = gpus[grant.gpu]

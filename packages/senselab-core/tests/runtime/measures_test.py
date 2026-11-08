@@ -2,7 +2,6 @@
 
 import getpass
 import platform
-import re
 import socket
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -13,8 +12,9 @@ from senselab_core.kernel.identity import Attestation, LogicalKey, ModelIdentity
 from senselab_core.runtime.calibration import Estimate, HardwareClass, HardwareGrant, Observation
 from senselab_core.runtime.config import dump_yaml
 from senselab_core.runtime.fake_backend import FAKE
-from senselab_core.runtime.hardware import GpuInfo, HardwareInfo, _cpu_model, probe_hardware
+from senselab_core.runtime.hardware import GpuInfo, HardwareInfo, _cpu_model, probe_hardware, process_cpus
 from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.launch import launch
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable, PackagedTable, load_resource_tables
 from senselab_core.testing.calibration_samples import ENV, UNIT
@@ -164,6 +164,44 @@ def test_a_cuda_class_carries_its_granted_cpus() -> None:
 
 
 @pytest.mark.logic
+def test_the_host_cpus_are_the_process_affinity_not_the_node() -> None:
+    """A worker bound to 4 cores of a 16-core node reports 4, so it never pools with a worker granted 16."""
+    assert process_cpus(lambda pid: set(range(4)), lambda: 16) == 4
+    assert process_cpus(None, lambda: 16) == 16
+    assert process_cpus(None, lambda: None) == 1
+    info = probe_hardware(
+        run=_fail, cpuinfo=lambda: CPUINFO, cpus=lambda: process_cpus(lambda pid: {0, 1, 2, 3}, lambda: 16)
+    )
+    assert info.cpu_count == 4
+
+
+L40S = GpuInfo(
+    name="NVIDIA L40S", memory_bytes=46068 * 2**20, driver="1", compute_capability="8.9", index=0, uuid="GPU-a"
+)
+
+
+def _measured(declared: dict[str, str], grant: HardwareGrant, environ: dict[str, str]) -> str:
+    started = launch("/env/bin/python", declared)
+    driver = {"torch_index": "https://download.pytorch.org/whl/cu128", "launch_env": started.digest}
+    hosts = _host(gpus=(L40S, replace(L40S, index=1, uuid="GPU-b")))
+    hardware = HardwareClass.from_report(hosts, grant, environ=environ)
+    fields = {**ENV_FIELDS, "driver": driver, "threads": started.measured}
+    return MeasureUnit.of(PLACEMENT, KEY, fields, hardware).digest()
+
+
+@pytest.mark.logic
+def test_units_differing_only_in_device_selection_share_a_digest() -> None:
+    """Two workers of one class on GPU slots 0 and 1 share a unit; a thread count still splits one."""
+    cuda = HardwareGrant(device="cuda", cpus=4)
+    slot0 = _measured({"CUDA_VISIBLE_DEVICES": "0", "OMP_NUM_THREADS": "4"}, cuda, {"CUDA_VISIBLE_DEVICES": "0"})
+    slot1 = _measured({"CUDA_VISIBLE_DEVICES": "1", "OMP_NUM_THREADS": "4"}, cuda, {"CUDA_VISIBLE_DEVICES": "1"})
+    second = _measured({"OMP_NUM_THREADS": "4"}, cuda.model_copy(update={"gpu": 1}), {})
+    assert slot0 == slot1 == second
+    threads = _measured({"CUDA_VISIBLE_DEVICES": "0", "OMP_NUM_THREADS": "8"}, cuda, {"CUDA_VISIBLE_DEVICES": "0"})
+    assert threads != slot0
+
+
+@pytest.mark.logic
 def test_mps_and_cpu_classes_are_normalised() -> None:
     """An mps class carries the chip and unified memory, a cpu class the model and no memory."""
     mps = HardwareClass.from_report(
@@ -277,7 +315,10 @@ def test_a_packaged_row_is_read_only_on_exact_identity(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_packaged_rows_carry_no_user_or_host(tmp_path: Path) -> None:
-    """I7: no account or host name in a row, and a row that adds one is refused, not ignored."""
+    """I7: no account or host name in a row, and a row that adds one is refused, not ignored.
+
+    The refusal is a row's: the table's top level keeps the format's minor-version rule.
+    """
     path = _write(tmp_path, _table())
     text = path.read_text()
     assert getpass.getuser() not in text.split() and socket.gethostname() not in text
@@ -395,19 +436,28 @@ SERVER_DRIVER = {
     **ATTESTATION.driver(),
     "launch_env": "9" * 64,
 }
+SERVER_ENV = {**ENV_FIELDS, "driver": SERVER_DRIVER}
 
 
 @pytest.mark.logic
 def test_a_server_unit_over_a_local_model_names_no_path_or_user() -> None:
     """The service is held as a digest and the attestation's served path is dropped, so no host string remains."""
     key = KEY.model_copy(update={"model": ModelIdentity(id=None, identity="e" * 64), "service": ATTESTATION})
-    unit = _unit(key=key, env={**ENV_FIELDS, "driver": SERVER_DRIVER})
+    unit = _unit(key=key, env=SERVER_ENV)
     text = unit.model_dump_json()
     assert "/home" not in text and "user" not in text and "models/m" not in text
-    assert unit.service is not None and re.fullmatch(r"[0-9a-f]{64}", unit.service)
-    assert set(unit.env.driver) == {"torch_build", "engine", "engine_version", "config_digest", "launch_env"}
+    assert unit.service == ATTESTATION.config_digest
+    assert set(unit.env.driver) == {"torch_build", "engine", "engine_version"}
     other = key.model_copy(update={"service": ATTESTATION.model_copy(update={"config_digest": "0" * 64})})
-    assert _unit(key=other, env={**ENV_FIELDS, "driver": SERVER_DRIVER}).digest() != unit.digest()
+    assert _unit(key=other, env=SERVER_ENV).digest() != unit.digest()
+
+
+@pytest.mark.logic
+def test_the_same_model_served_from_two_directories_gives_one_unit() -> None:
+    """The service is the asserted settings; where the weights are served from is provenance, not cost."""
+    key = KEY.model_copy(update={"model": ModelIdentity(id=None, identity="e" * 64), "service": ATTESTATION})
+    moved = key.model_copy(update={"service": ATTESTATION.model_copy(update={"served_model": "/scratch/m"})})
+    assert _unit(key=key, env=SERVER_ENV).digest() == _unit(key=moved, env=SERVER_ENV).digest()
 
 
 @pytest.mark.logic
