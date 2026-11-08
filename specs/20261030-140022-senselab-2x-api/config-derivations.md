@@ -410,3 +410,29 @@ The factor by which the realised filter's worst ripple, in either band, may exce
 ### max_block_elements
 
 The most (channels x outputs x taps) values one gather holds at once, 2**22 float64 values (32 MiB): a memory bound that changes no output.
+
+## benchmarks/exit/exit.yaml
+
+### plan_profiles
+
+`laptop` and `orcd`: the two profiles Phase 3 Task 21 Step 2 plans one scenario under. They differ in substrate, resource classes and env roots, which are all placement, so the check is that nothing but placement differs.
+
+### steps
+
+The scenarios of Task 21 Steps 2 and 3 as the plan states them: `Resample(target_rate=8000)` over `bids_tree.synthetic(n=1000, seed=0)`, and `SpeechToText()` with its default model over the first 1000 utterances of the `librispeech-test-clean` manifest. 8000 Hz is half the tree's 16 kHz, so every tone is resampled; 1000 items is the plan's count and sits between the ladder's 10² and 10⁴ points.
+
+### bounds
+
+Per executor, the wall seconds and resident bytes the coordinator and its workers may use. `in-process` and `pool-local`: Task 21 Step 2's laptop bound, 15 minutes (900 s) and 2 GB (2 × 1024³ B, 2147483648). `pool-slurm`: null, the allocation's: the coordinator's `sbatch --time` and `--mem` on the submit line bound it, and the workers' bounds are their resource classes' `time_s` and `mem_bytes`.
+
+### pool_local_workers
+
+2, Task 21 Step 2's "`Pool` on `local` (2 workers)": the workers on each cpu class of the local profile, which is its `max_workers`.
+
+### watch_poll_s
+
+1 s, the `orcd` profile's `pool.first_poll_s`, the finest cadence the cluster profile reads outcomes at, so the watch costs no more reads than the coordinator's. One `ps -A -o pid=,ppid=,rss=` took 18 ms on the laptop (mean of 20 calls), 1.8 % of one core at this cadence; not measured on a cluster node.
+
+### interrupt_share
+
+1/3, Task 21 Step 4's "a third of the items are committed". The interrupt target is that share of the items rounded up.
