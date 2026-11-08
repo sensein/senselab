@@ -282,6 +282,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
 - 2026-11-07: the Phase 3 service stage built: registry entries `{identity, endpoint}` under renewed leases, consumer leases, the `svc` pool worker; drops `heartbeat` (Phase 3 Task 17, P3-40).
 - 2026-11-07: a server backend is placed on a `svc` class first, a providing set consumes a live entry of the identity before reserving its own, the registry is per host and visible device set, and a server whose device lacks the memory it asks for is refused before launch (Phase 3 Task 20c).
 - 2026-11-07: the lease constants this ADR names are profile keys (`lease.record_attempts`, `lease.dir_mode`, `lease.missed_beats`), per P-34 as amended; `PRIVATE_DIR_MODE` stays an invariant (a security property). The other code constants move into the profile, with derivations in `config-derivations.md`, under the fixed-parameter audit.
+- 2026-11-08: the measures store, a third root under these rules: write-once files, a probe lease per measured unit, a serve lease pinning a probe queue to one worker, bounded peer waits, and a reader's trust filter (Phase 3 Task 20R).
 
 ## Amendment 2026-11-06: queues of plan fragments (Phase 3 Task 13)
 
@@ -344,3 +345,32 @@ Completes the 2026-11-01 staging. A registry entry is `{identity, endpoint}` und
   key agrees with its workers'. The registry is keyed by that attestation, so the entry a call consumes attests
   exactly it, and a started server that attests anything else is refused (`AttestationMismatch`). A restart with a
   new config changes the key; a restart with the same config keeps it.
+
+## Amendment 2026-11-08: the measures store and probe leases (Phase 3 Task 20R)
+
+Design: [`calibration-probe.md`](../calibration-probe.md) §3, §4.4. Adds to the Decision; replaces nothing in it.
+
+- **A third root.** `calibration.measures_root` (a profile key; on a cluster, group shared storage beside the result
+  store) holds `measures@1/<u[:2]>/<u>/` per `MeasureUnit` digest `u` (ADR-002 amendment of this date):
+  `unit.json` (first writer wins), `obs/<probe id>.json`, `drift/<id>.json`, `oom/<id>.json`, and `probe.lease/`.
+  The 2026-10-31 rules apply unchanged: walks by descriptor, nothing modified in place, modes from the store policy,
+  a wrong kind at an owned path moved aside. A reader recomputes `u` from `unit.json` and quarantines a directory
+  whose digest disagrees (misfiled), as the result store binds an entry to its address.
+- **Write-once, so no lock guards a write.** Every file is staged under `tmp/<uuid>/` and renamed onto a uuid name no
+  other writer uses. Concurrent probes, drift records and OOM records of one unit never conflict.
+- **One probe per unit, for efficiency.** A coordinator probes `u` only while holding `<u>/probe.lease` (the
+  2026-11-03 directory lease, `keep_alive` renewed, `prove()` before its observations are renamed in). A coordinator
+  finding it live waits for the holder's observations at most `calibration.peer_wait_s` (`probe_s +
+  lease.stale_after_s`, checked at profile load), reading once per `pool.poll_s`, and then sizes from what it finds or
+  under the safe values. Correctness does not rest on the lease: a broken lease gives two probes, and both sets of
+  observations are valid and pooled.
+- **The pin is a lease.** A probe's items go on a probe queue `<queue>~probe-<id>` under the run's queues. A worker
+  claims from it only while holding its `serve.lease`, one item per claim, so one live worker runs a probe and its
+  beats are the pin's liveness. A dead holder's lease goes stale and another worker takes the rest; its first
+  requests report a load, so no observation is misclassified.
+- **Trust is a reader's filter.** Each observation file records its user, host, job, run, senselab version and
+  commit, profile digest and the worker's hardware. `calibration.trust` `group` reads every file, `own` only the
+  current user's. A malformed file is quarantined and logged with its user; it never fails a run. Measures size work
+  and reach no key, so a wrong one costs efficiency, bounded by bisection, OOM records and drift (design §7).
+- **Not guaranteed.** One probe per unit; that a peer's estimate arrives within `peer_wait_s`; agreement between
+  measures written by different senselab versions under one `MeasureUnit` (drift supersedes them).

@@ -286,3 +286,23 @@ names tolerance profile digests.
   coverage target.
 - 2026-11-02: per-type comparison as data, thresholds in the run config, verify evidence by thresholds digest;
   tolerance profiles retired (P2-95; Phase 2 Task 34e).
+
+## Amendment 2026-11-08: measures are not results (Phase 3 Task 20R)
+
+Design: [`calibration-probe.md`](../calibration-probe.md) §3, §4.2, §11. Adds to the Decision; replaces nothing in it.
+
+- **A measure has its own identity.** What sizes a unit's batch, item cuts and workers is keyed by `MeasureUnit`,
+  `identity_digest("measure-unit@1", fields)` over task, backend and its version, all backend params, batch formation,
+  model identity, env lock, service attestation, numerics, hardware class and observation format. It is a separate
+  namespace: no `MeasureUnit` field or digest enters a `LogicalKey`, and none enters `ExecutionContext.fingerprint()`.
+  A measure changes how work is cut, never what a result is.
+- **A probe job is a job.** A job chosen to probe is keyed by `call_key` like any other, its result is put in the
+  result store and served like any other, and the run yields it. The batch it is sent in is placement, never key. On
+  a backend that declares `batch_formation` output-affecting, a batched probe item holds jobs of one bucket only, so
+  each job's formation, and so its key, is the one it would have had in production (2026-11-07 amendment of
+  ADR-004).
+- **The probe reads presence, not results.** A job whose key digest has any entry in the store (`store@5/<d[:2]>/<d>`
+  listed, no context read) is not chosen to probe: it would be served, and its timing would measure the store. It
+  still runs as a production item under the reuse policy.
+- 2026-11-08: measures keyed by `MeasureUnit` in their own namespace; probe jobs keyed and stored as ordinary jobs;
+  the probe chooses among key digests with no store entry (Phase 3 Task 20R).
