@@ -98,6 +98,7 @@ def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
 
     A pair's slope is below `t` exactly when the pair is inverted in `y − t·x`, so the slopes below `t` are counted by
     inversion counting and bisected over the doubles until at most n lie between the bounds, which are then listed.
+    Slopes tied beyond that are the one value of the pairs adjacent in `y − t·x` at the bound.
     """
     bound = max(float(np.ptp(ys)) / float(np.diff(np.unique(xs)).min()), 1.0)
     low, high, below, above = _ordered(-2 * bound), _ordered(2 * bound), 0, total
@@ -107,7 +108,10 @@ def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
         low, below = (middle, count) if count <= k else (low, below)
         high, above = (high, above) if count <= k else (middle, count)
     if above - below > len(xs):
-        return _unordered(low)
+        pivot = _unordered(low)
+        near = np.argsort(ys - pivot * xs, kind="stable")
+        tied = [(ys[b] - ys[a]) / (xs[b] - xs[a]) for a, b in itertools.pairwise(near.tolist()) if xs[a] != xs[b]]
+        return float(min(tied, key=lambda slope: abs(slope - pivot), default=pivot))
     lower, upper = ys - _unordered(low) * xs, ys - _unordered(high) * xs
     order = sorted(range(len(xs)), key=lambda i: (lower[i], i))
     slopes = sorted(
