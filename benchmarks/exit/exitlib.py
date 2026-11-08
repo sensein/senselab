@@ -9,7 +9,6 @@ import argparse
 import json
 import math
 import os
-import platform
 import subprocess
 import sys
 import threading
@@ -35,6 +34,7 @@ from senselab_core.runtime.execution.substrates import (
     Slurm,
     substrate_of,
 )
+from senselab_core.runtime.hardware import host_token
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import MANIFEST_NAME, NAMESPACE, cache_root
@@ -444,7 +444,7 @@ def identities_document(step: str, base: ExecutionProfile, executor: str, done: 
         "step": step,
         "profile": base.name,
         "executor": executor,
-        "host": platform.node(),
+        "host": host_token(),
         "hash": done.placed.hash,
         "items": len(done.placed.manifest.rows),
         "counts": dict(done.counts),

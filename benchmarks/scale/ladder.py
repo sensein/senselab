@@ -20,7 +20,6 @@ does not plan is refused, every such entry listed.
 import argparse
 import json
 import os
-import platform
 import statistics
 import subprocess
 import sys
@@ -43,7 +42,7 @@ from senselab_core.runtime.execution.pool import Pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.substrates import substrate_of, worker_id
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
-from senselab_core.runtime.hardware import memory_bytes
+from senselab_core.runtime.hardware import host_token, memory_bytes
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.resources import ResourceMeasure, Unit
@@ -355,7 +354,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         "began_s": began_s,
         "faults": _faults(events, placed.manifest.rows),
         "samples": _item_samples(by_digest, rounds),
-        "host": platform.node(),
+        "host": host_token(),
         "backend_params": dict(node.backend_params),
         "input_s": None if root is None else sum(soundfile.info(p).duration for p in sorted(root.rglob("*_audio.*"))),
         "job_s": _median([s.wall_s / s.jobs for s in samples if not s.cold]),

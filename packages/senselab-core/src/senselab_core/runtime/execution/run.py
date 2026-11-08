@@ -52,12 +52,15 @@ from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import cache_root, fresh_attempt_id
+from senselab_core.runtime.storage import PRIVATE_DIR_MODE
 from senselab_core.runtime.store import ResultStore
 
 PLAN_FILE = "plan.json"
-INPUTS_FILE = "inputs.json"
-MANIFEST_FILE = "manifest.json"
-PLACEMENTS_DIR = "placements"
+PRIVATE_DIR = "private"
+"""Run state that holds a filesystem path lives here, mode 0700; the rest of a run names no path."""
+INPUTS_FILE = f"{PRIVATE_DIR}/inputs.json"
+MANIFEST_FILE = f"{PRIVATE_DIR}/manifest.json"
+PLACEMENTS_DIR = f"{PRIVATE_DIR}/placements"
 RESULTS_DIR = "results"
 """The default result store, `<cache root>/results`."""
 ATTEMPTS_DIR = "attempts"
@@ -228,6 +231,13 @@ class ResultSet:
         columns["fault"] = [o.fault if isinstance(o, FaultRecord) else None for _, o in items]
         columns["not_run"] = [o.kind if isinstance(o, NotRun) else None for _, o in items]
         return pandas.DataFrame(columns, index=index)
+
+
+def _private(run_dir: Path) -> None:
+    """Make `<run_dir>/private`, owner-only whatever the umask."""
+    directory = Path(run_dir) / PRIVATE_DIR
+    directory.mkdir(mode=PRIVATE_DIR_MODE, parents=True, exist_ok=True)
+    directory.chmod(PRIVATE_DIR_MODE)
 
 
 def _write(path: Path, document: object) -> None:
@@ -611,6 +621,7 @@ def _claim_ordinal(run_dir: Path, attempt: str) -> int:
 
 def _claim_attempt(run_dir: Path, placement: PlanPlacement) -> tuple[str, int]:
     """Return a fresh attempt id and its ordinal, its placement file written and never replaced (a taken id: `-<n>`)."""
+    _private(run_dir)
     directory = run_dir / PLACEMENTS_DIR
     directory.mkdir(parents=True, exist_ok=True)
     base, n = fresh_attempt_id(), 0
@@ -705,7 +716,7 @@ def record_sources(placed: Plan, run_dir: Path) -> None:
         LeaseTimeout: another holder kept the lease for its whole timeout.
     """
     lease = _lease_of(placed)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    _private(run_dir)
     for _ in range(RECORD_ATTEMPTS):
         held = Lease(run_dir / INPUTS_FILE, stale_after=lease.stale_after_s)
         with held, held.keep_alive(lease.renew_fraction):

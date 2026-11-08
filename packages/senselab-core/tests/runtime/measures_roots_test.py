@@ -152,7 +152,7 @@ def test_no_measures_record_carries_an_account_or_host_name(tmp_path: Path) -> N
     with lease:
         pass
     assert len(_files(tmp_path)) == 7
-    assert identity_leaks(tmp_path) == []
+    assert identity_leaks(tmp_path, tmp_path) == []
 
 
 @pytest.mark.contract

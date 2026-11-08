@@ -385,7 +385,7 @@ def test_two_starters_keep_every_durable_source(tmp_path: Path, monkeypatch: pyt
     path = _wav(tmp_path / "a.wav")
     memory, durable = _heard(open_audio(path), profile), _heard(path, profile)
     run_dir = tmp_path / "run"
-    [(reached, go)] = pause_replaces(monkeypatch, INPUTS_FILE, 1)
+    [(reached, go)] = pause_replaces(monkeypatch, Path(INPUTS_FILE).name, 1)
     first = threading.Thread(target=record_sources, args=(memory, run_dir))
     first.start()
     assert reached.wait(30)
@@ -403,7 +403,7 @@ def test_two_starters_keep_every_durable_source(tmp_path: Path, monkeypatch: pyt
 def test_a_merge_whose_lease_fails_every_proof_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A merge whose `inputs.json` lease is displaced at each proof is tried `RECORD_ATTEMPTS` times."""
     profile = _profile(**CONTENT)
-    displaced = displace_before_proof(monkeypatch, f"{INPUTS_FILE}.lease")
+    displaced = displace_before_proof(monkeypatch, f"{Path(INPUTS_FILE).name}.lease")
     with pytest.raises(LeaseUnavailable):
         record_sources(_heard(_wav(tmp_path / "a.wav"), profile), tmp_path / "run")
     assert len(displaced) == RECORD_ATTEMPTS and not (tmp_path / "run" / INPUTS_FILE).exists()

@@ -130,6 +130,7 @@ def test_torch_index_recorded_in_context(tmp_path: Path, uv_log: Path) -> None:
         platform="linux-x86_64",
         numerics={"device_kind": "cuda"},
         decoder=None,
+        host="node",
         protocol="p",
         model_source=None,
         env_license=None,

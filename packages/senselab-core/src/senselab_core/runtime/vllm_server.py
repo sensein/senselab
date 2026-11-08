@@ -168,7 +168,7 @@ def expected_attestation(lock: Path | None, model: ResolvedModel, settings: Mapp
         raise VllmStartError("version", "the env's lock pins no vllm")
     return Attestation(
         engine_version=pin.group(1),
-        served_model=_served(model)[0],
+        served_model=_served(model)[2],
         model_identity=model.identity,
         config_digest=config_digest(settings),
     )
@@ -263,21 +263,26 @@ def _killpg(pgid: int, sig: int) -> None:
         pass
 
 
-def _served(model: ResolvedModel) -> tuple[str, list[str]]:
-    """Return what ``vllm serve`` is given for `model` and the arguments that bind it to its identity."""
+def _served(model: ResolvedModel) -> tuple[str, list[str], str]:
+    """Return what ``vllm serve`` is given for `model`, the arguments that bind it to its identity, its served name.
+
+    A hub model is served under its reference; a local model under its content identity, so its path never reaches a
+    reply, an attestation or a stored context.
+    """
     if not model.pinned:
         raise ValueError(f"an unpinned {model.ref.source} model; a server loads only a pinned model")
     if model.ref.source == "hf":
-        return model.ref.id, [f"--revision={model.identity}", f"--tokenizer-revision={model.identity}"]
+        return model.ref.id, [f"--revision={model.identity}", f"--tokenizer-revision={model.identity}"], model.ref.id
     if model.ref.source == "local":
-        return model.ref.id, []
+        return model.ref.id, [f"--served-model-name={model.identity}"], model.identity
     raise ValueError(f"a server loads a hub or local model, not a {model.ref.source} one")
 
 
 class VllmServer:
     """One ``vllm serve`` of a pinned model in a built `Env.server` env, listening on loopback while open.
 
-    On entry it takes a `Lease` on ``<start_lock_dir>/vllm-start-<host>-<devices>``, starts ``<env>/bin/vllm serve``
+    On entry it takes a `Lease` on ``<start_lock_dir>/vllm-start-<host token>-<devices>``, starts
+    ``<env>/bin/vllm serve``
     in its own session once each of its devices has `gpu_memory_utilization` of its memory free (a hub model with
     ``--revision`` and ``--tokenizer-revision`` set to its commit; ``CUDA_VISIBLE_DEVICES`` set to `devices` when
     given), waits for ``/health`` and releases the lease; the lease beats while it is held. A start whose lease is lost
@@ -326,7 +331,7 @@ class VllmServer:
         Raises:
             ValueError: `model` is unpinned or a url model, or `settings` is not exactly the known keys.
         """
-        self.target, self._model_args = _served(model)
+        self.target, self._model_args, self.served_name = _served(model)
         self.label = str(model.ref) if model.ref.source == "hf" else f"local model {model.identity[:12]}"
         self.model = model
         self.args = server_args(settings)
@@ -411,7 +416,7 @@ class VllmServer:
             StaleAttestation: The server is not running, or the reply names another model.
         """
         attestation = self._live()
-        return attest_reply(chat(str(self.url), self.target, messages, sampling=sampling), attestation, self.label)
+        return attest_reply(chat(str(self.url), self.served_name, messages, sampling=sampling), attestation, self.label)
 
     def complete(self, prompt_token_ids: Sequence[int], *, sampling: Mapping[str, Any]) -> Attested:
         """`complete` with this server's model; the reply carries this server's attestation.
@@ -420,7 +425,7 @@ class VllmServer:
             StaleAttestation: The server is not running, or the reply names another model.
         """
         attestation = self._live()
-        reply = complete(str(self.url), self.target, prompt_token_ids, sampling=sampling)
+        reply = complete(str(self.url), self.served_name, prompt_token_ids, sampling=sampling)
         return attest_reply(reply, attestation, self.label)
 
     def _live(self) -> Attestation:
@@ -498,8 +503,8 @@ class VllmServer:
         data = _probe(f"{self.url}/v1/models", "data")
         if not isinstance(data, list) or not data or not isinstance(data[0], dict):
             raise VllmStartError("version", f"probe {self.url}/v1/models: no model entry")
-        served = data[0].get("root")
-        if served != self.target:
+        served = data[0].get("id")
+        if served != self.served_name:
             raise VllmStartError("model", f"the server serves another model than {self.label}")
         return Attestation(
             engine_version=version,

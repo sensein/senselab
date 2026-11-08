@@ -6,7 +6,7 @@ Layout under `root`:
   `ExecutionContext.fingerprint()`, holding:
   - `result.json`: JCS JSON with `format: "result@2.0"`, the key, its digest, the context fingerprint,
     the encoded outputs and their output identity;
-  - `context.json`: JCS JSON with `format: "execution-context@3.1"` and the context's fields (a 3.0 `host` is ignored);
+  - `context.json`: JCS JSON with `format: "execution-context@3.1"` and the context's fields;
   - `<sha256>.npy`: each array output in canonical `.npy`, named by the sha256 of its bytes.
 - `equivalence-evidence@4/<d>.json`: one verify-sampling comparison (`EquivalenceEvidence`), JSON named by
   `d`, its canonical digest.
@@ -368,8 +368,8 @@ def _guarded(entry: Path, read: Callable[[], T]) -> T:
 
 def _stored_context(entry: Path) -> ExecutionContext:
     _require_directory(entry)
-    record = _read_object(entry, "context.json", CONTEXT_FORMAT, {*ExecutionContext.model_fields, "host"})
-    return ExecutionContext.model_validate({k: v for k, v in record.items() if k != "host"})
+    record = _read_object(entry, "context.json", CONTEXT_FORMAT, ExecutionContext.model_fields)
+    return ExecutionContext.model_validate(record)
 
 
 def _stored_address(

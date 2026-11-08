@@ -22,6 +22,8 @@ from typing import Callable, Collection, Final, Iterator, Mapping, Optional, Seq
 
 from senselab_worker.digest import identity_digest
 
+from senselab_core.runtime.storage import temporary_name
+
 logger = logging.getLogger("senselab")
 
 MIB: Final = 1024 * 1024  # invariant: bytes in a mebibyte
@@ -507,27 +509,39 @@ def process_started(pid: int) -> Optional[str]:
     return fields[_STAT_STARTED].decode() if len(fields) > _STAT_STARTED else None
 
 
-def host_secret(run: Callable[[list[str]], str] = _run) -> str:
+def _boot_id() -> str:
+    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+
+
+def host_secret(
+    run: Callable[[list[str]], str] = _run,
+    boot_id: Callable[[], str] = _boot_id,
+    link: Callable[[Path, Path], None] = os.link,
+) -> str:
     """Return a value random per host and per boot that only processes on this host can read; never its name.
 
-    Linux's boot id, else macOS's boot session uuid, else a random value kept in a file only this user reads, in the
-    host's temporary directory.
+    Linux's boot id (`boot_id`), else macOS's boot session uuid (`run`), else a random value kept in a file only this
+    user reads, in the host's temporary directory. The file is written complete under a temporary name and `link`ed
+    into place, so no reader sees it empty; a stale empty file is replaced.
     """
     with contextlib.suppress(OSError):
-        if found := Path("/proc/sys/kernel/random/boot_id").read_text().strip():
+        if found := boot_id():
             return found
     if platform.system() == "Darwin":
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             if found := run(["sysctl", "-n", "kern.bootsessionuuid"]).strip():
                 return found
     path = Path(tempfile.gettempdir()) / f"senselab-host-{os.getuid()}"
-    staged = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}")
+    staged = path.with_name(temporary_name(path.name))
     fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _PRIVATE)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(secrets.token_hex(_SECRET_BYTES).encode())
-        with contextlib.suppress(FileExistsError):
-            os.link(staged, path)
+        try:
+            link(staged, path)
+        except FileExistsError:
+            if not path.read_text().strip():
+                staged.replace(path)
     finally:
         staged.unlink(missing_ok=True)
     return path.read_text().strip()

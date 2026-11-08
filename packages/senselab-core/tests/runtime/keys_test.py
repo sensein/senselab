@@ -68,7 +68,7 @@ def test_key_ignores_context_through_builder() -> None:
     """Two execution contexts and two devices give one key; a context of another type is refused."""
     placement = _placement()
     key = build_key(CALL, placement, CONTEXT)
-    other = ExecutionContext.model_validate({**BASE_CONTEXT, "platform": "macos-arm64"})
+    other = ExecutionContext.model_validate({**BASE_CONTEXT, "platform": "macos-arm64", "host": "elsewhere"})
     assert build_key(CALL, placement, other).digest() == key.digest()
     assert build_key(CALL, replace(placement, device="cuda"), other).digest() == key.digest()
     with pytest.raises(TypeError, match="ExecutionContext"):

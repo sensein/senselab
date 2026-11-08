@@ -535,7 +535,7 @@ class SampleParams(TaskParams):
     n: int = 1
 
 
-def _context(env_license: License | None = None) -> ExecutionContext:
+def _context(host: str = "host", env_license: License | None = None) -> ExecutionContext:
     return ExecutionContext(
         env_lock="lock",
         platform="linux-x86_64",
@@ -543,6 +543,7 @@ def _context(env_license: License | None = None) -> ExecutionContext:
         numerics={"class": "fp32"},
         decoder=None,
         driver={"cuda": "12.8"},
+        host=host,
         protocol="2",
         model_source="hf",
         env_license=env_license,
@@ -737,7 +738,7 @@ def _register_kernel_samples() -> None:
     )
     register_samples(
         ExecutionContext,
-        lambda: [_context(), _context(_license())],
+        lambda: [_context(), _context("other", _license())],
         invalid_updates=[{"env_lock": ""}, {"numerics": 1}, {"env_license": "MIT"}],
     )
     register_samples(

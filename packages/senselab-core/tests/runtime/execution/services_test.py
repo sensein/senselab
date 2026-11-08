@@ -160,7 +160,7 @@ def test_a_service_record_holds_no_host_name(tmp_path: Path, starts: list[StandI
         provider.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY)
         consumer.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY)
         assert registry.root.relative_to(tmp_path / "servers").parts[1] == host_token()
-        assert identity_leaks(tmp_path / "servers") == []
+        assert identity_leaks(tmp_path / "servers", tmp_path) == []
     finally:
         consumer.close()
         provider.close()

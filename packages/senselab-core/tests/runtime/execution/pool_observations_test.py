@@ -168,9 +168,7 @@ def test_no_run_record_names_the_host_the_account_or_a_home_path(tmp_path: Path)
     ).serve()
     mark_ready(tmp_path / "run", {"cpu": HARDWARE})
     assert [p for p in (tmp_path / "run").rglob("*") if p.is_file()]
-    assert (
-        identity_leaks(tmp_path / "run", except_files=("manifest.json",)) == []
-    )  # it names the store workers write to
+    assert identity_leaks(tmp_path / "run", tmp_path) == []
 
 
 @pytest.mark.logic

@@ -201,6 +201,7 @@ BASE_CONTEXT: Mapping[str, Any] = {
     "numerics": {"class": "fp32"},
     "decoder": None,
     "driver": {"cuda": "12.8"},
+    "host": "host",
     "protocol": "protocol",
     "model_source": "hf",
     "env_license": {

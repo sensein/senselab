@@ -54,6 +54,7 @@ from senselab_core.runtime.execution.job import Completed, Job, lost_race
 from senselab_core.runtime.execution.outputs import AmbiguousClock, OutputTypeMismatch
 from senselab_core.runtime.execution.records import verify_attributes
 from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.hardware import host_token
 from senselab_core.runtime.keys import Call
 from senselab_core.runtime.licenses import LicensePolicy, LicenseRefused, license_record
 from senselab_core.runtime.planner import plan
@@ -393,13 +394,13 @@ def test_backend_fault_raises_call_failed(store: ResultStore) -> None:
 
 
 @pytest.mark.contract
-def test_no_host_name_in_the_store_after_a_run(store: ResultStore) -> None:
+def test_no_host_name_in_the_store_after_a_run(store: ResultStore, tmp_path: Path) -> None:
     """A host-env call and a pooled-worker call leave no host name, account name or home path in any store file."""
     _in_process(_call("same"), execution=_profile("alpha"), store=store)
     _in_process(_call("same"), execution=_profile("isolated"), store=store)
     contexts = list(store.root.rglob("context.json"))
-    assert len(contexts) == 2 and all("host" not in json.loads(p.read_text()) for p in contexts)
-    assert identity_leaks(store.root) == []
+    assert len(contexts) == 2 and all(json.loads(p.read_text())["host"] == host_token() for p in contexts)
+    assert identity_leaks(store.root, tmp_path) == []
 
 
 @pytest.mark.contract

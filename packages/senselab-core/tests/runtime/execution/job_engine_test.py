@@ -241,6 +241,7 @@ def test_a_retired_upstream_entry_fails_only_its_element_as_a_gap(tmp_path: Path
         numerics={"device": "cpu", "precision": "fp32"},
         decoder=None,
         driver={},
+        host="node1",
         protocol="p1",
         model_source="hf",
     )

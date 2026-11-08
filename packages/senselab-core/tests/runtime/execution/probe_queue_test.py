@@ -3,7 +3,7 @@
 import os
 import subprocess
 import sys
-import time
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -133,30 +133,40 @@ def test_the_host_token_is_stable_and_not_derived_from_the_host_name() -> None:
 @pytest.mark.logic
 def test_without_a_boot_id_the_secret_is_a_private_random_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Off Linux and macOS, the value is random bytes in a file only its user reads, the same on every call."""
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
-    first = host_secret(run=lambda _: "")
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    first = host_secret(run=lambda _: "", boot_id=_no_boot_id)
     files = [p for p in tmp_path.iterdir() if p.name.startswith("senselab-host-")]
-    assert len(first) >= 16 and host_secret(run=lambda _: "") == first and len(files) <= 1
+    assert first and host_secret(run=lambda _: "", boot_id=_no_boot_id) == first and len(files) == 1
     assert all(p.stat().st_mode & 0o077 == 0 for p in files)
 
 
+def _no_boot_id() -> str:
+    raise OSError("no boot id")
+
+
 @pytest.mark.logic
-def test_host_secret_is_created_once_under_a_race(tmp_path: Path) -> None:
-    """Processes racing to create the fallback file all read the one value, never an empty or another's."""
-    code = (
-        "import sys, time; from senselab_core.runtime.hardware import host_secret; "
-        "time.sleep(max(0, float(sys.argv[1]) - time.time())); print(host_secret(run=lambda _: ''))"
-    )
-    start = time.time() + 2.0
-    env = {**os.environ, "TMPDIR": str(tmp_path)}
-    procs = [
-        subprocess.Popen([sys.executable, "-c", code, str(start)], env=env, stdout=subprocess.PIPE, text=True)
-        for _ in range(8)
-    ]
-    values = {p.communicate(timeout=60)[0].strip() for p in procs}
-    files = [p for p in tmp_path.iterdir() if p.name.startswith("senselab-host-")]
-    assert len(values) == 1 and len(next(iter(values))) >= 16 and len(files) == 1
-    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".senselab-host-")]
+def test_host_secret_is_created_once_under_a_race(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rival that creates the file between this process's write and its link wins; both read the one value."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    rival: list[str] = []
+
+    def link(staged: Path, path: Path) -> None:
+        assert staged.read_text() != "", "the staged file is complete when it is linked"
+        rival.append(host_secret(run=lambda _: "", boot_id=_no_boot_id))
+        os.link(staged, path)
+
+    mine = host_secret(run=lambda _: "", boot_id=_no_boot_id, link=link)
+    files = sorted(p.name for p in tmp_path.iterdir())
+    assert rival and mine == rival[0] != "" and files == [f"senselab-host-{os.getuid()}"]
+
+
+@pytest.mark.logic
+def test_a_stale_empty_secret_file_is_replaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file a crashed writer left empty is not a secret: it is replaced, not shared as the digest of nothing."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    (tmp_path / f"senselab-host-{os.getuid()}").write_bytes(b"")
+    found = host_secret(run=lambda _: "", boot_id=_no_boot_id)
+    assert found and host_secret(run=lambda _: "", boot_id=_no_boot_id) == found
 
 
 @pytest.mark.logic

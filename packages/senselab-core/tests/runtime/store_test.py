@@ -144,7 +144,7 @@ def test_cross_context_follows_policy(tmp_path: Path) -> None:
     got = s.get(k, store_context(platform="macos"), ReusePolicy.TOLERANT)
     assert got is not None and got.policy_used is ReusePolicy.TOLERANT
     assert got.context.platform == "linux"
-    same = s.get(k, store_context(platform="linux"), ReusePolicy.EQUIVALENT)
+    same = s.get(k, store_context(platform="linux", host="node2"), ReusePolicy.EQUIVALENT)
     assert same is not None and same.policy_used is ReusePolicy.EXACT
 
 
@@ -446,7 +446,7 @@ def test_store_writes_entity_and_reuse_only(tmp_path: Path, caplog: pytest.LogCa
     """A put adds the result entity, every hit a reuse activity that used it; no execution activity, no quarantine."""
     provenance = ProvStore()
     s, k = ResultStore(tmp_path, provenance=provenance), store_key()
-    linux, mac = store_context(platform="linux"), store_context(platform="macos")
+    linux, mac = store_context(platform="linux"), store_context(platform="macos", host="node2")
     ident = s.put(k, {"y": 1}, linux)
     assert [(r.id, r.types()) for r in provenance.records()] == [(ident, ("prov:Entity",))]
     assert s.get(k, linux, ReusePolicy.EXACT) is not None

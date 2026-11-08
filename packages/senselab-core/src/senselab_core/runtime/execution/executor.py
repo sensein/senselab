@@ -1,11 +1,23 @@
 """The `Executor` protocol and the documents it carries: plan fragments in, result references out."""
 
+import logging
+import os
+import pwd
+import re
 import time
 from collections.abc import Iterator, Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Protocol
 
-from pydantic import AfterValidator, BeforeValidator, Field, PlainSerializer, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    Field,
+    PlainSerializer,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 from senselab_worker.faults import FaultClass
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, thawed
@@ -24,6 +36,28 @@ from senselab_core.runtime.planner import Plan
 
 if TYPE_CHECKING:
     from senselab_core.runtime.execution.events import EventLog
+
+logger = logging.getLogger("senselab")
+
+_PATH = re.compile(r"(?<![\w.:/~-])(?:~|/)[^\s'\"`,;)\]}>]*")
+_OWNER = re.compile(r"owned by \S+ \(uid (\d+)\); as \S+,")
+_HOLDER = re.compile(r"('user': )'[^']*'")
+
+
+def stored_message(message: str) -> str:
+    """Return `message` for a record other users read: paths and account names rendered to labels.
+
+    The full text goes to the operator log. An account is the running user's, the owner `owner_remedy` names, or the
+    lease holder `Lease.holder` names; a path is any absolute one.
+    """
+    kept = _OWNER.sub(r"owned by uid \1; as its owner,", message)
+    kept = _HOLDER.sub(r"\1'<account>'", kept)
+    with_user = kept.replace(pwd.getpwuid(os.getuid()).pw_name, "<account>")
+    shown = _PATH.sub("<path>", with_user)
+    if shown != message:
+        logger.info("a fault message was rendered for the record; the operator's text was: %s", message)
+    return shown
+
 
 Hex64 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
@@ -64,6 +98,11 @@ class FaultRecord(Frozen):
     message: str
     gap: bool
     charged: bool
+
+    @field_validator("message")
+    @classmethod
+    def _render_message(cls, v: str) -> str:
+        return stored_message(v)
 
     @model_validator(mode="after")
     def _check_charged(self) -> "FaultRecord":

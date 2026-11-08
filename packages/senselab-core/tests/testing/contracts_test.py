@@ -218,7 +218,7 @@ def test_output_affecting_cases_follow_the_declaration() -> None:
 
 def _keys_the_context(call: Call, placement: Placement, context: ExecutionContext) -> LogicalKey:
     key = build_key(call, placement, context)
-    return LogicalKey.model_validate({**key.model_dump(), "chunk_grid": context.platform})
+    return LogicalKey.model_validate({**key.model_dump(), "chunk_grid": context.host})
 
 
 def _keys_the_device(call: Call, placement: Placement, context: ExecutionContext) -> LogicalKey:
@@ -230,10 +230,10 @@ def _keys_the_device(call: Call, placement: Placement, context: ExecutionContext
 def test_ignore_cases_catch_a_builder_that_keys_context_or_placement() -> None:
     """`key_ignores_<field>` builds the key under two contexts or placements; a builder that keys one fails it."""
     registry = _registry({})
-    _case(registry, "fake::key_ignores_platform")()
+    _case(registry, "fake::key_ignores_host")()
     _case(registry, "fake::key_ignores_device")()
-    with pytest.raises(AssertionError, match="platform reached the key"):
-        _case(registry, "fake::key_ignores_platform", key_builder=_keys_the_context)()
+    with pytest.raises(AssertionError, match="host reached the key"):
+        _case(registry, "fake::key_ignores_host", key_builder=_keys_the_context)()
     with pytest.raises(AssertionError, match="device reached the key"):
         _case(registry, "fake::key_ignores_device", key_builder=_keys_the_device)()
 
