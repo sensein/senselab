@@ -11,8 +11,10 @@ import hashlib
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 
 TIERS = frozenset({"logic", "contract", "limits", "usecase", "env"})
 MODEL_TIERS = frozenset({"limits", "usecase", "env"})
@@ -71,17 +73,29 @@ def tier_budget_s() -> dict[str, float]:
     return tier_budgets()
 
 
-@pytest.fixture
-def slack(request: pytest.FixtureRequest) -> Path:
-    """The test slack file of the requesting test's package: `<package>/tests/data/test_slack.yaml`.
-
-    Test slack is a profile override (P-34); its derivations are in config-derivations.md.
-    """
+def _slack_file(request: pytest.FixtureRequest) -> Path:
     tests = next(p for p in Path(str(request.path)).resolve().parents if p.name == "tests")
     path = tests / "data" / "test_slack.yaml"
     if not path.is_file():
         raise FileNotFoundError(f"{path}: this package has no test slack file")
     return path
+
+
+@pytest.fixture
+def slack(request: pytest.FixtureRequest) -> dict[str, Any]:
+    """The profile override of the requesting test's package slack file, `<package>/tests/data/test_slack.yaml`.
+
+    Test slack is a profile override (P-34); its derivations are in config-derivations.md. The `tests` section is
+    not part of the override: `slack_tests` returns it.
+    """
+    return {k: v for k, v in yaml.safe_load(_slack_file(request).read_text()).items() if k != "tests"}
+
+
+@pytest.fixture
+def slack_tests(request: pytest.FixtureRequest) -> dict[str, Any]:
+    """The `tests` section of the package slack file: values only tests read (P-34)."""
+    section: dict[str, Any] = yaml.safe_load(_slack_file(request).read_text())["tests"]
+    return section
 
 
 @pytest.fixture

@@ -98,21 +98,25 @@ def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
 
     A pair's slope is below `t` exactly when the pair is inverted in `y − t·x`, so the slopes below `t` are counted by
     inversion counting and bisected over the doubles until at most n lie between the bounds, which are then listed.
-    Slopes tied beyond that are the one value of the pairs adjacent in `y − t·x` at the bound.
+    Slopes tied beyond that are the one value of the pairs adjacent in `y − t·x` at the bound. The comparisons use `x`
+    centred at its median, which leaves every slope unchanged and makes differences of nearby values exact; a pair is
+    then ranked wrongly only if its slope is within `2ε·max|y − t·x̃| / min Δx` of `t` (`ε` the double epsilon), and
+    the slopes returned are computed from the original `x`.
     """
+    centred = xs - float(np.median(xs))
     bound = max(float(np.ptp(ys)) / float(np.diff(np.unique(xs)).min()), 1.0)
     low, high, below, above = _ordered(-2 * bound), _ordered(2 * bound), 0, total
     while above - below > len(xs) and high - low > 1:
         middle = (low + high) // 2
-        count = _inversions(ys - _unordered(middle) * xs)
+        count = _inversions(ys - _unordered(middle) * centred)
         low, below = (middle, count) if count <= k else (low, below)
         high, above = (high, above) if count <= k else (middle, count)
     if above - below > len(xs):
         pivot = _unordered(low)
-        near = np.argsort(ys - pivot * xs, kind="stable")
+        near = np.argsort(ys - pivot * centred, kind="stable")
         tied = [(ys[b] - ys[a]) / (xs[b] - xs[a]) for a, b in itertools.pairwise(near.tolist()) if xs[a] != xs[b]]
         return float(min(tied, key=lambda slope: abs(slope - pivot), default=pivot))
-    lower, upper = ys - _unordered(low) * xs, ys - _unordered(high) * xs
+    lower, upper = ys - _unordered(low) * centred, ys - _unordered(high) * centred
     order = sorted(range(len(xs)), key=lambda i: (lower[i], i))
     slopes = sorted(
         (ys[order[j]] - ys[order[i]]) / (xs[order[j]] - xs[order[i]])
@@ -124,7 +128,8 @@ def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
 def _theil_sen(points: Sequence[tuple[float, float]]) -> tuple[float, float] | None:
     """Return `(intercept, slope)`: the median of the pairwise slopes, and the median intercept at that slope.
 
-    The slope is the exact median of the n(n−1)/2 pairwise slopes, found in O(n log² n) time and O(n) memory.
+    The slope is the median of the n(n−1)/2 pairwise slopes, found in O(n log² n) time and O(n) memory; it equals the
+    reference's except for slopes closer than the bound in `_kth_slope`.
     """
     ordered = sorted(points)
     xs, ys = np.array([x for x, _ in ordered]), np.array([y for _, y in ordered])
@@ -745,9 +750,9 @@ class Probe:
         """
         none = plan.model_copy(update={"items": (), "batched": ()})
         single, device = single_estimate.single, single_estimate.device
-        blocked = _blocked(plan, single_estimate, grant)
-        if blocked is None and plan.strata and not plan.batched:
+        if plan.formation != "single" and plan.strata and not plan.batched:
             return _unplanned(none, "covered")
+        blocked = _blocked(plan, single_estimate, grant)
         if blocked is not None or single is None or device is None or grant.memory_bytes is None:
             return _unplanned(none, blocked or "single_unmeasured")
         spans = {st.index: st for st in plan.strata}

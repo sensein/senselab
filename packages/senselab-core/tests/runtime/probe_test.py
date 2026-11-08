@@ -1,8 +1,10 @@
 """`Probe.plan` and `Probe.estimate`: what counts, what is planned, and the figures the old `calibrated` got wrong."""
 
 import itertools
+import math
 import random
 import statistics
+import sys
 import time
 from bisect import bisect_right
 from collections.abc import Sequence
@@ -840,18 +842,49 @@ def test_bounded_fit_equals_reference(points: list[tuple[int, int]]) -> None:
     assert _theil_sen(floats) == _reference_theil_sen(floats)
 
 
+def _agrees(points: Sequence[tuple[float, float]]) -> bool:
+    """Whether the fit is within the bound `2ε·max|y − t·x̃| / min Δx` of the reference, with margin 4 for the median."""
+    fit, reference = _theil_sen(points), _reference_theil_sen(points)
+    assert fit is not None and reference is not None
+    xs = sorted({x for x, _ in points})
+    spread, gap = xs[-1] - xs[0], min(b - a for a, b in itertools.pairwise(xs))
+    top = max(abs(y) for _, y in points) + abs(reference[1]) * spread
+    slope_tol = 8 * sys.float_info.epsilon * top / gap
+    intercept_tol = slope_tol * max(abs(x) for x in xs) + 8 * sys.float_info.epsilon * top
+    return abs(fit[1] - reference[1]) <= slope_tol and abs(fit[0] - reference[0]) <= intercept_tol
+
+
 @pytest.mark.logic
 @given(
     points=st.lists(
-        st.tuples(st.floats(-1e3, 1e3), st.floats(-1e6, 1e6)), min_size=2, max_size=60, unique_by=lambda p: p[0]
+        st.tuples(st.floats(-1e3, 1e3), st.floats(-1e6, 1e6)), min_size=3, max_size=60, unique_by=lambda p: p[0]
     )
 )
 @FAST
 def test_bounded_fit_equals_reference_on_real_data(points: list[tuple[float, float]]) -> None:
-    """On arbitrary floats the fit agrees with the reference to rounding."""
-    fit, reference = _theil_sen(points), _reference_theil_sen(points)
-    assert fit is not None and reference is not None
-    assert fit == pytest.approx(reference, rel=1e-9, abs=1e-9)
+    """On arbitrary floats the fit is within the documented bound of the reference."""
+    assert _agrees(points)
+
+
+@pytest.mark.logic
+def test_x_a_few_ulps_apart_does_not_misrank_slopes() -> None:
+    """Eight lengths one ulp apart near 476 with walls of either sign: centring makes the fit the reference's."""
+    xs = [476.4309283301684]
+    for _ in range(7):
+        xs.append(math.nextafter(xs[-1], math.inf))
+    ys = [-827064.8205435034, 327515.6096879614, -784137.4758118002, -672603.4057000517]
+    ys += [679903.0809589487, -258954.66670850653, 465531.61784373154, -61359.71779395221]
+    points = list(zip(xs, ys, strict=True))
+    assert _theil_sen(points) == _reference_theil_sen(points)
+
+
+@pytest.mark.logic
+def test_a_covered_batched_phase_is_reported_without_a_device_measurement() -> None:
+    """Coverage is decided before the single and device estimates are asked for."""
+    obs = _covering([5.0, 30.0]) + _covering([5.0, 30.0], batch=4)
+    plan = _plan(_candidates([float(i + 1) for i in range(40)]), Prior(observations=tuple(obs)))
+    batched = Probe.plan_batched(plan, _estimate(_line(0.2, 0.05)), GRANT, CONFIG, 1e6, memory_headroom=HEADROOM)
+    assert batched.unplanned[-1] == Unplanned(phase="BATCHED", stratum=None, reason="covered")
 
 
 def _pooled(n: int) -> list[Observation]:
@@ -859,9 +892,9 @@ def _pooled(n: int) -> list[Observation]:
     return [_obs(x, 0.2 + 0.05 * x + rng.gauss(0, 0.05)) for x in (rng.uniform(1.0, 60.0) for _ in range(n))]
 
 
-def _fit_seconds(observations: Sequence[Observation]) -> float:
+def _fit_seconds(observations: Sequence[Observation], repeats: int) -> float:
     best = float("inf")
-    for _ in range(3):
+    for _ in range(repeats):
         start = time.perf_counter()
         _estimate(observations)
         best = min(best, time.perf_counter() - start)
@@ -869,12 +902,10 @@ def _fit_seconds(observations: Sequence[Observation]) -> float:
 
 
 @pytest.mark.limits
-def test_fit_time_is_subquadratic() -> None:
-    """The estimate's time at 10^4 pooled requests is under 50 times its time at 10^3.
-
-    A quadratic fit multiplies by 100 for a tenfold n; an n log² n fit by 10·(log 10⁴ / log 10³)² ≈ 18, and the rest
-    of the estimate is linear (10). 50 sits above the second and below the first by more than a runner's noise, and
-    a ratio of two best-of-three times on one machine cancels the machine's speed.
-    """
-    ratio = _fit_seconds(_pooled(10_000)) / _fit_seconds(_pooled(1_000))
-    assert ratio < 50, f"{ratio:.1f}x for 10x the requests"
+def test_fit_time_is_subquadratic(slack_tests: dict[str, Any]) -> None:
+    """The estimate's time at 10^4 pooled requests is under `tests.probe.fit_ratio` times its time at 10^3."""
+    probe = slack_tests["probe"]
+    ratio = _fit_seconds(_pooled(10_000), probe["timing_repeats"]) / _fit_seconds(
+        _pooled(1_000), probe["timing_repeats"]
+    )
+    assert ratio < probe["fit_ratio"], f"{ratio:.1f}x for 10x the requests"
