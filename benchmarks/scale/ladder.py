@@ -45,7 +45,7 @@ from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError,
 from senselab_core.runtime.hardware import memory_bytes
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.resources import Unit
+from senselab_core.runtime.resources import ResourceMeasure, Unit
 from senselab_core.runtime.revision import NAMESPACE, cache_root
 from senselab_core.runtime.sizing import Measures, Sample, calibrated
 from senselab_core.runtime.store import ResultStore
@@ -192,6 +192,7 @@ def _steady(samples: Mapping[str, Sample], rounds: set[str], began_s: float) -> 
 
     Per-item seconds run from the last calibration item's end to the last other item's end over the other items'
     jobs, so neither the run's start nor the wait to see it end is counted; None when no item followed calibration.
+    The end times are each worker's `time.time`, so workers on several hosts need synchronised clocks.
     """
     ends = [s.ended_s for d, s in samples.items() if d in rounds]
     after = [s for d, s in samples.items() if d not in rounds]
@@ -283,7 +284,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     Its store is `<out>/<label>@<point>/store`, and its pool's measures are written beside it, so each point
     calibrates afresh and reads no other point's measure; its `measure` is the row its pool's calibration wrote (else
     one read from all its samples). `per_item_s` counts only the items after calibration, from item end times
-    (`_steady`); with none after it, the whole wall over all items (`per_item_basis` says which). `calibration_s` and
+    (`_steady`), None with none after it (`_per_item`). `calibration_s` and
     `calibration_jobs` give the calibration's share.
 
     Raises:
@@ -344,8 +345,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         "done": status.done,
         "counts": dict(status.counts),
         "wall_s": wall,
-        "per_item_s": steady_s if steady_s is not None else wall / items,
-        "per_item_basis": "after calibration" if steady_s is not None else "wall",
+        **_per_item(steady_s, wall / items, found),
         "calibration_s": calibration_s,
         "calibration_jobs": round_jobs,
         "host": platform.node(),
@@ -362,6 +362,26 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     }
 
 
+def _per_item(steady_s: float | None, wall_per_item_s: float, measure: ResourceMeasure | None) -> dict[str, Any]:
+    """Return a result's per-item seconds: after calibration (None with no item after it), wall, and calibration's.
+
+    `calibration_per_item_s` is the calibration's median per-item seconds in the regime it chose (batched where its
+    batched median is no slower than its single one), None without a measure.
+    """
+    chosen = None
+    if measure is not None:
+        scale = measure.input_s_per_item or 1.0
+        single = measure.s_per_input_s * scale
+        batched = None if measure.batched is None else measure.batched.s_per_input_s * scale
+        chosen = single if batched is None or batched > single else batched
+    return {
+        "per_item_s": steady_s,
+        "per_item_basis": "after calibration" if steady_s is not None else "no items after calibration",
+        "wall_per_item_s": wall_per_item_s,
+        "calibration_per_item_s": chosen,
+    }
+
+
 def commit() -> str:
     """Return the 40-hex commit of this checkout."""
     return subprocess.run(
@@ -369,7 +389,7 @@ def commit() -> str:
     ).stdout.strip()
 
 
-PER_ITEM: Mapping[str, Callable[[Mapping[str, Any]], float]] = {
+PER_ITEM: Mapping[str, Callable[[Mapping[str, Any]], float | None]] = {
     "per_item_s": lambda r: r["per_item_s"],
     "peak_rss_bytes": lambda r: r["peak_rss_bytes"],
     "files_per_item": lambda r: r["files_written"] / r["items"],
@@ -388,21 +408,31 @@ def flatness(results: Sequence[Mapping[str, Any]], budgets: Mapping[str, Any]) -
     """Return one line per entry (by its label, else its task) and measure: its flatness and its ceiling.
 
     Flatness is the value at 10⁴ over at 10² against `flat_ratio`; the ceiling is the largest value at those points
-    (at any point when it has neither) against the label's `per_item` budget. An unset budget reads unmeasured.
+    (at any point when it has neither) against the label's `per_item` budget. An unset budget reads unmeasured. A
+    point with no items after calibration has no per-item seconds, so it enters no ratio or ceiling; at 10² its own
+    line judges the calibration's chosen-regime median against the `per_item_s` ceiling, naming that basis.
     """
     lines = []
     for label in sorted({r.get("label", r["task"]) for r in results}):
         at = {r["point"]: r for r in results if r.get("label", r["task"]) == label}
         ceilings = (budgets.get("per_item") or {}).get(label) or {}
         for name, read in PER_ITEM.items():
-            values = {p: read(r) for p, r in at.items()}
+            values = {p: v for p, v in ((p, read(r)) for p, r in at.items()) if v is not None}
             low, high = (values.get(p) for p in FLAT_POINTS)
             ratio = high / low if low and high is not None else None
             flat = _verdict(ratio, budgets.get("flat_ratio"), "flat")
             judged = [v for p, v in values.items() if p in FLAT_POINTS] or list(values.values())
-            ceiling = _verdict(max(judged), ceilings.get(name), "ceiling")
+            ceiling = _verdict(max(judged, default=None), ceilings.get(name), "ceiling")
             shown = "n/a" if ratio is None else f"{ratio:.3f}"
             lines.append(f"{label} {name}: at {FLAT_POINTS[1]} / at {FLAT_POINTS[0]} = {shown}, {flat}, {ceiling}")
+        small = at.get(FLAT_POINTS[0], {})
+        if small.get("per_item_s", 0.0) is None and small.get("calibration_per_item_s") is not None:
+            median = small["calibration_per_item_s"]
+            ceiling = _verdict(median, ceilings.get("per_item_s"), "ceiling")
+            lines.append(
+                f"{label} per_item_s at {FLAT_POINTS[0]}: no items after calibration; "
+                f"calibration's chosen-regime median = {median:.4f}, {ceiling}"
+            )
     return lines
 
 
@@ -426,9 +456,10 @@ def run(suite_path: Path, profile: ExecutionProfile) -> list[dict[str, Any]]:
         for point in entry.points:
             result = measure_point(entry, point, suite, profile, label, out)
             (out / f"{label}@{point}.json").write_text(json.dumps(result, indent=1, sort_keys=True) + "\n")
+            per = "n/a" if result["per_item_s"] is None else f"{result['per_item_s']:.4f}"
             print(
                 f"{result['sha']} {','.join(result['jobs'])} {label}@{point}: {result['items']} items, "
-                f"{result['per_item_s']:.4f} s/item, peak {result['peak_rss_bytes']} B, "
+                f"{per} s/item, peak {result['peak_rss_bytes']} B, "
                 f"{result['files_written']} files, {result['bytes_written']} B written, done {result['done']}"
             )
             results.append(result)

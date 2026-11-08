@@ -203,7 +203,8 @@ class Sample(Frozen):
         served: Whether the item's class is a service class, whose server holds a fixed device reservation.
         cold: Whether the worker had run nothing of the item's queue before, so the item carried the model load.
         job: The scheduler job id or process id of the worker.
-        ended_s: The worker's wall clock (`time.time`) when the item's sample was taken, its outcomes in.
+        ended_s: The worker's wall clock (`time.time`) when the item's sample was taken, its outcomes in;
+            comparable across workers only on one host or synchronised clocks.
     """
 
     wall_s: Seconds
@@ -283,7 +284,8 @@ def code_version() -> str:
     """Return the installed senselab-core version and the digest of its source, `<version>+<12 hex>`.
 
     The digest is `identity_digest("core-runtime@1", files)` over the package's `*.py` files by relative path, so a
-    checkout whose version did not move with its code still names different code differently.
+    checkout whose version did not move with its code still names different code differently. It is computed once per
+    process.
     """
     root = Path(__file__).resolve().parents[1]
     files = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*.py"))

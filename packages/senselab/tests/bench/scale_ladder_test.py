@@ -20,7 +20,7 @@ from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.resources import ResourceTable
+from senselab_core.runtime.resources import Batched, ResourceMeasure, ResourceTable
 from senselab_core.runtime.sizing import Sample
 from senselab_core.testing.workers import mit_lock_records
 
@@ -301,3 +301,38 @@ def test_per_item_cost_runs_from_the_end_of_calibration_to_the_last_item() -> No
     samples = {"c1": sample(1, 101.0), "c2": sample(1, 103.0), "a": sample(10, 108.0), "b": sample(10, 113.0)}
     assert ladder._steady(samples, {"c1", "c2"}, 100.0) == (0.5, 3.0, 2)
     assert ladder._steady({"c1": samples["c1"]}, {"c1"}, 100.0) == (None, 1.0, 1)
+
+
+@pytest.mark.logic
+def test_a_point_whose_calibration_takes_every_item_has_no_per_item_cost() -> None:
+    """Its per-item seconds are None, so flatness judges no ratio or ceiling on it; the calibration median is named."""
+    ladder = _module("scale_ladder_no_steady_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    small = {
+        "per_item_s": None,
+        "per_item_basis": "no items after calibration",
+        "wall_per_item_s": 3.0,
+        "calibration_per_item_s": 0.05,
+    }
+    keys = {"task": "t", "peak_rss_bytes": 1000, "files_written": 10, "bytes_written": 100}
+    results = [
+        {**keys, "point": 100, "items": 100, **small},
+        {**keys, "point": 10_000, "items": 10_000, "per_item_s": 0.9},
+    ]
+    budgets = {"flat_ratio": 1.25, "per_item": {"t": {"per_item_s": 0.1}}}
+    lines = ladder.flatness(results, budgets)
+    assert lines[0] == "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling EXCEEDED (0.1)"
+    assert lines[-1] == (
+        "t per_item_s at 100: no items after calibration; calibration's chosen-regime median = 0.0500, ceiling ok"
+    )
+    assert ladder.flatness(results[:1], budgets)[0] == "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling n/a"
+    measure = ResourceMeasure(
+        load_s=1.0,
+        claim_s=0.1,
+        resident_bytes=None,
+        peak_memory_bytes=None,
+        s_per_input_s=0.2,
+        input_s_per_item=None,
+        batched=Batched(batch_size=8, s_per_input_s=0.05),
+    )
+    assert ladder._per_item(None, 3.0, measure) == small
+    assert ladder._per_item(0.4, 3.0, None)["per_item_basis"] == "after calibration"
