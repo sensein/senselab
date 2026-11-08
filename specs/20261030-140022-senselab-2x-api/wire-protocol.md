@@ -116,7 +116,7 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
 | W → H | ready | `{"ready": {"load_s": <int or float>}}` |
 | H → W | request | `{"id": "<uuid>", "items": [{"id": "<item>", "inputs": {...}}], "params": {...}}`; item ids unique |
 | W → H | result (one per item) | `{"id": "<uuid>", "item": "<item>", "outputs": {...}}` or `{"id": "<uuid>", "item": "<item>", "error": {...}}`; exactly one of `outputs` and `error`; the error is a complete error record |
-| W → H | done | `{"id": "<uuid>", "done": <number of items>}`, with `"device_peak_bytes"` and `"device_allocated_bytes"` (non-negative ints, together) when the worker measured the request on a CUDA device |
+| W → H | done | `{"id": "<uuid>", "done": <number of items>}`, with `"device_peak_bytes"` and `"device_allocated_bytes"` (non-negative ints, together) when the worker measured the request on a CUDA device, and `"since_load"` (non-negative int: the requests its model state answered before this one) with `"load_s"` (non-negative number: the load's seconds, only when `since_load` is 0) |
 | W → H | fatal | `{"error": <any>, "fatal": true}` |
 | H → W | stop | `{"stop": true}` |
 
@@ -163,8 +163,13 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
   answered by `done` alone. A worker whose backend has initialised CUDA in torch adds the request's device
   allocation peak and what stays allocated after it (`torch.cuda.max_memory_allocated` after a
   `reset_peak_memory_stats`, and `memory_allocated`) to `done`; the host records them for the request's
-  thread (`device_requests`). They are optional and additive: a worker without CUDA in use
-  sends neither (Phase 3 Task 20e). The host reads exactly that sequence; a line with the wrong `id`,
+  thread (`request_reports`). They are optional and additive: a worker without CUDA in use
+  sends neither (Phase 3 Task 20e). A worker also adds `since_load`, the requests its loaded state answered before
+  this one, and on the first request after the load, `load_s`, the load's seconds as `ready` reported them. Both are
+  optional and additive (Phase 3 Task 20R-5); a worker restart starts the count at 0 again, and a host-side model
+  cache counts per cache entry, so an eviction and reload does too. A server backend is counted per attested server
+  instance, by the consumer: one count for a server's address and attestation across every consumer in the process,
+  so a second consumer of a warm server reports no load. A request that raised reports neither field. The host reads exactly that sequence; a line with the wrong `id`,
   `item`, kind or count is a protocol violation.
 - **Host line limit.** A client may take a `max_line_bytes` below `MAX_LINE_BYTES`. It bounds the
   lines the client sends and, after the hello, the reply lines it accepts: a longer reply is

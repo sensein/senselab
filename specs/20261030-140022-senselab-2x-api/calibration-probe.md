@@ -387,12 +387,15 @@ Observation
   units, padded_units                      Σ input units; batch × the longest job's units
   wall_s                                   request start to end inside the worker (M6)
   item_wall_s                              on the item's last request: claim taken to commit
-  since_load                               requests this model state answered before this one
+  since_load                               requests this model state answered before this one; None on a request
+                                           that raised
   load_s                                   on a request that loaded: the load's seconds, else None
   device_peak, device_after                torch peak and allocation after, else None
   host_peak, host_after                    the model process's peak and after, else None (T20R-11)
-  cotenancy: {device, host}                compute processes on its device at the claim's device read;
-                                           live pool workers on its host (the run's workers directory)
+  cotenancy: {device, host}                pool workers with compute processes on its device (the most on any one
+                                           of its granted GPUs; a worker holding several processes counts once),
+                                           read at most once per pool.presence_refresh_s; None: unread. Live pool
+                                           workers on its host (the run's workers directory), likewise
   outcome: ok | failed | bisected | served
   hardware: HardwareClass as the worker reads it
 ```
@@ -401,7 +404,9 @@ Observation
 load; the worker reports, on `done` (wire-protocol amendment, T20R-5), how many requests the cache entry answering
 the request has answered since it was loaded, and the load's seconds when this request loaded it. An LRU eviction and
 reload, a worker-process restart, a second backend on one queue and a second model-less unit on `cpu` all reset it.
-A server backend counts per attested server instance on the consumer side. `Sample.cold` goes.
+A server backend counts per attested server instance on the consumer side: one count for a server's address and
+attestation across the consumers in a process. A request that raised has no `since_load`; an unread device count
+is `None` and the observation is kept (§5.4 step 1 treats it as shared). `Sample.cold` goes.
 
 ### 5.4 `Probe.estimate(observations, records, config, *, hardware, unit_kind, memory_headroom) -> Estimate`: the only classifier
 
