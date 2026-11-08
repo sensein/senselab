@@ -55,7 +55,7 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
         "port-output@1",
         "port-gather@1",
         "profile-slice@1",
-        "plan-fragment@2",
+        "plan-fragment@3",
         "label@1",
         "measure-unit@1",
         "hardware-class@1",

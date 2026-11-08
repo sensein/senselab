@@ -4,7 +4,7 @@
 (`gpu:h100#<id>`). A queue is the directory `<root>/<identity_digest("label@1", name)>`, holding:
 
 - `name`: the queue's name, written once.
-- `items/<digest>.json`: a `plan-fragment@2.0` document as JCS, named by `identity_digest("plan-fragment@2", …)` of
+- `items/<digest>.json`: a `plan-fragment@3.0` document as JCS, named by `identity_digest("plan-fragment@3", …)` of
   its JSON form; the first writer wins.
 - `segments/<seq>/slot-<n>`: the index, a symlink to `<digest>` (never followed) made by an exclusive `symlink` at
   the next free `n`; `n` runs from 0 to `pool.segment_items - 1`, and a put that finds them all taken makes
@@ -61,7 +61,7 @@ logger = logging.getLogger("senselab")
 
 RUN_QUEUES = "queues"
 """The directory of a run's queues, under its run directory."""
-ITEM_TAG = "plan-fragment@2"
+ITEM_TAG = "plan-fragment@3"
 """The identity tag of a queue item: the digest of a fragment's JSON form."""
 LABEL_TAG = "label@1"
 """The identity tag of a queue's directory name: the digest of the queue's name."""
@@ -116,7 +116,7 @@ def probe_of(name: str) -> tuple[str, str] | None:
 
 
 def item_digest(fragment: PlanFragment) -> str:
-    """Return the digest that names `fragment` as a queue item: `identity_digest("plan-fragment@2", …)` of its JSON."""
+    """Return the digest that names `fragment` as a queue item: `identity_digest("plan-fragment@3", …)` of its JSON."""
     return identity_digest(ITEM_TAG, fragment.model_dump(mode="json"))
 
 

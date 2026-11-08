@@ -35,8 +35,11 @@ def scoring(name: str) -> TaskSpec:
     )
 
 
-def registry(*tasks: TaskSpec, worker: str = BACKEND, name: str = "dsp") -> Registry:
-    """Return a registry of `tasks`, each served by one batch-invariant host backend `name` running `worker`."""
+def registry(*tasks: TaskSpec, worker: str = BACKEND, name: str = "dsp", env: Env | None = None) -> Registry:
+    """Return a registry of `tasks`, each served by one batch-invariant backend `name` running `worker` in `env`.
+
+    `env` is the host env when None.
+    """
     found = Registry()
     for task in tasks:
         found.add_task(task)
@@ -46,7 +49,7 @@ def registry(*tasks: TaskSpec, worker: str = BACKEND, name: str = "dsp") -> Regi
                 name=name,
                 version="1",
                 stack="dsp",
-                env=Env.host(),
+                env=env if env is not None else Env.host(),
                 devices=("cpu",),
                 batch_invariant=True,
                 worker=worker,

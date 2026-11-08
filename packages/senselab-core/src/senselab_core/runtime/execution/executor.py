@@ -179,7 +179,7 @@ class Admission(Frozen):
 
 
 class PlanFragment(Formatted):
-    """A `plan-fragment@2.0` document: jobs of one node of one admitted plan, their input identities, the placement.
+    """A `plan-fragment@3.0` document: jobs of one node of one admitted plan, their input identities, the placement.
 
     `inputs` holds one mapping per job, in the order of `jobs`; every job names `plan_hash` and `node`. `admission`
     names the admission whose graph-input values the jobs read; `upstream` gives, for each `output:` input

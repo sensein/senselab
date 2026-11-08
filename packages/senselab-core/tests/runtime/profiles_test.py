@@ -229,7 +229,7 @@ def test_env_root_expands_home_and_refuses_unset_variable(monkeypatch: pytest.Mo
         ExecutionProfile.load("orcd", {"env_roots": {"isolated": "$SENSELAB_UNSET_ROOT/v"}}).env_root("isolated")
     registry = _registry(_backend("b1", "one", env=Env.isolated("x")))
     placed = resolve_execution(TASK, _entry(), ExecutionProfile.load("orcd"), NO_GPU, registry, CAT)
-    assert placed.env_root == str(root) and "isolated:x" in placed.explain()
+    assert "isolated:x" in placed.explain() and str(tmp_path) not in placed.record().model_dump_json()
 
 
 @pytest.mark.logic

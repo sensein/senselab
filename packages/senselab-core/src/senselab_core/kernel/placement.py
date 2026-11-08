@@ -1,4 +1,4 @@
-"""The placement `placement@1.0`: where each node of a logical plan runs, the licenses it carries and its cost.
+"""The placement `placement@2.0`: where each node of a logical plan runs, the licenses it carries and its cost.
 
 A placement is never part of an identity: a plan placed on another site keeps its hash.
 """
@@ -28,8 +28,8 @@ def _frozen(v: Mapping[str, object]) -> Mapping[str, object]:
 class NodePlacement(Frozen):
     """Where one node runs: its backend and params, stack, env, device, batch size, resource class and partition.
 
-    `env` is `host` or `<kind>:<name>`; `env_root` is the directory its env is built under (None for a host env);
-    `partition` is the partition as the profile names it (None off a scheduler); `why` is the reason for the choice.
+    `env` is `host` or `<kind>:<name>`, built under the directory the worker's own profile gives; `partition` is the
+    partition as the profile names it (None off a scheduler); `why` is the reason for the choice.
     """
 
     backend: NonEmptyStr
@@ -41,7 +41,6 @@ class NodePlacement(Frozen):
     batch_size: Annotated[int, Field(ge=1)]
     resource_class: ResourceClassName
     partition: NonEmptyStr | None = None
-    env_root: NonEmptyStr | None = None
     why: str = ""
 
 
@@ -65,7 +64,7 @@ class Cost(Frozen):
 
 
 class PlanPlacement(Formatted):
-    """A `placement@1.0` document: each node's placement and license set, the envs to build and the cost.
+    """A `placement@2.0` document: each node's placement and license set, the envs to build and the cost.
 
     `profile_digest` is the canonical digest of the execution profile placed under; `nodes` and `licenses` name the
     same node ids; `env_builds` names the envs, as `<kind>:<name>`, not yet built.
