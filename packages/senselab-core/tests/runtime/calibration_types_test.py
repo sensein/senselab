@@ -102,7 +102,7 @@ def test_an_estimate_is_measured_by_its_per_request_cost_or_says_why_not() -> No
         Estimate(status="measured", unit_kind="audio_s")
     with pytest.raises(ValueError, match="reasons"):
         Estimate(status="unmeasured", unit_kind="none")
-    assert Estimate(status="unmeasured", unit_kind="none", reasons=("no warm request",)).single is None
+    assert Estimate(status="unmeasured", unit_kind="none", reasons=("no_usable_observations",)).single is None
     with pytest.raises(ValueError):
         RequestFit(batch=1, r=0.2, u=None, n=1, spread=None, lo=5.0, hi=2.0)
 
@@ -127,7 +127,11 @@ _FIT = RequestFit(batch=1, r=0.2, u=0.05, n=6, spread=0.1, lo=2.0, hi=9.0)
             (RequestFit(batch=4, r=0.3, u=None, n=3, spread=None, lo=1.0, hi=1.0),) * 2,
             r"batched.*batch 4",
         ),
-        ("batch", (StratumBatch(stratum=0, batch=4), StratumBatch(stratum=0, batch=8)), r"batch.*stratum 0"),
+        (
+            "batch",
+            (StratumBatch(lo=2.0, hi=9.0, batch=4), StratumBatch(lo=9.0, hi=12.0, batch=8)),
+            r"batch.*two strata over length 9",
+        ),
         ("regimes", (RegimeFactor(k=2, rho=1.4, n=6), RegimeFactor(k=2, rho=1.5, n=6)), r"regimes.*k 2"),
     ],
 )

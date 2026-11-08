@@ -182,3 +182,7 @@ class Formatted(Frozen):
         if isinstance(written, str) and not readable(written, self.format):
             raise ValueError(f"{type(self).__name__} reads {written} and its minor versions, got {self.format}")
         return self
+
+
+ESTIMATE_FORMAT = "estimate@1"
+"""The format tag of an `Estimate`: the estimator that derived it."""

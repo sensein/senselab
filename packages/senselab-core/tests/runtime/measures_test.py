@@ -61,7 +61,7 @@ MEASURED = Estimate.model_validate(
         "single": {"batch": 1, "r": 0.1, "u": 0.01, "n": 4, "spread": 0.0, "lo": 1.0, "hi": 5.0},
     }
 )
-UNMEASURED = Estimate(status="unmeasured", unit_kind="none", reasons=("no warm request",))
+UNMEASURED = Estimate(status="unmeasured", unit_kind="none", reasons=("no_usable_observations",))
 
 
 def _unit(placement: Placement = PLACEMENT, key: LogicalKey = KEY, env: dict[str, object] | None = None) -> MeasureUnit:
