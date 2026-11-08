@@ -50,14 +50,13 @@ def test_a_later_minor_is_read(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("member", ["result.json", "context.json"])
-def test_a_retired_entry_raises_and_stays(tmp_path: Path, member: str) -> None:
-    """A member in a retired format raises `StoreFormatRetired` naming the migration; the entry is never moved."""
+def test_a_retired_entry_raises_and_stays(tmp_path: Path) -> None:
+    """A retired context member raises `StoreFormatRetired` naming the migration; the entry is never moved."""
     s, k, c = ResultStore(tmp_path), store_key(), store_context()
     s.put(k, {"y": 1}, c)
     entry = entry_dir(tmp_path, k, c)
-    retired = {"result.json": "result@1.0", "context.json": "execution-context@1.0"}[member]
-    rewrite_json(entry / member, lambda r: r.update(format=retired))
+    retired = "execution-context@1.0"
+    rewrite_json(entry / "context.json", lambda r: r.update(format=retired))
     with pytest.raises(StoreFormatRetired, match=STORE_MIGRATION_STATEMENT) as info:
         s.get(k, c, ReusePolicy.EXACT)
     assert info.value.found == retired
@@ -72,7 +71,7 @@ def test_a_retired_sibling_does_not_hide_a_readable_entry(tmp_path: Path) -> Non
     s.put(k, {"y": 1}, linux)
     s.put(k, {"y": 2}, mac)
     retired = entry_dir(tmp_path, k, mac)
-    rewrite_json(retired / "result.json", lambda r: r.update(format="result@1.0"))
+    rewrite_json(retired / "context.json", lambda r: r.update(format="execution-context@1.0"))
     got = s.get(k, mac, ReusePolicy.TOLERANT)
     assert got is not None and got.outputs == {"y": 1}
     assert retired.is_dir() and not (tmp_path / QUARANTINE_DIR).exists()

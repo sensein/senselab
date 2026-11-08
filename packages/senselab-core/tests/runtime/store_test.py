@@ -41,7 +41,9 @@ from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import MANIFEST_NAME, NAMESPACE, record_resolution
 from senselab_core.runtime.storage import StorageFull, StorePolicy, StoreUnavailable
 from senselab_core.runtime.store import (
+    CONTEXT_FORMAT,
     QUARANTINE_DIR,
+    RESULT_FORMAT,
     STORE_DIR,
     CorruptEntryError,
     MisfiledEntryError,
@@ -1284,3 +1286,12 @@ def test_a_put_that_reports_success_is_served_by_the_next_get(tmp_path: Path, co
     """For every damage to an array file but same-size bytes, the re-put rewrites the entry and get serves it."""
     report = bounded("probe_corrupt_array", str(tmp_path), corruption)
     assert report == {"same_identity": True, "served": [SERVED, SERVED]}
+
+
+@pytest.mark.contract
+def test_a_store_dir_holds_one_member_format_pair() -> None:
+    """`STORE_DIR` and the result and context members' majors change as one unit (ADR-006, 2026-11-08)."""
+    majors = (STORE_DIR, RESULT_FORMAT.rsplit(".", 1)[0], CONTEXT_FORMAT.rsplit(".", 1)[0])
+    assert majors == ("store@5", "result@2", "execution-context@3"), (
+        "one member pair per STORE_DIR major: a major bump of result or context bumps STORE_DIR; update this pin"
+    )

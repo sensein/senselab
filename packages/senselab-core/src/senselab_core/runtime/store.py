@@ -25,8 +25,8 @@ A symlink or a non-directory where a directory of the store belongs is moved int
 directory is made again; one that cannot be moved raises `WrongKindError`, naming it and its owner.
 
 Only a completed read that fails verification moves an entry. A member's format is judged by `formats.check`: a
-retired format raises `StoreFormatRetired`, another version's format (a later major, or a later minor's context
-fields) `StoreFormatUnknown`, and neither moves the entry; only a malformed one is corruption.
+retired context raises `StoreFormatRetired`, another version's format (a later major, or a later minor's context
+fields) `StoreFormatUnknown`, and neither moves the entry; a malformed member, or a retired result, is corruption.
 An `OSError` while reading or writing is raised as `StoreUnavailable` (`StorageFull` for `ENOSPC` and `EDQUOT`)
 and changes nothing.
 
@@ -49,7 +49,7 @@ from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import numpy
 from pydantic import ValidationError
@@ -79,6 +79,7 @@ from senselab_core.kernel.identity import (
 from senselab_core.runtime.equivalence import EQUIVALENCE, EquivalenceEvidence
 from senselab_core.runtime.equivalence import split as split_class
 from senselab_core.runtime.provenance import ProvStore
+from senselab_core.runtime.servable import Servable, StoredContext, Verdict, always_serve, choose, servable
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
     STAGING_DIR_MODE,
@@ -93,6 +94,9 @@ from senselab_core.runtime.storage import (
     storage_fault,
 )
 from senselab_core.runtime.vocabulary import core_vocabulary
+
+if TYPE_CHECKING:
+    from senselab_core.runtime.call import RunConfig
 
 logger = logging.getLogger("senselab")
 
@@ -375,11 +379,13 @@ def _stored_address(
 
     The key in `result.json` must digest to its recorded `key_digest`, and the context in `context.json`
     (or `context`, when the caller has already read it from this entry) must fingerprint to the
-    `context_fingerprint` recorded in `result.json`.
+    `context_fingerprint` recorded in `result.json`; a retired `result.json` beside a current context is corrupt.
     """
-    if context is None:
-        context = _stored_context(entry)
-    record = _read_object(entry, "result.json", RESULT_FORMAT)
+    context = _stored_context(entry) if context is None else context
+    try:
+        record = _read_object(entry, "result.json", RESULT_FORMAT)
+    except StoreFormatRetired as err:
+        raise CorruptEntryError(f"corrupt store entry {entry}: a retired result beside a current context") from err
     digest = LogicalKey.model_validate(record["key"]).digest()
     if record["key_digest"] != digest:
         raise MisfiledEntryError(f"stored key digest {record['key_digest']!r} is not the digest of the stored key")
@@ -452,8 +458,12 @@ def _read_result(
     return _guarded(entry, read)
 
 
-def _is_fingerprint(name: str) -> bool:
-    return SHA256_HEX.fullmatch(name) is not None
+def _fingerprints(base_dir: StorageDir) -> list[str]:
+    """Return the fingerprints of the entries under a key's directory, sorted."""
+    try:
+        return sorted(n for n in base_dir.listdir() if SHA256_HEX.fullmatch(n))
+    except OSError as err:
+        raise storage_fault(err, base_dir.path) from err
 
 
 class _StoreEntryFormat:
@@ -707,10 +717,6 @@ class ResultStore:
             return []
         except OSError as err:
             raise storage_fault(err, self.root) from err
-
-    def _entry(self, key: LogicalKey) -> Path:
-        d = key.digest()
-        return self.root / STORE_DIR / d[:2] / d
 
     def _open_root(self, *, create: bool) -> StorageDir:
         return StorageDir.open_root(self.root, create=create, mode=shared_dir_mode(self.policy))
@@ -1031,12 +1037,9 @@ class ResultStore:
         """Return a committed result for `key` whose context `policy` admits for `context`, or None.
 
         With `record`, a hit adds its reuse activity; without, a caller that serves the hit calls `record_reuse`.
-
-        `policy` is `DEFAULT_REUSE_POLICY` when the caller names none.
-
-        Candidates are tried narrowest admitting policy first, the current fingerprint first among
-        `exact`, then by fingerprint. A candidate that fails verification is quarantined (or, if the
-        store cannot be written, skipped) and the next one tried.
+        `policy` is `DEFAULT_REUSE_POLICY` when the caller names none. Candidates are tried narrowest admitting
+        policy first, the current fingerprint first among `exact`, then by fingerprint. A candidate that fails
+        verification is quarantined (or, if the store cannot be written, skipped) and the next one tried.
 
         Raises:
             ValueError: if `policy` is not a `ReusePolicy` value.
@@ -1046,9 +1049,67 @@ class ResultStore:
         An object of the wrong kind at a directory of the store on the way to `key` is quarantined and the
         key reads as absent.
         """
-        policy = ReusePolicy(policy)
         started = datetime.now(timezone.utc)
+        hit, _ = self._fetch(key, context, ReusePolicy(policy), always_serve)
+        if hit is not None and record:
+            self.record_reuse(key, context, hit, started)
+        return hit
+
+    def fetch(
+        self, key: LogicalKey, context: ExecutionContext, run: "RunConfig"
+    ) -> tuple[StoredResult | None, Servable | None]:
+        """Return the result `admits` selects for `run` and what `run` does with it; `(None, None)` when none."""
+        return self._fetch(key, context, run.reuse, functools.partial(servable, run, key.digest(), context))
+
+    def admits(
+        self, key_digest: str, context: ExecutionContext, run: "RunConfig", *, backend: str
+    ) -> StoredContext | None:
+        """Return the entry under `key_digest` that `run` would serve for `context`, or None.
+
+        `fetch` selects the same entry. Each entry's `context.json`, the exact entry's included, is read for its format,
+        its license and the reuse rules; no result member is, so a corrupt one is admitted until a read finds it.
+        Raises what `get` raises.
+        """
+        retired: list[StoreFormatRetired] = []
+        verdict = functools.partial(servable, run, key_digest, context)
+        got = self._within(
+            key_digest, lambda b: choose(self._ranked(b, context, run.reuse, backend, retired), verdict, ())
+        )
+        if got is None:
+            if retired:
+                raise retired[0]
+            return None
+        return got[0] if got[1] is Servable.SERVE else None
+
+    def _fetch(
+        self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy, verdict: Verdict
+    ) -> tuple[StoredResult | None, Servable | None]:
         d = key.digest()
+        retired: list[StoreFormatRetired] = []
+
+        def attempt(base_dir: StorageDir) -> tuple[StoredResult | None, Servable | None]:
+            base, skipped = base_dir.path, set[str]()
+            ranked = self._ranked(base_dir, context, policy, key.backend, retired)
+            while got := choose(ranked, verdict, skipped):
+                entry, said = got
+                name = entry.fingerprint
+                if said is Servable.REFUSE:
+                    return None, said
+                one = functools.partial(_read_result, base / name, digest=d, fingerprint=name, context=entry.context)
+                if (read := self._readable(base, d, name, one, retired)) is None:
+                    skipped.add(name)
+                    continue
+                self._reseal(base_dir, name)
+                return StoredResult(read[1], read[0], read[2], entry.policy_used), said
+            return None, None
+
+        out = self._within(d, attempt) or (None, None)
+        if out[1] is None and retired:
+            raise retired[0]
+        return out
+
+    def _within(self, d: str, use: Callable[[StorageDir], T]) -> T | None:
+        """Return `use(base)` for the directory of key digest `d`, or None when the key reads as absent."""
         try:
             root = self._open_root(create=False)
         except FileNotFoundError:
@@ -1064,12 +1125,9 @@ class ResultStore:
                 logger.warning("cannot set aside %s, so key %s... is not served: %s", err.path, d[:12], err)
                 return None
             except OSError as err:
-                raise storage_fault(err, self._entry(key)) from err
+                raise storage_fault(err, self.root / STORE_DIR / d[:2] / d) from err
             with base:
-                hit = self._get_in(key, context, policy, base)
-        if hit is not None and record:
-            self.record_reuse(key, context, hit, started)
-        return hit
+                return use(base)
 
     def outputs_of(self, key_digest: str, identity: OutputIdentity) -> dict[str, object] | None:
         """Return the stored outputs of output identity `identity` under the key of digest `key_digest`, or None.
@@ -1079,51 +1137,37 @@ class ResultStore:
         Raises:
             StoreUnavailable: an entry could not be read.
         """
-        try:
-            root = self._open_root(create=False)
-        except FileNotFoundError:
-            return None
-        except OSError as err:
-            raise storage_fault(err, self.root) from err
-        with root:
-            try:
-                base_dir = root.walk(STORE_DIR, key_digest[:2], key_digest, aside=lambda: self._quarantine_dir(root))
-            except (FileNotFoundError, WrongKindError):
-                return None
-            except OSError as err:
-                raise storage_fault(err, self.root / STORE_DIR / key_digest[:2] / key_digest) from err
-            with base_dir:
-                base = base_dir.path
-                try:
-                    names = sorted(n for n in base_dir.listdir() if _is_fingerprint(n))
-                except OSError as err:
-                    raise storage_fault(err, base) from err
-                for name in names:
-                    entry = base / name
-                    read = self._readable(
-                        base,
-                        key_digest,
-                        name,
-                        functools.partial(_read_result, entry, digest=key_digest, fingerprint=name),
-                        [],
-                    )
-                    if read is not None and read[0] == identity:
-                        return read[1]
-        return None
 
-    def _get_in(
-        self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy, base_dir: StorageDir
-    ) -> StoredResult | None:
-        d, base = key.digest(), base_dir.path
-        try:
-            names = sorted(n for n in base_dir.listdir() if _is_fingerprint(n))
-        except OSError as err:
-            raise storage_fault(err, base) from err
+        def find(base_dir: StorageDir) -> dict[str, object] | None:
+            base = base_dir.path
+            for name in _fingerprints(base_dir):
+                read = self._readable(
+                    base,
+                    key_digest,
+                    name,
+                    functools.partial(_read_result, base / name, digest=key_digest, fingerprint=name),
+                    [],
+                )
+                if read is not None and read[0] == identity:
+                    return read[1]
+            return None
+
+        return self._within(key_digest, find)
+
+    def _ranked(
+        self,
+        base_dir: StorageDir,
+        context: ExecutionContext,
+        policy: ReusePolicy,
+        backend: str,
+        retired: list[StoreFormatRetired],
+    ) -> list[StoredContext]:
+        """Return the key's entries `policy` admits, narrowest policy first, the current fingerprint first."""
+        base, d = base_dir.path, base_dir.path.name
         allowed = _POLICY_ORDER[: _POLICY_ORDER.index(policy) + 1]
         current = context.fingerprint()
-        candidates: list[tuple[int, bool, str, ExecutionContext]] = []
-        retired: list[StoreFormatRetired] = []
-        for name in names:
+        ranked: list[tuple[int, bool, str, ExecutionContext]] = []
+        for name in _fingerprints(base_dir):
             stored = self._readable(base, d, name, functools.partial(_read_context, base / name, name), retired)
             if stored is None:
                 continue
@@ -1131,28 +1175,15 @@ class ResultStore:
                 (
                     i
                     for i, p in enumerate(allowed)
-                    if acceptable(stored, context, p, backend=key.backend, equivalence=self.equivalence)
+                    if acceptable(stored, context, p, backend=backend, equivalence=self.equivalence)
                 ),
                 None,
             )
             if rank is not None:
-                candidates.append((rank, name != current, name, stored))
-        for rank, _, name, read_context in sorted(candidates, key=lambda c: c[:3]):
-            read = self._readable(
-                base,
-                d,
-                name,
-                lambda: _read_result(base / name, digest=d, fingerprint=name, context=read_context),
-                retired,
-            )
-            if read is None:
-                continue
-            identity, outputs, stored = read
-            self._reseal(base_dir, name)
-            return StoredResult(outputs=outputs, output_identity=identity, context=stored, policy_used=allowed[rank])
-        if retired:
-            raise retired[0]
-        return None
+                ranked.append((rank, name != current, name, stored))
+        return [
+            StoredContext(name, stored, allowed[rank]) for rank, _, name, stored in sorted(ranked, key=lambda c: c[:3])
+        ]
 
     def _readable(
         self, base: Path, d: str, name: str, read: Callable[[], T], retired: list[StoreFormatRetired]
