@@ -38,6 +38,14 @@ Architect review §9 (R-45): the Plan mixed what is computed (identity) with whe
   and every node below it, stays unkeyed until that upstream runs, so status loses stale-result detection there.
   pydra's checksum is the key with the bucket index left out; events carry the job's true key.
 
+- **Amended 2026-11-08 (sizing at run time, Phase 3 Task 20R; design [`calibration-probe.md`](../calibration-probe.md)
+  §6).** The placement carries no plan-time batch: `profiles._batch_size` is removed, a placement records batch 1 and
+  `explain()` names the estimate the run will size from. The batch per length bucket, the cuts of a fragment into
+  items (by predicted seconds over the run's own input lengths) and the worker count are chosen at run time by one
+  function, `size(estimate, grant, config, lengths)`, called by the Pool and the in-process executor with the same
+  device selection. The cost estimate this ADR gives the placement is that function's output. None of it reaches a
+  key; a bucketed backend's batch never spans two buckets.
+
 ## Alternatives rejected
 - **A single hashed plan.** A hardware change becomes a new run, and resuming across sites is
   impossible.
