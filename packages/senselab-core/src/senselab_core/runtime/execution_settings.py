@@ -171,6 +171,14 @@ class CalibrationSettings(Frozen):
     observations_kept: PositiveInt
     unmeasured_workers: PositiveInt
 
+    @model_validator(mode="after")
+    def _check_roots(self) -> "CalibrationSettings":
+        if blank := [r for r in self.measures_roots if not r.strip()]:
+            raise ValueError(f"measures_roots holds a blank root {blank[0]!r}")
+        if repeated := sorted({r for r in self.measures_roots if self.measures_roots.count(r) > 1}):
+            raise ValueError(f"measures_roots holds {repeated[0]!r} twice")
+        return self
+
     @property
     def drift_window(self) -> int:
         """Production requests of a regime judged for drift together: `length_strata × min_requests`."""

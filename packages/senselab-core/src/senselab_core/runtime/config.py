@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 from collections.abc import Mapping
 from importlib.resources.abc import Traversable
 from pathlib import Path
@@ -93,3 +95,24 @@ def merge_over(base: Mapping[str, Any], top: Mapping[str, Any]) -> dict[str, Any
         else base[k]
         for k in {**base, **top}
     }
+
+
+_DEFAULTED = re.compile(r"\$\{(\w+):-([^}]*)\}")
+
+
+def expand_variables(raw: str) -> str:
+    """Return `raw` with `${VAR:-fallback}`, then `~` and `$VAR`, expanded; a variable that is not set stays."""
+    chosen = _DEFAULTED.sub(lambda m: os.environ.get(m[1]) or m[2], raw)
+    return os.path.expanduser(os.path.expandvars(chosen))
+
+
+def expand(raw: str) -> str:
+    """Return `raw` with `${VAR:-fallback}`, then `~` and `$VAR`, expanded from the environment.
+
+    Raises:
+        ValueError: `raw` names a variable that is not set.
+    """
+    text = expand_variables(raw)
+    if "$" in text:
+        raise ValueError(f"{raw!r} names a variable that is not set")
+    return text

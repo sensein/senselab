@@ -101,10 +101,11 @@ sizing:
   device_query_s: 30
 # How a unit without a measure is probed, where measures are kept and whose are trusted, and when a measure is stale.
 calibration:
-  # Roots read in order and pooled; writes go to the first writable one. An unset SENSELAB_MEASURES_ROOT is no root.
+  # Roots read in order and pooled; writes go to the first writable one. An unset SENSELAB_MEASURES_ROOT is no root;
+  # ${cache_root} is senselab's cache root (SENSELAB_CACHE, else its default).
   measures_roots:
   - ${SENSELAB_MEASURES_ROOT}
-  - ${SENSELAB_CACHE:-~/.cache/senselab/hf}/2x/measures
+  - ${cache_root}/2x/measures
   # group reads every file of every root; own only the reader's own files.
   trust: group
   # Requests a model state answers before one counts as warm.
