@@ -63,7 +63,7 @@ class HardwareInfo:
     a line that could not be parsed (``gpus`` is then empty), or when the driver rejected ``compute_cap``
     (``gpus`` is then present without capabilities). ``probe_error`` carries a failed memory or chip
     probe; ``memory_bytes`` is 0 and ``chip`` None in that case. ``chip`` is the Apple silicon brand
-    string, e.g. ``"Apple M2 Max"``.
+    string, e.g. ``"Apple M2 Max"``; ``cpu_model`` the CPU's model string, None where the host does not name it.
     """
 
     cpu_count: int
@@ -74,6 +74,7 @@ class HardwareInfo:
     gpu_probe_error: Optional[str] = None
     chip: Optional[str] = None
     probe_error: Optional[str] = None
+    cpu_model: Optional[str] = None
 
 
 def _run(cmd: list[str]) -> str:
@@ -152,6 +153,17 @@ def _probe_chip(run: Callable[[list[str]], str]) -> tuple[Optional[str], Optiona
     return chip or None, None if chip else "Apple chip unavailable: empty sysctl output"
 
 
+def _cpu_model(cpuinfo: Path = Path("/proc/cpuinfo")) -> Optional[str]:
+    try:
+        for line in cpuinfo.read_text().splitlines():
+            key, _, value = line.partition(":")
+            if key.strip() == "model name" and value.strip():
+                return value.strip()
+    except OSError:
+        pass
+    return platform.processor() or None
+
+
 def probe_hardware(*, run: Callable[[list[str]], str] = _run) -> HardwareInfo:
     """Probe CPU, memory, GPUs, Apple chip and platform; never imports ``torch``.
 
@@ -174,6 +186,7 @@ def probe_hardware(*, run: Callable[[list[str]], str] = _run) -> HardwareInfo:
         gpu_probe_error=gpu_error,
         chip=chip,
         probe_error="; ".join(errors) or None,
+        cpu_model=chip or _cpu_model(),
     )
 
 

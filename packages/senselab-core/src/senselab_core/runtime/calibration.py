@@ -12,6 +12,7 @@ from pydantic import Field, model_validator
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.runtime.execution_settings import CalibrationSettings, Trust
+from senselab_core.runtime.hardware import HardwareInfo, visible_gpus
 
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Units = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -39,6 +40,20 @@ class RunCalibration(Frozen):
         return settings if self.trust is None else settings.model_copy(update={"trust": self.trust})
 
 
+class HardwareGrant(Frozen):
+    """What a worker is granted of its host: the device kind, the CPUs (None: the host's) and which visible GPU.
+
+    Attributes:
+        device: `cuda`, `mps` or `cpu`.
+        cpus: The resource class's CPUs; None takes the host's count.
+        gpu: The position among the visible GPUs of the one granted, for `cuda`.
+    """
+
+    device: Literal["cuda", "mps", "cpu"]
+    cpus: Positive | None = None
+    gpu: Count = 0
+
+
 class HardwareClass(Frozen):
     """The normalised report of the hardware a worker runs on; the only form measures are looked up and written by.
 
@@ -55,6 +70,34 @@ class HardwareClass(Frozen):
     memory_mib: Positive | None = None
     compute_capability: NonEmptyStr | None = None
     cpus: Positive
+
+    @classmethod
+    def from_report(cls, report: HardwareInfo, grant: HardwareGrant) -> Self:
+        """Return the class of the hardware `report` describes, as `grant` allots it.
+
+        Raises:
+            ValueError: the grant names a device or GPU the report does not have, or the report lacks a name for it.
+        """
+        cpus = grant.cpus or report.cpu_count
+        if grant.device == "cuda":
+            gpus = visible_gpus(report)
+            if grant.gpu >= len(gpus):
+                raise ValueError(f"the grant names visible GPU {grant.gpu}; the host shows {len(gpus)}")
+            gpu = gpus[grant.gpu]
+            return cls(
+                device="cuda",
+                name=gpu.name,
+                memory_mib=gpu.memory_bytes // 2**20,
+                compute_capability=gpu.compute_capability,
+                cpus=cpus,
+            )
+        if grant.device == "mps":
+            if report.chip is None:
+                raise ValueError("the host reports no Apple chip for an mps grant")
+            return cls(device="mps", name=report.chip, memory_mib=report.memory_bytes // 2**20, cpus=cpus)
+        if report.cpu_model is None:
+            raise ValueError("the host reports no CPU model")
+        return cls(device="cpu", name=report.cpu_model, cpus=cpus)
 
     @model_validator(mode="after")
     def _check_device(self) -> Self:
