@@ -306,11 +306,11 @@ The Hub cache location, token and offline switch. Every model load passes a comm
 
 ### gpu
 
-The scheduler hands a job its devices as `CUDA_VISIBLE_DEVICES`; a worker that drops it sees every device or none. These select devices and CUDA behaviour (`CUDA_LAUNCH_BLOCKING`, `CUBLAS` workspace via `CUDA_`), which can change numerics, so they are recorded.
+The scheduler hands a job its devices as `CUDA_VISIBLE_DEVICES`; a worker that drops it sees every device or none. These select devices and CUDA behaviour (`CUDA_LAUNCH_BLOCKING`, `CUBLAS` workspace via `CUDA_`), which can change numerics, so they are recorded. They are not `measured`: which device a worker is given changes no cost, and the hardware class names the device (calibration-probe.md §3.1).
 
 ### threads
 
-Slurm jobs set thread counts to their CPU allocation; without them BLAS oversubscribes the node. Thread counts can change the order of floating-point reductions, so they are recorded.
+Slurm jobs set thread counts to their CPU allocation; without them BLAS oversubscribes the node. Thread counts can change the order of floating-point reductions, so they are recorded. The three counts (`OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS`) also set per-item time, so they are `measured`: a measure unit holds them (calibration-probe.md §3.1). The family's other variables are not: they name paths (`OMP_TOOL_LIBRARIES`), CPU placements (`OMP_PLACES`) that would split a unit by slot, or diagnostics.
 
 ### locale
 

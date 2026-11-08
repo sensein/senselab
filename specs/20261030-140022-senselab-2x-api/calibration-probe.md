@@ -78,12 +78,26 @@ fallback (`ladder.py:333`).
 | `task` | the node's task and its version | different work; a task version change is a cost change (UX-61) |
 | `backend`, `backend_version` | `BackendSpec` | different code path; the version also enters the logical key |
 | `backend_params` | canonical JSON of the placement's `backend_params` (all of them) | engine, dtype, beam width, `max_new_tokens` (R-229: crisperwhisper `engine`) |
-| `formation` | `mixed`, `single`, or `bucket:<grid id>` (ADR-004, 2026-11-07) | padding cost; whether a batch can be formed |
+| `params` | canonical JSON of the task call's `params` | a param that shapes cost (word timestamps, `num_speakers`, returned embeddings) |
+| `profile_slices` | the logical key's `profile_slices` | a slice is part of what the call computes; the key already holds it |
+| `chunk_grid` | the runtime `Placement`'s grid, whether or not the backend declares it output-affecting | chunk length sets padding and per-item cost |
+| `formation` | the runtime `Placement`'s `batch_formation`: `mixed`, `single`, or `bucket:<grid id>` (ADR-004, 2026-11-07); a placement whose formation is not yet decided has no unit | padding cost; whether a batch can be formed |
 | `model` | `(id, identity)`, both None without a model | different weights |
-| `env` | the env's fingerprinted context fields: `env_lock`, `wheel_set`, `driver` (holding `torch_index` and `launch_env`), `platform`, `decoder`, `numerics` | library versions and builds: one lock installs torch from a host-chosen index (`envs.py:449-450`), so cu121 and cu128 builds differ in `wheel_set` and `driver` (R-229: an env rebuild doubled crisperwhisper's per-item time) |
-| `service` | the `Attestation` digest for a server backend, else None | server settings (`max_num_seqs`, `gpu_memory_utilization`) |
+| `env` | the env's fingerprinted context fields: `env_lock`, `wheel_set`, `driver` (only `torch_build`, such as `cu128` or `cpu`, never the index URL, and for a server `engine` and `engine_version`; any other key is refused), `platform`, `decoder` (the job's: a probe over file-backed and in-memory inputs measures two units), `numerics`; and `threads`, the worker launch's values of the variables `launch_environment.yaml` names `measured` (`OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS`), each a positive count and anything else refused; no other variable of the family (a tool path, `OMP_PLACES`) enters; `{}` for a host env | library versions and builds: one lock installs torch from a host-chosen index (`envs.py:449-450`), so cu121 and cu128 builds differ in `wheel_set` and `driver` (R-229: an env rebuild doubled crisperwhisper's per-item time); thread counts set per-item time |
+| `service` | the `Attestation`'s `config_digest` for a server backend, else None | server settings (`max_num_seqs`, `gpu_memory_utilization`) |
 | `hardware` | the canonical `HardwareClass` (§3.2) | the device and the cores |
 | `observation_format` | `measure-observations@1` | an observation of another format cannot be pooled |
+
+A unit is built from the runtime `Placement` and the call's `LogicalKey`: it holds every field of the key but `inputs`
+(a measure is per input unit), plus env, hardware and formation.
+
+Every field is a declared value that shapes cost, or a digest whose every input is one; the identity takes no digest
+it did not see the inputs of. So the launch digest (`launch_env`) is not in it: it covers device selection
+(`CUDA_VISIBLE_DEVICES`, `NVIDIA_*`), which changes no cost, and `hardware` names the device. Two workers of one class
+on different GPU slots share a unit. Of the `Attestation`, only `config_digest`, the digest of the asserted server
+settings, is held: `engine_version` is in `driver`, `model_identity` in `model`, and `served_model` (for a `local:`
+model, its path) is provenance, so one model served from two directories is one unit. ADR-002's result identity is
+unchanged: a result's key still holds the whole `Attestation`.
 
 The `env` fields are the ones `ExecutionContext.fingerprint()` takes that the env decides; all are read from the
 env's record before a worker starts (`env.context_fields()`). This is ruling O-1 made precise (§13).
@@ -105,8 +119,10 @@ Not in the identity:
 - `cuda`: the driver's product name as `nvidia-smi --query-gpu=name` gives it, `memory.total` in MiB, compute
   capability;
 - `mps`: the chip string (`sysctl machdep.cpu.brand_string`) and unified memory;
-- `cpu`: the CPU model string;
-- every class: the granted `cpus` (the resource class's, else the host's), since decode and resample run on them.
+- `cpu`: the CPU model string, read from `/proc/cpuinfo` `model name`, else `lscpu` under `LC_ALL=C`, else `sysctl` on
+  Darwin; a host that names none has no class, never the architecture;
+- every class: the granted `cpus` (the resource class's, else the CPUs the worker's process may run on: its affinity,
+  `os.sched_getaffinity(0)`, where the platform has one, else `os.cpu_count()`), since decode and resample run on them.
 
 The profile's `gpu_type` (which may be None, "any GPU") and `memory_cap_bytes` are never compared with a report and
 never enter a digest. The coordinator resolves a resource class to the hardware it runs on before any lookup:
@@ -226,7 +242,7 @@ the counts and spreads behind it and its derivation (commit, jobs, probe ids). T
 
 Lookup order for a unit, the first `measured` estimate wins (`MeasureSource.get`):
 
-1. the measures roots, in order, identity match;
+1. the measures roots, in order, identity match, their observations pooled and estimated once;
 2. the packaged table, identity match;
 3. otherwise the Pool probes.
 
