@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 from senselab_core.kernel import formats
 from senselab_core.runtime.calibration import RunCalibration
-from senselab_core.runtime.execution_settings import CalibrationRuleError, CalibrationSettings
-from senselab_core.runtime.profiles import ExecutionProfile, UnknownProfileKey
+from senselab_core.runtime.execution_settings import CalibrationSettings
+from senselab_core.runtime.profiles import ExecutionProfile, UnknownProfileKey, expand
 
 PROFILES = Path(__file__).parents[2] / "src/senselab_core/runtime/data/profiles"
 NAMES = ["laptop", "orcd"]
@@ -27,48 +27,43 @@ def test_packaged_profiles_carry_the_designed_calibration(name: str) -> None:
     c = ExecutionProfile.load(name).calibration
     assert (c.trust, c.probe_items) == (TRUST[name], PROBE_ITEMS[name])
     assert (c.warmup_requests, c.length_strata, c.min_requests, c.single_item_jobs, c.batched_sizes) == (2, 2, 3, 4, 1)
-    assert (c.probe_s, c.confidence, c.drift_window, c.drift_confidence) == (90, 1.645, 6, 2.576)
-    assert (c.peer_wait_s, c.observations_kept, c.unmeasured_workers) == (390, 3, 1)
+    assert (c.confidence, c.drift_confidence) == (1.645, 2.576)
+    assert (c.observations_kept, c.unmeasured_workers) == (3, 1)
     assert len(c.measures_roots) == (2 if name == "orcd" else 1)
 
 
 @pytest.mark.logic
-def test_profile_refuses_probe_s_not_load_share_of_target_wall() -> None:
-    """`probe_s` is `sizing.load_share × sizing.target_wall_s`; a value off it or a target moved from it is refused."""
-    with pytest.raises(CalibrationRuleError, match=r"probe_s 91.*load_share 0\.05.*target_wall_s 1800"):
-        ExecutionProfile.load("orcd", _calibration({"probe_s": 91}))
-    with pytest.raises(CalibrationRuleError, match="probe_s 90"):
-        ExecutionProfile.load("orcd", {"sizing": {"target_wall_s": 3600}})
-    moved = ExecutionProfile.load(
-        "orcd", {"sizing": {"target_wall_s": 3600}, **_calibration({"probe_s": 180, "peer_wait_s": 480})}
-    )
-    assert moved.calibration.probe_s == 180
-
-
-@pytest.mark.logic
-def test_profile_refuses_peer_wait_s_not_probe_s_plus_lease_stale_bound() -> None:
-    """`peer_wait_s` is `probe_s + lease.stale_after_s`."""
-    with pytest.raises(CalibrationRuleError, match=r"peer_wait_s 391.*probe_s 90.*stale_after_s 300"):
-        ExecutionProfile.load("laptop", _calibration({"peer_wait_s": 391}))
-    with pytest.raises(CalibrationRuleError, match="peer_wait_s 390"):
-        ExecutionProfile.load("laptop", {"lease": {"stale_after_s": 600}})
-
-
-@pytest.mark.logic
-def test_profile_refuses_drift_window_not_strata_times_min_requests() -> None:
-    """`drift_window` is `length_strata × min_requests`."""
-    with pytest.raises(CalibrationRuleError, match=r"drift_window 7.*length_strata 2.*min_requests 3"):
-        ExecutionProfile.load("laptop", _calibration({"drift_window": 7}))
-    table = _calibration({"length_strata": 3, "drift_window": 9, "probe_items": 2 + 3 * 3 * 101 + 12})
-    assert ExecutionProfile.load("laptop", table).calibration.length_strata == 3
+def test_probe_s_peer_wait_s_and_drift_window_are_derived_from_the_profile() -> None:
+    """The three are properties, so a moved `sizing`, `lease` or section key moves them and they are never keys."""
+    profile = ExecutionProfile.load("orcd")
+    assert (profile.probe_s, profile.peer_wait_s, profile.calibration.drift_window) == (90, 390, 6)
+    moved = ExecutionProfile.load("orcd", {"sizing": {"target_wall_s": 3600}, "lease": {"stale_after_s": 600}})
+    assert (moved.probe_s, moved.peer_wait_s) == (180, 780)
+    table = ExecutionProfile.load("laptop", _calibration({"length_strata": 3}))
+    assert table.calibration.drift_window == 9
+    for key in ("probe_s", "peer_wait_s", "drift_window"):
+        assert key not in CalibrationSettings.model_fields
+        with pytest.raises(UnknownProfileKey, match=key):
+            ExecutionProfile.load("laptop", _calibration({key: 1}))
 
 
 @pytest.mark.logic
 @pytest.mark.parametrize("items", [49, 51, 13])
-def test_profile_refuses_probe_items_that_are_not_the_minimal_protocol_at_a_target_batch(items: int) -> None:
-    """`probe_items` is `warmup + strata × min × (1 + B) + min × single_item_jobs` for a whole B of at least 1."""
-    with pytest.raises(CalibrationRuleError, match=f"probe_items {items}"):
-        ExecutionProfile.load("laptop", _calibration({"probe_items": items}))
+def test_probe_items_is_a_bound_not_a_sum(items: int) -> None:
+    """`probe_items` is the most jobs a probe plans; no exact protocol sum is checked."""
+    assert ExecutionProfile.load("laptop", _calibration({"probe_items": items})).calibration.probe_items == items
+
+
+@pytest.mark.logic
+def test_the_group_measures_root_is_the_variable_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first orcd root has no fallback: an unset variable is no root, never a root of each member's own."""
+    first = ExecutionProfile.load("orcd").calibration.measures_roots[0]
+    assert first == "${SENSELAB_MEASURES_ROOT}"
+    monkeypatch.delenv("SENSELAB_MEASURES_ROOT", raising=False)
+    with pytest.raises(ValueError, match="not set"):
+        expand(first)
+    monkeypatch.setenv("SENSELAB_MEASURES_ROOT", "/group/measures")
+    assert expand(first) == "/group/measures"
 
 
 @pytest.mark.logic
@@ -83,7 +78,6 @@ def test_profile_refuses_probe_items_that_are_not_the_minimal_protocol_at_a_targ
         {"batched_sizes": 3},
         {"confidence": 0},
         {"drift_confidence": -1},
-        {"probe_s": 0},
         {"observations_kept": 0},
         {"unmeasured_workers": 0},
         {"measures_roots": []},
@@ -114,13 +108,13 @@ def test_run_config_trust_overrides_the_profile(name: str) -> None:
         assert run.apply(settings).model_copy(update={"trust": settings.trust}) == settings
     with pytest.raises(ValueError, match="trust"):
         RunCalibration.model_validate({"trust": "all"})
-    with pytest.raises(ValueError, match="extra|forbid|probe_s"):
-        RunCalibration.model_validate({"probe_s": 1})
+    with pytest.raises(ValueError, match="extra|forbid|probe_items"):
+        RunCalibration.model_validate({"probe_items": 1})
 
 
 @pytest.mark.logic
 @pytest.mark.parametrize("name", NAMES)
-def test_every_calibration_key_has_a_derivation(name: str) -> None:
+def test_every_calibration_key_is_described(name: str) -> None:
     """The section carries exactly the model's keys, each under a `#` comment line, and no prose value."""
     lines = (PROFILES / f"{name}.yaml").read_text().splitlines()
     start = lines.index("calibration:")

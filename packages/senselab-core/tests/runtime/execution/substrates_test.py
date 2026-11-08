@@ -44,7 +44,7 @@ from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile, QosCapTooSmall
 from senselab_core.runtime.storage import StorageCapabilities, StorageUnsupported
 from senselab_core.runtime.store import ResultStore
-from senselab_core.testing.measures import CEILED_SIZING, FixedMeasures, with_calibration_rules
+from senselab_core.testing.measures import CEILED_SIZING, FixedMeasures
 from syscall_faults_fixture import refuse_call
 
 SCORE = scoring("substrates_test.score")
@@ -140,7 +140,7 @@ def _profile(**substrate: Any) -> ExecutionProfile:  # noqa: ANN401 - substrate 
         "pool": {"quantum_items": 1, "first_poll_s": 0.01, "poll_s": 0.2},
         "sizing": CEILED_SIZING,
     }
-    return ExecutionProfile.load("orcd", with_calibration_rules(override, "orcd"))
+    return ExecutionProfile.load("orcd", override)
 
 
 def _commands(**update: float) -> SlurmCommands:
@@ -260,9 +260,7 @@ def test_scale_bounded_by_qos_cap(tmp_path: Path, cap: int | None, depth: int, e
 @pytest.mark.logic
 def test_scale_counts_workers_alive_and_a_quantum_of_items(tmp_path: Path) -> None:
     """Five items over a quantum of 2 want three workers; one alive, two are started; none once three are alive."""
-    profile = ExecutionProfile.load(
-        "orcd", with_calibration_rules({**_override(), "pool": {"quantum_items": 2, "first_poll_s": 0.01}}, "orcd")
-    )
+    profile = ExecutionProfile.load("orcd", {**_override(), "pool": {"quantum_items": 2, "first_poll_s": 0.01}})
     _, pool, recording = _queued(profile, tmp_path, 5)
     recording.starts.clear()
     recording.handles = [WorkerHandle("cpu", "x")]

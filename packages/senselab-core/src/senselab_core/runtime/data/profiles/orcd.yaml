@@ -101,9 +101,9 @@ sizing:
   device_query_s: 30
 # How a unit without a measure is probed, where measures are kept and whose are trusted, and when a measure is stale.
 calibration:
-  # Roots read in order and pooled; writes go to the first writable one.
+  # Roots read in order and pooled; writes go to the first writable one. An unset SENSELAB_MEASURES_ROOT is no root.
   measures_roots:
-  - ${SENSELAB_MEASURES_ROOT:-~/orcd/scratch/senselab-2x-measures}
+  - ${SENSELAB_MEASURES_ROOT}
   - ${SENSELAB_CACHE:-~/.cache/senselab/hf}/2x/measures
   # group reads every file of every root; own only the reader's own files.
   trust: group
@@ -119,16 +119,10 @@ calibration:
   batched_sizes: 1
   # The most jobs a probe plans.
   probe_items: 200
-  # Seconds of warm probe requests a probe may take; sizing.load_share times sizing.target_wall_s.
-  probe_s: 90
   # The one-sided z of the batch decision and of the item cut.
   confidence: 1.645
-  # Production requests of one regime judged for drift together; length_strata times min_requests.
-  drift_window: 6
   # The two-sided z of the drift test.
   drift_confidence: 2.576
-  # Seconds a coordinator waits for a peer's probe of the same unit; probe_s plus lease.stale_after_s.
-  peer_wait_s: 390
   # Superseded probes' observation files kept for audit.
   observations_kept: 3
   # Workers a unit without a measure runs on.

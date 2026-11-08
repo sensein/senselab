@@ -197,7 +197,6 @@ class ExecutionProfile(Formatted):
             ProfileFormatRetired: `override` declares a retired format.
             UnknownProfileKey: a key of `override` that the format does not define, naming the closest one.
             LeaseBoundError: two of the lease's beat intervals plus its attribute delay are not below its stale bound.
-            CalibrationRuleError: a `calibration` key is not what the rule deriving it from other keys gives.
             ValueError: the merged mapping is invalid.
         """
         packaged = _read(resources.files("senselab_core.runtime").joinpath("data", "profiles", f"{name}.yaml"))
@@ -210,8 +209,17 @@ class ExecutionProfile(Formatted):
         _check_keys(merged, cls.model_fields)
         profile = cls.model_validate(merged)
         profile.lease.check_bound()
-        profile.calibration.check_rules(profile.sizing, profile.lease)
         return profile
+
+    @property
+    def probe_s(self) -> float:
+        """Seconds of warm probe requests a probe may take: `sizing.load_share × sizing.target_wall_s`."""
+        return self.sizing.load_share * self.sizing.target_wall_s
+
+    @property
+    def peer_wait_s(self) -> float:
+        """Seconds a coordinator waits for a peer's probe of the same unit: `probe_s + lease.stale_after_s`."""
+        return self.probe_s + self.lease.stale_after_s
 
     def env_root(self, kind: str) -> Path:
         """Return the root for env `kind` with `${VAR:-fallback}`, then `~` and `$VAR`, expanded.

@@ -1,9 +1,5 @@
 """A `MeasureSource` for tests: one measure for every unit, and a record of what calibration rounds put."""
 
-from collections.abc import Mapping
-from typing import Any
-
-from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.resources import Batched, Measured, ResourceMeasure, Unit
 
 CEILED = ResourceMeasure(
@@ -20,16 +16,6 @@ fast in a batch as alone at a measured batch above every quantum the tests set."
 
 CEILED_SIZING = {"target_wall_s": 1e-12}
 """A `sizing` override under which a queue wants a worker per quantum of `CEILED` items: a target that short."""
-
-
-def with_calibration_rules(override: Mapping[str, Any], name: str = "laptop") -> dict[str, Any]:
-    """Return `override` with the `calibration` values its `sizing` and `lease` keys derive (`check_rules`)."""
-    base = ExecutionProfile.load(name)
-    sizing = {**base.sizing.model_dump(), **override.get("sizing", {})}
-    stale_after_s = {**base.lease.model_dump(), **override.get("lease", {})}["stale_after_s"]
-    probe_s = sizing["load_share"] * sizing["target_wall_s"]
-    derived = {"probe_s": probe_s, "peer_wait_s": probe_s + stale_after_s}
-    return {**override, "calibration": {**derived, **override.get("calibration", {})}}
 
 
 class FixedMeasures:

@@ -33,7 +33,6 @@ from senselab_core.runtime.sizing import Sample, calibrated, measure_of
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import WorkerClient, WorkerLost, WorkerOOMKilled
 from senselab_core.testing.interpreter import source_tree_python
-from senselab_core.testing.measures import with_calibration_rules
 from senselab_worker.faults import FaultClass, classify, error_record
 
 TASK = scoring("pool_worker_test.score")
@@ -60,7 +59,7 @@ def stack(tmp_path: Path) -> Iterator[None]:
 
 
 def _profile(**pool: object) -> ExecutionProfile:
-    return ExecutionProfile.load("laptop", with_calibration_rules({**OVERRIDE, "pool": {**OVERRIDE["pool"], **pool}}))
+    return ExecutionProfile.load("laptop", {**OVERRIDE, "pool": {**OVERRIDE["pool"], **pool}})
 
 
 def _run(
@@ -210,9 +209,7 @@ def test_device_memory_is_read_once_per_claim_on_a_cuda_class(tmp_path: Path) ->
     """
     classes = {**OVERRIDE["resource_classes"], "gpu": {"device": "cuda", "max_workers": 1}}
     pool = {**OVERRIDE["pool"], "quantum_items": 4}
-    profile = ExecutionProfile.load(
-        "laptop", with_calibration_rules({**OVERRIDE, "resource_classes": classes, "pool": pool})
-    )
+    profile = ExecutionProfile.load("laptop", {**OVERRIDE, "resource_classes": classes, "pool": pool})
     placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(4)])
     for element in range(4):
         _put(placed, pool_dir, element, "gpu")
@@ -363,7 +360,7 @@ def test_sigterm_releases_claims(tmp_path: Path) -> None:
         "pool": {**OVERRIDE["pool"], "quantum_items": 1, "poll_s": 5},
         "lease": {"stale_after_s": 300},
     }
-    profile = ExecutionProfile.load("laptop", with_calibration_rules(override))
+    profile = ExecutionProfile.load("laptop", override)
     placed, _, pool_dir = _run(tmp_path, profile, ["fast", "slow"])
     _put(placed, pool_dir, 0)
     _put(placed, pool_dir, 1)

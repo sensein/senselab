@@ -78,16 +78,10 @@ calibration:
   batched_sizes: 1
   # The most jobs a probe plans.
   probe_items: 50
-  # Seconds of warm probe requests a probe may take; sizing.load_share times sizing.target_wall_s.
-  probe_s: 90
   # The one-sided z of the batch decision and of the item cut.
   confidence: 1.645
-  # Production requests of one regime judged for drift together; length_strata times min_requests.
-  drift_window: 6
   # The two-sided z of the drift test.
   drift_confidence: 2.576
-  # Seconds a coordinator waits for a peer's probe of the same unit; probe_s plus lease.stale_after_s.
-  peer_wait_s: 390
   # Superseded probes' observation files kept for audit.
   observations_kept: 3
   # Workers a unit without a measure runs on.

@@ -18,7 +18,6 @@ from queue_race_fixture import FAULT, fragment
 from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment
 from senselab_core.runtime.execution.queue import ITEM_TAG, LABEL_TAG, Queue, QueueSet
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.testing.measures import with_calibration_rules
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import identity_digest
 from syscall_faults_fixture import await_file, count_calls, refuse_call, stale_lookup
@@ -28,7 +27,7 @@ pytestmark = pytest.mark.logic
 OLD = 10**9
 RACE = {"stale_after_s": 0.5, "renew_fraction": 0.25, "attribute_delay_s": 0.0}
 POLL_S = RACE["stale_after_s"] * RACE["renew_fraction"]
-OVERRIDE = with_calibration_rules({"pool": {"segment_items": 3}, "lease": RACE})
+OVERRIDE = {"pool": {"segment_items": 3}, "lease": RACE}
 
 
 def _fragments(n: int, prefix: str = "a") -> list[PlanFragment]:
@@ -43,7 +42,7 @@ def _queue(root: Path, segment_items: int = 3, lease: dict[str, float] | None = 
     override: dict[str, Any] = {"pool": {"segment_items": segment_items}}
     if lease is not None:
         override["lease"] = lease
-    return QueueSet(root, ExecutionProfile.load(override=with_calibration_rules(override))).queue("cpu")
+    return QueueSet(root, ExecutionProfile.load(override=override)).queue("cpu")
 
 
 def _drain(queue: Queue, worker: str = "w") -> list[str]:
