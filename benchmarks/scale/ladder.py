@@ -366,8 +366,8 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
 
 
 def _item_samples(samples: Mapping[str, Sample], rounds: set[str]) -> list[dict[str, Any]]:
-    """Return each item's timing by its end: whether it was a calibration item, its jobs, batch, wall and end."""
-    keys = ("jobs", "batch_size", "wall_s", "cold", "ended_s")
+    """Return each item's timing by its end: calibration item or not, jobs, batch, wall, end and input size."""
+    keys = ("jobs", "batch_size", "wall_s", "cold", "ended_s", "input_s", "input_chars")
     found = [{"calibration": d in rounds, **{k: getattr(s, k) for k in keys}} for d, s in samples.items()]
     return sorted(found, key=lambda r: r["ended_s"])
 

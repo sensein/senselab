@@ -12,7 +12,7 @@ from senselab_worker.units import NS_PER_S
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.declare import BackendSpec, kernel_types
-from senselab_core.kernel.signals import IrregularGroup, Recording, RegularGroup
+from senselab_core.kernel.signals import IrregularGroup, Recording, RegularGroup, Text
 from senselab_core.runtime.keys import BUCKET, SINGLE, fixed_formation
 from senselab_core.runtime.storage import load_policy_values
 
@@ -102,6 +102,12 @@ def job_length_ns(job: "Job") -> int | None:
             read.append(ref.length_ns)
     lengths = [n for n in (*held, *read) if n is not None]
     return max(lengths) if lengths else None
+
+
+def job_text_chars(job: "Job") -> int | None:
+    """Return the characters of `job`'s held text inputs, None when it holds none; an upstream text is not read."""
+    held = [len(v.content) for port, v in job.values.items() if port not in job.upstream and isinstance(v, Text)]
+    return sum(held) if held else None
 
 
 def formation(job: "Job", backend: BackendSpec, grid: BucketGrid) -> str:

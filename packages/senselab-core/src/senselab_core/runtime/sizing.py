@@ -188,6 +188,7 @@ class Sample(Frozen):
         claim_s: Seconds the claim holding the item took to take.
         jobs: The item's jobs.
         input_s: Their recording seconds; None when a job has no recording input or its length is unrecorded.
+        input_chars: The characters of their held text inputs; None when a job holds no text.
         baseline_bytes: The worker's host memory before it ran anything.
         resident_bytes: Its host memory once the item's outcomes were in, the model loaded and the item freed; None
             where only a high-water is readable.
@@ -212,6 +213,7 @@ class Sample(Frozen):
     jobs: Count
     batch_size: Count
     input_s: Seconds | None
+    input_chars: Annotated[int, Field(ge=0)] | None = None
     baseline_bytes: Bytes
     resident_bytes: Bytes | None
     peak_memory_bytes: Bytes

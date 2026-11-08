@@ -17,7 +17,7 @@ from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.identity import ExecutionContext, OutputIdentity
-from senselab_core.kernel.signals import Audio
+from senselab_core.kernel.signals import Audio, PlainText
 from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
@@ -27,6 +27,8 @@ from senselab_core.runtime.execution.batching import (
     LengthUnrecorded,
     form_batches,
     formation,
+    job_length_ns,
+    job_text_chars,
     keyed_formation,
 )
 from senselab_core.runtime.execution.executor import JobRef, UpstreamRef
@@ -341,3 +343,17 @@ def test_grid_buckets_by_edges_and_refuses_bad_edges() -> None:
             BucketGrid(id="bad", edges_ns=edges)
     with pytest.raises(ValidationError):
         BucketGrid(id="", edges_ns=(first,))
+
+
+@pytest.mark.logic
+def test_a_held_texts_characters_are_its_input_size() -> None:
+    """A job holding text gives its code points and no recording length; a job holding audio gives no characters."""
+    text = PlainText(content="na\u00efve caf\u00e9")
+    job = Job(
+        JobRef(plan_hash="0" * 64, node="n", element=(0,)),
+        Call(TEXT_TASK, EchoParams(), {"text": text.identity}),
+        {"text": text},
+    )
+    assert (job_text_chars(job), job_length_ns(job)) == (10, None)
+    [audio] = _jobs([SHORT])
+    assert job_text_chars(audio) is None

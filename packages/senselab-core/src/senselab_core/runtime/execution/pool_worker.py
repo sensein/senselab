@@ -33,7 +33,7 @@ from senselab_worker.units import NS_PER_S
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.runtime import device_requests
 from senselab_core.runtime.call import RunConfig
-from senselab_core.runtime.execution.batching import LengthUnrecorded, job_length_ns
+from senselab_core.runtime.execution.batching import LengthUnrecorded, job_length_ns, job_text_chars
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment
@@ -321,6 +321,7 @@ class PoolWorker:
             m.digest: request_size(g.placement.backend, g.placement.batch_size) for g in groups for m in g.members
         }
         inputs: dict[str, float | None] = {}
+        chars: dict[str, int | None] = {}
         for member in (m for g in groups for m in g.members):
             try:
                 length = job_length_ns(member.job)
@@ -328,6 +329,8 @@ class PoolWorker:
                 length = None
             known = inputs.get(member.digest, 0.0)
             inputs[member.digest] = None if length is None or known is None else known + length / NS_PER_S
+            text, so_far = job_text_chars(member.job), chars.get(member.digest, 0)
+            chars[member.digest] = None if text is None or so_far is None else so_far + text
         cold = claim.queue.name not in self._warm
         device: list[int | None] = []
         grant = self.profile.resource_classes.get(class_of(claim.queue.name))
@@ -348,6 +351,7 @@ class PoolWorker:
                 jobs=jobs,
                 batch_size=min(batches.get(digest, 1), jobs),
                 input_s=inputs.get(digest),
+                input_chars=chars.get(digest),
                 baseline_bytes=self._baseline,
                 resident_bytes=current,
                 peak_memory_bytes=peak,
