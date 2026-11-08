@@ -31,7 +31,6 @@ from senselab_core.kernel.wire import WireFormatRetired
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.call import Result, RunConfig, env_license, host_hardware, packaged
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.equivalence import sampled
 from senselab_core.runtime.execution.batching import BucketGrid, form_batches, keyed_formation, one_node
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, UpstreamRef
 from senselab_core.runtime.execution.outputs import (
@@ -59,6 +58,7 @@ from senselab_core.runtime.keys import Call, Placement, build_key, request_compo
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.servable import Servable, StoredContext, license_admits, servable
 from senselab_core.runtime.store import ResultStore, StoredResult
 from senselab_core.runtime.store import output_identity as store_output_identity
 from senselab_core.runtime.vllm_server import attested_fields, server_launch, server_variables
@@ -335,17 +335,6 @@ def _env_fields(
     return {**fields, "driver": {**fields["driver"], "launch_env": launch(env.python, declared).digest}}
 
 
-def _license_admits(run: RunConfig, hit: StoredResult) -> bool:
-    """Whether `hit` may be served: its context records an env license `run.licenses` accepts.
-
-    A result whose context records no env license is refused unless `run.licenses` allows unlicensed hits.
-    """
-    recorded = hit.context.env_license
-    if recorded is None:
-        return run.licenses is not None and run.licenses.allow_unlicensed_hits
-    return run.licenses is None or run.licenses.refusal("", recorded) is None
-
-
 def _serve(  # noqa: PLR0913 - the job's store, key, context and run, and what serving needs
     store: ResultStore,
     key: LogicalKey,
@@ -357,10 +346,13 @@ def _serve(  # noqa: PLR0913 - the job's store, key, context and run, and what s
     """Return the job's result served from `store`, recording the reuse, or None and the sampled hit to verify."""
     looked = datetime.now(timezone.utc)
     hit = store.get(key, context, run.reuse, record=False)
-    if hit is None or not _license_admits(run, hit):
+    if hit is None:
         return None, None
-    if hit.policy_used is not ReusePolicy.EXACT and sampled(run.verify, key.digest(), hit.context, context):
-        return None, hit
+    match servable(run, key.digest(), StoredContext(hit.context.fingerprint(), hit.context, hit.policy_used), context):
+        case Servable.REFUSE:
+            return None, None
+        case Servable.VERIFY:
+            return None, hit
     store.record_reuse(key, context, hit, looked, reuse_attributes(run, hit), _linked(job))
     return served(job, hit, key, placement), None
 
@@ -393,7 +385,7 @@ def lost_race(  # noqa: PLR0913 - the job's store, key, context and run, and wha
     committed = store.get(key, context, ReusePolicy.EXACT, record=False)
     if committed is None:
         raise RuntimeError(f"the entry another writer committed for {key.task!r} could not be read back")
-    if not _license_admits(run, committed):
+    if not license_admits(run, committed.context.env_license):
         return None
     store.record_reuse(
         key, context, committed, datetime.now(timezone.utc), {**attributes, **unlicensed(committed)}, _linked(job)
