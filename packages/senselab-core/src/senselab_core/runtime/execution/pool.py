@@ -960,7 +960,7 @@ def coordinate(
         QueueHeld: an env broke and was held.
         InputChanged, InputsUnavailable, ConflictingSources: as `start`.
     """
-    from senselab_core.runtime.execution.run import bind_sources, prepare  # noqa: PLC0415
+    from senselab_core.runtime.execution.run import PYDRA_DIR, bind_sources, prepare  # noqa: PLC0415
     from senselab_core.runtime.execution.runner import PydraRunner  # noqa: PLC0415 - needs pydra
 
     run_dir = Path(run_dir)
@@ -979,7 +979,7 @@ def coordinate(
             run_dir, queues=queues, store=store, events=events, profile=profile, substrate=substrate, epoch=epoch
         )
         try:
-            return PydraRunner(profile=profile, work_dir=run_dir / "pydra").run_plan(
+            return PydraRunner(profile=profile, work_dir=run_dir / PYDRA_DIR).run_plan(
                 placed, pool, values=values, events=events
             )
         finally:
