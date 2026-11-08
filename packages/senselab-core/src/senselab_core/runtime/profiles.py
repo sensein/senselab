@@ -134,7 +134,7 @@ class ExecutionProfile(Formatted):
             `${VAR:-fallback}`, then `~` and `$VAR`, are expanded where the root is used.
         envs: Env settings.
         model_sources: Allowed hub organisations; None allows those of the catalogue entries.
-        model_cache_budget_bytes: Cap on the model cache; None for none.
+        model_cache_budget_bytes: Cap on the model cache; None measures it (`hardware.measured_budget`).
         retry: How a transient fault is retried.
         network: `online`, or `offline` to forbid any fetch.
         resource_classes: The worker classes a node is placed on, by name (`cpu`, `gpu:<type>`, `mps`, `svc:<id>`).

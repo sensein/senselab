@@ -15,10 +15,12 @@ from senselab_core.runtime.hardware import (
     GpuInfo,
     HardwareInfo,
     device_memory_bytes,
+    measured_budget,
     memory_bytes,
     numerics_class,
     probe_hardware,
     process_tree,
+    visible_devices,
 )
 
 # ── probe_hardware ───────────────────────────────────────────────────
@@ -203,6 +205,23 @@ def test_numerics_class_cuda_visible_devices_uuid_list() -> None:
     info = _info(H100, A100)
     env = {"CUDA_VISIBLE_DEVICES": "GPU-bbbb-2222"}
     assert numerics_class(info, "cuda:0", "fp32", environ=env)["gpu_architecture"] == "sm_80"
+
+
+@pytest.mark.logic
+def test_visible_devices_and_the_measured_cache_budget_follow_cuda_visible_devices() -> None:
+    """Each visible GPU is named by its uuid; the cache budget is the smallest visible GPU's memory, else the host's."""
+    big, small = (
+        GpuInfo(g.name, m, g.driver, g.compute_capability, g.uuid, g.index) for g, m in ((H100, 80), (A100, 40))
+    )
+    info = _info(big, small)
+    assert visible_devices(info, {}) == ("GPU-aaaa-1111", "GPU-bbbb-2222")
+    assert visible_devices(info, {"CUDA_VISIBLE_DEVICES": "1"}) == ("GPU-bbbb-2222",)
+    assert visible_devices(info, {"CUDA_VISIBLE_DEVICES": ""}) == ()
+    assert visible_devices(_info(GpuInfo("g", 1, None, index=3)), {}) == ("3",)
+    assert measured_budget(info, {}) == 40 and measured_budget(info, {"CUDA_VISIBLE_DEVICES": "0"}) == 80
+    assert measured_budget(_info(), {}) == _info().memory_bytes
+    with pytest.raises(DeviceResolutionError):
+        visible_devices(info, {"CUDA_VISIBLE_DEVICES": "7"})
 
 
 @pytest.mark.logic

@@ -175,8 +175,13 @@ def probe_hardware(*, run: Callable[[list[str]], str] = _run) -> HardwareInfo:
     )
 
 
-def _visible_gpus(info: HardwareInfo, environ: Mapping[str, str]) -> list[GpuInfo]:
-    """The GPUs torch would enumerate: all of them, or those ``CUDA_VISIBLE_DEVICES`` names, in its order."""
+def visible_gpus(info: HardwareInfo, environ: Optional[Mapping[str, str]] = None) -> list[GpuInfo]:
+    """The GPUs torch would enumerate: all of them, or those ``CUDA_VISIBLE_DEVICES`` names, in its order.
+
+    Raises:
+        DeviceResolutionError: an entry of ``CUDA_VISIBLE_DEVICES`` names no GPU, or several.
+    """
+    environ = os.environ if environ is None else environ
     raw = environ.get("CUDA_VISIBLE_DEVICES")
     if raw is None:
         return list(info.gpus)
@@ -200,8 +205,13 @@ def visible_devices(info: HardwareInfo, environ: Optional[Mapping[str, str]] = N
     Raises:
         DeviceResolutionError: an entry of ``CUDA_VISIBLE_DEVICES`` names no GPU, or several.
     """
-    gpus = _visible_gpus(info, os.environ if environ is None else environ)
-    return tuple(g.uuid or str(g.index) for g in gpus if g.uuid or g.index is not None)
+    return tuple(g.uuid or str(g.index) for g in visible_gpus(info, environ) if g.uuid or g.index is not None)
+
+
+def measured_budget(info: HardwareInfo, environ: Optional[Mapping[str, str]] = None) -> int:
+    """Return the bytes a process's model cache may hold here: its smallest visible GPU's memory, else the host's."""
+    gpus = visible_gpus(info, environ)
+    return min(g.memory_bytes for g in gpus) if gpus else info.memory_bytes
 
 
 def numerics_class(
@@ -224,7 +234,7 @@ def numerics_class(
     if kind == "cuda":
         if index and not index.isdigit():
             raise DeviceResolutionError(f"unparseable device {device!r}")
-        visible = _visible_gpus(info, os.environ if environ is None else environ)
+        visible = visible_gpus(info, environ)
         position = int(index) if index else 0
         if position >= len(visible):
             raise DeviceResolutionError(f"{device!r} is out of range: {len(visible)} visible GPU(s)")

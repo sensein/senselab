@@ -194,7 +194,8 @@ def agreement(
 def probe(jobs: list[Job], placement: Placement, *, run: RunConfig, execution: ExecutionProfile, work: Path) -> Probe:
     """Run `jobs` at batch 1, at the largest formation population and at batch 1 again, and compare each item's outputs.
 
-    Nothing runs when no request would hold more than one item (`Probe.batched`).
+    Nothing runs when no request would hold more than one item (`Probe.batched`). The process's workers and models are
+    released after (`WorkerSet.release`), so the next benchmark starts on free devices.
     """
     grid = BucketGrid.load_default()
     [(top, batch)] = Counter(formation(j, placement.backend, grid) for j in jobs).most_common(1)
@@ -214,9 +215,12 @@ def probe(jobs: list[Job], placement: Placement, *, run: RunConfig, execution: E
         outcomes = execute(jobs, sized, store=store, run=run, profile=execution, workers=workers)
         return [_stored(store, o) for o in outcomes]
 
-    one = sent(1, "batch-1")
-    agree, largest, lost = agreement(one, sent(batch, f"batch-{batch}"), run)
-    repeat, repeat_largest, repeat_lost = agreement(one, sent(1, "batch-1-repeat"), run)
+    try:
+        one = sent(1, "batch-1")
+        agree, largest, lost = agreement(one, sent(batch, f"batch-{batch}"), run)
+        repeat, repeat_largest, repeat_lost = agreement(one, sent(1, "batch-1-repeat"), run)
+    finally:
+        workers.release()
     return Probe(
         backend.task, backend.name, agree, len(jobs), kind, batch, largest, repeat, repeat_largest, lost, repeat_lost
     )

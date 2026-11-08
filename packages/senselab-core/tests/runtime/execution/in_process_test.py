@@ -508,10 +508,11 @@ def test_concurrent_use_of_a_worker_client_is_an_infrastructure_fault() -> None:
 
 @pytest.mark.logic
 def test_budget_enters_the_host_pool(store: ResultStore) -> None:
-    """A host worker pooled under one cache budget is not reused under another, whose sizing it lacks."""
+    """A host worker pooled under one cache budget is not reused under another, whose cache it does not share."""
     _in_process(_call("budget"), execution=_profile("alpha"), store=store)
-    with pytest.raises(ValueError, match="state_bytes"):
-        _in_process(_call("budget-2"), execution=_profile("alpha", model_cache_budget_bytes=10), store=store)
+    [measured] = WORKERS.pooled()
+    _in_process(_call("budget-2"), execution=_profile("alpha", model_cache_budget_bytes=10), store=store)
+    assert len(WORKERS.pooled()) == 2 and measured in WORKERS.pooled()
 
 
 @pytest.mark.logic

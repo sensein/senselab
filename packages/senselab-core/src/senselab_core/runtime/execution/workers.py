@@ -5,7 +5,9 @@ A server is this set's own, or, with a registry, a registered service it consume
 
 import collections
 import contextlib
+import gc
 import importlib
+import sys
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -22,6 +24,7 @@ from senselab_core.kernel.identity import Attestation, ResolvedModel
 from senselab_core.runtime.call import packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.services import ServiceLease, ServiceRegistry
+from senselab_core.runtime.hardware import measured_budget, probe_hardware
 from senselab_core.runtime.host_worker import HostWorker
 from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.network import network_variables
@@ -136,10 +139,10 @@ _CACHES_LOCK = threading.Lock()
 
 
 def process_cache(budget: int | None) -> ModelCache:
-    """Return this process's model cache of `budget` bytes (None for no budget), made on first use."""
+    """Return this process's model cache of `budget` bytes, made on first use; None measures it (`measured_budget`)."""
     with _CACHES_LOCK:
         if budget not in _CACHES:
-            _CACHES[budget] = ModelCache(budget if budget is not None else 2**63 - 1)
+            _CACHES[budget] = ModelCache(budget if budget is not None else measured_budget(probe_hardware()))
         return _CACHES[budget]
 
 
@@ -218,7 +221,7 @@ class WorkerSet:
         pooled worker is closed and replaced.
 
         Raises:
-            ValueError: a server backend without `expected`; a budgeted host backend without `state_bytes`.
+            ValueError: a server backend without `expected`.
             LeaseTimeout, LeaseUnavailable: a server's start lease is busy or cannot be read.
             WorkerLoadFailed: a worker or a server failed to start or load, whatever else it raised
                 (`VllmStartError` and `AttestationMismatch` from a server start among them).
@@ -309,7 +312,7 @@ class WorkerSet:
             )
         budget = profile.model_cache_budget_bytes
         key = host_model_key(backend, env, model, init["device"])
-        size_of = _size_of(backend.worker, budget)
+        size_of = _size_of(backend.worker)
         return _loaded(
             lambda: HostWorker(
                 backend.worker, init=backend_init(init), key=key, cache=process_cache(budget), size_of=size_of
@@ -451,6 +454,22 @@ class WorkerSet:
         for _, worker in held:
             worker.close()
 
+    def release(self) -> None:
+        """Free what this set and this process hold; a later checkout loads again.
+
+        The set is closed (`close`), every process model cache dropped, and the device memory torch caches, when
+        torch is loaded, freed.
+        """
+        self.close()
+        with _CACHES_LOCK:
+            caches = list(_CACHES.values())
+        for cache in caches:
+            cache.clear()
+        gc.collect()
+        torch = sys.modules.get("torch")
+        if torch is not None and torch.cuda.is_initialized():
+            torch.cuda.empty_cache()
+
     def close(self) -> None:
         """Stop every pooled worker process and every server, withdrawing what it provides; a checkout starts again."""
         with self._lock:
@@ -499,11 +518,7 @@ def _loaded(start: Callable[[], Started]) -> Started:
         raise failed from exc
 
 
-def _size_of(module: str, budget: int | None) -> Callable[[object], int]:
-    """Return how a backend's state is sized: 0 bytes with no budget, else by its module's `state_bytes`."""
-    if budget is None:
-        return lambda _: 0
-    size_of = getattr(importlib.import_module(module), "state_bytes", None)
-    if size_of is None:
-        raise ValueError(f"backend module {module!r} defines no state_bytes, so a model-cache budget cannot hold it")
-    return size_of  # type: ignore[no-any-return]
+def _size_of(module: str) -> Callable[[object], int]:
+    """Return how a backend's state counts against the model-cache budget: by its module's `state_bytes`, else 0."""
+    size_of: Callable[[object], int] | None = getattr(importlib.import_module(module), "state_bytes", None)
+    return size_of or (lambda _: 0)

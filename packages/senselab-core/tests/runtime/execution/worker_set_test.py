@@ -5,6 +5,7 @@ import platform
 import threading
 from typing import Any
 
+import backends.release_backend_fixture as release_fixture
 import pytest
 import senselab_core.runtime.fake_backend as fake
 from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
@@ -187,6 +188,37 @@ def test_a_model_is_shared_by_one_backend_code_across_tasks_and_never_by_two() -
             states.append(worker.run([{"id": "a", "inputs": {}}], {})[0]["outputs"]["state"])
     workers.close()
     assert states[0] == states[1]
+
+
+@pytest.mark.logic
+def test_release_frees_the_cached_models_workers_and_servers() -> None:
+    """`release` frees a host backend's cached model and stops the set's servers; the next checkout loads again."""
+    stopped: list[str] = []
+
+    class Served:
+        label, url, attestation = "served", "http://127.0.0.1:1", _attestation(_model("d" * 40))
+
+        def context_fields(self) -> dict[str, Any]:
+            return {}
+
+        def stop(self) -> None:
+            stopped.append(self.label)
+
+    model = _model("d" * 40)
+    backend = _host("released").model_copy(update={"worker": "backends.release_backend_fixture"})
+    workers = WorkerSet(2, start_server=lambda *_: Served())
+    workers.server(backend, ENV, model, PROFILE, Served.attestation)
+
+    def load() -> int:
+        with workers.checkout(backend, ENV, model, device="cpu", profile=PROFILE) as worker:
+            return int(worker.run([{"id": "a", "inputs": {}}], {})[0]["outputs"]["state"])
+
+    first = load()
+    assert release_fixture.RELEASED == [] and load() == first
+    workers.release()
+    assert release_fixture.RELEASED == [first] and stopped == ["served"] and workers.pooled() == []
+    assert load() != first
+    workers.close()
 
 
 @pytest.mark.logic
