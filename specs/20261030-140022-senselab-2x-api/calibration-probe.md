@@ -127,10 +127,12 @@ Not in the identity:
 The profile's `gpu_type` (which may be None, "any GPU") and `memory_cap_bytes` are never compared with a report and
 never enter a digest. The coordinator resolves a resource class to the hardware it runs on before any lookup:
 
-1. Each measures root keeps an index `classes/<declared digest>/<seen digest>`, where the declared digest covers the
-   resource class's hardware fields (`device`, `gpu_type`, `memory_cap_bytes`, `cpus`, `partition`) and the seen digest
-   is a `HardwareClass`. The coordinator writes the entry (write-once, empty file) on a worker's first hello, from the
-   `HardwareClass` in its ready mark.
+1. Each measures root keeps an index `classes/<declared digest>/<seen digest>.json`, where the declared digest
+   (`hardware-declared@1`) covers the resource class's hardware fields (`device`, `gpu_type`, `memory_cap_bytes`,
+   `cpus`, `partition`) and the seen digest (`hardware-class@1`) is the digest of a `HardwareClass`. The file holds that
+   class (`measure-class@1.0`), since a digest alone cannot rebuild the unit's hardware field; a reader requires the
+   name to be the class's digest. The coordinator writes the entry (write-once) on a worker's first hello, from the
+   `HardwareClass` in its ready mark (`MeasureRoots.note_seen`; `seen_classes` reads it).
 2. If the index names exactly one seen class, the coordinator uses it.
 3. If the index is empty, or names more than one, the first worker's hello for that class decides. The unit is in
    `Resolving` (§7.1) until then; the queue's first worker is started as it would be anyway, so this costs no extra
@@ -148,7 +150,10 @@ index only; with no entry, its figures are "unmeasured: hardware not yet seen".
 `calibration.measures_roots` is a list of roots, read in order and pooled (a run reads the files of every root it can
 read, under the trust filter of §3.5):
 
-- on `orcd`: the group's shared root beside the result store, then the user's own `<cache root>/2x/measures`;
+- on `orcd`: the group's shared root beside the result store, then the user's own `<cache root>/2x/measures`, written
+  `${cache_root}/2x/measures` in the profile (the token is `revision.cache_root()`); a resolved root must be absolute,
+  an unset or empty `SENSELAB_MEASURES_ROOT` is no root (logged, never raised), and a blank, repeated or relative root
+  is refused at load;
 - on `laptop`: the own root only.
 
 Writes and leases go to the **first writable root**. Writability is checked once at run start by the storage probe
@@ -164,7 +169,7 @@ Layout of each root (`measures@1`):
 
 ```
 <root>/measures@1/
-  classes/<declared digest>/<seen digest>     hardware index (§3.2); empty files, written once
+  classes/<declared digest>/<seen digest>.json  hardware index (§3.2); measure-class@1.0, written once
   units/<u[:2]>/<u>/                          u = MeasureUnit digest
     unit.json                                 measure-unit@1.0: the identity fields; first writer wins
     obs/<probe id>.json                       measure-observations@1.0: one probe's observations; written once
@@ -178,7 +183,7 @@ Layout of each root (`measures@1`):
 ```
 
 There is no estimate file. `Probe.estimate` runs over the unit's pooled observations, newer than the newest trusted
-`supersede` record, when the coordinator first needs the unit, and the result is held for the run.
+`supersede` record names in `outdates`, when the coordinator first needs the unit, and the result is held for the run.
 
 ### 3.4 Concurrency (ADR-003)
 
@@ -189,10 +194,15 @@ There is no estimate file. `Probe.estimate` runs over the unit's pooled observat
   handled by §3.5's malformed-file rule; a skipped unit directory takes no writes, which go to the next writable root.
 - **One probe per unit at a time, for efficiency only.** A coordinator that needs to probe `u` reads every root for a
   live `<u>/probe.lease` and, finding none, takes the lease in its write root (the 2026-11-03 directory lease, renewed
-  by `keep_alive`, proven before it writes its observations). A coordinator finding a live lease waits for the
+  by `keep_alive`, proven before it writes its observations). "A peer" is defined once, by the trust filter: a lease
+  whose owner uid the filter admits. `MeasureRoots.probe_lease` returns `Lease | PeerProbing | Unleased`. A coordinator
+  finding a live lease of an admitted owner (`PeerProbing`) waits for the
   holder's observations up to `peer_wait_s`, re-reading once per `pool.poll_s`, then returns to `New` with
   whatever it found as prior (§7.1). The wait holds only the unit's computed jobs; its servable jobs and other units
-  proceed, and the plan states it (§6.6). A broken lease, or two members writing to different roots, costs a duplicate
+  proceed, and the plan states it (§6.6). Under `calibration.trust: own`, a live lease of another uid is no peer: the
+  coordinator probes without a lease and does not wait (`Unleased`, as when no root is writable); a stale lease its
+  uid cannot break raises `LeaseUnavailable` on taking it. Liveness is judged on the storage clock, and on the local
+  clock in a root that cannot be written. A broken lease, or two members writing to different roots, costs a duplicate
   probe, never a wrong measure.
 - **Walks are by descriptor** below each root; ids that become path components are one component.
 
@@ -206,7 +216,7 @@ is caught by drift (§7.3). So shared records need provenance and a reader's cho
   scheduler job id, when there is one), `run`, `senselab` (version and 40-hex commit when known), the profile's
   canonical digest and the worker's `HardwareClass`. **No record carries an account name or a hostname**: a measures
   root is a location other users read, so its files follow the widest audience's rule (UX-57). A writer's identity is
-  its file's owner uid, read from the file system, never from content; index entries, being empty, have only that. A
+  its file's owner uid, read from the file system, never from content; index entries hold a `HardwareClass`, which carries no account or host. A
   host is identified, where diagnosis needs it, by its `HardwareClass` and the scheduler job id.
 - **One reader filter over all of them.** `calibration.trust` is `group` (read every file of every root) or `own`
   (only files whose owner uid is the current user's). A `drift`, `supersede`, `regime` or `oom` record acts only for readers whose filter
@@ -228,10 +238,12 @@ is caught by drift (§7.3). So shared records need provenance and a reader's cho
 
 1. **Identity change.** Any field of §3.1 changes the digest; the old directory is never read for the new unit.
 2. **Measured staleness.** Drift under co-tenancy writes a `regime` record; drift in the probe regime makes the
-   estimate suspect, and a confirming probe decides whether it is stale (`supersede`) (§7.3). Observations older than the newest trusted `supersede` record
-   are not pooled.
+   estimate suspect, and a confirming probe decides whether it is stale (`supersede`) (§7.3). A `supersede` record names the probe ids it outdates (`outdates`, the ids of the suspect
+   estimate's basis); a trusted record's ids do not pool, whatever their files' times, so a copy, restore or clock skew
+   changes nothing and the order of writing does not matter.
 3. **No age rule.** A wall-clock time-to-live would be a fixed parameter with no measurement behind it.
-4. **Collection** (store policy's `collect_interval_s`): superseded observation files the collector wrote, keeping
+4. **Collection** (store policy's `collect_interval_s`): observation files the collector wrote that a trusted record
+   outdates, keeping
    the newest `calibration.observations_kept` for audit, and staging and quarantine older than the policy's ages.
 
 ### 3.7 Packaged tables and cluster measures
