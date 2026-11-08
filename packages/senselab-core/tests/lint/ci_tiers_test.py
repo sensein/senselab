@@ -1,8 +1,11 @@
 """The CI cadence for the test tiers: what a PR, the `limits` label and the nightly run select; the rest is ORCD."""
 
+import os
 import shlex
+import subprocess
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -16,6 +19,9 @@ PYPROJECT = REPO / "pyproject.toml"
 TIERS = ("logic", "contract", "limits", "usecase", "env")
 EVERY_PR, ON_LABEL, NIGHTLY = "every_pr", "on_label", "nightly"
 LABEL = "limits"
+FIT_SOURCES = frozenset(
+    f"packages/senselab-core/src/senselab_core/runtime/{name}.py" for name in ("probe", "calibration")
+)
 
 
 def _commands(run: str) -> list[list[str]]:
@@ -178,13 +184,64 @@ def test_the_nightly_workflow_tests_2x_and_a_pr_gaining_a_label_reruns_the_tests
     checkouts = [
         step for job in nightly["jobs"].values() for step in job.get("steps", []) if "checkout" in step.get("uses", "")
     ]
-    matrix = nightly["jobs"]["limits"]["strategy"]["matrix"]["ref"]
-    assert matrix[0] == "2.x" and all(ref.startswith("2x/") for ref in matrix[1:]) and len(matrix) == 2  # noqa: PLR2004
+    integration, phase = nightly["jobs"]["limits"]["strategy"]["matrix"]["ref"]
+    assert integration == "2.x" and phase.startswith("2x/")
     assert checkouts and all(step["with"]["ref"] in {"2.x", "${{ matrix.ref }}"} for step in checkouts)
     tests = yaml.safe_load(WORKFLOW.read_text())
     on = tests.get("on", tests.get(True))
     assert "schedule" not in on and "labeled" in on["pull_request"]["types"]
     assert on["workflow_call"]["inputs"]["ref"]
+
+
+PUSH_IF = "github.event_name == 'push' && startsWith(github.ref, 'refs/heads/2x/')"
+SCOPED_IF = "steps.scope.outputs.run == 'true'"
+
+
+def _scope(job: dict[str, Any]) -> dict[str, Any]:
+    step: dict[str, Any] = next(step for step in job["steps"] if step.get("id") == "scope")
+    return step
+
+
+@pytest.mark.logic
+def test_core_limits_runs_on_the_label_and_on_a_push_to_a_2x_branch_touching_the_fit() -> None:
+    """The label runs the job on a PR; a push to a `2x/` branch runs it when the push changes the probe's fit."""
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["core-limits"]
+    assert job["if"] == f"{LABEL_IF} || ({PUSH_IF})"
+    assert set(_scope(job)["env"]["PATHS"].split()) == FIT_SOURCES
+    later = job["steps"][job["steps"].index(_scope(job)) + 1 :]
+    assert later and all(step.get("if") == SCOPED_IF for step in later)
+
+
+def _commit(repo: Path, path: str) -> str:
+    git = ["git", "-C", str(repo), "-c", "user.name=user", "-c", "user.email=user@example.invalid"]
+    (repo / path).parent.mkdir(parents=True, exist_ok=True)
+    (repo / path).write_text(path)
+    subprocess.run([*git, "add", path], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", path], check=True)
+    return subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _scoped(repo: Path, event: str, before: str) -> str:
+    step = _scope(yaml.safe_load(WORKFLOW.read_text())["jobs"]["core-limits"])
+    output = repo.parent / "output"
+    output.write_text("")
+    env = {**os.environ, **step["env"], "BEFORE": before, "GITHUB_EVENT_NAME": event, "GITHUB_OUTPUT": str(output)}
+    subprocess.run(["bash", "-e", "-c", step["run"]], cwd=repo, env=env, check=True, timeout=60)
+    return output.read_text().strip()
+
+
+@pytest.mark.logic
+def test_the_scope_step_runs_the_tier_only_when_a_push_changes_the_fit(tmp_path: Path) -> None:
+    """A push changing only other files skips; one changing a fit source, an unknown base, or a PR runs."""
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    first = _commit(repo, "README.md")
+    second = _commit(repo, "packages/other.py")
+    assert _scoped(repo, "push", first) == "run=false"
+    _commit(repo, sorted(FIT_SOURCES)[0])
+    assert _scoped(repo, "push", second) == "run=true"
+    assert _scoped(repo, "push", "0" * 40) == "run=true"
+    assert _scoped(repo, "pull_request", second) == "run=true"
 
 
 @pytest.mark.logic

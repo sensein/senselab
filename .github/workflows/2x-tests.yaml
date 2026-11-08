@@ -151,25 +151,43 @@ jobs:
       run: .lean/bin/lint-imports
 
   # The model-free limits tier on a PR carrying the `limits` label; limits that load a model run on ORCD.
+  # On a PR carrying the `limits` label, and on a push to a `2x/` branch that changes the probe's fit.
   core-limits:
     needs: detect
     name: core-limits
-    if: contains(github.event.pull_request.labels.*.name, 'limits')
+    if: contains(github.event.pull_request.labels.*.name, 'limits') || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/2x/'))
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
       with:
         ref: ${{ inputs.ref }}
         fetch-depth: 0   # hatch-vcs derives the version from tags
+    - name: Whether this run tests the limits tier
+      id: scope
+      env:
+        BEFORE: ${{ github.event.before }}
+        PATHS: >-
+          packages/senselab-core/src/senselab_core/runtime/probe.py
+          packages/senselab-core/src/senselab_core/runtime/calibration.py
+      # A base the clone lacks (a new branch, a force push) counts as a change.
+      run: |
+        if [ "$GITHUB_EVENT_NAME" = push ] && git diff --quiet "$BEFORE" HEAD -- $PATHS; then
+          echo run=false >> "$GITHUB_OUTPUT"
+        else
+          echo run=true >> "$GITHUB_OUTPUT"
+        fi
     - name: Install uv
+      if: steps.scope.outputs.run == 'true'
       uses: astral-sh/setup-uv@v5
       with:
         version: 0.13.6
     - name: Install the core distributions alone, from uv.lock
+      if: steps.scope.outputs.run == 'true'
       env:
         UV_PROJECT_ENVIRONMENT: .core
       run: uv sync --locked --no-editable --python 3.13 --package senselab-core --group test
     - name: Run the limits tier
+      if: steps.scope.outputs.run == 'true'
       run: .core/bin/pytest packages -m "limits and not model" -p no:cacheprovider
 
   # The declared version of a task or backend moves whenever its source does (scripts/check_source_digests.py).
