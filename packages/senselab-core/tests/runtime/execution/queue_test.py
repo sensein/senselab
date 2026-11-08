@@ -230,6 +230,19 @@ def test_a_stalled_putter_keeps_its_item_indexed(tmp_path: Path, pool: Pool, tie
     claim.commit()
 
 
+def test_an_outcome_record_carries_the_epoch_of_the_claim_and_of_the_queue(tmp_path: Path) -> None:
+    """A committed record names the epoch its claim was taken in; the queue's own dead record names the queue's."""
+    queue = QueueSet(tmp_path, ExecutionProfile.load(), epoch=lambda: 4).queue("cpu")
+    done, corrupt = _fragments(2)
+    queue.put_all([done, corrupt])
+    (queue.path / "items" / f"{_digest(corrupt)}.json").write_bytes(b"{}")
+    claim = queue.claim("w", 2)
+    assert claim is not None and claim.items == (_digest(done),)
+    claim.commit()
+    written = [queue.outcome(_digest(f)) for f in (done, corrupt)]
+    assert [r and (r["outcome"], r["epoch"]) for r in written] == [("done", 4), ("dead", 4)]
+
+
 def test_a_missing_item_stays_ready_and_a_corrupt_one_is_dead(tmp_path: Path) -> None:
     """A missing item file is an infrastructure fault and stays ready; one that is not its digest's is a dead item."""
     queue = _queue(tmp_path)

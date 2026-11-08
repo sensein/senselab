@@ -685,14 +685,16 @@ class Pool:
     def _settle(self, followed: _Followed, flight: _Flight, record: Mapping[str, object]) -> Iterator[ResultRef]:
         """Yield the results of `flight`'s jobs from its outcome `record`, applying each failure's effect.
 
-        A reported result is taken only when it names the job's own key and the store holds its outputs. A resource
-        fault doubles the per-item memory of the unit's measure (`_grow`).
+        A reported result is taken only when it names the job's own key and the store holds its outputs; one whose
+        outcome was written by a claim of another epoch, or of none, is given as served under `exact` unless it was
+        served under another policy. A resource fault doubles the per-item memory of the unit's measure (`_grow`).
         """
         fragment = flight.fragment
         jobs = record.get("jobs") if record.get("outcome") == "done" else None
         given = {r.job: r for r in (ResultRef.model_validate(j) for j in jobs)} if isinstance(jobs, list) else {}
         dead = FaultRecord.model_validate(record["fault"]) if record.get("outcome") == "dead" else None
         keys, grown = self._keys(fragment), False
+        reused = record.get("epoch") != self.epoch
         for index, (job, key) in enumerate(zip(fragment.jobs, keys, strict=True)):
             ref = given.get(job)
             if ref is not None and ref.key_digest != key:
@@ -705,7 +707,7 @@ class Pool:
                 )
             elif ref is not None and ref.failure is None and ref.output_identity is not None:
                 if self.store.outputs_of(key, ref.output_identity) is not None:
-                    yield ref
+                    yield ref.model_copy(update={"served": "exact"}) if reused and ref.served is None else ref
                     continue
                 fault = _gap("MissingOutput", f"the outputs of {job} are not in the result store")
             elif ref is not None and ref.failure is not None:

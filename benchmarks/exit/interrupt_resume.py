@@ -1,18 +1,22 @@
 """Step 4: interrupt `SpeechToText` on a Slurm pool at a share of its items, then resume it and account the work.
 
-`interrupt_resume.py start --work DIR --out FILE` plans and runs the `stt` step under the profile on `pool-slurm`; once
-the config's share of the items has a result event it prints the coordinator's and every live worker's Slurm job id for
-the controller to `scancel`, writes them to `FILE`, and keeps waiting. It cancels nothing.
-`resume HASH --work DIR --out FILE` (a fresh process, after the cancel) resumes the run and asserts from its events:
+`interrupt_resume.py start --work DIR --out FILE` plans the `stt` step under the profile on `pool-slurm` and runs it in
+a child process; once the config's share of the items has a result event the coordinator cancels every Slurm job named
+by the run's prefix, SIGKILLs the child, cancels again whatever the child had submitted meanwhile, writes the report to
+`FILE`, prints the hash and the committed count and exits 0. The interrupt depends on no controller.
+`resume HASH --work DIR --out FILE` (a fresh process, after the interrupt) resumes the run and asserts from its events:
 executions are the items not committed before the interrupt, every other item a reuse, and no model ref was resolved.
 """
 
 import argparse
 import os
+import signal
+import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 sys.path[:0] = [str(Path(__file__).resolve().parent)]
 import exitlib  # noqa: E402 - beside this script
@@ -26,8 +30,81 @@ STEP = "stt"
 EXECUTOR = "pool-slurm"
 
 
-def start(work: Path, out: Path, profile_argument: str, config: exitlib.Config) -> int:
-    """Run the step until its share of the items is committed, report the jobs to cancel, then wait.
+def scancel(jobs: Sequence[str]) -> None:
+    """Cancel the Slurm jobs `jobs`."""
+    subprocess.run(["scancel", *jobs], check=True)
+
+
+def interrupt(  # noqa: PLR0913 - the prefix and process, then the three effects and the bound
+    prefix: str,
+    pid: int,
+    timeout_s: float,
+    poll_s: float,
+    deadline: float | None,
+    jobs: Callable[[str, float], list[str]],
+    cancel: Callable[[Sequence[str]], None],
+    kill: Callable[[int], None],
+) -> list[str]:
+    """Cancel the jobs named `prefix*`, kill process group `pid`, then cancel until none of the prefix is live.
+
+    The second round takes jobs the killed process submitted after the first listing. A job already cancelled that
+    is still listed (completing) is neither cancelled again nor counted again.
+
+    Returns:
+        Every job id cancelled.
+
+    Raises:
+        exitlib.BoundExceeded: jobs of the prefix are still live at `deadline` (a `time.monotonic()` value).
+    """
+    cancelled: list[str] = []
+
+    def sweep() -> list[str]:
+        live = jobs(prefix, timeout_s)
+        fresh = [j for j in live if j not in cancelled]
+        if fresh:
+            cancel(fresh)
+            cancelled.extend(fresh)
+        return live
+
+    sweep()
+    kill(pid)
+    while sweep():
+        if deadline is not None and time.monotonic() >= deadline:
+            raise exitlib.BoundExceeded(f"jobs named {prefix}* are still live after the interrupt")
+        time.sleep(poll_s)
+    return cancelled
+
+
+def _plan(work: Path, profile_argument: str, config: exitlib.Config) -> tuple[Any, Any]:  # noqa: ANN401
+    """Return the profile and the placed plan of the step under `work`."""
+    profile = exitlib.profile_for(EXECUTOR, exitlib.load_profile(profile_argument), config)
+    exitlib.isolate(work, STEP)
+    return profile, exitlib.planned(config.steps[STEP], exitlib.build_tree(config.steps[STEP], work), profile)
+
+
+def run_child(work: Path, profile_argument: str, config: exitlib.Config) -> int:
+    """Plan and run the step to its end; the process `start` spawns, killed at the interrupt."""
+    _, placed = _plan(work, profile_argument, config)
+    run, _ = exitlib.launch(placed, EXECUTOR, ResultStore(cache_root() / RESULTS_DIR))
+    while not run.wait(timeout=config.watch_poll_s).done:
+        pass
+    return 0
+
+
+def spawn_child(work: Path, profile_argument: str) -> subprocess.Popen[bytes]:
+    """Start `run_child` as a process of its own, leading its own process group."""
+    argv = [sys.executable, str(Path(__file__).resolve()), "_run", "--work", str(work), "--profile", profile_argument]
+    return subprocess.Popen(argv, start_new_session=True)  # noqa: S603 - this interpreter and script
+
+
+def start(
+    work: Path,
+    out: Path,
+    profile_argument: str,
+    config: exitlib.Config,
+    spawn: Callable[[Path, str], subprocess.Popen[bytes]] = spawn_child,
+) -> int:
+    """Run the step in a child until its share of the items is committed, then interrupt it and report.
 
     Raises:
         RuntimeError: the run is done before the share was committed, or not started as a Slurm job.
@@ -35,44 +112,58 @@ def start(work: Path, out: Path, profile_argument: str, config: exitlib.Config) 
     """
     if not os.environ.get("SLURM_JOB_ID"):
         raise RuntimeError("the coordinator must be a Slurm job: submit this command, do not run it on a login node")
-    base = exitlib.load_profile(profile_argument)
-    profile = exitlib.profile_for(EXECUTOR, base, config)
-    exitlib.isolate(work, STEP)
-    placed = exitlib.planned(config.steps[STEP], exitlib.build_tree(config.steps[STEP], work), profile)
+    profile, placed = _plan(work, profile_argument, config)
     run_dir = run_dir_of(placed.hash)
     items = len(placed.manifest.rows)
     target = exitlib.interrupt_target(items, config.interrupt_share)
     bounds, poll = config.bounds[EXECUTOR], config.watch_poll_s
-    store = ResultStore(cache_root() / RESULTS_DIR)
     prefix = exitlib.slurm_prefix(profile, run_dir, placed.hash)
-    run, _ = exitlib.launch(placed, EXECUTOR, store)
-    deadline = None if bounds.wall_s is None else time.monotonic() + bounds.wall_s
-    while len(exitlib.committed_jobs(run.events())) < target:
-        if run.wait(timeout=poll).done:
-            raise RuntimeError(
-                f"the run finished before {target} of {items} items were committed: nothing to interrupt"
-            )
-        if deadline is not None and time.monotonic() >= deadline:
-            run.cancel()
-            raise exitlib.BoundExceeded(f"fewer than {target} of {items} items committed within {bounds.wall_s} s")
     timeout = exitlib.slurm_timeout(profile, poll)
-    workers = exitlib.slurm_job_ids(prefix, timeout, exitlib.squeue)
-    committed = len(exitlib.committed_jobs(run.events()))
-    report = {
-        "hash": placed.hash,
-        "items": items,
-        "committed": committed,
-        "coordinator": worker_id(),
-        "workers": workers,
-    }
-    exitlib.write_json(out, report)
-    print(f"INTERRUPT NOW hash={placed.hash} committed={committed}/{items}")
-    print(f"scancel {worker_id()} {' '.join(workers)}")
-    print(f"more workers may have been submitted since: re-list the jobs named {prefix}* at cancel time")
-    while not run.wait(timeout=poll).done:
+    child = spawn(work, profile_argument)
+    deadline = None if bounds.wall_s is None else time.monotonic() + bounds.wall_s
+    committed = 0
+    try:
+        while (committed := len(exitlib.committed_jobs(read_events(run_dir)))) < target:
+            if child.poll() is not None:
+                raise RuntimeError(
+                    f"the run ended (exit {child.returncode}) with {committed} of {items} items committed, short of "
+                    f"{target}: nothing to interrupt; {exitlib.failure_summary(read_events(run_dir))}"
+                )
+            if deadline is not None and time.monotonic() >= deadline:
+                raise exitlib.BoundExceeded(f"fewer than {target} of {items} items committed within {bounds.wall_s} s")
+            time.sleep(poll)
+        cancelled = interrupt(
+            prefix,
+            child.pid,
+            timeout,
+            poll,
+            deadline,
+            lambda each, seconds: exitlib.slurm_job_ids(each, seconds, exitlib.squeue),
+            scancel,
+            lambda each: os.killpg(each, signal.SIGKILL),
+        )
+        child.wait()
+    except BaseException:
+        _reap(child, prefix, timeout)
+        raise
+    exitlib.write_json(
+        out,
+        {"hash": placed.hash, "items": items, "committed": committed, "coordinator": worker_id(), "workers": cancelled},
+    )
+    print(f"INTERRUPTED hash={placed.hash} committed={committed}/{items} cancelled={' '.join(cancelled)}")
+    return 0
+
+
+def _reap(child: subprocess.Popen[bytes], prefix: str, timeout_s: float) -> None:
+    """Kill the child's process group and cancel the jobs of `prefix` after a failed start."""
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
         pass
-    print("the run finished before it was cancelled: the interrupt did not land")
-    return 1
+    child.wait()
+    live = exitlib.slurm_job_ids(prefix, timeout_s, exitlib.squeue)
+    if live:
+        scancel(live)
 
 
 def resume(plan_hash: str, work: Path, out: Path, profile_argument: str) -> int:
@@ -120,13 +211,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="interrupt_resume.py")
     commands = parser.add_subparsers(dest="command", required=True)
     starting = commands.add_parser("start", help="run until the share is committed; print the jobs to scancel")
+    running = commands.add_parser("_run", help="the process `start` spawns")
     resuming = commands.add_parser("resume", help="resume a run and assert its executions and reuses")
     resuming.add_argument("plan_hash")
-    for each in (starting, resuming):
+    for each in (starting, running, resuming):
         each.add_argument("--work", type=Path, required=True)
-        each.add_argument("--out", type=Path, required=True)
+        each.add_argument("--out", type=Path, required=each is not running)
         each.add_argument("--profile", default="orcd", help="a packaged execution profile, or a YAML file over one")
     args = parser.parse_args(argv)
+    if args.command == "_run":
+        return run_child(args.work, args.profile, exitlib.load_config())
     if args.command == "start":
         return start(args.work, args.out, args.profile, exitlib.load_config())
     return resume(args.plan_hash, args.work, args.out, args.profile)
