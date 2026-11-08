@@ -1,7 +1,8 @@
 format: launch-environment@2.0
 # The ambient variables a worker or server process inherits, by family. A variable passes when a family names it or
 # one of its prefixes, and no `never` entry does. A family with `recorded: true` also enters the launch digest, which
-# the context records; the others are plumbing that cannot change a result.
+# the context records; the others are plumbing that cannot change a result. A family's `measured` names, positive counts,
+# also enter the measure unit of a launched worker.
 # Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under this file's path.
 # Dynamic-linker search paths.
 linker: {names: [LD_LIBRARY_PATH], prefixes: [DYLD_], recorded: false}
@@ -16,8 +17,12 @@ proxy:
 hugging_face: {names: [], prefixes: [HF_, HUGGINGFACE_], recorded: false}
 # Device selection and CUDA behaviour; recorded.
 gpu: {names: [], prefixes: [CUDA_, NVIDIA_], recorded: true}
-# Thread counts; recorded.
-threads: {names: [], prefixes: [OMP_, MKL_, OPENBLAS_], recorded: true}
+# Thread counts; recorded, and the three counts measured.
+threads:
+  names: []
+  prefixes: [OMP_, MKL_, OPENBLAS_]
+  recorded: true
+  measured: [OMP_NUM_THREADS, MKL_NUM_THREADS, OPENBLAS_NUM_THREADS]
 # Text decoding of tool output and file names.
 locale: {names: [LANG], prefixes: [LC_], recorded: false}
 # Home, temporary directory and tool path.

@@ -18,7 +18,7 @@ from typing import Callable, Collection, Final, Iterator, Mapping, Optional, Seq
 
 logger = logging.getLogger("senselab")
 
-_MIB = 1024 * 1024
+MIB: Final = 1024 * 1024  # invariant: bytes in a mebibyte
 _KIB: Final = 1024  # invariant: bytes in a kibibyte, the unit of Linux ru_maxrss
 _GPU_QUERY_TIMEOUT_S = 30.0
 _NVIDIA_SMI_FIELDS = "index,uuid,name,memory.total,driver_version"
@@ -26,6 +26,7 @@ _NVIDIA_SMI_FORMAT = "--format=csv,noheader,nounits"
 _NVIDIA_SMI_GPU_QUERY = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS},compute_cap", _NVIDIA_SMI_FORMAT]
 _NVIDIA_SMI_GPU_QUERY_NO_CAP = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS}", _NVIDIA_SMI_FORMAT]
 _CHIP_QUERY = ["sysctl", "-n", "machdep.cpu.brand_string"]
+_LSCPU_QUERY = ["env", "LC_ALL=C", "lscpu"]
 _APPS_FIELDS = ("pid", "used_memory")
 _FREE_FIELDS = ("index", "uuid", "memory.free", "memory.total")
 _NVIDIA_SMI_FREE_QUERY = ["nvidia-smi", f"--query-gpu={','.join(_FREE_FIELDS)}", _NVIDIA_SMI_FORMAT]
@@ -63,7 +64,8 @@ class HardwareInfo:
     a line that could not be parsed (``gpus`` is then empty), or when the driver rejected ``compute_cap``
     (``gpus`` is then present without capabilities). ``probe_error`` carries a failed memory or chip
     probe; ``memory_bytes`` is 0 and ``chip`` None in that case. ``chip`` is the Apple silicon brand
-    string, e.g. ``"Apple M2 Max"``.
+    string, e.g. ``"Apple M2 Max"``; ``cpu_model`` the CPU's model string, None where the host does not name it.
+    ``cpu_count`` is the CPUs the probing process may run on (``process_cpus``), not the node's.
     """
 
     cpu_count: int
@@ -74,6 +76,7 @@ class HardwareInfo:
     gpu_probe_error: Optional[str] = None
     chip: Optional[str] = None
     probe_error: Optional[str] = None
+    cpu_model: Optional[str] = None
 
 
 def _run(cmd: list[str]) -> str:
@@ -95,7 +98,7 @@ def _parse_gpus(output: str, *, with_capability: bool) -> tuple[GpuInfo, ...]:
         gpus.append(
             GpuInfo(
                 name=fields[2],
-                memory_bytes=int(fields[3]) * _MIB,
+                memory_bytes=int(fields[3]) * MIB,
                 driver=fields[4] or None,
                 compute_capability=capability,
                 uuid=fields[1] or None,
@@ -152,11 +155,53 @@ def _probe_chip(run: Callable[[list[str]], str]) -> tuple[Optional[str], Optiona
     return chip or None, None if chip else "Apple chip unavailable: empty sysctl output"
 
 
-def probe_hardware(*, run: Callable[[list[str]], str] = _run) -> HardwareInfo:
+def _read_cpuinfo() -> str:
+    try:
+        return Path("/proc/cpuinfo").read_text()
+    except OSError:
+        return ""
+
+
+def _field(text: str, name: str) -> Optional[str]:
+    for line in text.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == name and value.strip():
+            return value.strip()
+    return None
+
+
+def _cpu_model(
+    run: Callable[[list[str]], str], system: str, cpuinfo: Callable[[], str] = _read_cpuinfo
+) -> Optional[str]:
+    """Return the CPU's model string: `sysctl` on Darwin; on Linux `/proc/cpuinfo`, then `lscpu` in the C locale."""
+    try:
+        if system == "Darwin":
+            return run(_CHIP_QUERY).strip() or None
+        return _field(cpuinfo(), "model name") or _field(run(_LSCPU_QUERY), "Model name")
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def process_cpus(
+    affinity: Optional[Callable[[int], Collection[int]]] = getattr(os, "sched_getaffinity", None),
+    count: Callable[[], Optional[int]] = os.cpu_count,
+) -> int:
+    """Return the CPUs this process may run on: its ``affinity`` where the platform has one, else ``count``."""
+    if affinity is not None:
+        return len(affinity(0))
+    return count() or 1
+
+
+def probe_hardware(
+    *,
+    run: Callable[[list[str]], str] = _run,
+    cpuinfo: Callable[[], str] = _read_cpuinfo,
+    cpus: Callable[[], int] = process_cpus,
+) -> HardwareInfo:
     """Probe CPU, memory, GPUs, Apple chip and platform; never imports ``torch``.
 
     ``run`` executes a command (the ``nvidia-smi`` query, ``sysctl`` on Apple silicon) and returns
-    stdout; tests inject it.
+    stdout; ``cpuinfo`` reads ``/proc/cpuinfo``; ``cpus`` counts the process's CPUs; tests inject all three.
     """
     system = platform.system()
     machine = platform.machine()
@@ -166,7 +211,7 @@ def probe_hardware(*, run: Callable[[list[str]], str] = _run) -> HardwareInfo:
     chip, chip_error = _probe_chip(run) if apple_silicon else (None, None)
     errors = [e for e in (memory_error, chip_error) if e]
     return HardwareInfo(
-        cpu_count=os.cpu_count() or 1,
+        cpu_count=cpus(),
         memory_bytes=memory,
         gpus=gpus,
         apple_silicon=apple_silicon,
@@ -174,6 +219,7 @@ def probe_hardware(*, run: Callable[[list[str]], str] = _run) -> HardwareInfo:
         gpu_probe_error=gpu_error,
         chip=chip,
         probe_error="; ".join(errors) or None,
+        cpu_model=chip or _cpu_model(run, system, cpuinfo),
     )
 
 
@@ -253,9 +299,9 @@ def device_free_memory(
         logger.warning("device memory unreadable: %r", output)
         return None
     gpus = [
-        GpuInfo(name="", memory_bytes=int(r[3]) * _MIB, driver=None, uuid=r[1] or None, index=int(r[0])) for r in rows
+        GpuInfo(name="", memory_bytes=int(r[3]) * MIB, driver=None, uuid=r[1] or None, index=int(r[0])) for r in rows
     ]
-    free = {int(r[0]): int(r[2]) * _MIB for r in rows}
+    free = {int(r[0]): int(r[2]) * MIB for r in rows}
     environ = os.environ if environ is None else environ
     named = environ if devices is None else {"CUDA_VISIBLE_DEVICES": ",".join(devices)}
     info = HardwareInfo(cpu_count=1, memory_bytes=0, gpus=tuple(gpus), apple_silicon=False, platform="")
@@ -401,7 +447,7 @@ def device_memory_bytes(
         return None
     rows = [[p.strip() for p in line.split(",")] for line in output.splitlines()]
     return sum(
-        int(r[1]) * _MIB
+        int(r[1]) * MIB
         for r in rows
         if len(r) == len(_APPS_FIELDS) and r[0].isdigit() and r[1].isdigit() and int(r[0]) in pids
     )

@@ -1,4 +1,4 @@
-"""Resource tables (`resource-table@1.0`): what one task and backend measured per model and resource class.
+"""Resource tables, `resource-table@1.0` and, below it, `@2.0`: what one task and backend measured.
 
 A table is a generated file `<root>/<task>/<backend>.yaml`, never hand-edited: packaged under `data/resources` by
 `scripts/generate_resources.py` from scale-ladder results, or written under the cache by a calibration round
@@ -7,19 +7,21 @@ size, and per resource class the seconds to load, the memory resident after it a
 second and the input seconds per item, with the run and jobs that measured them.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Annotated, ClassVar, Protocol
+from typing import Annotated, ClassVar, Protocol, TypeVar
 
 from pydantic import AfterValidator, Field, PlainSerializer, StringConstraints, model_validator
 from senselab_worker.digest import COMMIT_HEX, SHA256_HEX
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, thawed
-from senselab_core.kernel.formats import RESOURCE_TABLE_FORMAT, FormatTag, Formatted
+from senselab_core.kernel.formats import RESOURCE_TABLE_2_FORMAT, RESOURCE_TABLE_FORMAT, FormatTag, Formatted
 from senselab_core.kernel.placement import ResourceClassName
+from senselab_core.runtime.calibration import Estimate
 from senselab_core.runtime.config import dump_yaml, load_yaml
+from senselab_core.runtime.measures import MeasureUnit
 from senselab_core.runtime.storage import write_atomically
 
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -133,6 +135,23 @@ class ResourceTable(Formatted):
         return next((r for r in self.rows if (r.id, r.revision) == (model_id, revision)), None)
 
 
+_Table = TypeVar("_Table", "ResourceTable", "MeasureTable")
+
+
+def _load_tables(root: Traversable | Path, model: type[_Table]) -> tuple[_Table, ...]:
+    """Return every `model` table under `root`, `<task>/<backend>.yaml`, sorted by task and backend."""
+    if not root.is_dir():
+        return ()
+    tables = []
+    for task_dir in sorted((d for d in root.iterdir() if d.is_dir()), key=lambda d: d.name):
+        for file in sorted((f for f in task_dir.iterdir() if f.name.endswith(".yaml")), key=lambda f: f.name):
+            table = model.model_validate(load_yaml(file, "resource table"))
+            if (table.task, table.backend) != (task_dir.name, file.name.removesuffix(".yaml")):
+                raise ValueError(f"{task_dir.name}/{file.name} holds the table of {table.task}/{table.backend}")
+            tables.append(table)
+    return tuple(tables)
+
+
 def load_resource_tables(root: Traversable | Path) -> tuple[ResourceTable, ...]:
     """Return every table under `root`, `<task>/<backend>.yaml`, sorted by task and backend; none when it is absent.
 
@@ -140,16 +159,7 @@ def load_resource_tables(root: Traversable | Path) -> tuple[ResourceTable, ...]:
         ConfigError: a file cannot be read as YAML.
         ValueError: a file's table names another task or backend than its path, or does not validate.
     """
-    if not root.is_dir():
-        return ()
-    tables = []
-    for task_dir in sorted((d for d in root.iterdir() if d.is_dir()), key=lambda d: d.name):
-        for file in sorted((f for f in task_dir.iterdir() if f.name.endswith(".yaml")), key=lambda f: f.name):
-            table = ResourceTable.model_validate(load_yaml(file, "resource table"))
-            if (table.task, table.backend) != (task_dir.name, file.name.removesuffix(".yaml")):
-                raise ValueError(f"{task_dir.name}/{file.name} holds the table of {table.task}/{table.backend}")
-            tables.append(table)
-    return tuple(tables)
+    return _load_tables(root, ResourceTable)
 
 
 @dataclass(frozen=True)
@@ -200,3 +210,61 @@ def write_row(root: Path, unit: Unit, measure: ResourceMeasure, measured: Measur
 
 def _row_order(row: ResourceRow) -> tuple[str, str]:
     return (row.id or "", row.revision or "")
+
+
+class Derivation(Frozen):
+    """Where a packaged row was measured: the 40-hex commit, the jobs and the probes."""
+
+    commit: Annotated[str, StringConstraints(pattern=rf"^{COMMIT_HEX.pattern}$")]
+    jobs: tuple[NonEmptyStr, ...] = Field(min_length=1)
+    probe_ids: tuple[NonEmptyStr, ...] = Field(min_length=1)
+
+
+class MeasureRow(Frozen):
+    """A measure unit with its estimate and derivation."""
+
+    unit: MeasureUnit
+    estimate: Estimate
+    derivation: Derivation
+
+
+class MeasureTable(Formatted):
+    """A `resource-table@2.0` document: the rows of one task and backend."""
+
+    format: FormatTag = RESOURCE_TABLE_2_FORMAT
+    port_value: ClassVar[bool] = False
+    task: NonEmptyStr
+    backend: NonEmptyStr
+    rows: tuple[MeasureRow, ...]
+
+    @model_validator(mode="after")
+    def _check_rows(self) -> "MeasureTable":
+        for row in self.rows:
+            if (row.unit.task, row.unit.backend) != (self.task, self.backend):
+                raise ValueError(f"{self.task}/{self.backend} holds a row of {row.unit.task}/{row.unit.backend}")
+        digests = [r.unit.digest() for r in self.rows]
+        if len(set(digests)) != len(digests):
+            raise ValueError(f"{self.task}/{self.backend}: a unit has two rows")
+        return self
+
+
+class PackagedTable:
+    """The `resource-table@2.0` rows under a root, read on exact unit identity."""
+
+    def __init__(self, tables: Sequence[MeasureTable]) -> None:
+        """Index the rows of `tables` by unit digest."""
+        self._rows = {r.unit.digest(): r.estimate for t in tables for r in t.rows}
+
+    @classmethod
+    def load(cls, root: Traversable | Path) -> "PackagedTable":
+        """Read every `<root>/<task>/<backend>.yaml`; an absent root holds none.
+
+        Raises:
+            ConfigError: a file cannot be read as YAML.
+            ValueError: a file does not validate, or holds the table of another task or backend than its path.
+        """
+        return cls(_load_tables(root, MeasureTable))
+
+    def get(self, unit: MeasureUnit) -> Estimate | None:
+        """Return the estimate of the row whose unit is `unit`, None when there is none."""
+        return self._rows.get(unit.digest())

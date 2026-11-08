@@ -2,11 +2,13 @@
 
 from collections.abc import Callable
 
+from senselab_core.kernel.identity import ModelIdentity
 from senselab_core.runtime.calibration import (
     Cotenancy,
     Estimate,
     EstimateSource,
     HardwareClass,
+    HardwareGrant,
     LengthProfile,
     MemoryFit,
     Observation,
@@ -18,11 +20,36 @@ from senselab_core.runtime.calibration import (
     StratumBatch,
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings
+from senselab_core.runtime.measures import MeasureEnv, MeasureUnit
+from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable
 
 Register = Callable[..., None]
 
 _CUDA = HardwareClass(device="cuda", name="NVIDIA H100 80GB HBM3", memory_mib=81559, compute_capability="9.0", cpus=8)
 _CPU = HardwareClass(device="cpu", name="CPU model", cpus=1)
+ENV = MeasureEnv(
+    env_lock="a" * 64,
+    wheel_set="b" * 64,
+    driver={"torch_build": "cu128"},
+    platform="linux-x86_64",
+    decoder=None,
+    numerics={"device": "cuda"},
+    threads={"OMP_NUM_THREADS": 8},
+)
+UNIT = MeasureUnit(
+    task="speech_to_text",
+    task_version="1",
+    backend="whisper",
+    backend_version="3",
+    params={"word_timestamps": False},
+    backend_params={"dtype": "float16"},
+    formation="mixed",
+    chunk_grid=None,
+    model=ModelIdentity(id="openai/whisper-tiny", identity="c" * 40),
+    env=ENV,
+    service=None,
+    hardware=_CUDA,
+)
 _FIT = RequestFit(batch=1, r=0.2, u=0.05, n=6, spread=0.1, lo=2.0, hi=9.0)
 
 
@@ -130,4 +157,42 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
         LengthProfile,
         lambda: [LengthProfile(units=(3.0, None, 1.0)), LengthProfile(units=())],
         invalid_updates=[{"units": (-1.0,)}],
+    )
+    register_measure_samples(register)
+
+
+def register_measure_samples(register: Register) -> None:
+    """Register the samples of the measure identity types and the packaged table."""
+    register(
+        HardwareGrant,
+        lambda: [HardwareGrant(device="cuda", cpus=4, gpu=1), HardwareGrant(device="cpu")],
+        invalid_updates=[{"cpus": 0}, {"device": "tpu"}, {"gpu": -1}],
+    )
+    register(
+        MeasureEnv,
+        lambda: [ENV],
+        invalid_updates=[
+            {"env_lock": ""},
+            {"platform": ""},
+            {"driver": {"torch_index": "https://u:p@mirror.internal/whl/cu128"}},
+            {"driver": {"launch_env": "9" * 64}},
+            {"threads": {"OMP_NUM_THREADS": "abc"}},
+            {"threads": {"OMP_NUM_THREADS": 0}},
+        ],
+    )
+    register(
+        MeasureUnit,
+        lambda: [UNIT, UNIT.model_copy(update={"model": None, "formation": "bucket:g1", "hardware": _CPU})],
+        invalid_updates=[{"formation": "pooled"}, {"task": ""}, {"chunk_grid": ""}, {"service": ""}],
+    )
+    derivation = Derivation(commit="d" * 40, jobs=("j1",), probe_ids=("p1",))
+    row = MeasureRow(
+        unit=UNIT, estimate=Estimate(status="unmeasured", unit_kind="none", reasons=("x",)), derivation=derivation
+    )
+    register(Derivation, lambda: [derivation], invalid_updates=[{"commit": "abc"}, {"jobs": ()}])
+    register(MeasureRow, lambda: [row], invalid_updates=[{"derivation": None}])
+    register(
+        MeasureTable,
+        lambda: [MeasureTable(task="speech_to_text", backend="whisper", rows=(row,))],
+        invalid_updates=[{"backend": "other"}, {"rows": (row, row)}],
     )
