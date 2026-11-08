@@ -18,15 +18,14 @@ from senselab_core.runtime.calibration import (
     Observation,
     OomRecord,
     Prior,
-    Probe,
     ProbeItem,
     ProbePlan,
     ProbeRef,
     RegimeFactor,
-    memory_batch,
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings
 from senselab_core.runtime.measures import MeasureSource
+from senselab_core.runtime.probe import Probe, memory_batch
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Grant, Sample, calibrated, measure_of
 from senselab_core.testing.calibration_samples import UNIT
