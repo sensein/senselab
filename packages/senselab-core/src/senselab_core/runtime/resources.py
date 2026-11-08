@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Annotated, ClassVar, Protocol
+from typing import Annotated, ClassVar, Protocol, TypeVar
 
 from pydantic import AfterValidator, Field, PlainSerializer, StringConstraints, model_validator
 from senselab_worker.digest import COMMIT_HEX, SHA256_HEX
@@ -135,6 +135,23 @@ class ResourceTable(Formatted):
         return next((r for r in self.rows if (r.id, r.revision) == (model_id, revision)), None)
 
 
+_Table = TypeVar("_Table", "ResourceTable", "MeasureTable")
+
+
+def _load_tables(root: Traversable | Path, model: type[_Table]) -> tuple[_Table, ...]:
+    """Return every `model` table under `root`, `<task>/<backend>.yaml`, sorted by task and backend."""
+    if not root.is_dir():
+        return ()
+    tables = []
+    for task_dir in sorted((d for d in root.iterdir() if d.is_dir()), key=lambda d: d.name):
+        for file in sorted((f for f in task_dir.iterdir() if f.name.endswith(".yaml")), key=lambda f: f.name):
+            table = model.model_validate(load_yaml(file, "resource table"))
+            if (table.task, table.backend) != (task_dir.name, file.name.removesuffix(".yaml")):
+                raise ValueError(f"{task_dir.name}/{file.name} holds the table of {table.task}/{table.backend}")
+            tables.append(table)
+    return tuple(tables)
+
+
 def load_resource_tables(root: Traversable | Path) -> tuple[ResourceTable, ...]:
     """Return every table under `root`, `<task>/<backend>.yaml`, sorted by task and backend; none when it is absent.
 
@@ -142,16 +159,7 @@ def load_resource_tables(root: Traversable | Path) -> tuple[ResourceTable, ...]:
         ConfigError: a file cannot be read as YAML.
         ValueError: a file's table names another task or backend than its path, or does not validate.
     """
-    if not root.is_dir():
-        return ()
-    tables = []
-    for task_dir in sorted((d for d in root.iterdir() if d.is_dir()), key=lambda d: d.name):
-        for file in sorted((f for f in task_dir.iterdir() if f.name.endswith(".yaml")), key=lambda f: f.name):
-            table = ResourceTable.model_validate(load_yaml(file, "resource table"))
-            if (table.task, table.backend) != (task_dir.name, file.name.removesuffix(".yaml")):
-                raise ValueError(f"{task_dir.name}/{file.name} holds the table of {table.task}/{table.backend}")
-            tables.append(table)
-    return tuple(tables)
+    return _load_tables(root, ResourceTable)
 
 
 @dataclass(frozen=True)
@@ -255,15 +263,7 @@ class PackagedTable:
             ConfigError: a file cannot be read as YAML.
             ValueError: a file does not validate, or holds the table of another task or backend than its path.
         """
-        tables = []
-        if root.is_dir():
-            for task_dir in sorted((d for d in root.iterdir() if d.is_dir()), key=lambda d: d.name):
-                for file in sorted((f for f in task_dir.iterdir() if f.name.endswith(".yaml")), key=lambda f: f.name):
-                    table = MeasureTable.model_validate(load_yaml(file, "resource table"))
-                    if (table.task, table.backend) != (task_dir.name, file.name.removesuffix(".yaml")):
-                        raise ValueError(f"{task_dir.name}/{file.name} holds the table of {table.task}/{table.backend}")
-                    tables.append(table)
-        return cls(tables)
+        return cls(_load_tables(root, MeasureTable))
 
     def get(self, unit: MeasureUnit) -> Estimate | None:
         """Return the estimate of the row whose unit is `unit`, None when there is none."""

@@ -12,7 +12,7 @@ from pydantic import Field, model_validator
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.runtime.execution_settings import CalibrationSettings, Trust
-from senselab_core.runtime.hardware import HardwareInfo, visible_gpus
+from senselab_core.runtime.hardware import MIB, HardwareInfo, visible_gpus
 
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Units = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -87,14 +87,16 @@ class HardwareClass(Frozen):
             return cls(
                 device="cuda",
                 name=gpu.name,
-                memory_mib=gpu.memory_bytes // 2**20,
+                memory_mib=gpu.memory_bytes // MIB,
                 compute_capability=gpu.compute_capability,
                 cpus=cpus,
             )
         if grant.device == "mps":
             if report.chip is None:
                 raise ValueError("the host reports no Apple chip for an mps grant")
-            return cls(device="mps", name=report.chip, memory_mib=report.memory_bytes // 2**20, cpus=cpus)
+            if not report.memory_bytes:
+                raise ValueError("the host reports no memory for an mps grant")
+            return cls(device="mps", name=report.chip, memory_mib=report.memory_bytes // MIB, cpus=cpus)
         if report.cpu_model is None:
             raise ValueError("the host reports no CPU model")
         return cls(device="cpu", name=report.cpu_model, cpus=cpus)

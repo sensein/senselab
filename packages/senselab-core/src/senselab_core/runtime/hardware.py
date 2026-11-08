@@ -18,7 +18,7 @@ from typing import Callable, Collection, Final, Iterator, Mapping, Optional, Seq
 
 logger = logging.getLogger("senselab")
 
-_MIB = 1024 * 1024
+MIB = 1024 * 1024
 _KIB: Final = 1024  # invariant: bytes in a kibibyte, the unit of Linux ru_maxrss
 _GPU_QUERY_TIMEOUT_S = 30.0
 _NVIDIA_SMI_FIELDS = "index,uuid,name,memory.total,driver_version"
@@ -26,6 +26,7 @@ _NVIDIA_SMI_FORMAT = "--format=csv,noheader,nounits"
 _NVIDIA_SMI_GPU_QUERY = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS},compute_cap", _NVIDIA_SMI_FORMAT]
 _NVIDIA_SMI_GPU_QUERY_NO_CAP = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS}", _NVIDIA_SMI_FORMAT]
 _CHIP_QUERY = ["sysctl", "-n", "machdep.cpu.brand_string"]
+_LSCPU_QUERY = ["lscpu"]
 _APPS_FIELDS = ("pid", "used_memory")
 _FREE_FIELDS = ("index", "uuid", "memory.free", "memory.total")
 _NVIDIA_SMI_FREE_QUERY = ["nvidia-smi", f"--query-gpu={','.join(_FREE_FIELDS)}", _NVIDIA_SMI_FORMAT]
@@ -96,7 +97,7 @@ def _parse_gpus(output: str, *, with_capability: bool) -> tuple[GpuInfo, ...]:
         gpus.append(
             GpuInfo(
                 name=fields[2],
-                memory_bytes=int(fields[3]) * _MIB,
+                memory_bytes=int(fields[3]) * MIB,
                 driver=fields[4] or None,
                 compute_capability=capability,
                 uuid=fields[1] or None,
@@ -153,15 +154,19 @@ def _probe_chip(run: Callable[[list[str]], str]) -> tuple[Optional[str], Optiona
     return chip or None, None if chip else "Apple chip unavailable: empty sysctl output"
 
 
-def _cpu_model(cpuinfo: Path = Path("/proc/cpuinfo")) -> Optional[str]:
+def _cpu_model(run: Callable[[list[str]], str], system: str) -> Optional[str]:
+    command = _CHIP_QUERY if system == "Darwin" else _LSCPU_QUERY
     try:
-        for line in cpuinfo.read_text().splitlines():
-            key, _, value = line.partition(":")
-            if key.strip() == "model name" and value.strip():
-                return value.strip()
-    except OSError:
-        pass
-    return platform.processor() or None
+        text = run(command)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if system == "Darwin":
+        return text.strip() or None
+    for line in text.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "Model name" and value.strip():
+            return value.strip()
+    return None
 
 
 def probe_hardware(*, run: Callable[[list[str]], str] = _run) -> HardwareInfo:
@@ -186,7 +191,7 @@ def probe_hardware(*, run: Callable[[list[str]], str] = _run) -> HardwareInfo:
         gpu_probe_error=gpu_error,
         chip=chip,
         probe_error="; ".join(errors) or None,
-        cpu_model=chip or _cpu_model(),
+        cpu_model=chip or _cpu_model(run, system),
     )
 
 
@@ -266,9 +271,9 @@ def device_free_memory(
         logger.warning("device memory unreadable: %r", output)
         return None
     gpus = [
-        GpuInfo(name="", memory_bytes=int(r[3]) * _MIB, driver=None, uuid=r[1] or None, index=int(r[0])) for r in rows
+        GpuInfo(name="", memory_bytes=int(r[3]) * MIB, driver=None, uuid=r[1] or None, index=int(r[0])) for r in rows
     ]
-    free = {int(r[0]): int(r[2]) * _MIB for r in rows}
+    free = {int(r[0]): int(r[2]) * MIB for r in rows}
     environ = os.environ if environ is None else environ
     named = environ if devices is None else {"CUDA_VISIBLE_DEVICES": ",".join(devices)}
     info = HardwareInfo(cpu_count=1, memory_bytes=0, gpus=tuple(gpus), apple_silicon=False, platform="")
@@ -414,7 +419,7 @@ def device_memory_bytes(
         return None
     rows = [[p.strip() for p in line.split(",")] for line in output.splitlines()]
     return sum(
-        int(r[1]) * _MIB
+        int(r[1]) * MIB
         for r in rows
         if len(r) == len(_APPS_FIELDS) and r[0].isdigit() and r[1].isdigit() and int(r[0]) in pids
     )

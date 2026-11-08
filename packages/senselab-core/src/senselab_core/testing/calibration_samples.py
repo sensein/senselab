@@ -30,7 +30,7 @@ _CPU = HardwareClass(device="cpu", name="CPU model", cpus=1)
 ENV = MeasureEnv(
     env_lock="a" * 64,
     wheel_set="b" * 64,
-    driver={"torch_index": "cu128"},
+    driver={"torch_build": "cu128"},
     platform="linux-x86_64",
     decoder=None,
     numerics={"device": "cuda"},
@@ -40,8 +40,10 @@ UNIT = MeasureUnit(
     task_version="1",
     backend="whisper",
     backend_version="3",
+    params={"word_timestamps": False},
     backend_params={"dtype": "float16"},
     formation="mixed",
+    chunk_grid=None,
     model=ModelIdentity(id="openai/whisper-tiny", identity="c" * 40),
     env=ENV,
     service=None,
@@ -165,11 +167,19 @@ def register_measure_samples(register: Register) -> None:
         lambda: [HardwareGrant(device="cuda", cpus=4, gpu=1), HardwareGrant(device="cpu")],
         invalid_updates=[{"cpus": 0}, {"device": "tpu"}, {"gpu": -1}],
     )
-    register(MeasureEnv, lambda: [ENV], invalid_updates=[{"env_lock": ""}, {"platform": ""}])
+    register(
+        MeasureEnv,
+        lambda: [ENV],
+        invalid_updates=[
+            {"env_lock": ""},
+            {"platform": ""},
+            {"driver": {"torch_index": "https://u:p@mirror.internal/whl/cu128"}},
+        ],
+    )
     register(
         MeasureUnit,
         lambda: [UNIT, UNIT.model_copy(update={"model": None, "formation": "bucket:g1", "hardware": _CPU})],
-        invalid_updates=[{"formation": "pooled"}, {"task": ""}],
+        invalid_updates=[{"formation": "pooled"}, {"task": ""}, {"chunk_grid": ""}],
     )
     derivation = Derivation(commit="d" * 40, jobs=("j1",), probe_ids=("p1",))
     row = MeasureRow(

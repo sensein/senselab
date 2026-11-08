@@ -2,20 +2,24 @@
 
 A `MeasureUnit` names the task, backend, parameters, model, env, service and hardware a measure holds for; its digest
 is the key every measures root and packaged table is looked up by. `MeasureSource` reads a unit's `Estimate` from the
-measures roots, then the packaged table.
+measures roots (pooled), then the packaged table.
 """
 
+import re
 from collections.abc import Callable, Mapping, Sequence
-from typing import Annotated, Protocol
+from typing import Annotated, Any, Protocol, Self
+from urllib.parse import urlsplit
 
-from pydantic import Field
+from pydantic import AfterValidator, Field, PlainSerializer, model_validator
 from senselab_worker.digest import identity_digest
 
-from senselab_core.kernel._base import Frozen, NonEmptyStr, StrMap
+from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
 from senselab_core.kernel.formats import MEASURE_OBSERVATIONS_FORMAT, MEASURE_UNIT_TAG
-from senselab_core.kernel.identity import Attestation, ModelIdentity, Params
-from senselab_core.kernel.placement import NodePlacement
+from senselab_core.kernel.identity import Attestation, LogicalKey, ModelIdentity, Params, ProfileSliceIdentity
 from senselab_core.runtime.calibration import Estimate, HardwareClass, Observation
+from senselab_core.runtime.keys import Placement
+
+_BUILD_TAG = re.compile(r"cu\d+|cpu")
 
 Formation = Annotated[str, Field(pattern=r"^(mixed|single|bucket:\S+)$")]
 """How a backend forms batches: `mixed`, `single`, or `bucket:<grid id>`."""
@@ -25,7 +29,10 @@ OBSERVATION_FORMAT = MEASURE_OBSERVATIONS_FORMAT.split(".")[0]
 
 
 class MeasureEnv(Frozen):
-    """The env's fingerprinted context fields that decide cost: its lock and wheels, driver, platform and numerics."""
+    """The env's fingerprinted context fields that decide cost: its lock and wheels, driver, platform and numerics.
+
+    The driver holds the torch build as `torch_build` (`cu128`, `cpu`), never the index URL, and no URL at all.
+    """
 
     env_lock: NonEmptyStr
     wheel_set: NonEmptyStr
@@ -34,16 +41,47 @@ class MeasureEnv(Frozen):
     decoder: NonEmptyStr | None
     numerics: StrMap
 
+    @model_validator(mode="after")
+    def _check_driver(self) -> Self:
+        if urls := sorted(k for k, v in self.driver.items() if "://" in v):
+            raise ValueError(f"driver {urls} holds a URL; a measure names the build, not where it came from")
+        return self
+
+    @classmethod
+    def from_fields(cls, fields: Mapping[str, Any]) -> Self:
+        """Return the env of `fields` as `EnvHandle.context_fields()` and the ready mark give them.
+
+        The driver's `torch_index` URL is replaced by its build tag.
+
+        Raises:
+            ValueError: a field is missing.
+        """
+        if missing := sorted(set(cls.model_fields) - set(fields)):
+            raise ValueError(f"env fields lack {missing}")
+        driver = dict(fields["driver"])
+        if (index := driver.pop("torch_index", None)) is not None:
+            tag = urlsplit(index).path.rstrip("/").rsplit("/", 1)[-1]
+            driver["torch_build"] = tag if _BUILD_TAG.fullmatch(tag) else "other"
+        return cls.model_validate({**{k: fields[k] for k in cls.model_fields}, "driver": driver})
+
 
 class MeasureUnit(Frozen):
-    """What a measure is of. The input lengths, the senselab source, the regime and the run are not part of it."""
+    """What a measure is of: the logical key without its inputs, plus env, hardware and formation.
+
+    The input lengths, the senselab source, the regime and the run are not part of it.
+    """
 
     task: NonEmptyStr
     task_version: NonEmptyStr
     backend: NonEmptyStr
     backend_version: NonEmptyStr
+    params: Params
     backend_params: Params
+    profile_slices: Annotated[
+        Mapping[str, ProfileSliceIdentity], AfterValidator(FrozenMapping), PlainSerializer(dict)
+    ] = FrozenMapping({})
     formation: Formation
+    chunk_grid: NonEmptyStr | None
     model: ModelIdentity | None
     env: MeasureEnv
     service: Attestation | None
@@ -51,36 +89,32 @@ class MeasureUnit(Frozen):
     observation_format: NonEmptyStr = OBSERVATION_FORMAT
 
     @classmethod
-    def of(  # noqa: PLR0913 - the identity's parts, each from a different owner
-        cls,
-        placement: NodePlacement,
-        model: ModelIdentity | None,
-        env_fields: Mapping[str, object],
-        hardware: HardwareClass,
-        *,
-        task: str,
-        task_version: str,
-        formation: str,
-        service: Attestation | None = None,
+    def of(
+        cls, placement: Placement, key: LogicalKey, env_fields: Mapping[str, Any], hardware: HardwareClass
     ) -> "MeasureUnit":
-        """Return the unit of `placement`'s backend and parameters, `model`, the env's `env_fields` and `hardware`.
+        """Return the unit of the call `key` run as `placement` in the env `env_fields` on `hardware`.
 
         `env_fields` holds `env_lock`, `wheel_set`, `driver` (`env.context_fields()`), `platform`, `decoder` and
-        `numerics` (the worker's ready mark); a missing field raises `ValueError`.
+        `numerics` (the worker's ready mark).
+
+        Raises:
+            ValueError: an env field is missing, or the placement's formation is not yet decided.
         """
-        names = set(MeasureEnv.model_fields)
-        if missing := sorted(names - set(env_fields)):
-            raise ValueError(f"env fields lack {missing}")
+        if placement.batch_formation is None:
+            raise ValueError("the placement's batch formation is not decided; each job's length picks it")
         return cls(
-            task=task,
-            task_version=task_version,
-            backend=placement.backend,
-            backend_version=placement.backend_version,
-            backend_params=placement.backend_params,
-            formation=formation,
-            model=model,
-            env=MeasureEnv.model_validate({k: env_fields[k] for k in names}),
-            service=service,
+            task=key.task,
+            task_version=key.task_version,
+            backend=key.backend,
+            backend_version=key.backend_version,
+            params=key.params,
+            backend_params=key.backend_params,
+            profile_slices=key.profile_slices,
+            formation=placement.batch_formation,
+            chunk_grid=placement.chunk_grid,
+            model=key.model,
+            env=MeasureEnv.from_fields(env_fields),
+            service=key.service,
             hardware=hardware,
         )
 
@@ -90,7 +124,7 @@ class MeasureUnit(Frozen):
 
 
 class MeasuresRoot(Protocol):
-    """A measures root, read: the observations pooled for a unit."""
+    """A measures root, read: the observations of a unit that still pool (none of a superseded probe)."""
 
     def observations(self, unit: MeasureUnit) -> Sequence[Observation]:
         """Return the observations of `unit` that still pool."""
@@ -104,7 +138,7 @@ class PackagedMeasures(Protocol):
 
 
 class MeasureSource:
-    """Reads a unit's estimate: the measures roots in order, then the packaged table; the first `measured` wins."""
+    """Reads a unit's estimate: the roots' pooled observations estimated once, then the packaged table."""
 
     def __init__(
         self,
@@ -119,10 +153,9 @@ class MeasureSource:
         self._estimate = estimate
 
     def get(self, unit: MeasureUnit) -> Estimate | None:
-        """Return the first measured estimate of `unit`, None when the Pool must probe it."""
-        for root in self._sources:
-            observed = root.observations(unit)
-            if observed and (found := self._estimate(unit, observed)).status == "measured":
-                return found
+        """Return the estimate of `unit` over the observations of every root, else the packaged one, else None."""
+        pooled = [o for root in self._sources for o in root.observations(unit)]
+        if pooled and (found := self._estimate(unit, pooled)).status == "measured":
+            return found
         row = self._packaged.get(unit)
         return row if row is not None and row.status == "measured" else None
