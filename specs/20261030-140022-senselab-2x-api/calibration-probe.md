@@ -105,7 +105,8 @@ Not in the identity:
 - `cuda`: the driver's product name as `nvidia-smi --query-gpu=name` gives it, `memory.total` in MiB, compute
   capability;
 - `mps`: the chip string (`sysctl machdep.cpu.brand_string`) and unified memory;
-- `cpu`: the CPU model string and the granted `cpus` (the resource class's, else the host's).
+- `cpu`: the CPU model string;
+- every class: the granted `cpus` (the resource class's, else the host's), since decode and resample run on them.
 
 The profile's `gpu_type` (which may be None, "any GPU") and `memory_cap_bytes` are never compared with a report and
 never enter a digest. The coordinator resolves a resource class to the hardware it runs on before any lookup:
@@ -117,9 +118,10 @@ never enter a digest. The coordinator resolves a resource class to the hardware 
 3. If the index is empty, or names more than one, the first worker's hello for that class decides. The unit is in
    `Resolving` (§7.1) until then; the queue's first worker is started as it would be anyway, so this costs no extra
    start. Probe and production items wait in that state; servable jobs do not (I4).
-4. A class that maps to several seen classes (a partition of mixed cards) is sized by the seen class with the least
-   device memory and the slowest estimate among those measured, and the plan says so; each observation is written
-   under the class of the worker that made it.
+4. A class is resolved once per run, by step 2 or step 3. When it maps to several seen classes (a partition of mixed
+   cards), the plan says the class is mixed and that its items are sized for the resolved class. Each observation is
+   written under the class of the worker that made it; only a worker of the resolved class takes a probe queue's
+   serve lease (§4.4), and drift counts only requests of the resolved class (§7.3).
 
 So a unit is never looked up under a digest that no worker writes (review B3). Plan time (`explain`, §6.6) uses the
 index only; with no entry, its figures are "unmeasured: hardware not yet seen".
@@ -207,8 +209,8 @@ is caught by drift (§7.3). So shared records need provenance and a reader's cho
 ### 3.6 Invalidation
 
 1. **Identity change.** Any field of §3.1 changes the digest; the old directory is never read for the new unit.
-2. **Measured staleness.** A drift record makes the estimate suspect; a confirming probe decides whether it is stale
-   (`supersede`) or a regime effect (`regime`) (§7.3). Observations older than the newest trusted `supersede` record
+2. **Measured staleness.** Drift under co-tenancy writes a `regime` record; drift in the probe regime makes the
+   estimate suspect, and a confirming probe decides whether it is stale (`supersede`) (§7.3). Observations older than the newest trusted `supersede` record
    are not pooled.
 3. **No age rule.** A wall-clock time-to-live would be a fixed parameter with no measurement behind it.
 4. **Collection** (store policy's `collect_interval_s`): superseded observation files the collector wrote, keeping
@@ -293,7 +295,8 @@ observation counts is decided by `Probe.estimate` from what the worker reported 
 ### 4.4 One item per claim, on a pinned worker
 
 - The Pool puts a probe's items on a probe queue, `<queue>~probe-<id>`, under the run's queues. A worker serving the
-  queue's class takes the probe queue's serve lease before it claims from it; a worker that finds the lease live skips
+  queue's class, whose `HardwareClass` is the resolved one (§3.2), takes the probe queue's serve lease before it claims
+  from it; a worker that finds the lease live skips
   the probe queue. The lease is the pin: one worker runs the probe, and its beats show it alive.
 - A probe item is claimed alone (`max_items=1`), never gathered (M3; R-234, R-236). The pinned worker drains its probe
   queue before production claims, quantum yielding aside, and waits on it with `pool.first_poll_s` (doubling to
@@ -477,7 +480,8 @@ otherwise. The in-process executor never probes; without an estimate it runs the
  Lookup ── none ── lease taken ──► Probing ── estimate measured ────────► Measured
                                       └──── budget out / too few jobs ──► Unmeasured
  Lookup ── none ── lease busy ───► PeerWait (≤ peer_wait_s) ──► New (peer's observations as prior)
- Measured ── drift record ──► Confirming (one probe, prior excluded) ──► Measured (supersede or regime record)
+ Measured ── drift, k > 1 ──► Measured (regime record, no probe)
+ Measured ── drift, k = 1 ──► Confirming (one probe, prior excluded, jobs held) ──► Measured (supersede, or no record)
 ```
 
 - Servable jobs (§4.2 step 1) bypass the state machine and are put at once, in every state.
@@ -488,7 +492,7 @@ otherwise. The in-process executor never probes; without an estimate it runs the
   result is already in the result store and the Pool yields it like any other**: probe items are ordinary items whose
   outcomes carry `ResultRef`s. Owner requirement 1.
 - `Unmeasured` writes its warm observations too; a later run pools them and may reach the minimum counts without
-  repeating them. A unit probes at most once per run, plus at most one confirming probe per regime (§7.3): no loop.
+  repeating them. A unit probes at most once per run, plus at most one confirming probe (§7.3): no loop.
 - `PeerWait` returns to `New`, where `Lookup` either finds the peer's estimate or plans only what the peer's
   observations leave uncovered (I8).
 - A retry of a probe job is a production retry (one-job fragment), never a probe item.
@@ -509,30 +513,39 @@ otherwise. The in-process executor never probes; without an estimate it runs the
 Production items carry a per-request `Observation` (`probe: None`) in their outcome. Ruling O-5: production requests
 are drift evidence only, never pooled into `r`, `u`, `a` or `B*`.
 
-- For each warm, `ok`, unserved production request the Pool computes `ρ = wall_s / predicted`, the prediction at its
-  batch, units and co-tenancy regime.
+- For each warm, `ok`, unserved production request whose `hardware` equals the estimate's, the Pool computes
+  `ρ = wall_s / predicted`, the prediction at its batch and units in the probe regime. A request of another hardware
+  class feeds no drift.
 - Requests are grouped by regime (device and host co-tenancy). Over the last `calibration.drift_window` requests of a
   regime, when the median ρ lies outside `1 ± drift_confidence · 1.2533 · spread_B / √drift_window` (`spread_B` at the
   requests' batch, `spread` at batch 1), the Pool writes a `drift` record (the window's ρ, regime, batch, estimate
-  source) and moves the unit to `Confirming`.
-- **Confirming** runs one probe of the unit's planned strata in the probe regime, with the stored observations
-  excluded from `prior`. If its estimate agrees with the suspect one within their bands, the drift was a regime effect:
-  the Pool writes a `regime` record `{k, ρ_k, n}` and `size` scales predictions in that regime by `ρ_k` (and §6.3 may
-  lower `w_d`). If it disagrees, the Pool writes a `supersede` record and the confirming probe's observations are the
-  unit's new basis. Either way production continues, and a drift record alone supersedes nothing, so two runs over
-  different content cannot supersede each other's measures by drift alone (I2).
+  source). The regime that drifted decides what follows:
+  - **co-tenancy k > 1**: the drift is a regime effect by construction. The Pool writes a `regime` record
+    `{k, ρ_k, n}` from the window (ρ_k its median ρ, n its size) at once, with no probe; `size` scales predictions in
+    that regime by `ρ_k` and §6.3 may lower `w_d`. The newest trusted record of a regime wins.
+  - **the probe regime (k = 1)**: the estimate may be stale. The unit moves to `Confirming`, which runs one probe of
+    its planned strata with the stored observations excluded from `prior` and, as `Probing` does, holds the unit's
+    computed jobs while it runs, so no worker of the unit shares the probing device. If its estimate disagrees with
+    the suspect one beyond their bands, the Pool writes a `supersede` record and the confirming probe's observations
+    are the unit's new basis. If it agrees, or is unmeasured (another process shared the device), nothing more is
+    written and the unit returns to `Measured`.
+  A unit writes at most one regime record per regime and runs at most one confirming probe per run. A drift record
+  alone supersedes nothing, so two runs over different content cannot supersede each other's measures by drift alone
+  (I2).
 - A device peak above the prediction at its padded units beyond the same band raises `m1` at once (§7.4).
 - Content effects beyond length (two concurrent runs whose content differs in cost at equal length) are not in the
-  identity; each run confirms at most once per regime, so such a disagreement costs one probe per run, never a loop.
+  identity; each run confirms at most once, so such a disagreement costs one probe per run, never a loop.
 
 ### 7.4 OOM backstop (S7)
 
 A resource fault on an item at batch B and longest length L writes an `oom` record `{resource: device | host, B, L,
 cotenancy, worker, run}`. It acts in two ways:
 
-- **The fitted model is raised, no constant.** For lengths at or above L, `m1` is raised to the least value that makes
-  (B, L) infeasible under the worker's grant: `m1′ = max(m1, (memory_headroom·grant − resident − m0)/(B·L))`. The
-  memory batch at every L′ ≥ L follows from `m1′` (§6.4). A record whose co-tenancy shows other processes on the device
+- **The fitted model is raised, no constant.** At B ≥ 2, for lengths at or above L, `m1` is raised to the value at
+  which the memory batch at L becomes B − 1, so the faulting pair is infeasible:
+  `m1′ = max(m1, (memory_headroom·grant − resident − m0)/((B − 1)·L))`. The memory batch at every L′ ≥ L follows
+  from `m1′` (§6.4). A fault at B = 1 has no batch to shrink: the record marks length L infeasible under this grant,
+  `m1` is not raised, and the item goes to the re-placement on a larger class below. A record whose co-tenancy shows other processes on the device
   applies to that regime and above only.
 - **The stratum re-opens.** The record makes its stratum uncovered for `BATCHED` (§4.2 step 5), so the next probe
   measures memory there. Observations of that probe newer than the record replace the raised `m1` for that stratum;
@@ -922,16 +935,20 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 
 ### T20R-7b: production telemetry, drift, regimes and OOM records
 
-- **Scope.** §7.3, §7.4: ρ per regime with `spread_B`; `drift` records and `Confirming`; `supersede` and `regime`
-  records; immediate `m1` raise on a device peak above band; `oom` records replacing `_grow` (removed here) with the
-  re-opened stratum.
+- **Scope.** §7.3, §7.4: ρ per regime with `spread_B`, same-hardware requests only; `drift` records; `regime` records
+  from a k > 1 window; `Confirming` with the unit's jobs held, and `supersede` records; immediate `m1` raise on a device
+  peak above band; `oom` records replacing `_grow` (removed here) with the re-opened stratum, and a B = 1 fault routed
+  to re-placement.
 - **Files.** `runtime/execution/pool.py`.
-- **Tests failing now.** `test_drift_confirms_before_superseding`; `test_a_reproduced_estimate_records_a_regime_not_a_supersede`
-  (I2: no probe loop under co-tenancy); `test_drift_in_one_run_does_not_supersede_another_runs_regime`;
+- **Tests failing now.** `test_drift_confirms_before_superseding`; `test_drift_under_cotenancy_records_a_regime_without_a_probe`
+  (I2: no probe loop under co-tenancy); `test_a_confirming_probe_holds_the_units_jobs`;
+  `test_requests_of_another_hardware_class_feed_no_drift`; `test_drift_in_one_run_does_not_supersede_another_runs_regime`;
   `test_an_oom_caps_only_the_lengths_at_or_above_it` (at `5ae1fc3d` `_grow` halves every length, permanently);
-  `test_an_oom_reopens_its_stratum_and_the_next_probe_lifts_it` (I6).
+  `test_an_oom_reopens_its_stratum_and_the_next_probe_lifts_it` (I6); `test_an_oom_at_batch_one_is_replaced_not_raised`;
+  property `test_after_an_oom_size_never_returns_its_batch_at_or_above_its_length` (after an `oom` record at (B, L),
+  `size` returns batch < B at every L′ ≥ L).
 - **ORCD.** One H100 run with two workers per card on a Local substrate (an interactive allocation of one node): a
-  regime record is written and no second confirming probe follows.
+  regime record is written and no confirming probe runs.
 
 ### T20R-8: ladder, generator and `resource-table@2.0`
 
