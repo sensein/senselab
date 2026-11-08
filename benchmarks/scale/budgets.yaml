@@ -6,11 +6,11 @@ flat_ratio: 1.25
 regression_band: {}
 # Per suite entry label, ceilings: wall seconds per item, peak memory bytes, files and bytes written per item.
 per_item:
-  diarize~pyannote: {per_item_s: 0.196, peak_rss_bytes: 482000000, files_per_item: 14.0, bytes_per_item: 9070}
-  fake.echo~fake: {per_item_s: 0.0356, peak_rss_bytes: 122000000, files_per_item: 4.0, bytes_per_item: 5290}
-  pii_spans~transformers: {per_item_s: 15.1, peak_rss_bytes: 482000000, files_per_item: 15.2, bytes_per_item: 15800}
-  pii_spans~vllm: {per_item_s: 6.07, peak_rss_bytes: 482000000, files_per_item: 15.2, bytes_per_item: 16800}
-  signal.resample~numpy-sinc: {per_item_s: 0.0784, peak_rss_bytes: 263000000, files_per_item: 11.2, bytes_per_item: 110000}
-  speaker_embeddings~speechbrain: {per_item_s: 0.13, peak_rss_bytes: 478000000, files_per_item: 11.5, bytes_per_item: 9290}
-  speech_to_text~crisperwhisper: {per_item_s: 1.71, peak_rss_bytes: 473000000, files_per_item: 10.3, bytes_per_item: 8740}
-  speech_to_text~transformers: {per_item_s: 0.389, peak_rss_bytes: 3320000000, files_per_item: 10.3, bytes_per_item: 8260}
+  diarize~pyannote: {per_item_s: 0.19, peak_rss_bytes: 458000000, files_per_item: 6.53, bytes_per_item: 7730}
+  fake.echo~fake: {per_item_s: 0.0335, peak_rss_bytes: 119000000, files_per_item: 4.0, bytes_per_item: 5290}
+  pii_spans~transformers: {per_item_s: 14.8, peak_rss_bytes: 459000000, files_per_item: 7.95, bytes_per_item: 14500}
+  pii_spans~vllm: {per_item_s: 5.69, peak_rss_bytes: 459000000, files_per_item: 7.77, bytes_per_item: 15500}
+  signal.resample~numpy-sinc: {per_item_s: 0.0871, peak_rss_bytes: 223000000, files_per_item: 3.92, bytes_per_item: 109000}
+  speaker_embeddings~speechbrain: {per_item_s: 0.13, peak_rss_bytes: 453000000, files_per_item: 4.03, bytes_per_item: 7960}
+  speech_to_text~crisperwhisper: {per_item_s: 1.71, peak_rss_bytes: 448000000, files_per_item: 2.87, bytes_per_item: 7320}
+  speech_to_text~transformers: {per_item_s: 0.397, peak_rss_bytes: 3300000000, files_per_item: 2.78, bytes_per_item: 6920}
