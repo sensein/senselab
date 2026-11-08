@@ -9,14 +9,16 @@ since then as of 2026-10-30. P-39 reconciliation at Phase 2 start (2026-11-01): 
 P-39 reconciliation at Phase 2 exit (2026-11-02): `origin/alpha` is `36aa9615`, merged into `2x/phase-2`. Of the commits since `22d2c103`, only `48ea265d` (uv-managed interpreters) touches an area Phase 2 ported, and `envs.py` already carries it, so no port-task row is added.
 P-39 reconciliation at Phase 3 start (2026-11-03): `origin/alpha` is `d5b1b20a`, merged into `2x/phase-3` by merge commit `06aea676`. Eight commits since `36aa9615` (PR #626, scrub of local paths and personal partitions). Under `src`, `scripts`, `tutorials` only `ef423730`, `666fd4e0`, `781a9af0`, `3eac1c48`, `597bb7fb`, `033e47c5`, `7b8fa8fd` land; none touches an area Phase 2 ported, so no port-task row is added. One merge conflict, in `.pre-commit-config.yaml` (both sides added hooks), kept both; `src/` carries no edit. The new `local-paths` hook flagged five synthetic example paths in the 2.x spec dir, rewritten to the generic `user` account.
 
+P-39 reconciliation at Phase 3 task 21 (2026-11-08): `origin/alpha` is `c4bb902b`, merged into `2x/phase-3`. Two commits since `d5b1b20a`: `3300d8c9` (#631, `drivendata/pasketti-word` routed through the Qwen3-ASR backend) touches only unported 1.x speech_to_text and audio_analysis, so no port-task row is added; `c4bb902b` (#632, `resample_audios` band-limits with a Kaiser sinc filter) is already carried by `signal.resample` (`numpy-sinc`, Kaiser window, 80 dB stop band against #632's >100 dB), so no port-task row is added.
+
 | Area (1.x paths) | Where | Mark | Reconciled changes (commit → 2.x handling) |
 |---|---|---|---|
-| `src/senselab/audio/tasks/` | on alpha | `d5b1b20a` | — (no change under this area since `19834fdd`) |
-| `src/senselab/video/tasks/`, `src/senselab/text/tasks/` | on alpha | `d5b1b20a` | — (no change under this area since `19834fdd`) |
-| `src/senselab/audio/workflows/audio_analysis/` | on alpha | `d5b1b20a` | — (no change under this area since `19834fdd`) |
-| `src/senselab/audio/workflows/triage/` | on alpha | `d5b1b20a` | `ef423730` (placeholder in `data/breath_pattern.yaml`, a comment only) → none; triage is not ported |
-| `src/senselab/utils/` | on alpha | `d5b1b20a` | — (no change under this area since `19834fdd`) |
-| `scripts/` (1.x scripts), `tutorials/` | on alpha | `d5b1b20a` | `666fd4e0`, `781a9af0`, `3eac1c48`, `597bb7fb` (new `scripts/check_local_paths.py` and its `local-paths` hook) → kept as merged, passing on the 2.x tree; `ef423730`, `033e47c5`, `7b8fa8fd` (`scripts/triage_review_serve.py` placeholder) → none, 1.x script only |
+| `src/senselab/audio/tasks/` | on alpha | `c4bb902b` | `3300d8c9` (`speech_to_text/api.py`, `doc.md`: pasketti-word added to `_QWEN_ASR_PREFIXES`) -> none; speech_to_text/Qwen not ported. `c4bb902b` (`preprocessing/preprocessing.py`: `resample_audios` uses a Kaiser sinc) -> already ported: `packages/senselab/src/senselab/signal/resample.py` is Kaiser-windowed (80 dB vs 100 dB) |
+| `src/senselab/video/tasks/`, `src/senselab/text/tasks/` | on alpha | `c4bb902b` | — (no change under this area since `19834fdd`) |
+| `src/senselab/audio/workflows/audio_analysis/` | on alpha | `c4bb902b` | `3300d8c9` (`stages.py` `stage_asr`: pasketti-word takes the Qwen native-timestamps opt-out) -> none; audio_analysis is not ported |
+| `src/senselab/audio/workflows/triage/` | on alpha | `c4bb902b` | `ef423730` (placeholder in `data/breath_pattern.yaml`, a comment only) → none; triage is not ported |
+| `src/senselab/utils/` | on alpha | `c4bb902b` | `c4bb902b` (`cached_inference.py` `CACHE_SCHEMA_VERSION` 26 -> 27) -> none; 2.x caches by content identity, not this constant |
+| `scripts/` (1.x scripts), `tutorials/` | on alpha | `c4bb902b` | `666fd4e0`, `781a9af0`, `3eac1c48`, `597bb7fb` (new `scripts/check_local_paths.py` and its `local-paths` hook) → kept as merged, passing on the 2.x tree; `ef423730`, `033e47c5`, `7b8fa8fd` (`scripts/triage_review_serve.py` placeholder) → none, 1.x script only |
 
 "On alpha": the module is developed on `alpha`, and its copy under `src/` on the 2.x line is the
 source pool it ports from (ADR-009). No 1.x module has moved into `packages/` yet.
