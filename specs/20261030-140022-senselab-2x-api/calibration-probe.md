@@ -254,12 +254,16 @@ matches only the env that generated it.
 
 ### 4.1 Inputs
 
-`Probe.plan(unit, candidates, prior, grant, config, formation) -> ProbePlan`:
+`Probe.plan(unit, candidates, prior, config, formation, seconds, *, bucket_edges) -> ProbePlan` (`seconds` is the
+warm-work budget, §4.5; `bucket_edges` are the input-unit edges of a `bucket:` formation's grid, empty otherwise; the plan
+returns the `WARMUP` and `SINGLE` items, and `Probe.plan_batched(plan, single_estimate, grant, config, seconds_left, *,
+memory_headroom)` adds the `BATCHED` ones once `SINGLE` is estimated, the worker's grant (§6.3) giving their memory
+batch; `Probe.replace_served` swaps a `served` item for the next candidates of its stratum):
 
 - `candidates`: for each held job of the unit that the store would **not** serve (§4.2 step 1), its fragment and
   index, its key digest and its input units (§5.1);
-- `prior`: the unit's pooled observations (own, peers', or a superseded probe's still valid);
-- `grant`: the worker's grant (§6.3), for the memory batch;
+- `prior`: `Prior(observations, records)`: the unit's pooled observations (own, peers', or a superseded probe's still
+  valid) and its regime and `oom` records, oldest first (the records re-open strata, §4.2 step 5);
 - `config`: the `calibration` section (§11);
 - `formation`: the backend's formation; `single` plans no batched phase.
 
@@ -277,11 +281,12 @@ matches only the env that generated it.
 2. **A probe request that returns `served`** (the predicate's view went stale, or the context was unknown) is
    discarded by the classifier and replaced by the next candidate of the same stratum, within `probe_items`.
 3. Drop all but one job of each key digest (M4, R-232).
-4. Cut the candidates into `calibration.length_strata` strata of equal count by input units (on a bucketed
-   formation, at bucket edges, so a batched item never spans two buckets and its jobs' keys are unchanged). Jobs
-   without a length form one stratum.
+4. Cut the candidates that have a length into `calibration.length_strata` strata of equal count by input units; a cut
+   never splits equal lengths, and bucket edges never move it. On a bucketed formation each batched item draws its jobs
+   from one bucket, so its jobs' keys are unchanged; a stratum's items may come from different buckets, and its supply
+   at width w is Σ_b ⌊n_b / w⌋. Jobs without a length form one more stratum.
 5. Skip each (phase, stratum) that `prior` already covers with `calibration.min_requests` steady observations, and
-   that no trusted `oom` record re-opens (§7.4): that is the stored timing reused instead of a run. A run whose lengths
+   that no unlifted trusted `oom` record re-opens (§7.4): that is the stored timing reused instead of a run. A run whose lengths
    lie inside what `prior` covers plans nothing.
 6. Within a stratum, `WARMUP` and `SINGLE` take its shortest candidates (bounded seconds, I3); `BATCHED` takes
    candidates spread evenly by rank of length.
@@ -352,7 +357,7 @@ Estimate
   item_s (a), item_n                       per-item cost beyond its requests: claim, bind, commit
   single:  r, u, n, spread, range (lo, hi in units)
   batched: per B: r_B, u_B, n, spread_B, range
-  batch:   per stratum: the chosen B* (1 when no batch is faster beyond the margin)
+  batch:   per stratum (lo, hi in per-job units): the chosen B* (1 when no batch is faster beyond the margin)
   device:  resident, m0, m1 (bytes per padded unit), n | None (unmeasured, never 0)
   host:    resident, m0, m1, n | None
   regimes: per co-tenancy k: ρ_k, n             from regime records (§7.3)
@@ -386,11 +391,11 @@ the request has answered since it was loaded, and the load's seconds when this r
 reload, a worker-process restart, a second backend on one queue and a second model-less unit on `cpu` all reset it.
 A server backend counts per attested server instance on the consumer side. `Sample.cold` goes.
 
-### 5.4 `Probe.estimate(observations) -> Estimate`: the only classifier
+### 5.4 `Probe.estimate(observations, records, config, *, hardware, unit_kind, memory_headroom) -> Estimate`: the only classifier
 
 1. **Keep** an observation only if `outcome` is `ok` (M7: failed, bisected and served requests never enter, nor does
    any request of a bisected item), its `hardware` is the unit's, and its co-tenancy is the probe regime (device 1,
-   host as the probe ran) for the `single`/`batched` fits; other regimes feed `regimes` only (§7.3).
+   host as its own probe ran: the least host co-tenancy among that probe's requests) for the `single`/`batched` fits; other regimes feed `regimes` only (§7.3).
 2. **Warm** iff `since_load ≥ calibration.warmup_requests` (M2). A request with `load_s` set gives `load_s` and
    nothing else. Cold or reloaded requests never move `r`, `u`, `a` or the batch decision.
 3. **Per request, single:** fit `wall_s = r + u·units` over warm batch-1 requests by Theil–Sen (the median of
@@ -407,10 +412,22 @@ A server backend counts per attested server instance on the consumer side. `Samp
    never chosen (S2).
 7. **Device memory:** over warm requests with device figures, `resident` = min `device_after`; `peak − after` fitted
    as `m0 + m1·padded_units` (Theil–Sen). No device figures: `device` is None, explicitly unmeasured.
-8. **OOM records** newer than the newest successful observation at their stratum raise the fit (§7.4).
+8. **OOM records** in force raise the fit (§7.4). A probe measures and lifts in the probe regime only: a record at
+   co-tenancy 1 and B ≥ 2 is lifted once a probe outside its `basis` has `min_requests` warm `ok` batched observations
+   in the stratum holding its length; every other record stays in force and never re-opens a stratum. `Probe.plan`
+   re-opens by the same predicate, and `oom` holds the records in force.
 9. **Minimum counts (M9):** each quantity needs `min_requests` warm observations in each stratum it uses; below that
    it is None and the reasons name what is missing. `status` is `measured` when `r` is measured; every other None is
-   treated by S5 in `size`.
+   treated by S5 in `size`. A stratum here is a length range: the kept warm requests' per-job lengths
+   (`padded_units / batch`) cut into `length_strata` ranges by §4.2 step 4's engine. A probe's `stratum` label is not
+   read, so probes, members and runs pooled together share strata by length.
+
+`hardware`, `unit_kind` and `memory_headroom` are required: a caller never inherits a guessed value. `MeasureSource`
+gets `Probe.estimator(config, records_of=, unit_kind_of=, memory_headroom=)`, which resolves each per unit, so
+`estimate=`'s `(unit, observations)` signature is unchanged. A median-only fit carries its spread
+(`1.4826·MAD/median`). A fit with a negative slope is not trusted (`u` unmeasured, `r` the median); a negative intercept
+is held at 0. `reasons` is a declared
+type and names no identifier. A regime factor exists only for k ≥ 2.
 
 Properties pinned by tests (T20R-4): a cold or reloaded observation never changes `r`, `u` or `B*`; a failed,
 bisected or served observation never enters any figure; an observation of another regime never enters `r` or `u`; a
@@ -560,7 +577,10 @@ are drift evidence only, never pooled into `r`, `u`, `a` or `B*`.
 ### 7.4 OOM backstop (S7)
 
 A resource fault on an item at batch B and longest length L writes an `oom` record `{resource: device | host, B, L,
-cotenancy, worker, grant, run}`, where `worker` is `worker_id()` and `grant` the faulting grant. It acts in two ways:
+cotenancy, worker, grant_bytes, basis, run}`, where `worker` is `worker_id()`, `grant_bytes` the faulting grant's
+memory and `basis` the probe ids of the estimate that sized the faulting batch together with the faulting item's own
+probe id when it is a probe item (`Estimate.fault_basis`), so a probe's own successes at another batch never lift its
+fault. It acts in two ways:
 
 - **The fitted model is raised, no constant.** At B ≥ 2, for lengths at or above L, `m1` is raised to the value at
   which the memory batch at L becomes B − 1, so the faulting pair is infeasible:
@@ -569,8 +589,13 @@ cotenancy, worker, grant, run}`, where `worker` is `worker_id()` and `grant` the
   `m1` is not raised, and the item goes to the re-placement on a larger class below. A record whose co-tenancy shows other processes on the device
   applies to that regime and above only.
 - **The stratum re-opens.** The record makes its stratum uncovered for `BATCHED` (§4.2 step 5), so the next probe
-  measures memory there. Observations of that probe newer than the record replace the raised `m1` for that stratum;
-  if the probe itself faults, a new record raises it again and the bisection proceeds as now.
+  measures memory there. A probe outside `basis` with `min_requests` warm batched observations in the stratum lifts the record, and its
+  observations replace the raised `m1` there;
+  if the probe itself faults, a new record raises it again and the bisection proceeds as now. A record whose
+  co-tenancy is above 1 never re-opens: a probe runs alone and can neither measure nor lift it.
+
+Any batch ≥ 2 lifts, so a probe at B − 1 lifts a fault at B; the refitted `m1` may permit B again, and the next run
+may fault once and probe once more. §7.1's one probe per run bounds this: a cost per run, never a loop.
 
 The bisection of the failing request, the re-placement on a larger class and the jobs' retries are unchanged.
 
