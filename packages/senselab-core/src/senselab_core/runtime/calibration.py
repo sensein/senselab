@@ -200,10 +200,9 @@ class EstimateSource(Frozen):
     commit: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")] | None = None
 
 
-def _refuse_repeat(field: str, keys: list[int]) -> None:
+def _refuse_repeat(field: str, label: str, keys: list[int]) -> None:
     repeated = sorted({k for k in keys if keys.count(k) > 1})
     if repeated:
-        label = {"batched": "batch", "batch": "stratum", "regimes": "k"}[field]
         raise ValueError(f"{field} holds {label} {repeated[0]} twice")
 
 
@@ -256,12 +255,9 @@ class Estimate(Frozen):
             raise ValueError("the single fit is at batch 1")
         if any(f.batch == 1 for f in self.batched):
             raise ValueError("a batched fit is at a batch above 1")
-        for name, keys in (
-            ("batched", [f.batch for f in self.batched]),
-            ("batch", [b.stratum for b in self.batch]),
-            ("regimes", [r.k for r in self.regimes]),
-        ):
-            _refuse_repeat(name, keys)
+        _refuse_repeat("batched", "batch", [f.batch for f in self.batched])
+        _refuse_repeat("batch", "stratum", [b.stratum for b in self.batch])
+        _refuse_repeat("regimes", "k", [r.k for r in self.regimes])
         return self
 
 

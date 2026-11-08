@@ -117,6 +117,9 @@ class Thresholds(Frozen):
         return load_run_config(override).thresholds
 
 
+READABLE_RUN_CONFIG_FORMATS = frozenset({"run-config@2.0", RUN_CONFIG_FORMAT})
+
+
 class LoadedRunConfig(Frozen):
     """A run config's validated sections: the comparison `thresholds` and the `calibration` overrides."""
 
@@ -132,11 +135,15 @@ def load_run_config(override: Mapping[str, Any] | Path | None = None) -> LoadedR
     Raises:
         UnknownThreshold: `override` names a key, threshold or calibration key the packaged run config lacks, naming
             the closest.
-        ValueError: the packaged file is not `run-config@2.1` with exactly `rtol` and `atol` per threshold, or a
+        ValueError: `override` declares a format other than `run-config@2.0` or `@2.1`, the packaged file is
+            not `run-config@2.1` with exactly `rtol` and `atol` per threshold, or a
             merged bound or calibration value is invalid.
     """
     merged = {name: dict(bound) for name, bound in _packaged_thresholds().items()}
     raw = load_yaml(override, "run config") if isinstance(override, Path) else dict(override or {})
+    tag = raw.get("format", RUN_CONFIG_FORMAT)
+    if tag not in READABLE_RUN_CONFIG_FORMATS:
+        raise ValueError(f"run config format {tag!r} is not one of {sorted(READABLE_RUN_CONFIG_FORMATS)}")
     _known("run config key", set(raw) - {"format"}, {"thresholds", "calibration"})
     given = raw.get("thresholds") or {}
     _known("threshold", set(given), set(merged))

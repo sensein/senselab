@@ -27,3 +27,13 @@ def test_one_run_config_reader_validates_thresholds_and_calibration(tmp_path: Pa
     with pytest.raises(ValueError, match="trust"):
         load_run_config({"calibration": {"trust": "all"}})
     assert RUN_CONFIG_FORMAT == "run-config@2.1"
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("tag", ["run-config@2.0", "run-config@2.1"])
+def test_a_run_config_declares_a_readable_format(tag: str) -> None:
+    """Both tags of the major are read; another tag is refused with the tag named."""
+    assert load_run_config({"format": tag}).calibration == RunCalibration()
+    for bad in ("run-config@1.0", "run-config@3.0", "thresholds@2.0"):
+        with pytest.raises(ValueError, match=bad):
+            load_run_config({"format": bad})

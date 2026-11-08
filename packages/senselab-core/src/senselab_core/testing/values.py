@@ -93,8 +93,9 @@ from senselab_core.kernel.signals import (
 from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER
+from senselab_core.runtime.calibration import RunCalibration
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
-from senselab_core.runtime.compare import Difference, Threshold, Thresholds
+from senselab_core.runtime.compare import Difference, LoadedRunConfig, Threshold, Thresholds
 from senselab_core.runtime.envs import EnvRecord
 from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide
 from senselab_core.runtime.execution_settings import ResourceClass
@@ -1054,6 +1055,14 @@ def _register_comparison_samples() -> None:
         Thresholds,
         lambda: [Thresholds(by_name={"a": bounds[0]}), Thresholds(by_name={"a": bounds[0], "b": bounds[1]})],
         invalid_updates=[{"by_name": {"a": 1}}],
+    )
+    register_samples(
+        LoadedRunConfig,
+        lambda: [
+            LoadedRunConfig(thresholds=Thresholds(by_name={"a": bounds[0]}), calibration=RunCalibration()),
+            LoadedRunConfig(thresholds=Thresholds(by_name={"a": bounds[1]}), calibration=RunCalibration(trust="own")),
+        ],
+        invalid_updates=[{"calibration": {"trust": "all"}}],
     )
 
 
