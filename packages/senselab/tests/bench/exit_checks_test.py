@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import platform
+import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -17,7 +18,7 @@ from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.events import Event, EventKind, EventLog, read_events
-from senselab_core.runtime.execution.executor import JobRef
+from senselab_core.runtime.execution.executor import FaultRecord, JobRef
 from senselab_core.runtime.planner import plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.testing.workers import mit_lock_records
@@ -383,59 +384,130 @@ def test_a_skipped_resident_sample_is_counted_not_read_as_zero() -> None:
     assert (watch.peak_resident, watch.report()["skipped_samples"]) == (40, 2)
 
 
-class _StartedRun:
-    """A started run: its events are what the log holds; `wait` reports done or not as scripted."""
-
-    def __init__(self, log: Path, done: bool) -> None:
-        self.log, self.done = log, done
-
-    def events(self) -> list[Event]:
-        return read_events(self.log)
-
-    def wait(self, timeout: float | None = None) -> SimpleNamespace:  # noqa: ARG002
-        return SimpleNamespace(done=self.done, interrupted=False)
-
-    def cancel(self) -> None:
-        raise AssertionError("the driver cancels nothing here")
+def _child(done: bool) -> Callable[[Path, str], subprocess.Popen[bytes]]:
+    """A spawner of a process that ends at once when `done`, else sleeps until its group is killed."""
+    code = "pass" if done else "import time; time.sleep(600)"
+    return lambda work, profile: subprocess.Popen([sys.executable, "-c", code], start_new_session=True)  # noqa: ARG005
 
 
-def _started(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, committed: int, done: bool) -> Any:  # noqa: ANN401
-    """Set `start` over three items with `committed` finished, on a fake run; return the harness config."""
+def _started(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, committed: int) -> Any:  # noqa: ANN401
+    """Set `start` over three items with `committed` finished; return the harness config."""
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
     monkeypatch.setenv("SLURM_JOB_ID", "4242")
     log = EventLog(tmp_path / "events", "a0", 1, epoch=1)
     for i in range(committed):
         _record(log, "finished", i, KEYS[i], _output(KEYS[i]))
     placed = SimpleNamespace(hash=HASH, manifest=SimpleNamespace(rows=[SimpleNamespace(id=f"r{i}") for i in range(3)]))
+    monkeypatch.setattr(interrupt_resume, "run_dir_of", lambda plan_hash: tmp_path / "events")
     monkeypatch.setattr(exitlib, "build_tree", lambda step, work: work)
     monkeypatch.setattr(exitlib, "planned", lambda step, root, profile: placed)
     monkeypatch.setattr(exitlib, "slurm_prefix", lambda profile, run_dir, plan_hash: "senselab-x-")
-    monkeypatch.setattr(exitlib, "slurm_job_ids", lambda prefix, timeout_s, run: ["77", "78"])
-    monkeypatch.setattr(
-        exitlib, "launch", lambda placed, executor, store: (_StartedRun(tmp_path / "events", done), None)
-    )
+    listings = iter([["77", "78"], []])
+    monkeypatch.setattr(exitlib, "slurm_job_ids", lambda prefix, timeout_s, run: next(listings, []))
+    monkeypatch.setattr(interrupt_resume, "scancel", lambda jobs: None)
     return exitlib.load_config()
 
 
 @pytest.mark.logic
 def test_start_refuses_a_run_that_is_done_before_its_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A run done with fewer items committed than the target has nothing to interrupt and fails."""
-    config = _started(tmp_path, monkeypatch, committed=0, done=True)
+    config = _started(tmp_path, monkeypatch, committed=0)
     with pytest.raises(RuntimeError, match="nothing to interrupt"):
-        interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config)
+        interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config, _child(True))
 
 
 @pytest.mark.logic
-def test_start_reports_the_jobs_then_fails_when_the_run_finishes_uncancelled(
+def test_interrupt_cancels_the_prefix_kills_the_process_then_sweeps_what_it_submitted() -> None:
+    """Jobs are cancelled before the kill; one the killed process submitted meanwhile is cancelled after it."""
+    order: list[str] = []
+    listings = iter([["1", "2"], ["3"], []])
+
+    def jobs(prefix: str, timeout_s: float) -> list[str]:
+        assert prefix == "senselab-x-" and timeout_s == 5.0
+        return next(listings)
+
+    cancelled = interrupt_resume.interrupt(
+        "senselab-x-",
+        99,
+        5.0,
+        0.0,
+        None,
+        jobs,
+        lambda each: order.append("cancel " + " ".join(each)),
+        lambda pid: order.append(f"kill {pid}"),
+    )
+    assert order == ["cancel 1 2", "kill 99", "cancel 3"] and cancelled == ["1", "2", "3"]
+
+
+@pytest.mark.logic
+def test_interrupt_fails_when_jobs_of_the_prefix_outlive_the_bound() -> None:
+    """Jobs still listed after the deadline raise instead of reporting an interrupt."""
+    with pytest.raises(exitlib.BoundExceeded, match="still live"):
+        interrupt_resume.interrupt(
+            "p-", 1, 1.0, 0.0, 0.0, lambda prefix, seconds: ["5"], lambda each: None, lambda pid: None
+        )
+
+
+@pytest.mark.logic
+def test_start_names_the_failures_of_a_run_that_ended_short_of_its_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run whose items all failed is refused with the failure message, not as a bare 'nothing to interrupt'."""
+    config = _started(tmp_path, monkeypatch, committed=0)
+    log = EventLog(tmp_path / "events", "a1", 1, epoch=1)
+    fault = FaultRecord(
+        type="ScalerFailed", fault="infrastructure", message="'${GPU_PARTITION}' is not set", gap=False, charged=False
+    )
+    for i in range(3):
+        log.record(
+            "failed", "call", job=JobRef(plan_hash=HASH, node="call", element=(i,)), key=KEYS[i] * 64, failure=fault
+        )
+    with pytest.raises(RuntimeError, match=r"3 x '\$\{GPU_PARTITION\}' is not set"):
+        interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config, _child(True))
+
+
+_WRITER = """
+import sys, time
+from pathlib import Path
+from senselab_core.runtime.execution.events import EventLog
+from senselab_core.runtime.execution.executor import JobRef
+log = EventLog(Path(sys.argv[1]), "a2", 1, epoch=1)
+for i in range(3):
+    log.record("finished", "call", job=JobRef(plan_hash=sys.argv[2], node="call", element=(i,)), key=str(i) * 64,
+               output="output:" + str(i) * 64)
+    time.sleep(0.3)
+time.sleep(600)
+"""
+
+
+@pytest.mark.logic
+def test_start_sees_a_separate_process_commit_items_and_interrupts_it_once_the_target_is_reached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The count is read from the events on disk that another process writes, and that process is then killed."""
+    config = _started(tmp_path, monkeypatch, committed=0)
+    children: list[subprocess.Popen[bytes]] = []
+
+    def spawn(work: Path, profile: str) -> subprocess.Popen[bytes]:  # noqa: ARG001
+        argv = [sys.executable, "-c", _WRITER, str(tmp_path / "events"), HASH]
+        children.append(subprocess.Popen(argv, start_new_session=True))
+        return children[0]
+
+    assert interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config, spawn) == 0
+    committed = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["committed"]
+    assert 1 <= committed <= 3 and children[0].returncode == -9
+
+
+@pytest.mark.logic
+def test_start_interrupts_its_own_run_at_the_target_and_exits_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """At the target `start` writes and prints the jobs to cancel; a run that then finishes returns 1."""
-    config = _started(tmp_path, monkeypatch, committed=1, done=True)
-    assert interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config) == 1
+    """The child run is SIGKILLed at the target, the report names the cancelled jobs, and `start` returns 0."""
+    config = _started(tmp_path, monkeypatch, committed=1)
+    assert interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config) == 0
     report = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
-    printed = capsys.readouterr().out
-    assert report["workers"] == ["77", "78"] and report["coordinator"] == "4242" and report["committed"] == 1
-    assert "INTERRUPT NOW" in printed and "scancel 4242 77 78" in printed and "senselab-x-*" in printed
+    assert report["workers"] == ["77", "78"] and report["committed"] == 1 and report["hash"] == HASH
+    assert f"INTERRUPTED hash={HASH} committed=1/3" in capsys.readouterr().out
 
 
 @pytest.mark.logic
@@ -455,6 +527,7 @@ def test_a_run_with_an_incomplete_or_failed_result_set_is_refused(
     )
     done = exitlib.Execution(placed, None, read_events(tmp_path / "events"), {}, 0.0, counts)
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setattr(interrupt_resume, "run_dir_of", lambda plan_hash: tmp_path / "events")
     monkeypatch.setattr(exitlib, "build_tree", lambda step, work: work)
     monkeypatch.setattr(exitlib, "planned", lambda step, root, profile: placed)
     monkeypatch.setattr(exitlib, "execute", lambda placed, executor, config: done)
