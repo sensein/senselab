@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 import soundfile
-from senselab_core.kernel.declare import REGISTRY, BackendSpec
+from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry
 from senselab_core.runtime import fake_backend
 from senselab_core.runtime.call import Packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
@@ -214,3 +214,53 @@ def test_a_suite_with_entries_that_do_not_plan_is_refused_before_anything_runs(
     assert not list((tmp_path / "cache").rglob(ladder.commit()))
     runs = tmp_path / "cache" / "2x" / "runs"
     assert not list((tmp_path / "cache").rglob("*@*.json")) and not (runs.is_dir() and any(runs.iterdir()))
+
+
+@pytest.mark.logic
+def test_labels_name_backend_and_model_only_as_needed() -> None:
+    """A task's entries are told apart by backend, and by model when they share a backend; a true twin collides."""
+    ladder = _module("scale_ladder_labels_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    placed = [("t", "a", "org/m"), ("t", "b", "org/m"), ("u", "a", "org/m"), ("u", "a", "org/n"), ("v", "a", None)]
+    assert ladder.labels(placed) == ["t~a", "t~b", "u~a~org--m", "u~a~org--n", "v~a"]
+    assert ladder.labels([("t", "a", None), ("t", "a", None)]) == ["t~a", "t~a"]
+
+
+@pytest.mark.logic
+def test_two_entries_of_one_task_write_two_results_and_two_stores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two backends of one task each get their own result file and store; twins sharing a label are refused."""
+    ladder = _module("scale_ladder_paths_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
+    registry = Registry()
+    registry.add_task(fake_backend.ECHO)
+    registry.add_backend(fake_backend.FAKE)
+    registry.add_backend(fake_backend.FAKE.model_copy(update={"name": "fake2", "stack": "fake2"}))
+
+    def measured(entry: Any, point: Any, suite: Any, profile: Any, label: str, out: Path) -> dict[str, Any]:  # noqa: ANN401, ARG001, PLR0913 - the measure_point signature
+        (out / f"{label}@{point}" / "store").mkdir(parents=True)
+        row = {"per_item_s": 1.0, "peak_rss_bytes": 1, "files_written": 1, "bytes_written": 1, "items": 1}
+        return {"sha": "a", "jobs": ["1"], "task": entry.task, "label": label, "point": point, "done": True, **row}
+
+    monkeypatch.setattr(ladder, "measure_point", measured)
+    head = "format: scale-suite@1.0\nname: two\nseed: 0\nlong_s: 1\ntasks:\n"
+    twins = tmp_path / "twins.yaml"
+    twins.write_text(
+        head + "- {task: fake.echo, port: payload, data: payloads, points: [1]}\n"
+        "- {task: fake.echo, port: payload, data: payloads, params: {salt: y}, points: [1]}\n"
+    )
+    pair = tmp_path / "two.yaml"
+    pair.write_text(
+        head + "- {task: fake.echo, stack: fake, port: payload, data: payloads, points: [1]}\n"
+        "- {task: fake.echo, stack: fake2, port: payload, data: payloads, points: [1]}\n"
+    )
+    previous = use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, registry, mit_lock_records))
+    try:
+        with pytest.raises(ladder.SuiteRefused, match="label 'fake.echo~fake' is another entry's too"):
+            ladder.run(twins, ExecutionProfile.load("laptop"))
+        ladder.run(pair, ExecutionProfile.load("laptop"))
+    finally:
+        use_packaged(previous)
+    out = tmp_path / "cache" / "2x" / "benchmarks" / "scale" / "two" / ladder.commit()
+    assert sorted(p.name for p in out.glob("*.json")) == ["fake.echo~fake2@1.json", "fake.echo~fake@1.json"]
+    assert sorted(p.parent.name for p in out.glob("*/store")) == ["fake.echo~fake2@1", "fake.echo~fake@1"]

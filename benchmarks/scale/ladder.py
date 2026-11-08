@@ -204,14 +204,33 @@ def placed_point(
     return placed, root, profile
 
 
-def check_suite(suite: Suite, profile: ExecutionProfile, data: Path) -> None:
-    """Fetch and plan every entry of `suite` at its smallest point, its data under `data`, measuring nothing.
+def labels(placed: Sequence[tuple[str, str, str | None]]) -> list[str]:
+    """Return the label of each entry placed as `(task, backend, model id)`.
+
+    A label is `<task>~<backend>`, with `~<model>` when two entries share a task and backend; a result's file and
+    store are named by its label and point.
+    """
+    pairs = [(task, backend) for task, backend, _ in placed]
+    return [
+        "~".join(
+            [task, backend]
+            + ([model.replace("/", "--")] if model is not None and pairs.count((task, backend)) > 1 else [])
+        )
+        for task, backend, model in placed
+    ]
+
+
+def check_suite(suite: Suite, profile: ExecutionProfile, data: Path) -> list[str]:
+    """Fetch and plan every entry of `suite` at its smallest point, its data under `data`; return their labels.
+
+    Nothing is measured.
 
     Raises:
-        SuiteRefused: an entry's data cannot be had, or it does not plan; every such entry is listed with the stage
-            and its error.
+        SuiteRefused: an entry's data cannot be had or it does not plan, or two entries share a label (so their
+            results would share a path); each such entry is listed with the stage and its error.
     """
-    bad = []
+    bad: list[str] = []
+    placed: list[tuple[str, str, str | None]] = []
     for index, entry in enumerate(suite.tasks):
         counts = [p for p in entry.points if p != LONG]
         point = min(counts) if counts else LONG
@@ -222,17 +241,29 @@ def check_suite(suite: Suite, profile: ExecutionProfile, data: Path) -> None:
             bad.append(f"{name}: data: {type(err).__name__}: {err}")
             continue
         try:
-            placed_point(entry, point, suite, profile, data)
+            plan_, _, _ = placed_point(entry, point, suite, profile, data)
         except Exception as err:  # noqa: BLE001 - every planning error of every entry is listed, then the suite refused
             bad.append(f"{name}: plan: {type(err).__name__}: {err}")
+            continue
+        model = plan_.logical.models["a"]
+        placed.append((entry.task, plan_.placement.nodes["a"].backend, None if model is None else model.ref.id))
+    found = labels(placed) if not bad else []
+    bad += [
+        f"entry {i}: label {label!r} is another entry's too" for i, label in enumerate(found) if found.count(label) > 1
+    ]
     if bad:
         raise SuiteRefused(
             f"{suite.name}: {len(bad)} entries do not fetch or plan, nothing was measured:\n" + "\n".join(bad)
         )
+    return found
 
 
-def measure_point(entry: Entry, point: int | str, suite: Suite, profile: ExecutionProfile, out: Path) -> dict[str, Any]:
+def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the profile, its label and where results go
+    entry: Entry, point: int | str, suite: Suite, profile: ExecutionProfile, label: str, out: Path
+) -> dict[str, Any]:
     """Plan, run and measure `entry` at `point` under `profile`; return its `scale-result@1.0` document.
+
+    Its store is `<out>/<label>@<point>/store`.
 
     Raises:
         FileExistsError: the point's run directory exists, so its results would be reused.
@@ -241,7 +272,7 @@ def measure_point(entry: Entry, point: int | str, suite: Suite, profile: Executi
     run_dir = run_dir_of(placed.hash)
     if run_dir.exists():
         raise FileExistsError(f"{run_dir} exists; remove it to measure {entry.task} at {point} afresh")
-    store_root = out / f"{entry.task}@{point}" / "store"
+    store_root = out / f"{label}@{point}" / "store"
     store = ResultStore(store_root)
     pool = Pool(
         run_dir,
@@ -272,6 +303,7 @@ def measure_point(entry: Entry, point: int | str, suite: Suite, profile: Executi
         "format": RESULT_FORMAT,
         "suite": suite.name,
         "task": entry.task,
+        "label": label,
         "point": point,
         "items": items,
         "backend": node.backend,
@@ -321,14 +353,15 @@ def _verdict(value: float | None, bound: float | None, what: str) -> str:
 
 
 def flatness(results: Sequence[Mapping[str, Any]], budgets: Mapping[str, Any]) -> list[str]:
-    """Return one line per task and measure: its flatness and its ceiling.
+    """Return one line per entry (by its label, else its task) and measure: its flatness and its ceiling.
 
     Flatness is the value at 10⁴ over at 10² against `flat_ratio`; the ceiling is the largest value over the points
-    against its `per_item` budget. An unset budget reads unmeasured.
+    against its task's `per_item` budget. An unset budget reads unmeasured.
     """
     lines = []
-    for task in sorted({r["task"] for r in results}):
-        at = {r["point"]: r for r in results if r["task"] == task}
+    for label in sorted({r.get("label", r["task"]) for r in results}):
+        at = {r["point"]: r for r in results if r.get("label", r["task"]) == label}
+        task = next(iter(at.values()))["task"]
         ceilings = (budgets.get("per_item") or {}).get(task) or {}
         for name, read in PER_ITEM.items():
             values = {p: read(r) for p, r in at.items()}
@@ -337,7 +370,7 @@ def flatness(results: Sequence[Mapping[str, Any]], budgets: Mapping[str, Any]) -
             flat = _verdict(ratio, budgets.get("flat_ratio"), "flat")
             ceiling = _verdict(max(values.values()), ceilings.get(name), "ceiling")
             shown = "n/a" if ratio is None else f"{ratio:.3f}"
-            lines.append(f"{task} {name}: at {FLAT_POINTS[1]} / at {FLAT_POINTS[0]} = {shown}, {flat}, {ceiling}")
+            lines.append(f"{label} {name}: at {FLAT_POINTS[1]} / at {FLAT_POINTS[0]} = {shown}, {flat}, {ceiling}")
     return lines
 
 
@@ -354,15 +387,15 @@ def run(suite_path: Path, profile: ExecutionProfile) -> list[dict[str, Any]]:
     """
     suite = Suite.load(suite_path)
     out = cache_root() / NAMESPACE / "benchmarks" / "scale" / suite.name / commit()
-    check_suite(suite, profile, out.parent)
+    found = check_suite(suite, profile, out.parent)
     out.mkdir(parents=True, exist_ok=True)
     results = []
-    for entry in suite.tasks:
+    for entry, label in zip(suite.tasks, found, strict=True):
         for point in entry.points:
-            result = measure_point(entry, point, suite, profile, out)
-            (out / f"{entry.task}@{point}.json").write_text(json.dumps(result, indent=1, sort_keys=True) + "\n")
+            result = measure_point(entry, point, suite, profile, label, out)
+            (out / f"{label}@{point}.json").write_text(json.dumps(result, indent=1, sort_keys=True) + "\n")
             print(
-                f"{result['sha']} {','.join(result['jobs'])} {entry.task}@{point}: {result['items']} items, "
+                f"{result['sha']} {','.join(result['jobs'])} {label}@{point}: {result['items']} items, "
                 f"{result['per_item_s']:.4f} s/item, peak {result['peak_rss_bytes']} B, "
                 f"{result['files_written']} files, {result['bytes_written']} B written, done {result['done']}"
             )
