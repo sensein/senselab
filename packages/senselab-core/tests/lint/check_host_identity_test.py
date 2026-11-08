@@ -24,6 +24,14 @@ _spec.loader.exec_module(hi)
         ("getpass.getuser()", "getpass.getuser"),
         ("os.uname().nodename", "uname().nodename"),
         ("uname().nodename", "uname().nodename"),
+        ("socket.getfqdn()", "socket.getfqdn"),
+        ("platform.uname().node", "platform.uname().node"),
+        ("os.getlogin()", "os.getlogin"),
+        ("pwd.getpwuid(0).pw_name", "pwd.getpwuid"),
+        ("s.gethostname()\nimport socket as s", "socket.gethostname"),
+        ("gethostname()\nfrom socket import gethostname", "socket.gethostname"),
+        ("me()\nfrom getpass import getuser as me", "getpass.getuser"),
+        ("uname().node\nfrom platform import uname", "platform.uname().node"),
     ],
 )
 def test_every_way_to_read_the_name_is_found(tmp_path: Path, line: str, found: str) -> None:
@@ -36,7 +44,7 @@ def test_every_way_to_read_the_name_is_found(tmp_path: Path, line: str, found: s
 def test_a_host_token_and_a_platform_read_pass(tmp_path: Path) -> None:
     """Reading the platform or the token is not reading a name."""
     source = tmp_path / "m.py"
-    source.write_text("x = platform.system() + host_token() + os.getuid()\n")
+    source.write_text("from os import path\nx = platform.system() + host_token() + os.getuid() + path.node()\n")
     assert hi.findings([source], root=tmp_path) == []
 
 

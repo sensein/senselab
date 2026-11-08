@@ -4,6 +4,7 @@ import logging
 import os
 import pwd
 import re
+import socket
 import time
 from collections.abc import Iterator, Mapping
 from enum import Enum
@@ -44,16 +45,23 @@ _OWNER = re.compile(r"owned by \S+ \(uid (\d+)\); as \S+,")
 _HOLDER = re.compile(r"('user': )'[^']*'")
 
 
+def _token(name: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])")
+
+
 def stored_message(message: str) -> str:
-    """Return `message` for a record other users read: paths and account names rendered to labels.
+    """Return `message` for a record other users read: paths, account and host names rendered to labels.
 
     The full text goes to the operator log. An account is the running user's, the owner `owner_remedy` names, or the
-    lease holder `Lease.holder` names; a path is any absolute one.
+    lease holder `Lease.holder` names; a host is this one's name or its first label; a path is any absolute one. A
+    name is matched as a whole token.
     """
     kept = _OWNER.sub(r"owned by uid \1; as its owner,", message)
     kept = _HOLDER.sub(r"\1'<account>'", kept)
-    with_user = kept.replace(pwd.getpwuid(os.getuid()).pw_name, "<account>")
-    shown = _PATH.sub("<path>", with_user)
+    shown = _token(pwd.getpwuid(os.getuid()).pw_name).sub("<account>", _PATH.sub("<path>", kept))
+    host = socket.gethostname()
+    for name in sorted({host, host.split(".")[0]} - {""}, key=len, reverse=True):
+        shown = _token(name).sub("<host>", shown)
     if shown != message:
         logger.info("a fault message was rendered for the record; the operator's text was: %s", message)
     return shown

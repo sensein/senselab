@@ -2,6 +2,7 @@
 
 import errno
 import json
+import socket
 import subprocess
 import sys
 import threading
@@ -81,6 +82,15 @@ def test_the_sweep_matches_a_name_as_a_token_and_a_path_anywhere(tmp_path: Path)
         assert identities_in(f"{name}_test x{name} {name}-1".encode(), tmp_path) == []
         assert name in identities_in(f"by {name}.".encode(), tmp_path)
     assert identities_in(f"at {tmp_path}x".encode(), tmp_path) == [str(tmp_path)]
+
+
+@pytest.mark.logic
+def test_a_stored_fault_message_names_no_host(tmp_path: Path) -> None:
+    """This host's name and its first label, as a peer address or a node name in a fault, are rendered to `<host>`."""
+    host = socket.gethostname()
+    text = f"ray: connect to {host}:6379 refused; node {host.split('.')[0]} is down; job x{host} kept"
+    stored = FaultRecord.of({"fault": "infrastructure", "type": "T", "message": text}).message
+    assert stored.count("<host>") == 2 and f"x{host}" in stored, stored
 
 
 @pytest.mark.logic
