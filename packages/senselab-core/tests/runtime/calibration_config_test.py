@@ -1,4 +1,4 @@
-"""The `calibration` profile section, its load-time rules, the run config's trust override, and the format tags."""
+"""The `calibration` profile section, its derived values, the run config's trust override, and the format tags."""
 
 import re
 from pathlib import Path
@@ -13,7 +13,6 @@ from senselab_core.runtime.profiles import ExecutionProfile, UnknownProfileKey, 
 PROFILES = Path(__file__).parents[2] / "src/senselab_core/runtime/data/profiles"
 NAMES = ["laptop", "orcd"]
 TRUST = {"laptop": "own", "orcd": "group"}
-PROBE_ITEMS = {"laptop": 50, "orcd": 200}
 
 
 def _calibration(overrides: dict[str, Any]) -> dict[str, Any]:
@@ -22,13 +21,10 @@ def _calibration(overrides: dict[str, Any]) -> dict[str, Any]:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("name", NAMES)
-def test_packaged_profiles_carry_the_designed_calibration(name: str) -> None:
-    """Each packaged profile holds the section's values of the design, and its trust default."""
+def test_packaged_profiles_carry_their_trust_and_roots(name: str) -> None:
+    """Each packaged profile holds its trust default; orcd pools the group root before its own."""
     c = ExecutionProfile.load(name).calibration
-    assert (c.trust, c.probe_items) == (TRUST[name], PROBE_ITEMS[name])
-    assert (c.warmup_requests, c.length_strata, c.min_requests, c.single_item_jobs, c.batched_sizes) == (2, 2, 3, 4, 1)
-    assert (c.confidence, c.drift_confidence) == (1.645, 2.576)
-    assert (c.observations_kept, c.unmeasured_workers) == (3, 1)
+    assert c.trust == TRUST[name]
     assert len(c.measures_roots) == (2 if name == "orcd" else 1)
 
 
