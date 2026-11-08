@@ -1,8 +1,11 @@
 """The CI cadence for the test tiers: what a PR, the `limits` label and the nightly run select; the rest is ORCD."""
 
+import os
 import shlex
+import subprocess
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -16,6 +19,13 @@ PYPROJECT = REPO / "pyproject.toml"
 TIERS = ("logic", "contract", "limits", "usecase", "env")
 EVERY_PR, ON_LABEL, NIGHTLY = "every_pr", "on_label", "nightly"
 LABEL = "limits"
+LIMITS_SCOPE = frozenset(
+    {
+        *(f"packages/senselab-core/src/senselab_core/runtime/{name}.py" for name in ("probe", "calibration")),
+        "packages/senselab-core/tests/runtime/probe_test.py",
+        "packages/senselab-core/tests/data/test_slack.yaml",
+    }
+)
 
 
 def _commands(run: str) -> list[list[str]]:
@@ -48,6 +58,49 @@ def package_selections(workflow: str) -> list[tuple[str, str | None, str]]:
                 if any(p == "packages" or p.startswith("packages/") for p in paths):
                     selections.append((name, marker, str(job.get("if", ""))))
     return selections
+
+
+def workspace_members() -> dict[str, tuple[str, frozenset[str]]]:
+    """Each workspace distribution: the directory under ``packages`` holding it, and the members it depends on."""
+    members = {}
+    for pyproject in [PYPROJECT, *sorted((REPO / "packages").glob("*/pyproject.toml"))]:
+        document = tomllib.loads(pyproject.read_text())
+        sources = document.get("tool", {}).get("uv", {}).get("sources", {})
+        needs = frozenset(name for name, source in sources.items() if source.get("workspace"))
+        members[document["project"]["name"]] = (f"packages/{document['project']['name']}", needs)
+    return members
+
+
+def _installs(argv: list[str], members: dict[str, tuple[str, frozenset[str]]]) -> set[str]:
+    """The workspace members a ``uv sync`` or a wheel ``uv pip install`` installs, their dependencies included."""
+    if argv[:2] == ["uv", "sync"]:
+        named = {argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--package"}
+        chosen = named or set(members)
+    elif argv[:3] == ["uv", "pip", "install"]:
+        chosen = {Path(a).name.split("-")[0].replace("_", "-") for a in argv if a.endswith(".whl")}
+    else:
+        return set()
+    while missing := {need for name in chosen for need in members[name][1]} - chosen:
+        chosen |= missing
+    return chosen
+
+
+def uninstalled_paths(workflow: str) -> list[tuple[str, str]]:
+    """``(job, path)`` for each ``pytest`` path under ``packages`` outside every member the job installs."""
+    members, found = workspace_members(), []
+    for name, job in yaml.safe_load(workflow).get("jobs", {}).items():
+        commands = [argv for step in job.get("steps", []) for argv in _commands(step.get("run", ""))]
+        installed = set().union(*(_installs(argv, members) for argv in commands))
+        roots = [members[member][0] for member in installed]
+        for argv in commands:
+            at = next((i for i, a in enumerate(argv) if Path(a).name == "pytest"), None)
+            if at is None:
+                continue
+            args = argv[at + 1 :]
+            values = {args[i + 1] for i, a in enumerate(args) if a in ("-m", "-p", "-k") and i + 1 < len(args)}
+            paths = [a for a in args if a.startswith("packages") and a not in values]
+            found += [(name, p) for p in paths if not any(p == r or p.startswith(f"{r}/") for r in roots)]
+    return found
 
 
 def pytest_paths_outside_packages(workflow: str) -> list[tuple[str, str]]:
@@ -169,7 +222,7 @@ def test_the_env_tier_runs_on_every_pr() -> None:
 
 @pytest.mark.logic
 def test_the_nightly_workflow_tests_2x_and_a_pr_gaining_a_label_reruns_the_tests() -> None:
-    """The nightly workflow is scheduled and checks out 2.x; the test workflow reruns on `labeled`."""
+    """The nightly workflow is scheduled and checks out 2.x and the phase branch; the test workflow reruns on label."""
     nightly = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
     triggers = nightly.get("on", nightly.get(True))
     assert triggers["schedule"] and all("cron" in entry for entry in triggers["schedule"])
@@ -178,11 +231,82 @@ def test_the_nightly_workflow_tests_2x_and_a_pr_gaining_a_label_reruns_the_tests
     checkouts = [
         step for job in nightly["jobs"].values() for step in job.get("steps", []) if "checkout" in step.get("uses", "")
     ]
-    assert checkouts and all(step["with"]["ref"] == "2.x" for step in checkouts)
+    integration, phase = nightly["jobs"]["limits"]["strategy"]["matrix"]["ref"]
+    assert integration == "2.x" and phase.startswith("2x/")
+    assert checkouts and all(step["with"]["ref"] in {"2.x", "${{ matrix.ref }}"} for step in checkouts)
     tests = yaml.safe_load(WORKFLOW.read_text())
     on = tests.get("on", tests.get(True))
     assert "schedule" not in on and "labeled" in on["pull_request"]["types"]
     assert on["workflow_call"]["inputs"]["ref"]
+
+
+PUSH_IF = "github.event_name == 'push' && startsWith(github.ref, 'refs/heads/2x/')"
+SCOPED_IF = "steps.scope.outputs.run == 'true'"
+
+
+def _scope(job: dict[str, Any]) -> dict[str, Any]:
+    step: dict[str, Any] = next(step for step in job["steps"] if step.get("id") == "scope")
+    return step
+
+
+@pytest.mark.logic
+def test_core_limits_runs_on_the_label_and_on_a_push_to_a_2x_branch_touching_the_fit() -> None:
+    """The label runs the job on a PR; a push to a `2x/` branch runs it when the push changes the probe's fit."""
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["core-limits"]
+    assert job["if"] == f"{LABEL_IF} || ({PUSH_IF})"
+    assert set(_scope(job)["env"]["PATHS"].split()) == LIMITS_SCOPE
+    later = job["steps"][job["steps"].index(_scope(job)) + 1 :]
+    assert later and all(step.get("if") == SCOPED_IF for step in later)
+
+
+def _commit(repo: Path, path: str) -> str:
+    git = ["git", "-C", str(repo), "-c", "user.name=user", "-c", "user.email=user@example.invalid"]
+    (repo / path).parent.mkdir(parents=True, exist_ok=True)
+    (repo / path).write_text(path)
+    subprocess.run([*git, "add", path], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", path], check=True)
+    return subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _scoped(repo: Path, event: str, before: str, bound: float) -> str:
+    step = _scope(yaml.safe_load(WORKFLOW.read_text())["jobs"]["core-limits"])
+    output = repo.parent / "output"
+    output.write_text("")
+    env = {**os.environ, **step["env"], "BEFORE": before, "GITHUB_EVENT_NAME": event, "GITHUB_OUTPUT": str(output)}
+    subprocess.run(["bash", "-e", "-c", step["run"]], cwd=repo, env=env, check=True, timeout=bound)
+    return output.read_text().strip()
+
+
+@pytest.mark.logic
+def test_the_scope_step_runs_the_tier_only_when_a_push_changes_the_fit(tmp_path: Path, tier_bound: float) -> None:
+    """A push changing only other files skips; one changing a fit source, an unknown base, or a PR runs."""
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    first = _commit(repo, "README.md")
+    second = _commit(repo, "packages/other.py")
+    assert _scoped(repo, "push", first, tier_bound) == "run=false"
+    _commit(repo, sorted(LIMITS_SCOPE)[0])
+    assert _scoped(repo, "push", second, tier_bound) == "run=true"
+    assert _scoped(repo, "push", "0" * 40, tier_bound) == "run=true"
+    assert _scoped(repo, "pull_request", second, tier_bound) == "run=true"
+
+
+@pytest.mark.logic
+def test_every_job_tests_only_the_packages_it_installs() -> None:
+    """A job's pytest paths lie under the workspace members its sync or wheel install puts in the environment."""
+    assert [(path.name, *found) for path in WORKFLOWS_2X for found in uninstalled_paths(path.read_text())] == []
+
+
+@pytest.mark.logic
+def test_a_path_outside_the_installed_packages_is_found() -> None:
+    """Syncing one member and running every package's tests is found; a member's dependency and a wheel are not."""
+    run = "uv sync --locked --package senselab-core\npytest packages packages/senselab-worker/tests"
+    wheel = "uv pip install --no-deps dist/senselab_worker-1.whl\npytest packages/senselab-worker/tests"
+    planted = yaml.safe_dump({"jobs": {"core": {"steps": [{"run": run}]}, "floor": {"steps": [{"run": wheel}]}}})
+    assert uninstalled_paths(planted) == [("core", "packages")]
+    assert {p for p, _ in workspace_members().values()} == {
+        f"packages/{d.name}" for d in (REPO / "packages").iterdir() if (d / "tests").is_dir()
+    }
 
 
 @pytest.mark.logic

@@ -21,13 +21,19 @@ jobs:
     with:
       ref: 2.x
 
+  # `2.x`, and the code branch of the current phase (STATE.md, Branches and PRs): a phase branch merges directly, with no
+  # PR to carry the `limits` label, so only this job runs its timing bounds before the phase merges.
   limits:
-    name: limits (model-free)
+    name: limits (model-free, ${{ matrix.ref }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [2.x, 2x/phase-3]
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: 2.x
+        ref: ${{ matrix.ref }}
         fetch-depth: 0   # hatch-vcs derives the version from tags
     - name: Install uv
       uses: astral-sh/setup-uv@v5
@@ -38,4 +44,4 @@ jobs:
         UV_PROJECT_ENVIRONMENT: .core
       run: uv sync --locked --no-editable --python 3.13 --package senselab-core --group test
     - name: Run the limits tier that needs no model
-      run: .core/bin/pytest packages -m "limits and not model" -p no:cacheprovider
+      run: .core/bin/pytest packages/senselab-core/tests -m "limits and not model" -p no:cacheprovider

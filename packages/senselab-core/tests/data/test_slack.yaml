@@ -8,3 +8,9 @@ substrate:
 pool:
   first_poll_s: 0.01
   poll_s: 10
+# Test-only values, which the execution profile does not take: the `slack` fixture returns the rest, `slack_tests` these.
+tests:
+  # Times of the pooled-fit scaling test: the ratio its 10^4-request time may reach over its 10^3-request time, and the runs it takes the best of.
+  probe:
+    fit_ratio: 50
+    timing_repeats: 3
