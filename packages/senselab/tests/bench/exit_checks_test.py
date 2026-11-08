@@ -194,6 +194,14 @@ def test_a_resume_that_resolved_a_ref_is_refused(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
+def test_a_resume_with_failed_items_is_refused() -> None:
+    """`ResultSet.failures` is a list: empty passes, one entry fails."""
+    interrupt_resume.refuse_failures(SimpleNamespace(failures=[]))
+    with pytest.raises(exitlib.ResumeMismatch, match="2 items failed"):
+        interrupt_resume.refuse_failures(SimpleNamespace(failures=[("r0", "f"), ("r1", "f")]))
+
+
+@pytest.mark.logic
 def test_events_of_a_surviving_worker_of_the_interrupted_epoch_are_not_the_resumes(tmp_path: Path) -> None:
     """A `finished` the old epoch logs after the snapshot is not an execution of the resume."""
     before, _ = _history(tmp_path, [0, 1], {}, KEYS)
