@@ -35,6 +35,14 @@ which models, and where. A *result* is one output with its record of what produc
 means a result already computed (by you, a colleague or an earlier run) is returned instead of
 being computed again.
 
+**Identifier visibility (a term).** Whether participant and record identifiers (names, study ids, input
+paths, metadata values) are shown is decided per audience by a *visibility policy* the data owner
+sets for a project or dataset. For example: the researcher holding the data, or an approved team,
+sees real identifiers; collaborators or a wider group see stable pseudonymous ids; a public or
+exported artifact sees none. The same run's logs, provenance and reports render according to who
+views or receives them. This is a runtime rule; P-28 is a separate repository rule (no identifiers
+in tracked files or commits).
+
 ---
 
 ## A. Personal use on one machine
@@ -259,8 +267,9 @@ being computed again.
      environment needed to reproduce it.
   2. The re-run's output is compared with the original under a stated tolerance, and the report
      says whether they agree.
-- **Never:** the record carries the original user's paths, account names or hostnames.
-- **Relates to:** P-3, P-4, P-28, P-38, ADR-010.
+- **Never:** the record shows the collaborator paths, account names, hostnames or participant
+  identifiers beyond what the visibility policy allows that audience.
+- **Relates to:** P-3, P-4, P-38, ADR-007, ADR-010.
 
 ## F. Models and versions
 
@@ -374,29 +383,34 @@ being computed again.
 
 ## I. Sensitive data
 
-### UX-28 Identifiable participants
-- **Actor, setting:** a clinical study with identifiable voice recordings and participant metadata.
-- **Steps:** runs pipelines, shares results with a collaborator, and reports a bug upstream with a
-  log.
+### UX-28 Identifiable participants, seen by different audiences
+- **Actor, setting:** a clinical study with identifiable voice recordings and participant metadata;
+  the data owner has set a visibility policy (see Terms).
+- **Steps:** the study team runs pipelines and reads logs and reports; a collaborator receives
+  results; a team member files a bug upstream with a log.
 - **Guarantees:**
-  1. Logs, progress reports, error messages and provenance identify inputs by content identity or
-     a user-chosen label, not by participant names, paths or metadata values, unless the user
-     opts in.
-  2. Sharing results shares only what the user selects; exporting provenance applies the
-     configured redaction.
-  3. Nothing about the data leaves the machine or site (no telemetry, no remote service) unless the
+  1. Logs, progress reports, error messages and provenance show identifiers exactly as the policy
+     allows the person reading them: real ids to the study team, pseudonymous ids to the
+     collaborator, none in the bug report's log.
+  2. Pseudonymous ids are stable across runs and outputs, so an allowed audience can link results
+     back to participants.
+  3. The user can see which policy and which audience rule applied to any log, report or export.
+  4. Nothing about the data leaves the machine or site (no telemetry, no remote service) unless the
      user configured that service.
-- **Never:** a transcript, participant identifier or input path appears in a log, an error, a
-  shared reuse record or an exported provenance file the user did not choose to include.
-- **Relates to:** P-3, P-28, ADR-007, ADR-010.
+- **Never:** identifiers are shown to an audience the policy does not allow; identifiers are
+  silently dropped or altered for an audience that is allowed them (that breaks the owner's own
+  analysis); anything is less protected than the policy states.
+- **Relates to:** P-3, ADR-007, ADR-010.
 
 ### UX-29 Sensitive results in a shared location
 - **Actor, setting:** a group in which some studies are restricted to named members.
 - **Steps:** a member runs a restricted study with a shared results location configured.
-- **Guarantees:** restricted results are written only where the user's configuration allows; reuse
-  never makes one study's restricted content readable by someone without access to that study.
-- **Never:** reuse turns a permission boundary into a leak (for example, by revealing whether a
-  given recording was processed).
+- **Guarantees:**
+  1. Restricted results are written only where the user's configuration allows.
+  2. Members outside the study see its records only as the visibility policy allows their audience.
+  3. Reuse never makes one study's restricted content readable by someone without access to it.
+- **Never:** reuse turns a permission boundary into a leak (for example, by revealing to an
+  audience without access whether a given recording was processed).
 - **Relates to:** P-38, ADR-007.
 
 ### UX-30 Remote model code
@@ -554,11 +568,14 @@ error), the affected items and the next action, in one line per cause.
 - **Guarantees:**
   1. The export is in a standard, documented provenance form that tools unaware of senselab can
      read.
-  2. It contains what is needed to cite and reproduce the results (UX-17), and the configured
-     redaction is applied.
-- **Never:** the export carries local paths, account names, hostnames or participant identifiers
-  the user did not choose to include.
-- **Relates to:** P-3, P-28, ADR-007, ADR-010.
+  2. It contains what is needed to cite and reproduce the results (UX-17).
+  3. Exporting applies the visibility rule of the export's audience (none for a public deposit,
+     pseudonymous ids for a collaborator, real ids for the study team), and the export states which
+     rule applied.
+- **Never:** the export shows local paths, account names, hostnames or participant identifiers to
+  an audience the policy does not allow; it drops or alters identifiers for an audience that is
+  allowed them.
+- **Relates to:** P-3, ADR-007, ADR-010.
 
 ### UX-46 Provenance survives moves, reuse and resume
 - **Actor, setting:** results copied to another machine, served to a colleague by reuse, or
@@ -606,15 +623,19 @@ error), the affected items and the next action, in one line per cause.
 - **Relates to:** P-1, P-3, P-5.
 
 ### UX-50 Reports for group and sensitive runs
-- **Actor, setting:** a group run on restricted, identifiable data.
-- **Steps:** a member generates and shares a report.
+- **Actor, setting:** a group run on restricted, identifiable data under a visibility policy.
+- **Steps:** a member generates a report, reads it, then shares it with a collaborator and later
+  publishes a summary.
 - **Guarantees:**
   1. A reader sees only the items and inputs they have access to.
-  2. Audio, video, transcripts and participant metadata are embedded only if the user asks and is
-     allowed; otherwise items appear by content identity or a user-chosen label.
-- **Never:** a report leaks identifiable participant data, input paths or another member's
-  restricted results.
-- **Relates to:** P-28, P-38, ADR-007, ADR-010.
+  2. Identifiers, audio, video, transcripts and participant metadata appear as the policy allows
+     the report's audience; sharing or publishing re-renders the report under the new audience's
+     rule rather than passing on the owner's view.
+  3. The report states which policy and audience rule it was rendered under.
+- **Never:** a report shows identifiable participant data, input paths or another member's
+  restricted results to an audience the policy does not allow; the owner's own report hides
+  identifiers the owner is allowed to see.
+- **Relates to:** P-38, ADR-007, ADR-010.
 
 ---
 
@@ -623,3 +644,6 @@ error), the affected items and the next action, in one line per cause.
 - 2026-11-08: proposed, 50 scenarios in groups A–N (M provenance and N reports added at the owner's
   request: "add in provenance related information and report (potentially interactive) generation
   for users").
+- 2026-11-08: identifier visibility is per audience under a data owner's policy, not a blanket rule
+  (owner: "identifier specification may depend on use-case, that shouldn't be a blanket rule but
+  dependent on who sees the identifiers"); UX-17, UX-28, UX-29, UX-45 and UX-50 revised.
