@@ -26,7 +26,7 @@ _NVIDIA_SMI_FORMAT = "--format=csv,noheader,nounits"
 _NVIDIA_SMI_GPU_QUERY = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS},compute_cap", _NVIDIA_SMI_FORMAT]
 _NVIDIA_SMI_GPU_QUERY_NO_CAP = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS}", _NVIDIA_SMI_FORMAT]
 _CHIP_QUERY = ["sysctl", "-n", "machdep.cpu.brand_string"]
-_LSCPU_QUERY = ["lscpu"]
+_LSCPU_QUERY = ["env", "LC_ALL=C", "lscpu"]
 _APPS_FIELDS = ("pid", "used_memory")
 _FREE_FIELDS = ("index", "uuid", "memory.free", "memory.total")
 _NVIDIA_SMI_FREE_QUERY = ["nvidia-smi", f"--query-gpu={','.join(_FREE_FIELDS)}", _NVIDIA_SMI_FORMAT]
@@ -154,26 +154,40 @@ def _probe_chip(run: Callable[[list[str]], str]) -> tuple[Optional[str], Optiona
     return chip or None, None if chip else "Apple chip unavailable: empty sysctl output"
 
 
-def _cpu_model(run: Callable[[list[str]], str], system: str) -> Optional[str]:
-    command = _CHIP_QUERY if system == "Darwin" else _LSCPU_QUERY
+def _read_cpuinfo() -> str:
     try:
-        text = run(command)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if system == "Darwin":
-        return text.strip() or None
+        return Path("/proc/cpuinfo").read_text()
+    except OSError:
+        return ""
+
+
+def _field(text: str, name: str) -> Optional[str]:
     for line in text.splitlines():
         key, _, value = line.partition(":")
-        if key.strip() == "Model name" and value.strip():
+        if key.strip() == name and value.strip():
             return value.strip()
     return None
 
 
-def probe_hardware(*, run: Callable[[list[str]], str] = _run) -> HardwareInfo:
+def _cpu_model(
+    run: Callable[[list[str]], str], system: str, cpuinfo: Callable[[], str] = _read_cpuinfo
+) -> Optional[str]:
+    """Return the CPU's model string: `sysctl` on Darwin; on Linux `/proc/cpuinfo`, then `lscpu` in the C locale."""
+    try:
+        if system == "Darwin":
+            return run(_CHIP_QUERY).strip() or None
+        return _field(cpuinfo(), "model name") or _field(run(_LSCPU_QUERY), "Model name")
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def probe_hardware(
+    *, run: Callable[[list[str]], str] = _run, cpuinfo: Callable[[], str] = _read_cpuinfo
+) -> HardwareInfo:
     """Probe CPU, memory, GPUs, Apple chip and platform; never imports ``torch``.
 
     ``run`` executes a command (the ``nvidia-smi`` query, ``sysctl`` on Apple silicon) and returns
-    stdout; tests inject it.
+    stdout; ``cpuinfo`` reads ``/proc/cpuinfo``; tests inject both.
     """
     system = platform.system()
     machine = platform.machine()
@@ -191,7 +205,7 @@ def probe_hardware(*, run: Callable[[list[str]], str] = _run) -> HardwareInfo:
         gpu_probe_error=gpu_error,
         chip=chip,
         probe_error="; ".join(errors) or None,
-        cpu_model=chip or _cpu_model(run, system),
+        cpu_model=chip or _cpu_model(run, system, cpuinfo),
     )
 
 

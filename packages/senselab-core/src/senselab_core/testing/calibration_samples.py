@@ -179,7 +179,7 @@ def register_measure_samples(register: Register) -> None:
     register(
         MeasureUnit,
         lambda: [UNIT, UNIT.model_copy(update={"model": None, "formation": "bucket:g1", "hardware": _CPU})],
-        invalid_updates=[{"formation": "pooled"}, {"task": ""}, {"chunk_grid": ""}],
+        invalid_updates=[{"formation": "pooled"}, {"task": ""}, {"chunk_grid": ""}, {"service": ""}],
     )
     derivation = Derivation(commit="d" * 40, jobs=("j1",), probe_ids=("p1",))
     row = MeasureRow(

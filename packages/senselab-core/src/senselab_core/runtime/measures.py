@@ -15,11 +15,15 @@ from senselab_worker.digest import identity_digest
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
 from senselab_core.kernel.formats import MEASURE_OBSERVATIONS_FORMAT, MEASURE_UNIT_TAG
-from senselab_core.kernel.identity import Attestation, LogicalKey, ModelIdentity, Params, ProfileSliceIdentity
+from senselab_core.kernel.identity import LogicalKey, ModelIdentity, Params, ProfileSliceIdentity
 from senselab_core.runtime.calibration import Estimate, HardwareClass, Observation
 from senselab_core.runtime.keys import Placement
 
-_BUILD_TAG = re.compile(r"cu\d+|cpu")
+DRIVER_KEYS = frozenset({"torch_build", "launch_env", "engine", "config_digest", "engine_version"})
+"""The driver entries a measure holds."""
+ATTESTATION_TAG = "attestation@1"
+_SERVICE_DRIVER_KEYS = frozenset({"served_model", "model_identity", "observed"})
+_BUILD_TAG = re.compile(r"cu\d+|cpu|rocm[\d.]+|xpu")
 
 Formation = Annotated[str, Field(pattern=r"^(mixed|single|bucket:\S+)$")]
 """How a backend forms batches: `mixed`, `single`, or `bucket:<grid id>`."""
@@ -31,7 +35,8 @@ OBSERVATION_FORMAT = MEASURE_OBSERVATIONS_FORMAT.split(".")[0]
 class MeasureEnv(Frozen):
     """The env's fingerprinted context fields that decide cost: its lock and wheels, driver, platform and numerics.
 
-    The driver holds the torch build as `torch_build` (`cu128`, `cpu`), never the index URL, and no URL at all.
+    The driver holds only the tags and digests of `DRIVER_KEYS`: the torch build (`cu128`, `cpu`) in place of its
+    index URL, and the engine, its version, its config digest and the launch env's digest for a server.
     """
 
     env_lock: NonEmptyStr
@@ -43,8 +48,8 @@ class MeasureEnv(Frozen):
 
     @model_validator(mode="after")
     def _check_driver(self) -> Self:
-        if urls := sorted(k for k, v in self.driver.items() if "://" in v):
-            raise ValueError(f"driver {urls} holds a URL; a measure names the build, not where it came from")
+        if undeclared := sorted(set(self.driver) - DRIVER_KEYS):
+            raise ValueError(f"driver holds {undeclared}; a measure holds only {sorted(DRIVER_KEYS)}")
         return self
 
     @classmethod
@@ -58,7 +63,7 @@ class MeasureEnv(Frozen):
         """
         if missing := sorted(set(cls.model_fields) - set(fields)):
             raise ValueError(f"env fields lack {missing}")
-        driver = dict(fields["driver"])
+        driver = {k: v for k, v in fields["driver"].items() if k not in _SERVICE_DRIVER_KEYS}
         if (index := driver.pop("torch_index", None)) is not None:
             tag = urlsplit(index).path.rstrip("/").rsplit("/", 1)[-1]
             driver["torch_build"] = tag if _BUILD_TAG.fullmatch(tag) else "other"
@@ -84,7 +89,7 @@ class MeasureUnit(Frozen):
     chunk_grid: NonEmptyStr | None
     model: ModelIdentity | None
     env: MeasureEnv
-    service: Attestation | None
+    service: NonEmptyStr | None
     hardware: HardwareClass
     observation_format: NonEmptyStr = OBSERVATION_FORMAT
 
@@ -114,7 +119,7 @@ class MeasureUnit(Frozen):
             chunk_grid=placement.chunk_grid,
             model=key.model,
             env=MeasureEnv.from_fields(env_fields),
-            service=key.service,
+            service=None if key.service is None else identity_digest(ATTESTATION_TAG, key.service.model_dump()),
             hardware=hardware,
         )
 

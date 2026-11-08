@@ -2,13 +2,14 @@
 
 import getpass
 import platform
+import re
 import socket
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from senselab_core.kernel.identity import LogicalKey
+from senselab_core.kernel.identity import Attestation, LogicalKey, ModelIdentity
 from senselab_core.runtime.calibration import Estimate, HardwareClass, HardwareGrant, Observation
 from senselab_core.runtime.config import dump_yaml
 from senselab_core.runtime.fake_backend import FAKE
@@ -341,13 +342,76 @@ def test_the_cpu_model_is_read_from_the_host_command_never_the_architecture(
     system: str, output: str, expected: str | None
 ) -> None:
     """A host that does not name its CPU gets None, not `aarch64` or `i386`, so classes never merge by architecture."""
-    assert _cpu_model(lambda command: output, system) == expected
-    assert _cpu_model(_fail, system) is None
+    assert _cpu_model(lambda command: output, system, lambda: "") == expected
+    assert _cpu_model(_fail, system, lambda: "") is None
+
+
+CPUINFO = "processor\t: 0\nmodel name\t: Intel(R) Xeon(R) Gold 6248\n"
+LSCPU_DE = "Architektur: x86_64\nModellname: AMD EPYC 9654\n"
 
 
 @pytest.mark.logic
-@pytest.mark.skipif(platform.system() != "Linux", reason="the Linux path asks lscpu")
+def test_cpuinfo_names_the_cpu_when_lscpu_is_absent() -> None:
+    """A slim image without `lscpu` still forms a cpu class from `/proc/cpuinfo`."""
+    assert _cpu_model(_fail, "Linux", lambda: CPUINFO) == "Intel(R) Xeon(R) Gold 6248"
+
+
+@pytest.mark.logic
+def test_lscpu_runs_in_the_c_locale_and_a_translated_answer_names_nothing() -> None:
+    """`lscpu` is asked under `LC_ALL=C`; a translated `Modellname` is not read as a model, so the result is None."""
+    asked: list[list[str]] = []
+
+    def run(command: list[str]) -> str:
+        asked.append(command)
+        return LSCPU_DE
+
+    assert _cpu_model(run, "Linux", lambda: "") is None
+    assert asked == [["env", "LC_ALL=C", "lscpu"]]
+
+
+@pytest.mark.logic
+def test_neither_source_names_the_cpu() -> None:
+    """With no cpuinfo model and no lscpu, the model is None, never the architecture."""
+    assert _cpu_model(_fail, "Linux", lambda: "processor\t: 0\n") is None
+
+
+@pytest.mark.logic
 def test_probe_hardware_records_the_cpu_model() -> None:
-    """The probe's `cpu_model` is the injected command's answer."""
-    info = probe_hardware(run=lambda command: LSCPU_X86 if command == ["lscpu"] else _fail(command))
-    assert info.cpu_model == "AMD EPYC 9654 96-Core Processor"
+    """The probe's `cpu_model` comes from the injected sources (a Darwin host takes the sysctl answer)."""
+    info = probe_hardware(run=_fail, cpuinfo=lambda: CPUINFO)
+    expected = None if platform.system() == "Darwin" else "Intel(R) Xeon(R) Gold 6248"
+    assert info.cpu_model == expected
+
+
+ATTESTATION = Attestation(
+    engine_version="0.11.0",
+    served_model="/home/user/models/m",
+    model_identity="e" * 64,
+    config_digest="f" * 64,
+)
+SERVER_DRIVER = {
+    "torch_index": "https://download.pytorch.org/whl/cu128",
+    "engine": "vllm",
+    **ATTESTATION.driver(),
+    "launch_env": "9" * 64,
+}
+
+
+@pytest.mark.logic
+def test_a_server_unit_over_a_local_model_names_no_path_or_user() -> None:
+    """The service is held as a digest and the attestation's served path is dropped, so no host string remains."""
+    key = KEY.model_copy(update={"model": ModelIdentity(id=None, identity="e" * 64), "service": ATTESTATION})
+    unit = _unit(key=key, env={**ENV_FIELDS, "driver": SERVER_DRIVER})
+    text = unit.model_dump_json()
+    assert "/home" not in text and "user" not in text and "models/m" not in text
+    assert unit.service is not None and re.fullmatch(r"[0-9a-f]{64}", unit.service)
+    assert set(unit.env.driver) == {"torch_build", "engine", "engine_version", "config_digest", "launch_env"}
+    other = key.model_copy(update={"service": ATTESTATION.model_copy(update={"config_digest": "0" * 64})})
+    assert _unit(key=other, env={**ENV_FIELDS, "driver": SERVER_DRIVER}).digest() != unit.digest()
+
+
+@pytest.mark.logic
+def test_a_driver_key_that_is_not_declared_is_refused() -> None:
+    """A driver entry outside the declared tags and digests is refused, whatever its value looks like."""
+    with pytest.raises(ValueError, match="holds"):
+        _unit(env={**ENV_FIELDS, "driver": {"torch_index": "https://x/whl/cpu", "cache_dir": "/home/user/c"}})
