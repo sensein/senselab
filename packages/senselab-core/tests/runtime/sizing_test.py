@@ -167,6 +167,7 @@ def _sample(wall: float, *, cold: bool = False, resident: int | None = 10_000, p
         peak_memory_bytes=peak,
         cold=cold,
         job="7",
+        ended_s=0,
     )
 
 

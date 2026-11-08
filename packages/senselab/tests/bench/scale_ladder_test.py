@@ -21,6 +21,7 @@ from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.resources import ResourceTable
+from senselab_core.runtime.sizing import Sample
 from senselab_core.testing.workers import mit_lock_records
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -275,3 +276,28 @@ def test_two_entries_of_one_task_write_two_results_and_two_stores(
     out = tmp_path / "cache" / "2x" / "benchmarks" / "scale" / "two" / ladder.commit()
     assert sorted(p.name for p in out.glob("*.json")) == ["fake.echo~fake2@1.json", "fake.echo~fake@1.json"]
     assert sorted(p.parent.name for p in out.glob("*/store")) == ["fake.echo~fake2@1", "fake.echo~fake@1"]
+
+
+@pytest.mark.logic
+def test_per_item_cost_runs_from_the_end_of_calibration_to_the_last_item() -> None:
+    """Calibration items and the run's start are left out; the wait to see the run end never enters, being no item's."""
+    ladder = _module("scale_ladder_steady_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+
+    def sample(jobs: int, ended_s: float) -> Sample:
+        return Sample(
+            wall_s=1.0,
+            claim_s=0.0,
+            jobs=jobs,
+            batch_size=1,
+            input_s=None,
+            baseline_bytes=0,
+            resident_bytes=None,
+            peak_memory_bytes=0,
+            cold=False,
+            job="7",
+            ended_s=ended_s,
+        )
+
+    samples = {"c1": sample(1, 101.0), "c2": sample(1, 103.0), "a": sample(10, 108.0), "b": sample(10, 113.0)}
+    assert ladder._steady(samples, {"c1", "c2"}, 100.0) == (0.5, 3.0, 2)
+    assert ladder._steady({"c1": samples["c1"]}, {"c1"}, 100.0) == (None, 1.0, 1)

@@ -305,6 +305,7 @@ def _register_sizing(register: Register) -> None:
                     device_allocated_bytes=2**29,
                     cold=True,
                     job="7",
+                    ended_s=1_800_000_000.0,
                 ),
                 Sample(
                     wall_s=0,
@@ -317,9 +318,10 @@ def _register_sizing(register: Register) -> None:
                     peak_memory_bytes=0,
                     cold=False,
                     job="h:1",
+                    ended_s=0,
                 ),
             ],
-            [{"jobs": 0}, {"peak_memory_bytes": -1}, {"job": ""}, {"claim_s": -1.0}],
+            [{"jobs": 0}, {"peak_memory_bytes": -1}, {"job": ""}, {"claim_s": -1.0}, {"ended_s": -1.0}],
         ),
     }
     for cls, (samples, invalid) in classes.items():

@@ -358,6 +358,7 @@ class PoolWorker:
                 device_allocated_bytes=min((a for _, a, _ in requests), default=None),
                 cold=cold,
                 job=worker_id(),
+                ended_s=time.time(),
             )
 
         return sample

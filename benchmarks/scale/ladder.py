@@ -45,6 +45,7 @@ from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError,
 from senselab_core.runtime.hardware import memory_bytes
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.resources import Unit
 from senselab_core.runtime.revision import NAMESPACE, cache_root
 from senselab_core.runtime.sizing import Measures, Sample, calibrated
 from senselab_core.runtime.store import ResultStore
@@ -174,16 +175,30 @@ def _tally(*roots: Path) -> tuple[int, int]:
     return files, size
 
 
-def _samples(run_dir: Path) -> list[Sample]:
-    """Return the sample of each item outcome of the run's queues."""
-    found = []
+def _samples(run_dir: Path) -> dict[str, Sample]:
+    """Return the sample of each item outcome of the run's queues, by item digest."""
+    found = {}
     for path in sorted((run_dir / RUN_QUEUES).glob("*/outcome/*")):
         if path.name.startswith("."):
             continue
         record = json.loads(path.read_bytes())
         if isinstance(record, dict) and "measure" in record:
-            found.append(Sample.model_validate(record["measure"]))
+            found[path.name] = Sample.model_validate(record["measure"])
     return found
+
+
+def _steady(samples: Mapping[str, Sample], rounds: set[str], began_s: float) -> tuple[float | None, float, int]:
+    """Return the per-item seconds after calibration, the calibration's seconds and its jobs, from item end times.
+
+    Per-item seconds run from the last calibration item's end to the last other item's end over the other items'
+    jobs, so neither the run's start nor the wait to see it end is counted; None when no item followed calibration.
+    """
+    ends = [s.ended_s for d, s in samples.items() if d in rounds]
+    after = [s for d, s in samples.items() if d not in rounds]
+    calibration_end = max(ends, default=began_s)
+    jobs = sum(s.jobs for s in after)
+    per = (max(s.ended_s for s in after) - calibration_end) / jobs if after else None
+    return per, calibration_end - began_s, sum(s.jobs for d, s in samples.items() if d in rounds)
 
 
 def _median(values: Sequence[float]) -> float | None:
@@ -266,9 +281,10 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     """Plan, run and measure `entry` at `point` under `profile`; return its `scale-result@1.0` document.
 
     Its store is `<out>/<label>@<point>/store`, and its pool's measures are written beside it, so each point
-    calibrates afresh and reads no other point's measure. `per_item_s` counts only the jobs after its calibration:
-    the wall from the measure being set to the end, over the jobs its rounds did not run; with no calibration, or
-    none left after it, the whole wall over all items. `calibration_s` and `calibration_jobs` give the rest.
+    calibrates afresh and reads no other point's measure; its `measure` is the row its pool's calibration wrote (else
+    one read from all its samples). `per_item_s` counts only the items after calibration, from item end times
+    (`_steady`); with none after it, the whole wall over all items (`per_item_basis` says which). `calibration_s` and
+    `calibration_jobs` give the calibration's share.
 
     Raises:
         FileExistsError: the point's run directory exists, so its results would be reused.
@@ -289,16 +305,16 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         epoch=0,
         measures=Measures(out / f"{label}@{point}" / "resources", packaged=()),
     )
-    began = time.monotonic()
+    began, began_s = time.monotonic(), time.time()
     try:
         status = placed.run(pool, store=store).wait()
     finally:
         pool.close()
-    ended = time.monotonic()
-    wall = ended - began
-    rounds = list(pool.calibrated.values())
-    set_at, round_jobs = (max(t for t, _ in rounds), sum(n for _, n in rounds)) if rounds else (began, 0)
-    samples = _samples(run_dir)
+    wall = time.monotonic() - began
+    by_digest = _samples(run_dir)
+    samples = list(by_digest.values())
+    rounds = {d for digests, _ in pool.calibrated.values() for d in digests}
+    steady_s, calibration_s, round_jobs = _steady(by_digest, rounds, began_s)
     events = read_events(run_dir)
     queued = {e.job: e.t_ns for e in events if e.kind == "queued" and e.job is not None}
     waits = [(e.t_ns - queued[e.job]) / NS_PER_S for e in events if e.kind == "claimed" and e.job in queued]
@@ -307,8 +323,9 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     entries, stored = _tally(store_root)
     node, model = placed.placement.nodes["a"], placed.logical.models["a"]
     items = len(placed.manifest.rows)
-    found = calibrated(samples)
-    steady = items - round_jobs
+    ident = (None, None) if model is None else (model.ref.id, model.identity)
+    unit = Unit(entry.task, node.backend, ident[0], ident[1], node.resource_class)
+    found = Measures(out / f"{label}@{point}" / "resources", packaged=()).get(unit) or calibrated(samples)
     return {
         "format": RESULT_FORMAT,
         "suite": suite.name,
@@ -327,8 +344,9 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         "done": status.done,
         "counts": dict(status.counts),
         "wall_s": wall,
-        "per_item_s": (ended - set_at) / steady if rounds and steady > 0 else wall / items,
-        "calibration_s": set_at - began,
+        "per_item_s": steady_s if steady_s is not None else wall / items,
+        "per_item_basis": "after calibration" if steady_s is not None else "wall",
+        "calibration_s": calibration_s,
         "calibration_jobs": round_jobs,
         "host": platform.node(),
         "backend_params": dict(node.backend_params),

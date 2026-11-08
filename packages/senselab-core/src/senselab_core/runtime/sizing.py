@@ -5,6 +5,7 @@ run first on one worker, the first carrying the model load (`calibrated`, from e
 the packaged tables, then the ones calibration rounds wrote under the cache.
 """
 
+import functools
 import importlib.metadata
 import math
 import statistics
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field
+from senselab_worker.digest import file_digest, identity_digest
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.runtime.execution_settings import PoolSettings, ResourceClass, SizingSettings
@@ -201,6 +203,7 @@ class Sample(Frozen):
         served: Whether the item's class is a service class, whose server holds a fixed device reservation.
         cold: Whether the worker had run nothing of the item's queue before, so the item carried the model load.
         job: The scheduler job id or process id of the worker.
+        ended_s: The worker's wall clock (`time.time`) when the item's sample was taken, its outcomes in.
     """
 
     wall_s: Seconds
@@ -218,6 +221,7 @@ class Sample(Frozen):
     served: bool = False
     cold: bool
     job: NonEmptyStr
+    ended_s: Seconds
 
 
 def calibrated(samples: Sequence[Sample]) -> ResourceMeasure | None:
@@ -274,9 +278,17 @@ def _batched(samples: Sequence[Sample], item_s: float | None) -> Batched | None:
     return Batched(batch_size=top, s_per_input_s=per if item_s is None else per / item_s)
 
 
+@functools.cache
 def code_version() -> str:
-    """Return the installed senselab-core version, which names the commit it was built from."""
-    return importlib.metadata.version("senselab-core")
+    """Return the installed senselab-core version and the digest of its source, `<version>+<12 hex>`.
+
+    The digest is `identity_digest("core-runtime@1", files)` over the package's `*.py` files by relative path, so a
+    checkout whose version did not move with its code still names different code differently.
+    """
+    root = Path(__file__).resolve().parents[1]
+    files = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*.py"))
+    source = identity_digest("core-runtime@1", [[rel, file_digest("file@1", path)] for rel, path in files])
+    return f"{importlib.metadata.version('senselab-core')}+{source[:12]}"
 
 
 class Measures:

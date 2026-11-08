@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import math
 import os
 import threading
 import time
@@ -187,15 +186,19 @@ def _sample(wall: float, jobs: int = 1, *, cold: bool = False) -> Sample:
         peak_memory_bytes=20,
         cold=cold,
         job="7",
+        ended_s=0,
     )
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize(("batched_s", "kept"), [(3.0, "batch"), (5.0, "single")], ids=["faster", "slower"])
+@pytest.mark.parametrize(("batched_s", "kept"), [(1.5, "batch"), (2.5, "single")], ids=["faster", "slower"])
 def test_an_unmeasured_unit_calibrates_alone_then_batched_and_keeps_the_faster(
     tmp_path: Path, batched_s: float, kept: str
 ) -> None:
-    """Four one-job items, then three batched ones, run first; the rest go batched only if batches ran no slower."""
+    """One-job items run first, then batched and one-job items side by side; the second round's times decide.
+
+    The rest go batched only if batches ran no slower per item than the one-job items beside them on the warm worker.
+    """
     profile, measures = _profile(quantum=100), FixedMeasures(None)
     placed, values = planned(SCORE, profile, [f"t{i}" for i in range(16)])
     pool = _pool(tmp_path, profile, measures=measures)
@@ -211,28 +214,26 @@ def test_an_unmeasured_unit_calibrates_alone_then_batched_and_keeps_the_faster(
             report(claim, claim.items[0], _executed(placed, values, pool.store, item), sample)
     results, done = pool.poll(first)
     assert len(results) == 4 and not done and measures.puts == []
-    quantum = math.ceil((0.5 + 0.1) / (profile.sizing.load_share * 4.0))
-    batches = _claim_all(queue)
-    assert len(batches) == profile.sizing.calibration_items - 1
-    for walls, claim in zip((0.9, 1.0, 1.4), batches, strict=True):
+    pairs = _claim_all(queue)
+    digests = {c.items[0] for c in pairs}
+    assert [len(c.fragments[0].jobs) for c in pairs] == [2, 1] * (profile.sizing.calibration_items - 1)
+    for spread, claim in zip((0.9, 0.9, 1.0, 1.0, 1.4, 1.4), pairs, strict=True):
         [item] = claim.fragments
-        assert len(item.jobs) == item.placement.batch_size == quantum
+        jobs = len(item.jobs)
+        assert item.placement.batch_size == jobs
         with claim:
-            sample = _sample(quantum * batched_s * walls, quantum)
+            sample = _sample((2.0 if jobs == 1 else jobs * batched_s) * spread, jobs)
             report(claim, claim.items[0], _executed(placed, values, pool.store, item), sample)
     results, done = pool.poll(first)
     [(unit, measure, measured)] = measures.puts
-    assert len(results) == 3 * quantum and done and (unit.task, unit.resource_class) == (SCORE.name, "cpu")
-    assert (measure.load_s, measure.claim_s, measure.s_per_input_s) == (0.5, 0.1, 4.0)
-    assert measure.batched is not None and (measure.batched.batch_size, measure.batched.s_per_input_s) == (
-        quantum,
-        batched_s,
-    )
+    assert len(results) == 9 and done and (unit.task, unit.resource_class) == (SCORE.name, "cpu")
+    assert (measure.claim_s, measure.s_per_input_s) == (0.1, 2.0)
+    assert measure.batched is not None and (measure.batched.batch_size, measure.batched.s_per_input_s) == (2, batched_s)
     assert (measure.resident_bytes, measure.peak_memory_bytes) == (15, 20)
     assert measured.sha is None and measured.jobs == ("7",) and "senselab-core" in (measured.run or "")
-    rest = [c.fragments[0] for c in _claim_all(queue)]
-    assert [len(f.jobs) for f in rest] == [3]
-    assert {f.placement.batch_size for f in rest} == ({quantum} if kept == "batch" else {1})
+    assert set(pool.calibrated[unit][0]) >= digests and pool.calibrated[unit][1] == 13
+    [rest] = [c.fragments[0] for c in _claim_all(queue)]
+    assert len(rest.jobs) == 3 and (rest.placement.batch_size > 1) == (kept == "batch")
 
 
 @pytest.mark.logic

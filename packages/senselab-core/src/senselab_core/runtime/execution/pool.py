@@ -232,8 +232,7 @@ class Pool:
     Attributes:
         broken: Each env this pool reported broken, once.
         gaps: Each job given a fault with `gap` set, with its fault.
-        calibrated: Each unit this pool calibrated, with when its measure was set (`time.monotonic`) and the jobs
-            its rounds ran.
+        calibrated: Each unit this pool calibrated, with the digests of its rounds' items and the jobs they ran.
     """
 
     logs_claims: ClassVar[bool] = True
@@ -290,7 +289,8 @@ class Pool:
         self._queue_units: dict[str, set[Unit]] = {}
         self._calibrating: dict[Unit, tuple[str, list[str]]] = {}
         self._first_round: dict[Unit, list[Sample]] = {}
-        self.calibrated: dict[Unit, tuple[float, int]] = {}
+        self.calibrated: dict[Unit, tuple[frozenset[str], int]] = {}
+        self._round_digests: dict[Unit, set[str]] = {}
 
     def bind_epoch(self, epoch: int, events: EventLog) -> None:
         """Coordinate as `epoch` from now on, logging to `events`, a log of that epoch's attempt.
@@ -443,26 +443,38 @@ class Pool:
         return first, rest
 
     def _batch_round(self, unit: Unit, queue: str, found: ResourceMeasure, samples: list[Sample]) -> bool:
-        """Start `unit`'s second round, its sized batch timed, when that batch is above one.
+        """Start `unit`'s second round, batched and one-job items timed side by side, when its sized batch is above one.
 
-        The round is `sizing.calibration_items - 1` items of that batch, each one request, so the batched per-item time
-        has a median as the one-job time does. The items' jobs are the first of the unit's held parts, in whole
-        batches (fewer items when it holds fewer); the rest of that part waits on. Return whether a round was started.
+        The round is `sizing.calibration_items - 1` pairs, each an item of the batch sent as one request then a
+        one-job item, all on the worker the first round warmed, so both per-item times have a median taken past the
+        first requests after the load. The batch is the memory batch, within what lets every pair fit in the unit's
+        first held part; the rest of that part waits on. Return whether a round was started.
         """
         with self._lock:
             held = [(f, p) for f in self._followed.values() for u, p in f.waiting if u == unit]
         if not held:
             return False
         followed, part = held[0]
-        batch = min(self._sizing(queue, self._per_item(found, queue)).memory_batch, len(part.jobs))
+        pairs = self.profile.sizing.calibration_items - 1
+        fits = len(part.jobs) // pairs - 1
+        batch = min(self._sizing(queue, self._per_item(found, queue)).memory_batch, max(fits, 1))
         placement = part.placement.model_copy(update={"batch_size": batch})
         request = node_request_size(self._admitted_plan(part)[0], part.node, placement)
         if request < 2:  # noqa: PLR2004 - a batch is two items or more
             return False
-        count = min(self.profile.sizing.calibration_items - 1, len(part.jobs) // request)
-        dumped, wire = _Dumped.of(part), placement.model_dump(mode="json")
-        items = [dumped.part(range(i * request, (i + 1) * request), placement=wire) for i in range(count)]
-        used = count * request
+        dumped = _Dumped.of(part)
+        batched, single = (
+            placement.model_dump(mode="json"),
+            placement.model_copy(update={"batch_size": 1}).model_dump(mode="json"),
+        )
+        items = []
+        for i in range(pairs):
+            start = i * (request + 1)
+            items += [
+                dumped.part(range(start, start + request), placement=batched),
+                dumped.part([start + request], placement=single),
+            ]
+        used = pairs * (request + 1)
         rest = [(unit, dumped.part(range(used, len(part.jobs))))] if used < len(part.jobs) else []
         self.queues.queue(queue).put_all(items)
         with self._lock:
@@ -488,9 +500,10 @@ class Pool:
     def _calibrate(self) -> None:
         """End each calibration round whose items all have outcomes: record its measure and put its unit's held parts.
 
-        A first round sends items one per request. When its measure sizes a batch above one, a second round sends
-        items of that many jobs, each one request (`_batch_round`), so the measure holds the median per-item seconds
-        alone and batched and `size` keeps the faster. A unit of a model backend whose `cuda` samples reported no
+        A first round sends items one per request and gives the load, the claim and the memory. When its measure
+        sizes a batch above one, a second round times batched and one-job items side by side on the warmed worker
+        (`_batch_round`), and the per-item seconds alone and batched are taken from that round alone, so `size` keeps
+        the faster of two like regimes. A unit of a model backend whose `cuda` samples reported no
         device figures is logged: its device memory stays unmeasured. A round whose items measured nothing leaves its
         unit unmeasured, so its held parts start another. A round with no warm one-job item measures
         nothing, since its load cannot be told from its items. A part refused when put (`_put`) waits again, with
@@ -502,10 +515,12 @@ class Pool:
             records = [self.queues.queue(queue).outcome(d) for d in digests]
             if not digests or any(r is None for r in records):
                 continue
-            samples = self._first_round.pop(unit, []) + [
-                Sample.model_validate(r["measure"]) for r in records if r is not None and "measure" in r
-            ]
-            found = calibrated(samples) if any(not s.cold and s.batch_size == 1 for s in samples) else None
+            with self._lock:
+                self._round_digests.setdefault(unit, set()).update(digests)
+            first = self._first_round.pop(unit, None)
+            this = [Sample.model_validate(r["measure"]) for r in records if r is not None and "measure" in r]
+            samples = (first or []) + this
+            found = _round_measure(first, this)
             if found is not None and found.batched is None and self._batch_round(unit, queue, found, samples):
                 continue
             _note_unmeasured_device(unit, queue, found, samples)
@@ -516,7 +531,7 @@ class Pool:
                 del self._calibrating[unit]
                 if found is not None:
                     self._sized[unit] = self._per_item(found, queue)
-                    self.calibrated[unit] = (time.monotonic(), sum(s.jobs for s in samples))
+                    self.calibrated[unit] = (frozenset(self._round_digests[unit]), sum(s.jobs for s in samples))
                 held = [(f, p) for f in self._followed.values() for u, p in f.waiting if u == unit]
                 for followed in self._followed.values():
                     followed.waiting = [(u, p) for u, p in followed.waiting if u != unit]
@@ -860,6 +875,20 @@ def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float
         del pool
         woken = wake.wait(min(poll_s, backoff) if backoff > 0 else poll_s)
         wake.clear()
+
+
+def _round_measure(first: list[Sample] | None, this: list[Sample]) -> ResourceMeasure | None:
+    """Return the measure of a calibration round's samples `this`, after the first round's `first` when it is a second.
+
+    None without a warm one-job sample, whose load cannot be told from its work. A second round's per-item seconds,
+    alone and batched, are its own; the load, the claim and the memory are of both rounds.
+    """
+    samples = (first or []) + this
+    found = calibrated(samples) if any(not s.cold and s.batch_size == 1 for s in samples) else None
+    steady = calibrated(this) if first is not None else None
+    if found is None or steady is None:
+        return found
+    return found.model_copy(update={k: getattr(steady, k) for k in ("s_per_input_s", "input_s_per_item", "batched")})
 
 
 def _note_unmeasured_device(unit: Unit, queue: str, found: ResourceMeasure | None, samples: list[Sample]) -> None:

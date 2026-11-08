@@ -38,6 +38,7 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
         "provenance-id@4",
         "data-manifest@3",
         "worker-runtime@1",
+        "core-runtime@1",
         "fake-output@1",
         "contract-probe@1",
         "prov-activity@1",
