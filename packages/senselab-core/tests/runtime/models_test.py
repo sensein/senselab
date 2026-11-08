@@ -62,6 +62,14 @@ def test_verify_weights_unknown_name(tmp_path: Path) -> None:
         verify_weights("no-such-weights", f)
 
 
+@pytest.fixture(autouse=True)
+def cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The cache root every resolve here keeps its answers under: a fresh directory outside each test's models."""
+    root = tmp_path_factory.mktemp("cache")
+    monkeypatch.setenv("SENSELAB_CACHE", str(root))
+    return root
+
+
 @pytest.mark.logic
 def test_resolve_local_uses_weights_identity(tmp_path: Path) -> None:
     """A local directory resolves to the weights identity of its files; a file to its own."""

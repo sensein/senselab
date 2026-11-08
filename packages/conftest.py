@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +71,22 @@ def budgets_file() -> Path:
 def tier_budget_s() -> dict[str, float]:
     """The time budget in seconds of one test of each tier."""
     return tier_budgets()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def real_cache_untouched() -> Iterator[None]:
+    """Fail the session if a test kept a local model's identity under the user's real cache root."""
+    try:
+        from senselab_core.runtime.models import LOCAL_IDENTITIES_DIR  # noqa: PLC0415 - core may not be installed
+        from senselab_core.runtime.revision import cache_root  # noqa: PLC0415
+    except ImportError:
+        yield
+        return
+    kept = cache_root() / LOCAL_IDENTITIES_DIR
+    before = set(kept.iterdir()) if kept.is_dir() else set()
+    yield
+    written = (set(kept.iterdir()) if kept.is_dir() else set()) - before
+    assert not written, f"tests wrote {len(written)} file(s) under the real cache root {kept}; give them tmp_path"
 
 
 def _slack_document(request: pytest.FixtureRequest) -> dict[str, Any]:
