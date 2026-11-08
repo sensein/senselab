@@ -1,0 +1,22 @@
+format: resource-table@1.0
+task: pii_spans
+backend: vllm
+rows:
+- id: google/gemma-4-31B-it-qat-w4a16-ct
+  revision: 52f3f65bc7a02d555763bc923bd1d9094898219d
+  download_bytes: null
+  classes:
+    svc:h100:
+      load_s: 98.10397445825822
+      claim_s: 0.19423177605494857
+      resident_bytes: null
+      peak_memory_bytes: null
+      device_resident_bytes: 0
+      device_peak_bytes: 75975622656
+      s_per_input_s: 2.905428980747614
+      input_s_per_item: null
+      measured:
+        sha: e801bc6c186559aa405c5b40af09b12d65ec4633
+        run: null
+        jobs:
+        - '28262080'

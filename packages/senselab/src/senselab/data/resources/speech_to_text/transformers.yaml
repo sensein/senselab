@@ -1,0 +1,22 @@
+format: resource-table@1.0
+task: speech_to_text
+backend: transformers
+rows:
+- id: openai/whisper-large-v3-turbo
+  revision: 41f01f3fe87f28c78e2fbf8b568835947dd65ed9
+  download_bytes: null
+  classes:
+    gpu:h100:
+      load_s: 8.181353488233825
+      claim_s: 0.22183401905931532
+      resident_bytes: null
+      peak_memory_bytes: null
+      device_resident_bytes: 0
+      device_peak_bytes: 2592079872
+      s_per_input_s: 0.024930808321915295
+      input_s_per_item: 5.154999999999999
+      measured:
+        sha: e801bc6c186559aa405c5b40af09b12d65ec4633
+        run: null
+        jobs:
+        - '28262080'

@@ -355,20 +355,20 @@ def _verdict(value: float | None, bound: float | None, what: str) -> str:
 def flatness(results: Sequence[Mapping[str, Any]], budgets: Mapping[str, Any]) -> list[str]:
     """Return one line per entry (by its label, else its task) and measure: its flatness and its ceiling.
 
-    Flatness is the value at 10⁴ over at 10² against `flat_ratio`; the ceiling is the largest value over the points
-    against its task's `per_item` budget. An unset budget reads unmeasured.
+    Flatness is the value at 10⁴ over at 10² against `flat_ratio`; the ceiling is the largest value at those points
+    (at any point when it has neither) against the label's `per_item` budget. An unset budget reads unmeasured.
     """
     lines = []
     for label in sorted({r.get("label", r["task"]) for r in results}):
         at = {r["point"]: r for r in results if r.get("label", r["task"]) == label}
-        task = next(iter(at.values()))["task"]
-        ceilings = (budgets.get("per_item") or {}).get(task) or {}
+        ceilings = (budgets.get("per_item") or {}).get(label) or {}
         for name, read in PER_ITEM.items():
             values = {p: read(r) for p, r in at.items()}
             low, high = (values.get(p) for p in FLAT_POINTS)
             ratio = high / low if low and high is not None else None
             flat = _verdict(ratio, budgets.get("flat_ratio"), "flat")
-            ceiling = _verdict(max(values.values()), ceilings.get(name), "ceiling")
+            judged = [v for p, v in values.items() if p in FLAT_POINTS] or list(values.values())
+            ceiling = _verdict(max(judged), ceilings.get(name), "ceiling")
             shown = "n/a" if ratio is None else f"{ratio:.3f}"
             lines.append(f"{label} {name}: at {FLAT_POINTS[1]} / at {FLAT_POINTS[0]} = {shown}, {flat}, {ceiling}")
     return lines

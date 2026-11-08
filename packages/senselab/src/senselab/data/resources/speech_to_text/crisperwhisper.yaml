@@ -1,0 +1,22 @@
+format: resource-table@1.0
+task: speech_to_text
+backend: crisperwhisper
+rows:
+- id: nyralabs/CrisperWhisper2.0_turbo
+  revision: de0369c8a68025b7f6e86387b6eb5a3b369787c8
+  download_bytes: null
+  classes:
+    gpu:h100:
+      load_s: 5.40670195575145
+      claim_s: 0.23125980189070106
+      resident_bytes: null
+      peak_memory_bytes: null
+      device_resident_bytes: 0
+      device_peak_bytes: 5574230016
+      s_per_input_s: 0.22164372402207558
+      input_s_per_item: 5.154999999999999
+      measured:
+        sha: e801bc6c186559aa405c5b40af09b12d65ec4633
+        run: null
+        jobs:
+        - '28262080'

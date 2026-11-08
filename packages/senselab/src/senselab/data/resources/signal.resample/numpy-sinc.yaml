@@ -1,0 +1,22 @@
+format: resource-table@1.0
+task: signal.resample
+backend: numpy-sinc
+rows:
+- id: null
+  revision: null
+  download_bytes: null
+  classes:
+    cpu:
+      load_s: 0.262663312042132
+      claim_s: 0.2139663454145193
+      resident_bytes: null
+      peak_memory_bytes: null
+      device_resident_bytes: null
+      device_peak_bytes: null
+      s_per_input_s: 0.009450571993365884
+      input_s_per_item: 3.0
+      measured:
+        sha: e801bc6c186559aa405c5b40af09b12d65ec4633
+        run: null
+        jobs:
+        - '28262078'

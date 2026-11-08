@@ -4,10 +4,13 @@ format: server-settings@1.0
 #   not healthy by then is a failed start, not a slow one.
 #   max_model_len: 8192 = a prompt of 6144 tokens (the instruction, the categories and a text of about 4500 words)
 #   plus the 2048 tokens of `engine.MAX_NEW_TOKENS` the answer may take. A longer text is refused by the server
-#   and reaches the caller as that item's typed fault. Not measured.
-#   max_num_seqs: 8, the batch the card is asked to hold; a call sends one item, so it bounds nothing until
-#   batched callers exist. Not measured.
-#   gpu_memory_utilization: 0.9, the value the H100 server test runs the same model with.
+#   and reaches the caller as that item's typed fault. Not measured: the e801bc6c ladder (job 28262080) records
+#   no token counts.
+#   max_num_seqs: 8, the batch the card is asked to hold; the e801bc6c ladder sent one item per request (batch 1),
+#   so it bounds nothing until batched callers exist. Not measured.
+#   gpu_memory_utilization: 0.9, the value the H100 server test runs the same model with. The e801bc6c ladder
+#   (job 28262080) read the server's device memory at 75 975 622 656 bytes at 10² items, inside 0.9 of an H100's
+#   81 559 MiB (76 968 728 985 bytes), so the pre-launch free-memory check holds for it.
 #   kv_cache_dtype: auto, the model's own dtype; no quantised cache, which would change outputs.
 #   generation_config: vllm, so the model repository's `generation_config.json` does not override the greedy
 #   sampling the backend requests.

@@ -1,0 +1,22 @@
+format: resource-table@1.0
+task: diarize
+backend: pyannote
+rows:
+- id: pyannote/speaker-diarization-community-1
+  revision: 3533c8cf8e369892e6b79ff1bf80f7b0286a54ee
+  download_bytes: null
+  classes:
+    gpu:h100:
+      load_s: 5.861177722394297
+      claim_s: 0.22887222096323967
+      resident_bytes: null
+      peak_memory_bytes: null
+      device_resident_bytes: 0
+      device_peak_bytes: 8128561152
+      s_per_input_s: 0.008417305636508169
+      input_s_per_item: 5.154999999999999
+      measured:
+        sha: e801bc6c186559aa405c5b40af09b12d65ec4633
+        run: null
+        jobs:
+        - '28262080'

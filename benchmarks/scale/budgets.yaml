@@ -1,14 +1,16 @@
 format: scale-budgets@1.0
 # Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under benchmarks/scale/budgets.yaml.
-# Per-item cost at 10⁴ items over per-item cost at 10² items, at most; null until the first idle-node run.
-flat_ratio:
+# Per-item cost at 10⁴ items over per-item cost at 10² items, at most, for each of the per_item measures.
+flat_ratio: 1.25
 # Per module, the share a per-item cost may rise over its last measured value before a merge is blocked.
 regression_band: {}
-# Per task, ceilings: wall seconds per item, peak memory bytes, files and bytes written per item; null until measured.
+# Per suite entry label, ceilings: wall seconds per item, peak memory bytes, files and bytes written per item.
 per_item:
-  signal.resample: {per_item_s: null, peak_rss_bytes: null, files_per_item: null, bytes_per_item: null}
-  fake.echo: {per_item_s: null, peak_rss_bytes: null, files_per_item: null, bytes_per_item: null}
-  speech_to_text: {per_item_s: null, peak_rss_bytes: null, files_per_item: null, bytes_per_item: null}
-  speaker_embeddings: {per_item_s: null, peak_rss_bytes: null, files_per_item: null, bytes_per_item: null}
-  diarize: {per_item_s: null, peak_rss_bytes: null, files_per_item: null, bytes_per_item: null}
-  pii_spans: {per_item_s: null, peak_rss_bytes: null, files_per_item: null, bytes_per_item: null}
+  diarize~pyannote: {per_item_s: 0.196, peak_rss_bytes: 482000000, files_per_item: 14.0, bytes_per_item: 9070}
+  fake.echo~fake: {per_item_s: 0.0356, peak_rss_bytes: 122000000, files_per_item: 4.0, bytes_per_item: 5290}
+  pii_spans~transformers: {per_item_s: 15.1, peak_rss_bytes: 482000000, files_per_item: 15.2, bytes_per_item: 15800}
+  pii_spans~vllm: {per_item_s: 6.07, peak_rss_bytes: 482000000, files_per_item: 15.2, bytes_per_item: 16800}
+  signal.resample~numpy-sinc: {per_item_s: 0.0784, peak_rss_bytes: 263000000, files_per_item: 11.2, bytes_per_item: 110000}
+  speaker_embeddings~speechbrain: {per_item_s: 0.13, peak_rss_bytes: 478000000, files_per_item: 11.5, bytes_per_item: 9290}
+  speech_to_text~crisperwhisper: {per_item_s: 1.71, peak_rss_bytes: 473000000, files_per_item: 10.3, bytes_per_item: 8740}
+  speech_to_text~transformers: {per_item_s: 0.389, peak_rss_bytes: 3320000000, files_per_item: 10.3, bytes_per_item: 8260}
