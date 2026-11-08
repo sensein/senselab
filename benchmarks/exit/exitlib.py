@@ -27,10 +27,17 @@ from senselab_core.runtime.execution.events import RESULTS, Event, EventLog, rea
 from senselab_core.runtime.execution.pool import Pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.run import RESULTS_DIR, Run
-from senselab_core.runtime.execution.substrates import LIVE_STATES, SQUEUE, SQUEUE_FORMAT, substrate_of
+from senselab_core.runtime.execution.substrates import (
+    LIVE_STATES,
+    SQUEUE,
+    SQUEUE_FIELDS,
+    SQUEUE_FORMAT,
+    Slurm,
+    substrate_of,
+)
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.revision import cache_root
+from senselab_core.runtime.revision import MANIFEST_NAME, NAMESPACE, cache_root
 from senselab_core.runtime.store import ResultStore
 
 HERE = Path(__file__).resolve().parent
@@ -43,7 +50,6 @@ CONFIG_FORMAT = "exit-checks@1.0"
 IDENTITIES_FORMAT = "exit-identities@1.0"
 EXECUTORS = ("in-process", "pool-local", "pool-slurm")
 KIB: Final = 1024  # invariant: `ps` reports resident set sizes in KiB
-SQUEUE_FIELDS: Final = 4  # invariant: the fields of SQUEUE_FORMAT: id, state, comment, name
 
 
 @dataclass(frozen=True)
@@ -54,7 +60,7 @@ class Step:
     params: Mapping[str, Any]
     tree: str
     items: int
-    seed: int = 0
+    seed: int | None = None
     manifest: str | None = None
 
 
@@ -90,6 +96,8 @@ def load_config(path: Path = CONFIG) -> Config:
     bounds = {name: Bounds(**b) for name, b in raw["bounds"].items()}
     if set(bounds) != set(EXECUTORS):
         raise ValueError(f"{path.name} bounds the executors {sorted(bounds)}, not {sorted(EXECUTORS)}")
+    if len(set(raw["plan_profiles"])) < 2:  # noqa: PLR2004 - a comparison needs two profiles
+        raise ValueError(f"plan_profiles names at least two distinct profiles, got {raw['plan_profiles']}")
     numerator, denominator = raw["interrupt_share"]
     if not 0 < numerator < denominator:
         raise ValueError(f"interrupt_share is a proper fraction, got {numerator}/{denominator}")
@@ -120,10 +128,11 @@ def isolate(work: Path, name: str) -> Path:
 
 def build_tree(step: Step, work: Path) -> Path:
     """Return the BIDS tree of `step` under `work`, laid first if absent."""
-    root = work / "data" / f"{step.tree}-{step.seed}-{step.items}"
+    name = f"{step.tree}-{step.items}" if step.seed is None else f"{step.tree}-{step.seed}-{step.items}"
+    root = work / "data" / name
     if (root / "dataset_description.json").is_file():
         return root
-    if step.tree == "synthetic":
+    if step.tree == "synthetic" and step.seed is not None:
         return bids_tree.synthetic(root, step.items, step.seed)
     if step.tree == "librispeech" and step.manifest is not None:
         return bids_tree.from_librispeech(root, ROOT / "benchmarks" / "manifests" / f"{step.manifest}.yaml", step.items)
@@ -239,14 +248,14 @@ def tree_resident(ps_text: str, root: int) -> int:
     return KIB * sum(rss.get(pid, 0) for pid in found)
 
 
-def process_resident(poll_s: float) -> int:
-    """Return this process tree's resident bytes now; a `ps` slower than `poll_s` is skipped as 0."""
+def process_resident(poll_s: float) -> int | None:
+    """Return this process tree's resident bytes now; None when `ps` took longer than `poll_s`."""
     try:
         out = subprocess.run(
             ["ps", "-A", "-o", "pid=,ppid=,rss="], capture_output=True, text=True, check=True, timeout=poll_s
         ).stdout
     except subprocess.TimeoutExpired:
-        return 0
+        return None
     return tree_resident(out, os.getpid())
 
 
@@ -265,7 +274,7 @@ class Watch:
         bounds: Bounds,
         poll_s: float,
         *,
-        resident: Callable[[], int] | None = None,
+        resident: Callable[[], int | None] | None = None,
         load: Callable[[], float] = lambda: os.getloadavg()[0],
     ) -> None:
         """Watch against `bounds`, sampling with `resident` (this tree's, by default) and `load`."""
@@ -273,6 +282,7 @@ class Watch:
         self._resident = resident if resident is not None else lambda: process_resident(poll_s)
         self.peak_resident = 0
         self.peak_load = 0.0
+        self.skipped = 0
         self.exceeded: str | None = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="exit-watch", daemon=True)
@@ -280,7 +290,11 @@ class Watch:
     def sample(self) -> None:
         """Take one sample and record a passed bound."""
         resident, load = self._resident(), self._load()
-        self.peak_resident, self.peak_load = max(self.peak_resident, resident), max(self.peak_load, load)
+        self.peak_load = max(self.peak_load, load)
+        if resident is None:
+            self.skipped += 1
+            return
+        self.peak_resident = max(self.peak_resident, resident)
         limit = self.bounds.resident_bytes
         if limit is not None and resident > limit and self.exceeded is None:
             self.exceeded = f"resident {resident} B passed the bound {limit} B"
@@ -301,8 +315,13 @@ class Watch:
         self.sample()
 
     def report(self) -> dict[str, Any]:
-        """Return the peaks and the host's CPU count."""
-        return {"peak_resident_bytes": self.peak_resident, "peak_load": self.peak_load, "cpus": os.cpu_count()}
+        """Return the peaks, the samples skipped as too slow, and the host's CPU count."""
+        return {
+            "peak_resident_bytes": self.peak_resident,
+            "peak_load": self.peak_load,
+            "skipped_samples": self.skipped,
+            "cpus": os.cpu_count(),
+        }
 
 
 class Waitable(Protocol):
@@ -431,6 +450,10 @@ def identities_document(step: str, base: ExecutionProfile, executor: str, done: 
         "counts": dict(done.counts),
         "wall_s": done.wall_s,
         "watch": dict(done.watch),
+        "placement": {
+            n: {"backend": p.backend, "resource_class": p.resource_class}
+            for n, p in done.placed.placement.nodes.items()
+        },
         "identities": found,
     }
 
@@ -510,8 +533,9 @@ def identity_cli(step: str, argv: Sequence[str] | None = None) -> int:
         print("\n".join(d.render() for d in found))
         return 0
     if args.command == "run":
-        write_json(args.out, run_identity(step, args.profile, args.executor, args.work, config))
-        print(f"wrote {args.out}")
+        document = run_identity(step, args.profile, args.executor, args.work, config)
+        write_json(args.out, document)
+        print(f"placed {document['placement']}; wrote {args.out}")
         return 0
     differences = compare_runs(*(json.loads(p.read_text(encoding="utf-8")) for p in (args.left, args.right)))
     print("\n".join(differences) if differences else "equal plan hash and output identities")
@@ -562,16 +586,18 @@ def _judge_groups(
 def account_resume(before: Sequence[Event], after: Sequence[Event], items: int) -> Accounting:
     """Account a resume from the events before it and after it.
 
-    Jobs the resume still had to compute are grouped by key, as the run groups them (an in-run duplicate is an exact
-    reuse of the first): a group whose key was committed before must not execute; any other executes exactly once, or
+    Only events of an epoch above every epoch before the resume are the resume's (a surviving worker of the
+    interrupted epoch may still log). Jobs the resume still had to compute are grouped by key, as the run groups
+    them (an in-run duplicate is an exact reuse of the first): a group whose key was committed before must not
+    execute; any other executes exactly once, or
     is served wholly from the store when its first finished between the last event and the interrupt (a late hit).
 
     Raises:
         ResumeMismatch: the run was not interrupted part way, a committed job executed again, a group executed twice,
             or an item has no result.
     """
-    seen = {(e.writer, e.seq) for e in before}
-    new = [e for e in after if (e.writer, e.seq) not in seen]
+    top = max((e.epoch for e in before), default=-1)
+    new = [e for e in after if e.epoch > top]
     committed = committed_jobs(before)
     keys = {(e.node, e.job.element): e.key for e in after if e.job is not None and e.key is not None}
     jobs = {(e.node, e.job.element) for e in after if e.job is not None and e.job.element}
@@ -599,14 +625,42 @@ def account_resume(before: Sequence[Event], after: Sequence[Event], items: int) 
     return Accounting(items, len(committed), executions, late, items - executions)
 
 
-def assert_no_resolution(resolved: Mapping[str, str]) -> None:
-    """Refuse a resume that resolved a model ref: `resolved` is this process's run manifest, which must be empty.
+def resolution_snapshot(cache: Path) -> dict[str, dict[str, str]]:
+    """Return every run manifest of resolutions under the cache root `cache`, by path: the entries each holds."""
+    found = {}
+    for path in sorted((cache / NAMESPACE / "runs").glob(f"*/{MANIFEST_NAME}")):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        found[str(path.relative_to(cache))] = document if isinstance(document, dict) else {}
+    return found
+
+
+def assert_no_resolution(before: Mapping[str, Mapping[str, str]], after: Mapping[str, Mapping[str, str]]) -> None:
+    """Refuse a resume that resolved a model ref: no manifest under the cache root gained an entry or appeared.
 
     Raises:
-        ResumeMismatch: the manifest holds a resolution.
+        ResumeMismatch: a resolution was recorded; names the manifest and ref.
     """
-    if resolved:
-        raise ResumeMismatch(f"the resume resolved refs: {sorted(resolved)}")
+    added = [f"{path}: {key}" for path, entries in after.items() for key in entries if key not in before.get(path, {})]
+    if added:
+        raise ResumeMismatch("the resume resolved refs: " + "; ".join(sorted(added)))
+
+
+def slurm_prefix(profile: ExecutionProfile, run_dir: Path, plan_hash: str) -> str:
+    """Return the start of the name of every Slurm job of the run in `run_dir`.
+
+    Raises:
+        TypeError: the profile's substrate is not Slurm.
+    """
+    substrate = substrate_of(profile, run_dir, plan_hash)
+    if not isinstance(substrate, Slurm):
+        raise TypeError(f"profile {profile.name} names a {type(substrate).__name__} substrate, not Slurm")
+    return substrate.prefix
+
+
+def slurm_timeout(profile: ExecutionProfile, fallback_s: float) -> float:
+    """Return the profile's Slurm command timeout in seconds, else `fallback_s`."""
+    commands = profile.substrate.commands
+    return commands.timeout_s if commands is not None else fallback_s
 
 
 def slurm_job_ids(prefix: str, timeout_s: float, run: Callable[[list[str], float], str]) -> list[str]:

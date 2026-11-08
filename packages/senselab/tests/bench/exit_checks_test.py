@@ -38,6 +38,7 @@ def _module(name: str, path: Path) -> ModuleType:
 
 exitlib = _module("exitlib", EXIT / "exitlib.py")
 agent_plan = _module("agent_plan_under_test", EXIT / "agent_plan.py")
+interrupt_resume = _module("interrupt_resume_under_test", EXIT / "interrupt_resume.py")
 
 
 def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
@@ -119,12 +120,12 @@ def _history(
     tmp_path: Path, committed: list[int], resumed: dict[EventKind, list[int]], keys: list[str]
 ) -> tuple[list[Event], list[Event]]:
     """Return events before a resume (the `committed` items finished) and after it (`resumed` kind to items)."""
-    log = EventLog(tmp_path, "a0", 1)
+    log = EventLog(tmp_path, "a0", 1, epoch=1)
     for i in committed:
         _record(log, "queued", i, keys[i])
         _record(log, "finished", i, keys[i], _output(keys[i]))
     before = read_events(tmp_path)
-    again = EventLog(tmp_path, "a1", 2)
+    again = EventLog(tmp_path, "a1", 2, epoch=2)
     for kind, items in resumed.items():
         for i in items:
             _record(again, kind, i, keys[i], _output(keys[i]))
@@ -172,11 +173,37 @@ def test_resume_accounting_refuses_what_contradicts_the_check(
 
 
 @pytest.mark.logic
-def test_a_resume_that_resolved_a_ref_is_refused() -> None:
-    """An empty run manifest passes; one entry fails and names the ref."""
-    exitlib.assert_no_resolution({})
+def test_a_resume_that_resolved_a_ref_is_refused(tmp_path: Path) -> None:
+    """Manifests of any attempt under the cache root count: an unchanged snapshot passes, a new entry or file fails."""
+    manifest = tmp_path / "2x" / "runs" / "100" / "resolutions@2.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('{"old": "' + "a" * 40 + '"}', encoding="utf-8")
+    before = exitlib.resolution_snapshot(tmp_path)
+    exitlib.assert_no_resolution(before, exitlib.resolution_snapshot(tmp_path))
+    manifest.write_text('{"old": "' + "a" * 40 + '", "org/model": "' + "b" * 40 + '"}', encoding="utf-8")
     with pytest.raises(exitlib.ResumeMismatch, match="org/model"):
-        exitlib.assert_no_resolution({'["org/model","main"]': "c" * 40})
+        exitlib.assert_no_resolution(before, exitlib.resolution_snapshot(tmp_path))
+    manifest.write_text('{"old": "' + "a" * 40 + '"}', encoding="utf-8")
+    other = tmp_path / "2x" / "runs" / "200" / "resolutions@2.json"
+    other.parent.mkdir(parents=True)
+    other.write_text('{"worker/model": "' + "c" * 40 + '"}', encoding="utf-8")
+    with pytest.raises(exitlib.ResumeMismatch, match="worker/model"):
+        exitlib.assert_no_resolution(before, exitlib.resolution_snapshot(tmp_path))
+
+
+@pytest.mark.logic
+def test_events_of_a_surviving_worker_of_the_interrupted_epoch_are_not_the_resumes(tmp_path: Path) -> None:
+    """A `finished` the old epoch logs after the snapshot is not an execution of the resume."""
+    before, _ = _history(tmp_path, [0, 1], {}, KEYS)
+    stray = EventLog(tmp_path, "a0", 1, epoch=1)
+    _record(stray, "finished", 2, KEYS[2], _output(KEYS[2]))
+    resumed = EventLog(tmp_path, "a1", 2, epoch=2)
+    served: dict[EventKind, list[int]] = {"cache_hit": [0, 1, 2, 5], "finished": [3, 4]}
+    for kind, items in served.items():
+        for i in items:
+            _record(resumed, kind, i, KEYS[i], _output(KEYS[i]))
+    found = exitlib.account_resume(before, read_events(tmp_path), 6)
+    assert (found.executions, found.late) == (2, 1)
 
 
 @pytest.mark.logic
@@ -263,6 +290,7 @@ def test_the_config_loads_and_refuses_a_bad_share_or_executor_set(tmp_path: Path
     for name, edited, message in [
         ("share", text.replace("[1, 3]", "[3, 3]"), "proper fraction"),
         ("executors", text.replace("  pool-local: *laptop\n", ""), "bounds the executors"),
+        ("profiles", text.replace("[laptop, orcd]", "[orcd, orcd]"), "at least two distinct"),
     ]:
         path = tmp_path / f"{name}.yaml"
         path.write_text(edited, encoding="utf-8")
@@ -342,4 +370,103 @@ def test_a_tree_is_laid_once_and_the_resident_probe_reads_this_process(tmp_path:
     assert len(list(root.rglob("*_audio.wav"))) == 3
     with pytest.raises(ValueError, match="not one this harness lays"):
         exitlib.build_tree(exitlib.Step("X", {}, "unknown", 1), tmp_path)
-    assert exitlib.process_resident(60.0) > 0
+    assert exitlib.process_resident(exitlib.load_config().watch_poll_s) > 0
+
+
+@pytest.mark.logic
+def test_a_skipped_resident_sample_is_counted_not_read_as_zero() -> None:
+    """A `ps` too slow to sample is counted in the report and moves no peak."""
+    samples = iter([None, 40, None])
+    watch = exitlib.Watch(exitlib.Bounds(None, None), 1.0, resident=lambda: next(samples), load=lambda: 0.0)
+    for _ in range(3):
+        watch.sample()
+    assert (watch.peak_resident, watch.report()["skipped_samples"]) == (40, 2)
+
+
+class _StartedRun:
+    """A started run: its events are what the log holds; `wait` reports done or not as scripted."""
+
+    def __init__(self, log: Path, done: bool) -> None:
+        self.log, self.done = log, done
+
+    def events(self) -> list[Event]:
+        return read_events(self.log)
+
+    def wait(self, timeout: float | None = None) -> SimpleNamespace:  # noqa: ARG002
+        return SimpleNamespace(done=self.done, interrupted=False)
+
+    def cancel(self) -> None:
+        raise AssertionError("the driver cancels nothing here")
+
+
+def _started(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, committed: int, done: bool) -> Any:  # noqa: ANN401
+    """Set `start` over three items with `committed` finished, on a fake run; return the harness config."""
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("SLURM_JOB_ID", "4242")
+    log = EventLog(tmp_path / "events", "a0", 1, epoch=1)
+    for i in range(committed):
+        _record(log, "finished", i, KEYS[i], _output(KEYS[i]))
+    placed = SimpleNamespace(hash=HASH, manifest=SimpleNamespace(rows=[SimpleNamespace(id=f"r{i}") for i in range(3)]))
+    monkeypatch.setattr(exitlib, "build_tree", lambda step, work: work)
+    monkeypatch.setattr(exitlib, "planned", lambda step, root, profile: placed)
+    monkeypatch.setattr(exitlib, "slurm_prefix", lambda profile, run_dir, plan_hash: "senselab-x-")
+    monkeypatch.setattr(exitlib, "slurm_job_ids", lambda prefix, timeout_s, run: ["77", "78"])
+    monkeypatch.setattr(
+        exitlib, "launch", lambda placed, executor, store: (_StartedRun(tmp_path / "events", done), None)
+    )
+    return exitlib.load_config()
+
+
+@pytest.mark.logic
+def test_start_refuses_a_run_that_is_done_before_its_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run done with fewer items committed than the target has nothing to interrupt and fails."""
+    config = _started(tmp_path, monkeypatch, committed=0, done=True)
+    with pytest.raises(RuntimeError, match="nothing to interrupt"):
+        interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config)
+
+
+@pytest.mark.logic
+def test_start_reports_the_jobs_then_fails_when_the_run_finishes_uncancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """At the target `start` writes and prints the jobs to cancel; a run that then finishes returns 1."""
+    config = _started(tmp_path, monkeypatch, committed=1, done=True)
+    assert interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config) == 1
+    report = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    printed = capsys.readouterr().out
+    assert report["workers"] == ["77", "78"] and report["coordinator"] == "4242" and report["committed"] == 1
+    assert "INTERRUPT NOW" in printed and "scancel 4242 77 78" in printed and "senselab-x-*" in printed
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(("have", "counts"), [(1, {}), (3, {"failed": 1})])
+def test_a_run_with_an_incomplete_or_failed_result_set_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, have: int, counts: dict[str, int]
+) -> None:
+    """`run_identity` raises when fewer records have a result than items, or any job failed."""
+    log = EventLog(tmp_path / "events", "a0", 1, epoch=1)
+    for i in range(have):
+        _record(log, "finished", i, KEYS[i], _output(KEYS[i]))
+    nodes = {"call": SimpleNamespace(backend="b", resource_class="cpu")}
+    placed = SimpleNamespace(
+        hash=HASH,
+        manifest=SimpleNamespace(rows=[SimpleNamespace(id=f"r{i}") for i in range(3)]),
+        placement=SimpleNamespace(nodes=nodes),
+    )
+    done = exitlib.Execution(placed, None, read_events(tmp_path / "events"), {}, 0.0, counts)
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setattr(exitlib, "build_tree", lambda step, work: work)
+    monkeypatch.setattr(exitlib, "planned", lambda step, root, profile: placed)
+    monkeypatch.setattr(exitlib, "execute", lambda placed, executor, config: done)
+    with pytest.raises(RuntimeError, match="items have a result"):
+        exitlib.run_identity("resample", "laptop", "in-process", tmp_path, exitlib.load_config())
+
+
+@pytest.mark.logic
+def test_the_agents_input_holds_the_descriptions_and_the_dataset_path_only(tmp_path: Path) -> None:
+    """Nothing but the format tag, the prompt, the dataset path and `describe` of each task reaches the agent."""
+    document = agent_plan.agent_input(tmp_path)
+    assert set(document) == {"format", "instructions", "dataset", "describe"}
+    assert document["dataset"] == str(tmp_path)
+    with pytest.raises(ValueError, match="not a directory"):
+        agent_plan.agent_input(tmp_path / "absent")

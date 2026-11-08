@@ -18,8 +18,8 @@ sys.path[:0] = [str(Path(__file__).resolve().parent)]
 import exitlib  # noqa: E402 - beside this script
 from senselab_core.runtime.execution.events import read_events, run_dir_of  # noqa: E402
 from senselab_core.runtime.execution.run import RESULTS_DIR  # noqa: E402
-from senselab_core.runtime.execution.substrates import Slurm, substrate_of, worker_id  # noqa: E402
-from senselab_core.runtime.revision import cache_root, read_manifest  # noqa: E402
+from senselab_core.runtime.execution.substrates import worker_id  # noqa: E402
+from senselab_core.runtime.revision import cache_root  # noqa: E402
 from senselab_core.runtime.store import ResultStore  # noqa: E402
 
 STEP = "stt"
@@ -44,10 +44,7 @@ def start(work: Path, out: Path, profile_argument: str, config: exitlib.Config) 
     target = exitlib.interrupt_target(items, config.interrupt_share)
     bounds, poll = config.bounds[EXECUTOR], config.watch_poll_s
     store = ResultStore(cache_root() / RESULTS_DIR)
-    substrate = substrate_of(profile, run_dir, placed.hash)
-    if not isinstance(substrate, Slurm):
-        raise TypeError(f"profile {profile.name} names a {type(substrate).__name__} substrate, not Slurm")
-    prefix = substrate.prefix
+    prefix = exitlib.slurm_prefix(profile, run_dir, placed.hash)
     run, _ = exitlib.launch(placed, EXECUTOR, store)
     deadline = None if bounds.wall_s is None else time.monotonic() + bounds.wall_s
     while len(exitlib.committed_jobs(run.events())) < target:
@@ -58,7 +55,7 @@ def start(work: Path, out: Path, profile_argument: str, config: exitlib.Config) 
         if deadline is not None and time.monotonic() >= deadline:
             run.cancel()
             raise exitlib.BoundExceeded(f"fewer than {target} of {items} items committed within {bounds.wall_s} s")
-    timeout = profile.substrate.commands.timeout_s if profile.substrate.commands is not None else poll
+    timeout = exitlib.slurm_timeout(profile, poll)
     workers = exitlib.slurm_job_ids(prefix, timeout, exitlib.squeue)
     committed = len(exitlib.committed_jobs(run.events()))
     report = {
@@ -71,6 +68,7 @@ def start(work: Path, out: Path, profile_argument: str, config: exitlib.Config) 
     exitlib.write_json(out, report)
     print(f"INTERRUPT NOW hash={placed.hash} committed={committed}/{items}")
     print(f"scancel {worker_id()} {' '.join(workers)}")
+    print(f"more workers may have been submitted since: re-list the jobs named {prefix}* at cancel time")
     while not run.wait(timeout=poll).done:
         pass
     print("the run finished before it was cancelled: the interrupt did not land")
@@ -87,14 +85,23 @@ def resume(plan_hash: str, work: Path, out: Path, profile_argument: str) -> int:
 
     exitlib.isolate(work, STEP)
     run_dir = run_dir_of(plan_hash)
-    before = read_events(run_dir)
     profile = exitlib.load_profile(profile_argument)
+    prefix = exitlib.slurm_prefix(profile, run_dir, plan_hash)
+    live = exitlib.slurm_job_ids(
+        prefix, exitlib.slurm_timeout(profile, exitlib.load_config().watch_poll_s), exitlib.squeue
+    )
+    if live:
+        raise exitlib.ResumeMismatch(
+            f"jobs of the run are still live ({' '.join(live)}); cancel every job named {prefix}*"
+        )
+    before = read_events(run_dir)
+    resolved = exitlib.resolution_snapshot(cache_root())
     with senselab.use(execution=profile):
         results = senselab.resume(plan_hash)
     after = read_events(run_dir)
     items = len(results)
     accounting = exitlib.account_resume(before, after, items)
-    exitlib.assert_no_resolution(read_manifest())
+    exitlib.assert_no_resolution(resolved, exitlib.resolution_snapshot(cache_root()))
     failed = results.failures()
     if failed:
         raise exitlib.ResumeMismatch(f"{len(failed)} items failed after the resume")
