@@ -61,6 +61,7 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
         "hardware-class@1",
         "host@1",
         "hardware-declared@1",
+        "local-weights-state@1",
     }
 )
 """The registered tags of `identity_digest`; no tag is a prefix of another."""
