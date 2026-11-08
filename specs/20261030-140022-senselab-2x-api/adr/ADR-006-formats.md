@@ -555,3 +555,9 @@ so moving them needs a format change, left open.
 - **`scale-result@1.0`**, **`scale-suite@1.0`**, **`scale-budgets@1.0`** (new; benchmarks, not port values): the ladder's
   per-point result, its suite file and its budgets file (`benchmarks/scale/`).
 - `core-runtime@1` (new identity tag, Phase 3 Task 20h): `identity_digest("core-runtime@1", [[relpath, file_digest("file@1", path)], ...])` over senselab-core's `*.py` files, sorted by POSIX relative path; it names the calibration-row directory, never a key.
+
+## Amendment 2026-11-08: automatic bind (Phase 3 Task 21b)
+
+- `logical-plan@1.0` `bind` is the resolved mapping: the given `bind` plus the one automatic entry a single
+  record-bound input named for no record input takes when every record has one input of one name that no other
+  input reads (design.md, Binding). A port bound by name adds no entry, so plans that bound by name keep their hash.

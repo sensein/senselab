@@ -316,7 +316,10 @@ ds = ds.filter(task="reading-passage")
 - **The `Dataset` protocol** yields `Record`s. It provides `entities()`, filtering, a stable
   `Record.id`, a manifest form, and slicing that is closed under grouping (I-7).
 - **Binding.** A record view binds to the pipeline input of the same name. `bind={}` overrides
-  that.
+  that; `bind` wins over the name. When exactly one record-bound input has neither, every record has exactly one
+  input of one name, and no other input reads it, it binds to that input; otherwise the error names the cause, and
+  the `bind` to pass when exactly one record input fits. The resolved mapping, automatic entries included, is the
+  logical plan's `bind`, so an automatic bind and the explicit bind it resolves to give one plan hash.
 - **Adapters.** The BIDS adapter parses entities once, with one implementation. The in-memory
   adapter wraps lists, dicts, frames, or HF datasets.
 - **Three profile kinds**, versioned as `name:version`, deep-merged over packaged defaults, and
@@ -965,3 +968,4 @@ R-n in [`review-register.md`](review-register.md).
   (P2-90, P2-47).
 - 2026-11-03: the pydra gate passed at `0c1bbcd9` (Route A, §4.9); K2 was delivered in Phase 3 Task 0, not Phase 2 (P3-1, §4.9, §6.2; `reviews/phase3-gate/evidence.md`).
 - 2026-11-03: a lease is a directory taken by `mkdir`, renewed by beat directories (ADR-003, owner item 58).
+- 2026-11-08: a single unnamed record-bound input binds to the records' single input; the plan's `bind` records it (§ Binding, ADR-006; Phase 3 Task 21b).
