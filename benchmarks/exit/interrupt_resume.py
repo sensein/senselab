@@ -132,7 +132,6 @@ def start(
             if deadline is not None and time.monotonic() >= deadline:
                 raise exitlib.BoundExceeded(f"fewer than {target} of {items} items committed within {bounds.wall_s} s")
             time.sleep(poll)
-        committed = len(exitlib.committed_jobs(read_events(run_dir)))
         cancelled = interrupt(
             prefix,
             child.pid,

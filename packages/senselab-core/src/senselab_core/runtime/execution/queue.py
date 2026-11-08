@@ -138,6 +138,11 @@ def _slots(segment: StorageDir) -> tuple[list[int], set[int], dict[int, int]]:
     return sorted(slots), resolved, jobs
 
 
+def _outcome_record(outcome: str, worker: str, epoch: int, **extra: object) -> dict[str, object]:
+    """Return the record of `outcome/<digest>`: who wrote it, in which coordinator epoch, and `extra`."""
+    return {"outcome": outcome, "worker": worker, "epoch": epoch, "finish": uuid.uuid4().hex, **extra}
+
+
 def settle(lease: Lease, q: StorageDir, digest: str, record: dict[str, object]) -> Optional[bool]:
     """Write `record` as the one outcome of `digest` under `lease`: staged, then proven, then linked.
 
@@ -211,7 +216,7 @@ class Claim:
     An outcome record names `epoch`, the coordinator epoch current when the claim was taken.
     """
 
-    def __init__(self, queue: "Queue", worker: str, held: list[_Held], epoch: int = 0) -> None:
+    def __init__(self, queue: "Queue", worker: str, held: list[_Held], epoch: int) -> None:
         """Hold `held` for `worker`, taken in coordinator epoch `epoch`; use `Queue.claim`."""
         self.queue = queue
         self.worker = worker
@@ -259,7 +264,7 @@ class Claim:
 
     def _finish(self, held: _Held, outcome: str, extra: dict[str, object]) -> str:
         """Write `outcome` for `held` (`settle`), mark its slot and release it; return what became of it."""
-        record = {"outcome": outcome, "worker": self.worker, "epoch": self.epoch, "finish": uuid.uuid4().hex, **extra}
+        record = _outcome_record(outcome, self.worker, self.epoch, **extra)
         written = None
         if not held.state.lost:
             with self.queue.open() as q:
@@ -444,6 +449,10 @@ class Queue:
             digests = sorted(m.group(1) for n in items.listdir() if (m := ITEM_NAME.fullmatch(n)))
             return self._index(q, dict.fromkeys(digests))
 
+    def _current(self) -> int:
+        """Return the current coordinator epoch, 0 when the queue has no epoch source."""
+        return self._epoch() if self._epoch is not None else 0
+
     def hold(self, epoch: int, env: str) -> None:
         """Hold `env` on this queue for the coordinator of `epoch`: no item placed in it is claimed while it counts."""
         with self.open() as q:
@@ -452,7 +461,7 @@ class Queue:
 
     def _holds(self) -> dict[str, int]:
         """Return each env label held by the current epoch or a newer one, with the newest such epoch."""
-        current = self._epoch() if self._epoch is not None else 0
+        current = self._current()
         found: dict[str, int] = {}
         with self.open() as q:
             for name in q.listdir():
@@ -512,7 +521,7 @@ class Queue:
             for held in taken:
                 held.stack.close()
             raise
-        return Claim(self, worker, taken, self._epoch() if self._epoch is not None else 0) if taken else None
+        return Claim(self, worker, taken, self._current()) if taken else None
 
     def _segments(
         self, segments: StorageDir
@@ -656,8 +665,8 @@ class Queue:
         except ValueError as err:
             fault = FaultRecord(fault="content", type="CorruptItem", message=str(err), gap=False, charged=True)
             logger.warning("queue %s: item %s cannot be read (%s); its outcome is dead", self.name, digest, err)
-            record = {"outcome": "dead", "worker": "queue", "finish": uuid.uuid4().hex}
-            if settle(lease, q, digest, {**record, "fault": fault.model_dump(mode="json")}) is not None:
+            record = _outcome_record("dead", "queue", self._current(), fault=fault.model_dump(mode="json"))
+            if settle(lease, q, digest, record) is not None:
                 _resolve(q, *slot, digest)
             return None
 
