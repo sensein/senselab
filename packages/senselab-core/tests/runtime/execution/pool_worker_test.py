@@ -235,7 +235,7 @@ def test_a_backends_request_peaks_reach_the_samples(tmp_path: Path) -> None:
     send = _sender(store, profile)
 
     def reporting(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
-        request_reports.record(1000 + 30 * len(jobs), 1000, len(jobs))
+        request_reports.record(len(jobs), device=(1000 + 30 * len(jobs), 1000))
         return send(jobs, placement)
 
     worker = PoolWorker(

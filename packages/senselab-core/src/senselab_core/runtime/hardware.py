@@ -30,6 +30,8 @@ _LSCPU_QUERY = ["env", "LC_ALL=C", "lscpu"]
 _APPS_FIELDS = ("pid", "used_memory")
 _FREE_FIELDS = ("index", "uuid", "memory.free", "memory.total")
 _NVIDIA_SMI_FREE_QUERY = ["nvidia-smi", f"--query-gpu={','.join(_FREE_FIELDS)}", _NVIDIA_SMI_FORMAT]
+_PLACED_FIELDS = ("pid", "gpu_uuid")
+_NVIDIA_SMI_PLACED_QUERY = ["nvidia-smi", f"--query-compute-apps={','.join(_PLACED_FIELDS)}", _NVIDIA_SMI_FORMAT]
 _NVIDIA_SMI_APPS_QUERY = ["nvidia-smi", f"--query-compute-apps={','.join(_APPS_FIELDS)}", _NVIDIA_SMI_FORMAT]
 _STAT_PPID = 1
 """The field index of the parent pid in `/proc/<pid>/stat` after the parenthesised command name."""
@@ -451,3 +453,20 @@ def device_memory_bytes(
         for r in rows
         if len(r) == len(_APPS_FIELDS) and r[0].isdigit() and r[1].isdigit() and int(r[0]) in pids
     )
+
+
+def device_cotenants(
+    uuid: str, own: Collection[int], *, timeout_s: float, run: Callable[[list[str], float], str] = _bounded
+) -> Optional[int]:
+    """Return the compute processes on the GPU `uuid`, the caller's processes `own` counting as one; None where unread.
+
+    Read from `nvidia-smi --query-compute-apps` within `timeout_s`: the processes on the GPU that are not in `own`,
+    plus one for the caller, which may not have touched the GPU yet.
+    """
+    try:
+        output = run(_NVIDIA_SMI_PLACED_QUERY, timeout_s)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    rows = [[p.strip() for p in line.split(",")] for line in output.splitlines()]
+    others = {int(r[0]) for r in rows if len(r) == len(_PLACED_FIELDS) and r[0].isdigit() and r[1] == uuid}
+    return len(others - set(own)) + 1

@@ -18,10 +18,14 @@
 - `segments/<seq>/retired`: the mark, made by an exclusive create, of a segment whose slots are all taken and all
   marked. A segment stays where it is once retired, so a segment number is made once.
 - `claims/<digest>.lease`: the `Lease` of a claim on the item.
+- `serve.lease`: on a probe queue, the `Lease` of the one worker that serves it (`Queue.serve_lease`).
+- `probe/<digest>`: on a probe queue, a JCS record `{"phase", "stratum"}` of the probe item (`Queue.mark_probe`).
 - `outcome/<digest>`: the item's one outcome, a JCS record `{"outcome": "done" | "dead", ...}` linked from a staged
   file, so the first writer wins and an item is never both done and dead.
 - `held-<epoch>-<env label>`: the mark, made by the coordinator of that epoch, that no item placed in that env is
   claimed; the env label is `identity_digest("label@1", env)`. Only a hold of the current epoch or a newer one counts.
+
+A probe queue is named `<queue>~probe-<id>` (`probe_queue`), under the queue it measures.
 
 A claim walks the segments from the oldest live one, lists each, and takes the lease of the first slot that is
 neither marked nor under a live claim; the outcome is checked again once the lease is held. An outcome is staged,
@@ -83,10 +87,32 @@ HELD_NAME = re.compile(r"^held-([1-9][0-9]*)-([0-9a-f]{64})$")
 """The mark of an env held on a queue, naming the epoch that held it and the env's label."""
 NAME_FILE = re.compile(r"^name$")
 """The file holding a queue's name."""
-DIRECTORIES = ("items", "segments", "slotted", "claims", "outcome")
+PROBE_MARK = "~probe-"
+"""Between a queue's name and the id of a probe, in the name of the probe's queue."""
+SERVE_LEASE = "serve"
+"""The resource whose lease pins a probe queue to one worker."""
+DIRECTORIES = ("items", "segments", "slotted", "claims", "outcome", "probe")
 """The directories of a queue."""
 OUTCOMES = ("done", "dead")
 """The outcomes an item can have."""
+
+
+def probe_queue(queue: str, probe_id: str) -> str:
+    """Return the name of the probe queue of `probe_id` under `queue`.
+
+    Raises:
+        ValueError: `queue` is itself a probe queue, or the result is not a queue name.
+    """
+    name = f"{queue}{PROBE_MARK}{probe_id}"
+    if PROBE_MARK in queue or not QUEUE_NAME.fullmatch(name):
+        raise ValueError(f"{name!r} is not the probe queue of {queue!r}")
+    return name
+
+
+def probe_of(name: str) -> tuple[str, str] | None:
+    """Return `(queue, probe id)` of a probe queue's name, None for any other queue."""
+    queue, found, probe_id = name.partition(PROBE_MARK)
+    return (queue, probe_id) if found and probe_id else None
 
 
 def item_digest(fragment: PlanFragment) -> str:
@@ -304,6 +330,23 @@ class Claim:
         self.release()
 
 
+class ServeLease:
+    """The lease pinning a probe queue to the worker that holds it; `held` says whether its beats still prove it."""
+
+    def __init__(self, stack: contextlib.ExitStack, state: LeaseState) -> None:
+        """Hold what `stack` holds, its beats recorded in `state`; use `Queue.serve_lease`."""
+        self._stack, self._state = stack, state
+
+    @property
+    def held(self) -> bool:
+        """Whether the lease has not been lost."""
+        return not self._state.lost
+
+    def release(self) -> None:
+        """Give the lease up."""
+        self._stack.close()
+
+
 class Queue:
     """One queue of plan fragments under a `QueueSet`.
 
@@ -359,6 +402,36 @@ class Queue:
             data = outcome.read_regular(digest)
         record = jcs_loads(data) if data is not None else None
         return record if isinstance(record, dict) else None
+
+    def serve_lease(self) -> Optional[ServeLease]:
+        """Take the lease that pins this queue to one worker, beating until released; None while another's is live."""
+        stack = contextlib.ExitStack()
+        lease = Lease(self.path / SERVE_LEASE, timeout=0, stale_after=self._stale_after)
+        try:
+            stack.enter_context(lease)
+        except LeaseTimeout:
+            return None
+        try:
+            state = stack.enter_context(lease.keep_alive(self._renew_fraction))
+        except BaseException:
+            stack.close()
+            raise
+        return ServeLease(stack, state)
+
+    def mark_probe(self, digest: str, phase: str, stratum: int) -> None:
+        """Record that item `digest` is of probe phase `phase` and length stratum `stratum`; the first mark stays."""
+        with self.open() as q, q.child("probe") as probe:
+            _publish(probe, digest, jcs_dumps({"phase": phase, "stratum": stratum}), DIGEST_NAME)
+
+    def probe_mark(self, digest: str) -> Optional[tuple[str, int]]:
+        """Return the `(phase, stratum)` item `digest` was marked with, None when it has no mark."""
+        with self.open() as q, q.child("probe") as probe:
+            data = probe.read_regular(digest)
+        record = jcs_loads(data) if data is not None else None
+        if not isinstance(record, dict):
+            return None
+        phase, stratum = record.get("phase"), record.get("stratum")
+        return (phase, stratum) if isinstance(phase, str) and isinstance(stratum, int) else None
 
     def put(self, fragment: PlanFragment) -> None:
         """Write `fragment`'s item and give it a slot, unless it has a slot or an outcome.
@@ -766,6 +839,7 @@ class QueueSet:
         self.profile = profile if profile is not None else ExecutionProfile.load()
         self.epoch = epoch if epoch is not None else Epoch(self.root.parent).current
         self._queues: dict[str, Queue] = {}
+        self._labels: dict[str, str] = {}
 
     def queue(self, name: str) -> Queue:
         """Return the queue `name`, made if missing."""
@@ -774,17 +848,16 @@ class QueueSet:
         return self._queues[name]
 
     def names(self) -> list[str]:
-        """Return the name of every queue under `root`, sorted."""
+        """Return the name of every queue under `root`, sorted; a queue's name is read once."""
         if not self.root.is_dir():
             return []
-        found = []
         with StorageDir.open_root(self.root) as root:
-            for label in sorted(n for n in root.listdir() if DIGEST_NAME.fullmatch(n)):
+            for label in sorted(n for n in root.listdir() if DIGEST_NAME.fullmatch(n) and n not in self._labels):
                 with root.child(label) as directory:
                     name = directory.read_regular("name")
                 if name is not None and identity_digest(LABEL_TAG, name.decode()) == label:
-                    found.append(name.decode())
-        return sorted(found)
+                    self._labels[label] = name.decode()
+        return sorted(self._labels.values())
 
     def claimed_any(self) -> bool:
         """Return whether any item of any queue is under a live claim, on the storage clock."""
@@ -795,4 +868,18 @@ class QueueSet:
         return sum(self.queue(name).reconcile() for name in self.names())
 
 
-__all__ = ["ITEM_TAG", "LABEL_TAG", "OUTCOMES", "RUN_QUEUES", "Claim", "Queue", "QueueSet", "item_digest", "settle"]
+__all__ = [
+    "ITEM_TAG",
+    "LABEL_TAG",
+    "OUTCOMES",
+    "PROBE_MARK",
+    "RUN_QUEUES",
+    "Claim",
+    "Queue",
+    "QueueSet",
+    "ServeLease",
+    "item_digest",
+    "probe_of",
+    "probe_queue",
+    "settle",
+]

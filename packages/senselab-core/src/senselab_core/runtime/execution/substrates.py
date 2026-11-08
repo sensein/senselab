@@ -11,16 +11,19 @@ class, with `#<model identity>` for a resident model; every worker serves one qu
 class's CPUs per worker. A surplus is stopped, pending workers first, running ones only once the queue has no
 unresolved item.
 
-A worker marks itself ready (`mark_ready`) once it can reach the run and its store. `Fleet` counts a worker that left
+A worker marks itself ready (`mark_ready`) once it can reach the run and its store; the mark names its host by a digest,
+its process and its `HardwareClass` per resource class, and writes no hardware index. `Fleet` counts a worker that left
 `live()` without a mark as a failed start of its class, backs the class's next start off, and reports the class broken
 after `faults.infrastructure_replacements` consecutive failures; it then starts no more workers of the class.
 """
 
+import hashlib
 import logging
 import math
 import os
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import threading
@@ -32,8 +35,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from senselab_worker.canonical import jcs_dumps, jcs_loads
+
+from senselab_core.runtime.calibration import HardwareClass
 from senselab_core.runtime.config import expand
-from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
+from senselab_core.runtime.execution.queue import PROBE_MARK, RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands, is_service_class
 from senselab_core.runtime.hardware import HardwareInfo, probe_hardware, visible_devices
@@ -129,8 +135,8 @@ class Substrate(Protocol):
 
 
 def class_of(queue: str) -> str:
-    """Return the resource class of queue `queue`: its name before any `#<model identity>`."""
-    return queue.partition("#")[0]
+    """Return the resource class of queue `queue`: its name before any `#<model identity>` or probe mark."""
+    return queue.partition("#")[0].partition(PROBE_MARK)[0]
 
 
 def worker_command(run_dir: Path, profile_argument: str) -> list[str]:
@@ -144,11 +150,67 @@ def worker_id() -> str:
     return os.environ.get("SLURM_JOB_ID") or str(os.getpid())
 
 
-def mark_ready(run_dir: Path) -> None:
-    """Record that this worker started: it reached the run and its store."""
+@dataclass(frozen=True)
+class ReadyMark:
+    """What a worker's ready mark says: its host's name as a digest, its process id and a `HardwareClass` per queue."""
+
+    host: str
+    pid: int
+    hardware: Mapping[str, HardwareClass]
+
+
+def host_token() -> str:
+    """Return the digest of this host's name: what a ready mark says of where its worker runs."""
+    return hashlib.sha256(socket.gethostname().encode()).hexdigest()
+
+
+def mark_ready(run_dir: Path, hardware: Mapping[str, HardwareClass] | None = None) -> None:
+    """Record that this worker started: it reached the run and its store; `hardware` is its class per resource class."""
     directory = Path(run_dir) / WORKERS_DIR
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / worker_id()).touch()
+    document = {
+        "host": host_token(),
+        "pid": os.getpid(),
+        "hardware": {name: found.model_dump(mode="json") for name, found in (hardware or {}).items()},
+    }
+    (directory / worker_id()).write_bytes(jcs_dumps(document))
+
+
+def read_mark(path: Path) -> ReadyMark | None:
+    """Return the ready mark at `path`; None when it is unreadable or is not a mark (an empty one, or another's)."""
+    try:
+        document = jcs_loads(Path(path).read_bytes())
+        if not isinstance(document, dict):
+            return None
+        return ReadyMark(
+            document["host"],
+            document["pid"],
+            {name: HardwareClass.model_validate(found) for name, found in document["hardware"].items()},
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def workers_on_host(run_dir: Path) -> int:
+    """Return the pool workers of the run alive on this host, this process counted: its ready mark or not."""
+    directory = Path(run_dir) / WORKERS_DIR
+    here, mine = host_token(), os.getpid()
+    others = set()
+    for path in directory.iterdir() if directory.is_dir() else ():
+        mark = read_mark(path)
+        if mark is not None and mark.host == here and mark.pid != mine and _alive(mark.pid):
+            others.add(mark.pid)
+    return len(others) + 1
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 class ExternalWorkers:
@@ -756,7 +818,11 @@ __all__ = [
     "SubstrateError",
     "WorkerHandle",
     "class_of",
+    "ReadyMark",
+    "host_token",
     "mark_ready",
+    "read_mark",
+    "workers_on_host",
     "profile_argument",
     "scale",
     "substrate_of",
