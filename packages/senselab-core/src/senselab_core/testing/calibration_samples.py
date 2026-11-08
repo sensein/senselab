@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from senselab_core.kernel.identity import ModelIdentity
 from senselab_core.runtime.calibration import (
+    Candidate,
     Cotenancy,
     Estimate,
     EstimateSource,
@@ -13,11 +14,16 @@ from senselab_core.runtime.calibration import (
     MemoryFit,
     Observation,
     OomRecord,
+    Prior,
+    ProbeItem,
+    ProbePlan,
     ProbeRef,
     RegimeFactor,
     RequestFit,
     RunCalibration,
+    Stratum,
     StratumBatch,
+    Unplanned,
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings
 from senselab_core.runtime.measures import MeasureEnv, MeasureUnit
@@ -49,6 +55,20 @@ UNIT = MeasureUnit(
     env=ENV,
     service=None,
     hardware=_CUDA,
+)
+_ITEM = ProbeItem(
+    phase="SINGLE", stratum=0, request_jobs=1, jobs=(Candidate(fragment="f1", index=0, key="k", units=3.0),)
+)
+_PLAN = ProbePlan(
+    items=(_ITEM,),
+    strata=(Stratum(index=0, lo=3.0, hi=3.0),),
+    remaining=((),),
+    batched=(0,),
+    unplanned=(),
+    formation="mixed",
+    seconds=90.0,
+    probe_items=50,
+    used_jobs=1,
 )
 _FIT = RequestFit(batch=1, r=0.2, u=0.05, n=6, spread=0.1, lo=2.0, hi=9.0)
 
@@ -118,7 +138,7 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
     register(RegimeFactor, lambda: [RegimeFactor(k=2, rho=1.4, n=6)], invalid_updates=[{"rho": 0}, {"k": 0}])
     register(
         OomRecord,
-        lambda: [OomRecord(resource="device", batch=16, length=30.0, cotenancy=1)],
+        lambda: [OomRecord(resource="device", batch=16, length=30.0, cotenancy=1, budget_bytes=2**36)],
         invalid_updates=[{"resource": "disk"}, {"batch": 0}],
     )
     register(
@@ -142,7 +162,7 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
                 batch=(StratumBatch(stratum=0, batch=4),),
                 device=MemoryFit(resident=1024, m0=0.0, m1=2.5, n=3),
                 regimes=(RegimeFactor(k=2, rho=1.4, n=6),),
-                oom=(OomRecord(resource="device", batch=16, length=30.0, cotenancy=1),),
+                oom=(OomRecord(resource="device", batch=16, length=30.0, cotenancy=1, budget_bytes=2**36),),
                 source=EstimateSource(probe_ids=("p1",), observations=9),
             ),
         ],
@@ -158,7 +178,48 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
         lambda: [LengthProfile(units=(3.0, None, 1.0)), LengthProfile(units=())],
         invalid_updates=[{"units": (-1.0,)}],
     )
+    register_probe_samples(register)
     register_measure_samples(register)
+
+
+def register_probe_samples(register: Register) -> None:
+    """Register the samples of the probe plan types."""
+    register(
+        Candidate,
+        lambda: [
+            Candidate(fragment="f1", index=0, key="k", units=3.0),
+            Candidate(fragment="f1", index=1, key="j", units=None),
+        ],
+        invalid_updates=[{"fragment": ""}, {"units": -1.0}],
+    )
+    register(
+        ProbeItem,
+        lambda: [_ITEM, _ITEM.model_copy(update={"phase": "BATCHED", "request_jobs": 1})],
+        invalid_updates=[{"jobs": ()}, {"request_jobs": 2}],
+    )
+    register(
+        Stratum,
+        lambda: [Stratum(index=0, lo=1.0, hi=4.0), Stratum(index=1, lo=None, hi=None)],
+        invalid_updates=[{"index": -1}],
+    )
+    register(
+        Unplanned,
+        lambda: [
+            Unplanned(phase="SINGLE", stratum=0, reason="covered"),
+            Unplanned(phase="WARMUP", stratum=None, reason="too_few_candidates"),
+        ],
+        invalid_updates=[{"reason": "lazy"}],
+    )
+    register(
+        Prior,
+        lambda: [Prior(), Prior(observations=(_observation(),), records=(RegimeFactor(k=2, rho=1.4, n=6),))],
+        invalid_updates=[{"observations": (1,)}],
+    )
+    register(
+        ProbePlan,
+        lambda: [_PLAN],
+        invalid_updates=[{"probe_items": 0}, {"seconds": -1.0}, {"formation": ""}],
+    )
 
 
 def register_measure_samples(register: Register) -> None:

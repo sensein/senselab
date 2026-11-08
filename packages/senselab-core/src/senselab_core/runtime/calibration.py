@@ -6,14 +6,23 @@ observations of one unit. `HardwareClass` is the normalised report of the hardwa
 `RunCalibration` is the run config's `calibration` section.
 """
 
-from collections.abc import Mapping
-from typing import Annotated, Literal, Self
+import math
+import statistics
+from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from itertools import combinations
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Self
 
 from pydantic import Field, model_validator
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.runtime.execution_settings import CalibrationSettings, Trust
 from senselab_core.runtime.hardware import MIB, HardwareInfo, visible_gpus
+
+if TYPE_CHECKING:
+    from senselab_core.runtime.measures import MeasureUnit
+    from senselab_core.runtime.sizing import Grant
 
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Units = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -232,12 +241,16 @@ class RegimeFactor(Frozen):
 
 
 class OomRecord(Frozen):
-    """A resource fault at batch `batch` and length `length`, under co-tenancy `cotenancy`."""
+    """A resource fault at batch `batch` and length `length`, under co-tenancy `cotenancy`.
+
+    `budget_bytes` is the share of the faulting grant a batch was sized against (`memory_headroom` times the grant).
+    """
 
     resource: Literal["device", "host"]
     batch: Positive
     length: Units
     cotenancy: Positive
+    budget_bytes: Positive
 
 
 class EstimateSource(Frozen):
@@ -313,3 +326,674 @@ class LengthProfile(Frozen):
     """The input units of each waiting job in put order; None for a job whose length is not yet known."""
 
     units: tuple[Units | None, ...]
+
+
+MAD_TO_SIGMA: Final = 1 / statistics.NormalDist().inv_cdf(
+    0.75
+)  # invariant: a median absolute deviation to a normal's σ
+MEDIAN_SE: Final = math.sqrt(math.pi / 2)  # invariant: the standard error of a median relative to that of a mean
+
+ESTIMATE_REASONS: Final = frozenset(
+    {
+        "no_usable_observations",
+        "load_unmeasured",
+        "single_below_min_requests",
+        "single_slope_unmeasured",
+        "item_below_min_requests",
+        "batched_below_min_requests",
+        "device_unmeasured",
+        "device_below_min_requests",
+        "device_fit_nonphysical",
+        "host_unmeasured",
+        "host_below_min_requests",
+        "host_fit_nonphysical",
+    }
+)
+"""The reasons an `Estimate` may carry; none names an identifier."""
+
+PlanReason = Literal[
+    "covered",
+    "too_few_candidates",
+    "over_budget",
+    "over_seconds",
+    "single_formation",
+    "single_unmeasured",
+    "device_unmeasured",
+    "no_lengths",
+]
+"""Why a phase or stratum of a plan is not planned."""
+
+RegimeRecord = OomRecord | RegimeFactor
+
+
+class Candidate(Frozen):
+    """A held job the store would not serve: its fragment and index, its key digest and its input units."""
+
+    fragment: NonEmptyStr
+    index: Count
+    key: NonEmptyStr
+    units: Units | None
+
+
+class ProbeItem(Frozen):
+    """One probe item: `jobs` run `request_jobs` to a request, so a one-job-per-request item has `request_jobs` 1."""
+
+    phase: ProbePhase
+    stratum: Count
+    request_jobs: Positive
+    jobs: Annotated[tuple[Candidate, ...], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def _check_jobs(self) -> Self:
+        if len(self.jobs) % self.request_jobs:
+            raise ValueError(f"{len(self.jobs)} jobs do not divide into requests of {self.request_jobs}")
+        return self
+
+
+class Stratum(Frozen):
+    """The input units `[lo, hi]` of a length stratum (None where its jobs have no length)."""
+
+    index: Count
+    lo: Units | None
+    hi: Units | None
+
+
+class Unplanned(Frozen):
+    """A phase (and stratum, when the phase is per stratum) the plan leaves unplanned, and why."""
+
+    phase: ProbePhase
+    stratum: Count | None
+    reason: PlanReason
+
+
+class Prior(Frozen):
+    """What is already known of a unit: its pooled observations, and its regime and `oom` records, oldest first."""
+
+    observations: tuple[Observation, ...] = ()
+    records: tuple[RegimeRecord, ...] = ()
+
+
+class ProbePlan(Frozen):
+    """The probe items chosen so far, and what is left to choose from.
+
+    `items` are those the plan step added; `used_jobs` counts every job planned across steps; `remaining` holds the
+    unchosen candidates of each stratum in ascending length; `batched` names the strata a batched phase may measure.
+    """
+
+    items: tuple[ProbeItem, ...]
+    strata: tuple[Stratum, ...]
+    remaining: tuple[tuple[Candidate, ...], ...]
+    batched: tuple[Count, ...]
+    unplanned: tuple[Unplanned, ...]
+    formation: NonEmptyStr
+    seconds: Seconds
+    probe_items: Positive
+    used_jobs: Count
+
+
+def _median(values: Sequence[float]) -> float:
+    return statistics.median(sorted(values))
+
+
+def _theil_sen(points: Sequence[tuple[float, float]]) -> tuple[float, float] | None:
+    """Return `(intercept, slope)`: the median of the pairwise slopes, and the median intercept at that slope."""
+    ordered = sorted(points)
+    slopes = [(y2 - y1) / (x2 - x1) for (x1, y1), (x2, y2) in combinations(ordered, 2) if x1 != x2]
+    if not slopes:
+        return None
+    slope = _median(slopes)
+    return _median([y - slope * x for x, y in ordered]), slope
+
+
+def _by_stratum(items: Sequence[Observation]) -> dict[int, list[Observation]]:
+    grouped: dict[int, list[Observation]] = {}
+    for o in items:
+        if o.probe is not None:
+            grouped.setdefault(o.probe.stratum, []).append(o)
+    return grouped
+
+
+@dataclass(frozen=True)
+class _Kept:
+    """The observations that count, split by what they give."""
+
+    single: list[Observation]
+    batched: list[Observation]
+    loads: list[Observation]
+    items: list[float]
+    warm: list[Observation]
+
+
+def _select(observations: Sequence[Observation], hardware: HardwareClass | None, warmup: int) -> _Kept:
+    """Keep `ok` probe requests of the unit's hardware in the probe regime (§5.4 steps 1-2)."""
+    if hardware is None and observations:
+        counts = Counter(o.hardware.model_dump_json() for o in observations)
+        top = max(counts.values())
+        hardware = next(
+            o.hardware
+            for o in sorted(observations, key=lambda o: o.hardware.model_dump_json())
+            if counts[o.hardware.model_dump_json()] == top
+        )
+    bisected = {(o.probe.id, o.item) for o in observations if o.probe is not None and o.outcome == "bisected"}
+    ok = [
+        o
+        for o in observations
+        if o.outcome == "ok"
+        and o.probe is not None
+        and o.hardware == hardware
+        and (o.probe.id, o.item) not in bisected
+        and o.cotenancy.device == 1
+    ]
+    host = min((o.cotenancy.host for o in ok), default=1)
+    kept = [o for o in ok if o.cotenancy.host == host]
+    warm = [o for o in kept if o.load_s is None and o.since_load >= warmup]
+    admitted = {id(o) for o in warm}
+    whole: dict[tuple[str, str], list[Observation]] = {}
+    for o in observations:
+        if o.probe is not None and o.hardware == hardware:
+            whole.setdefault((o.probe.id, o.item), []).append(o)
+    extras: list[float] = []
+    for requests in whole.values():
+        last = [o.item_wall_s for o in requests if o.item_wall_s is not None]
+        if last and all(id(o) in admitted for o in requests):
+            extras.append(max(0.0, last[0] - sum(o.wall_s for o in requests)))
+    return _Kept(
+        single=[o for o in warm if o.batch == 1],
+        batched=[o for o in warm if o.batch > 1],
+        loads=[o for o in kept if o.load_s is not None],
+        items=extras,
+        warm=warm,
+    )
+
+
+def _request_fit(
+    observations: Sequence[Observation], batch: int, units: Callable[[Observation], float], config: CalibrationSettings
+) -> RequestFit | None:
+    """Fit `wall_s = r + u·units` over the strata with `min_requests` observations; None when none has them."""
+    strata = {s: o for s, o in _by_stratum(observations).items() if len(o) >= config.min_requests}
+    points = [(units(o), o.wall_s) for group in strata.values() for o in group]
+    if not points:
+        return None
+    xs = [x for x, _ in points]
+    fit = _theil_sen(points) if len(strata) >= 2 else None  # noqa: PLR2004 - a slope needs two points in length
+    if fit is not None and fit[1] >= 0:
+        r, u = max(fit[0], 0.0), fit[1]
+        predicted = [r + u * x for x in xs]
+        spread = _relative_spread([y - p for (_, y), p in zip(points, predicted, strict=True)], predicted)
+        return RequestFit(batch=batch, r=r, u=u, n=len(points), spread=spread, lo=min(xs), hi=max(xs))
+    return RequestFit(
+        batch=batch, r=_median([y for _, y in points]), u=None, n=len(points), spread=None, lo=min(xs), hi=max(xs)
+    )
+
+
+def _relative_spread(residuals: Sequence[float], predicted: Sequence[float]) -> float | None:
+    centre = _median(predicted)
+    if centre <= 0:
+        return None
+    return MAD_TO_SIGMA * _median([abs(e - _median(residuals)) for e in residuals]) / centre
+
+
+def _memory_fit(
+    observations: Sequence[Observation], kind: Literal["device", "host"], config: CalibrationSettings
+) -> tuple[MemoryFit | None, str]:
+    """Return the memory fit of `kind` over warm requests, and the reason it is None."""
+    rows = [
+        (o, (o.device_peak, o.device_after) if kind == "device" else (o.host_peak, o.host_after))
+        for o in observations
+        if (o.device_peak if kind == "device" else o.host_peak) is not None
+        and (o.device_after if kind == "device" else o.host_after) is not None
+    ]
+    if not rows:
+        return None, f"{kind}_unmeasured"
+    strata: dict[int, list[tuple[Observation, tuple[int | None, int | None]]]] = {}
+    for row in rows:
+        if row[0].probe is not None:
+            strata.setdefault(row[0].probe.stratum, []).append(row)
+    points = [
+        (o.padded_units, float((pa[0] or 0) - (pa[1] or 0)))
+        for group in strata.values()
+        if len(group) >= config.min_requests
+        for o, pa in group
+    ]
+    fit = _theil_sen(points)
+    if fit is None:
+        return None, f"{kind}_below_min_requests"
+    if fit[1] < 0:
+        return None, f"{kind}_fit_nonphysical"
+    resident = min(pa[1] or 0 for _, pa in rows)
+    return MemoryFit(resident=resident, m0=fit[0], m1=fit[1], n=len(points)), ""
+
+
+def memory_batch(fit: MemoryFit, budget_bytes: float, length: float, ceiling: int) -> int:
+    """Return the most jobs of `length` units whose batch peak fits `budget_bytes`, within `[1, ceiling]`."""
+    room = budget_bytes - fit.resident - fit.m0
+    per_job = fit.m1 * length
+    if room < 0:
+        return 1
+    if per_job <= 0:
+        return ceiling
+    return max(1, min(ceiling, math.floor(room / per_job)))
+
+
+def _raised(fit: MemoryFit | None, records: Sequence[OomRecord]) -> MemoryFit | None:
+    """Return `fit` with `m1` raised so that every faulting pair at batch 2 or more is infeasible (§7.4)."""
+    if fit is None:
+        return None
+    m1 = fit.m1
+    for r in records:
+        if r.batch >= 2 and r.length > 0:  # noqa: PLR2004 - a batch of one has no smaller batch to fall back to
+            m1 = max(m1, (r.budget_bytes - fit.resident - fit.m0) / ((r.batch - 1) * r.length))
+    return fit.model_copy(update={"m1": m1})
+
+
+def _batch_choice(
+    single: RequestFit, batched: Sequence[RequestFit], lengths: Mapping[int, float], z: float
+) -> tuple[StratumBatch, ...]:
+    """Return per stratum the best measured batch that beats one beyond the margin, else 1 (§5.4 step 6)."""
+    chosen = []
+    for stratum, length in sorted(lengths.items()):
+        t1 = single.r + (single.u or 0.0) * length
+        best, best_t = 1, t1
+        for fit in sorted(batched, key=lambda f: f.batch):
+            if single.spread is None or fit.spread is None or t1 <= 0:
+                continue
+            t_b = (fit.r + (fit.u or 0.0) * fit.batch * length) / fit.batch
+            sigma = MEDIAN_SE * math.sqrt(single.spread**2 / single.n + fit.spread**2 / fit.n)
+            if (t1 - t_b) / t1 > z * sigma and t_b < best_t:
+                best, best_t = fit.batch, t_b
+        chosen.append(StratumBatch(stratum=stratum, batch=best))
+    return tuple(chosen)
+
+
+def _spread_idx(size: int, count: int) -> list[int]:
+    """Return `count` distinct positions of `size`, spread evenly by rank."""
+    return [(2 * i + 1) * size // (2 * count) for i in range(count)]
+
+
+def _strata(
+    candidates: Sequence[Candidate], count: int
+) -> tuple[tuple[Stratum, ...], tuple[tuple[Candidate, ...], ...]]:
+    """Return one job of each key cut into `count` strata of equal count by input units (one when any has none)."""
+    ordered = sorted(candidates, key=lambda c: (c.units is None, c.units or 0.0, c.fragment, c.index))
+    unique = list({c.key: c for c in reversed(ordered)}.values())
+    unique = sorted(unique, key=lambda c: (c.units is None, c.units or 0.0, c.fragment, c.index))
+    if not unique:
+        return (), ()
+    cut = 1 if any(c.units is None for c in unique) else min(count, len(unique))
+    pools = [tuple(unique[i * len(unique) // cut : (i + 1) * len(unique) // cut]) for i in range(cut)]
+    spans = tuple(
+        Stratum(index=i, lo=p[0].units, hi=p[-1].units if p[-1].units is not None else None)
+        for i, p in enumerate(pools)
+    )
+    return spans, tuple(pools)
+
+
+def _covered(
+    observations: Sequence[Observation], stratum: Stratum, minimum: int, units: Callable[[Observation], float]
+) -> bool:
+    """Whether `minimum` of `observations` lie in the stratum's units."""
+    if stratum.lo is None or stratum.hi is None:
+        return len(observations) >= minimum
+    return sum(stratum.lo <= units(o) <= stratum.hi for o in observations) >= minimum
+
+
+def _reopened(strata: Sequence[Stratum], records: Sequence[OomRecord]) -> set[int]:
+    """Return the strata holding the length of an `oom` record at batch 2 or more (the nearest one beyond them)."""
+    found: set[int] = set()
+    measured = [s for s in strata if s.lo is not None and s.hi is not None]
+    for r in records:
+        if r.batch < 2 or not measured:  # noqa: PLR2004 - a batch of one is re-placed, not re-measured
+            continue
+        inside = [s for s in measured if (s.lo or 0.0) <= r.length <= (s.hi or 0.0)]
+        found.add(
+            (
+                inside
+                or [min(measured, key=lambda s: min(abs(r.length - (s.lo or 0.0)), abs(r.length - (s.hi or 0.0))))]
+            )[0].index
+        )
+    return found
+
+
+def _unplanned(
+    plan: ProbePlan, reason: PlanReason, stratum: int | None = None, phase: ProbePhase = "BATCHED"
+) -> ProbePlan:
+    return plan.model_copy(
+        update={"unplanned": (*plan.unplanned, Unplanned(phase=phase, stratum=stratum, reason=reason))}
+    )
+
+
+def _single_items(
+    free: list[list[Candidate]],
+    wanted: Sequence[int],
+    used: int,
+    config: CalibrationSettings,
+    unplanned: list[Unplanned],
+) -> tuple[list[ProbeItem], int]:
+    """Take the `SINGLE` items of the `wanted` strata from `free` (shortest first); return them and the jobs used."""
+    singles: list[ProbeItem] = []
+    for index in wanted:
+        counts = [(config.min_requests, 1)]
+        if index == len(free) // 2:
+            counts.append((config.min_requests * config.single_item_jobs, config.single_item_jobs))
+        for count, per_item in counts:
+            if len(free[index]) < count:
+                unplanned.append(Unplanned(phase="SINGLE", stratum=index, reason="too_few_candidates"))
+            elif used + count > config.probe_items:
+                unplanned.append(Unplanned(phase="SINGLE", stratum=index, reason="over_budget"))
+            else:
+                used += count
+                taken = [free[index].pop(0) for _ in range(count)]
+                singles += [
+                    ProbeItem(phase="SINGLE", stratum=index, request_jobs=1, jobs=tuple(taken[i : i + per_item]))
+                    for i in range(0, count, per_item)
+                ]
+    return singles, used
+
+
+def _second(first: int, config: CalibrationSettings) -> int | None:
+    """Return `B₂`: the integer nearest √`first`, when `batched_sizes` is 2 and it is at least 2 and not `first`."""
+    second = math.floor(math.sqrt(first) + 0.5)
+    return second if config.batched_sizes == 2 and 2 <= second != first else None  # noqa: PLR2004
+
+
+def _per_set(first: int, config: CalibrationSettings) -> tuple[int, int]:
+    """Return the jobs and the items of one repetition of a stratum's batched sizes."""
+    second = _second(first, config)
+    return (first, 1) if second is None else (first + second, 2)
+
+
+def _supply(first: int, available: int, config: CalibrationSettings) -> int:
+    """Return the largest `B₁` within `first` whose `min_requests` repetitions the `available` jobs supply."""
+    while first >= 2 and config.min_requests * _per_set(first, config)[0] > available:  # noqa: PLR2004
+        first -= 1
+    return first
+
+
+def _batched_items(
+    plan: ProbePlan, sizes: Mapping[int, int], none: ProbePlan, config: CalibrationSettings, jobs: int
+) -> ProbePlan:
+    """Return `none` with the batched items of `sizes` (`B₁` per stratum), their jobs spread by rank."""
+    items: list[ProbeItem] = []
+    remaining = [list(r) for r in plan.remaining]
+    for index, first in sizes.items():
+        second = _second(first, config)
+        widths = (
+            [first] * config.min_requests + [second] * config.min_requests if second else [first] * config.min_requests
+        )
+        picks = _spread_idx(len(remaining[index]), sum(widths))
+        chosen = [remaining[index][i] for i in picks]
+        buckets: list[list[Candidate]] = [[] for _ in widths]
+        slot = 0
+        for job in chosen:
+            while len(buckets[slot % len(widths)]) >= widths[slot % len(widths)]:
+                slot += 1
+            buckets[slot % len(widths)].append(job)
+            slot += 1
+        items += [ProbeItem(phase="BATCHED", stratum=index, request_jobs=len(b), jobs=tuple(b)) for b in buckets]
+        remaining[index] = [c for i, c in enumerate(remaining[index]) if i not in picks]
+    return none.model_copy(
+        update={
+            "items": tuple(items),
+            "batched": tuple(sizes),
+            "remaining": tuple(tuple(r) for r in remaining),
+            "used_jobs": plan.used_jobs + jobs,
+        }
+    )
+
+
+class Probe:
+    """The calibration probe: what to run (`plan`), and what the observations say (`estimate`). Pure; no I/O."""
+
+    @staticmethod
+    def estimate(
+        observations: Sequence[Observation],
+        records: Sequence[RegimeRecord],
+        config: CalibrationSettings,
+        *,
+        hardware: HardwareClass | None = None,
+        unit_kind: UnitKind = "none",
+    ) -> Estimate:
+        """Return the estimate the observations of one unit give (§5.4).
+
+        Only `ok` probe requests of `hardware` (default: the most frequent) in the probe regime count, and cold or
+        reloaded ones give a load and nothing else. `records` are the unit's regime and `oom` records, oldest first;
+        a later regime record of one `k` replaces an earlier one, and an `oom` record raises the memory fit unless
+        other processes shared its device. A record a newer probe has lifted is not passed (the store, which alone
+        knows file times, decides).
+        """
+        kept = _select(observations, hardware, config.warmup_requests)
+        reasons: list[str] = []
+        single = _request_fit(kept.single, 1, lambda o: o.units, config)
+        if single is None:
+            reasons.append("single_below_min_requests" if kept.warm else "no_usable_observations")
+        elif single.u is None:
+            reasons.append("single_slope_unmeasured")
+        sizes = sorted({o.batch for o in kept.batched})
+        fits = [
+            _request_fit([o for o in kept.batched if o.batch == b], b, lambda o: o.padded_units, config) for b in sizes
+        ]
+        batched = tuple(f for f in fits if f is not None)
+        if len(batched) < len(sizes):
+            reasons.append("batched_below_min_requests")
+        if not kept.loads:
+            reasons.append("load_unmeasured")
+        if len(kept.items) < config.min_requests:
+            reasons.append("item_below_min_requests")
+        memory = {}
+        for kind in ("device", "host"):
+            fit, why = _memory_fit(kept.warm, kind, config)
+            memory[kind] = fit
+            if why:
+                reasons.append(why)
+        ooms = tuple(dict.fromkeys(r for r in records if isinstance(r, OomRecord)))
+        probe_regime = [r for r in ooms if r.cotenancy == 1]
+        device = _raised(memory["device"], [r for r in probe_regime if r.resource == "device"])
+        host = _raised(memory["host"], [r for r in probe_regime if r.resource == "host"])
+        lengths = {
+            s: _median([o.units for o in group])
+            for s, group in _by_stratum(kept.single).items()
+            if len(group) >= config.min_requests
+        }
+        regimes = {r.k: r for r in records if isinstance(r, RegimeFactor)}
+        return Estimate(
+            status="measured" if single is not None else "unmeasured",
+            reasons=tuple(reasons),
+            unit_kind=unit_kind,
+            load_s=_median([o.load_s or 0.0 for o in kept.loads]) if kept.loads else None,
+            load_n=len(kept.loads),
+            item_s=_median(kept.items) if len(kept.items) >= config.min_requests else None,
+            item_n=len(kept.items),
+            single=single,
+            batched=batched,
+            batch=() if single is None else _batch_choice(single, batched, lengths, config.confidence),
+            device=device,
+            host=host,
+            regimes=tuple(sorted(regimes.values(), key=lambda r: r.k)),
+            oom=ooms,
+            source=EstimateSource(
+                probe_ids=tuple(sorted({o.probe.id for o in kept.warm + kept.loads if o.probe is not None})),
+                observations=len(kept.warm) + len(kept.loads),
+            ),
+        )
+
+    @staticmethod
+    def estimator(
+        config: CalibrationSettings, records: Sequence[RegimeRecord] = (), unit_kind: UnitKind = "none"
+    ) -> Callable[["MeasureUnit", Sequence[Observation]], Estimate]:
+        """Return `Probe.estimate` as `MeasureSource`'s `estimate=` callable: `(unit, observations) -> Estimate`.
+
+        The unit supplies the hardware observations must match.
+        """
+        return lambda unit, observations: Probe.estimate(
+            observations, records, config, hardware=unit.hardware, unit_kind=unit_kind
+        )
+
+    @staticmethod
+    def plan(  # noqa: PLR0913 - the protocol's inputs (§4.1)
+        unit: "MeasureUnit",
+        candidates: Sequence[Candidate],
+        prior: Prior,
+        grant: "Grant",
+        config: CalibrationSettings,
+        formation: str,
+        seconds: float,
+    ) -> ProbePlan:
+        """Return the `WARMUP` and `SINGLE` items of a probe over `candidates`, and what a batched phase may use.
+
+        `candidates` are the held jobs the store would not serve. One job of each key is kept, the rest cut into
+        `length_strata` strata of equal count, and each (phase, stratum) `prior` already covers with `min_requests`
+        steady observations is left out, a batched stratum an `oom` record of `prior` re-opens excepted. `seconds`
+        is the warm-work budget the plan carries for the Pool. `grant` is the batched phase's, unused here.
+        """
+        del grant
+        kept = _select(prior.observations, unit.hardware, config.warmup_requests)
+        strata, pools = _strata(candidates, config.length_strata)
+        plan = ProbePlan(
+            items=(),
+            strata=strata,
+            remaining=pools,
+            batched=(),
+            unplanned=(),
+            formation=formation,
+            seconds=seconds,
+            probe_items=config.probe_items,
+            used_jobs=0,
+        )
+        if not strata:
+            return plan
+        middle = len(strata) // 2
+        unplanned: list[Unplanned] = []
+        wanted = []
+        for st in strata:
+            covered = _covered(kept.single, st, config.min_requests, lambda o: o.units)
+            if st.index == middle:
+                covered = covered and len(kept.items) >= config.min_requests
+            if covered:
+                unplanned.append(Unplanned(phase="SINGLE", stratum=st.index, reason="covered"))
+            else:
+                wanted.append(st.index)
+        reopened = _reopened(strata, [r for r in prior.records if isinstance(r, OomRecord)])
+        batched = tuple(
+            st.index
+            for st in strata
+            if formation != "single"
+            and (
+                st.index in reopened
+                or not _covered(kept.batched, st, config.min_requests, lambda o: o.padded_units / o.batch)
+            )
+        )
+        plan = plan.model_copy(update={"batched": batched})
+        free = [list(p) for p in pools]
+        warmup = config.warmup_requests
+        if warmup > len(free[0]) or warmup > config.probe_items:
+            wanted = []
+            unplanned.append(Unplanned(phase="WARMUP", stratum=None, reason="too_few_candidates"))
+            warmups: list[ProbeItem] = []
+        else:
+            warmups = [
+                ProbeItem(phase="WARMUP", stratum=0, request_jobs=1, jobs=(free[0].pop(0),)) for _ in range(warmup)
+            ]
+        singles, used = _single_items(free, wanted, warmup, config, unplanned)
+        if not singles:
+            return plan.model_copy(update={"unplanned": tuple(unplanned)})
+        return plan.model_copy(
+            update={
+                "items": (*warmups, *singles),
+                "remaining": tuple(tuple(f) for f in free),
+                "unplanned": tuple(unplanned),
+                "used_jobs": used,
+            }
+        )
+
+    @staticmethod
+    def plan_batched(  # noqa: PLR0913 - the batched phase's inputs (§4.3)
+        plan: ProbePlan,
+        single_estimate: Estimate,
+        grant: "Grant",
+        config: CalibrationSettings,
+        seconds_left: float,
+        *,
+        memory_headroom: float,
+    ) -> ProbePlan:
+        """Return `plan` with the `BATCHED` items its `SINGLE` estimate allows (§4.3).
+
+        `B₁` per stratum is the least of the memory batch at its longest candidate under `memory_headroom` of the
+        grant, the batch the item budget leaves, the batch whose items the single fit's upper prediction fits in
+        `seconds_left`, `grant.quantum_items`, and what the stratum's remaining candidates supply. `B₂` is the integer
+        nearest √B₁ when `batched_sizes` is 2. The result's `items` are the batched ones only.
+        """
+        none = plan.model_copy(update={"items": (), "batched": ()})
+        single, device = single_estimate.single, single_estimate.device
+        blocked: PlanReason | None = (
+            "single_formation"
+            if plan.formation == "single"
+            else "single_unmeasured"
+            if single is None
+            else "device_unmeasured"
+            if device is None or grant.memory_bytes is None
+            else None
+        )
+        if blocked is not None or single is None or device is None or grant.memory_bytes is None:
+            return _unplanned(none, blocked or "device_unmeasured")
+        spans = {st.index: st for st in plan.strata}
+        caps: dict[int, int] = {}
+        times: dict[int, float] = {}
+        for index in plan.batched:
+            hi = spans[index].hi
+            if hi is None:
+                none = _unplanned(none, "no_lengths", index)
+                continue
+            budget = memory_headroom * grant.memory_bytes
+            caps[index] = memory_batch(device, budget, hi, grant.quantum_items)
+            times[index] = (single.r + (single.u or 0.0) * hi) * (1 + config.confidence * (single.spread or 0.0))
+        left = plan.probe_items - plan.used_jobs
+        item_s = single_estimate.item_s or 0.0
+        supplied = fits_jobs = False
+        for top in range(max(caps.values(), default=0), 1, -1):
+            sizes = {i: _supply(min(c, top), len(plan.remaining[i]), config) for i, c in caps.items()}
+            sizes = {i: b for i, b in sizes.items() if b >= 2}  # noqa: PLR2004 - a batch of one is the single phase
+            if not sizes:
+                continue
+            supplied = True
+            jobs = sum(config.min_requests * _per_set(b, config)[0] for b in sizes.values())
+            wall = sum(
+                config.min_requests * (_per_set(b, config)[0] * times[i] + item_s * _per_set(b, config)[1])
+                for i, b in sizes.items()
+            )
+            fits_jobs = fits_jobs or jobs <= left
+            if jobs <= left and wall <= seconds_left:
+                return _batched_items(plan, sizes, none, config, jobs)
+        if not caps:
+            return none
+        if not supplied:
+            return _unplanned(none, "too_few_candidates")
+        return _unplanned(none, "over_seconds" if fits_jobs else "over_budget")
+
+    @staticmethod
+    def replace_served(plan: ProbePlan, served_item: ProbeItem) -> ProbePlan:
+        """Return `plan` with `served_item` (a probe request that came back `served`) replaced from its stratum.
+
+        The replacement has the item's phase, stratum and shape: the shortest remaining candidates for a `WARMUP` or
+        `SINGLE` item, candidates spread by rank for a `BATCHED` one. With too few left the item is dropped and the
+        plan says so.
+
+        Raises:
+            ValueError: `served_item` is not an item of `plan`.
+        """
+        if served_item not in plan.items:
+            raise ValueError("the served item is not an item of the plan")
+        at = plan.items.index(served_item)
+        pool = list(plan.remaining[served_item.stratum])
+        need = len(served_item.jobs)
+        others = (*plan.items[:at], *plan.items[at + 1 :])
+        if len(pool) < need:
+            dropped = _unplanned(plan, "too_few_candidates", served_item.stratum, served_item.phase)
+            return dropped.model_copy(update={"items": others})
+        picks = list(range(need)) if served_item.phase != "BATCHED" else _spread_idx(len(pool), need)
+        jobs = tuple(pool[i] for i in picks)
+        pool = [c for i, c in enumerate(pool) if i not in picks]
+        remaining = tuple(tuple(pool) if i == served_item.stratum else r for i, r in enumerate(plan.remaining))
+        item = served_item.model_copy(update={"jobs": jobs})
+        return plan.model_copy(
+            update={"items": (*plan.items[:at], item, *plan.items[at + 1 :]), "remaining": remaining}
+        )
