@@ -73,6 +73,9 @@ The 2.x PR template (`.github/PULL_REQUEST_TEMPLATE/2x.md`) carries this checkli
 - [ ] Every new task, backend or profile is declared, so contract tests cover it (P-30).
 - [ ] The PR records the implementer and reviewer models; the reviewer ran in a fresh context on a different model, or both are the top tier on a kernel item and the PR says so (P-40).
 - [ ] The ledger mark is current for any 1.x area touched (P-39).
+- [ ] No user scenario in [`user-scenarios.md`](user-scenarios.md) that the change's area touches is broken; the
+  PR names the scenarios checked, and an unchecked one is recorded as unchecked, never assumed to pass. A break
+  is blocking unless the owner amends the scenario (added 2026-11-08, owner).
 
 ### Size budgets
 
