@@ -1,22 +1,24 @@
 """`ResultStore.admits`: the one servable predicate, shared by `execute`'s serving and by probing."""
 
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from planted_objects_fixture import store_context, store_key
+from planted_objects_fixture import entry_dir, rewrite_json, store_context, store_key, unseal
 from senselab_core.kernel.declare import BackendSpec, Env, TaskSpec
 from senselab_core.kernel.identity import ReusePolicy, member_key
+from senselab_core.kernel.license import License
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.executor import JobRef
 from senselab_core.runtime.execution.job import Job, _serve
 from senselab_core.runtime.fake_backend import EchoParams
 from senselab_core.runtime.keys import Call, Placement
 from senselab_core.runtime.licenses import LicensePolicy, license_record
-from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.store import ResultStore, StoreFormatRetired
 
 TASK = TaskSpec(
     name="servable.t", version="1", kind="transform", inputs={"text": "json"}, outputs={"v": "json"}, params=EchoParams
@@ -44,8 +46,9 @@ def _ctx(platform: str = "linux", device: str = "cpu", licence: Any = MIT) -> An
 
 
 def _admits(store: ResultStore, context: Any, policy: ReusePolicy, run: RunConfig) -> Any:  # noqa: ANN401
+    """`admits` for the default key under `policy`; `policy` replaces `run.reuse`."""
     key = store_key()
-    return store.admits(key.digest(), context, policy, run, backend=key.backend)
+    return store.admits(key.digest(), context, replace(run, reuse=policy), backend=key.backend)
 
 
 @pytest.mark.logic
@@ -79,10 +82,10 @@ def test_an_unlicensed_entry_is_not_admitted_when_hits_require_a_license(tmp_pat
     assert _admits(store, bare, ReusePolicy.EXACT, RunConfig(licenses=LicensePolicy())) is None
     assert _admits(store, bare, ReusePolicy.EXACT, RunConfig()) is None
     assert _admits(store, bare, ReusePolicy.EXACT, RunConfig(licenses=LicensePolicy(allow_unlicensed_hits=True)))
-    store.put(store_key(task="other"), {"v": 1}, _ctx(licence=NC))
-    refusing = RunConfig(licenses=LicensePolicy(refuse=frozenset({"CC-BY-NC-4.0"})))
     other = store_key(task="other")
-    assert store.admits(other.digest(), _ctx(licence=NC), "exact", refusing, backend="hf") is None
+    store.put(other, {"v": 1}, _ctx(licence=NC))
+    refusing = RunConfig(reuse=ReusePolicy.EXACT, licenses=LicensePolicy(refuse=frozenset({"CC-BY-NC-4.0"})))
+    assert store.admits(other.digest(), _ctx(licence=NC), refusing, backend="hf") is None
 
 
 @pytest.mark.logic
@@ -97,39 +100,130 @@ def test_a_verify_sampled_entry_is_not_admitted(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_admits_reads_no_outputs(tmp_path: Path) -> None:
-    """A planted unreadable result member does not affect `admits`, which reads `context.json` only."""
+def test_the_policy_is_the_runs_and_a_run_is_required(tmp_path: Path) -> None:
+    """`admits` reads `run.reuse` and takes no second policy or absent run."""
+    store, key = ResultStore(tmp_path), store_key()
+    store.put(key, {"v": 1}, _ctx(platform="linux"))
+    assert store.admits(key.digest(), _ctx(platform="macos"), RunConfig(reuse=ReusePolicy.TOLERANT), backend="hf")
+    assert store.admits(key.digest(), _ctx(platform="macos"), RunConfig(reuse=ReusePolicy.EXACT), backend="hf") is None
+    with pytest.raises(TypeError):
+        store.admits(key.digest(), _ctx(), "exact", None, backend="hf")  # type: ignore[misc, arg-type]
+
+
+def _plant(tmp_path: Path, context: Any, fault: str) -> None:  # noqa: ANN401
+    entry = entry_dir(tmp_path, store_key(), context)
+    match fault:
+        case "context_missing":
+            unseal(entry)
+            (entry / "context.json").unlink()
+        case "result_corrupt":
+            unseal(entry)
+            (entry / "result.json").write_bytes(b"not json")
+        case "retired_context":
+            rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@1.0"))
+        case "retired_result":
+            rewrite_json(entry / "result.json", lambda r: r.update(format="result@1.0"))
+
+
+@pytest.mark.logic
+def test_a_corrupt_result_is_admitted_until_a_read_finds_it(tmp_path: Path) -> None:
+    """A probe reads contexts only: it admits an entry whose result is corrupt; serving finds and sets it aside."""
     store, key = ResultStore(tmp_path), store_key()
     store.put(key, {"v": 1}, _ctx())
-    (member,) = tmp_path.rglob("result.json")
-    member.chmod(0o600)
-    member.write_bytes(b"not json")
-    assert _admits(store, _ctx(), ReusePolicy.EXACT, RunConfig()) is not None
+    _plant(tmp_path, _ctx(), "result_corrupt")
+    run = RunConfig()
+    assert store.admits(key.digest(), _ctx(), run, backend="hf") is not None
+    assert store.fetch(key, _ctx(), run) == (None, None)
+    assert store.admits(key.digest(), _ctx(), run, backend="hf") is None
+
+
+@pytest.mark.logic
+def test_serving_falls_to_the_entry_admits_then_selects(tmp_path: Path) -> None:
+    """A corrupt exact entry is set aside, and the next admitted entry is the one served and the one admitted."""
+    store, key = ResultStore(tmp_path), store_key()
+    store.put(key, {"v": 1}, _ctx(platform="linux"))
+    store.put(key, {"v": 2}, _ctx(platform="macos"))
+    _plant(tmp_path, _ctx(platform="macos"), "result_corrupt")
+    run = RunConfig(reuse=ReusePolicy.TOLERANT)
+    hit, verdict = store.fetch(key, _ctx(platform="macos"), run)
+    assert hit is not None and hit.context.platform == "linux" and verdict is not None and verdict.value == "serve"
+    admitted = store.admits(key.digest(), _ctx(platform="macos"), run, backend="hf")
+    assert admitted is not None and admitted.fingerprint == hit.context.fingerprint()
+
+
+@pytest.mark.logic
+def test_admits_raises_for_a_key_holding_only_a_retired_entry(tmp_path: Path) -> None:
+    """A probe of a key whose only entry is retired raises what `get` raises."""
+    store, key = ResultStore(tmp_path), store_key()
+    store.put(key, {"v": 1}, _ctx())
+    _plant(tmp_path, _ctx(), "retired_context")
+    with pytest.raises(StoreFormatRetired):
+        store.get(key, _ctx(), ReusePolicy.EXACT)
+    with pytest.raises(StoreFormatRetired):
+        store.admits(key.digest(), _ctx(), RunConfig(), backend="hf")
+
+
+def _outcome(call: Any, fingerprint: Any) -> Any:  # noqa: ANN401
+    try:
+        got = call()
+    except StoreFormatRetired:
+        return "retired"
+    return None if got is None else fingerprint(got)
+
+
+POOL = tuple((p, d) for p in ("linux", "macos") for d in ("cpu", "mps"))
+LICENCES = st.sampled_from([None, MIT, NC])
 
 
 @pytest.mark.logic
 @settings(max_examples=60, deadline=None)
 @given(
-    stored=st.sets(
-        st.tuples(
-            st.sampled_from(["linux", "macos"]), st.sampled_from(["cpu", "mps"]), st.sampled_from([None, MIT, NC])
-        ),
-        max_size=4,
-    ),
-    current=st.tuples(
-        st.sampled_from(["linux", "macos"]), st.sampled_from(["cpu", "mps"]), st.sampled_from([None, MIT, NC])
-    ),
+    stored=st.dictionaries(st.sampled_from(POOL), LICENCES, max_size=4),
+    current=st.tuples(st.sampled_from(POOL), LICENCES),
+    members=st.sets(st.sampled_from(POOL)),
+    fault=st.sampled_from(["none", "context_missing", "result_corrupt", "retired_context", "retired_result"]),
+    victim=st.integers(min_value=0, max_value=3),
     policy=st.sampled_from(list(ReusePolicy)),
     verify=st.sampled_from([0.0, 0.5, 1.0]),
     licenses=st.sampled_from(POLICIES),
 )
-def test_admits_agrees_with_serve(stored: Any, current: Any, policy: ReusePolicy, verify: float, licenses: Any) -> None:  # noqa: ANN401
-    """For any store state and context, `admits` is not None exactly when `_serve` serves."""
+def test_admits_agrees_with_serve(  # noqa: PLR0913
+    stored: dict[tuple[str, str], License | None],
+    current: tuple[tuple[str, str], License | None],
+    members: set[tuple[str, str]],
+    fault: str,
+    victim: int,
+    policy: ReusePolicy,
+    verify: float,
+    licenses: Any,  # noqa: ANN401
+) -> None:
+    """`admits` selects the entry `_serve` serves, or both refuse, or both raise, over every store state.
+
+    An integrity failure of a result member no read has found yet is the one exception: it is admitted until
+    served once (a retired result member stays admitted, as a probe reads contexts only).
+    """
     with tempfile.TemporaryDirectory() as root:
-        store, key = ResultStore(Path(root)), store_key()
-        for platform, device, licence in sorted(stored, key=repr):
-            store.put(key, {"v": 1}, _ctx(platform, device, licence))
+        contexts = {k: _ctx(*k, licence) for k, licence in stored.items()}
+        numerics = [_ctx(*k) for k in members]
+        table = {"hf": {"c": frozenset(member_key(c.numerics, c.env_lock) for c in numerics)}} if members else {}
+        store, key = ResultStore(Path(root), equivalence=table), store_key()
+        for c in contexts.values():
+            store.put(key, {"v": 1}, c)
+        if contexts and fault != "none":
+            _plant(Path(root), list(contexts.values())[victim % len(contexts)], fault)
         run = RunConfig(reuse=policy, verify=verify, licenses=licenses)
-        context = _ctx(*current)
-        served, _ = _serve(store, key, context, run, JOB, PLACEMENT)
-        assert (served is not None) == (_admits(store, context, policy, run) is not None)
+        context = _ctx(*current[0], current[1])
+
+        def probe() -> Any:  # noqa: ANN401
+            return _outcome(lambda: store.admits(key.digest(), context, run, backend="hf"), lambda e: e.fingerprint)
+
+        def serve() -> Any:  # noqa: ANN401
+            return _outcome(
+                lambda: _serve(store, key, context, run, JOB, PLACEMENT)[0], lambda r: r.context.fingerprint()
+            )
+
+        before, first = probe(), serve()
+        if fault not in {"result_corrupt", "retired_result"}:
+            assert before == first
+        if fault != "retired_result":
+            assert probe() == serve()

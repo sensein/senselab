@@ -79,7 +79,7 @@ from senselab_core.kernel.identity import (
 from senselab_core.runtime.equivalence import EQUIVALENCE, EquivalenceEvidence
 from senselab_core.runtime.equivalence import split as split_class
 from senselab_core.runtime.provenance import ProvStore
-from senselab_core.runtime.servable import Servable, StoredContext, servable
+from senselab_core.runtime.servable import Servable, StoredContext, choose
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
     STAGING_DIR_MODE,
@@ -1035,12 +1035,9 @@ class ResultStore:
         """Return a committed result for `key` whose context `policy` admits for `context`, or None.
 
         With `record`, a hit adds its reuse activity; without, a caller that serves the hit calls `record_reuse`.
-
-        `policy` is `DEFAULT_REUSE_POLICY` when the caller names none.
-
-        Candidates are tried narrowest admitting policy first, the current fingerprint first among
-        `exact`, then by fingerprint. A candidate that fails verification is quarantined (or, if the
-        store cannot be written, skipped) and the next one tried.
+        `policy` is `DEFAULT_REUSE_POLICY` when the caller names none. Candidates are tried narrowest admitting
+        policy first, the current fingerprint first among `exact`, then by fingerprint. A candidate that fails
+        verification is quarantined (or, if the store cannot be written, skipped) and the next one tried.
 
         Raises:
             ValueError: if `policy` is not a `ReusePolicy` value.
@@ -1052,38 +1049,64 @@ class ResultStore:
         """
         policy = ReusePolicy(policy)
         started = datetime.now(timezone.utc)
-        hit = self._within(key.digest(), lambda base: self._get_in(key, context, policy, base))
+        hit, _ = self._fetch(key, context, policy, None)
         if hit is not None and record:
             self.record_reuse(key, context, hit, started)
         return hit
 
+    def fetch(
+        self, key: LogicalKey, context: ExecutionContext, run: "RunConfig"
+    ) -> tuple[StoredResult | None, Servable | None]:
+        """Return the result `admits` selects for `run` and what `run` does with it; `(None, None)` when none."""
+        return self._fetch(key, context, run.reuse, run)
+
     def admits(
-        self,
-        key_digest: str,
-        context: ExecutionContext,
-        policy: ReusePolicy | str,
-        run: "RunConfig | None",
-        *,
-        backend: str,
+        self, key_digest: str, context: ExecutionContext, run: "RunConfig", *, backend: str
     ) -> StoredContext | None:
-        """Return the entry `get` would pick under `policy` if `run` would serve it for `context`, or None.
+        """Return the entry under `key_digest` that `run` would serve for `context`, or None.
 
-        `servable` decides: the env license is accepted and verify sampling would not recompute the entry. Only
-        `context.json` is read, and no output decoded; without a run, only the reuse policy decides.
-
-        Raises:
-            ValueError: if `policy` is not a `ReusePolicy` value.
-            StoreUnavailable: an entry could not be read.
+        `fetch` selects the same entry. Only `context.json` is read, so an entry whose result member is corrupt is
+        admitted until a read finds it. Raises what `get` raises.
         """
-        policy = ReusePolicy(policy)
-
-        def first(base: StorageDir) -> StoredContext | None:
-            for rank, _, name, stored in self._ranked(base, context, policy, backend, [])[:1]:
-                entry = StoredContext(name, stored, _POLICY_ORDER[rank])
-                return entry if servable(run, key_digest, entry, context) is Servable.SERVE else None
+        retired: list[StoreFormatRetired] = []
+        got = self._within(
+            key_digest,
+            lambda base: choose(self._ranked(base, context, run.reuse, backend, retired), run, key_digest, context, ()),
+        )
+        if got is None:
+            if retired:
+                raise retired[0]
             return None
+        return got[0] if got[1] is Servable.SERVE else None
 
-        return self._within(key_digest, first)
+    def _fetch(
+        self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy, run: "RunConfig | None"
+    ) -> tuple[StoredResult | None, Servable | None]:
+        d = key.digest()
+        retired: list[StoreFormatRetired] = []
+        skipped: set[str] = set()
+
+        def attempt(base_dir: StorageDir) -> tuple[StoredResult | None, Servable | None]:
+            base = base_dir.path
+            while got := choose(
+                self._ranked(base_dir, context, policy, key.backend, retired), run, d, context, skipped
+            ):
+                entry, verdict = got
+                name = entry.fingerprint
+                if verdict is Servable.REFUSE:
+                    return None, verdict
+                one = functools.partial(_read_result, base / name, digest=d, fingerprint=name, context=entry.context)
+                if (read := self._readable(base, d, name, one, retired)) is None:
+                    skipped.add(name)
+                    continue
+                self._reseal(base_dir, name)
+                return StoredResult(read[1], read[0], read[2], entry.policy_used), verdict
+            return None, None
+
+        out = self._within(d, attempt) or (None, None)
+        if out[1] is None and retired:
+            raise retired[0]
+        return out
 
     def _within(self, d: str, use: Callable[[StorageDir], T]) -> T | None:
         """Return `use(base)` for the directory of key digest `d`, or None when the key reads as absent."""
@@ -1138,12 +1161,12 @@ class ResultStore:
         policy: ReusePolicy,
         backend: str,
         retired: list[StoreFormatRetired],
-    ) -> list[tuple[int, bool, str, ExecutionContext]]:
-        """Return the key's entries `policy` admits as (rank, not current, fingerprint, context), narrowest first."""
+    ) -> list[StoredContext]:
+        """Return the key's entries `policy` admits, narrowest policy first, the current fingerprint first."""
         base, d = base_dir.path, base_dir.path.name
         allowed = _POLICY_ORDER[: _POLICY_ORDER.index(policy) + 1]
         current = context.fingerprint()
-        candidates: list[tuple[int, bool, str, ExecutionContext]] = []
+        ranked: list[tuple[int, bool, str, ExecutionContext]] = []
         for name in _fingerprints(base_dir):
             stored = self._readable(base, d, name, functools.partial(_read_context, base / name, name), retired)
             if stored is None:
@@ -1157,33 +1180,10 @@ class ResultStore:
                 None,
             )
             if rank is not None:
-                candidates.append((rank, name != current, name, stored))
-        return sorted(candidates, key=lambda c: c[:3])
-
-    def _get_in(
-        self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy, base_dir: StorageDir
-    ) -> StoredResult | None:
-        d, base = key.digest(), base_dir.path
-        retired: list[StoreFormatRetired] = []
-        candidates = self._ranked(base_dir, context, policy, key.backend, retired)
-        for rank, _, name, read_context in candidates:
-            read = self._readable(
-                base,
-                d,
-                name,
-                lambda: _read_result(base / name, digest=d, fingerprint=name, context=read_context),
-                retired,
-            )
-            if read is None:
-                continue
-            identity, outputs, stored = read
-            self._reseal(base_dir, name)
-            return StoredResult(
-                outputs=outputs, output_identity=identity, context=stored, policy_used=_POLICY_ORDER[rank]
-            )
-        if retired:
-            raise retired[0]
-        return None
+                ranked.append((rank, name != current, name, stored))
+        return [
+            StoredContext(name, stored, allowed[rank]) for rank, _, name, stored in sorted(ranked, key=lambda c: c[:3])
+        ]
 
     def _readable(
         self, base: Path, d: str, name: str, read: Callable[[], T], retired: list[StoreFormatRetired]

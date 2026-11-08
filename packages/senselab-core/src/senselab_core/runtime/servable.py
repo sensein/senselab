@@ -1,9 +1,6 @@
-"""The servable rule: what a run does with a stored entry its reuse policy admitted.
+"""The servable rule: what a run does with a stored entry its reuse policy admitted."""
 
-`ResultStore.admits` (probing) and `execute` (serving) both apply `servable`, so the license and verify-sampling
-rules exist once.
-"""
-
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -33,27 +30,37 @@ class Servable(Enum):
     REFUSE = "refuse"
 
 
-def license_admits(run: "RunConfig | None", recorded: License | None) -> bool:
+def license_admits(run: "RunConfig", recorded: License | None) -> bool:
     """Whether a result whose context records env license `recorded` may be served under `run.licenses`.
 
     A result whose context records no env license is refused unless `run.licenses` allows unlicensed hits.
     """
-    licenses = None if run is None else run.licenses
     if recorded is None:
-        return licenses is not None and licenses.allow_unlicensed_hits
-    return licenses is None or licenses.refusal("", recorded) is None
+        return run.licenses is not None and run.licenses.allow_unlicensed_hits
+    return run.licenses is None or run.licenses.refusal("", recorded) is None
 
 
-def servable(run: "RunConfig | None", key_digest: str, stored: StoredContext, current: ExecutionContext) -> Servable:
-    """Return what `run` does with the entry `stored` for `current`: the license rule, then verify sampling.
-
-    This is the one rule serving (`execute`) and probing (`ResultStore.admits`) share. Without a run, any entry
-    the reuse policy admitted is served.
-    """
-    if run is None:
-        return Servable.SERVE
+def servable(run: "RunConfig", key_digest: str, stored: StoredContext, current: ExecutionContext) -> Servable:
+    """Return what `run` does with the entry `stored` for `current`: the license rule, then verify sampling."""
     if not license_admits(run, stored.context.env_license):
         return Servable.REFUSE
     if stored.policy_used is not ReusePolicy.EXACT and sampled(run.verify, key_digest, stored.context, current):
         return Servable.VERIFY
     return Servable.SERVE
+
+
+def choose(
+    ranked: Sequence[StoredContext],
+    run: "RunConfig | None",
+    key_digest: str,
+    current: ExecutionContext,
+    exclude: Collection[str],
+) -> tuple[StoredContext, Servable] | None:
+    """Return the first of `ranked` not in `exclude` with what `run` does with it, or None.
+
+    With no run (`ResultStore.get`) the reuse policy alone decides, and the entry is served.
+    """
+    for entry in ranked:
+        if entry.fingerprint not in exclude:
+            return entry, Servable.SERVE if run is None else servable(run, key_digest, entry, current)
+    return None

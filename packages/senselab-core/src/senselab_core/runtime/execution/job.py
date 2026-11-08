@@ -58,7 +58,7 @@ from senselab_core.runtime.keys import Call, Placement, build_key, request_compo
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.servable import Servable, StoredContext, license_admits, servable
+from senselab_core.runtime.servable import Servable, license_admits
 from senselab_core.runtime.store import ResultStore, StoredResult
 from senselab_core.runtime.store import output_identity as store_output_identity
 from senselab_core.runtime.vllm_server import attested_fields, server_launch, server_variables
@@ -345,14 +345,11 @@ def _serve(  # noqa: PLR0913 - the job's store, key, context and run, and what s
 ) -> tuple[Result | None, StoredResult | None]:
     """Return the job's result served from `store`, recording the reuse, or None and the sampled hit to verify."""
     looked = datetime.now(timezone.utc)
-    hit = store.get(key, context, run.reuse, record=False)
-    if hit is None:
+    hit, verdict = store.fetch(key, context, run)
+    if hit is None or verdict is Servable.REFUSE:
         return None, None
-    match servable(run, key.digest(), StoredContext(hit.context.fingerprint(), hit.context, hit.policy_used), context):
-        case Servable.REFUSE:
-            return None, None
-        case Servable.VERIFY:
-            return None, hit
+    if verdict is Servable.VERIFY:
+        return None, hit
     store.record_reuse(key, context, hit, looked, reuse_attributes(run, hit), _linked(job))
     return served(job, hit, key, placement), None
 
