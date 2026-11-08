@@ -522,7 +522,8 @@ def host_secret(
 
     Linux's boot id (`boot_id`), else macOS's boot session uuid (`run`), else a random value kept in a file only this
     user reads, in the host's temporary directory. The file is written complete under a temporary name and `link`ed
-    into place, so no reader sees it empty; a stale empty file is replaced.
+    into place, so no reader sees it empty and none is ever replaced; a stale empty file is passed over for the next
+    name, `<name>.<n>`, which every process tries in the same order.
     """
     with contextlib.suppress(OSError):
         if found := boot_id():
@@ -531,20 +532,29 @@ def host_secret(
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             if found := run(["sysctl", "-n", "kern.bootsessionuuid"]).strip():
                 return found
-    path = Path(tempfile.gettempdir()) / f"senselab-host-{os.getuid()}"
+    base = Path(tempfile.gettempdir()) / f"senselab-host-{os.getuid()}"
+    path, generation = base, 0
+    while True:
+        if not path.exists():
+            _place_secret(path, link)
+        with contextlib.suppress(FileNotFoundError):
+            if found := path.read_text().strip():
+                return found
+        generation += 1
+        path = base.with_name(f"{base.name}.{generation}")
+
+
+def _place_secret(path: Path, link: Callable[[Path, Path], None]) -> None:
+    """Write a fresh secret under a temporary name and `link` it to `path`, unless another process got there first."""
     staged = path.with_name(temporary_name(path.name))
     fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _PRIVATE)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(secrets.token_hex(_SECRET_BYTES).encode())
-        try:
+        with contextlib.suppress(FileExistsError):
             link(staged, path)
-        except FileExistsError:
-            if not path.read_text().strip():
-                staged.replace(path)
     finally:
         staged.unlink(missing_ok=True)
-    return path.read_text().strip()
 
 
 @functools.cache

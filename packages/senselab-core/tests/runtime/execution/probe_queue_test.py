@@ -161,12 +161,24 @@ def test_host_secret_is_created_once_under_a_race(tmp_path: Path, monkeypatch: p
 
 
 @pytest.mark.logic
-def test_a_stale_empty_secret_file_is_replaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A file a crashed writer left empty is not a secret: it is replaced, not shared as the digest of nothing."""
+def test_a_stale_empty_secret_file_is_passed_over(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty file is no secret; it stays as it is, so two writers that both read it empty cannot each replace it.
+
+    A rival that links the next name while this process writes there wins, and both read its one value.
+    """
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    (tmp_path / f"senselab-host-{os.getuid()}").write_bytes(b"")
-    found = host_secret(run=lambda _: "", boot_id=_no_boot_id)
-    assert found and host_secret(run=lambda _: "", boot_id=_no_boot_id) == found
+    stale = tmp_path / f"senselab-host-{os.getuid()}"
+    stale.write_bytes(b"")
+    inode = stale.stat().st_ino
+    rival: list[str] = []
+
+    def link(staged: Path, path: Path) -> None:
+        rival.append(host_secret(run=lambda _: "", boot_id=_no_boot_id))
+        os.link(staged, path)
+
+    mine = host_secret(run=lambda _: "", boot_id=_no_boot_id, link=link)
+    assert rival and mine == rival[0] != "" and host_secret(run=lambda _: "", boot_id=_no_boot_id) == mine
+    assert stale.stat().st_ino == inode and stale.read_bytes() == b""
 
 
 @pytest.mark.logic
