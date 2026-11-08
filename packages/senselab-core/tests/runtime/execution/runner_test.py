@@ -21,7 +21,7 @@ from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_pack
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.events import EventLog, read_events
+from senselab_core.runtime.execution.events import TERMINAL, EventLog, read_events, status_from
 from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status, follow
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.workers import WorkerSet
@@ -580,3 +580,95 @@ def test_the_submitter_is_built_over_a_senselab_store_with_no_readonly_caches(tm
     submitter = runner._submitter(run, store, ["cpu"])
     assert type(submitter.store) is runner.SenselabStore
     assert submitter.readonly_caches is None and not hasattr(submitter.store, "readonly_caches")
+
+
+def _terminal(events: Sequence[Any], node: str) -> list[Any]:
+    """Return the terminal events of `node`'s jobs in element order."""
+    ended = [e for e in events if e.node == node and e.job is not None and e.kind in TERMINAL]
+    return sorted(ended, key=lambda e: e.job.element)
+
+
+@pytest.mark.logic
+def test_records_of_one_content_are_one_execution_and_exact_reuses(tmp_path: Path) -> None:
+    """Two records of one text: per node one job runs and the other is served it, exact, with its own output."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "same"}, {"text": "same"}])
+    status, executor, events = _run(placed, values, tmp_path)
+    store = executor.inner.store
+    assert status.done and status_from(events).counts["done"] == 4
+    for node in ("a", "b"):
+        first, second = status.results[node]
+        assert (first.job.element, second.job.element) == ((0,), (1,))
+        assert (first.key_digest, first.output_identity) == (second.key_digest, second.output_identity)
+        assert [(e.kind, e.reuse) for e in _terminal(events, node)] == [("finished", None), ("cache_hit", "exact")]
+        outputs = [store.outputs_of(e.key, e.output) for e in _terminal(events, node)]
+        assert outputs[0] is not None and outputs[0] == outputs[1]
+    activities = store.provenance.activities()
+    assert sorted("senselab:Reuse" in a.types() for a in activities) == [False, False, True, True]
+
+
+@pytest.mark.logic
+def test_records_of_one_failing_content_both_fail_and_only_descendants_are_blocked(tmp_path: Path) -> None:
+    """Two records of one failing text: both fail with the one failure; their `b` jobs are blocked by it."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "fail"}, {"text": "fail"}])
+    status, _, events = _run(placed, values, tmp_path)
+    first, second = status.results["a"]
+    assert first.failure is not None and first.failure == second.failure and status.blocked["a"] == ()
+    assert [e.kind for e in _terminal(events, "a")] == ["failed", "failed"]
+    assert [e.kind for e in _terminal(events, "b")] == ["blocked", "blocked"] and status.blocked["b"] == ((0,), (1,))
+    assert status_from(events).counts["blocked"] == 2 and status_from(events).counts["failed"] == 2
+
+
+@pytest.mark.logic
+def test_a_job_reading_a_shared_result_runs_under_its_own_element(tmp_path: Path) -> None:
+    """`a` is one job for both records; `d` reads each record's own `other` and runs once per record, as itself."""
+    rows = [{"text": "same", "other": f"o{i}"} for i in range(2)]
+    placed, values = _plan(ZIPPED, rows, {"both": "shared"})
+    status, executor, events = _run(placed, values, tmp_path)
+    assert status.done and status_from(events).counts["done"] == 6
+    sent = {(f.node, j.element): i for f in executor.fragments for j, i in zip(f.jobs, f.inputs, strict=True)}
+    assert [sent[("d", (i,))]["right"] for i in range(2)] == [placed.manifest.rows[i].inputs["other"] for i in range(2)]
+    assert [e.kind for e in _terminal(events, "d")] == ["finished", "finished"]
+    assert [e.kind for e in _terminal(events, "e")] == ["finished", "cache_hit"]
+
+
+@pytest.mark.logic
+def test_a_gather_over_records_of_one_content_reads_every_record_under_its_plan_key(tmp_path: Path) -> None:
+    """Three records, two of one text: the gather reads three ports in record order, under its queued key."""
+    placed, values = _plan(_graph(GATHERED, GATHER_EDGES, text="list[json]"), [{"text": t} for t in ("x", "y", "x")])
+    status, executor, events = _run(placed, values, tmp_path)
+    [fragment] = [f for f in executor.fragments if f.node == "g"]
+    ports = [port_output_identity(r.key_digest, "value") for r in status.results["a"]]
+    assert fragment.inputs[0]["values"] == gather_identity(ports) and len(set(ports)) == 2
+    [queued] = [e for e in events if e.node == "g" and e.kind == "queued"]
+    [ended] = _terminal(events, "g")
+    assert status.done and ended.kind == "finished" and ended.key == queued.key
+
+
+@pytest.mark.parametrize(("text", "kinds"), [("one", ["finished", "cache_hit"]), ("fail", ["failed", "failed"])])
+@pytest.mark.logic
+def test_two_nodes_of_one_job_each_hold_their_own_result(text: str, kinds: list[str], tmp_path: Path) -> None:
+    """Nodes `a` and `a2` run one task on one record: one job runs, and each node's result names that node."""
+    graph = _graph(
+        [("a", SCORE), ("a2", SCORE)],
+        [("input.text", "a.text", "map"), ("input.text", "a2.text", "map")],
+        text="list[json]",
+    )
+    placed, values = _plan(graph, [{"text": text}])
+    status, _, events = _run(placed, values, tmp_path)
+    assert [r.job.node for n in ("a", "a2") for r in status.results[n]] == ["a", "a2"]
+    assert sorted(e.kind for n in ("a", "a2") for e in _terminal(events, n)) == sorted(kinds)
+
+
+@pytest.mark.logic
+def test_a_duplicate_whose_hit_the_license_rule_refuses_is_executed_again(tmp_path: Path) -> None:
+    """With no env license recorded, a hit is refused: the second record of one text runs as its own execution."""
+    previous = use_packaged(Packaged(CATALOGUE, _this_interpreter, REGISTRY, None))
+    try:
+        placed, values = _plan(
+            _graph([("a", SCORE)], [("input.text", "a.text", "map")], text="list[json]"), [{"text": "same"}] * 2
+        )
+        status, executor, events = _run(placed, values, tmp_path)
+    finally:
+        use_packaged(previous)
+    assert status.done and [(e.kind, e.reuse) for e in _terminal(events, "a")] == [("finished", None)] * 2
+    assert [a.types() for a in executor.inner.store.provenance.activities()] == [("prov:Activity",)] * 2
