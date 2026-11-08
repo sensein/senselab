@@ -10,3 +10,5 @@ quarantine_retention_s: 604800
 staging_stale_s: 86400
 # Least seconds between two collections a `put` starts.
 collect_interval_s: 3600
+# Most bytes of one measures file a reader takes; a larger file is malformed.
+measures_file_bytes_max: 4194304

@@ -8,7 +8,10 @@ import pytest
 from planted_objects_fixture import entry_dir, rewrite_json, store_context, store_key
 from senselab_core.kernel.identity import ReusePolicy
 from senselab_core.runtime.store import (
+    CONTEXT_FORMAT,
     QUARANTINE_DIR,
+    RESULT_FORMAT,
+    STORE_DIR,
     STORE_MIGRATION_STATEMENT,
     ResultStore,
     StoreFormatRetired,
@@ -89,3 +92,12 @@ def test_a_stored_execution_context_2_is_refused_as_retired(tmp_path: Path) -> N
             s.get(k, c, policy)
         assert info.value.found == "execution-context@2.0"
     assert entry.is_dir() and not (tmp_path / QUARANTINE_DIR).exists()
+
+
+@pytest.mark.contract
+def test_a_store_dir_holds_one_member_format_pair() -> None:
+    """`STORE_DIR` and the result and context members' majors change as one unit (ADR-006, 2026-11-08)."""
+    majors = (STORE_DIR, RESULT_FORMAT.rsplit(".", 1)[0], CONTEXT_FORMAT.rsplit(".", 1)[0])
+    assert majors == ("store@5", "result@2", "execution-context@3"), (
+        "one member pair per STORE_DIR major: a major bump of result or context bumps STORE_DIR; update this pin"
+    )

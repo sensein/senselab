@@ -8,9 +8,7 @@ a user mapping or YAML file over a packaged profile (`laptop`, `orcd`). A profil
 """
 
 import difflib
-import os
 import platform
-import re
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
@@ -29,7 +27,7 @@ from senselab_core.kernel.formats import (
     check,
 )
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
-from senselab_core.runtime.config import load_yaml, merge_over
+from senselab_core.runtime.config import expand_variables, load_yaml, merge_over
 from senselab_core.runtime.execution_settings import (
     CalibrationSettings,
     FaultBudgets,
@@ -102,26 +100,6 @@ class Envs(Frozen):
 
     server_start_margin_s: Annotated[float, Field(gt=0)]
     torch_index: NonEmptyStr | None = None
-
-
-_DEFAULTED = re.compile(r"\$\{(\w+):-([^}]*)\}")
-
-
-def _expanded(raw: str) -> str:
-    chosen = _DEFAULTED.sub(lambda m: os.environ.get(m[1]) or m[2], raw)
-    return os.path.expanduser(os.path.expandvars(chosen))
-
-
-def expand(raw: str) -> str:
-    """Return `raw` with `${VAR:-fallback}`, then `~` and `$VAR`, expanded from the environment.
-
-    Raises:
-        ValueError: `raw` names a variable that is not set.
-    """
-    expanded = _expanded(raw)
-    if "$" in expanded:
-        raise ValueError(f"{raw!r} names a variable that is not set")
-    return expanded
 
 
 class ExecutionProfile(Formatted):
@@ -231,10 +209,10 @@ class ExecutionProfile(Formatted):
             ValueError: the root names an unset variable.
         """
         raw = self.env_roots[kind]
-        expanded = _expanded(raw)
-        if "$" in expanded:
+        text = expand_variables(raw)
+        if "$" in text:
             raise ValueError(f"env root {raw!r} names a variable that is not set")
-        return Path(expanded)
+        return Path(text)
 
     def check_source(self, model_id: str, catalogue: Catalogue) -> None:
         """Raise `UnlistedSource` unless `model_id`'s organisation is allowed.

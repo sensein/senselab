@@ -917,7 +917,13 @@ def _register_runtime_samples() -> None:
         StorePolicy,
         lambda: [
             StorePolicy.load_default(),
-            StorePolicy(world_readable=True, quarantine_retention_s=60, staging_stale_s=60, collect_interval_s=60),
+            StorePolicy(
+                world_readable=True,
+                quarantine_retention_s=60,
+                staging_stale_s=60,
+                collect_interval_s=60,
+                measures_file_bytes_max=1024,
+            ),
         ],
         invalid_updates=[
             {"quarantine_retention_s": 0},

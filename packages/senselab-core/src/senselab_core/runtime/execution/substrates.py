@@ -32,11 +32,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from senselab_core.runtime.config import expand
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands, is_service_class
 from senselab_core.runtime.hardware import HardwareInfo, probe_hardware, visible_devices
-from senselab_core.runtime.profiles import ExecutionProfile, expand
+from senselab_core.runtime.profiles import ExecutionProfile
 
 logger = logging.getLogger("senselab")
 

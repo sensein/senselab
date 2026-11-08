@@ -7,8 +7,9 @@ from typing import Any
 import pytest
 from senselab_core.kernel import formats
 from senselab_core.runtime.calibration import RunCalibration
+from senselab_core.runtime.config import expand
 from senselab_core.runtime.execution_settings import CalibrationSettings
-from senselab_core.runtime.profiles import ExecutionProfile, UnknownProfileKey, expand
+from senselab_core.runtime.profiles import ExecutionProfile, UnknownProfileKey
 
 PROFILES = Path(__file__).parents[2] / "src/senselab_core/runtime/data/profiles"
 NAMES = ["laptop", "orcd"]

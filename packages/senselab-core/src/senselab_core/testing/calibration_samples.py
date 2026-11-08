@@ -26,7 +26,7 @@ from senselab_core.runtime.calibration import (
     Unplanned,
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings
-from senselab_core.runtime.measures import MeasureEnv, MeasureUnit
+from senselab_core.runtime.measures import Build, MeasureEnv, MeasureRecord, MeasureUnit, Provenance
 from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable
 
 Register = Callable[..., None]
@@ -73,7 +73,8 @@ _PLAN = ProbePlan(
 _FIT = RequestFit(batch=1, r=0.2, u=0.05, n=6, spread=0.1, lo=2.0, hi=9.0)
 
 
-def _observation(**update: object) -> Observation:
+def observation(**update: object) -> Observation:
+    """Return a sample `Observation` with `update` applied."""
     fields: dict[str, object] = {
         "probe": ProbeRef(id="p1", phase="SINGLE", stratum=0),
         "item": "i1",
@@ -97,8 +98,34 @@ def _observation(**update: object) -> Observation:
     return Observation.model_validate({**fields, **update})
 
 
+def _register_measures_roots_samples(register: Register) -> None:
+    provenance = Provenance(job=None, run="run-1", senselab=None, profile="d" * 64, hardware=_CPU)
+    full = Provenance(
+        job="1234", run="run-1", senselab=Build(version="2.0.0", commit="a" * 40), profile="d" * 64, hardware=_CUDA
+    )
+    register(
+        Build,
+        lambda: [Build(version="2.0.0"), Build(version="2.0.0", commit="a" * 40)],
+        invalid_updates=[{"commit": "abc"}],
+    )
+    register(
+        Provenance,
+        lambda: [provenance, full],
+        invalid_updates=[{"profile": "x"}, {"run": ""}, {"job": ""}],
+    )
+    register(
+        MeasureRecord,
+        lambda: [
+            MeasureRecord(kind="drift", id="r1", uid=1000, written_s=1.5, provenance=full, record={"n": 3}),
+            MeasureRecord(kind="oom", id="r2", uid=0, written_s=0.0, provenance=provenance, record={}),
+        ],
+        invalid_updates=[{"kind": "other"}, {"uid": -1}, {"written_s": -1.0}],
+    )
+
+
 def register_calibration_samples(register: Register, packaged: CalibrationSettings) -> None:
     """Register the samples of every calibration type through `register` (`values.register_samples`)."""
+    _register_measures_roots_samples(register)
     register(CalibrationSettings, lambda: [packaged], invalid_updates=[{"trust": "all"}, {"measures_roots": ()}])
     register(RunCalibration, lambda: [RunCalibration(), RunCalibration(trust="own")], invalid_updates=[{"trust": "x"}])
     register(
@@ -111,8 +138,8 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
     register(
         Observation,
         lambda: [
-            _observation(),
-            _observation(
+            observation(),
+            observation(
                 probe=None, device_peak=10, device_after=4, item_wall_s=1.0, since_load=0, load_s=2.0, hardware=_CPU
             ),
         ],
@@ -218,7 +245,7 @@ def register_probe_samples(register: Register) -> None:
     )
     register(
         Prior,
-        lambda: [Prior(), Prior(observations=(_observation(),), records=(RegimeFactor(k=2, rho=1.4, n=6),))],
+        lambda: [Prior(), Prior(observations=(observation(),), records=(RegimeFactor(k=2, rho=1.4, n=6),))],
         invalid_updates=[{"observations": (1,)}],
     )
     register(
