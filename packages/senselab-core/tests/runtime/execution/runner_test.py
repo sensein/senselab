@@ -629,3 +629,46 @@ def test_a_job_reading_a_shared_result_runs_under_its_own_element(tmp_path: Path
     assert [sent[("d", (i,))]["right"] for i in range(2)] == [placed.manifest.rows[i].inputs["other"] for i in range(2)]
     assert [e.kind for e in _terminal(events, "d")] == ["finished", "finished"]
     assert [e.kind for e in _terminal(events, "e")] == ["finished", "cache_hit"]
+
+
+@pytest.mark.logic
+def test_a_gather_over_records_of_one_content_reads_every_record_under_its_plan_key(tmp_path: Path) -> None:
+    """Three records, two of one text: the gather reads three ports in record order, under its queued key."""
+    placed, values = _plan(_graph(GATHERED, GATHER_EDGES, text="list[json]"), [{"text": t} for t in ("x", "y", "x")])
+    status, executor, events = _run(placed, values, tmp_path)
+    [fragment] = [f for f in executor.fragments if f.node == "g"]
+    ports = [port_output_identity(r.key_digest, "value") for r in status.results["a"]]
+    assert fragment.inputs[0]["values"] == gather_identity(ports) and len(set(ports)) == 2
+    [queued] = [e for e in events if e.node == "g" and e.kind == "queued"]
+    [ended] = _terminal(events, "g")
+    assert status.done and ended.kind == "finished" and ended.key == queued.key
+
+
+@pytest.mark.parametrize(("text", "kinds"), [("one", ["finished", "cache_hit"]), ("fail", ["failed", "failed"])])
+@pytest.mark.logic
+def test_two_nodes_of_one_job_each_hold_their_own_result(text: str, kinds: list[str], tmp_path: Path) -> None:
+    """Nodes `a` and `a2` run one task on one record: one job runs, and each node's result names that node."""
+    graph = _graph(
+        [("a", SCORE), ("a2", SCORE)],
+        [("input.text", "a.text", "map"), ("input.text", "a2.text", "map")],
+        text="list[json]",
+    )
+    placed, values = _plan(graph, [{"text": text}])
+    status, _, events = _run(placed, values, tmp_path)
+    assert [r.job.node for n in ("a", "a2") for r in status.results[n]] == ["a", "a2"]
+    assert sorted(e.kind for n in ("a", "a2") for e in _terminal(events, n)) == sorted(kinds)
+
+
+@pytest.mark.logic
+def test_a_duplicate_whose_hit_the_license_rule_refuses_is_executed_again(tmp_path: Path) -> None:
+    """With no env license recorded, a hit is refused: the second record of one text runs as its own execution."""
+    previous = use_packaged(Packaged(CATALOGUE, _this_interpreter, REGISTRY, None))
+    try:
+        placed, values = _plan(
+            _graph([("a", SCORE)], [("input.text", "a.text", "map")], text="list[json]"), [{"text": "same"}] * 2
+        )
+        status, executor, events = _run(placed, values, tmp_path)
+    finally:
+        use_packaged(previous)
+    assert status.done and [(e.kind, e.reuse) for e in _terminal(events, "a")] == [("finished", None)] * 2
+    assert [a.types() for a in executor.inner.store.provenance.activities()] == [("prov:Activity",)] * 2

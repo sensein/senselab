@@ -176,13 +176,14 @@ def _ref(value: object) -> ResultRef:
     return ResultRef.model_validate(value)
 
 
-def _at(ref: ResultRef, element: tuple[int, ...]) -> ResultRef:
-    """Return `ref` as the result of the job at `element` of its node."""
-    return ref.model_copy(update={"job": ref.job.model_copy(update={"element": element})})
+def _at(ref: ResultRef, node: str, element: tuple[int, ...]) -> ResultRef:
+    """Return `ref` as the result of the job of `node` at `element`."""
+    return ref.model_copy(update={"job": JobRef(plan_hash=ref.job.plan_hash, node=node, element=element)})
 
 
-def _refs(value: object) -> list[ResultRef]:
-    return sorted((_ref(v) for v in typing.cast(Sequence[object], value)), key=lambda r: r.job.element)
+def _refs(value: object, source: str) -> list[ResultRef]:
+    """Return a gathered list of `source`'s results, each held at its position, the record it combines."""
+    return [_at(_ref(v), source, (i,)) for i, v in enumerate(typing.cast(Sequence[object], value))]
 
 
 class _NodeKey:
@@ -203,7 +204,7 @@ class _NodeKey:
                 row = typing.cast(Mapping[str, int], value)[RECORD_FIELD] if feed.edge.kind == "map" else 0
                 found[feed.port] = rows[row].inputs[feed.source_port]
             elif feed.edge.kind == "gather":
-                ports = [port_output_identity(r.key_digest, feed.source_port) for r in _refs(value)]
+                ports = [port_output_identity(r.key_digest, feed.source_port) for r in _refs(value, feed.source)]
                 found[feed.port] = gather_identity(ports)
             else:
                 found[feed.port] = port_output_identity(_ref(value).key_digest, feed.source_port)
@@ -394,8 +395,9 @@ class _Run:
         """Settle each job pydra shared with a settled job of the same checksum, which it never sent.
 
         A job whose upstream results all landed is given the failure of a failed same-key job, or is sent again, so its
-        executor serves it the stored result as a reuse. Nodes are taken in graph order, so a shared job's descendants
-        read its result.
+        executor serves it the stored result as a reuse, or runs it when the store's hit rules refuse the entry. Nodes
+        are taken in graph order, so a shared job's descendants read its result; each fragment is followed to its end
+        before the next is sent.
         """
         if self.errors or self.cancel.is_set():
             return
@@ -409,7 +411,7 @@ class _Run:
                 if read is None or shared is None:
                     continue
                 if shared.failure is not None:
-                    self.settle(node, _at(shared, (i,)))
+                    self.settle(node, _at(shared, node, (i,)))
                     continue
                 again.append((i,))
                 for source, ref in read[1].items():
@@ -718,10 +720,10 @@ def _upstream(placed: Plan, node: str, batch: list[tuple[Any, tuple[int, ...], A
                 continue
             value = getattr(job.task, feed.port)
             if feed.edge.kind == "gather":
-                refs = _refs(value)
+                refs = _refs(value, feed.source)
             else:
                 ref = _ref(value)
-                refs = [_at(ref, element if ref.job.element else ())]
+                refs = [_at(ref, feed.source, element if ref.job.element else ())]
             found.setdefault(feed.source, {}).update({r.job.element: r for r in refs})
     return {source: list(refs.values()) for source, refs in found.items()}
 
