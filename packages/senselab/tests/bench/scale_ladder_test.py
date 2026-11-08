@@ -39,7 +39,7 @@ def _module(name: str, path: Path) -> ModuleType:
 bids_tree = _module("scale_bids_tree_under_test", ROOT / "benchmarks" / "scale" / "bids_tree.py")
 generate = _module("generate_resources_under_test", ROOT / "scripts" / "generate_resources.py")
 
-TREE_DIGEST = "74166948de67e1d029c3ef723ef61412257f2c74b65142f5c5f8a6df2d3e89d9"
+TREE_DIGEST = "d9fabd59a9907c1ffd7afea617a5327ba9deb56d5be2947e7a80d49a9e63ebb9"
 """The digest of `synthetic(root, 3, 0)`: its relative paths and bytes, the same on every host."""
 
 
@@ -65,6 +65,13 @@ def test_synthetic_tree_is_byte_identical_for_a_seed(tmp_path: Path) -> None:
     assert soundfile.info(long).duration == 7
     with pytest.raises(ValueError, match="at least one"):
         bids_tree.synthetic(tmp_path / "none", 0, 0)
+
+
+@pytest.mark.logic
+def test_no_two_synthetic_tones_share_content(tmp_path: Path) -> None:
+    """A hundred tones are a hundred contents, so a point of n items runs n jobs, none sharing another's key."""
+    tones = sorted(bids_tree.synthetic(tmp_path / "t", 100, 0).rglob("*_audio.wav"))
+    assert len({hashlib.sha256(t.read_bytes()).hexdigest() for t in tones}) == len(tones) == 100
 
 
 @pytest.mark.logic
@@ -301,6 +308,13 @@ def test_per_item_cost_runs_from_the_end_of_calibration_to_the_last_item() -> No
     samples = {"c1": sample(1, 101.0), "c2": sample(1, 103.0), "a": sample(10, 108.0), "b": sample(10, 113.0)}
     assert ladder._steady(samples, {"c1", "c2"}, 100.0) == (0.5, 3.0, 2)
     assert ladder._steady({"c1": samples["c1"]}, {"c1"}, 100.0) == (None, 1.0, 1)
+    timings = ladder._item_samples(samples, {"c1", "c2"})
+    assert [(t["calibration"], t["jobs"], t["ended_s"]) for t in timings] == [
+        (True, 1, 101.0),
+        (True, 1, 103.0),
+        (False, 10, 108.0),
+        (False, 10, 113.0),
+    ]
 
 
 @pytest.mark.logic

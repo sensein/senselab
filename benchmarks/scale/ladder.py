@@ -285,7 +285,8 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     calibrates afresh and reads no other point's measure; its `measure` is the row its pool's calibration wrote (else
     one read from all its samples). `per_item_s` counts only the items after calibration, from item end times
     (`_steady`), None with none after it (`_per_item`). `calibration_s` and
-    `calibration_jobs` give the calibration's share.
+    `calibration_jobs` give the calibration's share; `samples` holds each item's timing, so its figures can be
+    recomputed from the result.
 
     Raises:
         FileExistsError: the point's run directory exists, so its results would be reused.
@@ -348,6 +349,8 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         **_per_item(steady_s, wall / items, found),
         "calibration_s": calibration_s,
         "calibration_jobs": round_jobs,
+        "began_s": began_s,
+        "samples": _item_samples(by_digest, rounds),
         "host": platform.node(),
         "backend_params": dict(node.backend_params),
         "input_s": None if root is None else sum(soundfile.info(p).duration for p in sorted(root.rglob("*_audio.*"))),
@@ -360,6 +363,13 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         "store": {"entries": entries, "bytes": stored},
         "measure": None if found is None else found.model_dump(mode="json"),
     }
+
+
+def _item_samples(samples: Mapping[str, Sample], rounds: set[str]) -> list[dict[str, Any]]:
+    """Return each item's timing by its end: whether it was a calibration item, its jobs, batch, wall and end."""
+    keys = ("jobs", "batch_size", "wall_s", "cold", "ended_s")
+    found = [{"calibration": d in rounds, **{k: getattr(s, k) for k in keys}} for d, s in samples.items()]
+    return sorted(found, key=lambda r: r["ended_s"])
 
 
 def _per_item(steady_s: float | None, wall_per_item_s: float, measure: ResourceMeasure | None) -> dict[str, Any]:

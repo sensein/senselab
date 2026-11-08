@@ -1,7 +1,8 @@
 """BIDS trees for the scale ladder: synthetic tones byte-identical on every host, or LibriSpeech test-clean utterances.
 
 `synthetic(root, n, seed)` writes `n` triangle-wave tones as 16-bit PCM WAV, computed in integers and written by the
-standard library, so a seed gives the same bytes on every host; `synthetic(root, 1, seed, seconds=s)` writes one tone
+standard library, so a seed gives the same bytes on every host; each tone's length in samples is its own, so no two
+tones share content; `synthetic(root, 1, seed, seconds=s)` writes one tone
 of `s` seconds, the ladder's long signal. `from_librispeech(root, manifest, n)` lays the first `n` utterances of the
 fetched test-clean archive into `sub-<speaker>/ses-01/audio/sub-<speaker>_ses-01_task-read_run-<k>_audio.flac`.
 """
@@ -17,7 +18,7 @@ from senselab_core.runtime.fetch import DataManifest, default_cache_root, fetch
 RATE = 16_000
 """The sampling rate of a synthetic tone."""
 SECONDS = (1, 4)
-"""The whole seconds a synthetic tone's length is drawn from, both included."""
+"""The seconds a synthetic tone's length is drawn from, both included, in samples at `RATE`, each length once."""
 PERIODS = (16, 400)
 """The samples per period a tone's pitch is drawn from, both included: 1 kHz down to 40 Hz at `RATE`."""
 AMPLITUDE = 8192
@@ -41,13 +42,15 @@ def synthetic(root: Path, n: int, seed: int, *, seconds: int | None = None) -> P
     """Write `n` seeded tones as a BIDS tree at `root`, one subject each; `seconds` fixes every tone's length.
 
     Raises:
-        ValueError: `n` is below 1.
+        ValueError: `n` is below 1, or above the distinct lengths `SECONDS` holds at `RATE`.
     """
-    if n < 1:
-        raise ValueError(f"a tree holds at least one recording, got {n}")
+    lengths_held = (SECONDS[1] - SECONDS[0]) * RATE + 1
+    if n < 1 or (seconds is None and n > lengths_held):
+        raise ValueError(f"a tree holds at least one recording and at most {lengths_held}, got {n}")
     _description(root, f"synthetic tones, seed {seed}")
     rng = numpy.random.default_rng(seed)
-    lengths = rng.integers(SECONDS[0], SECONDS[1], n, endpoint=True) if seconds is None else numpy.full(n, seconds)
+    drawn = rng.choice(lengths_held, n, replace=False) + SECONDS[0] * RATE
+    lengths = drawn if seconds is None else numpy.full(n, seconds * RATE)
     periods = rng.integers(PERIODS[0], PERIODS[1], n, endpoint=True)
     width = len(str(n))
     for index, (length, period) in enumerate(zip(lengths, periods, strict=True)):
@@ -58,7 +61,7 @@ def synthetic(root: Path, n: int, seed: int, *, seconds: int | None = None) -> P
             out.setnchannels(1)
             out.setsampwidth(2)
             out.setframerate(RATE)
-            out.writeframes(_tone(int(length) * RATE, int(period)))
+            out.writeframes(_tone(int(length), int(period)))
     return root
 
 
