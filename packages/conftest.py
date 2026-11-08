@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
 TIERS = frozenset({"logic", "contract", "limits", "usecase", "env"})
 MODEL_TIERS = frozenset({"limits", "usecase", "env"})
@@ -73,12 +72,15 @@ def tier_budget_s() -> dict[str, float]:
     return tier_budgets()
 
 
-def _slack_file(request: pytest.FixtureRequest) -> Path:
+def _slack_document(request: pytest.FixtureRequest) -> dict[str, Any]:
+    import yaml  # noqa: PLC0415 - the root conftest imports the stdlib and pytest only
+
     tests = next(p for p in Path(str(request.path)).resolve().parents if p.name == "tests")
     path = tests / "data" / "test_slack.yaml"
     if not path.is_file():
         raise FileNotFoundError(f"{path}: this package has no test slack file")
-    return path
+    document: dict[str, Any] = yaml.safe_load(path.read_text())
+    return document
 
 
 @pytest.fixture
@@ -88,13 +90,13 @@ def slack(request: pytest.FixtureRequest) -> dict[str, Any]:
     Test slack is a profile override (P-34); its derivations are in config-derivations.md. The `tests` section is
     not part of the override: `slack_tests` returns it.
     """
-    return {k: v for k, v in yaml.safe_load(_slack_file(request).read_text()).items() if k != "tests"}
+    return {k: v for k, v in _slack_document(request).items() if k != "tests"}
 
 
 @pytest.fixture
 def slack_tests(request: pytest.FixtureRequest) -> dict[str, Any]:
     """The `tests` section of the package slack file: values only tests read (P-34)."""
-    section: dict[str, Any] = yaml.safe_load(_slack_file(request).read_text())["tests"]
+    section: dict[str, Any] = _slack_document(request)["tests"]
     return section
 
 
