@@ -2,6 +2,8 @@
 
 import itertools
 import random
+import statistics
+import time
 from bisect import bisect_right
 from collections.abc import Sequence
 from typing import Any
@@ -22,10 +24,11 @@ from senselab_core.runtime.calibration import (
     ProbePlan,
     ProbeRef,
     RegimeFactor,
+    Unplanned,
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings
 from senselab_core.runtime.measures import MeasureSource
-from senselab_core.runtime.probe import Probe, memory_batch
+from senselab_core.runtime.probe import Probe, _theil_sen, memory_batch
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Grant, Sample, calibrated, measure_of
 from senselab_core.testing.calibration_samples import UNIT
@@ -792,3 +795,86 @@ def test_estimator_is_the_callable_measure_source_takes() -> None:
     got = MeasureSource([_Root(pooled)], _NoTable(), estimate=estimate).get(UNIT)
     assert got is not None and got.unit_kind == "audio_s" and got.estimator == "estimate@1"
     assert got.single is not None and got.single.u == pytest.approx(0.05)
+
+
+@pytest.mark.logic
+def test_a_gap_tie_lifts_by_the_range_above() -> None:
+    """A record at L = 5.0 between ranges (2, 2) and (8, 8) is held by the range at or above L: only 8 lifts it."""
+    base = _with_device(5000, 50)
+
+    def probe_at(x: float) -> list[Observation]:
+        ref = ProbeRef(id="p2", phase="BATCHED", stratum=1)
+        return [_obs(x, 0.5, batch=4, probe=ref) for _ in range(CONFIG.min_requests)]
+
+    fault = _fault()
+    assert _estimate(base + probe_at(8.0), [fault]).oom == ()
+    assert _estimate(base + probe_at(2.0), [fault]).oom == (fault,)
+
+
+@pytest.mark.logic
+def test_a_covered_plan_reports_unplanned_batched() -> None:
+    """A plan whose strata the prior covers in both phases says so for the batched phase, not nothing."""
+    obs = _covering([5.0, 30.0]) + _covering([5.0, 30.0], batch=4)
+    plan = _plan(_candidates([float(i + 1) for i in range(40)]), Prior(observations=tuple(obs)))
+    assert plan.batched == ()
+    batched = Probe.plan_batched(plan, _measured_single(1e3), GRANT, CONFIG, 1e6, memory_headroom=HEADROOM)
+    assert batched.items == () and batched.unplanned[-1] == Unplanned(phase="BATCHED", stratum=None, reason="covered")
+
+
+def _reference_theil_sen(points: Sequence[tuple[float, float]]) -> tuple[float, float] | None:
+    """The definition: the median of every pairwise slope, and the median intercept at that slope."""
+    ordered = sorted(points)
+    slopes = [(y2 - y1) / (x2 - x1) for (x1, y1), (x2, y2) in itertools.combinations(ordered, 2) if x1 != x2]
+    if not slopes:
+        return None
+    slope = statistics.median(sorted(slopes))
+    return statistics.median(sorted(y - slope * x for x, y in ordered)), slope
+
+
+@pytest.mark.logic
+@given(points=st.lists(st.tuples(st.integers(0, 12), st.integers(-30, 30)), max_size=40))
+@FAST
+def test_bounded_fit_equals_reference(points: list[tuple[int, int]]) -> None:
+    """The bounded fit returns the reference's intercept and slope exactly, ties in `x` and collinear data included."""
+    floats = [(float(x), float(y)) for x, y in points]
+    assert _theil_sen(floats) == _reference_theil_sen(floats)
+
+
+@pytest.mark.logic
+@given(
+    points=st.lists(
+        st.tuples(st.floats(-1e3, 1e3), st.floats(-1e6, 1e6)), min_size=2, max_size=60, unique_by=lambda p: p[0]
+    )
+)
+@FAST
+def test_bounded_fit_equals_reference_on_real_data(points: list[tuple[float, float]]) -> None:
+    """On arbitrary floats the fit agrees with the reference to rounding."""
+    fit, reference = _theil_sen(points), _reference_theil_sen(points)
+    assert fit is not None and reference is not None
+    assert fit == pytest.approx(reference, rel=1e-9, abs=1e-9)
+
+
+def _pooled(n: int) -> list[Observation]:
+    rng = random.Random(n)
+    return [_obs(x, 0.2 + 0.05 * x + rng.gauss(0, 0.05)) for x in (rng.uniform(1.0, 60.0) for _ in range(n))]
+
+
+def _fit_seconds(observations: Sequence[Observation]) -> float:
+    best = float("inf")
+    for _ in range(3):
+        start = time.perf_counter()
+        _estimate(observations)
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+@pytest.mark.limits
+def test_fit_time_is_subquadratic() -> None:
+    """The estimate's time at 10^4 pooled requests is under 50 times its time at 10^3.
+
+    A quadratic fit multiplies by 100 for a tenfold n; an n log² n fit by 10·(log 10⁴ / log 10³)² ≈ 18, and the rest
+    of the estimate is linear (10). 50 sits above the second and below the first by more than a runner's noise, and
+    a ratio of two best-of-three times on one machine cancels the machine's speed.
+    """
+    ratio = _fit_seconds(_pooled(10_000)) / _fit_seconds(_pooled(1_000))
+    assert ratio < 50, f"{ratio:.1f}x for 10x the requests"

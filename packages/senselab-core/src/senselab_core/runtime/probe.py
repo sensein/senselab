@@ -3,11 +3,14 @@
 import itertools
 import math
 import statistics
+import struct
 from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal
+
+import numpy as np
 
 from senselab_core.runtime.calibration import (
     Candidate,
@@ -47,13 +50,87 @@ def _median(values: Sequence[float]) -> float:
     return statistics.median(sorted(values))
 
 
+def _inversions(z: np.ndarray) -> int:
+    """Count the pairs `i < j` with `z[i] > z[j]`, by merging runs of doubling length level by level."""
+    ranks = np.unique(z, return_inverse=True)[1].ravel().astype(np.int64)
+    n, span, total = len(ranks), int(ranks.max(initial=0)) + 1, 0
+    index, run = np.arange(n), 1
+    while run < n:
+        block, right = index // (2 * run), (index // run) % 2 == 1
+        keys = block * span + ranks
+        left = np.sort(keys[~right])
+        at_most = np.searchsorted(left, keys[right], side="right") - np.searchsorted(left, block[right] * span)
+        total += int((run - at_most).sum())
+        run *= 2
+    return total
+
+
+def _inverted_pairs(z: Sequence[float]) -> list[tuple[int, int]]:
+    """List the pairs `i < j` with `z[i] > z[j]`, in time linear in their number beyond n log n."""
+
+    def merge(run: list[int]) -> list[int]:
+        if len(run) <= 1:
+            return run
+        half = len(run) // 2
+        left, right = merge(run[:half]), merge(run[half:])
+        keys = [z[i] for i in left]
+        pairs.extend((i, j) for j in right for i in left[bisect_right(keys, z[j]) :])
+        return sorted(left + right, key=z.__getitem__)
+
+    pairs: list[tuple[int, int]] = []
+    merge(list(range(len(z))))
+    return pairs
+
+
+def _ordered(value: float) -> int:
+    """Map a double to an integer in the same order, so a bisection over integers halves the doubles."""
+    bits = struct.unpack("<q", struct.pack("<d", value))[0]
+    return bits if bits >= 0 else -(2**63) - bits
+
+
+def _unordered(bits: int) -> float:
+    return struct.unpack("<d", struct.pack("<q", bits if bits >= 0 else -(2**63) - bits))[0]
+
+
+def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
+    """Return the `k`-th smallest (from 0) of the `total` slopes between points of distinct `x`, sorted by `(x, y)`.
+
+    A pair's slope is below `t` exactly when the pair is inverted in `y − t·x`, so the slopes below `t` are counted by
+    inversion counting and bisected over the doubles until at most n lie between the bounds, which are then listed.
+    """
+    bound = max(float(np.ptp(ys)) / float(np.diff(np.unique(xs)).min()), 1.0)
+    low, high, below, above = _ordered(-2 * bound), _ordered(2 * bound), 0, total
+    while above - below > len(xs) and high - low > 1:
+        middle = (low + high) // 2
+        count = _inversions(ys - _unordered(middle) * xs)
+        low, below = (middle, count) if count <= k else (low, below)
+        high, above = (high, above) if count <= k else (middle, count)
+    if above - below > len(xs):
+        return _unordered(low)
+    lower, upper = ys - _unordered(low) * xs, ys - _unordered(high) * xs
+    order = sorted(range(len(xs)), key=lambda i: (lower[i], i))
+    slopes = sorted(
+        (ys[order[j]] - ys[order[i]]) / (xs[order[j]] - xs[order[i]])
+        for i, j in _inverted_pairs([upper[o] for o in order])
+    )
+    return float(slopes[min(max(k - below, 0), len(slopes) - 1)])
+
+
 def _theil_sen(points: Sequence[tuple[float, float]]) -> tuple[float, float] | None:
-    """Return `(intercept, slope)`: the median of the pairwise slopes, and the median intercept at that slope."""
+    """Return `(intercept, slope)`: the median of the pairwise slopes, and the median intercept at that slope.
+
+    The slope is the exact median of the n(n−1)/2 pairwise slopes, found in O(n log² n) time and O(n) memory.
+    """
     ordered = sorted(points)
-    slopes = [(y2 - y1) / (x2 - x1) for (x1, y1), (x2, y2) in itertools.combinations(ordered, 2) if x1 != x2]
-    if not slopes:
+    xs, ys = np.array([x for x, _ in ordered]), np.array([y for _, y in ordered])
+    ties = sum(c * (c - 1) // 2 for c in Counter(xs.tolist()).values())
+    total = len(ordered) * (len(ordered) - 1) // 2 - ties
+    if total == 0:
         return None
-    slope = _median(slopes)
+    middle = (total - 1) // 2
+    slope = _kth_slope(xs, ys, middle, total)
+    if total % 2 == 0:
+        slope = statistics.median([slope, _kth_slope(xs, ys, middle + 1, total)])
     return _median([y - slope * x for x, y in ordered]), slope
 
 
@@ -168,7 +245,8 @@ def _relative_spread(residuals: Sequence[float], predicted: Sequence[float]) -> 
     centre = _median(predicted)
     if centre <= 0:
         return None
-    return MAD_TO_SIGMA * _median([abs(e - _median(residuals)) for e in residuals]) / centre
+    middle = _median(residuals)
+    return MAD_TO_SIGMA * _median([abs(e - middle) for e in residuals]) / centre
 
 
 def _memory_fit(
@@ -212,11 +290,11 @@ def memory_batch(fit: MemoryFit, budget_bytes: float, length: float, ceiling: in
 
 
 def _holding(spans: Sequence[tuple[float, float]], length: float) -> tuple[float, float] | None:
-    """Return the span holding `length`, else the nearest one."""
+    """Return the span holding `length`, else the nearest one, the one at or above `length` on a tie."""
     inside = [s for s in spans if s[0] <= length <= s[1]]
     if inside or not spans:
         return inside[0] if inside else None
-    return min(spans, key=lambda s: (min(abs(length - s[0]), abs(length - s[1])), s))
+    return min(spans, key=lambda s: (min(abs(length - s[0]), abs(length - s[1])), s[0] < length, s))
 
 
 def _probe_regime(record: OomRecord) -> bool:
@@ -440,7 +518,8 @@ def _batched_items(
     remaining = [list(r) for r in plan.remaining]
     for index, first in sizes.items():
         groups = _buckets(plan.edges, remaining[index])
-        packed = _pack([len(g) for g in groups], _widths(first, config)) or []
+        packed = _pack([len(g) for g in groups], _widths(first, config))
+        assert packed is not None, "_supply sized this batch to fit its buckets"
         gone: set[int] = set()
         for group, widths in zip(groups, packed, strict=True):
             if not widths:
@@ -662,6 +741,8 @@ class Probe:
         none = plan.model_copy(update={"items": (), "batched": ()})
         single, device = single_estimate.single, single_estimate.device
         blocked = _blocked(plan, single_estimate, grant)
+        if blocked is None and plan.strata and not plan.batched:
+            return _unplanned(none, "covered")
         if blocked is not None or single is None or device is None or grant.memory_bytes is None:
             return _unplanned(none, blocked or "single_unmeasured")
         spans = {st.index: st for st in plan.strata}
