@@ -76,7 +76,7 @@ def cached_load(load: Load, backend: str, cache: ModelCache) -> Load:
         given = backend_init(init)
         if key is None:
             return load(given)
-        return cache.get_or_load(key, lambda: load(given), lambda _: 0)
+        return cache.get_or_load(key, lambda: load(given), lambda _: 0).state
 
     return through
 
@@ -88,7 +88,8 @@ def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO, meter: Meter[A
     decoded items (`{"id", "inputs"}`) and returns one `{"outputs": dict}` or `{"error": exception}`
     per item, in order. Each item's result is written as its own line, then `done`, which carries the request's
     device allocation peak and what stays allocated after it (`device_peak_bytes`, `device_allocated_bytes`) when
-    `meter` measures them (CUDA in use). Nothing an item
+    `meter` measures them (CUDA in use), the requests the state answered before it (`since_load`) and, on the first
+    one, the seconds the load took (`load_s`). Nothing an item
     or `handle` does ends the loop, except `KeyboardInterrupt` and `SystemExit`. Returns 0 on stop
     or EOF, and `EXIT_FATAL` after reporting a fatal error: a failed load, or a line from the host
     that is not a valid message.
@@ -108,9 +109,13 @@ def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO, meter: Meter[A
         array_dir, init = _init(msg)
         start = time.perf_counter()
         state = load(init)
-        _write(tx, dump_line({"ready": {"load_s": time.perf_counter() - start}}, "ready"))
+        loaded_s = time.perf_counter() - start
+        _write(tx, dump_line({"ready": {"load_s": loaded_s}}, "ready"))
+        answered = 0
         while (msg := _receive(rx)) is not None and not _is_stop(msg):
-            _respond(handle, state, validate_message(msg, "request"), array_dir, tx, meter)
+            report = {"since_load": answered} | ({"load_s": loaded_s} if not answered else {})
+            _respond(handle, state, validate_message(msg, "request"), array_dir, tx, (meter, report))
+            answered += 1
     except Exception as exc:
         _write(tx, dump_line({"error": error_record(exc), "fatal": True}, "fatal"))
         return EXIT_FATAL
@@ -138,9 +143,15 @@ def _init(msg: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     return array_dir, from_wire(init, array_dir=array_dir)
 
 
-def _respond(  # noqa: PLR0913 - the request and where its replies go, then how it is measured
-    handle: Handle, state: object, msg: dict[str, Any], array_dir: Path, tx: BinaryIO, meter: Meter[Any]
+def _respond(  # noqa: PLR0913 - the request and where its replies go, then how it is measured and reported
+    handle: Handle,
+    state: object,
+    msg: dict[str, Any],
+    array_dir: Path,
+    tx: BinaryIO,
+    measured: tuple[Meter[Any], dict[str, Any]],
 ) -> None:
+    meter, report = measured
     items: list[dict[str, Any]] = msg["items"]
     entries: list[dict[str, Any]] = [{} for _ in items]
     shared: dict[str, numpy.ndarray] = {}
@@ -163,7 +174,7 @@ def _respond(  # noqa: PLR0913 - the request and where its replies go, then how 
                 entries[i] = entry
     for item, entry in zip(items, entries):
         _write(tx, _result(msg["id"], item["id"], entry, array_dir))
-    done: dict[str, Any] = {"id": msg["id"], "done": len(items)}
+    done: dict[str, Any] = {"id": msg["id"], "done": len(items), **report}
     if device is not None:
         done |= {"device_peak_bytes": device[0], "device_allocated_bytes": device[1]}
     _write(tx, dump_line(done, "done"))

@@ -47,6 +47,7 @@ def _obs(units: float, wall: float, stratum: int = 0, batch: int = 1, **update: 
         "request_index": 0,
         "jobs": batch,
         "batch": batch,
+        "unit_kind": "audio_s",
         "units": units * batch,
         "padded_units": units * batch,
         "wall_s": wall,
@@ -74,9 +75,7 @@ def _line(r: float, u: float, lengths: Sequence[float] = (2.0, 8.0), batch: int 
 
 
 def _estimate(observations: Sequence[Observation], records: Sequence[Any] = ()) -> Estimate:
-    return Probe.estimate(
-        observations, records, CONFIG, hardware=UNIT.hardware, unit_kind="audio_s", memory_headroom=HEADROOM
-    )
+    return Probe.estimate(observations, records, CONFIG, hardware=UNIT.hardware, memory_headroom=HEADROOM)
 
 
 def _candidates(units: Sequence[float | None], keys: Sequence[int] | None = None) -> list[Candidate]:
@@ -244,10 +243,10 @@ def test_a_regime_factor_exists_only_for_shared_co_tenancy() -> None:
 
 
 @pytest.mark.logic
-def test_hardware_unit_kind_and_headroom_are_required() -> None:
-    """No caller inherits a guessed kind, hardware or headroom."""
-    for missing in ("hardware", "unit_kind", "memory_headroom"):
-        given = {"hardware": UNIT.hardware, "unit_kind": "audio_s", "memory_headroom": HEADROOM}
+def test_hardware_and_headroom_are_required() -> None:
+    """No caller inherits a guessed hardware or headroom."""
+    for missing in ("hardware", "memory_headroom"):
+        given = {"hardware": UNIT.hardware, "memory_headroom": HEADROOM}
         del given[missing]
         with pytest.raises(TypeError):
             Probe.estimate([], [], CONFIG, **given)  # type: ignore[arg-type]
@@ -318,12 +317,8 @@ def test_plan_reopens_only_unlifted_records_by_the_same_rule() -> None:
 def test_the_oom_raise_follows_the_headroom_given() -> None:
     """The record holds the grant; the headroom in force is the caller's, not frozen into the record."""
     record = _fault()
-    low = Probe.estimate(
-        _with_device(5000, 50), [record], CONFIG, hardware=UNIT.hardware, unit_kind="audio_s", memory_headroom=0.5
-    )
-    high = Probe.estimate(
-        _with_device(5000, 50), [record], CONFIG, hardware=UNIT.hardware, unit_kind="audio_s", memory_headroom=1.0
-    )
+    low = Probe.estimate(_with_device(5000, 50), [record], CONFIG, hardware=UNIT.hardware, memory_headroom=0.5)
+    high = Probe.estimate(_with_device(5000, 50), [record], CONFIG, hardware=UNIT.hardware, memory_headroom=1.0)
     assert low.device is not None and high.device is not None and high.device.m1 > low.device.m1
 
 
@@ -436,21 +431,24 @@ def test_a_batched_phase_names_a_memory_batch_below_two_and_an_unbounded_grant()
 
 
 @pytest.mark.contract
-def test_the_estimator_resolves_records_and_kind_per_unit() -> None:
-    """Another unit's `oom` record never raises this unit's `m1`, and each unit reports its own kind of input."""
+def test_the_estimator_resolves_records_per_unit() -> None:
+    """Another unit's `oom` record never raises this unit's `m1`."""
     other = UNIT.model_copy(update={"backend": "other"})
     records = {UNIT.digest(): [_fault(())], other.digest(): []}
-    kinds = {UNIT.digest(): "audio_s", other.digest(): "chars"}
-    estimate = Probe.estimator(
-        CONFIG,
-        records_of=lambda u: records[u.digest()],
-        unit_kind_of=lambda u: kinds[u.digest()],  # type: ignore[arg-type,return-value]
-        memory_headroom=HEADROOM,
-    )
+    estimate = Probe.estimator(CONFIG, records_of=lambda u: records[u.digest()], memory_headroom=HEADROOM)
     obs = _with_device(5000, 50)
     raised, plain = estimate(UNIT, obs), estimate(other, obs)
     assert raised.device is not None and plain.device is not None and raised.device.m1 > plain.device.m1
-    assert (raised.unit_kind, plain.unit_kind) == ("audio_s", "chars")
+
+
+@pytest.mark.logic
+def test_the_unit_kind_is_its_observations_and_mixed_kinds_leave_the_slope_unmeasured() -> None:
+    """Observations of one kind give that kind; audio seconds beside characters give `none`, `r` and no `u`."""
+    chars = [o.model_copy(update={"unit_kind": "chars"}) for o in _line(0.2, 0.05)]
+    assert _estimate(chars).unit_kind == "chars" and _estimate(chars).single.u == pytest.approx(0.05)  # type: ignore[union-attr]
+    mixed = _estimate(_line(0.2, 0.05) + chars)
+    assert mixed.unit_kind == "none" and mixed.single is not None
+    assert mixed.single.u is None and 0.2 <= mixed.single.r <= 0.6 and "single_slope_unmeasured" in mixed.reasons
 
 
 # --- the figures the old path got wrong -------------------------------------------------------------------------
@@ -787,9 +785,7 @@ def test_estimator_is_the_callable_measure_source_takes() -> None:
     """`Probe.estimator` has `MeasureSource`'s callable shape and filters observations by the unit's hardware."""
     other = UNIT.hardware.model_copy(update={"cpus": 99})
     pooled = _line(0.2, 0.05) + [_obs(5.0, 500.0, hardware=other)]
-    estimate = Probe.estimator(
-        CONFIG, records_of=lambda _: (), unit_kind_of=lambda _: "audio_s", memory_headroom=HEADROOM
-    )
+    estimate = Probe.estimator(CONFIG, records_of=lambda _: (), memory_headroom=HEADROOM)
     got = MeasureSource([_Root(pooled)], _NoTable(), estimate=estimate).get(UNIT)
     assert got is not None and got.unit_kind == "audio_s" and got.estimator == "estimate@1"
     assert got.single is not None and got.single.u == pytest.approx(0.05)

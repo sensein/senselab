@@ -868,8 +868,10 @@ class WorkerClient:
             raise ProtocolError(
                 f"expected done for {len(request['items'])} items of request {request['id']!r}, got {done!r}"
             )
-        if "device_peak_bytes" in done:
-            request_reports.record(done["device_peak_bytes"], done["device_allocated_bytes"], len(request["items"]))
+        device = (done["device_peak_bytes"], done["device_allocated_bytes"]) if "device_peak_bytes" in done else None
+        request_reports.record(
+            len(request["items"]), since_load=done.get("since_load"), load_s=done.get("load_s"), device=device
+        )
         return replies
 
     def _decode_result(

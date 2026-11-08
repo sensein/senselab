@@ -27,6 +27,7 @@ def _observation(**update: Any) -> Observation:  # noqa: ANN401
         "request_index": 0,
         "jobs": 1,
         "batch": 1,
+        "unit_kind": "audio_s",
         "units": 4.0,
         "padded_units": 4.0,
         "wall_s": 0.5,

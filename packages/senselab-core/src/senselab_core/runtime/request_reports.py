@@ -1,28 +1,91 @@
-"""The device memory each request a thread ran allocated: `(peak, allocated after, items)`, collected per block.
+"""What each worker request reported, collected for the thread that ran it: `RequestReport`, one per request.
 
-A worker client records what its worker's `done` reports, and an in-process host worker what it measured
-(`torch_meter`); `collected()` gathers the records of the requests the calling thread runs inside it.
+A worker client records what its worker's `done` reports, and an in-process host worker what it measured; `request`
+opens the report of the request a thread is about to send, tagged with the jobs it carries, and `collected()` gathers
+the reports of the requests the calling thread runs inside it.
 """
 
 import threading
-from collections.abc import Iterator
+import time
+from collections.abc import Hashable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 _LOCAL = threading.local()
 
 
-def record(peak: int, allocated: int, items: int) -> None:
-    """Record one request's device peak and allocation after it, over `items` items, for the thread's collector."""
-    found: list[tuple[int, int, int]] | None = getattr(_LOCAL, "found", None)
-    if found is not None:
-        found.append((peak, allocated, items))
+@dataclass
+class RequestReport:
+    """One request: its jobs' tags, its wall seconds, what its model state reported and its device figures.
+
+    Attributes:
+        tags: The tags of the jobs it carried; empty when the sender tagged none.
+        items: The items it held.
+        wall_s: Seconds from the request being sent to its replies being read; None outside `request`.
+        since_load: The requests its model state answered before it; None where the worker reports none.
+        load_s: The seconds the state's load took, on the request that used the load; else None.
+        device: `(peak, allocated after)` device bytes; None where the worker measured none.
+    """
+
+    tags: tuple[Hashable, ...] = ()
+    items: int = 0
+    wall_s: float | None = None
+    since_load: int | None = None
+    load_s: float | None = None
+    device: tuple[int, int] | None = None
+
+
+def _open() -> list[RequestReport]:
+    if not hasattr(_LOCAL, "opened"):
+        _LOCAL.opened = []
+    opened: list[RequestReport] = _LOCAL.opened
+    return opened
+
+
+def _collector() -> list[RequestReport] | None:
+    found: list[RequestReport] | None = getattr(_LOCAL, "found", None)
+    return found
+
+
+def record(
+    items: int, *, since_load: int | None = None, load_s: float | None = None, device: tuple[int, int] | None = None
+) -> None:
+    """Record what the request this thread is sending reported, over `items` items.
+
+    Without an open `request` it is a request of its own, tagged with nothing; without a collector it is dropped.
+    """
+    opened = _open()
+    if opened:
+        report = opened[-1]
+        report.items, report.since_load, report.load_s, report.device = items, since_load, load_s, device
+    elif (found := _collector()) is not None:
+        found.append(RequestReport(items=items, since_load=since_load, load_s=load_s, device=device))
 
 
 @contextmanager
-def collected() -> Iterator[list[tuple[int, int, int]]]:
-    """Yield the list the requests this thread runs inside the block are recorded in."""
+def request(tags: tuple[Hashable, ...]) -> Iterator[None]:
+    """Open the report of a request carrying the jobs `tags`; kept, with its wall, once the block ends and recorded.
+
+    A block that raises or records nothing (a request every job of which the store served) keeps no report.
+    """
+    report = RequestReport(tags=tags)
+    opened = _open()
+    opened.append(report)
+    began = time.monotonic()
+    try:
+        yield
+    finally:
+        report.wall_s = time.monotonic() - began
+        opened.pop()
+    if (found := _collector()) is not None and report.items:
+        found.append(report)
+
+
+@contextmanager
+def collected() -> Iterator[list[RequestReport]]:
+    """Yield the list the requests this thread runs inside the block are reported in."""
     previous = getattr(_LOCAL, "found", None)
-    found: list[tuple[int, int, int]] = []
+    found: list[RequestReport] = []
     _LOCAL.found = found
     try:
         yield found

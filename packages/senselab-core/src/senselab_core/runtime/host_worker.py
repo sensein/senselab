@@ -8,7 +8,7 @@ from typing import Any
 from senselab_worker.codec import validate_message
 from senselab_worker.device_peak import torch_meter
 from senselab_worker.faults import PASS_THROUGH, FaultClass, ProtocolError, error_record
-from senselab_worker.model_cache import ModelCache, ModelKey, check_model_key
+from senselab_worker.model_cache import Loan, ModelCache, ModelKey, check_model_key
 from senselab_worker.serve import call_handle
 
 from senselab_core.runtime import request_reports
@@ -49,7 +49,7 @@ class HostWorker:
             backend = importlib.import_module(module)
             self._load = backend.load
             self._handle = backend.handle
-            self._state()
+            self._loan()
 
     def run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         """Run one request in this process and return one result per item, in order, as `WorkerClient.run` does.
@@ -63,16 +63,16 @@ class HostWorker:
         except ProtocolError as exc:
             raise ValueError(f"malformed request: {exc}") from exc
         with _fatal():
-            state = self._state()
-        entries, device = torch_meter(lambda: call_handle(self._handle, state, items, params))
-        if device is not None:
-            request_reports.record(*device, len(items))
+            loan = self._loan()
+        entries, device = torch_meter(lambda: call_handle(self._handle, loan.state, items, params))
+        self._cache.answered(self._key)
+        request_reports.record(len(items), since_load=loan.since_load, load_s=loan.load_s, device=device)
         return [
             item_error(item["id"], error_record(entry["error"])) if "error" in entry else {"id": item["id"], **entry}
             for item, entry in zip(items, entries)
         ]
 
-    def _state(self) -> object:
+    def _loan(self) -> Loan:
         return self._cache.get_or_load(self._key, lambda: self._load(dict(self._init)), self._size_of)
 
 

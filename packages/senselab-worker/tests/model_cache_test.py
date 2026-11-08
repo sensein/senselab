@@ -28,7 +28,7 @@ def test_model_loaded_once_across_calls() -> None:
     cache, loads = ModelCache(10), list[str]()
     first = cache.get_or_load(_key(), _loader(loads, "m"), lambda _: 1)
     second = cache.get_or_load(_key(), _loader(loads, "again"), lambda _: 1)
-    assert second is first and loads == ["m"]
+    assert second.state is first.state and loads == ["m"]
     cache.get_or_load(_key(DIGEST), _loader(loads, "w"), lambda _: 1)
     assert loads == ["m", "w"] and cache.keys() == [_key(), _key(DIGEST)]
 
@@ -136,3 +136,28 @@ def test_budget_must_be_a_non_negative_int(budget: object) -> None:
     """The budget is a non-negative int."""
     with pytest.raises(ValueError, match="budget_bytes"):
         ModelCache(budget)  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+def test_an_entry_counts_its_answered_requests_and_a_reload_starts_again() -> None:
+    """A load reports its seconds on the first request only; an eviction and reload resets the count to 0."""
+    cache, loads = ModelCache(4), list[str]()
+    a, b = _key(backend="a"), _key(backend="b")
+    first = cache.get_or_load(a, _loader(loads, "a"), lambda _: 4)
+    assert first.since_load == 0 and first.load_s is not None
+    cache.answered(a)
+    second = cache.get_or_load(a, _loader(loads, "a"), lambda _: 4)
+    assert second.since_load == 1 and second.load_s is None
+    cache.get_or_load(b, _loader(loads, "b"), lambda _: 4)
+    cache.answered(a)
+    reloaded = cache.get_or_load(a, _loader(loads, "a"), lambda _: 4)
+    assert loads == ["a", "b", "a"] and reloaded.since_load == 0 and reloaded.load_s is not None
+
+
+@pytest.mark.logic
+def test_a_load_not_yet_answered_keeps_its_seconds() -> None:
+    """A state loaded ahead of its first request still reports the load on that request."""
+    cache = ModelCache(4)
+    cache.get_or_load(_key(), lambda: 1, lambda _: 1)
+    again = cache.get_or_load(_key(), lambda: 1, lambda _: 1)
+    assert again.since_load == 0 and again.load_s is not None

@@ -554,6 +554,10 @@ def _done(msg: dict[str, Any]) -> None:
             raise _fail("done", f"{key!r} is negative")
     if ("device_peak_bytes" in msg) != ("device_allocated_bytes" in msg):
         raise _fail("done", "'device_peak_bytes' and 'device_allocated_bytes' come together")
+    if "since_load" in msg and _typed(msg, "since_load", "done", (int,)) < 0:
+        raise _fail("done", "'since_load' is negative")
+    if "load_s" in msg and (_typed(msg, "load_s", "done", (int, float)) < 0 or msg.get("since_load") != 0):
+        raise _fail("done", "'load_s' is a non-negative time, given only with 'since_load' 0")
 
 
 def _fatal(msg: dict[str, Any]) -> None:
