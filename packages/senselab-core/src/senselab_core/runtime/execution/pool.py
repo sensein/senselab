@@ -232,6 +232,8 @@ class Pool:
     Attributes:
         broken: Each env this pool reported broken, once.
         gaps: Each job given a fault with `gap` set, with its fault.
+        calibrated: Each unit this pool calibrated, with when its measure was set (`time.monotonic`) and the jobs
+            its rounds ran.
     """
 
     logs_claims: ClassVar[bool] = True
@@ -288,6 +290,7 @@ class Pool:
         self._queue_units: dict[str, set[Unit]] = {}
         self._calibrating: dict[Unit, tuple[str, list[str]]] = {}
         self._first_round: dict[Unit, list[Sample]] = {}
+        self.calibrated: dict[Unit, tuple[float, int]] = {}
 
     def bind_epoch(self, epoch: int, events: EventLog) -> None:
         """Coordinate as `epoch` from now on, logging to `events`, a log of that epoch's attempt.
@@ -451,7 +454,7 @@ class Pool:
         if not held:
             return False
         followed, part = held[0]
-        batch = min(self._sizing(queue, self._per_item(found, queue)).batch_size, len(part.jobs))
+        batch = min(self._sizing(queue, self._per_item(found, queue)).memory_batch, len(part.jobs))
         placement = part.placement.model_copy(update={"batch_size": batch})
         request = node_request_size(self._admitted_plan(part)[0], part.node, placement)
         if request < 2:  # noqa: PLR2004 - a batch is two items or more
@@ -489,8 +492,9 @@ class Pool:
         items of that many jobs, each one request (`_batch_round`), so the measure holds the median per-item seconds
         alone and batched and `size` keeps the faster. A unit of a model backend whose `cuda` samples reported no
         device figures is logged: its device memory stays unmeasured. A round whose items measured nothing leaves its
-        unit unmeasured, so its held parts start another. A part refused when put (`_put`) waits again, with those
-        after it.
+        unit unmeasured, so its held parts start another. A round with no warm one-job item measures
+        nothing, since its load cannot be told from its items. A part refused when put (`_put`) waits again, with
+        those after it.
         """
         with self._lock:
             rounds = list(self._calibrating.items())
@@ -501,7 +505,7 @@ class Pool:
             samples = self._first_round.pop(unit, []) + [
                 Sample.model_validate(r["measure"]) for r in records if r is not None and "measure" in r
             ]
-            found = calibrated(samples)
+            found = calibrated(samples) if any(not s.cold and s.batch_size == 1 for s in samples) else None
             if found is not None and found.batched is None and self._batch_round(unit, queue, found, samples):
                 continue
             _note_unmeasured_device(unit, queue, found, samples)
@@ -512,6 +516,7 @@ class Pool:
                 del self._calibrating[unit]
                 if found is not None:
                     self._sized[unit] = self._per_item(found, queue)
+                    self.calibrated[unit] = (time.monotonic(), sum(s.jobs for s in samples))
                 held = [(f, p) for f in self._followed.values() for u, p in f.waiting if u == unit]
                 for followed in self._followed.values():
                     followed.waiting = [(u, p) for u, p in followed.waiting if u != unit]

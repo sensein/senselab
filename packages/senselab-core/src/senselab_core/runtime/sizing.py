@@ -101,9 +101,10 @@ class Grant(Frozen):
 
 
 class Sizing(Frozen):
-    """Items per request, jobs and seconds per quantum, and the workers a queue's waiting work wants."""
+    """Items per request, the most memory allows, jobs and seconds per quantum, and the workers a queue's work wants."""
 
     batch_size: Count
+    memory_batch: Count
     quantum_items: Count
     quantum_s: Seconds
     workers: Annotated[int, Field(ge=0)]
@@ -116,9 +117,10 @@ def size(measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 
       (the ceiling when both are 0), within the ceilings: `quantum_items`, and the jobs that fit in `quantum_s` after
       them;
     - `quantum_s`: the quantum's jobs plus the load and claim, within `quantum_s`;
-    - `batch_size`: the most items whose memory beside the resident memory fits `memory_headroom` of the grant's,
-      at most a quantum; 1 when the grant's or the unit's memory is unmeasured, `batchable` is False, or items sent
-      in a batch were measured slower per item than items sent alone;
+    - `memory_batch`: the most items whose memory beside the resident memory fits `memory_headroom` of the grant's,
+      at most a quantum; 1 when the grant's or the unit's memory is unmeasured or `batchable` is False;
+    - `batch_size`: `memory_batch` where items sent in a batch were measured no slower per item than items sent
+      alone, else 1 (batched throughput unmeasured counts as not shown);
     - `workers`: as many as end `work` within `target_wall_s`, at most a quantum each and `Grant.worker_bound`; 0 for
       none.
     """
@@ -127,18 +129,22 @@ def size(measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 
     wanted = _held(load / paid, ceiling, math.ceil) if paid and load else ceiling
     fits = _held((grant.quantum_s - load) / per, ceiling, math.floor) if per else ceiling
     quantum = max(1, min(wanted, fits))
-    batch = 1
-    slower = measure.batched_s_per_item is not None and measure.batched_s_per_item > per
-    if batchable and not slower and grant.memory_bytes is not None and measure.resident_bytes is not None:
+    memory_batch = 1
+    if batchable and grant.memory_bytes is not None and measure.resident_bytes is not None:
         room = config.memory_headroom * grant.memory_bytes - measure.resident_bytes
         per_bytes = measure.bytes_per_item or 0
-        batch = 1 if room < 0 else quantum if per_bytes == 0 else max(1, _held(room / per_bytes, quantum, math.floor))
+        memory_batch = (
+            1 if room < 0 else quantum if per_bytes == 0 else max(1, _held(room / per_bytes, quantum, math.floor))
+        )
+    faster = measure.batched_s_per_item is not None and measure.batched_s_per_item <= per
+    batch = memory_batch if faster else 1
     workers = 0
     if work > 0:
         timely = max(1, _held(work * per / config.target_wall_s, grant.max_workers, math.ceil))
         workers = min(timely, math.ceil(work / quantum), grant.worker_bound(measure))
     return Sizing(
         batch_size=batch,
+        memory_batch=memory_batch,
         quantum_items=quantum,
         quantum_s=min(quantum * per + load, grant.quantum_s),
         workers=workers,

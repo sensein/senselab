@@ -257,6 +257,29 @@ def test_a_resource_fault_halves_the_batch_later_items_are_sent_in(tmp_path: Pat
     assert {c.fragments[0].placement.batch_size for c in _claim_all(pool.queues.queue("cpu"))} == {4}
 
 
+@pytest.mark.logic
+def test_a_round_without_a_warm_item_measures_nothing(tmp_path: Path) -> None:
+    """A one-job round gives only its cold item, so nothing is written; the unit's next fragment starts a round.
+
+    A cold item's load and work cannot be told apart.
+    """
+    profile, measures = _profile(quantum=100), FixedMeasures(None)
+    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(6)])
+    pool = _pool(tmp_path, profile, measures=measures)
+    admission = pool.admit(placed, values)
+    alone = pool.submit(node_fragment(placed, admission, elements=[(0,)]))
+    queue = pool.queues.queue("cpu")
+    [claim] = _claim_all(queue)
+    with claim:
+        report(
+            claim, claim.items[0], _executed(placed, values, pool.store, claim.fragments[0]), _sample(9.0, cold=True)
+        )
+    results, done = pool.poll(alone)
+    assert len(results) == 1 and done and measures.puts == [] and pool.calibrated == {}
+    pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(1, 6)]))
+    assert [len(c.fragments[0].jobs) for c in _claim_all(queue)] == [1] * profile.sizing.calibration_items
+
+
 @pytest.mark.parametrize(("cap", "expected"), [(None, 20), (16, 4)], ids=["class-max", "qos-cap"])
 @pytest.mark.logic
 def test_scale_wants_a_worker_per_quantum_of_jobs(tmp_path: Path, cap: int | None, expected: int) -> None:

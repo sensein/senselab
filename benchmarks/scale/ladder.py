@@ -20,6 +20,7 @@ does not plan is refused, every such entry listed.
 import argparse
 import json
 import os
+import platform
 import statistics
 import subprocess
 import sys
@@ -264,7 +265,10 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
 ) -> dict[str, Any]:
     """Plan, run and measure `entry` at `point` under `profile`; return its `scale-result@1.0` document.
 
-    Its store is `<out>/<label>@<point>/store`.
+    Its store is `<out>/<label>@<point>/store`, and its pool's measures are written beside it, so each point
+    calibrates afresh and reads no other point's measure. `per_item_s` counts only the jobs after its calibration:
+    the wall from the measure being set to the end, over the jobs its rounds did not run; with no calibration, or
+    none left after it, the whole wall over all items. `calibration_s` and `calibration_jobs` give the rest.
 
     Raises:
         FileExistsError: the point's run directory exists, so its results would be reused.
@@ -283,14 +287,17 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         profile=profile,
         substrate=substrate_of(profile, run_dir, placed.hash),
         epoch=0,
-        measures=Measures(packaged=()),
+        measures=Measures(out / f"{label}@{point}" / "resources", packaged=()),
     )
     began = time.monotonic()
     try:
         status = placed.run(pool, store=store).wait()
     finally:
         pool.close()
-    wall = time.monotonic() - began
+    ended = time.monotonic()
+    wall = ended - began
+    rounds = list(pool.calibrated.values())
+    set_at, round_jobs = (max(t for t, _ in rounds), sum(n for _, n in rounds)) if rounds else (began, 0)
     samples = _samples(run_dir)
     events = read_events(run_dir)
     queued = {e.job: e.t_ns for e in events if e.kind == "queued" and e.job is not None}
@@ -301,6 +308,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     node, model = placed.placement.nodes["a"], placed.logical.models["a"]
     items = len(placed.manifest.rows)
     found = calibrated(samples)
+    steady = items - round_jobs
     return {
         "format": RESULT_FORMAT,
         "suite": suite.name,
@@ -319,7 +327,11 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         "done": status.done,
         "counts": dict(status.counts),
         "wall_s": wall,
-        "per_item_s": wall / items,
+        "per_item_s": (ended - set_at) / steady if rounds and steady > 0 else wall / items,
+        "calibration_s": set_at - began,
+        "calibration_jobs": round_jobs,
+        "host": platform.node(),
+        "backend_params": dict(node.backend_params),
         "input_s": None if root is None else sum(soundfile.info(p).duration for p in sorted(root.rglob("*_audio.*"))),
         "job_s": _median([s.wall_s / s.jobs for s in samples if not s.cold]),
         "queue_wait_s": _median(waits),

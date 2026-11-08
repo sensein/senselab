@@ -283,10 +283,10 @@ def _register_sizing(register: Register) -> None:
         ),
         Sizing: (
             [
-                Sizing(batch_size=8, quantum_items=50, quantum_s=27.5, workers=4),
-                Sizing(batch_size=1, quantum_items=1, quantum_s=0, workers=0),
+                Sizing(batch_size=8, memory_batch=8, quantum_items=50, quantum_s=27.5, workers=4),
+                Sizing(batch_size=1, memory_batch=4, quantum_items=1, quantum_s=0, workers=0),
             ],
-            [{"batch_size": 0}, {"workers": -1}],
+            [{"batch_size": 0}, {"memory_batch": 0}, {"workers": -1}],
         ),
         Sample: (
             [

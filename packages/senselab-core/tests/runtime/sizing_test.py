@@ -98,8 +98,10 @@ def test_the_quantum_holds_the_load_and_claim_to_their_share_and_workers_meet_th
     grant = Grant(max_workers=32, memory_bytes=10_000, quantum_items=1000, quantum_s=3600)
     sized = size(measure, grant, SETTINGS, work=4000)
     assert (sized.quantum_items, sized.workers) == (400, 7) and sized.quantum_s == pytest.approx(42.0)
-    assert sized.batch_size == (0.9 * 10_000 - 1000) // 100
-    assert size(measure, grant, SETTINGS, batchable=False).batch_size == 1
+    assert sized.memory_batch == (0.9 * 10_000 - 1000) // 100 and sized.batch_size == 1
+    proven = measure.model_copy(update={"batched_s_per_item": 0.1})
+    assert size(proven, grant, SETTINGS).batch_size == sized.memory_batch
+    assert size(proven, grant, SETTINGS, batchable=False).batch_size == 1
     assert size(measure, grant.model_copy(update={"quantum_s": 12.0}), SETTINGS).quantum_items == 100
     free = measure.model_copy(update={"load_s": 0.0, "claim_s": 0.0})
     assert size(free, grant, SETTINGS).quantum_items == grant.quantum_items
