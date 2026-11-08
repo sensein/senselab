@@ -1,0 +1,30 @@
+# Phase 3 exit checks. Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, section benchmarks/exit/exit.yaml.
+# The format.
+format: exit-checks@1.0
+# The profiles one plan hash is checked across, each planned on this host.
+plan_profiles: [laptop, orcd]
+# The two scenarios: the task class, its params, and the BIDS tree its records come from.
+steps:
+  resample:
+    task: Resample
+    params: {target_rate: 8000}
+    tree: synthetic
+    items: 1000
+    seed: 0
+  stt:
+    task: SpeechToText
+    params: {}
+    tree: librispeech
+    items: 1000
+    manifest: librispeech-test-clean
+# Per executor, the wall seconds and the resident bytes of the coordinator and its workers; null: the allocation's.
+bounds:
+  in-process: &laptop {wall_s: 900, resident_bytes: 2147483648}
+  pool-local: *laptop
+  pool-slurm: {wall_s: null, resident_bytes: null}
+# The local workers of the pool-local executor.
+pool_local_workers: 2
+# Seconds between samples of the watch over resident bytes and load.
+watch_poll_s: 1
+# The share of the items committed when the interrupted run is to be cancelled: numerator, denominator.
+interrupt_share: [1, 3]

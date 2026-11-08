@@ -1,0 +1,11 @@
+You are given the output of `senselab.describe()` for every task of a speech and signal toolkit, and the path of a BIDS dataset of audio recordings. You have no other documentation and no access to the repository.
+
+Choose one task from the descriptions that can run on each recording of the dataset, and write the call that runs it as a JSON object with these keys:
+
+  "format": "agent-plan@1.0"
+  "task":   the task's declared name, as `describe` gives it
+  "params": an object of the task's params, as its description declares them
+  "model":  a model id from the task's description, or null for the default
+  "dataset": the dataset path you were given
+
+Write the JSON object and nothing else.

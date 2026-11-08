@@ -1,0 +1,129 @@
+"""Step 4: interrupt `SpeechToText` on a Slurm pool at a share of its items, then resume it and account the work.
+
+`interrupt_resume.py start --work DIR --out FILE` plans and runs the `stt` step under the profile on `pool-slurm`; once
+the config's share of the items has a result event it prints the coordinator's and every live worker's Slurm job id for
+the controller to `scancel`, writes them to `FILE`, and keeps waiting. It cancels nothing.
+`resume HASH --work DIR --out FILE` (a fresh process, after the cancel) resumes the run and asserts from its events:
+executions are the items not committed before the interrupt, every other item a reuse, and no model ref was resolved.
+"""
+
+import argparse
+import os
+import sys
+import time
+from collections.abc import Sequence
+from pathlib import Path
+
+sys.path[:0] = [str(Path(__file__).resolve().parent)]
+import exitlib  # noqa: E402 - beside this script
+from senselab_core.runtime.execution.events import read_events, run_dir_of  # noqa: E402
+from senselab_core.runtime.execution.run import RESULTS_DIR  # noqa: E402
+from senselab_core.runtime.execution.substrates import Slurm, substrate_of, worker_id  # noqa: E402
+from senselab_core.runtime.revision import cache_root, read_manifest  # noqa: E402
+from senselab_core.runtime.store import ResultStore  # noqa: E402
+
+STEP = "stt"
+EXECUTOR = "pool-slurm"
+
+
+def start(work: Path, out: Path, profile_argument: str, config: exitlib.Config) -> int:
+    """Run the step until its share of the items is committed, report the jobs to cancel, then wait.
+
+    Raises:
+        RuntimeError: the run is done before the share was committed, or not started as a Slurm job.
+        BoundExceeded: the wall bound passed before the share was committed.
+    """
+    if not os.environ.get("SLURM_JOB_ID"):
+        raise RuntimeError("the coordinator must be a Slurm job: submit this command, do not run it on a login node")
+    base = exitlib.load_profile(profile_argument)
+    profile = exitlib.profile_for(EXECUTOR, base, config)
+    exitlib.isolate(work, STEP)
+    placed = exitlib.planned(config.steps[STEP], exitlib.build_tree(config.steps[STEP], work), profile)
+    run_dir = run_dir_of(placed.hash)
+    items = len(placed.manifest.rows)
+    target = exitlib.interrupt_target(items, config.interrupt_share)
+    bounds, poll = config.bounds[EXECUTOR], config.watch_poll_s
+    store = ResultStore(cache_root() / RESULTS_DIR)
+    substrate = substrate_of(profile, run_dir, placed.hash)
+    if not isinstance(substrate, Slurm):
+        raise TypeError(f"profile {profile.name} names a {type(substrate).__name__} substrate, not Slurm")
+    prefix = substrate.prefix
+    run, _ = exitlib.launch(placed, EXECUTOR, store)
+    deadline = None if bounds.wall_s is None else time.monotonic() + bounds.wall_s
+    while len(exitlib.committed_jobs(run.events())) < target:
+        if run.wait(timeout=poll).done:
+            raise RuntimeError(
+                f"the run finished before {target} of {items} items were committed: nothing to interrupt"
+            )
+        if deadline is not None and time.monotonic() >= deadline:
+            run.cancel()
+            raise exitlib.BoundExceeded(f"fewer than {target} of {items} items committed within {bounds.wall_s} s")
+    timeout = profile.substrate.commands.timeout_s if profile.substrate.commands is not None else poll
+    workers = exitlib.slurm_job_ids(prefix, timeout, exitlib.squeue)
+    committed = len(exitlib.committed_jobs(run.events()))
+    report = {
+        "hash": placed.hash,
+        "items": items,
+        "committed": committed,
+        "coordinator": worker_id(),
+        "workers": workers,
+    }
+    exitlib.write_json(out, report)
+    print(f"INTERRUPT NOW hash={placed.hash} committed={committed}/{items}")
+    print(f"scancel {worker_id()} {' '.join(workers)}")
+    while not run.wait(timeout=poll).done:
+        pass
+    print("the run finished before it was cancelled: the interrupt did not land")
+    return 1
+
+
+def resume(plan_hash: str, work: Path, out: Path, profile_argument: str) -> int:
+    """Resume the run of `plan_hash` and assert its accounting; write it to `out`.
+
+    Raises:
+        exitlib.ResumeMismatch: the events or the run manifest contradict the check.
+    """
+    import senselab  # noqa: PLC0415 - imported after the cache root is set
+
+    exitlib.isolate(work, STEP)
+    run_dir = run_dir_of(plan_hash)
+    before = read_events(run_dir)
+    profile = exitlib.load_profile(profile_argument)
+    with senselab.use(execution=profile):
+        results = senselab.resume(plan_hash)
+    after = read_events(run_dir)
+    items = len(results)
+    accounting = exitlib.account_resume(before, after, items)
+    exitlib.assert_no_resolution(read_manifest())
+    failed = results.failures()
+    if failed:
+        raise exitlib.ResumeMismatch(f"{len(failed)} items failed after the resume")
+    document = {"hash": plan_hash, **vars(accounting)}
+    exitlib.write_json(out, document)
+    print(
+        f"resume {plan_hash}: {accounting.executions} executions (items not committed: {items - accounting.committed}, "
+        f"late hits {accounting.late}), {accounting.reuses} reuses (items committed: {accounting.committed}), "
+        "no ref resolved"
+    )
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the step's command line."""
+    parser = argparse.ArgumentParser(prog="interrupt_resume.py")
+    commands = parser.add_subparsers(dest="command", required=True)
+    starting = commands.add_parser("start", help="run until the share is committed; print the jobs to scancel")
+    resuming = commands.add_parser("resume", help="resume a run and assert its executions and reuses")
+    resuming.add_argument("plan_hash")
+    for each in (starting, resuming):
+        each.add_argument("--work", type=Path, required=True)
+        each.add_argument("--out", type=Path, required=True)
+        each.add_argument("--profile", default="orcd", help="a packaged execution profile, or a YAML file over one")
+    args = parser.parse_args(argv)
+    if args.command == "start":
+        return start(args.work, args.out, args.profile, exitlib.load_config())
+    return resume(args.plan_hash, args.work, args.out, args.profile)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
