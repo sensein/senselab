@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import logging
 import os
 import platform
@@ -18,6 +19,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Collection, Final, Iterator, Mapping, Optional, Sequence
+
+from senselab_worker.digest import identity_digest
 
 logger = logging.getLogger("senselab")
 
@@ -518,8 +521,23 @@ def host_secret(run: Callable[[list[str]], str] = _run) -> str:
             if found := run(["sysctl", "-n", "kern.bootsessionuuid"]).strip():
                 return found
     path = Path(tempfile.gettempdir()) / f"senselab-host-{os.getuid()}"
-    with contextlib.suppress(FileExistsError):
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _PRIVATE)
+    staged = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}")
+    fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _PRIVATE)
+    try:
         with os.fdopen(fd, "wb") as f:
             f.write(secrets.token_hex(_SECRET_BYTES).encode())
+        with contextlib.suppress(FileExistsError):
+            os.link(staged, path)
+    finally:
+        staged.unlink(missing_ok=True)
     return path.read_text().strip()
+
+
+@functools.cache
+def host_token() -> str:
+    """Return the token of this host: a digest of a random per-host value (`host_secret`), never of its name.
+
+    It says only whether two processes share a host. Anyone with a shell on the host can compute it, so it links a
+    record to a host for them and tells every other reader nothing.
+    """
+    return identity_digest("host@1", host_secret())

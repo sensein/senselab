@@ -57,7 +57,6 @@ def _ctx(**overrides: object) -> ExecutionContext:
         "numerics": {"device": "cpu", "arch": "x86_64", "precision": "fp32"},
         "decoder": "soundfile-0.12.1",
         "driver": {},
-        "host": "node1",
         "protocol": "worker-c0ffee/wire-1",
         "model_source": "hf",
         "env_license": None,
@@ -303,14 +302,13 @@ def test_key_schema_version_is_a_positive_integer(schema_version: object) -> Non
 
 
 @pytest.mark.logic
-def test_fingerprint_excludes_host_protocol_model_source_and_license() -> None:
-    """The fingerprint skips host, protocol, model source and the license record, but not whether one is recorded."""
+def test_fingerprint_excludes_protocol_model_source_and_license() -> None:
+    """The fingerprint skips protocol, model source and the license record, but not whether one is recorded."""
     base = _ctx()
     mit = {"expression": "MIT", "commercial_use": "yes", "copyleft": "none", "attribution": True, "gated": False}
     licensed = _ctx(env_license={**mit, "source": "lock", "verified": {"date": "2026-11-02", "how": "pep639"}})
     other = _ctx(env_license={**mit, "source": "another lock", "verified": {"date": "2026-11-03", "how": "manual"}})
     assert licensed.fingerprint() == other.fingerprint() != base.fingerprint() and licensed != other
-    assert _ctx(host="node2").fingerprint() == base.fingerprint()
     assert _ctx(protocol="worker-beef/wire-2").fingerprint() == base.fingerprint()
     for source in ("url", "local", None):
         assert _ctx(model_source=source).fingerprint() == base.fingerprint()
@@ -379,15 +377,9 @@ def test_every_policy_member_is_dispatched(policy: ReusePolicy) -> None:
 def test_fingerprint_is_the_context_tagged_digest() -> None:
     """The fingerprint is `identity_digest("context@4", ...)` over all but the recorded-only fields, plus `licensed`."""
     c = _ctx()
-    recorded_only = {"host", "protocol", "model_source", "env_license"}
+    recorded_only = {"protocol", "model_source", "env_license"}
     fields = {**c.model_dump(exclude=recorded_only), "licensed": c.env_license is not None}
     assert c.fingerprint() == identity_digest("context@4", fields)
-
-
-@pytest.mark.logic
-def test_another_host_is_the_same_context() -> None:
-    """A result from another host with an identical context is reused even under `exact`."""
-    assert acceptable(_ctx(host="laptop"), _ctx(host="node7"), ReusePolicy.EXACT, backend="b")
 
 
 @pytest.mark.logic

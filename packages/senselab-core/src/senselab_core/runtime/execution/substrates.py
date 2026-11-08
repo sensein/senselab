@@ -17,7 +17,6 @@ its process and its `HardwareClass` per resource class, and writes no hardware i
 after `faults.infrastructure_replacements` consecutive failures; it then starts no more workers of the class.
 """
 
-import functools
 import logging
 import math
 import os
@@ -35,14 +34,13 @@ from pathlib import Path
 from typing import Protocol
 
 from senselab_worker.canonical import jcs_dumps, jcs_loads
-from senselab_worker.digest import identity_digest
 
 from senselab_core.runtime.calibration import HardwareClass
 from senselab_core.runtime.config import expand
 from senselab_core.runtime.execution.queue import PROBE_MARK, RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands, is_service_class
-from senselab_core.runtime.hardware import HardwareInfo, host_secret, probe_hardware, process_started, visible_devices
+from senselab_core.runtime.hardware import HardwareInfo, host_token, probe_hardware, process_started, visible_devices
 from senselab_core.runtime.profiles import ExecutionProfile
 
 logger = logging.getLogger("senselab")
@@ -158,15 +156,6 @@ class ReadyMark:
     pid: int
     started: str | None
     hardware: Mapping[str, HardwareClass]
-
-
-@functools.cache
-def host_token() -> str:
-    """Return the token of this host: a digest of a random per-host value (`host_secret`), never of its name.
-
-    It says only whether two processes share a host.
-    """
-    return identity_digest("host@1", host_secret())
 
 
 def mark_ready(run_dir: Path, hardware: Mapping[str, HardwareClass] | None = None) -> None:
@@ -849,7 +838,6 @@ __all__ = [
     "class_of",
     "Peers",
     "ReadyMark",
-    "host_token",
     "mark_ready",
     "read_mark",
     "profile_argument",

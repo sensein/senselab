@@ -1,5 +1,6 @@
 """The result store's format gate: later minors read, another version's entries skipped, retired ones refused."""
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,28 @@ def test_a_later_minor_is_read(tmp_path: Path) -> None:
     rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@3.4"))
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.outputs == {"y": 1}
+
+
+@pytest.mark.logic
+def test_an_old_context_with_a_host_field_is_still_read(tmp_path: Path) -> None:
+    """A `execution-context@3.0` member carrying `host` is served (the field ignored) and is not rewritten."""
+    s, k, c = ResultStore(tmp_path), store_key(), store_context()
+    s.put(k, {"y": 1}, c)
+    entry = entry_dir(tmp_path, k, c)
+    rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@3.0", host="node1"))
+    before = (entry / "context.json").read_bytes()
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.outputs == {"y": 1} and "host" not in got.context.model_dump()
+    assert (entry / "context.json").read_bytes() == before
+
+
+@pytest.mark.logic
+def test_a_new_context_carries_no_host_field(tmp_path: Path) -> None:
+    """A written context is `execution-context@3.1` and has no `host`."""
+    s, k, c = ResultStore(tmp_path), store_key(), store_context()
+    s.put(k, {"y": 1}, c)
+    record = json.loads((entry_dir(tmp_path, k, c) / "context.json").read_bytes())
+    assert record["format"] == CONTEXT_FORMAT == "execution-context@3.1" and "host" not in record
 
 
 @pytest.mark.logic

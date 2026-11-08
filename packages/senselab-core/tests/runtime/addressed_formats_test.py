@@ -46,7 +46,6 @@ def _ctx(platform: str = "linux") -> ExecutionContext:
         numerics={"device": "cpu", "precision": "fp32"},
         decoder=None,
         driver={},
-        host="node1",
         protocol="p1",
         model_source="hf",
     )

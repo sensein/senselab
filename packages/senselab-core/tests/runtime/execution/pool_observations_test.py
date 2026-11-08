@@ -1,7 +1,5 @@
 """What a pool worker reports per request: walls, outcomes, co-tenancy and hardware, and how it serves a probe queue."""
 
-import getpass
-import socket
 import threading
 import time
 from collections import Counter
@@ -10,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from planted_objects_fixture import identity_leaks
 from pool_stack_fixture import packaged, registry, scoring
 from pool_worker_test import WORKERS, _outcomes, _profile, _put, _run, _sender, _text
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
@@ -168,17 +167,10 @@ def test_no_run_record_names_the_host_the_account_or_a_home_path(tmp_path: Path)
         cotenancy=lambda _: SHARED,
     ).serve()
     mark_ready(tmp_path / "run", {"cpu": HARDWARE})
-    names = [socket.gethostname().encode(), getpass.getuser().encode(), str(Path.home()).encode()]
-    files = [p for p in (tmp_path / "run").rglob("*") if p.is_file()]
-    own = [str(tmp_path).encode(), str(tmp_path.resolve()).encode()]
-
-    def content(path: Path) -> bytes:
-        data = path.read_bytes()
-        for place in own:
-            data = data.replace(place, b"")
-        return data
-
-    assert files and not [(p.name, n) for p in files for n in names if n in content(p)]
+    assert [p for p in (tmp_path / "run").rglob("*") if p.is_file()]
+    assert (
+        identity_leaks(tmp_path / "run", except_files=("manifest.json",)) == []
+    )  # it names the store workers write to
 
 
 @pytest.mark.logic

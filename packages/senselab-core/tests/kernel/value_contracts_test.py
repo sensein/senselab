@@ -600,7 +600,6 @@ def test_small_loosenesses_are_refused() -> None:
         numerics={},
         decoder=None,
         driver={},
-        host="h",
         protocol="1",
         model_source=None,
         env_license=None,

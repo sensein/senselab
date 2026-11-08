@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 import senselab_core.runtime.fake_backend as fake
+from planted_objects_fixture import identity_leaks
 from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
 from senselab_core.kernel.identity import Attestation, ModelRef, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
@@ -22,6 +23,7 @@ from senselab_core.runtime.execution.pool_worker import IDLE_POLLS, PoolWorker
 from senselab_core.runtime.execution.queue import RUN_QUEUES
 from senselab_core.runtime.execution.services import ConsumerLease, ServiceEntry, ServiceRegistry, service_registry
 from senselab_core.runtime.execution.workers import WorkerSet, expected_of
+from senselab_core.runtime.hardware import host_token
 from senselab_core.runtime.keys import Call, Placement, call_key
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -147,6 +149,21 @@ def test_service_registered_under_renewed_lease(registry: ServiceRegistry) -> No
         os.utime(path, (past, past))
     assert registry.lookup(IDENTITY) is None
     registry.register(IDENTITY, "http://127.0.0.1:3").close()
+
+
+def test_a_service_record_holds_no_host_name(tmp_path: Path, starts: list[StandIn]) -> None:
+    """A provider and a consumer on the host-keyed registry leave no host name, account or home path under its root."""
+    profile = PROFILE.model_copy(update={"env_roots": {**PROFILE.env_roots, "server": str(tmp_path / "servers")}})
+    registry = service_registry(profile, {"CUDA_VISIBLE_DEVICES": "0"})
+    provider, consumer = _provider(registry, starts), WorkerSet(1, registry=registry)
+    try:
+        provider.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY)
+        consumer.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY)
+        assert registry.root.relative_to(tmp_path / "servers").parts[1] == host_token()
+        assert identity_leaks(tmp_path / "servers") == []
+    finally:
+        consumer.close()
+        provider.close()
 
 
 def test_two_consumers_one_server(registry: ServiceRegistry, starts: list[StandIn]) -> None:

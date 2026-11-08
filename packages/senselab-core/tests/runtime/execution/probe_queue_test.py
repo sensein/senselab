@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,11 +24,10 @@ from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
     Peers,
     class_of,
-    host_token,
     mark_ready,
     read_mark,
 )
-from senselab_core.runtime.hardware import GpuInfo, HardwareInfo, device_parties, host_secret
+from senselab_core.runtime.hardware import GpuInfo, HardwareInfo, device_parties, host_secret, host_token
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import identity_digest
@@ -120,7 +120,7 @@ def test_a_ready_mark_carries_the_hardware_per_queue_and_names_the_host_by_token
 @pytest.mark.logic
 def test_the_host_token_is_stable_and_not_derived_from_the_host_name() -> None:
     """The token is the same in this process and another, and no hash of the host name gives it."""
-    probe_code = "from senselab_core.runtime.execution.substrates import host_token; print(host_token())"
+    probe_code = "from senselab_core.runtime.hardware import host_token; print(host_token())"
     other = subprocess.run(
         [sys.executable, "-c", probe_code], capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -138,6 +138,25 @@ def test_without_a_boot_id_the_secret_is_a_private_random_file(tmp_path: Path, m
     files = [p for p in tmp_path.iterdir() if p.name.startswith("senselab-host-")]
     assert len(first) >= 16 and host_secret(run=lambda _: "") == first and len(files) <= 1
     assert all(p.stat().st_mode & 0o077 == 0 for p in files)
+
+
+@pytest.mark.logic
+def test_host_secret_is_created_once_under_a_race(tmp_path: Path) -> None:
+    """Processes racing to create the fallback file all read the one value, never an empty or another's."""
+    code = (
+        "import sys, time; from senselab_core.runtime.hardware import host_secret; "
+        "time.sleep(max(0, float(sys.argv[1]) - time.time())); print(host_secret(run=lambda _: ''))"
+    )
+    start = time.time() + 2.0
+    env = {**os.environ, "TMPDIR": str(tmp_path)}
+    procs = [
+        subprocess.Popen([sys.executable, "-c", code, str(start)], env=env, stdout=subprocess.PIPE, text=True)
+        for _ in range(8)
+    ]
+    values = {p.communicate(timeout=60)[0].strip() for p in procs}
+    files = [p for p in tmp_path.iterdir() if p.name.startswith("senselab-host-")]
+    assert len(values) == 1 and len(next(iter(values))) >= 16 and len(files) == 1
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".senselab-host-")]
 
 
 @pytest.mark.logic

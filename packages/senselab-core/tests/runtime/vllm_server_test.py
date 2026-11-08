@@ -113,7 +113,6 @@ def _context(fields: dict[str, Any]) -> ExecutionContext:
         platform="linux-x86_64",
         numerics={},
         decoder=None,
-        host="h",
         protocol="p",
         model_source="hf",
         env_license=None,

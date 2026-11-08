@@ -40,7 +40,7 @@ from senselab_core.kernel.identity import Attestation, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.supervisor import current
 from senselab_core.runtime.execution_settings import JobLease
-from senselab_core.runtime.hardware import DeviceMemory, device_free_memory, device_set
+from senselab_core.runtime.hardware import DeviceMemory, device_free_memory, device_set, host_token
 from senselab_core.runtime.launch import Launch, launch
 from senselab_core.runtime.locks import TIMEOUT_S, Lease, LeaseUnavailable
 from senselab_core.runtime.network import Network, network_variables
@@ -358,7 +358,7 @@ class VllmServer:
     @property
     def lock_path(self) -> Path:
         """The start lease's resource, shared by every server on this host's devices."""
-        return self.start_lock_dir / f"vllm-start-{socket.gethostname()}-{device_set(self.devices)}"
+        return self.start_lock_dir / f"vllm-start-{host_token()}-{device_set(self.devices)}"
 
     def __enter__(self) -> "VllmServer":
         """Start the server and attest it.
@@ -440,7 +440,7 @@ class VllmServer:
         sink: int | IO[bytes] = 2
         if self.log_dir is not None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
-            path = self.log_path = self.log_dir / f"vllm-{socket.gethostname()}-{os.getpid()}-{port}.log"
+            path = self.log_path = self.log_dir / f"vllm-{host_token()}-{os.getpid()}-{port}.log"
             self._log = os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "wb")
             sink = self._log
         self._supervisor = current()

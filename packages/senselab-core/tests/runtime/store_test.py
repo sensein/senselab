@@ -130,7 +130,7 @@ def test_put_get_exact(tmp_path: Path) -> None:
     assert result["output_identity"] == ident
     sha = _sha(canonical_npy_bytes(outputs["y"]))  # type: ignore[arg-type]
     assert (entry / f"{sha}.npy").read_bytes() == canonical_npy_bytes(outputs["y"])  # type: ignore[arg-type]
-    assert json.loads((entry / "context.json").read_bytes())["format"] == "execution-context@3.0"
+    assert json.loads((entry / "context.json").read_bytes())["format"] == "execution-context@3.1"
     assert s.get(store_key(task="other"), c, ReusePolicy.TOLERANT) is None
 
 
@@ -144,7 +144,7 @@ def test_cross_context_follows_policy(tmp_path: Path) -> None:
     got = s.get(k, store_context(platform="macos"), ReusePolicy.TOLERANT)
     assert got is not None and got.policy_used is ReusePolicy.TOLERANT
     assert got.context.platform == "linux"
-    same = s.get(k, store_context(platform="linux", host="node2"), ReusePolicy.EQUIVALENT)
+    same = s.get(k, store_context(platform="linux"), ReusePolicy.EQUIVALENT)
     assert same is not None and same.policy_used is ReusePolicy.EXACT
 
 
@@ -446,7 +446,7 @@ def test_store_writes_entity_and_reuse_only(tmp_path: Path, caplog: pytest.LogCa
     """A put adds the result entity, every hit a reuse activity that used it; no execution activity, no quarantine."""
     provenance = ProvStore()
     s, k = ResultStore(tmp_path, provenance=provenance), store_key()
-    linux, mac = store_context(platform="linux"), store_context(platform="macos", host="node2")
+    linux, mac = store_context(platform="linux"), store_context(platform="macos")
     ident = s.put(k, {"y": 1}, linux)
     assert [(r.id, r.types()) for r in provenance.records()] == [(ident, ("prov:Entity",))]
     assert s.get(k, linux, ReusePolicy.EXACT) is not None
@@ -465,8 +465,8 @@ def test_store_writes_entity_and_reuse_only(tmp_path: Path, caplog: pytest.LogCa
     assert sorted(_reuses(s), key=lambda a: str(a["senselab:reusePolicy"])) == [
         {
             "senselab:logicalKey": store_module.key_record(k),
-            "senselab:context": {"format": "execution-context@3.0", **current.model_dump(mode="json")},
-            "senselab:storedContext": {"format": "execution-context@3.0", **linux.model_dump(mode="json")},
+            "senselab:context": {"format": "execution-context@3.1", **current.model_dump(mode="json")},
+            "senselab:storedContext": {"format": "execution-context@3.1", **linux.model_dump(mode="json")},
             "senselab:reusePolicy": policy,
             "senselab:storedAgent": store_module.agent_record(k, linux).id,
         }

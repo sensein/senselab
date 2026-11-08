@@ -80,8 +80,8 @@ def store_key(task: str = "asr", **inputs: str) -> Any:  # noqa: ANN401
     )
 
 
-def store_context(platform: str = "linux", host: str = "node1", device: str = "cpu") -> Any:  # noqa: ANN401
-    """Return the store tests' execution context on `platform`, `host` and `device`."""
+def store_context(platform: str = "linux", device: str = "cpu") -> Any:  # noqa: ANN401
+    """Return the store tests' execution context on `platform` and `device`."""
     from senselab_core.kernel.identity import ExecutionContext
 
     return ExecutionContext(
@@ -91,7 +91,6 @@ def store_context(platform: str = "linux", host: str = "node1", device: str = "c
         numerics={"device": device, "precision": "fp32"},
         decoder=None,
         driver={},
-        host=host,
         protocol="p1",
         model_source="hf",
         env_license=None,
@@ -918,3 +917,28 @@ def probe_clock_hard_link(scratch: str, op: str) -> dict[str, Any]:
 
 
 UNOPENABLE_NAMES = (LEASE, "resolutions@2.json")
+
+
+def real_identities() -> set[str]:
+    """The names this machine goes by: host (three spellings), account and home path."""
+    import getpass
+    import os
+    import platform
+    import socket
+
+    full = {socket.gethostname(), platform.node(), os.uname().nodename}
+    return {n for n in {*full, *(h.split(".")[0] for h in full), getpass.getuser(), str(Path.home())} if n}
+
+
+def identity_leaks(root: Path, *, except_files: tuple[str, ...] = ()) -> list[tuple[str, str]]:
+    """Return `(file, what)` for every file under `root` whose path or bytes hold a real name or `root` itself.
+
+    Nothing is stripped from the bytes: a record holding the absolute path of `root` is reported, since on a real host
+    that path lies under the account's home. `except_files` names files exempt by their path under `root`.
+    """
+    wanted = {*real_identities(), str(root), str(root.resolve())}
+    found = []
+    for path in sorted(p for p in root.rglob("*") if p.is_file() and str(p.relative_to(root)) not in except_files):
+        relative, data = str(path.relative_to(root)), path.read_bytes()
+        found += [(relative, n) for n in sorted(wanted) if n in relative or n.encode() in data]
+    return found

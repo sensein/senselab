@@ -16,6 +16,7 @@ import pytest
 import senselab_core.runtime.call as call_module
 import senselab_core.runtime.fake_backend as fake
 import soundfile
+from planted_objects_fixture import identity_leaks
 from pydantic import ValidationError
 from senselab_core.kernel import prov
 from senselab_core.kernel._base import Frozen
@@ -389,6 +390,16 @@ def test_backend_fault_raises_call_failed(store: ResultStore) -> None:
         _in_process(call, execution=_profile(), store=store)
     assert info.value.failure.fault == "content"
     assert _activities(store) == [] and store.provenance.entities() == []
+
+
+@pytest.mark.contract
+def test_no_host_name_in_the_store_after_a_run(store: ResultStore) -> None:
+    """A host-env call and a pooled-worker call leave no host name, account name or home path in any store file."""
+    _in_process(_call("same"), execution=_profile("alpha"), store=store)
+    _in_process(_call("same"), execution=_profile("isolated"), store=store)
+    contexts = list(store.root.rglob("context.json"))
+    assert len(contexts) == 2 and all("host" not in json.loads(p.read_text()) for p in contexts)
+    assert identity_leaks(store.root) == []
 
 
 @pytest.mark.contract

@@ -5,7 +5,6 @@ A key holds the batch formation of the request a job is sent in (`request_compon
 and a sampled cross-context hit is recomputed and compared instead. A failure is never stored.
 """
 
-import platform
 import sysconfig
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -303,14 +302,13 @@ def _context(  # noqa: PLR0913 - every input a context records
     job: Job,
     code_license: License | None,
 ) -> ExecutionContext:
-    """Return the context a job runs in: its env, attestation, network, host, decoder, model source and license."""
+    """Return the context a job runs in: its env, attestation, network, decoder, model source and license."""
     model = job.call.model
     return ExecutionContext(
         **_env_fields(placement, env, expected, network_variables(profile.network)),
         platform=sysconfig.get_platform(),
         numerics=numerics_class(host_hardware(), placement.device, PRECISION),
         decoder=_decoder(job),
-        host=platform.node(),
         protocol=f"wire@{WIRE_VERSION}",
         model_source=None if model is None else model.ref.source,
         env_license=code_license,
