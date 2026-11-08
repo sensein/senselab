@@ -278,6 +278,11 @@ are recorded here (R-200).
 - **Lost commit race.** When `put` finds that another writer committed different outputs first, the job is served
   that entry as a reuse and writes no execution: the store keeps one entry per key, and the provenance must name the
   entry that is kept. The license rule applies to that entry as to any hit.
+- **Same key in one run.** Jobs of one run sharing a key run once. Each other one is served that job's stored entry
+  as an exact reuse (`cache_hit`, recorded as a reuse) or given its failure; only a descendant of a failed job is
+  `blocked` (R-232). The store's hit rules still apply: an entry they refuse, such as one whose context records no
+  env license under a policy that does not allow unlicensed hits, is not served, and the job runs again as its own
+  execution.
 - **Outputs on identity clocks.** Outputs are stored on the clocks their recording inputs' identities name and served
   re-bound to the caller's anchors, so the key holds no anchor and one entry serves one content under every anchor.
   Two recording inputs of one content under two anchors are refused (`AmbiguousClock`): there is no single clock to
