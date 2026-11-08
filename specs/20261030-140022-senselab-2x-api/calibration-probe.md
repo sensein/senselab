@@ -1,14 +1,14 @@
 # Task 20R: execution calibration around a dedicated Probe
 
-Status: revised 2026-11-08 after the design review (`t20r-design-review.md`: B1-B3, I1-I12, N1-N5) and the owner's
-rulings on O-1..O-6 (§13). Replaces the calibration rounds of Phase 3 Tasks 20e to 20k (`Pool._calibrate`,
+Status: revised 2026-11-08 after the design review (`t20r-design-review.md`: B1-B3, I1-I12, N1-N5), the owner's
+rulings on O-1..O-6 (§13) and the final review (`t20r-design-final-review.md`: F1-F11, N1-N7). Replaces the calibration rounds of Phase 3 Tasks 20e to 20k (`Pool._calibrate`,
 `_batch_round`, `_round_measure`, `sizing.calibrated`). Keeps `size`, `Grant` and `Sizing` as the one sizing site,
 reshaped as §6 says. Adds a site placement hook and a machine-readable statement of what a run needs (§10, owner 2026-11-08).
 
 Baseline: the Task 20 architecture review at `438cb624` (`.superpowers/sdd/phase-3/t20-architecture-review.md` in the
 implementation worktree), its measurement contract M1..M10, its sizing contract S1..S7, its §3 restructuring and its
-§4 eight must-fix items. Code paths below are at `origin/2x/phase-3` `5ae1fc3d`. Scenarios: UX-10, UX-31, UX-35,
-UX-43, UX-45 (`user-scenarios.md`, branch `2x/p3-ux-scenarios`). Amendments: ADR-002, ADR-003 and ADR-004 of
+§4 eight must-fix items. Code paths below are at `origin/2x/phase-3` `5ae1fc3d`. Scenarios: `user-scenarios.md` on
+`2x/phase-3-spec`, checked in §14.4. Amendments: ADR-002, ADR-003 and ADR-004 of
 2026-11-08 (§12). Principles: P-17, P-28, P-33, P-34 (as amended 2026-11-07), P-37, P-40 (as amended 2026-11-08).
 
 ## 1. What the owner asked
@@ -75,7 +75,7 @@ fallback (`ladder.py:333`).
 
 | field | source | why it changes cost |
 |---|---|---|
-| `task` | the node's task | different work |
+| `task` | the node's task and its version | different work; a task version change is a cost change (UX-61) |
 | `backend`, `backend_version` | `BackendSpec` | different code path; the version also enters the logical key |
 | `backend_params` | canonical JSON of the placement's `backend_params` (all of them) | engine, dtype, beam width, `max_new_tokens` (R-229: crisperwhisper `engine`) |
 | `formation` | `mixed`, `single`, or `bucket:<grid id>` (ADR-004, 2026-11-07) | padding cost; whether a batch can be formed |
@@ -113,7 +113,8 @@ never enter a digest. The coordinator resolves a resource class to the hardware 
 
 1. Each measures root keeps an index `classes/<declared digest>/<seen digest>`, where the declared digest covers the
    resource class's hardware fields (`device`, `gpu_type`, `memory_cap_bytes`, `cpus`, `partition`) and the seen digest
-   is a `HardwareClass`. A worker writes its entry (write-once, empty file) on its first hello.
+   is a `HardwareClass`. The coordinator writes the entry (write-once, empty file) on a worker's first hello, from the
+   `HardwareClass` in its ready mark.
 2. If the index names exactly one seen class, the coordinator uses it.
 3. If the index is empty, or names more than one, the first worker's hello for that class decides. The unit is in
    `Resolving` (§7.1) until then; the queue's first worker is started as it would be anyway, so this costs no extra
@@ -250,8 +251,8 @@ matches only the env that generated it.
 
 1. **Servable jobs are not candidates, and they do not wait.** Whether a job would be served is decided by
    `ResultStore.admits(key_digest, context, policy, run)`, the predicate `_serve` itself uses (P-37): an entry under
-   the key digest whose context fingerprint is the current one, or one the reuse policy admits (an equivalence member
-   under `equivalent`), that the license rule admits (`_license_admits`) and that verify sampling (`sampled`, which is
+   the key digest whose context fingerprint is the current one, or any member the run's reuse policy admits (the
+   policy decides: equivalence members under `equivalent`, any context, labelled, under `tolerant`), that the license rule admits (`_license_admits`) and that verify sampling (`sampled`, which is
    deterministic in the key and the two contexts) would not recompute. It lists `<d>/` for fingerprints and reads
    `context.json` of non-exact entries only; it decodes no output. The current context is the env record's
    (`env.context_fields()`); where it is not yet known (an env not yet built), every job is a candidate. Servable jobs
@@ -568,8 +569,8 @@ The bisection of the failing request, the re-placement on a larger class and the
   `bisected` and its halves are their own requests.
 - `ModelCache.get_or_load` returns whether it loaded and keeps a per-entry request count; the worker process reports
   both on `done` (`since_load`, `load_s`), and the in-process host worker reads them directly.
-- The first hello of a worker writes its hardware index entry (§3.2) and reports its `HardwareClass` to the coordinator
-  through its ready mark.
+- A worker reports its `HardwareClass` to the coordinator through its ready mark; the coordinator writes the hardware
+  index entry (§3.2). The worker writes nothing to a measures root.
 
 ## 9. Ladder and generator on the same Probe
 
@@ -667,7 +668,8 @@ minutes, so an adapter there uses live idle resources and observed start latency
 
 A new profile section `calibration`; `sizing.calibration_items` and `sizing.calibration_workers` are removed by
 T20R-7a′. Every key gets a section in `config-derivations.md` (T20R-1). Values marked *provisional* are replaced by
-T20R-10's measurement under the stated rule (ruling O-6).
+T20R-10's measurement under the stated rule (ruling O-6); `substrate.placement_hook_s` (§10.3, T20R-12) is provisional
+too, until a real adapter is timed.
 
 | key | `orcd` | `laptop` | derivation rule |
 |---|---|---|---|
@@ -727,11 +729,12 @@ Dated amendment text is in the ADR files, 2026-11-08:
 - **Placement (owner, 2026-11-08).** No site scheduling policy in senselab; a site hook outside it answers a
   versioned request, senselab validates the answer and reports refusals (§10).
 - **O-6, provisional values.** `warmup_requests` 2, `single_item_jobs` 4, and `probe_items`' target batch stand until
-  T20R-10 measures them.
+  T20R-10 measures them; `substrate.placement_hook_s` (the substrate's start backoff's first step) stands until a real
+  adapter is timed.
 
 ## 14. Review items, must-fix items and register rows
 
-### 14.1 The design review (2026-11-08)
+### 14.1 The design reviews (2026-11-08)
 
 | item | where | task |
 |---|---|---|
@@ -755,8 +758,20 @@ Dated amendment text is in the ADR files, 2026-11-08:
 | N3 contrasting figures in tests | §15 T20R-4 | T20R-4 |
 | N4 `probe_items` target | §11 | T20R-10 |
 | N5 trust bullet names all kinds | ADR-003 amendment | — |
+| final F1 no account or host name in a record; owner uid as trust identity | §3.5, ADR-003 | T20R-2b |
+| final F2 one hardware resolution; drift on the resolved class only | §3.2 step 4, §4.4, §7.3 | T20R-7a, T20R-7b |
+| final F3 drift at k > 1 writes a regime; at k = 1 confirms with jobs held | §7.1, §7.3, §3.6 | T20R-7b |
+| final F4 OOM raise at (B − 1); B = 1 re-placed | §7.4 | T20R-4, T20R-7b |
+| final F5 index write by the coordinator | §3.2 step 1, §8, §15 | T20R-5, T20R-7a |
+| final F6 T20R-2 and T20R-7a split | §15 | T20R-2a, T20R-2b, T20R-7a, T20R-7a′ |
+| final F7 any `OSError` on a root non-fatal | §3.3, ADR-003 | T20R-2b |
+| final F8 unknown formats skipped; quarantine own files only | §3.4, §3.5, ADR-003 | T20R-2b |
+| final F9 actuals beside the estimate | §10.3 | T20R-7b |
+| final F10 refusals and request values rendered per audience | §10.3, §10.4 | T20R-12 |
+| final F11 waits on another run stated | §3.4, §6.6 | T20R-6 |
+| final N1-N7 | §4.2, §3.1, §3.2, §6.6, §15 T20R-8, header, §11, §13 | — |
 
-Nothing in the review is declined.
+Nothing in either review is declined.
 
 ### 14.2 The architecture review's eight must-fix items
 
@@ -800,6 +815,15 @@ To open at merge (ids assigned then):
 
 R-224, R-225, R-235 and R-165 follow exit as the review says; R-221's grid edges stay open, with T20R-10's per-stratum
 costs as their first evidence.
+
+### 14.4 Scenarios checked
+
+Against `user-scenarios.md` on `2x/phase-3-spec`, groups A-D, F, J, L, M and Terms. Hold: UX-1, UX-2, UX-3, UX-4
+(§6.6's over-cap flag), UX-5 to UX-10 (UX-10 guarantee 4 by §3.5's own-files rule), UX-12, UX-14 to UX-16, UX-18 to
+UX-21, UX-31 (guarantee 3 by §10.3's actuals), UX-32, UX-35 to UX-39, UX-42 (§6.6 states `peer_wait_s`), UX-43,
+UX-45 to UX-47, UX-56 (§3.3), UX-57 (§3.5: no account or host name in a measures root), UX-58, UX-61 to UX-63, and
+group L's preamble (§10.3, §10.4). Not designed here: UX-11 and UX-13 (measures roots on object storage), UX-17, UX-40,
+UX-41, UX-59 (beyond the attestation in the identity), UX-60, UX-64.
 
 ## 15. Implementation tasks
 

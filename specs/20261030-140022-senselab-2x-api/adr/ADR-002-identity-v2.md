@@ -292,7 +292,7 @@ names tolerance profile digests.
 Design: [`calibration-probe.md`](../calibration-probe.md) §3, §4.2, §12. Adds to the Decision; replaces nothing in it.
 
 - **A measure has its own identity.** What sizes a unit's batch, item cuts and workers is keyed by `MeasureUnit`,
-  `identity_digest("measure-unit@1", fields)` over task, backend and its version, all backend params, batch formation,
+  `identity_digest("measure-unit@1", fields)` over task and its version, backend and its version, all backend params, batch formation,
   model identity, the env's fingerprinted context fields (`env_lock`, `wheel_set`, `driver`, `platform`, `decoder`,
   `numerics`), service attestation, the canonical hardware class a worker reports, and observation format. It is a
   separate namespace: no `MeasureUnit` field or digest enters a `LogicalKey`, and none enters
