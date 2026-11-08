@@ -25,8 +25,8 @@ A symlink or a non-directory where a directory of the store belongs is moved int
 directory is made again; one that cannot be moved raises `WrongKindError`, naming it and its owner.
 
 Only a completed read that fails verification moves an entry. A member's format is judged by `formats.check`: a
-retired format raises `StoreFormatRetired`, another version's format (a later major, or a later minor's context
-fields) `StoreFormatUnknown`, and neither moves the entry; only a malformed one is corruption.
+retired context raises `StoreFormatRetired`, another version's format (a later major, or a later minor's context
+fields) `StoreFormatUnknown`, and neither moves the entry; a malformed member, or a retired result, is corruption.
 An `OSError` while reading or writing is raised as `StoreUnavailable` (`StorageFull` for `ENOSPC` and `EDQUOT`)
 and changes nothing.
 
@@ -79,7 +79,7 @@ from senselab_core.kernel.identity import (
 from senselab_core.runtime.equivalence import EQUIVALENCE, EquivalenceEvidence
 from senselab_core.runtime.equivalence import split as split_class
 from senselab_core.runtime.provenance import ProvStore
-from senselab_core.runtime.servable import Servable, StoredContext, choose
+from senselab_core.runtime.servable import Servable, StoredContext, Verdict, always_serve, choose, servable
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
     STAGING_DIR_MODE,
@@ -379,11 +379,13 @@ def _stored_address(
 
     The key in `result.json` must digest to its recorded `key_digest`, and the context in `context.json`
     (or `context`, when the caller has already read it from this entry) must fingerprint to the
-    `context_fingerprint` recorded in `result.json`.
+    `context_fingerprint` recorded in `result.json`; a retired `result.json` beside a current context is corrupt.
     """
-    if context is None:
-        context = _stored_context(entry)
-    record = _read_object(entry, "result.json", RESULT_FORMAT)
+    context = _stored_context(entry) if context is None else context
+    try:
+        record = _read_object(entry, "result.json", RESULT_FORMAT)
+    except StoreFormatRetired as err:
+        raise CorruptEntryError(f"corrupt store entry {entry}: a retired result beside a current context") from err
     digest = LogicalKey.model_validate(record["key"]).digest()
     if record["key_digest"] != digest:
         raise MisfiledEntryError(f"stored key digest {record['key_digest']!r} is not the digest of the stored key")
@@ -1047,9 +1049,8 @@ class ResultStore:
         An object of the wrong kind at a directory of the store on the way to `key` is quarantined and the
         key reads as absent.
         """
-        policy = ReusePolicy(policy)
         started = datetime.now(timezone.utc)
-        hit, _ = self._fetch(key, context, policy, None)
+        hit, _ = self._fetch(key, context, ReusePolicy(policy), always_serve)
         if hit is not None and record:
             self.record_reuse(key, context, hit, started)
         return hit
@@ -1058,20 +1059,21 @@ class ResultStore:
         self, key: LogicalKey, context: ExecutionContext, run: "RunConfig"
     ) -> tuple[StoredResult | None, Servable | None]:
         """Return the result `admits` selects for `run` and what `run` does with it; `(None, None)` when none."""
-        return self._fetch(key, context, run.reuse, run)
+        return self._fetch(key, context, run.reuse, functools.partial(servable, run, key.digest(), context))
 
     def admits(
         self, key_digest: str, context: ExecutionContext, run: "RunConfig", *, backend: str
     ) -> StoredContext | None:
         """Return the entry under `key_digest` that `run` would serve for `context`, or None.
 
-        `fetch` selects the same entry. Only `context.json` is read, so an entry whose result member is corrupt is
-        admitted until a read finds it. Raises what `get` raises.
+        `fetch` selects the same entry. Each entry's `context.json`, the exact entry's included, is read for its format,
+        its license and the reuse rules; no result member is, so a corrupt one is admitted until a read finds it.
+        Raises what `get` raises.
         """
         retired: list[StoreFormatRetired] = []
+        verdict = functools.partial(servable, run, key_digest, context)
         got = self._within(
-            key_digest,
-            lambda base: choose(self._ranked(base, context, run.reuse, backend, retired), run, key_digest, context, ()),
+            key_digest, lambda b: choose(self._ranked(b, context, run.reuse, backend, retired), verdict, ())
         )
         if got is None:
             if retired:
@@ -1080,27 +1082,25 @@ class ResultStore:
         return got[0] if got[1] is Servable.SERVE else None
 
     def _fetch(
-        self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy, run: "RunConfig | None"
+        self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy, verdict: Verdict
     ) -> tuple[StoredResult | None, Servable | None]:
         d = key.digest()
         retired: list[StoreFormatRetired] = []
-        skipped: set[str] = set()
 
         def attempt(base_dir: StorageDir) -> tuple[StoredResult | None, Servable | None]:
-            base = base_dir.path
-            while got := choose(
-                self._ranked(base_dir, context, policy, key.backend, retired), run, d, context, skipped
-            ):
-                entry, verdict = got
+            base, skipped = base_dir.path, set[str]()
+            ranked = self._ranked(base_dir, context, policy, key.backend, retired)
+            while got := choose(ranked, verdict, skipped):
+                entry, said = got
                 name = entry.fingerprint
-                if verdict is Servable.REFUSE:
-                    return None, verdict
+                if said is Servable.REFUSE:
+                    return None, said
                 one = functools.partial(_read_result, base / name, digest=d, fingerprint=name, context=entry.context)
                 if (read := self._readable(base, d, name, one, retired)) is None:
                     skipped.add(name)
                     continue
                 self._reseal(base_dir, name)
-                return StoredResult(read[1], read[0], read[2], entry.policy_used), verdict
+                return StoredResult(read[1], read[0], read[2], entry.policy_used), said
             return None, None
 
         out = self._within(d, attempt) or (None, None)

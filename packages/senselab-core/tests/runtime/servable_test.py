@@ -18,6 +18,7 @@ from senselab_core.runtime.execution.job import Job, _serve
 from senselab_core.runtime.fake_backend import EchoParams
 from senselab_core.runtime.keys import Call, Placement
 from senselab_core.runtime.licenses import LicensePolicy, license_record
+from senselab_core.runtime.servable import Servable, StoredContext, choose
 from senselab_core.runtime.store import ResultStore, StoreFormatRetired
 
 TASK = TaskSpec(
@@ -163,6 +164,43 @@ def test_admits_raises_for_a_key_holding_only_a_retired_entry(tmp_path: Path) ->
         store.admits(key.digest(), _ctx(), RunConfig(), backend="hf")
 
 
+@pytest.mark.logic
+def test_choose_takes_the_verdict_and_no_run() -> None:
+    """`choose` returns the first entry not excluded with the verdict it is given."""
+    a, b = (StoredContext(f, _ctx(), ReusePolicy.EXACT) for f in ("a", "b"))
+    assert choose([a, b], lambda _: Servable.REFUSE, {"a"}) == (b, Servable.REFUSE)
+    assert choose([a, b], lambda _: Servable.SERVE, {"a", "b"}) is None
+
+
+@pytest.mark.logic
+def test_a_retired_result_beside_a_current_context_is_set_aside(tmp_path: Path) -> None:
+    """A retired result member under a current context is an altered entry: set aside, then `admits` agrees."""
+    store, key = ResultStore(tmp_path), store_key()
+    store.put(key, {"v": 1}, _ctx())
+    _plant(tmp_path, _ctx(), "retired_result")
+    run = RunConfig()
+    assert store.fetch(key, _ctx(), run) == (None, None)
+    assert store.admits(key.digest(), _ctx(), run, backend="hf") is None
+    assert not entry_dir(tmp_path, key, _ctx()).exists()
+
+
+@pytest.mark.logic
+def test_a_skipped_entry_does_not_rerank_the_key(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Serving lists and reads the key's contexts once, however many entries a read sets aside."""
+    store, key = ResultStore(tmp_path), store_key()
+    for platform in ("linux", "macos", "windows"):
+        store.put(key, {"v": 1}, _ctx(platform=platform))
+    rewrite_json(
+        entry_dir(tmp_path, key, _ctx(platform="windows")) / "context.json",
+        lambda r: r.update(format="execution-context@4.0"),
+    )
+    _plant(tmp_path, _ctx(platform="macos"), "result_corrupt")
+    with caplog.at_level("INFO", logger="senselab"):
+        hit, _ = store.fetch(key, _ctx(platform="macos"), RunConfig(reuse=ReusePolicy.TOLERANT))
+    assert hit is not None and hit.context.platform == "linux"
+    assert sum("another version's" in r.getMessage() for r in caplog.records) == 1
+
+
 def _outcome(call: Any, fingerprint: Any) -> Any:  # noqa: ANN401
     try:
         got = call()
@@ -178,11 +216,11 @@ LICENCES = st.sampled_from([None, MIT, NC])
 @pytest.mark.logic
 @settings(max_examples=60, deadline=None)
 @given(
-    stored=st.dictionaries(st.sampled_from(POOL), LICENCES, max_size=4),
+    stored=st.dictionaries(st.sampled_from(POOL), LICENCES, max_size=len(POOL)),
     current=st.tuples(st.sampled_from(POOL), LICENCES),
     members=st.sets(st.sampled_from(POOL)),
     fault=st.sampled_from(["none", "context_missing", "result_corrupt", "retired_context", "retired_result"]),
-    victim=st.integers(min_value=0, max_value=3),
+    victim=st.integers(min_value=0, max_value=len(POOL) - 1),
     policy=st.sampled_from(list(ReusePolicy)),
     verify=st.sampled_from([0.0, 0.5, 1.0]),
     licenses=st.sampled_from(POLICIES),
@@ -200,7 +238,7 @@ def test_admits_agrees_with_serve(  # noqa: PLR0913
     """`admits` selects the entry `_serve` serves, or both refuse, or both raise, over every store state.
 
     An integrity failure of a result member no read has found yet is the one exception: it is admitted until
-    served once (a retired result member stays admitted, as a probe reads contexts only).
+    served once.
     """
     with tempfile.TemporaryDirectory() as root:
         contexts = {k: _ctx(*k, licence) for k, licence in stored.items()}
@@ -225,5 +263,4 @@ def test_admits_agrees_with_serve(  # noqa: PLR0913
         before, first = probe(), serve()
         if fault not in {"result_corrupt", "retired_result"}:
             assert before == first
-        if fault != "retired_result":
-            assert probe() == serve()
+        assert probe() == serve()

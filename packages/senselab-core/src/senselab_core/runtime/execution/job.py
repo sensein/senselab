@@ -58,7 +58,7 @@ from senselab_core.runtime.keys import Call, Placement, build_key, request_compo
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.servable import Servable, license_admits
+from senselab_core.runtime.servable import Servable
 from senselab_core.runtime.store import ResultStore, StoredResult
 from senselab_core.runtime.store import output_identity as store_output_identity
 from senselab_core.runtime.vllm_server import attested_fields, server_launch, server_variables
@@ -379,11 +379,11 @@ def lost_race(  # noqa: PLR0913 - the job's store, key, context and run, and wha
     Raises:
         RuntimeError: the committed entry cannot be read back.
     """
-    committed = store.get(key, context, ReusePolicy.EXACT, record=False)
+    committed, verdict = store.fetch(key, context, replace(run, reuse=ReusePolicy.EXACT))
+    if verdict is Servable.REFUSE:
+        return None
     if committed is None:
         raise RuntimeError(f"the entry another writer committed for {key.task!r} could not be read back")
-    if not license_admits(run, committed.context.env_license):
-        return None
     store.record_reuse(
         key, context, committed, datetime.now(timezone.utc), {**attributes, **unlicensed(committed)}, _linked(job)
     )

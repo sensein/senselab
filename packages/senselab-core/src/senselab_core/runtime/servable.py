@@ -1,6 +1,6 @@
 """The servable rule: what a run does with a stored entry its reuse policy admitted."""
 
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -30,6 +30,10 @@ class Servable(Enum):
     REFUSE = "refuse"
 
 
+Verdict = Callable[[StoredContext], Servable]
+"""What a run does with an admitted entry."""
+
+
 def license_admits(run: "RunConfig", recorded: License | None) -> bool:
     """Whether a result whose context records env license `recorded` may be served under `run.licenses`.
 
@@ -40,7 +44,7 @@ def license_admits(run: "RunConfig", recorded: License | None) -> bool:
     return run.licenses is None or run.licenses.refusal("", recorded) is None
 
 
-def servable(run: "RunConfig", key_digest: str, stored: StoredContext, current: ExecutionContext) -> Servable:
+def servable(run: "RunConfig", key_digest: str, current: ExecutionContext, stored: StoredContext) -> Servable:
     """Return what `run` does with the entry `stored` for `current`: the license rule, then verify sampling."""
     if not license_admits(run, stored.context.env_license):
         return Servable.REFUSE
@@ -49,18 +53,14 @@ def servable(run: "RunConfig", key_digest: str, stored: StoredContext, current: 
     return Servable.SERVE
 
 
-def choose(
-    ranked: Sequence[StoredContext],
-    run: "RunConfig | None",
-    key_digest: str,
-    current: ExecutionContext,
-    exclude: Collection[str],
-) -> tuple[StoredContext, Servable] | None:
-    """Return the first of `ranked` not in `exclude` with what `run` does with it, or None.
+def always_serve(_: StoredContext) -> Servable:
+    """The verdict of a read under the reuse policy alone (`ResultStore.get`): every admitted entry is served."""
+    return Servable.SERVE
 
-    With no run (`ResultStore.get`) the reuse policy alone decides, and the entry is served.
-    """
-    for entry in ranked:
-        if entry.fingerprint not in exclude:
-            return entry, Servable.SERVE if run is None else servable(run, key_digest, entry, current)
-    return None
+
+def choose(
+    ranked: Sequence[StoredContext], verdict: Verdict, exclude: Collection[str]
+) -> tuple[StoredContext, Servable] | None:
+    """Return the first of `ranked` not in `exclude` with its `verdict`, or None."""
+    entry = next((e for e in ranked if e.fingerprint not in exclude), None)
+    return None if entry is None else (entry, verdict(entry))
