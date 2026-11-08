@@ -17,7 +17,14 @@ from senselab_core.runtime.execution_settings import (
     SupervisorSettings,
     Timeouts,
 )
-from senselab_core.runtime.resources import ClassMeasure, Measured, ResourceMeasure, ResourceRow, ResourceTable
+from senselab_core.runtime.resources import (
+    Batched,
+    ClassMeasure,
+    Measured,
+    ResourceMeasure,
+    ResourceRow,
+    ResourceTable,
+)
 from senselab_core.runtime.sizing import Grant, Measure, Sample, Sizing
 
 Register = Callable[..., None]
@@ -109,6 +116,7 @@ def _register_resources(register: Register) -> None:
                 device_peak_bytes=2**31,
                 s_per_input_s=0,
                 input_s_per_item=None,
+                batched=Batched(batch_size=8, s_per_input_s=0.05),
             ),
         ],
         invalid_updates=[
@@ -120,6 +128,11 @@ def _register_resources(register: Register) -> None:
             {"device_resident_bytes": 1, "device_peak_bytes": None},
             {"device_resident_bytes": 2**32, "device_peak_bytes": 2**31},
         ],
+    )
+    register(
+        Batched,
+        lambda: [Batched(batch_size=8, s_per_input_s=0.05), Batched(batch_size=2, s_per_input_s=0)],
+        invalid_updates=[{"batch_size": 1}, {"s_per_input_s": -1.0}],
     )
     register(
         ClassMeasure,
@@ -281,12 +294,15 @@ def _register_sizing(register: Register) -> None:
                     wall_s=3.0,
                     claim_s=0.01,
                     jobs=1,
+                    batch_size=1,
                     input_s=8.0,
                     baseline_bytes=1024,
                     resident_bytes=2048,
                     peak_memory_bytes=4096,
                     device_baseline_bytes=0,
                     device_bytes=2**30,
+                    device_item_bytes=2**20,
+                    device_allocated_bytes=2**29,
                     cold=True,
                     job="7",
                 ),
@@ -294,6 +310,7 @@ def _register_sizing(register: Register) -> None:
                     wall_s=0,
                     claim_s=0,
                     jobs=2,
+                    batch_size=2,
                     input_s=None,
                     baseline_bytes=0,
                     resident_bytes=None,

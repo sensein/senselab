@@ -549,6 +549,11 @@ def _done(msg: dict[str, Any]) -> None:
     _identifier(msg, "id", "done")
     if _typed(msg, "done", "done", (int,)) < 0:
         raise _fail("done", "'done' is negative")
+    for key in ("device_peak_bytes", "device_allocated_bytes"):
+        if key in msg and _typed(msg, key, "done", (int,)) < 0:
+            raise _fail("done", f"{key!r} is negative")
+    if ("device_peak_bytes" in msg) != ("device_allocated_bytes" in msg):
+        raise _fail("done", "'device_peak_bytes' and 'device_allocated_bytes' come together")
 
 
 def _fatal(msg: dict[str, Any]) -> None:

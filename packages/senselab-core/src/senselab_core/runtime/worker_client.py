@@ -51,6 +51,7 @@ from senselab_worker.faults import (
 )
 from senselab_worker.ownership import ARRAY_FILE, remove_owned
 
+from senselab_core.runtime import device_requests
 from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.hardware import cgroup_memory_events, oom_kills
 from senselab_core.runtime.launch import launch
@@ -867,6 +868,8 @@ class WorkerClient:
             raise ProtocolError(
                 f"expected done for {len(request['items'])} items of request {request['id']!r}, got {done!r}"
             )
+        if "device_peak_bytes" in done:
+            device_requests.record(done["device_peak_bytes"], done["device_allocated_bytes"], len(request["items"]))
         return replies
 
     def _decode_result(

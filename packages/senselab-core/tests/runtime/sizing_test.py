@@ -130,6 +130,7 @@ def test_a_grant_takes_device_memory_on_a_device_and_host_memory_otherwise() -> 
         "bytes_per_item": 20,
         "s_per_item": 0.5,
         "on_device": True,
+        "batched_s_per_item": None,
     }
     assert measure_of(FOUND, on_device=True).on_device is False and measure_of(device).bytes_per_item == 1
 
@@ -157,6 +158,7 @@ def _sample(wall: float, *, cold: bool = False, resident: int | None = 10_000, p
         wall_s=wall,
         claim_s=0.02,
         jobs=1,
+        batch_size=1,
         input_s=4.0,
         baseline_bytes=500,
         resident_bytes=resident,
@@ -230,3 +232,31 @@ def test_measures_read_written_rows_first_then_packaged_ones(tmp_path: Path) -> 
     found = measures.get(UNIT)
     assert found is not None and found.load_s == 1.0 and Measures(tmp_path, packaged=()).get(UNIT) is not None
     assert Measures(tmp_path, packaged=()).get(Unit("t", "b", "org/m", "a" * 40, "gpu")) is None
+
+
+@pytest.mark.logic
+def test_reported_request_peaks_give_the_device_bytes_per_item() -> None:
+    """A backend's request peaks over what stays allocated give per-item device bytes, the model left out of them."""
+    reported = [
+        _sample(10, cold=True).model_copy(
+            update={"device_bytes": 9000, "device_item_bytes": 40, "device_allocated_bytes": 5000}
+        ),
+        _sample(2).model_copy(update={"device_bytes": 9000, "device_item_bytes": 50, "device_allocated_bytes": 5000}),
+    ]
+    found = calibrated(reported)
+    assert found is not None and (found.device_resident_bytes, found.device_peak_bytes) == (5000, 5050)
+    assert measure_of(found, on_device=True).bytes_per_item == 50
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(("batched_wall", "batch"), [(1.0, 4), (3.0, 1)], ids=["faster", "slower"])
+def test_items_measured_slower_in_a_batch_are_sized_one_per_request(batched_wall: float, batch: int) -> None:
+    """Items run 2 s alone; in fours at 1 s each the memory-sized batch stands, at 3 s each it falls to one."""
+    alone = [_sample(10, cold=True), _sample(2), _sample(2)]
+    batched = _sample(4 * batched_wall).model_copy(update={"jobs": 4, "batch_size": 4})
+    found = calibrated([*alone, batched])
+    assert found is not None and found.batched is not None and found.batched.batch_size == 4
+    measure = measure_of(found)
+    assert (measure.s_per_item, measure.batched_s_per_item) == (2.0, batched_wall)
+    grant = Grant(max_workers=1, memory_bytes=10_000_000, quantum_items=4, quantum_s=3600)
+    assert size(measure, grant, SETTINGS).batch_size == batch

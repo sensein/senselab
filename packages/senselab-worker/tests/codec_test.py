@@ -417,6 +417,24 @@ def test_validate_message_refuses_malformed_requests(items: list[Any]) -> None:
 
 
 @pytest.mark.logic
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"device_peak_bytes": -1, "device_allocated_bytes": 0},
+        {"device_peak_bytes": 1},
+        {"device_peak_bytes": 1.0, "device_allocated_bytes": 0},
+    ],
+)
+def test_done_device_figures_are_paired_non_negative_ints(fields: dict[str, object]) -> None:
+    """A `done` names a device peak and the allocation after it together, each a non-negative `int`."""
+    from senselab_worker.codec import validate_message
+
+    validate_message({"id": "r", "done": 1, "device_peak_bytes": 2, "device_allocated_bytes": 1}, "done")
+    with pytest.raises(ProtocolError):
+        validate_message({"id": "r", "done": 1, **fields}, "done")
+
+
+@pytest.mark.logic
 @pytest.mark.parametrize("done", [-1, True, 1.0])
 def test_done_counts_items(done: object) -> None:
     """`done` is a non-negative `int`."""

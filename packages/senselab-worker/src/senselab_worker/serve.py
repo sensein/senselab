@@ -18,6 +18,7 @@ from senselab_worker.codec import (
     to_wire,
     validate_message,
 )
+from senselab_worker.device_peak import Meter, torch_meter
 from senselab_worker.faults import (
     PASS_THROUGH,
     ArrayIntegrityError,
@@ -80,12 +81,14 @@ def cached_load(load: Load, backend: str, cache: ModelCache) -> Load:
     return through
 
 
-def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO) -> int:
+def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO, meter: Meter[Any] = torch_meter) -> int:
     """Serve the protocol, reading from `rx` and writing to `tx`; return the process exit code.
 
     `load(init)` is called once and returns the state. `handle(state, items, params)` gets the
     decoded items (`{"id", "inputs"}`) and returns one `{"outputs": dict}` or `{"error": exception}`
-    per item, in order. Each item's result is written as its own line, then `done`. Nothing an item
+    per item, in order. Each item's result is written as its own line, then `done`, which carries the request's
+    device allocation peak and what stays allocated after it (`device_peak_bytes`, `device_allocated_bytes`) when
+    `meter` measures them (CUDA in use). Nothing an item
     or `handle` does ends the loop, except `KeyboardInterrupt` and `SystemExit`. Returns 0 on stop
     or EOF, and `EXIT_FATAL` after reporting a fatal error: a failed load, or a line from the host
     that is not a valid message.
@@ -107,7 +110,7 @@ def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO) -> int:
         state = load(init)
         _write(tx, dump_line({"ready": {"load_s": time.perf_counter() - start}}, "ready"))
         while (msg := _receive(rx)) is not None and not _is_stop(msg):
-            _respond(handle, state, validate_message(msg, "request"), array_dir, tx)
+            _respond(handle, state, validate_message(msg, "request"), array_dir, tx, meter)
     except Exception as exc:
         _write(tx, dump_line({"error": error_record(exc), "fatal": True}, "fatal"))
         return EXIT_FATAL
@@ -135,10 +138,13 @@ def _init(msg: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     return array_dir, from_wire(init, array_dir=array_dir)
 
 
-def _respond(handle: Handle, state: object, msg: dict[str, Any], array_dir: Path, tx: BinaryIO) -> None:
+def _respond(  # noqa: PLR0913 - the request and where its replies go, then how it is measured
+    handle: Handle, state: object, msg: dict[str, Any], array_dir: Path, tx: BinaryIO, meter: Meter[Any]
+) -> None:
     items: list[dict[str, Any]] = msg["items"]
     entries: list[dict[str, Any]] = [{} for _ in items]
     shared: dict[str, numpy.ndarray] = {}
+    device: tuple[int, int] | None = None
     try:
         params = from_wire(msg["params"], array_dir=array_dir, shared=shared)
     except ArrayIntegrityError as exc:
@@ -152,11 +158,15 @@ def _respond(handle: Handle, state: object, msg: dict[str, Any], array_dir: Path
             except ArrayIntegrityError as exc:
                 entries[i] = {"error": exc}
         if decoded:
-            for (i, _), entry in zip(decoded, call_handle(handle, state, [item for _, item in decoded], params)):
+            results, device = meter(lambda: call_handle(handle, state, [item for _, item in decoded], params))
+            for (i, _), entry in zip(decoded, results):
                 entries[i] = entry
     for item, entry in zip(items, entries):
         _write(tx, _result(msg["id"], item["id"], entry, array_dir))
-    _write(tx, dump_line({"id": msg["id"], "done": len(items)}, "done"))
+    done: dict[str, Any] = {"id": msg["id"], "done": len(items)}
+    if device is not None:
+        done |= {"device_peak_bytes": device[0], "device_allocated_bytes": device[1]}
+    _write(tx, dump_line(done, "done"))
 
 
 def call_handle(

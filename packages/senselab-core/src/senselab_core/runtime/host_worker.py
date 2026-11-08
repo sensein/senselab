@@ -6,10 +6,12 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from senselab_worker.codec import validate_message
+from senselab_worker.device_peak import torch_meter
 from senselab_worker.faults import PASS_THROUGH, FaultClass, ProtocolError, error_record
 from senselab_worker.model_cache import ModelCache, ModelKey, check_model_key
 from senselab_worker.serve import call_handle
 
+from senselab_core.runtime import device_requests
 from senselab_core.runtime.worker_client import WorkerFatal, item_error
 
 
@@ -62,7 +64,9 @@ class HostWorker:
             raise ValueError(f"malformed request: {exc}") from exc
         with _fatal():
             state = self._state()
-        entries = call_handle(self._handle, state, items, params)
+        entries, device = torch_meter(lambda: call_handle(self._handle, state, items, params))
+        if device is not None:
+            device_requests.record(*device, len(items))
         return [
             item_error(item["id"], error_record(entry["error"])) if "error" in entry else {"id": item["id"], **entry}
             for item, entry in zip(items, entries)

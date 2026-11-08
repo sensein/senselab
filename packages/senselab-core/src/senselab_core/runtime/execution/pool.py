@@ -287,6 +287,7 @@ class Pool:
         self._sized: dict[Unit, Measure] = {}
         self._queue_units: dict[str, set[Unit]] = {}
         self._calibrating: dict[Unit, tuple[str, list[str]]] = {}
+        self._first_round: dict[Unit, list[Sample]] = {}
 
     def bind_epoch(self, epoch: int, events: EventLog) -> None:
         """Coordinate as `epoch` from now on, logging to `events`, a log of that epoch's attempt.
@@ -438,6 +439,34 @@ class Pool:
         rest = [(unit, dumped.part(range(k, count)))] if k < count else []
         return first, rest
 
+    def _batch_round(self, unit: Unit, queue: str, found: ResourceMeasure, samples: list[Sample]) -> bool:
+        """Start `unit`'s second round, one item of its sized batch as one request, when that batch is above one.
+
+        The item's jobs are the first of the unit's held parts; the rest of that part waits on. Return whether a
+        round was started.
+        """
+        with self._lock:
+            held = [(f, p) for f in self._followed.values() for u, p in f.waiting if u == unit]
+        if not held:
+            return False
+        followed, part = held[0]
+        batch = min(self._sizing(queue, self._per_item(found, queue)).batch_size, len(part.jobs))
+        placement = part.placement.model_copy(update={"batch_size": batch})
+        request = node_request_size(self._admitted_plan(part)[0], part.node, placement)
+        if request < 2:  # noqa: PLR2004 - a batch is two items or more
+            return False
+        dumped = _Dumped.of(part)
+        item = dumped.part(range(request), placement=placement.model_dump(mode="json"))
+        rest = [(unit, dumped.part(range(request, len(part.jobs))))] if request < len(part.jobs) else []
+        self.queues.queue(queue).put_all([item])
+        with self._lock:
+            followed.waiting = [(u, p) for u, p in followed.waiting if p is not part] + rest
+            followed.flights.append(_Flight(queue, item_digest(item), item))
+            self._first_round[unit] = samples
+            self._calibrating[unit] = (queue, [item_digest(item)])
+        self._wake_scaler()
+        return True
+
     def workers_wanted(self, queue: str, work: int) -> int:
         """Return the workers `queue`'s `work` jobs want: by its slowest measured unit, else one, to calibrate.
 
@@ -453,8 +482,10 @@ class Pool:
     def _calibrate(self) -> None:
         """End each calibration round whose items all have outcomes: record its measure and put its unit's held parts.
 
-        A round whose items measured nothing leaves its unit unmeasured, so its held parts start another. A part
-        refused when put (`_put`) waits again, with those after it.
+        A first round sends items one per request. When its measure sizes a batch above one, a second round sends
+        one item of that many jobs as one request, so the measure holds per-item seconds alone and batched and `size`
+        keeps the faster. A round whose items measured nothing leaves its unit unmeasured, so its held parts start
+        another. A part refused when put (`_put`) waits again, with those after it.
         """
         with self._lock:
             rounds = list(self._calibrating.items())
@@ -462,8 +493,12 @@ class Pool:
             records = [self.queues.queue(queue).outcome(d) for d in digests]
             if not digests or any(r is None for r in records):
                 continue
-            samples = [Sample.model_validate(r["measure"]) for r in records if r is not None and "measure" in r]
+            samples = self._first_round.pop(unit, []) + [
+                Sample.model_validate(r["measure"]) for r in records if r is not None and "measure" in r
+            ]
             found = calibrated(samples)
+            if found is not None and found.batched is None and self._batch_round(unit, queue, found, samples):
+                continue
             if found is not None:
                 jobs = tuple(sorted({s.job for s in samples}))
                 self.measures.put(unit, found, self._measured(jobs))

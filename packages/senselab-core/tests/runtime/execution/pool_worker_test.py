@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 from pool_stack_fixture import packaged, planned, registry, scoring
 from senselab_core.kernel.declare import TaskSpec
+from senselab_core.runtime import device_requests
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.executor import Admission, PlanFragment, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
@@ -222,6 +223,35 @@ def test_device_memory_is_read_once_per_claim_on_a_cuda_class(tmp_path: Path) ->
     found = calibrated(samples)
     assert found is not None and (found.device_resident_bytes, found.device_peak_bytes) == (1000, 1010)
     assert measure_of(found, on_device=True).bytes_per_item == 10
+
+
+@pytest.mark.logic
+def test_a_backends_request_peaks_reach_the_samples(tmp_path: Path) -> None:
+    """A backend reporting each request's device peak and what stays allocated gives non-zero per-item device bytes."""
+    profile = _profile()
+    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(3)])
+    for element in range(3):
+        _put(placed, pool_dir, element)
+    send = _sender(store, profile)
+
+    def reporting(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+        device_requests.record(1000 + 30 * len(jobs), 1000, len(jobs))
+        return send(jobs, placement)
+
+    worker = PoolWorker(
+        pool_dir,
+        ["cpu"],
+        profile=profile,
+        store=store,
+        send=reporting,
+        memory=lambda: (100, 200),
+        device_memory=lambda: None,
+    )
+    assert worker.serve() == 0
+    samples = [Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)]
+    assert {(s.device_item_bytes, s.device_allocated_bytes, s.batch_size) for s in samples} == {(30, 1000, 1)}
+    found = calibrated(samples)
+    assert found is not None and measure_of(found, on_device=True).bytes_per_item == 30
 
 
 @pytest.mark.logic

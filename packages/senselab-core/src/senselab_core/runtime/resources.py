@@ -25,6 +25,13 @@ from senselab_core.runtime.storage import write_atomically
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
+class Batched(Frozen):
+    """Seconds of work per second of input of items sent `batch_size` per request, at the batch measured."""
+
+    batch_size: Annotated[int, Field(ge=2)]
+    s_per_input_s: Seconds
+
+
 class ResourceMeasure(Frozen):
     """One model on one resource class at one item per request.
 
@@ -37,6 +44,7 @@ class ResourceMeasure(Frozen):
         device_peak_bytes: The highest device memory read between requests; None off a device.
         s_per_input_s: Seconds of work per second of recording input; per item when `input_s_per_item` is None.
         input_s_per_item: The median recording seconds of a measured item; None for items without a recording.
+        batched: The seconds per input second at the largest batch measured; None where none was measured.
     """
 
     load_s: Seconds
@@ -47,6 +55,7 @@ class ResourceMeasure(Frozen):
     device_peak_bytes: Annotated[int, Field(gt=0)] | None = None
     s_per_input_s: Seconds
     input_s_per_item: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None
+    batched: Batched | None = None
 
     @model_validator(mode="after")
     def _check_memory(self) -> "ResourceMeasure":

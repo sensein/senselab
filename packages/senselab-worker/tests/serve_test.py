@@ -552,3 +552,24 @@ def test_exponentially_shared_output_fails_only_its_item(tmp_path: Path) -> None
     dag, mate = _replies(out)
     assert code == 0 and mate["outputs"] == {"ok": 1}
     assert (dag["error"]["type"], dag["error"]["fault"], dag["error"]["gap"]) == ("ResponseTooLarge", "resource", False)
+
+
+@pytest.mark.logic
+def test_done_carries_the_requests_device_peak_when_measured(tmp_path: Path) -> None:
+    """A meter's `(peak, allocated after)` rides on `done`; without one (no CUDA in use) `done` has neither."""
+    measured: list[int] = []
+
+    def meter(call: Callable[[], Any]) -> tuple[Any, tuple[int, int] | None]:
+        measured.append(1)
+        return call(), (2048, 1024)
+
+    rx = io.BytesIO(
+        _line(_init(tmp_path), tmp_path)
+        + _line({"id": "r", "items": [{"id": "a", "inputs": {}}], "params": {}}, tmp_path)
+    )
+    tx = io.BytesIO()
+    assert serve(_load, _echo, rx, tx, meter) == 0
+    done = validate_message(json.loads(tx.getvalue().splitlines()[-1]), "done")
+    assert done == {"id": "r", "done": 1, "device_peak_bytes": 2048, "device_allocated_bytes": 1024} and measured == [1]
+    _, out = _session(tmp_path, [_init(tmp_path), {"id": "r", "items": [{"id": "a", "inputs": {}}], "params": {}}])
+    assert out[-1] == {"id": "r", "done": 1}
