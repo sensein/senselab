@@ -169,7 +169,7 @@ def test_the_env_tier_runs_on_every_pr() -> None:
 
 @pytest.mark.logic
 def test_the_nightly_workflow_tests_2x_and_a_pr_gaining_a_label_reruns_the_tests() -> None:
-    """The nightly workflow is scheduled and checks out 2.x; the test workflow reruns on `labeled`."""
+    """The nightly workflow is scheduled and checks out 2.x and the phase branch; the test workflow reruns on label."""
     nightly = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
     triggers = nightly.get("on", nightly.get(True))
     assert triggers["schedule"] and all("cron" in entry for entry in triggers["schedule"])
@@ -178,7 +178,9 @@ def test_the_nightly_workflow_tests_2x_and_a_pr_gaining_a_label_reruns_the_tests
     checkouts = [
         step for job in nightly["jobs"].values() for step in job.get("steps", []) if "checkout" in step.get("uses", "")
     ]
-    assert checkouts and all(step["with"]["ref"] == "2.x" for step in checkouts)
+    matrix = nightly["jobs"]["limits"]["strategy"]["matrix"]["ref"]
+    assert matrix[0] == "2.x" and all(ref.startswith("2x/") for ref in matrix[1:]) and len(matrix) == 2  # noqa: PLR2004
+    assert checkouts and all(step["with"]["ref"] in {"2.x", "${{ matrix.ref }}"} for step in checkouts)
     tests = yaml.safe_load(WORKFLOW.read_text())
     on = tests.get("on", tests.get(True))
     assert "schedule" not in on and "labeled" in on["pull_request"]["types"]
