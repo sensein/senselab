@@ -21,8 +21,9 @@ import numpy
 from pydantic import Field
 
 from senselab_core.kernel._base import FiniteFloat, Frozen, value_digest
-from senselab_core.kernel.formats import FORMAT_PATTERN
+from senselab_core.kernel.formats import FORMAT_PATTERN, RUN_CONFIG_FORMAT
 from senselab_core.kernel.wire import WIRE_FORMATS
+from senselab_core.runtime.calibration import RunCalibration
 from senselab_core.runtime.config import load_yaml
 
 COMPARISON_FORMAT = "comparison@1.0"
@@ -112,27 +113,44 @@ class Thresholds(Frozen):
 
     @classmethod
     def load(cls, override: Mapping[str, Any] | Path | None = None) -> "Thresholds":
-        """Return the packaged run config's `thresholds` with `override`'s (a run config mapping or YAML) merged over.
-
-        A threshold of `override` may set `rtol`, `atol` or both.
-
-        Raises:
-            UnknownThreshold: `override` names a key or threshold the packaged run config lacks, naming the closest.
-            ValueError: the packaged file is not `run-config@2.0` with exactly `rtol` and `atol` per threshold, or a
-                merged bound is not a finite non-negative number.
-        """
-        merged = {name: dict(bound) for name, bound in _packaged_thresholds().items()}
-        raw = load_yaml(override, "run config") if isinstance(override, Path) else dict(override or {})
-        _known("run config key", set(raw) - {"format"}, {"thresholds"})
-        given = raw.get("thresholds") or {}
-        _known("threshold", set(given), set(merged))
-        for name, bound in given.items():
-            _known(f"key of threshold {name!r}", set(bound), {"rtol", "atol"})
-            merged[name] |= bound
-        return cls(by_name={n: Threshold(**{k: _number(v) for k, v in b.items()}) for n, b in merged.items()})
+        """Return the `thresholds` of `load_run_config(override)`."""
+        return load_run_config(override).thresholds
 
 
-RUN_CONFIG_FORMAT = "run-config@2.0"
+class LoadedRunConfig(Frozen):
+    """A run config's validated sections: the comparison `thresholds` and the `calibration` overrides."""
+
+    thresholds: Thresholds
+    calibration: RunCalibration
+
+
+def load_run_config(override: Mapping[str, Any] | Path | None = None) -> LoadedRunConfig:
+    """Return the packaged run config's sections with `override`'s (a run config mapping or YAML) merged over.
+
+    A threshold of `override` may set `rtol`, `atol` or both; `calibration` may set `trust`.
+
+    Raises:
+        UnknownThreshold: `override` names a key, threshold or calibration key the packaged run config lacks, naming
+            the closest.
+        ValueError: the packaged file is not `run-config@2.1` with exactly `rtol` and `atol` per threshold, or a
+            merged bound or calibration value is invalid.
+    """
+    merged = {name: dict(bound) for name, bound in _packaged_thresholds().items()}
+    raw = load_yaml(override, "run config") if isinstance(override, Path) else dict(override or {})
+    _known("run config key", set(raw) - {"format"}, {"thresholds", "calibration"})
+    given = raw.get("thresholds") or {}
+    _known("threshold", set(given), set(merged))
+    for name, bound in given.items():
+        _known(f"key of threshold {name!r}", set(bound), {"rtol", "atol"})
+        merged[name] |= bound
+    calibration = raw.get("calibration") or {}
+    _known("calibration key", set(calibration), set(RunCalibration.model_fields))
+    return LoadedRunConfig(
+        thresholds=Thresholds(
+            by_name={n: Threshold(**{k: _number(v) for k, v in b.items()}) for n, b in merged.items()}
+        ),
+        calibration=RunCalibration.model_validate(calibration),
+    )
 
 
 def _number(v: object) -> object:

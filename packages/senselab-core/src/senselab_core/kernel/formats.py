@@ -100,6 +100,9 @@ MEASURE_REGIME_FORMAT = "measure-regime@1.0"
 MEASURE_OOM_FORMAT = "measure-oom@1.0"
 """The format of a resource fault at a batch and length."""
 
+RUN_CONFIG_FORMAT = "run-config@2.1"
+"""The format of a run config, `runtime/data/run_config.yaml` or a user's: comparison thresholds and calibration."""
+
 PLACEMENT_REQUEST_FORMAT = "placement-request@1.0"
 """The format of what a run needs, handed to a site's placement hook."""
 PLACEMENT_ANSWER_FORMAT = "placement-answer@1.0"
