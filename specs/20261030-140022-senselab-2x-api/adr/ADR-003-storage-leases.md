@@ -21,8 +21,9 @@ The protocol uses only primitives that `work_pool` has measured on NFS v4.2: ato
     writer wins.
   - A duplicate coordinator, a duplicate claim or a resumed run can only cause **duplicate work,
     never a wrong or mixed result**.
-  - The coordinator epoch file (incremented by `O_EXCL` link) is a fence for efficiency only. A
-    stale coordinator sees a newer epoch and stops releasing.
+  - The coordinator epoch file (incremented by `O_EXCL` link) is a fence for efficiency only, as to results:
+    a stale coordinator sees a newer epoch and stops releasing, and results stay correct without it. Which attempt is
+    credited with the work depends on it (amendment 2026-11-08, outcome record epoch).
 - **Claim order and fairness.**
   - Each queue keeps append-only, time-ordered index segments, and workers claim oldest-first
     from the head segment. This replaces lexicographic scans; claiming costs O(1) amortised.
@@ -283,6 +284,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
 - 2026-11-07: a server backend is placed on a `svc` class first, a providing set consumes a live entry of the identity before reserving its own, the registry is per host and visible device set, and a server whose device lacks the memory it asks for is refused before launch (Phase 3 Task 20c).
 - 2026-11-07: the lease constants this ADR names are profile keys (`lease.record_attempts`, `lease.dir_mode`, `lease.missed_beats`), per P-34 as amended; `PRIVATE_DIR_MODE` stays an invariant (a security property). The other code constants move into the profile, with derivations in `config-derivations.md`, under the fixed-parameter audit.
 - 2026-11-08: measures roots, layered (shared, then own) under these rules: write-once files, a hardware index, a probe lease per measured unit, a serve lease pinning a probe queue to one worker, bounded peer waits, a read-only root that falls back and never fails, one trust filter over every record kind, and `collect` of the collector's own files (Phase 3 Task 20R).
+- 2026-11-08: the outcome record names the epoch of the claim that wrote it (Phase 3 Task 21R1).
 
 ## Amendment 2026-11-06: queues of plan fragments (Phase 3 Task 13)
 
@@ -383,3 +385,20 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3, §4.4. Adds to th
   staging, quarantine past the policy's ages).
 - **Not guaranteed.** One probe per unit; that a peer's estimate arrives within `peer_wait_s`; agreement between
   measures written by different senselab versions under one `MeasureUnit` (a confirming probe after drift settles it).
+
+## Amendment 2026-11-08: the outcome record names the claim's epoch (Phase 3 Task 21R1)
+
+- **`outcome/<digest>` carries `epoch`.** The record `{"outcome": "done" | "dead", "worker", "finish", ...}` gains
+  `"epoch": <int>`: the coordinator epoch current when the claim that wrote it was taken, read from the queue's epoch
+  source (0 when the queue has none). It is fixed at claim time, so a claim taken in epoch 1 that commits after epoch 2
+  put the same item still names 1.
+- **Meaning.** A coordinator of epoch `e` gives an outcome as executed in its attempt only when the record's `epoch` is
+  `e`. A record of another epoch, or without the field, is another attempt's work: the coordinator gives it as served
+  under `exact`, or under the policy the worker already recorded when that is `equivalent` or `tolerant`. The pool
+  decides this where it settles an outcome; it reads no outcome at put time. The epoch therefore also decides
+  `finished` against `cache_hit` in the run's events, not only the efficiency fence of the safety section: results
+  stay correct without it (idempotence, first-writer-wins), but which attempt is credited with the work depends on
+  it.
+- **One writer shape.** Every writer of `outcome/<digest>`, a claim's commit or dead and the queue's own dead record
+  for a corrupt item, builds the record the same way and names an epoch.
+- **Unchanged.** First-writer-wins, the staged-then-linked write, the one-outcome-per-item rule and fencing by epoch.
