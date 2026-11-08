@@ -116,7 +116,7 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
 | W → H | ready | `{"ready": {"load_s": <int or float>}}` |
 | H → W | request | `{"id": "<uuid>", "items": [{"id": "<item>", "inputs": {...}}], "params": {...}}`; item ids unique |
 | W → H | result (one per item) | `{"id": "<uuid>", "item": "<item>", "outputs": {...}}` or `{"id": "<uuid>", "item": "<item>", "error": {...}}`; exactly one of `outputs` and `error`; the error is a complete error record |
-| W → H | done | `{"id": "<uuid>", "done": <number of items>}` |
+| W → H | done | `{"id": "<uuid>", "done": <number of items>}`, with `"device_peak_bytes"` and `"device_allocated_bytes"` (non-negative ints, together) when the worker measured the request on a CUDA device |
 | W → H | fatal | `{"error": <any>, "fatal": true}` |
 | H → W | stop | `{"stop": true}` |
 
@@ -160,7 +160,11 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
   request.
 - **Reply.** The worker writes one `result` line per item, in item order, each naming its `item`,
   then `{"id": <request>, "done": <n>}` with `n` the number of items. A request with no items is
-  answered by `done` alone. The host reads exactly that sequence; a line with the wrong `id`,
+  answered by `done` alone. A worker whose backend has initialised CUDA in torch adds the request's device
+  allocation peak and what stays allocated after it (`torch.cuda.max_memory_allocated` after a
+  `reset_peak_memory_stats`, and `memory_allocated`) to `done`; the host records them for the request's
+  thread (`device_requests`). They are optional and additive: a worker without CUDA in use
+  sends neither (Phase 3 Task 20e). The host reads exactly that sequence; a line with the wrong `id`,
   `item`, kind or count is a protocol violation.
 - **Host line limit.** A client may take a `max_line_bytes` below `MAX_LINE_BYTES`. It bounds the
   lines the client sends and, after the hello, the reply lines it accepts: a longer reply is

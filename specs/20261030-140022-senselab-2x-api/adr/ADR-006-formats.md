@@ -544,7 +544,9 @@ so moving them needs a format change, left open.
   packaged profile of the same name, and set `format: execution-profile@3.0`.
 - **`resource-table@1.0`** (amended in place: no table had been generated). A row is `{id, revision, download_bytes,
   classes: {resource class -> {load_s, claim_s, resident_bytes, peak_memory_bytes, device_resident_bytes,
-  device_peak_bytes, s_per_input_s, input_s_per_item, measured: {sha, run, jobs}}}}`: each class carries its own
+  device_peak_bytes, s_per_input_s, input_s_per_item, batched: {batch_size, s_per_input_s} | null, measured: {sha, run,
+  jobs}}}}` (`batched` added by Phase 3 Task 20e: the seconds per input second of items sent in the largest batch
+  measured, so sizing keeps a batch only where it is not slower per item): each class carries its own
   derivation, and writing one class replaces that class alone. `download_bytes` is null when unmeasured; the host
   pair is null where no resident figure could be read (no cgroup v2), the device pair off a device or unread; `input_s_per_item` is null for items without a recording, `s_per_input_s` being then per
   item; `sha` is null for a calibration round, whose `run` names the senselab-core version and the run, and `jobs`
