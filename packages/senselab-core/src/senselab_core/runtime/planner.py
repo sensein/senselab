@@ -31,7 +31,7 @@ from senselab_core.runtime.call import (
     pin_model,
 )
 from senselab_core.runtime.catalogue import Catalogue
-from senselab_core.runtime.datasets import sourced_manifest
+from senselab_core.runtime.datasets import record_bind, sourced_manifest
 from senselab_core.runtime.explain import explain
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
@@ -156,13 +156,13 @@ def _manifest(  # noqa: PLR0913 - the graph and what binds its inputs
     spec: TaskSpec | None,
     bind: Mapping[str, str],
     inputs: Mapping[str, object],
-) -> tuple[InputManifest, dict[str, Any], dict[InputIdentity, object]]:
-    """Return the manifest of the records `graph` runs over, the sources its inputs are read from and the live values.
+) -> tuple[InputManifest, dict[str, Any], dict[InputIdentity, object], dict[str, str]]:
+    """Return the records' manifest, the sources its inputs are read from, the live values and the resolved bind.
 
     The sources are `{"rows": [{port: source}], "shared": {port: source}}`, a row per manifest row and the broadcast
     inputs once (`_source`); the live values are those of the `{"memory": <identity>}` sources, by identity. Over a
     dataset each row holds its record's identity for every record-bound input and the broadcast identity of every
-    other input.
+    other input. The resolved bind is `bind` with any automatic binding added (`record_bind`).
     """
     live: dict[InputIdentity, object] = {}
     if dataset is not None:
@@ -177,25 +177,26 @@ def _manifest(  # noqa: PLR0913 - the graph and what binds its inputs
             raise RecordBinding(tuple(sorted(set(bind) - set(record))), "bind names record-bound inputs only")
         bound = {port: bind_input(port, kind, inputs[port]) for port, kind in broadcast.items()}
         shared = {port: identity for port, (identity, _, _) in bound.items()}
+        bind = record_bind(dataset, record, bind)
         built, rows = sourced_manifest(dataset, record, bind=bind)
         manifest = InputManifest(
             rows=tuple(ManifestRow(id=r.id, entities=r.entities, inputs={**r.inputs, **shared}) for r in built.rows)
         )
         sources = {port: _source(inputs[port], identity, value, live) for port, (identity, value, _) in bound.items()}
-        return manifest, {"rows": rows, "shared": sources}, live
+        return manifest, {"rows": rows, "shared": sources}, live, bind
     if bind or inputs:
         raise ValueError("bind and inputs name the inputs of a graph over a dataset; there is no dataset")
     if call is None or spec is None:
         if graph.inputs:
             raise ValueError(f"the graph has inputs {sorted(graph.inputs)}; they are bound from a dataset's records")
-        return InputManifest(), {"rows": [], "shared": {}}, live
+        return InputManifest(), {"rows": [], "shared": {}}, live, {}
     if set(call.inputs) != set(spec.inputs):
         raise ValueError(f"{call.task!r} takes inputs {sorted(spec.inputs)}; the call gives {sorted(call.inputs)}")
     bound = {port: bind_input(port, spec.inputs[port], value) for port, value in call.inputs.items()}
     identities = {port: identity for port, (identity, _, _) in bound.items()}
     manifest = InputManifest(rows=(ManifestRow(id=ITEM_ID, entities={}, inputs=identities),))
     row = {port: _source(call.inputs[port], identity, value, live) for port, (identity, value, _) in bound.items()}
-    return manifest, {"rows": [row], "shared": {}}, live
+    return manifest, {"rows": [row], "shared": {}}, live, {}
 
 
 def _source(given: object, identity: InputIdentity, value: object, live: dict[InputIdentity, object]) -> object:
@@ -303,8 +304,10 @@ def resolve_bound(  # noqa: PLR0913 - as `resolve`
     takes the task's catalogue default. Each node's declared profile slices are cut from `config.settings` and
     `dataset_profile` (`keys.profile_slices`). Over a dataset each `list[T]` input fed only by `map` edges is bound
     from every record, zipped by record, and `bind` maps such an input to the record input it reads
-    (`build_manifest`); every other input is broadcast to every element, its one value given in `inputs`. The plan's
-    reuse policy is `config.reuse`. Models and slices are resolved before any input is read.
+    (`build_manifest`), or the one such input named for no record input binds to the records' single input
+    (`record_bind`, recorded in the plan's `bind`); every other input is broadcast to every element, its one value
+    given in `inputs`. The plan's reuse policy is `config.reuse`. Models and slices are resolved before any input is
+    read.
 
     Raises:
         InvalidGraph: the graph has issues against the packaged registry.
@@ -328,13 +331,13 @@ def resolve_bound(  # noqa: PLR0913 - as `resolve`
     specs = {n.id: registry.spec(n.task) for n in graph.nodes}
     models = {n.id: _pinned(specs[n.id], n, catalogue, resolver, admit) for n in graph.nodes}
     slices = {n.id: profile_slices(specs[n.id], config.settings, dataset_profile) for n in graph.nodes}
-    manifest, sources, live = _manifest(graph, dataset, call, spec, bind or {}, inputs or {})
+    manifest, sources, live, bound = _manifest(graph, dataset, call, spec, bind or {}, inputs or {})
     plan = LogicalPlan(
         graph=graph,
         models=models,
         profile_slices=slices,
         manifest_digest=manifest.digest(),
-        bind=bind or {},
+        bind=bound,
         reuse=config.reuse,
     )
     return Resolved(plan, manifest, sources, live)

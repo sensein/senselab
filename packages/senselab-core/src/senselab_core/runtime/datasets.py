@@ -117,6 +117,32 @@ def build_manifest(
     return sourced_manifest(dataset, ports, bind=bind)[0]
 
 
+def record_bind(dataset: Dataset, ports: Iterable[str], bind: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return `bind` with the port no record input is named for bound to the records' single input.
+
+    A port reads `bind[port]`, else the record input of its name. When exactly one port has neither and every record
+    has exactly one input, of one name, that port binds to it.
+
+    Raises:
+        ValueError: if a port has neither and does not bind automatically; the message names the `bind` to pass.
+    """
+    chosen = dict(bind or {})
+    records = list(dataset.records())
+    unbound = [p for p in ports if p not in chosen and any(p not in r.inputs for r in records)]
+    if not unbound:
+        return chosen
+    names = {name for r in records for name in r.inputs}
+    if len(unbound) == 1 and len(names) == 1 and all(len(r.inputs) == 1 for r in records):
+        return {**chosen, unbound[0]: names.pop()}
+    record = next(r for r in records if any(p not in r.inputs for p in unbound))
+    inputs = sorted(record.inputs)
+    suggested = {p: inputs[0] if inputs else "<input>" for p in unbound}
+    raise ValueError(
+        f"record {record.id!r}: no input {', '.join(map(repr, unbound))}; record inputs are {inputs}; "
+        f"pass bind={suggested}"
+    )
+
+
 def sourced_manifest(
     dataset: Dataset, ports: Mapping[str, str], *, bind: Mapping[str, str] | None = None
 ) -> tuple[InputManifest, list[dict[str, object]]]:
@@ -125,13 +151,14 @@ def sourced_manifest(
     A source is what `bind_input` reads the input from: the file's path as text, or the JSON value.
 
     Each port binds to the record input of the same name; `bind[port]` names another input instead (for BIDS, a
-    suffix). A file input is read as `bind_input` reads a path for the port's type, so its identity is the one a
-    run keys on and comes from the file's content.
+    suffix); a single port named for no input binds to the records' single input (`record_bind`). A file input is
+    read as `bind_input` reads a path for the port's type, so its identity is the one a run keys on and comes from
+    the file's content.
 
     Raises:
         ValueError: if a record has no input for a port, or a file input is bound to a port type not read from a path.
     """
-    chosen = bind or {}
+    chosen = record_bind(dataset, ports, bind)
     rows = []
     sources: list[dict[str, object]] = []
     for record in dataset.records():

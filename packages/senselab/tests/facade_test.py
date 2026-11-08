@@ -146,6 +146,19 @@ def test_sl_dataset_bids_builds_bids_dataset(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
+def test_a_task_over_bids_binds_its_single_input(tmp_path: Path) -> None:
+    """`Resample` plans over a BIDS tree as with `bind={'series': 'audio'}`; `SpeechToText`'s `audio` binds by name."""
+    path = tmp_path / "bids" / "sub-01" / "audio" / "sub-01_task-read_audio.wav"
+    path.parent.mkdir(parents=True)
+    soundfile.write(path, numpy.zeros(160, dtype=numpy.float32), 16000)
+    dataset, resample = sl.Dataset.bids(tmp_path / "bids"), sl.Resample(target_rate=8000)
+    auto = sl.plan(resample, dataset)
+    assert dict(auto.logical.bind) == {"series": "audio"}
+    assert auto.hash == sl.plan(resample, dataset, bind={"series": "audio"}).hash
+    assert dict(sl.plan(sl.SpeechToText(), dataset).logical.bind) == {}
+
+
+@pytest.mark.logic
 def test_to_frame_indexed_by_entities() -> None:
     """The frame is indexed by the records' entities, one column per output, and a failed row holds its fault class."""
     import pandas  # noqa: PLC0415 - a test dependency of this package, imported so its absence fails the test

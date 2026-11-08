@@ -405,6 +405,17 @@ def test_reuse_policy_and_bind_reach_the_plan() -> None:
     assert plan.reuse == ReusePolicy.EXACT.value and dict(plan.bind) == {"text": "utterance"}
 
 
+@pytest.mark.logic
+def test_an_automatic_bind_is_the_plan_of_the_explicit_one() -> None:
+    """A port binding to the records' single input is recorded in `bind`; a port binding by name records nothing."""
+    rows = from_records([{"id": "r", "inputs": {"utterance": "x"}}])
+    auto, _ = resolve(_call(), rows, config=RunConfig())
+    explicit, _ = resolve(_call(), rows, config=RunConfig(), bind={"text": "utterance"})
+    assert dict(auto.bind) == {"text": "utterance"} and plan_hash(auto) == plan_hash(explicit)
+    by_name, _ = resolve(_call(), _records("x"), config=RunConfig())
+    assert dict(by_name.bind) == {}
+
+
 NO_GPU = HardwareInfo(cpu_count=2, memory_bytes=2**33, gpus=(), apple_silicon=False, platform="linux-x86_64")
 GPU = HardwareInfo(
     cpu_count=2,

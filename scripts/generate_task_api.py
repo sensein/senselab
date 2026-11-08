@@ -176,7 +176,11 @@ def _render_task(spec: TaskSpec, imports: _Imports) -> tuple[str, str, str]:
         *_signature(
             "def map", ["self", "dataset: Dataset"], ["bind: Mapping[str, str] | None = None"], "ResultSet", "    "
         ),
-        '        """Run this task on every record of the dataset and return its `ResultSet`; `bind` names record inputs."""',
+        '        """Run this task on every record of the dataset and return its `ResultSet`.',
+        "",
+        "        A port reads the record input of its name, else `bind[port]`; the one port named for none reads the",
+        "        records' single input.",
+        '        """',
         "        return self._map(dataset, bind)",
         "",
         "",
