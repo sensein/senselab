@@ -205,8 +205,11 @@ class Local:
         """Start workers of `resource_class`, as many as `count`, the room under `max_workers` and free devices allow.
 
         Raises:
-            LocalError: a process could not be launched; those launched before it are kept and listed.
+            LocalError: a process could not be launched, those launched before it kept and listed; or `resource_class`
+                is a `cuda` class and no device is visible.
         """
+        if class_of(resource_class) in self.cuda and not self.devices:
+            raise LocalError(f"no device is visible to run {resource_class!r} on (CUDA_VISIBLE_DEVICES, nvidia-smi)")
         with self._lock:
             alive = self._alive()
             room = self.max_workers - len(alive)

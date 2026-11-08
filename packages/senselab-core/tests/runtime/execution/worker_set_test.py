@@ -222,6 +222,17 @@ def test_release_frees_the_cached_models_workers_and_servers() -> None:
 
 
 @pytest.mark.logic
+def test_a_host_backend_serving_models_must_size_its_state() -> None:
+    """A host backend declaring `models` with no `state_bytes` is refused; one declaring none counts its state 0."""
+    serving = _host("serving").model_copy(update={"models": ("org/m",)})
+    with pytest.raises(ValueError, match="defines no state_bytes"):
+        with WorkerSet(1).checkout(serving, ENV, None, device="cpu", profile=PROFILE):
+            pass
+    with WorkerSet(1).checkout(_host("plain"), ENV, None, device="cpu", profile=PROFILE) as worker:
+        assert worker.run([{"id": "a", "inputs": {"x": "v"}}], {})[0]["outputs"] == {"value": "v"}
+
+
+@pytest.mark.logic
 def test_a_busy_server_start_lease_is_not_a_load_failure() -> None:
     """A server start whose lease is busy raises `LeaseTimeout` as it is: a busy resource, never a broken env."""
 

@@ -1,6 +1,7 @@
 """Services: servers registered under renewed leases, consumed under leases of their own (ADR-003).
 
-A `ServiceRegistry` is a directory. A service whose identity is an `Attestation` is named `svc-<identity digest>`:
+A `ServiceRegistry` is a directory, one per host and set of visible devices (`service_registry`). A service whose
+identity is an `Attestation` is named `svc-<identity digest>`:
 
 - `<name>.json` is its `service-entry@1.0` entry, `{identity, endpoint}`;
 - `<name>.lease` is the `Lease` its server's process holds and renews (`Lease.keep_alive`); the entry is live while
@@ -31,6 +32,7 @@ from senselab_core.kernel._base import NonEmptyStr
 from senselab_core.kernel.formats import SERVICE_ENTRY_FORMAT, FormatTag, Formatted
 from senselab_core.kernel.identity import Attestation
 from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.hardware import device_set
 from senselab_core.runtime.locks import LEASE_SUFFIX, Lease, LeaseState, LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.storage import write_atomically
@@ -303,9 +305,14 @@ class ConsumerLease:
         self._stack.close()
 
 
-def service_registry(profile: ExecutionProfile) -> ServiceRegistry:
-    """Return this host's registry under `profile`: `<server env root>/services/<host>`."""
-    return ServiceRegistry(profile.env_root("server") / "services" / socket.gethostname(), lease=profile.lease)
+def service_registry(profile: ExecutionProfile, environ: Mapping[str, str] | None = None) -> ServiceRegistry:
+    """Return the registry of this host's devices under `profile`: `<server env root>/services/<host>/<devices>`.
+
+    `<devices>` names the devices this process sees (`device_set` of `environ`, `os.environ` when None), so the
+    servers of each card are registered, and consumed, apart.
+    """
+    root = profile.env_root("server") / "services" / socket.gethostname() / device_set(environ=environ)
+    return ServiceRegistry(root, lease=profile.lease)
 
 
 __all__ = [

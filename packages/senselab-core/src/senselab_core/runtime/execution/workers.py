@@ -221,7 +221,7 @@ class WorkerSet:
         pooled worker is closed and replaced.
 
         Raises:
-            ValueError: a server backend without `expected`.
+            ValueError: a server backend without `expected`; a host backend declaring `models` without `state_bytes`.
             LeaseTimeout, LeaseUnavailable: a server's start lease is busy or cannot be read.
             ResourceFault: a worker or a server lacked a resource to start or load (`VllmOutOfMemory` among them).
             WorkerLoadFailed: a worker or a server failed to start or load, whatever else it raised
@@ -313,7 +313,7 @@ class WorkerSet:
             )
         budget = profile.model_cache_budget_bytes
         key = host_model_key(backend, env, model, init["device"])
-        size_of = _size_of(backend.worker)
+        size_of = _size_of(backend)
         return _loaded(
             lambda: HostWorker(
                 backend.worker, init=backend_init(init), key=key, cache=process_cache(budget), size_of=size_of
@@ -520,7 +520,20 @@ def _loaded(start: Callable[[], Started]) -> Started:
         raise failed from exc
 
 
-def _size_of(module: str) -> Callable[[object], int]:
-    """Return how a backend's state counts against the model-cache budget: by its module's `state_bytes`, else 0."""
-    size_of: Callable[[object], int] | None = getattr(importlib.import_module(module), "state_bytes", None)
-    return size_of or (lambda _: 0)
+def _size_of(backend: BackendSpec) -> Callable[[object], int]:
+    """Return how a backend's state counts against the model-cache budget: by its module's `state_bytes`.
+
+    A backend that declares no `models` and no `state_bytes` holds none, and counts 0.
+
+    Raises:
+        ValueError: the backend declares `models` and its module no `state_bytes`.
+    """
+    size_of: Callable[[object], int] | None = getattr(importlib.import_module(backend.worker), "state_bytes", None)
+    if size_of is not None:
+        return size_of
+    if backend.models:
+        raise ValueError(
+            f"backend {backend.name!r} serves models and its module {backend.worker!r} defines no state_bytes, "
+            "so the model-cache budget cannot hold it"
+        )
+    return lambda _: 0

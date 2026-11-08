@@ -39,7 +39,7 @@ from senselab_core.runtime.execution.substrates import (
     scale,
 )
 from senselab_core.runtime.execution.supervisor import Supervisor
-from senselab_core.runtime.execution_settings import LeaseBoundError, SlurmCommands
+from senselab_core.runtime.execution_settings import LeaseBoundError, PoolSettings, SlurmCommands
 from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile, QosCapTooSmall
 from senselab_core.runtime.storage import StorageCapabilities, StorageUnsupported
@@ -463,31 +463,35 @@ DEVICE_CHILD = (
 )
 
 
-def _devices_seen(directory: Path, count: int) -> dict[str, str]:
-    """Wait until `count` workers wrote the device they were given; return it by process id."""
+def _devices_seen(directory: Path, count: int, waits: PoolSettings) -> dict[str, str]:
+    """Wait, within `waits.poll_s`, until `count` workers wrote the device they were given; return it by process id."""
+    deadline = time.monotonic() + waits.poll_s
     while len(written := list(directory.iterdir())) < count:
-        time.sleep(0.01)
+        assert time.monotonic() < deadline, f"{len(written)} of {count} workers wrote their device"
+        time.sleep(waits.first_poll_s)
     return {p.name: p.read_text() for p in written}
 
 
 @pytest.mark.logic
-def test_local_runs_one_cuda_worker_per_visible_device(tmp_path: Path) -> None:
+def test_local_runs_one_cuda_worker_per_visible_device(tmp_path: Path, slack: Path) -> None:
     """A cuda class's workers each get a free device as `CUDA_VISIBLE_DEVICES`; no more start than there are devices."""
+    waits = ExecutionProfile.load("orcd", slack).pool
     seen = tmp_path / "seen"
     seen.mkdir()
     local = Local(8, command=[sys.executable, "-c", DEVICE_CHILD, str(seen)], cuda=["gpu"], devices=["G-0", "G-1"])
     handles = local.start("gpu#m", 3)
     try:
         assert len(handles) == 2 and local.start("gpu#n", 1) == []
-        assert sorted(_devices_seen(seen, 2).values()) == ["G-0", "G-1"]
+        assert sorted(_devices_seen(seen, 2, waits).values()) == ["G-0", "G-1"]
         local.stop(handles[:1])
         handles = [*handles[1:], *local.start("gpu#n", 2)]
-        assert len(handles) == 2 and set(_devices_seen(seen, 3).values()) == {"G-0", "G-1"}
+        assert len(handles) == 2 and set(_devices_seen(seen, 3, waits).values()) == {"G-0", "G-1"}
         handles += local.start("cpu", 2)
-        assert local.running("cpu") == 2 and "-" in _devices_seen(seen, 5).values()
+        assert local.running("cpu") == 2 and "-" in _devices_seen(seen, 5, waits).values()
     finally:
         local.stop(handles)
-    assert Local(1, command=[sys.executable], cuda=["gpu"]).start("gpu", 1) == []
+    with pytest.raises(LocalError, match="no device is visible"):
+        Local(1, command=[sys.executable], cuda=["gpu"]).start("gpu", 1)
 
 
 @pytest.mark.logic

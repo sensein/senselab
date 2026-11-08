@@ -112,6 +112,11 @@ def load(init: dict[str, Any]) -> object:
     return _State()
 
 
+def state_bytes(state: object) -> int:
+    """Return 0: the fake loads no weights."""
+    return 0
+
+
 def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     """Return `{"outputs": {"value": identity_digest("fake-output@1", {"inputs", "params"})}}` per item.
 
