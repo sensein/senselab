@@ -18,6 +18,9 @@ invariants:
 - path: packages/senselab-worker/src/senselab_worker/fake.py
   name: _NONCE_BYTES
   reason: A 128-bit random nonce in the test fake; its width is not a tunable.
+- path: packages/senselab-core/src/senselab_core/runtime/hardware.py
+  name: _SECRET_BYTES
+  reason: A 128-bit random host value; its width is not a tunable.
 - path: packages/senselab-worker/src/senselab_worker/serve.py
   name: UNBOUNDED_BYTES
   reason: 'The largest signed 64-bit size, read as no bound: a sentinel, not a size.'

@@ -39,6 +39,7 @@ OBSERVATION = Observation.model_validate(
         "request_index": 0,
         "jobs": 1,
         "batch": 1,
+        "unit_kind": "audio_s",
         "units": 1.0,
         "padded_units": 1.0,
         "wall_s": 0.1,

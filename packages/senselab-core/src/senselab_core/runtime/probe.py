@@ -197,6 +197,19 @@ class _Kept:
     ranges: list[tuple[float, float]]
 
 
+def _unit_kind(observations: Sequence[Observation], hardware: HardwareClass) -> tuple[UnitKind, Sequence[Observation]]:
+    """Return the kind of input the unit's probe observations share, and the observations measured by it.
+
+    A unit whose observations mix kinds is of kind `none`, and its observations are returned with units 0, so each
+    request is measured by itself.
+    """
+    kinds = {o.unit_kind for o in observations if o.probe is not None and o.hardware == hardware}
+    if len(kinds) <= 1:
+        return (next(iter(kinds)) if kinds else "none"), observations
+    flat = {"unit_kind": "none", "units": 0.0, "padded_units": 0.0}
+    return "none", [o.model_copy(update=flat) for o in observations]
+
+
 def _select(observations: Sequence[Observation], hardware: HardwareClass, config: CalibrationSettings) -> _Kept:
     """Keep `ok` probe requests of the unit's hardware in the regime each probe ran under (§5.4 steps 1-2).
 
@@ -217,7 +230,7 @@ def _select(observations: Sequence[Observation], hardware: HardwareClass, config
         if o.probe is not None:
             quietest[o.probe.id] = min(o.cotenancy.host, quietest.get(o.probe.id, o.cotenancy.host))
     kept = [o for o in ok if o.probe is not None and o.cotenancy.host == quietest[o.probe.id]]
-    warm = [o for o in kept if o.load_s is None and o.since_load >= config.warmup_requests]
+    warm = [o for o in kept if o.load_s is None and o.since_load is not None and o.since_load >= config.warmup_requests]
     admitted = {id(o) for o in warm}
     lengths = sorted(_length(o) for o in warm)
     whole: dict[tuple[str, str], list[Observation]] = {}
@@ -572,17 +585,18 @@ class Probe:
         config: CalibrationSettings,
         *,
         hardware: HardwareClass,
-        unit_kind: UnitKind,
         memory_headroom: float,
     ) -> Estimate:
         """Return the estimate the observations of one unit give (§5.4).
 
         Only `ok` probe requests of `hardware`, in the regime their probe ran under, count; cold or reloaded ones give
-        a load and nothing else. `records` are the unit's regime and `oom` records, oldest first; a later regime
-        record of one `k` replaces an earlier one. An `oom` record raises the memory fit by `memory_headroom` of its
-        grant (§7.4) unless other processes shared its device, and only until a probe outside its `basis` measures
-        its stratum.
+        a load and nothing else. The unit's kind of input is its observations' when they share one; when they mix
+        kinds each request is measured by itself (units 0), so `u` is unmeasured. `records` are the unit's regime and
+        `oom` records, oldest first; a later regime record of one `k` replaces an earlier one. An `oom` record raises
+        the memory fit by `memory_headroom` of its grant (§7.4) unless other processes shared its device, and only
+        until a probe outside its `basis` measures its stratum.
         """
+        unit_kind, observations = _unit_kind(observations, hardware)
         kept = _select(observations, hardware, config)
         reasons: list[EstimateReason] = []
         single = _request_fit(kept.single, 1, lambda o: o.units, config, kept.ranges)
@@ -644,19 +658,17 @@ class Probe:
         config: CalibrationSettings,
         *,
         records_of: Callable[["MeasureUnit"], Sequence[RegimeRecord]],
-        unit_kind_of: Callable[["MeasureUnit"], UnitKind],
         memory_headroom: float,
     ) -> Callable[["MeasureUnit", Sequence[Observation]], Estimate]:
         """Return `Probe.estimate` as `MeasureSource`'s `estimate=` callable: `(unit, observations) -> Estimate`.
 
-        The records, the kind of input and the hardware are each resolved for the unit asked about.
+        The records and the hardware are each resolved for the unit asked about.
         """
         return lambda unit, observations: Probe.estimate(
             observations,
             records_of(unit),
             config,
             hardware=unit.hardware,
-            unit_kind=unit_kind_of(unit),
             memory_headroom=memory_headroom,
         )
 

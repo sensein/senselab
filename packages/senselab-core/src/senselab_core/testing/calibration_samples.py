@@ -81,6 +81,7 @@ def observation(**update: object) -> Observation:
         "request_index": 0,
         "jobs": 1,
         "batch": 1,
+        "unit_kind": "audio_s",
         "units": 4.0,
         "padded_units": 4.0,
         "wall_s": 0.5,

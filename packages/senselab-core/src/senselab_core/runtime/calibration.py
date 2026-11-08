@@ -139,9 +139,9 @@ class ProbeRef(Frozen):
 
 
 class Cotenancy(Frozen):
-    """Compute processes on the request's device and live pool workers on its host, the request itself counted."""
+    """Pool workers on the request's device and on its host, the request's own worker counted; device None: unread."""
 
-    device: Positive
+    device: Positive | None
     host: Positive
 
 
@@ -154,11 +154,13 @@ class Observation(Frozen):
         request_index: The request's index within its item.
         jobs: Jobs in the request.
         batch: The request's batch size.
+        unit_kind: What its input units are: recording seconds, characters, or none.
         units: The sum of its jobs' input units.
         padded_units: `batch` times the longest job's units.
         wall_s: Request start to end inside the worker.
         item_wall_s: On an item's last request, claim taken to commit; else None.
-        since_load: Requests the model state answered before this one.
+        since_load: Requests the model state answered before this one; None on a request that raised, which loaded
+            nothing it could say.
         load_s: On a request that loaded the model, the load's seconds; else None.
         device_peak: The torch peak device allocation, else None.
         device_after: The device allocation after the request, else None.
@@ -174,11 +176,12 @@ class Observation(Frozen):
     request_index: Count
     jobs: Positive
     batch: Positive
+    unit_kind: UnitKind
     units: Units
     padded_units: Units
     wall_s: Seconds
     item_wall_s: Seconds | None
-    since_load: Count
+    since_load: Count | None
     load_s: Seconds | None
     device_peak: Bytes | None
     device_after: Bytes | None
@@ -192,8 +195,10 @@ class Observation(Frozen):
     def _check_request(self) -> Self:
         if self.padded_units < self.units:
             raise ValueError(f"padded_units {self.padded_units} is below units {self.units}")
-        if self.load_s is not None and self.since_load:
+        if self.load_s is not None and self.since_load != 0:
             raise ValueError(f"load_s is set on the request that loaded, not one with since_load {self.since_load}")
+        if self.outcome == "ok" and self.since_load is None:
+            raise ValueError("an ok request reports the requests its model state answered before it")
         for name, peak, after in (
             ("device", self.device_peak, self.device_after),
             ("host", self.host_peak, self.host_after),

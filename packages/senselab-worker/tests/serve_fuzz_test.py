@@ -295,7 +295,10 @@ def test_serve_is_total_fuzz(behaviour: Behaviour) -> None:
     assert [next(iter(m)) for m in out[:2]] == ["hello", "ready"]
     replies = out[2 : 2 + behaviour.n + 1]
     assert [r["item"] for r in replies[:-1]] == behaviour.item_ids
-    assert replies[-1] == {"id": REQ, "done": behaviour.n}
+    assert {k: v for k, v in replies[-1].items() if k not in ("since_load", "load_s")} == {
+        "id": REQ,
+        "done": behaviour.n,
+    }
     for r in replies[:-1]:
         assert ("outputs" in r) != ("error" in r)
         validate_message(r, "result")
@@ -313,4 +316,6 @@ def test_serve_is_total_fuzz(behaviour: Behaviour) -> None:
         assert all("error" in r for r in replies[:-1])
     for r in replies[:-1]:
         assert "error" not in r or r["error"]["type"] != "ProtocolError" or behaviour.batch != "well"
-    assert out[2 + behaviour.n + 1 :] == [{"id": GOOD, "item": "g", "outputs": {"ok": True}}, {"id": GOOD, "done": 1}]
+    *good, good_done = out[2 + behaviour.n + 1 :]
+    assert good == [{"id": GOOD, "item": "g", "outputs": {"ok": True}}]
+    assert {k: v for k, v in good_done.items() if k not in ("since_load", "load_s")} == {"id": GOOD, "done": 1}

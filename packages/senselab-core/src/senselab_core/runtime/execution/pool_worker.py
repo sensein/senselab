@@ -16,10 +16,8 @@ service it holds has been live for `services.idle_exit_s`, the jobs it runs itse
 import contextlib
 import functools
 import logging
-import os
 import queue
 import signal
-import socket
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -28,19 +26,28 @@ from pathlib import Path
 from typing import TypeAlias
 
 from senselab_worker.faults import FaultClass, ProtocolError, classify, error_record
-from senselab_worker.units import NS_PER_S
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
-from senselab_core.runtime import device_requests
+from senselab_core.runtime import request_reports
+from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
 from senselab_core.runtime.call import RunConfig
-from senselab_core.runtime.execution.batching import LengthUnrecorded, job_length_ns, job_text_chars
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
-from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment
+from senselab_core.runtime.execution.executor import FaultRecord, JobRef, PlanFragment
 from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, process_workers
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
+from senselab_core.runtime.execution.observing import (
+    Presence,
+    RequestRecord,
+    Seen,
+    Sent,
+    hardware_of,
+    job_units,
+    observations,
+    records_of,
+)
 from senselab_core.runtime.execution.pool import report, run_plan
-from senselab_core.runtime.execution.queue import Claim, QueueSet
+from senselab_core.runtime.execution.queue import Claim, QueueSet, ServeLease, UnmarkedProbeItem, probe_of
 from senselab_core.runtime.execution.services import service_registry
 from senselab_core.runtime.execution.substrates import (
     EXIT_UNREACHABLE,
@@ -98,13 +105,18 @@ class Member:
     key: str
 
 
-def bisect(
-    members: Sequence[Member], placement: Placement, send: Send, cancelled: threading.Event | None = None
+def bisect(  # noqa: PLR0913 - the members and their placement, the request seam, then the cancel flag and the log
+    members: Sequence[Member],
+    placement: Placement,
+    send: Send,
+    cancelled: threading.Event | None = None,
+    record: Callable[[Sent], None] | None = None,
 ) -> list[JobOutcome]:
     """Return one outcome per member, sent as one request; one that fails as a whole is split in halves.
 
     A member alone whose request fails as a whole gets that failure. Any other exception is the failure of every
-    member of the request that raised it, so a half that completed keeps its outcomes.
+    member of the request that raised it, so a half that completed keeps its outcomes. Each call of `send` is given
+    to `record` as a `Sent`, timed by its own clock, with the requests it made.
 
     Raises:
         Abandoned: `cancelled` was set before a request, or while one ran.
@@ -112,30 +124,59 @@ def bisect(
     """
     if cancelled is not None and cancelled.is_set():
         raise Abandoned
+    refs = tuple(m.job.ref for m in members)
+    began = time.monotonic()
     try:
-        return send([m.job for m in members], placement)
+        with request_reports.collected() as reported:
+            outcomes = send([m.job for m in members], placement)
     except Exception as exc:
+        wall = time.monotonic() - began
         if cancelled is not None and cancelled.is_set():
             raise Abandoned from exc
         if isinstance(exc, LeaseTimeout):
             raise
-        if not whole(exc) or len(members) == 1:
+        split = whole(exc) and len(members) > 1
+        if record is not None:
+            record(Sent(refs, wall, (), "bisected" if split else "failed"))
+        if not split:
             if len(members) == 1:
                 logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)
             return [Failed(m.job.ref, m.key, failure_of(exc)) for m in members]
         half = len(members) // 2
-        return bisect(members[:half], placement, send, cancelled) + bisect(members[half:], placement, send, cancelled)
+        return bisect(members[:half], placement, send, cancelled, record) + bisect(
+            members[half:], placement, send, cancelled, record
+        )
+    if record is not None:
+        record(Sent(refs, time.monotonic() - began, tuple(reported), None))
+    return outcomes
 
 
 @dataclass
 class _Spans:
-    """What each item of a claim ran in, by digest: its wall seconds and each request's device figures.
+    """What each item of a claim ran in, by digest: its wall seconds and the requests its jobs were in.
 
-    A request's figures are `(device peak, allocated after, items)` as its backend reported them.
+    An item's wall is its jobs' share of each request they were in, each timed by itself, and of the time a call of
+    `send` took beyond its requests. Its requests are those the calls made.
     """
 
     walls: dict[str, float] = field(default_factory=dict)
-    devices: dict[str, list[tuple[int, int, int]]] = field(default_factory=dict)
+    requests: dict[str, list[RequestRecord]] = field(default_factory=dict)
+
+    def add(self, sent: Sent, owners: Mapping[JobRef, str]) -> None:
+        """Take one call of `send`: charge each job's item its share of each request and of the rest of the call."""
+        records = records_of(sent)
+        rest = max(0.0, sent.wall_s - sum(r.wall_s for r in records)) / len(sent.refs)
+        for ref in sent.refs:
+            self._charge(owners[ref], rest)
+        for record in records:
+            for ref in record.refs:
+                if ref in owners:
+                    self._charge(owners[ref], record.wall_s / len(record.refs))
+            for digest in dict.fromkeys(owners[r] for r in record.refs if r in owners):
+                self.requests.setdefault(digest, []).append(record)
+
+    def _charge(self, digest: str, seconds: float) -> None:
+        self.walls[digest] = self.walls.get(digest, 0.0) + seconds
 
 
 @dataclass
@@ -175,8 +216,16 @@ class PoolWorker:
         join_s: float = DEFAULT_GRACES.bound,
         memory: Callable[[], tuple[int | None, int]] = memory_bytes,
         device_memory: Callable[[], int | None] | None = None,
+        hardware: Callable[[str], HardwareClass] | None = None,
+        cotenancy: Callable[[str], Cotenancy] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Serve `classes` under `profile`, storing into `store`; jobs go through `send` (`execute` when None).
+
+        `hardware` gives the `HardwareClass` a resource class runs on and `cotenancy` its device and host
+        co-tenancy; they default to what this host shows (`hardware_of`, `Presence`). The worker's name is its
+        `worker_id()` unless given, so no run record names its host. `clock` times the reuse of what it read of its
+        peers and of the run's probe queues (`pool.presence_refresh_s`).
 
         Raises:
             ValueError: no class is named.
@@ -188,7 +237,7 @@ class PoolWorker:
         self.queues = QueueSet(Path(pool_dir), profile, epoch=self.epochs.current)
         self.classes = tuple(classes)
         self.profile, self.store = profile, store
-        self.name = name if name is not None else f"{socket.gethostname()}:{os.getpid()}"
+        self.name = name if name is not None else worker_id()
         self.served: list[tuple[str, str]] = []
         self.stop = threading.Event()
         self._workers = workers
@@ -203,6 +252,21 @@ class PoolWorker:
         self._baseline = memory()[0] or memory()[1]
         self._device_baseline: int | None = None
         self._warm: set[str] = set()
+        self._serving: dict[str, ServeLease] = {}
+        self._hardware = hardware or functools.partial(hardware_of, profile)
+        self._cotenancy = cotenancy or Presence(profile, self.run_dir, clock=clock).cotenancy
+        self._clock = clock
+        self._listed: float | None = None
+
+    def hardware(self) -> dict[str, HardwareClass]:
+        """Return the `HardwareClass` of each queue this worker serves that this host describes, for its ready mark."""
+        found = {}
+        for name in self.classes:
+            try:
+                found[name] = self._hardware(class_of(name))
+            except ValueError as err:
+                logger.warning("pool worker %s cannot describe the hardware of %s: %s", self.name, name, err)
+        return found
 
     def halt(self) -> None:
         """Set `stop` and wake the wait for a running claim's outcomes; safe in a signal handler."""
@@ -210,10 +274,22 @@ class PoolWorker:
         self._finished.put([])
 
     def serve(self) -> int:
-        """Claim and run items until the queues stay empty for `IDLE_POLLS` polls or `stop` is set; return 0."""
+        """Claim and run items until the queues stay empty for `IDLE_POLLS` polls or `stop` is set; return 0.
+
+        A probe queue the worker serves (`_pinned_probes`) is waited on from `pool.first_poll_s`, doubling to
+        `pool.poll_s`, so a probe's next phase costs no full poll; its serve leases are released on return.
+        """
+        try:
+            return self._claim_loop()
+        finally:
+            for lease in self._serving.values():
+                lease.release()
+            self._serving.clear()
+
+    def _claim_loop(self) -> int:
         pool = self.profile.pool
         current: str | None = None
-        spent, began, idle = 0, time.monotonic(), None
+        spent, began, idle, waited = 0, time.monotonic(), None, 0.0
         while not self.stop.is_set():
             ended = current is not None and (spent >= pool.quantum_items or time.monotonic() - began >= pool.quantum_s)
             prefer = None if ended else current
@@ -230,9 +306,13 @@ class PoolWorker:
                 left = IDLE_POLLS * pool.poll_s - (time.monotonic() - idle)
                 if left <= 0:
                     break
-                self.stop.wait(min(pool.poll_s, left))
+                pause = pool.poll_s
+                if self._serving:
+                    waited = min(pool.poll_s, max(waited * 2, pool.first_poll_s))
+                    pause = waited
+                self.stop.wait(min(pause, left))
                 continue
-            idle = None
+            idle, waited = None, 0.0
             if claim.queue.name != current or ended:
                 current, spent, began = claim.queue.name, 0, time.monotonic()
             spent += sum(len(f.jobs) for f in claim.fragments)
@@ -247,22 +327,48 @@ class PoolWorker:
         ages = [(age, n) for n in self.classes if (age := self.queues.queue(n).oldest_age_s()) is not None]
         return [n for _, n in sorted(ages, key=lambda a: -a[0])]
 
+    def _pinned_probes(self) -> list[str]:
+        """Return the probe queues of this worker's queues it serves, oldest first.
+
+        A worker serves a probe queue while it holds that queue's serve lease; it takes the lease of one with waiting
+        work, and skips one whose lease is live under another worker. A lease it lost is dropped. The run's queues are
+        listed at most once per `pool.presence_refresh_s`.
+        """
+        for name, kept in list(self._serving.items()):
+            if not kept.held:
+                kept.release()
+                del self._serving[name]
+        now = self._clock()
+        if self._listed is None or now - self._listed >= self.profile.pool.presence_refresh_s:
+            self._listed = now
+            for name in self.queues.names():
+                found = probe_of(name)
+                if found is not None and found[0] in self.classes and name not in self._serving:
+                    queue = self.queues.queue(name)
+                    if queue.oldest_age_s() is not None and (lease := queue.serve_lease()) is not None:
+                        self._serving[name] = lease
+        ages = {n: self.queues.queue(n).oldest_age_s() or 0.0 for n in self._serving}
+        return sorted(ages, key=lambda n: -ages[n])
+
     def _next(self, prefer: str | None, left: int) -> Claim | None:
         """Claim up to `left` jobs from `prefer`, else from the class with the oldest work; None if none.
 
         A claim holds one item, or one-job items up to the bound; on a queue this worker has not run, one item, so
-        the model load falls on one item alone.
+        the model load falls on one item alone. A probe queue this worker serves comes first, and its items are
+        claimed one per claim, never gathered.
         """
         order = [prefer] if prefer is not None else []
         order += [n for n in self._by_age() if n != prefer]
-        for name in order:
+        probes = self._pinned_probes()
+        for name in [*probes, *(n for n in order if n not in probes)]:
             size = left if name == prefer else self.profile.pool.quantum_items
             queue = self.queues.queue(name)
-            claim = (
-                queue.claim(self.name, max_jobs=max(size, 1), singles=True)
-                if name in self._warm
-                else queue.claim(self.name, max_items=1, max_jobs=max(size, 1))
-            )
+            if name in probes:
+                claim = queue.claim(self.name, max_items=1)
+            elif name in self._warm:
+                claim = queue.claim(self.name, max_jobs=max(size, 1), singles=True)
+            else:
+                claim = queue.claim(self.name, max_items=1, max_jobs=max(size, 1))
             if claim is not None:
                 return claim
         return None
@@ -281,6 +387,7 @@ class PoolWorker:
             self._log_claimed(claim)
             groups, dead = self._groups(claim)
             sample = self._sampler(claim, groups, spans, claim_s)
+            observe = self._observer(claim, groups, spans)
             for digest, failure in dead.items():
                 claim.dead(failure, [digest])
             pending = {d: len(f.jobs) for d, f in zip(claim.items, claim.fragments, strict=True)}
@@ -295,7 +402,7 @@ class PoolWorker:
                 with contextlib.suppress(queue.Empty):
                     batch = finished.get(timeout=interval)
                     running = batch is not None
-                    self._commit(claim, batch or [], outcomes, pending, sample)
+                    self._commit(claim, batch or [], outcomes, pending, (sample, observe))
                 if not claim.renew():
                     logger.warning(
                         "pool worker %s lost a claim on queue %s; its request is abandoned", self.name, claim.queue.name
@@ -304,7 +411,7 @@ class PoolWorker:
                     break
             self._stop_runner(runner, cancelled)
             while not finished.empty():
-                self._commit(claim, finished.get_nowait() or [], outcomes, pending, sample)
+                self._commit(claim, finished.get_nowait() or [], outcomes, pending, (sample, observe))
         self._warm.add(claim.queue.name)
 
     def _sampler(
@@ -323,14 +430,10 @@ class PoolWorker:
         inputs: dict[str, float | None] = {}
         chars: dict[str, int | None] = {}
         for member in (m for g in groups for m in g.members):
-            try:
-                length = job_length_ns(member.job)
-            except LengthUnrecorded:
-                length = None
-            known = inputs.get(member.digest, 0.0)
-            inputs[member.digest] = None if length is None or known is None else known + length / NS_PER_S
-            text, so_far = job_text_chars(member.job), chars.get(member.digest, 0)
-            chars[member.digest] = None if text is None or so_far is None else so_far + text
+            kind, amount = job_units(member.job)
+            known, so_far = inputs.get(member.digest, 0.0), chars.get(member.digest, 0)
+            inputs[member.digest] = amount + known if kind == "audio_s" and known is not None else None
+            chars[member.digest] = int(amount) + so_far if kind == "chars" and so_far is not None else None
         cold = claim.queue.name not in self._warm
         device: list[int | None] = []
         grant = self.profile.resource_classes.get(class_of(claim.queue.name))
@@ -344,7 +447,7 @@ class PoolWorker:
             if on_device and self._device_baseline is not None and not device:
                 device.append(self._device_memory())
             used = device[0] if device else None
-            requests = spans.devices.get(digest, [])
+            requests = [(r.device[0], r.device[1], r.items) for r in spans.requests.get(digest, []) if r.device]
             return Sample(
                 wall_s=spans.walls.get(digest, 0.0),
                 claim_s=claim_s,
@@ -367,6 +470,50 @@ class PoolWorker:
 
         return sample
 
+    def _observer(
+        self, claim: Claim, groups: list["_Group"], spans: "_Spans"
+    ) -> Callable[[str, Sequence[JobOutcome]], list[Observation]]:
+        """Return what gives an item of `claim` its `Observation`s once its jobs ran.
+
+        The hardware class and co-tenancy are read once per claim, when its first item is reported.
+        """
+        jobs = {m.job.ref: m.job for g in groups for m in g.members}
+        began = time.monotonic()
+        seen: list[Seen | None] = []
+
+        def observe(digest: str, outcomes: Sequence[JobOutcome]) -> list[Observation]:
+            if not seen:
+                seen.append(self._seen(claim))
+            found = seen[0]
+            if found is None:
+                return []
+            try:
+                mark = claim.queue.probe_mark(digest) if found.probe is not None else None
+            except UnmarkedProbeItem as err:
+                logger.error("pool worker %s reports no observations of an unmarked probe item: %s", self.name, err)
+                return []
+            return observations(
+                digest,
+                spans.requests.get(digest, []),
+                jobs,
+                outcomes,
+                found,
+                mark=mark,
+                item_wall_s=time.monotonic() - began,
+            )
+
+        return observe
+
+    def _seen(self, claim: Claim) -> Seen | None:
+        """Return the hardware class and co-tenancy `claim` ran under; None, logged, where the hardware is unknown."""
+        name = class_of(claim.queue.name)
+        try:
+            hardware = self._hardware(name)
+        except ValueError as err:
+            logger.warning("pool worker %s reports no observations of %s: %s", self.name, name, err)
+            return None
+        return Seen(hardware, self._cotenancy(name), probe_of(claim.queue.name), is_service_class(claim.queue.name))
+
     def _stop_runner(self, runner: threading.Thread, cancelled: threading.Event) -> None:
         """Abandon what `runner` still runs and wait for it: `join_s` once halted, else until it stops."""
         if not runner.is_alive():
@@ -388,9 +535,11 @@ class PoolWorker:
         batch: list[tuple[Member, JobOutcome | None]],
         outcomes: dict[str, dict[int, JobOutcome]],
         pending: dict[str, int],
-        sample: Callable[[str], Sample],
+        measure: tuple[Callable[[str], Sample], Callable[[str, Sequence[JobOutcome]], list[Observation]]],
     ) -> None:
-        """Record `batch`'s outcomes; commit each item still held whose every job has one, with its `sample`.
+        """Record `batch`'s outcomes; commit each item still held whose every job has one, with what `measure` gives.
+
+        `measure` is the item's `Sample` and its `Observation`s, given its outcomes.
 
         An item with a job whose outcome is None (a busy start lease) is released, unreported.
         """
@@ -401,32 +550,28 @@ class PoolWorker:
                 outcomes[member.digest][member.index] = outcome
         for digest in {m.digest for m, _ in batch} - busy:
             if len(outcomes[digest]) == pending[digest] and digest in claim.items:
-                report(claim, digest, [outcomes[digest][i] for i in range(pending[digest])], sample(digest))
+                done = [outcomes[digest][i] for i in range(pending[digest])]
+                sample, observe = measure
+                report(claim, digest, done, sample(digest), observe(digest, done))
 
     def _run_groups(
         self, groups: list[_Group], finished: Finished, cancelled: threading.Event, spans: "_Spans"
     ) -> None:
         """Run each group until `cancelled`, putting its members' outcomes on `finished`; then put None.
 
-        Each item is given in `spans`, before its outcomes are put, its share by jobs of each group span it ran in and
-        the device memory each request of its groups reported (`device_requests`).
+        Each call of a group's send is given in `spans`, with the requests it made, before the outcomes are put.
         """
         try:
             for group in groups:
                 send = self._send or functools.partial(self._execute, run=group.run)
-                began = time.monotonic()
-                with device_requests.collected() as reported:
-                    try:
-                        outcomes: list[JobOutcome | None] = list(
-                            bisect(group.members, group.placement, send, cancelled)
-                        )
-                    except LeaseTimeout as busy:
-                        logger.info("pool worker %s gives its items back: %s", self.name, busy)
-                        outcomes = [None] * len(group.members)
-                share = (time.monotonic() - began) / len(group.members)
-                for member in group.members:
-                    spans.walls[member.digest] = spans.walls.get(member.digest, 0.0) + share
-                    spans.devices.setdefault(member.digest, []).extend(reported)
+                owners = {m.job.ref: m.digest for m in group.members}
+                try:
+                    outcomes: list[JobOutcome | None] = list(
+                        bisect(group.members, group.placement, send, cancelled, lambda sent: spans.add(sent, owners))
+                    )
+                except LeaseTimeout as busy:
+                    logger.info("pool worker %s gives its items back: %s", self.name, busy)
+                    outcomes = [None] * len(group.members)
                 finished.put(list(zip(group.members, outcomes, strict=True)))
         except Abandoned:
             logger.info("pool worker %s abandoned the rest of its claim", self.name)
@@ -511,7 +656,8 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
     Without `workers`, a worker of service classes runs on a set that provides its servers to this host's registry
     (`service_registry`), closed when it returns.
     A worker that cannot reach the run directory or the store returns `EXIT_UNREACHABLE` and marks nothing; one that can
-    marks itself ready (`mark_ready`) once its worker is built and supervised, just before it serves. On the main
+    marks itself ready (`mark_ready`, with the `HardwareClass` of each queue it serves) once its worker is built and
+    supervised, just before it serves. On the main
     thread SIGTERM halts the worker (`PoolWorker.halt`); the previous handler is restored after.
     """
     try:
@@ -528,11 +674,11 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
         if owned is not None:
             stack.callback(owned.close)
         if threading.current_thread() is not threading.main_thread():
-            mark_ready(Path(pool_dir).parent)
+            mark_ready(Path(pool_dir).parent, worker.hardware())
             return worker.serve()
         previous = signal.signal(signal.SIGTERM, lambda *_: worker.halt())
         try:
-            mark_ready(Path(pool_dir).parent)
+            mark_ready(Path(pool_dir).parent, worker.hardware())
             return worker.serve()
         finally:
             signal.signal(signal.SIGTERM, previous)

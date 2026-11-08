@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import platform
 import re
 import resource
+import secrets
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Collection, Final, Iterator, Mapping, Optional, Sequence
@@ -30,9 +33,15 @@ _LSCPU_QUERY = ["env", "LC_ALL=C", "lscpu"]
 _APPS_FIELDS = ("pid", "used_memory")
 _FREE_FIELDS = ("index", "uuid", "memory.free", "memory.total")
 _NVIDIA_SMI_FREE_QUERY = ["nvidia-smi", f"--query-gpu={','.join(_FREE_FIELDS)}", _NVIDIA_SMI_FORMAT]
+_PLACED_FIELDS = ("pid", "gpu_uuid")
+_NVIDIA_SMI_PLACED_QUERY = ["nvidia-smi", f"--query-compute-apps={','.join(_PLACED_FIELDS)}", _NVIDIA_SMI_FORMAT]
 _NVIDIA_SMI_APPS_QUERY = ["nvidia-smi", f"--query-compute-apps={','.join(_APPS_FIELDS)}", _NVIDIA_SMI_FORMAT]
 _STAT_PPID = 1
 """The field index of the parent pid in `/proc/<pid>/stat` after the parenthesised command name."""
+_STAT_STARTED = 19
+"""The field index of the start time in `/proc/<pid>/stat` after the parenthesised command name (field 22)."""
+_PRIVATE: Final = 0o600  # invariant: readable by its owner only
+_SECRET_BYTES: Final = 16  # invariant: a 128-bit random value
 
 
 class DeviceResolutionError(ValueError):
@@ -451,3 +460,66 @@ def device_memory_bytes(
         for r in rows
         if len(r) == len(_APPS_FIELDS) and r[0].isdigit() and r[1].isdigit() and int(r[0]) in pids
     )
+
+
+def device_parties(
+    uuids: Collection[str],
+    workers: Mapping[int, Collection[int]],
+    own: Collection[int],
+    *,
+    timeout_s: float,
+    run: Callable[[list[str], float], str] = _bounded,
+) -> Optional[int]:
+    """Return the parties with compute processes on the GPUs `uuids`, the most on any one; None where unread.
+
+    A party is a pool worker: the pids of `workers` (a worker's pid and its process tree, by worker) and of `own` (the
+    caller's) each count once however many processes they hold; a pid of neither is a party of its own. The caller
+    counts once though it may hold no process on the GPU yet. Read from `nvidia-smi --query-compute-apps` within
+    `timeout_s`.
+    """
+    try:
+        output = run(_NVIDIA_SMI_PLACED_QUERY, timeout_s)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    rows = [[p.strip() for p in line.split(",")] for line in output.splitlines()]
+    placed = [(int(r[0]), r[1]) for r in rows if len(r) == len(_PLACED_FIELDS) and r[0].isdigit()]
+    mine = set(own)
+
+    def party(pid: int) -> object:
+        if pid in mine:
+            return "self"
+        return next((w for w, pids in workers.items() if pid in pids), ("pid", pid))
+
+    return max((len({party(p) for p, u in placed if u == uuid} | {"self"}) for uuid in uuids), default=1)
+
+
+def process_started(pid: int) -> Optional[str]:
+    """Return when `pid` started as `/proc/<pid>/stat` says it (field 22, clock ticks since boot); None off `/proc`."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    fields = data[data.rfind(b")") + 2 :].split()
+    return fields[_STAT_STARTED].decode() if len(fields) > _STAT_STARTED else None
+
+
+def host_secret(run: Callable[[list[str]], str] = _run) -> str:
+    """Return a value random per host and per boot that only processes on this host can read; never its name.
+
+    Linux's boot id, else macOS's boot session uuid, else a random value kept in a file only this user reads, in the
+    host's temporary directory.
+    """
+    with contextlib.suppress(OSError):
+        if found := Path("/proc/sys/kernel/random/boot_id").read_text().strip():
+            return found
+    if platform.system() == "Darwin":
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            if found := run(["sysctl", "-n", "kern.bootsessionuuid"]).strip():
+                return found
+    path = Path(tempfile.gettempdir()) / f"senselab-host-{os.getuid()}"
+    with contextlib.suppress(FileExistsError):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _PRIVATE)
+        with os.fdopen(fd, "wb") as f:
+            f.write(secrets.token_hex(_SECRET_BYTES).encode())
+    return path.read_text().strip()

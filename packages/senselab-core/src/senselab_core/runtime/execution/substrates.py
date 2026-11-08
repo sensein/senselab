@@ -11,11 +11,13 @@ class, with `#<model identity>` for a resident model; every worker serves one qu
 class's CPUs per worker. A surplus is stopped, pending workers first, running ones only once the queue has no
 unresolved item.
 
-A worker marks itself ready (`mark_ready`) once it can reach the run and its store. `Fleet` counts a worker that left
+A worker marks itself ready (`mark_ready`) once it can reach the run and its store; the mark names its host by a digest,
+its process and its `HardwareClass` per resource class, and writes no hardware index. `Fleet` counts a worker that left
 `live()` without a mark as a failed start of its class, backs the class's next start off, and reports the class broken
 after `faults.infrastructure_replacements` consecutive failures; it then starts no more workers of the class.
 """
 
+import functools
 import logging
 import math
 import os
@@ -32,11 +34,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from senselab_worker.canonical import jcs_dumps, jcs_loads
+from senselab_worker.digest import identity_digest
+
+from senselab_core.runtime.calibration import HardwareClass
 from senselab_core.runtime.config import expand
-from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
+from senselab_core.runtime.execution.queue import PROBE_MARK, RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands, is_service_class
-from senselab_core.runtime.hardware import HardwareInfo, probe_hardware, visible_devices
+from senselab_core.runtime.hardware import HardwareInfo, host_secret, probe_hardware, process_started, visible_devices
 from senselab_core.runtime.profiles import ExecutionProfile
 
 logger = logging.getLogger("senselab")
@@ -129,8 +135,8 @@ class Substrate(Protocol):
 
 
 def class_of(queue: str) -> str:
-    """Return the resource class of queue `queue`: its name before any `#<model identity>`."""
-    return queue.partition("#")[0]
+    """Return the resource class of queue `queue`: its name before any `#<model identity>` or probe mark."""
+    return queue.partition("#")[0].partition(PROBE_MARK)[0]
 
 
 def worker_command(run_dir: Path, profile_argument: str) -> list[str]:
@@ -144,11 +150,96 @@ def worker_id() -> str:
     return os.environ.get("SLURM_JOB_ID") or str(os.getpid())
 
 
-def mark_ready(run_dir: Path) -> None:
-    """Record that this worker started: it reached the run and its store."""
+@dataclass(frozen=True)
+class ReadyMark:
+    """What a worker's ready mark says: its host's token, its process id and start, and a `HardwareClass` per queue."""
+
+    host: str
+    pid: int
+    started: str | None
+    hardware: Mapping[str, HardwareClass]
+
+
+@functools.cache
+def host_token() -> str:
+    """Return the token of this host: a digest of a random per-host value (`host_secret`), never of its name.
+
+    It says only whether two processes share a host.
+    """
+    return identity_digest("host@1", host_secret())
+
+
+def mark_ready(run_dir: Path, hardware: Mapping[str, HardwareClass] | None = None) -> None:
+    """Record that this worker started: it reached the run and its store; `hardware` is its class per queue."""
     directory = Path(run_dir) / WORKERS_DIR
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / worker_id()).touch()
+    document = {
+        "host": host_token(),
+        "pid": os.getpid(),
+        "started": process_started(os.getpid()),
+        "hardware": {name: found.model_dump(mode="json") for name, found in (hardware or {}).items()},
+    }
+    staged = directory / f".{worker_id()}.{os.getpid()}"
+    staged.write_bytes(jcs_dumps(document))
+    staged.replace(directory / worker_id())
+
+
+def read_mark(path: Path) -> ReadyMark | None:
+    """Return the ready mark at `path`; None when it is unreadable or is not a mark (an empty one, or another's)."""
+    try:
+        document = jcs_loads(Path(path).read_bytes())
+        if not isinstance(document, dict):
+            return None
+        return ReadyMark(
+            document["host"],
+            document["pid"],
+            document["started"],
+            {name: HardwareClass.model_validate(found) for name, found in document["hardware"].items()},
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+class Peers:
+    """The other pool workers of a run alive on this host, from the marks in its `workers` directory.
+
+    A mark never changes once written, so each is read once; a listing and a liveness check per worker remain. A
+    worker is alive while its process is, and, where `/proc` says when it started, the same process.
+
+    Attributes:
+        reads: The marks read so far.
+    """
+
+    def __init__(self, run_dir: Path) -> None:
+        """Watch the workers of the run in `run_dir`."""
+        self._directory = Path(run_dir) / WORKERS_DIR
+        self._marks: dict[str, ReadyMark] = {}
+        self.reads = 0
+
+    def alive(self) -> dict[int, ReadyMark]:
+        """Return each other worker of this host alive now, by pid; this process is not one."""
+        names = [p.name for p in self._directory.iterdir()] if self._directory.is_dir() else []
+        for name in names:
+            if name not in self._marks and not name.startswith("."):
+                self.reads += 1
+                if (mark := read_mark(self._directory / name)) is not None:
+                    self._marks[name] = mark
+        here, mine = host_token(), os.getpid()
+        return {
+            m.pid: m
+            for n, m in self._marks.items()
+            if n in names and m.host == here and m.pid != mine and _alive(m.pid, m.started)
+        }
+
+
+def _alive(pid: int, started: str | None) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return started is not None and process_started(pid) == started
+    return started is None or process_started(pid) in (None, started)
 
 
 class ExternalWorkers:
@@ -756,7 +847,11 @@ __all__ = [
     "SubstrateError",
     "WorkerHandle",
     "class_of",
+    "Peers",
+    "ReadyMark",
+    "host_token",
     "mark_ready",
+    "read_mark",
     "profile_argument",
     "scale",
     "substrate_of",

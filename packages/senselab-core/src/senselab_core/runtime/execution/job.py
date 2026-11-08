@@ -28,7 +28,7 @@ from senselab_core.kernel.identity import (
 from senselab_core.kernel.license import License
 from senselab_core.kernel.signals import Recording, StaleSource
 from senselab_core.kernel.wire import WireFormatRetired
-from senselab_core.runtime import audio_io
+from senselab_core.runtime import audio_io, request_reports
 from senselab_core.runtime.call import Result, RunConfig, env_license, host_hardware, packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.batching import BucketGrid, form_batches, keyed_formation, one_node
@@ -400,14 +400,15 @@ def _send(  # noqa: PLR0913 - the request's jobs and everything placing it
 ) -> list[dict[str, Any]]:
     """Send `jobs` as one request to the backend's worker, with the task params and `backend_params` beside them.
 
-    A host worker is handed kernel values as they are; an isolated or server one, their wire forms.
+    A host worker is handed kernel values as they are; an isolated or server one, their wire forms. The request is
+    reported (`request_reports`) tagged with its jobs' refs.
     """
     backend, call = placement.backend, jobs[0].call
     params = {**call.params.model_dump(mode="json"), "backend_params": placement.backend_params.model_dump(mode="json")}
     host = backend.env.kind == "host"
     items = [{"id": str(i), "inputs": dict(j.values) if host else as_wire(j.values)} for i, j in enumerate(jobs)]
     held = workers.checkout(backend, env, call.model, device=placement.device, profile=profile, expected=expected)
-    with held as worker:
+    with held as worker, request_reports.request(tuple(j.ref for j in jobs)):
         return worker.run(items, params)
 
 

@@ -81,12 +81,13 @@ substrate:
     timeout_s: 60
     attempts: 3
     retry_first_s: 0.5
-# The quantum ceilings, how pool workers poll and roll index segments, and how often a coordinator first reads an outcome.
+# The quantum ceilings, how pool workers poll and roll index segments, how often a coordinator first reads an outcome, and how long a worker reuses its read of its peers, its device and its probe queues.
 pool:
   quantum_items: 100
   quantum_s: 300
   poll_s: 30
   first_poll_s: 1
+  presence_refresh_s: 30
   segment_items: 512
 # The fractions and targets each unit's batch, quantum and worker count are derived from: the load's largest share of a
 # quantum, the share of a worker's memory a batch fills, the wall time a queue's work aims to end in, and the one-job

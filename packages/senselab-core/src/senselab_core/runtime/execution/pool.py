@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement
+from senselab_core.runtime.calibration import Observation
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import BrokenEnv, EventLog, read_events
@@ -98,11 +99,22 @@ DEAD_DIR = "dead"
 """The directory of a run's dead jobs, one `<key digest>.json` each."""
 
 
-def report(claim: Claim, digest: str, outcomes: Sequence[JobOutcome], sample: Sample | None = None) -> bool:
-    """Commit the claimed item `digest` with each job's `ResultRef` and the `sample` measured; return whether it did."""
+def report(  # noqa: PLR0913 - the claim and item, its outcomes, then what was measured of it
+    claim: Claim,
+    digest: str,
+    outcomes: Sequence[JobOutcome],
+    sample: Sample | None = None,
+    observations: Sequence[Observation] = (),
+) -> bool:
+    """Commit the claimed item `digest` with each job's `ResultRef`, the `sample` measured and its `observations`.
+
+    Return whether it committed.
+    """
     extra: dict[str, object] = {"jobs": [result_ref(outcome).model_dump(mode="json") for outcome in outcomes]}
     if sample is not None:
         extra["measure"] = sample.model_dump(mode="json")
+    if observations:
+        extra["observations"] = [o.model_dump(mode="json") for o in observations]
     return digest in claim.commit([digest], extra)
 
 

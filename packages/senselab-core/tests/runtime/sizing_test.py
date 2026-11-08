@@ -118,7 +118,9 @@ def test_the_quantum_holds_the_load_and_claim_to_their_share_and_workers_meet_th
 @pytest.mark.logic
 def test_a_grant_takes_device_memory_on_a_device_and_host_memory_otherwise() -> None:
     """On a device the class's device cap; else its memory, the host's last; the class's time bounds the quantum."""
-    pool = PoolSettings(quantum_items=100, quantum_s=300, poll_s=30, first_poll_s=1, segment_items=512)
+    pool = PoolSettings(
+        quantum_items=100, quantum_s=300, poll_s=30, first_poll_s=1, presence_refresh_s=30, segment_items=512
+    )
     capped = ResourceClass(device="cuda", max_workers=4, mem_bytes=2**36, memory_cap_bytes=2**33, time_s=60)
     assert Grant.of(capped, pool, on_device=True).model_dump() == {
         "max_workers": 4,
