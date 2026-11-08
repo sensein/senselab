@@ -124,7 +124,8 @@ def start(
         while (committed := len(exitlib.committed_jobs(read_events(run_dir)))) < target:
             if child.poll() is not None:
                 raise RuntimeError(
-                    f"the run ended before {target} of {items} items were committed: nothing to interrupt"
+                    f"the run ended (exit {child.returncode}) with {committed} of {items} items committed, short of "
+                    f"{target}: nothing to interrupt; {exitlib.failure_summary(read_events(run_dir))}"
                 )
             if deadline is not None and time.monotonic() >= deadline:
                 raise exitlib.BoundExceeded(f"fewer than {target} of {items} items committed within {bounds.wall_s} s")

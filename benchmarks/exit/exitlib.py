@@ -562,6 +562,17 @@ def committed_jobs(events: Sequence[Event]) -> dict[tuple[str, tuple[int, ...]],
     return {job: e.key for job, e in terminal_events(events).items() if e.kind in RESULTS and job[1]}
 
 
+def failure_summary(events: Sequence[Event]) -> str:
+    """Return each distinct failure message of `events` with its count, the most common first."""
+    counts: dict[str, int] = defaultdict(int)
+    for event in events:
+        if event.failure is not None:
+            counts[event.failure.message.strip()] += 1
+    if not counts:
+        return "no failure events"
+    return "failures: " + "; ".join(f"{n} x {message}" for message, n in sorted(counts.items(), key=lambda i: -i[1]))
+
+
 def _judge_groups(
     groups: Mapping[object, Sequence[tuple[str, tuple[int, ...]]]],
     held: set[object],

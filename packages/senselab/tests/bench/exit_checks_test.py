@@ -18,7 +18,7 @@ from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.events import Event, EventKind, EventLog, read_events
-from senselab_core.runtime.execution.executor import JobRef
+from senselab_core.runtime.execution.executor import FaultRecord, JobRef
 from senselab_core.runtime.planner import plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.testing.workers import mit_lock_records
@@ -446,6 +446,56 @@ def test_interrupt_fails_when_jobs_of_the_prefix_outlive_the_bound() -> None:
         interrupt_resume.interrupt(
             "p-", 1, 1.0, 0.0, 0.0, lambda prefix, seconds: ["5"], lambda each: None, lambda pid: None
         )
+
+
+@pytest.mark.logic
+def test_start_names_the_failures_of_a_run_that_ended_short_of_its_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run whose items all failed is refused with the failure message, not as a bare 'nothing to interrupt'."""
+    config = _started(tmp_path, monkeypatch, committed=0)
+    log = EventLog(tmp_path / "events", "a1", 1, epoch=1)
+    fault = FaultRecord(
+        type="ScalerFailed", fault="infrastructure", message="'${GPU_PARTITION}' is not set", gap=False, charged=False
+    )
+    for i in range(3):
+        log.record(
+            "failed", "call", job=JobRef(plan_hash=HASH, node="call", element=(i,)), key=KEYS[i] * 64, failure=fault
+        )
+    with pytest.raises(RuntimeError, match=r"3 x '\$\{GPU_PARTITION\}' is not set"):
+        interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config, _child(True))
+
+
+_WRITER = """
+import sys, time
+from pathlib import Path
+from senselab_core.runtime.execution.events import EventLog
+from senselab_core.runtime.execution.executor import JobRef
+log = EventLog(Path(sys.argv[1]), "a2", 1, epoch=1)
+for i in range(3):
+    log.record("finished", "call", job=JobRef(plan_hash=sys.argv[2], node="call", element=(i,)), key=str(i) * 64,
+               output="output:" + str(i) * 64)
+    time.sleep(0.3)
+time.sleep(600)
+"""
+
+
+@pytest.mark.logic
+def test_start_sees_a_separate_process_commit_items_and_interrupts_it_once_the_target_is_reached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The count is read from the events on disk that another process writes, and that process is then killed."""
+    config = _started(tmp_path, monkeypatch, committed=0)
+    children: list[subprocess.Popen[bytes]] = []
+
+    def spawn(work: Path, profile: str) -> subprocess.Popen[bytes]:  # noqa: ARG001
+        argv = [sys.executable, "-c", _WRITER, str(tmp_path / "events"), HASH]
+        children.append(subprocess.Popen(argv, start_new_session=True))
+        return children[0]
+
+    assert interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config, spawn) == 0
+    committed = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["committed"]
+    assert 1 <= committed <= 3 and children[0].returncode == -9
 
 
 @pytest.mark.logic
