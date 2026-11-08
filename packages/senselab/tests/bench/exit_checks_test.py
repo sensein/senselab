@@ -3,8 +3,8 @@
 import importlib.util
 import json
 import platform
+import subprocess
 import sys
-import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -384,19 +384,14 @@ def test_a_skipped_resident_sample_is_counted_not_read_as_zero() -> None:
     assert (watch.peak_resident, watch.report()["skipped_samples"]) == (40, 2)
 
 
-class _StartedRun:
-    """A started run that reports `done` as scripted; one that is not done ends only by the coordinator's SIGKILL."""
-
-    def __init__(self, done: bool) -> None:
-        self.done = done
-
-    def wait(self, timeout: float | None = None) -> SimpleNamespace:
-        time.sleep(0 if self.done else timeout or 0.01)
-        return SimpleNamespace(done=self.done, interrupted=False)
+def _child(done: bool) -> Callable[[Path, str], subprocess.Popen[bytes]]:
+    """A spawner of a process that ends at once when `done`, else sleeps until its group is killed."""
+    code = "pass" if done else "import time; time.sleep(600)"
+    return lambda work, profile: subprocess.Popen([sys.executable, "-c", code], start_new_session=True)  # noqa: ARG005
 
 
-def _started(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, committed: int, done: bool) -> Any:  # noqa: ANN401
-    """Set `start` over three items with `committed` finished, on a fake run; return the harness config."""
+def _started(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, committed: int) -> Any:  # noqa: ANN401
+    """Set `start` over three items with `committed` finished; return the harness config."""
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
     monkeypatch.setenv("SLURM_JOB_ID", "4242")
     log = EventLog(tmp_path / "events", "a0", 1, epoch=1)
@@ -410,16 +405,15 @@ def _started(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, committed: int,
     listings = iter([["77", "78"], []])
     monkeypatch.setattr(exitlib, "slurm_job_ids", lambda prefix, timeout_s, run: next(listings, []))
     monkeypatch.setattr(interrupt_resume, "scancel", lambda jobs: None)
-    monkeypatch.setattr(exitlib, "launch", lambda placed, executor, store: (_StartedRun(done), None))
     return exitlib.load_config()
 
 
 @pytest.mark.logic
 def test_start_refuses_a_run_that_is_done_before_its_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A run done with fewer items committed than the target has nothing to interrupt and fails."""
-    config = _started(tmp_path, monkeypatch, committed=0, done=True)
+    config = _started(tmp_path, monkeypatch, committed=0)
     with pytest.raises(RuntimeError, match="nothing to interrupt"):
-        interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config)
+        interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config, _child(True))
 
 
 @pytest.mark.logic
@@ -459,7 +453,7 @@ def test_start_interrupts_its_own_run_at_the_target_and_exits_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The child run is SIGKILLed at the target, the report names the cancelled jobs, and `start` returns 0."""
-    config = _started(tmp_path, monkeypatch, committed=1, done=False)
+    config = _started(tmp_path, monkeypatch, committed=1)
     assert interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config) == 0
     report = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
     assert report["workers"] == ["77", "78"] and report["committed"] == 1 and report["hash"] == HASH
