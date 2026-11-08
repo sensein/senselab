@@ -168,6 +168,19 @@ def test_two_consumers_one_server(registry: ServiceRegistry, starts: list[StandI
     assert registry.lookup(IDENTITY) is None and starts[0].url is None
 
 
+def test_workers_of_one_identity_start_one_server(registry: ServiceRegistry, starts: list[StandIn]) -> None:
+    """Providing and consuming sets of one identity start one server: every set after the first consumes it."""
+    sets = [_provider(registry, starts) for _ in range(3)] + [WorkerSet(1, registry=registry) for _ in range(2)]
+    try:
+        served = [workers.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY) for workers in sets]
+        assert len(starts) == 1 and served[0] is starts[0]
+        assert all(isinstance(s, ConsumerLease) and s.url == starts[0].url for s in served[1:])
+        assert registry.live_consumers(IDENTITY) == len(sets) - 1
+    finally:
+        for workers in reversed(sets):
+            workers.close()
+
+
 def test_service_exits_after_idle_consumers(tmp_path: Path, registry: ServiceRegistry, starts: list[StandIn]) -> None:
     """A `svc` worker with an empty queue stays while a consumer lease is live and exits `idle_exit_s` after it ends."""
     provider = _provider(registry, starts)

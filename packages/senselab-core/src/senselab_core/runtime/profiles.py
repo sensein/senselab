@@ -40,6 +40,7 @@ from senselab_core.runtime.execution_settings import (
     SubstrateSpec,
     SupervisorSettings,
     Timeouts,
+    is_service_class,
 )
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import SINGLE, Placement, fixed_formation
@@ -296,14 +297,19 @@ def resource_class(
 
     Devices are taken in `profile.devices` order and classes in profile order; a class runs the backend when the
     backend declares its device and, with `hardware` given, this host has that device (and GPU type). With
-    `hardware` None the class is not judged against this host, as when a scheduler places the worker.
+    `hardware` None the class is not judged against this host, as when a scheduler places the worker. A server
+    backend takes a service class (`svc:<id>`) that runs it before any other class, so its consumers share one
+    registered server; no other backend is placed on a service class.
     """
-    for device in profile.devices:
-        if device not in backend.devices:
-            continue
-        for name, resource in profile.resource_classes.items():
-            if resource.device == device and (hardware is None or _has(resource, hardware)):
-                return name, resource
+    server = backend.env.kind == "server"
+    for services in (True, False) if server else (False,):
+        for device in profile.devices:
+            if device not in backend.devices:
+                continue
+            for name, resource in profile.resource_classes.items():
+                runs = resource.device == device and (hardware is None or _has(resource, hardware))
+                if runs and is_service_class(name) == services:
+                    return name, resource
     return None
 
 

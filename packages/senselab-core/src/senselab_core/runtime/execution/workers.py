@@ -152,7 +152,7 @@ class WorkerSet:
     lease of that triple alone, so starts of other servers proceed. Servers are not counted in the bound.
 
     With a `registry`, a server is consumed from the registry while a live service attests what it must, and started
-    otherwise; a set that `provide`s registers each server it starts there instead, and consumes none.
+    otherwise; a set that `provide`s registers each server it starts there, so every later set consumes that one.
     """
 
     def __init__(
@@ -326,11 +326,12 @@ class WorkerSet:
     ) -> Server:
         """Return the running server of this env, backend and model, starting it (or replacing a dead one) if needed.
 
-        The start holds the lease of this env, backend and model only. A consuming set returns a live registered
-        service attesting `expected` (`ConsumerLease`) instead; a providing set registers what it starts.
+        The start holds the lease of this env, backend and model only. A live registered service attesting `expected`
+        is consumed (`ConsumerLease`) instead; a providing set registers what it starts.
 
         Raises:
-            VllmStartError, LeaseTimeout, LeaseUnavailable: as the server start or its registration.
+            VllmStartError, LeaseUnavailable: as the server start or its registration.
+            LeaseTimeout: a start lease is busy, or another providing set is starting this server.
             AttestationMismatch: the server attests something other than `expected`.
         """
         key = (env.python, backend.name, model.identity)
@@ -347,7 +348,7 @@ class WorkerSet:
                     with self._lock:
                         self._servers.pop(key, None)
                     self._retire(key, server)
-            server = self._consumed(expected) if not self._provide else None
+            server = self._consumed(expected)
             if server is None:
                 server = self._provided_server(key, backend, env, model, profile, expected)
             with self._lock:

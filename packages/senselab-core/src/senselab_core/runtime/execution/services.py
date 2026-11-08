@@ -38,15 +38,8 @@ from senselab_core.runtime.vllm_server import Attested, StaleAttestation, attest
 
 logger = logging.getLogger("senselab")
 
-SERVICE_CLASS = "svc"
-"""The kind of a resource class whose workers hold services: `svc:<id>`."""
 CONSUMER_LEASE = re.compile(rf"^([0-9a-f]{{32}}){re.escape(LEASE_SUFFIX)}$")
 """A consumer's lease in a service's `consumers` directory."""
-
-
-def is_service_class(name: str) -> bool:
-    """Whether the resource class or queue `name` is a service class, `svc:<id>[#<model identity>]`."""
-    return name.partition(":")[0] == SERVICE_CLASS
 
 
 class ServiceEntry(Formatted):
@@ -317,11 +310,9 @@ def service_registry(profile: ExecutionProfile) -> ServiceRegistry:
 
 __all__ = [
     "CONSUMER_LEASE",
-    "SERVICE_CLASS",
     "ConsumerLease",
     "ServiceEntry",
     "ServiceLease",
     "ServiceRegistry",
-    "is_service_class",
     "service_registry",
 ]
