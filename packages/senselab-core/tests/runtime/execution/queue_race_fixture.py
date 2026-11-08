@@ -1,11 +1,10 @@
 """Processes for the queue race tests: claimers and putters, some stalled or crashed at the `os` boundary.
 
-Each function waits for a wall-clock start, acts on queue `cpu` under `root` with the profile `override`, and reports
+Each function acts on queue `cpu` under `root` with the profile `override`, and reports
 what happened. A stall or crash is installed in the child (`syscall_faults_fixture`) before it acts.
 """
 
 import os
-import time
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +12,7 @@ from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, PlanFragment
 from senselab_core.runtime.execution.queue import Queue, QueueSet
 from senselab_core.runtime.profiles import ExecutionProfile
-from syscall_faults_fixture import exit_at, gate_pause, stall
+from syscall_faults_fixture import await_file, exit_at, gate_pause, stall
 
 FAULT = FaultRecord(fault="content", type="ContentFault", message="bad", gap=False, charged=True)
 
@@ -38,17 +37,19 @@ def fragment(admission: str) -> PlanFragment:
     return PlanFragment(plan_hash="ab" * 32, node="n", admission=admission, jobs=job, inputs=({},), placement=placement)
 
 
-def claim_and_finish(root: str, override: dict[str, Any], start_at: float, stall_s: float, kind: str) -> dict[str, Any]:
-    """Claim one item and commit it (`kind` `done`) or kill it (`dead`); with `stall_s`, beats and links sleep first.
+def claim_and_finish(
+    root: str, override: dict[str, Any], kind: str, gate: str | None = None, wait: tuple[float, float] = (0.0, 0.0)
+) -> dict[str, Any]:
+    """Claim one item and commit it (`kind` `done`) or kill it (`dead`).
 
-    The link that sleeps is the outcome link, made after the claim's proof.
+    With `gate`, the claimer's beats wait for `release` there, and its outcome link first creates `stalled` there and
+    waits for `release` (`gate_pause`), giving up after `wait[0]` seconds and polling every `wait[1]`.
     """
-    if stall_s:
-        stall("mkdir", "beat-", stall_s)
-        stall("link", "", stall_s)
-    queue = _queue(root, override)
-    time.sleep(max(0.0, start_at - time.time()))
-    claim = queue.claim(f"w{os.getpid()}", 1)
+    if gate is not None:
+        release = Path(gate) / "release"
+        stall("mkdir", "beat-", lambda: await_file(release, *wait))
+        stall("link", "", gate_pause(Path(gate), *wait))
+    claim = _queue(root, override).claim(f"w{os.getpid()}", 1)
     if claim is None:
         return {"claimed": False, "finished": [], "outcomes": {}, "broke": 0}
     broke = sum(claim.broke(d) for d in claim.items)
@@ -72,9 +73,3 @@ def commit_then_crash(root: str, override: dict[str, Any]) -> str:
     assert claim is not None
     claim.commit()
     return "not reached"
-
-
-def ready(hold_s: float) -> int:
-    """Return this process's pid after `hold_s` seconds, once its imports are done."""
-    time.sleep(hold_s)
-    return os.getpid()
