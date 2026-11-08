@@ -666,7 +666,7 @@ minutes, so an adapter there uses live idle resources and observed start latency
 ## 11. Configuration (no fixed parameters)
 
 A new profile section `calibration`; `sizing.calibration_items` and `sizing.calibration_workers` are removed by
-T20R-7a. Every key gets a section in `config-derivations.md` (T20R-1). Values marked *provisional* are replaced by
+T20R-7a′. Every key gets a section in `config-derivations.md` (T20R-1). Values marked *provisional* are replaced by
 T20R-10's measurement under the stated rule (ruling O-6).
 
 | key | `orcd` | `laptop` | derivation rule |
@@ -736,22 +736,22 @@ Dated amendment text is in the ADR files, 2026-11-08:
 | item | where | task |
 |---|---|---|
 | B1 servable, not present | §4.2 steps 1-2, §6.6 | T20R-3, T20R-7a |
-| B2 read-only shared root | §3.3, §3.5 `collect` | T20R-2 |
-| B3 one hardware class | §3.2, §8 | T20R-2, T20R-5, T20R-7a |
-| I1 env build | §3.1 | T20R-2 |
+| B2 read-only shared root | §3.3, §3.5 `collect` | T20R-2b |
+| B3 one hardware class | §3.2, §8 | T20R-2a, T20R-2b, T20R-5, T20R-7a |
+| I1 env build | §3.1 | T20R-2a |
 | I2 regime | §5.3, §5.4 step 1, §7.3, §6.3 | T20R-5, T20R-4, T20R-7b |
 | I3 probe seconds | §4.2 step 6, §4.3 `B₁`, §4.4, §4.5 | T20R-4, T20R-7a |
 | I4 servable not held | §4.2 step 1, §7.1 | T20R-7a |
-| I5 trust for every record | §3.5 | T20R-2 |
+| I5 trust for every record | §3.5 | T20R-2b |
 | I6 OOM from the model, re-opened stratum | §7.4, §4.2 step 5 | T20R-4, T20R-7b |
-| I7 no account or host names out of the store | §3.5, §9 | T20R-2, T20R-8 |
+| I7 no account or host names out of the store | §3.5, §9 | T20R-2a, T20R-2b, T20R-8 |
 | I8 PeerWait to New | §7.1 | T20R-7a |
 | I9 upper prediction | §6.2 | T20R-6 |
 | I10 UX-31 | §6.6 | T20R-6 |
 | I11 task order and size | §15 | all |
 | I12 rulings | §13 | — |
 | N1 `spread_B` in drift | §7.3 | T20R-7b |
-| N2 `mps` chip | §3.2 | T20R-2 |
+| N2 `mps` chip | §3.2 | T20R-2a |
 | N3 contrasting figures in tests | §15 T20R-4 | T20R-4 |
 | N4 `probe_items` target | §11 | T20R-10 |
 | N5 trust bullet names all kinds | ADR-003 amendment | — |
@@ -767,7 +767,7 @@ Nothing in the review is declined.
 | 3. cold/warm from model-load events; exclude failed and bisected requests | `since_load`, `load_s` (§5.3, §8); §5.4 steps 1-2 | T20R-5, T20R-4 |
 | 4. remove or unify `profiles._batch_size` | removed; one `size` for Pool, in-process and `explain` (§6.6) | T20R-6 |
 | 5. drop the ladder's fallback | §9 | T20R-7a |
-| 6. key packaged rows by backend params and env | `MeasureUnit` (§3.1, §3.2), `resource-table@2.0` on exact identity (§3.7) | T20R-2, T20R-8 |
+| 6. key packaged rows by backend params and env | `MeasureUnit` (§3.1, §3.2), `resource-table@2.0` on exact identity (§3.7) | T20R-2a, T20R-8 |
 | 7. fit the per-call fixed cost; a seconds budget | `r`, `a` (§5.4 steps 3-4); `probe_s` over warm probe work (§4.5) | T20R-4, T20R-7a |
 | 8. regenerate with recorded n and spread, two batch sizes, two length strata | table profile, `resource-table@2.0` (§9) | T20R-10 |
 
@@ -779,7 +779,7 @@ Closed when their task merges:
 |---|---|
 | R-236 | T20R-4 (`a` and `r` fitted; test on a fixed-cost stand-in) and T20R-10 (CPU row regenerated) |
 | R-237 | T20R-10: the 10³ GPU table point measures `B₁` at the memory batch and `B₂` |
-| R-229 | T20R-2 (env build and `backend_params` in the identity) and T20R-10 (crisperwhisper at batch 1 from warm unshared requests, beside e801bc6c) |
+| R-229 | T20R-2a (env build and `backend_params` in the identity) and T20R-10 (crisperwhisper at batch 1 from warm unshared requests, beside e801bc6c) |
 | R-233 | budget side by T20R-8 (flatness from request walls); the worker poll wait stays open, harmless to any measure |
 | R-230 | T20R-4 records "device unmeasured" in the estimate, batch 1; stays open for a non-torch peak |
 
@@ -793,7 +793,7 @@ To open at merge (ids assigned then):
 | N-4 | P2 | plan time sizes a second way (`profiles._batch_size`, host pair against a GPU) | T20R-6 |
 | N-5 | P2 | failed and bisected requests enter the medians | T20R-4, T20R-7a |
 | N-6 | P2 | the ladder ships `calibrated(samples)` when its pool measured nothing | T20R-7a |
-| N-7 | P2 | `Unit` omits backend params, the env build and the device; packaged rows are reused across them | T20R-2, T20R-8 |
+| N-7 | P2 | `Unit` omits backend params, the env build and the device; packaged rows are reused across them | T20R-2a, T20R-8 |
 | N-8 | P3 | host memory is not per request and not of the process holding the model | T20R-11 (after exit) |
 | N-9 | P3 | `_grow` doubles per-item bytes for the whole unit, unmarked and without decay | T20R-7b |
 | N-10 | P2 | placement values are fixed per profile and a site refusal is not actionable: Task 21 Step 3 submitted `--time=360` to a 4 h partition and every start was refused | T20R-12 |
@@ -808,12 +808,17 @@ first, fable reviews before merge). **Each merges on its own with the tree green
 lands beside the old, and every deletion belongs to the task that removes its last caller. Order:
 
 ```
-T20R-1 ──► T20R-2 ──┐
-       ├─► T20R-3 ──┤
-       ├─► T20R-4 ──┼─► T20R-6 ──► T20R-7a ──► T20R-7b ──► T20R-8 ──► T20R-10
-       └─► T20R-5 ──┘
-T20R-12 independent; T20R-11 after the Phase 3 exit.
+T20R-1 ──► T20R-2a ──┬─► T20R-2b ──┐
+       │             └─► T20R-5 ───┤
+       ├─► T20R-3 ─────────────────┤
+       └─► T20R-4 ─────────────────┴─► T20R-6 ──► T20R-7a ──► T20R-7a′ ──► T20R-7b ──► T20R-8 ──► T20R-10
+T20R-12 ──────────────────────────────────────────────────────────────────►┘
+T20R-11 after the Phase 3 exit.
 ```
+
+T20R-5 follows T20R-2a for the `HardwareClass` normalisation. T20R-12 needs no other task: until T20R-6 merges every
+request figure is `unmeasured`, so the `time_per_worker_s` check accepts any answer and the event says so (§10.3). It
+merges before T20R-7b, which closes its `placement` event with actuals (§10.3).
 
 Every "fails now" test is written first and shown failing on `5ae1fc3d` in the PR, or, where it is new behaviour,
 states the old mechanism's contrasting result in its assertion (P-34). No task runs a full suite locally; GPU and
@@ -830,27 +835,39 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
   `test_run_config_trust_overrides_the_profile`; `test_every_calibration_key_has_a_derivation`.
 - **ORCD.** None.
 
-### T20R-2: `MeasureUnit`, hardware index and the layered measures store (additive)
+### T20R-2a: `MeasureUnit`, `HardwareClass` and `MeasureSource` (additive)
 
-- **Scope.** §3: identity with the env fields; `HardwareClass` normalisation (`cuda`, `mps`, `cpu`); hardware index;
-  layered roots with the writability check and fallback; write-once `obs`, `drift`, `supersede`, `regime`, `oom` files
-  with provenance; probe lease (taken in the write root, looked for in all); trust filter over every record kind;
-  quarantine; `collect` of own files only; `MeasureSource` (roots, then the `resource-table@2.0` packaged reader) with
-  the estimator **passed in** as a callable, so it does not wait on T20R-4. `Measures` and `Unit` stay (T20R-7a removes
-  them).
+- **Scope.** §3.1, §3.2's normalisation, §3.7: identity with the env fields; `HardwareClass` normalisation (`cuda`,
+  `mps`, `cpu`, `cpus` on every class); `MeasureSource` over its sources, then the `resource-table@2.0` packaged
+  reader, with the estimator **passed in** as a callable, so it does not wait on T20R-4. `Measures` and `Unit` stay
+  (T20R-7a′ removes them).
 - **Files.** `runtime/measures.py` (new), `runtime/resources.py` (`@2.0` schema and reader added beside `@1.0`).
 - **Interfaces.** `MeasureUnit.of(placement, model, env_fields, hardware) -> MeasureUnit`; `.digest()`;
-  `MeasureRoots(roots, policy, trust, user)` with `.observations(u)`, `.records(u)`, `.write_root`,
-  `.put_observations(u, probe_id, obs, provenance)`, `.put_record(u, kind, record)`, `.probe_lease(u)`,
-  `.seen_classes(declared)`, `.note_seen(declared, seen)`; `MeasureSource(roots, packaged, estimate=...).get(u)`.
+  `HardwareClass.from_report(report, grant) -> HardwareClass`; `MeasureSource(sources, packaged, estimate=...).get(u)`.
 - **Tests failing now** (each states the `5ae1fc3d` contrast): `test_units_differing_only_in_backend_params_have_different_measures`
   (`Measures.get` returns one row for both); `test_units_differing_only_in_wheel_set_have_different_measures`;
-  `test_read_only_shared_root_falls_back_to_own` (B2: no write fails, the observation lands in the own root, a log
-  line names the fallback); `test_lookup_and_write_use_one_hardware_digest` (B3: a class with `gpu_type` None and a
-  worker reporting `NVIDIA H100 80GB HBM3` is read under the digest it was written under);
-  `test_another_users_drift_record_does_not_act_under_trust_own` (I5); `test_collect_never_removes_another_users_file`;
-  `test_two_writers_of_one_unit_both_keep_their_observations`; `test_a_misfiled_unit_directory_is_quarantined`;
+  `test_a_cuda_class_carries_its_granted_cpus`; `test_a_packaged_row_is_read_only_on_exact_identity`;
   `test_packaged_rows_carry_no_user_or_host` (I7).
+- **ORCD.** None.
+
+### T20R-2b: the layered measures roots (additive)
+
+- **Scope.** §3.2's index, §3.3-§3.6: layered roots with the writability check and the `OSError` fallback; the
+  hardware index (`seen_classes`, `note_seen`; called by T20R-7a); write-once `obs`, `drift`, `supersede`, `regime`,
+  `oom` files with provenance and no account or host name; probe lease (taken in the write root, looked for in all);
+  trust filter by owner uid over every record kind; unknown formats skipped; quarantine of own files only; `collect`
+  of own files only; the roots as a `MeasureSource` source.
+- **Files.** `runtime/measures.py`.
+- **Interfaces.** `MeasureRoots(roots, policy, trust, uid)` with `.observations(u)`, `.records(u)`, `.write_root`,
+  `.put_observations(u, probe_id, obs, provenance)`, `.put_record(u, kind, record)`, `.probe_lease(u)`,
+  `.seen_classes(declared)`, `.note_seen(declared, seen)`.
+- **Tests failing now.** `test_read_only_shared_root_falls_back_to_own` (B2: no write fails, the observation lands in
+  the own root, a log line names the fallback); `test_an_oserror_on_a_root_is_logged_and_never_raised` (`ENOSPC` and
+  `ESTALE` injected on read and write); `test_lookup_and_write_use_one_hardware_digest` (B3: a class with `gpu_type`
+  None and a worker reporting `NVIDIA H100 80GB HBM3` is read under the digest it was written under);
+  `test_no_measures_record_carries_an_account_or_host_name`; `test_another_users_drift_record_does_not_act_under_trust_own`
+  (I5); `test_collect_never_removes_another_users_file`; `test_two_writers_of_one_unit_both_keep_their_observations`;
+  `test_a_misfiled_unit_directory_is_quarantined_only_by_its_owner`; `test_a_file_of_an_unknown_format_is_skipped_not_moved`.
 - **ORCD.** One submitted job on three nodes against a shared root: concurrent `put_observations`, two coordinators
   racing `probe_lease` with one SIGKILLed (adapt `scripts/probe_lease_cross_node.py`), and one process with the shared
   root mounted read-only (a bind of it with `ro`) falling back to its own root.
@@ -889,8 +906,8 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 
 - **Scope.** §5.3, §8: `ModelCache` load flag and per-entry count; `done` fields `since_load`, `load_s`
   (wire-protocol amendment text); per-request walls in `_Spans`; per-request `Observation` with `outcome`, co-tenancy
-  and `HardwareClass` in each outcome **beside** `Sample` (which keeps `cold` until T20R-7a); the hardware index entry
-  on first hello; probe queue naming, serve lease, one-per-claim and the short wait of §4.4.
+  and `HardwareClass` in each outcome **beside** `Sample` (which keeps `cold` until T20R-7a′); the worker's
+  `HardwareClass` in its ready mark, with no store write (the index entry is T20R-7a's); probe queue naming, serve lease, one-per-claim and the short wait of §4.4.
 - **Files.** `senselab-worker/model_cache.py`, the worker's `done` writer, `runtime/worker_client.py`,
   `runtime/host_worker.py`, `runtime/execution/pool_worker.py`, `runtime/execution/queue.py` (probe queue naming),
   `wire-protocol.md`.
@@ -918,20 +935,19 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
   `test_workers_sharing_a_card_fit_it_together` (four workers × 0.9 of the cap at `5ae1fc3d`);
   `test_workers_per_device_bounded_by_the_batch_peak`; `test_plan_time_never_sizes_a_gpu_batch_against_host_memory`;
   `test_batch_is_one_above_the_measured_length_range`; `test_in_process_and_pool_size_one_unit_alike`;
-  `test_explain_labels_each_figure_measured_or_unmeasured_and_never_probes` (UX-31).
+  `test_explain_labels_each_figure_measured_or_unmeasured_and_never_probes` (UX-31);
+  `test_explain_states_the_waits_on_another_run`; `test_explain_flags_a_job_whose_batch_one_peak_exceeds_the_cap`.
 - **ORCD.** None.
 
 ### T20R-7a: the Pool's probe state machine
 
-- **Scope.** §7.1, §7.2: `Resolving` (hardware index, else first hello), `Lookup`, probe lease and `PeerWait` → `New`,
-  `Probing` with the probe queue, `replace_served`, budgets over warm probe work, servable jobs put at once (T20R-3's
-  predicate), observation writes, release under §6 or the safe values; `workers_wanted` for probing units. Removes
-  `_calibrating`, `_first_round`, `_round_measure`, `_batch_round`, `_round_digests`, `_note_unmeasured_device`,
-  `calibrated`, `_batched`, `Measures`, `code_version`, `Unit`, `measure_of`, `size_row`, `Sample.cold`,
-  `PoolWorker._warm`, `sizing.calibration_*`, and the ladder's two reads of them (`pool.calibrated` becomes
-  `pool.probes`; the `or calibrated(samples)` fallback is deleted, must-fix 5). `execution.md` §3.2 updated.
-- **Files.** `runtime/execution/pool.py`, `runtime/execution/pool_worker.py`, `runtime/sizing.py`,
-  `runtime/resources.py`, `benchmarks/scale/ladder.py` (the two reads only), profiles, `execution.md`.
+- **Scope.** §7.1, §7.2: `Resolving` (hardware index, else the first hello's ready mark, and the coordinator's
+  `note_seen` write of the index entry), `Lookup`, probe lease and `PeerWait` → `New`, `Probing` with the probe queue,
+  `replace_served`, budgets over warm probe work, servable jobs put at once (T20R-3's predicate), observation writes,
+  release under §6 or the safe values; `workers_wanted` for probing units; the ladder's two reads (`pool.calibrated`
+  becomes `pool.probes`; the `or calibrated(samples)` fallback is deleted, must-fix 5). The old calibration path is
+  left with no caller, for T20R-7a′. `execution.md` §3.2 updated.
+- **Files.** `runtime/execution/pool.py`, `benchmarks/scale/ladder.py` (the two reads only), `execution.md`.
 - **Tests failing now.** `test_probe_results_are_yielded_and_never_rerun`; `test_servable_jobs_are_put_at_once`
   (at `5ae1fc3d` they wait behind the calibration round, I4); `test_entries_under_another_context_are_probed_not_skipped`
   (B1 at Pool level); `test_a_served_probe_request_is_replaced_from_its_stratum`; `test_held_work_waits_at_most_probe_s_of_warm_work`
@@ -942,20 +958,31 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
   the first probes each unit once; the second plans no probe item (owner requirement 2) and its results match by key;
   a third run after an env rebuild (new `wheel_set`) probes, and its old-context entries are computed, not skipped.
 
+### T20R-7a′: removal of the old calibration path (mechanical, same day as T20R-7a)
+
+- **Scope.** Deletes what T20R-7a left without a caller: `_calibrating`, `_first_round`, `_round_measure`,
+  `_batch_round`, `_round_digests`, `_note_unmeasured_device`, `calibrated`, `_batched`, `Measures`, `code_version`,
+  `Unit`, `measure_of`, `size_row`, `Sample.cold`, `PoolWorker._warm`, `sizing.calibration_*` and their
+  `config-derivations.md` sections. No behaviour change. Sonnet at low effort.
+- **Files.** `runtime/execution/pool.py`, `runtime/execution/pool_worker.py`, `runtime/sizing.py`,
+  `runtime/resources.py`, profiles, `config-derivations.md`.
+- **Tests.** None new; the suites of the touched modules pass, and a grep finds none of the names under `packages/`.
+- **ORCD.** None.
+
 ### T20R-7b: production telemetry, drift, regimes and OOM records
 
 - **Scope.** §7.3, §7.4: ρ per regime with `spread_B`, same-hardware requests only; `drift` records; `regime` records
   from a k > 1 window; `Confirming` with the unit's jobs held, and `supersede` records; immediate `m1` raise on a device
   peak above band; `oom` records replacing `_grow` (removed here) with the re-opened stratum, and a B = 1 fault routed
-  to re-placement.
-- **Files.** `runtime/execution/pool.py`.
+  to re-placement; the `placement` event's closing record of actuals (§10.3).
+- **Files.** `runtime/execution/pool.py`, `runtime/execution/events.py`.
 - **Tests failing now.** `test_drift_confirms_before_superseding`; `test_drift_under_cotenancy_records_a_regime_without_a_probe`
   (I2: no probe loop under co-tenancy); `test_a_confirming_probe_holds_the_units_jobs`;
   `test_requests_of_another_hardware_class_feed_no_drift`; `test_drift_in_one_run_does_not_supersede_another_runs_regime`;
   `test_an_oom_caps_only_the_lengths_at_or_above_it` (at `5ae1fc3d` `_grow` halves every length, permanently);
   `test_an_oom_reopens_its_stratum_and_the_next_probe_lifts_it` (I6); `test_an_oom_at_batch_one_is_replaced_not_raised`;
   property `test_after_an_oom_size_never_returns_its_batch_at_or_above_its_length` (after an `oom` record at (B, L),
-  `size` returns batch < B at every L′ ≥ L).
+  `size` returns batch < B at every L′ ≥ L); `test_the_placement_event_closes_with_actuals_beside_the_request`.
 - **ORCD.** One H100 run with two workers per card on a Local substrate (an interactive allocation of one node): a
   regime record is written and no confirming probe runs.
 
@@ -963,7 +990,8 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 
 - **Scope.** §9: table profile in the suite; point results carry observations and `Estimate`; flatness from request
   walls; generator from measures roots, refusing unmeasured, writing no user or host; `@1.0` loader and its seven rows
-  deleted (their last readers); the `config-derivations.md` resources section.
+  deleted (the generator, rewritten here, is their last reader once T20R-7a′ removes `Measures`, `measure_of` and
+  `size_row`); the `config-derivations.md` resources section.
 - **Files.** `benchmarks/scale/ladder.py`, `benchmarks/scale/suites/ladder.yaml`, `scripts/generate_resources.py`,
   `runtime/resources.py`, `packages/senselab/src/senselab/data/resources/` (emptied), `config-derivations.md`.
 - **Tests failing now.** `test_generator_refuses_an_unmeasured_estimate`; `test_a_packaged_row_of_another_env_build_is_not_read`;
@@ -1008,7 +1036,7 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
   (the stub replies "Requested time limit is invalid" to `--time=360`: at `5ae1fc3d` the queue is held after
   repeated starts with no named cause); `test_the_hooks_answer_is_used_and_recorded`;
   `test_an_answer_below_time_per_worker_is_refused`; `test_an_answer_above_the_runs_workers_is_refused`;
-  `test_a_failing_hook_falls_back_and_says_so`; `test_explicit_placement_overrides_the_profile_and_is_recorded`;
+  `test_a_failing_hook_falls_back_and_says_so`; `test_a_site_refusal_renders_under_the_audience_rule`; `test_explicit_placement_overrides_the_profile_and_is_recorded`;
   `test_the_request_is_produced_without_computing` (UX-31); `test_senselab_runs_no_scheduler_query_to_place`
   (the stub records every call; only `sbatch` submissions appear).
 - **ORCD.** None required; the ORCD adapter is outside senselab. A smoke run with a toy hook that returns the
