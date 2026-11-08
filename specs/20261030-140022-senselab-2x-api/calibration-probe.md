@@ -174,7 +174,8 @@ There is no estimate file. `Probe.estimate` runs over the unit's pooled observat
   live `<u>/probe.lease` and, finding none, takes the lease in its write root (the 2026-11-03 directory lease, renewed
   by `keep_alive`, proven before it writes its observations). A coordinator finding a live lease waits for the
   holder's observations up to `calibration.peer_wait_s`, re-reading once per `pool.poll_s`, then returns to `New` with
-  whatever it found as prior (§7.1). A broken lease, or two members writing to different roots, costs a duplicate
+  whatever it found as prior (§7.1). The wait holds only the unit's computed jobs; its servable jobs and other units
+  proceed, and the plan states it (§6.6). A broken lease, or two members writing to different roots, costs a duplicate
   probe, never a wrong measure.
 - **Walks are by descriptor** below each root; ids that become path components are one component.
 
@@ -466,7 +467,10 @@ batch; a fragment whose jobs fall in several buckets is cut at bucket boundaries
 (graph inputs; a node fed by an upstream recording has unknown lengths until it runs). It states wall time, GPU hours
 and peak device memory per node, each labelled `measured` (with the estimate's source, §3.5) or `unmeasured` (with
 the reason: no estimate, hardware not yet seen, lengths unknown), how many jobs are servable and how many will be
-computed (§4.2's predicate), and the measures root writes will go to (§3.3). The Pool and the in-process executor call
+computed (§4.2's predicate), the measures root writes will go to (§3.3), and the waits a run may incur on another
+run: the lease takeover delay and `peer_wait_s` (§3.4, UX-36, UX-42). A job whose predicted batch-1 peak at its
+length, `resident + m0 + m1·L`, exceeds the class's memory cap is flagged before running with the memory it needs
+(UX-2, UX-4). The Pool and the in-process executor call
 the same `size` at run time with the same device selection: the device pair on a `cuda` class, the host pair
 otherwise. The in-process executor never probes; without an estimate it runs the safe values of §6.5.
 
@@ -636,14 +640,19 @@ override file, then the hook's answer (§10.3). The plan records the value it us
 - **A hook that fails or times out** is reported (`PlacementHookFailed`, chaining its error) and the run falls back
   to the explicit and profile values; the event says so. The fallback is logged, not silent.
 - **Recorded.** One `placement` event per class per epoch holds the request, the answer, the callable's import path
-  and the version of its distribution (`importlib.metadata`), the validation verdict, and the values used. Exports
-  apply the visibility policy to `why`, as they do to any free text (UX-45).
+  and the version of its distribution (`importlib.metadata`), the validation verdict, and the values used. Its request
+  values (partition, account) and `why` render under the reader's audience rule, like any error text (Terms, UX-45).
+- **Actuals beside the estimate.** At the epoch's end the event gains a closing record per class: the actual wall
+  time, GPU hours and peak device memory of the class's work, from the epoch's `Observation`s, beside the request's
+  figures. The run report reads both (UX-31 guarantee 3, UX-47).
 
 ### 10.4 A site's refusal is actionable
 
 When the scheduler refuses a submission (Slurm's `sbatch` exit with "Requested time limit is invalid", "Invalid
 account or account/partition combination", a QOS refusal), the substrate raises `SiteRefused` carrying the class, the
-exact request (the `sbatch` line), the site's message, and the placement layer that set each refused value. The queue
+exact request (the `sbatch` line), the site's message, and the placement layer that set each refused value; the
+request line and the message name accounts and partitions, so they render under the reader's audience rule like any
+error text. The queue
 is held as now (`BrokenClass`), and the run's status names the refusal and the inputs that can change it (`--placement`,
 the hook). senselab does not rewrite the request. A resumed run with corrected placement continues from the store.
 
