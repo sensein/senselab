@@ -1,29 +1,33 @@
 """Cross-node probe of the layered measures roots, on the shared filesystem they are meant for.
 
-Three nodes at one commit share one measures root ``<shared>``. Roles, each logging to ``<events>/events-<name>.jsonl``
-(``<shared>.events``, beside the root, so the stamped hostnames never enter a measures record):
+Three nodes at one commit share one measures root ``<shared>``; barriers and event logs live beside it in
+``<shared>.events`` (so stamped hostnames never enter a measures record). Roles:
 
-* ``write``: wait for ``--start-at``, then ``--probes`` times write one probe's observations of one unit, concurrently
-  with the other nodes.
-* ``hold``: node A takes the probe lease of a second unit, beats for ``--hold`` seconds (more than ``--stale``), then
+* ``write``: ``--probes`` rounds. Each round writes a fresh unit (the round number is one of its params), so each is a
+  first-writer race; the writers meet at a barrier on the shared storage (``go-<round>/<name>``, released when
+  ``--writers`` entries exist) and then write one probe each. After the last round every writer waits for the others
+  and reads every unit back, requiring all writers' observations.
+* ``hold``: node A takes the probe lease of a lease unit, beats for ``--hold`` seconds (more than ``--stale``), then
   SIGKILLs itself.
 * ``break``: nodes B and C look for a live lease in every root and try to take it every second; a taker proves it,
   writes one probe's observations, holds it two bounds and releases it.
-* ``readonly``: one process with ``<shared>`` mounted read-only and ``--own`` writable falls back to its own root.
+* ``readonly``: started with ``<shared>`` mounted read-only and ``--own`` writable. It waits for A's hold, logs
+  ``peer_holds`` of the lease unit (the lease lies in a root it cannot write), then writes and falls back to ``--own``.
 * ``verdict``: reads ``<shared>`` and the events and prints JSON with ``pass``.
 
-``verdict`` passes when every written probe is read back exactly once from every node, each unit has one
-``unit.json``, nothing is quarantined, no take precedes the kill, the first take follows it within ``--stale`` plus
-``--slack``, no two holds overlap, no holder lost its lease, the ``readonly`` process wrote only to its own root,
-and three distinct hosts took part. Run ``<checkout>`` at the commit under test, ``<shared>`` a fresh directory::
+``verdict`` passes when every writer read every unit back complete, no unit lacks a writer's probe, each written unit
+has one ``unit.json``, nothing is quarantined, no take precedes the kill, the first take follows it within
+``--stale`` plus ``--slack``, no two holds overlap, no holder lost its lease, ``readonly`` saw A's lease and wrote
+only to its own root, three distinct hosts took part, and the rounds whose writers overlapped on the storage clock
+number at least ``--overlap`` (reported either way). ``<checkout>`` is a clone at the commit under test::
 
     export PYTHONPATH=<checkout>/packages/senselab-core/src:<checkout>/packages/senselab/src:<checkout>/packages/senselab-worker/src
     S=<checkout>/scripts/probe_measures_cross_node.py
-    python $S write <shared> --name A --start-at <epoch>        # on each of three nodes, A B C
-    python $S hold <shared> --stale 120 --hold 360               # node A, concurrently with the break roles
-    python $S break <shared> --stale 120 --name B --until 1200   # nodes B and C
-    apptainer exec --bind <shared>:<shared>:ro <image> python $S readonly <shared> --own <own>
-    python $S verdict <shared> --stale 120 --slack 75 --hosts 3 --writers 3 --probes <n>
+    python $S write <shared> --name A --probes 20 --writers 3 --stale 120      # nodes A, B, C
+    python $S hold <shared> --stale 120 --hold 360                              # node A, with the write role
+    python $S break <shared> --stale 120 --name B --until 1200                  # nodes B and C
+    apptainer exec --bind <shared>:<shared>:ro <image> python $S readonly <shared> --own <own> --stale 120
+    python $S verdict <shared> --stale 120 --slack 75 --hosts 3 --writers 3 --probes 20
 """
 
 from __future__ import annotations
@@ -38,17 +42,14 @@ import time
 from pathlib import Path
 
 from senselab_core.kernel.identity import ModelIdentity
-from senselab_core.runtime.calibration import Observation
-from senselab_core.runtime.locks import LeaseTimeout
-from senselab_core.runtime.measures import Build, MeasureRoots, Provenance
+from senselab_core.runtime.locks import Lease, LeaseTimeout
+from senselab_core.runtime.measures import Build, MeasureRoots, MeasureUnit, PeerProbing, Provenance
 from senselab_core.runtime.storage import StorageDir, StorePolicy
 from senselab_core.testing.calibration_samples import UNIT, observation
 
-WRITE_UNIT = UNIT
 LEASE_UNIT = UNIT.model_copy(update={"model": ModelIdentity(id="openai/whisper-base", identity="e" * 40)})
-EVENT_POLL_S = 5.0
-TAKE_POLL_S = 1.0
 OBSERVATIONS_PER_PROBE = 3
+BARRIER_POLL_S = 0.002
 PROVENANCE = Provenance(
     job=os.environ.get("SLURM_JOB_ID"),
     run="cross-node",
@@ -58,120 +59,143 @@ PROVENANCE = Provenance(
 )
 
 
-def _observation(item: str) -> Observation:
-    return observation(probe=None, item=item)
+def _unit(round_: int) -> MeasureUnit:
+    return UNIT.model_copy(update={"params": {"word_timestamps": False, "round": round_}})
 
 
 def _roots(*roots: Path, stale: float) -> MeasureRoots:
     return MeasureRoots(roots, StorePolicy.load_default(), "group", os.geteuid(), stale_after_s=stale)
 
 
-def _log(events: Path, name: str, **event: object) -> None:
+def _now(events: Path) -> float:
     with StorageDir.open_root(events, create=True) as directory:
-        stamp = directory.dir_now()
-    event.update(role=name, host=socket.gethostname(), storage_t=stamp, local_t=time.time())
+        return directory.dir_now()
+
+
+def _log(events: Path, name: str, **event: object) -> None:
+    event.update(role=name, host=socket.gethostname(), storage_t=_now(events), local_t=time.time())
     with open(events / f"events-{name}.jsonl", "a") as handle:
         handle.write(json.dumps(event) + "\n")
         handle.flush()
         os.fsync(handle.fileno())
 
 
-def write(shared: Path, events: Path, name: str, probes: int, start_at: float) -> None:
-    """Write `probes` probes of one unit, starting together at `start_at` (epoch seconds)."""
-    roots = _roots(shared, stale=120)
-    while time.time() < start_at:
-        time.sleep(0.05)
+def _barrier(events: Path, label: str, name: str, parties: int, bound: float) -> None:
+    """Make `events/<label>/<name>` and wait until `parties` entries exist on the shared storage."""
+    here = events / label
+    here.mkdir(parents=True, exist_ok=True)
+    (here / name).mkdir(exist_ok=True)
+    deadline = time.monotonic() + bound
+    while len(list(here.iterdir())) < parties:
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"barrier {label}: fewer than {parties} entries")
+        time.sleep(BARRIER_POLL_S)
+
+
+def _items(round_: int, writers: list[str]) -> set[str]:
+    return {f"{w}-{round_}-{i}" for w in writers for i in range(OBSERVATIONS_PER_PROBE)}
+
+
+def write(shared: Path, events: Path, name: str, probes: int, writers: int, stale: float, bound: float) -> None:
+    """Write one probe of a fresh unit per round after a barrier; then read every unit back."""
+    roots = _roots(shared, stale=stale)
     for n in range(probes):
-        probe = f"{name}-{n}"
+        _barrier(events, f"go-{n}", name, writers, bound)
+        start = _now(events)
         landed = roots.put_observations(
-            WRITE_UNIT, probe, [_observation(f"{probe}-{i}") for i in range(OBSERVATIONS_PER_PROBE)], PROVENANCE
+            _unit(n), f"{name}-{n}", [observation(probe=None, item=f"{name}-{n}-{i}") for i in range(OBSERVATIONS_PER_PROBE)], PROVENANCE
         )
-        _log(events, name, event="wrote", probe=probe, landed=landed is not None)
+        _log(events, name, event="wrote", round=n, landed=landed is not None, start_t=start, end_t=_now(events))
+    _barrier(events, "done", name, writers, bound)
+    names = sorted(p.name for p in (events / "done").iterdir())
+    missing = [n for n in range(probes) if _items(n, names) - {o.item for o in roots.observations(_unit(n))}]
+    _log(events, name, event="read", writers=names, missing_rounds=missing)
 
 
-def hold(shared: Path, events: Path, stale: float, fraction: float, seconds: float) -> None:
+def hold(shared: Path, events: Path, stale: float, fraction: float, seconds: float, poll: float) -> None:
     """Take the probe lease, beat for `seconds`, then SIGKILL this process while holding it."""
     lease = _roots(shared, stale=stale).probe_lease(LEASE_UNIT)
-    if lease is None:
-        _log(events, "A", event="no-lease")
+    if not isinstance(lease, Lease):
+        _log(events, "A", event="no-lease", why=type(lease).__name__)
         return
     with lease, lease.keep_alive(fraction) as state:
         _log(events, "A", event="held")
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
-            time.sleep(EVENT_POLL_S)
+            time.sleep(poll)
             _log(events, "A", event="beat", beats=state.beats, lost=state.lost, owns=lease.owns())
         _log(events, "A", event="kill", beats=state.beats, lost=state.lost)
         os.kill(os.getpid(), signal.SIGKILL)
 
 
-def breaker(shared: Path, events: Path, stale: float, fraction: float, name: str, until: float) -> None:  # noqa: PLR0913 - the role's command-line options
-    """Look for a live lease and try to take it every second; a taker proves it, writes, holds two bounds, releases."""
+def breaker(shared: Path, events: Path, stale: float, fraction: float, name: str, until: float, poll: float) -> None:  # noqa: PLR0913 - the role's command-line options
+    """Look for a live lease and try to take it every `poll` seconds; a taker proves it, writes, holds two bounds."""
     roots = _roots(shared, stale=stale)
     deadline = time.monotonic() + until
     while time.monotonic() < deadline:
-        lease = None if roots.peer_holds(LEASE_UNIT) else roots.probe_lease(LEASE_UNIT)
-        if lease is None:
-            _log(events, name, event="refused")
-            time.sleep(TAKE_POLL_S)
-            continue
-        try:
-            with lease, lease.keep_alive(fraction) as state:
-                _log(events, name, event="took", broke=[str(p) for p in lease.broke], proved=lease.prove())
-                roots.put_observations(LEASE_UNIT, f"lease-{name}", [_observation(name)], PROVENANCE)
-                time.sleep(2 * stale)
-                owned = lease.owns()
-            _log(events, name, event="released", owns=owned, lost=state.lost)
-            return
-        except LeaseTimeout:
-            _log(events, name, event="refused")
-            time.sleep(TAKE_POLL_S)
+        lease = roots.probe_lease(LEASE_UNIT)
+        if isinstance(lease, Lease):
+            try:
+                with lease, lease.keep_alive(fraction) as state:
+                    _log(events, name, event="took", broke=[str(p) for p in lease.broke], proved=lease.prove())
+                    roots.put_observations(LEASE_UNIT, f"lease-{name}", [observation(probe=None, item=name)], PROVENANCE)
+                    time.sleep(2 * stale)
+                    owned = lease.owns()
+                _log(events, name, event="released", owns=owned, lost=state.lost)
+                return
+            except LeaseTimeout:
+                pass
+        _log(events, name, event="refused", peer=isinstance(lease, PeerProbing))
+        time.sleep(poll)
     _log(events, name, event="gave-up")
 
 
-def readonly(shared: Path, events: Path, own: Path) -> None:
-    """With `shared` mounted read-only, write one probe and record where it landed."""
+def readonly(shared: Path, events: Path, own: Path, stale: float, until: float, poll: float) -> None:  # noqa: PLR0913 - the role's command-line options
+    """During A's hold, with `shared` mounted read-only, see its lease, then write one probe and fall back to `own`."""
+    roots = _roots(shared, own, stale=stale)
+    deadline = time.monotonic() + until
+    log = events / "events-A.jsonl"
+    while not (log.exists() and '"held"' in log.read_text()) and time.monotonic() < deadline:
+        time.sleep(poll)
+    sees = roots.peer_holds(LEASE_UNIT)
     before = sorted(str(p) for p in shared.rglob("*"))
-    roots = _roots(shared, own, stale=120)
-    landed = roots.put_observations(WRITE_UNIT, "readonly-0", [_observation("readonly")], PROVENANCE)
-    after = sorted(str(p) for p in shared.rglob("*"))
+    landed = roots.put_observations(_unit(-1), "readonly-0", [observation(probe=None, item="readonly")], PROVENANCE)
     _log(
         events,
         "readonly",
         event="wrote",
+        peer_holds=sees,
         in_own=landed is not None and own in landed.parents,
-        shared_unchanged=before == after,
+        shared_unchanged=before == sorted(str(p) for p in shared.rglob("*")),
         write_root_is_own=roots.write_root == own,
-        read_back=len(roots.observations(WRITE_UNIT)) > 0,
+        read_back=len(roots.observations(_unit(-1))) > 0,
     )
 
 
+def _spans_overlap(spans: list[tuple[float, float]]) -> bool:
+    return max(s for s, _ in spans) <= min(e for _, e in spans)
+
+
 def _check_writes(shared: Path, events: list[dict], writers: int, probes: int) -> dict[str, object]:
-    roots = _roots(shared, stale=120)
-    items = [o.item for o in roots.observations(WRITE_UNIT)]
-    expected = {
-        f"{e['probe']}-{i}"
-        for e in events
-        if e["event"] == "wrote" and e["role"] != "readonly"
-        for i in range(OBSERVATIONS_PER_PROBE)
-    }
-    units = list((shared / "measures@1" / "units").rglob("unit.json"))
-    quarantine = list((shared / "measures@1" / "quarantine").glob("*"))
+    wrote = [e for e in events if e["event"] == "wrote" and e["role"] != "readonly"]
+    reads = [e for e in events if e["event"] == "read"]
+    rounds = [[(e["start_t"], e["end_t"]) for e in wrote if e["round"] == n] for n in range(probes)]
+    unit_files = list((shared / "measures@1" / "units").rglob("unit.json"))
     return {
-        "probes_written": len(expected) // OBSERVATIONS_PER_PROBE,
-        "observations_missing": len(expected - set(items)),
-        "observations_duplicated": len(items) - len(set(items)),
-        "units": len(units),
-        "quarantined": len(quarantine),
-        "complete": len(expected) == writers * probes * OBSERVATIONS_PER_PROBE and expected <= set(items),
+        "probes_written": len(wrote),
+        "all_landed": all(e["landed"] for e in wrote),
+        "readers": len(reads),
+        "rounds_missing_at_a_reader": sorted({n for e in reads for n in e["missing_rounds"]}),
+        "overlapping_rounds": sum(len(r) == writers and _spans_overlap(r) for r in rounds),
+        "unit_files": len(unit_files),
+        "quarantined": len(list((shared / "measures@1" / "quarantine").glob("*"))),
+        "complete": len(wrote) == writers * probes and len(reads) == writers,
     }
 
 
-def verdict(shared: Path, events_dir: Path, stale: float, slack: float, hosts: int, writers: int, probes: int) -> bool:  # noqa: PLR0913 - the role's command-line options
+def verdict(shared: Path, events_dir: Path, args: argparse.Namespace) -> bool:
     """Print the probe's verdict as JSON; return whether it passed."""
-    events = [
-        json.loads(line) for p in sorted(events_dir.glob("events-*.jsonl")) for line in p.read_text().splitlines()
-    ]
+    events = [json.loads(line) for p in sorted(events_dir.glob("events-*.jsonl")) for line in p.read_text().splitlines()]
     kill = next((e["storage_t"] for e in events if e["role"] == "A" and e["event"] == "kill"), None)
     held = next((e["storage_t"] for e in events if e["role"] == "A" and e["event"] == "held"), None)
     spans, unreleased = [], 0
@@ -187,15 +211,17 @@ def verdict(shared: Path, events_dir: Path, stale: float, slack: float, hosts: i
     early = [t for t in took if kill is not None and t < kill]
     lost = [e for e in events if e.get("lost")]
     fallback: dict = next((e for e in events if e["role"] == "readonly" and e["event"] == "wrote"), {})
-    writes = _check_writes(shared, events, writers, probes)
+    writes = _check_writes(shared, events, args.writers, args.probes)
     seen_hosts = sorted({e["host"] for e in events})
-    passed = (
-        kill is not None and held is not None and bool(took) and len(seen_hosts) == hosts and not unreleased and not early
-        and not lost and not overlaps and kill - held > stale and took[0] - kill <= stale + slack
-        and bool(writes["complete"]) and not writes["observations_duplicated"] and writes["units"] == 2
-        and not writes["quarantined"]
-        and bool(fallback) and fallback["in_own"] and fallback["shared_unchanged"] and fallback["write_root_is_own"]
-        and fallback["read_back"]
+    units_expected = args.probes + 1
+    passed = bool(
+        kill is not None and held is not None and bool(took) and len(seen_hosts) == args.hosts and not unreleased
+        and not early and not lost and not overlaps and kill - held > args.stale and took[0] - kill <= args.stale + args.slack
+        and bool(writes["complete"]) and writes["all_landed"] and not writes["rounds_missing_at_a_reader"]
+        and writes["unit_files"] == units_expected and not writes["quarantined"]
+        and writes["overlapping_rounds"] >= args.overlap
+        and bool(fallback) and fallback["peer_holds"] and fallback["in_own"] and fallback["shared_unchanged"]
+        and fallback["write_root_is_own"] and fallback["read_back"]
     )  # fmt: skip
     print(
         json.dumps(
@@ -225,26 +251,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--probes", type=int, default=20)
     parser.add_argument("--hosts", type=int, default=3)
     parser.add_argument("--writers", type=int, default=3)
-    parser.add_argument("--start-at", type=float, default=0.0)
-    parser.add_argument("--stale", type=float, default=120.0)
+    parser.add_argument("--overlap", type=int, default=1)
+    parser.add_argument("--stale", type=float, required=True)
     parser.add_argument("--fraction", type=float, default=0.25)
     parser.add_argument("--hold", type=float, default=360.0)
     parser.add_argument("--until", type=float, default=1200.0)
     parser.add_argument("--slack", type=float, default=75.0)
+    parser.add_argument("--poll", type=float, default=1.0)
     args = parser.parse_args(argv)
     events = args.events or args.shared.with_name(args.shared.name + ".events")
     if args.role == "write":
-        write(args.shared, events, args.name, args.probes, args.start_at)
+        write(args.shared, events, args.name, args.probes, args.writers, args.stale, args.until)
     elif args.role == "hold":
-        hold(args.shared, events, args.stale, args.fraction, args.hold)
+        hold(args.shared, events, args.stale, args.fraction, args.hold, args.poll)
     elif args.role == "break":
-        breaker(args.shared, events, args.stale, args.fraction, args.name, args.until)
+        breaker(args.shared, events, args.stale, args.fraction, args.name, args.until, args.poll)
     elif args.role == "readonly":
         if args.own is None:
             parser.error("readonly needs --own")
-        readonly(args.shared, events, args.own)
+        readonly(args.shared, events, args.own, args.stale, args.until, args.poll)
     else:
-        return 0 if verdict(args.shared, events, args.stale, args.slack, args.hosts, args.writers, args.probes) else 1
+        return 0 if verdict(args.shared, events, args) else 1
     return 0
 
 

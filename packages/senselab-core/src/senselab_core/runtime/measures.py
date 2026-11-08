@@ -7,15 +7,17 @@ probe lease. `MeasureSource` reads a unit's `Estimate` from the roots (pooled), 
 """
 
 import contextlib
+import errno
 import json
 import logging
 import os
 import re
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Literal, Protocol, Self
+from typing import Annotated, Any, Literal, Protocol, Self, TypeVar
 from urllib.parse import urlsplit
 
 from pydantic import AfterValidator, Field, PlainSerializer, ValidationError, model_validator
@@ -54,6 +56,7 @@ from senselab_core.runtime.storage import (
 )
 
 logger = logging.getLogger("senselab")
+T = TypeVar("T")
 
 DRIVER_KEYS = frozenset({"torch_build", "engine", "engine_version"})
 """The driver entries a measure holds."""
@@ -277,20 +280,32 @@ def class_digest(seen: HardwareClass) -> str:
     return identity_digest(MEASURE_CLASS_TAG, seen.model_dump(mode="json"))
 
 
+_VARIABLE = re.compile(r"\$\{(\w+)\}|\$(\w+)")
+
+
 def resolve_roots(raw: Sequence[str], cache: Path) -> tuple[Path, ...]:
     """Return the roots `raw` names, in order: `cache` for the cache-root token, then `expand`.
 
-    A root naming a variable that is not set, a blank one and a repeat are left out, logged and never raised.
+    A root naming a variable that is unset or empty, a root that is not absolute, a blank one and a repeat are left
+    out, logged and never raised.
     """
     roots: list[Path] = []
     for entry in raw:
+        text = entry.replace(CACHE_ROOT_TOKEN, str(cache))
+        if empty := [n for m in _VARIABLE.finditer(text) for n in m.groups() if n and os.environ.get(n) == ""]:
+            logger.info("measures root %r is not a root: %s is empty", entry, empty[0])
+            continue
         try:
-            path = Path(expand(entry.replace(CACHE_ROOT_TOKEN, str(cache))))
+            path = Path(expand(text))
         except ValueError as err:
             logger.info("measures root %r is not a root: %s", entry, err)
             continue
-        if entry.strip() and path not in roots:
-            roots.append(path)
+        if not entry.strip() or path in roots:
+            continue
+        if not path.is_absolute():
+            logger.info("measures root %r is not a root: %s is not absolute", entry, path)
+            continue
+        roots.append(path)
     return tuple(roots)
 
 
@@ -319,8 +334,22 @@ def _parse_class(document: Mapping[str, Any]) -> HardwareClass:
     return HardwareClass.model_validate(document["class"])
 
 
+def outdates(record: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return the probe ids a `supersede` payload names.
+
+    Raises:
+        ValueError: `outdates` is not a non-empty list of probe ids.
+    """
+    ids = record.get("outdates")
+    if not isinstance(ids, (list, tuple)) or not ids or not all(isinstance(i, str) and i for i in ids):
+        raise ValueError("a supersede record names the probe ids it outdates")
+    return tuple(ids)
+
+
 def _record_parser(kind: str) -> Callable[[Mapping[str, Any]], MeasureRecord]:
     def parse(document: Mapping[str, Any]) -> MeasureRecord:
+        if kind == "supersede":
+            outdates(document["record"])
         return MeasureRecord.model_validate(
             {
                 "kind": kind,
@@ -333,6 +362,23 @@ def _record_parser(kind: str) -> Callable[[Mapping[str, Any]], MeasureRecord]:
         )
 
     return parse
+
+
+@dataclass(frozen=True)
+class PeerProbing:
+    """A coordinator the trust filter admits holds a live probe lease: wait for its observations."""
+
+
+@dataclass(frozen=True)
+class Unleased:
+    """No probe lease is to be held: probe without one and do not wait.
+
+    Attributes:
+        reason: `no writable root`, or `foreign lease`: under `trust: own`, a live lease of another uid that
+            cannot be taken and whose observations this reader would not pool.
+    """
+
+    reason: Literal["no writable root", "foreign lease"]
 
 
 class _Skipped(Exception):  # noqa: N818 - control flow inside one class: the unit directory takes no write
@@ -383,6 +429,19 @@ class MeasureRoots:
         if key not in self._said:
             self._said.add(key)
             logger.warning(message, *args)
+
+    def _admits(self, uid: int) -> bool:
+        return self.trust == "group" or uid == self.uid
+
+    def _in_first_writable(self, action: Callable[[Path], T]) -> T | None:
+        for root in list(self._writable()):
+            try:
+                return action(root)
+            except _Skipped:
+                continue
+            except (OSError, WrongKindError) as err:
+                self._lost(root, err)
+        return None
 
     def _owner(self, uid: int) -> str:
         return "you" if uid == self.uid else "another user" if self.trust == "own" else f"uid {uid}"
@@ -455,13 +514,13 @@ class MeasureRoots:
             return None
         with os.fdopen(fd, "rb") as handle:
             owner = os.fstat(handle.fileno())
+            if filtered and not self._admits(owner.st_uid):
+                return None
             raw = handle.read()
-        if filtered and self.trust == "own" and owner.st_uid != self.uid:
-            return None
         path = directory.path / name
         try:
             document = json.loads(raw)
-        except ValueError:
+        except (ValueError, RecursionError):
             document = None
         verdict = check(expected, document.get("format") if isinstance(document, dict) else None)
         if verdict in (FormatVerdict.UNKNOWN, FormatVerdict.RETIRED):
@@ -476,7 +535,7 @@ class MeasureRoots:
             if verdict is FormatVerdict.MALFORMED:
                 raise ValueError("no format tag")
             return _File(parse(document), owner.st_uid, owner.st_mtime)
-        except (ValueError, KeyError, TypeError, ValidationError) as err:
+        except (ValueError, KeyError, TypeError, RecursionError, ValidationError) as err:
             self._malformed(root, directory, name, owner.st_uid, type(err).__name__)
             return None
 
@@ -530,17 +589,23 @@ class MeasureRoots:
                     if self._unit_status(root, parent, unit_dir, digest) == "ok":
                         visit(root, unit_dir)
 
+    def _read_dir(
+        self, root: Path, directory: StorageDir, expected: str, parse: Callable[[Mapping[str, Any]], Any]
+    ) -> list[tuple[str, _File]]:
+        found: list[tuple[str, _File]] = []
+        for name in sorted(n for n in directory.listdir() if _JSON_NAME.fullmatch(n)):
+            with self._guard(root, "read"):
+                loaded = self._load(root, directory, name, expected, parse)
+                if loaded is not None:
+                    found.append((name, loaded))
+        return found
+
     def _files(
         self, root: Path, unit_dir: StorageDir, sub: str, expected: str, parse: Callable[[Mapping[str, Any]], Any]
     ) -> list[tuple[str, _File]]:
-        found: list[tuple[str, _File]] = []
         with self._guard(root, "read"), unit_dir.child(sub) as directory:
-            for name in sorted(n for n in directory.listdir() if _JSON_NAME.fullmatch(n)):
-                with self._guard(root, "read"):
-                    loaded = self._load(root, directory, name, expected, parse)
-                    if loaded is not None:
-                        found.append((name, loaded))
-        return found
+            return self._read_dir(root, directory, expected, parse)
+        return []
 
     def _records(self, digest: str) -> list[MeasureRecord]:
         records: list[MeasureRecord] = []
@@ -548,13 +613,13 @@ class MeasureRoots:
         def visit(root: Path, unit_dir: StorageDir) -> None:
             for kind, expected in RECORD_FORMATS.items():
                 for _, f in self._files(root, unit_dir, kind, expected, _record_parser(kind)):
-                    records.append(f.value.model_copy(update={"uid": f.uid, "written_s": f.mtime}))
+                    records.append(f.value.model_copy(update={"uid": f.uid, "written_s": max(f.mtime, 0.0)}))
 
         self._each_unit(digest, visit)
         return sorted(records, key=lambda r: (r.written_s, r.id))
 
-    def _cutoff(self, digest: str) -> float:
-        return max((r.written_s for r in self._records(digest) if r.kind == "supersede"), default=0.0)
+    def _outdated(self, digest: str) -> frozenset[str]:
+        return frozenset(i for r in self._records(digest) if r.kind == "supersede" for i in r.record["outdates"])
 
     def records(self, unit: MeasureUnit) -> tuple[MeasureRecord, ...]:
         """Return the `drift`, `supersede`, `regime` and `oom` records of `unit` the trust admits, oldest first."""
@@ -563,19 +628,19 @@ class MeasureRoots:
     def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
         """Return the observations of `unit` that still pool, oldest file first.
 
-        A probe's file pools when it is not older than the newest trusted `supersede` record; the writer of that
-        record writes it before its confirming probe's observations.
+        A probe whose id a trusted `supersede` record names in `outdates` does not pool.
         """
         digest = self._digest(unit)
-        cutoff = self._cutoff(digest)
+        outdated = self._outdated(digest)
         files: list[tuple[float, str, tuple[Observation, ...]]] = []
 
         def visit(root: Path, unit_dir: StorageDir) -> None:
             for name, f in self._files(root, unit_dir, "obs", MEASURE_OBSERVATIONS_FORMAT, _parse_observations):
-                files.append((f.mtime, name, f.value))
+                if name.removesuffix(".json") not in outdated:
+                    files.append((f.mtime, name, f.value))
 
         self._each_unit(digest, visit)
-        return tuple(o for mtime, _, group in sorted(files, key=lambda f: f[:2]) if mtime >= cutoff for o in group)
+        return tuple(o for _, _, group in sorted(files, key=lambda f: f[:2]) for o in group)
 
     def _stage(self, root: Path, target: StorageDir, name: str, data: bytes) -> None:
         with self._open(root, create=True) as m, m.walk("tmp", create=True, mode=self._dir_mode) as tmp:
@@ -602,17 +667,14 @@ class MeasureRoots:
 
     def _write(self, parts: tuple[str, ...], name: str, document: Mapping[str, Any], unit: MeasureUnit) -> Path | None:
         data, digest = _dump(document), self._digest(unit)
-        for root in list(self._writable()):
-            try:
-                with self._unit_dir(root, unit, digest) as unit_dir:
-                    with unit_dir.walk(*parts, create=True, mode=self._dir_mode) as target:
-                        self._stage(root, target, name, data)
-                        return target.path / name
-            except _Skipped:
-                continue
-            except (OSError, WrongKindError) as err:
-                self._lost(root, err)
-        return None
+
+        def put(root: Path) -> Path:
+            with self._unit_dir(root, unit, digest) as unit_dir:
+                with unit_dir.walk(*parts, create=True, mode=self._dir_mode) as target:
+                    self._stage(root, target, name, data)
+                    return target.path / name
+
+        return self._in_first_writable(put)
 
     def put_observations(
         self, unit: MeasureUnit, probe_id: str, obs: Sequence[Observation], provenance: Provenance
@@ -631,17 +693,22 @@ class MeasureRoots:
     ) -> Path | None:
         """Write a `kind` record of `unit` as `<kind>/<id>.json`; return the file, None when none persists.
 
+        A `supersede` payload names the probe ids it outdates (`outdates`).
+
         Raises:
-            ValueError: `kind` is not a record kind.
+            ValueError: `kind` is not a record kind, or a `supersede` payload names no probe id.
         """
         if kind not in RECORD_FORMATS:
             raise ValueError(f"{kind!r} is not a measures record kind; they are {sorted(RECORD_FORMATS)}")
+        payload = record.model_dump(mode="json") if isinstance(record, Frozen) else dict(record)
+        if kind == "supersede":
+            outdates(payload)
         record_id = uuid.uuid4().hex
         document = {
             "format": RECORD_FORMATS[kind],
             "id": record_id,
             "provenance": provenance.model_dump(mode="json"),
-            "record": record.model_dump(mode="json") if isinstance(record, Frozen) else dict(record),
+            "record": payload,
         }
         return self._write((kind,), f"{record_id}.json", document, unit)
 
@@ -649,15 +716,14 @@ class MeasureRoots:
         """Record in the write root that a worker of `declared` reported `seen`; write-once. None when none persists."""
         name = f"{class_digest(seen)}.json"
         data = _dump({"format": MEASURE_CLASS_FORMAT, "class": seen.model_dump(mode="json")})
-        for root in list(self._writable()):
-            try:
-                with self._open(root, create=True) as m:
-                    with m.walk("classes", declared_digest(declared), create=True, mode=self._dir_mode) as target:
-                        self._stage(root, target, name, data)
-                        return target.path / name
-            except (OSError, WrongKindError) as err:
-                self._lost(root, err)
-        return None
+
+        def put(root: Path) -> Path:
+            with self._open(root, create=True) as m:
+                with m.walk("classes", declared_digest(declared), create=True, mode=self._dir_mode) as target:
+                    self._stage(root, target, name, data)
+                    return target.path / name
+
+        return self._in_first_writable(put)
 
     def seen_classes(self, declared: ResourceClass) -> tuple[HardwareClass, ...]:
         """Return the hardware classes workers of `declared` have reported in any root, ordered by digest."""
@@ -665,57 +731,74 @@ class MeasureRoots:
         for root in self.roots:
             with self._guard(root, "read"), self._open(root, create=False) as m:
                 with m.walk("classes", declared_digest(declared)) as directory:
-                    for name in sorted(n for n in directory.listdir() if _JSON_NAME.fullmatch(n)):
-                        with self._guard(root, "read"):
-                            loaded = self._load(root, directory, name, MEASURE_CLASS_FORMAT, _parse_class)
-                            if loaded is None:
-                                continue
-                            if f"{class_digest(loaded.value)}.json" != name:
-                                self._malformed(root, directory, name, loaded.uid, "name is not the class digest")
-                                continue
+                    for name, loaded in self._read_dir(root, directory, MEASURE_CLASS_FORMAT, _parse_class):
+                        if f"{class_digest(loaded.value)}.json" != name:
+                            self._malformed(root, directory, name, loaded.uid, "name is not the class digest")
+                        else:
                             found[name] = loaded.value
         return tuple(found[n] for n in sorted(found))
 
-    def peer_holds(self, unit: MeasureUnit) -> bool:
-        """Return whether a coordinator the trust filter admits holds a live probe lease of `unit` in any root."""
-        held: list[bool] = []
+    def _lease_age(self, unit_dir: StorageDir) -> float | None:
+        try:
+            return Lease(unit_dir.path / PROBE_LEASE, stale_after=self.stale_after_s, directory=unit_dir).age()
+        except PermissionError:
+            pass
+        except OSError as err:
+            if err.errno != errno.EROFS:
+                raise
+        newest = 0.0
+        with unit_dir.child(PROBE_LEASE + ".lease") as lease:
+            for token in lease.listdir():
+                with lease.child(token) as held:
+                    beats = (i.st_mtime for n in held.listdir() if (i := held.lstat(n)) is not None)
+                    newest = max([newest, os.fstat(held.fd).st_mtime, *beats])
+        return time.time() - newest if newest else None
+
+    def _lease_owner(self, unit_dir: StorageDir) -> int | None:
         name = PROBE_LEASE + ".lease"
+        info = unit_dir.lstat(name)
+        if info is None or unit_dir.kind(name) != "directory":
+            return None
+        age = self._lease_age(unit_dir)
+        return info.st_uid if age is not None and age <= self.stale_after_s else None
+
+    def peer_holds(self, unit: MeasureUnit) -> bool:
+        """Return whether a live probe lease of `unit` is held in any root by an owner the trust filter admits."""
+        owners: list[int] = []
 
         def visit(root: Path, unit_dir: StorageDir) -> None:
-            info = unit_dir.lstat(name)
-            if info is None or unit_dir.kind(name) != "directory" or (self.trust == "own" and info.st_uid != self.uid):
-                return
-            age = Lease(unit_dir.path / PROBE_LEASE, stale_after=self.stale_after_s).age()
-            held.append(age is not None and age <= self.stale_after_s)
+            if (owner := self._lease_owner(unit_dir)) is not None:
+                owners.append(owner)
 
         self._each_unit(self._digest(unit), visit)
-        return any(held)
+        return any(self._admits(o) for o in owners)
 
-    def probe_lease(self, unit: MeasureUnit) -> Lease | None:
-        """Return the probe lease of `unit` in the write root, not taken; None if a peer holds one or none is writable.
+    def probe_lease(self, unit: MeasureUnit) -> Lease | PeerProbing | Unleased:
+        """Return the probe lease of `unit` in the write root, not taken, or why none is to be held.
 
-        The caller takes it (`with lease`; `LeaseTimeout` means a peer won the race), renews it with `keep_alive` and
-        `prove`s it before it writes the probe's observations. `peer_holds` tells the two `None`s apart.
+        `PeerProbing`: an admitted peer holds one in some root; wait for its observations up to `peer_wait_s`.
+        `Unleased`: probe without a lease and do not wait. A `Lease` is taken with `with lease` (`LeaseTimeout`: a peer
+        won the race; `LeaseUnavailable`: a stale lease this uid cannot break), renewed with `keep_alive` and
+        `prove`d before the probe's observations are written.
         """
         if self.peer_holds(unit):
-            return None
+            return PeerProbing()
         digest = self._digest(unit)
-        for root in list(self._writable()):
-            try:
-                with self._unit_dir(root, unit, digest) as unit_dir:
-                    path = unit_dir.path / PROBE_LEASE
-                return Lease(path, timeout=0, stale_after=self.stale_after_s, mode=self._dir_mode)
-            except _Skipped:
-                continue
-            except (OSError, WrongKindError) as err:
-                self._lost(root, err)
-        return None
+
+        def take(root: Path) -> Lease | PeerProbing | Unleased:
+            with self._unit_dir(root, unit, digest) as unit_dir:
+                if (owner := self._lease_owner(unit_dir)) is not None:
+                    return PeerProbing() if self._admits(owner) else Unleased("foreign lease")
+                path = unit_dir.path / PROBE_LEASE
+            return Lease(path, timeout=0, stale_after=self.stale_after_s, mode=self._dir_mode)
+
+        return self._in_first_writable(take) or Unleased("no writable root")
 
     def collect(self, kept: int, now: float | None = None) -> int:
         """Remove what `uid` owns and no reader needs; return how many.
 
         That is staging and quarantine older than the policy's ages, and the observation files of probes a trusted
-        `supersede` record outdates beyond the newest `kept`. Another user's file is never removed.
+        `supersede` record names in `outdates`, beyond the newest `kept`. Another user's file is never removed.
         """
         removed = 0
         ages = (("tmp", self.policy.staging_stale_s), ("quarantine", self.policy.quarantine_retention_s))
@@ -746,19 +829,19 @@ class MeasureRoots:
                     for digest in parent.listdir():
                         with self._guard(root, "written"), parent.child(digest) as unit_dir:
                             if self._unit_status(root, parent, unit_dir, digest) == "ok":
-                                removed += self._collect_obs(unit_dir, self._cutoff(digest), kept)
+                                removed += self._collect_obs(unit_dir, self._outdated(digest), kept)
         return removed
 
-    def _collect_obs(self, unit_dir: StorageDir, cutoff: float, kept: int) -> int:
+    def _collect_obs(self, unit_dir: StorageDir, outdated: frozenset[str], kept: int) -> int:
         with unit_dir.child("obs") as obs:
             old = []
             for name in obs.listdir():
                 info = obs.lstat(name)
                 if (
                     _JSON_NAME.fullmatch(name)
-                    and info is not None
+                    and info
                     and info.st_uid == self.uid
-                    and info.st_mtime < cutoff
+                    and name.removesuffix(".json") in outdated
                 ):
                     old.append((info.st_mtime, name))
             return sum(obs.remove_owned(name, pattern=_JSON_NAME) for _, name in sorted(old)[: max(len(old) - kept, 0)])

@@ -6,12 +6,15 @@ import logging
 import os
 import socket
 import stat
+import subprocess
 import time
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from senselab_core.kernel.identity import ModelIdentity
 from senselab_core.runtime.calibration import Estimate, HardwareClass, Observation
 from senselab_core.runtime.execution_settings import ResourceClass, Trust
@@ -21,7 +24,9 @@ from senselab_core.runtime.measures import (
     MeasureRoots,
     MeasureSource,
     MeasureUnit,
+    PeerProbing,
     Provenance,
+    Unleased,
     class_digest,
     resolve_roots,
 )
@@ -35,7 +40,7 @@ from syscall_faults_fixture import fail_at
 POLICY = StorePolicy.load_default()
 UID = os.geteuid()
 STRANGER = UID + 1
-STALE_S = 60.0
+STALE_S = ExecutionProfile.load("orcd").lease.stale_after_s
 PROVENANCE = Provenance(
     job="1234", run="run-1", senselab=Build(version="2.0.0", commit="a" * 40), profile="d" * 64, hardware=UNIT.hardware
 )
@@ -140,10 +145,10 @@ def test_no_measures_record_carries_an_account_or_host_name(tmp_path: Path) -> N
     roots = _roots(tmp_path)
     roots.put_observations(UNIT, "p1", [_observation()], PROVENANCE)
     for kind in ("drift", "supersede", "regime", "oom"):
-        roots.put_record(UNIT, kind, {"reason": kind}, PROVENANCE)
+        roots.put_record(UNIT, kind, {"reason": kind, "outdates": ["p1"]}, PROVENANCE)
     roots.note_seen(DECLARED, UNIT.hardware)
     lease = roots.probe_lease(UNIT)
-    assert lease is not None
+    assert isinstance(lease, Lease)
     with lease:
         pass
     names = {getpass.getuser(), socket.gethostname(), socket.gethostname().split(".")[0], str(Path.home())}
@@ -161,7 +166,7 @@ def test_another_users_drift_record_does_not_act_under_trust_own(tmp_path: Path)
     writer = _roots(tmp_path)
     writer.put_observations(UNIT, "p1", [_observation()], PROVENANCE)
     for kind in ("drift", "supersede", "oom"):
-        writer.put_record(UNIT, kind, {"n": 1}, PROVENANCE)
+        writer.put_record(UNIT, kind, {"n": 1, "outdates": ["p1"]}, PROVENANCE)
     assert {r.kind for r in _roots(tmp_path, trust="group", uid=STRANGER).records(UNIT)} == {
         "drift",
         "supersede",
@@ -172,18 +177,22 @@ def test_another_users_drift_record_does_not_act_under_trust_own(tmp_path: Path)
 
 
 @pytest.mark.contract
-def test_a_supersede_record_stops_older_observations_pooling(tmp_path: Path) -> None:
-    """Observation files older than the newest trusted `supersede` record are not pooled; newer ones are."""
+def test_a_supersede_record_names_the_probes_it_outdates_whatever_their_mtime(tmp_path: Path) -> None:
+    """Pooling excludes by probe id: a superseded file touched newer stays out, and a newer unnamed one pools."""
     roots = _roots(tmp_path)
     old = roots.put_observations(UNIT, "old", [_observation("old")], PROVENANCE)
     assert old is not None
-    _age(old, 100)
-    superseded = roots.put_record(UNIT, "supersede", {"probe": "old"}, PROVENANCE)
-    assert superseded is not None
-    _age(superseded, 50)
-    roots.put_observations(UNIT, "new", [_observation("new")], PROVENANCE)
-    assert [o.item for o in roots.observations(UNIT)] == ["new"]
-    assert [o.item for o in _roots(tmp_path, trust="own", uid=STRANGER).observations(UNIT)] == []
+    roots.put_record(UNIT, "supersede", {"outdates": ["old"]}, PROVENANCE)
+    for age in (1000, -1000, 0):
+        _age(old, age)
+        roots.put_observations(UNIT, f"fresh{age}", [_observation(f"fresh{age}")], PROVENANCE)
+        assert "old" not in {o.item for o in roots.observations(UNIT)}
+    assert {o.item for o in roots.observations(UNIT)} == {"fresh1000", "fresh-1000", "fresh0"}
+    assert _roots(tmp_path, trust="own", uid=STRANGER).observations(UNIT) == ()
+    refused: list[dict[str, object]] = [{}, {"outdates": []}, {"outdates": [""]}, {"outdates": "old"}]
+    for bad in refused:
+        with pytest.raises(ValueError, match="outdates"):
+            roots.put_record(UNIT, "supersede", bad, PROVENANCE)
 
 
 @pytest.mark.contract
@@ -194,7 +203,7 @@ def test_collect_never_removes_another_users_file(tmp_path: Path) -> None:
     for n, path in enumerate(paths):
         assert path is not None
         _age(path, 1000 - n)
-    superseded = roots.put_record(UNIT, "supersede", {}, PROVENANCE)
+    superseded = roots.put_record(UNIT, "supersede", {"outdates": ["p0", "p1", "p2"]}, PROVENANCE)
     assert superseded is not None
     measures = tmp_path / "measures@1"
     staging, quarantined = measures / "tmp" / uuid.uuid4().hex, measures / "quarantine" / uuid.uuid4().hex
@@ -262,36 +271,77 @@ def test_a_file_of_an_unknown_format_is_skipped_not_moved(tmp_path: Path) -> Non
 
 @pytest.mark.contract
 def test_a_live_peer_lease_is_found_in_any_root_and_taken_only_in_the_write_root(tmp_path: Path) -> None:
-    """A coordinator finding a live lease in a root it does not write to gets none; one finding none takes its own."""
+    """A live lease in a root this reader does not write to is `PeerProbing`; with none the lease is in its own."""
     shared, own = tmp_path / "shared", tmp_path / "own"
     peer, me = _roots(shared), _roots(shared, own, trust="group")
     held = peer.probe_lease(UNIT)
-    assert held is not None
+    assert isinstance(held, Lease)
     with held:
-        assert me.peer_holds(UNIT) and me.probe_lease(UNIT) is None
+        assert me.peer_holds(UNIT) and me.probe_lease(UNIT) == PeerProbing()
         with pytest.raises(LeaseTimeout):
             with Lease(shared / "measures@1" / "units" / UNIT.digest()[:2] / UNIT.digest() / "probe", timeout=0):
                 pass
         assert not _roots(shared, trust="own", uid=STRANGER).peer_holds(UNIT)
     assert not me.peer_holds(UNIT)
     taken = me.probe_lease(UNIT)
-    assert taken is not None and taken.path.parent == (
-        shared / "measures@1" / "units" / UNIT.digest()[:2] / UNIT.digest()
-    )
+    assert isinstance(taken, Lease)
+    assert taken.path.parent == shared / "measures@1" / "units" / UNIT.digest()[:2] / UNIT.digest()
+
+
+@pytest.mark.contract
+def test_under_trust_own_a_foreign_live_lease_means_probe_without_a_lease(tmp_path: Path) -> None:
+    """The filter that ignores a foreign lease also stops a take that would only time out: no lease, no wait."""
+    holder = _roots(tmp_path).probe_lease(UNIT)
+    assert isinstance(holder, Lease)
+    with holder:
+        stranger = _roots(tmp_path, trust="own", uid=STRANGER)
+        assert not stranger.peer_holds(UNIT)
+        assert stranger.probe_lease(UNIT) == Unleased("foreign lease")
+        assert _roots(tmp_path, trust="group", uid=STRANGER).probe_lease(UNIT) == PeerProbing()
+        assert _roots(tmp_path, trust="own").probe_lease(UNIT) == PeerProbing()
 
 
 @pytest.mark.contract
 @needs_non_root
-def test_the_lease_is_taken_in_the_first_writable_root(tmp_path: Path) -> None:
-    """With the group root read-only, the lease lies in the own root, where the observations will be written."""
+def test_the_lease_is_taken_in_the_first_writable_root_and_no_root_is_a_typed_outcome(tmp_path: Path) -> None:
+    """With the group root read-only the lease lies in the own root; with no writable root the answer says so."""
     shared, own = tmp_path / "shared", tmp_path / "own"
     shared.mkdir()
     shared.chmod(stat.S_IRUSR | stat.S_IXUSR)
     try:
         lease = _roots(shared, own).probe_lease(UNIT)
-        assert lease is not None and own in lease.path.parents
+        assert isinstance(lease, Lease) and own in lease.path.parents
+        assert _roots(shared).probe_lease(UNIT) == Unleased("no writable root")
     finally:
         shared.chmod(0o700)
+
+
+@pytest.mark.contract
+@needs_non_root
+def test_a_live_lease_is_seen_in_a_root_that_cannot_be_written(tmp_path: Path) -> None:
+    """A read-only group root cannot give the storage clock, so liveness falls back to the local clock."""
+    holder = _roots(tmp_path).probe_lease(UNIT)
+    assert isinstance(holder, Lease)
+    with holder:
+        subprocess.run(["chmod", "-R", "a-w", str(tmp_path)], check=True)
+        try:
+            assert _roots(tmp_path).peer_holds(UNIT)
+        finally:
+            subprocess.run(["chmod", "-R", "u+w", str(tmp_path)], check=True)
+
+
+@pytest.mark.contract
+def test_a_file_that_cannot_be_parsed_is_malformed_never_raised(tmp_path: Path) -> None:
+    """Deeply nested JSON and an out-of-range mtime are read as malformed or harmless, not raised."""
+    roots = _roots(tmp_path)
+    written = roots.put_observations(UNIT, "p1", [_observation()], PROVENANCE)
+    record = roots.put_record(UNIT, "drift", {"n": 1}, PROVENANCE)
+    assert written is not None and record is not None
+    written.chmod(0o640)
+    written.write_text("[" * 200000)
+    os.utime(record, (-5, -5))
+    assert roots.observations(UNIT) == ()
+    assert [r.written_s for r in roots.records(UNIT)] == [0.0]
 
 
 @pytest.mark.contract
@@ -326,6 +376,48 @@ def test_an_unset_group_root_variable_is_no_root_and_blank_or_repeated_roots_are
     )
     assert roots.roots == (tmp_path / "group", tmp_path / "cache" / "2x" / "measures") and roots.trust == "group"
     assert resolve_roots(["${SENSELAB_MEASURES_ROOT}", str(tmp_path / "group")], cache_root()) == (tmp_path / "group",)
-    for bad in (["a", "a"], ["a", "  "]):
+    for bad in (["a", "a"], ["/a", "  "], ["relative/root"], ["./x"]):
         with pytest.raises(ValueError, match="measures_roots"):
             ExecutionProfile.load("laptop", {"calibration": {"measures_roots": bad}})
+
+
+@pytest.mark.contract
+def test_an_empty_variable_and_a_relative_root_are_no_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty-valued variable is unset, so `${X}` is never the current directory and `${X}/m` never `/m`."""
+    monkeypatch.setenv("SENSELAB_MEASURES_ROOT", "")
+    own = str(tmp_path / "own")
+    assert resolve_roots(["${SENSELAB_MEASURES_ROOT}", "${SENSELAB_MEASURES_ROOT}/m", own], tmp_path) == (Path(own),)
+    monkeypatch.setenv("SENSELAB_MEASURES_ROOT", "rel")
+    assert resolve_roots(["${SENSELAB_MEASURES_ROOT}", "~/m"], tmp_path) == (Path.home() / "m",)
+
+
+@settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    probes=st.sets(st.sampled_from("abcdef"), min_size=1),
+    outdated=st.sets(st.sampled_from("abcdef")),
+    trust=st.sampled_from(["group", "own"]),
+    reader=st.sampled_from([UID, STRANGER]),
+    split=st.integers(0, 1),
+)
+@pytest.mark.logic
+def test_pooling_is_the_admitted_probes_less_the_outdated_whatever_the_root_split(  # noqa: PLR0913 - the strategy's draws
+    tmp_path_factory: pytest.TempPathFactory,
+    probes: set[str],
+    outdated: set[str],
+    trust: Trust,
+    reader: int,
+    split: int,
+) -> None:
+    """Over any placement of probes in two roots: a reader pools the probes of owners it admits, minus the outdated."""
+    base = tmp_path_factory.mktemp("prop")
+    first, second = base / "first", base / "second"
+    writer = _roots(first, second)
+    for n, probe in enumerate(sorted(probes)):
+        _roots(*((first, second) if (n + split) % 2 else (second, first))).put_observations(
+            UNIT, probe, [_observation(probe)], PROVENANCE
+        )
+    if outdated:
+        writer.put_record(UNIT, "supersede", {"outdates": sorted(outdated)}, PROVENANCE)
+    pooled = {o.item for o in _roots(first, second, trust=trust, uid=reader).observations(UNIT)}
+    admitted = trust == "group" or reader == UID
+    assert pooled == (probes - outdated if admitted else set())
