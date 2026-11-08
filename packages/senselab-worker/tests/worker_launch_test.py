@@ -19,7 +19,7 @@ def _launch(tmp_path: Path, backend: str, *messages: dict[str, Any]) -> subproce
     kinds: tuple[Kind, ...] = ("init", "stop")
     default: Kind = "request"
     stdin = b"".join(encode(m, next((k for k in kinds if k in m), default), array_dir=tmp_path) for m in messages)
-    env = {**os.environ, "PYTHONPATH": str(TESTS)}
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(TESTS), *filter(None, sys.path)])}
     return subprocess.run(
         [sys.executable, "-m", "senselab_worker.launch", backend],
         input=stdin,
@@ -54,7 +54,9 @@ def test_fake_runs_through_the_launcher(tmp_path: Path) -> None:
     proc = _launch(tmp_path, "senselab_worker.fake", *_session(tmp_path))
     assert proc.returncode == 0
     *_, result, done = proc.stdout.splitlines()
-    assert "value" in json.loads(result)["outputs"] and json.loads(done) == {"id": "r", "done": 1}
+    reported = json.loads(done)
+    assert "value" in json.loads(result)["outputs"] and reported.keys() == {"id", "done", "since_load", "load_s"}
+    assert (reported["id"], reported["done"], reported["since_load"]) == ("r", 1, 0) and reported["load_s"] >= 0
 
 
 @pytest.mark.logic

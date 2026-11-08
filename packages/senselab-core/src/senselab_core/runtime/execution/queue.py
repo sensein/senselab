@@ -330,6 +330,14 @@ class Claim:
         self.release()
 
 
+class ProbeQueueError(ValueError):
+    """A production put on a probe queue, or a probe put on another."""
+
+
+class UnmarkedProbeItem(LookupError):
+    """An item of a probe queue has no phase and stratum: it was not put with `put_probe`."""
+
+
 class ServeLease:
     """The lease pinning a probe queue to the worker that holds it; `held` says whether its beats still prove it."""
 
@@ -418,26 +426,41 @@ class Queue:
             raise
         return ServeLease(stack, state)
 
-    def mark_probe(self, digest: str, phase: str, stratum: int) -> None:
-        """Record that item `digest` is of probe phase `phase` and length stratum `stratum`; the first mark stays."""
+    def put_probe(self, fragment: PlanFragment, phase: str, stratum: int) -> None:
+        """Put a probe item: its mark (`phase`, length `stratum`) is written before its slot, the first mark staying.
+
+        Raises:
+            ProbeQueueError: this is not a probe queue.
+        """
+        if probe_of(self.name) is None:
+            raise ProbeQueueError(f"{self.name!r} is not a probe queue; put production items with `put`")
+        digest = item_digest(fragment)
         with self.open() as q, q.child("probe") as probe:
             _publish(probe, digest, jcs_dumps({"phase": phase, "stratum": stratum}), DIGEST_NAME)
+        self._put_all([fragment])
 
-    def probe_mark(self, digest: str) -> Optional[tuple[str, int]]:
-        """Return the `(phase, stratum)` item `digest` was marked with, None when it has no mark."""
+    def probe_mark(self, digest: str) -> tuple[str, int]:
+        """Return the `(phase, stratum)` item `digest` was put with.
+
+        Raises:
+            UnmarkedProbeItem: the item has no readable mark.
+        """
         with self.open() as q, q.child("probe") as probe:
             data = probe.read_regular(digest)
         record = jcs_loads(data) if data is not None else None
-        if not isinstance(record, dict):
-            return None
-        phase, stratum = record.get("phase"), record.get("stratum")
-        return (phase, stratum) if isinstance(phase, str) and isinstance(stratum, int) else None
+        phase, stratum = (record.get("phase"), record.get("stratum")) if isinstance(record, dict) else (None, None)
+        if not (isinstance(phase, str) and isinstance(stratum, int)):
+            raise UnmarkedProbeItem(f"item {digest} of probe queue {self.name!r} has no phase and stratum")
+        return phase, stratum
 
     def put(self, fragment: PlanFragment) -> None:
         """Write `fragment`'s item and give it a slot, unless it has a slot or an outcome.
 
         A put is idempotent, so putting a run's unfinished fragments again repairs a put that was interrupted. A
         fragment with an outcome is not queued again; a retry is a fragment of a later `attempt`, another digest.
+
+        Raises:
+            ProbeQueueError: this is a probe queue (`put_probe`).
         """
         self.put_all([fragment])
 
@@ -446,7 +469,13 @@ class Queue:
 
         Raises:
             TypeError: an element is not a `PlanFragment`.
+            ProbeQueueError: this is a probe queue (`put_probe`).
         """
+        if probe_of(self.name) is not None:
+            raise ProbeQueueError(f"{self.name!r} is a probe queue; put its items with `put_probe`")
+        return self._put_all(fragments)
+
+    def _put_all(self, fragments: Iterable[PlanFragment]) -> int:
         digests: dict[str, Optional[int]] = {}
         with self.open() as q, q.child("items") as items:
             for fragment in fragments:
@@ -848,11 +877,13 @@ class QueueSet:
         return self._queues[name]
 
     def names(self) -> list[str]:
-        """Return the name of every queue under `root`, sorted; a queue's name is read once."""
+        """Return the name of every queue under `root`, sorted; a name is read once and a removed queue's is dropped."""
         if not self.root.is_dir():
             return []
         with StorageDir.open_root(self.root) as root:
-            for label in sorted(n for n in root.listdir() if DIGEST_NAME.fullmatch(n) and n not in self._labels):
+            labels = {n for n in root.listdir() if DIGEST_NAME.fullmatch(n)}
+            self._labels = {k: v for k, v in self._labels.items() if k in labels}
+            for label in sorted(labels - self._labels.keys()):
                 with root.child(label) as directory:
                     name = directory.read_regular("name")
                 if name is not None and identity_digest(LABEL_TAG, name.decode()) == label:
@@ -875,9 +906,11 @@ __all__ = [
     "PROBE_MARK",
     "RUN_QUEUES",
     "Claim",
+    "ProbeQueueError",
     "Queue",
     "QueueSet",
     "ServeLease",
+    "UnmarkedProbeItem",
     "item_digest",
     "probe_of",
     "probe_queue",

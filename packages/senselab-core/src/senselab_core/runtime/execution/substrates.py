@@ -17,12 +17,12 @@ its process and its `HardwareClass` per resource class, and writes no hardware i
 after `faults.infrastructure_replacements` consecutive failures; it then starts no more workers of the class.
 """
 
+import functools
 import logging
 import math
 import os
 import re
 import shlex
-import socket
 import subprocess
 import sys
 import threading
@@ -42,7 +42,7 @@ from senselab_core.runtime.config import expand
 from senselab_core.runtime.execution.queue import PROBE_MARK, RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands, is_service_class
-from senselab_core.runtime.hardware import HardwareInfo, probe_hardware, visible_devices
+from senselab_core.runtime.hardware import HardwareInfo, host_secret, probe_hardware, process_started, visible_devices
 from senselab_core.runtime.profiles import ExecutionProfile
 
 logger = logging.getLogger("senselab")
@@ -152,28 +152,36 @@ def worker_id() -> str:
 
 @dataclass(frozen=True)
 class ReadyMark:
-    """What a worker's ready mark says: its host's name as a digest, its process id and a `HardwareClass` per queue."""
+    """What a worker's ready mark says: its host's token, its process id and start, and a `HardwareClass` per queue."""
 
     host: str
     pid: int
+    started: str | None
     hardware: Mapping[str, HardwareClass]
 
 
+@functools.cache
 def host_token() -> str:
-    """Return the digest of this host's name: what a ready mark says of where its worker runs."""
-    return identity_digest("host@1", socket.gethostname())
+    """Return the token of this host: a digest of a random per-host value (`host_secret`), never of its name.
+
+    It says only whether two processes share a host.
+    """
+    return identity_digest("host@1", host_secret())
 
 
 def mark_ready(run_dir: Path, hardware: Mapping[str, HardwareClass] | None = None) -> None:
-    """Record that this worker started: it reached the run and its store; `hardware` is its class per resource class."""
+    """Record that this worker started: it reached the run and its store; `hardware` is its class per queue."""
     directory = Path(run_dir) / WORKERS_DIR
     directory.mkdir(parents=True, exist_ok=True)
     document = {
         "host": host_token(),
         "pid": os.getpid(),
+        "started": process_started(os.getpid()),
         "hardware": {name: found.model_dump(mode="json") for name, found in (hardware or {}).items()},
     }
-    (directory / worker_id()).write_bytes(jcs_dumps(document))
+    staged = directory / f".{worker_id()}.{os.getpid()}"
+    staged.write_bytes(jcs_dumps(document))
+    staged.replace(directory / worker_id())
 
 
 def read_mark(path: Path) -> ReadyMark | None:
@@ -185,32 +193,53 @@ def read_mark(path: Path) -> ReadyMark | None:
         return ReadyMark(
             document["host"],
             document["pid"],
+            document["started"],
             {name: HardwareClass.model_validate(found) for name, found in document["hardware"].items()},
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
 
-def workers_on_host(run_dir: Path) -> int:
-    """Return the pool workers of the run alive on this host, this process counted: its ready mark or not."""
-    directory = Path(run_dir) / WORKERS_DIR
-    here, mine = host_token(), os.getpid()
-    others = set()
-    for path in directory.iterdir() if directory.is_dir() else ():
-        mark = read_mark(path)
-        if mark is not None and mark.host == here and mark.pid != mine and _alive(mark.pid):
-            others.add(mark.pid)
-    return len(others) + 1
+class Peers:
+    """The other pool workers of a run alive on this host, from the marks in its `workers` directory.
+
+    A mark never changes once written, so each is read once; a listing and a liveness check per worker remain. A
+    worker is alive while its process is, and, where `/proc` says when it started, the same process.
+
+    Attributes:
+        reads: The marks read so far.
+    """
+
+    def __init__(self, run_dir: Path) -> None:
+        """Watch the workers of the run in `run_dir`."""
+        self._directory = Path(run_dir) / WORKERS_DIR
+        self._marks: dict[str, ReadyMark] = {}
+        self.reads = 0
+
+    def alive(self) -> dict[int, ReadyMark]:
+        """Return each other worker of this host alive now, by pid; this process is not one."""
+        names = [p.name for p in self._directory.iterdir()] if self._directory.is_dir() else []
+        for name in names:
+            if name not in self._marks and not name.startswith("."):
+                self.reads += 1
+                if (mark := read_mark(self._directory / name)) is not None:
+                    self._marks[name] = mark
+        here, mine = host_token(), os.getpid()
+        return {
+            m.pid: m
+            for n, m in self._marks.items()
+            if n in names and m.host == here and m.pid != mine and _alive(m.pid, m.started)
+        }
 
 
-def _alive(pid: int) -> bool:
+def _alive(pid: int, started: str | None) -> bool:
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
-    return True
+        return started is not None and process_started(pid) == started
+    return started is None or process_started(pid) in (None, started)
 
 
 class ExternalWorkers:
@@ -818,11 +847,11 @@ __all__ = [
     "SubstrateError",
     "WorkerHandle",
     "class_of",
+    "Peers",
     "ReadyMark",
     "host_token",
     "mark_ready",
     "read_mark",
-    "workers_on_host",
     "profile_argument",
     "scale",
     "substrate_of",

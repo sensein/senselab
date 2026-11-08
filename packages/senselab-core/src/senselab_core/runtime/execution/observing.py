@@ -7,7 +7,8 @@ call itself where it failed. `observations` turns an item's records into its `Ob
 
 import functools
 import logging
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -25,9 +26,15 @@ from senselab_core.runtime.calibration import (
 from senselab_core.runtime.execution.batching import LengthUnrecorded, job_length_ns, job_text_chars
 from senselab_core.runtime.execution.executor import JobRef
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome
-from senselab_core.runtime.execution.substrates import workers_on_host
+from senselab_core.runtime.execution.substrates import Peers, ReadyMark
 from senselab_core.runtime.execution_settings import is_service_class
-from senselab_core.runtime.hardware import HardwareInfo, device_cotenants, probe_hardware, process_tree, visible_gpus
+from senselab_core.runtime.hardware import (
+    HardwareInfo,
+    device_parties,
+    probe_hardware,
+    process_tree,
+    visible_gpus,
+)
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.request_reports import RequestReport
 
@@ -69,7 +76,7 @@ def records_of(sent: Sent) -> list[RequestRecord]:
     A report tagged with nothing belongs to every job of the call.
     """
     if sent.failure is not None:
-        return [RequestRecord(sent.refs, sent.wall_s, len(sent.refs), 0, None, None, sent.failure)]
+        return [RequestRecord(sent.refs, sent.wall_s, len(sent.refs), None, None, None, sent.failure)]
     return [
         RequestRecord(
             tuple(r for r in report.tags if isinstance(r, JobRef)) or sent.refs,
@@ -132,11 +139,12 @@ def observations(  # noqa: PLR0913 - an item's requests, then what they ran on a
     """Return one `Observation` per request of item `digest` that reported what its model state had answered.
 
     `records` are the requests the item's jobs were in, in the order they finished; `jobs` holds every job of the
-    claim by ref. A request is `ok` unless it raised, its class is a service class (`served`), or one of the item's
-    jobs in it failed. The last request carries `item_wall_s`. A probe's phase and stratum are `mark`.
+    claim by ref. A request that raised has no `since_load`; any other is `ok` unless its class is a service class
+    (`served`) or one of the item's jobs in it failed. The last request carries `item_wall_s`. A probe's phase and
+    stratum are `mark`.
     """
     failed = {o.ref for o in outcomes if isinstance(o, Failed)}
-    heard = [r for r in records if r.since_load is not None]
+    heard = [r for r in records if r.since_load is not None or r.failure is not None]
     found: list[Observation] = []
     for index, record in enumerate(heard):
         kind, units, padded = request_units([jobs[ref] for ref in record.refs])
@@ -156,7 +164,7 @@ def observations(  # noqa: PLR0913 - an item's requests, then what they ran on a
                 padded_units=padded,
                 wall_s=record.wall_s,
                 item_wall_s=item_wall_s if index == len(heard) - 1 else None,
-                since_load=record.since_load or 0,
+                since_load=record.since_load,
                 load_s=record.load_s,
                 device_peak=None if record.device is None else record.device[0],
                 device_after=None if record.device is None else record.device[1],
@@ -194,19 +202,63 @@ def hardware_of(profile: ExecutionProfile, resource_class: str) -> HardwareClass
     return HardwareClass.from_report(host_report(), given)
 
 
-def cotenancy_of(profile: ExecutionProfile, resource_class: str, run_dir: Path) -> Cotenancy | None:
-    """Return the compute processes on this worker's device and the pool workers on its host, itself counted.
+class Presence:
+    """The co-tenancy of a worker's classes, read at most once per `refresh_s` for each class.
 
-    The device count is read from `nvidia-smi` for a `cuda` class and is 1 elsewhere; None where it cannot be read.
+    A read lists the run's worker marks (each mark once, `Peers`), checks the peers' liveness and, for a `cuda` class,
+    asks `nvidia-smi` for the processes on every GPU the worker sees. Between reads, any number of claims cost
+    nothing.
     """
-    host = workers_on_host(run_dir)
-    grant = profile.resource_classes.get(resource_class)
-    if grant is None or grant.device != "cuda":
-        return Cotenancy(device=1, host=host)
-    gpus = visible_gpus(host_report())
-    uuid = gpus[0].uuid if gpus else None
-    shared = None if uuid is None else device_cotenants(uuid, process_tree(), timeout_s=profile.sizing.device_query_s)
-    if shared is None:
-        logger.warning("the compute processes on the device of class %s could not be read", resource_class)
-        return None
-    return Cotenancy(device=shared, host=host)
+
+    def __init__(  # noqa: PLR0913 - the profile and run, then keyword-only refresh, clock and seams
+        self,
+        profile: ExecutionProfile,
+        run_dir: Path,
+        *,
+        refresh_s: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        report: Callable[[], HardwareInfo] = host_report,
+        run: Callable[[list[str], float], str] | None = None,
+    ) -> None:
+        """Read for the run in `run_dir`; `refresh_s` is the profile's `pool.presence_refresh_s` when None."""
+        self._profile = profile
+        self._peers = Peers(run_dir)
+        self._refresh_s = profile.pool.presence_refresh_s if refresh_s is None else refresh_s
+        self._clock, self._report, self._run = clock, report, run
+        self._read: dict[str, tuple[float, Cotenancy]] = {}
+
+    @property
+    def reads(self) -> int:
+        """The marks read so far."""
+        return self._peers.reads
+
+    def cotenancy(self, resource_class: str) -> Cotenancy:
+        """Return the pool workers on this worker's device and on its host, itself counted; the device None if unread.
+
+        A device count is the parties with compute processes on the GPUs the worker sees, the most on any one.
+        """
+        now = self._clock()
+        held = self._read.get(resource_class)
+        if held is not None and now - held[0] < self._refresh_s:
+            return held[1]
+        peers = self._peers.alive()
+        found = Cotenancy(device=self._device(resource_class, peers), host=len(peers) + 1)
+        self._read[resource_class] = (now, found)
+        return found
+
+    def _device(self, resource_class: str, peers: Mapping[int, ReadyMark]) -> int | None:
+        grant = self._profile.resource_classes.get(resource_class)
+        if grant is None or grant.device != "cuda":
+            return 1
+        uuids = [g.uuid for g in visible_gpus(self._report()) if g.uuid]
+        seam = {} if self._run is None else {"run": self._run}
+        parties = device_parties(
+            uuids,
+            {pid: process_tree(pid) for pid in peers},
+            process_tree(),
+            timeout_s=self._profile.sizing.device_query_s,
+            **seam,
+        )
+        if parties is None:
+            logger.warning("the compute processes on the device of class %s could not be read", resource_class)
+        return parties

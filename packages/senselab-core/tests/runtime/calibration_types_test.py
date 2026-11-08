@@ -60,6 +60,8 @@ def _observation(**update: Any) -> Observation:  # noqa: ANN401
         {"probe": {"id": "p", "phase": "IDLE", "stratum": 0}},
         {"device_peak": 5, "device_after": 6},
         {"cotenancy": {"device": 0, "host": 1}},
+        {"since_load": None},
+        {"outcome": "failed", "since_load": None, "load_s": 1.0},
     ],
 )
 def test_an_observation_refuses_what_a_worker_cannot_have_measured(bad: dict[str, Any]) -> None:
@@ -140,3 +142,10 @@ def test_an_estimate_refuses_two_entries_for_one_key(field: str, twice: tuple[An
     """The tuples of an estimate stand for maps by batch, stratum and `k`; a repeated key is refused."""
     with pytest.raises(ValueError, match=match):
         Estimate(status="measured", unit_kind="audio_s", single=_FIT, **{field: twice})
+
+
+@pytest.mark.logic
+def test_a_request_that_raised_has_no_since_load_and_an_unread_device_is_none() -> None:
+    """A failed request says nothing of its model state; a device count may be unread; neither drops the record."""
+    found = _observation(outcome="bisected", since_load=None, cotenancy=Cotenancy(device=None, host=2))
+    assert found.since_load is None and found.cotenancy.device is None

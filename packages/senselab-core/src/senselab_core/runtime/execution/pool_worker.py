@@ -16,10 +16,8 @@ service it holds has been live for `services.idle_exit_s`, the jobs it runs itse
 import contextlib
 import functools
 import logging
-import os
 import queue
 import signal
-import socket
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -28,29 +26,28 @@ from pathlib import Path
 from typing import TypeAlias
 
 from senselab_worker.faults import FaultClass, ProtocolError, classify, error_record
-from senselab_worker.units import NS_PER_S
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.runtime import request_reports
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
 from senselab_core.runtime.call import RunConfig
-from senselab_core.runtime.execution.batching import LengthUnrecorded, job_length_ns, job_text_chars
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, PlanFragment
 from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, process_workers
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.observing import (
+    Presence,
     RequestRecord,
     Seen,
     Sent,
-    cotenancy_of,
     hardware_of,
+    job_units,
     observations,
     records_of,
 )
 from senselab_core.runtime.execution.pool import report, run_plan
-from senselab_core.runtime.execution.queue import Claim, QueueSet, ServeLease, probe_of
+from senselab_core.runtime.execution.queue import Claim, QueueSet, ServeLease, UnmarkedProbeItem, probe_of
 from senselab_core.runtime.execution.services import service_registry
 from senselab_core.runtime.execution.substrates import (
     EXIT_UNREACHABLE,
@@ -220,12 +217,15 @@ class PoolWorker:
         memory: Callable[[], tuple[int | None, int]] = memory_bytes,
         device_memory: Callable[[], int | None] | None = None,
         hardware: Callable[[str], HardwareClass] | None = None,
-        cotenancy: Callable[[str], Cotenancy | None] | None = None,
+        cotenancy: Callable[[str], Cotenancy] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Serve `classes` under `profile`, storing into `store`; jobs go through `send` (`execute` when None).
 
         `hardware` gives the `HardwareClass` a resource class runs on and `cotenancy` its device and host
-        co-tenancy, None where unread; they default to what this host shows (`hardware_of`, `cotenancy_of`).
+        co-tenancy; they default to what this host shows (`hardware_of`, `Presence`). The worker's name is its
+        `worker_id()` unless given, so no run record names its host. `clock` times the reuse of what it read of its
+        peers and of the run's probe queues (`pool.presence_refresh_s`).
 
         Raises:
             ValueError: no class is named.
@@ -237,7 +237,7 @@ class PoolWorker:
         self.queues = QueueSet(Path(pool_dir), profile, epoch=self.epochs.current)
         self.classes = tuple(classes)
         self.profile, self.store = profile, store
-        self.name = name if name is not None else f"{socket.gethostname()}:{os.getpid()}"
+        self.name = name if name is not None else worker_id()
         self.served: list[tuple[str, str]] = []
         self.stop = threading.Event()
         self._workers = workers
@@ -254,7 +254,9 @@ class PoolWorker:
         self._warm: set[str] = set()
         self._serving: dict[str, ServeLease] = {}
         self._hardware = hardware or functools.partial(hardware_of, profile)
-        self._cotenancy = cotenancy or (lambda name: cotenancy_of(profile, name, self.run_dir))
+        self._cotenancy = cotenancy or Presence(profile, self.run_dir, clock=clock).cotenancy
+        self._clock = clock
+        self._listed: float | None = None
 
     def hardware(self) -> dict[str, HardwareClass]:
         """Return the `HardwareClass` of each queue this worker serves that this host describes, for its ready mark."""
@@ -329,18 +331,22 @@ class PoolWorker:
         """Return the probe queues of this worker's queues it serves, oldest first.
 
         A worker serves a probe queue while it holds that queue's serve lease; it takes the lease of one with waiting
-        work, and skips one whose lease is live under another worker. A lease it lost is dropped.
+        work, and skips one whose lease is live under another worker. A lease it lost is dropped. The run's queues are
+        listed at most once per `pool.presence_refresh_s`.
         """
         for name, kept in list(self._serving.items()):
             if not kept.held:
                 kept.release()
                 del self._serving[name]
-        for name in self.queues.names():
-            found = probe_of(name)
-            if found is not None and found[0] in self.classes and name not in self._serving:
-                queue = self.queues.queue(name)
-                if queue.oldest_age_s() is not None and (lease := queue.serve_lease()) is not None:
-                    self._serving[name] = lease
+        now = self._clock()
+        if self._listed is None or now - self._listed >= self.profile.pool.presence_refresh_s:
+            self._listed = now
+            for name in self.queues.names():
+                found = probe_of(name)
+                if found is not None and found[0] in self.classes and name not in self._serving:
+                    queue = self.queues.queue(name)
+                    if queue.oldest_age_s() is not None and (lease := queue.serve_lease()) is not None:
+                        self._serving[name] = lease
         ages = {n: self.queues.queue(n).oldest_age_s() or 0.0 for n in self._serving}
         return sorted(ages, key=lambda n: -ages[n])
 
@@ -424,14 +430,10 @@ class PoolWorker:
         inputs: dict[str, float | None] = {}
         chars: dict[str, int | None] = {}
         for member in (m for g in groups for m in g.members):
-            try:
-                length = job_length_ns(member.job)
-            except LengthUnrecorded:
-                length = None
-            known = inputs.get(member.digest, 0.0)
-            inputs[member.digest] = None if length is None or known is None else known + length / NS_PER_S
-            text, so_far = job_text_chars(member.job), chars.get(member.digest, 0)
-            chars[member.digest] = None if text is None or so_far is None else so_far + text
+            kind, amount = job_units(member.job)
+            known, so_far = inputs.get(member.digest, 0.0), chars.get(member.digest, 0)
+            inputs[member.digest] = amount + known if kind == "audio_s" and known is not None else None
+            chars[member.digest] = int(amount) + so_far if kind == "chars" and so_far is not None else None
         cold = claim.queue.name not in self._warm
         device: list[int | None] = []
         grant = self.profile.resource_classes.get(class_of(claim.queue.name))
@@ -485,7 +487,11 @@ class PoolWorker:
             found = seen[0]
             if found is None:
                 return []
-            mark = claim.queue.probe_mark(digest) if found.probe is not None else None
+            try:
+                mark = claim.queue.probe_mark(digest) if found.probe is not None else None
+            except UnmarkedProbeItem as err:
+                logger.error("pool worker %s reports no observations of an unmarked probe item: %s", self.name, err)
+                return []
             return observations(
                 digest,
                 spans.requests.get(digest, []),
@@ -499,17 +505,14 @@ class PoolWorker:
         return observe
 
     def _seen(self, claim: Claim) -> Seen | None:
-        """Return the hardware class and co-tenancy `claim` ran under; None, logged, where either cannot be read."""
+        """Return the hardware class and co-tenancy `claim` ran under; None, logged, where the hardware is unknown."""
         name = class_of(claim.queue.name)
         try:
             hardware = self._hardware(name)
         except ValueError as err:
             logger.warning("pool worker %s reports no observations of %s: %s", self.name, name, err)
             return None
-        cotenancy = self._cotenancy(name)
-        if cotenancy is None:
-            return None
-        return Seen(hardware, cotenancy, probe_of(claim.queue.name), is_service_class(claim.queue.name))
+        return Seen(hardware, self._cotenancy(name), probe_of(claim.queue.name), is_service_class(claim.queue.name))
 
     def _stop_runner(self, runner: threading.Thread, cancelled: threading.Event) -> None:
         """Abandon what `runner` still runs and wait for it: `join_s` once halted, else until it stops."""

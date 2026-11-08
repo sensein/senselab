@@ -134,8 +134,15 @@ def worker_init(device: str, model: ResolvedModel | None) -> dict[str, Any]:
     return init
 
 
+_SERVERS = ModelCache(2**63 - 1)  # invariant: the largest signed 64-bit size, read as no bound
+"""The state and request count of each server instance this process consumes."""
 _CACHES: dict[int | None, ModelCache] = {}
 _CACHES_LOCK = threading.Lock()
+
+
+def _attested(server: Server) -> dict[str, Any]:
+    attestation = server.attestation
+    return {} if attestation is None else attestation.model_dump(mode="json")
 
 
 def process_cache(budget: int | None) -> ModelCache:
@@ -432,12 +439,17 @@ class WorkerSet:
 
     @staticmethod
     def server_worker(backend: BackendSpec, init: dict[str, Any], server: Server) -> HostWorker:
-        """Return the in-process worker of a server backend, given `server` as `init["server"]`."""
+        """Return the in-process worker of a server backend, given `server` as `init["server"]`.
+
+        Its requests are counted per attested server instance, in this process's server cache: a second consumer of a
+        server another has used reports no load.
+        """
+        instance = value_digest("server", {"url": server.url, "attestation": _attested(server)})
         return HostWorker(
             backend.worker,
             init={**backend_init(init), "server": server},
-            key=(backend.name, init["model"]["identity"], init["device"], PRECISION),
-            cache=ModelCache(2**63 - 1),
+            key=(backend.name, instance, init["device"], PRECISION),
+            cache=_SERVERS,
             size_of=lambda _: 0,
         )
 

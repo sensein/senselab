@@ -5,8 +5,9 @@ from pathlib import Path
 import numpy
 import pytest
 from pool_stack_fixture import host_env, registry, scoring
+from senselab_core.kernel.identity import Attestation
 from senselab_core.runtime import request_reports
-from senselab_core.runtime.execution.workers import host_model_key
+from senselab_core.runtime.execution.workers import WorkerSet, host_model_key
 from senselab_core.runtime.host_worker import HostWorker
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.worker_client import WorkerClient
@@ -75,3 +76,37 @@ def test_a_worker_process_reports_each_request_it_answered_and_its_load_on_the_f
             for _ in range(3):
                 client.run([{"id": "a", "inputs": {"payload": 1, "signal": numpy.arange(4.0)}}], {})
     assert [(r.since_load, r.load_s is not None) for r in found] == [(0, True), (1, False), (2, False)]
+
+
+class _Server:
+    """A running server as a consumer sees it: its label, address and attestation."""
+
+    label = "vllm"
+
+    def __init__(self, url: str) -> None:
+        self.url: str | None = url
+        self.attestation: Attestation | None = Attestation(
+            engine_version="1", served_model="m", model_identity="c" * 40, config_digest="d" * 64
+        )
+
+    def context_fields(self) -> dict[str, str]:
+        return {}
+
+    def stop(self) -> None:
+        self.url = None
+
+
+def _consume(server: _Server) -> list[tuple[int | None, bool]]:
+    task = scoring("host_reports_test.served")
+    spec = registry(task, worker="backends.served_backend_fixture").backends(task.name)[0]
+    init = {"device": "cpu", "dtype": "default", "model": {"source": "hf", "id": "org/m", "identity": "c" * 40}}
+    return _asks(WorkerSet.server_worker(spec, init, server))
+
+
+@pytest.mark.logic
+def test_a_second_consumer_of_a_warm_server_reports_no_load() -> None:
+    """Requests are counted per attested server instance: another consumer of a used server reports it warm."""
+    server = _Server("http://node-a:8000")
+    assert _consume(server) == [(0, True)]
+    assert _consume(server) == [(1, False)]
+    assert _consume(_Server("http://node-b:8000")) == [(0, True)]

@@ -230,7 +230,7 @@ def _select(observations: Sequence[Observation], hardware: HardwareClass, config
         if o.probe is not None:
             quietest[o.probe.id] = min(o.cotenancy.host, quietest.get(o.probe.id, o.cotenancy.host))
     kept = [o for o in ok if o.probe is not None and o.cotenancy.host == quietest[o.probe.id]]
-    warm = [o for o in kept if o.load_s is None and o.since_load >= config.warmup_requests]
+    warm = [o for o in kept if o.load_s is None and o.since_load is not None and o.since_load >= config.warmup_requests]
     admitted = {id(o) for o in warm}
     lengths = sorted(_length(o) for o in warm)
     whole: dict[tuple[str, str], list[Observation]] = {}

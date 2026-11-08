@@ -1,33 +1,53 @@
-"""Probe queues and worker presence: the queue's name, its serve lease and item marks, the ready mark's contents."""
+"""Probe queues and worker presence: the queue's name, its serve lease and marked puts, the ready mark and peers."""
 
 import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from queue_race_fixture import fragment
 from senselab_core.runtime.calibration import HardwareClass
-from senselab_core.runtime.execution.queue import PROBE_MARK, QueueSet, item_digest, probe_of, probe_queue
+from senselab_core.runtime.execution.observing import Presence
+from senselab_core.runtime.execution.queue import (
+    PROBE_MARK,
+    ProbeQueueError,
+    QueueSet,
+    UnmarkedProbeItem,
+    item_digest,
+    probe_of,
+    probe_queue,
+)
 from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
+    Peers,
     class_of,
     host_token,
     mark_ready,
     read_mark,
-    workers_on_host,
 )
-from senselab_core.runtime.hardware import device_cotenants
+from senselab_core.runtime.hardware import GpuInfo, HardwareInfo, device_parties, host_secret
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_worker.canonical import jcs_dumps
+from senselab_worker.digest import identity_digest
 
-LEASE = {"stale_after_s": 0.4, "renew_fraction": 0.25, "attribute_delay_s": 0.0}
 CPU = HardwareClass(device="cpu", name="a cpu", cpus=2)
 CUDA = HardwareClass(device="cuda", name="a gpu", memory_mib=1024, compute_capability="9.0", cpus=2)
+GPU = GpuInfo(name="a gpu", memory_bytes=2**30, driver="1", compute_capability="9.0", uuid="GPU-a", index=0)
+HOST = HardwareInfo(cpu_count=2, memory_bytes=2**30, gpus=(GPU,), apple_silicon=False, platform="linux-x86_64")
 
 
-def _queues(root: Path) -> QueueSet:
-    return QueueSet(root, ExecutionProfile.load(override={"lease": LEASE}))
+def _queues(root: Path, slack: dict[str, Any]) -> QueueSet:
+    lease = {"stale_after_s": slack["stale_after_s"], "renew_fraction": slack["renew_fraction"], "attribute_delay_s": 0}
+    return QueueSet(root, ExecutionProfile.load(override={"lease": lease}))
+
+
+@pytest.fixture
+def probe(slack_tests: dict[str, Any]) -> dict[str, Any]:
+    """The probe-queue test slack."""
+    section: dict[str, Any] = slack_tests["probe_queue"]
+    return section
 
 
 @pytest.mark.logic
@@ -44,9 +64,11 @@ def test_a_probe_queue_is_named_under_its_queue_and_has_its_class(queue: str) ->
 
 
 @pytest.mark.logic
-def test_one_worker_holds_a_probe_queues_serve_lease_until_it_is_released_or_stale(tmp_path: Path) -> None:
-    """A second taker finds the lease live and gets None; once released, or stale, another takes it."""
-    queue = _queues(tmp_path).queue(probe_queue("cpu", "p1"))
+def test_one_worker_holds_a_probe_queues_serve_lease_until_it_is_released(
+    tmp_path: Path, probe: dict[str, Any]
+) -> None:
+    """A second taker finds the lease live and gets None; once released, another takes it."""
+    queue = _queues(tmp_path, probe).queue(probe_queue("cpu", "p1"))
     first = queue.serve_lease()
     assert first is not None and first.held and queue.serve_lease() is None
     first.release()
@@ -57,20 +79,35 @@ def test_one_worker_holds_a_probe_queues_serve_lease_until_it_is_released_or_sta
 
 
 @pytest.mark.logic
-def test_a_probe_items_phase_and_stratum_are_marked_once(tmp_path: Path) -> None:
-    """The first mark of an item stays; an item with none reads None."""
-    queue = _queues(tmp_path).queue(probe_queue("cpu", "p1"))
+def test_a_probe_item_is_put_with_its_mark_and_a_plain_put_is_refused(tmp_path: Path, probe: dict[str, Any]) -> None:
+    """`put_probe` writes the mark before the slot, the first mark staying; `put` and `put_all` refuse a probe queue."""
+    queues = _queues(tmp_path, probe)
+    queue, plain = queues.queue(probe_queue("cpu", "p1")), queues.queue("cpu")
     item = fragment("a-0")
-    queue.put(item)
-    digest = item_digest(item)
-    assert queue.probe_mark(digest) is None
-    queue.mark_probe(digest, "SINGLE", 2)
-    queue.mark_probe(digest, "BATCHED", 0)
-    assert queue.probe_mark(digest) == ("SINGLE", 2)
+    queue.put_probe(item, "SINGLE", 2)
+    queue.put_probe(item, "BATCHED", 0)
+    assert queue.probe_mark(item_digest(item)) == ("SINGLE", 2) and queue.depth() == 1
+    for refused in (lambda: queue.put(fragment("a-1")), lambda: queue.put_all([fragment("a-1")])):
+        with pytest.raises(ProbeQueueError):
+            refused()
+    with pytest.raises(ProbeQueueError):
+        plain.put_probe(fragment("a-1"), "SINGLE", 0)
+    assert queue.depth() == 1
 
 
 @pytest.mark.logic
-def test_a_ready_mark_carries_the_hardware_per_queue_and_names_the_host_by_digest(tmp_path: Path) -> None:
+def test_an_item_of_a_probe_queue_without_a_mark_is_a_typed_error(tmp_path: Path, probe: dict[str, Any]) -> None:
+    """A probe item whose mark is gone raises `UnmarkedProbeItem` rather than reading as no probe."""
+    queue = _queues(tmp_path, probe).queue(probe_queue("cpu", "p1"))
+    item = fragment("a-0")
+    queue.put_probe(item, "SINGLE", 0)
+    (queue.path / "probe" / item_digest(item)).unlink()
+    with pytest.raises(UnmarkedProbeItem):
+        queue.probe_mark(item_digest(item))
+
+
+@pytest.mark.logic
+def test_a_ready_mark_carries_the_hardware_per_queue_and_names_the_host_by_token(tmp_path: Path) -> None:
     """The mark reads back as written, holds no host name, and writes nothing but the mark."""
     mark_ready(tmp_path, {"cpu": CPU, "gpu": CUDA})
     [path] = list((tmp_path / WORKERS_DIR).iterdir())
@@ -78,6 +115,29 @@ def test_a_ready_mark_carries_the_hardware_per_queue_and_names_the_host_by_diges
     assert mark is not None and mark.hardware == {"cpu": CPU, "gpu": CUDA} and mark.pid == os.getpid()
     assert mark.host == host_token() and os.uname().nodename not in path.read_text()
     assert [p.name for p in tmp_path.iterdir()] == [WORKERS_DIR]
+
+
+@pytest.mark.logic
+def test_the_host_token_is_stable_and_not_derived_from_the_host_name() -> None:
+    """The token is the same in this process and another, and no hash of the host name gives it."""
+    probe_code = "from senselab_core.runtime.execution.substrates import host_token; print(host_token())"
+    other = subprocess.run(
+        [sys.executable, "-c", probe_code], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert host_token() == host_token() == other
+    for name in (os.uname().nodename, os.uname().nodename.split(".")[0]):
+        assert host_token() != identity_digest("host@1", name)
+    assert host_secret() == host_secret()
+
+
+@pytest.mark.logic
+def test_without_a_boot_id_the_secret_is_a_private_random_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Off Linux and macOS, the value is random bytes in a file only its user reads, the same on every call."""
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    first = host_secret(run=lambda _: "")
+    files = [p for p in tmp_path.iterdir() if p.name.startswith("senselab-host-")]
+    assert len(first) >= 16 and host_secret(run=lambda _: "") == first and len(files) <= 1
+    assert all(p.stat().st_mode & 0o077 == 0 for p in files)
 
 
 @pytest.mark.logic
@@ -89,56 +149,133 @@ def test_an_empty_or_foreign_mark_is_no_mark(tmp_path: Path) -> None:
     assert [read_mark(tmp_path / n) for n in ("empty", "list", "partial", "missing")] == [None] * 4
 
 
+def _mark(directory: Path, name: str, host: str, pid: int, started: str | None = None) -> None:
+    directory.mkdir(exist_ok=True)
+    (directory / name).write_bytes(jcs_dumps({"host": host, "pid": pid, "started": started, "hardware": {}}))
+
+
 @pytest.mark.logic
-def test_workers_on_host_counts_live_workers_of_this_host_and_itself(tmp_path: Path) -> None:
-    """A peer alive on this host counts; one that exited, or one of another host, does not; this process always does."""
-    assert workers_on_host(tmp_path) == 1
-    peer = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+def test_peers_are_the_other_live_workers_of_this_host_and_each_mark_is_read_once(
+    tmp_path: Path, probe: dict[str, Any]
+) -> None:
+    """A live peer counts; an exited one, one of another host and this process do not; a mark is read once."""
+    peer = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep({probe['peer_lifetime_s']})"])
     gone = subprocess.Popen([sys.executable, "-c", "pass"])
     gone.wait()
     try:
         directory = tmp_path / WORKERS_DIR
-        directory.mkdir()
         host = host_token()
-        marks = {
-            "peer": (host, peer.pid),
-            "gone": (host, gone.pid),
-            "away": ("0" * 64, peer.pid),
-            "me": (host, os.getpid()),
-        }
-        for name, (where, pid) in marks.items():
-            (directory / name).write_bytes(jcs_dumps({"host": where, "pid": pid, "hardware": {}}))
-        assert workers_on_host(tmp_path) == 2
+        for name, where, pid in (("peer", host, peer.pid), ("gone", host, gone.pid), ("away", "0" * 64, peer.pid)):
+            _mark(directory, name, where, pid)
+        _mark(directory, "me", host, os.getpid())
+        peers = Peers(tmp_path)
+        assert list(peers.alive()) == [peer.pid] and list(peers.alive()) == [peer.pid] and peers.reads == 4
+        _mark(directory, "late", host, os.getpid())
+        peers.alive()
+        assert peers.reads == 5
     finally:
         peer.kill()
         peer.wait()
 
 
 @pytest.mark.logic
-def test_device_cotenants_counts_the_other_processes_on_the_card_and_the_caller() -> None:
-    """Processes on other cards and the caller's own do not count; the caller does, once, though it holds no memory."""
-    rows = "10, GPU-a\n11, GPU-a\n12, GPU-b\n13, GPU-a\nbroken\n"
-    seen: list[float] = []
+def test_a_pid_reused_by_another_process_is_not_a_peer(tmp_path: Path, probe: dict[str, Any]) -> None:
+    """A mark whose pid is alive but started at another time names a process that is not its worker."""
+    from senselab_core.runtime.hardware import process_started  # noqa: PLC0415 - beside its one use
+
+    peer = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep({probe['peer_lifetime_s']})"])
+    try:
+        started = process_started(peer.pid)
+        if started is None:
+            pytest.skip("this host has no /proc start times")
+        directory = tmp_path / WORKERS_DIR
+        _mark(directory, "same", host_token(), peer.pid, started)
+        assert list(Peers(tmp_path).alive()) == [peer.pid]
+        (directory / "same").unlink()
+        _mark(directory, "other", host_token(), peer.pid, started + "0")
+        assert Peers(tmp_path).alive() == {}
+    finally:
+        peer.kill()
+        peer.wait()
+
+
+@pytest.mark.logic
+def test_device_parties_counts_workers_not_pids() -> None:
+    """A worker holding two processes on the card is one party from every side; k workers read k."""
+    rows = "10, GPU-a\n11, GPU-a\n12, GPU-a\n13, GPU-b\nbroken\n"
 
     def listing(cmd: list[str], timeout_s: float) -> str:
-        seen.append(timeout_s)
         return rows
 
-    assert device_cotenants("GPU-a", {10}, timeout_s=3.0, run=listing) == 3
-    assert device_cotenants("GPU-a", set(), timeout_s=3.0, run=listing) == 4
-    assert device_cotenants("GPU-c", {10}, timeout_s=3.0, run=listing) == 1 and seen == [3.0] * 3
+    workers = {1: {10, 11}, 2: {12}}
+    assert device_parties(["GPU-a"], workers, {99}, timeout_s=1, run=listing) == 3
+    assert device_parties(["GPU-a"], {1: {10, 11}}, {12}, timeout_s=1, run=listing) == 2
+    assert device_parties(["GPU-a"], {1: {10}}, {11, 12}, timeout_s=1, run=listing) == 2
+    assert device_parties(["GPU-a"], {}, {99}, timeout_s=1, run=listing) == 4
+    assert device_parties(["GPU-c"], workers, {99}, timeout_s=1, run=listing) == 1
+    assert device_parties(["GPU-a", "GPU-b"], workers, {99}, timeout_s=1, run=listing) == 3
+
+
+@pytest.mark.logic
+def test_device_parties_is_none_where_nvidia_smi_cannot_answer() -> None:
+    """An absent or failing `nvidia-smi` is unread, not a count."""
 
     def absent(cmd: list[str], timeout_s: float) -> str:
         raise FileNotFoundError("nvidia-smi")
 
-    assert device_cotenants("GPU-a", {10}, timeout_s=3.0, run=absent) is None
+    assert device_parties(["GPU-a"], {}, {1}, timeout_s=1, run=absent) is None
 
 
 @pytest.mark.logic
-def test_a_names_listing_reads_each_queue_once(tmp_path: Path) -> None:
-    """A queue made after a listing is in the next one, and the first is not read again."""
-    queues = _queues(tmp_path)
+def test_presence_keeps_an_unread_device_as_none_and_reads_once_per_refresh(tmp_path: Path) -> None:
+    """A failing device read gives `device=None` beside the host count; claims within a refresh read nothing again."""
+    profile = ExecutionProfile.load()
+    asked: list[int] = []
+
+    def failing(cmd: list[str], timeout_s: float) -> str:
+        asked.append(1)
+        raise OSError("nvidia-smi timed out")
+
+    now = [0.0]
+    presence = Presence(profile, tmp_path, refresh_s=10, clock=lambda: now[0], report=lambda: HOST, run=failing)
+    cuda = next(n for n, c in profile.resource_classes.items() if c.device == "cuda")
+    first = presence.cotenancy(cuda)
+    assert (first.device, first.host) == (None, 1)
+    for _ in range(100):
+        presence.cotenancy(cuda)
+    assert len(asked) == 1
+    now[0] = 11.0
+    presence.cotenancy(cuda)
+    assert len(asked) == 2
+    cpu = next(n for n, c in profile.resource_classes.items() if c.device == "cpu")
+    assert presence.cotenancy(cpu).device == 1
+
+
+@pytest.mark.logic
+def test_marks_read_per_refresh_do_not_grow_with_the_claims_or_the_workers_already_read(tmp_path: Path) -> None:
+    """With 100 peer marks, a thousand claims read each mark once, not a hundred thousand."""
+    directory, host, me = tmp_path / WORKERS_DIR, host_token(), os.getpid()
+    for i in range(100):
+        _mark(directory, f"w{i}", host, me + 1 + i)
+    now = [0.0]
+    presence = Presence(
+        ExecutionProfile.load(), tmp_path, refresh_s=1, clock=lambda: now[0], report=lambda: HOST, run=lambda *_: ""
+    )
+    for claim in range(1000):
+        now[0] = claim * 0.1
+        presence.cotenancy("cpu")
+    assert presence.reads == 100
+
+
+@pytest.mark.logic
+def test_a_names_listing_reads_each_queue_once_and_forgets_a_removed_one(tmp_path: Path, probe: dict[str, Any]) -> None:
+    """A queue made after a listing is in the next one; one whose directory is gone is out of it."""
+    queues = _queues(tmp_path, probe)
     queues.queue("cpu")
     assert queues.names() == ["cpu"]
-    queues.queue(probe_queue("cpu", "p1"))
+    made = queues.queue(probe_queue("cpu", "p1"))
     assert queues.names() == ["cpu", probe_queue("cpu", "p1")]
+    import shutil  # noqa: PLC0415 - beside its one use
+
+    shutil.rmtree(made.path)
+    assert queues.names() == ["cpu"]
