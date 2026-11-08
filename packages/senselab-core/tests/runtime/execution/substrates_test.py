@@ -456,6 +456,40 @@ def test_local_runs_at_most_max_workers_and_stops_them(tmp_path: Path) -> None:
     assert local.running("cpu") == 0
 
 
+DEVICE_CHILD = (
+    "import os, pathlib, sys, time; "
+    "pathlib.Path(sys.argv[1], str(os.getpid())).write_text(os.environ.get('CUDA_VISIBLE_DEVICES', '-')); "
+    "time.sleep(60)"
+)
+
+
+def _devices_seen(directory: Path, count: int) -> dict[str, str]:
+    """Wait until `count` workers wrote the device they were given; return it by process id."""
+    while len(written := list(directory.iterdir())) < count:
+        time.sleep(0.01)
+    return {p.name: p.read_text() for p in written}
+
+
+@pytest.mark.logic
+def test_local_runs_one_cuda_worker_per_visible_device(tmp_path: Path) -> None:
+    """A cuda class's workers each get a free device as `CUDA_VISIBLE_DEVICES`; no more start than there are devices."""
+    seen = tmp_path / "seen"
+    seen.mkdir()
+    local = Local(8, command=[sys.executable, "-c", DEVICE_CHILD, str(seen)], cuda=["gpu"], devices=["G-0", "G-1"])
+    handles = local.start("gpu#m", 3)
+    try:
+        assert len(handles) == 2 and local.start("gpu#n", 1) == []
+        assert sorted(_devices_seen(seen, 2).values()) == ["G-0", "G-1"]
+        local.stop(handles[:1])
+        handles = [*handles[1:], *local.start("gpu#n", 2)]
+        assert len(handles) == 2 and set(_devices_seen(seen, 3).values()) == {"G-0", "G-1"}
+        handles += local.start("cpu", 2)
+        assert local.running("cpu") == 2 and "-" in _devices_seen(seen, 5).values()
+    finally:
+        local.stop(handles)
+    assert Local(1, command=[sys.executable], cuda=["gpu"]).start("gpu", 1) == []
+
+
 @pytest.mark.logic
 def test_external_workers_start_nothing() -> None:
     """The substrate for workers started on their own starts none and counts none."""

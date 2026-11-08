@@ -194,6 +194,16 @@ def _visible_gpus(info: HardwareInfo, environ: Mapping[str, str]) -> list[GpuInf
     return visible
 
 
+def visible_devices(info: HardwareInfo, environ: Optional[Mapping[str, str]] = None) -> tuple[str, ...]:
+    """Return the ``CUDA_VISIBLE_DEVICES`` entry naming each GPU this process sees: its uuid, else its index.
+
+    Raises:
+        DeviceResolutionError: an entry of ``CUDA_VISIBLE_DEVICES`` names no GPU, or several.
+    """
+    gpus = _visible_gpus(info, os.environ if environ is None else environ)
+    return tuple(g.uuid or str(g.index) for g in gpus if g.uuid or g.index is not None)
+
+
 def numerics_class(
     info: HardwareInfo, device: str, precision: str, *, environ: Optional[Mapping[str, str]] = None
 ) -> dict[str, str]:

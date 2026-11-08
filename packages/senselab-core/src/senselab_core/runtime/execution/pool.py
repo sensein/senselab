@@ -61,6 +61,7 @@ from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
     BrokenClass,
     Fleet,
+    Local,
     Slurm,
     Substrate,
     SubstrateError,
@@ -407,10 +408,15 @@ class Pool:
         """Return `found` per item, by device memory on a `cuda` class."""
         return measure_of(found, on_device=self.profile.resource_classes[class_of(queue)].device == "cuda")
 
+    def _grant(self, queue: str, *, on_device: bool = False) -> Grant:
+        """Return the grant of `queue`'s resource class; a local substrate's workers share its visible devices."""
+        devices = len(self.substrate.devices) if isinstance(self.substrate, Local) else None
+        resource = self.profile.resource_classes[class_of(queue)]
+        return Grant.of(resource, self.profile.pool, on_device=on_device, devices=devices)
+
     def _sizing(self, queue: str, measure: Measure, work: int = 0) -> Sizing:
         """Return the sizing of `measure` on `queue`'s resource class for `work` waiting jobs."""
-        grant = Grant.of(self.profile.resource_classes[class_of(queue)], self.profile.pool, on_device=measure.on_device)
-        return size(measure, grant, self.profile.sizing, work=work)
+        return size(measure, self._grant(queue, on_device=measure.on_device), self.profile.sizing, work=work)
 
     def _calibration_part(
         self, unit: Unit, queue: str, fragment: PlanFragment
@@ -439,7 +445,7 @@ class Pool:
         with self._lock:
             measures = [self._sized[u] for u in self._queue_units.get(queue, ()) if u in self._sized]
         if not measures:
-            return min(self.profile.sizing.calibration_workers, work)
+            return min(self.profile.sizing.calibration_workers, work, self._grant(queue).worker_bound(None))
         return self._sizing(queue, max(measures, key=lambda m: m.s_per_item), work).workers
 
     def _calibrate(self) -> None:

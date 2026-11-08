@@ -41,6 +41,7 @@ measures = st.builds(
     resident_bytes=st.none() | st.integers(0, 2**36),
     bytes_per_item=st.integers(0, 2**32),
     s_per_item=seconds,
+    on_device=st.booleans(),
 )
 grants = st.builds(
     Grant,
@@ -48,6 +49,7 @@ grants = st.builds(
     memory_bytes=st.none() | st.integers(1, 2**37),
     quantum_items=st.integers(1, 1000),
     quantum_s=st.floats(min_value=1e-3, max_value=1e5, allow_nan=False),
+    devices=st.none() | st.integers(0, 8),
 )
 settings = st.builds(
     SizingSettings,
@@ -82,8 +84,11 @@ def test_sizing_keeps_every_bound(measure: Measure, grant: Grant, config: Sizing
     elif sized.batch_size > 1:
         used = measure.resident_bytes + sized.batch_size * (measure.bytes_per_item or 0)
         assert used <= config.memory_headroom * grant.memory_bytes * (1 + eps)
-    assert sized.workers == 0 if work == 0 else 1 <= sized.workers <= min(grant.max_workers, work)
+    bound = grant.worker_bound(measure)
+    assert sized.workers == 0 if work == 0 or bound == 0 else 1 <= sized.workers <= min(bound, work)
     assert sized.workers <= math.ceil(work / q)
+    if grant.devices is not None and not measure.on_device:
+        assert bound == min(grant.max_workers, grant.devices)
 
 
 @pytest.mark.logic
@@ -110,9 +115,12 @@ def test_a_grant_takes_device_memory_on_a_device_and_host_memory_otherwise() -> 
         "memory_bytes": 2**33,
         "quantum_items": 100,
         "quantum_s": 60,
+        "devices": None,
     }
+    assert Grant.of(capped, pool, devices=2).devices == 2
     assert Grant.of(capped, pool).memory_bytes == 2**36
     bare = ResourceClass(device="cpu", max_workers=1)
+    assert Grant.of(bare, pool, devices=2).devices is None
     assert Grant.of(bare, pool).memory_bytes is None and Grant.of(bare, pool, 2**30).memory_bytes == 2**30
     device = FOUND.model_copy(update={"device_resident_bytes": 10, "device_peak_bytes": 30})
     assert measure_of(device, on_device=True).model_dump() == {
@@ -124,6 +132,24 @@ def test_a_grant_takes_device_memory_on_a_device_and_host_memory_otherwise() -> 
         "on_device": True,
     }
     assert measure_of(FOUND, on_device=True).on_device is False and measure_of(device).bytes_per_item == 1
+
+
+@pytest.mark.logic
+def test_workers_on_shared_devices_are_bounded_by_device_memory() -> None:
+    """A 75 GB device peak under an 80 GB cap fits one worker per device; 30 GB fits two; unmeasured, one."""
+    gpu = Grant(max_workers=8, memory_bytes=80 * 10**9, quantum_items=1, quantum_s=3600, devices=1)
+    big = Measure(
+        load_s=0, claim_s=0, resident_bytes=70 * 10**9, bytes_per_item=5 * 10**9, s_per_item=60, on_device=True
+    )
+    small = big.model_copy(update={"resident_bytes": 25 * 10**9})
+    host = big.model_copy(update={"on_device": False})
+    assert size(big, gpu, SETTINGS, work=100).workers == 1
+    assert size(small, gpu, SETTINGS, work=100).workers == 2
+    assert size(host, gpu, SETTINGS, work=100).workers == 1
+    assert size(big, gpu.model_copy(update={"devices": 3}), SETTINGS, work=100).workers == 3
+    assert size(big, gpu.model_copy(update={"devices": 0}), SETTINGS, work=100).workers == 0
+    assert size(big, gpu.model_copy(update={"devices": None}), SETTINGS, work=100).workers == 8
+    assert gpu.worker_bound(None) == 1
 
 
 def _sample(wall: float, *, cold: bool = False, resident: int | None = 10_000, peak: int = 10_100) -> Sample:

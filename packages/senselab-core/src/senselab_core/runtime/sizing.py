@@ -46,31 +46,56 @@ class Measure(Frozen):
 
 
 class Grant(Frozen):
-    """What a unit's workers are granted: the most alive at once, memory per worker (None unknown), quantum ceilings."""
+    """What a unit's workers are granted: the most alive at once, memory per worker (None unknown), quantum ceilings.
+
+    `devices` is the count of devices a `cuda` class's workers share; None where each worker is granted its own device
+    or runs on none.
+    """
 
     max_workers: Count
     memory_bytes: Count | None
     quantum_items: Count
     quantum_s: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    devices: Annotated[int, Field(ge=0)] | None = None
 
     @classmethod
-    def of(
+    def of(  # noqa: PLR0913 - the class and pool, then what the host measured
         cls,
         resource: ResourceClass,
         pool: PoolSettings,
         host_memory_bytes: int | None = None,
         *,
         on_device: bool = False,
+        devices: int | None = None,
     ) -> "Grant":
         """Return the grant of a worker of `resource`: its device memory cap `on_device`, else its memory or the host's.
 
-        The quantum ceilings are the pool's, `quantum_s` within the class's wall-time limit.
+        The quantum ceilings are the pool's, `quantum_s` within the class's wall-time limit. `devices`, the devices the
+        class's workers share, is kept for a `cuda` class only.
         """
         memory = resource.memory_cap_bytes if on_device else resource.mem_bytes or host_memory_bytes or None
         time_s = pool.quantum_s if resource.time_s is None else min(pool.quantum_s, resource.time_s)
         return cls(
-            max_workers=resource.max_workers, memory_bytes=memory, quantum_items=pool.quantum_items, quantum_s=time_s
+            max_workers=resource.max_workers,
+            memory_bytes=memory,
+            quantum_items=pool.quantum_items,
+            quantum_s=time_s,
+            devices=devices if resource.device == "cuda" else None,
         )
+
+    def worker_bound(self, measure: "Measure | None") -> int:
+        """Return the most workers of a unit measured as `measure` (None unmeasured) this grant runs at once.
+
+        On shared devices each holds `floor(device memory cap / measured device peak)` workers, at least one, and
+        one when the device peak or the cap is unmeasured; the bound is that times `devices`, within `max_workers`.
+        """
+        if self.devices is None:
+            return self.max_workers
+        peak = None
+        if measure is not None and measure.on_device and measure.resident_bytes is not None:
+            peak = measure.resident_bytes + (measure.bytes_per_item or 0)
+        each = 1 if not peak or self.memory_bytes is None else max(1, self.memory_bytes // peak)
+        return min(self.max_workers, self.devices * each)
 
 
 class Sizing(Frozen):
@@ -91,7 +116,8 @@ def size(measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 
     - `quantum_s`: the quantum's jobs plus the load and claim, within `quantum_s`;
     - `batch_size`: the most items whose memory beside the resident memory fits `memory_headroom` of the grant's,
       at most a quantum; 1 when the grant's or the unit's memory is unmeasured or `batchable` is False;
-    - `workers`: as many as end `work` within `target_wall_s`, at most a quantum each and `max_workers`; 0 for none.
+    - `workers`: as many as end `work` within `target_wall_s`, at most a quantum each and `Grant.worker_bound`; 0 for
+      none.
     """
     per, load, ceiling = measure.s_per_item, measure.load_s + measure.claim_s, grant.quantum_items
     paid = config.load_share * per
@@ -106,7 +132,7 @@ def size(measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 
     workers = 0
     if work > 0:
         timely = max(1, _held(work * per / config.target_wall_s, grant.max_workers, math.ceil))
-        workers = min(timely, math.ceil(work / quantum))
+        workers = min(timely, math.ceil(work / quantum), grant.worker_bound(measure))
     return Sizing(
         batch_size=batch,
         quantum_items=quantum,
