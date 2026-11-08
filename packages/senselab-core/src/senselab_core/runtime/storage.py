@@ -124,12 +124,14 @@ class StorePolicy(Frozen):
         quarantine_retention_s: Seconds a quarantined entry is kept before `ResultStore.collect` removes it.
         staging_stale_s: Seconds after which a staging directory or download belongs to a crashed writer.
         collect_interval_s: Least seconds between two collections that `ResultStore.put` starts.
+        measures_file_bytes_max: Most bytes of one measures file a reader takes; a larger file is malformed.
     """
 
     world_readable: StrictBool = False
     quarantine_retention_s: Annotated[int, Field(strict=True, gt=0)]
     staging_stale_s: Annotated[int, Field(strict=True, gt=0)]
     collect_interval_s: Annotated[int, Field(strict=True, gt=0)]
+    measures_file_bytes_max: Annotated[int, Field(strict=True, gt=0)]
 
     @classmethod
     def load_default(cls) -> Self:

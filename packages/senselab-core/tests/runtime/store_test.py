@@ -84,6 +84,16 @@ def _reuses(store: ResultStore) -> list[dict[str, object]]:
     ]
 
 
+def _policy(world_readable: bool, quarantine_retention_s: int, staging_stale_s: int) -> StorePolicy:
+    return StorePolicy(
+        world_readable=world_readable,
+        quarantine_retention_s=quarantine_retention_s,
+        staging_stale_s=staging_stale_s,
+        collect_interval_s=60,
+        measures_file_bytes_max=1024,
+    )
+
+
 @pytest.mark.logic
 def test_a_reuse_outside_a_plan_names_its_agent_alone(tmp_path: Path) -> None:
     """A `get` that records its own reuse is associated with its agent with no node role and no plan."""
@@ -614,7 +624,7 @@ def test_umask_077_gives_no_world_bits(tmp_path: Path, umask: int) -> None:
 @pytest.mark.logic
 def test_world_readable_policy_adds_only_world_read(tmp_path: Path) -> None:
     """A world-readable policy adds read (and search on directories) for others, and no write."""
-    policy = StorePolicy(world_readable=True, quarantine_retention_s=60, staging_stale_s=60, collect_interval_s=60)
+    policy = _policy(True, 60, 60)
     old = os.umask(0o077)
     try:
         s, k, c = ResultStore(tmp_path / "s", policy=policy), store_key(), store_context()
@@ -835,7 +845,7 @@ def test_quarantine_logs_reason(tmp_path: Path, caplog: pytest.LogCaptureFixture
 @pytest.mark.logic
 def test_collect_removes_only_aged_quarantine(tmp_path: Path) -> None:
     """`collect` removes quarantined entries and staging past their ages, keeps younger ones and foreign names."""
-    policy = StorePolicy(world_readable=False, quarantine_retention_s=1000, staging_stale_s=100, collect_interval_s=60)
+    policy = _policy(False, 1000, 100)
     s, c = ResultStore(tmp_path, policy=policy), store_context()
     for audio in ("a", "b"):
         k = store_key(audio=audio * 64)
@@ -875,7 +885,7 @@ def test_an_entry_reported_corrupt_once_is_still_served_afterwards(
 @pytest.mark.logic
 def test_quarantine_is_collected_by_put(tmp_path: Path) -> None:
     """A put collects the aged quarantine directories."""
-    policy = StorePolicy(world_readable=False, quarantine_retention_s=60, staging_stale_s=60, collect_interval_s=60)
+    policy = _policy(False, 60, 60)
     s, k, c = ResultStore(tmp_path, policy=policy), store_key(), store_context()
     for _ in range(5):
         s.put(k, {"y": 1}, c)
@@ -1012,7 +1022,7 @@ def test_corrupt_entry_of_another_user_does_not_wedge_the_key(
 )
 def test_collect_removes_exactly_the_aged_entries_set_aside_in_place(ages: list[tuple[str, int]], sealed: bool) -> None:
     """Under every key, `collect` removes the uuid-named children past the quarantine age, sealed or not, only."""
-    policy = StorePolicy(world_readable=False, quarantine_retention_s=1000, staging_stale_s=100, collect_interval_s=60)
+    policy = _policy(False, 1000, 100)
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         s, k, c = ResultStore(root, policy=policy), store_key(), store_context()

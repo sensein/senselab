@@ -2,6 +2,7 @@
 
 import errno
 import getpass
+import importlib.util
 import logging
 import os
 import socket
@@ -421,3 +422,81 @@ def test_pooling_is_the_admitted_probes_less_the_outdated_whatever_the_root_spli
     pooled = {o.item for o in _roots(first, second, trust=trust, uid=reader).observations(UNIT)}
     admitted = trust == "group" or reader == UID
     assert pooled == (probes - outdated if admitted else set())
+
+
+_SCRIPT = Path(__file__).resolve().parents[4] / "scripts" / "probe_measures_cross_node.py"
+
+
+@pytest.mark.logic
+def test_the_cross_node_verdict_reports_each_rounds_barrier_release_spread(tmp_path: Path) -> None:
+    """The verdict JSON carries `max - min` of the writers' start times per round, to attribute a failed overlap."""
+    spec = importlib.util.spec_from_file_location("probe_measures_cross_node", _SCRIPT)
+    assert spec and spec.loader
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    events = [
+        {"event": "wrote", "role": w, "round": r, "landed": True, "start_t": 10.0 * r + d, "end_t": 10.0 * r + d + 0.5}
+        for r in range(2)
+        for w, d in (("A", 0.0), ("B", 0.25), ("C", 1.0))
+    ]
+    report = script._check_writes(tmp_path, events, 3, 2)
+    assert report["release_spread_s"] == [1.0, 1.0]
+    assert report["overlapping_rounds"] == 0
+
+
+@pytest.mark.contract
+def test_a_file_over_the_policy_bound_is_malformed_not_a_failure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One byte over `measures_file_bytes_max` is skipped and logged; a reader of another uid skips and leaves it."""
+    roots = _roots(tmp_path)
+    written = roots.put_observations(UNIT, "p1", [_observation()], PROVENANCE)
+    assert written is not None
+    limit = POLICY.measures_file_bytes_max
+    written.chmod(0o640)
+    body = written.read_bytes()
+    written.write_bytes(body + b" " * (limit - len(body)))
+    assert roots.observations(UNIT) == (_observation(),)
+    written.write_bytes(body + b" " * (limit + 1 - len(body)))
+    with caplog.at_level(logging.WARNING, logger="senselab"):
+        assert _roots(tmp_path, uid=STRANGER).observations(UNIT) == ()
+        assert written.exists() and "skipped" in caplog.text
+        assert roots.observations(UNIT) == ()
+    assert not written.exists()
+
+
+@pytest.mark.contract
+def test_a_wrong_kind_entry_in_obs_is_malformed_and_silences_no_later_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A symlink planted in `obs/` is quarantined by its owner, not logged as a root read fault."""
+    roots = _roots(tmp_path)
+    written = roots.put_observations(UNIT, "p1", [_observation()], PROVENANCE)
+    assert written is not None
+    planted = written.parent / "p2.json"
+    planted.symlink_to(written)
+    with caplog.at_level(logging.WARNING, logger="senselab"):
+        assert roots.observations(UNIT) == (_observation(),)
+    assert not planted.is_symlink() and "cannot be read" not in caplog.text
+    fail_at(monkeypatch, "p1.json", "read", OSError(errno.ESTALE, "stale"), creating=False)
+    with caplog.at_level(logging.WARNING, logger="senselab"):
+        assert roots.observations(UNIT) == ()
+    assert "cannot be read" in caplog.text
+
+
+@pytest.mark.contract
+@needs_non_root
+def test_the_local_clock_fallback_is_logged_once_per_root(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Judging a lease on the local clock in a root that cannot be written is said once."""
+    holder = _roots(tmp_path).probe_lease(UNIT)
+    assert isinstance(holder, Lease)
+    with holder:
+        subprocess.run(["chmod", "-R", "a-w", str(tmp_path)], check=True)
+        try:
+            reader = _roots(tmp_path)
+            with caplog.at_level(logging.WARNING, logger="senselab"):
+                reader.peer_holds(UNIT)
+                reader.peer_holds(UNIT)
+            assert caplog.text.count("local clock") == 1
+        finally:
+            subprocess.run(["chmod", "-R", "u+w", str(tmp_path)], check=True)

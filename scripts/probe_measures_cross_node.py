@@ -49,7 +49,6 @@ from senselab_core.testing.calibration_samples import UNIT, observation
 
 LEASE_UNIT = UNIT.model_copy(update={"model": ModelIdentity(id="openai/whisper-base", identity="e" * 40)})
 OBSERVATIONS_PER_PROBE = 3
-BARRIER_POLL_S = 0.002
 PROVENANCE = Provenance(
     job=os.environ.get("SLURM_JOB_ID"),
     run="cross-node",
@@ -80,7 +79,7 @@ def _log(events: Path, name: str, **event: object) -> None:
         os.fsync(handle.fileno())
 
 
-def _barrier(events: Path, label: str, name: str, parties: int, bound: float) -> None:
+def _barrier(events: Path, label: str, name: str, parties: int, bound: float, poll: float) -> None:
     """Make `events/<label>/<name>` and wait until `parties` entries exist on the shared storage."""
     here = events / label
     here.mkdir(parents=True, exist_ok=True)
@@ -89,24 +88,26 @@ def _barrier(events: Path, label: str, name: str, parties: int, bound: float) ->
     while len(list(here.iterdir())) < parties:
         if time.monotonic() > deadline:
             raise TimeoutError(f"barrier {label}: fewer than {parties} entries")
-        time.sleep(BARRIER_POLL_S)
+        time.sleep(poll)
 
 
 def _items(round_: int, writers: list[str]) -> set[str]:
     return {f"{w}-{round_}-{i}" for w in writers for i in range(OBSERVATIONS_PER_PROBE)}
 
 
-def write(shared: Path, events: Path, name: str, probes: int, writers: int, stale: float, bound: float) -> None:
+def write(  # noqa: PLR0913 - the role's command-line options
+    shared: Path, events: Path, name: str, probes: int, writers: int, stale: float, bound: float, poll: float
+) -> None:
     """Write one probe of a fresh unit per round after a barrier; then read every unit back."""
     roots = _roots(shared, stale=stale)
     for n in range(probes):
-        _barrier(events, f"go-{n}", name, writers, bound)
+        _barrier(events, f"go-{n}", name, writers, bound, poll)
         start = _now(events)
         landed = roots.put_observations(
             _unit(n), f"{name}-{n}", [observation(probe=None, item=f"{name}-{n}-{i}") for i in range(OBSERVATIONS_PER_PROBE)], PROVENANCE
         )
         _log(events, name, event="wrote", round=n, landed=landed is not None, start_t=start, end_t=_now(events))
-    _barrier(events, "done", name, writers, bound)
+    _barrier(events, "done", name, writers, bound, poll)
     names = sorted(p.name for p in (events / "done").iterdir())
     missing = [n for n in range(probes) if _items(n, names) - {o.item for o in roots.observations(_unit(n))}]
     _log(events, name, event="read", writers=names, missing_rounds=missing)
@@ -186,6 +187,7 @@ def _check_writes(shared: Path, events: list[dict], writers: int, probes: int) -
         "all_landed": all(e["landed"] for e in wrote),
         "readers": len(reads),
         "rounds_missing_at_a_reader": sorted({n for e in reads for n in e["missing_rounds"]}),
+        "release_spread_s": [round(max(s for s, _ in r) - min(s for s, _ in r), 3) for r in rounds if r],
         "overlapping_rounds": sum(len(r) == writers and _spans_overlap(r) for r in rounds),
         "unit_files": len(unit_files),
         "quarantined": len(list((shared / "measures@1" / "quarantine").glob("*"))),
@@ -258,10 +260,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--until", type=float, default=1200.0)
     parser.add_argument("--slack", type=float, default=75.0)
     parser.add_argument("--poll", type=float, default=1.0)
+    parser.add_argument("--barrier-poll", type=float, default=0.25)
     args = parser.parse_args(argv)
     events = args.events or args.shared.with_name(args.shared.name + ".events")
     if args.role == "write":
-        write(args.shared, events, args.name, args.probes, args.writers, args.stale, args.until)
+        write(args.shared, events, args.name, args.probes, args.writers, args.stale, args.until, args.barrier_poll)
     elif args.role == "hold":
         hold(args.shared, events, args.stale, args.fraction, args.hold, args.poll)
     elif args.role == "break":

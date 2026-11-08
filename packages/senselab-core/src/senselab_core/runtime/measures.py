@@ -322,15 +322,15 @@ def _dump(document: Mapping[str, Any]) -> bytes:
     return json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
 
-def _parse_observations(document: Mapping[str, Any]) -> tuple[Observation, ...]:
+def _parse_observations(document: Mapping[str, Any], info: os.stat_result) -> tuple[Observation, ...]:
     return tuple(Observation.model_validate(o) for o in document["observations"])
 
 
-def _parse_unit(document: Mapping[str, Any]) -> MeasureUnit:
+def _parse_unit(document: Mapping[str, Any], info: os.stat_result) -> MeasureUnit:
     return MeasureUnit.model_validate(document["unit"])
 
 
-def _parse_class(document: Mapping[str, Any]) -> HardwareClass:
+def _parse_class(document: Mapping[str, Any], info: os.stat_result) -> HardwareClass:
     return HardwareClass.model_validate(document["class"])
 
 
@@ -346,16 +346,16 @@ def outdates(record: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(ids)
 
 
-def _record_parser(kind: str) -> Callable[[Mapping[str, Any]], MeasureRecord]:
-    def parse(document: Mapping[str, Any]) -> MeasureRecord:
+def _record_parser(kind: str) -> Callable[[Mapping[str, Any], os.stat_result], MeasureRecord]:
+    def parse(document: Mapping[str, Any], info: os.stat_result) -> MeasureRecord:
         if kind == "supersede":
             outdates(document["record"])
         return MeasureRecord.model_validate(
             {
                 "kind": kind,
                 "id": document["id"],
-                "uid": 0,
-                "written_s": 0,
+                "uid": info.st_uid,
+                "written_s": max(info.st_mtime, 0.0),
                 "provenance": document["provenance"],
                 "record": document["record"],
             }
@@ -505,18 +505,20 @@ class MeasureRoots:
         directory: StorageDir,
         name: str,
         expected: str,
-        parse: Callable[[Mapping[str, Any]], Any],
+        parse: Callable[[Mapping[str, Any], os.stat_result], Any],
         *,
         filtered: bool = True,
     ) -> _File | None:
-        fd = directory.open_regular(name)
-        if fd is None:
+        info = directory.lstat(name)
+        if info is None or (filtered and not self._admits(info.st_uid)):
             return None
-        with os.fdopen(fd, "rb") as handle:
-            owner = os.fstat(handle.fileno())
-            if filtered and not self._admits(owner.st_uid):
-                return None
-            raw = handle.read()
+        try:
+            raw = directory.read_regular(name, limit=self.policy.measures_file_bytes_max)
+        except (WrongKindError, ValueError) as err:
+            self._malformed(root, directory, name, info.st_uid, type(err).__name__)
+            return None
+        if raw is None:
+            return None
         path = directory.path / name
         try:
             document = json.loads(raw)
@@ -528,15 +530,15 @@ class MeasureRoots:
                 (path,),
                 "measures file %s (owner %s) has a format not read here; skipped",
                 path,
-                self._owner(owner.st_uid),
+                self._owner(info.st_uid),
             )
             return None
         try:
             if verdict is FormatVerdict.MALFORMED:
                 raise ValueError("no format tag")
-            return _File(parse(document), owner.st_uid, owner.st_mtime)
+            return _File(parse(document, info), info.st_uid, info.st_mtime)
         except (ValueError, KeyError, TypeError, RecursionError, ValidationError) as err:
-            self._malformed(root, directory, name, owner.st_uid, type(err).__name__)
+            self._malformed(root, directory, name, info.st_uid, type(err).__name__)
             return None
 
     def _aside(self, root: Path, move: Callable[[StorageDir], object]) -> bool:
@@ -590,7 +592,11 @@ class MeasureRoots:
                         visit(root, unit_dir)
 
     def _read_dir(
-        self, root: Path, directory: StorageDir, expected: str, parse: Callable[[Mapping[str, Any]], Any]
+        self,
+        root: Path,
+        directory: StorageDir,
+        expected: str,
+        parse: Callable[[Mapping[str, Any], os.stat_result], Any],
     ) -> list[tuple[str, _File]]:
         found: list[tuple[str, _File]] = []
         for name in sorted(n for n in directory.listdir() if _JSON_NAME.fullmatch(n)):
@@ -601,7 +607,12 @@ class MeasureRoots:
         return found
 
     def _files(
-        self, root: Path, unit_dir: StorageDir, sub: str, expected: str, parse: Callable[[Mapping[str, Any]], Any]
+        self,
+        root: Path,
+        unit_dir: StorageDir,
+        sub: str,
+        expected: str,
+        parse: Callable[[Mapping[str, Any], os.stat_result], Any],
     ) -> list[tuple[str, _File]]:
         with self._guard(root, "read"), unit_dir.child(sub) as directory:
             return self._read_dir(root, directory, expected, parse)
@@ -613,7 +624,7 @@ class MeasureRoots:
         def visit(root: Path, unit_dir: StorageDir) -> None:
             for kind, expected in RECORD_FORMATS.items():
                 for _, f in self._files(root, unit_dir, kind, expected, _record_parser(kind)):
-                    records.append(f.value.model_copy(update={"uid": f.uid, "written_s": max(f.mtime, 0.0)}))
+                    records.append(f.value)
 
         self._each_unit(digest, visit)
         return sorted(records, key=lambda r: (r.written_s, r.id))
@@ -746,6 +757,11 @@ class MeasureRoots:
         except OSError as err:
             if err.errno != errno.EROFS:
                 raise
+        self._say(
+            ("local-clock", unit_dir.path.parents[3]),
+            "lease liveness in %s is judged on the local clock",
+            unit_dir.path.parents[3],
+        )
         newest = 0.0
         with unit_dir.child(PROBE_LEASE + ".lease") as lease:
             for token in lease.listdir():
@@ -792,7 +808,8 @@ class MeasureRoots:
                 path = unit_dir.path / PROBE_LEASE
             return Lease(path, timeout=0, stale_after=self.stale_after_s, mode=self._dir_mode)
 
-        return self._in_first_writable(take) or Unleased("no writable root")
+        taken = self._in_first_writable(take)
+        return Unleased("no writable root") if taken is None else taken
 
     def collect(self, kept: int, now: float | None = None) -> int:
         """Remove what `uid` owns and no reader needs; return how many.
