@@ -178,8 +178,10 @@ class Sample(Frozen):
         resident_bytes: Its host memory once the item's outcomes were in, the model loaded and the item freed; None
             where only a high-water is readable.
         peak_memory_bytes: Its host high-water memory once the item ran.
-        device_baseline_bytes: The device memory used before the worker ran anything; None off a device.
-        device_bytes: The device memory used once the item ran; None off a device.
+        device_baseline_bytes: The device memory this worker's processes used before it ran anything; None off a
+            device.
+        device_bytes: The device memory they used once the item's claim had its outcomes, the model loaded and
+            nothing in flight; None off a device.
         cold: Whether the worker had run nothing of the item's queue before, so the item carried the model load.
         job: The scheduler job id or process id of the worker.
     """
@@ -203,8 +205,8 @@ def calibrated(samples: Sequence[Sample]) -> ResourceMeasure | None:
     Seconds per item are the median over warm items (over cold ones when none is warm), the load the median of what
     a cold item took beyond its jobs, the claim the median claim. The resident host memory is the lowest after a warm
     item (after any item when none is warm) and the peak the highest; with no resident figure the host pair is
-    unmeasured. The device pair is the lowest device baseline and the highest device use, when the items ran on a
-    device.
+    unmeasured. The device pair is the lowest and the highest device use read after items, when the items ran on a
+    device: the lowest holds the loaded model alone, so per-item device bytes exclude it.
     """
     if not samples:
         return None
@@ -217,12 +219,8 @@ def calibrated(samples: Sequence[Sample]) -> ResourceMeasure | None:
     after = [s.resident_bytes for s in samples if s.resident_bytes is not None and not s.cold]
     after = after or [s.resident_bytes for s in samples if s.resident_bytes is not None]
     resident = min(after) if after else None
-    devices = [s for s in samples if s.device_baseline_bytes is not None and s.device_bytes is not None]
-    device = (
-        (min(s.device_baseline_bytes or 0 for s in devices), max(s.device_bytes or 0 for s in devices))
-        if devices
-        else (None, None)
-    )
+    used = [s.device_bytes for s in samples if s.device_bytes is not None]
+    device = (min(used), max(used)) if used else (None, None)
     return ResourceMeasure(
         load_s=load,
         claim_s=statistics.median([s.claim_s for s in samples]),

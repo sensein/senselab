@@ -33,8 +33,8 @@ class ResourceMeasure(Frozen):
         claim_s: Seconds a worker takes to claim one item.
         resident_bytes: Host memory held once loaded, between requests; None where it could not be read.
         peak_memory_bytes: The host high-water memory over the measured requests; None with `resident_bytes`.
-        device_resident_bytes: Device memory held before the first request; None off a device.
-        device_peak_bytes: The device memory used once requests ran; None off a device.
+        device_resident_bytes: Device memory held once loaded, between requests; None off a device.
+        device_peak_bytes: The highest device memory read between requests; None off a device.
         s_per_input_s: Seconds of work per second of recording input; per item when `input_s_per_item` is None.
         input_s_per_item: The median recording seconds of a measured item; None for items without a recording.
     """

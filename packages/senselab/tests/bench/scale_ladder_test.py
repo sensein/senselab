@@ -112,8 +112,11 @@ def _result(
 
 
 @pytest.mark.logic
-def test_resource_table_derivation_names_jobs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """The largest point's measure is written with the commit and every job of the unit; a measureless one is listed."""
+def test_resource_table_derivation_names_jobs(tmp_path: Path) -> None:
+    """The largest point's measure is written with the commit and every job of the unit; other results are listed.
+
+    A result without a measure, or of a backend the packaged registry does not declare, gets no table.
+    """
     small = {
         "load_s": 9.0,
         "claim_s": 0.01,
@@ -129,10 +132,16 @@ def test_resource_table_derivation_names_jobs(tmp_path: Path, capsys: pytest.Cap
         "a@1": _result(1, 1, ["101"], small),
         "a@100": _result(100, 100, ["102", "103"], large),
         "b@1": {**_result(1, 1, ["104"], None), "task": "diarize"},
+        "f@1": {**_result(1, 1, ["106"], small), "task": "fake.echo", "backend": "fake", "model": None},
     }.items():
         (results / f"{name}.json").write_text(json.dumps(doc))
-    assert generate.main([str(results), "--out", str(tmp_path / "out")]) == 0
-    assert capsys.readouterr().out.splitlines()[0] == "diarize@1: no measure; skipped"
+    declared = {("speech_to_text", "transformers"), ("diarize", "transformers")}
+    lines = generate.generate([results], tmp_path / "out", declared)
+    assert lines[:2] == [
+        "fake.echo~fake@1: not a packaged backend; skipped",
+        "diarize~transformers@1: no measure; skipped",
+    ]
+    assert sorted(p.parent.name for p in (tmp_path / "out").rglob("*.yaml")) == ["speech_to_text"]
     table = ResourceTable.model_validate(load_yaml(tmp_path / "out" / "speech_to_text" / "transformers.yaml", "table"))
     [row] = table.rows
     assert (row.id, row.revision, row.download_bytes) == ("org/m", "b" * 40, None)
@@ -141,7 +150,7 @@ def test_resource_table_derivation_names_jobs(tmp_path: Path, capsys: pytest.Cap
     assert measured.sha == "a" * 40 and measured.jobs == ("101", "102", "103")
     (results / "c@1.json").write_text(json.dumps(_result(1, 1, ["105"], small, sha="c" * 40)))
     with pytest.raises(ValueError, match="several commits"):
-        generate.main([str(results), "--out", str(tmp_path / "out")])
+        generate.generate([results], tmp_path / "out", declared)
 
 
 @pytest.mark.logic

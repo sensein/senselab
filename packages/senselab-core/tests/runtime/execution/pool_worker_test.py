@@ -200,29 +200,28 @@ def test_each_gathered_item_is_timed_by_the_requests_it_ran_in(tmp_path: Path) -
 
 @pytest.mark.logic
 def test_device_memory_is_read_once_per_claim_on_a_cuda_class(tmp_path: Path) -> None:
-    """A gathered claim of three one-job items on a `cuda` class reads its processes' device memory once."""
+    """Device memory is read once before the first claim and once per claim; the model stays out of per-item bytes.
+
+    The stand-in's processes hold nothing before the model loads, 1000 bytes with it loaded after the cold claim,
+    and 1010 once the gathered claim's items have run: the device pair is (1000, 1010), 10 bytes an item.
+    """
     classes = {**OVERRIDE["resource_classes"], "gpu": {"device": "cuda", "max_workers": 1}}
     pool = {**OVERRIDE["pool"], "quantum_items": 4}
     profile = ExecutionProfile.load("laptop", {**OVERRIDE, "resource_classes": classes, "pool": pool})
     placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(4)])
     for element in range(4):
         _put(placed, pool_dir, element, "gpu")
-    reads: list[int] = []
-
-    def device() -> int:
-        reads.append(1)
-        return 2**30 * len(reads)
-
+    reads = iter([0, 1000, 1010])
     worker = PoolWorker(
-        pool_dir, ["gpu"], profile=profile, store=store, send=_sender(store, profile), device_memory=device
+        pool_dir, ["gpu"], profile=profile, store=store, send=_sender(store, profile), device_memory=lambda: next(reads)
     )
     assert worker.serve() == 0
     samples = [Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile, "gpu")]
-    assert len(reads) == 1 + 2 and len(samples) == 4
-    assert {s.device_baseline_bytes for s in samples} == {2**30} and {s.device_bytes for s in samples} == {
-        2**31,
-        3 * 2**30,
-    }
+    assert next(reads, None) is None and len(samples) == 4
+    assert {s.device_baseline_bytes for s in samples} == {0} and {s.device_bytes for s in samples} == {1000, 1010}
+    found = calibrated(samples)
+    assert found is not None and (found.device_resident_bytes, found.device_peak_bytes) == (1000, 1010)
+    assert measure_of(found, on_device=True).bytes_per_item == 10
 
 
 @pytest.mark.logic
