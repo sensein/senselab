@@ -174,12 +174,12 @@ def test_a_fragment_of_200_jobs_is_queued_as_20_items_of_10(tmp_path: Path) -> N
     assert {f.placement.batch_size for f in items} == {10}
 
 
-def _sample(wall: float, jobs: int = 1, *, cold: bool = False) -> Sample:
+def _sample(wall: float, jobs: int = 1, *, cold: bool = False, batch: int | None = None) -> Sample:
     return Sample(
         wall_s=wall,
         claim_s=0.1,
         jobs=jobs,
-        batch_size=jobs,
+        batch_size=jobs if batch is None else batch,
         input_s=None,
         baseline_bytes=10,
         resident_bytes=15,
@@ -195,16 +195,17 @@ def _sample(wall: float, jobs: int = 1, *, cold: bool = False) -> Sample:
 def test_an_unmeasured_unit_calibrates_alone_then_batched_and_keeps_the_faster(
     tmp_path: Path, batched_s: float, kept: str
 ) -> None:
-    """One-job items run first, then batched and one-job items side by side; the second round's times decide.
+    """One-job items run first, then batched items beside items of as many jobs sent one per request; those decide.
 
-    The rest go batched only if batches ran no slower per item than the one-job items beside them on the warm worker.
+    The rest go batched only if batches ran no slower per item than the one-per-request items beside them on the warm
+    worker, each pair's two items holding as many jobs.
     """
     profile, measures = _profile(quantum=100), FixedMeasures(None)
-    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(16)])
+    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(19)])
     pool = _pool(tmp_path, profile, measures=measures)
     admission = pool.admit(placed, values)
-    first = pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(13)]))
-    pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(13, 16)]))
+    first = pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(16)]))
+    pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(16, 19)]))
     queue = pool.queues.queue("cpu")
     assert queue.work() == profile.sizing.calibration_items == 4 and pool.workers_wanted("cpu", 4) == 1
     for index, claim in enumerate(_claim_all(queue)):
@@ -216,22 +217,23 @@ def test_an_unmeasured_unit_calibrates_alone_then_batched_and_keeps_the_faster(
     assert len(results) == 4 and not done and measures.puts == []
     pairs = _claim_all(queue)
     digests = {c.items[0] for c in pairs}
-    assert [len(c.fragments[0].jobs) for c in pairs] == [2, 1] * (profile.sizing.calibration_items - 1)
+    assert [(len(c.fragments[0].jobs), c.fragments[0].placement.batch_size) for c in pairs] == [(2, 2), (2, 1)] * (
+        profile.sizing.calibration_items - 1
+    )
     for spread, claim in zip((0.9, 0.9, 1.0, 1.0, 1.4, 1.4), pairs, strict=True):
         [item] = claim.fragments
-        jobs = len(item.jobs)
-        assert item.placement.batch_size == jobs
+        batch = item.placement.batch_size
         with claim:
-            sample = _sample((2.0 if jobs == 1 else jobs * batched_s) * spread, jobs)
+            sample = _sample((2.0 if batch == 1 else batched_s) * 2 * spread, 2, batch=batch)
             report(claim, claim.items[0], _executed(placed, values, pool.store, item), sample)
     results, done = pool.poll(first)
     [(unit, measure, measured)] = measures.puts
-    assert len(results) == 9 and done and (unit.task, unit.resource_class) == (SCORE.name, "cpu")
+    assert len(results) == 12 and done and (unit.task, unit.resource_class) == (SCORE.name, "cpu")
     assert (measure.claim_s, measure.s_per_input_s) == (0.1, 2.0)
     assert measure.batched is not None and (measure.batched.batch_size, measure.batched.s_per_input_s) == (2, batched_s)
     assert (measure.resident_bytes, measure.peak_memory_bytes) == (15, 20)
     assert measured.sha is None and measured.jobs == ("7",) and "senselab-core" in (measured.run or "")
-    assert set(pool.calibrated[unit][0]) >= digests and pool.calibrated[unit][1] == 13
+    assert set(pool.calibrated[unit][0]) >= digests and pool.calibrated[unit][1] == 16
     [rest] = [c.fragments[0] for c in _claim_all(queue)]
     assert len(rest.jobs) == 3 and (rest.placement.batch_size > 1) == (kept == "batch")
 

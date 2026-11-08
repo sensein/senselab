@@ -443,12 +443,13 @@ class Pool:
         return first, rest
 
     def _batch_round(self, unit: Unit, queue: str, found: ResourceMeasure, samples: list[Sample]) -> bool:
-        """Start `unit`'s second round, batched and one-job items timed side by side, when its sized batch is above one.
+        """Start `unit`'s second round, batched and one-per-request items side by side, when its batch is above one.
 
-        The round is `sizing.calibration_items - 1` pairs, each an item of the batch sent as one request then a
-        one-job item, all on the worker the first round warmed, so both per-item times have a median taken past the
-        first requests after the load. The batch is the memory batch, within what lets every pair fit in the unit's
-        first held part; the rest of that part waits on. Return whether a round was started.
+        The round is `sizing.calibration_items - 1` pairs, each an item of the batch sent as one request then an item
+        of as many jobs sent one per request, all on the worker the first round warmed: each item is one request call
+        over the same jobs, so its fixed cost weighs alike on both per-item times, and each averages as many inputs.
+        The batch is the memory batch, within what lets every pair fit in the unit's first held part; the rest of that
+        part waits on. Return whether a round was started.
         """
         with self._lock:
             held = [(f, p) for f in self._followed.values() for u, p in f.waiting if u == unit]
@@ -456,7 +457,7 @@ class Pool:
             return False
         followed, part = held[0]
         pairs = self.profile.sizing.calibration_items - 1
-        fits = len(part.jobs) // pairs - 1
+        fits = len(part.jobs) // (2 * pairs)
         batch = min(self._sizing(queue, self._per_item(found, queue)).memory_batch, max(fits, 1))
         placement = part.placement.model_copy(update={"batch_size": batch})
         request = node_request_size(self._admitted_plan(part)[0], part.node, placement)
@@ -469,12 +470,12 @@ class Pool:
         )
         items = []
         for i in range(pairs):
-            start = i * (request + 1)
+            start = 2 * i * request
             items += [
                 dumped.part(range(start, start + request), placement=batched),
-                dumped.part([start + request], placement=single),
+                dumped.part(range(start + request, start + 2 * request), placement=single),
             ]
-        used = pairs * (request + 1)
+        used = 2 * pairs * request
         rest = [(unit, dumped.part(range(used, len(part.jobs))))] if used < len(part.jobs) else []
         self.queues.queue(queue).put_all(items)
         with self._lock:
@@ -501,12 +502,12 @@ class Pool:
         """End each calibration round whose items all have outcomes: record its measure and put its unit's held parts.
 
         A first round sends items one per request and gives the load, the claim and the memory. When its measure
-        sizes a batch above one, a second round times batched and one-job items side by side on the warmed worker
-        (`_batch_round`), and the per-item seconds alone and batched are taken from that round alone, so `size` keeps
-        the faster of two like regimes. A unit of a model backend whose `cuda` samples reported no
+        sizes a batch above one, a second round times batched and one-per-request items of as many jobs side by side on
+        the warmed worker (`_batch_round`), and the per-item seconds alone and batched are taken from that round alone,
+        so `size` keeps the faster of two like regimes. A unit of a model backend whose `cuda` samples reported no
         device figures is logged: its device memory stays unmeasured. A round whose items measured nothing leaves its
-        unit unmeasured, so its held parts start another. A round with no warm one-job item measures
-        nothing, since its load cannot be told from its items. A part refused when put (`_put`) waits again, with
+        unit unmeasured, so its held parts start another. A round with no warm one-per-request item measures nothing,
+        since its load cannot be told from its items. A part refused when put (`_put`) waits again, with
         those after it.
         """
         with self._lock:

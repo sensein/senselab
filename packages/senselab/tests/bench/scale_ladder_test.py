@@ -8,17 +8,19 @@ import platform
 import sys
 import tarfile
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
 import soundfile
+from senselab_core.kernel.dataset import ManifestRow
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry
 from senselab_core.runtime import fake_backend
 from senselab_core.runtime.call import Packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.executor import FaultRecord
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.resources import Batched, ResourceMeasure, ResourceTable
 from senselab_core.runtime.sizing import Sample
@@ -350,3 +352,18 @@ def test_a_point_whose_calibration_takes_every_item_has_no_per_item_cost() -> No
     )
     assert ladder._per_item(None, 3.0, measure) == small
     assert ladder._per_item(0.4, 3.0, None)["per_item_basis"] == "after calibration"
+
+
+@pytest.mark.logic
+def test_a_result_names_each_failed_record_by_its_last_failure() -> None:
+    """A job failed twice is named once, by its last failure; finished jobs are not named; the message is bounded."""
+    ladder = _module("scale_ladder_faults_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    rows = [ManifestRow(id=f"r{i}", entities={}, inputs={}) for i in range(3)]
+
+    def event(kind: str, element: int, message: str = "") -> Any:  # noqa: ANN401 - an Event stand-in
+        failure = FaultRecord(fault="content", type="Bad", message=message, gap=False, charged=True)
+        return SimpleNamespace(kind=kind, job=SimpleNamespace(element=(element,)), failure=failure)
+
+    events = [event("failed", 2, "first"), event("finished", 0), event("failed", 2, "x" * 500)]
+    [named] = ladder._faults(events, rows)
+    assert named == {"record": "r2", "fault": "content", "type": "Bad", "message": "x" * ladder.FAULT_MESSAGE_CHARS}

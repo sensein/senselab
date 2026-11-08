@@ -31,13 +31,14 @@ from pathlib import Path
 from typing import Any
 
 import soundfile
+from senselab_core.kernel.dataset import ManifestRow
 from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.runtime.bids import bids_dataset
 from senselab_core.runtime.call import packaged
 from senselab_core.runtime.config import ConfigError, load_yaml
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.execution.epoch import Epoch
-from senselab_core.runtime.execution.events import EventLog, read_events, run_dir_of
+from senselab_core.runtime.execution.events import Event, EventLog, read_events, run_dir_of
 from senselab_core.runtime.execution.pool import Pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.substrates import substrate_of, worker_id
@@ -63,6 +64,8 @@ BUDGETS_FORMAT = "scale-budgets@1.0"
 LONG = "long"
 FLAT_POINTS = (100, 10_000)
 """The points whose per-item costs the flatness rule compares (P-33)."""
+FAULT_MESSAGE_CHARS = 200
+"""The characters of a failed job's message a result keeps: enough to name the failure, not to copy its input."""
 RECORDING = {"synthetic": "Audio", "librispeech": "Audio"}
 """The graph input type of each data kind read from a BIDS tree; `payloads` take the port's declared type."""
 
@@ -350,6 +353,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         "calibration_s": calibration_s,
         "calibration_jobs": round_jobs,
         "began_s": began_s,
+        "faults": _faults(events, placed.manifest.rows),
         "samples": _item_samples(by_digest, rounds),
         "host": platform.node(),
         "backend_params": dict(node.backend_params),
@@ -363,6 +367,18 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         "store": {"entries": entries, "bytes": stored},
         "measure": None if found is None else found.model_dump(mode="json"),
     }
+
+
+def _faults(events: Sequence[Event], rows: Sequence[ManifestRow]) -> list[dict[str, Any]]:
+    """Return each failed job's record id, fault class, exception type and message, its last failure, by record."""
+    last = {}
+    for event in events:
+        if event.kind == "failed" and event.job is not None and event.failure is not None and event.job.element:
+            last[event.job.element[0]] = event.failure
+    return [
+        {"record": rows[i].id, "fault": f.fault, "type": f.type, "message": f.message[:FAULT_MESSAGE_CHARS]}
+        for i, f in sorted(last.items())
+    ]
 
 
 def _item_samples(samples: Mapping[str, Sample], rounds: set[str]) -> list[dict[str, Any]]:
