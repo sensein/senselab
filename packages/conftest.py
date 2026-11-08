@@ -84,6 +84,14 @@ def slack(request: pytest.FixtureRequest) -> Path:
     return path
 
 
+@pytest.fixture
+def tier_bound(request: pytest.FixtureRequest) -> float:
+    """The seconds the requesting test's tier allows it, which bounds every wait on a sentinel in it."""
+    marker = request.node.get_closest_marker("timeout")
+    assert marker is not None
+    return float(marker.args[0])
+
+
 def _apply_budgets(items: list[pytest.Item]) -> None:
     if not items:
         return

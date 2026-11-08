@@ -471,7 +471,7 @@ def test_coordinate_runs_a_plan_on_the_pool_as_the_next_epoch(tmp_path: Path) ->
 
 @pytest.mark.contract
 def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(
-    tmp_path: Path, request: pytest.FixtureRequest
+    tmp_path: Path, tier_bound: float
 ) -> None:
     """An older coordinator whose env breaks after a newer epoch was taken stops; no hold of its epoch counts.
 
@@ -490,9 +490,7 @@ def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(
     workers._serve(claim)  # noqa: SLF001 - one item served by hand, before the newer epoch
     live = _pool(tmp_path, store, workers, profile)
     late = live.submit(node_fragment(placed, live.admit(placed, values), elements=[(1,)]))
-    marker = request.node.get_closest_marker("timeout")
-    assert marker is not None
-    await_true(lambda: len(workers.served) == 2, float(marker.args[0]), profile.pool.poll_s, "serving")
+    await_true(lambda: len(workers.served) == 2, tier_bound, profile.pool.poll_s, "serving")
     with pytest.raises(StaleCoordinator):
         list(follow(stale, early))
     queue.hold(stale.epoch, "host")

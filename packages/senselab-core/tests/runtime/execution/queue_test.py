@@ -60,13 +60,6 @@ def pool() -> Iterator[Pool]:
         yield processes
 
 
-def _bound(request: pytest.FixtureRequest) -> float:
-    """Return the seconds this test's tier allows it, which bounds every wait on a sentinel."""
-    marker = request.node.get_closest_marker("timeout")
-    assert marker is not None
-    return float(marker.args[0])
-
-
 def _age(lease: Path) -> None:
     """Stamp a lease and its tokens `OLD`, as a holder that stopped beating long ago leaves them."""
     for path in (*lease.iterdir(), lease):
@@ -175,14 +168,12 @@ def test_expired_claim_reclaimed(tmp_path: Path) -> None:
     other.release()
 
 
-def _race(
-    tmp_path: Path, pool: Pool, request: pytest.FixtureRequest, kinds: tuple[str, str]
-) -> tuple[str, list[dict[str, Any]]]:
+def _race(tmp_path: Path, pool: Pool, tier_bound: float, kinds: tuple[str, str]) -> tuple[str, list[dict[str, Any]]]:
     """Put one item; a claimer stalled after its proof has its lease aged, and a second claimer finishes the item.
 
     The first claimer is released only after the second is done; its report is the first of the two returned.
     """
-    bound, gate = _bound(request), tmp_path / "gate"
+    bound, gate = tier_bound, tmp_path / "gate"
     gate.mkdir()
     queue = _queue(tmp_path, lease=RACE)
     (each,) = _fragments(1)
@@ -199,22 +190,20 @@ def _race(
     return _digest(each), reports
 
 
-def test_double_claim_commits_once(tmp_path: Path, pool: Pool, request: pytest.FixtureRequest) -> None:
+def test_double_claim_commits_once(tmp_path: Path, pool: Pool, tier_bound: float) -> None:
     """A claimer stalled past the stale bound after its proof is broken by a second process; one commit is kept.
 
     The stalled claimer's beats wait and its outcome link waits at the `os` boundary; its late link is refused as a
     duplicate.
     """
-    digest, reports = _race(tmp_path, pool, request, ("done", "done"))
+    digest, reports = _race(tmp_path, pool, tier_bound, ("done", "done"))
     assert [r["finished"] for r in reports] == [[], [digest]] and reports[0]["outcomes"] == {digest: "duplicate"}
     assert [p.name for p in (_queue(tmp_path).path / "outcome").iterdir()] == [digest]
 
 
-def test_a_stalled_commit_and_a_fast_dead_give_one_outcome(
-    tmp_path: Path, pool: Pool, request: pytest.FixtureRequest
-) -> None:
+def test_a_stalled_commit_and_a_fast_dead_give_one_outcome(tmp_path: Path, pool: Pool, tier_bound: float) -> None:
     """A commit stalled after its proof and a `dead` from the claimer that broke it: the item has one outcome."""
-    digest, reports = _race(tmp_path, pool, request, ("done", "dead"))
+    digest, reports = _race(tmp_path, pool, tier_bound, ("done", "dead"))
     queue = _queue(tmp_path)
     record = queue.outcome(digest)
     assert record is not None and record["outcome"] == "dead"
@@ -222,9 +211,9 @@ def test_a_stalled_commit_and_a_fast_dead_give_one_outcome(
     assert [p.name for p in (queue.path / "outcome").iterdir()] == [digest]
 
 
-def test_a_stalled_putter_keeps_its_item_indexed(tmp_path: Path, pool: Pool, request: pytest.FixtureRequest) -> None:
+def test_a_stalled_putter_keeps_its_item_indexed(tmp_path: Path, pool: Pool, tier_bound: float) -> None:
     """A putter whose slot `symlink` stalls while others fill, finish and retire its segment still takes a slot."""
-    bound, gate = _bound(request), tmp_path / "gate"
+    bound, gate = tier_bound, tmp_path / "gate"
     gate.mkdir()
     late = pool.apply_async(
         queue_race_fixture.put_stalled, (str(tmp_path), OVERRIDE, "late", str(gate), (bound, POLL_S))
