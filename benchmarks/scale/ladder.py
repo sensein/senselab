@@ -8,8 +8,9 @@ stack, its data (`synthetic` tones, `librispeech` utterances of a manifest, `gre
 `payloads`, JSON records for the fake stack) and its scale points: item counts, or `long`, one recording of the long
 seconds. `PROFILE` is a packaged execution profile, or a YAML file merged over the packaged profile its `name` names
 (`orcd-local.yaml` runs the orcd classes as local workers of one allocation). Each point is planned, run on a `Pool`
-over the profile's substrate into a store of its own, and measured from its events, its files and the sample each pool
-worker reported with each item; one `scale-result@1.0` document per point is written under
+over the profile's substrate into a store of its own, its pool reading no packaged resource table (so each unit is
+calibrated in the run: one item per request, then the memory-sized batch), and measured from its events, its files and
+the sample each pool worker reported with each item; one `scale-result@1.0` document per point is written under
 `$SENSELAB_CACHE/2x/benchmarks/scale/<suite>/<commit>/` and one line printed per point, then each task's flatness
 against `budgets.yaml` (`scale-budgets@1.0`). A point whose run directory already exists is refused, so no point is
 measured from reused results, and every entry is planned before any point is measured, so a suite with an entry that
@@ -44,7 +45,7 @@ from senselab_core.runtime.hardware import memory_bytes
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import NAMESPACE, cache_root
-from senselab_core.runtime.sizing import Sample, calibrated
+from senselab_core.runtime.sizing import Measures, Sample, calibrated
 from senselab_core.runtime.store import ResultStore
 from senselab_worker.units import NS_PER_S
 
@@ -282,6 +283,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         profile=profile,
         substrate=substrate_of(profile, run_dir, placed.hash),
         epoch=0,
+        measures=Measures(packaged=()),
     )
     began = time.monotonic()
     try:
