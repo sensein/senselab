@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
 from senselab_worker.canonical import jcs_dumps
-from senselab_worker.faults import InfrastructureFault
+from senselab_worker.faults import InfrastructureFault, ResourceFault
 from senselab_worker.model_cache import ModelCache, ModelKey
 from senselab_worker.serve import backend_init
 
@@ -223,6 +223,7 @@ class WorkerSet:
         Raises:
             ValueError: a server backend without `expected`.
             LeaseTimeout, LeaseUnavailable: a server's start lease is busy or cannot be read.
+            ResourceFault: a worker or a server lacked a resource to start or load (`VllmOutOfMemory` among them).
             WorkerLoadFailed: a worker or a server failed to start or load, whatever else it raised
                 (`VllmStartError` and `AttestationMismatch` from a server start among them).
         """
@@ -505,11 +506,12 @@ def _loaded(start: Callable[[], Started]) -> Started:
 
     Raises:
         LeaseTimeout, LeaseUnavailable: a start lease is busy or cannot be read, as raised.
+        ResourceFault: the start or load lacked a resource, as raised.
         WorkerLoadFailed: whatever else the start or load raised, as its cause.
     """
     try:
         return start()
-    except (LeaseTimeout, LeaseUnavailable):
+    except (LeaseTimeout, LeaseUnavailable, ResourceFault):
         raise
     except Exception as exc:
         failed = WorkerLoadFailed(f"{type(exc).__name__}: {exc}")

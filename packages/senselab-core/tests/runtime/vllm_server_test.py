@@ -18,6 +18,7 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.testing.processes import group_gone
 from senselab_worker.digest import identity_digest
+from senselab_worker.faults import ResourceFault
 
 pytestmark = pytest.mark.logic
 
@@ -206,6 +207,41 @@ def test_start_failure_is_typed_and_stops(
     assert raised.value.kind == kind and server.url is None
     for record in _records(tmp_path):
         assert group_gone(record["pgid"], 5)
+
+
+FREE_MEMORY = (
+    "ValueError: Free memory on device cuda:0 (7.9/79.18 GiB) on startup is less than desired GPU memory utilization"
+    " (0.9, 71.26 GiB)"
+)
+
+
+@pytest.mark.parametrize(
+    ("last", "kind"), [(FREE_MEMORY, "memory"), ("RuntimeError: Engine core initialization failed", "exited")]
+)
+def test_a_start_failure_names_its_last_log_error_and_the_log(
+    env: EnvHandle, tmp_path: Path, last: str, kind: str
+) -> None:
+    """An exit before health carries the log's last error line and its path; a device short of memory is a resource."""
+    _knob(tmp_path, FAKE_VLLM_EXIT="1", FAKE_VLLM_STDERR=f"INFO loading\n{last}\nINFO shutting down")
+    logs = tmp_path / "logs"
+    server = vs.VllmServer(
+        env,
+        MODEL,
+        SETTINGS,
+        start_lock_dir=tmp_path / "locks",
+        startup_timeout_s=30,
+        start_margin_s=1,
+        lease=LEASE,
+        log_dir=logs,
+    )
+    with pytest.raises(vs.VllmStartError) as raised:
+        server.__enter__()
+    [log] = logs.iterdir()
+    assert raised.value.kind == kind and f"{last} [log: {log}]" in str(raised.value)
+    assert isinstance(raised.value, ResourceFault) == (kind == "memory")
+    _knob(tmp_path, FAKE_VLLM_STDERR=last)
+    with pytest.raises(vs.VllmStartError, match=r"exited with 1 before it was healthy$"):
+        _server(env, tmp_path).__enter__()
 
 
 @pytest.mark.parametrize(

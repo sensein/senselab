@@ -14,7 +14,7 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.workers import PRECISION, WorkerLoadFailed, WorkerSet, host_model_key
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.vllm_server import VllmStartError
+from senselab_core.runtime.vllm_server import VllmOutOfMemory, VllmStartError
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_worker.faults import FaultClass, classify
@@ -255,3 +255,22 @@ def test_a_server_that_fails_to_start_is_a_load_failure() -> None:
         with workers.checkout(backend, ENV, model, device="cpu", profile=PROFILE, expected=_attestation(model)):
             pass
     assert isinstance(raised.value.__cause__, VllmStartError) and classify(raised.value) is FaultClass.INFRASTRUCTURE
+
+
+@pytest.mark.logic
+def test_a_server_short_of_device_memory_is_a_resource_fault() -> None:
+    """A server that fails to start for lack of device memory reaches a checkout as itself, a resource fault."""
+
+    def start(*_: Any) -> Any:  # noqa: ANN401 - a ServerStart
+        raise VllmOutOfMemory("vllm serve exited with 1 before it was healthy: ValueError: Free memory on device")
+
+    backend = _host("served").model_copy(
+        update={"env": Env.server("s"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
+    )
+    model = _model("e" * 40)
+    with pytest.raises(VllmOutOfMemory) as raised:
+        with WorkerSet(1, start_server=start).checkout(
+            backend, ENV, model, device="cpu", profile=PROFILE, expected=_attestation(model)
+        ):
+            pass
+    assert raised.value.kind == "memory" and classify(raised.value) is FaultClass.RESOURCE

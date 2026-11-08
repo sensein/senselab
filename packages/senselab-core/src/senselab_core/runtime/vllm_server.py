@@ -34,6 +34,7 @@ from types import TracebackType
 from typing import IO, Any
 
 from senselab_worker.digest import identity_digest
+from senselab_worker.faults import ResourceFault
 
 from senselab_core.kernel.identity import Attestation, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
@@ -58,9 +59,15 @@ REQUEST_TIMEOUT_S = 600.0
 URL_SCHEMES = ("http", "https", "data", "file")
 """Schemes an image or video part may name directly; anything else is read as a local path."""
 
-START_ERROR_KINDS = ("exited", "timeout", "version", "model")
+START_ERROR_KINDS = ("exited", "timeout", "version", "model", "memory")
 """Why a server failed to start: it exited before it was healthy, was not healthy in time, its ``/version`` or
-``/v1/models`` probe failed, or it serves another model."""
+``/v1/models`` probe failed, it serves another model, or its device lacked the memory it asks for."""
+
+ERROR_LINE = re.compile(r"\w(Error|Exception)\b")
+"""A log line naming a raised error."""
+
+OUT_OF_MEMORY = re.compile(r"OutOfMemoryError|Free memory on device .* is less than desired GPU memory utilization")
+"""vLLM's and torch's messages for a device without the memory a server asks for."""
 
 ERROR_DETAIL_CHARS = 300
 """The most characters of a server's error message a raised error keeps."""
@@ -103,6 +110,14 @@ class VllmStartError(RuntimeError):
             raise ValueError(f"unknown start error kind {kind!r}; known: {START_ERROR_KINDS}")
         super().__init__(f"{kind}: {message}")
         self.kind = kind
+
+
+class VllmOutOfMemory(VllmStartError, ResourceFault):
+    """A server that did not start because its device lacked the memory it asks for: a resource fault."""
+
+    def __init__(self, message: str) -> None:
+        """Name the failure, of kind `memory`."""
+        super().__init__("memory", message)
 
 
 class AttestationMismatch(RuntimeError):
@@ -324,6 +339,7 @@ class VllmServer:
         self._server: subprocess.Popen[bytes] | None = None
         self._supervisor = current()
         self._log: IO[bytes] | None = None
+        self.log_path: Path | None = None
 
     @property
     def config_digest(self) -> str:
@@ -418,7 +434,7 @@ class VllmServer:
         sink: int | IO[bytes] = 2
         if self.log_dir is not None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
-            path = self.log_dir / f"vllm-{socket.gethostname()}-{os.getpid()}-{port}.log"
+            path = self.log_path = self.log_dir / f"vllm-{socket.gethostname()}-{os.getpid()}-{port}.log"
             self._log = os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "wb")
             sink = self._log
         self._supervisor = current()
@@ -437,10 +453,24 @@ class VllmServer:
         while not _healthy(self.url):
             code = self._server.poll()
             if code is not None:
-                raise VllmStartError("exited", f"vllm serve exited with {code} before it was healthy")
+                raise self._start_error("exited", f"vllm serve exited with {code} before it was healthy")
             if time.monotonic() > deadline:
-                raise VllmStartError("timeout", f"vllm serve was not healthy within {self.startup_timeout_s:g}s")
+                raise self._start_error("timeout", f"vllm serve was not healthy within {self.startup_timeout_s:g}s")
             time.sleep(POLL_S)
+
+    def _start_error(self, kind: str, message: str) -> VllmStartError:
+        """Return the start failure `kind`, its message followed by the log's last error line and the log's path.
+
+        A last line saying the device lacked memory makes it `VllmOutOfMemory`.
+        """
+        if self._log is None or self.log_path is None:
+            return VllmStartError(kind, message)
+        self._log.flush()
+        lines = [line.strip() for line in self.log_path.read_text(errors="replace").splitlines() if line.strip()]
+        errors = [line for line in lines if ERROR_LINE.search(line)]
+        last = (errors or lines or [""])[-1][:ERROR_DETAIL_CHARS]
+        detailed = f"{message}: {last} [log: {self.log_path}]"
+        return VllmOutOfMemory(detailed) if OUT_OF_MEMORY.search(last) else VllmStartError(kind, detailed)
 
     def _attest(self) -> Attestation:
         version = _probe(f"{self.url}/version", "version")

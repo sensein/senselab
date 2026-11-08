@@ -356,7 +356,9 @@ class Pool:
         queue = self.queues.queue(name)
         queue.unhold(before=self.epoch)
         if queue.held(env) is not None:
-            raise QueueHeld(name, env, self._env_failures(env))
+            failures = self._env_failures(env)
+            reason = failures[-1].message if failures else "held by an earlier coordinator of this epoch or a newer one"
+            raise QueueHeld(name, env, len(failures), reason)
         unit = self._unit(fragment)
         measure = self._measure(unit, name)
         quantum = 1
@@ -719,21 +721,22 @@ class Pool:
                 return
         yield self._dead(job, key, fault)
 
-    def _env_failures(self, env: str) -> int:
-        """Return the infrastructure and gap failures of `env` this epoch's events on disk record."""
-        return sum(
-            1
+    def _env_failures(self, env: str) -> list[FaultRecord]:
+        """Return the infrastructure and gap failures of `env` this epoch's events on disk record, in order."""
+        return [
+            e.failure
             for e in read_events(self.run_dir)
             if e.kind == "failed"
             and e.epoch == self.epoch
             and e.env == env
             and e.failure is not None
             and (e.failure.gap or e.failure.fault == "infrastructure")
-        )
+        ]
 
     def _held(self, flight: _Flight) -> QueueHeld:
         env = flight.fragment.placement.env
-        return QueueHeld(flight.queue, env, self.broken[env].failures)
+        broken = self.broken[env]
+        return QueueHeld(flight.queue, env, broken.failures, broken.fault.message)
 
     def _infrastructure(self, flight: _Flight, job: JobRef, key: str, fault: FaultRecord) -> bool:
         """Count an infrastructure fault of `flight`'s env this epoch; return False once the env is broken and held.
@@ -742,7 +745,7 @@ class Pool:
         """
         env, budget = flight.fragment.placement.env, self.profile.faults.infrastructure_replacements
         with self._lock:
-            failures = self._env_failures(env)
+            failures = len(self._env_failures(env))
             if env not in self.broken and failures < budget:
                 self._failed(job, key, fault, env)
                 failures += 1
@@ -753,7 +756,9 @@ class Pool:
                 self.broken[env] = BrokenEnv(env=env, fault=fault, failures=failures)
         self.queues.queue(flight.queue).hold(self.epoch, env)
         if not reported:
-            logger.error("env %s is broken after %d infrastructure faults; it is held", env, failures)
+            logger.error(
+                "env %s is broken after %d infrastructure faults; it is held: %s", env, failures, fault.message
+            )
         return False
 
     def _failed(self, job: JobRef, key: str, fault: FaultRecord, env: str) -> None:
