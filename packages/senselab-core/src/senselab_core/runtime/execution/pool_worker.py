@@ -353,6 +353,7 @@ class PoolWorker:
                 peak_memory_bytes=peak,
                 device_baseline_bytes=None if used is None else self._device_baseline,
                 device_bytes=used,
+                served=is_service_class(claim.queue.name),
                 device_item_bytes=max(((p - a) // n for p, a, n in requests), default=None),
                 device_allocated_bytes=min((a for _, a, _ in requests), default=None),
                 cold=cold,

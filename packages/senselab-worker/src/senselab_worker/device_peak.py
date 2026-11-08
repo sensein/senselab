@@ -1,7 +1,8 @@
 """The device memory a request allocated: its peak and what stays allocated after it, read from torch's CUDA stats.
 
 `torch_meter` measures a call when the process has imported torch and initialised CUDA (a backend running on a
-GPU), and gives None otherwise; torch is never imported here.
+GPU), and gives None otherwise; torch is never imported here. It reads the current device, the one card a worker
+is given (`CUDA_VISIBLE_DEVICES`).
 """
 
 import sys

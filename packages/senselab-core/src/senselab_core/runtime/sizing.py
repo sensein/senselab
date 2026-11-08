@@ -192,6 +192,7 @@ class Sample(Frozen):
             allocated after it, as its backend reported it; None where none reported (a server, or no CUDA in use).
         device_allocated_bytes: The least device memory the backend held allocated after one of those requests.
         batch_size: The most items of the item's jobs one request held.
+        served: Whether the item's class is a service class, whose server holds a fixed device reservation.
         cold: Whether the worker had run nothing of the item's queue before, so the item carried the model load.
         job: The scheduler job id or process id of the worker.
     """
@@ -208,6 +209,7 @@ class Sample(Frozen):
     device_bytes: Bytes | None = None
     device_item_bytes: Bytes | None = None
     device_allocated_bytes: Bytes | None = None
+    served: bool = False
     cold: bool
     job: NonEmptyStr
 
@@ -220,8 +222,8 @@ def calibrated(samples: Sequence[Sample]) -> ResourceMeasure | None:
     per-item seconds at their largest batch (`batched`). The resident host memory is the lowest after a warm item
     (after any item when none is warm) and the peak the highest; with no resident figure the host pair is unmeasured.
     The device pair is, where the backend reported its requests, the least allocation after a request and that plus
-    the most a request allocated per item; else the lowest and the highest device use of the worker's processes read
-    after items.
+    the most a request allocated per item; for a server (`served`) the lowest and the highest device use of the
+    worker's processes read after items, its fixed reservation; else unmeasured.
     """
     if not samples:
         return None
@@ -236,7 +238,7 @@ def calibrated(samples: Sequence[Sample]) -> ResourceMeasure | None:
     after = after or [s.resident_bytes for s in samples if s.resident_bytes is not None]
     resident = min(after) if after else None
     reported = [s for s in samples if s.device_item_bytes is not None and s.device_allocated_bytes is not None]
-    used = [s.device_bytes for s in samples if s.device_bytes is not None]
+    used = [s.device_bytes for s in samples if s.device_bytes is not None and s.served]
     device: tuple[int | None, int | None] = (min(used), max(used)) if used else (None, None)
     if reported:
         held = min(s.device_allocated_bytes or 0 for s in reported)

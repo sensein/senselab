@@ -26,7 +26,10 @@ Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
 class Batched(Frozen):
-    """Seconds of work per second of input of items sent `batch_size` per request, at the batch measured."""
+    """Seconds of work per second of input of items sent `batch_size` per request, at the batch measured.
+
+    It is read per item at the row's `input_s_per_item`, so batched and single items are taken of one distribution.
+    """
 
     batch_size: Annotated[int, Field(ge=2)]
     s_per_input_s: Seconds

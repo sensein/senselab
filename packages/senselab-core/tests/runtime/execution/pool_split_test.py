@@ -195,13 +195,13 @@ def _sample(wall: float, jobs: int = 1, *, cold: bool = False) -> Sample:
 def test_an_unmeasured_unit_calibrates_alone_then_batched_and_keeps_the_faster(
     tmp_path: Path, batched_s: float, kept: str
 ) -> None:
-    """Four one-job items, then one batched item, run first; the rest go in batches only if batched items ran faster."""
+    """Four one-job items, then three batched ones, run first; the rest go batched only if batches ran no slower."""
     profile, measures = _profile(quantum=100), FixedMeasures(None)
-    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(10)])
+    placed, values = planned(SCORE, profile, [f"t{i}" for i in range(16)])
     pool = _pool(tmp_path, profile, measures=measures)
     admission = pool.admit(placed, values)
-    first = pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(6)]))
-    pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(6, 10)]))
+    first = pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(13)]))
+    pool.submit(node_fragment(placed, admission, elements=[(i,) for i in range(13, 16)]))
     queue = pool.queues.queue("cpu")
     assert queue.work() == profile.sizing.calibration_items == 4 and pool.workers_wanted("cpu", 4) == 1
     for index, claim in enumerate(_claim_all(queue)):
@@ -211,21 +211,27 @@ def test_an_unmeasured_unit_calibrates_alone_then_batched_and_keeps_the_faster(
             report(claim, claim.items[0], _executed(placed, values, pool.store, item), sample)
     results, done = pool.poll(first)
     assert len(results) == 4 and not done and measures.puts == []
-    [batched] = _claim_all(queue)
-    [item] = batched.fragments
-    assert len(item.jobs) == item.placement.batch_size == 2
-    with batched:
-        report(batched, batched.items[0], _executed(placed, values, pool.store, item), _sample(2 * batched_s, 2))
+    quantum = math.ceil((0.5 + 0.1) / (profile.sizing.load_share * 4.0))
+    batches = _claim_all(queue)
+    assert len(batches) == profile.sizing.calibration_items - 1
+    for walls, claim in zip((0.9, 1.0, 1.4), batches, strict=True):
+        [item] = claim.fragments
+        assert len(item.jobs) == item.placement.batch_size == quantum
+        with claim:
+            sample = _sample(quantum * batched_s * walls, quantum)
+            report(claim, claim.items[0], _executed(placed, values, pool.store, item), sample)
     results, done = pool.poll(first)
     [(unit, measure, measured)] = measures.puts
-    assert len(results) == 2 and done and (unit.task, unit.resource_class) == (SCORE.name, "cpu")
+    assert len(results) == 3 * quantum and done and (unit.task, unit.resource_class) == (SCORE.name, "cpu")
     assert (measure.load_s, measure.claim_s, measure.s_per_input_s) == (0.5, 0.1, 4.0)
-    assert measure.batched is not None and (measure.batched.batch_size, measure.batched.s_per_input_s) == (2, batched_s)
+    assert measure.batched is not None and (measure.batched.batch_size, measure.batched.s_per_input_s) == (
+        quantum,
+        batched_s,
+    )
     assert (measure.resident_bytes, measure.peak_memory_bytes) == (15, 20)
     assert measured.sha is None and measured.jobs == ("7",) and "senselab-core" in (measured.run or "")
-    quantum = math.ceil((0.5 + 0.1) / (profile.sizing.load_share * 4.0))
     rest = [c.fragments[0] for c in _claim_all(queue)]
-    assert [len(f.jobs) for f in rest] == [quantum, 4 - quantum]
+    assert [len(f.jobs) for f in rest] == [3]
     assert {f.placement.batch_size for f in rest} == ({quantum} if kept == "batch" else {1})
 
 

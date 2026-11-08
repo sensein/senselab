@@ -194,12 +194,14 @@ def test_calibrated_separates_the_load_and_the_model_from_the_items() -> None:
     assert (unmeasured.resident_bytes, unmeasured.bytes_per_item) == (None, None)
     grant = Grant(max_workers=1, memory_bytes=2**36, quantum_items=100, quantum_s=300)
     assert size(unmeasured, grant, SETTINGS).batch_size == 1
-    devices = [
+    read = [
         s.model_copy(update={"device_baseline_bytes": 0, "device_bytes": used})
         for s, used in ((_sample(10, cold=True), 1000), (_sample(2), 1010))
     ]
-    on_device = calibrated(devices)
-    assert on_device is not None and (on_device.device_resident_bytes, on_device.device_peak_bytes) == (1000, 1010)
+    served = calibrated([s.model_copy(update={"served": True}) for s in read])
+    assert served is not None and (served.device_resident_bytes, served.device_peak_bytes) == (1000, 1010)
+    model = calibrated(read)
+    assert model is not None and (model.device_resident_bytes, model.device_peak_bytes) == (None, None)
 
 
 @pytest.mark.logic

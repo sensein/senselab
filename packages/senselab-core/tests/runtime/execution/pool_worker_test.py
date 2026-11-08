@@ -201,10 +201,11 @@ def test_each_gathered_item_is_timed_by_the_requests_it_ran_in(tmp_path: Path) -
 
 @pytest.mark.logic
 def test_device_memory_is_read_once_per_claim_on_a_cuda_class(tmp_path: Path) -> None:
-    """Device memory is read once before the first claim and once per claim; the model stays out of per-item bytes.
+    """Device memory is read once before the first claim and once per claim, but sizes no model backend.
 
-    The stand-in's processes hold nothing before the model loads, 1000 bytes with it loaded after the cold claim,
-    and 1010 once the gathered claim's items have run: the device pair is (1000, 1010), 10 bytes an item.
+    The stand-in's processes hold nothing before the model loads, 1000 bytes after the cold claim and 1010 after the
+    gathered one. The reads reach the samples; a model backend that reported no request peaks is left unmeasured
+    on the device (batch 1), since those reads cannot tell its model from its items.
     """
     classes = {**OVERRIDE["resource_classes"], "gpu": {"device": "cuda", "max_workers": 1}}
     pool = {**OVERRIDE["pool"], "quantum_items": 4}
@@ -218,11 +219,10 @@ def test_device_memory_is_read_once_per_claim_on_a_cuda_class(tmp_path: Path) ->
     )
     assert worker.serve() == 0
     samples = [Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile, "gpu")]
-    assert next(reads, None) is None and len(samples) == 4
+    assert next(reads, None) is None and len(samples) == 4 and not any(s.served for s in samples)
     assert {s.device_baseline_bytes for s in samples} == {0} and {s.device_bytes for s in samples} == {1000, 1010}
     found = calibrated(samples)
-    assert found is not None and (found.device_resident_bytes, found.device_peak_bytes) == (1000, 1010)
-    assert measure_of(found, on_device=True).bytes_per_item == 10
+    assert found is not None and (found.device_resident_bytes, found.device_peak_bytes) == (None, None)
 
 
 @pytest.mark.logic
