@@ -339,12 +339,17 @@ def stall(
     setattr(os, function, stalled)
 
 
+def await_true(done: Callable[[], bool], bound_s: float, poll_s: float, what: str) -> None:
+    """Return once `done()` is true, checking every `poll_s`; fail naming `what` after `bound_s`."""
+    deadline = time.monotonic() + bound_s
+    while not done():
+        assert time.monotonic() < deadline, f"{what} never happened"
+        time.sleep(poll_s)
+
+
 def await_file(path: Path, bound_s: float, poll_s: float) -> None:
     """Return once `path` exists, checking every `poll_s`; fail after `bound_s`."""
-    deadline = time.monotonic() + bound_s
-    while not path.exists():
-        assert time.monotonic() < deadline, f"{path.name} never appeared"
-        time.sleep(poll_s)
+    await_true(path.exists, bound_s, poll_s, path.name)
 
 
 def gate_pause(gate: Path, bound_s: float, poll_s: float) -> Callable[[], None]:

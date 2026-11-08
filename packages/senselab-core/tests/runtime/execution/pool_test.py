@@ -34,7 +34,7 @@ from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.measures import FixedMeasures
-from syscall_faults_fixture import displace_before_proof, pause_replaces
+from syscall_faults_fixture import await_true, displace_before_proof, pause_replaces
 
 SCORE = scoring("pool_test.score")
 HEAR = SCORE.model_copy(update={"name": "pool_test.hear", "inputs": {"audio": "Audio"}})
@@ -470,7 +470,9 @@ def test_coordinate_runs_a_plan_on_the_pool_as_the_next_epoch(tmp_path: Path) ->
 
 
 @pytest.mark.contract
-def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(tmp_path: Path) -> None:
+def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     """An older coordinator whose env breaks after a newer epoch was taken stops; no hold of its epoch counts.
 
     Its clock is frozen, so every poll may reuse its submit-time epoch read; the outcome that lands must find the newer
@@ -481,18 +483,20 @@ def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(tm
     frozen = time.monotonic()
     stale = _pool(tmp_path, store, _Idle(), profile, clock=lambda: frozen)
     early = stale.submit(node_fragment(placed, stale.admit(placed, values), elements=[(0,)]))
-    workers.act = lambda fragment: LOST
+    workers.act = lambda fragment: LOST if fragment.jobs[0].element == (0,) else None
     queue = stale.queues.queue("cpu")
     claim = queue.claim("w")
     assert claim is not None
     workers._serve(claim)  # noqa: SLF001 - one item served by hand, before the newer epoch
     live = _pool(tmp_path, store, workers, profile)
     late = live.submit(node_fragment(placed, live.admit(placed, values), elements=[(1,)]))
+    marker = request.node.get_closest_marker("timeout")
+    assert marker is not None
+    await_true(lambda: len(workers.served) == 2, float(marker.args[0]), profile.pool.poll_s, "serving")
     with pytest.raises(StaleCoordinator):
         list(follow(stale, early))
     queue.hold(stale.epoch, "host")
     assert queue.held("host") is None and not stale.broken
-    workers.act = lambda fragment: None
     try:
         [ref] = list(follow(live, late))
     finally:
