@@ -94,10 +94,14 @@ def test_cli_items_run_compare_end_to_end(tmp_path: Path) -> None:
     decided = tmp_path / "comparison.json"
     _cli("benchmarks/parity_reference.py", "compare", outputs, "--config", config, "--out", decided)
     record: dict[str, Any] = json.loads(decided.read_text("utf-8"))
-    thresholds = importlib.import_module("senselab_core.runtime.compare").Thresholds
+    run_config = importlib.import_module("senselab_core.runtime.compare").RunConfigFile
     assert record["format"] == "parity-comparison@1.0" and record["against"] == "batch"
     assert record["mismatches"] == {}
-    assert record["thresholds"] == thresholds.load(config).canonical_digest() != thresholds.load().canonical_digest()
+    assert (
+        record["thresholds"]
+        == run_config.load(config).thresholds.canonical_digest()
+        != run_config.load().thresholds.canonical_digest()
+    )
 
 
 def _parity() -> Any:  # noqa: ANN401

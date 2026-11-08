@@ -41,8 +41,9 @@ from senselab_core.kernel.identity import (
 from senselab_core.kernel.license import License
 from senselab_core.kernel.signals import PlainText, Recording, text_identity
 from senselab_core.runtime.audio_io import DECODER, open_audio
+from senselab_core.runtime.calibration import RunCalibration
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
-from senselab_core.runtime.compare import Thresholds
+from senselab_core.runtime.compare import RunConfigFile, Thresholds
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.hardware import HardwareInfo, probe_hardware
 from senselab_core.runtime.keys import Placement, request_components
@@ -124,16 +125,17 @@ class TaskCall(BaseModel):
 class RunConfig:
     """A run's settings: `reuse`, the widest policy under which a stored result serves a call, `verify`, `licenses`.
 
-    `verify` is the fraction of cross-context hits recomputed and compared under `thresholds` (`Thresholds.load`,
-    the packaged run config's unless a user's is merged over it). `licenses` is the user's license policy; with None
-    no call is refused for its license. `settings` holds the values tasks read, from which a task's `run.<path>`
-    profile slices are cut (`keys.profile_slices`).
+    `config` is the run config file (`RunConfigFile.load`, the packaged one unless a user's is merged over it), whose
+    sections are `thresholds` and `calibration`. `verify` is the fraction of cross-context hits recomputed and
+    compared under `thresholds`. `licenses` is the user's license policy; with None no call is refused for its
+    license. `settings` holds the values tasks read, from which a task's `run.<path>` profile slices are cut
+    (`keys.profile_slices`).
     """
 
     reuse: ReusePolicy = DEFAULT_REUSE_POLICY
     verify: float = 0.0
     licenses: LicensePolicy | None = None
-    thresholds: Thresholds = field(default_factory=Thresholds.load)
+    config: RunConfigFile = field(default_factory=RunConfigFile.load)
     settings: Mapping[str, Any] = field(default_factory=lambda: FrozenMapping({}))
 
     def __post_init__(self) -> None:
@@ -141,6 +143,16 @@ class RunConfig:
         if not 0.0 <= self.verify <= 1.0:
             raise ValueError(f"verify is a fraction in [0, 1], got {self.verify}")
         object.__setattr__(self, "settings", FrozenMapping(dict(self.settings)))
+
+    @property
+    def thresholds(self) -> Thresholds:
+        """The run config's comparison thresholds."""
+        return self.config.thresholds
+
+    @property
+    def calibration(self) -> RunCalibration:
+        """What the run overrides of its profile's `calibration` section (`RunCalibration.apply`)."""
+        return self.config.calibration
 
 
 @dataclass(frozen=True)

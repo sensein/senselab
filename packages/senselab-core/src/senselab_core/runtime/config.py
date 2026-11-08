@@ -1,7 +1,11 @@
-"""The one YAML reader: dates stay text, a repeated key is refused, a non-mapping document is refused."""
+"""The one YAML reader: dates stay text, a repeated key is refused, a non-mapping document is refused.
+
+`merge_over` deep-merges a user's config mapping over a packaged one.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any
@@ -77,3 +81,15 @@ def load_yaml(source: str | Path | Traversable, what: str) -> dict[str, Any]:
 def dump_yaml(document: dict[str, Any]) -> str:
     """Return `document` as YAML text, keys in insertion order and no line wrapping."""
     return yaml.safe_dump(document, sort_keys=False, width=float("inf"))
+
+
+def merge_over(base: Mapping[str, Any], top: Mapping[str, Any]) -> dict[str, Any]:
+    """Return `top` deep-merged over `base`: a key both hold as mappings merges, any other key of `top` replaces."""
+    return {
+        k: merge_over(base[k], top[k])
+        if isinstance(base.get(k), Mapping) and isinstance(top.get(k), Mapping)
+        else top[k]
+        if k in top
+        else base[k]
+        for k in {**base, **top}
+    }

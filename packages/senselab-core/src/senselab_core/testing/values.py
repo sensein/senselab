@@ -93,8 +93,9 @@ from senselab_core.kernel.signals import (
 from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER
+from senselab_core.runtime.calibration import RunCalibration
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
-from senselab_core.runtime.compare import Difference, Threshold, Thresholds
+from senselab_core.runtime.compare import Difference, RunConfigFile, Threshold, Thresholds
 from senselab_core.runtime.envs import EnvRecord
 from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide
 from senselab_core.runtime.execution_settings import ResourceClass
@@ -102,6 +103,7 @@ from senselab_core.runtime.fetch import DataFile, DataManifest
 from senselab_core.runtime.profiles import Envs, ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
+from senselab_core.testing.calibration_samples import register_calibration_samples
 from senselab_core.testing.execution_samples import register_execution_samples
 from senselab_core.testing.placement_samples import register_placement_samples, resource_table
 
@@ -1054,6 +1056,14 @@ def _register_comparison_samples() -> None:
         lambda: [Thresholds(by_name={"a": bounds[0]}), Thresholds(by_name={"a": bounds[0], "b": bounds[1]})],
         invalid_updates=[{"by_name": {"a": 1}}],
     )
+    register_samples(
+        RunConfigFile,
+        lambda: [
+            RunConfigFile(thresholds=Thresholds(by_name={"a": bounds[0]})),
+            RunConfigFile(thresholds={"a": bounds[1]}, calibration=RunCalibration(trust="own")),
+        ],
+        invalid_updates=[{"calibration": {"trust": "all"}}, {"thresholds": "a"}, {"format": "run-config@3.0"}],
+    )
 
 
 def _register_graph_samples() -> None:
@@ -1144,3 +1154,4 @@ _register_plan_samples()
 _register_runtime_samples()
 register_placement_samples(register_samples, _license())
 register_execution_samples(register_samples)
+register_calibration_samples(register_samples, ExecutionProfile.load().calibration)

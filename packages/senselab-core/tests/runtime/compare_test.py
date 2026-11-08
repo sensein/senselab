@@ -16,6 +16,7 @@ from senselab_core.runtime.compare import (
     FLATTEN_VERSION,
     Fields,
     NotWireForm,
+    RunConfigFile,
     Threshold,
     Thresholds,
     UndeclaredComparison,
@@ -266,16 +267,18 @@ def test_a_decoded_kernel_value_is_refused_and_its_wire_form_compares_under_its_
 @pytest.mark.logic
 def test_packaged_thresholds_cover_every_rule_and_a_run_config_overrides_one(tmp_path: Path) -> None:
     """The packaged run config names every threshold a rule reads; a user's run config replaces one bound of one."""
-    packaged = Thresholds.load()
+    packaged = RunConfigFile.load().thresholds
     assert set(NAMES) <= set(packaged.by_name)
     config = tmp_path / "run.yaml"
     config.write_text("thresholds:\n  embedding:\n    atol: 2\n", "utf-8")
-    mine = Thresholds.load(config)
+    mine = RunConfigFile.load(config).thresholds
     assert mine.by_name["embedding"] == Threshold(rtol=packaged.by_name["embedding"].rtol, atol=2.0)
     assert {n: b for n, b in mine.by_name.items() if n != "embedding"} == {
         n: b for n, b in packaged.by_name.items() if n != "embedding"
     }
-    assert mine.canonical_digest() != packaged.canonical_digest() == Thresholds.load({}).canonical_digest()
+    assert (
+        mine.canonical_digest() != packaged.canonical_digest() == RunConfigFile.load({}).thresholds.canonical_digest()
+    )
     expected: Fields = {"e.format": '"embedding@1.0"', "e.vector": [0.0]}
     moved: Fields = {**expected, "e.vector": [1.5]}
     assert not compare_fields(expected, moved, packaged).agree
@@ -295,14 +298,14 @@ def test_packaged_thresholds_cover_every_rule_and_a_run_config_overrides_one(tmp
 def test_an_unknown_threshold_is_refused(override: dict[str, Any], match: str) -> None:
     """A misspelt threshold, run config key or bound, or a derivation, is refused, naming the closest one."""
     with pytest.raises(UnknownThreshold, match=match):
-        Thresholds.load(override)
+        RunConfigFile.load(override)
 
 
 @pytest.mark.logic
 def test_a_negative_bound_is_refused() -> None:
     """A bound is a finite non-negative number."""
     with pytest.raises(ValueError, match="greater than or equal"):
-        Thresholds.load({"thresholds": {"time_ns": {"atol": -1}}})
+        RunConfigFile.load({"thresholds": {"time_ns": {"atol": -1}}})
 
 
 @pytest.mark.logic

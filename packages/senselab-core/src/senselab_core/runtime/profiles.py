@@ -2,8 +2,8 @@
 
 A profile holds stack preferences per task, device preference, env roots, the torch index override, the model-source
 allowlist, the model-cache budget, the retry policy, the network policy, the resource classes, the substrate, the
-pool, job leases, fault budgets, worker timeouts and service settings. `ExecutionProfile.load` deep-merges a user
-mapping or YAML file over a packaged profile (`laptop`, `orcd`). A profile is recorded with each result through
+pool, calibration, job leases, fault budgets, worker timeouts and service settings. `ExecutionProfile.load` deep-merges
+a user mapping or YAML file over a packaged profile (`laptop`, `orcd`). A profile is recorded with each result through
 `canonical_digest` and never reaches a key.
 """
 
@@ -29,8 +29,9 @@ from senselab_core.kernel.formats import (
     check,
 )
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
-from senselab_core.runtime.config import load_yaml
+from senselab_core.runtime.config import load_yaml, merge_over
 from senselab_core.runtime.execution_settings import (
+    CalibrationSettings,
     FaultBudgets,
     JobLease,
     PoolSettings,
@@ -141,6 +142,7 @@ class ExecutionProfile(Formatted):
         substrate: What starts workers: `local` processes or `slurm` jobs.
         pool: How pool workers claim and yield, and the quantum ceilings.
         sizing: The fractions and targets a unit's batch, quantum and worker count are derived from (`size`).
+        calibration: How a unit without a measure is probed, where measures are kept and whose are trusted.
         lease: How a lease is kept alive: its stale bound and renewal share, for job and pool leases alike.
         faults: The retry budget of each fault class.
         timeouts: A worker's load and request timeouts.
@@ -162,6 +164,7 @@ class ExecutionProfile(Formatted):
     substrate: SubstrateSpec
     pool: PoolSettings
     sizing: SizingSettings
+    calibration: CalibrationSettings
     lease: JobLease
     faults: FaultBudgets
     timeouts: Timeouts
@@ -198,7 +201,7 @@ class ExecutionProfile(Formatted):
         """
         packaged = _read(resources.files("senselab_core.runtime").joinpath("data", "profiles", f"{name}.yaml"))
         extra = override if isinstance(override, Mapping) else _read(override) if override is not None else {}
-        merged = _merge(packaged, extra)
+        merged = merge_over(packaged, extra)
         if check(EXECUTION_PROFILE_FORMAT, merged.get("format"), RETIRED_EXECUTION_PROFILE_FORMATS) is (
             FormatVerdict.RETIRED
         ):
@@ -207,6 +210,16 @@ class ExecutionProfile(Formatted):
         profile = cls.model_validate(merged)
         profile.lease.check_bound()
         return profile
+
+    @property
+    def probe_s(self) -> float:
+        """Seconds of warm probe requests a probe may take: `sizing.load_share × sizing.target_wall_s`."""
+        return self.sizing.load_share * self.sizing.target_wall_s
+
+    @property
+    def peer_wait_s(self) -> float:
+        """Seconds a coordinator waits for a peer's probe of the same unit: `probe_s + lease.stale_after_s`."""
+        return self.probe_s + self.lease.stale_after_s
 
     def env_root(self, kind: str) -> Path:
         """Return the root for env `kind` with `${VAR:-fallback}`, then `~` and `$VAR`, expanded.
@@ -240,22 +253,12 @@ def _read(source: Any) -> dict[str, Any]:  # noqa: ANN401 - a Path or a package 
     return load_yaml(source, "profile")
 
 
-def _merge(base: Mapping[str, Any], top: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        k: _merge(base[k], top[k])
-        if isinstance(base.get(k), Mapping) and isinstance(top.get(k), Mapping)
-        else top[k]
-        if k in top
-        else base[k]
-        for k in {**base, **top}
-    }
-
-
 _SECTIONS: Mapping[str, type[Frozen]] = {
     "envs": Envs,
     "retry": RetryPolicy,
     "substrate": SubstrateSpec,
     "pool": PoolSettings,
+    "calibration": CalibrationSettings,
     "lease": JobLease,
     "faults": FaultBudgets,
     "timeouts": Timeouts,

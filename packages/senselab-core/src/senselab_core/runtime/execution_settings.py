@@ -1,7 +1,7 @@
-"""The sections of an execution profile that size and pace a run: classes, substrate, pool, leases, faults, timeouts.
+"""The sections of an execution profile that size and pace a run.
 
-Each is a `Frozen` value the profile holds; `ExecutionProfile` checks that each resource class's name matches its
-device.
+Classes, substrate, pool, calibration, leases, faults and timeouts. Each is a `Frozen` value the profile holds;
+`ExecutionProfile` checks that each resource class's name matches its device.
 """
 
 from typing import Annotated, Literal
@@ -12,6 +12,7 @@ from senselab_core.kernel._base import Frozen, NonEmptyStr
 
 PositiveInt = Annotated[int, Field(ge=1)]
 PositiveSeconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+PositiveFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 
 SERVICE_CLASS = "svc"
@@ -133,6 +134,47 @@ class SizingSettings(Frozen):
     calibration_items: Annotated[int, Field(ge=2)]
     calibration_workers: PositiveInt
     device_query_s: PositiveSeconds
+
+
+Trust = Literal["group", "own"]
+"""Whose measures a reader trusts: every file of every root (`group`), or only its own (`own`)."""
+
+
+class CalibrationSettings(Frozen):
+    """How a unit without a measure is probed, where measures are kept, and how a measure is judged stale.
+
+    Attributes:
+        measures_roots: Roots read in order and pooled; writes go to the first writable one.
+        trust: `group` reads every root's files, `own` only the reader's own.
+        warmup_requests: Requests a model state answers before one counts as warm.
+        length_strata: Strata of equal count a probe cuts its candidate jobs into.
+        min_requests: Warm requests a stratum needs for a quantity to be measured.
+        single_item_jobs: Jobs of the one item per probe that separates the per-item cost from the per-job cost.
+        batched_sizes: Batch sizes the batched phase measures.
+        probe_items: Jobs a probe plans at most.
+        confidence: The one-sided z of the batch decision and of the item cut.
+        drift_confidence: The two-sided z of the drift test.
+        observations_kept: Superseded probes' observation files kept for audit.
+        unmeasured_workers: Workers a unit without a measure runs on.
+    """
+
+    measures_roots: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    trust: Trust
+    warmup_requests: Annotated[int, Field(ge=0)]
+    length_strata: PositiveInt
+    min_requests: PositiveInt
+    single_item_jobs: Annotated[int, Field(ge=2)]
+    batched_sizes: Annotated[int, Field(ge=1, le=2)]
+    probe_items: PositiveInt
+    confidence: PositiveFloat
+    drift_confidence: PositiveFloat
+    observations_kept: PositiveInt
+    unmeasured_workers: PositiveInt
+
+    @property
+    def drift_window(self) -> int:
+        """Production requests of a regime judged for drift together: `length_strata × min_requests`."""
+        return self.length_strata * self.min_requests
 
 
 class LeaseBoundError(ValueError):
