@@ -18,8 +18,10 @@ Three nodes at one commit share one measures root ``<shared>``; barriers and eve
 ``verdict`` passes when every writer read every unit back complete, no unit lacks a writer's probe, each written unit
 has one ``unit.json``, nothing is quarantined, no take precedes the kill, the first take follows it within
 ``--stale`` plus ``--slack``, no two holds overlap, no holder lost its lease, ``readonly`` saw A's lease and wrote
-only to its own root, three distinct hosts took part, and the rounds whose writers overlapped on the storage clock
-number at least ``--overlap`` (reported either way). ``<checkout>`` is a clone at the commit under test::
+only to its own root, three distinct hosts took part, and at least half the rounds overlapped. A round overlaps when
+every writer had staged its observation file before any writer committed it: each writer's window runs from staging to
+commit on the storage clock, and the windows have a common point. The commit (`StorageDir.link`) is held at a barrier on
+the shared storage until all writers have staged, for `unit.json` and for the observation file alike. ``<checkout>`` is a clone at the commit under test::
 
     export PYTHONPATH=<checkout>/packages/senselab-core/src:<checkout>/packages/senselab/src:<checkout>/packages/senselab-worker/src
     S=<checkout>/scripts/probe_measures_cross_node.py
@@ -35,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import socket
 import sys
@@ -43,12 +46,13 @@ from pathlib import Path
 
 from senselab_core.kernel.identity import ModelIdentity
 from senselab_core.runtime.locks import Lease, LeaseTimeout
-from senselab_core.runtime.measures import Build, MeasureRoots, MeasureUnit, PeerProbing, Provenance
+from senselab_core.runtime.measures import UNIT_FILE, Build, MeasureRoots, MeasureUnit, PeerProbing, Provenance
 from senselab_core.runtime.storage import StorageDir, StorePolicy
 from senselab_core.testing.calibration_samples import UNIT, observation
 
 LEASE_UNIT = UNIT.model_copy(update={"model": ModelIdentity(id="openai/whisper-base", identity="e" * 40)})
 OBSERVATIONS_PER_PROBE = 3
+COMMIT_POLL_S = 0.02
 PROVENANCE = Provenance(
     job=os.environ.get("SLURM_JOB_ID"),
     run="cross-node",
@@ -95,18 +99,66 @@ def _items(round_: int, writers: list[str]) -> set[str]:
     return {f"{w}-{round_}-{i}" for w in writers for i in range(OBSERVATIONS_PER_PROBE)}
 
 
+class _CommitRendezvous:
+    """Hold every writer's `StorageDir.link` (the commit of a staged file) until all writers have staged theirs.
+
+    A writer enters `commit-<round>-<kind>/<name>` when its temp file is staged and links only once every writer has;
+    `kind` is `unit` for the first-writer `unit.json` race and `obs` for the observation file. A writer that finds
+    `unit.json` already committed never stages it, so that barrier gives up after `grace` seconds and goes on.
+    """
+
+    def __init__(self, events: Path, name: str, writers: int, grace: float, poll: float) -> None:
+        self.events, self.name, self.writers, self.grace, self.poll = events, name, writers, grace, poll
+        self.round = 0
+        self.windows: dict[str, tuple[float, float]] = {}
+        self._link = StorageDir.link
+
+    def __enter__(self) -> "_CommitRendezvous":
+        rendezvous = self
+
+        def link(stage: StorageDir, name: str, dst: StorageDir, dst_name: str, *, grammar: re.Pattern[str]) -> None:
+            kind = {UNIT_FILE: "unit", f"{rendezvous.name}-{rendezvous.round}.json": "obs"}.get(dst_name)
+            if kind is None:
+                rendezvous._link(stage, name, dst, dst_name, grammar=grammar)
+                return
+            staged = _now(rendezvous.events)
+            try:
+                _barrier(
+                    rendezvous.events, f"commit-{rendezvous.round}-{kind}", rendezvous.name,
+                    rendezvous.writers, rendezvous.grace, rendezvous.poll,
+                )  # fmt: skip
+            except TimeoutError:
+                pass
+            try:
+                rendezvous._link(stage, name, dst, dst_name, grammar=grammar)
+            finally:
+                rendezvous.windows[kind] = (staged, _now(rendezvous.events))
+
+        StorageDir.link = link  # type: ignore[method-assign]
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        StorageDir.link = self._link  # type: ignore[method-assign]
+
+
 def write(  # noqa: PLR0913 - the role's command-line options
     shared: Path, events: Path, name: str, probes: int, writers: int, stale: float, bound: float, poll: float
 ) -> None:
-    """Write one probe of a fresh unit per round after a barrier; then read every unit back."""
+    """Write one probe of a fresh unit per round: stage, meet at a commit barrier, commit together; then read back."""
     roots = _roots(shared, stale=stale)
-    for n in range(probes):
-        _barrier(events, f"go-{n}", name, writers, bound, poll)
-        start = _now(events)
-        landed = roots.put_observations(
-            _unit(n), f"{name}-{n}", [observation(probe=None, item=f"{name}-{n}-{i}") for i in range(OBSERVATIONS_PER_PROBE)], PROVENANCE
-        )
-        _log(events, name, event="wrote", round=n, landed=landed is not None, start_t=start, end_t=_now(events))
+    with _CommitRendezvous(events, name, writers, grace=10.0, poll=COMMIT_POLL_S) as commits:
+        for n in range(probes):
+            _barrier(events, f"go-{n}", name, writers, bound, poll)
+            commits.round, commits.windows = n, {}
+            landed = roots.put_observations(
+                _unit(n),
+                f"{name}-{n}",
+                [observation(probe=None, item=f"{name}-{n}-{i}") for i in range(OBSERVATIONS_PER_PROBE)],
+                PROVENANCE,
+            )
+            start, end = commits.windows.get("obs", (None, None))
+            _log(events, name, event="wrote", round=n, landed=landed is not None, start_t=start, end_t=end,
+                 unit_window=commits.windows.get("unit"))  # fmt: skip
     _barrier(events, "done", name, writers, bound, poll)
     names = sorted(p.name for p in (events / "done").iterdir())
     missing = [n for n in range(probes) if _items(n, names) - {o.item for o in roots.observations(_unit(n))}]
@@ -139,7 +191,9 @@ def breaker(shared: Path, events: Path, stale: float, fraction: float, name: str
             try:
                 with lease, lease.keep_alive(fraction) as state:
                     _log(events, name, event="took", broke=[str(p) for p in lease.broke], proved=lease.prove())
-                    roots.put_observations(LEASE_UNIT, f"lease-{name}", [observation(probe=None, item=name)], PROVENANCE)
+                    roots.put_observations(
+                        LEASE_UNIT, f"lease-{name}", [observation(probe=None, item=name)], PROVENANCE
+                    )
                     time.sleep(2 * stale)
                     owned = lease.owns()
                 _log(events, name, event="released", owns=owned, lost=state.lost)
@@ -197,7 +251,9 @@ def _check_writes(shared: Path, events: list[dict], writers: int, probes: int) -
 
 def verdict(shared: Path, events_dir: Path, args: argparse.Namespace) -> bool:
     """Print the probe's verdict as JSON; return whether it passed."""
-    events = [json.loads(line) for p in sorted(events_dir.glob("events-*.jsonl")) for line in p.read_text().splitlines()]
+    events = [
+        json.loads(line) for p in sorted(events_dir.glob("events-*.jsonl")) for line in p.read_text().splitlines()
+    ]
     kill = next((e["storage_t"] for e in events if e["role"] == "A" and e["event"] == "kill"), None)
     held = next((e["storage_t"] for e in events if e["role"] == "A" and e["event"] == "held"), None)
     spans, unreleased = [], 0
@@ -221,7 +277,7 @@ def verdict(shared: Path, events_dir: Path, args: argparse.Namespace) -> bool:
         and not early and not lost and not overlaps and kill - held > args.stale and took[0] - kill <= args.stale + args.slack
         and bool(writes["complete"]) and writes["all_landed"] and not writes["rounds_missing_at_a_reader"]
         and writes["unit_files"] == units_expected and not writes["quarantined"]
-        and writes["overlapping_rounds"] >= args.overlap
+        and writes["overlapping_rounds"] * 2 >= args.probes
         and bool(fallback) and fallback["peer_holds"] and fallback["in_own"] and fallback["shared_unchanged"]
         and fallback["write_root_is_own"] and fallback["read_back"]
     )  # fmt: skip
@@ -253,7 +309,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--probes", type=int, default=20)
     parser.add_argument("--hosts", type=int, default=3)
     parser.add_argument("--writers", type=int, default=3)
-    parser.add_argument("--overlap", type=int, default=1)
     parser.add_argument("--stale", type=float, required=True)
     parser.add_argument("--fraction", type=float, default=0.25)
     parser.add_argument("--hold", type=float, default=360.0)
