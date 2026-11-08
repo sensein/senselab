@@ -53,6 +53,7 @@ from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.execution.executor import JobRef, PlanFragment
 from senselab_core.runtime.execution.queue import ITEM_TAG, Queue, QueueSet
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.testing.measures import with_calibration_rules
 from senselab_worker.digest import identity_digest
 
 DIR_VARIABLE = "SENSELAB_QUEUE_PROBE_DIR"
@@ -68,7 +69,7 @@ def _queues(root: Path, args: argparse.Namespace) -> QueueSet:
             "renew_fraction": args.fraction,
             "attribute_delay_s": args.delay,
         }
-    return QueueSet(root / "queues", ExecutionProfile.load(args.profile, override=override))
+    return QueueSet(root / "queues", ExecutionProfile.load(args.profile, override=with_calibration_rules(override, args.profile)))
 
 
 def _queue(root: Path, args: argparse.Namespace) -> Queue:

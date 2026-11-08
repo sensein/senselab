@@ -41,6 +41,7 @@ from senselab_core.kernel.identity import (
 from senselab_core.kernel.license import License
 from senselab_core.kernel.signals import PlainText, Recording, text_identity
 from senselab_core.runtime.audio_io import DECODER, open_audio
+from senselab_core.runtime.calibration import RunCalibration
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
 from senselab_core.runtime.compare import Thresholds
 from senselab_core.runtime.envs import EnvHandle
@@ -124,6 +125,7 @@ class TaskCall(BaseModel):
 class RunConfig:
     """A run's settings: `reuse`, the widest policy under which a stored result serves a call, `verify`, `licenses`.
 
+    `calibration` holds what the run overrides of its profile's `calibration` section (`RunCalibration.apply`).
     `verify` is the fraction of cross-context hits recomputed and compared under `thresholds` (`Thresholds.load`,
     the packaged run config's unless a user's is merged over it). `licenses` is the user's license policy; with None
     no call is refused for its license. `settings` holds the values tasks read, from which a task's `run.<path>`
@@ -135,6 +137,7 @@ class RunConfig:
     licenses: LicensePolicy | None = None
     thresholds: Thresholds = field(default_factory=Thresholds.load)
     settings: Mapping[str, Any] = field(default_factory=lambda: FrozenMapping({}))
+    calibration: RunCalibration = field(default_factory=RunCalibration)
 
     def __post_init__(self) -> None:
         """Refuse a `verify` outside [0, 1], and hold `settings` read-only."""

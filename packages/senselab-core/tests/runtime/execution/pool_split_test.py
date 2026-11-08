@@ -32,7 +32,7 @@ from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.store import ResultStore
-from senselab_core.testing.measures import CEILED, CEILED_SIZING, FixedMeasures
+from senselab_core.testing.measures import CEILED, CEILED_SIZING, FixedMeasures, with_calibration_rules
 
 SCORE = scoring("pool_split_test.score")
 CHAIN = SCORE.model_copy(update={"name": "pool_split_test.chain", "inputs": {"value": "sha256"}})
@@ -72,7 +72,7 @@ def _profile(quantum: int = 10, cap: int | None = None, **faults: int) -> Execut
         "sizing": CEILED_SIZING,
         "faults": {"content_attempts": 1, **faults},
     }
-    return ExecutionProfile.load("orcd", override)
+    return ExecutionProfile.load("orcd", with_calibration_rules(override, "orcd"))
 
 
 class Recording:

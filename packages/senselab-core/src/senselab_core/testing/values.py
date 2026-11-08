@@ -102,6 +102,7 @@ from senselab_core.runtime.fetch import DataFile, DataManifest
 from senselab_core.runtime.profiles import Envs, ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
+from senselab_core.testing.calibration_samples import register_calibration_samples
 from senselab_core.testing.execution_samples import register_execution_samples
 from senselab_core.testing.placement_samples import register_placement_samples, resource_table
 
@@ -1144,3 +1145,4 @@ _register_plan_samples()
 _register_runtime_samples()
 register_placement_samples(register_samples, _license())
 register_execution_samples(register_samples)
+register_calibration_samples(register_samples, ExecutionProfile.load().calibration)

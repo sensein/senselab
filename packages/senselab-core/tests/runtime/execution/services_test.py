@@ -28,6 +28,7 @@ from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.vllm_server import StaleAttestation
 from senselab_core.testing.interpreter import source_tree_python
+from senselab_core.testing.measures import with_calibration_rules
 
 pytestmark = pytest.mark.logic
 
@@ -40,13 +41,15 @@ BACKEND = fake.FAKE.model_copy(
 )
 PROFILE = ExecutionProfile.load(
     "laptop",
-    {
-        "devices": ["cpu"],
-        "resource_classes": {"svc:pii": {"device": "cpu", "max_workers": 1}},
-        "pool": {"poll_s": 0.05, "first_poll_s": 0.01},
-        "lease": {"stale_after_s": 0.4, "renew_fraction": 0.2, "attribute_delay_s": 0},
-        "services": {"idle_exit_s": 0.15},
-    },
+    with_calibration_rules(
+        {
+            "devices": ["cpu"],
+            "resource_classes": {"svc:pii": {"device": "cpu", "max_workers": 1}},
+            "pool": {"poll_s": 0.05, "first_poll_s": 0.01},
+            "lease": {"stale_after_s": 0.4, "renew_fraction": 0.2, "attribute_delay_s": 0},
+            "services": {"idle_exit_s": 0.15},
+        }
+    ),
 )
 CHAT = [{"role": "user", "content": "hi"}]
 

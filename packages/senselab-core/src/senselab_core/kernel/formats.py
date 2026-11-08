@@ -79,6 +79,32 @@ RETIRED_CATALOGUE_FORMATS = frozenset({"catalogue@1"})
 RESOURCE_TABLE_FORMAT = "resource-table@1.0"
 """The format of one task and backend's measured resources, `data/resources/<task>/<backend>.yaml`."""
 
+RESOURCE_TABLE_2_FORMAT = "resource-table@2.0"
+"""The format of a measured resource table whose rows are measure units with their estimates (`resource-table@1.0`'s
+successor)."""
+
+MEASURES_LAYOUT_TAG = "measures@1"
+"""The layout tag of a measures root: the directory `<root>/measures@1/` holds every record kind."""
+MEASURE_UNIT_TAG = "measure-unit@1"
+"""The identity tag of a measure unit: its digest is over the unit's identity fields."""
+MEASURE_UNIT_FORMAT = "measure-unit@1.0"
+"""The format of a unit's identity record, `units/<u[:2]>/<u>/unit.json`."""
+MEASURE_OBSERVATIONS_FORMAT = "measure-observations@1.0"
+"""The format of one probe's observations, `units/<u[:2]>/<u>/obs/<probe id>.json`."""
+MEASURE_DRIFT_FORMAT = "measure-drift@1.0"
+"""The format of production evidence that an estimate is suspect."""
+MEASURE_SUPERSEDE_FORMAT = "measure-supersede@1.0"
+"""The format of a record that a confirming probe disagreed, so earlier observations stop pooling."""
+MEASURE_REGIME_FORMAT = "measure-regime@1.0"
+"""The format of a co-tenancy factor of an estimate."""
+MEASURE_OOM_FORMAT = "measure-oom@1.0"
+"""The format of a resource fault at a batch and length."""
+
+PLACEMENT_REQUEST_FORMAT = "placement-request@1.0"
+"""The format of what a run needs, handed to a site's placement hook."""
+PLACEMENT_ANSWER_FORMAT = "placement-answer@1.0"
+"""The format of a site's placement hook's answer."""
+
 FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]
 """`<name>@<major>.<minor>`."""
 

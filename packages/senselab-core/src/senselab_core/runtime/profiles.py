@@ -2,8 +2,8 @@
 
 A profile holds stack preferences per task, device preference, env roots, the torch index override, the model-source
 allowlist, the model-cache budget, the retry policy, the network policy, the resource classes, the substrate, the
-pool, job leases, fault budgets, worker timeouts and service settings. `ExecutionProfile.load` deep-merges a user
-mapping or YAML file over a packaged profile (`laptop`, `orcd`). A profile is recorded with each result through
+pool, calibration, job leases, fault budgets, worker timeouts and service settings. `ExecutionProfile.load` deep-merges
+a user mapping or YAML file over a packaged profile (`laptop`, `orcd`). A profile is recorded with each result through
 `canonical_digest` and never reaches a key.
 """
 
@@ -31,6 +31,7 @@ from senselab_core.kernel.formats import (
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.execution_settings import (
+    CalibrationSettings,
     FaultBudgets,
     JobLease,
     PoolSettings,
@@ -141,6 +142,7 @@ class ExecutionProfile(Formatted):
         substrate: What starts workers: `local` processes or `slurm` jobs.
         pool: How pool workers claim and yield, and the quantum ceilings.
         sizing: The fractions and targets a unit's batch, quantum and worker count are derived from (`size`).
+        calibration: How a unit without a measure is probed, where measures are kept and whose are trusted.
         lease: How a lease is kept alive: its stale bound and renewal share, for job and pool leases alike.
         faults: The retry budget of each fault class.
         timeouts: A worker's load and request timeouts.
@@ -162,6 +164,7 @@ class ExecutionProfile(Formatted):
     substrate: SubstrateSpec
     pool: PoolSettings
     sizing: SizingSettings
+    calibration: CalibrationSettings
     lease: JobLease
     faults: FaultBudgets
     timeouts: Timeouts
@@ -194,6 +197,7 @@ class ExecutionProfile(Formatted):
             ProfileFormatRetired: `override` declares a retired format.
             UnknownProfileKey: a key of `override` that the format does not define, naming the closest one.
             LeaseBoundError: two of the lease's beat intervals plus its attribute delay are not below its stale bound.
+            CalibrationRuleError: a `calibration` key is not what the rule deriving it from other keys gives.
             ValueError: the merged mapping is invalid.
         """
         packaged = _read(resources.files("senselab_core.runtime").joinpath("data", "profiles", f"{name}.yaml"))
@@ -206,6 +210,7 @@ class ExecutionProfile(Formatted):
         _check_keys(merged, cls.model_fields)
         profile = cls.model_validate(merged)
         profile.lease.check_bound()
+        profile.calibration.check_rules(profile.sizing, profile.lease)
         return profile
 
     def env_root(self, kind: str) -> Path:
@@ -256,6 +261,7 @@ _SECTIONS: Mapping[str, type[Frozen]] = {
     "retry": RetryPolicy,
     "substrate": SubstrateSpec,
     "pool": PoolSettings,
+    "calibration": CalibrationSettings,
     "lease": JobLease,
     "faults": FaultBudgets,
     "timeouts": Timeouts,

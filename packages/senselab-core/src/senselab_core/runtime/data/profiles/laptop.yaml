@@ -59,6 +59,39 @@ sizing:
   calibration_items: 4
   calibration_workers: 1
   device_query_s: 30
+# How a unit without a measure is probed, where measures are kept and whose are trusted, and when a measure is stale.
+calibration:
+  # Roots read in order and pooled; writes go to the first writable one.
+  measures_roots:
+  - ${SENSELAB_CACHE:-~/.cache/senselab/hf}/2x/measures
+  # group reads every file of every root; own only the reader's own files.
+  trust: own
+  # Requests a model state answers before one counts as warm.
+  warmup_requests: 2
+  # Strata of equal count a probe cuts its candidate jobs into.
+  length_strata: 2
+  # Warm requests a stratum needs for a quantity to be measured.
+  min_requests: 3
+  # Jobs of the one item per probe that separates the per-item cost from the per-job cost.
+  single_item_jobs: 4
+  # Batch sizes the batched phase measures.
+  batched_sizes: 1
+  # The most jobs a probe plans.
+  probe_items: 50
+  # Seconds of warm probe requests a probe may take; sizing.load_share times sizing.target_wall_s.
+  probe_s: 90
+  # The one-sided z of the batch decision and of the item cut.
+  confidence: 1.645
+  # Production requests of one regime judged for drift together; length_strata times min_requests.
+  drift_window: 6
+  # The two-sided z of the drift test.
+  drift_confidence: 2.576
+  # Seconds a coordinator waits for a peer's probe of the same unit; probe_s plus lease.stale_after_s.
+  peer_wait_s: 390
+  # Superseded probes' observation files kept for audit.
+  observations_kept: 3
+  # Workers a unit without a measure runs on.
+  unmeasured_workers: 1
 # Every lease: seconds after which another process breaks it, the share of that between beats, and the
 # storage's attribute delay; load refuses 2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.
 lease:
