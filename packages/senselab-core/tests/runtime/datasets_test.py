@@ -57,7 +57,7 @@ def test_binding_by_name_and_override(tmp_path: Path) -> None:
     other = build_manifest(data, {"audio": "Audio"}, bind={"audio": "other"})
     assert by_name.digest() != other.digest()
     assert by_name.rows[0].inputs["audio"] != other.rows[0].inputs["audio"]
-    with pytest.raises(ValueError, match=r"record 'r'.*'speech'.*\['audio', 'other'\]"):
+    with pytest.raises(ValueError, match=r"no input 'speech'.*\['audio', 'other'\]"):
         build_manifest(data, {"speech": "Audio"})
 
 
@@ -70,20 +70,33 @@ def test_a_single_port_binds_to_the_records_single_input(tmp_path: Path) -> None
     assert auto.digest() == build_manifest(data, {"series": "RegularSeries"}, bind={"series": "audio"}).digest()
 
 
+@pytest.mark.parametrize(
+    ("rows", "ports", "message"),
+    [
+        ([{"audio": 1}], ["a", "b"], r"no input 'a', 'b'; record inputs are \['audio'\]; another port reads \[\]"),
+        ([{"reference": 1}], ["reference", "hypothesis"], r"another port reads \['reference'\], leaving \[\]$"),
+        ([{"audio": 1}, {"speech": 1}], ["series"], r"records differ in their inputs \[\['audio'\], \['speech'\]\]"),
+        (
+            [{"audio": 1, "other": 1}],
+            ["audio", "series"],
+            r"record inputs are \['audio', 'other'\]; pass bind=\{'series': 'other'\}$",
+        ),
+        (
+            [{"audio": 1, "other": 1}],
+            ["series"],
+            r"pass bind naming one of \['audio', 'other'\] for each of \['series'\]",
+        ),
+    ],
+    ids=["ports-outnumber-inputs", "input-read-by-another-port", "records-differ", "one-fit", "several-fit"],
+)
 @pytest.mark.logic
-def test_an_ambiguous_binding_names_the_bind_to_pass(tmp_path: Path) -> None:
-    """Two unbound ports, or a record with two inputs, bind nothing and name the `bind` that would."""
-    write_audio(tmp_path / "a.wav", 1)
-    single = from_records([{"id": "r", "inputs": {"audio": tmp_path / "a.wav"}}])
-    double = from_records([{"id": "r", "inputs": {"audio": tmp_path / "a.wav", "other": tmp_path / "a.wav"}}])
-    with pytest.raises(
-        ValueError, match=r"no input 'a', 'b'; record inputs are \['audio'\]; pass bind=\{'a': 'audio', 'b': 'audio'\}"
-    ):
-        build_manifest(single, {"a": "Audio", "b": "Audio"})
-    with pytest.raises(
-        ValueError, match=r"no input 'series'; record inputs are \['audio', 'other'\]; pass bind=\{'series': 'audio'\}"
-    ):
-        build_manifest(double, {"series": "Audio"})
+def test_an_ambiguous_binding_binds_nothing_and_names_the_cause(
+    rows: list[dict[str, int]], ports: list[str], message: str
+) -> None:
+    """A port binds automatically only to the one input every record has and no other port reads."""
+    data = from_records({"id": f"r{i}", "inputs": inputs} for i, inputs in enumerate(rows))
+    with pytest.raises(ValueError, match=message):
+        record_bind(data, ports)
 
 
 @pytest.mark.logic

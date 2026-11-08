@@ -122,8 +122,8 @@ class SpeechToText(ConfiguredTask):
     ) -> ResultSet:
         """Run this task on every record of the dataset and return its `ResultSet`.
 
-        A port reads the record input of its name, else `bind[port]`; the one port named for none reads the
-        records' single input.
+        A port reads `bind[port]`, else the record input of its name; the one port with neither reads the
+        records' single input when no other port reads it.
         """
         return self._map(dataset, bind)
 
@@ -216,8 +216,8 @@ class Diarize(ConfiguredTask):
     ) -> ResultSet:
         """Run this task on every record of the dataset and return its `ResultSet`.
 
-        A port reads the record input of its name, else `bind[port]`; the one port named for none reads the
-        records' single input.
+        A port reads `bind[port]`, else the record input of its name; the one port with neither reads the
+        records' single input when no other port reads it.
         """
         return self._map(dataset, bind)
 
@@ -297,8 +297,8 @@ class SpeakerEmbeddings(ConfiguredTask):
     ) -> ResultSet:
         """Run this task on every record of the dataset and return its `ResultSet`.
 
-        A port reads the record input of its name, else `bind[port]`; the one port named for none reads the
-        records' single input.
+        A port reads `bind[port]`, else the record input of its name; the one port with neither reads the
+        records' single input when no other port reads it.
         """
         return self._map(dataset, bind)
 
@@ -383,8 +383,8 @@ class PiiSpans(ConfiguredTask):
     ) -> ResultSet:
         """Run this task on every record of the dataset and return its `ResultSet`.
 
-        A port reads the record input of its name, else `bind[port]`; the one port named for none reads the
-        records' single input.
+        A port reads `bind[port]`, else the record input of its name; the one port with neither reads the
+        records' single input when no other port reads it.
         """
         return self._map(dataset, bind)
 
@@ -469,8 +469,8 @@ class Resample(ConfiguredTask):
     ) -> ResultSet:
         """Run this task on every record of the dataset and return its `ResultSet`.
 
-        A port reads the record input of its name, else `bind[port]`; the one port named for none reads the
-        records' single input.
+        A port reads `bind[port]`, else the record input of its name; the one port with neither reads the
+        records' single input when no other port reads it.
         """
         return self._map(dataset, bind)
 
@@ -557,8 +557,8 @@ class Wer(ConfiguredTask):
     ) -> ResultSet:
         """Run this task on every record of the dataset and return its `ResultSet`.
 
-        A port reads the record input of its name, else `bind[port]`; the one port named for none reads the
-        records' single input.
+        A port reads `bind[port]`, else the record input of its name; the one port with neither reads the
+        records' single input when no other port reads it.
         """
         return self._map(dataset, bind)
 
@@ -650,8 +650,8 @@ class Der(ConfiguredTask):
     ) -> ResultSet:
         """Run this task on every record of the dataset and return its `ResultSet`.
 
-        A port reads the record input of its name, else `bind[port]`; the one port named for none reads the
-        records' single input.
+        A port reads `bind[port]`, else the record input of its name; the one port with neither reads the
+        records' single input when no other port reads it.
         """
         return self._map(dataset, bind)
 
@@ -730,8 +730,8 @@ class Eer(ConfiguredTask):
     ) -> ResultSet:
         """Run this task on every record of the dataset and return its `ResultSet`.
 
-        A port reads the record input of its name, else `bind[port]`; the one port named for none reads the
-        records' single input.
+        A port reads `bind[port]`, else the record input of its name; the one port with neither reads the
+        records' single input when no other port reads it.
         """
         return self._map(dataset, bind)
 
@@ -809,8 +809,8 @@ class SpanF1(ConfiguredTask):
     ) -> ResultSet:
         """Run this task on every record of the dataset and return its `ResultSet`.
 
-        A port reads the record input of its name, else `bind[port]`; the one port named for none reads the
-        records' single input.
+        A port reads `bind[port]`, else the record input of its name; the one port with neither reads the
+        records' single input when no other port reads it.
         """
         return self._map(dataset, bind)
 
@@ -889,8 +889,8 @@ class ResampleError(ConfiguredTask):
     ) -> ResultSet:
         """Run this task on every record of the dataset and return its `ResultSet`.
 
-        A port reads the record input of its name, else `bind[port]`; the one port named for none reads the
-        records' single input.
+        A port reads `bind[port]`, else the record input of its name; the one port with neither reads the
+        records' single input when no other port reads it.
         """
         return self._map(dataset, bind)
 

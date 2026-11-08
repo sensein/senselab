@@ -156,7 +156,11 @@ def resume(target: Plan | Run | str) -> ResultSet:
 
 
 def map_over(task: ConfiguredTask, dataset: DatasetProtocol, bind: Mapping[str, str] | None) -> ResultSet:
-    """Run `task` on every record of `dataset`, each input port bound as `record_bind` binds it."""
+    """Run `task` on every record of `dataset`.
+
+    A port reads `bind[port]`, else the record input of its name; the one port with neither reads the records' single
+    input when no other port reads it.
+    """
     graph = one_node_graph(task._task_call(), task.registry, every_port=True)  # noqa: SLF001
     try:
         return run(graph, dataset, bind=dict(bind or {}))

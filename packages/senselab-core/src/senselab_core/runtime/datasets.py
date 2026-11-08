@@ -118,29 +118,35 @@ def build_manifest(
 
 
 def record_bind(dataset: Dataset, ports: Iterable[str], bind: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Return `bind` with the port no record input is named for bound to the records' single input.
+    """Return `bind` with the one port that has no input bound to the records' single input.
 
-    A port reads `bind[port]`, else the record input of its name. When exactly one port has neither and every record
-    has exactly one input, of one name, that port binds to it.
+    A port reads `bind[port]`, else the record input of its name. When exactly one port has neither, every record has
+    exactly one input, of one name, and no other port reads it, that port binds to it.
 
     Raises:
-        ValueError: if a port has neither and does not bind automatically; the message names the `bind` to pass.
+        ValueError: if a port has neither and does not bind automatically; the message names the cause, and the
+            `bind` to pass when exactly one record input fits.
     """
-    chosen = dict(bind or {})
-    records = list(dataset.records())
+    chosen, ports, records = dict(bind or {}), list(ports), list(dataset.records())
     unbound = [p for p in ports if p not in chosen and any(p not in r.inputs for r in records)]
     if not unbound:
         return chosen
-    names = {name for r in records for name in r.inputs}
-    if len(unbound) == 1 and len(names) == 1 and all(len(r.inputs) == 1 for r in records):
-        return {**chosen, unbound[0]: names.pop()}
-    record = next(r for r in records if any(p not in r.inputs for p in unbound))
-    inputs = sorted(record.inputs)
-    suggested = {p: inputs[0] if inputs else "<input>" for p in unbound}
-    raise ValueError(
-        f"record {record.id!r}: no input {', '.join(map(repr, unbound))}; record inputs are {inputs}; "
-        f"pass bind={suggested}"
-    )
+    read = {chosen.get(p, p) for p in ports if p not in unbound}
+    shapes = sorted({tuple(sorted(r.inputs)) for r in records})
+    inputs = list(shapes[0])
+    free = [n for n in inputs if n not in read]
+    if len(unbound) == 1 and len(shapes) == 1 and inputs == free and len(free) == 1:
+        return {**chosen, unbound[0]: free[0]}
+    missing = f"no input {', '.join(map(repr, unbound))}"
+    if len(shapes) > 1:
+        cause = f"records differ in their inputs {[list(s) for s in shapes]}; no one bind fits every record"
+    elif len(free) < len(unbound):
+        cause = f"record inputs are {inputs}; another port reads {sorted(read & set(inputs))}, leaving {free}"
+    elif len(unbound) == 1 and len(free) == 1:
+        cause = f"record inputs are {inputs}; pass bind={ {unbound[0]: free[0]} }"
+    else:
+        cause = f"record inputs are {inputs}; pass bind naming one of {free} for each of {unbound}"
+    raise ValueError(f"{missing}; {cause}")
 
 
 def sourced_manifest(

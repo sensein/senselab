@@ -8,6 +8,7 @@ import numpy
 import pytest
 import soundfile
 from api_test import _echo_namespace, fake_stack  # noqa: F401 - `fake_stack` is the fixture of the fake stack
+from senselab._api.call import ApiError
 from senselab._api.facade import PlanKwargs, session
 from senselab_core.kernel._base import FrozenMapping
 from senselab_core.kernel.dataset import Record
@@ -21,6 +22,10 @@ from senselab_core.runtime.store import ResultStore
 import senselab as sl
 
 needs_runner = pytest.mark.skipif(importlib.util.find_spec("pydra") is None, reason="the pydra extra is not installed")
+
+
+SPEECH_TO_TEXT_PLAN = "7bf52ad0f8e735cba424cf45ba77d71f5346b336dea10de155782696f00da8c6"
+"""The plan hash of `SpeechToText` over the one-recording BIDS tree of the BIDS binding test."""
 
 
 def _records(count: int = 3) -> list[dict[str, object]]:
@@ -155,7 +160,16 @@ def test_a_task_over_bids_binds_its_single_input(tmp_path: Path) -> None:
     auto = sl.plan(resample, dataset)
     assert dict(auto.logical.bind) == {"series": "audio"}
     assert auto.hash == sl.plan(resample, dataset, bind={"series": "audio"}).hash
-    assert dict(sl.plan(sl.SpeechToText(), dataset).logical.bind) == {}
+    by_name = sl.plan(sl.SpeechToText(), dataset)
+    assert dict(by_name.logical.bind) == {} and by_name.hash == SPEECH_TO_TEXT_PLAN
+
+
+@pytest.mark.logic
+def test_a_second_port_never_binds_to_the_input_the_first_reads() -> None:
+    """`Wer` over records holding only `reference` refuses; `hypothesis` does not read `reference` too."""
+    records = sl.Dataset.from_records([{"id": "r", "inputs": {"reference": "a b"}}])
+    with pytest.raises(ApiError, match=r"no input 'hypothesis'.*another port reads \['reference'\]"):
+        sl.Wer().map(records)
 
 
 @pytest.mark.logic
