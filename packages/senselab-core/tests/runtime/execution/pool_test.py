@@ -81,7 +81,8 @@ class FakeWorkers:
     """A `Substrate` whose thread claims each queue it serves, logs each job `claimed` and runs it through `execute`.
 
     `act` decides per fragment: a `FaultRecord` fails every job with it, a `ResultStore` executes into that store,
-    None executes into `store`. `served` holds each fragment claimed, in order.
+    None executes into `store`. `served` holds each fragment claimed, in order. The thread claims only while `ready()`
+    is true, which a test uses to hold it back until the coordinator has acted on what it served.
     """
 
     def __init__(self, run_dir: Path, store: ResultStore, placed: Plan, values: Mapping[InputIdentity, object]) -> None:
@@ -92,6 +93,7 @@ class FakeWorkers:
         self.store, self.placed, self.values = store, placed, values
         self.act: Act = lambda fragment: None
         self.served: list[PlanFragment] = []
+        self.ready: Callable[[], bool] = lambda: True
         self.names: set[str] = set()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -120,7 +122,9 @@ class FakeWorkers:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
-            claims = [c for name in sorted(self.names) if (c := self.queues.queue(name).claim("fake")) is not None]
+            claims = []
+            if self.ready():
+                claims = [c for name in sorted(self.names) if (c := self.queues.queue(name).claim("fake")) is not None]
             for claim in claims:
                 self._serve(claim)
             if not claims:
@@ -740,6 +744,8 @@ def test_a_held_env_leaves_its_jobs_queued_and_the_wait_interrupted(tmp_path: Pa
     profile = _profile(content_attempts=2, infrastructure_replacements=1, resource_replacements=0)
     placed, _, store, workers = _stack(tmp_path, profile, ["one", "two"])
     workers.act = lambda fragment: LOST
+    cpu = workers.queues.queue("cpu")
+    workers.ready = lambda: not workers.served or cpu.held("host") is not None
     run_dir = tmp_path / "run"
     prepare(placed, run_dir, store)
     try:
