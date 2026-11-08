@@ -59,6 +59,7 @@ IDENTITY_TAGS: frozenset[str] = frozenset(
         "label@1",
         "measure-unit@1",
         "hardware-class@1",
+        "host@1",
         "hardware-declared@1",
     }
 )

@@ -17,7 +17,6 @@ its process and its `HardwareClass` per resource class, and writes no hardware i
 after `faults.infrastructure_replacements` consecutive failures; it then starts no more workers of the class.
 """
 
-import hashlib
 import logging
 import math
 import os
@@ -36,6 +35,7 @@ from pathlib import Path
 from typing import Protocol
 
 from senselab_worker.canonical import jcs_dumps, jcs_loads
+from senselab_worker.digest import identity_digest
 
 from senselab_core.runtime.calibration import HardwareClass
 from senselab_core.runtime.config import expand
@@ -161,7 +161,7 @@ class ReadyMark:
 
 def host_token() -> str:
     """Return the digest of this host's name: what a ready mark says of where its worker runs."""
-    return hashlib.sha256(socket.gethostname().encode()).hexdigest()
+    return identity_digest("host@1", socket.gethostname())
 
 
 def mark_ready(run_dir: Path, hardware: Mapping[str, HardwareClass] | None = None) -> None:
