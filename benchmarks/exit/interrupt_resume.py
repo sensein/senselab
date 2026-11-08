@@ -166,6 +166,12 @@ def _reap(child: subprocess.Popen[bytes], prefix: str, timeout_s: float) -> None
         scancel(live)
 
 
+def refuse_failures(results: Any) -> None:  # noqa: ANN401 - a ResultSet
+    """Raise `exitlib.ResumeMismatch` when `results.failures` (a list) is not empty."""
+    if results.failures:
+        raise exitlib.ResumeMismatch(f"{len(results.failures)} items failed after the resume")
+
+
 def resume(plan_hash: str, work: Path, out: Path, profile_argument: str) -> int:
     """Resume the run of `plan_hash` and assert its accounting; write it to `out`.
 
@@ -193,9 +199,7 @@ def resume(plan_hash: str, work: Path, out: Path, profile_argument: str) -> int:
     items = len(results)
     accounting = exitlib.account_resume(before, after, items)
     exitlib.assert_no_resolution(resolved, exitlib.resolution_snapshot(cache_root()))
-    failed = results.failures()
-    if failed:
-        raise exitlib.ResumeMismatch(f"{len(failed)} items failed after the resume")
+    refuse_failures(results)
     document = {"hash": plan_hash, **vars(accounting)}
     exitlib.write_json(out, document)
     print(
