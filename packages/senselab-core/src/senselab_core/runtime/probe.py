@@ -4,6 +4,7 @@ import itertools
 import math
 import statistics
 import struct
+import sys
 from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
@@ -93,6 +94,18 @@ def _unordered(bits: int) -> float:
     return value
 
 
+def _rank_bound(points: Sequence[tuple[float, float]], slope: float) -> float:
+    """Return `2ε·(max|y − t·x̃| + |t|·max|x̃|) / min Δx` at `t = slope`: `x̃` is x centred at its median, `ε` epsilon.
+
+    `_kth_slope` compares points by `y − t·x̃`, which rounds once in the product and once in the subtraction; a pair
+    compares two of them, so it is ranked wrongly only if its slope is within this distance of `t`.
+    """
+    xs, ys = np.array([x for x, _ in points]), np.array([y for _, y in points])
+    centred = xs - float(np.median(xs))
+    spread = float(np.abs(ys - slope * centred).max()) + abs(slope) * float(np.abs(centred).max())
+    return 2 * sys.float_info.epsilon * spread / float(np.diff(np.unique(xs)).min())
+
+
 def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
     """Return the `k`-th smallest (from 0) of the `total` slopes between points of distinct `x`, sorted by `(x, y)`.
 
@@ -100,8 +113,8 @@ def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
     inversion counting and bisected over the doubles until at most n lie between the bounds, which are then listed.
     Slopes tied beyond that are the one value of the pairs adjacent in `y − t·x` at the bound. The comparisons use `x`
     centred at its median, which leaves every slope unchanged and makes differences of nearby values exact; a pair is
-    then ranked wrongly only if its slope is within `2ε·max|y − t·x̃| / min Δx` of `t` (`ε` the double epsilon), and
-    the slopes returned are computed from the original `x`.
+    then ranked wrongly only if its slope is within `_rank_bound` of `t`, and the slopes returned are computed from the
+    original `x`.
     """
     centred = xs - float(np.median(xs))
     bound = max(float(np.ptp(ys)) / float(np.diff(np.unique(xs)).min()), 1.0)
@@ -129,7 +142,7 @@ def _theil_sen(points: Sequence[tuple[float, float]]) -> tuple[float, float] | N
     """Return `(intercept, slope)`: the median of the pairwise slopes, and the median intercept at that slope.
 
     The slope is the median of the n(n−1)/2 pairwise slopes, found in O(n log² n) time and O(n) memory; it equals the
-    reference's except for slopes closer than the bound in `_kth_slope`.
+    reference's except for slopes closer than `_rank_bound` to it.
     """
     ordered = sorted(points)
     xs, ys = np.array([x for x, _ in ordered]), np.array([y for _, y in ordered])

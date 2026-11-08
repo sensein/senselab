@@ -30,7 +30,7 @@ from senselab_core.runtime.calibration import (
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings
 from senselab_core.runtime.measures import MeasureSource
-from senselab_core.runtime.probe import Probe, _theil_sen, memory_batch
+from senselab_core.runtime.probe import Probe, _rank_bound, _theil_sen, memory_batch
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Grant, Sample, calibrated, measure_of
 from senselab_core.testing.calibration_samples import UNIT
@@ -843,15 +843,18 @@ def test_bounded_fit_equals_reference(points: list[tuple[int, int]]) -> None:
 
 
 def _agrees(points: Sequence[tuple[float, float]]) -> bool:
-    """Whether the fit is within the bound `2ε·max|y − t·x̃| / min Δx` of the reference, with margin 4 for the median."""
+    """Whether the fit is within `_rank_bound` of the reference.
+
+    The slope is within the bound plus one rounding of the mean of two ranks. Each intercept `y − s·x` moves by the
+    slope's error times `|x|` and rounds twice in each fit; their median adds one rounding of the mean.
+    """
     fit, reference = _theil_sen(points), _reference_theil_sen(points)
     assert fit is not None and reference is not None
-    xs = sorted({x for x, _ in points})
-    spread, gap = xs[-1] - xs[0], min(b - a for a, b in itertools.pairwise(xs))
-    top = max(abs(y) for _, y in points) + abs(reference[1]) * spread
-    slope_tol = 8 * sys.float_info.epsilon * top / gap
-    intercept_tol = slope_tol * max(abs(x) for x in xs) + 8 * sys.float_info.epsilon * top
-    return abs(fit[1] - reference[1]) <= slope_tol and abs(fit[0] - reference[0]) <= intercept_tol
+    eps, (intercept, slope) = sys.float_info.epsilon, reference
+    slope_tol = _rank_bound(points, slope) + eps * abs(slope)
+    terms = max(abs(y) + 2 * abs(slope * x) for x, y in points)
+    intercept_tol = slope_tol * max(abs(x) for x, _ in points) + 2 * eps * terms + eps * abs(intercept)
+    return abs(fit[1] - slope) <= slope_tol and abs(fit[0] - intercept) <= intercept_tol
 
 
 @pytest.mark.logic
@@ -864,6 +867,13 @@ def _agrees(points: Sequence[tuple[float, float]]) -> bool:
 def test_bounded_fit_equals_reference_on_real_data(points: list[tuple[float, float]]) -> None:
     """On arbitrary floats the fit is within the documented bound of the reference."""
     assert _agrees(points)
+
+
+@pytest.mark.logic
+def test_a_line_through_the_median_x_is_within_the_rounding_of_the_product() -> None:
+    """On `y = s·(x − median x)`, `y − t·x̃` is near zero and the rounding of `t·x̃` alone bounds the fit."""
+    xs = [-309, -44, 249, 258, 294, 332, 435, 912]
+    assert _agrees([(float(x), -7.513524149434952 * (x - 276.0)) for x in xs])
 
 
 @pytest.mark.logic
