@@ -268,7 +268,7 @@ names tolerance profile digests.
   A kernel value whose type has no entry in the table is refused (`UndeclaredComparison`, naming its format tag),
   never compared as exact.
 - **Thresholds are run config values,** never fitted. `runtime/data/run_config.yaml` (`run-config@1.0`) holds
-  `thresholds`, each `{rtol, atol, derivation}`; `Thresholds.load(override)` deep-merges a user's run config (a
+  `thresholds`, each `{rtol, atol, derivation}`; `RunConfigFile.load(override)` deep-merges a user's run config (a
   mapping or YAML) over it and refuses an unknown name with the closest one. `RunConfig.thresholds` defaults to the
   packaged ones. The packaged defaults (`time_ns`, `probability`, `score`, `embedding`, `samples`, `value`) cite the
   ORCD measurements taken for the retired profiles as evidence for the written value. A benchmark may later evaluate
@@ -279,7 +279,7 @@ names tolerance profile digests.
   derivation names the threshold digests. Every activity a call writes records `senselab:verifyThresholds` (ADR-010
   amendment of this date).
 - **Parity uses the same thresholds.** `parity_reference.py compare --config` and the parity tests
-  (`$SENSELAB_PARITY_CONFIG`) load the run config through `Thresholds.load`; each decision is a
+  (`$SENSELAB_PARITY_CONFIG`) load the run config through `RunConfigFile.load`; each decision is a
   `parity-comparison@1.0` record carrying the thresholds' digest.
 - **Retired:** the tolerance profiles (`senselab/data/tolerance/`), `scripts/generate_tolerance.py` (`measure`,
   `generate`), `runtime.tolerance` with its coverage policy, `NoToleranceProfile` and its envelope row, and R-186's

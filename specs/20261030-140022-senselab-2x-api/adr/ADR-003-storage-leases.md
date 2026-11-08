@@ -365,8 +365,8 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3, §4.4. Adds to th
   other writer uses.
 - **One probe per unit, for efficiency.** A coordinator looks for a live `<u>/probe.lease` in every root and, finding
   none, takes it in its write root (the 2026-11-03 directory lease, `keep_alive` renewed, `prove()` before its
-  observations are renamed in). Finding one live, it waits at most `calibration.peer_wait_s` (`probe_s +
-  lease.stale_after_s`, checked at profile load), reading once per `pool.poll_s`, then plans again with what it found.
+  observations are renamed in). Finding one live, it waits at most `peer_wait_s` (`probe_s +
+  lease.stale_after_s`, a derived property of the profile), reading once per `pool.poll_s`, then plans again with what it found.
   Correctness does not rest on the lease: two probes give two valid sets of observations.
 - **The pin is a lease.** A probe's items go on a probe queue `<queue>~probe-<id>`. A worker claims from it only while
   holding its `serve.lease`, one item per claim. A dead holder's lease goes stale and another worker takes the rest;

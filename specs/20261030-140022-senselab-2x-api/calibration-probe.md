@@ -174,7 +174,7 @@ There is no estimate file. `Probe.estimate` runs over the unit's pooled observat
 - **One probe per unit at a time, for efficiency only.** A coordinator that needs to probe `u` reads every root for a
   live `<u>/probe.lease` and, finding none, takes the lease in its write root (the 2026-11-03 directory lease, renewed
   by `keep_alive`, proven before it writes its observations). A coordinator finding a live lease waits for the
-  holder's observations up to `calibration.peer_wait_s`, re-reading once per `pool.poll_s`, then returns to `New` with
+  holder's observations up to `peer_wait_s`, re-reading once per `pool.poll_s`, then returns to `New` with
   whatever it found as prior (§7.1). The wait holds only the unit's computed jobs; its servable jobs and other units
   proceed, and the plan states it (§6.6). A broken lease, or two members writing to different roots, costs a duplicate
   probe, never a wrong measure.
@@ -309,7 +309,7 @@ observation counts is decided by `Probe.estimate` from what the worker reported 
 ### 4.5 Budgets (M8)
 
 - `calibration.probe_items` bounds the jobs a probe plans; `B₁` is chosen inside it (§4.3).
-- `calibration.probe_s` bounds **probe work**: the sum of the walls of the probe's warm requests, counted from the
+- The seconds budget (`probe_s`, §11, an argument of `Probe.plan`) bounds **probe work**: the sum of the walls of the probe's warm requests, counted from the
   first warm request. The model load (already `load_share`'s and `timeouts.load_s`'s) and the waits between phases do
   not count, so a model that loads for minutes is still measured (I3). Past it the Pool puts no further probe item;
   items already claimed finish, because they are real work whose results are kept, and §4.3 bounds each item's
@@ -521,7 +521,7 @@ are drift evidence only, never pooled into `r`, `u`, `a` or `B*`.
 - For each warm, `ok`, unserved production request whose `hardware` equals the estimate's, the Pool computes
   `ρ = wall_s / predicted`, the prediction at its batch and units in the probe regime. A request of another hardware
   class feeds no drift.
-- Requests are grouped by regime (device and host co-tenancy). Over the last `calibration.drift_window` requests of a
+- Requests are grouped by regime (device and host co-tenancy). Over the last `drift_window` requests of a
   regime, when the median ρ lies outside `1 ± drift_confidence · 1.2533 · spread_B / √drift_window` (`spread_B` at the
   requests' batch, `spread` at batch 1), the Pool writes a `drift` record (the window's ρ, regime, batch, estimate
   source). The regime that drifted decides what follows:
@@ -673,25 +673,28 @@ too, until a real adapter is timed.
 
 | key | `orcd` | `laptop` | derivation rule |
 |---|---|---|---|
-| `measures_roots` | the group's shared root beside the result store, then `<cache root>/2x/measures` | `<cache root>/2x/measures` | §3.3: shared first so the group reuses; own as the write fallback for a read-only member |
+| `measures_roots` | `${SENSELAB_MEASURES_ROOT}`, the group's shared root (no fallback; unset is no root, logged once per run and never raised), then `<cache root>/2x/measures` | `<cache root>/2x/measures` | §3.3: shared first so the group reuses; own as the write fallback for a read-only member |
 | `trust` | `group` | `own` | §3.5; ruling O-3; overridable per run by the run config's `calibration.trust` |
 | `warmup_requests` | 2 *provisional* | 2 | the least w such that, on the table probe, the median of warm requests w+1..w+3 of one stratum lies within the steady band of the requests after them, the maximum over GPU units. Provisional basis: R-230 (CUDA initialised inside the first request) plus one request for shape-dependent kernel selection; R-231's decay was confounded by gathering (R-234) |
 | `length_strata` | 2 | 2 | two points fit a line in length (must-fix 8, R-221); the table profile uses 3 to test linearity |
 | `min_requests` | 3 | 3 | the least count whose median tolerates one outlier |
 | `single_item_jobs` | 4 *provisional* | 4 | items of 1 and k jobs separate `a` from the per-job cost; k such that `a` is at least a fifth of a k-job item's wall at the measured CPU fit (R-236: `a` 0.040 s against 0.0366 s per job) |
 | `batched_sizes` | 1 | 1 | run time measures `B₁` only; the table profile measures 2 (R-237) |
-| `probe_items` | 200 *provisional* | 50 | the jobs of the minimal protocol at a target batch B: `warmup_requests + length_strata·min_requests·(1 + B) + min_requests·single_item_jobs`. `orcd` B = 30 is a target until T20R-10 re-derives B from the measured memory batches (N4); `laptop` B = 5, one CPU worker; the table profile sizes it for B = 100 |
-| `probe_s` | 90 | 90 | `sizing.load_share × sizing.target_wall_s` (0.05 × 1800 on both): probe work, like loading, may cost a queue at most a twentieth of its target wall; counts warm probe requests only (§4.5) |
+| `probe_items` | 200 *provisional* | 50 | a bound, not a checked sum; chosen as the jobs of the minimal protocol at a target batch B: `warmup_requests + length_strata·min_requests·(1 + B) + min_requests·single_item_jobs`. `orcd` B = 30 is a target until T20R-10 re-derives B from the measured memory batches (N4); `laptop` B = 5, one CPU worker; the table profile sizes it for B = 100 |
 | `confidence` | 1.645 | 1.645 | one-sided 5 %: the false-batch rate of the batch decision (§5.4 step 6) and the share of items cut past `quantum_s` (§6.2); a wrong batch decision errs to batch 1 |
-| `drift_window` | 6 | 6 | `length_strata × min_requests`: drift is judged at the precision of the probe's single phase |
 | `drift_confidence` | 2.576 | 2.576 | two-sided 1 %: at most one spurious confirming probe per hundred windows of a stable unit |
-| `peer_wait_s` | `probe_s + lease.stale_after_s` | same | a peer's probe ends within its budget or its lease goes stale |
 | `observations_kept` | 3 | 3 | superseded probes kept for audit: three give a median of medians tolerating one bad probe |
 | `unmeasured_workers` | 1 | 1 | S5: unmeasured work is not scaled; one worker runs it under the safe values |
 
-The ladder's table profile overrides `length_strata` 3, `batched_sizes` 2, `probe_items` (B = 100) and `probe_s`
-(the suite's per-point wall budget). Rules that read other keys (`probe_s`, `peer_wait_s`, `drift_window`) are
-checked at profile load, so a value cannot drift from its rule.
+Three values are derived properties of the profile, not keys, so they cannot drift and no override restates them:
+`probe_s` = `sizing.load_share × sizing.target_wall_s` (0.05 × 1800 = 90 on both profiles: probe work, like loading,
+may cost a queue at most a twentieth of its target wall; counts warm probe requests only, §4.5), `peer_wait_s` =
+`probe_s + lease.stale_after_s` (a peer's probe ends within its budget or its lease goes stale) and `drift_window` =
+`length_strata × min_requests` (drift is judged at the precision of the probe's single phase). `probe_s` and
+`peer_wait_s` are properties of `ExecutionProfile`, which holds `sizing` and `lease`; `drift_window` is a property of
+the `calibration` settings. `Probe.plan` takes its seconds budget as an argument: the pool passes `probe_s`, the
+ladder the suite's per-point wall budget (a suite key), so the table profile overrides `length_strata` 3,
+`batched_sizes` 2 and `probe_items` (B = 100) only.
 
 ## 12. ADR changes
 
@@ -708,10 +711,12 @@ Dated amendment text is in the ADR files, 2026-11-08:
 - **ADR-004**: the placement carries no plan-time batch; the batch, item cuts and workers are sized at run time by
   `size`; `explain()` calls the same `size` with the stored estimate, never probing, so the plan's cost figures are
   measured or labelled unmeasured.
+- **ADR-006**: the format list gains `placement-request@1.0`, `placement-answer@1.0`, `measures@1`,
+  `measure-unit@1.0`, `measure-observations@1.0`, `measure-drift@1.0`, `measure-supersede@1.0`, `measure-regime@1.0`,
+  `measure-oom@1.0` and `resource-table@2.0`, and `run-config@2.1` (additive minor: the `calibration` section, whose
+  `trust` a run sets). T20R-1 registers them in `kernel/formats.py`; `resource-table@1.0` is retired by T20R-8.
 - **Elsewhere, by the implementing tasks**: `wire-protocol.md` (`done` gains `since_load` and `load_s`, T20R-5);
-  ADR-006's format list (`placement-request@1.0`, `placement-answer@1.0`, `measures@1`, `measure-unit@1.0`, `measure-observations@1.0`, `measure-drift@1.0`,
-  `measure-supersede@1.0`, `measure-regime@1.0`, `measure-oom@1.0`, `resource-table@2.0`; `resource-table@1.0`
-  retired; T20R-1 and T20R-8); `execution.md` §3.2 and §3.6 (T20R-7a, T20R-12); `config-derivations.md` (T20R-1,
+  `execution.md` §3.2 and §3.6 (T20R-7a, T20R-12); `config-derivations.md` (T20R-1,
   T20R-12); `design.md`'s public API (`placement=`, `placement_hook=`, T20R-12).
 
 ## 13. Rulings (owner, 2026-11-08)
@@ -850,13 +855,15 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 
 ### T20R-1: configuration and data types (additive)
 
-- **Scope.** The `calibration` profile section (§11) and the run config's `calibration.trust` override, with load-time
-  rule checks; `Observation`, `Estimate`, `ProbePhase`, `LengthProfile`, `HardwareClass` types (data only); format
+- **Scope.** The `calibration` profile section (§11), with `probe_s`, `peer_wait_s` and `drift_window` as derived
+  properties and no load-time rule checks; one run config reader, validating `thresholds` and `calibration`, so the run
+  config's `calibration.trust` override is read (`run-config@2.1`); `Observation`, `Estimate`, `ProbePhase`, `LengthProfile`, `HardwareClass` types (data only); format
   tags registered (§12); `config-derivations.md` sections. `sizing.calibration_*` stay (T20R-7a′ removes them).
-- **Files.** `runtime/execution_settings.py`, `runtime/call.py` (run config), `runtime/data/profiles/{laptop,orcd}.yaml`,
+- **Files.** `runtime/execution_settings.py`, `runtime/profiles.py`, `runtime/compare.py` (the run config reader), `runtime/call.py` (run config), `runtime/data/profiles/{laptop,orcd}.yaml`,
   `runtime/calibration.py` (types only), `kernel/formats.py`, `config-derivations.md`.
-- **Tests failing now.** `test_profile_refuses_probe_s_not_load_share_of_target_wall`;
-  `test_run_config_trust_overrides_the_profile`; `test_every_calibration_key_has_a_derivation`.
+- **Tests failing now.** `test_probe_s_peer_wait_s_and_drift_window_are_derived_from_the_profile`;
+  `test_one_run_config_reader_validates_thresholds_and_calibration`; `test_the_group_measures_root_is_the_variable_alone`;
+  `test_an_estimate_refuses_two_entries_for_one_key`.
 - **ORCD.** None.
 
 ### T20R-2a: `MeasureUnit`, `HardwareClass` and `MeasureSource` (additive)
@@ -913,7 +920,8 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 
 - **Scope.** §4.1-4.3, §4.5 arithmetic, §5.4, the OOM raise of §7.4. No I/O.
 - **Files.** `runtime/calibration.py`.
-- **Interfaces.** `Probe.plan(unit, candidates, prior, grant, config, formation) -> ProbePlan`;
+- **Interfaces.** `Probe.plan(unit, candidates, prior, grant, config, formation, seconds) -> ProbePlan` (`seconds` is the warm-work
+  budget: the pool passes `probe_s`, the ladder its suite's per-point budget);
   `Probe.plan_batched(plan, single_estimate, grant, config, seconds_left) -> ProbePlan`;
   `Probe.replace_served(plan, served_item) -> ProbePlan`; `Probe.estimate(observations, records, config) -> Estimate`.
 - **Tests (hypothesis).** Cold/reloaded observations never move `r`, `u`, `B*`; failed, bisected, served never enter;
@@ -1013,7 +1021,8 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 ### T20R-8: ladder, generator and `resource-table@2.0`
 
 - **Scope.** §9: table profile in the suite; point results carry observations and `Estimate`; flatness from request
-  walls; generator from measures roots, refusing unmeasured, writing no user or host; `@1.0` loader and its seven rows
+  walls; the table profile overrides no seconds key, the ladder passing its suite's per-point wall budget to
+  `Probe.plan`; generator from measures roots, refusing unmeasured, writing no user or host; `@1.0` loader and its seven rows
   deleted (the generator, rewritten here, is their last reader once T20R-7a′ removes `Measures`, `measure_of` and
   `size_row`); the `config-derivations.md` resources section.
 - **Files.** `benchmarks/scale/ladder.py`, `benchmarks/scale/suites/ladder.yaml`, `scripts/generate_resources.py`,

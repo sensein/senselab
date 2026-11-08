@@ -561,3 +561,14 @@ so moving them needs a format change, left open.
 - `logical-plan@1.0` `bind` is the resolved mapping: the given `bind` plus the one automatic entry a single
   record-bound input named for no record input takes when every record has one input of one name that no other
   input reads (design.md, Binding). A port bound by name adds no entry, so plans that bound by name keep their hash.
+
+## Amendment 2026-11-08: calibration formats (Phase 3 Task 20R)
+
+- New formats, registered in `kernel/formats.py`: `placement-request@1.0` (what a run needs, handed to a site's
+  placement hook), `placement-answer@1.0` (the hook's answer), `measures@1` (the layout tag of a measures root),
+  `measure-unit@1.0` (identity tag `measure-unit@1`), `measure-observations@1.0`, `measure-drift@1.0`,
+  `measure-supersede@1.0`, `measure-regime@1.0`, `measure-oom@1.0` and `resource-table@2.0` (rows are measure units
+  with their estimates). Each reader accepts later minors of its major. `resource-table@1.0` is retired by Task 20R-8.
+- **`run-config@2.1`** (additive minor of `run-config@2.0`): the file may carry a `calibration` section, of which a run
+  sets `trust` (`group` or `own`) and nothing else; one reader, `RunConfigFile.load`, validates both as one `Formatted` value from which `RunConfig` is built. A tag of another name or major is refused, naming it. The packaged
+  file carries no `calibration` section.
