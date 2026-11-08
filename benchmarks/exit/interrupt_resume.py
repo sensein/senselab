@@ -47,7 +47,8 @@ def interrupt(  # noqa: PLR0913 - the prefix and process, then the three effects
 ) -> list[str]:
     """Cancel the jobs named `prefix*`, kill process group `pid`, then cancel until none of the prefix is live.
 
-    The second round takes jobs the killed process submitted after the first listing.
+    The second round takes jobs the killed process submitted after the first listing. A job already cancelled that
+    is still listed (completing) is neither cancelled again nor counted again.
 
     Returns:
         Every job id cancelled.
@@ -59,9 +60,10 @@ def interrupt(  # noqa: PLR0913 - the prefix and process, then the three effects
 
     def sweep() -> list[str]:
         live = jobs(prefix, timeout_s)
-        if live:
-            cancel(live)
-            cancelled.extend(live)
+        fresh = [j for j in live if j not in cancelled]
+        if fresh:
+            cancel(fresh)
+            cancelled.extend(fresh)
         return live
 
     sweep()

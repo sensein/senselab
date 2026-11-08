@@ -202,6 +202,7 @@ class _Flight:
     queue: str
     digest: str
     fragment: PlanFragment
+    prior: bool = False
 
 
 @dataclass
@@ -377,6 +378,7 @@ class Pool:
             part, waiting = self._calibration_part(unit, name, fragment)
         items = [] if part is None else split(part, quantum, request)
         reserved = measure is None and not retry and bool(items)
+        prior = {d for item in items if queue.outcome(d := item_digest(item)) is not None}
         try:
             queue.put_all(items)
         except BaseException:
@@ -384,7 +386,7 @@ class Pool:
                 with self._lock:
                     self._calibrating.pop(unit, None)
             raise
-        flights = [_Flight(name, item_digest(item), item) for item in items]
+        flights = [_Flight(name, d, item, d in prior) for item in items if (d := item_digest(item))]
         if reserved:
             with self._lock:
                 self._calibrating[unit] = (name, [f.digest for f in flights])
@@ -685,7 +687,8 @@ class Pool:
     def _settle(self, followed: _Followed, flight: _Flight, record: Mapping[str, object]) -> Iterator[ResultRef]:
         """Yield the results of `flight`'s jobs from its outcome `record`, applying each failure's effect.
 
-        A reported result is taken only when it names the job's own key and the store holds its outputs. A resource
+        A reported result is taken only when it names the job's own key and the store holds its outputs; one whose
+        item already had an outcome when it was put is given as served under `exact`. A resource
         fault doubles the per-item memory of the unit's measure (`_grow`).
         """
         fragment = flight.fragment
@@ -705,7 +708,7 @@ class Pool:
                 )
             elif ref is not None and ref.failure is None and ref.output_identity is not None:
                 if self.store.outputs_of(key, ref.output_identity) is not None:
-                    yield ref
+                    yield ref.model_copy(update={"served": "exact"}) if flight.prior and ref.served is None else ref
                     continue
                 fault = _gap("MissingOutput", f"the outputs of {job} are not in the result store")
             elif ref is not None and ref.failure is not None:

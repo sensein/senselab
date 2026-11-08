@@ -440,6 +440,17 @@ def test_interrupt_cancels_the_prefix_kills_the_process_then_sweeps_what_it_subm
 
 
 @pytest.mark.logic
+def test_interrupt_counts_each_cancelled_job_once() -> None:
+    """A job still listed while completing is not cancelled again or counted again."""
+    sent: list[list[str]] = []
+    listings = iter([["1"], ["1", "2"], ["1", "2"], []])
+    cancelled = interrupt_resume.interrupt(
+        "p-", 9, 1.0, 0.0, None, lambda prefix, seconds: next(listings), sent.append, lambda pid: None
+    )
+    assert sent == [["1"], ["2"]] and cancelled == ["1", "2"]
+
+
+@pytest.mark.logic
 def test_interrupt_fails_when_jobs_of_the_prefix_outlive_the_bound() -> None:
     """Jobs still listed after the deadline raise instead of reporting an interrupt."""
     with pytest.raises(exitlib.BoundExceeded, match="still live"):

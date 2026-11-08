@@ -23,7 +23,7 @@ from senselab_core.runtime.execution.events import EventLog, read_events, run_di
 from senselab_core.runtime.execution.executor import Admission, FaultRecord, PlanFragment, QueueHeld, ResultRef, follow
 from senselab_core.runtime.execution.in_process import InProcess, job_key, node_fragment
 from senselab_core.runtime.execution.job import Failed, JobOutcome
-from senselab_core.runtime.execution.pool import Pool, larger_class, report
+from senselab_core.runtime.execution.pool import Pool, larger_class, report, split
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet
 from senselab_core.runtime.execution.run import INPUTS_FILE, RECORD_ATTEMPTS, Run, prepare, record_sources
 from senselab_core.runtime.execution.substrates import WorkerHandle
@@ -359,7 +359,8 @@ def test_results_read_from_store_only(tmp_path: Path) -> None:
     assert ref.output_identity is not None and store.outputs_of(ref.key_digest, ref.output_identity) is not None
     assert [f.attempt for f in workers.served] == [1, 2] and [g.type for _, g in pool.gaps] == ["MissingOutput"]
     restarted = _pool(tmp_path, store, _Idle(), profile)
-    assert restarted.epoch == 2 and _all(restarted, placed, values) == [ref]
+    [again] = _all(restarted, placed, values)
+    assert restarted.epoch == 2 and again == ref.model_copy(update={"served": "exact"})
     assert not restarted.gaps and [f.attempt for f in workers.served] == [1, 2]
 
 
@@ -821,3 +822,41 @@ def test_a_resource_fault_never_moves_a_job_to_a_class_the_qos_cap_cannot_start(
         workers.stop()
     assert failed.failure == OOM and [f.placement.resource_class for f in workers.served] == ["cpu"]
     assert (tmp_path / "run" / "dead" / f"{failed.key_digest}.json").is_file()
+
+
+@pytest.mark.contract
+def test_a_resumed_run_logs_prior_outcomes_as_exact_reuse(tmp_path: Path) -> None:
+    """Two epochs over one queue: the second's events for the first's items are `cache_hit` under `exact`."""
+    pytest.importorskip("pydra")
+    from senselab_core.runtime.execution.pool import coordinate  # noqa: PLC0415 - after the pydra check
+
+    profile = _profile(**CONTENT)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one", "two", "three"])
+    run_dir = tmp_path / "run"
+    assert prepare(placed, run_dir, store)[0] == 1
+    try:
+        coordinate(run_dir, substrate=workers, profile=profile, store=store)
+        coordinate(run_dir, substrate=workers, profile=profile, store=store)
+    finally:
+        workers.stop()
+    done = [e for e in read_events(run_dir) if e.kind in ("finished", "cache_hit")]
+    first, second = ([e for e in done if e.ordinal == o] for o in sorted({e.ordinal for e in done}))
+    assert {e.kind for e in first} == {"finished"} and len(first) == 3
+    assert {e.kind for e in second} == {"cache_hit"} and {e.reuse for e in second} == {"exact"} and len(second) == 3
+
+
+@pytest.mark.contract
+def test_report_counts_reused_and_ran_after_resume(tmp_path: Path) -> None:
+    """UX-8 g1: a resumed plan's results count the outcomes already on the queue as reused and the rest as ran."""
+    profile = _profile(**CONTENT)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one", "two", "three", "four"])
+    first = _pool(tmp_path, store, workers, profile)
+    head, tail = split(node_fragment(placed, first.admit(placed, values)), 2)
+    try:
+        assert [r.served for r in follow(first, first.submit(head))] == [None, None]
+        second = _pool(tmp_path, store, workers, profile)
+        second.admit(placed, values)
+        refs = [r for part in (head, tail) for r in follow(second, second.submit(part))]
+    finally:
+        workers.stop()
+    assert [(r.job.element, r.served) for r in refs] == [((0,), "exact"), ((1,), "exact"), ((2,), None), ((3,), None)]
