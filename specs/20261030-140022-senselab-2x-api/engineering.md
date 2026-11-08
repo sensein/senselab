@@ -110,10 +110,10 @@ without trading away P-31..P-39.
 |---|---|---|---|
 | Lookups, inventories, fact checks, `migration-ledger.md` drift scans (P-39) | Explore | haiku, low | read-only; cites `file:line` |
 | Mechanical changes: rewires, renames, module moves, applying a spelled-out pattern, doc consistency fixes | general-purpose | sonnet, low | worktree |
-| Implementing a phase item outside the kernel: a backend port, a task, a dataset adapter, tests | general-purpose | sonnet | worktree |
-| Implementing kernel or concurrency code: identity, store and leases, graph format, worker protocol, planner | general-purpose | opus | worktree |
+| Implementing a phase item: a backend port, a task, a dataset adapter, kernel or concurrency code, tests and test runs | general-purpose | sonnet (opus after the second failure) | worktree |
 | Design, ADRs, synthesis across threads | main thread or fork | opus | — |
-| Per-PR review (standards and checklist, P-31..P-37) | fresh general-purpose | sonnet; opus for kernel or concurrency PRs | read-only |
+| Per-PR review, first rounds (standards and checklist, P-31..P-37) | fresh general-purpose | opus | read-only |
+| Per-PR final review before merge | fresh general-purpose | fable | read-only |
 | End-of-phase adversarial round (P-35) | general-purpose lead with up to 5 subagents | opus, high; subagents sonnet | read-only |
 | Phase-gate architecture review | general-purpose lead with subagents | opus; at most three verification subagents, haiku, low, each on a disjoint section | read-only |
 | Verifying a reviewer's claims before acting on them | Explore, at most three, each on a disjoint section | haiku or sonnet, low | read-only; cites `file:line` |
@@ -122,13 +122,13 @@ without trading away P-31..P-39.
 **Rules**
 - **Escalation.** Any review verdict other than approve, and any failing test run, is a failure. After the
   second on one task, the next round goes to a fresh agent one tier up (sonnet to opus), and the ledger line
-  says `escalated`. A 429 or usage-limit error is not a failure and is not escalated. Use fable only after
-  opus has failed on the same item, or for proofs about the lease and store protocol (ADR-003). Fix rounds
+  says `escalated`. A 429 or usage-limit error is not a failure and is not escalated. Fable runs the final
+  review before a merge (amended 2026-11-08), and proofs about the lease and store protocol (ADR-003). Fix rounds
   on one symptom are counted separately (P-35); when the task counter and the symptom counter disagree, the
   stricter one wins.
 - **Reviewer independence.** A review never runs on the model and context that produced the work.
-  Pair a sonnet implementation with an opus review on the kernel, and an opus implementation with
-  a fresh sonnet reviewer, or a fresh opus reviewer on a kernel item (P-40 Check). A reviewer gets the code and the principles, not the
+  A sonnet implementation gets opus review rounds and a fable final review; an escalated opus implementation
+  gets fable reviews (P-40 Check, amended 2026-11-08). A reviewer gets the code and the principles, not the
   implementer's conclusions.
 - **Every brief is a file with three headings**, implementer and reviewer briefs alike:
   - `## Principles`: P-31..P-40 by id, one line each; the other P-ids and ADRs the task touches; the test tier
@@ -356,3 +356,9 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   exactly this, with the template's `Kernel item` line. The top tier is opus or
   fable: an opus+opus or fable+fable pairing is allowed on a kernel item only. Briefs take the three-heading form and
   reviews the checklist table set out under Rules above.
+  Amended 2026-11-08 (owner): implementation and testing agents run on sonnet; the first review rounds run on
+  opus; the final review before a merge runs on fable. Escalation after a second failure still moves an
+  implementation one tier up. Reviews judge the mechanism against the invariant it serves, with tasks as evidence
+  only, and a component on its second fix round gets a design review, not another scoped re-review. Owner:
+  "sonnet use for implementation and testing subagents, opus for initial review iterations, and fable for final
+  review".
