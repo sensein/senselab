@@ -29,7 +29,7 @@ from senselab_core.kernel.formats import (
     check,
 )
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
-from senselab_core.runtime.config import load_yaml
+from senselab_core.runtime.config import load_yaml, merge_over
 from senselab_core.runtime.execution_settings import (
     CalibrationSettings,
     FaultBudgets,
@@ -201,7 +201,7 @@ class ExecutionProfile(Formatted):
         """
         packaged = _read(resources.files("senselab_core.runtime").joinpath("data", "profiles", f"{name}.yaml"))
         extra = override if isinstance(override, Mapping) else _read(override) if override is not None else {}
-        merged = _merge(packaged, extra)
+        merged = merge_over(packaged, extra)
         if check(EXECUTION_PROFILE_FORMAT, merged.get("format"), RETIRED_EXECUTION_PROFILE_FORMATS) is (
             FormatVerdict.RETIRED
         ):
@@ -251,17 +251,6 @@ class ExecutionProfile(Formatted):
 
 def _read(source: Any) -> dict[str, Any]:  # noqa: ANN401 - a Path or a package resource
     return load_yaml(source, "profile")
-
-
-def _merge(base: Mapping[str, Any], top: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        k: _merge(base[k], top[k])
-        if isinstance(base.get(k), Mapping) and isinstance(top.get(k), Mapping)
-        else top[k]
-        if k in top
-        else base[k]
-        for k in {**base, **top}
-    }
 
 
 _SECTIONS: Mapping[str, type[Frozen]] = {

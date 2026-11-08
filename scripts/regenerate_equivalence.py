@@ -44,14 +44,14 @@ def _sample_cli(args: argparse.Namespace) -> None:
     from senselab_core.kernel.identity import ReusePolicy  # noqa: PLC0415 - only a real run needs the runtime
     from senselab_core.runtime.call import RunConfig, TaskCall  # noqa: PLC0415
     from senselab_core.runtime.execution.in_process import InProcess  # noqa: PLC0415
-    from senselab_core.runtime.compare import Thresholds  # noqa: PLC0415
+    from senselab_core.runtime.compare import RunConfigFile  # noqa: PLC0415
     from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415
 
     bench, items = _parity_script().load_items(args.suite, args.benchmark, args.data_cache, args.work, HELDOUT)
     store = ResultStore(args.store)
     before = len(store.evidence())
     profile = ExecutionProfile.load(args.execution)
-    run = RunConfig(reuse=ReusePolicy(args.reuse), verify=args.verify, thresholds=Thresholds.load(args.config))
+    run = RunConfig(reuse=ReusePolicy(args.reuse), verify=args.verify, config=RunConfigFile.load(args.config))
     executed = reused = 0
     executor = InProcess(store=store, profile=profile, run=run)
     for item in items:

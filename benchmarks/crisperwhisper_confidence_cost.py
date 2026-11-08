@@ -184,7 +184,7 @@ def compare_transcripts(expected: Path, actual: Path) -> dict[str, Any]:
     compare = importlib.import_module("senselab_core.runtime.compare")
     a, b = (json.loads(path.read_text()) for path in (expected, actual))
     result = compare.compare(
-        {"transcript": a["transcript"]}, {"transcript": b["transcript"]}, compare.Thresholds.load()
+        {"transcript": a["transcript"]}, {"transcript": b["transcript"]}, compare.RunConfigFile.load().thresholds
     )
     gaps = [d.absolute for d in result.differences if d.absolute is not None]
     return {

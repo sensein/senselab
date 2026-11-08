@@ -1,7 +1,7 @@
 """Output agreement by standard comparisons: hash equality, exact equality, and `isclose` within named thresholds.
 
 `runtime/data/comparison.yaml` (`comparison@1.0`) declares, per kernel type, how each field of its wire form
-compares (`COMPARISONS`); the thresholds its rules name are the run config's (`Thresholds.load`, over the packaged
+compares (`COMPARISONS`); the thresholds its rules name are the run config's (`RunConfigFile.load`, over the packaged
 `runtime/data/run_config.yaml`). `compare` decides whether two outputs agree and returns the field-level
 differences, each with the threshold it was judged by. Outputs are compared as their flattened leaves (`flatten`).
 """
@@ -11,20 +11,20 @@ import functools
 import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 import numpy
-from pydantic import Field
+from pydantic import Field, field_serializer, field_validator
 
 from senselab_core.kernel._base import FiniteFloat, Frozen, value_digest
-from senselab_core.kernel.formats import FORMAT_PATTERN, RUN_CONFIG_FORMAT
+from senselab_core.kernel.formats import FORMAT_PATTERN, RUN_CONFIG_FORMAT, FormatTag, Formatted
 from senselab_core.kernel.wire import WIRE_FORMATS
 from senselab_core.runtime.calibration import RunCalibration
-from senselab_core.runtime.config import load_yaml
+from senselab_core.runtime.config import load_yaml, merge_over
 
 COMPARISON_FORMAT = "comparison@1.0"
 
@@ -111,76 +111,62 @@ class Thresholds(Frozen):
 
     by_name: Mapping[str, Threshold]
 
-    @classmethod
-    def load(cls, override: Mapping[str, Any] | Path | None = None) -> "Thresholds":
-        """Return the `thresholds` of `load_run_config(override)`."""
-        return load_run_config(override).thresholds
 
+class RunConfigFile(Formatted):
+    """A run config: the comparison `thresholds`, by name as the file writes them, and the `calibration` overrides.
 
-READABLE_RUN_CONFIG_FORMATS = frozenset({"run-config@2.0", RUN_CONFIG_FORMAT})
-
-
-class LoadedRunConfig(Frozen):
-    """A run config's validated sections: the comparison `thresholds` and the `calibration` overrides."""
-
-    thresholds: Thresholds
-    calibration: RunCalibration
-
-
-def load_run_config(override: Mapping[str, Any] | Path | None = None) -> LoadedRunConfig:
-    """Return the packaged run config's sections with `override`'s (a run config mapping or YAML) merged over.
-
-    A threshold of `override` may set `rtol`, `atol` or both; `calibration` may set `trust`.
-
-    Raises:
-        UnknownThreshold: `override` names a key, threshold or calibration key the packaged run config lacks, naming
-            the closest.
-        ValueError: `override` declares a format other than `run-config@2.0` or `@2.1`, the packaged file is
-            not `run-config@2.1` with exactly `rtol` and `atol` per threshold, or a
-            merged bound or calibration value is invalid.
+    `load` is the one reader: the packaged `runtime/data/run_config.yaml` with a user's run config merged over it.
     """
-    merged = {name: dict(bound) for name, bound in _packaged_thresholds().items()}
-    raw = load_yaml(override, "run config") if isinstance(override, Path) else dict(override or {})
-    tag = raw.get("format", RUN_CONFIG_FORMAT)
-    if tag not in READABLE_RUN_CONFIG_FORMATS:
-        raise ValueError(f"run config format {tag!r} is not one of {sorted(READABLE_RUN_CONFIG_FORMATS)}")
-    _known("run config key", set(raw) - {"format"}, {"thresholds", "calibration"})
-    given = raw.get("thresholds") or {}
-    _known("threshold", set(given), set(merged))
-    for name, bound in given.items():
-        _known(f"key of threshold {name!r}", set(bound), {"rtol", "atol"})
-        merged[name] |= bound
-    calibration = raw.get("calibration") or {}
-    _known("calibration key", set(calibration), set(RunCalibration.model_fields))
-    return LoadedRunConfig(
-        thresholds=Thresholds(
-            by_name={n: Threshold(**{k: _number(v) for k, v in b.items()}) for n, b in merged.items()}
-        ),
-        calibration=RunCalibration.model_validate(calibration),
-    )
 
+    format: FormatTag = RUN_CONFIG_FORMAT
+    thresholds: Thresholds
+    calibration: RunCalibration = RunCalibration()
 
-def _number(v: object) -> object:
-    return float(v) if isinstance(v, int) and not isinstance(v, bool) else v
+    port_value: ClassVar[bool] = False
 
+    @field_validator("thresholds", mode="before")
+    @classmethod
+    def _by_name(cls, value: object) -> object:
+        return {"by_name": value} if isinstance(value, Mapping) else value
 
-def _known(what: str, given: set[str], known: set[str]) -> None:
-    for name in sorted(given - known):
-        closest = difflib.get_close_matches(name, sorted(known), n=1)
-        raise UnknownThreshold(f"unknown {what} {name!r}" + (f"; did you mean {closest[0]!r}?" if closest else ""))
+    @field_serializer("thresholds")
+    def _as_written(self, value: Thresholds) -> dict[str, dict[str, float]]:
+        return {name: bound.model_dump() for name, bound in value.by_name.items()}
+
+    @classmethod
+    def load(cls, override: Mapping[str, Any] | Path | None = None) -> "RunConfigFile":
+        """Return the packaged run config with `override` (a run config mapping or YAML file) deep-merged over it.
+
+        A threshold of `override` may set `rtol`, `atol` or both; `calibration` may set `trust`.
+
+        Raises:
+            UnknownThreshold: a key, threshold or calibration key the packaged run config lacks, naming the closest.
+            pydantic.ValidationError: a format of another name or major, a section that is not a mapping, or an
+                invalid bound or calibration value.
+        """
+        packaged = _packaged_run_config()
+        raw = load_yaml(override, "run config") if isinstance(override, Path) else dict(override or {})
+        merged = merge_over(packaged, raw)
+        _known("run config key", merged, cls.model_fields)
+        _known("threshold", merged.get("thresholds"), packaged["thresholds"])
+        for name, bound in (merged["thresholds"] if isinstance(merged.get("thresholds"), Mapping) else {}).items():
+            _known(f"key of threshold {name!r}", bound, Threshold.model_fields)
+        _known("calibration key", merged.get("calibration"), RunCalibration.model_fields)
+        return cls.model_validate(merged)
 
 
 @functools.cache
-def _packaged_thresholds() -> dict[str, dict[str, object]]:
-    raw = load_yaml(resources.files("senselab_core.runtime").joinpath("data", "run_config.yaml"), "run_config.yaml")
-    if raw.get("format") != RUN_CONFIG_FORMAT or not isinstance(raw.get("thresholds"), dict):
-        raise ValueError(f"run_config.yaml must carry format {RUN_CONFIG_FORMAT!r} and 'thresholds'")
-    out = {}
-    for name, entry in raw["thresholds"].items():
-        if not isinstance(entry, dict) or set(entry) != {"rtol", "atol"}:
-            raise ValueError(f"{RUN_CONFIG_FORMAT} threshold {name!r} is exactly 'rtol' and 'atol'")
-        out[str(name)] = {"rtol": entry["rtol"], "atol": entry["atol"]}
-    return out
+def _packaged_run_config() -> dict[str, Any]:
+    return load_yaml(resources.files("senselab_core.runtime").joinpath("data", "run_config.yaml"), "run_config.yaml")
+
+
+def _known(what: str, given: object, known: Iterable[str]) -> None:
+    if not isinstance(given, Mapping):
+        return
+    names = sorted(known)
+    for name in sorted(set(map(str, given)) - set(names)):
+        closest = difflib.get_close_matches(name, names, n=1)
+        raise UnknownThreshold(f"unknown {what} {name!r}" + (f"; did you mean {closest[0]!r}?" if closest else ""))
 
 
 @dataclass(frozen=True)

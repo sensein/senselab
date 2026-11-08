@@ -9,7 +9,7 @@ Subcommands, in the order a campaign runs them:
 never run;
 `compare` writes `parity-comparison@1.0`: a run's outputs against the 1.x reference, or alone against one request,
 by each kernel type's comparison (`runtime.compare`) under the thresholds of `--config`, a run config merged over the
-packaged one (`Thresholds.load`), whose digest the record carries. `packages/senselab/tests/parity` asserts the same.
+packaged one (`RunConfigFile.load`), whose digest the record carries. `packages/senselab/tests/parity` asserts the same.
 Calibration items are refused everywhere.
 """
 
@@ -37,6 +37,7 @@ from senselab_core.kernel.results import Embedding, Intervals, Transcript
 from senselab_core.runtime.compare import (
     FLATTEN_VERSION,
     Fields,
+    RunConfigFile,
     Thresholds,
     Value,
     compare_fields,
@@ -564,7 +565,7 @@ def _run_cli(args: argparse.Namespace) -> None:
 
 def _compare_cli(args: argparse.Namespace) -> None:
     reference = None if args.reference is None else load_reference(args.reference)
-    decision = decide(load_outputs(args.outputs), reference, Thresholds.load(args.config))
+    decision = decide(load_outputs(args.outputs), reference, RunConfigFile.load(args.config).thresholds)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(decision.model_dump_json(indent=1), "utf-8")
 

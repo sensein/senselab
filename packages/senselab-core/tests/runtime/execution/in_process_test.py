@@ -43,7 +43,7 @@ from senselab_core.runtime.audio_io import DECODER
 from senselab_core.runtime.call import Packaged, Result, RunConfig, TaskCall, bind_input, use_packaged
 from senselab_core.runtime.call import packaged as packaged_now
 from senselab_core.runtime.catalogue import Catalogue
-from senselab_core.runtime.compare import Thresholds
+from senselab_core.runtime.compare import RunConfigFile
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.equivalence import SAMPLING
@@ -677,11 +677,11 @@ def test_verify_compares_under_the_run_configs_thresholds(tmp_path: Path) -> Non
     form = dict(stored.outputs["trials"])  # type: ignore[call-overload]
     nudged: dict[str, object] = {"trials": {**form, "first": numpy.asarray(form["first"]) + 0.05}}
     gpu = ExecutionContext.model_validate({**here.context.model_dump(), "numerics": GPU})
-    tight = Thresholds.load({"thresholds": {"embedding": {"atol": 0.01}}})
+    tight = RunConfigFile.load({"thresholds": {"embedding": {"atol": 0.01}}})
     found = {}
     for name, run in (
         ("packaged", RunConfig(ReusePolicy.TOLERANT, 1.0)),
-        ("tight", RunConfig(ReusePolicy.TOLERANT, 1.0, thresholds=tight)),
+        ("tight", RunConfig(ReusePolicy.TOLERANT, 1.0, config=tight)),
     ):
         store = ResultStore(tmp_path / name)
         store.put(here.key, nudged, gpu)
@@ -689,13 +689,15 @@ def test_verify_compares_under_the_run_configs_thresholds(tmp_path: Path) -> Non
         [found[name]] = store.evidence()
         [execution] = _activities(store)
         assert prov.literal_value(execution.node()["senselab:verifyThresholds"]) == run.thresholds.canonical_digest()
-    assert found["packaged"].agree and found["packaged"].thresholds == Thresholds.load().canonical_digest()
-    assert found["tight"].thresholds == tight.canonical_digest()
+    assert (
+        found["packaged"].agree and found["packaged"].thresholds == RunConfigFile.load().thresholds.canonical_digest()
+    )
+    assert found["tight"].thresholds == tight.thresholds.canonical_digest()
     [difference] = found["tight"].mismatched
     assert (difference.path, difference.threshold, difference.bound) == (
         "trials.first",
         "embedding",
-        tight.by_name["embedding"],
+        tight.thresholds.by_name["embedding"],
     )
     assert difference.absolute == pytest.approx(0.05) and difference.relative is not None
 

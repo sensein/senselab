@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 from senselab_core.kernel.formats import PARITY_OUTPUTS_FORMAT, PARITY_REFERENCE_FORMAT
-from senselab_core.runtime.compare import Threshold, Thresholds, flatten
+from senselab_core.runtime.compare import RunConfigFile, Threshold, Thresholds, flatten
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -44,7 +44,7 @@ def _records(directory: Path, task: str, ids: list[str], record: dict[str, Any])
         (directory / f"{i}.json").write_text(json.dumps({"task": task, **record}), "utf-8")
 
 
-THRESHOLDS = Thresholds.load({"thresholds": {"embedding": {"rtol": 0.0, "atol": 0.25}}})
+THRESHOLDS = RunConfigFile.load({"thresholds": {"embedding": {"rtol": 0.0, "atol": 0.25}}}).thresholds
 EXACT = Thresholds(by_name={n: Threshold(rtol=0.0, atol=0.0) for n in THRESHOLDS.by_name})
 
 
@@ -253,10 +253,10 @@ def test_a_parity_decision_records_the_thresholds_of_its_run_config(tmp_path: Pa
     )
     config = tmp_path / "run.yaml"
     config.write_text("thresholds:\n  embedding:\n    atol: 1.0\n", "utf-8")
-    packaged = par.decide(outputs, reference, Thresholds.load())
-    mine = par.decide(outputs, reference, Thresholds.load(config))
-    assert not packaged.agree and packaged.thresholds == Thresholds.load().canonical_digest()
-    assert mine.agree and mine.thresholds == Thresholds.load(config).canonical_digest()
+    packaged = par.decide(outputs, reference, RunConfigFile.load().thresholds)
+    mine = par.decide(outputs, reference, RunConfigFile.load(config).thresholds)
+    assert not packaged.agree and packaged.thresholds == RunConfigFile.load().thresholds.canonical_digest()
+    assert mine.agree and mine.thresholds == RunConfigFile.load(config).thresholds.canonical_digest()
     assert mine.format == "parity-comparison@1.0" and mine.against == "reference"
 
 

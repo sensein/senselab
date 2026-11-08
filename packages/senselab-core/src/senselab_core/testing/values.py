@@ -95,7 +95,7 @@ from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER
 from senselab_core.runtime.calibration import RunCalibration
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
-from senselab_core.runtime.compare import Difference, LoadedRunConfig, Threshold, Thresholds
+from senselab_core.runtime.compare import Difference, RunConfigFile, Threshold, Thresholds
 from senselab_core.runtime.envs import EnvRecord
 from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide
 from senselab_core.runtime.execution_settings import ResourceClass
@@ -1057,12 +1057,12 @@ def _register_comparison_samples() -> None:
         invalid_updates=[{"by_name": {"a": 1}}],
     )
     register_samples(
-        LoadedRunConfig,
+        RunConfigFile,
         lambda: [
-            LoadedRunConfig(thresholds=Thresholds(by_name={"a": bounds[0]}), calibration=RunCalibration()),
-            LoadedRunConfig(thresholds=Thresholds(by_name={"a": bounds[1]}), calibration=RunCalibration(trust="own")),
+            RunConfigFile(thresholds=Thresholds(by_name={"a": bounds[0]})),
+            RunConfigFile(thresholds={"a": bounds[1]}, calibration=RunCalibration(trust="own")),
         ],
-        invalid_updates=[{"calibration": {"trust": "all"}}],
+        invalid_updates=[{"calibration": {"trust": "all"}}, {"thresholds": "a"}, {"format": "run-config@3.0"}],
     )
 
 

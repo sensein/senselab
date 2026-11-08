@@ -1,5 +1,5 @@
 format: run-config@2.1
-# The packaged run config, under which a user's run config is deep-merged (`load_run_config`). `thresholds` names the
+# The packaged run config, under which a user's run config is deep-merged (`RunConfigFile.load`). `thresholds` names the
 # `isclose` bounds the per-type comparisons (`comparison.yaml`) read: `|actual - expected| <= atol + rtol * |expected|`.
 # Each is a written value; none is fitted at run time. `calibration` is read from a user's run config only (`trust`).
 # Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under this file's path.

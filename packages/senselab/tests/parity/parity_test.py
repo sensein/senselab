@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from senselab_core.runtime.compare import Thresholds
+from senselab_core.runtime.compare import RunConfigFile
 
 ROOT = Path(__file__).resolve().parents[4]
 CONFIG = Path(os.environ["SENSELAB_PARITY_CONFIG"]) if "SENSELAB_PARITY_CONFIG" in os.environ else None
-THRESHOLDS = Thresholds.load(CONFIG)
+THRESHOLDS = RunConfigFile.load(CONFIG).thresholds
 
 
 def _load() -> Any:  # noqa: ANN401
