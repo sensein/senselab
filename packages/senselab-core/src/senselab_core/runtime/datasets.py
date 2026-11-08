@@ -125,7 +125,7 @@ def record_bind(dataset: Dataset, ports: Iterable[str], bind: Mapping[str, str] 
 
     Raises:
         ValueError: if a port has neither and does not bind automatically; the message names the cause, and the
-            `bind` to pass when exactly one record input fits.
+            `bind` to pass when exactly one input every record has, unread by another port, fits.
     """
     chosen, ports, records = dict(bind or {}), list(ports), list(dataset.records())
     unbound = [p for p in ports if p not in chosen and any(p not in r.inputs for r in records)]
@@ -133,20 +133,25 @@ def record_bind(dataset: Dataset, ports: Iterable[str], bind: Mapping[str, str] 
         return chosen
     read = {chosen.get(p, p) for p in ports if p not in unbound}
     shapes = sorted({tuple(sorted(r.inputs)) for r in records})
-    inputs = list(shapes[0])
-    free = [n for n in inputs if n not in read]
-    if len(unbound) == 1 and len(shapes) == 1 and inputs == free and len(free) == 1:
-        return {**chosen, unbound[0]: free[0]}
+    shared = sorted(set.intersection(*(set(r.inputs) for r in records)))
+    fits = [n for n in shared if n not in read]
+    if len(unbound) == 1 and shapes == [tuple(fits)] and len(fits) == 1:
+        return {**chosen, unbound[0]: fits[0]}
     missing = f"no input {', '.join(map(repr, unbound))}"
-    if len(shapes) > 1:
-        cause = f"records differ in their inputs {[list(s) for s in shapes]}; no one bind fits every record"
-    elif len(free) < len(unbound):
-        cause = f"record inputs are {inputs}; another port reads {sorted(read & set(inputs))}, leaving {free}"
-    elif len(unbound) == 1 and len(free) == 1:
-        cause = f"record inputs are {inputs}; pass bind={ {unbound[0]: free[0]} }"
+    held = (
+        f"record inputs are {shared}"
+        if len(shapes) == 1
+        else f"records differ in their inputs {[list(s) for s in shapes]}, sharing {shared}"
+    )
+    if len(fits) < len(unbound) and read & set(shared):
+        cause = f"another port reads {sorted(read & set(shared))}, leaving {fits}"
+    elif len(fits) < len(unbound):
+        cause = f"the unbound ports outnumber the inputs every record has, {fits}"
+    elif len(unbound) == 1:
+        cause = f"pass bind={ {unbound[0]: fits[0]} }" if len(fits) == 1 else f"pass bind naming one of {fits}"
     else:
-        cause = f"record inputs are {inputs}; pass bind naming one of {free} for each of {unbound}"
-    raise ValueError(f"{missing}; {cause}")
+        cause = f"pass bind naming one of {fits} for each of {unbound}"
+    raise ValueError(f"{missing}; {held}; {cause}")
 
 
 def sourced_manifest(

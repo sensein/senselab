@@ -73,21 +73,25 @@ def test_a_single_port_binds_to_the_records_single_input(tmp_path: Path) -> None
 @pytest.mark.parametrize(
     ("rows", "ports", "message"),
     [
-        ([{"audio": 1}], ["a", "b"], r"no input 'a', 'b'; record inputs are \['audio'\]; another port reads \[\]"),
+        ([{"audio": 1}], ["a", "b"], r"record inputs are \['audio'\]; the unbound ports outnumber"),
         ([{"reference": 1}], ["reference", "hypothesis"], r"another port reads \['reference'\], leaving \[\]$"),
-        ([{"audio": 1}, {"speech": 1}], ["series"], r"records differ in their inputs \[\['audio'\], \['speech'\]\]"),
         (
-            [{"audio": 1, "other": 1}],
-            ["audio", "series"],
-            r"record inputs are \['audio', 'other'\]; pass bind=\{'series': 'other'\}$",
-        ),
-        (
-            [{"audio": 1, "other": 1}],
+            [{"audio": 1}, {"speech": 1}],
             ["series"],
-            r"pass bind naming one of \['audio', 'other'\] for each of \['series'\]",
+            r"differ in their inputs \[\['audio'\], \['speech'\]\], sharing \[\]",
         ),
+        ([{"audio": 1}, {"audio": 1, "meta": 1}], ["series"], r"sharing \['audio'\]; pass bind=\{'series': 'audio'\}$"),
+        ([{"audio": 1, "other": 1}], ["audio", "series"], r"pass bind=\{'series': 'other'\}$"),
+        ([{"audio": 1, "other": 1}], ["series"], r"pass bind naming one of \['audio', 'other'\]$"),
     ],
-    ids=["ports-outnumber-inputs", "input-read-by-another-port", "records-differ", "one-fit", "several-fit"],
+    ids=[
+        "ports-outnumber-inputs",
+        "input-read-by-another-port",
+        "records-differ",
+        "shared-fit",
+        "one-fit",
+        "several-fit",
+    ],
 )
 @pytest.mark.logic
 def test_an_ambiguous_binding_binds_nothing_and_names_the_cause(
