@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from senselab_worker.digest import file_digest, identity_digest
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
@@ -37,7 +37,8 @@ class Measure(Frozen):
     """What one item costs on one resource class: seconds to load and to claim, memory resident and per item, seconds.
 
     `on_device` says the memory pair is the device's, sized against the class's device memory cap; the pair is None
-    when unmeasured. `batched_s_per_item` is the seconds per item measured in batches, None where unmeasured.
+    when unmeasured. `batched_s_per_item` is the seconds per item measured in batches of `batched_batch_size`, both
+    None where unmeasured.
     """
 
     load_s: Seconds
@@ -47,6 +48,13 @@ class Measure(Frozen):
     s_per_item: Seconds
     on_device: bool = False
     batched_s_per_item: Seconds | None = None
+    batched_batch_size: Count | None = None
+
+    @model_validator(mode="after")
+    def _check_batched(self) -> "Measure":
+        if (self.batched_s_per_item is None) != (self.batched_batch_size is None):
+            raise ValueError("a batched measure names both its seconds per item and the batch it was measured at")
+        return self
 
 
 class Grant(Frozen):
@@ -121,8 +129,8 @@ def size(measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 
     - `quantum_s`: the quantum's jobs plus the load and claim, within `quantum_s`;
     - `memory_batch`: the most items whose memory beside the resident memory fits `memory_headroom` of the grant's,
       at most a quantum; 1 when the grant's or the unit's memory is unmeasured or `batchable` is False;
-    - `batch_size`: `memory_batch` where items sent in a batch were measured no slower per item than items sent
-      alone, else 1 (batched throughput unmeasured counts as not shown);
+    - `batch_size`: `memory_batch`, at most the batch measured, where items sent in that batch were measured no slower
+      per item than items sent alone, else 1 (batched throughput unmeasured counts as not shown);
     - `workers`: as many as end `work` within `target_wall_s`, at most a quantum each and `Grant.worker_bound`; 0 for
       none.
     """
@@ -139,7 +147,7 @@ def size(measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 
             1 if room < 0 else quantum if per_bytes == 0 else max(1, _held(room / per_bytes, quantum, math.floor))
         )
     faster = measure.batched_s_per_item is not None and measure.batched_s_per_item <= per
-    batch = memory_batch if faster else 1
+    batch = min(memory_batch, measure.batched_batch_size or 1) if faster else 1
     workers = 0
     if work > 0:
         timely = max(1, _held(work * per / config.target_wall_s, grant.max_workers, math.ceil))
@@ -177,6 +185,7 @@ def measure_of(row: ResourceMeasure, *, on_device: bool = False) -> Measure:
         s_per_item=seconds,
         on_device=device,
         batched_s_per_item=None if row.batched is None else row.batched.s_per_input_s * scale,
+        batched_batch_size=None if row.batched is None else row.batched.batch_size,
     )
 
 

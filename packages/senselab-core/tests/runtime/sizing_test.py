@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from pydantic import ValidationError
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.execution_settings import PoolSettings, ResourceClass, SizingSettings
 from senselab_core.runtime.resources import (
@@ -93,14 +94,21 @@ def test_sizing_keeps_every_bound(measure: Measure, grant: Grant, config: Sizing
 
 @pytest.mark.logic
 def test_the_quantum_holds_the_load_and_claim_to_their_share_and_workers_meet_the_target() -> None:
-    """A 1.9 s load and 0.1 s claim at 0.1 s per item take a 400-job quantum; 4000 jobs in 60 s want 7 workers."""
+    """A 1.9 s load and 0.1 s claim at 0.1 s per item take a 400-job quantum; 4000 jobs in 60 s want 7 workers.
+
+    A batch measured no slower is kept at most at the batch it was measured at: 16 of a memory batch of 80.
+    """
     measure = Measure(load_s=1.9, claim_s=0.1, resident_bytes=1000, bytes_per_item=100, s_per_item=0.1)
     grant = Grant(max_workers=32, memory_bytes=10_000, quantum_items=1000, quantum_s=3600)
     sized = size(measure, grant, SETTINGS, work=4000)
     assert (sized.quantum_items, sized.workers) == (400, 7) and sized.quantum_s == pytest.approx(42.0)
     assert sized.memory_batch == (0.9 * 10_000 - 1000) // 100 and sized.batch_size == 1
-    proven = measure.model_copy(update={"batched_s_per_item": 0.1})
-    assert size(proven, grant, SETTINGS).batch_size == sized.memory_batch
+    proven = Measure(**{**measure.model_dump(), "batched_s_per_item": 0.1, "batched_batch_size": 16})
+    assert sized.memory_batch == 80 and size(proven, grant, SETTINGS).batch_size == 16
+    wide = proven.model_copy(update={"batched_batch_size": 200})
+    assert size(wide, grant, SETTINGS).batch_size == sized.memory_batch
+    with pytest.raises(ValidationError, match="both"):
+        Measure(**{**measure.model_dump(), "batched_s_per_item": 0.1})
     assert size(proven, grant, SETTINGS, batchable=False).batch_size == 1
     assert size(measure, grant.model_copy(update={"quantum_s": 12.0}), SETTINGS).quantum_items == 100
     free = measure.model_copy(update={"load_s": 0.0, "claim_s": 0.0})
@@ -133,6 +141,7 @@ def test_a_grant_takes_device_memory_on_a_device_and_host_memory_otherwise() -> 
         "s_per_item": 0.5,
         "on_device": True,
         "batched_s_per_item": None,
+        "batched_batch_size": None,
     }
     assert measure_of(FOUND, on_device=True).on_device is False and measure_of(device).bytes_per_item == 1
 
@@ -262,6 +271,6 @@ def test_items_measured_slower_in_a_batch_are_sized_one_per_request(batched_wall
     found = calibrated([*alone, batched])
     assert found is not None and found.batched is not None and found.batched.batch_size == 4
     measure = measure_of(found)
-    assert (measure.s_per_item, measure.batched_s_per_item) == (2.0, batched_wall)
+    assert (measure.s_per_item, measure.batched_s_per_item, measure.batched_batch_size) == (2.0, batched_wall, 4)
     grant = Grant(max_workers=1, memory_bytes=10_000_000, quantum_items=4, quantum_s=3600)
     assert size(measure, grant, SETTINGS).batch_size == batch

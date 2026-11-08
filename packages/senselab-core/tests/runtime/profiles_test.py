@@ -121,7 +121,7 @@ def test_batch_size_is_sized_from_the_measure_and_not_in_key() -> None:
         peak_memory_bytes=1280,
         s_per_input_s=0.1,
         input_s_per_item=5.0,
-        batched=Batched(batch_size=4, s_per_input_s=0.1),
+        batched=Batched(batch_size=64, s_per_input_s=0.1),
         measured=Measured(sha="1" * 40, jobs=("1",)),
     )
     row = ResourceRow(id="org/m", revision="a" * 40, download_bytes=None, classes={"cpu": measure})

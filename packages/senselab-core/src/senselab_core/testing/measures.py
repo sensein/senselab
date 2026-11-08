@@ -9,10 +9,10 @@ CEILED = ResourceMeasure(
     peak_memory_bytes=1,
     s_per_input_s=1e-6,
     input_s_per_item=None,
-    batched=Batched(batch_size=2, s_per_input_s=1e-6),
+    batched=Batched(batch_size=1024, s_per_input_s=1e-6),
 )
 """A measure under which the pool's quantum ceilings bind: a load many items long, each item far under a second, as
-fast in a batch as alone."""
+fast in a batch as alone at a measured batch above every quantum the tests set."""
 
 CEILED_SIZING = {"target_wall_s": 1e-12}
 """A `sizing` override under which a queue wants a worker per quantum of `CEILED` items: a target that short."""
