@@ -282,6 +282,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
 - 2026-11-07: the Phase 3 service stage built: registry entries `{identity, endpoint}` under renewed leases, consumer leases, the `svc` pool worker; drops `heartbeat` (Phase 3 Task 17, P3-40).
 - 2026-11-07: a server backend is placed on a `svc` class first, a providing set consumes a live entry of the identity before reserving its own, the registry is per host and visible device set, and a server whose device lacks the memory it asks for is refused before launch (Phase 3 Task 20c).
 - 2026-11-07: the lease constants this ADR names are profile keys (`lease.record_attempts`, `lease.dir_mode`, `lease.missed_beats`), per P-34 as amended; `PRIVATE_DIR_MODE` stays an invariant (a security property). The other code constants move into the profile, with derivations in `config-derivations.md`, under the fixed-parameter audit.
+- 2026-11-08: measures roots, layered (shared, then own) under these rules: write-once files, a hardware index, a probe lease per measured unit, a serve lease pinning a probe queue to one worker, bounded peer waits, a read-only root that falls back and never fails, one trust filter over every record kind, and `collect` of the collector's own files (Phase 3 Task 20R).
 
 ## Amendment 2026-11-06: queues of plan fragments (Phase 3 Task 13)
 
@@ -344,3 +345,41 @@ Completes the 2026-11-01 staging. A registry entry is `{identity, endpoint}` und
   key agrees with its workers'. The registry is keyed by that attestation, so the entry a call consumes attests
   exactly it, and a started server that attests anything else is refused (`AttestationMismatch`). A restart with a
   new config changes the key; a restart with the same config keeps it.
+
+## Amendment 2026-11-08: measures roots and probe leases (Phase 3 Task 20R)
+
+Design: [`calibration-probe.md`](../calibration-probe.md) §3, §4.4. Adds to the Decision; replaces nothing in it.
+
+- **Layered roots.** `calibration.measures_roots` lists roots read in order and pooled: on a cluster, the group's
+  shared root beside the result store, then the user's own. Each holds `measures@1/`: `classes/<declared>/<seen>`
+  (the hardware index) and `units/<u[:2]>/<u>/` per `MeasureUnit` digest `u` (ADR-002 amendment of this date) with
+  `unit.json` (first writer wins), `obs/`, `drift/`, `supersede/`, `regime/`, `oom/` and `probe.lease/`. The
+  2026-10-31 rules apply unchanged: walks by descriptor, nothing modified in place, modes from the store policy, a
+  wrong kind at an owned path moved aside. A reader recomputes `u` from `unit.json`; a directory whose digest disagrees
+  is misfiled, under the malformed-file rule below.
+- **Writes go to the first writable root.** Writability is probed once at run start, before any work, and the plan
+  names the write root. Any later `OSError` on a root (permission, quota, stale handle, unreachable) makes it unreadable
+  or unwritable for the run: logged once, never raised; reads use the other roots, writes the next writable one. A
+  read-only member reuses the shared root and writes to their own.
+- **Write-once, so no lock guards a write.** Every file is staged under `tmp/<uuid>/` and renamed onto a uuid name no
+  other writer uses.
+- **One probe per unit, for efficiency.** A coordinator looks for a live `<u>/probe.lease` in every root and, finding
+  none, takes it in its write root (the 2026-11-03 directory lease, `keep_alive` renewed, `prove()` before its
+  observations are renamed in). Finding one live, it waits at most `calibration.peer_wait_s` (`probe_s +
+  lease.stale_after_s`, checked at profile load), reading once per `pool.poll_s`, then plans again with what it found.
+  Correctness does not rest on the lease: two probes give two valid sets of observations.
+- **The pin is a lease.** A probe's items go on a probe queue `<queue>~probe-<id>`. A worker claims from it only while
+  holding its `serve.lease`, one item per claim. A dead holder's lease goes stale and another worker takes the rest;
+  its first requests report a load.
+- **Trust is a reader's filter over every record kind, by owner uid.** `obs`, `drift`, `supersede`, `regime` and
+  `oom` records carry their writer's scheduler job id, run, senselab version and commit, profile digest and hardware
+  class, and no account name or hostname: the roots are readable by other users (ADR-007, 2026-11-08). The writer is
+  the file's owner uid. `calibration.trust` `group` reads all, `own` only files the current uid owns (the run config
+  overrides the profile); a record acts only for readers that admit it. Run provenance and packaged tables name probe
+  ids and counts.
+- **A reader moves only its own files.** A file of an unknown format tag is skipped and logged. A malformed or
+  misfiled file is quarantined when the reader's uid owns it, else skipped; never fatal.
+- **`collect` removes only files the collector's uid owns** (superseded observations beyond `observations_kept`,
+  staging, quarantine past the policy's ages).
+- **Not guaranteed.** One probe per unit; that a peer's estimate arrives within `peer_wait_s`; agreement between
+  measures written by different senselab versions under one `MeasureUnit` (a confirming probe after drift settles it).

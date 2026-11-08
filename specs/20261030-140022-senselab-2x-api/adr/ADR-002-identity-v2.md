@@ -286,3 +286,26 @@ names tolerance profile digests.
   coverage target.
 - 2026-11-02: per-type comparison as data, thresholds in the run config, verify evidence by thresholds digest;
   tolerance profiles retired (P2-95; Phase 2 Task 34e).
+
+## Amendment 2026-11-08: measures are not results (Phase 3 Task 20R)
+
+Design: [`calibration-probe.md`](../calibration-probe.md) §3, §4.2, §12. Adds to the Decision; replaces nothing in it.
+
+- **A measure has its own identity.** What sizes a unit's batch, item cuts and workers is keyed by `MeasureUnit`,
+  `identity_digest("measure-unit@1", fields)` over task and its version, backend and its version, all backend params, batch formation,
+  model identity, the env's fingerprinted context fields (`env_lock`, `wheel_set`, `driver`, `platform`, `decoder`,
+  `numerics`), service attestation, the canonical hardware class a worker reports, and observation format. It is a
+  separate namespace: no `MeasureUnit` field or digest enters a `LogicalKey`, and none enters
+  `ExecutionContext.fingerprint()`. A measure changes how work is cut, never what a result is.
+- **A probe job is a job.** A job chosen to probe is keyed by `call_key` like any other, its result is put in the
+  result store and served like any other, and the run yields it. The batch it is sent in is placement, never key. On
+  a backend that declares `batch_formation` output-affecting, a batched probe item holds jobs of one bucket only, so
+  each job's formation, and so its key, is the one it would have had in production (2026-11-07 amendment of
+  ADR-004).
+- **The probe asks the reuse predicate.** `ResultStore.admits(key_digest, context, policy, run)` decides whether a
+  job would be served: an entry under the current fingerprint, or one the reuse policy admits, that the license rule
+  admits and verify sampling would not recompute. `get` and `_serve` call the same predicate. A job it admits is put at
+  once and never probed; every other job is a probe candidate, including one whose key has entries only under an old
+  context. A probe request that comes back served is discarded and replaced.
+- 2026-11-08: measures keyed by `MeasureUnit` in their own namespace; probe jobs keyed and stored as ordinary jobs;
+  probe candidates are the jobs the reuse predicate would not serve (Phase 3 Task 20R).
