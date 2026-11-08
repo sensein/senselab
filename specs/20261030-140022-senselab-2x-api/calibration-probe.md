@@ -140,7 +140,7 @@ Writes and leases go to the **first writable root**. Writability is checked once
 (UX-10: missing write access is never discovered after computing). Any `OSError` on a measures root, on a read or a
 later write (permission, `ENOSPC`, `ESTALE`, an unreachable mount), is logged once per run per root and treated as that
 root unreadable or unwritable: reads go on over the other roots, writes move to the next writable root, else the
-measure is unmeasured. It is never raised (UX-37, UX-56). A read-only group member
+measure is not persisted (the run goes on with it in memory). It is never raised (UX-37, UX-56). A read-only group member
 therefore reuses the group's measures and writes their own probes to their own root. The ladder sets one root, in
 its output directory (§9), so a table point measures afresh.
 
@@ -544,7 +544,7 @@ are drift evidence only, never pooled into `r`, `u`, `a` or `B*`.
 ### 7.4 OOM backstop (S7)
 
 A resource fault on an item at batch B and longest length L writes an `oom` record `{resource: device | host, B, L,
-cotenancy, worker, run}`. It acts in two ways:
+cotenancy, worker, grant, run}`, where `worker` is `worker_id()` and `grant` the faulting grant. It acts in two ways:
 
 - **The fitted model is raised, no constant.** At B ≥ 2, for lengths at or above L, `m1` is raised to the value at
   which the memory batch at L becomes B − 1, so the faulting pair is infeasible:
@@ -644,7 +644,7 @@ override file, then the hook's answer (§10.3). The plan records the value it us
   and the version of its distribution (`importlib.metadata`), the validation verdict, and the values used. Its request
   values (partition, account) and `why` render under the reader's audience rule, like any error text (Terms, UX-45).
 - **Actuals beside the estimate.** At the epoch's end the event gains a closing record per class: the actual wall
-  time, GPU hours and peak device memory of the class's work, from the epoch's `Observation`s, beside the request's
+  time, GPU hours (from worker lifetimes) and peak device memory (from the epoch's `Observation`s) of the class's work, beside the request's
   figures. The run report reads both (UX-31 guarantee 3, UX-47).
 
 ### 10.4 A site's refusal is actionable
@@ -852,7 +852,7 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 
 - **Scope.** The `calibration` profile section (§11) and the run config's `calibration.trust` override, with load-time
   rule checks; `Observation`, `Estimate`, `ProbePhase`, `LengthProfile`, `HardwareClass` types (data only); format
-  tags registered (§12); `config-derivations.md` sections. `sizing.calibration_*` stay (T20R-7a removes them).
+  tags registered (§12); `config-derivations.md` sections. `sizing.calibration_*` stay (T20R-7a′ removes them).
 - **Files.** `runtime/execution_settings.py`, `runtime/call.py` (run config), `runtime/data/profiles/{laptop,orcd}.yaml`,
   `runtime/calibration.py` (types only), `kernel/formats.py`, `config-derivations.md`.
 - **Tests failing now.** `test_profile_refuses_probe_s_not_load_share_of_target_wall`;
