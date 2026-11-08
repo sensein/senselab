@@ -1,18 +1,23 @@
 """Step 4: interrupt `SpeechToText` on a Slurm pool at a share of its items, then resume it and account the work.
 
-`interrupt_resume.py start --work DIR --out FILE` plans and runs the `stt` step under the profile on `pool-slurm`; once
-the config's share of the items has a result event it prints the coordinator's and every live worker's Slurm job id for
-the controller to `scancel`, writes them to `FILE`, and keeps waiting. It cancels nothing.
-`resume HASH --work DIR --out FILE` (a fresh process, after the cancel) resumes the run and asserts from its events:
+`interrupt_resume.py start --work DIR --out FILE` plans the `stt` step under the profile on `pool-slurm` and runs it in
+a child process; once the config's share of the items has a result event the coordinator cancels every Slurm job named
+by the run's prefix, SIGKILLs the child, cancels again whatever the child had submitted meanwhile, writes the report to
+`FILE`, prints the hash and the committed count and exits 0. The interrupt depends on no controller.
+`resume HASH --work DIR --out FILE` (a fresh process, after the interrupt) resumes the run and asserts from its events:
 executions are the items not committed before the interrupt, every other item a reuse, and no model ref was resolved.
 """
 
 import argparse
 import os
+import signal
+import subprocess
 import sys
 import time
-from collections.abc import Sequence
+import traceback
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 sys.path[:0] = [str(Path(__file__).resolve().parent)]
 import exitlib  # noqa: E402 - beside this script
@@ -26,8 +31,62 @@ STEP = "stt"
 EXECUTOR = "pool-slurm"
 
 
+def scancel(jobs: Sequence[str]) -> None:
+    """Cancel the Slurm jobs `jobs`."""
+    subprocess.run(["scancel", *jobs], check=True)
+
+
+def interrupt(  # noqa: PLR0913 - the prefix and process, then the three effects and the bound
+    prefix: str,
+    pid: int,
+    timeout_s: float,
+    poll_s: float,
+    deadline: float | None,
+    jobs: Callable[[str, float], list[str]],
+    cancel: Callable[[Sequence[str]], None],
+    kill: Callable[[int], None],
+) -> list[str]:
+    """Cancel the jobs named `prefix*`, kill process `pid`, then cancel until none of the prefix is live.
+
+    The second round takes jobs the killed process submitted after the first listing.
+
+    Returns:
+        Every job id cancelled.
+
+    Raises:
+        exitlib.BoundExceeded: jobs of the prefix are still live at `deadline` (a `time.monotonic()` value).
+    """
+    cancelled: list[str] = []
+
+    def sweep() -> list[str]:
+        live = jobs(prefix, timeout_s)
+        if live:
+            cancel(live)
+            cancelled.extend(live)
+        return live
+
+    sweep()
+    kill(pid)
+    while sweep():
+        if deadline is not None and time.monotonic() >= deadline:
+            raise exitlib.BoundExceeded(f"jobs named {prefix}* are still live after the interrupt")
+        time.sleep(poll_s)
+    return cancelled
+
+
+def _drive(run: Any, poll: float) -> int:  # noqa: ANN401 - a started Run
+    """Return the exit code of a child that waits for `run` to finish."""
+    try:
+        while not run.wait(timeout=poll).done:
+            pass
+    except BaseException:  # noqa: BLE001 - the parent reads the exit code
+        traceback.print_exc()
+        return 2
+    return 0
+
+
 def start(work: Path, out: Path, profile_argument: str, config: exitlib.Config) -> int:
-    """Run the step until its share of the items is committed, report the jobs to cancel, then wait.
+    """Run the step in a child until its share of the items is committed, then interrupt it and report.
 
     Raises:
         RuntimeError: the run is done before the share was committed, or not started as a Slurm job.
@@ -45,34 +104,56 @@ def start(work: Path, out: Path, profile_argument: str, config: exitlib.Config) 
     bounds, poll = config.bounds[EXECUTOR], config.watch_poll_s
     store = ResultStore(cache_root() / RESULTS_DIR)
     prefix = exitlib.slurm_prefix(profile, run_dir, placed.hash)
-    run, _ = exitlib.launch(placed, EXECUTOR, store)
-    deadline = None if bounds.wall_s is None else time.monotonic() + bounds.wall_s
-    while len(exitlib.committed_jobs(run.events())) < target:
-        if run.wait(timeout=poll).done:
-            raise RuntimeError(
-                f"the run finished before {target} of {items} items were committed: nothing to interrupt"
-            )
-        if deadline is not None and time.monotonic() >= deadline:
-            run.cancel()
-            raise exitlib.BoundExceeded(f"fewer than {target} of {items} items committed within {bounds.wall_s} s")
     timeout = exitlib.slurm_timeout(profile, poll)
-    workers = exitlib.slurm_job_ids(prefix, timeout, exitlib.squeue)
-    committed = len(exitlib.committed_jobs(run.events()))
-    report = {
-        "hash": placed.hash,
-        "items": items,
-        "committed": committed,
-        "coordinator": worker_id(),
-        "workers": workers,
-    }
-    exitlib.write_json(out, report)
-    print(f"INTERRUPT NOW hash={placed.hash} committed={committed}/{items}")
-    print(f"scancel {worker_id()} {' '.join(workers)}")
-    print(f"more workers may have been submitted since: re-list the jobs named {prefix}* at cancel time")
-    while not run.wait(timeout=poll).done:
+    sys.stdout.flush()
+    sys.stderr.flush()
+    pid = os.fork()
+    if pid == 0:
+        os._exit(_drive(exitlib.launch(placed, EXECUTOR, store)[0], poll))
+    deadline = None if bounds.wall_s is None else time.monotonic() + bounds.wall_s
+    committed = 0
+    try:
+        while (committed := len(exitlib.committed_jobs(read_events(run_dir)))) < target:
+            if os.waitpid(pid, os.WNOHANG)[0]:
+                raise RuntimeError(
+                    f"the run ended before {target} of {items} items were committed: nothing to interrupt"
+                )
+            if deadline is not None and time.monotonic() >= deadline:
+                raise exitlib.BoundExceeded(f"fewer than {target} of {items} items committed within {bounds.wall_s} s")
+            time.sleep(poll)
+        committed = len(exitlib.committed_jobs(read_events(run_dir)))
+        cancelled = interrupt(
+            prefix,
+            pid,
+            timeout,
+            poll,
+            deadline,
+            lambda each, seconds: exitlib.slurm_job_ids(each, seconds, exitlib.squeue),
+            scancel,
+            lambda each: os.kill(each, signal.SIGKILL),
+        )
+        os.waitpid(pid, 0)
+    except BaseException:
+        _reap(pid, prefix, timeout)
+        raise
+    exitlib.write_json(
+        out,
+        {"hash": placed.hash, "items": items, "committed": committed, "coordinator": worker_id(), "workers": cancelled},
+    )
+    print(f"INTERRUPTED hash={placed.hash} committed={committed}/{items} cancelled={' '.join(cancelled)}")
+    return 0
+
+
+def _reap(pid: int, prefix: str, timeout_s: float) -> None:
+    """Kill child `pid` and cancel the jobs of `prefix` after a failed start, so nothing outlives the coordinator."""
+    try:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+    except (ProcessLookupError, ChildProcessError):
         pass
-    print("the run finished before it was cancelled: the interrupt did not land")
-    return 1
+    live = exitlib.slurm_job_ids(prefix, timeout_s, exitlib.squeue)
+    if live:
+        scancel(live)
 
 
 def resume(plan_hash: str, work: Path, out: Path, profile_argument: str) -> int:

@@ -4,6 +4,7 @@ import importlib.util
 import json
 import platform
 import sys
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -384,19 +385,14 @@ def test_a_skipped_resident_sample_is_counted_not_read_as_zero() -> None:
 
 
 class _StartedRun:
-    """A started run: its events are what the log holds; `wait` reports done or not as scripted."""
+    """A started run that reports `done` as scripted; one that is not done ends only by the coordinator's SIGKILL."""
 
-    def __init__(self, log: Path, done: bool) -> None:
-        self.log, self.done = log, done
+    def __init__(self, done: bool) -> None:
+        self.done = done
 
-    def events(self) -> list[Event]:
-        return read_events(self.log)
-
-    def wait(self, timeout: float | None = None) -> SimpleNamespace:  # noqa: ARG002
+    def wait(self, timeout: float | None = None) -> SimpleNamespace:
+        time.sleep(0 if self.done else timeout or 0.01)
         return SimpleNamespace(done=self.done, interrupted=False)
-
-    def cancel(self) -> None:
-        raise AssertionError("the driver cancels nothing here")
 
 
 def _started(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, committed: int, done: bool) -> Any:  # noqa: ANN401
@@ -407,13 +403,14 @@ def _started(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, committed: int,
     for i in range(committed):
         _record(log, "finished", i, KEYS[i], _output(KEYS[i]))
     placed = SimpleNamespace(hash=HASH, manifest=SimpleNamespace(rows=[SimpleNamespace(id=f"r{i}") for i in range(3)]))
+    monkeypatch.setattr(interrupt_resume, "run_dir_of", lambda plan_hash: tmp_path / "events")
     monkeypatch.setattr(exitlib, "build_tree", lambda step, work: work)
     monkeypatch.setattr(exitlib, "planned", lambda step, root, profile: placed)
     monkeypatch.setattr(exitlib, "slurm_prefix", lambda profile, run_dir, plan_hash: "senselab-x-")
-    monkeypatch.setattr(exitlib, "slurm_job_ids", lambda prefix, timeout_s, run: ["77", "78"])
-    monkeypatch.setattr(
-        exitlib, "launch", lambda placed, executor, store: (_StartedRun(tmp_path / "events", done), None)
-    )
+    listings = iter([["77", "78"], []])
+    monkeypatch.setattr(exitlib, "slurm_job_ids", lambda prefix, timeout_s, run: next(listings, []))
+    monkeypatch.setattr(interrupt_resume, "scancel", lambda jobs: None)
+    monkeypatch.setattr(exitlib, "launch", lambda placed, executor, store: (_StartedRun(done), None))
     return exitlib.load_config()
 
 
@@ -426,16 +423,47 @@ def test_start_refuses_a_run_that_is_done_before_its_target(tmp_path: Path, monk
 
 
 @pytest.mark.logic
-def test_start_reports_the_jobs_then_fails_when_the_run_finishes_uncancelled(
+def test_interrupt_cancels_the_prefix_kills_the_process_then_sweeps_what_it_submitted() -> None:
+    """Jobs are cancelled before the kill; one the killed process submitted meanwhile is cancelled after it."""
+    order: list[str] = []
+    listings = iter([["1", "2"], ["3"], []])
+
+    def jobs(prefix: str, timeout_s: float) -> list[str]:
+        assert prefix == "senselab-x-" and timeout_s == 5.0
+        return next(listings)
+
+    cancelled = interrupt_resume.interrupt(
+        "senselab-x-",
+        99,
+        5.0,
+        0.0,
+        None,
+        jobs,
+        lambda each: order.append("cancel " + " ".join(each)),
+        lambda pid: order.append(f"kill {pid}"),
+    )
+    assert order == ["cancel 1 2", "kill 99", "cancel 3"] and cancelled == ["1", "2", "3"]
+
+
+@pytest.mark.logic
+def test_interrupt_fails_when_jobs_of_the_prefix_outlive_the_bound() -> None:
+    """Jobs still listed after the deadline raise instead of reporting an interrupt."""
+    with pytest.raises(exitlib.BoundExceeded, match="still live"):
+        interrupt_resume.interrupt(
+            "p-", 1, 1.0, 0.0, 0.0, lambda prefix, seconds: ["5"], lambda each: None, lambda pid: None
+        )
+
+
+@pytest.mark.logic
+def test_start_interrupts_its_own_run_at_the_target_and_exits_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """At the target `start` writes and prints the jobs to cancel; a run that then finishes returns 1."""
-    config = _started(tmp_path, monkeypatch, committed=1, done=True)
-    assert interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config) == 1
+    """The child run is SIGKILLed at the target, the report names the cancelled jobs, and `start` returns 0."""
+    config = _started(tmp_path, monkeypatch, committed=1, done=False)
+    assert interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config) == 0
     report = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
-    printed = capsys.readouterr().out
-    assert report["workers"] == ["77", "78"] and report["coordinator"] == "4242" and report["committed"] == 1
-    assert "INTERRUPT NOW" in printed and "scancel 4242 77 78" in printed and "senselab-x-*" in printed
+    assert report["workers"] == ["77", "78"] and report["committed"] == 1 and report["hash"] == HASH
+    assert f"INTERRUPTED hash={HASH} committed=1/3" in capsys.readouterr().out
 
 
 @pytest.mark.logic
@@ -455,6 +483,7 @@ def test_a_run_with_an_incomplete_or_failed_result_set_is_refused(
     )
     done = exitlib.Execution(placed, None, read_events(tmp_path / "events"), {}, 0.0, counts)
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setattr(interrupt_resume, "run_dir_of", lambda plan_hash: tmp_path / "events")
     monkeypatch.setattr(exitlib, "build_tree", lambda step, work: work)
     monkeypatch.setattr(exitlib, "planned", lambda step, root, profile: placed)
     monkeypatch.setattr(exitlib, "execute", lambda placed, executor, config: done)
