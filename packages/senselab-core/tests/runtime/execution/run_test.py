@@ -7,9 +7,10 @@ import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
-from planted_objects_fixture import identity_leaks, real_identities
+from planted_objects_fixture import identities_in, identity_leaks, real_names
 from queue_race_fixture import fragment
 from runner_test import (  # noqa: F401 - `packaged` is the autouse fixture of the fake stack
     CHAIN_EDGES,
@@ -74,15 +75,25 @@ def test_a_failed_run_leaves_no_path_or_account_in_its_readable_files(tmp_path: 
 
 
 @pytest.mark.logic
-def test_a_stored_fault_message_names_no_account_or_path(tmp_path: Path) -> None:
+def test_the_sweep_matches_a_name_as_a_token_and_a_path_anywhere(tmp_path: Path) -> None:
+    """A name inside a longer word (`runner` in `runner_test`) is no leak; alone it is, and a path is anywhere."""
+    for name in real_names():
+        assert identities_in(f"{name}_test x{name} {name}-1".encode(), tmp_path) == []
+        assert name in identities_in(f"by {name}.".encode(), tmp_path)
+    assert identities_in(f"at {tmp_path}x".encode(), tmp_path) == [str(tmp_path)]
+
+
+@pytest.mark.logic
+def test_a_stored_fault_message_names_no_account_or_path(tmp_path: Path, slack_tests: dict[str, Any]) -> None:
     """A lease holder's user, an owner remedy's account and any absolute path are rendered to labels."""
-    held = Lease(tmp_path / "lock", stale_after=60.0)
+    times = slack_tests["held_lease"]
+    held = Lease(tmp_path / "lock", stale_after=times["stale_after_s"])
     with held, pytest.raises(LeaseTimeout) as timeout:
-        Lease(tmp_path / "lock", stale_after=60.0, timeout=0.2).__enter__()
+        Lease(tmp_path / "lock", stale_after=times["stale_after_s"], timeout=times["timeout_s"]).__enter__()
     remedy = owner_remedy(tmp_path)
     for text in (str(timeout.value), remedy, f"open {tmp_path / 'x.wav'}: denied", f"in ~/data and {Path.home()}"):
         stored = FaultRecord.of({"fault": "infrastructure", "type": "T", "message": text}).message
-        assert [n for n in real_identities() | {str(tmp_path)} if n in stored] == [], stored
+        assert identities_in(stored.encode(), tmp_path) == [], stored
         assert "<path>" in stored
     assert FaultRecord.of({"fault": "content", "type": "T", "message": "a/b and 3/4 http://h/x"}).message == (
         "a/b and 3/4 http://h/x"

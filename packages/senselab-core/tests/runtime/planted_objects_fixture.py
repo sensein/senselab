@@ -920,15 +920,24 @@ def probe_clock_hard_link(scratch: str, op: str) -> dict[str, Any]:
 UNOPENABLE_NAMES = (LEASE, "resolutions@2.json")
 
 
-def real_identities() -> set[str]:
-    """The names this machine goes by: host (three spellings), account and home path."""
+def real_names() -> set[str]:
+    """The names this machine goes by: host (three spellings and their first labels) and account."""
     import getpass
     import os
     import platform
     import socket
 
     full = {socket.gethostname(), platform.node(), os.uname().nodename}
-    return {n for n in {*full, *(h.split(".")[0] for h in full), getpass.getuser(), str(Path.home())} if n}
+    return {n for n in {*full, *(h.split(".")[0] for h in full), getpass.getuser()} if n}
+
+
+def identities_in(data: bytes, base: Path) -> list[str]:
+    """Return each real name `data` holds as a whole token, and each path of the home or of `base` it holds anywhere."""
+    import re
+
+    paths = {str(Path.home()), str(base), str(base.resolve())}
+    names = [n for n in sorted(real_names()) if re.search(rb"(?<![\w-])" + re.escape(n.encode()) + rb"(?![\w-])", data)]
+    return names + [p for p in sorted(paths) if p.encode() in data]
 
 
 def identity_leaks(root: Path, base: Path) -> list[tuple[str, str]]:
@@ -940,9 +949,8 @@ def identity_leaks(root: Path, base: Path) -> list[tuple[str, str]]:
     private = root / "private"
     if private.is_dir():
         assert private.stat().st_mode & 0o777 == 0o700, f"{private} is not owner-only"
-    wanted = {*real_identities(), str(base), str(base.resolve())}
     found = []
     for path in sorted(p for p in root.rglob("*") if p.is_file() and private not in p.parents):
-        relative, data = str(path.relative_to(root)), path.read_bytes()
-        found += [(relative, n) for n in sorted(wanted) if n in relative or n.encode() in data]
+        relative = str(path.relative_to(root))
+        found += [(relative, n) for n in identities_in(relative.encode() + b"\0" + path.read_bytes(), base)]
     return found
