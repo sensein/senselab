@@ -45,6 +45,8 @@ account or dataset.
   (as `engineering.md` requires).
 - A scenario that a change touches but that was not checked (no test, no run) is recorded in the
   review as unchecked. It is never assumed to pass.
+- Where a scenario and an ADR disagree, the scenario governs and the ADR gets a dated amendment
+  (ADR-000) before the next change in that area merges.
 - Only the owner amends or adds a scenario, as a dated edit here with the owner's words. An agent
   or reviewer may propose an amendment, never apply one, and code never carries a silent exception.
 
@@ -58,23 +60,28 @@ account or dataset.
   models, and where.
 - **Result.** One output with its record of what produced it.
 - **Identity.** What makes two results the same computation: input content, task and its version,
-  model content, effective parameters. Hardware, host and environment are recorded in provenance,
+  model content, effective parameters, and the inference engine where it can change outputs. Hardware, host and environment are recorded in provenance,
   not part of identity.
 - **Reuse.** A result already computed (by you, a colleague or an earlier run) is returned instead
-  of being computed again. The user chooses how strict reuse is across machines, at one of three
-  levels: exact, measured-equivalent, or within a stated tolerance. Unmeasured cases behave as
-  exact.
+  of being computed again. Across contexts (another host, hardware or environment), the user chooses
+  the reuse level: exact, measured-equivalent, or any context (the result is labelled as such in its
+  record, with no comparison made). Unmeasured cases behave as exact.
+- **Stated tolerance.** A configured threshold per output, with its derivation. Where none is
+  declared for an output, two results are reported as uncompared, never as agreeing.
 - **Silent fallback.** Not allowed anywhere. Anything that changes what is computed, which model or
   configuration runs, or where results go is the user's choice, visible in the plan or the report.
 - **Identifiers.** Participant and record identifiers (names, study ids, metadata values, input
   paths) and the identifiers of people and places that ran the work (account names, hostnames,
   site names).
+- **Data owner.** The person or group that holds the data and sets its visibility policy. When
+  several hold the same corpus, each sets the policy for their own copy and for what they share.
+  With nothing configured, the data owner is the user who runs, for their own runs.
 - **Audience.** Whoever sees an output: the data owner, an approved team, a collaborator, a group,
   other users of a cluster who can read a location, a public export. An AI agent is an audience like
   any other: it sees what its principal (the user it acts for) is allowed to see.
 - **Visibility policy.** Set by the data owner per project or dataset, it decides per audience
-  whether identifiers are shown as real values, as pseudonymous ids, or not at all. Logs, progress
-  views, errors, provenance and reports of the same run render according to who views or receives
+  whether identifiers are shown as real values, as pseudonymous ids, or not at all. Plans, logs,
+  progress views, errors, provenance, reports and exports of the same run render according to who views or receives
   them.
   - **Default.** With no policy set, the data owner sees real identifiers and every other audience
     sees pseudonymous ids.
@@ -112,8 +119,7 @@ account or dataset.
   1. The plan states the device and numeric precision it will use, and any setting that can change
      outputs.
   2. The transcripts have the same identity as the laptop run; the hardware is recorded in
-     provenance. Any numeric difference between the two is reported against the measured tolerance
-     for that model; where no tolerance is measured, the report says the two are uncompared.
+     provenance. Any numeric difference between the two is reported against the stated tolerance for that output (none declared: uncompared).
   3. With the GPU busy or too small for the model, the plan says so before running and offers the
      CPU placement as the user's choice; it does not fail halfway.
 - **Never:** the user selects the device inside the task call to get GPU execution; a GPU result
@@ -126,7 +132,8 @@ account or dataset.
   to look at the output; a week later runs the same pipeline declaration over 2,000 recordings.
 - **Guarantees:**
   1. The pipeline is written once; scaling up changes only the inputs and the execution setting.
-  2. The first recording's results are reused in the large run.
+  2. The first recording's results are reused in the large run, under a reuse level that admits
+     its setting.
   3. An item's result has the same fields and values whether obtained interactively or from the
      bulk run.
 - **Never:** a "batch version" of a pipeline has to be written separately from the interactive one.
@@ -136,7 +143,8 @@ account or dataset.
 - **Actor, setting:** a laptop with 8 GB of memory; one recording is three hours long.
 - **Steps:** runs feature extraction and transcription over a set that includes the long file.
 - **Guarantees:**
-  1. The plan states the expected peak memory per step, or states that it is unmeasured.
+  1. The plan states the expected peak memory per step, or states that it is unmeasured; an
+     unmeasured statement is the warning, and out-of-memory then follows UX-35.
   2. Peak memory per step is bounded independently of recording length. The plan refuses a step
      only when its bounded requirement exceeds the machine, and names the requirement.
 - **Never:** the machine runs out of memory mid-run on a file the plan accepted without warning; a
@@ -169,8 +177,8 @@ account or dataset.
   1. Each recording's result is computed once, however many nodes run.
   2. CPU-only steps run on CPU nodes and GPU steps on GPU nodes, as the plan stated.
   3. The run stays within the site's caps; it never submits more than the user is allowed.
-  4. Results equal a single-node run of the same plan, or are reported against the measured
-     tolerance where hardware differs.
+  4. Results equal a single-node run of the same plan, or are reported against the stated tolerance for that output (none declared: uncompared)
+     where hardware differs.
 - **Never:** two nodes compute and write the same result and one silently overwrites the other;
   a slow shared filesystem turns into duplicated work.
 - **Relates to:** P-2, P-5, P-10, P-33, P-38, ADR-003.
@@ -193,11 +201,13 @@ account or dataset.
 - **Steps:** later, runs the same plan again, possibly on another day or node.
 - **Guarantees:**
   1. Only missing results are computed; the report says how many were reused and how many ran.
-  2. The results, their values and identity, equal those of an uninterrupted run.
+  2. The results, their values and identity, equal those of an uninterrupted run, or are reported
+     against the stated tolerance for that output (none declared: uncompared) where the hardware differs (UX-6).
   3. The run's provenance shows the interruption and both attempts; each result's record is the
      record of the attempt that produced it (UX-46).
 - **Never:** the user must clean up anything left by the interrupted run before resuming; a
-  resumed run recomputes finished work because the host or day changed.
+  resumed run recomputes finished work because the day changed, or because the host changed within
+  a reuse level that admits the new host.
 - **Relates to:** P-5, P-10, P-19.
 
 ### UX-56 Disk quota or scratch purge
@@ -216,7 +226,8 @@ account or dataset.
   readable by other users.
 - **Steps:** runs a plan on identifiable data whose logs land in such a location.
 - **Guarantees:** anything written where other users can read it follows the visibility rule of
-  the widest audience that can read that location.
+  the widest audience that can read that location; the log states the rule it was rendered under,
+  and the data owner's own rendering stays available to the data owner.
 - **Never:** identifiers appear in a world-readable log under a rule meant only for the data owner.
 - **Relates to:** P-3, ADR-007, ADR-008.
 
@@ -248,9 +259,9 @@ account or dataset.
   3. Users choose the reuse level (Terms), and the level is recorded with each result reused.
   4. A release that cannot interpret a stored result refuses it with a typed error and does not
      reuse it.
-- **Never:** a member can make others reuse a result that was not produced by the stated model on
-  the stated input; the run discovers missing write access only after computing; a value is
-  returned that was read under another schema.
+- **Never:** a result whose stored content does not match its recorded identity is reused; a member
+  without write access can make others reuse anything; the run discovers missing write access only
+  after computing; a value is returned that the release cannot interpret.
 - **Relates to:** P-3, P-19, P-38, ADR-002, ADR-007.
 
 ### UX-11 Shared measurements, different thresholds
@@ -319,8 +330,8 @@ account or dataset.
 - **Steps:** keeps the cluster workers running and adds cloud workers to the same plan.
 - **Guarantees:**
   1. Work is not duplicated between the two; each result is computed once.
-  2. Results from both sites carry their recorded hardware and are equal or reported against the
-     model's measured tolerance.
+  2. Results from both sites carry their recorded hardware and are equal or reported against
+     the stated tolerance for that output (none declared: uncompared).
   3. If cloud workers cannot reach the shared results, the plan or the first check says so before
      they take work.
 - **Never:** adding a site requires a new plan identity or changes what is computed.
@@ -371,10 +382,10 @@ account or dataset.
 - **Guarantees:**
   1. The record alone states the exact model content, parameters, input identity, software and
      environment needed to reproduce it.
-  2. The re-run's output is compared with the original under a stated tolerance, and the report
-     says whether they agree, or that they are uncompared where no tolerance is measured.
+  2. The re-run's output is compared with the original under the stated tolerance for that output (none declared: uncompared), and the report
+     says whether they agree.
 - **Never:** the record shows the collaborator identifiers beyond what the visibility policy allows
-  that audience; fields the policy allows that audience, including those needed to reproduce, are
+  the collaborator; fields the policy allows that audience, including those needed to reproduce, are
   stripped.
 - **Relates to:** P-3, P-4, P-38, ADR-007, ADR-010.
 
@@ -435,15 +446,16 @@ account or dataset.
   2. Results from the old release remain readable and name the release that produced them, or are
      refused with a typed error (UX-10).
 - **Never:** an upgrade changes a task's output without that task's version changing; an upgrade
-  forces recomputing tasks whose version did not change.
+  recomputes, beyond what the user's reuse level requires, tasks whose version did not change, or
+  does so without the plan saying how many.
 - **Relates to:** P-3, P-19, P-38.
 
 ### UX-62 Bringing your own model or task
 - **Actor, setting:** a lab with fine-tuned weights on local disk and a new analysis of its own.
 - **Steps:** registers the local model and adds the new task or backend, then plans with them.
 - **Guarantees:**
-  1. Local weights are identified by their content; changing one weight changes the identity,
-     while unrelated files beside them do not.
+  1. Local weights are identified by their content: every file in the model's directory counts
+     except version-control metadata; files outside it do not.
   2. The new task is added without forking senselab, and its machine-readable description (UX-33)
      is generated from it.
 - **Never:** a local model is identified by its folder name or path; an added task needs a separately
@@ -454,7 +466,7 @@ account or dataset.
 - **Actor, setting:** a user runs a sampling decoder, text-to-speech or voice cloning.
 - **Steps:** runs it twice with the same seed, then once with another seed.
 - **Guarantees:** the seed is part of the effective parameters and the identity; the same seed
-  reproduces the output, or the difference is reported against a stated tolerance; a different
+  reproduces the output, or the difference is reported against the stated tolerance for that output (none declared: uncompared); a different
   seed is a different result.
 - **Never:** a stochastic result is reused for a different seed; an unseeded run is presented as
   reproducible.
@@ -577,7 +589,8 @@ account or dataset.
      before deletion.
   2. After deletion none is reused or reported again; dependent results are recomputed without
      them if needed.
-  3. The deletion is recorded without re-identifying the participant to any audience.
+  3. The deletion is recorded without re-identifying the participant to any audience the policy does
+     not allow.
 - **Never:** a derived result of a withdrawn participant survives in a shared location or a
   report; the deletion record names the participant to an audience the policy does not allow.
 - **Relates to:** P-3, P-19, ADR-007, ADR-010.
@@ -600,8 +613,8 @@ account or dataset.
 ### UX-32 Explaining a plan
 - **Actor, setting:** a reviewer or supervisor reading someone else's plan.
 - **Steps:** renders the plan's steps and their connections without running.
-- **Guarantees:** the rendering lists every step with model identity, effective parameters,
-  environment and placement; a nested pipeline is shown as one node, expandable one level at a
+- **Guarantees:** the rendering, under the reader's audience rule (Terms), lists every step with
+  model identity, effective parameters, environment and placement; a nested pipeline is shown as one node, expandable one level at a
   time.
 - **Never:** what a plan will do can only be learned by running it.
 - **Relates to:** P-9, P-10, P-31.
@@ -824,8 +837,8 @@ the same rule get the same content.
 - **Actor, setting:** a user with results from an old and a new model version (UX-19), or from two
   sites (UX-15).
 - **Steps:** asks for a comparison report.
-- **Guarantees:** the report shows per-item differences and their distribution, each against the
-  measured tolerance where one exists, and lists items present in only one set.
+- **Guarantees:** the report shows per-item differences and their distribution, each against the stated tolerance for that output (none declared: uncompared),
+  and lists items present in only one set.
 - **Never:** two result sets are reported as agreeing when they were not compared item by item.
 - **Relates to:** P-3, P-38.
 
@@ -871,8 +884,8 @@ the same rule get the same content.
 - **Actor, setting:** a three-hour recording processed in pieces, in any setting.
 - **Steps:** transcribes and diarizes it.
 - **Guarantees:** outputs have continuous timestamps over the whole recording; nothing is lost or
-  duplicated at piece boundaries; the result equals an unpieced run, or is reported against a
-  stated tolerance.
+  duplicated at piece boundaries; where an unpieced run can be run, the result equals it or is reported against
+  the stated tolerance for that output (none declared: uncompared).
 - **Never:** a word, segment or speaker turn is dropped or doubled at a boundary; timestamps restart
   per piece.
 - **Relates to:** P-5, P-33, ADR-005.
@@ -892,3 +905,7 @@ the same rule get the same content.
   contradictions on resume, fallbacks, reuse and hardware in identity resolved; scenarios made
   decidable; UX-51..UX-66 added (66 scenarios, groups A–O); how-to-use gains the area map, the
   quoted-location rule, unchecked scenarios and owner-only amendment.
+- 2026-11-08: final review. Reuse level three is "any context, labelled"; cross-context reuse in
+  UX-3, UX-8 and UX-61 is qualified by the reuse level; identity includes the engine where it can
+  change outputs; one tolerance phrase; data owner defined; plans and exports render per audience;
+  scenarios govern over ADRs (ADR-007 amended the same day).

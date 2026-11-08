@@ -1,6 +1,6 @@
 # ADR-007: Trust and privacy
 
-**Status:** accepted 2026-10-30; amended 2026-11-01.
+**Status:** accepted 2026-10-30; amended 2026-11-01, 2026-11-02, 2026-11-08.
 
 ## Context
 Architect review §12 (R-48):
@@ -71,3 +71,19 @@ exporter's tests require it.
 - A catalogue entry's license, placement and resources describe `(id, revision)`, not `id`. A model reference that
   resolves to the entry's revision carries them; one that resolves to any other commit (`org/model@main` after the
   repository moved) carries `license: None`, unverified, and is placed as an uncatalogued model (R-176).
+
+## Amendment 2026-11-08: identifier visibility is per audience
+
+Owner, 2026-11-08: "identifier specification may depend on use-case, that shouldn't be a blanket rule but
+dependent on who sees the identifiers". [`user-scenarios.md`](../user-scenarios.md) (Terms, UX-28, UX-45,
+UX-50) governs; this amendment brings the decision in line.
+- **Policy.** Visibility of participant and record identifiers (and of the accounts, hosts and sites that ran
+  the work) is decided per audience by a policy the data owner sets for a project or dataset: real values,
+  pseudonymous ids, or none. An AI agent sees what its principal may see.
+- **Default.** With no policy set, the data owner sees real identifiers and every other audience sees
+  pseudonymous ids.
+- **Pseudonyms are stable per dataset**: one identifier maps to one pseudonym across runs, outputs and every
+  audience allowed pseudonyms. This supersedes "allocated per run" for labels shown to an audience.
+- **Exports and shared reports render for their recipient audience**, never above what the policy allows that
+  audience. "Publishable by default" and the export refusal of paths and `sub-`/`ses-` labels describe the
+  rule for a public audience, not for every recipient.
