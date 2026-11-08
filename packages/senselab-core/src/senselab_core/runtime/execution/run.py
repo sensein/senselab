@@ -83,6 +83,18 @@ class MissingExtra(ImportError):
         self.extra = extra
 
 
+class RunPrivate(PermissionError):
+    """Another account's run: its private state (manifest, inputs, placement) is not readable here."""
+
+    def __init__(self, run_dir: Path) -> None:
+        """Name the run directory and the argument that names its result store."""
+        super().__init__(
+            f"run {Path(run_dir).name}'s private state belongs to another account; name its result store with "
+            "Run(run_dir, store=<its result store>)"
+        )
+        self.run_dir = Path(run_dir)
+
+
 class InputChanged(StaleSource):
     """Inputs no longer of the identity the plan was made with, or unreadable; `changed` is (record, port)."""
 
@@ -273,16 +285,20 @@ def load_plan(run_dir: Path) -> Plan:
 
     Raises:
         FileNotFoundError: the run has no `plan.json`, or no claimed attempt.
+        RunPrivate: the run is another account's, so its placement and inputs are not readable.
     """
     document = json.loads((Path(run_dir) / PLAN_FILE).read_text(encoding="utf-8"))
     inputs = Path(run_dir) / INPUTS_FILE
-    return Plan(
-        logical=LogicalPlan.model_validate(document["logical"]),
-        manifest=InputManifest.model_validate(document["manifest"]),
-        placement=latest_placement(run_dir),
-        hash=document["plan_hash"],
-        sources=json.loads(inputs.read_text(encoding="utf-8")) if inputs.is_file() else {},
-    )
+    try:
+        return Plan(
+            logical=LogicalPlan.model_validate(document["logical"]),
+            manifest=InputManifest.model_validate(document["manifest"]),
+            placement=latest_placement(run_dir),
+            hash=document["plan_hash"],
+            sources=json.loads(inputs.read_text(encoding="utf-8")) if inputs.is_file() else {},
+        )
+    except PermissionError as err:
+        raise RunPrivate(run_dir) from err
 
 
 def _memory(source: object) -> str | None:
@@ -460,11 +476,17 @@ class Run:
         return load_plan(self.run_dir)
 
     def manifest(self) -> dict[str, Any]:
-        """Return the manifest (plan hash and result store), `{}` if the run has none."""
+        """Return the manifest (plan hash and result store), `{}` if the run has none.
+
+        Raises:
+            RunPrivate: the run is another account's, so its manifest is not readable.
+        """
         try:
             found = json.loads((self.run_dir / MANIFEST_FILE).read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {}
+        except PermissionError as err:
+            raise RunPrivate(self.run_dir) from err
         return found if isinstance(found, dict) else {}
 
     def events(self) -> list[Event]:

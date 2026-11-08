@@ -2,6 +2,7 @@
 
 import errno
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -33,6 +34,7 @@ from senselab_core.runtime.execution.run import (
     NotRun,
     Output,
     Run,
+    RunPrivate,
     bind_inputs,
     load_plan,
 )
@@ -73,6 +75,22 @@ def test_a_failed_run_leaves_no_path_or_account_in_its_readable_files(tmp_path: 
     assert failed and all("<path>" in f.message for f in failed)
     assert identity_leaks(run.run_dir, tmp_path) == []
     assert str(tmp_path / "store") in (run.run_dir / "private" / "manifest.json").read_text()
+
+
+@pytest.mark.contract
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any directory")
+def test_another_accounts_run_is_refused_by_a_typed_error_naming_the_store(tmp_path: Path) -> None:
+    """A run whose `private/` this account cannot read raises `RunPrivate` naming `store=`; its events still read."""
+    run, _ = _started(tmp_path)
+    private = run.run_dir / "private"
+    private.chmod(0)
+    try:
+        for read in (Run(run.run_dir).manifest, Run(run.run_dir).results):
+            with pytest.raises(RunPrivate, match=r"store=<its result store>"):
+                read()
+        assert Run(run.run_dir).status().done
+    finally:
+        private.chmod(0o700)
 
 
 @pytest.mark.logic
