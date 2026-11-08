@@ -116,7 +116,7 @@ without trading away P-31..P-39.
 | Implementing a phase item: a backend port, a task, a dataset adapter, kernel or concurrency code, tests and test runs | general-purpose | sonnet (opus after the second failure) | worktree |
 | Design, ADRs, synthesis across threads | main thread or fork | opus | — |
 | Per-PR review, first rounds (standards and checklist, P-31..P-37) | fresh general-purpose | opus | read-only |
-| Per-PR final review before merge | fresh general-purpose | fable | read-only |
+| Per-PR final review before merge | fresh general-purpose | opus; fable only for the high-stakes classes below | read-only |
 | End-of-phase adversarial round (P-35) | general-purpose lead with up to 5 subagents | opus, high; subagents sonnet | read-only |
 | Phase-gate architecture review | general-purpose lead with subagents | opus; at most three verification subagents, haiku, low, each on a disjoint section | read-only |
 | Verifying a reviewer's claims before acting on them | Explore, at most three, each on a disjoint section | haiku or sonnet, low | read-only; cites `file:line` |
@@ -125,13 +125,15 @@ without trading away P-31..P-39.
 **Rules**
 - **Escalation.** Any review verdict other than approve, and any failing test run, is a failure. After the
   second on one task, the next round goes to a fresh agent one tier up (sonnet to opus), and the ledger line
-  says `escalated`. A 429 or usage-limit error is not a failure and is not escalated. Fable runs the final
-  review before a merge (amended 2026-11-08), and proofs about the lease and store protocol (ADR-003). Fix rounds
+  says `escalated`. A 429 or usage-limit error is not a failure and is not escalated. Opus runs the final
+  review before a merge; fable runs it only for the high-stakes classes in the 2026-11-09 amendment, which
+  include proofs about the lease and store protocol (ADR-003). Fix rounds
   on one symptom are counted separately (P-35); when the task counter and the symptom counter disagree, the
   stricter one wins.
 - **Reviewer independence.** A review never runs on the model and context that produced the work.
-  A sonnet implementation gets opus review rounds and a fable final review; an escalated opus implementation
-  gets fable reviews (P-40 Check, amended 2026-11-08). A reviewer gets the code and the principles, not the
+  A sonnet implementation gets opus review rounds and an opus final review in a fresh context; an escalated
+  opus implementation gets opus reviews in a fresh context, the pairing recorded, and fable only for the
+  high-stakes classes (P-40 Check, amended 2026-11-09). A reviewer gets the code and the principles, not the
   implementer's conclusions.
 - **Every brief is a file with three headings**, implementer and reviewer briefs alike:
   - `## Principles`: P-31..P-40 by id, one line each; the other P-ids and ADRs the task touches; the test tier
@@ -366,3 +368,9 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   only, and a component on its second fix round gets a design review, not another scoped re-review. Owner:
   "sonnet use for implementation and testing subagents, opus for initial review iterations, and fable for final
   review".
+  Amended 2026-11-09 (owner): fable is used only for the most important issues. The final review before a merge
+  runs on opus in a fresh context. Fable reviews only these high-stakes classes: identity, privacy and security
+  (anything that could put a user's identifier where another user can read it, UX-28/UX-57); a change to the
+  wire, lease or store protocol or to an ADR's semantics; and the design review of a component on its second
+  fix round. An opus+opus pairing outside a kernel item is allowed in a fresh context and is recorded in the
+  ledger. Owner: "reduce fable usage except for the most important issues".
