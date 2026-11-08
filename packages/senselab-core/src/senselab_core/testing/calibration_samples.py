@@ -135,11 +135,11 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
         invalid_updates=[{"resident": -1}, {"n": 0}],
     )
     register(StratumBatch, lambda: [StratumBatch(stratum=0, batch=8)], invalid_updates=[{"batch": 0}])
-    register(RegimeFactor, lambda: [RegimeFactor(k=2, rho=1.4, n=6)], invalid_updates=[{"rho": 0}, {"k": 0}])
+    register(RegimeFactor, lambda: [RegimeFactor(k=2, rho=1.4, n=6)], invalid_updates=[{"rho": 0}, {"k": 0}, {"k": 1}])
     register(
         OomRecord,
-        lambda: [OomRecord(resource="device", batch=16, length=30.0, cotenancy=1, budget_bytes=2**36)],
-        invalid_updates=[{"resource": "disk"}, {"batch": 0}],
+        lambda: [OomRecord(resource="device", batch=16, length=30.0, cotenancy=1, grant_bytes=2**36, basis=("p1",))],
+        invalid_updates=[{"resource": "disk"}, {"batch": 0}, {"grant_bytes": 0}],
     )
     register(
         EstimateSource,
@@ -149,7 +149,7 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
     register(
         Estimate,
         lambda: [
-            Estimate(status="unmeasured", unit_kind="none", reasons=("no warm request",)),
+            Estimate(status="unmeasured", unit_kind="none", reasons=("no_usable_observations",)),
             Estimate(
                 status="measured",
                 unit_kind="audio_s",
@@ -162,7 +162,9 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
                 batch=(StratumBatch(stratum=0, batch=4),),
                 device=MemoryFit(resident=1024, m0=0.0, m1=2.5, n=3),
                 regimes=(RegimeFactor(k=2, rho=1.4, n=6),),
-                oom=(OomRecord(resource="device", batch=16, length=30.0, cotenancy=1, budget_bytes=2**36),),
+                oom=(
+                    OomRecord(resource="device", batch=16, length=30.0, cotenancy=1, grant_bytes=2**36, basis=("p1",)),
+                ),
                 source=EstimateSource(probe_ids=("p1",), observations=9),
             ),
         ],
@@ -171,6 +173,8 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
             {"reasons": (), "status": "unmeasured"},
             {"batch": (StratumBatch(stratum=0, batch=4), StratumBatch(stratum=0, batch=8))},
             {"regimes": (RegimeFactor(k=2, rho=1.4, n=6),) * 2},
+            {"reasons": ("lazy",)},
+            {"estimator": "estimate@2"},
         ],
     )
     register(
@@ -200,7 +204,7 @@ def register_probe_samples(register: Register) -> None:
     register(
         Stratum,
         lambda: [Stratum(index=0, lo=1.0, hi=4.0), Stratum(index=1, lo=None, hi=None)],
-        invalid_updates=[{"index": -1}],
+        invalid_updates=[{"index": -1}, {"lo": 9.0, "hi": 2.0}, {"lo": 1.0, "hi": None}],
     )
     register(
         Unplanned,
@@ -218,7 +222,14 @@ def register_probe_samples(register: Register) -> None:
     register(
         ProbePlan,
         lambda: [_PLAN],
-        invalid_updates=[{"probe_items": 0}, {"seconds": -1.0}, {"formation": ""}],
+        invalid_updates=[
+            {"probe_items": 0},
+            {"seconds": -1.0},
+            {"formation": ""},
+            {"remaining": ()},
+            {"batched": (3,)},
+            {"used_jobs": 51},
+        ],
     )
 
 
@@ -248,7 +259,9 @@ def register_measure_samples(register: Register) -> None:
     )
     derivation = Derivation(commit="d" * 40, jobs=("j1",), probe_ids=("p1",))
     row = MeasureRow(
-        unit=UNIT, estimate=Estimate(status="unmeasured", unit_kind="none", reasons=("x",)), derivation=derivation
+        unit=UNIT,
+        estimate=Estimate(status="unmeasured", unit_kind="none", reasons=("no_usable_observations",)),
+        derivation=derivation,
     )
     register(Derivation, lambda: [derivation], invalid_updates=[{"commit": "abc"}, {"jobs": ()}])
     register(MeasureRow, lambda: [row], invalid_updates=[{"derivation": None}])

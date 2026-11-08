@@ -102,7 +102,7 @@ def test_an_estimate_is_measured_by_its_per_request_cost_or_says_why_not() -> No
         Estimate(status="measured", unit_kind="audio_s")
     with pytest.raises(ValueError, match="reasons"):
         Estimate(status="unmeasured", unit_kind="none")
-    assert Estimate(status="unmeasured", unit_kind="none", reasons=("no warm request",)).single is None
+    assert Estimate(status="unmeasured", unit_kind="none", reasons=("no_usable_observations",)).single is None
     with pytest.raises(ValueError):
         RequestFit(batch=1, r=0.2, u=None, n=1, spread=None, lo=5.0, hi=2.0)
 

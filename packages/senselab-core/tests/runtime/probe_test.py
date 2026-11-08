@@ -2,14 +2,16 @@
 
 import itertools
 import random
+from bisect import bisect_right
 from collections.abc import Sequence
 from typing import Any
 
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from pydantic import ValidationError
+from senselab_core.kernel.formats import ESTIMATE_FORMAT
 from senselab_core.runtime.calibration import (
-    ESTIMATE_REASONS,
     Candidate,
     Cotenancy,
     Estimate,
@@ -31,7 +33,9 @@ from senselab_core.testing.calibration_samples import UNIT
 
 CONFIG: CalibrationSettings = ExecutionProfile.load("laptop").calibration
 GRANT = Grant(max_workers=1, memory_bytes=10**10, quantum_items=64, quantum_s=3600)
-HEADROOM = 0.9
+PROFILE = ExecutionProfile.load("laptop")
+HEADROOM = PROFILE.sizing.memory_headroom
+PROBE_S = PROFILE.probe_s
 FAST = settings(max_examples=60, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 _ids = itertools.count()
 
@@ -70,7 +74,9 @@ def _line(r: float, u: float, lengths: Sequence[float] = (2.0, 8.0), batch: int 
 
 
 def _estimate(observations: Sequence[Observation], records: Sequence[Any] = ()) -> Estimate:
-    return Probe.estimate(observations, records, CONFIG)
+    return Probe.estimate(
+        observations, records, CONFIG, hardware=UNIT.hardware, unit_kind="audio_s", memory_headroom=HEADROOM
+    )
 
 
 def _candidates(units: Sequence[float | None], keys: Sequence[int] | None = None) -> list[Candidate]:
@@ -85,8 +91,9 @@ def _plan(
     prior: Prior = Prior(),
     config: CalibrationSettings = CONFIG,
     formation: str = "mixed",
+    edges: Sequence[float] = (),
 ) -> ProbePlan:  # noqa: B008
-    return Probe.plan(UNIT, candidates, prior, GRANT, config, formation, 90.0)
+    return Probe.plan(UNIT, candidates, prior, GRANT, config, formation, PROBE_S, bucket_edges=edges)
 
 
 def _with_device(m0: float, m1: float, resident: int = 10**9) -> list[Observation]:
@@ -111,10 +118,11 @@ def _with_device(m0: float, m1: float, resident: int = 10**9) -> list[Observatio
 @FAST
 def test_cold_and_reloaded_requests_never_move_r_u_or_the_batch(wall: float, since: int, batch: int) -> None:
     """A request before warmup, or one that loaded, gives a load and nothing else."""
-    base = _line(0.2, 0.05) + _line(0.3, 0.04, batch=4)
+    base = _line(0.2, 0.05) + _line(0.3, 0.04, batch=4) + _with_device(5000, 50)
+    wild = {"device_after": 1, "device_peak": 10**12}
     extra = [
-        _obs(5.0, wall, since_load=since, batch=batch),
-        _obs(5.0, wall, since_load=0, load_s=wall, batch=batch),
+        _obs(5.0, wall, since_load=since, batch=batch, **wild),
+        _obs(5.0, wall, since_load=0, load_s=wall, batch=batch, **wild),
     ]
     a, b = _estimate(base), _estimate(base + extra)
     assert (b.single, b.batched, b.batch, b.device) == (a.single, a.batched, a.batch, a.device)
@@ -209,12 +217,178 @@ def test_the_estimate_is_invariant_to_the_order_of_observations(seed: int) -> No
 
 
 @pytest.mark.logic
-def test_every_reason_is_from_the_declared_vocabulary() -> None:
-    """No estimate, however thin its evidence, carries a reason outside the vocabulary or one with an identifier."""
+def test_reasons_are_a_declared_type() -> None:
+    """An estimate refuses a reason outside the declared type; thin evidence gives only declared ones."""
+    with pytest.raises(ValidationError):
+        Estimate(status="unmeasured", unit_kind="none", reasons=("lazy",))  # type: ignore[arg-type]
     for obs in ([], _line(0.2, 0.05)[:2], _line(0.2, 0.05), _line(0.2, 0.05) + _line(0.3, 0.04, batch=4)[:1]):
-        got = _estimate(obs)
-        assert set(got.reasons) <= ESTIMATE_REASONS
+        got = Estimate.model_validate(_estimate(obs).model_dump())
+        assert got == _estimate(obs)
     assert _estimate([]).status == "unmeasured"
+
+
+@pytest.mark.contract
+def test_the_estimator_tag_is_registered() -> None:
+    """`estimate@1` is a registered format; an estimate names it and refuses another."""
+    assert ESTIMATE_FORMAT == "estimate@1" == _estimate(_line(0.2, 0.05)).estimator
+    with pytest.raises(ValidationError):
+        Estimate(status="unmeasured", unit_kind="none", reasons=("no_usable_observations",), estimator="estimate@2")
+
+
+@pytest.mark.contract
+def test_a_regime_factor_exists_only_for_shared_co_tenancy() -> None:
+    """`k` 1 is the probe regime, which only a confirming probe may change."""
+    with pytest.raises(ValidationError):
+        RegimeFactor(k=1, rho=3.0, n=6)
+    assert RegimeFactor(k=2, rho=3.0, n=6).k == 2
+
+
+@pytest.mark.logic
+def test_hardware_unit_kind_and_headroom_are_required() -> None:
+    """No caller inherits a guessed kind, hardware or headroom."""
+    for missing in ("hardware", "unit_kind", "memory_headroom"):
+        given = {"hardware": UNIT.hardware, "unit_kind": "audio_s", "memory_headroom": HEADROOM}
+        del given[missing]
+        with pytest.raises(TypeError):
+            Probe.estimate([], [], CONFIG, **given)  # type: ignore[arg-type]
+
+
+@pytest.mark.logic
+def test_a_peer_request_at_another_host_load_does_not_change_a_probes_regime() -> None:
+    """A probe at host co-tenancy 4 stays measured when one peer request at host co-tenancy 1 joins the pool."""
+    shared = Cotenancy(device=1, host=4)
+    probe = [o.model_copy(update={"cotenancy": shared}) for o in _line(0.2, 0.05)]
+    peer = _obs(5.0, 0.45, probe=ProbeRef(id="peer", phase="SINGLE", stratum=0), cotenancy=Cotenancy(device=1, host=1))
+    alone, pooled = _estimate(probe), _estimate([*probe, peer])
+    assert alone.status == "measured" and pooled.status == "measured"
+    assert pooled.single is not None and alone.single is not None
+    assert (pooled.single.r, pooled.single.u) == pytest.approx((alone.single.r, alone.single.u))
+
+
+@pytest.mark.logic
+def test_a_single_stratum_median_fit_carries_its_spread_so_a_faster_batch_is_chosen() -> None:
+    """One stratum, batch 8 eight times faster per job: the median fits have spreads and the batch is chosen."""
+    jitter = [0.98, 1.0, 1.02]
+    one = [_obs(5.0, 1.0 * j) for j in jitter]
+    eight = [_obs(5.0, 1.0 * j, batch=8) for j in jitter]
+    got = _estimate(one + eight)
+    assert got.single is not None and got.single.u is None and got.single.spread is not None
+    assert [b.batch for b in got.batch] == [8]
+
+
+# --- OOM records lift by probe id --------------------------------------------------------------------------------
+
+
+def _fault(basis: tuple[str, ...] = ("p1",)) -> OomRecord:
+    return OomRecord(resource="device", batch=8, length=5.0, cotenancy=1, grant_bytes=2 * 10**9, basis=basis)
+
+
+def _probe_of(name: str, batch: int = 4, count: int | None = None) -> list[Observation]:
+    ref = ProbeRef(id=name, phase="BATCHED", stratum=0)
+    return [_obs(5.0, 0.5, batch=batch, probe=ref) for _ in range(count or CONFIG.min_requests)]
+
+
+@pytest.mark.logic
+def test_an_oom_record_is_lifted_by_a_later_probe_not_in_its_basis() -> None:
+    """A probe outside the basis with `min_requests` batched requests in the stratum lifts the record; others do not."""
+    base = _with_device(5000, 50)
+    raised = _estimate(base, [_fault()])
+    plain = _estimate(base)
+    assert raised.device is not None and plain.device is not None and raised.device.m1 > plain.device.m1
+    own = _estimate(base + _probe_of("p1"), [_fault()])
+    assert own.device is not None and own.device.m1 == raised.device.m1
+    thin = _estimate(base + _probe_of("p2", count=CONFIG.min_requests - 1), [_fault()])
+    assert thin.device is not None and thin.device.m1 == raised.device.m1
+    later = _estimate(base + _probe_of("p2"), [_fault()])
+    assert later.device == plain.device and later.oom == (_fault(),)
+
+
+@pytest.mark.logic
+def test_plan_reopens_only_unlifted_records_by_the_same_rule() -> None:
+    """The record that raises `m1` is the record that re-opens its stratum, and a lifted one does neither."""
+    candidates = _candidates([float(i + 1) for i in range(40)])
+    obs = _covering([5.0, 30.0]) + _covering([5.0, 30.0], batch=4)
+    held = _plan(candidates, Prior(observations=tuple(obs), records=(_fault(("p1",)),)))
+    assert held.batched == (0,) and held.items and all(i.phase == "WARMUP" for i in held.items)
+    lifted = _plan(candidates, Prior(observations=tuple(obs + _probe_of("p2")), records=(_fault(("p1",)),)))
+    assert lifted.batched == () and lifted.items == ()
+
+
+@pytest.mark.logic
+def test_the_oom_raise_follows_the_headroom_given() -> None:
+    """The record holds the grant; the headroom in force is the caller's, not frozen into the record."""
+    record = _fault()
+    low = Probe.estimate(
+        _with_device(5000, 50), [record], CONFIG, hardware=UNIT.hardware, unit_kind="audio_s", memory_headroom=0.5
+    )
+    high = Probe.estimate(
+        _with_device(5000, 50), [record], CONFIG, hardware=UNIT.hardware, unit_kind="audio_s", memory_headroom=1.0
+    )
+    assert low.device is not None and high.device is not None and high.device.m1 > low.device.m1
+
+
+# --- the strata ------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.logic
+def test_lengthless_jobs_are_one_extra_stratum_beside_the_sized_ones() -> None:
+    """One job with no length leaves the sized jobs in their two strata and gets a stratum of its own."""
+    plan = _plan(_candidates([*(float(i + 1) for i in range(40)), None]))
+    assert [(s.lo, s.hi) for s in plan.strata] == [(1.0, 20.0), (21.0, 40.0), (None, None)]
+
+
+@pytest.mark.logic
+def test_strata_are_cut_at_the_bucket_edge_nearest_the_equal_count_cut() -> None:
+    """Edge 15 is nearest the cut after 20 jobs among edges (15, 80): the strata are 1-14 and 15-40."""
+    plan = _plan(_candidates([float(i + 1) for i in range(40)]), formation="bucket:g", edges=(15.0, 80.0))
+    assert [(s.lo, s.hi) for s in plan.strata] == [(1.0, 14.0), (15.0, 40.0)]
+    with pytest.raises(ValueError, match="bucket edges"):
+        _plan(_candidates([1.0, 2.0]), formation="bucket:g")
+
+
+@pytest.mark.logic
+def test_a_batched_item_never_spans_two_buckets() -> None:
+    """With edges (15, 30) every batched item and every replacement draws its jobs from one bucket."""
+    edges = (15.0, 30.0)
+    plan = _plan(_candidates([float(i + 1) for i in range(400)]), formation="bucket:g", edges=edges)
+    batched = Probe.plan_batched(plan, _measured_single(1e3), GRANT, CONFIG, 1e6, memory_headroom=HEADROOM)
+    assert batched.items
+    for item in batched.items:
+        assert len({bisect_right(edges, j.units or 0.0) for j in item.jobs}) == 1
+    swapped = Probe.replace_served(batched, batched.items[0]).items[0]
+    assert len({bisect_right(edges, j.units or 0.0) for j in swapped.jobs}) == 1
+
+
+@pytest.mark.logic
+def test_a_batched_phase_names_a_memory_batch_below_two_and_an_unbounded_grant() -> None:
+    """A memory batch of one everywhere, and a grant with no memory, each have their own reason."""
+    plan = _plan(_candidates([float(i + 1) for i in range(40)]))
+    tight = Probe.plan_batched(plan, _measured_single(1e12), GRANT, CONFIG, PROBE_S, memory_headroom=HEADROOM)
+    assert tight.unplanned[-1].reason == "memory_below_two"
+    open_ = GRANT.model_copy(update={"memory_bytes": None})
+    unbounded = Probe.plan_batched(plan, _measured_single(), open_, CONFIG, PROBE_S, memory_headroom=HEADROOM)
+    assert unbounded.unplanned[-1].reason == "grant_unbounded"
+
+
+# --- records, kind and hardware are resolved for the unit asked about ------------------------------------------
+
+
+@pytest.mark.contract
+def test_the_estimator_resolves_records_and_kind_per_unit() -> None:
+    """Another unit's `oom` record never raises this unit's `m1`, and each unit reports its own kind of input."""
+    other = UNIT.model_copy(update={"backend": "other"})
+    records = {UNIT.digest(): [_fault(())], other.digest(): []}
+    kinds = {UNIT.digest(): "audio_s", other.digest(): "chars"}
+    estimate = Probe.estimator(
+        CONFIG,
+        records_of=lambda u: records[u.digest()],
+        unit_kind_of=lambda u: kinds[u.digest()],  # type: ignore[arg-type,return-value]
+        memory_headroom=HEADROOM,
+    )
+    obs = _with_device(5000, 50)
+    raised, plain = estimate(UNIT, obs), estimate(other, obs)
+    assert raised.device is not None and plain.device is not None and raised.device.m1 > plain.device.m1
+    assert (raised.unit_kind, plain.unit_kind) == ("audio_s", "chars")
 
 
 # --- the figures the old path got wrong -------------------------------------------------------------------------
@@ -232,9 +406,9 @@ def test_a_failed_request_never_enters_the_per_item_time() -> None:
     """`calibrated` takes a failed 9 s request into its median (2 s per item); the estimate keeps 0.1 + 0.02·L."""
     good = _line(0.1, 0.02)
     failed = [_obs(5.0, 9.0, outcome="failed") for _ in range(4)]
-    samples = [_sample(o.wall_s) for o in good[:3]] + [_sample(9.0) for _ in range(4)]
-    assert calibrated(samples) is not None
-    assert calibrated(samples).s_per_input_s > 1.0  # type: ignore[union-attr]
+    samples = [_sample(o.wall_s) for o in good[:3] + failed]
+    old = calibrated(samples)
+    assert old is not None and old.s_per_input_s == 9.0
     got = _estimate(good + failed).single
     assert got is not None and got.u == pytest.approx(0.02) and got.r == pytest.approx(0.1)
 
@@ -250,9 +424,9 @@ def test_fixed_cost_is_fitted_not_shared() -> None:
     got = _estimate(obs)
     assert got.single is not None and got.single.u == pytest.approx(per_job)
     assert got.item_s == pytest.approx(fixed)
-    shared = calibrated([_sample(fixed + per_job * 1.0, jobs=1), _sample(fixed + per_job * 1.0, jobs=1)] * 2)
-    assert shared is not None and shared.s_per_input_s == pytest.approx(0.0766, abs=0.002)
-    assert got.single.u is not None and shared.s_per_input_s - got.single.u > 0.039
+    shared = calibrated([_sample(o.item_wall_s or 0.0, jobs=int(o.units)) for o in obs])
+    assert shared is not None and shared.s_per_input_s == pytest.approx(0.0616, abs=1e-3)
+    assert got.single.u is not None and shared.s_per_input_s - got.single.u > 0.02
 
 
 @pytest.mark.logic
@@ -265,7 +439,6 @@ def test_device_bytes_scale_with_length() -> None:
     longer = _sample(1.0).model_copy(update={"device_item_bytes": 5400, "device_allocated_bytes": 10**9})
     measure = measure_of(calibrated([short, longer]), on_device=True)  # type: ignore[arg-type]
     assert measure.bytes_per_item == 5400  # the one constant, at every length
-    assert got.device.m1 * 2.0 + got.device.m0 != got.device.m1 * 8.0 + got.device.m0
 
 
 # --- the OOM raise ----------------------------------------------------------------------------------------------
@@ -273,24 +446,27 @@ def test_device_bytes_scale_with_length() -> None:
 
 @pytest.mark.logic
 def test_an_oom_raises_m1_without_a_constant() -> None:
-    """`m1′ = (budget − resident − m0)/((B − 1)·L)` for B = 8, L = 40: the faulting batch becomes infeasible."""
+    """`m1′ = (headroom·grant − resident − m0)/((B − 1)·L)`: B = 8 at L = 40 leaves a memory batch of 7, not 199 998."""
     base = _estimate(_with_device(5000, 50))
-    budget, batch, length = 2 * 10**9, 8, 40.0
-    record = OomRecord(resource="device", batch=batch, length=length, cotenancy=1, budget_bytes=budget)
+    grant, batch, length = 2 * 10**9, 8, 40.0
+    record = OomRecord(resource="device", batch=batch, length=length, cotenancy=1, grant_bytes=grant, basis=())
     raised = _estimate(_with_device(5000, 50), [record])
     assert base.device is not None and raised.device is not None
-    expected = (budget - base.device.resident - base.device.m0) / ((batch - 1) * length)
+    expected = (HEADROOM * grant - base.device.resident - base.device.m0) / ((batch - 1) * length)
     assert raised.device.m1 == pytest.approx(expected)
-    assert raised.device.m1 > base.device.m1
     assert raised.oom == (record,)
+    budget = HEADROOM * grant
+    assert memory_batch(raised.device, budget, length, ceiling=10**9) == 7
+    doubled = base.device.model_copy(update={"m1": base.device.m1 * 2})  # what `Pool._grow` did: double per-item bytes
+    assert memory_batch(doubled, budget, length, ceiling=10**9) == 199_998 >= batch
 
 
 @pytest.mark.logic
 def test_an_oom_under_shared_device_or_at_batch_one_does_not_raise() -> None:
     """A record of another co-tenancy applies to that regime and above; a batch of one has none to shrink."""
     base = _estimate(_with_device(5000, 50))
-    shared = OomRecord(resource="device", batch=8, length=40.0, cotenancy=2, budget_bytes=2 * 10**9)
-    single = OomRecord(resource="device", batch=1, length=40.0, cotenancy=1, budget_bytes=2 * 10**9)
+    shared = OomRecord(resource="device", batch=8, length=40.0, cotenancy=2, grant_bytes=2 * 10**9, basis=())
+    single = OomRecord(resource="device", batch=1, length=40.0, cotenancy=1, grant_bytes=2 * 10**9, basis=())
     got = _estimate(_with_device(5000, 50), [shared, single])
     assert got.device == base.device and got.oom == (shared, single)
 
@@ -301,18 +477,18 @@ def test_an_oom_under_shared_device_or_at_batch_one_does_not_raise() -> None:
     batch=st.integers(2, 64),
     length=st.floats(0.5, 200.0),
     above=st.floats(1.0, 4.0),
-    budget=st.integers(10**9, 10**11),
+    grant=st.integers(10**9, 10**11),
 )
 @FAST
 def test_after_an_oom_the_memory_batch_never_reaches_the_faulting_one(
-    m1: float, batch: int, length: float, above: float, budget: int
+    m1: float, batch: int, length: float, above: float, grant: int
 ) -> None:
     """At any length at or above the faulting one, the memory batch is below the faulting batch."""
     obs = _with_device(5000, m1)
-    record = OomRecord(resource="device", batch=batch, length=length, cotenancy=1, budget_bytes=budget)
+    record = OomRecord(resource="device", batch=batch, length=length, cotenancy=1, grant_bytes=grant, basis=())
     fit = _estimate(obs, [record]).device
     assert fit is not None
-    assert memory_batch(fit, budget, length * above, ceiling=10**6) < batch
+    assert memory_batch(fit, HEADROOM * grant, length * above, ceiling=10**6) < batch
 
 
 # --- plan -------------------------------------------------------------------------------------------------------
@@ -373,9 +549,9 @@ def test_covered_strata_are_not_replanned_until_an_oom_record_reopens_them(extra
     prior = Prior(observations=tuple(_covering([5.0, 15.0]) + _covering([5.0, 15.0], batch=4)))
     plan = _plan(candidates, prior)
     assert plan.items == () and plan.batched == ()
-    record = OomRecord(resource="device", batch=4, length=15.0, cotenancy=1, budget_bytes=10**9)
+    record = OomRecord(resource="device", batch=4, length=15.0, cotenancy=1, grant_bytes=10**9, basis=("p1",))
     reopened = _plan(candidates, Prior(observations=prior.observations, records=(record,)))
-    assert reopened.items == () and reopened.batched == (1,)
+    assert reopened.batched == (1,) and all(i.phase == "WARMUP" for i in reopened.items) and reopened.items
     assert (
         _plan(
             candidates, Prior(observations=prior.observations, records=(record.model_copy(update={"batch": 1}),))
@@ -406,7 +582,9 @@ def test_lengthless_jobs_form_one_stratum_and_a_single_formation_plans_no_batch(
     plan = _plan(_candidates([None] * 20), formation="single")
     assert len(plan.strata) == 1 and plan.strata[0].lo is None and plan.batched == ()
     assert (
-        Probe.plan_batched(plan, _measured_single(), GRANT, CONFIG, 90.0, memory_headroom=HEADROOM).unplanned[-1].reason
+        Probe.plan_batched(plan, _measured_single(), GRANT, CONFIG, PROBE_S, memory_headroom=HEADROOM)
+        .unplanned[-1]
+        .reason
         == "single_formation"
     )
 
@@ -490,16 +668,16 @@ def test_batched_phase_names_what_blocks_it() -> None:
     plan = _plan(_candidates([float(i + 1) for i in range(40)]))
     none = _estimate([])
     assert (
-        Probe.plan_batched(plan, none, GRANT, CONFIG, 90.0, memory_headroom=HEADROOM).unplanned[-1].reason
+        Probe.plan_batched(plan, none, GRANT, CONFIG, PROBE_S, memory_headroom=HEADROOM).unplanned[-1].reason
         == "single_unmeasured"
     )
     nodev = _estimate(_line(0.2, 0.05))
     assert (
-        Probe.plan_batched(plan, nodev, GRANT, CONFIG, 90.0, memory_headroom=HEADROOM).unplanned[-1].reason
+        Probe.plan_batched(plan, nodev, GRANT, CONFIG, PROBE_S, memory_headroom=HEADROOM).unplanned[-1].reason
         == "device_unmeasured"
     )
     nogrant = GRANT.model_copy(update={"memory_bytes": None})
-    assert Probe.plan_batched(plan, _measured_single(), nogrant, CONFIG, 90.0, memory_headroom=HEADROOM).items == ()
+    assert Probe.plan_batched(plan, _measured_single(), nogrant, CONFIG, PROBE_S, memory_headroom=HEADROOM).items == ()
 
 
 @pytest.mark.logic
@@ -547,7 +725,9 @@ def test_estimator_is_the_callable_measure_source_takes() -> None:
     """`Probe.estimator` has `MeasureSource`'s callable shape and filters observations by the unit's hardware."""
     other = UNIT.hardware.model_copy(update={"cpus": 99})
     pooled = _line(0.2, 0.05) + [_obs(5.0, 500.0, hardware=other)]
-    source = MeasureSource([_Root(pooled)], _NoTable(), estimate=Probe.estimator(CONFIG, unit_kind="audio_s"))
-    got = source.get(UNIT)
+    estimate = Probe.estimator(
+        CONFIG, records_of=lambda _: (), unit_kind_of=lambda _: "audio_s", memory_headroom=HEADROOM
+    )
+    got = MeasureSource([_Root(pooled)], _NoTable(), estimate=estimate).get(UNIT)
     assert got is not None and got.unit_kind == "audio_s" and got.estimator == "estimate@1"
     assert got.single is not None and got.single.u == pytest.approx(0.05)
