@@ -129,6 +129,8 @@ class Observation(Frozen):
     def _check_request(self) -> Self:
         if self.padded_units < self.units:
             raise ValueError(f"padded_units {self.padded_units} is below units {self.units}")
+        if self.load_s is not None and self.since_load:
+            raise ValueError(f"load_s is set on the request that loaded, not one with since_load {self.since_load}")
         for name, peak, after in (
             ("device", self.device_peak, self.device_after),
             ("host", self.host_peak, self.host_after),

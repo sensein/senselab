@@ -54,6 +54,7 @@ def _observation(**update: Any) -> Observation:  # noqa: ANN401
         {"padded_units": 3.0},
         {"wall_s": float("nan")},
         {"since_load": -1},
+        {"load_s": 2.0},
         {"outcome": "lost"},
         {"probe": {"id": "p", "phase": "IDLE", "stratum": 0}},
         {"device_peak": 5, "device_after": 6},
@@ -64,6 +65,14 @@ def test_an_observation_refuses_what_a_worker_cannot_have_measured(bad: dict[str
     """Padding never shrinks a request, a peak is not below what stayed allocated, a phase is one of three."""
     with pytest.raises(ValueError):
         _observation(**bad)
+
+
+@pytest.mark.logic
+def test_only_the_request_that_loaded_carries_load_s() -> None:
+    """`load_s` is set on the request that loaded the model, whose `since_load` is 0."""
+    assert _observation(since_load=0, load_s=2.0).load_s == 2.0
+    with pytest.raises(ValueError, match="since_load"):
+        _observation(since_load=1, load_s=2.0)
 
 
 @pytest.mark.logic

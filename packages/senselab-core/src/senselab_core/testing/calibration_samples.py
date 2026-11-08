@@ -65,13 +65,16 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
         Observation,
         lambda: [
             _observation(),
-            _observation(probe=None, device_peak=10, device_after=4, item_wall_s=1.0, load_s=2.0, hardware=_CPU),
+            _observation(
+                probe=None, device_peak=10, device_after=4, item_wall_s=1.0, since_load=0, load_s=2.0, hardware=_CPU
+            ),
         ],
         invalid_updates=[
             {"batch": 0},
             {"padded_units": 1.0},
             {"outcome": "lost"},
             {"device_peak": 1, "device_after": 2},
+            {"load_s": 1.0, "since_load": 2},
         ],
     )
     register(
