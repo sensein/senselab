@@ -280,6 +280,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
 - 2026-11-03: a lease is a directory taken by `mkdir` with the holder's token, renewed by beat directories from a renewer independent of the work; replaces the `O_EXCL` link (owner item 58).
 - 2026-11-06: renewal as built: probe-directory clock, fresh re-read before a break, claim by rename before a break or release (tokenless leases included; empty ones by `rmdir`), withdrawn leases removed, no put-back, `keep_alive` renewer on a monotonic cadence held by every lease caller, `prove()` before every commit, `ESTALE` as lost, the beat bound (one missed beat allowed) checked at profile load, `StorageUnsupported` on an unsupported `mkdir`; closes R-111.
 - 2026-11-07: the Phase 3 service stage built: registry entries `{identity, endpoint}` under renewed leases, consumer leases, the `svc` pool worker; drops `heartbeat` (Phase 3 Task 17, P3-40).
+- 2026-11-07: a server backend is placed on a `svc` class first, a providing set consumes a live entry of the identity before reserving its own, the registry is per host and visible device set, and a server whose device lacks the memory it asks for is refused before launch (Phase 3 Task 20c).
 - 2026-11-07: the lease constants this ADR names are profile keys (`lease.record_attempts`, `lease.dir_mode`, `lease.missed_beats`), per P-34 as amended; `PRIVATE_DIR_MODE` stays an invariant (a security property). The other code constants move into the profile, with derivations in `config-derivations.md`, under the fixed-parameter audit.
 
 ## Amendment 2026-11-06: queues of plan fragments (Phase 3 Task 13)
@@ -314,6 +315,17 @@ Completes the 2026-11-01 staging. A registry entry is `{identity, endpoint}` und
   removes the stale ones. A process's worker set consumes a live entry that attests what its backend, env lock,
   model and settings declare instead of starting a server; with none live it starts a process-scoped server as in
   Phase 2.
+- **Placement (amended 2026-11-07).** A server backend is placed on the first `svc:<id>` class of a device it
+  declares before any other class; no other backend is placed on a service class; a profile with no service class
+  places it as any backend. A providing set, like a consuming one, consumes a live entry attesting the identity
+  before it reserves one, so the `svc` workers of one identity on a host start one server; one that finds the
+  registration reserved but not yet published gets `LeaseTimeout` and gives its items back. The registry is one
+  directory per host and set of visible devices (`<server env root>/services/<host>/<devices>`, the devices named as
+  the start lease names them), so each card registers its own server and a consumer binds to its own card's.
+- **Device memory (amended 2026-11-07).** Inside the start lease, before the launch, a server reads the free and
+  total memory of its devices (`nvidia-smi`) and is refused with `VllmOutOfMemory`, a resource fault, when any device
+  has less free than `gpu_memory_utilization` of its total. A start that still fails carries its log's last
+  device-memory error line (else its last error line) and the log's path as detail.
 - **The `svc` pool worker.** A pool worker of `svc:<id>` classes registers each server it starts. Once it holds one,
   empty queues decide nothing: it exits when no consumer lease of any service it holds has been seen live for
   `services.idle_exit_s`, read every `pool.poll_s` (so the exit can come up to one poll early); the jobs it runs
