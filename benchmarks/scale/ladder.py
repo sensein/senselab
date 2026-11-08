@@ -431,33 +431,33 @@ def _verdict(value: float | None, bound: float | None, what: str) -> str:
 
 
 def flatness(results: Sequence[Mapping[str, Any]], budgets: Mapping[str, Any]) -> list[str]:
-    """Return one line per entry (by its label, else its task) and measure: its flatness and its ceiling.
+    """Return one line per entry (by its label, else its task) and measure: its flatness and its ceiling, by basis.
 
-    Flatness is the value at 10⁴ over at 10² against `flat_ratio`; the ceiling is the largest value at those points
-    (at any point when it has neither) against the label's `per_item` budget. An unset budget reads unmeasured. A
-    point with no items after calibration has no per-item seconds, so it enters no ratio or ceiling; at 10² its own
-    line judges the calibration's chosen-regime median against the `per_item_s` ceiling, naming that basis.
+    Flatness is the value at 10⁴ over at 10² against `flat_ratio`; a point with no items after calibration has no
+    per-item seconds and enters no ratio. The ceiling reads the largest of those points the entry ran (the largest of
+    its points when it ran neither), and for per-item seconds without a 10⁴ point the calibration's chosen-regime
+    median at 10², since a 10² point's items after calibration carry the workers' poll wait (R-233); each line names
+    the point and figure its ceiling read. An unset budget reads unmeasured.
     """
     lines = []
     for label in sorted({r.get("label", r["task"]) for r in results}):
         at = {r["point"]: r for r in results if r.get("label", r["task"]) == label}
         ceilings = (budgets.get("per_item") or {}).get(label) or {}
+        basis = next((p for p in reversed(FLAT_POINTS) if p in at), None)
+        if basis is None:
+            basis = max(at, key=lambda p: at[p]["items"])
         for name, read in PER_ITEM.items():
-            values = {p: v for p, v in ((p, read(r)) for p, r in at.items()) if v is not None}
+            values = {p: read(r) for p, r in at.items()}
             low, high = (values.get(p) for p in FLAT_POINTS)
             ratio = high / low if low and high is not None else None
             flat = _verdict(ratio, budgets.get("flat_ratio"), "flat")
-            judged = [v for p, v in values.items() if p in FLAT_POINTS] or list(values.values())
-            ceiling = _verdict(max(judged, default=None), ceilings.get(name), "ceiling")
+            judged, figure = values.get(basis), f"at {basis}"
+            if name == "per_item_s" and basis == FLAT_POINTS[0]:
+                judged, figure = at[basis].get("calibration_per_item_s"), f"calibration median at {basis}"
+            ceiling = _verdict(judged, ceilings.get(name), "ceiling")
             shown = "n/a" if ratio is None else f"{ratio:.3f}"
-            lines.append(f"{label} {name}: at {FLAT_POINTS[1]} / at {FLAT_POINTS[0]} = {shown}, {flat}, {ceiling}")
-        small = at.get(FLAT_POINTS[0], {})
-        if small.get("per_item_s", 0.0) is None and small.get("calibration_per_item_s") is not None:
-            median = small["calibration_per_item_s"]
-            ceiling = _verdict(median, ceilings.get("per_item_s"), "ceiling")
             lines.append(
-                f"{label} per_item_s at {FLAT_POINTS[0]}: no items after calibration; "
-                f"calibration's chosen-regime median = {median:.4f}, {ceiling}"
+                f"{label} {name}: at {FLAT_POINTS[1]} / at {FLAT_POINTS[0]} = {shown}, {flat}, {ceiling} ({figure})"
             )
     return lines
 

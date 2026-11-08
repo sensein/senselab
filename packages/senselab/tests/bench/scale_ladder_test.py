@@ -125,7 +125,8 @@ def _result(
 def test_resource_table_derivation_names_jobs(tmp_path: Path) -> None:
     """The largest point's measure is written with the commit and every job of the unit; other results are listed.
 
-    A result without a measure, or of a backend the packaged registry does not declare, gets no table.
+    The derivation the point's pool wrote with its row is replaced by the results'. A result without a measure, or of a
+    backend the packaged registry does not declare, gets no table.
     """
     small = {
         "load_s": 9.0,
@@ -135,7 +136,8 @@ def test_resource_table_derivation_names_jobs(tmp_path: Path) -> None:
         "s_per_input_s": 0.2,
         "input_s_per_item": 7.0,
     }
-    large = {**small, "load_s": 8.0, "s_per_input_s": 0.1}
+    pool_row = {"sha": None, "jobs": ["102"], "run": "senselab-core 1.0+abc, run " + "d" * 64}
+    large = {**small, "load_s": 8.0, "s_per_input_s": 0.1, "measured": pool_row}
     results = tmp_path / "results"
     results.mkdir()
     for name, doc in {
@@ -165,7 +167,11 @@ def test_resource_table_derivation_names_jobs(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_flatness_covers_time_memory_files_and_bytes_against_budgets() -> None:
-    """Each measure's value at 10⁴ over at 10² is judged against `flat_ratio`, its largest against its ceiling."""
+    """Each measure's value at 10⁴ over at 10² is judged against `flat_ratio`, its value at 10⁴ against its ceiling.
+
+    Without a 10⁴ point the ceiling reads 10², per-item seconds by the calibration median there, never the one-item
+    point, whose time is the model load's.
+    """
     ladder = _module("scale_ladder_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
 
     def point(at: int, wall: float, peak: int, files: int, written: int) -> dict[str, Any]:
@@ -175,14 +181,21 @@ def test_flatness_covers_time_memory_files_and_bytes_against_budgets() -> None:
     results = [point(100, 1.0, 1000, 200, 10_000), point(10_000, 1.2, 1000, 30_000, 1_000_000)]
     budgets = {"flat_ratio": 1.25, "per_item": {"t": {"per_item_s": 1.1, "peak_rss_bytes": None}}}
     assert ladder.flatness(results, budgets) == [
-        "t per_item_s: at 10000 / at 100 = 1.200, flat ok, ceiling EXCEEDED (1.1)",
-        "t peak_rss_bytes: at 10000 / at 100 = 1.000, flat ok, ceiling unmeasured",
-        "t files_per_item: at 10000 / at 100 = 1.500, flat EXCEEDED (1.25), ceiling unmeasured",
-        "t bytes_per_item: at 10000 / at 100 = 1.000, flat ok, ceiling unmeasured",
+        "t per_item_s: at 10000 / at 100 = 1.200, flat ok, ceiling EXCEEDED (1.1) (at 10000)",
+        "t peak_rss_bytes: at 10000 / at 100 = 1.000, flat ok, ceiling unmeasured (at 10000)",
+        "t files_per_item: at 10000 / at 100 = 1.500, flat EXCEEDED (1.25), ceiling unmeasured (at 10000)",
+        "t bytes_per_item: at 10000 / at 100 = 1.000, flat ok, ceiling unmeasured (at 10000)",
     ]
     assert all("unmeasured" in line for line in ladder.flatness(results, {})[:1])
-    started = [point(1, 9.0, 1000, 20, 100), point(100, 1.0, 1000, 200, 10_000)]
-    assert ladder.flatness(started, budgets)[0] == "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling ok"
+    gpu = [point(1, 9.0, 1000, 20, 100), {**point(100, 1.0, 1000, 200, 10_000), "per_item_s": None}]
+    gpu[1]["calibration_per_item_s"] = 0.5
+    assert ladder.flatness(gpu, budgets)[0] == (
+        "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling ok (calibration median at 100)"
+    )
+    assert (
+        ladder.flatness(gpu[:1], budgets)[0]
+        == "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling EXCEEDED (1.1) (at 1)"
+    )
 
 
 def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
@@ -321,7 +334,7 @@ def test_per_item_cost_runs_from_the_end_of_calibration_to_the_last_item() -> No
 
 @pytest.mark.logic
 def test_a_point_whose_calibration_takes_every_item_has_no_per_item_cost() -> None:
-    """Its per-item seconds are None, so flatness judges no ratio or ceiling on it; the calibration median is named."""
+    """Its per-item seconds are None, so it enters no ratio; without a 10⁴ point its calibration median is judged."""
     ladder = _module("scale_ladder_no_steady_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
     small = {
         "per_item_s": None,
@@ -336,11 +349,10 @@ def test_a_point_whose_calibration_takes_every_item_has_no_per_item_cost() -> No
     ]
     budgets = {"flat_ratio": 1.25, "per_item": {"t": {"per_item_s": 0.1}}}
     lines = ladder.flatness(results, budgets)
-    assert lines[0] == "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling EXCEEDED (0.1)"
-    assert lines[-1] == (
-        "t per_item_s at 100: no items after calibration; calibration's chosen-regime median = 0.0500, ceiling ok"
+    assert lines[0] == "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling EXCEEDED (0.1) (at 10000)"
+    assert ladder.flatness(results[:1], budgets)[0] == (
+        "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling ok (calibration median at 100)"
     )
-    assert ladder.flatness(results[:1], budgets)[0] == "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling n/a"
     measure = ResourceMeasure(
         load_s=1.0,
         claim_s=0.1,

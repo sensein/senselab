@@ -7,17 +7,17 @@ rows:
   download_bytes: null
   classes:
     cpu:
-      load_s: 0.32679189548129217
-      claim_s: 0.23677066317759454
+      load_s: 0.26262552896514535
+      claim_s: 0.008445922983810306
       resident_bytes: null
       peak_memory_bytes: null
       device_resident_bytes: null
       device_peak_bytes: null
-      s_per_input_s: 0.012793333526545514
-      input_s_per_item: 3.0
+      s_per_input_s: 0.023188557486278044
+      input_s_per_item: 3.245875
       batched: null
       measured:
-        sha: 868c06dffe7ceb9a4218a280a2b05718130704da
+        sha: a9fc9adc05c0966ce391e18e84ad0e0a90435d92
         run: null
         jobs:
-        - '28275171'
+        - '28300055'

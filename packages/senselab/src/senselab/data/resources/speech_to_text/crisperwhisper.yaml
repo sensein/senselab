@@ -7,17 +7,19 @@ rows:
   download_bytes: null
   classes:
     gpu:h100:
-      load_s: 6.8111942155131455
-      claim_s: 0.21676688198931515
+      load_s: 5.123100132497106
+      claim_s: 0.005295334849506617
       resident_bytes: null
       peak_memory_bytes: null
       device_resident_bytes: 1653349888
       device_peak_bytes: 4653800960
-      s_per_input_s: 0.47315561249936494
-      input_s_per_item: 5.154999999999999
-      batched: null
+      s_per_input_s: 0.18051735700208643
+      input_s_per_item: 6.137499999999999
+      batched:
+        batch_size: 16
+        s_per_input_s: 0.1808485755215109
       measured:
-        sha: 868c06dffe7ceb9a4218a280a2b05718130704da
+        sha: b7c25c4c8b61881ea3ca827cae8ba9f4ec2f2fa3
         run: null
         jobs:
-        - '28272885'
+        - '28305384'

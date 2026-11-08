@@ -7,7 +7,7 @@ Usage::
 Each `RESULT` is a `scale-result@1.0` file or a directory of them. Per (task, backend, model, resource class) the
 measure of the result with the most items (the most input seconds on a tie) is written to
 `DIR/<task>/<backend>.yaml` (`packages/senselab/src/senselab/data/resources` by default), with the commit and the
-job ids of every result of that unit as its derivation. A result without a measure (no pool worker reported a
+job ids of every result of that unit as its derivation, in place of the one its pool wrote. A result without a measure (no pool worker reported a
 sample), or of a task and backend the packaged registry does not declare (the fake stack), is listed and skipped.
 Results of different commits are refused.
 """
@@ -57,14 +57,17 @@ def rows(
         raise ValueError(f"results of several commits {shas}; generate from one commit's results")
     chosen: dict[Unit, tuple[ResourceMeasure, Measured]] = {}
     known = [r for r in found if (r["task"], r["backend"]) in declared]
-    skipped = [f"{r['task']}~{r['backend']}@{r['point']}: not a packaged backend; skipped" for r in found if r not in known]
+    skipped = [
+        f"{r['task']}~{r['backend']}@{r['point']}: not a packaged backend; skipped" for r in found if r not in known
+    ]
     skipped += [f"{r['task']}~{r['backend']}@{r['point']}: no measure; skipped" for r in known if r["measure"] is None]
     measured = [r for r in known if r["measure"] is not None]
     for unit in sorted({unit_of(r) for r in measured}, key=repr):
         of_unit = [r for r in measured if unit_of(r) == unit]
         best = max(of_unit, key=lambda r: (r["items"], r["input_s"] or 0.0))
         jobs = tuple(sorted({j for r in of_unit for j in r["jobs"]}))
-        chosen[unit] = (ResourceMeasure.model_validate(best["measure"]), Measured(sha=shas[0], jobs=jobs))
+        measure = {k: v for k, v in best["measure"].items() if k != "measured"}
+        chosen[unit] = (ResourceMeasure.model_validate(measure), Measured(sha=shas[0], jobs=jobs))
     return chosen, skipped
 
 
