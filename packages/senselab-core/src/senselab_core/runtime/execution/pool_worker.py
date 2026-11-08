@@ -31,7 +31,7 @@ from senselab_worker.faults import FaultClass, ProtocolError, classify, error_re
 from senselab_worker.units import NS_PER_S
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
-from senselab_core.runtime import device_requests
+from senselab_core.runtime import request_reports
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.batching import LengthUnrecorded, job_length_ns, job_text_chars
 from senselab_core.runtime.execution.epoch import Epoch
@@ -409,13 +409,13 @@ class PoolWorker:
         """Run each group until `cancelled`, putting its members' outcomes on `finished`; then put None.
 
         Each item is given in `spans`, before its outcomes are put, its share by jobs of each group span it ran in and
-        the device memory each request of its groups reported (`device_requests`).
+        the device memory each request of its groups reported (`request_reports`).
         """
         try:
             for group in groups:
                 send = self._send or functools.partial(self._execute, run=group.run)
                 began = time.monotonic()
-                with device_requests.collected() as reported:
+                with request_reports.collected() as reported:
                     try:
                         outcomes: list[JobOutcome | None] = list(
                             bisect(group.members, group.placement, send, cancelled)

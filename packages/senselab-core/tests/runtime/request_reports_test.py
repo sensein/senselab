@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from lifecycle_probes_fixture import interpreter
-from senselab_core.runtime import device_requests
+from senselab_core.runtime import request_reports
 from senselab_core.runtime.worker_client import WorkerClient
 
 SCRIPTED = Path(__file__).parent / "scripted_worker_fixture.py"
@@ -24,7 +24,7 @@ def test_a_requests_device_figures_are_recorded_for_the_thread(tmp_path: Path) -
     arrays.mkdir()
     python = interpreter(tmp_path, f'exec "{sys.executable}" "{SCRIPTED}"')
     with WorkerClient(python, "unused", init={"replies": replies}, array_parent=arrays) as client:
-        with device_requests.collected() as found:
+        with request_reports.collected() as found:
             client.run([{"id": "a", "inputs": {}}, {"id": "b", "inputs": {}}], {})
             client.run([{"id": "c", "inputs": {}}], {})
     assert found == [(3000, 1000, 2)]

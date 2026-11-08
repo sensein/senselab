@@ -11,7 +11,7 @@ from senselab_worker.faults import PASS_THROUGH, FaultClass, ProtocolError, erro
 from senselab_worker.model_cache import ModelCache, ModelKey, check_model_key
 from senselab_worker.serve import call_handle
 
-from senselab_core.runtime import device_requests
+from senselab_core.runtime import request_reports
 from senselab_core.runtime.worker_client import WorkerFatal, item_error
 
 
@@ -66,7 +66,7 @@ class HostWorker:
             state = self._state()
         entries, device = torch_meter(lambda: call_handle(self._handle, state, items, params))
         if device is not None:
-            device_requests.record(*device, len(items))
+            request_reports.record(*device, len(items))
         return [
             item_error(item["id"], error_record(entry["error"])) if "error" in entry else {"id": item["id"], **entry}
             for item, entry in zip(items, entries)
