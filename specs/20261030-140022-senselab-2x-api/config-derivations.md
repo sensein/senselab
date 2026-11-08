@@ -342,15 +342,21 @@ transformers.class-0: verify sampling: 6 agreements and 0 disagreements over 6 k
 
 ### flat_ratio
 
-The most a task's per-item wall time at 10⁴ items may be over its per-item wall time at 10² items (P-33). Null: not measured; the first idle-node ladder run (Task 20 Step 4: an exclusive CPU node for signal.resample and the fake stack) sets it to the measured ratio's ceiling with its run's noise, and a later point past it is a register row, not a budget change.
+1.25: one plus the largest spread of a per-item wall time between two full runs of the same point, rounded up to a quarter. Spread is |a − b| / min(a, b) per (task, backend, point) present in the result files of both runs: d0c1203e (CPU ladder 28257809, fake stack 28257810, H100 28257811) against e801bc6c (28262078, 28262079, 28262080). At the 10² and 10⁴ points it reads: signal.resample~numpy-sinc 0.32 % at 10² (0.06289 against 0.06269 s) and 1.32 % at 10⁴ (0.01768 against 0.01745 s); fake.echo~fake 7.06 % at 10² (0.02653 against 0.02840 s) and 18.36 % at 10⁴ (0.01535 against 0.01817 s); at 10² on the H100 diarize~pyannote 0.50 %, speaker_embeddings~speechbrain 0.42 %, speech_to_text~crisperwhisper 0.07 %, pii_spans~transformers 2.49 % (12.343 against 12.042 s). The largest is fake.echo~fake at 10⁴, 18.36 %, which rounds up to 25 %. Excluded: speech_to_text~transformers and pii_spans~vllm, whose d0c1203e files were overwritten by the result-name collision fixed at e801bc6c (that run wrote one file per task); the one-item points, which carry a worker's start (their spread reaches 376 %, speaker_embeddings at 1) and are not budgeted; and the `long` point (0.12 %), covered by R-225. Peak-memory flatness moved more than a quarter between the runs (signal.resample 1.487 against 1.662; fake.echo 2.864 against 2.896), which is R-224's growth with plan size, not spread, and is registered rather than budgeted. The ratio applies to every per-item measure; at e801bc6c the flat ones read signal.resample per item 0.278, files 0.156, bytes 0.170 and fake.echo 0.640, 0.938, 0.897. The regression band measured from repeated idle-node runs replaces this once the nightly ladder repeats a point.
 
 ### regression_band
 
-Per module, the share a per-item cost may rise over its last measured value before a merge is blocked. Empty: no module is measured yet; each is set from the spread of repeated idle-node runs once the per-PR ladder runs.
+Empty: no module has repeated idle-node runs yet; each is set from the spread of repeated runs once the per-PR ladder runs.
 
 ### per_item
 
-Per task, the per-item wall seconds, peak memory bytes, and files and bytes written per item a ladder point may not exceed; flat_ratio applies to each of the four. Null: not measured; Task 20 Step 4's idle-node (CPU) and idle-H100 runs set each, with the run's commit and job ids, in Task 20 Step 5.
+Per suite entry label, the per-item ceilings: wall seconds, peak memory bytes, files and bytes written per item. Each is the entry's value at its 10² point at e801bc6c times 1.25 (flat_ratio's run-to-run spread), rounded up to three significant figures, so the 10⁴ point is held by flat_ratio, not by a ceiling raised to admit it; the ladder judges a ceiling at the 10² and 10⁴ points, never the one-item point, which carries a worker's start. Sources, value at 10² then ceiling (per item s; peak bytes; files; bytes):
+
+- signal.resample~numpy-sinc (job 28262078): 0.0627 s, 210 337 792 B, 8.9 files, 87 783 B -> 0.0784, 263 000 000, 11.2, 110 000.
+- fake.echo~fake (job 28262079): 0.0284 s, 97 570 816 B, 3.2, 4 228 B -> 0.0356, 122 000 000, 4.0, 5 290.
+- H100, job 28262080: speech_to_text~transformers 0.310 s, 2 650 468 352 B, 8.17, 6 605 B -> 0.389, 3 320 000 000, 10.3, 8 260; speech_to_text~crisperwhisper 1.365 s, 378 064 896 B, 8.17, 6 986 B -> 1.71, 473 000 000, 10.3, 8 740; speaker_embeddings~speechbrain 0.104 s, 381 640 704 B, 9.17, 7 430 B -> 0.13, 478 000 000, 11.5, 9 290; diarize~pyannote 0.156 s, 385 384 448 B, 11.17, 7 251 B -> 0.196, 482 000 000, 14.0, 9 070; pii_spans~vllm 4.851 s, 385 384 448 B, 12.09, 13 431 B -> 6.07, 482 000 000, 15.2, 16 800; pii_spans~transformers 12.042 s, 385 384 448 B, 12.1, 12 571 B -> 15.1, 482 000 000, 15.2, 15 800.
+
+Peak memory is the pool worker's own high-water (`ru_maxrss`); the host memory pair of the resource tables is unmeasured on these nodes (no readable cgroup v2), and the H100 entries' device memory is in the tables, not here. The tables generated at e801bc6c read the device pair before the model loaded, so their per-item device bytes are the model's footprint and the batches sized from them are conservative (whisper 29 against a quantum of 100), never over memory; they are regenerated from a rerun at the commit that reads the device pair after items.
 
 ## packages/senselab-core/src/senselab_core/runtime/data/batching.yaml
 
