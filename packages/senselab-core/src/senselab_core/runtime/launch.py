@@ -27,13 +27,13 @@ ISOLATED = {"PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"}
 class Family:
     """Ambient variables passed together: by exact name or by prefix.
 
-    `recorded` ones enter the launch digest; `measured` ones enter a measure unit (`Launch.measured`).
+    `recorded` ones enter the launch digest; the `measured` names enter a measure unit (`Launch.measured`).
     """
 
     names: frozenset[str]
     prefixes: tuple[str, ...]
     recorded: bool
-    measured: bool
+    measured: frozenset[str]
 
     def holds(self, name: str) -> bool:
         """Return whether `name` is one of this family's variables."""
@@ -54,7 +54,7 @@ def launch_environment() -> tuple[dict[str, Family], Family]:
             frozenset(v["names"]),
             tuple(v["prefixes"]),
             bool(v.get("recorded", False)),
-            bool(v.get("measured", False)),
+            frozenset(v.get("measured", ())),
         )
         for name, v in entries.items()
     }
@@ -70,7 +70,7 @@ class Launch:
         variables: The process's whole environment: the ambient variables of a family, `ISOLATED` and the declared.
         cwd: Its working directory, the interpreter's directory.
         digest: `identity_digest(LAUNCH_TAG, ...)` of its recorded ambient variables and its declared variables.
-        measured: Its variables, ambient or declared, of a `measured` family: what a measure unit holds of a launch.
+        measured: Its variables, ambient or declared, that a family names `measured`: what a measure unit holds.
     """
 
     python: str
@@ -122,5 +122,5 @@ def launch(python: str | os.PathLike[str], declared: Mapping[str, str] | None = 
         variables={**passed, **ISOLATED, **recorded},
         cwd=Path(python).parent,
         digest=identity_digest(LAUNCH_TAG, sorted([k, v] for k, v in recorded.items())),
-        measured={k: v for k, v in recorded.items() if any(f.measured and f.holds(k) for f in families.values())},
+        measured={k: v for k, v in recorded.items() if any(k in f.measured for f in families.values())},
     )

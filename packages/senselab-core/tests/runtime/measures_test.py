@@ -201,6 +201,29 @@ def test_units_differing_only_in_device_selection_share_a_digest() -> None:
     assert threads != slot0
 
 
+def _launched(declared: dict[str, str]) -> MeasureUnit:
+    return _unit(env={**ENV_FIELDS, "threads": launch("/env/bin/python", declared).measured})
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("extra", [{"OMP_TOOL_LIBRARIES": "/home/user/x"}, {"OMP_PLACES": "{0},{1}"}])
+def test_only_declared_thread_counts_reach_the_unit(extra: dict[str, str]) -> None:
+    """A thread variable that is not a declared count (a tool path, a CPU placement) neither enters nor splits."""
+    plain = _launched({"OMP_NUM_THREADS": "4"})
+    unit = _launched({"OMP_NUM_THREADS": "4", **extra})
+    assert dict(unit.env.threads) == {"OMP_NUM_THREADS": 4}
+    assert unit.digest() == plain.digest()
+    assert not any(value in unit.model_dump_json() for value in extra.values())
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("value", ["abc", "0", "/home/user/x"])
+def test_a_thread_count_that_is_not_a_count_is_refused(value: str) -> None:
+    """A measured variable holds a positive count; anything else is refused."""
+    with pytest.raises(ValueError):
+        _unit(env={**ENV_FIELDS, "threads": {"OMP_NUM_THREADS": value}})
+
+
 @pytest.mark.logic
 def test_mps_and_cpu_classes_are_normalised() -> None:
     """An mps class carries the chip and unified memory, a cpu class the model and no memory."""

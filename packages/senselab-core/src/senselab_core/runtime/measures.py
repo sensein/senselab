@@ -16,7 +16,7 @@ from senselab_worker.digest import identity_digest
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap
 from senselab_core.kernel.formats import MEASURE_OBSERVATIONS_FORMAT, MEASURE_UNIT_TAG
 from senselab_core.kernel.identity import LogicalKey, ModelIdentity, Params, ProfileSliceIdentity
-from senselab_core.runtime.calibration import Estimate, HardwareClass, Observation
+from senselab_core.runtime.calibration import Estimate, HardwareClass, Observation, Positive
 from senselab_core.runtime.keys import Placement
 
 DRIVER_KEYS = frozenset({"torch_build", "engine", "engine_version"})
@@ -35,7 +35,7 @@ class MeasureEnv(Frozen):
     """The env's fingerprinted context fields that decide cost: its lock and wheels, driver, platform and numerics.
 
     The driver holds only `DRIVER_KEYS`: the torch build (`cu128`, `cpu`) in place of its index URL, and for a server
-    the engine and its version. `threads` are the worker launch's measured variables (`Launch.measured`).
+    the engine and its version. `threads` are the worker launch's measured thread counts (`Launch.measured`).
     """
 
     env_lock: NonEmptyStr
@@ -44,7 +44,7 @@ class MeasureEnv(Frozen):
     platform: NonEmptyStr
     decoder: NonEmptyStr | None
     numerics: StrMap
-    threads: StrMap
+    threads: Annotated[Mapping[str, Positive], AfterValidator(FrozenMapping), PlainSerializer(dict)]
 
     @model_validator(mode="after")
     def _check_driver(self) -> Self:
