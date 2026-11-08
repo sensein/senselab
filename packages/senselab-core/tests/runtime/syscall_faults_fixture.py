@@ -306,14 +306,23 @@ def count_calls(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, int]]:
             gc.enable()
 
 
-def stall(function: str, prefix: str, seconds: float, *, times: int | None = None, after: bool = False) -> None:
-    """In this process, make `os.<function>` on a name starting with `prefix` sleep `seconds`, without `monkeypatch`.
+def stall(
+    function: str, prefix: str, pause: float | Callable[[], None], *, times: int | None = None, after: bool = False
+) -> None:
+    """In this process, make `os.<function>` on a name starting with `prefix` pause, without `monkeypatch`.
 
-    The sleep comes before the call, or after it with `after`; only the first `times` matching calls sleep (all with
+    `pause` is a number of seconds to sleep, or a callable run in place of the sleep.
+    The pause comes before the call, or after it with `after`; only the first `times` matching calls pause (all with
     None). For a spawned child, which ends with its patch.
     """
     real = getattr(os, function)
     left = [times]
+
+    def hold() -> None:
+        if callable(pause):
+            pause()
+        else:
+            time.sleep(pause)
 
     def stalled(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         names = [os.path.basename(os.fsdecode(a)) for a in args[:2] if isinstance(a, (str, bytes, os.PathLike))]
@@ -321,13 +330,31 @@ def stall(function: str, prefix: str, seconds: float, *, times: int | None = Non
         if due and left[0] is not None:
             left[0] -= 1
         if due and not after:
-            time.sleep(seconds)
+            hold()
         result = real(*args, **kwargs)
         if due and after:
-            time.sleep(seconds)
+            hold()
         return result
 
     setattr(os, function, stalled)
+
+
+def await_file(path: Path, bound_s: float, poll_s: float) -> None:
+    """Return once `path` exists, checking every `poll_s`; fail after `bound_s`."""
+    deadline = time.monotonic() + bound_s
+    while not path.exists():
+        assert time.monotonic() < deadline, f"{path.name} never appeared"
+        time.sleep(poll_s)
+
+
+def gate_pause(gate: Path, bound_s: float, poll_s: float) -> Callable[[], None]:
+    """Return a `stall` pause that creates `gate/stalled`, then waits for `gate/release` (see `await_file`)."""
+
+    def pause() -> None:
+        (gate / "stalled").touch()
+        await_file(gate / "release", bound_s, poll_s)
+
+    return pause
 
 
 def exit_at(function: str, prefix: str) -> None:

@@ -21,12 +21,13 @@ from senselab_core.runtime.execution.queue import ITEM_TAG, LABEL_TAG, Queue, Qu
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import identity_digest
-from syscall_faults_fixture import count_calls, refuse_call, stale_lookup
+from syscall_faults_fixture import await_file, count_calls, refuse_call, stale_lookup
 
 pytestmark = pytest.mark.logic
 
 OLD = 10**9
 RACE = {"stale_after_s": 0.5, "renew_fraction": 0.25, "attribute_delay_s": 0.0}
+POLL_S = RACE["stale_after_s"] * RACE["renew_fraction"]
 OVERRIDE = {"pool": {"segment_items": 3}, "lease": RACE}
 
 
@@ -196,18 +197,26 @@ def test_a_stalled_commit_and_a_fast_dead_give_one_outcome(tmp_path: Path, pool:
     assert [p.name for p in (queue.path / "outcome").iterdir()] == [digest]
 
 
-def test_a_stalled_putter_keeps_its_item_indexed(tmp_path: Path, pool: Pool) -> None:
+def test_a_stalled_putter_keeps_its_item_indexed(tmp_path: Path, pool: Pool, request: pytest.FixtureRequest) -> None:
     """A putter whose slot `symlink` stalls while others fill, finish and retire its segment still takes a slot."""
-    late = pool.apply_async(queue_race_fixture.put_stalled, (str(tmp_path), OVERRIDE, "late", 1.0))
-    time.sleep(0.5)
+    marker = request.node.get_closest_marker("timeout")
+    assert marker is not None
+    bound = float(marker.args[0])
+    gate = tmp_path / "gate"
+    gate.mkdir()
+    late = pool.apply_async(
+        queue_race_fixture.put_stalled, (str(tmp_path), OVERRIDE, "late", str(gate), (bound, POLL_S))
+    )
+    await_file(gate / "stalled", bound, POLL_S)
     queue = _queue(tmp_path, lease=RACE)
     queue.put_all(_fragments(3))
-    _drain(queue)
-    assert late.get(30) == 1
+    assert len(_drain(queue)) == 3
+    assert (queue.path / "segments" / f"{0:012d}" / "retired").exists()
+    (gate / "release").touch()
+    assert late.get(bound) == 1
     claim = queue.claim("w", 1)
     assert claim is not None and claim.items == (_digest(fragment("late")),)
     claim.commit()
-    assert (queue.path / "segments" / f"{0:012d}" / "retired").exists()
 
 
 def test_a_missing_item_stays_ready_and_a_corrupt_one_is_dead(tmp_path: Path) -> None:
