@@ -208,12 +208,14 @@ class Claim:
 
     `outcomes` records, per digest, what became of each item this claim gave up: `committed`, `dead`, `duplicate`
     (another claim's outcome was written first), `released` or `lost` (the lease failed its proof; nothing written).
+    An outcome record names `epoch`, the coordinator epoch current when the claim was taken.
     """
 
-    def __init__(self, queue: "Queue", worker: str, held: list[_Held]) -> None:
-        """Hold `held` for `worker`; use `Queue.claim`."""
+    def __init__(self, queue: "Queue", worker: str, held: list[_Held], epoch: int = 0) -> None:
+        """Hold `held` for `worker`, taken in coordinator epoch `epoch`; use `Queue.claim`."""
         self.queue = queue
         self.worker = worker
+        self.epoch = epoch
         self._held = {h.digest: h for h in held}
         self.outcomes: dict[str, str] = {}
 
@@ -257,7 +259,7 @@ class Claim:
 
     def _finish(self, held: _Held, outcome: str, extra: dict[str, object]) -> str:
         """Write `outcome` for `held` (`settle`), mark its slot and release it; return what became of it."""
-        record = {"outcome": outcome, "worker": self.worker, "finish": uuid.uuid4().hex, **extra}
+        record = {"outcome": outcome, "worker": self.worker, "epoch": self.epoch, "finish": uuid.uuid4().hex, **extra}
         written = None
         if not held.state.lost:
             with self.queue.open() as q:
@@ -510,7 +512,7 @@ class Queue:
             for held in taken:
                 held.stack.close()
             raise
-        return Claim(self, worker, taken) if taken else None
+        return Claim(self, worker, taken, self._epoch() if self._epoch is not None else 0) if taken else None
 
     def _segments(
         self, segments: StorageDir

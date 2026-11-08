@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import platform
+import signal
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
@@ -386,7 +387,7 @@ def test_a_skipped_resident_sample_is_counted_not_read_as_zero() -> None:
 
 def _child(done: bool) -> Callable[[Path, str], subprocess.Popen[bytes]]:
     """A spawner of a process that ends at once when `done`, else sleeps until its group is killed."""
-    code = "pass" if done else "import time; time.sleep(600)"
+    code = "pass" if done else "import signal; signal.pause()"
     return lambda work, profile: subprocess.Popen([sys.executable, "-c", code], start_new_session=True)  # noqa: ARG005
 
 
@@ -478,7 +479,7 @@ def test_start_names_the_failures_of_a_run_that_ended_short_of_its_target(
 
 
 _WRITER = """
-import sys, time
+import signal, sys
 from pathlib import Path
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import JobRef
@@ -486,8 +487,7 @@ log = EventLog(Path(sys.argv[1]), "a2", 1, epoch=1)
 for i in range(3):
     log.record("finished", "call", job=JobRef(plan_hash=sys.argv[2], node="call", element=(i,)), key=str(i) * 64,
                output="output:" + str(i) * 64)
-    time.sleep(0.3)
-time.sleep(600)
+signal.pause()
 """
 
 
@@ -506,7 +506,7 @@ def test_start_sees_a_separate_process_commit_items_and_interrupts_it_once_the_t
 
     assert interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config, spawn) == 0
     committed = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["committed"]
-    assert 1 <= committed <= 3 and children[0].returncode == -9
+    assert 1 <= committed <= 3 and children[0].returncode == -signal.SIGKILL
 
 
 @pytest.mark.logic

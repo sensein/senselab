@@ -847,7 +847,7 @@ def test_a_resumed_run_logs_prior_outcomes_as_exact_reuse(tmp_path: Path) -> Non
 
 @pytest.mark.contract
 def test_report_counts_reused_and_ran_after_resume(tmp_path: Path) -> None:
-    """UX-8 g1: a resumed plan's results count the outcomes already on the queue as reused and the rest as ran."""
+    """A resumed plan's results count the outcomes already on the queue as reused and the rest as ran."""
     profile = _profile(**CONTENT)
     placed, values, store, workers = _stack(tmp_path, profile, ["one", "two", "three", "four"])
     first = _pool(tmp_path, store, workers, profile)
@@ -860,3 +860,44 @@ def test_report_counts_reused_and_ran_after_resume(tmp_path: Path) -> None:
     finally:
         workers.stop()
     assert [(r.job.element, r.served) for r in refs] == [((0,), "exact"), ((1,), "exact"), ((2,), None), ((3,), None)]
+
+
+def _late_claim(tmp_path: Path, claimed_in: Callable[[], int]) -> tuple[list[ResultRef], FakeWorkers]:
+    """Epoch 1 puts an item and a claim taken under `claimed_in` holds it; epoch 2 puts it; the claim then commits."""
+    profile = _profile(**CONTENT)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one"])
+    workers.ready = lambda: False
+    first = _pool(tmp_path, store, workers, profile)
+    fragment = node_fragment(placed, first.admit(placed, values))
+    first.submit(fragment)
+    held = QueueSet(tmp_path / "run" / RUN_QUEUES, profile, epoch=claimed_in).queue("cpu").claim("late")
+    assert held is not None
+    second = _pool(tmp_path, store, workers, profile)
+    second.admit(placed, values)
+    handle = second.submit(fragment)
+    try:
+        report(held, held.items[0], workers._outcomes(fragment))
+        return list(follow(second, handle)), workers
+    finally:
+        workers.stop()
+
+
+@pytest.mark.contract
+def test_a_claim_of_an_earlier_epoch_committing_after_the_next_put_is_a_reuse(tmp_path: Path) -> None:
+    """An epoch-1 worker finishing after epoch 2 put its item is served `exact` to epoch 2, not `finished`."""
+    refs, _ = _late_claim(tmp_path, lambda: 1)
+    assert [r.served for r in refs] == ["exact"]
+
+
+@pytest.mark.contract
+def test_an_outcome_of_a_claim_taken_in_no_epoch_is_a_reuse(tmp_path: Path) -> None:
+    """An outcome record whose claim read no epoch counts as another epoch's."""
+    refs, _ = _late_claim(tmp_path, lambda: 0)
+    assert [r.served for r in refs] == ["exact"]
+
+
+@pytest.mark.contract
+def test_a_claim_of_the_current_epoch_is_not_a_reuse(tmp_path: Path) -> None:
+    """An item put and claimed in the current epoch is reported as executed."""
+    refs, _ = _late_claim(tmp_path, lambda: 2)
+    assert [r.served for r in refs] == [None]
