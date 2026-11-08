@@ -473,7 +473,7 @@ def _devices_seen(directory: Path, count: int, waits: PoolSettings) -> dict[str,
 
 
 @pytest.mark.logic
-def test_local_runs_one_cuda_worker_per_visible_device(tmp_path: Path, slack: Path) -> None:
+def test_local_runs_one_cuda_worker_per_visible_device(tmp_path: Path, slack: dict[str, Any]) -> None:
     """A cuda class's workers each get a free device as `CUDA_VISIBLE_DEVICES`; no more start than there are devices."""
     waits = ExecutionProfile.load("orcd", slack).pool
     seen = tmp_path / "seen"
@@ -881,7 +881,9 @@ def _jobs(tmp_path: Path) -> list[str]:
 
 
 @pytest.mark.logic
-def test_a_submission_that_times_out_after_queueing_its_job_leaves_one_job(tmp_path: Path, slack: Path) -> None:
+def test_a_submission_that_times_out_after_queueing_its_job_leaves_one_job(
+    tmp_path: Path, slack: dict[str, Any]
+) -> None:
     """An `sbatch` that queues its job and then hangs past the timeout is found by name, never submitted again.
 
     A duplicate the controller registers late under the same name is cancelled when the fleet closes.
