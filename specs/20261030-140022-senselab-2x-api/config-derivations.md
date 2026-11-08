@@ -168,6 +168,14 @@ commands.timeout_s 1: the time the hang test gives a fake `sbatch` that queues i
 
 first_poll_s 0.01 and poll_s 10: the device-pinning test reads what its local worker processes wrote every hundredth of a second and fails after ten seconds. Each worker is one interpreter start and one file write, about 30 ms on a loaded laptop (the measurement in test_slack.substrate); 0.01 s keeps the poll below that start, and 10 s is over 300 times it, so only a worker that never starts fails the bound. Not measured on CI runners.
 
+### test_slack.tests
+
+Values only tests read; the `slack` fixture leaves them out of the profile override and `slack_tests` returns them.
+
+probe.fit_ratio 50: the most the pooled-fit scaling test lets the estimate's time at 10^4 requests reach over its time at 10^3. A quadratic fit multiplies by 100 for a tenfold n, an n log² n fit by 10·(log 10⁴ / log 10³)² ≈ 18, and the rest of the estimate is linear (10). Measured 2026-11-08 on a laptop at load average 5: 17 end to end, 9 to 19 for the fit alone across data shapes, 176.7 for the replaced quadratic fit. 50 sits above the first by a factor 2.8 and below the second by 2, more than a runner's noise, and a ratio of two times taken on one machine cancels the machine's speed. Not measured on CI runners.
+
+probe.timing_repeats 3: each time is the best of this many runs, which drops a run a scheduler preempted; one run is exposed to that, and each added run costs the test about one more second at 10^4.
+
 ## pyproject.toml
 
 The root `[tool.ruff.lint]` limits, which `packages/ruff.toml` extends. A site over one carries a `noqa` with its reason;

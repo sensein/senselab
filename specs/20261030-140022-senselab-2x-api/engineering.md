@@ -300,7 +300,8 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   tag (ADR-006), or a mathematical identity, declared as `NAME: Final = ...  # invariant: <why it cannot
   vary>`. Anything with a unit of seconds, bytes, attempts, workers, items or polls is config. Test slack
   is read through the `slack` fixture (`packages/conftest.py`) from `tests/data/test_slack.yaml` beside the test
-  package. Specs name profile keys (`lease.record_attempts`), never identifiers in capitals.
+  package; values only tests read sit under that file's `tests:` section and are read through the `slack_tests`
+  fixture. Specs name profile keys (`lease.record_attempts`), never identifiers in capitals.
   `scripts/check_fixed_parameters.py` fails pre-commit on a module-level numeric assignment (outside classes and
   functions) under `packages/*/src` whose name ends in `_S`, `_MS`, `_BYTES`, `_ATTEMPTS`, `_RETRIES`, `_WORKERS`,
   `_ITEMS`, `_POLLS`, `_BUDGET` or `_MODE`, or on a non-zero literal argument to `sleep`, `timeout=`, `wait(` or
