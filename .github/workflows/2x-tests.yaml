@@ -151,7 +151,7 @@ jobs:
       run: .lean/bin/lint-imports
 
   # The model-free limits tier on a PR carrying the `limits` label; limits that load a model run on ORCD.
-  # On a PR carrying the `limits` label, and on a push to a `2x/` branch that changes the probe's fit.
+  # On a PR carrying the `limits` label, and on a push to a `2x/` branch that changes the probe's fit or its timed test.
   core-limits:
     needs: detect
     name: core-limits
@@ -169,6 +169,8 @@ jobs:
         PATHS: >-
           packages/senselab-core/src/senselab_core/runtime/probe.py
           packages/senselab-core/src/senselab_core/runtime/calibration.py
+          packages/senselab-core/tests/runtime/probe_test.py
+          packages/senselab-core/tests/data/test_slack.yaml
       # A base the clone lacks (a new branch, a force push) counts as a change.
       run: |
         if [ "$GITHUB_EVENT_NAME" = push ] && git diff --quiet "$BEFORE" HEAD -- $PATHS; then
@@ -188,7 +190,7 @@ jobs:
       run: uv sync --locked --no-editable --python 3.13 --package senselab-core --group test
     - name: Run the limits tier
       if: steps.scope.outputs.run == 'true'
-      run: .core/bin/pytest packages -m "limits and not model" -p no:cacheprovider
+      run: .core/bin/pytest packages/senselab-core/tests -m "limits and not model" -p no:cacheprovider
 
   # The declared version of a task or backend moves whenever its source does (scripts/check_source_digests.py).
   source-digests:

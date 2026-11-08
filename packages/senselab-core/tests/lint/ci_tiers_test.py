@@ -19,8 +19,12 @@ PYPROJECT = REPO / "pyproject.toml"
 TIERS = ("logic", "contract", "limits", "usecase", "env")
 EVERY_PR, ON_LABEL, NIGHTLY = "every_pr", "on_label", "nightly"
 LABEL = "limits"
-FIT_SOURCES = frozenset(
-    f"packages/senselab-core/src/senselab_core/runtime/{name}.py" for name in ("probe", "calibration")
+LIMITS_SCOPE = frozenset(
+    {
+        *(f"packages/senselab-core/src/senselab_core/runtime/{name}.py" for name in ("probe", "calibration")),
+        "packages/senselab-core/tests/runtime/probe_test.py",
+        "packages/senselab-core/tests/data/test_slack.yaml",
+    }
 )
 
 
@@ -54,6 +58,49 @@ def package_selections(workflow: str) -> list[tuple[str, str | None, str]]:
                 if any(p == "packages" or p.startswith("packages/") for p in paths):
                     selections.append((name, marker, str(job.get("if", ""))))
     return selections
+
+
+def workspace_members() -> dict[str, tuple[str, frozenset[str]]]:
+    """Each workspace distribution: the directory under ``packages`` holding it, and the members it depends on."""
+    members = {}
+    for pyproject in [PYPROJECT, *sorted((REPO / "packages").glob("*/pyproject.toml"))]:
+        document = tomllib.loads(pyproject.read_text())
+        sources = document.get("tool", {}).get("uv", {}).get("sources", {})
+        needs = frozenset(name for name, source in sources.items() if source.get("workspace"))
+        members[document["project"]["name"]] = (f"packages/{document['project']['name']}", needs)
+    return members
+
+
+def _installs(argv: list[str], members: dict[str, tuple[str, frozenset[str]]]) -> set[str]:
+    """The workspace members a ``uv sync`` or a wheel ``uv pip install`` installs, their dependencies included."""
+    if argv[:2] == ["uv", "sync"]:
+        named = {argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--package"}
+        chosen = named or set(members)
+    elif argv[:3] == ["uv", "pip", "install"]:
+        chosen = {Path(a).name.split("-")[0].replace("_", "-") for a in argv if a.endswith(".whl")}
+    else:
+        return set()
+    while missing := {need for name in chosen for need in members[name][1]} - chosen:
+        chosen |= missing
+    return chosen
+
+
+def uninstalled_paths(workflow: str) -> list[tuple[str, str]]:
+    """``(job, path)`` for each ``pytest`` path under ``packages`` outside every member the job installs."""
+    members, found = workspace_members(), []
+    for name, job in yaml.safe_load(workflow).get("jobs", {}).items():
+        commands = [argv for step in job.get("steps", []) for argv in _commands(step.get("run", ""))]
+        installed = set().union(*(_installs(argv, members) for argv in commands))
+        roots = [members[member][0] for member in installed]
+        for argv in commands:
+            at = next((i for i, a in enumerate(argv) if Path(a).name == "pytest"), None)
+            if at is None:
+                continue
+            args = argv[at + 1 :]
+            values = {args[i + 1] for i, a in enumerate(args) if a in ("-m", "-p", "-k") and i + 1 < len(args)}
+            paths = [a for a in args if a.startswith("packages") and a not in values]
+            found += [(name, p) for p in paths if not any(p == r or p.startswith(f"{r}/") for r in roots)]
+    return found
 
 
 def pytest_paths_outside_packages(workflow: str) -> list[tuple[str, str]]:
@@ -207,7 +254,7 @@ def test_core_limits_runs_on_the_label_and_on_a_push_to_a_2x_branch_touching_the
     """The label runs the job on a PR; a push to a `2x/` branch runs it when the push changes the probe's fit."""
     job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["core-limits"]
     assert job["if"] == f"{LABEL_IF} || ({PUSH_IF})"
-    assert set(_scope(job)["env"]["PATHS"].split()) == FIT_SOURCES
+    assert set(_scope(job)["env"]["PATHS"].split()) == LIMITS_SCOPE
     later = job["steps"][job["steps"].index(_scope(job)) + 1 :]
     assert later and all(step.get("if") == SCOPED_IF for step in later)
 
@@ -221,27 +268,45 @@ def _commit(repo: Path, path: str) -> str:
     return subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
 
 
-def _scoped(repo: Path, event: str, before: str) -> str:
+def _scoped(repo: Path, event: str, before: str, bound: float) -> str:
     step = _scope(yaml.safe_load(WORKFLOW.read_text())["jobs"]["core-limits"])
     output = repo.parent / "output"
     output.write_text("")
     env = {**os.environ, **step["env"], "BEFORE": before, "GITHUB_EVENT_NAME": event, "GITHUB_OUTPUT": str(output)}
-    subprocess.run(["bash", "-e", "-c", step["run"]], cwd=repo, env=env, check=True, timeout=60)
+    subprocess.run(["bash", "-e", "-c", step["run"]], cwd=repo, env=env, check=True, timeout=bound)
     return output.read_text().strip()
 
 
 @pytest.mark.logic
-def test_the_scope_step_runs_the_tier_only_when_a_push_changes_the_fit(tmp_path: Path) -> None:
+def test_the_scope_step_runs_the_tier_only_when_a_push_changes_the_fit(tmp_path: Path, tier_bound: float) -> None:
     """A push changing only other files skips; one changing a fit source, an unknown base, or a PR runs."""
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     first = _commit(repo, "README.md")
     second = _commit(repo, "packages/other.py")
-    assert _scoped(repo, "push", first) == "run=false"
-    _commit(repo, sorted(FIT_SOURCES)[0])
-    assert _scoped(repo, "push", second) == "run=true"
-    assert _scoped(repo, "push", "0" * 40) == "run=true"
-    assert _scoped(repo, "pull_request", second) == "run=true"
+    assert _scoped(repo, "push", first, tier_bound) == "run=false"
+    _commit(repo, sorted(LIMITS_SCOPE)[0])
+    assert _scoped(repo, "push", second, tier_bound) == "run=true"
+    assert _scoped(repo, "push", "0" * 40, tier_bound) == "run=true"
+    assert _scoped(repo, "pull_request", second, tier_bound) == "run=true"
+
+
+@pytest.mark.logic
+def test_every_job_tests_only_the_packages_it_installs() -> None:
+    """A job's pytest paths lie under the workspace members its sync or wheel install puts in the environment."""
+    assert [(path.name, *found) for path in WORKFLOWS_2X for found in uninstalled_paths(path.read_text())] == []
+
+
+@pytest.mark.logic
+def test_a_path_outside_the_installed_packages_is_found() -> None:
+    """Syncing one member and running every package's tests is found; a member's dependency and a wheel are not."""
+    run = "uv sync --locked --package senselab-core\npytest packages packages/senselab-worker/tests"
+    wheel = "uv pip install --no-deps dist/senselab_worker-1.whl\npytest packages/senselab-worker/tests"
+    planted = yaml.safe_dump({"jobs": {"core": {"steps": [{"run": run}]}, "floor": {"steps": [{"run": wheel}]}}})
+    assert uninstalled_paths(planted) == [("core", "packages")]
+    assert {p for p, _ in workspace_members().values()} == {
+        f"packages/{d.name}" for d in (REPO / "packages").iterdir() if (d / "tests").is_dir()
+    }
 
 
 @pytest.mark.logic

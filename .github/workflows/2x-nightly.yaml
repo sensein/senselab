@@ -44,4 +44,4 @@ jobs:
         UV_PROJECT_ENVIRONMENT: .core
       run: uv sync --locked --no-editable --python 3.13 --package senselab-core --group test
     - name: Run the limits tier that needs no model
-      run: .core/bin/pytest packages -m "limits and not model" -p no:cacheprovider
+      run: .core/bin/pytest packages/senselab-core/tests -m "limits and not model" -p no:cacheprovider
