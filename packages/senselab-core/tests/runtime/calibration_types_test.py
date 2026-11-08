@@ -10,7 +10,9 @@ from senselab_core.runtime.calibration import (
     LengthProfile,
     Observation,
     ProbeRef,
+    RegimeFactor,
     RequestFit,
+    StratumBatch,
 )
 
 HARDWARE = HardwareClass(
@@ -102,3 +104,25 @@ def test_a_length_profile_holds_units_in_put_order_with_unknowns() -> None:
     assert LengthProfile(units=(3.0, None, 1.0)).units == (3.0, None, 1.0)
     with pytest.raises(ValueError):
         LengthProfile(units=(-1.0,))
+
+
+_FIT = RequestFit(batch=1, r=0.2, u=0.05, n=6, spread=0.1, lo=2.0, hi=9.0)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("field", "twice", "match"),
+    [
+        (
+            "batched",
+            (RequestFit(batch=4, r=0.3, u=None, n=3, spread=None, lo=1.0, hi=1.0),) * 2,
+            r"batched.*batch 4",
+        ),
+        ("batch", (StratumBatch(stratum=0, batch=4), StratumBatch(stratum=0, batch=8)), r"batch.*stratum 0"),
+        ("regimes", (RegimeFactor(k=2, rho=1.4, n=6), RegimeFactor(k=2, rho=1.5, n=6)), r"regimes.*k 2"),
+    ],
+)
+def test_an_estimate_refuses_two_entries_for_one_key(field: str, twice: tuple[Any, ...], match: str) -> None:
+    """The tuples of an estimate stand for maps by batch, stratum and `k`; a repeated key is refused."""
+    with pytest.raises(ValueError, match=match):
+        Estimate(status="measured", unit_kind="audio_s", single=_FIT, **{field: twice})

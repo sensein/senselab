@@ -116,7 +116,12 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
                 source=EstimateSource(probe_ids=("p1",), observations=9),
             ),
         ],
-        invalid_updates=[{"status": "measured", "single": None}, {"reasons": (), "status": "unmeasured"}],
+        invalid_updates=[
+            {"status": "measured", "single": None},
+            {"reasons": (), "status": "unmeasured"},
+            {"batch": (StratumBatch(stratum=0, batch=4), StratumBatch(stratum=0, batch=8))},
+            {"regimes": (RegimeFactor(k=2, rho=1.4, n=6),) * 2},
+        ],
     )
     register(
         LengthProfile,
