@@ -311,7 +311,8 @@ within. A stored transcript output is recomputed; a hand-built timed transcript 
 
 2.x reads `result@2` and `execution-context@3` store members, any minor, under `store@5/`. `result@1`,
 `execution-context@1` and `execution-context@2` are retired with no converter (P2-44; `@2` by Phase 2 Task 34d, whose
-`@3` adds the env license): a store read raises `StoreFormatRetired`, naming the member, and leaves the entry in
-place. Migrating it is removing the entry and recomputing it under this version. An entry written in a later major, or
+`@3` adds the env license): a store read of a retired context raises `StoreFormatRetired`, naming the member, and
+leaves the entry in place. A `STORE_DIR` major holds one member format pair (ADR-006 amendment 2026-11-08), so a
+retired `result.json` beside a current `context.json` is corruption: set aside and recomputed. Migrating it is removing the entry and recomputing it under this version. An entry written in a later major, or
 a later minor whose context carries fields this version does not know, is another version's: it is skipped, never
 quarantined (Phase 2 Task 34a).

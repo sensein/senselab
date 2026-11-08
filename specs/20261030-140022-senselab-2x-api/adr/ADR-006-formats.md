@@ -572,3 +572,15 @@ so moving them needs a format change, left open.
 - **`run-config@2.1`** (additive minor of `run-config@2.0`): the file may carry a `calibration` section, of which a run
   sets `trust` (`group` or `own`) and nothing else; one reader, `RunConfigFile.load`, validates both as one `Formatted` value from which `RunConfig` is built. A tag of another name or major is refused, naming it. The packaged
   file carries no `calibration` section.
+
+## Amendment 2026-11-08: one member format pair per store directory (Phase 3 Task 20R-3)
+
+- A `STORE_DIR` major holds exactly one `(result, execution-context)` member format pair; a major bump of either
+  member bumps `STORE_DIR`. `store@5` holds `result@2` with `execution-context@3`. A contract test in `store_test.py`
+  pins `(STORE_DIR, result major, context major)` as one unit.
+- A store read judges an entry's format by its `context.json`: a retired context is refused (`StoreFormatRetired`);
+  a retired `result.json` beside a current `context.json` is a pair no writer produced, so it is corruption
+  (UX-38): the entry is set aside and recomputed, and `admits` agrees after one read. Supersedes, for the result
+  member, the 2026-11-01 amendment's "a retired format is refused".
+- A plan's reuse count is the admitted count; result integrity is decided at read, and the run's report states the
+  difference.
