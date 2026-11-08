@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +17,10 @@ from senselab_core.kernel.identity import Attestation, ExecutionContext, ModelRe
 from senselab_core.runtime import vllm_server as vs
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.hardware import DeviceMemory
 from senselab_core.testing.processes import group_gone
 from senselab_worker.digest import identity_digest
+from senselab_worker.faults import ResourceFault
 
 pytestmark = pytest.mark.logic
 
@@ -82,9 +85,21 @@ def _knob(tmp_path: Path, **knobs: str) -> None:
     path.write_text(json.dumps({**(json.loads(path.read_text()) if path.exists() else {}), **knobs}))
 
 
-def _server(env: EnvHandle, tmp_path: Path, settings: dict[str, Any] = SETTINGS) -> vs.VllmServer:
+def _server(
+    env: EnvHandle,
+    tmp_path: Path,
+    settings: dict[str, Any] = SETTINGS,
+    **options: Any,  # noqa: ANN401
+) -> vs.VllmServer:
     return vs.VllmServer(
-        env, MODEL, settings, start_lock_dir=tmp_path / "locks", startup_timeout_s=30, start_margin_s=1, lease=LEASE
+        env,
+        MODEL,
+        settings,
+        start_lock_dir=tmp_path / "locks",
+        startup_timeout_s=30,
+        start_margin_s=1,
+        lease=LEASE,
+        **options,
     )
 
 
@@ -206,6 +221,55 @@ def test_start_failure_is_typed_and_stops(
     assert raised.value.kind == kind and server.url is None
     for record in _records(tmp_path):
         assert group_gone(record["pgid"], 5)
+
+
+FREE_MEMORY = (
+    "ValueError: Free memory on device cuda:0 (7.9/79.18 GiB) on startup is less than desired GPU memory utilization"
+    " (0.9, 71.26 GiB)"
+)
+
+
+ENGINE_FAILED = "RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}"
+
+
+@pytest.mark.parametrize(
+    ("tail", "line", "kind"),
+    [
+        (f"{FREE_MEMORY}\nERROR engine core failed\n{ENGINE_FAILED}", FREE_MEMORY, "memory"),
+        (f"ERROR engine core failed\n{ENGINE_FAILED}", ENGINE_FAILED, "exited"),
+    ],
+    ids=["v1-free-memory", "v1-other"],
+)
+def test_a_start_failure_names_an_error_of_its_log_and_the_log(
+    env: EnvHandle, tmp_path: Path, tail: str, line: str, kind: str
+) -> None:
+    """An exit before health carries the log's memory error, else its last error, and the log's path."""
+    _knob(tmp_path, FAKE_VLLM_EXIT="1", FAKE_VLLM_STDERR=f"INFO loading\n{tail}\nINFO shutting down")
+    logs = tmp_path / "logs"
+    with pytest.raises(vs.VllmStartError) as raised:
+        _server(env, tmp_path, log_dir=logs).__enter__()
+    [log] = logs.iterdir()
+    assert raised.value.kind == kind and f"{line} [log: {log}]" in str(raised.value)
+    assert isinstance(raised.value, ResourceFault) == (kind == "memory")
+    with pytest.raises(vs.VllmStartError, match=r"exited with 1 before it was healthy$"):
+        _server(env, tmp_path).__enter__()
+
+
+def test_a_device_short_of_free_memory_is_refused_before_the_launch(env: EnvHandle, tmp_path: Path) -> None:
+    """A device with less free memory than gpu_memory_utilization of its total is a resource fault; nothing starts."""
+    gib = 2**30
+
+    def short(devices: Sequence[str] | None) -> tuple[DeviceMemory, ...]:
+        assert devices is None
+        return (DeviceMemory("GPU-a", 80 * gib, 80 * gib), DeviceMemory("GPU-b", 8 * gib, 80 * gib))
+
+    with pytest.raises(vs.VllmOutOfMemory, match=f"GPU-b has {8 * gib} of {80 * gib} bytes free") as raised:
+        _server(env, tmp_path, memory=short).__enter__()
+    assert raised.value.kind == "memory" and isinstance(raised.value, ResourceFault) and _records(tmp_path) == []
+    with _server(env, tmp_path, memory=lambda _: (DeviceMemory("GPU-a", 72 * gib, 80 * gib),)) as server:
+        assert server.url is not None
+    with _server(env, tmp_path, memory=lambda _: None) as server:
+        assert server.url is not None
 
 
 @pytest.mark.parametrize(

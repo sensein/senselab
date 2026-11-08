@@ -17,7 +17,7 @@ envs:
   torch_index:
 # Allowed hub organisations; null allows those of the catalogue entries.
 model_sources:
-# Cap on the in-process model cache; null for none.
+# Cap on the in-process model cache; null measures it: the smallest visible GPU's memory, else the host's.
 model_cache_budget_bytes:
 # How a transient fault is retried: attempts and the first, doubling, wait.
 retry:

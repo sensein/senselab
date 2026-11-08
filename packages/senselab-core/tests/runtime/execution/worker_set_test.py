@@ -5,6 +5,7 @@ import platform
 import threading
 from typing import Any
 
+import backends.release_backend_fixture as release_fixture
 import pytest
 import senselab_core.runtime.fake_backend as fake
 from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
@@ -13,7 +14,7 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.workers import PRECISION, WorkerLoadFailed, WorkerSet, host_model_key
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.vllm_server import VllmStartError
+from senselab_core.runtime.vllm_server import VllmOutOfMemory, VllmStartError
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_worker.faults import FaultClass, classify
@@ -190,6 +191,48 @@ def test_a_model_is_shared_by_one_backend_code_across_tasks_and_never_by_two() -
 
 
 @pytest.mark.logic
+def test_release_frees_the_cached_models_workers_and_servers() -> None:
+    """`release` frees a host backend's cached model and stops the set's servers; the next checkout loads again."""
+    stopped: list[str] = []
+
+    class Served:
+        label, url, attestation = "served", "http://127.0.0.1:1", _attestation(_model("d" * 40))
+
+        def context_fields(self) -> dict[str, Any]:
+            return {}
+
+        def stop(self) -> None:
+            stopped.append(self.label)
+
+    model = _model("d" * 40)
+    backend = _host("released").model_copy(update={"worker": "backends.release_backend_fixture"})
+    workers = WorkerSet(2, start_server=lambda *_: Served())
+    workers.server(backend, ENV, model, PROFILE, Served.attestation)
+
+    def load() -> int:
+        with workers.checkout(backend, ENV, model, device="cpu", profile=PROFILE) as worker:
+            return int(worker.run([{"id": "a", "inputs": {}}], {})[0]["outputs"]["state"])
+
+    first = load()
+    assert release_fixture.RELEASED == [] and load() == first
+    workers.release()
+    assert release_fixture.RELEASED == [first] and stopped == ["served"] and workers.pooled() == []
+    assert load() != first
+    workers.close()
+
+
+@pytest.mark.logic
+def test_a_host_backend_serving_models_must_size_its_state() -> None:
+    """A host backend declaring `models` with no `state_bytes` is refused; one declaring none counts its state 0."""
+    serving = _host("serving").model_copy(update={"models": ("org/m",)})
+    with pytest.raises(ValueError, match="defines no state_bytes"):
+        with WorkerSet(1).checkout(serving, ENV, None, device="cpu", profile=PROFILE):
+            pass
+    with WorkerSet(1).checkout(_host("plain"), ENV, None, device="cpu", profile=PROFILE) as worker:
+        assert worker.run([{"id": "a", "inputs": {"x": "v"}}], {})[0]["outputs"] == {"value": "v"}
+
+
+@pytest.mark.logic
 def test_a_busy_server_start_lease_is_not_a_load_failure() -> None:
     """A server start whose lease is busy raises `LeaseTimeout` as it is: a busy resource, never a broken env."""
 
@@ -223,3 +266,22 @@ def test_a_server_that_fails_to_start_is_a_load_failure() -> None:
         with workers.checkout(backend, ENV, model, device="cpu", profile=PROFILE, expected=_attestation(model)):
             pass
     assert isinstance(raised.value.__cause__, VllmStartError) and classify(raised.value) is FaultClass.INFRASTRUCTURE
+
+
+@pytest.mark.logic
+def test_a_server_short_of_device_memory_is_a_resource_fault() -> None:
+    """A server that fails to start for lack of device memory reaches a checkout as itself, a resource fault."""
+
+    def start(*_: Any) -> Any:  # noqa: ANN401 - a ServerStart
+        raise VllmOutOfMemory("vllm serve exited with 1 before it was healthy: ValueError: Free memory on device")
+
+    backend = _host("served").model_copy(
+        update={"env": Env.server("s"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
+    )
+    model = _model("e" * 40)
+    with pytest.raises(VllmOutOfMemory) as raised:
+        with WorkerSet(1, start_server=start).checkout(
+            backend, ENV, model, device="cpu", profile=PROFILE, expected=_attestation(model)
+        ):
+            pass
+    assert raised.value.kind == "memory" and classify(raised.value) is FaultClass.RESOURCE

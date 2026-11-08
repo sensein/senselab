@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
+from senselab_core.kernel.declare import BackendSpec, Env, Registry, ServerConfig, TaskParams, TaskSpec
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.execution_settings import LeaseBoundError
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
@@ -266,6 +266,21 @@ def test_resource_class_follows_device_order_and_host() -> None:
     assert resolve_execution(TASK, _entry(), orcd, other_gpu, registry, CAT).resource_class == "gpu"
     cpu_only = ExecutionProfile.load("orcd", {"devices": ["cpu"]})
     assert resolve_execution(TASK, _entry(), cpu_only, other_gpu, registry, CAT).resource_class == "cpu"
+
+
+@pytest.mark.logic
+def test_a_server_backend_takes_a_service_class_first() -> None:
+    """A server backend takes a `svc` class before any other; a host backend never does; without one, as usual."""
+    host = _backend("b1", "one", devices=("cuda",))
+    server = BackendSpec.model_validate(
+        {**host.model_dump(), "env": Env.server("e"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
+    )
+    orcd = ExecutionProfile.load("orcd")
+    placed = resolve_execution(TASK, _entry(), orcd, None, _registry(server), CAT)
+    assert (placed.resource_class, placed.device) == ("svc:h100", "cuda")
+    assert resolve_execution(TASK, _entry(), orcd, GPU, _registry(server), CAT).resource_class == "svc:h100"
+    assert resolve_execution(TASK, _entry(), orcd, None, _registry(host), CAT).resource_class == "gpu:h100"
+    assert resolve_execution(TASK, _entry(), _profile(), GPU, _registry(server), CAT).resource_class == "gpu"
 
 
 @pytest.mark.logic

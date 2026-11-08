@@ -4,3 +4,7 @@
 substrate:
   commands:
     timeout_s: 1
+# Seconds a test first waits between reads of what its worker processes wrote, and the longest it waits for them.
+pool:
+  first_poll_s: 0.01
+  poll_s: 10

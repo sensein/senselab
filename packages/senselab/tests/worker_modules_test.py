@@ -2,6 +2,7 @@
 
 import ast
 import importlib
+import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -9,7 +10,8 @@ from pathlib import Path
 import pytest
 from senselab._api import generated  # noqa: F401 - importing it declares every backend
 from senselab._api.declarations import DECLARATION_MODULES
-from senselab_core.kernel.declare import REGISTRY
+from senselab._api.packaged import register
+from senselab_core.kernel.declare import REGISTRY, Registry
 
 for _module in DECLARATION_MODULES:
     importlib.import_module(_module)
@@ -118,3 +120,25 @@ def test_import_rule_refuses(line: str) -> None:
 def test_import_rule_accepts(line: str) -> None:
     """A sibling (absolute or relative), stdlib, numpy and the runtime pass."""
     assert not outside_imports(line, MODULE, SIBLINGS, ALWAYS)
+
+
+def _defines(module: str, name: str) -> bool:
+    """Whether `module`'s source defines `name` at top level, read without importing it."""
+    spec = importlib.util.find_spec(module)
+    assert spec is not None and spec.origin is not None, module
+    tree = ast.parse(Path(spec.origin).read_text("utf-8"))
+    return any(isinstance(n, ast.FunctionDef) and n.name == name for n in tree.body)
+
+
+@pytest.mark.contract
+def test_every_host_backend_serving_a_model_sizes_its_state() -> None:
+    """A host backend that declares models, or that a catalogue entry names, defines `state_bytes` for the budget."""
+    registry = Registry()
+    entries = register(registry).catalogue.entries
+    serving = [
+        b
+        for t in registry.tasks()
+        for b in registry.backends(t.name)
+        if b.env.kind == "host" and (b.models or any(b.task in e.tasks and b.name in e.backends for e in entries))
+    ]
+    assert serving and [b.name for b in serving if not _defines(b.worker, "state_bytes")] == []

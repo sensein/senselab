@@ -5,14 +5,16 @@ A server is this set's own, or, with a registry, a registered service it consume
 
 import collections
 import contextlib
+import gc
 import importlib
+import sys
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
 from senselab_worker.canonical import jcs_dumps
-from senselab_worker.faults import InfrastructureFault
+from senselab_worker.faults import InfrastructureFault, ResourceFault
 from senselab_worker.model_cache import ModelCache, ModelKey
 from senselab_worker.serve import backend_init
 
@@ -22,6 +24,7 @@ from senselab_core.kernel.identity import Attestation, ResolvedModel
 from senselab_core.runtime.call import packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.services import ServiceLease, ServiceRegistry
+from senselab_core.runtime.hardware import measured_budget, probe_hardware
 from senselab_core.runtime.host_worker import HostWorker
 from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.network import network_variables
@@ -136,10 +139,10 @@ _CACHES_LOCK = threading.Lock()
 
 
 def process_cache(budget: int | None) -> ModelCache:
-    """Return this process's model cache of `budget` bytes (None for no budget), made on first use."""
+    """Return this process's model cache of `budget` bytes, made on first use; None measures it (`measured_budget`)."""
     with _CACHES_LOCK:
         if budget not in _CACHES:
-            _CACHES[budget] = ModelCache(budget if budget is not None else 2**63 - 1)
+            _CACHES[budget] = ModelCache(budget if budget is not None else measured_budget(probe_hardware()))
         return _CACHES[budget]
 
 
@@ -152,7 +155,7 @@ class WorkerSet:
     lease of that triple alone, so starts of other servers proceed. Servers are not counted in the bound.
 
     With a `registry`, a server is consumed from the registry while a live service attests what it must, and started
-    otherwise; a set that `provide`s registers each server it starts there instead, and consumes none.
+    otherwise; a set that `provide`s registers each server it starts there, so every later set consumes that one.
     """
 
     def __init__(
@@ -218,8 +221,9 @@ class WorkerSet:
         pooled worker is closed and replaced.
 
         Raises:
-            ValueError: a server backend without `expected`; a budgeted host backend without `state_bytes`.
+            ValueError: a server backend without `expected`; a host backend declaring `models` without `state_bytes`.
             LeaseTimeout, LeaseUnavailable: a server's start lease is busy or cannot be read.
+            ResourceFault: a worker or a server lacked a resource to start or load (`VllmOutOfMemory` among them).
             WorkerLoadFailed: a worker or a server failed to start or load, whatever else it raised
                 (`VllmStartError` and `AttestationMismatch` from a server start among them).
         """
@@ -309,7 +313,7 @@ class WorkerSet:
             )
         budget = profile.model_cache_budget_bytes
         key = host_model_key(backend, env, model, init["device"])
-        size_of = _size_of(backend.worker, budget)
+        size_of = _size_of(backend)
         return _loaded(
             lambda: HostWorker(
                 backend.worker, init=backend_init(init), key=key, cache=process_cache(budget), size_of=size_of
@@ -326,11 +330,12 @@ class WorkerSet:
     ) -> Server:
         """Return the running server of this env, backend and model, starting it (or replacing a dead one) if needed.
 
-        The start holds the lease of this env, backend and model only. A consuming set returns a live registered
-        service attesting `expected` (`ConsumerLease`) instead; a providing set registers what it starts.
+        The start holds the lease of this env, backend and model only. A live registered service attesting `expected`
+        is consumed (`ConsumerLease`) instead; a providing set registers what it starts.
 
         Raises:
-            VllmStartError, LeaseTimeout, LeaseUnavailable: as the server start or its registration.
+            VllmStartError, LeaseUnavailable: as the server start or its registration.
+            LeaseTimeout: a start lease is busy, or another providing set is starting this server.
             AttestationMismatch: the server attests something other than `expected`.
         """
         key = (env.python, backend.name, model.identity)
@@ -347,7 +352,7 @@ class WorkerSet:
                     with self._lock:
                         self._servers.pop(key, None)
                     self._retire(key, server)
-            server = self._consumed(expected) if not self._provide else None
+            server = self._consumed(expected)
             if server is None:
                 server = self._provided_server(key, backend, env, model, profile, expected)
             with self._lock:
@@ -450,6 +455,22 @@ class WorkerSet:
         for _, worker in held:
             worker.close()
 
+    def release(self) -> None:
+        """Free what this set and this process hold; a later checkout loads again.
+
+        The set is closed (`close`), every process model cache dropped, and the device memory torch caches, when
+        torch is loaded, freed.
+        """
+        self.close()
+        with _CACHES_LOCK:
+            caches = list(_CACHES.values())
+        for cache in caches:
+            cache.clear()
+        gc.collect()
+        torch = sys.modules.get("torch")
+        if torch is not None and torch.cuda.is_initialized():
+            torch.cuda.empty_cache()
+
     def close(self) -> None:
         """Stop every pooled worker process and every server, withdrawing what it provides; a checkout starts again."""
         with self._lock:
@@ -485,11 +506,12 @@ def _loaded(start: Callable[[], Started]) -> Started:
 
     Raises:
         LeaseTimeout, LeaseUnavailable: a start lease is busy or cannot be read, as raised.
+        ResourceFault: the start or load lacked a resource, as raised.
         WorkerLoadFailed: whatever else the start or load raised, as its cause.
     """
     try:
         return start()
-    except (LeaseTimeout, LeaseUnavailable):
+    except (LeaseTimeout, LeaseUnavailable, ResourceFault):
         raise
     except Exception as exc:
         failed = WorkerLoadFailed(f"{type(exc).__name__}: {exc}")
@@ -498,11 +520,20 @@ def _loaded(start: Callable[[], Started]) -> Started:
         raise failed from exc
 
 
-def _size_of(module: str, budget: int | None) -> Callable[[object], int]:
-    """Return how a backend's state is sized: 0 bytes with no budget, else by its module's `state_bytes`."""
-    if budget is None:
-        return lambda _: 0
-    size_of = getattr(importlib.import_module(module), "state_bytes", None)
-    if size_of is None:
-        raise ValueError(f"backend module {module!r} defines no state_bytes, so a model-cache budget cannot hold it")
-    return size_of  # type: ignore[no-any-return]
+def _size_of(backend: BackendSpec) -> Callable[[object], int]:
+    """Return how a backend's state counts against the model-cache budget: by its module's `state_bytes`.
+
+    A backend that declares no `models` and no `state_bytes` holds none, and counts 0.
+
+    Raises:
+        ValueError: the backend declares `models` and its module no `state_bytes`.
+    """
+    size_of: Callable[[object], int] | None = getattr(importlib.import_module(backend.worker), "state_bytes", None)
+    if size_of is not None:
+        return size_of
+    if backend.models:
+        raise ValueError(
+            f"backend {backend.name!r} serves models and its module {backend.worker!r} defines no state_bytes, "
+            "so the model-cache budget cannot hold it"
+        )
+    return lambda _: 0

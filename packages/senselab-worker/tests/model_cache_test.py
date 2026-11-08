@@ -34,6 +34,17 @@ def test_model_loaded_once_across_calls() -> None:
 
 
 @pytest.mark.logic
+def test_clear_drops_every_state_and_a_later_get_loads_again() -> None:
+    """After `clear` the cache holds nothing and the next `get_or_load` of a key calls its loader again."""
+    cache, loads = ModelCache(10), list[str]()
+    cache.get_or_load(_key(), _loader(loads, "m"), lambda _: 4)
+    cache.clear()
+    assert cache.keys() == [] and cache.used_bytes == 0
+    cache.get_or_load(_key(), _loader(loads, "again"), lambda _: 4)
+    assert loads == ["m", "again"]
+
+
+@pytest.mark.logic
 def test_cache_evicts_under_budget() -> None:
     """A new entry evicts least recently used entries until the sizes fit the budget; a hit refreshes recency."""
     cache, loads = ModelCache(10), list[str]()

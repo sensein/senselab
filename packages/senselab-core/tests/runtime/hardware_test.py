@@ -11,14 +11,19 @@ from typing import Callable
 
 import pytest
 from senselab_core.runtime.hardware import (
+    DeviceMemory,
     DeviceResolutionError,
     GpuInfo,
     HardwareInfo,
+    device_free_memory,
     device_memory_bytes,
+    device_set,
+    measured_budget,
     memory_bytes,
     numerics_class,
     probe_hardware,
     process_tree,
+    visible_devices,
 )
 
 # ── probe_hardware ───────────────────────────────────────────────────
@@ -203,6 +208,49 @@ def test_numerics_class_cuda_visible_devices_uuid_list() -> None:
     info = _info(H100, A100)
     env = {"CUDA_VISIBLE_DEVICES": "GPU-bbbb-2222"}
     assert numerics_class(info, "cuda:0", "fp32", environ=env)["gpu_architecture"] == "sm_80"
+
+
+@pytest.mark.logic
+def test_visible_devices_and_the_measured_cache_budget_follow_cuda_visible_devices() -> None:
+    """Each visible GPU is named by its uuid; the cache budget is the smallest visible GPU's memory, else the host's."""
+    big, small = (
+        GpuInfo(g.name, m, g.driver, g.compute_capability, g.uuid, g.index) for g, m in ((H100, 80), (A100, 40))
+    )
+    info = _info(big, small)
+    assert visible_devices(info, {}) == ("GPU-aaaa-1111", "GPU-bbbb-2222")
+    assert visible_devices(info, {"CUDA_VISIBLE_DEVICES": "1"}) == ("GPU-bbbb-2222",)
+    assert visible_devices(info, {"CUDA_VISIBLE_DEVICES": ""}) == ()
+    assert visible_devices(_info(GpuInfo("g", 1, None, index=3)), {}) == ("3",)
+    assert measured_budget(info, {}) == 40 and measured_budget(info, {"CUDA_VISIBLE_DEVICES": "0"}) == 80
+    assert measured_budget(_info(), {}) == _info().memory_bytes
+    with pytest.raises(DeviceResolutionError):
+        visible_devices(info, {"CUDA_VISIBLE_DEVICES": "7"})
+
+
+@pytest.mark.logic
+def test_free_device_memory_of_the_named_or_visible_devices() -> None:
+    """Free and total memory per device, of those named or else those visible; empty without nvidia-smi."""
+    smi = _smi("0, GPU-aaaa-1111, 7900, 81559\n1, GPU-bbbb-2222, 40000, 40960\n")
+    both = device_free_memory(None, {}, run=smi)
+    assert both == (
+        DeviceMemory("GPU-aaaa-1111", 7900 * 2**20, 81559 * 2**20),
+        DeviceMemory("GPU-bbbb-2222", 40000 * 2**20, 40960 * 2**20),
+    )
+    assert device_free_memory(None, {"CUDA_VISIBLE_DEVICES": "1"}, run=smi) == both[1:]
+    assert device_free_memory(["GPU-aaaa"], {"CUDA_VISIBLE_DEVICES": "1"}, run=smi) == both[:1]
+    assert device_free_memory(None, {}, run=_raising(FileNotFoundError())) == ()
+    assert device_free_memory(None, {}, run=_raising(subprocess.TimeoutExpired("nvidia-smi", 1))) is None
+    assert device_free_memory(None, {}, run=_smi("0, GPU-a, N/A, 81559\n")) is None
+    with pytest.raises(DeviceResolutionError):
+        device_free_memory(["7"], {}, run=smi)
+
+
+@pytest.mark.logic
+def test_a_device_set_is_named_by_its_entries() -> None:
+    """Given devices or `CUDA_VISIBLE_DEVICES` joined by `-`; `all` when unset, `none` when empty."""
+    assert device_set(["0", "1"]) == "0-1" and device_set([]) == "none"
+    assert device_set(environ={"CUDA_VISIBLE_DEVICES": "GPU-a, GPU-b"}) == "GPU-a-GPU-b"
+    assert device_set(environ={}) == "all" and device_set(environ={"CUDA_VISIBLE_DEVICES": ""}) == "none"
 
 
 @pytest.mark.logic

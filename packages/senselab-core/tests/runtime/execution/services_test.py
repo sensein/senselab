@@ -20,7 +20,7 @@ from senselab_core.kernel.identity import Attestation, ModelRef, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.pool_worker import IDLE_POLLS, PoolWorker
 from senselab_core.runtime.execution.queue import RUN_QUEUES
-from senselab_core.runtime.execution.services import ConsumerLease, ServiceEntry, ServiceRegistry
+from senselab_core.runtime.execution.services import ConsumerLease, ServiceEntry, ServiceRegistry, service_registry
 from senselab_core.runtime.execution.workers import WorkerSet, expected_of
 from senselab_core.runtime.keys import Call, Placement, call_key
 from senselab_core.runtime.locks import LeaseTimeout
@@ -166,6 +166,34 @@ def test_two_consumers_one_server(registry: ServiceRegistry, starts: list[StandI
         for workers in (*consumers, provider):
             workers.close()
     assert registry.lookup(IDENTITY) is None and starts[0].url is None
+
+
+def test_workers_of_one_identity_start_one_server(registry: ServiceRegistry, starts: list[StandIn]) -> None:
+    """Providing and consuming sets of one identity start one server: every set after the first consumes it."""
+    sets = [_provider(registry, starts) for _ in range(3)] + [WorkerSet(1, registry=registry) for _ in range(2)]
+    try:
+        served = [workers.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY) for workers in sets]
+        assert len(starts) == 1 and served[0] is starts[0]
+        assert all(isinstance(s, ConsumerLease) and s.url == starts[0].url for s in served[1:])
+        assert registry.live_consumers(IDENTITY) == len(sets) - 1
+    finally:
+        for workers in reversed(sets):
+            workers.close()
+
+
+def test_each_device_set_registers_its_own_server(tmp_path: Path, starts: list[StandIn]) -> None:
+    """Providers on two devices start two servers, two on one device one; a consumer binds to its card's."""
+    profile = PROFILE.model_copy(update={"env_roots": {**PROFILE.env_roots, "server": str(tmp_path / "servers")}})
+    on = {d: service_registry(profile, {"CUDA_VISIBLE_DEVICES": d}) for d in ("0", "1")}
+    sets = [_provider(on["0"], starts), _provider(on["1"], starts), _provider(on["0"], starts)]
+    consumer = WorkerSet(1, registry=on["1"])
+    try:
+        served = [w.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY) for w in (*sets, consumer)]
+        assert len(starts) == 2 and on["0"].root != on["1"].root
+        assert served[2].url == starts[0].url and served[3].url == starts[1].url
+    finally:
+        for workers in (consumer, *reversed(sets)):
+            workers.close()
 
 
 def test_service_exits_after_idle_consumers(tmp_path: Path, registry: ServiceRegistry, starts: list[StandIn]) -> None:

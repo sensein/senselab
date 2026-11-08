@@ -1,10 +1,10 @@
 """Substrates: what starts the pool workers that serve a run's queues, and `scale`, which sizes them from queue depth.
 
 A `Substrate` starts workers for a queue, lists those alive, counts them and stops given ones. `Local` runs each worker
-as a `senselab execute` process under the supervisor that launched it; `Slurm` submits one `sbatch` job per worker, with
-the class's partition, gres, CPUs, memory and time, named by plan hash, run, attempt, epoch and a token of its own, and
-never on an excluded node. A queue is named by its resource class, with `#<model identity>` for a resident model;
-every worker serves one queue.
+as a `senselab execute` process under the supervisor that launched it, a `cuda` class's on a visible device of its own;
+`Slurm` submits one `sbatch` job per worker, with the class's partition, gres, CPUs, memory and time, named by plan
+hash, run, attempt, epoch and a token of its own, and never on an excluded node. A queue is named by its resource
+class, with `#<model identity>` for a resident model; every worker serves one queue.
 
 `scale` is called by the coordinator each round, with one `live()` listing: per queue, the workers its waiting jobs
 (`Queue.work`) want, as the coordinator sizes them, within the class's `max_workers` and the QOS CPU cap over the
@@ -27,15 +27,15 @@ import threading
 import time
 import uuid
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
-from senselab_core.runtime.execution.services import is_service_class
 from senselab_core.runtime.execution.supervisor import Supervisor, current
-from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands
+from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands, is_service_class
+from senselab_core.runtime.hardware import HardwareInfo, probe_hardware, visible_devices
 from senselab_core.runtime.profiles import ExecutionProfile, expand
 
 logger = logging.getLogger("senselab")
@@ -172,12 +172,15 @@ class ExternalWorkers:
 class Local:
     """A `Substrate` of local processes: each worker is `command` with `--classes <queue>`, in its own group.
 
-    At most `max_workers` are alive at once, across queues. A process is launched through the supervisor in force
-    when it starts, and stopped and released through that one.
+    At most `max_workers` are alive at once, across queues. A worker of a `cuda` class (`cuda`, by name) is given one
+    of `devices` no other live worker holds, as its `CUDA_VISIBLE_DEVICES`, so no more run than there are devices. A
+    process is launched through the supervisor in force when it starts, and stopped and released through that one.
     """
 
-    def __init__(self, max_workers: int, *, command: Sequence[str]) -> None:
-        """Run at most `max_workers` workers, each `command` plus `--classes <queue>`.
+    def __init__(
+        self, max_workers: int, *, command: Sequence[str], cuda: Collection[str] = (), devices: Sequence[str] = ()
+    ) -> None:
+        """Run at most `max_workers` workers, each `command` plus `--classes <queue>`; `cuda` classes on `devices`.
 
         Raises:
             ValueError: `max_workers` is below 1.
@@ -186,40 +189,51 @@ class Local:
             raise ValueError(f"a local substrate runs at least one worker, got {max_workers}")
         self.max_workers = max_workers
         self.command = list(command)
-        self._procs: dict[str, tuple[str, subprocess.Popen[bytes], Supervisor]] = {}
+        self.cuda = frozenset(cuda)
+        self.devices = tuple(devices)
+        self._procs: dict[str, _Process] = {}
         self._lock = threading.Lock()
 
-    def _alive(self) -> dict[str, tuple[str, "subprocess.Popen[bytes]", Supervisor]]:
-        for key, (_, proc, supervisor) in list(self._procs.items()):
-            if proc.poll() is not None:
-                supervisor.released(proc.pid)
+    def _alive(self) -> dict[str, "_Process"]:
+        for key, held in list(self._procs.items()):
+            if held.proc.poll() is not None:
+                held.supervisor.released(held.proc.pid)
                 del self._procs[key]
         return self._procs
 
     def start(self, resource_class: str, count: int) -> list[WorkerHandle]:
-        """Start workers of `resource_class`, as many as `count` and the room under `max_workers` allow.
+        """Start workers of `resource_class`, as many as `count`, the room under `max_workers` and free devices allow.
 
         Raises:
-            LocalError: a process could not be launched; those launched before it are kept and listed.
+            LocalError: a process could not be launched, those launched before it kept and listed; or `resource_class`
+                is a `cuda` class and no device is visible.
         """
+        if class_of(resource_class) in self.cuda and not self.devices:
+            raise LocalError(f"no device is visible to run {resource_class!r} on (CUDA_VISIBLE_DEVICES, nvidia-smi)")
         with self._lock:
-            room = self.max_workers - len(self._alive())
+            alive = self._alive()
+            room = self.max_workers - len(alive)
+            held = {p.device for p in alive.values()}
+            free: list[str | None] = [d for d in self.devices if d not in held]
+            if class_of(resource_class) not in self.cuda:
+                free = [None] * max(0, room)
             handles: list[WorkerHandle] = []
-            for _ in range(max(0, min(count, room))):
+            for device in free[: max(0, min(count, room))]:
                 supervisor = current()
                 argv = [*self.command, "--classes", resource_class]
+                env = None if device is None else {**os.environ, "CUDA_VISIBLE_DEVICES": device}
                 try:
-                    proc = supervisor.popen(argv)
+                    proc = supervisor.popen(argv, env=env)
                 except OSError as err:
                     raise LocalError(f"could not launch {shlex.join(argv)}: {err}", handles) from err
-                self._procs[str(proc.pid)] = (resource_class, proc, supervisor)
+                self._procs[str(proc.pid)] = _Process(resource_class, proc, supervisor, device)
                 handles.append(WorkerHandle(resource_class, str(proc.pid)))
             return handles
 
     def live(self) -> list[WorkerHandle]:
         """Return the workers alive."""
         with self._lock:
-            return [WorkerHandle(queue, key) for key, (queue, _, _) in self._alive().items()]
+            return [WorkerHandle(p.queue, key) for key, p in self._alive().items()]
 
     def running(self, resource_class: str) -> int:
         """Return the workers of `resource_class` alive."""
@@ -229,16 +243,26 @@ class Local:
         """SIGTERM each worker of `handles`, which commits what finished; kill one that outlasts `STOP_GRACE_S`."""
         with self._lock:
             found = [self._procs.pop(h.id) for h in handles if h.id in self._procs]
-        for _, proc, _ in found:
-            if proc.poll() is None:
-                proc.terminate()
-        for _, proc, supervisor in found:
+        for held in found:
+            if held.proc.poll() is None:
+                held.proc.terminate()
+        for held in found:
             try:
-                proc.wait(STOP_GRACE_S)
+                held.proc.wait(STOP_GRACE_S)
             except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-            supervisor.released(proc.pid)
+                held.proc.kill()
+                held.proc.wait()
+            held.supervisor.released(held.proc.pid)
+
+
+@dataclass(frozen=True)
+class _Process:
+    """A local worker: its queue, process, the supervisor it was launched through, and its device (None for none)."""
+
+    queue: str
+    proc: "subprocess.Popen[bytes]"
+    supervisor: Supervisor
+    device: str | None
 
 
 def _minutes(seconds: float) -> int:
@@ -682,16 +706,25 @@ def profile_argument(profile: ExecutionProfile, run_dir: Path) -> str:
     return str(path)
 
 
-def substrate_of(profile: ExecutionProfile, run_dir: Path, plan_hash: str) -> Substrate:
+def substrate_of(
+    profile: ExecutionProfile, run_dir: Path, plan_hash: str, *, hardware: HardwareInfo | None = None
+) -> Substrate:
     """Return the substrate `profile` names for the run in `run_dir` of plan `plan_hash`.
 
-    `local` is `Local` over the sum of the classes' `max_workers`; `slurm` is `Slurm` over the profile's classes,
-    QOS cap and excluded nodes, logging under `<run dir>/slurm`.
+    `local` is `Local` over the sum of the classes' `max_workers`, its `cuda` classes on the GPUs this process sees
+    (`hardware`, probed when None); `slurm` is `Slurm` over the profile's classes, QOS cap and excluded nodes, logging
+    under `<run dir>/slurm`.
     """
     command = worker_command(run_dir, profile_argument(profile, run_dir))
     spec = profile.substrate
     if spec.kind == "local":
-        return Local(sum(c.max_workers for c in profile.resource_classes.values()), command=command)
+        classes = profile.resource_classes
+        return Local(
+            sum(c.max_workers for c in classes.values()),
+            command=command,
+            cuda=[name for name, c in classes.items() if c.device == "cuda"],
+            devices=visible_devices(hardware or probe_hardware()),
+        )
     if spec.commands is None:
         raise ValueError("a slurm substrate needs its commands settings")
     return Slurm(

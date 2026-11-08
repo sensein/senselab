@@ -77,6 +77,11 @@ class ModelCache:
         with self._lock:
             return sum(size for _, size in self._entries.values())
 
+    def clear(self) -> None:
+        """Drop every cached state; the sizes of the keys loaded stay known."""
+        with self._lock:
+            self._entries.clear()
+
     def keys(self) -> list[ModelKey]:
         """The cached keys, least recently used first."""
         with self._lock:

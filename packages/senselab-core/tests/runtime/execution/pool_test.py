@@ -286,8 +286,8 @@ def test_resource_fault_moves_to_larger_class_uncharged(tmp_path: Path) -> None:
 
 
 @pytest.mark.contract
-def test_broken_env_reported_once(tmp_path: Path) -> None:
-    """Two infrastructure faults of one env break it: reported once, held on its queue, no job failed or dead."""
+def test_broken_env_reported_once(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Two infrastructure faults of one env break it: reported once with its cause, held, no job failed or dead."""
     profile = _profile(content_attempts=2, infrastructure_replacements=2, resource_replacements=0)
     placed, values, store, workers = _stack(tmp_path, profile, ["one", "two", "three"])
     workers.act = lambda fragment: LOST
@@ -298,11 +298,14 @@ def test_broken_env_reported_once(tmp_path: Path) -> None:
         for handle in handles:
             with pytest.raises(QueueHeld) as raised:
                 list(follow(pool, handle))
-            assert (raised.value.queue, raised.value.failures) == ("cpu", 2)
+            assert (raised.value.queue, raised.value.failures, raised.value.reason) == ("cpu", 2, LOST.message)
+            assert LOST.message in str(raised.value)
     finally:
         workers.stop()
     [broken] = pool.broken.values()
     assert broken.env == "host" and broken.failures == 2 and broken.fault == LOST
+    [logged] = [r.getMessage() for r in caplog.records if "is broken" in r.getMessage()]
+    assert logged.endswith(f": {LOST.message}")
     events = read_events(tmp_path / "run")
     assert [e.kind for e in events if e.kind == "failed"] == ["failed", "failed"]
     assert status_from(events).counts["failed"] == 0
@@ -310,7 +313,7 @@ def test_broken_env_reported_once(tmp_path: Path) -> None:
     queue = pool.queues.queue("cpu")
     assert queue.held("host") == pool.epoch and queue.claim("w") is None
     assert not any((tmp_path / "run").glob("dead/*"))
-    with pytest.raises(QueueHeld):
+    with pytest.raises(QueueHeld, match=LOST.message):
         pool.submit(node_fragment(placed, admission, elements=[(0,)]))
 
 

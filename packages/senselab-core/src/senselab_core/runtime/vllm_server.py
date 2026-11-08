@@ -26,7 +26,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
@@ -34,11 +34,13 @@ from types import TracebackType
 from typing import IO, Any
 
 from senselab_worker.digest import identity_digest
+from senselab_worker.faults import ResourceFault
 
 from senselab_core.kernel.identity import Attestation, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.supervisor import current
 from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.hardware import DeviceMemory, device_free_memory, device_set
 from senselab_core.runtime.launch import Launch, launch
 from senselab_core.runtime.locks import TIMEOUT_S, Lease, LeaseUnavailable
 from senselab_core.runtime.network import Network, network_variables
@@ -58,9 +60,15 @@ REQUEST_TIMEOUT_S = 600.0
 URL_SCHEMES = ("http", "https", "data", "file")
 """Schemes an image or video part may name directly; anything else is read as a local path."""
 
-START_ERROR_KINDS = ("exited", "timeout", "version", "model")
+START_ERROR_KINDS = ("exited", "timeout", "version", "model", "memory")
 """Why a server failed to start: it exited before it was healthy, was not healthy in time, its ``/version`` or
-``/v1/models`` probe failed, or it serves another model."""
+``/v1/models`` probe failed, it serves another model, or its device lacked the memory it asks for."""
+
+ERROR_LINE = re.compile(r"\w(Error|Exception)\b")
+"""A log line naming a raised error."""
+
+OUT_OF_MEMORY = re.compile(r"OutOfMemoryError|Free memory on device .* is less than desired GPU memory utilization")
+"""vLLM's and torch's messages for a device without the memory a server asks for."""
 
 ERROR_DETAIL_CHARS = 300
 """The most characters of a server's error message a raised error keeps."""
@@ -90,6 +98,10 @@ STOP_TIMEOUT_S = 60.0
 _NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+MemoryProbe = Callable[[Sequence[str] | None], Sequence[DeviceMemory] | None]
+"""Reads the free and total memory of the given devices (None: those inherited); empty with no GPU, None unreadable."""
+
+
 class VllmStartError(RuntimeError):
     """A server that did not start, with the reason in `kind` (one of `START_ERROR_KINDS`)."""
 
@@ -103,6 +115,14 @@ class VllmStartError(RuntimeError):
             raise ValueError(f"unknown start error kind {kind!r}; known: {START_ERROR_KINDS}")
         super().__init__(f"{kind}: {message}")
         self.kind = kind
+
+
+class VllmOutOfMemory(VllmStartError, ResourceFault):
+    """A server that did not start because its device lacked the memory it asks for: a resource fault."""
+
+    def __init__(self, message: str) -> None:
+        """Name the failure, of kind `memory`."""
+        super().__init__("memory", message)
 
 
 class AttestationMismatch(RuntimeError):
@@ -258,12 +278,12 @@ class VllmServer:
     """One ``vllm serve`` of a pinned model in a built `Env.server` env, listening on loopback while open.
 
     On entry it takes a `Lease` on ``<start_lock_dir>/vllm-start-<host>-<devices>``, starts ``<env>/bin/vllm serve``
-    in its own session (a hub model with ``--revision`` and ``--tokenizer-revision`` set to its commit;
-    ``CUDA_VISIBLE_DEVICES`` set to `devices` when given), waits for ``/health`` and releases the lease; the lease
-    beats while it is held. A start whose lease is lost before the launch is refused; one lost after it is logged,
-    and the healthy server is kept, since the lease only orders starts. It then
-    reads ``/version`` and checks that ``/v1/models`` serves the model. On exit, and on any start failure, the
-    server's process group gets SIGTERM, then SIGKILL.
+    in its own session once each of its devices has `gpu_memory_utilization` of its memory free (a hub model with
+    ``--revision`` and ``--tokenizer-revision`` set to its commit; ``CUDA_VISIBLE_DEVICES`` set to `devices` when
+    given), waits for ``/health`` and releases the lease; the lease beats while it is held. A start whose lease is lost
+    before the launch is refused; one lost after it is logged, and the healthy server is kept, since the lease only
+    orders starts. It then reads ``/version`` and checks that ``/v1/models`` serves the model. On exit, and on any
+    start failure, the server's process group gets SIGTERM, then SIGKILL.
 
     Attributes:
         label: The model as a message names it: the hub reference, or a local model's identity prefix, never a path.
@@ -284,6 +304,7 @@ class VllmServer:
         devices: Sequence[int | str] | None = None,
         log_dir: Path | None = None,
         network: Network = "online",
+        memory: MemoryProbe = device_free_memory,
     ) -> None:
         """Describe the server; nothing starts until the context is entered.
 
@@ -300,6 +321,7 @@ class VllmServer:
                 is named by the inherited ``CUDA_VISIBLE_DEVICES`` (``all`` if unset).
             log_dir: Where the server's output goes, one mode-600 file per server; the owner's stderr when None.
             network: The profile's `network`; `offline` gives the server `OFFLINE_VARIABLES`.
+            memory: Reads the free and total memory of the server's devices (None: those it inherits).
 
         Raises:
             ValueError: `model` is unpinned or a url model, or `settings` is not exactly the known keys.
@@ -310,6 +332,8 @@ class VllmServer:
         self.args = server_args(settings)
         self.variables = server_variables(settings)
         self._digest = config_digest(settings)
+        self.memory_share = float(settings["gpu_memory_utilization"])
+        self._memory = memory
         self.executable = Path(env.python).parent / "vllm"
         self.devices = None if devices is None else [str(device) for device in devices]
         self.start_lock_dir = Path(start_lock_dir)
@@ -324,6 +348,7 @@ class VllmServer:
         self._server: subprocess.Popen[bytes] | None = None
         self._supervisor = current()
         self._log: IO[bytes] | None = None
+        self.log_path: Path | None = None
 
     @property
     def config_digest(self) -> str:
@@ -333,18 +358,14 @@ class VllmServer:
     @property
     def lock_path(self) -> Path:
         """The start lease's resource, shared by every server on this host's devices."""
-        if self.devices is None:
-            devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all").replace(",", "-") or "none"
-        else:
-            devices = "-".join(self.devices) or "none"
-        return self.start_lock_dir / f"vllm-start-{socket.gethostname()}-{devices}"
+        return self.start_lock_dir / f"vllm-start-{socket.gethostname()}-{device_set(self.devices)}"
 
     def __enter__(self) -> "VllmServer":
         """Start the server and attest it.
 
         Raises:
             VllmStartError: The server exited before it was healthy, was not healthy in time, or serves another
-                model.
+                model; `VllmOutOfMemory` when a device lacked the memory it asks for.
             LeaseTimeout, LeaseUnavailable: as `Lease`; `LeaseUnavailable` also when the start lease was lost before
                 the launch.
         """
@@ -356,6 +377,7 @@ class VllmServer:
             with held, held.keep_alive(self.lease.renew_fraction) as state:
                 if state.lost or not held.prove():
                     raise LeaseUnavailable(held.path, f"the start lease {held.path} was lost before the server started")
+                self._check_memory()
                 self._launch()
                 self._await_health()
                 if state.lost:
@@ -418,7 +440,7 @@ class VllmServer:
         sink: int | IO[bytes] = 2
         if self.log_dir is not None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
-            path = self.log_dir / f"vllm-{socket.gethostname()}-{os.getpid()}-{port}.log"
+            path = self.log_path = self.log_dir / f"vllm-{socket.gethostname()}-{os.getpid()}-{port}.log"
             self._log = os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "wb")
             sink = self._log
         self._supervisor = current()
@@ -437,10 +459,37 @@ class VllmServer:
         while not _healthy(self.url):
             code = self._server.poll()
             if code is not None:
-                raise VllmStartError("exited", f"vllm serve exited with {code} before it was healthy")
+                raise self._start_error("exited", f"vllm serve exited with {code} before it was healthy")
             if time.monotonic() > deadline:
-                raise VllmStartError("timeout", f"vllm serve was not healthy within {self.startup_timeout_s:g}s")
+                raise self._start_error("timeout", f"vllm serve was not healthy within {self.startup_timeout_s:g}s")
             time.sleep(POLL_S)
+
+    def _check_memory(self) -> None:
+        """Refuse to launch on a device whose free memory is below `gpu_memory_utilization` of its total.
+
+        Raises:
+            VllmOutOfMemory: a device is short, with its measured free and total bytes.
+        """
+        short = [d for d in self._memory(self.devices) or () if d.free_bytes < self.memory_share * d.total_bytes]
+        if short:
+            figures = "; ".join(f"{d.device} has {d.free_bytes} of {d.total_bytes} bytes free" for d in short)
+            raise VllmOutOfMemory(f"{figures}, below gpu_memory_utilization {self.memory_share:g}")
+
+    def _start_error(self, kind: str, message: str) -> VllmStartError:
+        """Return the start failure `kind`, its message followed by an error line of the log and the log's path.
+
+        The line is the last error saying the device lacked memory, which makes the failure `VllmOutOfMemory`, else
+        the last error line, else the last line.
+        """
+        if self._log is None or self.log_path is None:
+            return VllmStartError(kind, message)
+        self._log.flush()
+        lines = [line.strip() for line in self.log_path.read_text(errors="replace").splitlines() if line.strip()]
+        errors = [line for line in lines if ERROR_LINE.search(line)]
+        memory = [line for line in errors if OUT_OF_MEMORY.search(line)]
+        line = (memory or errors or lines or [""])[-1][:ERROR_DETAIL_CHARS]
+        detailed = f"{message}: {line} [log: {self.log_path}]"
+        return VllmOutOfMemory(detailed) if memory else VllmStartError(kind, detailed)
 
     def _attest(self) -> Attestation:
         version = _probe(f"{self.url}/version", "version")

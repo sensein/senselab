@@ -14,7 +14,7 @@ import resource
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Collection, Final, Iterator, Mapping, Optional
+from typing import Callable, Collection, Final, Iterator, Mapping, Optional, Sequence
 
 logger = logging.getLogger("senselab")
 
@@ -27,6 +27,8 @@ _NVIDIA_SMI_GPU_QUERY = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS},comput
 _NVIDIA_SMI_GPU_QUERY_NO_CAP = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS}", _NVIDIA_SMI_FORMAT]
 _CHIP_QUERY = ["sysctl", "-n", "machdep.cpu.brand_string"]
 _APPS_FIELDS = ("pid", "used_memory")
+_FREE_FIELDS = ("index", "uuid", "memory.free", "memory.total")
+_NVIDIA_SMI_FREE_QUERY = ["nvidia-smi", f"--query-gpu={','.join(_FREE_FIELDS)}", _NVIDIA_SMI_FORMAT]
 _NVIDIA_SMI_APPS_QUERY = ["nvidia-smi", f"--query-compute-apps={','.join(_APPS_FIELDS)}", _NVIDIA_SMI_FORMAT]
 _STAT_PPID = 1
 """The field index of the parent pid in `/proc/<pid>/stat` after the parenthesised command name."""
@@ -175,8 +177,13 @@ def probe_hardware(*, run: Callable[[list[str]], str] = _run) -> HardwareInfo:
     )
 
 
-def _visible_gpus(info: HardwareInfo, environ: Mapping[str, str]) -> list[GpuInfo]:
-    """The GPUs torch would enumerate: all of them, or those ``CUDA_VISIBLE_DEVICES`` names, in its order."""
+def visible_gpus(info: HardwareInfo, environ: Optional[Mapping[str, str]] = None) -> list[GpuInfo]:
+    """The GPUs torch would enumerate: all of them, or those ``CUDA_VISIBLE_DEVICES`` names, in its order.
+
+    Raises:
+        DeviceResolutionError: an entry of ``CUDA_VISIBLE_DEVICES`` names no GPU, or several.
+    """
+    environ = os.environ if environ is None else environ
     raw = environ.get("CUDA_VISIBLE_DEVICES")
     if raw is None:
         return list(info.gpus)
@@ -192,6 +199,77 @@ def _visible_gpus(info: HardwareInfo, environ: Mapping[str, str]) -> list[GpuInf
             raise DeviceResolutionError(f"CUDA_VISIBLE_DEVICES entry {entry!r} matches {len(matches)} GPUs")
         visible.append(matches[0])
     return visible
+
+
+def visible_devices(info: HardwareInfo, environ: Optional[Mapping[str, str]] = None) -> tuple[str, ...]:
+    """Return the ``CUDA_VISIBLE_DEVICES`` entry naming each GPU this process sees: its uuid, else its index.
+
+    Raises:
+        DeviceResolutionError: an entry of ``CUDA_VISIBLE_DEVICES`` names no GPU, or several.
+    """
+    return tuple(g.uuid or str(g.index) for g in visible_gpus(info, environ) if g.uuid or g.index is not None)
+
+
+def device_set(devices: Optional[Sequence[str]] = None, environ: Optional[Mapping[str, str]] = None) -> str:
+    """Name devices: `devices`, else ``CUDA_VISIBLE_DEVICES``'s entries, joined by `-`; `all` unset, `none` empty."""
+    if devices is None:
+        raw = (os.environ if environ is None else environ).get("CUDA_VISIBLE_DEVICES")
+        devices = ["all"] if raw is None else [e.strip() for e in raw.split(",") if e.strip()]
+    return "-".join(devices) or "none"
+
+
+@dataclass(frozen=True)
+class DeviceMemory:
+    """One GPU's free and total memory now, in bytes, named by its ``CUDA_VISIBLE_DEVICES`` entry."""
+
+    device: str
+    free_bytes: int
+    total_bytes: int
+
+
+def device_free_memory(
+    devices: Optional[Sequence[str]] = None,
+    environ: Optional[Mapping[str, str]] = None,
+    *,
+    run: Callable[[list[str]], str] = _run,
+) -> Optional[tuple[DeviceMemory, ...]]:
+    """Return the free and total memory of `devices` (``CUDA_VISIBLE_DEVICES`` entries; None: those this process sees).
+
+    Read from ``nvidia-smi --query-gpu``; empty without ``nvidia-smi``; None, logged, where it fails or its output
+    cannot be parsed.
+
+    Raises:
+        DeviceResolutionError: a device names no GPU, or several.
+    """
+    try:
+        output = run(_NVIDIA_SMI_FREE_QUERY)
+    except FileNotFoundError:
+        return ()
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("device memory unreadable: %s", exc)
+        return None
+    rows = [[f.strip() for f in line.split(",")] for line in output.splitlines() if line.strip()]
+    if any(len(r) != len(_FREE_FIELDS) or not (r[0].isdigit() and r[2].isdigit() and r[3].isdigit()) for r in rows):
+        logger.warning("device memory unreadable: %r", output)
+        return None
+    gpus = [
+        GpuInfo(name="", memory_bytes=int(r[3]) * _MIB, driver=None, uuid=r[1] or None, index=int(r[0])) for r in rows
+    ]
+    free = {int(r[0]): int(r[2]) * _MIB for r in rows}
+    environ = os.environ if environ is None else environ
+    named = environ if devices is None else {"CUDA_VISIBLE_DEVICES": ",".join(devices)}
+    info = HardwareInfo(cpu_count=1, memory_bytes=0, gpus=tuple(gpus), apple_silicon=False, platform="")
+    return tuple(
+        DeviceMemory(g.uuid or str(g.index), free[g.index], g.memory_bytes)
+        for g in visible_gpus(info, named)
+        if g.index is not None
+    )
+
+
+def measured_budget(info: HardwareInfo, environ: Optional[Mapping[str, str]] = None) -> int:
+    """Return the bytes a process's model cache may hold here: its smallest visible GPU's memory, else the host's."""
+    gpus = visible_gpus(info, environ)
+    return min(g.memory_bytes for g in gpus) if gpus else info.memory_bytes
 
 
 def numerics_class(
@@ -214,7 +292,7 @@ def numerics_class(
     if kind == "cuda":
         if index and not index.isdigit():
             raise DeviceResolutionError(f"unparseable device {device!r}")
-        visible = _visible_gpus(info, os.environ if environ is None else environ)
+        visible = visible_gpus(info, environ)
         position = int(index) if index else 0
         if position >= len(visible):
             raise DeviceResolutionError(f"{device!r} is out of range: {len(visible)} visible GPU(s)")

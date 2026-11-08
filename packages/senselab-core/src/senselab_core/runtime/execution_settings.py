@@ -14,6 +14,15 @@ PositiveInt = Annotated[int, Field(ge=1)]
 PositiveSeconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 
+SERVICE_CLASS = "svc"
+"""The kind of a resource class whose workers hold services: `svc:<id>`."""
+
+
+def is_service_class(name: str) -> bool:
+    """Whether the resource class or queue `name` is a service class, `svc:<id>[#<model identity>]`."""
+    return name.partition(":")[0] == SERVICE_CLASS
+
+
 class ResourceClass(Frozen):
     """A class of worker grants: the device and, for a GPU, its type; what each worker is granted; the caps.
 
@@ -48,7 +57,7 @@ class ResourceClass(Frozen):
     def matches(self, name: str) -> bool:
         """Whether `name` fits this device: `cpu[:v]`, `mps[:v]`, `gpu` or `gpu:<gpu_type>[:v]`, or `svc:<id>`."""
         kind, _, rest = name.partition(":")
-        if kind == "svc":
+        if kind == SERVICE_CLASS:
             return True
         if kind == "gpu":
             if self.device != "cuda":

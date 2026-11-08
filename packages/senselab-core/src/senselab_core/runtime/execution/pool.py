@@ -61,6 +61,7 @@ from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
     BrokenClass,
     Fleet,
+    Local,
     Slurm,
     Substrate,
     SubstrateError,
@@ -355,7 +356,9 @@ class Pool:
         queue = self.queues.queue(name)
         queue.unhold(before=self.epoch)
         if queue.held(env) is not None:
-            raise QueueHeld(name, env, self._env_failures(env))
+            failures = self._env_failures(env)
+            reason = failures[-1].message if failures else "held by an earlier coordinator of this epoch or a newer one"
+            raise QueueHeld(name, env, len(failures), reason)
         unit = self._unit(fragment)
         measure = self._measure(unit, name)
         quantum = 1
@@ -407,10 +410,15 @@ class Pool:
         """Return `found` per item, by device memory on a `cuda` class."""
         return measure_of(found, on_device=self.profile.resource_classes[class_of(queue)].device == "cuda")
 
+    def _grant(self, queue: str, *, on_device: bool = False) -> Grant:
+        """Return the grant of `queue`'s resource class; a local substrate's workers share its visible devices."""
+        devices = len(self.substrate.devices) if isinstance(self.substrate, Local) else None
+        resource = self.profile.resource_classes[class_of(queue)]
+        return Grant.of(resource, self.profile.pool, on_device=on_device, devices=devices)
+
     def _sizing(self, queue: str, measure: Measure, work: int = 0) -> Sizing:
         """Return the sizing of `measure` on `queue`'s resource class for `work` waiting jobs."""
-        grant = Grant.of(self.profile.resource_classes[class_of(queue)], self.profile.pool, on_device=measure.on_device)
-        return size(measure, grant, self.profile.sizing, work=work)
+        return size(measure, self._grant(queue, on_device=measure.on_device), self.profile.sizing, work=work)
 
     def _calibration_part(
         self, unit: Unit, queue: str, fragment: PlanFragment
@@ -439,7 +447,7 @@ class Pool:
         with self._lock:
             measures = [self._sized[u] for u in self._queue_units.get(queue, ()) if u in self._sized]
         if not measures:
-            return min(self.profile.sizing.calibration_workers, work)
+            return min(self.profile.sizing.calibration_workers, work, self._grant(queue).worker_bound(None))
         return self._sizing(queue, max(measures, key=lambda m: m.s_per_item), work).workers
 
     def _calibrate(self) -> None:
@@ -713,21 +721,22 @@ class Pool:
                 return
         yield self._dead(job, key, fault)
 
-    def _env_failures(self, env: str) -> int:
-        """Return the infrastructure and gap failures of `env` this epoch's events on disk record."""
-        return sum(
-            1
+    def _env_failures(self, env: str) -> list[FaultRecord]:
+        """Return the infrastructure and gap failures of `env` this epoch's events on disk record, in order."""
+        return [
+            e.failure
             for e in read_events(self.run_dir)
             if e.kind == "failed"
             and e.epoch == self.epoch
             and e.env == env
             and e.failure is not None
             and (e.failure.gap or e.failure.fault == "infrastructure")
-        )
+        ]
 
     def _held(self, flight: _Flight) -> QueueHeld:
         env = flight.fragment.placement.env
-        return QueueHeld(flight.queue, env, self.broken[env].failures)
+        broken = self.broken[env]
+        return QueueHeld(flight.queue, env, broken.failures, broken.fault.message)
 
     def _infrastructure(self, flight: _Flight, job: JobRef, key: str, fault: FaultRecord) -> bool:
         """Count an infrastructure fault of `flight`'s env this epoch; return False once the env is broken and held.
@@ -736,7 +745,7 @@ class Pool:
         """
         env, budget = flight.fragment.placement.env, self.profile.faults.infrastructure_replacements
         with self._lock:
-            failures = self._env_failures(env)
+            failures = len(self._env_failures(env))
             if env not in self.broken and failures < budget:
                 self._failed(job, key, fault, env)
                 failures += 1
@@ -747,7 +756,9 @@ class Pool:
                 self.broken[env] = BrokenEnv(env=env, fault=fault, failures=failures)
         self.queues.queue(flight.queue).hold(self.epoch, env)
         if not reported:
-            logger.error("env %s is broken after %d infrastructure faults; it is held", env, failures)
+            logger.error(
+                "env %s is broken after %d infrastructure faults; it is held: %s", env, failures, fault.message
+            )
         return False
 
     def _failed(self, job: JobRef, key: str, fault: FaultRecord, env: str) -> None:

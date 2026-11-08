@@ -225,15 +225,18 @@ class Status(str, Enum):
 class QueueHeld(RuntimeError):
     """An executor holds the queue of a fragment's jobs: env `env` failed `failures` times by infrastructure faults.
 
-    The jobs are not failed; they wait in the queue for a later attempt.
+    The jobs are not failed; they wait in the queue for a later attempt. `reason` is the latest fault's message.
     """
 
-    def __init__(self, queue: str, env: str, failures: int) -> None:
-        """Name the queue, the env and its failures."""
-        super().__init__(f"queue {queue!r} is held: env {env!r} failed {failures} times by infrastructure faults")
+    def __init__(self, queue: str, env: str, failures: int, reason: str) -> None:
+        """Name the queue, the env, its failures and the latest cause."""
+        super().__init__(
+            f"queue {queue!r} is held: env {env!r} failed {failures} times by infrastructure faults: {reason}"
+        )
         self.queue = queue
         self.env = env
         self.failures = failures
+        self.reason = reason
 
 
 class WorkersBroken(QueueHeld):
@@ -244,7 +247,7 @@ class WorkersBroken(QueueHeld):
 
     def __init__(self, queue: str, resource_class: str, failures: int, reason: str) -> None:
         """Name the queue, the class (or `*`), its failures and the latest cause."""
-        super().__init__(queue, f"workers:{resource_class}", failures)
+        super().__init__(queue, f"workers:{resource_class}", failures, reason)
         RuntimeError.__init__(
             self, f"queue {queue!r} is held: workers of {resource_class!r} failed to start {failures} times: {reason}"
         )

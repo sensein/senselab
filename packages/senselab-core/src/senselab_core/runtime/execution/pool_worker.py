@@ -40,7 +40,7 @@ from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_k
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool import report, run_plan
 from senselab_core.runtime.execution.queue import Claim, QueueSet
-from senselab_core.runtime.execution.services import is_service_class, service_registry
+from senselab_core.runtime.execution.services import service_registry
 from senselab_core.runtime.execution.substrates import (
     EXIT_UNREACHABLE,
     StoreUnreachable,
@@ -50,6 +50,7 @@ from senselab_core.runtime.execution.substrates import (
 )
 from senselab_core.runtime.execution.supervisor import Supervisor
 from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.execution_settings import is_service_class
 from senselab_core.runtime.hardware import device_memory_bytes, memory_bytes, process_tree
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import LeaseTimeout
