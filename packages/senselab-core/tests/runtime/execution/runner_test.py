@@ -21,7 +21,7 @@ from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_pack
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.events import EventLog, read_events
+from senselab_core.runtime.execution.events import TERMINAL, EventLog, read_events, status_from
 from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status, follow
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.workers import WorkerSet
@@ -580,3 +580,52 @@ def test_the_submitter_is_built_over_a_senselab_store_with_no_readonly_caches(tm
     submitter = runner._submitter(run, store, ["cpu"])
     assert type(submitter.store) is runner.SenselabStore
     assert submitter.readonly_caches is None and not hasattr(submitter.store, "readonly_caches")
+
+
+def _terminal(events: Sequence[Any], node: str) -> list[Any]:
+    """Return the terminal events of `node`'s jobs in element order."""
+    ended = [e for e in events if e.node == node and e.job is not None and e.kind in TERMINAL]
+    return sorted(ended, key=lambda e: e.job.element)
+
+
+@pytest.mark.logic
+def test_records_of_one_content_are_one_execution_and_exact_reuses(tmp_path: Path) -> None:
+    """Two records of one text: per node one job runs and the other is served it, exact, with its own output."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "same"}, {"text": "same"}])
+    status, executor, events = _run(placed, values, tmp_path)
+    store = executor.inner.store
+    assert status.done and status_from(events).counts["done"] == 4
+    for node in ("a", "b"):
+        first, second = status.results[node]
+        assert (first.job.element, second.job.element) == ((0,), (1,))
+        assert (first.key_digest, first.output_identity) == (second.key_digest, second.output_identity)
+        assert [(e.kind, e.reuse) for e in _terminal(events, node)] == [("finished", None), ("cache_hit", "exact")]
+        outputs = [store.outputs_of(e.key, e.output) for e in _terminal(events, node)]
+        assert outputs[0] is not None and outputs[0] == outputs[1]
+    activities = store.provenance.activities()
+    assert sorted("senselab:Reuse" in a.types() for a in activities) == [False, False, True, True]
+
+
+@pytest.mark.logic
+def test_records_of_one_failing_content_both_fail_and_only_descendants_are_blocked(tmp_path: Path) -> None:
+    """Two records of one failing text: both fail with the one failure; their `b` jobs are blocked by it."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "fail"}, {"text": "fail"}])
+    status, _, events = _run(placed, values, tmp_path)
+    first, second = status.results["a"]
+    assert first.failure is not None and first.failure == second.failure and status.blocked["a"] == ()
+    assert [e.kind for e in _terminal(events, "a")] == ["failed", "failed"]
+    assert [e.kind for e in _terminal(events, "b")] == ["blocked", "blocked"] and status.blocked["b"] == ((0,), (1,))
+    assert status_from(events).counts["blocked"] == 2 and status_from(events).counts["failed"] == 2
+
+
+@pytest.mark.logic
+def test_a_job_reading_a_shared_result_runs_under_its_own_element(tmp_path: Path) -> None:
+    """`a` is one job for both records; `d` reads each record's own `other` and runs once per record, as itself."""
+    rows = [{"text": "same", "other": f"o{i}"} for i in range(2)]
+    placed, values = _plan(ZIPPED, rows, {"both": "shared"})
+    status, executor, events = _run(placed, values, tmp_path)
+    assert status.done and status_from(events).counts["done"] == 6
+    sent = {(f.node, j.element): i for f in executor.fragments for j, i in zip(f.jobs, f.inputs, strict=True)}
+    assert [sent[("d", (i,))]["right"] for i in range(2)] == [placed.manifest.rows[i].inputs["other"] for i in range(2)]
+    assert [e.kind for e in _terminal(events, "d")] == ["finished", "finished"]
+    assert [e.kind for e in _terminal(events, "e")] == ["finished", "cache_hit"]

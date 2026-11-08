@@ -46,6 +46,7 @@ from senselab_core.runtime.execution.executor import (
     JobRef,
     QueueHeld,
     ResultRef,
+    follow,
 )
 from senselab_core.runtime.execution.in_process import fragment_keys, job_checksum, node_fragment, plan_keys
 from senselab_core.runtime.execution_settings import JobLease
@@ -173,6 +174,11 @@ def _feeds(placed: Plan, node: str) -> list[_Feed]:
 
 def _ref(value: object) -> ResultRef:
     return ResultRef.model_validate(value)
+
+
+def _at(ref: ResultRef, element: tuple[int, ...]) -> ResultRef:
+    """Return `ref` as the result of the job at `element` of its node."""
+    return ref.model_copy(update={"job": ref.job.model_copy(update={"element": element})})
 
 
 def _refs(value: object) -> list[ResultRef]:
@@ -331,6 +337,7 @@ class _Run:
     sending: set[asyncio.Task[None]] = field(default_factory=set)
     element_failures: set[str] = field(default_factory=set)
     ended: set[tuple[str, tuple[int, ...]]] = field(default_factory=set)
+    settled: dict[str, ResultRef] = field(default_factory=dict)
 
     def expected(self) -> list[tuple[str, tuple[int, ...]]]:
         """Return every job of the plan as (node, element): a mapped node's per record, any other once."""
@@ -369,8 +376,71 @@ class _Run:
             if (node, element) not in self.ended:
                 self.log("failed", node, element, failure=failure)
 
-    def send(self, node: str, batch: list[tuple[Any, tuple[int, ...], Any]]) -> Handle:
-        """Submit the jobs of `batch` as one fragment and return its handle.
+    def settle(self, node: str, ref: ResultRef) -> None:
+        """Hold `ref` as its element's result and log it `failed`, `cache_hit` or `finished`."""
+        self.results.setdefault(node, {})[ref.job.element] = ref
+        kind: EventKind = "failed" if ref.failure is not None else "cache_hit" if ref.served else "finished"
+        self.log(
+            kind,
+            node,
+            ref.job.element,
+            key=ref.key_digest,
+            failure=ref.failure,
+            output=ref.output_identity,
+            reuse=ref.served,
+        )
+
+    def serve_shared(self) -> None:
+        """Settle each job pydra shared with a settled job of the same checksum, which it never sent.
+
+        A job whose upstream results all landed is given the failure of a failed same-key job, or is sent again, so its
+        executor serves it the stored result as a reuse. Nodes are taken in graph order, so a shared job's descendants
+        read its result.
+        """
+        if self.errors or self.cancel.is_set():
+            return
+        mapped = mapped_nodes(self.placed.logical.graph)
+        for node in order(self.placed.logical.graph):
+            again: list[tuple[int, ...]] = []
+            upstream: dict[str, list[ResultRef]] = {}
+            for i in range(len(self.placed.manifest.rows)) if node in mapped else ():
+                read = None if (node, (i,)) in self.ended else self._read(node, (i,), mapped)
+                shared = None if read is None else self.settled.get(_NodeKey(self.placed, node).checksum(read[0]))
+                if read is None or shared is None:
+                    continue
+                if shared.failure is not None:
+                    self.settle(node, _at(shared, (i,)))
+                    continue
+                again.append((i,))
+                for source, ref in read[1].items():
+                    upstream.setdefault(source, []).append(ref)
+            size = self.fragment_size(node) or max(1, len(again))
+            for start in range(0, len(again), size):
+                handle = self.send(node, again[start : start + size], upstream)
+                for ref in follow(self.executor, handle, first_s=self.follower.first_s, max_s=self.follower.max_s):
+                    self.settle(node, ref)
+
+    def _read(
+        self, node: str, element: tuple[int, ...], mapped: set[str]
+    ) -> tuple[dict[str, object], dict[str, ResultRef]] | None:
+        """Return the inputs and upstream results of the job of `node` at `element`, None if one is missing.
+
+        An upstream result is held at `element` of a mapped source and at `()` of any other, and must have succeeded.
+        """
+        inputs: dict[str, object] = {}
+        refs: dict[str, ResultRef] = {}
+        for feed in _feeds(self.placed, node):
+            if feed.source == "input":
+                inputs[feed.port] = {RECORD_FIELD: element[0]}
+                continue
+            ref = self.results.get(feed.source, {}).get(element if feed.source in mapped else ())
+            if ref is None or ref.failure is not None:
+                return None
+            inputs[feed.port] = refs[feed.source] = ref
+        return inputs, refs
+
+    def send(self, node: str, elements: list[tuple[int, ...]], upstream: Mapping[str, Sequence[ResultRef]]) -> Handle:
+        """Submit the jobs of `node` at `elements` as one fragment, reading `upstream`, and return its handle.
 
         Each job is logged `started` as it is sent, unless the executor logs its own claims (`logs_claims`).
 
@@ -379,10 +449,7 @@ class _Run:
         """
         if self.cancel.is_set():
             raise RunCancelled(f"run {self.placed.hash} was cancelled before node {node!r} was sent")
-        elements = [element for _, element, _ in batch]
-        fragment = node_fragment(
-            self.placed, self.admission, node, upstream=_upstream(self.placed, node, batch), elements=elements
-        )
+        fragment = node_fragment(self.placed, self.admission, node, upstream=upstream, elements=elements)
         if not self.executor.logs_claims:
             for job, key in zip(fragment.jobs, fragment_keys(fragment, self.placed, self.values), strict=True):
                 self.log("started", node, job.element, key=key)
@@ -416,15 +483,9 @@ class _Run:
         )
 
 
-def _element(placed: Plan, node: str, job: Any) -> tuple[int, ...]:  # noqa: ANN401 - a pydra job
-    """Return the senselab element of a job of `node`: its record's row, or its per-element upstream's element."""
-    for feed in _feeds(placed, node):
-        value = getattr(job.task, feed.port)
-        if feed.source == "input" and feed.edge.kind == "map":
-            return (int(typing.cast(Mapping[str, int], value)[RECORD_FIELD]),)
-        if feed.source != "input" and feed.edge.kind == "plain" and _ref(value).job.element:
-            return _ref(value).job.element
-    return ()
+def _element(job: Any) -> tuple[int, ...]:  # noqa: ANN401 - a pydra job
+    """Return the senselab element of a pydra job: its record's row, the index of its state, or `()` unsplit."""
+    return () if job.state_index is None else (int(job.state_index),)
 
 
 class ExecutorWorker(Worker):  # type: ignore[misc]
@@ -475,7 +536,7 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
     async def _submit(self, run: _Run, node: str, job: Any) -> ResultRef:  # noqa: ANN401 - a pydra job
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ResultRef] = loop.create_future()
-        element = _element(run.placed, node, job)
+        element = _element(job)
         run.pending.setdefault(node, []).append((job, element, future))
         size = run.fragment_size(node)
         if size is not None and len(run.pending[node]) >= size:
@@ -484,6 +545,7 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
             run.scheduled.add(node)
             loop.call_soon(self._flush, run, node)
         ref = await future
+        run.settled[job.checksum] = ref
         if ref.failure is not None:
             raise ElementFailed(ref.failure)
         return ref
@@ -504,17 +566,7 @@ class ExecutorWorker(Worker):  # type: ignore[misc]
         futures = {element: future for _, element, future in batch}
 
         def settle(ref: ResultRef) -> None:
-            run.results.setdefault(node, {})[ref.job.element] = ref
-            kind: EventKind = "failed" if ref.failure is not None else "cache_hit" if ref.served else "finished"
-            run.log(
-                kind,
-                node,
-                ref.job.element,
-                key=ref.key_digest,
-                failure=ref.failure,
-                output=ref.output_identity,
-                reuse=ref.served,
-            )
+            run.settle(node, ref)
             futures[ref.job.element].set_result(ref)
 
         try:
@@ -555,7 +607,10 @@ async def _dispatched(
             loop.call_soon_threadsafe(callback, *args)
 
     try:
-        handle = await loop.run_in_executor(run.senders, contextvars.copy_context().run, run.send, node, batch)
+        elements, upstream = [element for _, element, _ in batch], _upstream(run.placed, node, batch)
+        handle = await loop.run_in_executor(
+            run.senders, contextvars.copy_context().run, run.send, node, elements, upstream
+        )
     except Exception as raised:  # noqa: BLE001 - the caller fails the batch with it, and the run re-raises it
         return raised
     run.follower.follow(handle, lambda ref: soon(settle, ref), lambda error: soon(end, error))
@@ -652,14 +707,21 @@ class Follower:
 
 
 def _upstream(placed: Plan, node: str, batch: list[tuple[Any, tuple[int, ...], Any]]) -> dict[str, list[ResultRef]]:
-    """Return each upstream node's results the jobs of `batch` read, from their resolved inputs."""
+    """Return each upstream node's results the jobs of `batch` read, from their resolved inputs.
+
+    A per-element result is held at the reading job's element: a result pydra shared is another element's.
+    """
     found: dict[str, dict[tuple[int, ...], ResultRef]] = {}
-    for job, _, _ in batch:
+    for job, element, _ in batch:
         for feed in _feeds(placed, node):
             if feed.source == "input":
                 continue
             value = getattr(job.task, feed.port)
-            refs = _refs(value) if feed.edge.kind == "gather" else [_ref(value)]
+            if feed.edge.kind == "gather":
+                refs = _refs(value)
+            else:
+                ref = _ref(value)
+                refs = [_at(ref, element if ref.job.element else ())]
             found.setdefault(feed.source, {}).update({r.job.element: r for r in refs})
     return {source: list(refs.values()) for source, refs in found.items()}
 
@@ -703,7 +765,8 @@ class PydraRunner:
 
         Each job is first logged `queued` with its key under this plan (`plan_keys`).
 
-        A failed element fails only its descendants, which are reported `blocked`; every other element runs. Each
+        A failed element fails only its descendants, which are reported `blocked`; every other element runs. A job
+        sharing its key with another job of the run is that job's reuse, or its failure (`_Run.serve_shared`). Each
         job's `queued`, `started` and `finished` or `failed` event is appended to `events`. Once `cancel` is set no
         further fragment is sent: running fragments finish and the run raises `RunCancelled`. While it runs,
         `attempt_id()` is the attempt of `events`.
@@ -741,24 +804,32 @@ class PydraRunner:
             run.log("queued", node, element, key=keys.get((node, element)))
         classes = sorted({p.resource_class for p in placed.placement.nodes.values()})
         try:
-            with (
-                _no_telemetry(),
-                _submitter(run, store, classes) as submitter,
-            ):
-                submitter(compile_plan(placed), raise_errors=True)
-        except WorkflowError as error:
-            if run.errors:
-                raise run.errors[0] from error
-            if error.__context__ is not None:
-                raise error.__context__ from error
-            if not (error.errors and all(_errored_job(entry) in run.element_failures for entry in error.errors)):
-                raise
+            _submit_plan(run, store, classes)
+            run.serve_shared()
         finally:
             follower.close()
             senders.shutdown(cancel_futures=True)
             executor.release(admission)
             run.close()
         return _outcome(placed, run)
+
+
+def _submit_plan(run: _Run, store: SenselabStore, classes: Sequence[str]) -> None:
+    """Run the plan's pydra workflow, its jobs through the run's executor, and return once every job ended.
+
+    Raises:
+        Exception: as `PydraRunner.run_plan`.
+    """
+    try:
+        with _no_telemetry(), _submitter(run, store, classes) as submitter:
+            submitter(compile_plan(run.placed), raise_errors=True)
+    except WorkflowError as error:
+        if run.errors:
+            raise run.errors[0] from error
+        if error.__context__ is not None:
+            raise error.__context__ from error
+        if not (error.errors and all(_errored_job(entry) in run.element_failures for entry in error.errors)):
+            raise
 
 
 def _submitter(run: _Run, store: SenselabStore, classes: Sequence[str]) -> Submitter:
