@@ -26,7 +26,8 @@ from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution import pool_parts
-from senselab_core.runtime.execution.executor import FaultRecord
+from senselab_core.runtime.execution.executor import FaultRecord, JobRef
+from senselab_core.runtime.execution.queue import probe_queue
 from senselab_core.runtime.measures import Build, MeasureRoots, MeasureUnit, Provenance
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.resources import Derivation, MeasureTable, PackagedTable
@@ -432,13 +433,44 @@ def _request(item: str, jobs: int, wall: float, item_wall: float | None, **updat
     return observation(**{**fields, "item_wall_s": item_wall, **update})
 
 
+NS = 1_000_000_000
+
+
+def _ref(i: int) -> JobRef:
+    return JobRef(plan_hash="0" * 64, node="n", element=(i,))
+
+
+def _event(kind: str, i: int, at_s: float) -> SimpleNamespace:
+    """An event stand-in: the coordinator's clock `at_s` seconds in, of job `i`."""
+    return SimpleNamespace(kind=kind, job=_ref(i), t_ns=int(at_s * NS))
+
+
+def _outcome(queue: str, jobs: range, failed: Sequence[int] = ()) -> dict[str, Any]:
+    refs = [{"job": _ref(i).model_dump(mode="json"), "failure": {"x": 1} if i in failed else None} for i in jobs]
+    return {"queue": queue, "jobs": refs}
+
+
+def _span_run(tail_s: float, probe: tuple[float, float]) -> tuple[list[SimpleNamespace], list[dict[str, Any]]]:
+    """Return the events and outcomes of a run with `tail_s` seconds after its last commit.
+
+    Production jobs 10 to 14 are claimed at 20 s (a load before it leaves no event) and committed by 30 s; a probe's
+    jobs 100 and 101 are claimed and committed at the times `probe` gives.
+    """
+    events = [_event("claimed", i, 20.0) for i in range(10, 15)] + [_event("finished", i, 30.0) for i in range(10, 15)]
+    events += [_event("claimed", 100, probe[0]), _event("finished", 100, probe[1])]
+    events += [_event("claimed", 101, probe[0]), _event("finished", 101, probe[1])]
+    events += [_event("queued", 10, 0.0), _event("queued", 10, 30.0 + tail_s)]
+    outcomes = [_outcome("cpu", range(10, 15), failed=[14]), _outcome(probe_queue("cpu", "p1"), range(100, 102))]
+    return events, outcomes
+
+
 @pytest.mark.logic
 def test_flatness_reads_request_walls_not_end_times() -> None:
-    """Per-item seconds are the run's wall less its probe items' walls over its production jobs, from reports alone.
+    """Per-item seconds are the production span, first claim to last commit, over the jobs that gave a result.
 
-    The jobs are those of the `ok` production requests, a request that loaded the model among them (its load is run
-    time); a probe item's own wall is the probe's. Worker seconds per job leave the loading request out. No end time
-    enters either, so neither poll waits nor clock skew do; with no production request there are no per-item seconds.
+    Neither a model load before the first claim, the wait after the last commit, nor a probe running beside production
+    changes it; worker seconds per job come from request walls and leave the loading request out. No item end time or
+    worker clock enters either.
     """
     ladder = _module("scale_ladder_walls_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
     probe = ProbeRef(id="p1", phase="SINGLE", stratum=0)
@@ -450,12 +482,15 @@ def test_flatness_reads_request_walls_not_end_times() -> None:
         _request("cold", 4, 4.0, 4.0, since_load=0, load_s=3.0),
         _request("lost", 4, 0.1, 0.1, outcome="failed", since_load=None, fault="content"),
     ]
-    assert ladder.request_cost(observations, 21.0) == {
-        "per_item_s": (21.0 - 9.0) / 12,
-        "per_item_basis": "run wall less probe items, per production job",
-        "worker_s_per_item": pytest.approx((0.1 + 0.2 + 0.3) / 8),
-    }
-    assert ladder.request_cost([observations[3], observations[5]], 21.0)["per_item_s"] is None
+    events, outcomes = _span_run(tail_s=1.0, probe=(40.0, 41.0))
+    cost = ladder.request_cost(observations, events, outcomes)
+    assert cost["per_item_s"] == pytest.approx(10.0 / 4) and cost["worker_s_per_item"] == pytest.approx(0.6 / 8)
+    assert cost["per_item_basis"] == "production span, first claim to last commit, per production job"
+    for tail, beside in ((600.0, (40.0, 41.0)), (1.0, (22.0, 28.0)), (1.0, (5.0, 500.0))):
+        again, same = _span_run(tail_s=tail, probe=beside)
+        assert ladder.request_cost(observations, again, same)["per_item_s"] == cost["per_item_s"]
+    none = ladder.request_cost(observations, events, [outcomes[1]])
+    assert none["per_item_s"] is None and none["per_item_basis"] == "no production items"
     assert not hasattr(ladder, "_steady") and not hasattr(ladder, "_item_samples")
 
 
@@ -465,18 +500,19 @@ def test_a_claim_of_several_items_and_a_request_spanning_them_count_each_job_onc
 
     Three one-job items of one claim report item walls 0.1, 0.2 and 0.3 (from the claim's start), and one request of the
     three jobs, 0.3 s, is reported in each of them: the worker seconds per job are 0.1, not the 0.2 or 0.6 the sums of
-    those would give.
+    those would give. The jobs per-item seconds divide by are the outcome records' own, each counted once.
     """
     ladder = _module("scale_ladder_claims_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
     spanning = [_request(f"i{k}", 3, 0.3, 0.1 * (k + 1), request_index=k) for k in range(3)]
-    cost = ladder.request_cost(spanning, 1.0)
+    events = [_event("claimed", i, 1.0) for i in range(3)] + [_event("finished", i, 2.0) for i in range(3)]
+    outcomes = [_outcome("cpu", range(3))]
+    cost = ladder.request_cost(spanning, events, outcomes)
     assert cost["worker_s_per_item"] == pytest.approx(0.1) and cost["per_item_s"] == pytest.approx(1.0 / 3)
     walls = (0.05, 0.1, 0.15)
     singles = [_request(f"j{k}", 1, w, sum(walls[: k + 1])) for k, w in enumerate(walls)]
-    cost = ladder.request_cost(singles, 0.6)
-    assert cost["worker_s_per_item"] == pytest.approx(0.1) and cost["per_item_s"] == pytest.approx(0.2)
-    twice = [*singles, *[o.model_copy(update={"item": f"k{n}"}) for n, o in enumerate(singles[:1])]]
-    assert ladder.request_cost(twice, 0.6)["per_item_s"] == pytest.approx(0.6 / 3)
+    assert ladder.request_cost(singles, events, outcomes)["worker_s_per_item"] == pytest.approx(0.1)
+    twice = [*singles, singles[0].model_copy(update={"item": "k0"})]
+    assert ladder.request_cost(twice, events, outcomes)["per_item_s"] == pytest.approx(1.0 / 3)
 
 
 @pytest.mark.logic
@@ -515,7 +551,7 @@ def test_the_outcome_record_a_pool_worker_commits_is_what_the_ladder_reads(tmp_p
     (outcome / ("d" * 8)).write_text(json.dumps(written))
     outcomes = ladder._outcomes(run_dir)
     assert ladder._observations(outcomes) == seen and ladder._samples(outcomes) == [sample]
-    assert ladder.request_cost(ladder._observations(outcomes), 2.0)["per_item_s"] == 1.0
+    assert outcomes[0]["queue"] == "cpu"
 
 
 @pytest.mark.logic

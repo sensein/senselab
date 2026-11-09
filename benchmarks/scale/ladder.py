@@ -44,8 +44,9 @@ from senselab_core.runtime.config import ConfigError, load_yaml
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import Event, EventLog, read_events, run_dir_of
+from senselab_core.runtime.execution.executor import JobRef
 from senselab_core.runtime.execution.pool import Pool
-from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
+from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, probe_of
 from senselab_core.runtime.execution.substrates import substrate_of, worker_id
 from senselab_core.runtime.execution_settings import CalibrationSettings
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
@@ -211,14 +212,14 @@ def _tally(*roots: Path) -> tuple[int, int]:
 
 
 def _outcomes(run_dir: Path) -> list[dict[str, Any]]:
-    """Return the outcome record of each item the run's queues committed."""
+    """Return the outcome record of each item the run's queues committed, with its `queue`'s name."""
     found = []
     for path in sorted((run_dir / RUN_QUEUES).glob("*/outcome/*")):
         if path.name.startswith("."):
             continue
         record = json.loads(path.read_bytes())
         if isinstance(record, dict):
-            found.append(record)
+            found.append({**record, "queue": path.parent.parent.name})
     return found
 
 
@@ -248,22 +249,45 @@ def _own_requests(observations: Sequence[Observation]) -> list[Observation]:
     return found
 
 
-def request_cost(observations: Sequence[Observation], wall_s: float) -> dict[str, Any]:
-    """Return a point's per-item figures from what its requests reported and the run's wall seconds `wall_s`.
+def production_cost(events: Sequence[Event], outcomes: Sequence[Mapping[str, Any]]) -> tuple[float, int] | None:
+    """Return the span in seconds of the production jobs and the count of those that gave a result, else None.
 
-    `per_item_s` is the throughput wall per production job: the run's wall less its probe items' own walls, over the
-    jobs of the production requests that were `ok`, each counted once, so the coordinator's overhead stays in it.
-    `worker_s_per_item` is worker seconds per job: the walls of those requests that did not load the model over their
-    jobs, each request counted once however many items it spanned, and timed from its own start. With no production
-    request `per_item_s` is None.
+    Production jobs are those of items committed on a queue that is not a probe's. The span runs on the coordinator's
+    clock (the event log's) from the first production `claimed` to the last production `finished` or `failed`, so worker
+    starts, model loads before the first claim, the wait after the last commit and probe items running beside
+    production do not enter it.
     """
-    probe_s = sum({o.item: o.item_wall_s for o in observations if o.probe is not None and o.item_wall_s}.values())
-    ok = [o for o in _own_requests(observations) if o.outcome == "ok"]
-    warm = [o for o in ok if o.load_s is None]
-    jobs, warm_jobs = sum(o.jobs for o in ok), sum(o.jobs for o in warm)
+    jobs = {
+        JobRef.model_validate(j["job"]): j.get("failure") is None
+        for o in outcomes
+        if probe_of(o["queue"]) is None
+        for j in o.get("jobs", ())
+    }
+    claimed = [e.t_ns for e in events if e.kind == "claimed" and e.job in jobs]
+    ended = [e.t_ns for e in events if e.kind in ("finished", "failed") and e.job in jobs]
+    if not claimed or not ended:
+        return None
+    return (max(ended) - min(claimed)) / NS_PER_S, sum(jobs.values())
+
+
+def request_cost(
+    observations: Sequence[Observation], events: Sequence[Event], outcomes: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Return a point's per-item figures.
+
+    `per_item_s` is the throughput wall per production job: `production_cost`'s span over its job count, counted from
+    the outcome records, so the coordinator's overhead between jobs stays in it. `worker_s_per_item` is worker seconds
+    per job: the walls of the `ok` production requests that did not load the model over their jobs, each request counted
+    once however many items it spanned and timed from its own start. With no production job `per_item_s` is None.
+    """
+    warm = [o for o in _own_requests(observations) if o.outcome == "ok" and o.load_s is None]
+    warm_jobs = sum(o.jobs for o in warm)
+    found = production_cost(events, outcomes)
     return {
-        "per_item_s": None if not jobs else max(0.0, wall_s - probe_s) / jobs,
-        "per_item_basis": "run wall less probe items, per production job" if jobs else "no production items",
+        "per_item_s": None if found is None or not found[1] else found[0] / found[1],
+        "per_item_basis": "production span, first claim to last commit, per production job"
+        if found is not None and found[1]
+        else "no production items",
         "worker_s_per_item": sum(o.wall_s for o in warm) / warm_jobs if warm_jobs else None,
     }
 
@@ -421,7 +445,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         "done": status.done,
         "counts": dict(status.counts),
         "wall_s": wall,
-        **request_cost(_observations(outcomes), wall),
+        **request_cost(_observations(outcomes), events, outcomes),
         "units": _units(roots, profile),
         "faults": _faults(events, placed.manifest.rows),
         "host": host_token(),
