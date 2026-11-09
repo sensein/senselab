@@ -262,3 +262,20 @@ and docs.
 - **Format migrations** (§3, "every reader has a test that reads the previous major format"): before the first 2.x
   release a major bump has no previous-major reader, and the test is that the retired format is refused with a
   typed error naming the migration statement (ADR-006 amendment, P2-44).
+
+## Amendment 2026-11-09 (owner): time in tests
+
+Owner: "aren't timing tests very brittle since they are dependent on resources they run on".
+
+- A logic or contract test never asserts a wall-time magnitude or a ratio of wall times. Such a figure depends on
+  the runner's load, CPU and disk, so the test fails without a code change.
+- Logic that depends on time passing (leases going stale, peer waits, presence refresh, retries, dead-holder
+  detection, per-request wall attribution) is tested with an injected clock: the code reads time through a clock
+  passed in, production passes the real monotonic clock, and the test advances it. Use it where the logic would
+  otherwise need real waits or where misattributed times change a decision; do not thread a clock where the time
+  logic is trivial.
+- Real durations, throughput and contention are measured only on controlled hardware (the ORCD benchmark and
+  ladder runs on typed resources) and are recorded, not used as pass/fail gates.
+- A complexity bound is asserted by counting operations at two sizes, not by timing them.
+- Existing tests that assert walls or rely on sleeps with slack are converted when their area is next touched;
+  the sweep is a Task 22/23 item.
