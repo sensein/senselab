@@ -176,8 +176,11 @@ class Pool:
         measures: Estimates | None = None,
         roots: MeasureRoots | None = None,
         resolver: UnitReads | None = None,
+        probe_s: float | None = None,
     ) -> None:
         """Coordinate the run in `run_dir` as epoch `epoch`; `clock` times every read and wait of the pool.
+
+        `probe_s` is the seconds of warm requests a unit's probe may take; None for the profile's.
 
         Raises:
             ValueError: `events` is not a log of `epoch`.
@@ -218,7 +221,7 @@ class Pool:
         self.roots = roots if roots is not None else measure_roots(profile)
         self.measures = measures if measures is not None else default_measures(profile, self.roots)
         self.resolver = resolver if resolver is not None else UnitResolver(profile, self.roots)
-        self._machine = ProbeMachine(profile, self.roots, self.measures, self.resolver, clock, _PoolHost(self))
+        self._machine = ProbeMachine(profile, self.roots, self.measures, self.resolver, clock, _PoolHost(self), probe_s)
         self._rates: dict[str, dict[str, tuple[float | None, int]]] = {}
 
     @property

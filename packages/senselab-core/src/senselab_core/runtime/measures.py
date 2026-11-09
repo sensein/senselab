@@ -375,8 +375,16 @@ def _dump(document: Mapping[str, Any]) -> bytes:
     return json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
 
-def _parse_observations(document: Mapping[str, Any], info: os.stat_result) -> tuple[Observation, ...]:
-    return tuple(Observation.model_validate(o) for o in document["observations"])
+class ProbeFile(Frozen):
+    """One probe's observations of a unit as stored: its id, who wrote it and what it reported."""
+
+    probe: NonEmptyStr
+    provenance: Provenance
+    observations: tuple[Observation, ...]
+
+
+def _parse_observations(document: Mapping[str, Any], info: os.stat_result) -> ProbeFile:
+    return ProbeFile.model_validate({k: document[k] for k in ("probe", "provenance", "observations")})
 
 
 def _parse_unit(document: Mapping[str, Any], info: os.stat_result) -> MeasureUnit:
@@ -711,14 +719,14 @@ class MeasureRoots:
         """Return the typed `regime` and `oom` records of `unit` the trust admits, oldest first."""
         return tuple(_typed(r) for r in self.records(unit) if r.kind in ESTIMATE_RECORDS)
 
-    def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
-        """Return the observations of `unit` that still pool, oldest file first.
+    def probes(self, unit: MeasureUnit) -> tuple[ProbeFile, ...]:
+        """Return the probe files of `unit` that still pool, oldest first.
 
         A probe whose id a trusted `supersede` record names in `outdates` does not pool.
         """
         digest = self._digest(unit)
         outdated = self._outdated(digest)
-        files: list[tuple[float, str, tuple[Observation, ...]]] = []
+        files: list[tuple[float, str, ProbeFile]] = []
 
         def visit(root: Path, unit_dir: StorageDir) -> None:
             for name, f in self._files(root, unit_dir, "obs", MEASURE_OBSERVATIONS_FORMAT, _parse_observations):
@@ -726,7 +734,29 @@ class MeasureRoots:
                     files.append((f.mtime, name, f.value))
 
         self._each_unit(digest, visit)
-        return tuple(o for _, _, group in sorted(files, key=lambda f: f[:2]) for o in group)
+        return tuple(file for _, _, file in sorted(files, key=lambda f: f[:2]))
+
+    def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
+        """Return the observations of `unit` that still pool, oldest file first (`probes`)."""
+        return tuple(o for probe in self.probes(unit) for o in probe.observations)
+
+    def units(self) -> tuple[MeasureUnit, ...]:
+        """Return the units any root holds, by digest, each read from a unit file whose name is its digest."""
+        found: dict[str, MeasureUnit] = {}
+        for root in self.roots:
+            with self._guard(root, "read"), self._open(root, create=False) as m, m.walk("units") as units:
+                for prefix in sorted(units.listdir()):
+                    self._read_units(root, units, prefix, found)
+        return tuple(found[d] for d in sorted(found))
+
+    def _read_units(self, root: Path, units: StorageDir, prefix: str, found: dict[str, MeasureUnit]) -> None:
+        with self._guard(root, "read"), units.child(prefix) as parent:
+            for digest in sorted(parent.listdir()):
+                with self._guard(root, "read"), parent.child(digest) as unit_dir:
+                    if self._unit_status(root, parent, unit_dir, digest) == "ok":
+                        loaded = self._load(root, unit_dir, UNIT_FILE, MEASURE_UNIT_FORMAT, _parse_unit, filtered=False)
+                        if loaded is not None:
+                            found.setdefault(digest, loaded.value)
 
     def _stage(self, root: Path, target: StorageDir, name: str, data: bytes) -> None:
         with self._open(root, create=True) as m, m.walk("tmp", create=True, mode=self._dir_mode) as tmp:

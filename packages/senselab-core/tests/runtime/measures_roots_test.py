@@ -224,6 +224,32 @@ def test_a_supersede_record_names_the_probes_it_outdates_whatever_their_mtime(tm
 
 
 @pytest.mark.contract
+def test_roots_list_their_units_and_each_units_probe_files_with_their_writers(tmp_path: Path) -> None:
+    """`units` names every unit any root holds once; `probes` gives its pooling files with id and provenance.
+
+    A unit another user wrote is listed under `own` trust (its identity is no evidence) with none of its files; a
+    superseded probe is not listed.
+    """
+    first, second = tmp_path / "first", tmp_path / "second"
+    other = UNIT.model_copy(update={"backend": "other"})
+    assert _roots(first, second).units() == ()
+    _roots(first).put_observations(UNIT, "p1", [_observation("a")], PROVENANCE)
+    _roots(second).put_observations(UNIT, "p2", [_observation("b")], PROVENANCE)
+    _roots(second).put_observations(other, "p3", [_observation("c")], PROVENANCE)
+    pooled = _roots(first, second)
+    assert [u.digest() for u in pooled.units()] == sorted([UNIT.digest(), other.digest()])
+    assert [(p.probe, p.provenance, [o.item for o in p.observations]) for p in pooled.probes(UNIT)] == [
+        ("p1", PROVENANCE, ["a"]),
+        ("p2", PROVENANCE, ["b"]),
+    ]
+    assert [o.item for o in pooled.observations(UNIT)] == ["a", "b"]
+    pooled.put_record(UNIT, "supersede", {"outdates": ["p1"]}, PROVENANCE)
+    assert [p.probe for p in pooled.probes(UNIT)] == ["p2"]
+    stranger = _roots(first, second, trust="own", uid=STRANGER)
+    assert len(stranger.units()) == 2 and stranger.probes(UNIT) == ()
+
+
+@pytest.mark.contract
 def test_collect_never_removes_another_users_file(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A collector removes superseded observations, stale staging and quarantine its uid owns, and nothing else."""
     clock = lease_clock(storage_root=tmp_path)

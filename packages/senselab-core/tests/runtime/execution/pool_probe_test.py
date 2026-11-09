@@ -430,6 +430,25 @@ def test_held_work_waits_at_most_probe_s_of_warm_work(tmp_path: Path, clock: Man
 
 
 @pytest.mark.logic
+@pytest.mark.parametrize(("budget", "ended"), [(None, False), (0.01, True)])
+def test_a_pool_given_probe_s_ends_its_probe_at_that_budget(
+    tmp_path: Path, clock: ManualClock, budget: float | None, ended: bool
+) -> None:
+    """A budget given to the pool replaces the profile's `probe_s`: the same warm walls end a probe or not."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    given = None if budget is None else budget * profile.probe_s
+    pool = _pool(tmp_path, profile, clock=clock, probe_s=given)
+    _, handle = _submit(pool, placed, values)
+    [unit] = pool.probes.values()
+    queue = pool.queues.queue(probe_queue("cpu", unit.probe))
+    Hand(pool, placed, values, wall=lambda units: 0.01 * profile.probe_s, limit=3).serve()
+    pool.poll(Handle(id=handle))
+    assert (pool.queues.queue("cpu").work() > 0 and queue.depth() > 0) is ended
+
+
+@pytest.mark.logic
 def test_a_stand_in_with_a_long_load_is_still_measured(tmp_path: Path, clock: ManualClock) -> None:
     """A load many times `probe_s` is not warm work: the probe runs on and its unit is measured."""
     profile = _profile(tmp_path)

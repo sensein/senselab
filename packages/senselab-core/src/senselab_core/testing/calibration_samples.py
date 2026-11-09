@@ -28,7 +28,7 @@ from senselab_core.runtime.calibration import (
     Unplanned,
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings
-from senselab_core.runtime.measures import Build, MeasureEnv, MeasureRecord, MeasureUnit, Provenance
+from senselab_core.runtime.measures import Build, MeasureEnv, MeasureRecord, MeasureUnit, ProbeFile, Provenance
 from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable
 
 Register = Callable[..., None]
@@ -115,6 +115,14 @@ def _register_measures_roots_samples(register: Register) -> None:
         Provenance,
         lambda: [provenance, full],
         invalid_updates=[{"profile": "x"}, {"run": ""}, {"job": ""}],
+    )
+    register(
+        ProbeFile,
+        lambda: [
+            ProbeFile(probe="p1", provenance=full, observations=(observation(),)),
+            ProbeFile(probe="p2", provenance=provenance, observations=()),
+        ],
+        invalid_updates=[{"probe": ""}, {"provenance": None}],
     )
     register(
         MeasureRecord,
@@ -310,11 +318,20 @@ def register_measure_samples(register: Register) -> None:
     derivation = Derivation(commit="d" * 40, jobs=("j1",), probe_ids=("p1",))
     row = MeasureRow(
         unit=UNIT,
-        estimate=Estimate(status="unmeasured", unit_kind="none", reasons=("no_usable_observations",)),
+        estimate=Estimate(
+            status="measured",
+            unit_kind="audio_s",
+            single=_FIT,
+            source=EstimateSource(probe_ids=("p1",), observations=6, commit="d" * 40),
+        ),
         derivation=derivation,
     )
     register(Derivation, lambda: [derivation], invalid_updates=[{"commit": "abc"}, {"jobs": ()}])
-    register(MeasureRow, lambda: [row], invalid_updates=[{"derivation": None}])
+    register(
+        MeasureRow,
+        lambda: [row],
+        invalid_updates=[{"derivation": None}, {"derivation": derivation.model_copy(update={"probe_ids": ("p2",)})}],
+    )
     register(
         MeasureTable,
         lambda: [MeasureTable(task="speech_to_text", backend="whisper", rows=(row,))],
