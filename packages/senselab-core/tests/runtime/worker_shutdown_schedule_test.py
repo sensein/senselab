@@ -29,11 +29,7 @@ from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import group_alive
 from senselab_worker.fake import FAULT_KEY
 from shutdown_schedule_fixture import (
-    CASE_BOUND_S,
     KINDS,
-    PATHS,
-    REAL_GRACES,
-    case_bound,
     counted,
     run_schedule,
     schedule,
@@ -87,19 +83,6 @@ def test_every_injection_at_every_later_boundary_call_ends_typed_bounded_and_cle
     _check(tmp_path, kind, range(2, 100))
 
 
-@pytest.mark.logic
-@pytest.mark.parametrize("path", PATHS)
-@pytest.mark.parametrize("real_graces", [False, True])
-def test_every_case_bound_carries_load_slack_yet_fails_a_real_hang(path: str, real_graces: bool) -> None:
-    """A shrunk-grace bound stays below the real STOP grace and a real-grace bound below the faulthandler timeout.
-
-    A case that ignores the shrunk graces waits out at least the real STOP grace, and a deadlock ends at
-    `CASE_BOUND_S`; both must exceed the bound, so the load allowance never hides either.
-    """
-    bound = case_bound({"path": path, "real_graces": real_graces})
-    assert bound < (CASE_BOUND_S if real_graces else REAL_GRACES.stop)
-
-
 RUNTIME_TESTS = Path(__file__).resolve().parents[1] / "runtime"
 
 
@@ -140,6 +123,7 @@ def test_close_from_a_signal_handler_inside_close_returns(tmp_path: Path) -> Non
     case = {"path": "close", "boundary": "module:_members_gone", "kind": "handler_close", "occurrence": 1}
     [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])
     assert report["fired"] and report["outcome"] is None
+    assert report["nested_acquires"] == 0, "the nested close tried to take the shutdown lock"
     assert shutdown_schedule_fixture.violations(report) == []
 
 
@@ -375,21 +359,21 @@ def test_the_escalation_hint_is_logged_once_per_process() -> None:
 
 @pytest.mark.contract
 def test_ctrl_c_twice_kills_reaps_and_releases(tmp_path: Path) -> None:
-    """With the real graces, a second SIGINT while a SIGTERM-ignoring group is stopped interrupts the close.
+    """A second SIGINT while a SIGTERM-ignoring group is stopped SIGKILLs the group before anything else is sent.
 
-    The group is SIGKILLed and reaped and the files are removed before `KeyboardInterrupt` surfaces; a held second
-    SIGINT would let the close finish with no interruption.
+    The group is reaped and the files are removed before `KeyboardInterrupt` surfaces.
     """
     case = {
         "path": "timeout",
         "boundary": "module:_members_gone",
         "kind": "double_sigint",
         "occurrence": 1,
-        "real_graces": True,
     }
     [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])
     assert report["fired"] and report["outcome"] == "KeyboardInterrupt"
     assert report["at_outcome"] == shutdown_schedule_fixture.CLEAN
+    after = report["signals"][report["signals"].index("SIGINT2") + 1 :]
+    assert after[:1] == ["SIGKILL"], f"the first signal sent after the second SIGINT was not SIGKILL: {after}"
     assert shutdown_schedule_fixture.violations(report) == []
 
 

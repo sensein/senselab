@@ -98,11 +98,11 @@ class Pump:
 class Lines:
     """The lines the stdout pump produced, taken by one reader at a time, each wait read on `clock`."""
 
-    def __init__(self, clock: Clock) -> None:
-        """Start empty."""
+    def __init__(self, clock: Clock, ready: threading.Event | None = None) -> None:
+        """Start empty; `ready` is the event a `put` sets and a waiting `get` clears (a new one when None)."""
         self._clock = clock
         self._queue: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
-        self._ready = threading.Event()
+        self._ready = threading.Event() if ready is None else ready
 
     def put(self, line: bytes | None) -> None:
         """Add a line; `None` is the end of the stream."""
@@ -110,13 +110,17 @@ class Lines:
         self._ready.set()
 
     def get(self, deadline: Deadline) -> bytes | None:
-        """Return the next line, waiting until `deadline`; raise `queue.Empty` if none came."""
+        """Return the next line, waiting until `deadline`; raise `queue.Empty` if none came.
+
+        The wake flag is cleared before each look and never between the last look and the wait, so a line put after
+        a look sets it again.
+        """
         while True:
-            for _ in range(2):
-                try:
-                    return self._queue.get_nowait()
-                except queue.Empty:
-                    self._ready.clear()
+            self._ready.clear()
+            try:
+                return self._queue.get_nowait()
+            except queue.Empty:
+                pass
             remaining = deadline.remaining()
             if remaining is not None and remaining <= 0:
                 raise queue.Empty
