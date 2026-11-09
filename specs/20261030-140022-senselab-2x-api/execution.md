@@ -306,7 +306,7 @@ current one.
     before any submission. A hook that raises, answers with another type or outlasts its bound is
     `PlacementHookFailed`: the class keeps its explicit and profile values and the event says so.
     A hook path that does not import is `PlacementHookFailed` at start, not a fallback.
-  - **Events.** A `placement` event is a run-scoped kind of `run-event@2.0`, appended to the epoch's
+  - **Events.** A `placement` event is a run-scoped kind of `run-event@2.1`, appended to the epoch's
     `EventLog` (no node), one per class per epoch: the class's needs, the answer, the hook's path (and
     whether it is importable) and distribution version, the verdict (`no-hook`, `accepted`, `refused`,
     `failed`), the values used with the layer that set each, and the `--exclude` list submitted.

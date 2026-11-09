@@ -650,3 +650,16 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3.2, §8.
   profile index alike. `env-record@1.0` stores the index URL without its userinfo (read only for equality; the
   credentialed URL lives in the process environment), and `CudaCompatibilityError` names the build and the URL
   without userinfo, since a worker logs it into scheduler output (UX-57).
+
+## Amendment 2026-11-09: `run-event@2.1` and `measure-oom@1.1` (Phase 3 Task 20R-7b)
+
+- **`run-event@2.1`** (additive minor): `PlacementRecord` gains `closing: ClassActuals | null` (`wall_s`, `gpu_hours`,
+  `device_peak_bytes`, each null where unmeasured). The epoch's end appends a class's `placement` event again with
+  `closing` set (`calibration-probe.md` §10.3). Both bumps below are additive minors: a reader reads its major, so
+  `@2.0` and `@1.0` documents still read.
+- **`measure-oom@1.1`** (additive minor): `OomRecord` gains `worker: str | null`, the `worker_id()` of the item's
+  worker.
+- **`measure-observations@1.1`** (additive minor): `Observation` gains `fault: content | resource | infrastructure |
+  null`, the class of the exception a `failed` or `bisected` request raised on the host, else the one class every job
+  of a `failed` request failed with (`calibration-probe.md` §7.4). `measure-drift@1.0` and `measure-supersede@1.0` payloads are defined (`calibration-probe.md` §7.3); no
+  earlier writer wrote either.

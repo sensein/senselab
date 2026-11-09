@@ -27,7 +27,7 @@ corpus run could not be debugged except by reading worker stderr.
 
 ## Amendment 2026-11-09: placement is an event of the one log (Phase 3 Task 20R-12)
 
-- A run has one event log. Each class's placement in an epoch is a run-scoped `placement` event of `run-event@2.0`
+- A run has one event log. Each class's placement in an epoch is a run-scoped `placement` event of `run-event@2.1`
   (ADR-006), appended through the epoch's `EventLog` by the pool; status, `explain` and reports read it there. The
   closing actuals record of T20R-7b is appended the same way.
 

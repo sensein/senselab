@@ -169,7 +169,10 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
   optional and additive (Phase 3 Task 20R-5); a worker restart starts the count at 0 again, and a host-side model
   cache counts per cache entry, so an eviction and reload does too. A server backend is counted per attested server
   instance, by the consumer: one count for a server's address and attestation across every consumer in the process,
-  so a second consumer of a warm server reports no load. A request that raised reports neither field. The host reads exactly that sequence; a line with the wrong `id`,
+  so a second consumer of a warm server reports no load. A request that raised reports neither field. A fault class travels on each item's error record (`fault`):
+  whatever `handle` raises becomes every item's error and the request still ends with its `done`. The host records a
+  request's class in its `Observation` as `fault`: the class of the exception the host raised for the request where
+  one raised, else the one class every item of the request failed with (Phase 3 Task 20R-7b); no wire field is added. The host reads exactly that sequence; a line with the wrong `id`,
   `item`, kind or count is a protocol violation.
 - **Host line limit.** A client may take a `max_line_bytes` below `MAX_LINE_BYTES`. It bounds the
   lines the client sends and, after the hello, the reply lines it accepts: a longer reply is

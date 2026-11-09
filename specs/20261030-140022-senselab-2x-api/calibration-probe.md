@@ -206,11 +206,11 @@ Layout of each root (`measures@1`):
   classes/<declared digest>/<seen digest>.json  hardware index (§3.2); measure-class@1.0, written once
   units/<u[:2]>/<u>/                          u = MeasureUnit digest
     unit.json                                 measure-unit@1.0: the identity fields; first writer wins
-    obs/<probe id>.json                       measure-observations@1.0: one probe's observations; written once
+    obs/<probe id>.json                       measure-observations@1.1: one probe's observations; written once
     drift/<record id>.json                    measure-drift@1.0: production evidence of a suspect estimate
     supersede/<record id>.json                measure-supersede@1.0: a confirming probe disagreed; earlier obs stop pooling
     regime/<record id>.json                   measure-regime@1.0: a co-tenancy factor (§7.3)
-    oom/<record id>.json                      measure-oom@1.0: a resource fault (§7.4)
+    oom/<record id>.json                      measure-oom@1.1: a resource fault (§7.4)
     probe.lease/                              the ADR-003 lease held while a coordinator probes u
   tmp/<uuid>/                                 staging
   quarantine/<uuid>                           misfiled or malformed files, moved aside
@@ -692,6 +692,39 @@ are drift evidence only, never pooled into `r`, `u`, `a` or `B*`.
   alone supersedes nothing, so two runs over different content cannot supersede each other's measures by drift alone
   (I2).
 - A device peak above the prediction at its padded units beyond the same band raises `m1` at once (§7.4).
+
+Amended 2026-11-09 (T20R-7b):
+
+- **Regime is the device co-tenancy.** A production request's regime is `k = Observation.cotenancy.device`; a request
+  whose device count is unread (None) is no drift evidence. `k = 1` is the probe regime, so a host-only co-tenancy on a
+  `cpu` class (device count always 1) is never a regime record.
+- **Evidence.** A request is evidence when it is `ok`, warm (`load_s` None and `since_load` at least
+  `warmup_requests`), of the unit's hardware, unserved and has a positive wall; its prediction is the single fit at
+  batch 1 and the batched fit of its batch above 1, with that fit's `spread`. A request whose batch has no fit, or
+  whose fit has no spread, is not evidence. The window's band uses the median of its requests' spreads. A window that
+  drifted starts over.
+- **Records.** Every kind's payload is a typed model (`RECORD_MODELS`: `DriftRecord`, `SupersedeRecord`, `RegimeFactor`,
+  `OomRecord`). A `drift` payload is `{metric, k, rho[], median, band[low, high], batch, source[]}` (`metric` is
+  `wall_s`, or `device_peak` with `{m1, batch}`); `source` is the probe ids of the estimate it doubts. A unit writes
+  at most one `drift` record of the wall metric per co-tenancy and at most one `regime` record per co-tenancy per run;
+  the estimate is read again from the roots at once, so `size` scales by `ρ_k` for the rest of the run. A window at
+  `k > 1` is judged against the factor in force: its ratios are `wall_s / (ρ_k · prediction)` where a regime record of
+  that `k` is in the estimate that sized the request, so a later run at the same co-tenancy writes no second record.
+  The record's `rho` is the window's median of `wall_s / prediction`.
+- **Confirming.** At `k = 1` the unit is `confirming` with no probe yet: the next part of the unit to arrive is the
+  held part, planned fresh (stored observations out of the prior, the unit's records in), probed under the unit's
+  lease, and the unit's later parts are held until it ends. The probe starts only once every item of the unit already
+  put has its outcome read, a job's retry on the same class included (it is noted under its parent's unit), so no
+  worker of the unit shares the probing device; parts that arrive meanwhile are held. With no further part there is nothing to confirm and
+  nothing runs. A part with nothing worth probing, or a peer holding the lease, returns the unit to `Measured`. The
+  probe disagrees when its single fit and the suspect's differ, at the middle of the probe's measured range, by more
+  than `drift_confidence · 1.2533 · hypot(t₁·spread₁/√n₁, t₂·spread₂/√n₂)` (`t` the fit's seconds there); a fit with no
+  spread cannot disagree. A `supersede` record `{outdates, confirmed_by}` names the suspect estimate's probe ids; a
+  suspect from a packaged row names none and writes none. The probe's observations are written either way.
+- **Device peak.** A warm request whose `device_peak − device_after` exceeds `m0 + m1·padded_units` of the device fit by
+  more than the band (at the spread of its batch and `drift_window`) raises the unit's `m1` to `(peak − after − m0) /
+  padded_units` for the rest of the run, held across the estimate's re-reads, and writes one `drift` record. It is not
+  persisted as an estimate: the next run's probe measures it, or a fault records it.
 - Content effects beyond length (two concurrent runs whose content differs in cost at equal length) are not in the
   identity; each run confirms at most once, so such a disagreement costs one probe per run, never a loop.
 
@@ -719,6 +752,39 @@ Any batch ≥ 2 lifts, so a probe at B − 1 lifts a fault at B; the refitted `m
 may fault once and probe once more. §7.1's one probe per run bounds this: a cost per run, never a loop.
 
 The bisection of the failing request, the re-placement on a larger class and the jobs' retries are unchanged.
+
+Amended 2026-11-09 (T20R-7b):
+
+- **Where a fault is read.** Each request that failed with a resource fault is a fault at its own batch and longest
+  length. A request's fault class is the class of the exception the host raised for it (a worker killed for memory,
+  a timeout, a value too large), else, where nothing raised, the one class every job of the request failed with: a
+  backend's out-of-memory raises inside the worker and reaches the host as every item's error record, each naming
+  `resource` (`call_handle`). A request whose jobs failed with mixed classes names none. `observations()` computes it,
+  the one place, into the request's `Observation` (`fault`, `measure-observations@1.1`); the pool writes one `oom`
+  record per item from its resource-faulted requests: the largest faulting batch `B` (the shortest `L` among equals),
+  `L = padded_units / batch`, and the co-tenancy of the grant that faulted, an unread count filed as 1 (the
+  conservative direction: a probe running alone can lift it). The co-tenancy is the device's on a device grant; on a
+  host grant it is the request's host count only where the grant is the host's shared memory (a class with no
+  `mem_bytes`), and 1 where each worker is granted its own memory, since no other process shares that grant.
+  `resource` is `device` on a class whose grant is a device's, else `host`; `grant_bytes` is the
+  class's grant; `worker` is the item's `worker_id()`, None where its outcome names none (`measure-oom@1.1`). An item
+  whose grant states no memory is logged and not recorded. A batch that faults and then bisects cleanly is recorded
+  at its batch; a job that fails alone is recorded at batch 1 and is not liftable as `B ≥ 2`; a bisect caused by a
+  lost worker or a protocol error (a fault class other than `resource`) writes nothing.
+- **One record per shape.** In a run, a fault at a length no shorter than one already written for the same unit,
+  batch, co-tenancy, grant and basis adds nothing: the shorter length is the more restrictive.
+- **Reading it back.** The pool reads the unit's estimate again at once, so later parts of the run are sized under the
+  raised `m1`. A record a probe can lift (`probe_regime`: co-tenancy 1, batch of two or more) makes `covers` false for the
+  unit, so the next run plans a probe whose `BATCHED` phase re-opens the stratum. A record of co-tenancy `k ≥ 2` and
+  batch of two or more is read by `size` whenever the card's workers `w_d ≥ k`, and a `host` record likewise on a
+  shared host whose workers `w = min(⌊memory_headroom · host / P⌋, max_workers) ≥ k`, each then sized in `host / w`: `m1′ = max(m1, (memory_headroom ·
+  grant/k − resident − m0)/((B − 1)·L))` (`probe.raised`, the one formula); a probe never lifts it. The raised `m1` is one
+  slope, so lengths just below `L` (within `L/B`) also read a batch below `B`.
+- **A backend out-of-memory is recorded, not bisected.** Nothing raises on the host for it, so the request is not
+  split: every job is `Failed` with `resource` and re-placed on a larger class (or dies without one), uncharged. The
+  record at `B` makes the next `size` avoid the batch; the bisection above applies to faults the host raised.
+- **`since_load` across processes.** A second consumer of a warm server in another process is not covered: the server
+  does not report its count, and a `served` request is no evidence for any estimate or drift, so nothing reads it.
 
 ## 8. Worker changes
 
@@ -839,7 +905,7 @@ override file, then the hook's answer (§10.3). The plan records the value it us
 - **A hook that cannot be imported** (a malformed or unresolvable `module:callable`) is `PlacementHookFailed` when
   the run starts, not a fallback: a misconfigured hook fails loudly. A callable given as an object that no import
   can resolve (a lambda, a nested function) is recorded with `importable: false`.
-- **Recorded.** One `placement` event per class per epoch, a run-scoped kind of `run-event@2.0` in the epoch's event
+- **Recorded.** One `placement` event per class per epoch, a run-scoped kind of `run-event@2.1` in the epoch's event
   log, holds the request, the answer, the callable's path and the version of its distribution
   (`importlib.metadata`), the validation verdict, the values used with the layer of each, and the `--exclude` list
   submitted. The request is built per epoch from the input values the pool bound. Its request
@@ -847,6 +913,17 @@ override file, then the hook's answer (§10.3). The plan records the value it us
 - **Actuals beside the estimate.** At the epoch's end the event gains a closing record per class: the actual wall
   time, GPU hours (from worker lifetimes) and peak device memory (from the epoch's `Observation`s) of the class's work, beside the request's
   figures. The run report reads both (UX-31 guarantee 3, UX-47).
+
+  Amended 2026-11-09 (T20R-7b). The log is append-only, so the closing record is the class's `placement` event written
+  again at the epoch's end (a change of epoch, or `Pool.close`), its `PlacementRecord` carrying `closing:
+  {wall_s, gpu_hours, device_peak_bytes}` (`run-event@2.1`, an additive minor). `request` is the request the class
+  was placed against: the hook's, else the plan's request built when the class was first placed. `wall_s` runs from
+  the class's first put to its last outcome on the pool's clock; `gpu_hours` is the lifetimes of its workers (a
+  worker lives from the first listing that shows it started to the first that omits it) on a `cuda` class, None on
+  another; `device_peak_bytes` is the largest `device_peak` of any `Observation` of the class, None where none was
+  read. `senselab status` prints the closing record on its own line. The epoch's close writes it for every executor:
+  the `Pool` with its fleet's lifetimes, and an executor with no workers (`InProcess`) at the end of the run with the
+  run's wall time and no GPU hours or peak. A request reused from another epoch is not part of this epoch's actuals.
 
 ### 10.4 A site's refusal is actionable
 
@@ -914,8 +991,8 @@ Dated amendment text is in the ADR files, 2026-11-08:
   `size`; `explain()` calls the same `size` with the stored estimate, never probing, so the plan's cost figures are
   measured or labelled unmeasured.
 - **ADR-006**: the format list gains `placement-request@1.0`, `placement-answer@1.0`, `measures@1`,
-  `measure-unit@1.0`, `measure-observations@1.0`, `measure-drift@1.0`, `measure-supersede@1.0`, `measure-regime@1.0`,
-  `measure-oom@1.0` and `resource-table@2.0`, `worker-ready@1.0` (the ready mark, §8; amended 2026-11-08 after the
+  `measure-unit@1.0`, `measure-observations@1.1`, `measure-drift@1.0`, `measure-supersede@1.0`, `measure-regime@1.0`,
+  `measure-oom@1.1` and `resource-table@2.0`, `worker-ready@1.0` (the ready mark, §8; amended 2026-11-08 after the
   T20R-7a review), and `run-config@2.1` (additive minor: the `calibration` section, whose
   `trust` a run sets). T20R-1 registers them in `kernel/formats.py`; `resource-table@1.0` is retired by T20R-8.
 - **Elsewhere, by the implementing tasks**: `wire-protocol.md` (`done` gains `since_load` and `load_s`, T20R-5);
