@@ -49,7 +49,7 @@ def call_params(task: str, params: dict[str, Any], backend_params: dict[str, Any
     """
     if task not in PASSED:
         raise SystemExit(f"no 1.x reference for task {task!r}")
-    given = {**params, **backend_params}
+    given = {**params, **{k: v for k, v in backend_params.items() if v is not None}}
     dropped = sorted(set(given) - PASSED[task] - MAPPED.get(task, set()))
     if dropped:
         raise SystemExit(f"the 1.x {task} call is not given the params {dropped}")
