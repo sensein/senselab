@@ -17,7 +17,13 @@ from pydantic import AfterValidator, Field, PlainSerializer, StringConstraints, 
 from senselab_worker.digest import COMMIT_HEX, SHA256_HEX
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, thawed
-from senselab_core.kernel.formats import RESOURCE_TABLE_2_FORMAT, RESOURCE_TABLE_FORMAT, FormatTag, Formatted
+from senselab_core.kernel.formats import (
+    RESOURCE_TABLE_2_FORMAT,
+    RESOURCE_TABLE_FORMAT,
+    FormatTag,
+    Formatted,
+    require_writable,
+)
 from senselab_core.kernel.placement import ResourceClassName
 from senselab_core.runtime.calibration import Estimate
 from senselab_core.runtime.config import dump_yaml, load_yaml
@@ -188,9 +194,14 @@ def write_row(root: Path, unit: Unit, measure: ResourceMeasure, measured: Measur
 
     Only the unit's class of its model's row is replaced, with `measured` as its derivation; the row keeps its other
     classes and its download bytes. The file is replaced whole.
+
+    Raises:
+        FieldsOfLaterMinor: the file is of a later minor with fields this version drops; it is not rewritten.
     """
     path = Path(root) / unit.task / f"{unit.backend}.yaml"
     table = ResourceTable.model_validate(load_yaml(path, "resource table")) if path.is_file() else None
+    if table is not None:
+        require_writable(table)
     rows = list(table.rows) if table is not None else []
     old = next((r for r in rows if (r.id, r.revision) == (unit.model_id, unit.revision)), None)
     entry = ClassMeasure(**ResourceMeasure.model_validate(measure.model_dump()).model_dump(), measured=measured)

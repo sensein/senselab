@@ -9,7 +9,7 @@ from typing import Annotated, Any, ClassVar, TypeVar
 
 from pydantic import StringConstraints, model_validator
 
-from senselab_core.kernel._base import _IGNORING_UNKNOWN, Frozen
+from senselab_core.kernel._base import _READING, Frozen, ReadUnder, _Reading
 
 F = TypeVar("F", bound=Frozen)
 _LOG = logging.getLogger(__name__)
@@ -170,41 +170,56 @@ def later_minor(written: str, found: str) -> bool:
 def reading(written: str, found: object) -> Iterator[None]:
     """Scope in which a record declaring `found` is validated by a reader of `written`.
 
-    Under a later minor of `written`'s name and major, every `Frozen` validated inside ignores the fields it does
-    not declare, at every nesting level, and the newer minor is logged the first time it is met. Under any other
-    tag unknown fields are refused. A `Formatted` nested in a later-minor record inherits the tolerance.
+    Under a later minor of `written`'s name and major, every `Frozen` validated inside drops the fields it does not
+    declare, at every nesting level, and records what it dropped (`Frozen.read_under`); the newer minor is logged the
+    first time it is met. Under any other tag unknown fields are refused. A `Formatted` decides from its own tag; a
+    bare `Frozen` inherits the scope it is validated in.
     """
     newer = check(written, found) is FormatVerdict.ACCEPTED and later_minor(written, str(found))
-    if newer and (written, str(found)) not in _REPORTED:
-        _REPORTED.add((written, str(found)))
-        _LOG.info("reading %s as %s: fields it does not know are ignored", found, written)
-    token = _IGNORING_UNKNOWN.set(newer or _IGNORING_UNKNOWN.get())
+    parent, current = _READING.get(), _Reading(str(found), []) if newer else None
+    token = _READING.set(current)
     try:
         yield
     finally:
-        _IGNORING_UNKNOWN.reset(token)
+        _READING.reset(token)
+        if current is not None:
+            if parent is not None:
+                parent.dropped.extend(current.dropped)
+            if (written, current.tag) not in _REPORTED:
+                _REPORTED.add((written, current.tag))
+                _LOG.info("reading %s as %s: ignoring %s", current.tag, written, sorted(set(current.dropped)))
 
 
-class LaterMinorFields(ValueError):
-    """A record of a later minor held fields its reader does not declare, in a value that is part of an identity."""
+class FieldsOfLaterMinor(ValueError):
+    """A value read under a later minor lost fields: it is not part of an identity, and it is not rewritten."""
 
-    def __init__(self, found: str) -> None:
-        """Name the declared format."""
-        super().__init__(f"fields of {found} that this version does not declare enter the identity")
-        self.found = found
+    def __init__(self, read: ReadUnder) -> None:
+        """Name the minor and the fields."""
+        super().__init__(f"read under {read.tag}, which declares fields this version dropped: {list(read.dropped)}")
+        self.read = read
+
+
+def require_writable(value: Frozen) -> None:
+    """Refuse a value that was read under a later minor and lost fields.
+
+    Raises:
+        FieldsOfLaterMinor: naming the newer minor and the fields.
+    """
+    read = value.read_under()
+    if read is not None and read.dropped:
+        raise FieldsOfLaterMinor(read)
 
 
 def validated(model: type[F], record: Mapping[str, Any], written: str, found: str) -> F:
     """Return `record` as `model`, read under `found` by a reader of `written`.
 
     Raises:
-        LaterMinorFields: if `found` is a later minor and `record` held fields `model` does not declare, so the value
-            is not the whole of what was written and its digest would differ.
+        FieldsOfLaterMinor: if `record` held fields `model` does not declare, so the value is not the whole of what
+            was written and its digest would differ.
     """
     with reading(written, found):
         value = model.model_validate(record)
-    if later_minor(written, found) and value.model_dump(mode="json") != record:
-        raise LaterMinorFields(found)
+    require_writable(value)
     return value
 
 

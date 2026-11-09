@@ -65,7 +65,7 @@ from senselab_worker.digest import SHA256_HEX, identity_digest
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel._base import value_digest
-from senselab_core.kernel.formats import FormatVerdict, LaterMinorFields, check, validated
+from senselab_core.kernel.formats import FieldsOfLaterMinor, FormatVerdict, check, require_writable, validated
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
     Equivalence,
@@ -76,7 +76,7 @@ from senselab_core.kernel.identity import (
     acceptable,
 )
 from senselab_core.runtime.clock import Clock, SystemClock
-from senselab_core.runtime.equivalence import EQUIVALENCE, EquivalenceEvidence
+from senselab_core.runtime.equivalence import EQUIVALENCE, EquivalenceEvidence, read_evidence
 from senselab_core.runtime.equivalence import split as split_class
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.servable import Servable, StoredContext, Verdict, always_serve, choose, servable
@@ -357,8 +357,8 @@ def _guarded(entry: Path, read: Callable[[], T]) -> T:
         return read()
     except (CorruptEntryError, StoreFormatRetired, StoreFormatUnknown):
         raise
-    except LaterMinorFields as err:
-        raise StoreFormatUnknown(entry, err.found, str(err)) from err
+    except FieldsOfLaterMinor as err:
+        raise StoreFormatUnknown(entry, err.read.tag, str(err)) from err
     except OSError as err:
         raise storage_fault(err, entry) from err
     except (ValueError, KeyError, TypeError, ValidationError) as err:
@@ -681,7 +681,9 @@ class ResultStore:
         Raises:
             StoreUnavailable: the store could not be written.
             WrongKindError: an object of the wrong kind on the way cannot be moved aside.
+            FieldsOfLaterMinor: `evidence` was read under a later minor and lost fields.
         """
+        require_writable(evidence)
         data = jcs_dumps(evidence.model_dump(mode="json"))
         try:
             with self._open_root(create=True) as root, self._ensure(root, EVIDENCE_DIR) as directory:
@@ -707,12 +709,11 @@ class ResultStore:
                 out = []
                 for name in sorted(n for n in directory.listdir() if EVIDENCE_NAME.fullmatch(n)):
                     try:
-                        record = EquivalenceEvidence.model_validate_json(directory.read_regular(name) or b"")
-                    except ValidationError:
-                        record = None
-                    if record is None or f"{record.canonical_digest()}.json" != name:
-                        raise CorruptEntryError(f"evidence record {name[:12]}... is not the record its name digests")
-                    out.append(record)
+                        out.append(read_evidence(name, directory.read_regular(name) or b""))
+                    except ValueError as err:
+                        raise CorruptEntryError(
+                            f"evidence record {name[:12]}... is not the record its name digests"
+                        ) from err
                 return out
         except FileNotFoundError:
             return []

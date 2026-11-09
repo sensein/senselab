@@ -216,14 +216,32 @@ def _seal(v: "Frozen") -> None:
     object.__setattr__(v, "__pydantic_private__", private)
 
 
-_IGNORING_UNKNOWN: ContextVar[bool] = ContextVar("senselab_ignoring_unknown_fields", default=False)
-"""Whether the record being validated declares a later minor of its format: every `Frozen` under it drops
-fields it does not declare. Set by `formats.reading`."""
+@dataclass
+class _Reading:
+    tag: str
+    dropped: list[str]
+
+
+@dataclass(frozen=True)
+class ReadUnder:
+    """What reading a value under a later minor cost.
+
+    `tag` is the tag it was read under; `dropped` the fields the reader did not declare, as `<Type>.<field>`,
+    dropped from the value and every value below it.
+    """
+
+    tag: str
+    dropped: tuple[str, ...]
+
+
+_READING: ContextVar[_Reading | None] = ContextVar("senselab_reading", default=None)
+"""The record being validated, when it declares a later minor of its format: every `Frozen` under it drops the
+fields it does not declare and says so here. Set by `formats.reading`."""
 
 
 def ignoring_unknown_fields() -> bool:
     """Whether the record being validated declares a later minor of its format (`formats.reading`)."""
-    return _IGNORING_UNKNOWN.get()
+    return _READING.get() is not None
 
 
 def _declared(cls: type["Frozen"], data: Mapping[Any, Any]) -> dict[Any, Any]:
@@ -295,9 +313,16 @@ class Frozen(BaseModel):
     def _drop_unknown_fields(cls, data: object, handler: ModelWrapValidatorHandler[Self]) -> Self:
         """Validate `data` in its reading scope, minus the undeclared fields while that scope is a later minor."""
         with cls._reading(data):
-            if _IGNORING_UNKNOWN.get() and isinstance(data, Mapping):
-                data = _declared(cls, data)
-            return handler(data)
+            read = _READING.get()
+            if read is None or not isinstance(data, Mapping):
+                return handler(data)
+            kept, start = _declared(cls, data), len(read.dropped)
+            read.dropped.extend(f"{cls.__name__}.{k}" for k in data if k not in kept)
+            value = handler(kept)
+            object.__setattr__(
+                value, "__pydantic_private__", {"_read": ReadUnder(read.tag, tuple(read.dropped[start:]))}
+            )
+            return value
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
@@ -316,7 +341,13 @@ class Frozen(BaseModel):
 
     def _derived(self) -> Mapping[str, object]:
         """Return the private values a built value holds; a subclass extends this mapping."""
-        return {"_canonical": digest_of(self)}
+        held = object.__getattribute__(self, "__pydantic_private__") or {}
+        return {"_canonical": digest_of(self), "_read": held.get("_read")}
+
+    def read_under(self) -> ReadUnder | None:
+        """Return what reading this value under a later minor cost, None when it was read under its own."""
+        read: ReadUnder | None = self.__pydantic_private__["_read"]  # type: ignore[index]
+        return read
 
     def canonical_digest(self) -> str:
         """Return `value_digest("<module>.<qualname>", <each field's held value>)`, computed when the value was built.

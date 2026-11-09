@@ -24,12 +24,15 @@ from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution_settings import ResourceClass, Trust
 from senselab_core.runtime.locks import Lease, LeaseTimeout
 from senselab_core.runtime.measures import (
+    RECORD_FORMATS,
+    RECORD_MODELS,
     Build,
     MeasureRoots,
     MeasureSource,
     MeasureUnit,
     PeerProbing,
     Provenance,
+    RecordKind,
     Unleased,
     class_digest,
     resolve_roots,
@@ -294,6 +297,23 @@ def test_a_later_minor_file_with_nested_added_fields_is_read(tmp_path: Path) -> 
     written.chmod(0o640)
     written.write_text(json.dumps(document))
     assert roots.observations(UNIT) == (_observation(),)
+    assert written.exists() and not (tmp_path / "measures@1" / "quarantine").exists()
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("kind", sorted(RECORD_FORMATS))
+def test_a_later_minor_record_of_every_kind_is_read_and_typed(tmp_path: Path, kind: RecordKind) -> None:
+    """A record of a later minor whose payload gained a field is listed, typed where it has a model, and kept."""
+    roots = _roots(tmp_path)
+    written = roots.put_record(UNIT, kind, _payload(kind), PROVENANCE)
+    assert written is not None
+    document = json.loads(written.read_text())
+    document["format"] = RECORD_FORMATS[kind].rsplit(".", 1)[0] + ".1"
+    document["record"]["added_later"] = 1
+    written.chmod(0o640)
+    written.write_text(json.dumps(document))
+    assert [r.kind for r in roots.records(UNIT)] == [kind]
+    assert len(roots.regime_records(UNIT)) == (kind in RECORD_MODELS)
     assert written.exists() and not (tmp_path / "measures@1" / "quarantine").exists()
 
 

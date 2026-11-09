@@ -6,7 +6,16 @@ import logging
 import pytest
 from pydantic import ValidationError
 from senselab_core.kernel._base import Frozen
-from senselab_core.kernel.formats import FormatTag, Formatted, FormatVerdict, check, reading
+from senselab_core.kernel.formats import (
+    FieldsOfLaterMinor,
+    FormatTag,
+    Formatted,
+    FormatVerdict,
+    check,
+    reading,
+    require_writable,
+    validated,
+)
 
 
 class _Thing(Formatted):
@@ -138,13 +147,68 @@ def test_the_reading_scope_covers_a_bare_frozen_and_ends_with_the_read() -> None
 
 @pytest.mark.logic
 def test_a_later_minor_is_reported_once(caplog: pytest.LogCaptureFixture) -> None:
-    """The newer minor is logged the first time a reader meets it, not on every record."""
+    """The newer minor is logged the first time a reader meets it, with the fields it ignored, not on every record."""
     caplog.set_level(logging.INFO, logger="senselab_core.kernel.formats")
     for _ in range(3):
         _Outer.model_validate(_record("outer@1.7"))
-    assert [r.getMessage() for r in caplog.records].count(
-        "reading outer@1.7 as outer@1.0: fields it does not know are ignored"
-    ) == 1
+    assert len(caplog.records) == 1 and "outer@1.7" in caplog.records[0].getMessage()
+    assert "_Inner.later" in caplog.records[0].getMessage()
+
+
+class _Tagged(Formatted):
+    format: FormatTag = "tagged@1.0"
+    n: int
+
+
+class _Holder(Formatted):
+    format: FormatTag = "holder@1.0"
+    tagged: _Tagged
+    inner: _Inner
+
+
+@pytest.mark.logic
+def test_a_nested_formatted_decides_from_its_own_tag_and_a_bare_frozen_inherits() -> None:
+    """Inside a later-minor record a nested `Formatted` of its own minor still refuses an unknown field."""
+    record = {"format": "holder@1.1", "tagged": {"format": "tagged@1.0", "n": 1}, "inner": {"n": 1, "later": 1}}
+    assert _Holder.model_validate(record).inner.n == 1
+    with pytest.raises(ValidationError):
+        _Holder.model_validate({**record, "tagged": {"format": "tagged@1.0", "n": 1, "later": 1}})
+    read = _Holder.model_validate({**record, "tagged": {"format": "tagged@1.1", "n": 1, "later": 1}})
+    assert read.tagged.read_under() is not None and read.read_under() is not None
+    assert read.read_under().dropped == ("_Tagged.later", "_Inner.later")  # type: ignore[union-attr]
+
+
+@pytest.mark.logic
+def test_a_value_carries_what_its_read_cost() -> None:
+    """A value read under a later minor says so; one read under its own minor does not."""
+    assert _Outer.model_validate(_record()).read_under() is not None
+    dropped = _Outer.model_validate(_record("outer@1.1", top_later=1)).read_under().dropped  # type: ignore[union-attr]
+    assert "_Outer.top_later" in dropped and "_Inner.later" in dropped
+    assert _Outer(inner=_Inner(n=1)).read_under() is None
+
+
+@pytest.mark.logic
+def test_a_value_read_under_a_later_minor_is_not_rewritten() -> None:
+    """A value that lost fields is refused by `require_writable`, naming the minor; one that lost none is writable."""
+    lost = _Outer.model_validate(_record())
+    with pytest.raises(FieldsOfLaterMinor, match=r"outer@1\.1.*_Inner\.later"):
+        require_writable(lost)
+    require_writable(_Outer.model_validate({"format": "outer@1.1", "inner": {"n": 1}}))
+    require_writable(_Outer(inner=_Inner(n=1)))
+
+
+class _Defaulted(Frozen):
+    n: int
+    m: int = 0
+
+
+@pytest.mark.logic
+def test_validated_refuses_dropped_fields_not_a_different_serialisation() -> None:
+    """A later writer that omits a defaulted field is read whole; one that adds a field is refused as skew."""
+    assert validated(_Defaulted, {"n": 1}, "d@1.0", "d@1.1") == _Defaulted(n=1)
+    with pytest.raises(FieldsOfLaterMinor):
+        validated(_Defaulted, {"n": 1, "later": 1}, "d@1.0", "d@1.1")
+    assert validated(_Defaulted, {"n": 1}, "d@1.0", "d@1.0") == _Defaulted(n=1)
 
 
 @pytest.mark.logic

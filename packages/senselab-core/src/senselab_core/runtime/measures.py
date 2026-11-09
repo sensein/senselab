@@ -393,6 +393,13 @@ def outdates(record: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(ids)
 
 
+def _typed(record: MeasureRecord) -> RegimeRecord:
+    """Return the payload of a `regime` or `oom` record as its model, read under the tag the file declared."""
+    written, read = RECORD_FORMATS[record.kind], record.read_under()
+    with reading(written, written if read is None else read.tag):
+        return RECORD_MODELS[record.kind].model_validate(record.record)
+
+
 def _record_parser(kind: str) -> Callable[[Mapping[str, Any], os.stat_result], MeasureRecord]:
     def parse(document: Mapping[str, Any], info: os.stat_result) -> MeasureRecord:
         if kind == "supersede":
@@ -695,9 +702,7 @@ class MeasureRoots:
 
     def regime_records(self, unit: MeasureUnit) -> tuple[RegimeRecord, ...]:
         """Return the typed `regime` and `oom` records of `unit` the trust admits, oldest first (`RECORD_MODELS`)."""
-        return tuple(
-            RECORD_MODELS[r.kind].model_validate(r.record) for r in self.records(unit) if r.kind in RECORD_MODELS
-        )
+        return tuple(_typed(r) for r in self.records(unit) if r.kind in RECORD_MODELS)
 
     def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
         """Return the observations of `unit` that still pool, oldest file first.

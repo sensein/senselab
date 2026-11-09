@@ -234,3 +234,18 @@ def render(evidence: Iterable[EquivalenceEvidence]) -> tuple[str, str]:
             derivations.append(f"{backend}.class-{n}: {derivation}")
     document = {"format": EQUIVALENCE_FORMAT, "backends": backends}
     return HEADER + dump_yaml(document), "\n\n".join(derivations)
+
+
+def read_evidence(name: str, raw: bytes) -> EquivalenceEvidence:
+    """Return the evidence record `raw`, a file `name`d by its canonical digest.
+
+    A record of a later minor that lost fields has a digest this version cannot recompute: it is read, not verified.
+
+    Raises:
+        ValueError: `raw` is not an evidence record, or its digest is not `name`.
+    """
+    record = EquivalenceEvidence.model_validate_json(raw)
+    read = record.read_under()
+    if (read is None or not read.dropped) and f"{record.canonical_digest()}.json" != name:
+        raise ValueError(f"evidence record {name[:12]}... is not the record its name digests")
+    return record

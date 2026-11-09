@@ -105,6 +105,7 @@ from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
 from senselab_core.testing.calibration_samples import register_calibration_samples
 from senselab_core.testing.execution_samples import register_execution_samples
+from senselab_core.testing.format_skew import later_minor_ignored
 from senselab_core.testing.placement_samples import register_placement_samples, resource_table
 
 Case = Callable[[], None]
@@ -191,7 +192,7 @@ def value_cases() -> list[tuple[str, Case]]:
             "copy_refuses_unknown_fields": functools.partial(_copy_refuses_unknown_fields, factory),
             "built_from_mappings_only": functools.partial(_built_from_mappings_only, factory),
             "read_only": functools.partial(_read_only, factory),
-            "later_minor_ignored": functools.partial(_later_minor_ignored, factory),
+            "later_minor_ignored": lambda: later_minor_ignored(_samples(factory)),
             "setstate_revalidates": functools.partial(_setstate_revalidates, factory, invalid),
         }
         if cls in ATTESTED_IDENTITIES:
@@ -357,36 +358,6 @@ def _copy_refuses_unknown_fields(factory: Factory) -> None:
         except ValueError:
             continue
         raise AssertionError(f"{type(v).__qualname__}.model_copy accepted an unknown field")
-
-
-def _inject_unknown(value: object, dumped: object) -> None:
-    if isinstance(value, Frozen) and isinstance(dumped, dict) and set(dumped) <= set(type(value).model_fields):
-        dumped["added_by_a_later_minor"] = 1
-        for name in type(value).model_fields:
-            _inject_unknown(getattr(value, name), dumped.get(name))
-    elif isinstance(value, Mapping) and isinstance(dumped, Mapping):
-        for key, item in value.items():
-            _inject_unknown(item, dumped.get(key))
-    elif isinstance(value, (tuple, list)) and isinstance(dumped, (tuple, list)):
-        for item, held in zip(value, dumped, strict=False):
-            _inject_unknown(item, held)
-
-
-def _later_minor_ignored(factory: Factory) -> None:
-    for v in _samples(factory):
-        if not isinstance(v, Formatted) or type(v).model_fields["format"].is_required():
-            continue
-        later = f"{v.format.split('@')[0]}@{v.format.split('@')[1].split('.')[0]}.{int(v.format.rsplit('.', 1)[1]) + 1}"
-        dumped = {**v.model_dump(), "format": later}
-        assert type(v).model_validate(dumped) == v.model_copy(update={"format": later})
-        _inject_unknown(v, dumped)
-        assert type(v).model_validate(dumped) == v.model_copy(update={"format": later}), type(v).__qualname__
-        strict = {**dumped, "format": v.format}
-        try:
-            type(v).model_validate(strict)
-        except ValidationError:
-            continue
-        raise AssertionError(f"{type(v).__qualname__} read an unknown field under its own minor")
 
 
 def _built_from_mappings_only(factory: Factory) -> None:
