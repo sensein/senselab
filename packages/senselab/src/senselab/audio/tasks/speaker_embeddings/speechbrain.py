@@ -41,16 +41,17 @@ class StubModel:
 
 
 def unpinned_paths(paths: Mapping[str, str], snapshot: str) -> dict[str, str]:
-    """Return the checkpoint paths of `paths` outside the directory `snapshot` and its repo's `blobs/`.
+    """Return the checkpoint paths of `paths` that are not a file of the directory `snapshot`.
 
-    A Hugging Face snapshot file is a symlink into `../../blobs/`, so a path may be given as the link or as its target.
+    A path passes when it lies under `snapshot`, or when it resolves to the same file as an entry of `snapshot`: a
+    Hugging Face snapshot file links into `blobs/`, which may itself link into a hub-wide store.
     """
     root = snapshot.rstrip("/") + "/"
-    blobs = os.path.realpath(os.path.join(snapshot, os.pardir, os.pardir, "blobs")) + os.sep
+    pinned = {os.path.realpath(os.path.join(top, name)) for top, _, names in os.walk(snapshot) for name in names}
     return {
         name: path
         for name, path in paths.items()
-        if not (str(path).startswith(root) or os.path.realpath(str(path)).startswith(blobs))
+        if not (str(path).startswith(root) or os.path.realpath(str(path)) in pinned)
     }
 
 
