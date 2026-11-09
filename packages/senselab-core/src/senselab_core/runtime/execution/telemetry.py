@@ -8,14 +8,15 @@ tests of production against an estimate. `Actuals` collects what a class's work 
 import math
 import statistics
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from senselab_core.runtime.calibration import Estimate, HardwareClass, Observation
 from senselab_core.runtime.clock import Clock
-from senselab_core.runtime.execution.events import ClassActuals
-from senselab_core.runtime.placement import _HOUR_S
+from senselab_core.runtime.execution.events import ClassActuals, EventLog, PlacementRecord, placement_record
+from senselab_core.runtime.placement import HOUR_S
 from senselab_core.runtime.probe import MEDIAN_SE
+from senselab_core.runtime.site_placement import ClassNeeds, ClassPlacement, HookRef, PlacementRequest
 
 
 def predicted(estimate: Estimate, request: Observation) -> tuple[float, float | None] | None:
@@ -183,6 +184,42 @@ class Actuals:
         first, last = self._first.get(resource_class), self._last.get(resource_class)
         return ClassActuals(
             wall_s=None if first is None or last is None else max(0.0, last - first),
-            gpu_hours=None if worker_s is None else worker_s / _HOUR_S,
+            gpu_hours=None if worker_s is None else worker_s / HOUR_S,
             device_peak_bytes=self._peak.get(resource_class),
         )
+
+
+class Placements:
+    """One epoch's placement events for one log: each class's record as placed, and again, closed, at the epoch's end.
+
+    `request` builds the run's request, from which a class placed with no hook takes its needs; `cuda` says whether
+    a class is a GPU class, whose GPU hours are its workers' lifetimes.
+    """
+
+    def __init__(
+        self,
+        log: EventLog,
+        request: Callable[[], PlacementRequest],
+        actuals: Actuals,
+        cuda: Callable[[str], bool],
+    ) -> None:
+        """Log to `log`, closing each class with what `actuals` read of it."""
+        self._log, self._request, self._actuals, self._cuda = log, request, actuals, cuda
+        self._placed: dict[str, PlacementRecord] = {}
+
+    def record(  # noqa: PLR0913 - what a `Placer` hands its recorder
+        self, _: int, name: str, needs: ClassNeeds | None, hook: HookRef | None, placed: ClassPlacement
+    ) -> None:
+        """Append class `name`'s placement to the log and keep it with the request it was placed against."""
+        record = placement_record(name, needs, hook, placed)
+        self._log.record("placement", None, placement=record)
+        asked = needs if needs is not None else self._request().held(name)
+        self._placed[name] = record.model_copy(update={"request": asked})
+
+    def close(self, worker_seconds: Callable[[str], float] | None = None) -> None:
+        """Append each placed class's record again with its actuals; `worker_seconds` gives a class's lifetimes."""
+        for name, record in self._placed.items():
+            worker_s = worker_seconds(name) if worker_seconds is not None and self._cuda(name) else None
+            closing = self._actuals.closing(name, worker_s)
+            self._log.record("placement", None, placement=record.model_copy(update={"closing": closing}))
+        self._placed.clear()

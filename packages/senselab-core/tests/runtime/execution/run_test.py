@@ -25,7 +25,7 @@ from runner_test import (  # noqa: F401 - `packaged` is the autouse fixture of t
     packaged,
 )
 from senselab_core.cli import main as cli_main
-from senselab_core.runtime.execution.events import read_events
+from senselab_core.runtime.execution.events import placements, read_events
 from senselab_core.runtime.execution.executor import FaultRecord, Handle, PlanFragment
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.run import (
@@ -65,6 +65,18 @@ def _started(tmp_path: Path, rows: list[dict[str, str]] = ROWS) -> tuple[Run, Re
     run = placed.run(executor, store=executor.store)
     assert run.wait(60).done
     return run, executor
+
+
+@pytest.mark.logic
+def test_a_run_of_an_executor_with_no_workers_closes_its_placement_with_actuals(tmp_path: Path) -> None:
+    """A laptop-shaped run records each class's placement and, at its end, the same record with its wall time."""
+    run, _ = _started(tmp_path)
+    found = [e.placement for e in placements(run.events()) if e.placement is not None]
+    opened = [p for p in found if p.closing is None]
+    closed = [p for p in found if p.closing is not None]
+    assert opened and [p.resource_class for p in closed] == [p.resource_class for p in opened]
+    assert all(p.closing is not None and p.closing.wall_s is not None and p.closing.gpu_hours is None for p in closed)
+    assert all(p.request is not None for p in closed)
 
 
 @pytest.mark.contract

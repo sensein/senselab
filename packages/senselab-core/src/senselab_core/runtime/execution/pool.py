@@ -24,7 +24,8 @@ A retry is a one-job fragment of the next `attempt`, logged `failed` then `queue
 with its env is logged `queued` again, so it reads as waiting, never as failed.
 
 The `Observation`s of production items are read against the estimate that sized them (`ProbeMachine.settled`):
-drift, `regime` and `supersede` records, and the unit's `m1` raised at once by a device peak above its band. Each
+drift, `regime` and `supersede` records, and the unit's `m1` raised at once by a device peak above its band; a
+request that raised a resource fault writes an `oom` record. Each
 class's `placement` event is appended again when its epoch ends, with the work's actuals (`ClassActuals`).
 """
 
@@ -56,8 +57,6 @@ from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import (
     BrokenEnv,
     EventLog,
-    PlacementRecord,
-    placement_record,
     read_events,
 )
 from senselab_core.runtime.execution.executor import (
@@ -102,7 +101,7 @@ from senselab_core.runtime.execution.substrates import (
     read_mark,
     scale,
 )
-from senselab_core.runtime.execution.telemetry import Actuals
+from senselab_core.runtime.execution.telemetry import Actuals, Placements
 from senselab_core.runtime.execution_settings import ResourceClass
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.measures import (
@@ -112,9 +111,6 @@ from senselab_core.runtime.measures import (
 from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.site_placement import (
-    ClassNeeds,
-    ClassPlacement,
-    HookRef,
     PlacementHook,
     PlacementRequest,
     PlacementValues,
@@ -209,8 +205,7 @@ class Pool:
         self._fenced: tuple[float, int] | None = None
         self._clock = clock
         self._extrapolated = ExtrapolationLog()
-        self._placed: dict[str, PlacementRecord] = {}
-        self._actuals = Actuals(clock)
+        self._bound = False
         self.bind_epoch(epoch, events)
         self.broken: dict[str, BrokenEnv] = {}
         self.gaps: list[tuple[JobRef, FaultRecord]] = []
@@ -241,15 +236,18 @@ class Pool:
         """
         if events.epoch != epoch:
             raise ValueError(f"the pool coordinates epoch {epoch}; its event log is of epoch {events.epoch}")
-        if hasattr(self, "events"):
+        if self._bound:
             self._close_placements()
+        self._bound = True
         self.epoch, self.events = epoch, events
-        self._placed.clear()
         self._actuals = Actuals(self._clock)
+        self._ledger = Placements(
+            events, self._request, self._actuals, lambda name: self.profile.resource_classes[name].device == "cuda"
+        )
         if isinstance(self.substrate, Slurm):
             self.substrate.attempt, self.substrate.epoch = events.attempt, epoch
         if self._placer is not None:
-            self._placer.record = self._record_placement
+            self._placer.record = self._ledger.record
         self._fleet.reset()
         self.broken_workers.clear()
         self._relogged.clear()
@@ -276,7 +274,7 @@ class Pool:
                     placed.hook,
                     request=self._request,
                     clock=self._clock,
-                    record=self._record_placement,
+                    record=self._ledger.record,
                     inert=inert,
                 )
                 if isinstance(self.substrate, Slurm):
@@ -289,23 +287,9 @@ class Pool:
         placed, values = self._request_of
         return placed.placement_request(values=values)
 
-    def _record_placement(
-        self, _: int, name: str, needs: ClassNeeds | None, hook: HookRef | None, placed: ClassPlacement
-    ) -> None:
-        """Append class `name`'s placement to the epoch's log, and keep it with the request it was placed against."""
-        record = placement_record(name, needs, hook, placed)
-        self.events.record("placement", None, placement=record)
-        asked = needs if needs is not None else self._request().held(name)
-        self._placed[name] = record.model_copy(update={"request": asked})
-
     def _close_placements(self) -> None:
-        """Append each placed class's record again with its actuals beside the request, once per epoch (§10.3)."""
-        for name, record in self._placed.items():
-            cuda = self.profile.resource_classes[name].device == "cuda"
-            worker_s = self._fleet.worker_seconds(name) if cuda else None
-            closing = self._actuals.closing(name, worker_s)
-            self.events.record("placement", None, placement=record.model_copy(update={"closing": closing}))
-        self._placed.clear()
+        """Append each placed class's record again with its actuals beside the request, once per epoch."""
+        self._ledger.close(self._fleet.worker_seconds)
 
     def granted(self, queue: str) -> ResourceClass:
         """Return `queue`'s class as it is placed this epoch: the one source of its worker cap.
@@ -629,7 +613,8 @@ class Pool:
         keys = self._keys(fragment)
         reused = record.get("epoch") != self.epoch
         seen = _observed(record)
-        self._actuals.landed(class_of(flight.queue), seen)
+        if not reused:
+            self._actuals.landed(class_of(flight.queue), seen)
         self._machine.settled(flight.digest, seen)
         self._machine.oom(flight.digest, seen, _worker_of(record))
         try:
