@@ -29,7 +29,7 @@ from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.sizing import Sample, calibrated, measure_of
+from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import WorkerClient, WorkerLost, WorkerOOMKilled
 from senselab_core.testing.interpreter import source_tree_python
@@ -189,9 +189,9 @@ def test_samples_leave_the_resident_model_out_of_the_per_item_memory(tmp_path: P
         device_memory=lambda: None,
     )
     assert worker.serve() == 0
-    found = calibrated([Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)])
-    assert found is not None and (found.resident_bytes, found.peak_memory_bytes) == (1100, 1110)
-    assert measure_of(found).bytes_per_item == 10
+    samples = [Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)]
+    warm = [s for s in samples if not s.cold]
+    assert (min(s.resident_bytes or 0 for s in warm), max(s.peak_memory_bytes for s in samples)) == (1100, 1110)
 
 
 @pytest.mark.logic
@@ -240,8 +240,7 @@ def test_device_memory_is_read_once_per_claim_on_a_cuda_class(tmp_path: Path) ->
     samples = [Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile, "gpu")]
     assert next(reads, None) is None and len(samples) == 4 and not any(s.served for s in samples)
     assert {s.device_baseline_bytes for s in samples} == {0} and {s.device_bytes for s in samples} == {1000, 1010}
-    found = calibrated(samples)
-    assert found is not None and (found.device_resident_bytes, found.device_peak_bytes) == (None, None)
+    assert not any(s.device_item_bytes is not None or s.device_allocated_bytes is not None for s in samples)
 
 
 @pytest.mark.logic
@@ -269,13 +268,11 @@ def test_a_backends_request_peaks_reach_the_samples(tmp_path: Path) -> None:
     assert worker.serve() == 0
     samples = [Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)]
     assert {(s.device_item_bytes, s.device_allocated_bytes, s.batch_size) for s in samples} == {(30, 1000, 1)}
-    found = calibrated(samples)
-    assert found is not None and measure_of(found, on_device=True).bytes_per_item == 30
 
 
 @pytest.mark.logic
 def test_an_unreadable_resident_memory_leaves_the_host_memory_unmeasured(tmp_path: Path) -> None:
-    """With only a high-water readable (no cgroup v2), the calibrated measure has no host memory pair."""
+    """With only a high-water readable (no cgroup v2), no sample has a resident figure."""
     profile = _profile()
     placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(3)])
     for element in range(3):
@@ -290,8 +287,8 @@ def test_an_unreadable_resident_memory_leaves_the_host_memory_unmeasured(tmp_pat
         device_memory=lambda: None,
     )
     assert worker.serve() == 0
-    found = calibrated([Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)])
-    assert found is not None and (found.resident_bytes, found.peak_memory_bytes) == (None, None)
+    samples = [Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)]
+    assert samples and all(s.resident_bytes is None for s in samples)
 
 
 @pytest.mark.logic

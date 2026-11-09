@@ -27,7 +27,7 @@ from senselab_core.runtime.keys import Call, Placement
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.probe import memory_batch, peak
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.sizing import ExtrapolationLog, Grant, Measure, Sizing, size, size_row
+from senselab_core.runtime.sizing import ExtrapolationLog, Grant, Sizing, size
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.calibration_samples import UNIT
 
@@ -94,8 +94,6 @@ def test_ten_minute_recordings_keep_items_within_quantum_s() -> None:
     assert all(_seconds(sized, c) * (1 + z * 0.1) <= grant.quantum_s for c in sized.cuts)
     assert max(b - a for a, b in sized.cuts) == int(grant.quantum_s // upper)
     assert [i for c in sized.cuts for i in range(*c)] == list(range(40))
-    by_row = Measure(load_s=0.0, claim_s=0.0, resident_bytes=None, bytes_per_item=None, s_per_item=6.1)
-    assert size_row(by_row, grant, SIZING).quantum_items > 5 * max(b - a for a, b in sized.cuts)
 
 
 @pytest.mark.logic

@@ -1,4 +1,4 @@
-"""`Probe.plan` and `Probe.estimate`: what counts, what is planned, and the figures the old `calibrated` got wrong."""
+"""`Probe.plan` and `Probe.estimate`: what counts, what is planned."""
 
 import itertools
 import math
@@ -31,7 +31,7 @@ from senselab_core.runtime.execution_settings import CalibrationSettings
 from senselab_core.runtime.measures import MeasureSource
 from senselab_core.runtime.probe import Probe, Work, _rank_bound, _theil_sen, memory_batch
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.sizing import Grant, Sample, calibrated, measure_of
+from senselab_core.runtime.sizing import Grant
 from senselab_core.testing.calibration_samples import UNIT
 
 CONFIG: CalibrationSettings = ExecutionProfile.load("laptop").calibration
@@ -457,28 +457,18 @@ def test_the_unit_kind_is_its_observations_and_mixed_kinds_leave_the_slope_unmea
 # --- the figures the old path got wrong -------------------------------------------------------------------------
 
 
-def _sample(wall: float, jobs: int = 1, cold: bool = False) -> Sample:
-    return Sample(
-        wall_s=wall, claim_s=0.01, jobs=jobs, batch_size=1, input_s=None, baseline_bytes=1, resident_bytes=1000,
-        peak_memory_bytes=1100, cold=cold, job="j", ended_s=0,
-    )  # fmt: skip
-
-
 @pytest.mark.logic
 def test_a_failed_request_never_enters_the_per_item_time() -> None:
-    """`calibrated` takes a failed 9 s request into its median (2 s per item); the estimate keeps 0.1 + 0.02·L."""
+    """A failed 9 s request does not move the estimate, which keeps 0.1 + 0.02·L."""
     good = _line(0.1, 0.02)
     failed = [_obs(5.0, 9.0, outcome="failed") for _ in range(4)]
-    samples = [_sample(o.wall_s) for o in good[:3] + failed]
-    old = calibrated(samples)
-    assert old is not None and old.s_per_input_s == 9.0
     got = _estimate(good + failed).single
     assert got is not None and got.u == pytest.approx(0.02) and got.r == pytest.approx(0.1)
 
 
 @pytest.mark.logic
 def test_fixed_cost_is_fitted_not_shared() -> None:
-    """Item wall 0.040 + 0.0366 per job over 1-job and 4-job items: `u` 0.0366 and `a` 0.040; `calibrated` 0.0616."""
+    """Item wall 0.040 + 0.0366 per job over 1-job and 4-job items: `u` 0.0366 and `a` 0.040."""
     fixed, per_job = 0.040, 0.0366
     obs = []
     for stratum, length in enumerate((1.0, 4.0)):
@@ -487,21 +477,14 @@ def test_fixed_cost_is_fitted_not_shared() -> None:
     got = _estimate(obs)
     assert got.single is not None and got.single.u == pytest.approx(per_job)
     assert got.item_s == pytest.approx(fixed)
-    shared = calibrated([_sample(o.item_wall_s or 0.0, jobs=int(o.units)) for o in obs])
-    assert shared is not None and shared.s_per_input_s == pytest.approx(0.0616, abs=1e-3)
-    assert got.single.u is not None and shared.s_per_input_s - got.single.u > 0.02
 
 
 @pytest.mark.logic
 def test_device_bytes_scale_with_length() -> None:
-    """Peak beyond resident is 5 000 + 50 per unit: the estimate gives `m1` 50; `measure_of` gives one constant."""
+    """Peak beyond resident is 5 000 + 50 per unit: the estimate gives `m1` 50."""
     got = _estimate(_with_device(5000, 50))
     assert got.device is not None and got.device.m1 == pytest.approx(50.0) and got.device.m0 == pytest.approx(5000.0)
     assert got.device.resident == 10**9
-    short = _sample(1.0).model_copy(update={"device_item_bytes": 5100, "device_allocated_bytes": 10**9})
-    longer = _sample(1.0).model_copy(update={"device_item_bytes": 5400, "device_allocated_bytes": 10**9})
-    measure = measure_of(calibrated([short, longer]), on_device=True)  # type: ignore[arg-type]
-    assert measure.bytes_per_item == 5400  # the one constant, at every length
 
 
 # --- the OOM raise ----------------------------------------------------------------------------------------------
