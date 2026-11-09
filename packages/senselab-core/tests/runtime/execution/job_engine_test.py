@@ -13,6 +13,14 @@ from pydantic import ValidationError
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskSpec
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ReusePolicy
 from senselab_core.runtime.audio_io import open_audio
+from senselab_core.runtime.calibration import (
+    Estimate,
+    EstimateSource,
+    MemoryFit,
+    Observation,
+    RequestFit,
+    StratumBatch,
+)
 from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
@@ -22,9 +30,11 @@ from senselab_core.runtime.execution.job import Completed, Failed, Job, JobOutco
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.fake_backend import EchoParams
 from senselab_core.runtime.keys import Call, Placement, request_size
+from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.resources import Batched, ClassMeasure, Measured, ResourceRow, ResourceTable
+from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable, PackagedTable
 from senselab_core.runtime.store import ResultStore
+from senselab_core.testing.calibration_samples import UNIT
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.workers import mit_lock_records
 from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, ResourceFault, error_record
@@ -269,24 +279,36 @@ def test_a_retired_upstream_entry_fails_only_its_element_as_a_gap(tmp_path: Path
     assert sizes == [1]
 
 
+class _Bare:
+    """A measures root that holds nothing."""
+
+    def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:  # noqa: ARG002 - a MeasuresRoot
+        return ()
+
+
 @pytest.mark.logic
-def test_in_process_runs_a_unit_with_packaged_rows_in_batches(tmp_path: Path, sizes: list[int]) -> None:
-    """Jobs of a unit with a packaged resource row are sent in the batch `size` gives, not one to a request."""
-    measure = ClassMeasure(
+def test_in_process_runs_a_unit_with_a_packaged_row_in_batches(tmp_path: Path, sizes: list[int]) -> None:
+    """Jobs of a unit with a packaged row are sent in the batch `size` gives, not one to a request."""
+    fit = {"r": 0.0, "n": 6, "spread": 0.1, "lo": 1.0, "hi": 1.0}
+    estimate = Estimate(
+        status="measured",
+        unit_kind="audio_s",
         load_s=1.0,
-        claim_s=0.0,
-        resident_bytes=1024,
-        peak_memory_bytes=1280,
-        s_per_input_s=0.1,
-        input_s_per_item=1.0,
-        batched=Batched(batch_size=4, s_per_input_s=0.05),
-        measured=Measured(sha="1" * 40, jobs=("1",)),
+        load_n=3,
+        item_s=0.0,
+        item_n=3,
+        single=RequestFit(batch=1, u=0.1, **{**fit, "r": 0.0}),
+        batched=(RequestFit(batch=4, u=0.05, **fit),),
+        batch=(StratumBatch(lo=1.0, hi=1.0, batch=4),),
+        host=MemoryFit(resident=1024, m0=0.0, m1=256.0, n=6),
+        source=EstimateSource(probe_ids=("p9",), observations=12, commit="1" * 40),
     )
-    row = ResourceRow(id=None, revision=None, download_bytes=None, classes={"cpu": measure})
-    table = ResourceTable(task=AUDIO_TASK.name, backend="identify", rows=(row,))
-    use_packaged(
-        Packaged(Catalogue(entries=(), resource_tables=(table,)), _this_interpreter, REGISTRY, mit_lock_records)
+    row = MeasureRow(
+        unit=UNIT, estimate=estimate, derivation=Derivation(commit="1" * 40, jobs=("1",), probe_ids=("p9",))
     )
+    packaged_table = PackagedTable([MeasureTable(task=UNIT.task, backend=UNIT.backend, rows=(row,))])
+    source = MeasureSource([_Bare()], packaged_table, estimate=lambda unit, observed: estimate)
+    use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, REGISTRY, mit_lock_records))
     jobs = []
     for i in range(6):
         path = tmp_path / f"tone{i}.wav"
@@ -298,7 +320,14 @@ def test_in_process_runs_a_unit_with_packaged_rows_in_batches(tmp_path: Path, si
     placement = Placement(backend=IDENTIFY, backend_params=IDENTIFY.params(), device="cpu")
     workers = WorkerSet(1)
     try:
-        executor = InProcess(store=ResultStore(tmp_path / "store"), profile=profile, run=RunConfig(), workers=workers)
+        executor = InProcess(
+            store=ResultStore(tmp_path / "store"),
+            profile=profile,
+            run=RunConfig(),
+            workers=workers,
+            measures=source,
+            units=lambda call, placement, decoder: UNIT,
+        )
         outcomes = executor._run(jobs, placement)  # noqa: SLF001 - the run `submit` makes of a fragment's jobs
     finally:
         workers.close()

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from senselab_core.kernel.dataset import InputManifest, Record
+from senselab_core.kernel.formats import PLACEMENT_FORMAT, RETIRED_PLACEMENT_FORMATS, FormatVerdict, check
 from senselab_core.kernel.graph import Graph, mapped_nodes, order, split
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import PlanPlacement
@@ -272,11 +273,37 @@ def _source(value: object) -> str:
     )
 
 
+class PlacementFormatRetired(ValueError):
+    """A run directory holds a placement of a format this build does not read: the run was made by an older build."""
+
+    def __init__(self, found: str, path: Path) -> None:
+        """Name the declared format and the run."""
+        super().__init__(
+            f"run {path.parent.parent.name} holds a placement of the retired format {found}, which this build does not"
+            f" read ({PLACEMENT_FORMAT} is current); it was made by an older build, so plan and run it again"
+        )
+        self.found = found
+
+
+def read_placement(path: Path) -> PlanPlacement:
+    """Return the placement written at `path`.
+
+    Raises:
+        PlacementFormatRetired: it is of a retired format.
+    """
+    document = json.loads(path.read_text(encoding="utf-8"))
+    found = document.get("format") if isinstance(document, dict) else None
+    if check(PLACEMENT_FORMAT, found, RETIRED_PLACEMENT_FORMATS) is FormatVerdict.RETIRED:
+        raise PlacementFormatRetired(str(found), path)
+    return PlanPlacement.model_validate(document)
+
+
 def latest_placement(run_dir: Path) -> PlanPlacement:
     """Return the placement of the run's latest claimed attempt, `placements/<attempt>.json`.
 
     Raises:
         FileNotFoundError: the run has no claimed attempt.
+        PlacementFormatRetired: the placement is of a retired format.
     """
     directory = Path(run_dir) / ATTEMPTS_DIR
     claimed = sorted((int(p.name), p) for p in directory.iterdir() if p.name.isdigit()) if directory.is_dir() else []
@@ -284,7 +311,7 @@ def latest_placement(run_dir: Path) -> PlanPlacement:
         attempt = path.read_text(encoding="utf-8")
         if attempt:
             placement = Path(run_dir) / PLACEMENTS_DIR / f"{attempt}.json"
-            return PlanPlacement.model_validate(json.loads(placement.read_text(encoding="utf-8")))
+            return read_placement(placement)
     raise FileNotFoundError(f"run {Path(run_dir).name} has no claimed attempt, so no placement")
 
 

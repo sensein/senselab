@@ -37,7 +37,7 @@ from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.locks import Lease
-from senselab_core.runtime.measures import Build, MeasureUnit, Provenance
+from senselab_core.runtime.measures import Build, MeasureUnit, Provenance, checkout_commit
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
@@ -329,6 +329,9 @@ def test_probe_results_are_yielded_and_never_rerun(
     assert all(r.failure is None and pool.store.outputs_of(r.key_digest, str(r.output_identity)) for r in refs)
     [unit] = pool.probes.values()
     assert unit.jobs > 0 and len(unit.items) > 0
+    [written] = pool.roots.units()
+    builds = {p.provenance.senselab for p in pool.roots.probes(written)}
+    assert {b.commit for b in builds if b is not None} == {checkout_commit()} and None not in builds
     assert len([r for r in caplog.records if "extrapolated" in r.getMessage()]) == 1
     seen = [(n, j.element) for n, item in _claims(pool) for j in item.jobs]
     assert len({e for _, e in seen}) == len(seen) == JOBS
@@ -427,6 +430,25 @@ def test_held_work_waits_at_most_probe_s_of_warm_work(tmp_path: Path, clock: Man
     assert pool.queues.queue("cpu").work() == 0
     pool.poll(Handle(id=handle))
     assert pool.queues.queue("cpu").work() > 0 and queue.depth() > 0
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(("budget", "ended"), [(None, False), (0.01, True)])
+def test_a_pool_given_probe_s_ends_its_probe_at_that_budget(
+    tmp_path: Path, clock: ManualClock, budget: float | None, ended: bool
+) -> None:
+    """A budget given to the pool replaces the profile's `probe_s`: the same warm walls end a probe or not."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    given = None if budget is None else budget * profile.probe_s
+    pool = _pool(tmp_path, profile, clock=clock, probe_s=given)
+    _, handle = _submit(pool, placed, values)
+    [unit] = pool.probes.values()
+    queue = pool.queues.queue(probe_queue("cpu", unit.probe))
+    Hand(pool, placed, values, wall=lambda units: 0.01 * profile.probe_s, limit=3).serve()
+    pool.poll(Handle(id=handle))
+    assert (pool.queues.queue("cpu").work() > 0 and queue.depth() > 0) is ended
 
 
 @pytest.mark.logic

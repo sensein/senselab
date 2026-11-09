@@ -19,7 +19,6 @@ from senselab_core.runtime.profiles import (
     UnlistedSource,
     resolve_execution,
 )
-from senselab_core.runtime.resources import Batched, ClassMeasure, Measured, ResourceRow, ResourceTable
 from senselab_core.testing.contracts import BASE, base_call
 
 TASK = TaskSpec(
@@ -111,31 +110,15 @@ def test_profile_digest_not_in_key() -> None:
 
 
 @pytest.mark.logic
-def test_plan_time_never_sizes_a_gpu_batch_against_host_memory() -> None:
-    """A placement records batch 1 whatever the table holds: a GPU row's host pair never sizes a device batch."""
+def test_a_placement_records_batch_one_whatever_the_hardware() -> None:
+    """A placement never sizes a batch, a device batch against host memory least of all: it records batch 1."""
     registry = _registry(_backend("b1", "one", devices=("cpu", "cuda")))
-    measure = ClassMeasure(
-        load_s=2.5,
-        claim_s=0.01,
-        resident_bytes=1024,
-        peak_memory_bytes=1280,
-        s_per_input_s=0.1,
-        input_s_per_item=5.0,
-        batched=Batched(batch_size=64, s_per_input_s=0.1),
-        measured=Measured(sha="1" * 40, jobs=("1",)),
-    )
-    row = ResourceRow(id="org/m", revision="a" * 40, download_bytes=None, classes={"cpu": measure, "gpu": measure})
-    measured = Catalogue(entries=CAT.entries, resource_tables=(ResourceTable(task="t", backend="b1", rows=(row,)),))
     big = HardwareInfo(cpu_count=1, memory_bytes=2**40, gpus=GPU.gpus, apple_silicon=False, platform="linux-x86_64")
     placements = [
-        resolve_execution(TASK, _entry(), _profile(), hardware, registry, catalogue)
-        for hardware in (big, NO_GPU, None)
-        for catalogue in (CAT, measured)
+        resolve_execution(TASK, _entry(), _profile(), hardware, registry, CAT) for hardware in (big, NO_GPU, None)
     ]
     assert [p.batch_size for p in placements] == [1] * len(placements)
-    assert placements[1].device == "cuda" and placements[3].device == "cpu"
-    call, _ = base_call(TASK, placements[0].backend)
-    assert len({build_key(call, p, BASE).digest() for p in placements[:2]}) == 1
+    assert placements[0].device == "cuda" and placements[1].device == "cpu"
 
 
 @pytest.mark.logic

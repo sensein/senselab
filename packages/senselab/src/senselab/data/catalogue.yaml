@@ -1,7 +1,7 @@
 format: catalogue@2.0
 # Every Phase 2 model, pinned by the commit its hub metadata query returned on 2026-11-01 (no weights read).
 # `license` is the hub card's license field; flags are derived from the expression. `default_for` names the task
-# the model is the default of. Measured resources are resource-table@1.0 files under data/resources/.
+# the model is the default of. Measured resources are resource-table@2.0 files under data/resources/.
 entries:
 - id: openai/whisper-large-v3-turbo
   revision: 41f01f3fe87f28c78e2fbf8b568835947dd65ed9

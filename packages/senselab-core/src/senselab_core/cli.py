@@ -14,7 +14,7 @@ from senselab_core.runtime.execution.events import Event, placements, runs_root
 from senselab_core.runtime.execution.executor import QueueHeld
 from senselab_core.runtime.execution.pool import coordinate, run_plan, run_store
 from senselab_core.runtime.execution.pool_worker import serve_pool
-from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run, latest_placement
+from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run, latest_placement, read_placement
 from senselab_core.runtime.execution.substrates import ExternalWorkers, substrate_of
 from senselab_core.runtime.explain import node_line
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
@@ -141,7 +141,7 @@ def _placement(run_dir: Path, events: list[Event]) -> PlanPlacement:
     for event in reversed(events):
         path = run_dir / PLACEMENTS_DIR / f"{event.attempt}.json"
         if path.is_file():
-            return PlanPlacement.model_validate(json.loads(path.read_text(encoding="utf-8")))
+            return read_placement(path)
     return latest_placement(run_dir)
 
 
@@ -163,7 +163,11 @@ def run_explain(args: argparse.Namespace) -> int:
         return 1
     for node in nodes:
         shown = [e for e in matched if e.node == node] or [e for e in events if e.node == node]
-        placement = _placement(run.run_dir, shown)
+        try:
+            placement = _placement(run.run_dir, shown)
+        except (OSError, ValueError) as err:
+            print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
+            return 1
         print(node_line(node, tasks[node], placement) if node in placement.nodes else f"node {node}")
         if node in placement.nodes:
             for line in _placement_lines(events, placement.nodes[node].resource_class):

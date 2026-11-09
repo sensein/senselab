@@ -35,14 +35,13 @@ from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.keys import MissingProfileSlice
 from senselab_core.runtime.licenses import LicensePolicy, LicenseRefused, license_record
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
-from senselab_core.runtime.placement import BackendParamsMismatch, MemoryCapExceeded, place_nodes, plan_cost
+from senselab_core.runtime.placement import BackendParamsMismatch
 from senselab_core.runtime.planner import CALL_NODE, InvalidGraph, RecordBinding, UnmappedOutput, plan, resolve
 from senselab_core.runtime.profiles import ExecutionProfile, NoDevice
-from senselab_core.runtime.resources import Batched, ClassMeasure, Measured, ResourceRow, ResourceTable
+from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable, PackagedTable
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.calibration_samples import UNIT, observation
-from senselab_core.testing.placement_samples import resource_table
 
 TOY = "toyorg/toy"
 PIN = "a" * 40
@@ -473,10 +472,6 @@ def _chain() -> Graph:
     )
 
 
-def _tables(*tables: Any) -> None:  # noqa: ANN401 - resource tables
-    _use(catalogue=Catalogue(entries=CATALOGUE.entries, resource_tables=tables))
-
-
 ORCD = {"orcd": ExecutionProfile.load("orcd"), "laptop": ExecutionProfile.load("laptop")}
 
 
@@ -508,10 +503,10 @@ def test_gpu_only_node_without_gpu_class_fails_naming_node() -> None:
 
 @pytest.mark.logic
 def test_explain_lists_every_placement_field() -> None:
-    """`explain` names the plan hash, env builds and cost, and per node every placement field and its licenses."""
+    """`explain` names the plan hash and env builds, and per node every placement field and its licenses."""
     placed = _plan(_call(backend_params={"beta": {}}), _records("x"))
     text = placed.explain()
-    for field in (placed.hash, "envs to build: none", "cost: download unmeasured"):
+    for field in (placed.hash, "envs to build: none"):
         assert field in text, field
     node = next(line for line in text.splitlines() if line.startswith("node call"))
     for field in (
@@ -543,25 +538,6 @@ def test_env_builds_announced() -> None:
 
 
 @pytest.mark.logic
-def test_unmeasured_cost_is_none_and_named() -> None:
-    """A node or model without a table makes each figure None and is named; measured nodes sum, never estimated."""
-    cost = _plan(_chain(), _records("x")).placement.cost
-    assert (cost.wall_s, cost.gpu_hours, cost.download_bytes) == (None, None, None)
-    assert cost.unmeasured == ("a", "b", f"{TOY}@{PIN}")
-    _tables(resource_table(SCORE.name, "alpha", TOY, PIN))
-    cost = _plan(_chain(), _records("x")).placement.cost
-    assert cost.unmeasured == ("b",) and cost.download_bytes is None and cost.wall_s is None
-    _tables(resource_table(SCORE.name, "alpha", TOY, PIN), resource_table(TAIL.name, "gamma", None))
-    placed = _plan(_chain(), _records("x"))
-    assert placed.placement.cost.unmeasured == () and placed.placement.cost.download_bytes == 2000
-    assert placed.placement.cost.wall_s is None
-    catalogue = packaged_now().catalogue
-    nodes = place_nodes(placed.logical, ORCD["laptop"], NO_GPU, REGISTRY, catalogue)
-    measured = plan_cost(placed.logical, nodes, catalogue, 10.0)
-    assert measured.wall_s == pytest.approx(2 * (2.5 + 0.1 * 10)) and measured.gpu_hours == 0.0
-
-
-@pytest.mark.logic
 def test_taint_unions_upstream_licenses() -> None:
     """A node's license set holds its own env and model and every upstream node's; a policy refuses the taint."""
     by_backend = {"alpha": _license("CC-BY-NC-4.0"), "gamma": _license("MIT")}
@@ -577,23 +553,6 @@ def test_taint_unions_upstream_licenses() -> None:
     with pytest.raises(LicenseRefused, match="node 'a'.*CC-BY-NC-4.0"):
         _plan(_chain(), _records("x"), config=permissive)
     _plan(_chain(), _records("x"), config=RunConfig(licenses=LicensePolicy(allow=frozenset({"MIT", "CC-BY-NC-4.0"}))))
-
-
-@pytest.mark.logic
-def test_caps_refuse_resident_models_over_cap() -> None:
-    """The models resident at once on a class must fit its cap; an unmeasured node is admitted."""
-    capped = ExecutionProfile.load("laptop", {"resource_classes": {"cpu": {"memory_cap_bytes": 6000}}})
-    _plan(_chain(), _records("x"), execution=capped)
-    _tables(resource_table(SCORE.name, "alpha", TOY, PIN), resource_table(TAIL.name, "gamma", None))
-    with pytest.raises(MemoryCapExceeded, match="'cpu'.*6000.*8192") as raised:
-        _plan(_chain(), _records("x"), execution=capped)
-    assert raised.value.nodes == ["a", "b"]
-    _plan(_call(), _records("x"), execution=capped)
-    _plan(
-        _chain(),
-        _records("x"),
-        execution=ExecutionProfile.load("laptop", {"resource_classes": {"cpu": {"memory_cap_bytes": 8192}}}),
-    )
 
 
 @pytest.mark.logic
@@ -659,6 +618,13 @@ class _Reads:
     def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
         self.calls.append("observations")
         return (observation(),)
+
+
+class _Bare:
+    """A measures root that holds nothing."""
+
+    def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
+        return ()
 
 
 class _NoTable:
@@ -735,47 +701,65 @@ def test_explain_flags_a_job_whose_batch_one_peak_exceeds_the_cap() -> None:
     assert "needs " not in fits
 
 
-def _with_rows(batched_s: float = 0.1) -> ExecutionProfile:
-    measure = ClassMeasure(
+def _packaged(batched_s: float = 0.1) -> tuple[MeasureSource, ExecutionProfile]:
+    """A source whose packaged table holds a row of `UNIT` that batches 64 where `batched_s` is no slower than 0.1."""
+    fit = {"n": 6, "spread": 0.1, "lo": 1.0, "hi": 100.0}
+    estimate = Estimate(
+        status="measured",
+        unit_kind="audio_s",
         load_s=2.5,
-        claim_s=0.01,
-        resident_bytes=1024,
-        peak_memory_bytes=1280,
-        s_per_input_s=0.1,
-        input_s_per_item=5.0,
-        batched=Batched(batch_size=64, s_per_input_s=batched_s),
-        measured=Measured(sha="1" * 40, jobs=("1",)),
+        load_n=3,
+        item_s=0.01,
+        item_n=3,
+        single=RequestFit(batch=1, r=0.0, u=0.1, **fit),
+        batched=(RequestFit(batch=64, r=0.0, u=batched_s, **fit),),
+        batch=(StratumBatch(lo=1.0, hi=100.0, batch=64 if batched_s <= 0.1 else 1),),
+        host=MemoryFit(resident=1024, m0=0.0, m1=1.0, n=6),
+        source=EstimateSource(probe_ids=("p9",), observations=12, commit="1" * 40),
     )
-    row = ResourceRow(id=TOY, revision=PIN, download_bytes=None, classes={"cpu": measure})
-    table = ResourceTable(task=SCORE.name, backend="alpha", rows=(row,))
-    _use(catalogue=Catalogue(entries=CATALOGUE.entries, resource_tables=(table,)))
-    return ExecutionProfile.load("laptop", {"resource_classes": {"cpu": {"mem_bytes": 10_000}}})
+    derivation = Derivation(commit="1" * 40, jobs=("1",), probe_ids=("p9",))
+    table = PackagedTable(
+        [
+            MeasureTable(
+                task=UNIT.task,
+                backend=UNIT.backend,
+                rows=(MeasureRow(unit=UNIT, estimate=estimate, derivation=derivation),),
+            )
+        ]
+    )
+    profile = ExecutionProfile.load("laptop", {"resource_classes": {"cpu": {"mem_bytes": 10_000}}})
+    return MeasureSource([_Bare()], table, estimate=lambda unit, observed: _measured()), profile
 
 
 @pytest.mark.logic
-def test_a_unit_with_packaged_rows_batches_in_process(tmp_path: Path) -> None:
+def test_a_unit_with_a_packaged_row_batches_in_process(tmp_path: Path) -> None:
     """The executor sizes a node's fragment from `size` over its packaged row: many jobs where it batches, else one."""
-    profile = _with_rows()
+    source, profile = _packaged()
     placed = _plan(_call(), _records("x", "y"), execution=profile)
     assert placed.placement.nodes[CALL_NODE].batch_size == 1
-    executor = InProcess(store=ResultStore(tmp_path / "a"), profile=profile, workers=WorkerSet(1))
+    executor = InProcess(
+        store=ResultStore(tmp_path / "a"), profile=profile, workers=WorkerSet(1), measures=source, units=_unit
+    )
     assert executor.fragment_size(placed, CALL_NODE) == profile.pool.quantum_items
-    slower = _with_rows(batched_s=0.2)
-    unbatched = _plan(_call(), _records("x"), execution=slower)
+    slower, _ = _packaged(batched_s=0.2)
+    unbatched = _plan(_call(), _records("x"), execution=profile)
     assert (
-        InProcess(store=ResultStore(tmp_path / "b"), profile=slower, workers=WorkerSet(1)).fragment_size(
-            unbatched, CALL_NODE
-        )
+        InProcess(
+            store=ResultStore(tmp_path / "b"), profile=profile, workers=WorkerSet(1), measures=slower, units=_unit
+        ).fragment_size(unbatched, CALL_NODE)
         == 1
     )
 
 
+def _unit(call: Any, placement: Any, decoder: Any) -> MeasureUnit:  # noqa: ANN401, ARG001 - a UnitOf
+    return UNIT
+
+
 @pytest.mark.logic
-def test_explain_prints_no_plan_cost_from_a_second_estimator() -> None:
-    """The cost line holds only what no `size` reads, the download; wall time and GPU hours are the nodes' sizing."""
-    _with_rows()
+def test_explain_prints_no_cost_line_the_nodes_sizing_is_the_one_estimate() -> None:
+    """A plan states no cost of its own: wall time, GPU hours and memory are each node's `Sizing`, from one source."""
     text = _plan(_call(), _records("x")).explain()
-    assert "cost: download" in text and "cost: wall" not in text and "; cost " not in text
+    assert "cost:" not in text and "; cost " not in text and "\nenvs to build" in text
 
 
 @pytest.mark.logic

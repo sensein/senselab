@@ -1,70 +1,26 @@
-"""Sizing: a unit's batch, quantum and worker count, derived from a measure of it and the grant it runs under.
+"""Sizing: a unit's batch, quantum and worker count, derived from an estimate of it and the grant it runs under.
 
-`size` is pure. `Measures` reads the packaged resource tables, then the ones calibration rounds wrote under the cache.
+`size` is pure; `Sample` is what a pool worker reports of an item it ran.
 """
 
 import bisect
-import functools
-import importlib.metadata
 import logging
 import math
-import sys
 import threading
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, model_validator
-from senselab_worker.digest import file_digest, identity_digest
+from pydantic import Field
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
-from senselab_core.runtime.calibration import (
-    Estimate,
-    LengthProfile,
-    MemoryFit,
-    RegimeFactor,
-    RequestFit,
-    StratumBatch,
-)
+from senselab_core.runtime.calibration import Estimate, LengthProfile, MemoryFit, RegimeFactor, StratumBatch
 from senselab_core.runtime.execution_settings import CalibrationSettings, PoolSettings, ResourceClass, SizingSettings
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.probe import memory_batch, peak, raised
-from senselab_core.runtime.resources import (
-    Measured,
-    ResourceMeasure,
-    ResourceTable,
-    Unit,
-    load_resource_tables,
-    write_row,
-)
 
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Bytes = Annotated[int, Field(ge=0)]
 Count = Annotated[int, Field(ge=1)]
-
-
-class Measure(Frozen):
-    """What one item costs on one resource class: seconds to load and to claim, memory resident and per item, seconds.
-
-    `on_device` says the memory pair is the device's, sized against the class's device memory cap; the pair is None
-    when unmeasured. `batched_s_per_item` is the seconds per item measured in batches of `batched_batch_size`, both
-    None where unmeasured.
-    """
-
-    load_s: Seconds
-    claim_s: Seconds
-    resident_bytes: Bytes | None
-    bytes_per_item: Bytes | None
-    s_per_item: Seconds
-    on_device: bool = False
-    batched_s_per_item: Seconds | None = None
-    batched_batch_size: Count | None = None
-
-    @model_validator(mode="after")
-    def _check_batched(self) -> "Measure":
-        if (self.batched_s_per_item is None) != (self.batched_batch_size is None):
-            raise ValueError("a batched measure names both its seconds per item and the batch it was measured at")
-        return self
 
 
 class Grant(Frozen):
@@ -248,42 +204,6 @@ def _regime_workers(regimes: Sequence[RegimeFactor], bound: int) -> int:
         throughput = k / rho.get(k, 1.0)
         best = k
     return best
-
-
-def estimate_of(row: ResourceMeasure, *, on_device: bool = False) -> Estimate:
-    """Return a resource-table row as an estimate over recording seconds, with no length range, spread or oom.
-
-    Time is `s_per_input_s` per input second, memory the row's pair per input second of its median item, the batch the
-    measured one where its per-second time is no slower than a single's. The spread is unmeasured, so items are cut by
-    count.
-    """
-    scale = row.input_s_per_item or 1.0
-    top = sys.float_info.max
-
-    def fit(resident: int | None, peak_bytes: int | None) -> MemoryFit | None:
-        if resident is None or peak_bytes is None:
-            return None
-        return MemoryFit(resident=resident, m0=0.0, m1=max(0, peak_bytes - resident) / scale, n=1)
-
-    def request(batch: int, per_s: float) -> RequestFit:
-        return RequestFit(batch=batch, r=0.0, u=per_s, n=1, spread=None, lo=0.0, hi=top)
-
-    found = row.batched
-    wide = found is not None and found.batch_size > 1
-    chosen = found.batch_size if found is not None and wide and found.s_per_input_s <= row.s_per_input_s else 1
-    return Estimate(
-        status="measured",
-        unit_kind="audio_s",
-        load_s=row.load_s,
-        load_n=1,
-        item_s=row.claim_s,
-        item_n=1,
-        single=request(1, row.s_per_input_s),
-        batched=(request(found.batch_size, found.s_per_input_s),) if found is not None and wide else (),
-        batch=(StratumBatch(lo=0.0, hi=top, batch=chosen),),
-        device=fit(row.device_resident_bytes, row.device_peak_bytes) if on_device else None,
-        host=fit(row.resident_bytes, row.peak_memory_bytes) if not on_device else None,
-    )
 
 
 def _by_count(grant: Grant, jobs: int) -> tuple[tuple[int, int], ...]:
@@ -484,54 +404,3 @@ class Sample(Frozen):
     cold: bool
     job: NonEmptyStr
     ended_s: Seconds
-
-
-@functools.cache
-def code_version() -> str:
-    """Return the installed senselab-core version and the digest of its source, `<version>+<12 hex>`.
-
-    The digest is `identity_digest("core-runtime@1", files)` over the package's `*.py` files by relative path, so a
-    checkout whose version did not move with its code still names different code differently. It is computed once per
-    process.
-    """
-    root = Path(__file__).resolve().parents[1]
-    files = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*.py"))
-    source = identity_digest("core-runtime@1", [[rel, file_digest("file@1", path)] for rel, path in files])
-    return f"{importlib.metadata.version('senselab-core')}+{source[:12]}"
-
-
-class Measures:
-    """The measures calibration rounds of this code version wrote under `root`, then the packaged resource tables'.
-
-    `root` defaults to `<cache root>/2x/resources/<code version>`, so a row written by other code is never read;
-    `packaged` defaults to the packaged catalogue's tables, read on first use.
-    """
-
-    def __init__(self, root: Path | None = None, packaged: Sequence[ResourceTable] | None = None) -> None:
-        """Read the tables under `root` first, then `packaged`; write under `root`."""
-        if root is None:
-            from senselab_core.runtime.revision import (  # noqa: PLC0415 - revision imports profiles
-                NAMESPACE,
-                cache_root,
-            )
-
-            root = cache_root() / NAMESPACE / "resources" / code_version()
-        self.root = Path(root)
-        self._packaged = packaged
-
-    def get(self, unit: Unit) -> ResourceMeasure | None:
-        """Return the measure of `unit`: a written table's, which is newer, else a packaged one's, else None."""
-        if self._packaged is None:
-            from senselab_core.runtime.call import packaged  # noqa: PLC0415 - call imports the planner
-
-            self._packaged = packaged().catalogue.resource_tables
-        for tables in (load_resource_tables(self.root), self._packaged):
-            table = next((t for t in tables if (t.task, t.backend) == (unit.task, unit.backend)), None)
-            row = None if table is None else table.row(unit.model_id, unit.revision)
-            if row is not None and unit.resource_class in row.classes:
-                return row.classes[unit.resource_class]
-        return None
-
-    def put(self, unit: Unit, measure: ResourceMeasure, measured: Measured) -> None:
-        """Write `measure` of `unit` under `root` (`write_row`)."""
-        write_row(self.root, unit, measure, measured)

@@ -1,91 +1,221 @@
-"""Write the packaged resource tables (`resource-table@1.0`) from scale-ladder results; never hand-edit them.
+"""Write the packaged resource tables (`resource-table@2.0`) from measures roots; never hand-edit them.
 
 Usage::
 
-    uv run python scripts/generate_resources.py RESULT... [--out DIR]
+    uv run python scripts/generate_resources.py ROOT... [--suite SUITE] [--execution PROFILE] [--out DIR]
 
-Each `RESULT` is a `scale-result@1.0` file or a directory of them. Per (task, backend, model, resource class) the
-measure of the result with the most items (the most input seconds on a tie) is written to
-`DIR/<task>/<backend>.yaml` (`packages/senselab/src/senselab/data/resources` by default), with the commit and the
-job ids of every result of that unit as its derivation, in place of the one its pool wrote. A result without a measure (no pool worker reported a
-sample), or of a task and backend the packaged registry does not declare (the fake stack), is listed and skipped.
-Results of different commits are refused.
+Each `ROOT` is a measures root (a cluster's), or a ladder run directory, whose `<label>@<point>/measures` roots are
+read. Per unit a root holds, `Probe.estimate` runs over the pooled observations of every root under the execution
+profile's calibration settings (`--execution`, `orcd` by default; a ladder run's roots are read with `--suite`, the
+suite whose table profile they were probed under). Per (task, backend) a table of `DIR/<task>/<backend>.yaml`
+(`packages/senselab/src/senselab/data/resources` by default) is written: one row per unit, the unit's full identity
+with its estimate and its derivation (commit, scheduler jobs, probe ids); a table that exists keeps the rows of the
+units this run does not regenerate. A unit of a task and backend the packaged registry does not declare (the fake
+stack) is listed and skipped. The run is refused, and nothing written, when a declared unit's estimate is unmeasured, a
+probe behind a row carries no commit or no scheduler job, the rows (new or kept) are of more than one commit, or a
+ladder run directory's points were probed under calibration settings other than the ones read (give `--suite`).
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
 import sys
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from pathlib import Path
-from typing import Any
 
+from senselab_core.kernel.formats import MEASURES_LAYOUT_TAG
 from senselab_core.runtime.call import packaged
-from senselab_core.runtime.resources import Measured, ResourceMeasure, Unit, write_row
+from senselab_core.runtime.config import dump_yaml, load_yaml
+from senselab_core.runtime.measures import MeasureRoots, MeasureUnit, ProbeFile
+from senselab_core.runtime.probe import Probe
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable
+from senselab_core.runtime.storage import StorePolicy, write_atomically
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "packages" / "senselab" / "src" / "senselab" / "data" / "resources"
-RESULT_FORMAT = "scale-result@1.0"
+LADDER = ROOT / "benchmarks" / "scale" / "ladder.py"
+ESTIMATE_FREE = frozenset({"measures_roots", "trust"})
+"""The calibration settings that do not shape an estimate: where measures are read and whose files are."""
 
 
-def results(paths: Iterable[Path]) -> list[dict[str, Any]]:
-    """Return every `scale-result@1.0` document of `paths`: files, or the `*.json` files of directories."""
-    files = [f for p in paths for f in (sorted(p.glob("*.json")) if p.is_dir() else [p])]
-    loaded = [json.loads(f.read_text(encoding="utf-8")) for f in files]
-    return [r for r in loaded if isinstance(r, dict) and r.get("format") == RESULT_FORMAT]
+class Refused(ValueError):
+    """The measures cannot be written as packaged rows; each reason is a line, and nothing was written."""
 
 
-def unit_of(result: Mapping[str, Any]) -> Unit:
-    """Return the unit a result measured."""
-    model = result["model"] or {"id": None, "revision": None}
-    return Unit(result["task"], result["backend"], model["id"], model["revision"], result["resource_class"])
-
-
-def rows(
-    found: Sequence[Mapping[str, Any]], declared: Collection[tuple[str, str]]
-) -> tuple[dict[Unit, tuple[ResourceMeasure, Measured]], list[str]]:
-    """Return each unit of a `declared` (task, backend) with its chosen measure and derivation, and the lines skipped.
-
-    A result is skipped without a measure, or when its task and backend are not declared.
+def expand(roots: Iterable[Path]) -> list[Path]:
+    """Return the measures roots `roots` name: each one that holds `measures@1`, else its `<label>@<point>/measures`.
 
     Raises:
-        ValueError: the results are of more than one commit.
+        Refused: a path holds no measures root.
     """
-    shas = sorted({r["sha"] for r in found})
-    if len(shas) > 1:
-        raise ValueError(f"results of several commits {shas}; generate from one commit's results")
-    chosen: dict[Unit, tuple[ResourceMeasure, Measured]] = {}
-    known = [r for r in found if (r["task"], r["backend"]) in declared]
-    skipped = [
-        f"{r['task']}~{r['backend']}@{r['point']}: not a packaged backend; skipped" for r in found if r not in known
-    ]
-    skipped += [f"{r['task']}~{r['backend']}@{r['point']}: no measure; skipped" for r in known if r["measure"] is None]
-    measured = [r for r in known if r["measure"] is not None]
-    for unit in sorted({unit_of(r) for r in measured}, key=repr):
-        of_unit = [r for r in measured if unit_of(r) == unit]
-        best = max(of_unit, key=lambda r: (r["items"], r["input_s"] or 0.0))
-        jobs = tuple(sorted({j for r in of_unit for j in r["jobs"]}))
-        measure = {k: v for k, v in best["measure"].items() if k != "measured"}
-        chosen[unit] = (ResourceMeasure.model_validate(measure), Measured(sha=shas[0], jobs=jobs))
-    return chosen, skipped
+    found: list[Path] = []
+    for path in roots:
+        held = [path] if (path / MEASURES_LAYOUT_TAG).is_dir() else sorted(path.glob("*/measures"))
+        if not held:
+            raise Refused(f"{path} is no measures root and holds no ladder points' roots")
+        found += held
+    return found
 
 
-def generate(paths: Iterable[Path], out: Path, declared: Collection[tuple[str, str]]) -> list[str]:
-    """Write the tables of the results at `paths` under `out`; return a line per result skipped and per file written."""
-    chosen, skipped = rows(results(paths), declared)
-    return skipped + [str(write_row(out, unit, measure, measured)) for unit, (measure, measured) in chosen.items()]
+def _commit(probe: ProbeFile) -> str | None:
+    build = probe.provenance.senselab
+    return None if build is None else build.commit
+
+
+def _row(
+    unit: MeasureUnit, found: MeasureRoots, profile: ExecutionProfile
+) -> tuple[MeasureRow | None, str | None, list[str]]:
+    """Return the row of `unit` and its commit, else why there is none: unmeasured, no commit or job, several commits."""
+    estimate = Probe.estimator(
+        profile.calibration, records_of=found.regime_records, memory_headroom=profile.sizing.memory_headroom
+    )(unit, found.observations(unit))
+    name = f"{unit.task}~{unit.backend} unit {unit.label()}"
+    if estimate.status != "measured":
+        return None, None, [f"{name}: unmeasured ({', '.join(estimate.reasons)})"]
+    behind = [p for p in found.probes(unit) if p.probe in estimate.source.probe_ids]
+    why = [f"{name}: probe {p.probe} carries no commit" for p in behind if _commit(p) is None]
+    why += [f"{name}: probe {p.probe} carries no scheduler job" for p in behind if p.provenance.job is None]
+    commits = sorted({c for p in behind if (c := _commit(p)) is not None})
+    if len(commits) > 1:
+        why.append(f"{name}: probes of several commits {commits}")
+    if not behind:
+        why.append(f"{name}: no probe file behind its estimate")
+    if why:
+        return None, None, why
+    jobs = sorted({p.provenance.job for p in behind if p.provenance.job is not None})
+    source = estimate.source.model_copy(update={"commit": commits[0]})
+    derivation = Derivation(commit=commits[0], jobs=tuple(jobs), probe_ids=estimate.source.probe_ids)
+    row = MeasureRow(unit=unit, estimate=estimate.model_copy(update={"source": source}), derivation=derivation)
+    return row, commits[0], []
+
+
+def generate(
+    roots: Sequence[Path], out: Path, declared: Collection[tuple[str, str]], profile: ExecutionProfile
+) -> list[str]:
+    """Write the tables of the units `roots` hold under `out`; return a line per unit skipped and per file written.
+
+    Raises:
+        Refused: a declared unit is unmeasured, a probe behind a row carries no commit or no scheduler job, or the
+            rows are of several commits; nothing is written.
+    """
+    found = MeasureRoots(
+        roots, StorePolicy.load_default(), "group", os.geteuid(), stale_after_s=profile.lease.stale_after_s
+    )
+    skipped: list[str] = []
+    refused: list[str] = []
+    rows: list[MeasureRow] = []
+    commits: set[str] = set()
+    for unit in found.units():
+        if (unit.task, unit.backend) not in declared:
+            skipped.append(f"{unit.task}~{unit.backend} unit {unit.label()}: not a packaged backend; skipped")
+            continue
+        row, commit, why = _row(unit, found, profile)
+        refused += why
+        if row is not None and commit is not None:
+            rows.append(row)
+            commits.add(commit)
+    if len(commits) > 1:
+        refused.append(f"rows of several commits {sorted(commits)}; generate from one commit's measures")
+    if refused:
+        raise Refused("\n".join(refused))
+    tables = _merged(rows, out, commits, refused)
+    if refused:
+        raise Refused("\n".join(refused))
+    written = []
+    for (task, backend), merged in sorted(tables.items()):
+        path = out / task / f"{backend}.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        table = MeasureTable(task=task, backend=backend, rows=tuple(merged))
+        write_atomically(path, dump_yaml(table.model_dump(mode="json")).encode())
+        written.append(str(path))
+    return sorted(skipped) + written
+
+
+def _merged(
+    rows: Sequence[MeasureRow], out: Path, commits: set[str], refused: list[str]
+) -> dict[tuple[str, str], list[MeasureRow]]:
+    """Return each (task, backend)'s table rows: the regenerated `rows` over the rows `out` already holds.
+
+    A row already written for a unit this run did not regenerate is kept; one of another commit than this run's is
+    refused, so a table holds rows of one commit.
+    """
+    tables: dict[tuple[str, str], dict[str, MeasureRow]] = {}
+    for row in rows:
+        tables.setdefault((row.unit.task, row.unit.backend), {})[row.unit.digest()] = row
+    for (task, backend), mine in tables.items():
+        path = out / task / f"{backend}.yaml"
+        if not path.is_file():
+            continue
+        for old in MeasureTable.model_validate(load_yaml(path, "resource table")).rows:
+            if old.unit.digest() in mine:
+                continue
+            if {old.derivation.commit} != commits:
+                refused.append(
+                    f"{path.relative_to(out)} holds unit {old.unit.label()} of commit {old.derivation.commit}, which this "
+                    f"run (commit {sorted(commits)}) does not regenerate; regenerate it too, or remove the table"
+                )
+            mine[old.unit.digest()] = old
+    return {key: [mine[d] for d in sorted(mine)] for key, mine in tables.items()}
+
+
+def ladder_mismatches(paths: Iterable[Path], profile: ExecutionProfile) -> list[str]:
+    """Return a line per ladder point under `paths` whose result names calibration settings other than `profile`'s.
+
+    The settings the estimate is made under must be those the points were probed under; a path that is a measures
+    root rather than a ladder run directory has no result to compare and is not read.
+    """
+    now = profile.calibration.model_dump(mode="json")
+    lines = []
+    for path in paths:
+        if (path / MEASURES_LAYOUT_TAG).is_dir():
+            continue
+        for root in sorted(path.glob("*/measures")):
+            result = path / f"{root.parent.name}.json"
+            ran = json.loads(result.read_text(encoding="utf-8")).get("calibration") if result.is_file() else None
+            if not isinstance(ran, dict):
+                lines.append(f"{root.parent.name}: no result naming the calibration it ran under")
+                continue
+            differ = sorted(k for k in now.keys() - ESTIMATE_FREE if now[k] != ran.get(k))
+            if differ:
+                lines.append(f"{root.parent.name}: probed under other calibration settings ({', '.join(differ)}); give --suite")
+    return lines
+
+
+def _profile(name: str, suite: Path | None) -> ExecutionProfile:
+    profile = ExecutionProfile.load(name)
+    if suite is None:
+        return profile
+    spec = importlib.util.spec_from_file_location("scale_ladder", LADDER)
+    assert spec is not None and spec.loader is not None
+    ladder = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = ladder
+    spec.loader.exec_module(ladder)
+    return ladder.table_profile(profile, ladder.Suite.load(suite))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Write the tables of the results named in `argv` for the packaged registry's backends; print each line."""
+    """Write the tables of the measures roots named in `argv` for the packaged registry's backends; print each line."""
     parser = argparse.ArgumentParser(prog="generate_resources.py")
-    parser.add_argument("results", nargs="+", type=Path, help="scale-result@1.0 files or directories of them")
+    parser.add_argument("roots", nargs="+", type=Path, help="measures roots, or ladder run directories")
+    parser.add_argument("--suite", type=Path, help="the scale suite whose table profile the roots were probed under")
+    parser.add_argument("--execution", default="orcd", help="the packaged execution profile whose calibration is read")
     parser.add_argument("--out", type=Path, default=OUT, help="the resource-table root")
     args = parser.parse_args(argv)
     registry = packaged().registry
     declared = {(t.name, b.name) for t in registry.tasks() for b in registry.backends(t.name)}
-    for line in generate(args.results, args.out, declared):
+    try:
+        profile = _profile(args.execution, args.suite)
+        if mismatched := ladder_mismatches(args.roots, profile):
+            raise Refused("\n".join(mismatched))
+        lines = generate(expand(args.roots), args.out, declared, profile)
+    except Refused as err:
+        print(f"refused, nothing written:\n{err}", file=sys.stderr)
+        return 1
+    for line in lines:
         print(line)
     return 0
 

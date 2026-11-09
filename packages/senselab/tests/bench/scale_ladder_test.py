@@ -1,12 +1,16 @@
 """The scale ladder's trees and the resource tables generated from its results."""
 
+import getpass
 import hashlib
 import importlib.util
 import io
 import json
+import os
 import platform
+import socket
 import sys
 import tarfile
+from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -16,14 +20,20 @@ import soundfile
 from senselab_core.kernel.dataset import ManifestRow
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry
 from senselab_core.runtime import fake_backend
+from senselab_core.runtime.calibration import EstimateSource, HardwareClass, Observation, ProbeRef
 from senselab_core.runtime.call import Packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.executor import FaultRecord
+from senselab_core.runtime.execution import pool_parts
+from senselab_core.runtime.execution.executor import FaultRecord, JobRef
+from senselab_core.runtime.execution.queue import probe_queue
+from senselab_core.runtime.measures import Build, MeasureRoots, MeasureUnit, Provenance
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.resources import Batched, ResourceMeasure, ResourceTable
+from senselab_core.runtime.resources import Derivation, MeasureTable, PackagedTable
 from senselab_core.runtime.sizing import Sample
+from senselab_core.runtime.storage import StorePolicy
+from senselab_core.testing.calibration_samples import UNIT, observation
 from senselab_core.testing.workers import mit_lock_records
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -103,78 +113,178 @@ def test_librispeech_utterances_are_laid_out_as_bids(tmp_path: Path) -> None:
         bids_tree.lay_librispeech(tmp_path / "short", archive, 5)
 
 
-def _result(
-    point: int, items: int, jobs: list[str], measure: dict[str, Any] | None, sha: str = "a" * 40
-) -> dict[str, Any]:
-    return {
-        "format": "scale-result@1.0",
-        "task": "speech_to_text",
-        "point": point,
-        "items": items,
-        "input_s": items * 7.0,
-        "backend": "transformers",
-        "model": {"id": "org/m", "revision": "b" * 40},
-        "resource_class": "gpu:h100",
-        "sha": sha,
-        "jobs": jobs,
-        "measure": measure,
-    }
+PROFILE = ExecutionProfile.load("laptop")
+CONFIG = PROFILE.calibration
+COMMIT = "a" * 40
+PROVENANCE = Provenance(
+    job="1234", run="run-1", senselab=Build(version="2.0.0", commit=COMMIT), profile="d" * 64, hardware=UNIT.hardware
+)
+DECLARED = {(UNIT.task, UNIT.backend)}
+
+
+def _line(
+    units: Sequence[float], probe: str = "p1", count: int | None = None, hardware: HardwareClass = UNIT.hardware
+) -> list[Observation]:
+    """`count` (default `min_requests`) warm batch-1 requests of each length, one stratum per length."""
+    return [
+        observation(
+            probe=ProbeRef(id=probe, phase="SINGLE", stratum=i),
+            item=f"{probe}-{i}-{n}",
+            units=x,
+            padded_units=x,
+            wall_s=0.1 + 0.01 * x,
+            since_load=CONFIG.warmup_requests,
+            hardware=hardware,
+        )
+        for i, x in enumerate(units)
+        for n in range(CONFIG.min_requests if count is None else count)
+    ]
+
+
+def _roots(path: Path) -> MeasureRoots:
+    return MeasureRoots(
+        [path], StorePolicy.load_default(), "group", os.geteuid(), stale_after_s=PROFILE.lease.stale_after_s
+    )
+
+
+def _write(
+    path: Path, unit: MeasureUnit, observations: Sequence[Observation], provenance: Provenance = PROVENANCE
+) -> None:
+    probes = {o.probe.id for o in observations if o.probe is not None}
+    for probe in sorted(probes):
+        mine = [o for o in observations if o.probe is not None and o.probe.id == probe]
+        assert _roots(path).put_observations(unit, probe, mine, provenance) is not None
 
 
 @pytest.mark.logic
-def test_resource_table_derivation_names_jobs(tmp_path: Path) -> None:
-    """The largest point's measure is written with the commit and every job of the unit; other results are listed.
+def test_generator_refuses_an_unmeasured_estimate(tmp_path: Path) -> None:
+    """A declared unit whose estimate is unmeasured refuses the whole run, naming it and why; nothing is written.
 
-    The derivation the point's pool wrote with its row is replaced by the results'. A result without a measure, or of a
-    backend the packaged registry does not declare, gets no table.
+    An undeclared unit (the fake stack) is skipped and listed, measured or not.
     """
-    small = {
-        "load_s": 9.0,
-        "claim_s": 0.01,
-        "resident_bytes": 1,
-        "peak_memory_bytes": 2,
-        "s_per_input_s": 0.2,
-        "input_s_per_item": 7.0,
-    }
-    pool_row = {"sha": None, "jobs": ["102"], "run": "senselab-core 1.0+abc, run " + "d" * 64}
-    large = {**small, "load_s": 8.0, "s_per_input_s": 0.1, "measured": pool_row}
-    results = tmp_path / "results"
-    results.mkdir()
-    for name, doc in {
-        "a@1": _result(1, 1, ["101"], small),
-        "a@100": _result(100, 100, ["102", "103"], large),
-        "b@1": {**_result(1, 1, ["104"], None), "task": "diarize"},
-        "f@1": {**_result(1, 1, ["106"], small), "task": "fake.echo", "backend": "fake", "model": None},
-    }.items():
-        (results / f"{name}.json").write_text(json.dumps(doc))
-    declared = {("speech_to_text", "transformers"), ("diarize", "transformers")}
-    lines = generate.generate([results], tmp_path / "out", declared)
-    assert lines[:2] == [
-        "fake.echo~fake@1: not a packaged backend; skipped",
-        "diarize~transformers@1: no measure; skipped",
-    ]
-    assert sorted(p.parent.name for p in (tmp_path / "out").rglob("*.yaml")) == ["speech_to_text"]
-    table = ResourceTable.model_validate(load_yaml(tmp_path / "out" / "speech_to_text" / "transformers.yaml", "table"))
+    root, out = tmp_path / "measures", tmp_path / "out"
+    thin = UNIT.model_copy(update={"backend": "thin"})
+    _write(root, UNIT, _line([2.0, 8.0]))
+    _write(root, thin, _line([2.0, 8.0], count=1))
+    with pytest.raises(generate.Refused, match="unmeasured") as refused:
+        generate.generate([root], out, {*DECLARED, (UNIT.task, "thin")}, PROFILE)
+    assert thin.label() in str(refused.value) and "single_below_min_requests" in str(refused.value)
+    assert UNIT.label() not in str(refused.value) and not out.exists()
+    lines = generate.generate([root], out, DECLARED, PROFILE)
+    assert lines[0] == f"{UNIT.task}~thin unit {thin.label()}: not a packaged backend; skipped"
+    assert sorted(p.name for p in out.rglob("*.yaml")) == ["whisper.yaml"]
+
+
+@pytest.mark.logic
+def test_generated_rows_carry_probe_ids_not_users(tmp_path: Path) -> None:
+    """A row is the full unit, its estimate with the commit and probe ids, and the jobs; no account, host or uid."""
+    root, out = tmp_path / "measures", tmp_path / "out"
+    _write(root, UNIT, _line([2.0, 8.0], "p1") + _line([3.0, 9.0], "p2"))
+    generate.generate([root], out, DECLARED, PROFILE)
+    path = out / UNIT.task / f"{UNIT.backend}.yaml"
+    table = MeasureTable.model_validate(load_yaml(path, "table"))
     [row] = table.rows
-    assert (row.id, row.revision, row.download_bytes) == ("org/m", "b" * 40, None)
-    assert row.classes["gpu:h100"].load_s == 8.0 and row.classes["gpu:h100"].s_per_input_s == 0.1
-    measured = row.classes["gpu:h100"].measured
-    assert measured.sha == "a" * 40 and measured.jobs == ("101", "102", "103")
-    (results / "c@1.json").write_text(json.dumps(_result(1, 1, ["105"], small, sha="c" * 40)))
-    with pytest.raises(ValueError, match="several commits"):
-        generate.generate([results], tmp_path / "out", declared)
+    assert row.unit == UNIT
+    assert row.derivation == Derivation(commit=COMMIT, jobs=("1234",), probe_ids=("p1", "p2"))
+    assert row.estimate.source == EstimateSource(probe_ids=("p1", "p2"), observations=12, commit=COMMIT)
+    assert PackagedTable.load(out).get(UNIT) == row.estimate
+    text = path.read_text()
+    for name in (getpass.getuser(), socket.gethostname(), str(tmp_path), str(os.geteuid())):
+        assert name not in text.split() and name not in text
+
+    def keys(value: object) -> set[str]:
+        if isinstance(value, dict):
+            return set(value) | {k for v in value.values() for k in keys(v)}
+        return {k for v in value for k in keys(v)} if isinstance(value, list) else set()
+
+    assert not keys(load_yaml(path, "table")) & {"uid", "user", "username", "hostname", "account", "run"}
+
+
+@pytest.mark.logic
+def test_a_partial_regeneration_keeps_the_rows_of_the_units_it_does_not_regenerate(tmp_path: Path) -> None:
+    """Regenerating one unit of a table replaces its row and leaves the others; a row of another commit is refused."""
+    out = tmp_path / "out"
+    other = UNIT.model_copy(update={"hardware": UNIT.hardware.model_copy(update={"cpus": 4})})
+    first, second = tmp_path / "first", tmp_path / "second"
+    _write(first, UNIT, _line([2.0, 8.0]))
+    _write(second, other, _line([3.0, 9.0], "p2", hardware=other.hardware), PROVENANCE)
+    for unit in (UNIT, other):
+        generate.generate([first if unit is UNIT else second], out, DECLARED, PROFILE)
+    table = PackagedTable.load(out)
+    assert table.get(UNIT) is not None and table.get(other) is not None
+    again = tmp_path / "again"
+    _write(again, UNIT, _line([2.0, 9.0], "p3"))
+    generate.generate([again], out, DECLARED, PROFILE)
+    kept = PackagedTable.load(out)
+    assert kept.get(other) == table.get(other) and kept.get(UNIT) is not None and kept.get(UNIT) != table.get(UNIT)
+    later = tmp_path / "later"
+    _write(
+        later,
+        UNIT,
+        _line([2.0, 8.0], "p4"),
+        PROVENANCE.model_copy(update={"senselab": Build(version="2.0.0", commit="b" * 40)}),
+    )
+    with pytest.raises(generate.Refused, match="does not regenerate"):
+        generate.generate([later], out, DECLARED, PROFILE)
+    assert PackagedTable.load(out).get(UNIT) == kept.get(UNIT)
+
+
+@pytest.mark.logic
+def test_a_ladder_run_read_under_other_calibration_settings_is_refused(tmp_path: Path) -> None:
+    """The estimate is made under the settings the points were probed under: a table-profiled run needs its suite."""
+    run = tmp_path / "run"
+    table = PROFILE.calibration.model_copy(update={"length_strata": 3})
+    for point, ran in (("t~b@100", table), ("t~b@200", PROFILE.calibration)):
+        (run / point / "measures" / "measures@1").mkdir(parents=True)
+        (run / f"{point}.json").write_text(json.dumps({"calibration": ran.model_dump(mode="json")}))
+    (run / "t~b@300" / "measures" / "measures@1").mkdir(parents=True)
+    lines = generate.ladder_mismatches([run], PROFILE)
+    assert [line.split(":")[0] for line in lines] == ["t~b@100", "t~b@300"]
+    assert "length_strata" in lines[0] and "no result" in lines[1]
+    assert generate.ladder_mismatches([run], PROFILE.model_copy(update={"calibration": table}))[:1] == [
+        "t~b@200: probed under other calibration settings (length_strata); give --suite"
+    ]
+    assert generate.ladder_mismatches([run / "t~b@100" / "measures"], PROFILE) == []
+
+
+@pytest.mark.logic
+def test_generator_refuses_rows_it_cannot_derive_or_of_two_commits(tmp_path: Path) -> None:
+    """A probe with no commit or no scheduler job, or units measured at two commits, refuse the run; none is written."""
+    out = tmp_path / "out"
+    other = UNIT.model_copy(update={"backend": "other"})
+    declared = {*DECLARED, (UNIT.task, "other")}
+    cases = {
+        "commit": (PROVENANCE.model_copy(update={"senselab": Build(version="2.0.0")}), "no commit"),
+        "job": (PROVENANCE.model_copy(update={"job": None}), "no scheduler job"),
+    }
+    for name, (provenance, why) in cases.items():
+        root = tmp_path / name
+        _write(root, UNIT, _line([2.0, 8.0]), provenance)
+        with pytest.raises(generate.Refused, match=why):
+            generate.generate([root], out, DECLARED, PROFILE)
+    root = tmp_path / "two"
+    _write(root, UNIT, _line([2.0, 8.0]))
+    _write(
+        root,
+        other,
+        _line([2.0, 8.0]),
+        PROVENANCE.model_copy(update={"senselab": Build(version="2.0.0", commit="b" * 40)}),
+    )
+    with pytest.raises(generate.Refused, match="several commits"):
+        generate.generate([root], out, declared, PROFILE)
+    assert not out.exists()
 
 
 @pytest.mark.logic
 def test_flatness_covers_time_memory_files_and_bytes_against_budgets() -> None:
     """Each measure's value at 10⁴ over at 10² is judged against `flat_ratio`, its value at 10⁴ against its ceiling.
 
-    Without a 10⁴ point the ceiling reads 10², per-item seconds by the calibration median there, never the one-item
-    point, whose time is the model load's.
+    Without a 10⁴ point the ceiling reads 10², and without either the largest point; a point with no per-item
+    seconds enters no ratio and its ceiling reads n/a.
     """
     ladder = _module("scale_ladder_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
 
-    def point(at: int, wall: float, peak: int, files: int, written: int) -> dict[str, Any]:
+    def point(at: int, wall: float | None, peak: int, files: int, written: int) -> dict[str, Any]:
         keys = ("per_item_s", "peak_rss_bytes", "files_written", "bytes_written")
         return {"task": "t", "point": at, "items": at, **dict(zip(keys, (wall, peak, files, written), strict=True))}
 
@@ -187,14 +297,12 @@ def test_flatness_covers_time_memory_files_and_bytes_against_budgets() -> None:
         "t bytes_per_item: at 10000 / at 100 = 1.000, flat ok, ceiling unmeasured (at 10000)",
     ]
     assert all("unmeasured" in line for line in ladder.flatness(results, {})[:1])
-    gpu = [point(1, 9.0, 1000, 20, 100), {**point(100, 1.0, 1000, 200, 10_000), "per_item_s": None}]
-    gpu[1]["calibration_per_item_s"] = 0.5
-    assert ladder.flatness(gpu, budgets)[0] == (
-        "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling ok (calibration median at 100)"
-    )
+    probed = [point(1, 9.0, 1000, 20, 100), point(100, None, 1000, 200, 10_000)]
     assert (
-        ladder.flatness(gpu[:1], budgets)[0]
-        == "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling EXCEEDED (1.1) (at 1)"
+        ladder.flatness(probed, budgets)[0] == "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling n/a (at 100)"
+    )
+    assert ladder.flatness(probed[:1], budgets)[0] == (
+        "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling EXCEEDED (1.1) (at 1)"
     )
 
 
@@ -273,7 +381,7 @@ def test_two_entries_of_one_task_write_two_results_and_two_stores(
 
     def measured(entry: Any, point: Any, suite: Any, profile: Any, label: str, out: Path) -> dict[str, Any]:  # noqa: ANN401, ARG001, PLR0913 - the measure_point signature
         (out / f"{label}@{point}" / "store").mkdir(parents=True)
-        row = {"per_item_s": 1.0, "peak_rss_bytes": 1, "files_written": 1, "bytes_written": 1, "items": 1}
+        row = {"per_item_s": 1.0, "peak_rss_bytes": 1, "files_written": 1, "bytes_written": 1, "items": 1, "units": []}
         return {"sha": "a", "jobs": ["1"], "task": entry.task, "label": label, "point": point, "done": True, **row}
 
     monkeypatch.setattr(ladder, "measure_point", measured)
@@ -301,69 +409,150 @@ def test_two_entries_of_one_task_write_two_results_and_two_stores(
 
 
 @pytest.mark.logic
-def test_per_item_cost_runs_from_the_end_of_calibration_to_the_last_item() -> None:
-    """Calibration items and the run's start are left out; the wait to see the run end never enters, being no item's."""
-    ladder = _module("scale_ladder_steady_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+def test_a_points_units_hold_their_probe_observations_and_estimate(tmp_path: Path) -> None:
+    """Per unit its measures root holds: the unit, its probe observations and the `Estimate`, measured or not."""
+    ladder = _module("scale_ladder_units_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    thin = UNIT.model_copy(update={"backend": "thin"})
+    _write(tmp_path, UNIT, _line([2.0, 8.0]))
+    _write(tmp_path, thin, _line([2.0, 8.0], count=1))
+    units = ladder._units(_roots(tmp_path), PROFILE)
+    by_label = {u["label"]: u for u in units}
+    assert set(by_label) == {UNIT.label(), thin.label()} and [u["label"] for u in units] == sorted(by_label)
+    assert (
+        by_label[UNIT.label()]["estimate"]["status"] == "measured" and len(by_label[UNIT.label()]["observations"]) == 6
+    )
+    assert (
+        by_label[thin.label()]["estimate"]["status"] == "unmeasured" and by_label[thin.label()]["estimate"]["reasons"]
+    )
+    assert MeasureUnit.model_validate(by_label[UNIT.label()]["unit"]) == UNIT
+    assert json.loads(json.dumps(units, sort_keys=True)) == units
 
-    def sample(jobs: int, ended_s: float) -> Sample:
-        return Sample(
-            wall_s=1.0,
-            claim_s=0.0,
-            jobs=jobs,
-            batch_size=1,
-            input_s=None,
-            baseline_bytes=0,
-            resident_bytes=None,
-            peak_memory_bytes=0,
-            cold=False,
-            job="7",
-            ended_s=ended_s,
-        )
 
-    samples = {"c1": sample(1, 101.0), "c2": sample(1, 103.0), "a": sample(10, 108.0), "b": sample(10, 113.0)}
-    assert ladder._steady(samples, {"c1", "c2"}, 100.0) == (0.5, 3.0, 2)
-    assert ladder._steady({"c1": samples["c1"]}, {"c1"}, 100.0) == (None, 1.0, 1)
-    timings = ladder._item_samples(samples, {"c1", "c2"})
-    assert [(t["calibration"], t["jobs"], t["ended_s"]) for t in timings] == [
-        (True, 1, 101.0),
-        (True, 1, 103.0),
-        (False, 10, 108.0),
-        (False, 10, 113.0),
+def _request(item: str, jobs: int, wall: float, item_wall: float | None, **update: Any) -> Observation:  # noqa: ANN401
+    fields: dict[str, Any] = {"probe": None, "item": item, "jobs": jobs, "batch": jobs, "wall_s": wall}
+    return observation(**{**fields, "item_wall_s": item_wall, **update})
+
+
+BASIS = "production span on the worker clock, first claim to last commit, per production job"
+
+
+def _ref(i: int) -> JobRef:
+    return JobRef(plan_hash="0" * 64, node="n", element=(i,))
+
+
+def _sample(began_s: float, ended_s: float, claim_s: float = 0.0) -> dict[str, Any]:
+    """A worker's sample of an item claimed at `began_s` and measured at `ended_s`, on the worker's clock."""
+    sample = Sample(
+        wall_s=ended_s - began_s - claim_s,
+        claim_s=claim_s,
+        jobs=1,
+        batch_size=1,
+        input_s=None,
+        baseline_bytes=0,
+        resident_bytes=None,
+        peak_memory_bytes=1,
+        cold=False,
+        job="7",
+        ended_s=ended_s,
+    )
+    return sample.model_dump(mode="json")
+
+
+def _outcome(queue: str, jobs: range, began_s: float, ended_s: float, failed: Sequence[int] = ()) -> dict[str, Any]:
+    refs = [{"job": _ref(i).model_dump(mode="json"), "failure": {"x": 1} if i in failed else None} for i in jobs]
+    return {"queue": queue, "jobs": refs, "measure": _sample(began_s, ended_s, claim_s=1.0)}
+
+
+def _span_run(production_end: float, probe: tuple[float, float]) -> list[dict[str, Any]]:
+    """Return the outcomes of a run: production jobs 10 to 14 and a probe's two jobs.
+
+    The production jobs (14 failed) are one item claimed at 20 s and measured at `production_end`; the probe's are an
+    item of the probe's queue claimed and measured at `probe`'s times. A model load and a worker start before the
+    first claim leave no sample, nor does the wait after the last commit.
+    """
+    return [
+        _outcome("cpu", range(10, 15), 20.0, production_end, failed=[14]),
+        _outcome(probe_queue("cpu", "p1"), range(100, 102), *probe),
     ]
 
 
 @pytest.mark.logic
-def test_a_point_whose_calibration_takes_every_item_has_no_per_item_cost() -> None:
-    """Its per-item seconds are None, so it enters no ratio; without a 10⁴ point its calibration median is judged."""
-    ladder = _module("scale_ladder_no_steady_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
-    small = {
-        "per_item_s": None,
-        "per_item_basis": "no items after calibration",
-        "wall_per_item_s": 3.0,
-        "calibration_per_item_s": 0.05,
-    }
-    keys = {"task": "t", "peak_rss_bytes": 1000, "files_written": 10, "bytes_written": 100}
-    results = [
-        {**keys, "point": 100, "items": 100, **small},
-        {**keys, "point": 10_000, "items": 10_000, "per_item_s": 0.9},
+def test_flatness_reads_request_walls_not_end_times() -> None:
+    """Per-item seconds are the production span, first claim to last commit, over the jobs that gave a result.
+
+    Both ends are the workers' own clock (the samples' `ended_s` less their claim's start), never the coordinator's
+    events, which are written when the follower next reads: that lag is not in the figure. A model load before the first
+    claim, the wait after the last commit and a probe running beside production do not change it, and a later commit
+    does. Worker seconds per job come from request walls and leave the loading request out.
+    """
+    ladder = _module("scale_ladder_walls_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    probe = ProbeRef(id="p1", phase="SINGLE", stratum=0)
+    observations = [
+        _request("a", 2, 0.1, None, request_index=0),
+        _request("a", 2, 0.2, 0.5, request_index=1),
+        _request("b", 4, 0.3, 1.0),
+        _request("probe", 1, 9.0, 9.0, probe=probe),
+        _request("cold", 4, 4.0, 4.0, since_load=0, load_s=3.0),
+        _request("lost", 4, 0.1, 0.1, outcome="failed", since_load=None, fault="content"),
     ]
-    budgets = {"flat_ratio": 1.25, "per_item": {"t": {"per_item_s": 0.1}}}
-    lines = ladder.flatness(results, budgets)
-    assert lines[0] == "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling EXCEEDED (0.1) (at 10000)"
-    assert ladder.flatness(results[:1], budgets)[0] == (
-        "t per_item_s: at 10000 / at 100 = n/a, flat n/a, ceiling ok (calibration median at 100)"
+    cost = ladder.request_cost(observations, _span_run(30.0, (40.0, 41.0)))
+    assert cost["per_item_s"] == pytest.approx(10.0 / 4) and cost["worker_s_per_item"] == pytest.approx(0.6 / 8)
+    assert (
+        cost["per_item_basis"] == "production span on the worker clock, first claim to last commit, per production job"
     )
-    measure = ResourceMeasure(
-        load_s=1.0,
-        claim_s=0.1,
-        resident_bytes=None,
-        peak_memory_bytes=None,
-        s_per_input_s=0.2,
-        input_s_per_item=None,
-        batched=Batched(batch_size=8, s_per_input_s=0.05),
-    )
-    assert ladder._per_item(None, 3.0, measure) == small
-    assert ladder._per_item(0.4, 3.0, None)["per_item_basis"] == "after calibration"
+    for beside in ((40.0, 41.0), (22.0, 28.0), (5.0, 500.0)):
+        assert ladder.request_cost(observations, _span_run(30.0, beside))["per_item_s"] == cost["per_item_s"]
+    assert ladder.request_cost(observations, _span_run(32.0, (40.0, 41.0)))["per_item_s"] == pytest.approx(12.0 / 4)
+    none = ladder.request_cost(observations, _span_run(30.0, (40.0, 41.0))[1:])
+    assert none["per_item_s"] is None and none["per_item_basis"] == "no production items"
+    assert not hasattr(ladder, "_steady") and not hasattr(ladder, "_item_samples")
+
+
+@pytest.mark.logic
+def test_a_claim_of_several_items_and_a_request_spanning_them_count_each_job_once() -> None:
+    """Items claimed together carry the claim's clock, and a batched request is in every item it spans.
+
+    Three one-job items of one claim report item walls 0.1, 0.2 and 0.3 (from the claim's start), and one request of the
+    three jobs, 0.3 s, is reported in each of them: the worker seconds per job are 0.1, not the 0.2 or 0.6 the sums of
+    those would give. The jobs per-item seconds divide by are the outcome records' own, each counted once.
+    """
+    ladder = _module("scale_ladder_claims_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    spanning = [_request(f"i{k}", 3, 0.3, 0.1 * (k + 1), request_index=k) for k in range(3)]
+    outcomes = [_outcome("cpu", range(3), 1.0, 2.0)]
+    cost = ladder.request_cost(spanning, outcomes)
+    assert cost["worker_s_per_item"] == pytest.approx(0.1) and cost["per_item_s"] == pytest.approx(1.0 / 3)
+    walls = (0.05, 0.1, 0.15)
+    singles = [_request(f"j{k}", 1, w, sum(walls[: k + 1])) for k, w in enumerate(walls)]
+    assert ladder.request_cost(singles, outcomes)["worker_s_per_item"] == pytest.approx(0.1)
+    twice = [*singles, singles[0].model_copy(update={"item": "k0"})]
+    assert ladder.request_cost(twice, outcomes)["per_item_s"] == pytest.approx(1.0 / 3)
+
+
+@pytest.mark.logic
+def test_the_outcome_record_a_pool_worker_commits_is_what_the_ladder_reads(tmp_path: Path) -> None:
+    """`pool_parts.report`'s outcome record is read by `_outcomes`, `_samples` and `_observations` of the ladder.
+
+    The key the worker writes the observations under is the one the ladder reads, so a rename on either side fails here
+    rather than turning every point's per-item seconds into "no production items".
+    """
+    ladder = _module("scale_ladder_join_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    sample = Sample.model_validate(_sample(0.0, 1.0))
+    seen = [_request("a", 2, 0.4, 0.5)]
+    written: dict[str, Any] = {}
+
+    class Claim:
+        def commit(self, digests: list[str], extra: dict[str, Any]) -> list[str]:
+            written.update(extra)
+            return digests
+
+    assert pool_parts.report(Claim(), "d" * 8, [], sample, seen)  # type: ignore[arg-type]
+    run_dir = tmp_path / "run"
+    outcome = run_dir / ladder.RUN_QUEUES / "cpu" / "outcome"
+    outcome.mkdir(parents=True)
+    (outcome / ("d" * 8)).write_text(json.dumps(written))
+    outcomes = ladder._outcomes(run_dir)
+    assert ladder._observations(outcomes) == seen and ladder._samples(outcomes) == [sample]
+    assert outcomes[0]["queue"] == "cpu"
 
 
 @pytest.mark.logic

@@ -77,6 +77,7 @@ from senselab_core.runtime.measures import (
     PeerProbing,
     Provenance,
     Unleased,
+    checkout_commit,
 )
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.probe import Probe
@@ -161,9 +162,14 @@ class ProbeMachine:
         resolver: UnitReads,
         clock: Clock,
         host: Host,
+        probe_s: float | None = None,
     ) -> None:
-        """Run units under `profile`, reading `roots`, `measures`, `resolver`; timed by `clock`, acting by `host`."""
+        """Run units under `profile`, reading `roots`, `measures`, `resolver`; timed by `clock`, acting by `host`.
+
+        A probe's warm requests may take `probe_s` seconds: the profile's `probe_s` when None.
+        """
         self.profile, self.roots, self.measures, self.resolver = profile, roots, measures, resolver
+        self.probe_s = profile.probe_s if probe_s is None else probe_s
         self._clock, self.host = clock, host
         self.probes: dict[str, ProbedUnit] = {}
         self.lock = threading.Lock()
@@ -295,7 +301,7 @@ class ProbeMachine:
         stored = () if fresh else tuple(self.roots.observations(unit))
         prior = Prior(observations=stored, records=tuple(self.roots.regime_records(unit)))
         return Probe.plan(
-            unit, candidates, prior, self.profile.calibration, unit.formation, self.profile.probe_s, bucket_edges=edges
+            unit, candidates, prior, self.profile.calibration, unit.formation, self.probe_s, bucket_edges=edges
         )
 
     def _take_lease(
@@ -498,7 +504,7 @@ class ProbeMachine:
             found = [Observation.model_validate(o) for o in reported] if isinstance(reported, list) else []
             run.observations.extend(found)
             served = any(o.outcome == "served" for o in found)
-            if replace and served and self._warm_s(run.observations) < self.profile.probe_s:
+            if replace and served and self._warm_s(run.observations) < self.probe_s:
                 old = run.plan
                 run.plan = Probe.replace_served(old, item)
                 self._put_items(state, [i for i in run.plan.items if i not in old.items])
@@ -509,11 +515,11 @@ class ProbeMachine:
         assert run is not None
         self._read_outcomes(state, replace=True)
         spent = self._warm_s(run.observations)
-        if run.awaiting and spent < self.profile.probe_s:
+        if run.awaiting and spent < self.probe_s:
             if self._clock.now() - run.last >= self.profile.lease.stale_after_s:
                 self._conclude(state, None, abandon=True)
             return
-        if run.stage == "single" and not run.awaiting and spent < self.profile.probe_s:
+        if run.stage == "single" and not run.awaiting and spent < self.probe_s:
             estimate = self._estimate(state, [*run.prior, *run.observations])
             if estimate.status == "measured" and run.plan.batched:
                 more = Probe.plan_batched(
@@ -521,7 +527,7 @@ class ProbeMachine:
                     estimate,
                     self.host.grant(state.queue),
                     cfg,
-                    self.profile.probe_s - spent,
+                    self.probe_s - spent,
                     memory_headroom=self.profile.sizing.memory_headroom,
                 )
                 if more.items:
@@ -820,8 +826,11 @@ def detected_kind(jobs: Sequence[Job]) -> UnitKind:
 
 
 def _build() -> Build | None:
-    """Return the installed senselab-core release for a record's provenance; None when it is not installed."""
+    """Return the installed senselab-core release and its checkout's commit for a record's provenance.
+
+    None when senselab-core is not installed; the commit is None outside a git checkout.
+    """
     try:
-        return Build(version=importlib.metadata.version("senselab-core"))
+        return Build(version=importlib.metadata.version("senselab-core"), commit=checkout_commit())
     except importlib.metadata.PackageNotFoundError:
         return None

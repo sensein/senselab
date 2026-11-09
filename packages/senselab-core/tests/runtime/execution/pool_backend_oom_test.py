@@ -170,16 +170,20 @@ def _the_oom_record(pool: Pool) -> OomRecord:
     return record
 
 
-@pytest.mark.parametrize("quantum_items", [20, 100], ids=["one-request", "shipped-profile"])
+@pytest.mark.parametrize(
+    ("lengths", "quantum_items"),
+    [([30] * 11 + [90], 20), ([30] * 13 + [90], 100)],
+    ids=["one-request", "shipped-profile"],
+)
 def test_a_torch_style_oom_bisects_the_request_that_ran_out_and_does_not_hold_the_env(
-    tmp_path: Path, clock: ManualClock, quantum_items: int
+    tmp_path: Path, clock: ManualClock, lengths: list[int], quantum_items: int
 ) -> None:
     """A plain `OutOfMemoryError` at batch 12: the halves that fit succeed, the oversize job dies, the env is free.
 
-    Fourteen jobs make requests of 12 and 2 when `quantum_items` holds them all. The oom record is at batch 12, and
-    `poll` raises no `QueueHeld`. The oom is a gap in the table's terms: it is listed in `pool.gaps` and still not held.
+    Twelve jobs are one request of 12; fourteen, under the shipped quantum that holds them all, make requests of 12
+    and 2, which the oversize job runs out in too. The oom record is at batch 12, and `poll` raises no `QueueHeld`.
+    The oom is a gap in the table's terms: it is listed in `pool.gaps` and still not held.
     """
-    lengths = [30] * 13 + [90]
     pool, results = _torch_run(tmp_path, clock, lengths, quantum_items)
     found = _observed(pool)
     assert any((o.batch, o.outcome, o.fault) == (12, "bisected", "resource") for o in found)
@@ -202,6 +206,9 @@ def test_only_the_request_that_ran_out_is_split_and_the_others_keep_their_report
     found = _observed(pool)
     assert (12, "ok", None) in {(o.batch, o.outcome, o.fault) for o in found}
     assert (12, "bisected", "resource") in {(o.batch, o.outcome, o.fault) for o in found}
+    in_order = sorted(found, key=lambda o: o.request_index)
+    assert (in_order[0].batch, in_order[0].outcome) == (12, "ok")
+    assert [o.item_wall_s is not None for o in in_order].count(True) == 1 and in_order[-1].item_wall_s is not None
     assert all(r.failure is None for r in results) and len(results) == len(lengths)
     record = _the_oom_record(pool)
     assert (record.batch, record.length) == (12, 40.0)

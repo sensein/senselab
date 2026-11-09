@@ -53,7 +53,7 @@ from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
-from senselab_core.runtime.sizing import ExtrapolationLog, Grant, Sizing, estimate_of, size
+from senselab_core.runtime.sizing import ExtrapolationLog, Grant, Sizing, size
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import UnitOf, UnitResolver, Unresolved, decoder_of, default_measures, measure_roots
 
@@ -553,17 +553,10 @@ class InProcess:
     def _estimate(
         self, placement: Placement, call: Call, decoder: str | None | Unresolved
     ) -> tuple[Estimate | None, str | None]:
-        """Return the estimate `measures` gives for the unit `units` resolves and its label, else the packaged row's."""
+        """Return the estimate `measures` gives for the unit `units` resolves and its label, else none."""
         unit = decoder if isinstance(decoder, Unresolved) else self.units(call, placement, decoder)
         found = None if isinstance(unit, Unresolved) else self.measures.get(unit)
-        if found is not None and isinstance(unit, MeasureUnit):
-            return found, unit.label()
-        backend, model = placement.backend, call.model
-        ident = (None, None) if model is None else (model.ref.id, model.identity)
-        row = packaged().catalogue.resources(backend.task, backend.name, *ident)
-        measured = None if row is None else row.classes.get(placement.resource_class)
-        cuda = self.profile.resource_classes[placement.resource_class].device == "cuda"
-        return (None if measured is None else estimate_of(measured, on_device=cuda)), None
+        return (found, unit.label()) if found is not None and isinstance(unit, MeasureUnit) else (None, None)
 
     def _size(self, jobs: Sequence[Job], placement: Placement) -> tuple[Sizing, tuple[float | None, ...]]:
         estimate, label = self._estimate(placement, jobs[0].call, decoder_of(jobs)) if jobs else (None, None)
@@ -630,7 +623,7 @@ class InProcess:
             UnknownTask, InconsistentInputs: the task is not declared; the inputs contradict a constraint it declares.
             AmbiguousClock: two recording inputs of one content carry different anchors.
             UnlistedSource, NoBackend, NoDevice, BackendParamsMismatch: as `plan` places the node.
-            LicenseRefused, LicenseConflict, MemoryCapExceeded: as `plan` checks the placement.
+            LicenseRefused, LicenseConflict: as `plan` checks the placement.
             MissingProfileSlice, ModelResolutionError: as `plan` resolves the node.
             ValueError: the call names another task version or other inputs than the task's; an input has no reader
                 for its port's type or, for an isolated or server backend, no wire form; or a server backend got no

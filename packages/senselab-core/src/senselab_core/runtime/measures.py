@@ -277,6 +277,58 @@ RecordKind = Literal["drift", "supersede", "regime", "oom"]
 _JSON_NAME = re.compile(r".+\.json")
 
 
+PACKAGE_IN_CHECKOUT = Path("packages") / "senselab-core" / "src"
+"""Where senselab-core lies inside its own checkout: a checkout's commit is this package's only from there."""
+
+
+def _git_dir(start: Path) -> Path | None:
+    """Return the git directory of the checkout whose work tree holds senselab-core and `start`; None otherwise.
+
+    A `.git` found above `start` is another project's (a virtual environment inside its repository) unless
+    `packages/senselab-core/src` lies under the same work tree and `start` lies under it.
+    """
+    for parent in (start, *start.parents):
+        dot = parent / ".git"
+        found = None
+        if dot.is_dir():
+            found = dot
+        elif dot.is_file() and (named := dot.read_text().strip()).startswith("gitdir:"):
+            found = (parent / named.removeprefix("gitdir:").strip()).resolve()
+        if found is not None:
+            return found if start.is_relative_to(parent / PACKAGE_IN_CHECKOUT) else None
+    return None
+
+
+def _ref_commit(git: Path, ref: str) -> str | None:
+    """Return the commit of `ref`, loose or packed, in `git` or the common directory a worktree's names."""
+    common = git / "commondir"
+    base = (git / common.read_text().strip()).resolve() if common.is_file() else git
+    loose = base / ref
+    if loose.is_file():
+        return loose.read_text().strip()
+    packed = base / "packed-refs"
+    lines = packed.read_text().splitlines() if packed.is_file() else []
+    return next((line.split()[0] for line in lines if line.endswith(f" {ref}")), None)
+
+
+def checkout_commit(root: Path | None = None) -> str | None:
+    """Return the 40-hex commit `HEAD` names in the git checkout this package lives in (`root`: where it lives).
+
+    Read from the git directory, not by running git. None unless the package lies inside the work tree of that
+    checkout, so a package installed into a virtual environment inside another repository gets none of that
+    repository's; and None where it cannot be read.
+    """
+    try:
+        git = _git_dir(Path(__file__).resolve().parent if root is None else root.resolve())
+        if git is None:
+            return None
+        head = (git / "HEAD").read_text().strip()
+        found = _ref_commit(git, head.removeprefix("ref:").strip()) if head.startswith("ref:") else head
+    except OSError:
+        return None
+    return found if found is not None and COMMIT_HEX.fullmatch(found) else None
+
+
 class Build(Frozen):
     """The senselab release a record was written by: its version and, when known, its 40-hex commit."""
 
@@ -375,8 +427,16 @@ def _dump(document: Mapping[str, Any]) -> bytes:
     return json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
 
-def _parse_observations(document: Mapping[str, Any], info: os.stat_result) -> tuple[Observation, ...]:
-    return tuple(Observation.model_validate(o) for o in document["observations"])
+class ProbeFile(Frozen):
+    """One probe's observations of a unit as stored: its id, who wrote it and what it reported."""
+
+    probe: NonEmptyStr
+    provenance: Provenance
+    observations: tuple[Observation, ...]
+
+
+def _parse_observations(document: Mapping[str, Any], info: os.stat_result) -> ProbeFile:
+    return ProbeFile.model_validate({k: document[k] for k in ("probe", "provenance", "observations")})
 
 
 def _parse_unit(document: Mapping[str, Any], info: os.stat_result) -> MeasureUnit:
@@ -711,14 +771,14 @@ class MeasureRoots:
         """Return the typed `regime` and `oom` records of `unit` the trust admits, oldest first."""
         return tuple(_typed(r) for r in self.records(unit) if r.kind in ESTIMATE_RECORDS)
 
-    def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
-        """Return the observations of `unit` that still pool, oldest file first.
+    def probes(self, unit: MeasureUnit) -> tuple[ProbeFile, ...]:
+        """Return the probe files of `unit` that still pool, oldest first.
 
         A probe whose id a trusted `supersede` record names in `outdates` does not pool.
         """
         digest = self._digest(unit)
         outdated = self._outdated(digest)
-        files: list[tuple[float, str, tuple[Observation, ...]]] = []
+        files: list[tuple[float, str, ProbeFile]] = []
 
         def visit(root: Path, unit_dir: StorageDir) -> None:
             for name, f in self._files(root, unit_dir, "obs", MEASURE_OBSERVATIONS_FORMAT, _parse_observations):
@@ -726,7 +786,29 @@ class MeasureRoots:
                     files.append((f.mtime, name, f.value))
 
         self._each_unit(digest, visit)
-        return tuple(o for _, _, group in sorted(files, key=lambda f: f[:2]) for o in group)
+        return tuple(file for _, _, file in sorted(files, key=lambda f: f[:2]))
+
+    def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
+        """Return the observations of `unit` that still pool, oldest file first (`probes`)."""
+        return tuple(o for probe in self.probes(unit) for o in probe.observations)
+
+    def units(self) -> tuple[MeasureUnit, ...]:
+        """Return the units any root holds, by digest, each read from a unit file whose name is its digest."""
+        found: dict[str, MeasureUnit] = {}
+        for root in self.roots:
+            with self._guard(root, "read"), self._open(root, create=False) as m, m.walk("units") as units:
+                for prefix in sorted(units.listdir()):
+                    self._read_units(root, units, prefix, found)
+        return tuple(found[d] for d in sorted(found))
+
+    def _read_units(self, root: Path, units: StorageDir, prefix: str, found: dict[str, MeasureUnit]) -> None:
+        with self._guard(root, "read"), units.child(prefix) as parent:
+            for digest in sorted(parent.listdir()):
+                with self._guard(root, "read"), parent.child(digest) as unit_dir:
+                    if self._unit_status(root, parent, unit_dir, digest) == "ok":
+                        loaded = self._load(root, unit_dir, UNIT_FILE, MEASURE_UNIT_FORMAT, _parse_unit, filtered=False)
+                        if loaded is not None:
+                            found.setdefault(digest, loaded.value)
 
     def _stage(self, root: Path, target: StorageDir, name: str, data: bytes) -> None:
         with self._open(root, create=True) as m, m.walk("tmp", create=True, mode=self._dir_mode) as tmp:
