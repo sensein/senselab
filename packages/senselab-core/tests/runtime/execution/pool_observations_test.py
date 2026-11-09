@@ -65,21 +65,6 @@ def _worker(
     )
 
 
-class _BackendClock(ManualClock):
-    """A `ManualClock` read from the fake-time backend, which advances it by the seconds its requests name."""
-
-    def now(self) -> float:
-        """Return the backend's reading."""
-        return fake_time_backend_fixture.NOW[0]
-
-    def advance(self, seconds: float) -> None:
-        """Move the backend's reading ahead `seconds` and wake the threads waiting on it."""
-        with self._cond:
-            fake_time_backend_fixture.NOW[0] += seconds
-            self._version += 1
-            self._cond.notify_all()
-
-
 @pytest.fixture
 def obs(slack_tests: dict[str, Any]) -> dict[str, Any]:
     """The worker-observation test slack."""
@@ -108,8 +93,8 @@ def test_gathered_items_report_their_own_request_walls(tmp_path: Path, lease_clo
     """
     profile = _profile(quantum_items=4)
     texts = ["0", "0.25", "0.5", "0.75", "1"]
-    clock = lease_clock(_BackendClock)
     fake_time_backend_fixture.NOW[0] = 0.0
+    clock = lease_clock(cell=fake_time_backend_fixture.NOW)
     with packaged(registry(TIMED, worker=FAKE_TIME), tmp_path / "cache"):
         placed, store, pool_dir = _items(profile, tmp_path, texts)
         _put(placed, pool_dir, 0)
@@ -349,14 +334,16 @@ def test_a_pinned_worker_waits_on_its_probe_queue_from_the_first_poll(
         clock=clock,
     )
     exits: list[int] = []
-    thread = threading.Thread(target=lambda: exits.append(worker.serve()))
+    thread = threading.Thread(target=lambda: exits.append(worker.serve()), daemon=True)
     thread.start()
-    assert clock.parked(thread) and len(worker.served) == 3
-    queue.put_probe(later, "SINGLE", 1)
-    clock.advance(obs["first_poll_s"])
-    assert clock.parked(thread) and len(worker.served) == 4
-    worker.halt()
-    thread.join()
+    try:
+        assert clock.parked(thread) and len(worker.served) == 3
+        queue.put_probe(later, "SINGLE", 1)
+        clock.advance(obs["first_poll_s"])
+        assert clock.parked(thread) and len(worker.served) == 4
+    finally:
+        worker.halt()
+        thread.join(clock.hang_s)
     assert exits == [0]
 
 

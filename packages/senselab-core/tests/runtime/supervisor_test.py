@@ -56,7 +56,7 @@ def _spawned(sup: Supervisor, clock: ManualClock) -> tuple[WorkerClient, int, in
 @pytest.mark.contract
 def test_setsid_escapee_killed_with_worker(backends_importable: None, lease_clock: Callable[..., ManualClock]) -> None:
     """An escapee left by a worker is adopted while the worker runs, then SIGKILLed and reaped when it is closed."""
-    clock = lease_clock()
+    clock = lease_clock(spends=False)
     with Supervisor(clock=clock) as sup:
         client, _, escapee = _spawned(sup, clock)
         assert os.getpgid(escapee) != client.hello["pid"] and alive(escapee)
@@ -69,7 +69,7 @@ def test_setsid_escapee_killed_with_worker(backends_importable: None, lease_cloc
 @pytest.mark.contract
 def test_fork_without_exec_child_reaped(backends_importable: None, lease_clock: Callable[..., ManualClock]) -> None:
     """A forked member outliving its leader is adopted into the leader's group, stopped with it and reaped."""
-    clock = lease_clock()
+    clock = lease_clock(spends=False)
     with Supervisor(clock=clock) as sup:
         client, member, escapee = _spawned(sup, clock)
         pgid = client.hello["pid"]
@@ -99,7 +99,7 @@ def test_liveness_from_supervisor_not_ps(backends_importable: None, lease_clock:
     A worker's close asks the supervisor it was launched through.
     """
     elsewhere = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
-    clock = lease_clock()
+    clock = lease_clock(spends=False)
     try:
         with _Asked(clock) as sup:
             assert not sup.group_live(elsewhere.pid) and group_alive(elsewhere.pid)
@@ -126,7 +126,7 @@ def test_liveness_from_supervisor_not_ps(backends_importable: None, lease_clock:
 @pytest.mark.contract
 def test_leaving_a_supervisor_kills_its_groups(lease_clock: Callable[..., ManualClock]) -> None:
     """Every group launched through a supervisor, and not yet released, is SIGKILLed and reaped when it is left."""
-    with Supervisor(subreaper=False, clock=lease_clock()) as sup:
+    with Supervisor(subreaper=False, clock=lease_clock(spends=False)) as sup:
         leader = sup.popen([sys.executable, "-c", SLEEPER])
     assert leader.returncode == -signal.SIGKILL
 
@@ -159,7 +159,9 @@ def test_supervisor_host_sigkill_leaves_no_descendant(
         assert all(map(alive, (leader, member, escapee)))
         host.kill()
         host.wait()
-        lease_clock().until(lambda: not any(map(alive, (leader, member, escapee))), "every descendant is gone")
+        lease_clock(spends=False).until(
+            lambda: not any(map(alive, (leader, member, escapee))), "every descendant is gone"
+        )
         assert not group_alive(leader)
     finally:
         host.kill()
@@ -177,7 +179,7 @@ def test_released_leader_keeps_its_exit_status(
     backends_importable: None, lease_clock: Callable[..., ManualClock]
 ) -> None:
     """A leader released while the reaper runs is never reaped by it: its `Popen` and its client read -9."""
-    clock = lease_clock()
+    clock = lease_clock(spends=False)
     with Supervisor(poll_s=0.001, clock=clock) as sup:
         for _ in range(20):
             leader = sup.popen([sys.executable, "-c", SLEEPER])
@@ -338,7 +340,7 @@ def test_keeper_leads_its_own_session(lease_clock: Callable[..., ManualClock]) -
     keeper.record("+", "p", os.getpid(), start="never")
     pid = keeper.pid
     assert pid is not None
-    lease_clock().until(lambda: os.getsid(pid) == pid, "the keeper leads its own session")
+    lease_clock(spends=False).until(lambda: os.getsid(pid) == pid, "the keeper leads its own session")
     assert os.getsid(pid) != os.getsid(0)
     keeper.stop(SETTLE_S)
     keeper.pid = pid

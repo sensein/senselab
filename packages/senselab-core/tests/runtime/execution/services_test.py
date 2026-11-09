@@ -234,7 +234,7 @@ def test_service_exits_after_idle_consumers(
         tmp_path / "run" / RUN_QUEUES, ["svc:pii"], profile=PROFILE, store=store, workers=provider, clock=clock
     )
     exits: list[int] = []
-    thread = threading.Thread(target=lambda: exits.append(worker.serve()))
+    thread = threading.Thread(target=lambda: exits.append(worker.serve()), daemon=True)
     thread.start()
     try:
         for _ in range(round(held_s / poll_s)):
@@ -244,14 +244,12 @@ def test_service_exits_after_idle_consumers(
         assert thread.is_alive()
         consumer.stop()
         left = clock.now()
-        while thread.is_alive():
-            clock.advance(poll_s)
-            clock.settle()
+        clock.drive(thread, poll_s)
         assert exits == [0]
         assert idle_s - poll_s <= clock.now() - left <= idle_s + 2 * poll_s
     finally:
         worker.halt()
-        thread.join()
+        thread.join(clock.hang_s)
         consumer.stop()
         provider.close()
     assert worker.served == [] and registry.lookup(IDENTITY) is None

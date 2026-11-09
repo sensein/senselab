@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pool_probe_test import HOST, JOBS, SEEN, WORKERS, Clock, _plan, _profile, _seen, stack  # noqa: F401 - the stack
+from lease_clock_fixture import ManualClock
+from pool_probe_test import HOST, JOBS, SEEN, WORKERS, _plan, _profile, _seen, stack  # noqa: F401 - the stack
 from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
 from senselab_core.runtime.execution.executor import Admission, PlanFragment
@@ -102,7 +103,7 @@ class FakeHost:
         self.woken += 1
 
 
-def _machine(tmp_path: Path, seen: bool, clock: Clock) -> tuple[ProbeMachine, FakeHost, Held, Any]:
+def _machine(tmp_path: Path, seen: bool, clock: ManualClock) -> tuple[ProbeMachine, FakeHost, Held, Any]:
     profile = _profile(tmp_path)
     if seen:
         _seen(profile, SEEN)
@@ -155,9 +156,11 @@ def _observations(host: FakeHost, queue: FakeQueue) -> None:
         queue.outcomes[digest] = {"outcome": "done", "observations": [o.model_dump(mode="json") for o in found]}
 
 
-def test_a_unit_with_its_hardware_seen_probes_then_releases_its_held_jobs_sized(tmp_path: Path) -> None:
+def test_a_unit_with_its_hardware_seen_probes_then_releases_its_held_jobs_sized(
+    tmp_path: Path, clock: ManualClock
+) -> None:
     """Place -> probing (items on a queue that records the unit) -> ticks -> measured and the rest released."""
-    machine, host, held, _ = _machine(tmp_path, True, Clock())
+    machine, host, held, _ = _machine(tmp_path, True, clock)
     machine.place(held)
     [name] = host.queues
     queue = host.queues[name]
@@ -171,9 +174,9 @@ def test_a_unit_with_its_hardware_seen_probes_then_releases_its_held_jobs_sized(
     assert not probed & set(rest.jobs) and len(probed) + len(rest.jobs) == JOBS
 
 
-def test_a_unit_whose_hardware_is_unseen_waits_for_a_mark_then_probes(tmp_path: Path) -> None:
+def test_a_unit_whose_hardware_is_unseen_waits_for_a_mark_then_probes(tmp_path: Path, clock: ManualClock) -> None:
     """Without the class in the index the part is held and a worker wanted; a mark with its env resolves it."""
-    machine, host, held, profile = _machine(tmp_path, False, Clock())
+    machine, host, held, profile = _machine(tmp_path, False, clock)
     machine.place(held)
     assert not host.queues and machine.counts("cpu") == (0, True) and held.followed.waiting
     _, placement = fragment_jobs(held.part, host.placed, host.values)
@@ -186,9 +189,8 @@ def test_a_unit_whose_hardware_is_unseen_waits_for_a_mark_then_probes(tmp_path: 
     assert len(host.queues) == 1 and machine.counts("cpu") == (1, False)
 
 
-def test_a_unit_resolving_past_resolve_s_is_released_unmeasured(tmp_path: Path) -> None:
+def test_a_unit_resolving_past_resolve_s_is_released_unmeasured(tmp_path: Path, clock: ManualClock) -> None:
     """From the queue's first live worker, `resolve_s` later the held part is released with no estimate."""
-    clock = Clock()
     machine, host, held, profile = _machine(tmp_path, False, clock)
     machine.place(held)
     host.workers = [WorkerHandle("cpu", "w0")]
@@ -201,9 +203,10 @@ def test_a_unit_resolving_past_resolve_s_is_released_unmeasured(tmp_path: Path) 
     assert [r.estimate for r in host.released] == [None] and machine.counts("cpu") == (0, False)
 
 
-def test_a_probe_with_no_progress_for_the_stale_window_closes_its_queue_and_gives_its_jobs_back(tmp_path: Path) -> None:
+def test_a_probe_with_no_progress_for_the_stale_window_closes_its_queue_and_gives_its_jobs_back(
+    tmp_path: Path, clock: ManualClock
+) -> None:
     """Window from the last claim: a live claim renews it; past it the queue is closed and the jobs are released."""
-    clock = Clock()
     machine, host, held, profile = _machine(tmp_path, True, clock)
     machine.place(held)
     [queue] = host.queues.values()
@@ -221,9 +224,11 @@ def test_a_probe_with_no_progress_for_the_stale_window_closes_its_queue_and_give
     assert queue.closed and host.released and host.released[0].estimate is None
 
 
-def test_a_built_local_unit_probes_at_once_under_a_mark_with_no_entry_for_its_env(tmp_path: Path) -> None:
+def test_a_built_local_unit_probes_at_once_under_a_mark_with_no_entry_for_its_env(
+    tmp_path: Path, clock: ManualClock
+) -> None:
     """A mark lacking the backend's entry demotes only a pending unit: one this host resolves is placed as it is."""
-    machine, host, held, _ = _machine(tmp_path, True, Clock())
+    machine, host, held, _ = _machine(tmp_path, True, clock)
     host.new_marks = [("w1", ReadyMark("h", 1, None, {"cpu": QueueReady(SEEN, {})}))]
     machine.advance()
     machine.place(held)
@@ -312,16 +317,15 @@ class _Guarded(ProbeMachine):
         super().__setattr__(name, value)
 
 
-def _guarded(tmp_path: Path, seen: bool, clock: Clock) -> tuple[_Guarded, FakeHost, Held, Any]:
+def _guarded(tmp_path: Path, seen: bool, clock: ManualClock) -> tuple[_Guarded, FakeHost, Held, Any]:
     plain, host, held, profile = _machine(tmp_path, seen, clock)
     return _Guarded(profile, plain.roots, plain.measures, plain.resolver, clock, host), host, held, profile
 
 
 def test_every_change_to_the_unit_states_and_the_resolving_parts_holds_the_lock_counts_reads_under(
-    tmp_path: Path,
+    tmp_path: Path, clock: ManualClock
 ) -> None:
     """Probing, an ended unit, a held part and its expiry, and a disagreeing hello each change under the lock."""
-    clock = Clock()
     machine, host, held, profile = _guarded(tmp_path, False, clock)
     machine.place(held)
     host.workers = [WorkerHandle("cpu", "w0")]

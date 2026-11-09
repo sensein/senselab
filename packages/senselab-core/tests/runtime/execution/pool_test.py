@@ -13,7 +13,7 @@ from typing import Any
 import numpy
 import pytest
 import soundfile
-from lease_clock_fixture import ManualClock, SpendingClock, newest
+from lease_clock_fixture import ManualClock, newest
 from pool_stack_fixture import packaged, planned, registry, scoring, unresolving
 from senselab_core.cli import main as cli_main
 from senselab_core.kernel.identity import InputIdentity
@@ -411,12 +411,13 @@ def test_a_merge_whose_lease_fails_every_proof_writes_nothing(tmp_path: Path, mo
     assert len(displaced) == RECORD_ATTEMPTS and not (tmp_path / "run" / INPUTS_FILE).exists()
 
 
-CRASH = """
+CRASH_STALE_S = 1.0
+CRASH = f"""
 import os, sys
 from pathlib import Path
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution_settings import JobLease
-lease = JobLease(stale_after_s=1.0, renew_fraction=0.2, attribute_delay_s=0)
+lease = JobLease(stale_after_s={CRASH_STALE_S}, renew_fraction=0.2, attribute_delay_s=0)
 epochs = Epoch(Path(sys.argv[1]))
 with epochs.held(epochs.take(lease), lease):
     os._exit(9)
@@ -435,9 +436,11 @@ def test_wait_on_a_run_whose_coordinator_died_ends_interrupted(
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
     crashed = subprocess.run([sys.executable, "-c", CRASH, str(run_dir)], env=env, check=False)
     assert crashed.returncode == 9 and not Epoch(run_dir).stopped()
-    clock = lease_clock(storage_origin=newest(run_dir / "epoch" / "1"))
-    status = Run(run_dir, clock=clock).wait(None, poll=0.1)
+    clock = lease_clock(storage_origin=newest(run_dir / "epoch" / "1" / "coordinator.lease"))
+    poll = 0.1
+    status = Run(run_dir, clock=clock).wait(None, poll=poll)
     assert status.interrupted and not status.done and status.counts["queued"] == 1
+    assert CRASH_STALE_S < clock.now() <= CRASH_STALE_S + 2 * poll
 
 
 def _admitted(tmp_path: Path) -> tuple[Plan, Any]:
@@ -672,7 +675,7 @@ def test_wait_never_reports_a_running_run_interrupted(tmp_path: Path, lease_cloc
     epochs = Epoch(run_dir)
     (run_dir / "epoch" / str(pool.epoch) / "ended").touch()
     assert epochs.stopped()
-    clock, running = lease_clock(SpendingClock), threading.Event()
+    clock, running = lease_clock(waits="spend"), threading.Event()
     run = Run(run_dir, clock=clock)
     run.launch(threading.Thread(target=running.wait, daemon=True))
     try:
@@ -692,10 +695,13 @@ def test_an_epoch_taken_but_never_held_ends_a_wait(tmp_path: Path, lease_clock: 
     run_dir = tmp_path / "run"
     log = EventLog(run_dir, "a1", 1, epoch=1)
     job = node_fragment(*_admitted(tmp_path)).jobs[0]
-    Epoch(run_dir).take(JobLease(stale_after_s=0.5, renew_fraction=0.2, attribute_delay_s=0))
+    lease = JobLease(stale_after_s=0.5, renew_fraction=0.2, attribute_delay_s=0)
+    Epoch(run_dir).take(lease)
     log.record("queued", job.node, job=job)
-    clock = lease_clock(storage_origin=newest(run_dir / "epoch" / "1"))
-    assert Run(run_dir, clock=clock).wait(None, poll=0.05).interrupted
+    clock = lease_clock(storage_origin=os.stat(run_dir / "epoch" / "1").st_mtime)
+    poll = 0.05
+    assert Run(run_dir, clock=clock).wait(None, poll=poll).interrupted
+    assert lease.stale_after_s < clock.now() <= lease.stale_after_s + 2 * poll
 
 
 @pytest.mark.contract

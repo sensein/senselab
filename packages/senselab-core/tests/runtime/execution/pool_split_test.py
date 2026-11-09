@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import os
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -21,7 +22,7 @@ from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
-from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment, QueueHeld, ResultRef, follow
+from senselab_core.runtime.execution.executor import FaultRecord, Handle, PlanFragment, QueueHeld, ResultRef, follow
 from senselab_core.runtime.execution.in_process import InProcess, fragment_keys, job_key, node_fragment
 from senselab_core.runtime.execution.job import Failed, JobOutcome
 from senselab_core.runtime.execution.pool import DEAD_DIR, Pool, report, split
@@ -55,7 +56,7 @@ OOM = FaultRecord(fault="resource", type="ResourceFault", message="out of memory
 LOST = FaultRecord(fault="infrastructure", type="WorkerLost", message="gone", gap=False, charged=False)
 
 
-def _profile(quantum: int = 10, cap: int | None = None, **faults: int) -> ExecutionProfile:
+def _profile(quantum: int = 10, cap: int | None = None, first_poll_s: float = 0.01, **faults: int) -> ExecutionProfile:
     cpu = {
         "device": "cpu",
         "cpus": 4,
@@ -68,7 +69,7 @@ def _profile(quantum: int = 10, cap: int | None = None, **faults: int) -> Execut
         "devices": ["cpu"],
         "resource_classes": {"cpu": cpu, "cpu:large": {**cpu, "mem_bytes": 2**34, "max_workers": 2}},
         "substrate": {"kind": "slurm", "qos_cpu_cap": cap},
-        "pool": {"quantum_items": quantum, "first_poll_s": 0.01, "poll_s": 0.2},
+        "pool": {"quantum_items": quantum, "first_poll_s": first_poll_s, "poll_s": 0.2},
         "sizing": CEILED_SIZING,
         "faults": {"content_attempts": 1, **faults},
     }
@@ -115,11 +116,12 @@ def _pool(
     profile: ExecutionProfile,
     substrate: Recording | None = None,
     clock: Clock = SystemClock(),  # noqa: B008 - stateless
+    kind: type[Pool] = Pool,
 ) -> Pool:
     run_dir = tmp_path / "run"
     epochs = Epoch(run_dir)
     epoch = epochs.take()
-    return Pool(
+    return kind(
         run_dir,
         queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=epochs.current),
         store=ResultStore(tmp_path / "store"),
@@ -409,17 +411,14 @@ def test_a_fragment_of_ten_thousand_jobs_is_dumped_once_to_split(tmp_path: Path)
     assert [j.element for i in items for j in i.jobs] == [(n,) for n in range(10**4)]
 
 
-SERVE_POLL_S = 0.01
-"""Seconds a fake worker waits between looks at its queue; no outcome depends on it."""
-
-
 class Gated(Recording):
     """A `Recording` whose `serve` thread runs the `cpu` queue's items once its gate opens.
 
     The gate opens once `want` workers were started (at once for 0). With `hold` set, items of that node are held and
     every other item is served at once; the gate then opens once `want` workers are alive and `hold`'s jobs on the
     queue are `held_jobs`, which `peak` records. With `stall`, every `start` blocks, as a slow `sbatch` does, until
-    `release` is set. With `cancel_at`, `serve` sets its event once the `cpu` queue holds that many items.
+    `release` is set. With `queued_at`, `serve` sets its event once the `cpu` queue holds that many items. `poll_s` is
+    the real seconds `serve` waits between looks at its queue.
     """
 
     def __init__(  # noqa: PLR0913 - the gate's settings
@@ -428,12 +427,15 @@ class Gated(Recording):
         hold: str | None = None,
         held_jobs: int = 0,
         stall: bool = False,
-        cancel_at: tuple[threading.Event, int] | None = None,
+        poll_s: float = 0.0,
+        queued_at: tuple[threading.Event, int] | None = None,
     ) -> None:
         """Serve once `want` workers were started (and `hold` has `held_jobs` queued)."""
         super().__init__()
         self.started = 0
-        self.want, self.hold, self.held_jobs, self.stall, self.cancel_at = want, hold, held_jobs, stall, cancel_at
+        self.want, self.hold, self.held_jobs, self.stall, self.queued_at = want, hold, held_jobs, stall, queued_at
+        self.poll_s = poll_s
+        self.at_end = 0
         self.opened, self.release, self.reached = threading.Event(), threading.Event(), threading.Event()
         if hold is None and want <= 0:
             self.opened.set()
@@ -455,10 +457,10 @@ class Gated(Recording):
         """Execute each item of the `cpu` queue until `done`: `hold`'s items only once the gate opens."""
         queue = QueueSet(pool.run_dir / RUN_QUEUES, placed.execution).queue("cpu")
         while not done.is_set():
-            if self.cancel_at is not None and queue.depth() >= self.cancel_at[1]:
-                self.cancel_at[0].set()
+            if self.queued_at is not None and queue.depth() >= self.queued_at[1]:
+                self.queued_at[0].set()
             if self.hold is None and not self.opened.is_set():
-                done.wait(SERVE_POLL_S)
+                done.wait(self.poll_s)
                 continue
             claim = queue.claim("gated", max_items=1)
             if claim is not None and claim.fragments[0].node == self.hold and not self.opened.is_set():
@@ -466,7 +468,7 @@ class Gated(Recording):
                 claim.release()
                 claim = None
             if claim is None:
-                done.wait(SERVE_POLL_S)
+                done.wait(self.poll_s)
                 continue
             with claim:
                 report(claim, claim.items[0], _executed(placed, values, pool.store, claim.fragments[0]))
@@ -516,28 +518,86 @@ def _run_gated(  # noqa: PLR0913 - the plan and its gate, then the run's seams
     values: Mapping[InputIdentity, object],
     gated: Gated,
     cancel: threading.Event | None = None,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
+    noticed: threading.Event | None = None,
 ) -> Any:  # noqa: ANN401 - a `RunOutcome`
-    """Run `placed` by `PydraRunner` on a pool over `gated`, its serving thread alongside, with 2 default threads."""
+    """Run `placed` by `PydraRunner` on a pool over `gated`, its serving thread alongside, with 2 default threads.
+
+    `noticed` is set when the runner cancels a followed handle on the pool.
+    """
     runner = pytest.importorskip("senselab_core.runtime.execution.runner", exc_type=ImportError)
-    pool = _pool(tmp_path, profile, gated)
+
+    class Noticing(Pool):
+        def cancel(self, handle: Handle) -> None:
+            if noticed is not None:
+                noticed.set()
+            super().cancel(handle)
+
+    pool = _pool(tmp_path, profile, gated, clock, Noticing)
     done = threading.Event()
     server = threading.Thread(target=gated.serve, args=(pool, placed, values, done), daemon=True)
     server.start()
     try:
         with _default_threads(2):
-            return runner.PydraRunner(profile=profile, work_dir=tmp_path / "pydra").run_plan(
+            return runner.PydraRunner(profile=profile, work_dir=tmp_path / "pydra", clock=clock).run_plan(
                 placed, pool, values=values, events=pool.events, cancel=cancel
             )
     finally:
         done.set()
+        gated.at_end = gated.started
+        gated.release.set()
+        pool.close()
         server.join(30)
 
 
+def _run_cancelled(  # noqa: PLR0913 - the plan and its gate, then the cancel and the clock that times it
+    tmp_path: Path,
+    profile: ExecutionProfile,
+    placed: Plan,
+    values: Mapping[InputIdentity, object],
+    gated: Gated,
+    clock: ManualClock,
+) -> None:
+    """Run `placed` until its items are queued and the follower waits, cancel, and time the notice on `clock`."""
+    runner = pytest.importorskip("senselab_core.runtime.execution.runner", exc_type=ImportError)
+    assert gated.queued_at is not None
+    queued, cancel, noticed, ended = gated.queued_at[0], threading.Event(), threading.Event(), []
+
+    def run() -> None:
+        try:
+            _run_gated(tmp_path, profile, placed, values, gated, cancel, clock, noticed)
+        except BaseException as err:  # noqa: BLE001 - what the run ended with, read below
+            ended.append(err)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    try:
+        assert queued.wait(clock.hang_s)
+        follower = next(t for t in threading.enumerate() if t.name == "senselab-follower")
+        assert clock.parked(follower)
+        cancel.set()
+        before, guard = clock.now(), time.monotonic() + clock.hang_s
+        while not noticed.is_set():
+            assert time.monotonic() < guard, "the runner did not notice the cancel"
+            if clock.is_parked(follower):
+                clock.advance(runner.CANCEL_CHECK_S)
+            noticed.wait(clock.poll_s)
+        after = clock.now()
+    finally:
+        cancel.set()
+        thread.join(clock.hang_s)
+        gated.release.set()
+    assert len(ended) == 1 and isinstance(ended[0], runner.RunCancelled)
+    assert after - before <= runner.CANCEL_CHECK_S + clock.step_s
+
+
 @pytest.mark.contract
-def test_the_runner_queues_a_map_nodes_ready_jobs_so_scale_wants_a_worker_per_quantum(tmp_path: Path) -> None:
+def test_the_runner_queues_a_map_nodes_ready_jobs_so_scale_wants_a_worker_per_quantum(
+    tmp_path: Path, fake_poll_s: float
+) -> None:
     """A 200-row map node run by `PydraRunner` on a pool reaches 20 items of 10 jobs, so 20 workers are started."""
     profile = _profile()
-    gated = Gated(want=20)
+    gated = Gated(want=20, poll_s=fake_poll_s)
     placed, values = planned(SCORE, profile, [f"t{i}" for i in range(200)])
     outcome = _run_gated(tmp_path, profile, placed, values, gated)
     assert len(outcome.results["a"]) == 200 and all(r.failure is None for r in outcome.results["a"])
@@ -546,14 +606,14 @@ def test_the_runner_queues_a_map_nodes_ready_jobs_so_scale_wants_a_worker_per_qu
 
 @pytest.mark.contract
 def test_a_downstream_nodes_jobs_queue_as_their_upstream_lands_so_scale_wants_a_worker_per_quantum(
-    tmp_path: Path,
+    tmp_path: Path, fake_poll_s: float
 ) -> None:
     """With `a`'s items served at once and `b`'s held, every one of `b`'s 200 jobs is queued and 20 workers are alive.
 
     The pydra loop has two default threads, so no thread may be held per fragment while it waits.
     """
     profile = _profile()
-    gated = Gated(want=20, hold="b", held_jobs=200)
+    gated = Gated(want=20, poll_s=fake_poll_s, hold="b", held_jobs=200)
     placed, values = _chained(profile, 200)
     outcome = _run_gated(tmp_path, profile, placed, values, gated)
     assert len(outcome.results["b"]) == 200 and all(r.failure is None for r in outcome.results["b"])
@@ -561,52 +621,49 @@ def test_a_downstream_nodes_jobs_queue_as_their_upstream_lands_so_scale_wants_a_
 
 
 @pytest.mark.contract
-def test_a_cancel_stops_following_the_pool_at_once_and_leaves_its_items_queued(tmp_path: Path) -> None:
-    """A cancel set while a 200-job node waits on closed gates ends the run cancelled before the gate opens."""
-    runner = pytest.importorskip("senselab_core.runtime.execution.runner", exc_type=ImportError)
-    profile = _profile()
-    cancel = threading.Event()
-    gated = Gated(want=10**6, cancel_at=(cancel, 20))
+def test_a_cancel_stops_following_the_pool_at_once_and_leaves_its_items_queued(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock], fake_poll_s: float
+) -> None:
+    """A cancel set while a 200-job node waits on closed gates ends the run cancelled within one check of it."""
+    profile, clock = _profile(first_poll_s=0.2), lease_clock()
+    gated = Gated(want=10**6, poll_s=fake_poll_s, queued_at=(threading.Event(), 20))
     placed, values = planned(SCORE, profile, [f"t{i}" for i in range(200)])
     queue = QueueSet(tmp_path / "run" / RUN_QUEUES, profile).queue("cpu")
-    with pytest.raises(runner.RunCancelled):
-        _run_gated(tmp_path, profile, placed, values, gated, cancel)
-    assert not gated.opened.is_set()
+    _run_cancelled(tmp_path, profile, placed, values, gated, clock)
     assert queue.depth() == 20 and queue.work() == 200
 
 
 @pytest.mark.contract
-def test_a_slow_substrate_never_delays_settling(tmp_path: Path) -> None:
+def test_a_slow_substrate_never_delays_settling(tmp_path: Path, fake_poll_s: float) -> None:
     """With each start stalled, a 60-job node whose items are served at once ends before any start returns."""
     profile = _profile()
-    gated = Gated(want=0, stall=True)
+    gated = Gated(want=0, poll_s=fake_poll_s, stall=True)
     placed, values = planned(SCORE, profile, [f"t{i}" for i in range(60)])
     outcome = _run_gated(tmp_path, profile, placed, values, gated)
-    assert gated.started == 0
+    assert gated.at_end == 0
     assert len(outcome.results["a"]) == 60 and all(r.failure is None for r in outcome.results["a"])
 
 
 @pytest.mark.contract
-def test_a_slow_substrate_never_delays_a_cancel(tmp_path: Path) -> None:
-    """With each start stalled, a cancel set once the items are queued ends the run before any start returns."""
-    runner = pytest.importorskip("senselab_core.runtime.execution.runner", exc_type=ImportError)
-    profile = _profile()
-    cancel = threading.Event()
-    gated = Gated(want=10**6, stall=True, cancel_at=(cancel, 20))
+def test_a_slow_substrate_never_delays_a_cancel(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock], fake_poll_s: float
+) -> None:
+    """With each start stalled, a cancel set once the items are queued ends the run within one check of it."""
+    profile, clock = _profile(first_poll_s=0.2), lease_clock()
+    gated = Gated(want=10**6, poll_s=fake_poll_s, stall=True, queued_at=(threading.Event(), 20))
     placed, values = planned(SCORE, profile, [f"t{i}" for i in range(200)])
     queue = QueueSet(tmp_path / "run" / RUN_QUEUES, profile).queue("cpu")
-    with pytest.raises(runner.RunCancelled):
-        _run_gated(tmp_path, profile, placed, values, gated, cancel)
-    assert gated.started == 0 and queue.work() == 200
+    _run_cancelled(tmp_path, profile, placed, values, gated, clock)
+    assert gated.at_end == 0 and queue.work() == 200
 
 
 @pytest.mark.logic
 def test_concurrent_submits_never_start_more_workers_than_the_target(
-    tmp_path: Path, tier_bound: float, lease_clock: Callable[..., ManualClock]
+    tmp_path: Path, tier_bound: float, lease_clock: Callable[..., ManualClock], fake_poll_s: float
 ) -> None:
     """48 senders submit a 10-job fragment each at once; the class's 32 workers are started, never more."""
     profile = _profile()
-    gated, clock = Gated(want=32, stall=True), lease_clock()
+    gated, clock = Gated(want=32, poll_s=fake_poll_s, stall=True), lease_clock()
     placed, values = planned(SCORE, profile, [f"t{i}" for i in range(480)])
     pool = _pool(tmp_path, profile, gated, clock)
     admission = pool.admit(placed, values)

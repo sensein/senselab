@@ -102,10 +102,14 @@ def _text(job: Job) -> object:
 def _served(worker: PoolWorker, clock: ManualClock) -> int:
     """Serve `worker` on a thread, advancing `clock` by the pool's poll each time it waits, until it returns."""
     exits: list[int] = []
-    thread = threading.Thread(target=lambda: exits.append(worker.serve()))
+    thread = threading.Thread(target=lambda: exits.append(worker.serve()), daemon=True)
     thread.start()
-    clock.drive(thread, worker.profile.pool.poll_s)
-    thread.join()
+    try:
+        clock.drive(thread, worker.profile.pool.poll_s)
+    finally:
+        worker.halt()
+        thread.join(clock.hang_s)
+    assert not thread.is_alive()
     return exits[0]
 
 
@@ -211,7 +215,7 @@ def test_each_gathered_item_is_timed_by_the_requests_it_ran_in(
     )
     _served(worker, clock)
     warm = [s for s in (Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)) if not s.cold]
-    assert len(warm) == 3 and all(s.wall_s >= took for s in warm)
+    assert len(warm) == 3 and all(s.wall_s == took for s in warm)
 
 
 @pytest.mark.logic
@@ -491,7 +495,7 @@ class _Abandoning(WorkerSet):
 
 
 @pytest.mark.logic
-def test_a_lost_claim_abandons_its_request(tmp_path: Path) -> None:
+def test_a_lost_claim_abandons_its_request(tmp_path: Path, tier_bound: float) -> None:
     """A claim broken mid-request: its worker set abandons the request, nothing is committed, nothing more is sent."""
     profile = _profile()
     placed, store, pool_dir = _run(tmp_path, profile, ["one", "two"])
@@ -505,7 +509,7 @@ def test_a_lost_claim_abandons_its_request(tmp_path: Path) -> None:
         for lease in (queue.path / "claims").iterdir():
             shutil.rmtree(lease)
         thief.append(queue.claim("thief", max_items=2))
-        seen.append(workers.abandoned.wait(10))
+        seen.append(workers.abandoned.wait(tier_bound))
         raise WorkerLost("closed by abandon")
 
     worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, workers=workers, send=stolen)
@@ -516,7 +520,7 @@ def test_a_lost_claim_abandons_its_request(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_halt_commits_finished_groups_and_releases_the_rest(tmp_path: Path) -> None:
+def test_halt_commits_finished_groups_and_releases_the_rest(tmp_path: Path, tier_bound: float) -> None:
     """Halted while a claim's second group runs, the worker commits the first group's item and releases the second."""
     profile = _profile()
     placed, store, pool_dir = _run(tmp_path, profile, ["fast", "slow"])
@@ -527,7 +531,7 @@ def test_halt_commits_finished_groups_and_releases_the_rest(tmp_path: Path) -> N
 
     def halting(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
         if _text(jobs[0]) == "slow":
-            release.wait(10)
+            release.wait(tier_bound)
             raise WorkerLost("closed by abandon")
         outcomes = send(jobs, placement)
         worker.halt()

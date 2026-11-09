@@ -47,9 +47,12 @@ def backends_importable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def lease_clock(slack_tests: dict[str, Any], tier_bound: float) -> Callable[..., ManualClock]:
-    """Build a `ManualClock` (or a subclass `kind`): polls from the test slack file, hang bound from the tier."""
+    """Build a `ManualClock`: polls and step from the test slack file, hang bound a fraction of the tier's."""
+    section = slack_tests["lease_clock"]
 
-    def make(kind: type[ManualClock] = ManualClock, **kwargs: Any) -> ManualClock:  # noqa: ANN401 - `kind`'s own arguments
-        return kind(poll_s=slack_tests["lease_clock"]["poll_s"], hang_s=tier_bound, **kwargs)
+    def make(**kwargs: Any) -> ManualClock:  # noqa: ANN401 - `ManualClock`'s own keyword arguments
+        return ManualClock(
+            poll_s=section["poll_s"], step_s=section["step_s"], hang_s=section["hang_fraction"] * tier_bound, **kwargs
+        )
 
     return make

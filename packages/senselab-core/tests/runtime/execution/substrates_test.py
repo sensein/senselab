@@ -680,7 +680,13 @@ def test_a_worker_that_reaches_the_run_marks_itself_and_one_that_cannot_exits_ty
     assert not (other / "workers").exists()
 
 
-def _slurm(tmp_path: Path, epoch: int = 1, plan_hash: str = HASH, commands: SlurmCommands | None = None) -> Slurm:
+def _slurm(
+    tmp_path: Path,
+    epoch: int = 1,
+    plan_hash: str = HASH,
+    commands: SlurmCommands | None = None,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
+) -> Slurm:
     return Slurm(
         _profile().resource_classes,
         None,
@@ -690,7 +696,20 @@ def _slurm(tmp_path: Path, epoch: int = 1, plan_hash: str = HASH, commands: Slur
         attempt="a1",
         epoch=epoch,
         commands=commands or _commands(),
+        clock=clock,
     )
+
+
+@pytest.mark.logic
+def test_a_failed_slurm_command_is_retried_after_waits_that_double(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
+    """A command that keeps failing is tried `attempts` times, a wait that doubles after each, on the injected clock."""
+    (tmp_path / "slurm" / "fail-sbatch").write_text("")
+    commands, clock = _commands(attempts=3, retry_first_s=1.0), lease_clock()
+    with pytest.raises(SlurmError, match="Socket timed out"):
+        _slurm(tmp_path, commands=commands, clock=clock).start("cpu", 1)
+    assert clock.slept == [1.0, 2.0, 4.0]
 
 
 @pytest.mark.logic
@@ -871,7 +890,7 @@ def test_a_local_worker_is_in_the_supervisors_table(tmp_path: Path) -> None:
 
 
 @pytest.mark.contract
-def test_a_default_slurm_run_cancels_its_workers_when_it_ends(tmp_path: Path) -> None:
+def test_a_default_slurm_run_cancels_its_workers_when_it_ends(tmp_path: Path, tier_bound: float) -> None:
     """`Plan.run` over Slurm closes its pool when the run ends (held, the substrate failing): jobs are cancelled."""
     pytest.importorskip("pydra")
     profile = ExecutionProfile.load(
@@ -888,7 +907,7 @@ def test_a_default_slurm_run_cancels_its_workers_when_it_ends(tmp_path: Path) ->
         os.close(signalled)
     (tmp_path / "slurm" / "fail-squeue").write_text("")
     with contextlib.suppress(Exception):
-        run.wait(120)
+        run.wait(tier_bound)
     cancelled = tmp_path / "slurm" / "cancelled"
     assert _submitted(tmp_path) and cancelled.exists() and cancelled.read_text().split()
 

@@ -53,11 +53,6 @@ SEEN = HardwareClass(device="cpu", name="Test CPU", cpus=4)
 ELSEWHERE = HardwareClass(device="cpu", name="Another CPU", cpus=4)
 JOBS = 60
 WORKERS = WorkerSet(2)
-CLOCK_START = 1000.0
-CLOCK_POLL_S = 0.0005
-"""Real seconds a thread parked on the clock waits between looks at its event: the slack file's `lease_clock`."""
-CLOCK_HANG_S = 60.0
-"""Real seconds after which a wait on the clock that has not ended fails; a failure bound only."""
 
 
 class Idle:
@@ -77,15 +72,6 @@ class Idle:
 
     def stop(self, handles: Sequence[WorkerHandle] = ()) -> None:
         """Stop nothing."""
-
-
-class Clock(ManualClock):
-    """A `ManualClock` that starts at `CLOCK_START` and is moved by hand."""
-
-    def __init__(self) -> None:
-        """Start at `CLOCK_START`, its parked threads looking at their events every `CLOCK_POLL_S` real seconds."""
-        super().__init__(poll_s=CLOCK_POLL_S, hang_s=CLOCK_HANG_S)
-        self._now = CLOCK_START
 
 
 def _handle(wheel_set: str) -> Callable[..., EnvHandle]:
@@ -172,7 +158,7 @@ def _pool(  # noqa: PLR0913 - the run's places, its clock and the seams a test r
     *,
     run: str = "run",
     store: str = "store",
-    clock: Clock | None = None,
+    clock: ManualClock,
     substrate: Substrate | None = None,
     **seams: object,
 ) -> Pool:
@@ -189,7 +175,7 @@ def _pool(  # noqa: PLR0913 - the run's places, its clock and the seams a test r
         profile=profile,
         substrate=substrate if substrate is not None else Idle(),
         epoch=epoch,
-        clock=clock if clock is not None else Clock(),
+        clock=clock,
         **given,  # type: ignore[arg-type]
     )
 
@@ -317,12 +303,14 @@ def _probe_queues(pool: Pool) -> list[str]:
 
 
 @pytest.mark.logic
-def test_probe_results_are_yielded_and_never_rerun(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_probe_results_are_yielded_and_never_rerun(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, clock: ManualClock
+) -> None:
     """Every job's result comes once, probe jobs' included; no job is claimed twice; the class is on the queue."""
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    pool = _pool(tmp_path, profile)
+    pool = _pool(tmp_path, profile, clock=clock)
     fragment, handle = _submit(pool, placed, values)
     [probe] = _probe_queues(pool)
     assert pool.queues.queue(probe).probe_hardware() == SEEN and pool.queues.queue("cpu").work() == 0
@@ -359,12 +347,12 @@ def _stored(placed: Plan, values: Mapping[InputIdentity, object], store: ResultS
 
 
 @pytest.mark.logic
-def test_servable_jobs_are_put_at_once(tmp_path: Path) -> None:
+def test_servable_jobs_are_put_at_once(tmp_path: Path, clock: ManualClock) -> None:
     """Jobs the store serves are queued before any probe outcome; the computed ones are on the probe queue."""
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    pool = _pool(tmp_path, profile)
+    pool = _pool(tmp_path, profile, clock=clock)
     _stored(placed, values, pool.store, range(20))
     _submit(pool, placed, values)
     served = [j.element for n, item in _claims(pool) if n == "cpu" for j in item.jobs]
@@ -374,12 +362,12 @@ def test_servable_jobs_are_put_at_once(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_entries_under_another_context_are_probed_not_skipped(tmp_path: Path) -> None:
+def test_entries_under_another_context_are_probed_not_skipped(tmp_path: Path, clock: ManualClock) -> None:
     """Results stored under an old env's context are not served: their jobs are probed and computed."""
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    pool = _pool(tmp_path, profile)
+    pool = _pool(tmp_path, profile, clock=clock)
     with _env("5" * 64, _registry()):
         _stored(placed, values, pool.store, range(JOBS))
     _, handle = _submit(pool, placed, values)
@@ -395,12 +383,12 @@ def _registry() -> Registry:
 
 
 @pytest.mark.logic
-def test_a_served_probe_request_is_replaced_from_its_stratum(tmp_path: Path) -> None:
+def test_a_served_probe_request_is_replaced_from_its_stratum(tmp_path: Path, clock: ManualClock) -> None:
     """An item whose request came back served is replaced by one of the same phase and stratum over other jobs."""
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    pool = _pool(tmp_path, profile)
+    pool = _pool(tmp_path, profile, clock=clock)
     _, handle = _submit(pool, placed, values)
     [unit] = pool.probes.values()
     before = set(unit.items)
@@ -417,12 +405,12 @@ def test_a_served_probe_request_is_replaced_from_its_stratum(tmp_path: Path) -> 
 
 
 @pytest.mark.logic
-def test_held_work_waits_at_most_probe_s_of_warm_work(tmp_path: Path) -> None:
+def test_held_work_waits_at_most_probe_s_of_warm_work(tmp_path: Path, clock: ManualClock) -> None:
     """Past `probe_s` of warm requests the probe ends: its held jobs are put while probe items are still unclaimed."""
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    pool = _pool(tmp_path, profile)
+    pool = _pool(tmp_path, profile, clock=clock)
     _, handle = _submit(pool, placed, values)
     [unit] = pool.probes.values()
     queue = pool.queues.queue(probe_queue("cpu", unit.probe))
@@ -433,12 +421,12 @@ def test_held_work_waits_at_most_probe_s_of_warm_work(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a_stand_in_with_a_long_load_is_still_measured(tmp_path: Path) -> None:
+def test_a_stand_in_with_a_long_load_is_still_measured(tmp_path: Path, clock: ManualClock) -> None:
     """A load many times `probe_s` is not warm work: the probe runs on and its unit is measured."""
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    pool = _pool(tmp_path, profile)
+    pool = _pool(tmp_path, profile, clock=clock)
     _, handle = _submit(pool, placed, values)
     _drive(pool, handle, Hand(pool, placed, values, load_s=1000 * profile.probe_s))
     assert pool.measures.get(_unit(pool, placed, values)) is not None
@@ -453,16 +441,16 @@ def _unit(pool: Pool, placed: Plan, values: Mapping[InputIdentity, object]) -> M
 
 
 @pytest.mark.logic
-def test_a_second_run_reuses_the_first_runs_measure_without_probing(tmp_path: Path) -> None:
+def test_a_second_run_reuses_the_first_runs_measure_without_probing(tmp_path: Path, clock: ManualClock) -> None:
     """A second run over the same unit reads the first's written observations: no probe queue, items sized."""
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    first = _pool(tmp_path, profile)
+    first = _pool(tmp_path, profile, clock=clock)
     _, handle = _submit(first, placed, values)
     assert len(_drive(first, handle, Hand(first, placed, values))) == JOBS
     [probed] = first.probes.values()
-    second = _pool(tmp_path, profile, run="run2", store="store2")
+    second = _pool(tmp_path, profile, run="run2", store="store2", clock=clock)
     _, again = _submit(second, placed, values)
     estimate = second.measures.get(_unit(second, placed, values))
     assert estimate is not None and probed.probe in estimate.source.probe_ids
@@ -512,12 +500,11 @@ def _peer(pool: Pool, placed: Plan, values: Mapping[InputIdentity, object]) -> E
 
 
 @pytest.mark.logic
-def test_a_peer_wait_returns_to_planning_for_uncovered_strata(tmp_path: Path) -> None:
+def test_a_peer_wait_returns_to_planning_for_uncovered_strata(tmp_path: Path, clock: ManualClock) -> None:
     """While a peer probes, the unit waits; its observations cover stratum 0, so only stratum 1 is probed after."""
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    clock = Clock()
     pool = _pool(tmp_path, profile, clock=clock)
     peer = _peer(pool, placed, values)
     _, handle = _submit(pool, placed, values)
@@ -537,12 +524,11 @@ def test_a_peer_wait_returns_to_planning_for_uncovered_strata(tmp_path: Path) ->
 
 
 @pytest.mark.logic
-def test_a_peer_that_holds_past_peer_wait_s_is_not_waited_for_again(tmp_path: Path) -> None:
+def test_a_peer_that_holds_past_peer_wait_s_is_not_waited_for_again(tmp_path: Path, clock: ManualClock) -> None:
     """A unit waits `peer_wait_s` on its injected clock; then it probes unleased, and waits no more."""
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    clock = Clock()
     pool = _pool(tmp_path, profile, clock=clock)
     peer = _peer(pool, placed, values)
     _, handle = _submit(pool, placed, values)
@@ -556,7 +542,7 @@ def test_a_peer_that_holds_past_peer_wait_s_is_not_waited_for_again(tmp_path: Pa
 
 
 @pytest.mark.logic
-def test_a_point_whose_probe_measured_nothing_ships_no_measure(tmp_path: Path) -> None:
+def test_a_point_whose_probe_measured_nothing_ships_no_measure(tmp_path: Path, clock: ManualClock) -> None:
     """A probe whose requests all failed gives no estimate: its jobs run on the safe values and none is written.
 
     The next run finds no estimate and probes again.
@@ -564,7 +550,7 @@ def test_a_point_whose_probe_measured_nothing_ships_no_measure(tmp_path: Path) -
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    pool = _pool(tmp_path, profile)
+    pool = _pool(tmp_path, profile, clock=clock)
     _, handle = _submit(pool, placed, values)
 
     class Broken(Hand):
@@ -573,20 +559,19 @@ def test_a_point_whose_probe_measured_nothing_ships_no_measure(tmp_path: Path) -
 
     assert len(_drive(pool, handle, Broken(pool, placed, values))) == JOBS
     assert pool.measures.get(_unit(pool, placed, values)) is None
-    again = _pool(tmp_path, profile, run="run2", store="store2")
+    again = _pool(tmp_path, profile, run="run2", store="store2", clock=clock)
     _submit(again, placed, values)
     assert len(_probe_queues(again)) == 1
 
 
 @pytest.mark.logic
 def test_a_probe_queue_with_no_eligible_worker_ends_unmeasured_and_its_items_run_as_production(
-    tmp_path: Path,
+    tmp_path: Path, clock: ManualClock
 ) -> None:
     """After the lease's stale window with no worker of the class, the unit is unmeasured and nothing waits on it."""
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    clock = Clock()
     pool = _pool(tmp_path, profile, clock=clock)
     fragment, handle = _submit(pool, placed, values)
     assert len(_probe_queues(pool)) == 1
@@ -602,11 +587,11 @@ def test_a_probe_queue_with_no_eligible_worker_ends_unmeasured_and_its_items_run
 
 
 @pytest.mark.logic
-def test_a_unit_resolves_on_the_first_hello_and_the_hello_wins(tmp_path: Path) -> None:
+def test_a_unit_resolves_on_the_first_hello_and_the_hello_wins(tmp_path: Path, clock: ManualClock) -> None:
     """With the host's class not in the index, jobs wait and a worker is wanted; the first hello's class decides."""
     profile = _profile(tmp_path)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    pool = _pool(tmp_path, profile)
+    pool = _pool(tmp_path, profile, clock=clock)
     _, handle = _submit(pool, placed, values)
     assert not _probe_queues(pool) and pool.queues.queue("cpu").work() == 0
     assert pool.workers_wanted("cpu", 0) == 1
@@ -620,7 +605,7 @@ def test_a_unit_resolves_on_the_first_hello_and_the_hello_wins(tmp_path: Path) -
 
 
 @pytest.mark.logic
-def test_the_pool_and_the_in_process_executor_size_one_unit_alike(tmp_path: Path) -> None:
+def test_the_pool_and_the_in_process_executor_size_one_unit_alike(tmp_path: Path, clock: ManualClock) -> None:
     """Over one estimate and one unit, the pool's items and the executor's sizing give each job the same batch."""
     from senselab_core.runtime.calibration import (  # noqa: PLC0415 - one estimate, built here
         Estimate,
@@ -644,7 +629,7 @@ def test_the_pool_and_the_in_process_executor_size_one_unit_alike(tmp_path: Path
     profile = _profile(tmp_path)
     lengths = [3, 12, 25, 60, 90, 7, 33, 41]
     placed, values = _plan(profile, lengths)
-    pool = _pool(tmp_path, profile, measures=FixedEstimates(estimate), resolver=FixedUnit(profile))
+    pool = _pool(tmp_path, profile, measures=FixedEstimates(estimate), resolver=FixedUnit(profile), clock=clock)
     fragment, _ = _submit(pool, placed, values)
     per_job = {j.element: item.placement.batch_size for _, item in _claims(pool) for j in item.jobs}
     jobs, placement = fragment_jobs(fragment, placed, values)
@@ -684,7 +669,7 @@ def _audio_plan(
 
 
 @pytest.mark.logic
-def test_an_unmeasured_units_items_end_where_the_backends_bucket_changes(tmp_path: Path) -> None:
+def test_an_unmeasured_units_items_end_where_the_backends_bucket_changes(tmp_path: Path, clock: ManualClock) -> None:
     """With no estimate the backend's bucket edges still cut the items: no item holds jobs of two buckets."""
     from pool_stack_fixture import registry  # noqa: PLC0415 - as the stack fixture
     from senselab_core.kernel.declare import BackendSpec, Registry  # noqa: PLC0415 - one registry
@@ -701,7 +686,7 @@ def test_an_unmeasured_units_items_end_where_the_backends_bucket_changes(tmp_pat
         profile = _profile(tmp_path)
         placed, values = _audio_plan(profile, tmp_path, [0.5] * 6 + [3.0] * 6)
         unresolved = FixedUnit(profile, Unresolved("a final cause"))
-        pool = _pool(tmp_path, profile, measures=FixedEstimates(None), resolver=unresolved)
+        pool = _pool(tmp_path, profile, measures=FixedEstimates(None), resolver=unresolved, clock=clock)
         _submit(pool, placed, values)
         items = [item for n, item in _claims(pool) if n == "cpu"]
         spans = [{job_units(j, "audio_s") for j in fragment_jobs(i, placed, values)[0]} for i in items]
@@ -718,12 +703,11 @@ class Live(Idle):
 
 @pytest.mark.logic
 def test_resolving_past_resolve_s_runs_unmeasured_with_its_reason(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, clock: ManualClock
 ) -> None:
     """From a live worker's first poll, a unit waits `resolve_s` for a mark, then runs the safe values and says why."""
     profile = _profile(tmp_path)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    clock = Clock()
     pool = _pool(tmp_path, profile, clock=clock, substrate=Live())
     fragment, handle = _submit(pool, placed, values)
     pool.poll(Handle(id=handle))
@@ -740,7 +724,7 @@ def test_resolving_past_resolve_s_runs_unmeasured_with_its_reason(
 
 
 @pytest.mark.logic
-def test_a_broken_class_with_no_hello_fails_its_held_parts(tmp_path: Path) -> None:
+def test_a_broken_class_with_no_hello_fails_its_held_parts(tmp_path: Path, clock: ManualClock) -> None:
     """Workers of a class that die before their mark break it; the jobs a Resolving unit holds are then reported."""
     import sys  # noqa: PLC0415 - one test starts real processes
 
@@ -760,7 +744,6 @@ def test_a_broken_class_with_no_hello_fails_its_held_parts(tmp_path: Path) -> No
     )
     placed, values = _plan(profile, range(1, 5))
     local = Local(2, command=[sys.executable, "-c", "raise SystemExit(1)"])
-    clock = Clock()
     pool = _pool(tmp_path, profile, substrate=local, clock=clock)
     handle = pool.submit(node_fragment(placed, pool.admit(placed, values)))
     try:
@@ -772,12 +755,13 @@ def test_a_broken_class_with_no_hello_fails_its_held_parts(tmp_path: Path) -> No
 
 
 @pytest.mark.logic
-def test_the_stale_window_runs_from_the_last_claim_and_closes_the_queue_first(tmp_path: Path) -> None:
+def test_the_stale_window_runs_from_the_last_claim_and_closes_the_queue_first(
+    tmp_path: Path, clock: ManualClock
+) -> None:
     """A probe that last progressed less than the window ago is kept; past it the queue is closed, then jobs re-put."""
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    clock = Clock()
     pool = _pool(tmp_path, profile, clock=clock)
     fragment, handle = _submit(pool, placed, values)
     hand = Hand(pool, placed, values, limit=1)
@@ -799,7 +783,7 @@ def test_the_stale_window_runs_from_the_last_claim_and_closes_the_queue_first(tm
 
 
 @pytest.mark.logic
-def test_a_disagreeing_hello_resolves_a_probing_unit_again(tmp_path: Path) -> None:
+def test_a_disagreeing_hello_resolves_a_probing_unit_again(tmp_path: Path, clock: ManualClock) -> None:
     """With the prediction already in the index, a hello of another class closes the probe built on it and probes anew.
 
     The in-flight item's observations are written under the class of the worker that made them, and every job's
@@ -808,7 +792,7 @@ def test_a_disagreeing_hello_resolves_a_probing_unit_again(tmp_path: Path) -> No
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    pool = _pool(tmp_path, profile)
+    pool = _pool(tmp_path, profile, clock=clock)
     fragment, handle = _submit(pool, placed, values)
     [first] = _probe_queues(pool)
     told = HardwareClass(device="cpu", name="Test CPU", cpus=2)
@@ -837,11 +821,11 @@ def _slurm_profile(tmp_path: Path) -> ExecutionProfile:
 
 
 @pytest.mark.logic
-def test_a_slurm_unit_resolves_at_the_first_hello_and_probes(tmp_path: Path) -> None:
+def test_a_slurm_unit_resolves_at_the_first_hello_and_probes(tmp_path: Path, clock: ManualClock) -> None:
     """On a slurm profile no env is readable here; the unit waits and the first hello's class and env resolve it."""
     profile = _slurm_profile(tmp_path)
     placed, values = _plan(profile, range(1, JOBS + 1))
-    pool = _pool(tmp_path, profile)
+    pool = _pool(tmp_path, profile, clock=clock)
     fragment, handle = _submit(pool, placed, values)
     assert not _probe_queues(pool) and pool.workers_wanted("cpu", 0) == 1
     _hello(pool, placed, values, SEEN)
@@ -853,7 +837,7 @@ def test_a_slurm_unit_resolves_at_the_first_hello_and_probes(tmp_path: Path) -> 
 
 
 @pytest.mark.logic
-def test_a_worker_builds_an_unbuilt_env_before_its_mark_and_the_unit_probes(tmp_path: Path) -> None:
+def test_a_worker_builds_an_unbuilt_env_before_its_mark_and_the_unit_probes(tmp_path: Path, clock: ManualClock) -> None:
     """An env not built when the plan is read leaves the unit pending; the worker builds it, its mark carries it."""
     from senselab_core.runtime.execution.pool_worker import PoolWorker  # noqa: PLC0415 - one use
     from senselab_core.testing.interpreter import source_tree_python  # noqa: PLC0415 - as `pool_stack_fixture`
@@ -872,7 +856,12 @@ def test_a_worker_builds_an_unbuilt_env_before_its_mark_and_the_unit_probes(tmp_
     )
     try:
         prepare(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
-        pool = _pool(tmp_path, profile, resolver=UnitResolver(profile, measure_roots(profile), hardware=HOST))
+        pool = _pool(
+            tmp_path,
+            profile,
+            clock=clock,
+            resolver=UnitResolver(profile, measure_roots(profile), hardware=HOST),
+        )
         fragment, handle = _submit(pool, placed, values)
         assert not _probe_queues(pool) and not built
         worker = PoolWorker(
@@ -908,7 +897,7 @@ def _counting(built: list[str]) -> Callable[..., EnvHandle]:
 
 
 @pytest.mark.logic
-def test_a_final_cause_takes_the_safe_values(tmp_path: Path) -> None:
+def test_a_final_cause_takes_the_safe_values(tmp_path: Path, clock: ManualClock) -> None:
     """A hello whose env failed to build, or that names no class, is final: the jobs run unmeasured, none probed."""
     profile = _slurm_profile(tmp_path)
     causes: list[Callable[[str], QueueReady]] = [
@@ -917,7 +906,7 @@ def test_a_final_cause_takes_the_safe_values(tmp_path: Path) -> None:
     ]
     for index, ready in enumerate(causes):
         placed, values = _plan(profile, range(1, 9))
-        pool = _pool(tmp_path, profile, run=f"run{index}", store=f"store{index}")
+        pool = _pool(tmp_path, profile, run=f"run{index}", store=f"store{index}", clock=clock)
         _, handle = _submit(pool, placed, values)
         jobs, placement = fragment_jobs(node_fragment(placed, pool.admit(placed, values)), placed, values)
         mark_ready(pool.run_dir, {"cpu": ready(backend_key(placement.backend))})
@@ -927,7 +916,7 @@ def test_a_final_cause_takes_the_safe_values(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a_ready_mark_carries_no_identifier(tmp_path: Path) -> None:
+def test_a_ready_mark_carries_no_identifier(tmp_path: Path, clock: ManualClock) -> None:
     """A mark built from an env whose torch index is a mirror URL with userinfo names the build tag and nothing else."""
     from senselab_core.runtime.execution.pool_worker import PoolWorker  # noqa: PLC0415 - one use
 
@@ -955,7 +944,7 @@ def test_a_ready_mark_carries_no_identifier(tmp_path: Path) -> None:
     )
     try:
         prepare(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
-        pool = _pool(tmp_path, profile)
+        pool = _pool(tmp_path, profile, clock=clock)
         _submit(pool, placed, values)
         worker = PoolWorker(
             tmp_path / "run" / RUN_QUEUES,
