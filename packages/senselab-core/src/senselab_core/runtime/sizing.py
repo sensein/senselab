@@ -1,8 +1,6 @@
 """Sizing: a unit's batch, quantum and worker count, derived from a measure of it and the grant it runs under.
 
-`size` is pure. Its measure is a resource-table row's (`measure_of`), or one a calibration round wrote: one-job items
-run first on one worker, the first carrying the model load (`calibrated`, from each item's `Sample`). `Measures` reads
-the packaged tables, then the ones calibration rounds wrote under the cache.
+`size` is pure. `Measures` reads the packaged resource tables, then the ones calibration rounds wrote under the cache.
 """
 
 import bisect
@@ -10,10 +8,9 @@ import functools
 import importlib.metadata
 import logging
 import math
-import statistics
 import sys
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated
 
@@ -33,7 +30,6 @@ from senselab_core.runtime.execution_settings import CalibrationSettings, PoolSe
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.probe import memory_batch, peak
 from senselab_core.runtime.resources import (
-    Batched,
     Measured,
     ResourceMeasure,
     ResourceTable,
@@ -128,20 +124,6 @@ class Grant(Frozen):
         seen = min((g.memory_bytes for g in hardware.gpus), default=None) if hardware is not None and cuda else None
         return cls.of(resource, pool, host, on_device=cuda, devices=devices, device_memory_bytes=seen)
 
-    def worker_bound(self, measure: "Measure | None") -> int:
-        """Return the most workers of a unit measured as `measure` (None unmeasured) this grant runs at once.
-
-        On shared devices each holds `floor(device memory cap / measured device peak)` workers, at least one, and
-        one when the device peak or the cap is unmeasured; the bound is that times `devices`, within `max_workers`.
-        """
-        if self.devices is None:
-            return self.max_workers
-        peak = None
-        if measure is not None and measure.on_device and measure.resident_bytes is not None:
-            peak = measure.resident_bytes + (measure.bytes_per_item or 0)
-        each = 1 if not peak or self.memory_bytes is None else max(1, self.memory_bytes // peak)
-        return min(self.max_workers, self.devices * each)
-
 
 class RowSizing(Frozen):
     """Items per request, the most memory allows, jobs and seconds per quantum, and the workers a queue's work wants."""
@@ -151,54 +133,6 @@ class RowSizing(Frozen):
     quantum_items: Count
     quantum_s: Seconds
     workers: Annotated[int, Field(ge=0)]
-
-
-def size_row(
-    measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 0, batchable: bool = True
-) -> RowSizing:
-    """Return the sizing of a unit measured as `measure` under `grant`, for `work` waiting jobs; the Pool's until 7a.
-
-    - `quantum_items`: the fewest jobs whose time keeps the load and the claim within `load_share` of the quantum
-      (the ceiling when both are 0), within the ceilings: `quantum_items`, and the jobs that fit in `quantum_s` after
-      them;
-    - `quantum_s`: the quantum's jobs plus the load and claim, within `quantum_s`;
-    - `memory_batch`: the most items whose memory beside the resident memory fits `memory_headroom` of the grant's,
-      at most a quantum; 1 when the grant's or the unit's memory is unmeasured or `batchable` is False;
-    - `batch_size`: `memory_batch`, at most the batch measured, where items sent in that batch were measured no slower
-      per item than items sent alone, else 1 (batched throughput unmeasured counts as not shown);
-    - `workers`: as many as end `work` within `target_wall_s`, at most a quantum each and `Grant.worker_bound`; 0 for
-      none.
-    """
-    per, load, ceiling = measure.s_per_item, measure.load_s + measure.claim_s, grant.quantum_items
-    paid = config.load_share * per
-    wanted = _held(load / paid, ceiling, math.ceil) if paid and load else ceiling
-    fits = _held((grant.quantum_s - load) / per, ceiling, math.floor) if per else ceiling
-    quantum = max(1, min(wanted, fits))
-    memory_batch = 1
-    if batchable and grant.memory_bytes is not None and measure.resident_bytes is not None:
-        room = config.memory_headroom * grant.memory_bytes - measure.resident_bytes
-        per_bytes = measure.bytes_per_item or 0
-        memory_batch = (
-            1 if room < 0 else quantum if per_bytes == 0 else max(1, _held(room / per_bytes, quantum, math.floor))
-        )
-    faster = measure.batched_s_per_item is not None and measure.batched_s_per_item <= per
-    batch = min(memory_batch, measure.batched_batch_size or 1) if faster else 1
-    workers = 0
-    if work > 0:
-        timely = max(1, _held(work * per / config.target_wall_s, grant.max_workers, math.ceil))
-        workers = min(timely, math.ceil(work / quantum), grant.worker_bound(measure))
-    return RowSizing(
-        batch_size=batch,
-        memory_batch=memory_batch,
-        quantum_items=quantum,
-        quantum_s=min(quantum * per + load, grant.quantum_s),
-        workers=workers,
-    )
-
-
-def _held(x: float, bound: int, rounded: Callable[[float], int]) -> int:
-    """Return `rounded(x)` held within `[0, bound]`, for an infinite `x` too."""
-    return bound if x >= bound else rounded(max(x, 0.0))
 
 
 class Basis(Frozen):
@@ -496,29 +430,6 @@ def _cut(
     return (*cuts, (start, len(medians))) if medians else ()
 
 
-def measure_of(row: ResourceMeasure, *, on_device: bool = False) -> Measure:
-    """Return the per-item measure of a resource-table measure, at its median item's input seconds.
-
-    `on_device` takes the device memory pair when the row measured one, else the host pair.
-    """
-    scale = 1.0 if row.input_s_per_item is None else row.input_s_per_item
-    seconds = row.s_per_input_s * scale
-    device = on_device and row.device_resident_bytes is not None and row.device_peak_bytes is not None
-    resident, peak = (
-        (row.device_resident_bytes, row.device_peak_bytes) if device else (row.resident_bytes, row.peak_memory_bytes)
-    )
-    return Measure(
-        load_s=row.load_s,
-        claim_s=row.claim_s,
-        resident_bytes=resident,
-        bytes_per_item=None if resident is None or peak is None else peak - resident,
-        s_per_item=seconds,
-        on_device=device,
-        batched_s_per_item=None if row.batched is None else row.batched.s_per_input_s * scale,
-        batched_batch_size=None if row.batched is None else row.batched.batch_size,
-    )
-
-
 class Sample(Frozen):
     """What a pool worker measured of one item it ran.
 
@@ -564,60 +475,6 @@ class Sample(Frozen):
     cold: bool
     job: NonEmptyStr
     ended_s: Seconds
-
-
-def calibrated(samples: Sequence[Sample]) -> ResourceMeasure | None:
-    """Return the measure a calibration round's `samples` give; None for none.
-
-    Seconds per item are the median over warm items sent one per request (over cold ones when none is warm), the load
-    the median of what a cold item took beyond its jobs, the claim the median claim; items sent in batches give the
-    per-item seconds at their largest batch (`batched`). The resident host memory is the lowest after a warm item
-    (after any item when none is warm) and the peak the highest; with no resident figure the host pair is unmeasured.
-    The device pair is, where the backend reported its requests, the least allocation after a request and that plus
-    the most a request allocated per item; for a server (`served`) the lowest and the highest device use of the
-    worker's processes read after items, its fixed reservation; else unmeasured.
-    """
-    if not samples:
-        return None
-    single = [s for s in samples if s.batch_size == 1] or list(samples)
-    warm = [s.wall_s / s.jobs for s in single if not s.cold]
-    cold = [s for s in samples if s.cold]
-    per = statistics.median(warm or [s.wall_s / s.jobs for s in cold] or [s.wall_s / s.jobs for s in single])
-    load = max(0.0, statistics.median([s.wall_s - per * s.jobs for s in cold])) if cold else 0.0
-    inputs = [s.input_s / s.jobs for s in samples if s.input_s is not None]
-    item_s = statistics.median(inputs) if len(inputs) == len(samples) and all(inputs) else None
-    after = [s.resident_bytes for s in samples if s.resident_bytes is not None and not s.cold]
-    after = after or [s.resident_bytes for s in samples if s.resident_bytes is not None]
-    resident = min(after) if after else None
-    reported = [s for s in samples if s.device_item_bytes is not None and s.device_allocated_bytes is not None]
-    used = [s.device_bytes for s in samples if s.device_bytes is not None and s.served]
-    device: tuple[int | None, int | None] = (min(used), max(used)) if used else (None, None)
-    if reported:
-        held = min(s.device_allocated_bytes or 0 for s in reported)
-        device = (held, held + max(s.device_item_bytes or 0 for s in reported))
-    return ResourceMeasure(
-        load_s=load,
-        claim_s=statistics.median([s.claim_s for s in samples]),
-        resident_bytes=resident,
-        peak_memory_bytes=None if resident is None else max(1, resident, *(s.peak_memory_bytes for s in samples)),
-        device_resident_bytes=device[0],
-        device_peak_bytes=None if device[1] is None else max(1, device[0] or 0, device[1]),
-        s_per_input_s=per if item_s is None else per / item_s,
-        input_s_per_item=item_s,
-        batched=_batched(samples, item_s),
-    )
-
-
-def _batched(samples: Sequence[Sample], item_s: float | None) -> Batched | None:
-    """Return the per-item seconds of the items sent in the largest batch, warm ones preferred; None for none."""
-    top = max((s.batch_size for s in samples), default=1)
-    if top == 1:
-        return None
-    at = [s for s in samples if s.batch_size == top]
-    per = statistics.median(
-        [s.wall_s / s.jobs for s in (s for s in at if not s.cold)] or [s.wall_s / s.jobs for s in at]
-    )
-    return Batched(batch_size=top, s_per_input_s=per if item_s is None else per / item_s)
 
 
 @functools.cache
