@@ -144,7 +144,7 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
             raise
         split = whole(exc) and len(members) > 1
         if record is not None:
-            record(Sent(refs, wall, (), "bisected" if split else "failed"))
+            record(Sent(refs, wall, (), "bisected" if split else "failed", classify(exc).value))
         if not split:
             if len(members) == 1:
                 logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)

@@ -389,14 +389,18 @@ def _in_force(records: Sequence[RegimeRecord], kept: _Kept, minimum: int) -> tup
     return tuple(live)
 
 
-def _raised(fit: MemoryFit | None, records: Sequence[OomRecord], memory_headroom: float) -> MemoryFit | None:
-    """Return `fit` with `m1` raised so that every unlifted faulting pair is infeasible (§7.4)."""
+def raised(fit: MemoryFit | None, records: Sequence[OomRecord], memory_headroom: float) -> MemoryFit | None:
+    """Return `fit` with `m1` raised so that every faulting pair of `records` (batch of two or more) is infeasible.
+
+    A record's room is its grant divided among the processes that shared the device when it faulted (§7.4).
+    """
     if fit is None:
         return None
     m1 = fit.m1
     for r in records:
-        if r.length > 0:
-            m1 = max(m1, (memory_headroom * r.grant_bytes - fit.resident - fit.m0) / ((r.batch - 1) * r.length))
+        if r.length > 0 and r.batch >= 2:  # noqa: PLR2004 - a batch of one has none to shrink
+            share = r.grant_bytes / r.cotenancy
+            m1 = max(m1, (memory_headroom * share - fit.resident - fit.m0) / ((r.batch - 1) * r.length))
     return fit.model_copy(update={"m1": m1})
 
 
@@ -653,8 +657,8 @@ class Probe:
                 reasons.append(why)
         ooms = _in_force(records, kept, config.min_requests)
         probed = list(filter(probe_regime, ooms))
-        device = _raised(memory["device"], [r for r in probed if r.resource == "device"], memory_headroom)
-        host = _raised(memory["host"], [r for r in probed if r.resource == "host"], memory_headroom)
+        device = raised(memory["device"], [r for r in probed if r.resource == "device"], memory_headroom)
+        host = raised(memory["host"], [r for r in probed if r.resource == "host"], memory_headroom)
         lengths = {
             kept.ranges[s]: _median([o.units for o in group])
             for s, group in _by_stratum(kept.single, kept.ranges).items()

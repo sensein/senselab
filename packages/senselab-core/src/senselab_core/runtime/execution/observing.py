@@ -16,6 +16,7 @@ from senselab_worker.units import NS_PER_S
 
 from senselab_core.runtime.calibration import (
     Cotenancy,
+    FaultKind,
     HardwareClass,
     HardwareGrant,
     Observation,
@@ -55,6 +56,7 @@ class Sent:
     wall_s: float
     reports: tuple[RequestReport, ...]
     failure: Failure | None
+    fault: FaultKind | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,7 @@ class RequestRecord:
     load_s: float | None
     device: tuple[int, int] | None
     failure: Failure | None
+    fault: FaultKind | None = None
 
 
 def records_of(sent: Sent) -> list[RequestRecord]:
@@ -76,7 +79,7 @@ def records_of(sent: Sent) -> list[RequestRecord]:
     A report tagged with nothing belongs to every job of the call.
     """
     if sent.failure is not None:
-        return [RequestRecord(sent.refs, sent.wall_s, len(sent.refs), None, None, None, sent.failure)]
+        return [RequestRecord(sent.refs, sent.wall_s, len(sent.refs), None, None, None, sent.failure, sent.fault)]
     return [
         RequestRecord(
             tuple(r for r in report.tags if isinstance(r, JobRef)) or sent.refs,
@@ -173,6 +176,7 @@ def observations(  # noqa: PLR0913 - an item's requests, then what they ran on a
                 cotenancy=seen.cotenancy,
                 outcome=outcome,
                 hardware=seen.hardware,
+                fault=record.fault,
             )
         )
     return found

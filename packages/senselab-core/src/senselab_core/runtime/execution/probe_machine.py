@@ -35,7 +35,7 @@ from senselab_core.runtime.execution.batching import bucket_edges
 from senselab_core.runtime.execution.executor import (
     PlanFragment,
 )
-from senselab_core.runtime.execution.in_process import fragment_jobs, job_units
+from senselab_core.runtime.execution.in_process import fragment_jobs
 from senselab_core.runtime.execution.job import Job
 from senselab_core.runtime.execution.observing import job_units as detected_units
 from senselab_core.runtime.execution.pool_parts import (
@@ -728,41 +728,38 @@ class ProbeMachine:
             self.roots.put_record(state.unit, "supersede", record, self._provenance(state.unit.hardware))
         return _floored(self.measures.get(state.unit) or suspect, state.m1_floor)
 
-    def oom(self, digest: str, fragment: PlanFragment, observations: Sequence[Observation], worker: str | None) -> None:
-        """Write the `oom` record of a resource fault on item `digest` and read the unit's estimate under it (§7.4).
+    def oom(self, digest: str, observations: Sequence[Observation], worker: str | None) -> None:
+        """Write the `oom` record of item `digest` from its requests that raised a resource fault (§7.4).
 
-        The record is of the item's batch and longest length, under the co-tenancy its requests reported; an item
-        that reported none, or whose grant states no memory, is not recorded. A fault at a length no shorter than one
-        already written this run for the same batch, co-tenancy, grant and basis adds nothing: the shorter one holds.
+        The record is of the largest faulting request (the shortest of equals): its batch, its longest job's length
+        and the co-tenancy it reported (an unread count is 1). The unit's estimate is read again at once.
         """
         origin = self._origins.get(digest)
-        if origin is None or digest in self._oomed:
+        faulted = [o for o in observations if o.fault == "resource"]
+        if origin is None or not faulted or digest in self._oomed:
             return
         self._oomed.add(digest)
-        placed, values = self.host.plan_of(fragment)
-        jobs, _ = fragment_jobs(fragment, placed, values)
-        kind = detected_kind(jobs) if origin.estimate is None else origin.estimate.unit_kind
-        length = max((n for j in jobs if (n := job_units(j, kind)) is not None), default=0.0)
         grant = self.host.grant(origin.queue)
-        shared = [k for o in observations if (k := o.cotenancy.device if grant.on_device else o.cotenancy.host)]
-        if grant.memory_bytes is None or not shared:
-            logger.warning("no oom record of %s: its grant or its co-tenancy is unread", origin.unit.label())
+        if grant.memory_bytes is None:
+            logger.warning("no oom record of %s: its grant states no memory", origin.unit.label())
             return
+        worst = max(faulted, key=lambda o: (o.batch, -o.padded_units / o.batch))
+        shared = worst.cotenancy.device if grant.on_device else worst.cotenancy.host
         basis = origin.estimate.fault_basis(origin.probe) if origin.estimate else tuple(filter(None, [origin.probe]))
         record = OomRecord(
             resource="device" if grant.on_device else "host",
-            batch=max(1, min(fragment.placement.batch_size, len(jobs))),
-            length=length,
-            cotenancy=max(shared),
+            batch=worst.batch,
+            length=worst.padded_units / worst.batch,
+            cotenancy=shared or 1,
             grant_bytes=grant.memory_bytes,
             basis=basis,
             worker=worker,
         )
         shape = (origin.unit.digest(), record.resource, record.batch, record.cotenancy, record.grant_bytes, basis)
         with self._machine:
-            if self._shortest.get(shape, math.inf) <= length:
+            if self._shortest.get(shape, math.inf) <= record.length:
                 return
-            self._shortest[shape] = length
+            self._shortest[shape] = record.length
             self.roots.put_record(origin.unit, "oom", record, self._provenance(origin.unit.hardware))
             if (state := self._states.get(origin.unit.digest())) is not None:
                 self._refresh(state)

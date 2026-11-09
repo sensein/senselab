@@ -41,6 +41,7 @@ EstimateReason = Literal[
 ]
 """The reasons an `Estimate` may carry; none names an identifier."""
 Outcome = Literal["ok", "failed", "bisected", "served"]
+FaultKind = Literal["content", "resource", "infrastructure"]
 UnitKind = Literal["audio_s", "chars", "none"]
 
 
@@ -168,6 +169,7 @@ class Observation(Frozen):
         host_after: Its host memory after the request, else None.
         cotenancy: The co-tenancy the request ran under.
         outcome: `ok`, `failed`, `bisected` or `served`.
+        fault: The class of the exception a `failed` or `bisected` request raised, else None.
         hardware: The hardware as the worker reads it.
     """
 
@@ -190,9 +192,12 @@ class Observation(Frozen):
     cotenancy: Cotenancy
     outcome: Outcome
     hardware: HardwareClass
+    fault: FaultKind | None = None
 
     @model_validator(mode="after")
     def _check_request(self) -> Self:
+        if self.fault is not None and self.outcome not in ("failed", "bisected"):
+            raise ValueError(f"a {self.outcome} request names no fault")
         if self.padded_units < self.units:
             raise ValueError(f"padded_units {self.padded_units} is below units {self.units}")
         if self.load_s is not None and self.since_load != 0:

@@ -118,6 +118,7 @@ class Worker(Hand):
                         "cotenancy": self.cotenancy,
                         "outcome": "failed" if faulted else "ok",
                         "hardware": self.production_hardware,
+                        "fault": "resource" if faulted else None,
                     }
                 )
             )
@@ -275,7 +276,7 @@ def test_an_oom_at_batch_one_is_replaced_not_raised(tmp_path: Path, clock: Manua
     assert len(refs) == JOBS and [r.failure for r in refs if r.failure is not None] == []
     ooms = [OomRecord.model_validate(r.record) for r in pool.roots.records(unit) if r.kind == "oom"]
     probed = next(iter(pool.probes.values())).probe
-    assert ooms and len({o.length for o in ooms}) == len(ooms) and all(o.length >= 40.0 for o in ooms)
+    assert ooms and len({o.length for o in ooms}) == len(ooms) and all(o.length > 0 for o in ooms)
     assert {(o.resource, o.batch, o.cotenancy, o.grant_bytes, o.basis) for o in ooms} == {
         ("host", 1, 1, 2**33, (probed,))
     }

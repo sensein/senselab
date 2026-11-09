@@ -17,6 +17,7 @@ from hypothesis import strategies as st
 from lease_clock_fixture import ManualClock
 from planted_objects_fixture import identity_leaks
 from pydantic import ValidationError
+from senselab_core.kernel.formats import MEASURE_OBSERVATIONS_FORMAT
 from senselab_core.kernel.identity import ModelIdentity
 from senselab_core.runtime.calibration import Estimate, HardwareClass, Observation
 from senselab_core.runtime.clock import Clock, SystemClock
@@ -269,7 +270,7 @@ def test_a_file_of_an_unknown_format_is_skipped_not_moved(tmp_path: Path) -> Non
     malformed = roots.put_observations(UNIT, "p2", [_observation()], PROVENANCE)
     assert written is not None and malformed is not None
     for path, text in (
-        (written, written.read_text().replace("measure-observations@1.0", "measure-observations@2.0")),
+        (written, written.read_text().replace(MEASURE_OBSERVATIONS_FORMAT, "measure-observations@2.0")),
         (malformed, "{"),
     ):
         path.chmod(0o640)

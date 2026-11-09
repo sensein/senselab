@@ -18,13 +18,13 @@ from pool_probe_test import (
 )
 from probe_machine_test import FakeHost, FakeQueue, _machine  # noqa: F401 - the fake host and its machine
 from senselab_core.runtime.calibration import Cotenancy, LengthProfile, Observation, OomRecord, ProbeRef
-from senselab_core.runtime.execution.in_process import fragment_jobs, job_units
+from senselab_core.runtime.execution.in_process import fragment_jobs
 from senselab_core.runtime.execution.observing import request_units
-from senselab_core.runtime.execution.pool_parts import Dumped, Held
+from senselab_core.runtime.execution.pool_parts import Held
 from senselab_core.runtime.execution.probe_machine import ProbeMachine
 from senselab_core.runtime.execution.queue import probe_of
 from senselab_core.runtime.measures import MeasureUnit, Provenance
-from senselab_core.runtime.probe import Probe
+from senselab_core.runtime.probe import Probe, probe_regime
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Grant, size
 from senselab_core.runtime.units import Unresolved, decoder_of
@@ -129,22 +129,28 @@ def _device(tmp_path: Path, clock: ManualClock) -> tuple[ProbeMachine, DeviceHos
     return machine, host, held, profile, unit
 
 
-def _part(host: FakeHost, held: Held, lengths: range, batch: int) -> Any:  # noqa: ANN401 - a fragment
-    """Return the item of `held`'s jobs whose length is in `lengths`, at request size `batch`."""
-    jobs, _ = fragment_jobs(held.part, host.placed, host.values)
-    picks = [i for i, j in enumerate(jobs) if job_units(j, "chars") in lengths]
-    moved = held.part.placement.model_copy(update={"batch_size": batch})
-    return Dumped.of(held.part).part(picks, placement=moved.model_dump(mode="json"))
+def _faulted(x: float, batch: int, *, fault: str = "resource", device: int | None = 1) -> Observation:
+    """A request of `batch` jobs of `x` units that raised `fault` and was split, under `device` co-tenancy."""
+    return _obs(x, batch=batch).model_copy(
+        update={
+            "outcome": "bisected",
+            "fault": fault,
+            "since_load": None,
+            "probe": None,
+            "cotenancy": Cotenancy(device=device, host=1),
+        }
+    )
 
 
-def _fault(machine: ProbeMachine, host: DeviceHost, held: Held, *, lengths: range, batch: int) -> OomRecord:
-    """Size the unit's part, put its jobs of `lengths` as an item of `batch`, fault it, and return the record."""
+def _fault(  # noqa: PLR0913 - the machine and unit, then the fault's shape
+    machine: ProbeMachine, host: DeviceHost, held: Held, *, length: float, batch: int, device: int | None = 1
+) -> OomRecord:
+    """Size the unit's part, fault a request of `batch` jobs of `length` units, and return the record written."""
     machine.place(held)
     [release] = host.released
     assert release.estimate is not None and release.estimate.device is not None
     machine.note(release, ["item"])
-    seen = [_obs(float(lengths[-1]), batch=1)]
-    machine.oom("item", _part(host, held, lengths, batch), seen, "4242")
+    machine.oom("item", [_faulted(length, batch, device=device)], "4242")
     [record] = [r for r in machine.roots.regime_records(release.unit) if isinstance(r, OomRecord)]  # type: ignore[arg-type]
     return record
 
@@ -168,7 +174,7 @@ def test_an_oom_caps_only_the_lengths_at_or_above_it(tmp_path: Path, clock: Manu
     machine, host, held, _, unit = _device(tmp_path, clock)
     before = _sized(machine, unit, host, 1.0, 10.0, 20.0, 40.0, 60.0)
     assert [before.batch_at(n) for n in (1.0, 10.0, 20.0, 40.0, 60.0)] == [4, 4, 4, 4, 4]
-    record = _fault(machine, host, held, lengths=range(57, 61), batch=4)
+    record = _fault(machine, host, held, length=60.0, batch=4)
     assert (record.resource, record.batch, record.length, record.cotenancy, record.worker) == (
         "device",
         4,
@@ -185,7 +191,7 @@ def test_an_oom_caps_only_the_lengths_at_or_above_it(tmp_path: Path, clock: Manu
 def test_an_oom_reopens_its_stratum_and_the_next_probe_lifts_it(tmp_path: Path, clock: ManualClock) -> None:
     """The next run plans a batched probe over the stratum; its requests outside the basis lift the record."""
     machine, host, held, profile, unit = _device(tmp_path, clock)
-    record = _fault(machine, host, held, lengths=range(57, 61), batch=4)
+    record = _fault(machine, host, held, length=60.0, batch=4)
     raised = machine.measures.get(unit)
     assert raised is not None and raised.oom == (record,) and raised.device is not None and raised.device.m1 > M1
     plain, fake, held2, _ = _machine(tmp_path, True, clock)
@@ -231,25 +237,70 @@ def _answer(host: DeviceHost) -> None:
             queue.outcomes[digest] = {"outcome": "done", "observations": [o.model_dump(mode="json") for o in reported]}
 
 
-def test_a_fault_that_reports_no_co_tenancy_writes_no_record(tmp_path: Path, clock: ManualClock) -> None:
-    """The co-tenancy a record is filed under comes from the item's requests; with none, nothing is invented."""
-    machine, host, held, _, unit = _device(tmp_path, clock)
-    machine.place(held)
-    machine.note(host.released[0], ["item"])
-    machine.oom("item", _part(host, held, range(57, 61), 4), [], None)
-    assert machine.roots.regime_records(unit) == ()
+def test_a_fault_that_reports_no_co_tenancy_is_recorded_at_one(tmp_path: Path, clock: ManualClock) -> None:
+    """An unread device count is filed as co-tenancy 1, the regime a probe running alone can lift."""
+    machine, host, held, _, _ = _device(tmp_path, clock)
+    assert _fault(machine, host, held, length=60.0, batch=4, device=None).cotenancy == 1
 
 
 def test_a_second_fault_no_longer_than_the_first_adds_no_record(tmp_path: Path, clock: ManualClock) -> None:
     """One record per batch, co-tenancy, grant and basis holds the shortest length that faulted."""
     machine, host, held, _, unit = _device(tmp_path, clock)
-    _fault(machine, host, held, lengths=range(51, 55), batch=4)
+    _fault(machine, host, held, length=54.0, batch=4)
     machine.note(host.released[0], ["again", "shorter"])
-    seen = [_obs(54.0)]
-    machine.oom("again", _part(host, held, range(57, 61), 4), seen, None)
+    machine.oom("again", [_faulted(58.0, 4)], None)
     assert len(machine.roots.regime_records(unit)) == 1
-    machine.oom("shorter", _part(host, held, range(41, 45), 4), seen, None)
+    machine.oom("shorter", [_faulted(44.0, 4)], None)
     assert sorted(r.length for r in machine.roots.regime_records(unit) if isinstance(r, OomRecord)) == [44.0, 54.0]
+
+
+def test_a_batch_that_faults_and_bisects_cleanly_writes_a_record_at_its_batch(
+    tmp_path: Path, clock: ManualClock
+) -> None:
+    """The faulting request is the measurement: no job failed, yet the next `size` stays below its batch."""
+    machine, host, held, _, unit = _device(tmp_path, clock)
+    machine.place(held)
+    machine.note(host.released[0], ["item"])
+    halves = [_obs(60.0, batch=2).model_copy(update={"probe": None})] * 2
+    machine.oom("item", [_faulted(60.0, 4), *halves], None)
+    [record] = [r for r in machine.roots.regime_records(unit) if isinstance(r, OomRecord)]
+    assert (record.batch, record.length, record.cotenancy) == (4, 60.0, 1)
+    assert _sized(machine, unit, host, 60.0).batch_at(60.0) < 4
+
+
+def test_a_job_failing_alone_is_a_batch_one_record_that_raises_nothing(tmp_path: Path, clock: ManualClock) -> None:
+    """A fault of one job is filed at batch 1: it is re-placed, `m1` is not raised and no probe re-opens for it."""
+    machine, host, held, _, unit = _device(tmp_path, clock)
+    before = machine.measures.get(unit)
+    record = _fault(machine, host, held, length=60.0, batch=1)
+    after = machine.measures.get(unit)
+    assert before is not None and after is not None and record.batch == 1 and not probe_regime(record)
+    assert after.device == before.device and after.oom == (record,)
+
+
+def test_a_fault_that_is_not_a_resource_fault_writes_nothing(tmp_path: Path, clock: ManualClock) -> None:
+    """A lost worker splits the request but is not an out-of-memory: no record."""
+    machine, host, held, _, unit = _device(tmp_path, clock)
+    machine.place(held)
+    machine.note(host.released[0], ["item"])
+    machine.oom("item", [_faulted(60.0, 4, fault="infrastructure")], None)
+    assert machine.roots.regime_records(unit) == ()
+
+
+def test_an_oom_under_shared_devices_is_read_when_the_card_shares_it_again(tmp_path: Path, clock: ManualClock) -> None:
+    """A fault with two parties on the card caps the batch when two workers share it, though a probe never lifts it."""
+    machine, host, held, _, unit = _device(tmp_path, clock)
+    record = _fault(machine, host, held, length=60.0, batch=4, device=2)
+    assert record.cotenancy == 2 and not probe_regime(record)
+    shared = Grant(
+        max_workers=2, memory_bytes=GRANT.memory_bytes, quantum_items=10, quantum_s=60.0, on_device=True, devices=1
+    )
+    estimate = machine.measures.get(unit)
+    assert estimate is not None
+    profile = machine.profile
+    for grant, below in ((GRANT, False), (shared, True)):
+        sized = size(estimate, grant, profile.sizing, LengthProfile(units=(60.0,)), calibration=profile.calibration)
+        assert (sized.batch_at(60.0) < 4) is below and sized.workers_per_device == (2 if below else 1)
 
 
 def test_a_device_peak_above_its_band_raises_m1_for_the_next_jobs(tmp_path: Path, clock: ManualClock) -> None:
@@ -264,7 +315,7 @@ def test_a_device_peak_above_its_band_raises_m1_for_the_next_jobs(tmp_path: Path
         update={"probe": None, "device_peak": RESIDENT + int(5 * M1 * padded)}
     )
     machine.settled("item", [request])
-    machine.place(Held(held.followed, held.queue, _part(host, held, range(1, 5), 1)))
+    machine.place(Held(held.followed, held.queue, held.part))
     raised = host.released[-1].estimate
     assert raised is not None and raised.device is not None and raised.device.m1 > first.estimate.device.m1
     assert raised.device.m1 == pytest.approx(5 * M1, rel=0.01)

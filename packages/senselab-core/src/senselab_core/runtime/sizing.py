@@ -28,7 +28,7 @@ from senselab_core.runtime.calibration import (
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings, PoolSettings, ResourceClass, SizingSettings
 from senselab_core.runtime.hardware import HardwareInfo
-from senselab_core.runtime.probe import memory_batch, peak
+from senselab_core.runtime.probe import memory_batch, peak, raised
 from senselab_core.runtime.resources import (
     Measured,
     ResourceMeasure,
@@ -359,6 +359,8 @@ def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the cali
         batch_peak = peak(fit, star, longest)
         fits = grant.max_workers if batch_peak <= 0 else max(1, math.floor(config.memory_headroom * share / batch_peak))
         per_device = _regime_workers(estimate.regimes, fits)
+        shared = [r for r in estimate.oom if r.resource == "device" and 2 <= r.cotenancy <= per_device]  # noqa: PLR2004
+        fit = raised(fit, shared, config.memory_headroom)
         share //= per_device
     budget = None if share is None else config.memory_headroom * share
     shell = Sizing(

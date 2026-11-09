@@ -26,6 +26,7 @@ from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import WorkerLost
+from senselab_worker.fake import OutOfMemoryError
 
 TIMED = scoring("pool_observations_test.timed")
 TIMER = "backends.timed_backend_fixture"
@@ -142,8 +143,32 @@ def test_a_bisected_request_is_reported_bisected(tmp_path: Path) -> None:
     found = _observations(pool_dir, profile)
     assert Counter(o.outcome for o in found) == {"bisected": 3, "failed": 1, "ok": 7}
     assert sorted(o.jobs for o in found if o.outcome == "bisected") == [2, 4, 8]
+    assert "resource" not in {o.fault for o in found}
     assert [o.jobs for o in found if o.outcome == "failed"] == [1]
     assert all(o.since_load is None for o in found if o.outcome != "ok")
+
+
+@pytest.mark.logic
+def test_a_request_reports_the_class_of_the_fault_it_raised(tmp_path: Path) -> None:
+    """Requests of over two jobs run out of memory and split; each says `resource`, the ones that ran say nothing."""
+    profile = _profile(quantum_items=8)
+    texts = [f"0.0{i}" for i in range(8)]
+    placed, store, pool_dir = _items(profile, tmp_path, texts)
+    _put(placed, pool_dir, range(8))
+    send = _sender(store, profile)
+
+    def crowded(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+        if len(jobs) > 2:
+            raise OutOfMemoryError("out of memory")
+        return send(jobs, placement)
+
+    _worker(pool_dir, ["cpu"], profile, store, crowded).serve()
+    found = _observations(pool_dir, profile)
+    assert {(o.batch, o.outcome, o.fault) for o in found if o.fault is not None} == {
+        (8, "bisected", "resource"),
+        (4, "bisected", "resource"),
+    }
+    assert all(o.fault is None for o in found if o.outcome == "ok")
 
 
 @pytest.mark.logic

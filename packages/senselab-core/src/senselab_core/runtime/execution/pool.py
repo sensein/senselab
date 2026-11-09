@@ -13,7 +13,7 @@ failure only as `dead/<key digest>.json` holds it, so a restarted coordinator re
 fault class has its effect here, with the budgets of the profile's `faults` section:
 
 - **content**, not a gap: charged; the job is queued again until `content_attempts` charges, then it is dead;
-- **resource**, not a gap: an `oom` record of the item's batch and length is written (§7.4), then the job is queued
+- **resource**, not a gap: the job is queued
   again on the next larger memory class of its device, uncharged, at most `resource_replacements` times; then, or
   with no larger class, it is dead;
 - **infrastructure**, or any gap: queued again uncharged (a gap is logged as a classification gap); at
@@ -631,6 +631,7 @@ class Pool:
         seen = _observed(record)
         self._actuals.landed(class_of(flight.queue), seen)
         self._machine.settled(flight.digest, seen)
+        self._machine.oom(flight.digest, seen, _worker_of(record))
         try:
             yield from self._results(followed, flight, record, seen, given, dead, keys, reused)
         finally:
@@ -667,7 +668,7 @@ class Pool:
                 fault = ref.failure
             else:
                 fault = dead or _gap("MissingResult", f"the outcome of the item gives no result for {job}")
-            yield from self._effect(followed, flight, index, key, fault, (seen, record))
+            yield from self._effect(followed, flight, index, key, fault)
 
     def _admitted_plan(self, fragment: PlanFragment) -> tuple[Plan, Mapping[InputIdentity, object]]:
         admitted = self._plans.get(fragment.admission)
@@ -685,13 +686,8 @@ class Pool:
         index: int,
         key: str,
         fault: FaultRecord,
-        outcome: tuple[Sequence[Observation], Mapping[str, object]],
     ) -> Iterator[ResultRef]:
-        """Apply `fault`'s effect to job `index` of `flight`: retry it, hold its env, or yield it dead.
-
-        A resource fault is first written as an `oom` record of the item's batch and length (`outcome` is what the
-        item reported: its observations and its outcome record), then the job is queued again on the next larger class.
-        """
+        """Apply `fault`'s effect to job `index` of `flight`: retry it, hold its env, or yield it dead."""
         fragment, budgets = flight.fragment, self.profile.faults
         job, placement = fragment.jobs[index], fragment.placement
         if fault.gap or fault.fault == "infrastructure":
@@ -705,7 +701,6 @@ class Pool:
                 followed.held.append(self._held(flight))
             return
         if fault.fault == "resource":
-            self._machine.oom(flight.digest, fragment, outcome[0], _worker_of(outcome[1]))
             followed.moved[job.element] += 1
             larger = larger_class(self.profile, placement.resource_class)
             if larger is not None and followed.moved[job.element] <= budgets.resource_replacements:
