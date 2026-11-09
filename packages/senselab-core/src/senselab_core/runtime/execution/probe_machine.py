@@ -748,7 +748,8 @@ class ProbeMachine:
         """Write the `oom` record of item `digest` from its requests that raised a resource fault (§7.4).
 
         The record is of the largest faulting request (the shortest of equals): its batch, its longest job's length
-        and the co-tenancy it reported (an unread count is 1). The unit's estimate is read again at once.
+        and the co-tenancy of its grant (the device's, the host's on a shared host, else 1; an unread count is 1). The
+        unit's estimate is read again at once.
         """
         origin = self._origins.get(digest)
         faulted = [o for o in observations if o.fault == "resource"]
@@ -760,7 +761,7 @@ class ProbeMachine:
             logger.warning("no oom record of %s: its grant states no memory", origin.unit.label())
             return
         worst = max(faulted, key=lambda o: (o.batch, -o.padded_units / o.batch))
-        shared = worst.cotenancy.device if grant.on_device else worst.cotenancy.host
+        shared = worst.cotenancy.device if grant.on_device else worst.cotenancy.host if grant.shared_host else 1
         basis = origin.estimate.fault_basis(origin.probe) if origin.estimate else tuple(filter(None, [origin.probe]))
         record = OomRecord(
             resource="device" if grant.on_device else "host",

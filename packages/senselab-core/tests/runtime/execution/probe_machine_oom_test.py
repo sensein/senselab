@@ -23,6 +23,7 @@ from senselab_core.runtime.execution.observing import request_units
 from senselab_core.runtime.execution.pool_parts import Held
 from senselab_core.runtime.execution.probe_machine import ProbeMachine
 from senselab_core.runtime.execution.queue import probe_of
+from senselab_core.runtime.execution_settings import ResourceClass
 from senselab_core.runtime.measures import MeasureUnit, Provenance
 from senselab_core.runtime.probe import Probe, probe_regime
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -301,6 +302,51 @@ def test_an_oom_under_shared_devices_is_read_when_the_card_shares_it_again(tmp_p
     for grant, below in ((GRANT, False), (shared, True)):
         sized = size(estimate, grant, profile.sizing, LengthProfile(units=(60.0,)), calibration=profile.calibration)
         assert (sized.batch_at(60.0) < 4) is below and sized.workers_per_device == (2 if below else 1)
+
+
+class HostGrant(DeviceHost):
+    """A `DeviceHost` whose grant is `host_grant`, a host's memory."""
+
+    host_grant = GRANT
+
+    def grant(self, queue: str) -> Grant:  # noqa: ARG002
+        """Return the host grant."""
+        return self.host_grant
+
+
+@pytest.mark.parametrize(("shared_host", "filed"), [(False, 1), (True, 3)])
+def test_a_host_fault_is_filed_at_the_co_tenancy_of_its_grant(
+    tmp_path: Path,
+    clock: ManualClock,
+    shared_host: bool,
+    filed: int,  # noqa: FBT001 - parametrized
+) -> None:
+    """Beside three live peers, a host fault is filed at 1 under a per-worker grant and at 3 under shared host memory.
+
+    The first is one a probe lifts; the second is read by `size` when the class's workers share the host again.
+    """
+    plain, fake, held, profile = _machine(tmp_path, True, clock)
+    host = HostGrant(fake.placed, fake.values)
+    granted = ResourceClass(device="cpu", max_workers=4, mem_bytes=None if shared_host else 2**35)
+    host.host_grant = Grant.of(granted, profile.pool, 2**35)
+    machine = ProbeMachine(profile, plain.roots, plain.measures, plain.resolver, clock, host)
+    unit = _unit(machine, host, held)
+    seed = [
+        o.model_copy(
+            update={"device_peak": None, "device_after": None, "host_peak": o.device_peak, "host_after": RESIDENT}
+        )
+        for o in _seed()
+    ]
+    assert machine.roots.put_observations(unit, SEED, seed, _provenance(profile)) is not None
+    assert _sized(machine, unit, host, 60.0).batch_at(60.0) == 4
+    machine.place(held)
+    machine.note(host.released[0], ["item"])
+    peers = _faulted(60.0, 4, device=None).model_copy(update={"cotenancy": Cotenancy(device=None, host=3)})
+    machine.oom("item", [peers], None)
+    [record] = [r for r in machine.roots.regime_records(unit) if isinstance(r, OomRecord)]
+    assert (record.resource, record.batch, record.cotenancy) == ("host", 4, filed)
+    assert probe_regime(record) is not shared_host
+    assert _sized(machine, unit, host, 60.0).batch_at(60.0) < 4
 
 
 def test_a_device_peak_above_its_band_raises_m1_for_the_next_jobs(tmp_path: Path, clock: ManualClock) -> None:
