@@ -18,7 +18,6 @@ import http.client
 import logging
 import math
 import re
-import socket
 import time
 import urllib.error
 import uuid
@@ -32,7 +31,7 @@ from senselab_core.kernel._base import NonEmptyStr
 from senselab_core.kernel.formats import SERVICE_ENTRY_FORMAT, FormatTag, Formatted
 from senselab_core.kernel.identity import Attestation
 from senselab_core.runtime.execution_settings import JobLease
-from senselab_core.runtime.hardware import device_set
+from senselab_core.runtime.hardware import device_set, host_token
 from senselab_core.runtime.locks import LEASE_SUFFIX, Lease, LeaseState, LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.storage import write_atomically
@@ -306,12 +305,12 @@ class ConsumerLease:
 
 
 def service_registry(profile: ExecutionProfile, environ: Mapping[str, str] | None = None) -> ServiceRegistry:
-    """Return the registry of this host's devices under `profile`: `<server env root>/services/<host>/<devices>`.
+    """Return the registry of this host's devices under `profile`: `<server env root>/services/<host token>/<devices>`.
 
     `<devices>` names the devices this process sees (`device_set` of `environ`, `os.environ` when None), so the
     servers of each card are registered, and consumed, apart.
     """
-    root = profile.env_root("server") / "services" / socket.gethostname() / device_set(environ=environ)
+    root = profile.env_root("server") / "services" / host_token() / device_set(environ=environ)
     return ServiceRegistry(root, lease=profile.lease)
 
 

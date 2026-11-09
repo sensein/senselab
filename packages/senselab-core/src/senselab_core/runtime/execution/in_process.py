@@ -209,7 +209,6 @@ def placement_of_record(record: NodePlacement, spec: TaskSpec, registry: Registr
         backend=backend,
         backend_params=backend.params.model_validate(dict(record.backend_params)),
         device=record.device,
-        env_root=record.env_root,
         why=record.why,
         resource_class=record.resource_class,
         batch_size=record.batch_size,

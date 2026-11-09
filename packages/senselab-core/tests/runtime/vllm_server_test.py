@@ -311,7 +311,29 @@ def test_local_model_errors_name_no_path(env: EnvHandle, tmp_path: Path, monkeyp
         server.__enter__()
     assert "private-weights" not in str(raised.value) and "c" * 12 in str(raised.value)
     (record,) = _records(tmp_path)
-    assert record["argv"][1] == str(weights) and not any(a.startswith("--revision") for a in record["argv"])
+    assert (
+        record["argv"][1] == str(weights)
+        and f"--served-model-name={'c' * 64}" in record["argv"]
+        and not any(a.startswith("--revision") for a in record["argv"])
+    )
+
+
+def test_a_local_model_is_attested_under_its_identity_not_its_path(env: EnvHandle, tmp_path: Path) -> None:
+    """Weights at two paths give one attestation and one context; neither holds a path."""
+    contexts, served = [], []
+    for name in ("one", "two"):
+        weights = tmp_path / name / "weights"
+        model = ResolvedModel(ref=ModelRef.parse(f"local:{weights}"), identity="c" * 64)
+        with vs.VllmServer(
+            env, model, SETTINGS, start_lock_dir=tmp_path / "locks", startup_timeout_s=30, start_margin_s=1, lease=LEASE
+        ) as server:
+            assert server.attestation is not None and server.attestation.served_model == "c" * 64
+            reply = server.chat([{"role": "user", "content": "hi"}], sampling={})
+            contexts.append(_context(server.context_fields()))
+            served.append((reply.attestation, str(weights)))
+    assert contexts[0].fingerprint() == contexts[1].fingerprint() and served[0][0] == served[1][0]
+    for context, (attestation, path) in zip(contexts, served, strict=True):
+        assert path not in context.model_dump_json() and path not in attestation.model_dump_json()
 
 
 @pytest.mark.parametrize("kind", ["audio", "image"])

@@ -62,6 +62,14 @@ def test_verify_weights_unknown_name(tmp_path: Path) -> None:
         verify_weights("no-such-weights", f)
 
 
+@pytest.fixture(autouse=True)
+def cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The cache root every resolve here keeps its answers under: a fresh directory outside each test's models."""
+    root = tmp_path_factory.mktemp("cache")
+    monkeypatch.setenv("SENSELAB_CACHE", str(root))
+    return root
+
+
 @pytest.mark.logic
 def test_resolve_local_uses_weights_identity(tmp_path: Path) -> None:
     """A local directory resolves to the weights identity of its files; a file to its own."""
@@ -73,6 +81,22 @@ def test_resolve_local_uses_weights_identity(tmp_path: Path) -> None:
     assert r.identity == weights_identity([tmp_path / "a.bin", tmp_path / "sub" / "b.bin"], root=tmp_path)
     one = resolve(ModelRef.parse(f"local:{tmp_path / 'a.bin'}"))
     assert one.identity == file_digest("file@1", tmp_path / "a.bin")
+
+
+@pytest.mark.logic
+def test_a_second_plan_reads_a_local_models_identity_without_hashing_it_again(tmp_path: Path) -> None:
+    """Unchanged sizes and mtimes reuse the kept identity, even over changed bytes; a new mtime hashes again."""
+    model, resolver = tmp_path / "model", Resolver(cache_root=tmp_path / "cache")
+    model.mkdir()
+    (model / "w.bin").write_bytes(b"aaaa")
+    first = resolve(ModelRef.parse(f"local:{model}"), resolver=resolver).identity
+    st = (model / "w.bin").stat()
+    (model / "w.bin").write_bytes(b"bbbb")
+    os.utime(model / "w.bin", ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert resolve(ModelRef.parse(f"local:{model}"), resolver=resolver).identity == first
+    os.utime(model / "w.bin", ns=(st.st_atime_ns, st.st_mtime_ns + 1))
+    again = resolve(ModelRef.parse(f"local:{model}"), resolver=resolver).identity
+    assert again != first and again == weights_identity([model / "w.bin"], root=model)
 
 
 def _model_key(text: str) -> LogicalKey:

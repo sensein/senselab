@@ -93,7 +93,7 @@ def register_execution_samples(register: Register) -> None:
             ),
         ],
         invalid_updates=[
-            {"format": "plan-fragment@3.0"},
+            {"format": "plan-fragment@4.0"},
             {"inputs": ()},
             {"attempt": 0},
             {"jobs": ()},

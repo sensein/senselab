@@ -1,11 +1,9 @@
 """The layered measures roots: writes, reads under a trust filter, the hardware index, the probe lease, collection."""
 
 import errno
-import getpass
 import importlib.util
 import logging
 import os
-import socket
 import stat
 import subprocess
 import time
@@ -16,6 +14,7 @@ from pathlib import Path
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from planted_objects_fixture import identity_leaks
 from senselab_core.kernel.identity import ModelIdentity
 from senselab_core.runtime.calibration import Estimate, HardwareClass, Observation
 from senselab_core.runtime.execution_settings import ResourceClass, Trust
@@ -152,13 +151,8 @@ def test_no_measures_record_carries_an_account_or_host_name(tmp_path: Path) -> N
     assert isinstance(lease, Lease)
     with lease:
         pass
-    names = {getpass.getuser(), socket.gethostname(), socket.gethostname().split(".")[0], str(Path.home())}
-    names -= {"", "unit", "obs", "run", "drift", "oom"}
-    files = _files(tmp_path)
-    assert len(files) == 7
-    for path in files:
-        text = path.read_text() + str(path.relative_to(tmp_path))
-        assert not [n for n in names if n in text], path
+    assert len(_files(tmp_path)) == 7
+    assert identity_leaks(tmp_path, tmp_path) == []
 
 
 @pytest.mark.contract

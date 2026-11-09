@@ -17,7 +17,6 @@ its process and its `HardwareClass` per resource class, and writes no hardware i
 after `faults.infrastructure_replacements` consecutive failures; it then starts no more workers of the class.
 """
 
-import functools
 import logging
 import math
 import os
@@ -35,15 +34,15 @@ from pathlib import Path
 from typing import Protocol
 
 from senselab_worker.canonical import jcs_dumps, jcs_loads
-from senselab_worker.digest import identity_digest
 
 from senselab_core.runtime.calibration import HardwareClass
 from senselab_core.runtime.config import expand
 from senselab_core.runtime.execution.queue import PROBE_MARK, RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands, is_service_class
-from senselab_core.runtime.hardware import HardwareInfo, host_secret, probe_hardware, process_started, visible_devices
+from senselab_core.runtime.hardware import HardwareInfo, host_token, probe_hardware, process_started, visible_devices
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.storage import PRIVATE_DIR, private_dir
 
 logger = logging.getLogger("senselab")
 
@@ -158,15 +157,6 @@ class ReadyMark:
     pid: int
     started: str | None
     hardware: Mapping[str, HardwareClass]
-
-
-@functools.cache
-def host_token() -> str:
-    """Return the token of this host: a digest of a random per-host value (`host_secret`), never of its name.
-
-    It says only whether two processes share a host.
-    """
-    return identity_digest("host@1", host_secret())
 
 
 def mark_ready(run_dir: Path, hardware: Mapping[str, HardwareClass] | None = None) -> None:
@@ -549,7 +539,7 @@ class Slurm:
             used = sum(self._cpus(h.queue) for h in cached)
             count = min(count, (self.qos_cpu_cap - used) // self._cpus(resource_class))
         if self.log_dir is not None:
-            self.log_dir.mkdir(parents=True, exist_ok=True)
+            private_dir(self.log_dir)
         handles: list[WorkerHandle] = []
         for _ in range(max(0, count)):
             try:
@@ -781,8 +771,8 @@ def scale(  # noqa: PLR0913 - the queues and substrate, then keyword-only sizing
 def profile_argument(profile: ExecutionProfile, run_dir: Path) -> str:
     """Return what `senselab execute --profile` takes to load `profile`: its packaged name, else a file written.
 
-    A profile that differs from the packaged one of its name is written to `<run dir>/profile-<digest prefix>.json`,
-    so two coordinators with different profiles never share a file.
+    A profile that differs from the packaged one of its name is written to
+    `<run dir>/private/profile-<digest prefix>.json`, so two coordinators with different profiles never share a file.
     """
     digest = profile.canonical_digest()
     try:
@@ -790,8 +780,7 @@ def profile_argument(profile: ExecutionProfile, run_dir: Path) -> str:
             return profile.name
     except (FileNotFoundError, ValueError):
         pass
-    path = Path(run_dir) / f"{PROFILE_PREFIX}{digest[:16]}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = private_dir(Path(run_dir) / PRIVATE_DIR) / f"{PROFILE_PREFIX}{digest[:16]}.json"
     staging = path.with_name(f".{path.name}.{os.getpid()}")
     staging.write_text(profile.model_dump_json(), encoding="utf-8")
     staging.replace(path)
@@ -805,7 +794,7 @@ def substrate_of(
 
     `local` is `Local` over the sum of the classes' `max_workers`, its `cuda` classes on the GPUs this process sees
     (`hardware`, probed when None); `slurm` is `Slurm` over the profile's classes, QOS cap and excluded nodes, logging
-    under `<run dir>/slurm`.
+    under `<run dir>/private/slurm`.
     """
     command = worker_command(run_dir, profile_argument(profile, run_dir))
     spec = profile.substrate
@@ -826,7 +815,7 @@ def substrate_of(
         plan_hash=plan_hash,
         run_dir=Path(run_dir),
         exclude_nodes=spec.exclude_nodes,
-        log_dir=Path(run_dir) / "slurm",
+        log_dir=Path(run_dir) / PRIVATE_DIR / "slurm",
         commands=spec.commands,
     )
 
@@ -849,7 +838,6 @@ __all__ = [
     "class_of",
     "Peers",
     "ReadyMark",
-    "host_token",
     "mark_ready",
     "read_mark",
     "profile_argument",

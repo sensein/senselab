@@ -311,7 +311,8 @@ class ExecutionContext(Frozen):
     `protocol` is recorded but checked only at the worker handshake; `model_source` is how the model's
     weights were reached (`hf`, `url`, `local`, or None for a call without a model); `env_license` is the code
     license of the env, derived from its lock's license records (None when no records were handed to the runtime).
-    None of these, nor `host`, is fingerprinted; whether `env_license` is recorded is.
+    `host` is the writer's `host_token()`, never a name. None of these, nor `host`, is fingerprinted; whether
+    `env_license` is recorded is.
     """
 
     env_lock: NonEmptyStr

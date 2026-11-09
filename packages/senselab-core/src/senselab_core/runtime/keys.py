@@ -128,10 +128,9 @@ class Placement:
     """Where a call runs: the backend and its params, the device, the resource class, and how batches are formed.
 
     `batch_formation` and `chunk_grid` describe the placement whether or not the backend declares them
-    output-affecting; `batch_formation` is None while each job's length picks it. `env_root` is the directory the
-    backend's env is built under (None for a host env), `resource_class` the class of worker it runs on, `batch_size`
-    the most items per request, `partition` the scheduler partition as the profile names it, and `why` the reason
-    `explain` gives; none of these reaches a key.
+    output-affecting; `batch_formation` is None while each job's length picks it. `resource_class` is the class of
+    worker it runs on, `batch_size` the most items per request, `partition` the scheduler partition as the profile
+    names it, and `why` the reason `explain` gives; none of these reaches a key.
     """
 
     backend: BackendSpec
@@ -139,7 +138,6 @@ class Placement:
     device: str
     batch_formation: str | None = None
     chunk_grid: str | None = None
-    env_root: str | None = None
     why: str = ""
     resource_class: str = "cpu"
     batch_size: int = 1
@@ -162,7 +160,6 @@ class Placement:
             batch_size=self.batch_size,
             resource_class=self.resource_class,
             partition=self.partition,
-            env_root=self.env_root,
             why=self.why,
         )
 

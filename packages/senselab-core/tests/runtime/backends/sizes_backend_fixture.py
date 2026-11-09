@@ -1,5 +1,6 @@
 """A host backend that records the items of each request and fails the items its input asks it to."""
 
+from pathlib import Path
 from typing import Any
 
 from senselab_worker.faults import ContentFault
@@ -21,6 +22,8 @@ def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -
         value = next(iter(item["inputs"].values()))
         if value == "fail":
             entries.append({"error": ContentFault("asked to fail")})
+        elif value == "leak":
+            entries.append({"error": ContentFault(f"cannot read {Path.home() / 'data' / 'a.wav'} from {Path.cwd()}")})
         elif value == "gap":
             entries.append({"error": RuntimeError("an untyped failure")})
         else:

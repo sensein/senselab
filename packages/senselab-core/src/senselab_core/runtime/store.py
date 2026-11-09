@@ -6,7 +6,7 @@ Layout under `root`:
   `ExecutionContext.fingerprint()`, holding:
   - `result.json`: JCS JSON with `format: "result@2.0"`, the key, its digest, the context fingerprint,
     the encoded outputs and their output identity;
-  - `context.json`: JCS JSON with `format: "execution-context@3.0"` and the context's fields;
+  - `context.json`: JCS JSON with `format: "execution-context@3.1"` and the context's fields;
   - `<sha256>.npy`: each array output in canonical `.npy`, named by the sha256 of its bytes.
 - `equivalence-evidence@4/<d>.json`: one verify-sampling comparison (`EquivalenceEvidence`), JSON named by
   `d`, its canonical digest.
@@ -106,7 +106,7 @@ EVIDENCE_DIR = "equivalence-evidence@4"
 EVIDENCE_NAME = re.compile(r"[0-9a-f]{64}\.json")
 QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@2.0"
-CONTEXT_FORMAT = "execution-context@3.0"
+CONTEXT_FORMAT = "execution-context@3.1"
 RETIRED_STORE_FORMATS = frozenset({"result@1", "execution-context@1", "execution-context@2"})
 """Store member formats 2.x no longer reads, as `<name>@<major>`."""
 STORE_MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-store-formats"
@@ -309,7 +309,7 @@ def key_record(key: LogicalKey) -> object:
 
 
 def context_record(context: ExecutionContext) -> dict[str, object]:
-    """Return `context` as an `execution-context@3.0` record: its format tag and its fields."""
+    """Return `context` as an `execution-context@3.1` record: its format tag and its fields."""
     return {"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}
 
 

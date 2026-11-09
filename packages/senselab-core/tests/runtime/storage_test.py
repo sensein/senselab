@@ -1,10 +1,17 @@
 """`probe_capabilities`: what a root does, measured on the root itself."""
 
 import errno
+import os
 from pathlib import Path
 
 import pytest
-from senselab_core.runtime.storage import StorageCapabilities, StorageUnsupported, probe_capabilities
+from senselab_core.runtime.storage import (
+    StorageCapabilities,
+    StorageUnsupported,
+    WrongKindError,
+    private_dir,
+    probe_capabilities,
+)
 from syscall_faults_fixture import refuse_call
 
 pytestmark = pytest.mark.logic
@@ -46,3 +53,20 @@ def test_require_names_each_missing_primitive() -> None:
     found = StorageCapabilities(False, True, False, True, True, 0.0)
     with pytest.raises(StorageUnsupported, match="atomic_mkdir, dir_mtime_server_clock"):
         found.require(Path("/store"))
+
+
+@pytest.mark.logic
+def test_a_private_directory_is_made_owner_only_and_a_planted_symlink_is_refused(tmp_path: Path) -> None:
+    """The leaf is made 0700, missing parents under the umask; a loose leaf is tightened; a symlink is refused."""
+    umask = os.umask(0o022)
+    try:
+        made = private_dir(tmp_path / "run" / "private")
+    finally:
+        os.umask(umask)
+    assert [(tmp_path / p).stat().st_mode & 0o777 for p in ("run", "run/private")] == [0o755, 0o700]
+    made.chmod(0o755)
+    assert private_dir(made).stat().st_mode & 0o777 == 0o700
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "planted").symlink_to(tmp_path / "elsewhere")
+    with pytest.raises(WrongKindError, match="not a directory"):
+        private_dir(tmp_path / "planted")

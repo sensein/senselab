@@ -49,11 +49,12 @@ from senselab_core.runtime.execution.executor import (
     follow,
 )
 from senselab_core.runtime.execution.in_process import fragment_keys, job_checksum, node_fragment, plan_keys
+from senselab_core.runtime.execution.run import PYDRA_DIR
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.planner import Plan, check_mapped_outputs
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import attempt_scope
-from senselab_core.runtime.storage import PRIVATE_DIR_MODE
+from senselab_core.runtime.storage import PRIVATE_DIR, private_dir
 
 RECORDS = "records"
 """The pydra node split over the manifest's rows; every mapped node reads its row from it."""
@@ -739,7 +740,7 @@ class PydraRunner:
     def __init__(
         self, *, profile: ExecutionProfile | None = None, work_dir: Path | None = None, senders: int | None = None
     ) -> None:
-        """Run under `profile`'s job leases, pydra's files under `work_dir` (`cache_root()/runs/<plan>/pydra`).
+        """Run under `profile`'s job leases, pydra's files under `work_dir` (`<run dir>/private/pydra`).
 
         Raises:
             ValueError: `senders` is below 1.
@@ -792,8 +793,9 @@ class PydraRunner:
         store: SenselabStore | None,
         cancel: threading.Event | None,
     ) -> RunOutcome:
-        root = self.work_dir if self.work_dir is not None else run_dir_of(placed.hash) / "pydra"
-        _private_dir(root)
+        if self.work_dir is None:
+            private_dir(run_dir_of(placed.hash) / PRIVATE_DIR)
+        root = private_dir(self.work_dir if self.work_dir is not None else run_dir_of(placed.hash) / PYDRA_DIR)
         store = store if store is not None else SenselabStore(root)
         admission = executor.admit(placed, values)
         cancel = cancel if cancel is not None else threading.Event()
@@ -843,12 +845,6 @@ def _submitter(run: _Run, store: SenselabStore, classes: Sequence[str]) -> Submi
         router=tag_router({name: name for name in classes}),
         on_error="raise_at_end",
     )
-
-
-def _private_dir(path: Path) -> None:
-    """Create `path` and its missing parents, and set `path` to mode `0o700` whatever the umask."""
-    path.mkdir(mode=PRIVATE_DIR_MODE, parents=True, exist_ok=True)
-    path.chmod(PRIVATE_DIR_MODE)
 
 
 def _errored_job(entry: str) -> str | None:

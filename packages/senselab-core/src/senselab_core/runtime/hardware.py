@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import logging
 import os
 import platform
@@ -18,6 +19,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Collection, Final, Iterator, Mapping, Optional, Sequence
+
+from senselab_worker.digest import identity_digest
+
+from senselab_core.runtime.storage import temporary_name
 
 logger = logging.getLogger("senselab")
 
@@ -504,22 +509,59 @@ def process_started(pid: int) -> Optional[str]:
     return fields[_STAT_STARTED].decode() if len(fields) > _STAT_STARTED else None
 
 
-def host_secret(run: Callable[[list[str]], str] = _run) -> str:
+def _boot_id() -> str:
+    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+
+
+def host_secret(
+    run: Callable[[list[str]], str] = _run,
+    boot_id: Callable[[], str] = _boot_id,
+    link: Callable[[Path, Path], None] = os.link,
+) -> str:
     """Return a value random per host and per boot that only processes on this host can read; never its name.
 
-    Linux's boot id, else macOS's boot session uuid, else a random value kept in a file only this user reads, in the
-    host's temporary directory.
+    Linux's boot id (`boot_id`), else macOS's boot session uuid (`run`), else a random value kept in a file only this
+    user reads, in the host's temporary directory. The file is written complete under a temporary name and `link`ed
+    into place, so no reader sees it empty and none is ever replaced; a stale empty file is passed over for the next
+    name, `<name>.<n>`, which every process tries in the same order.
     """
     with contextlib.suppress(OSError):
-        if found := Path("/proc/sys/kernel/random/boot_id").read_text().strip():
+        if found := boot_id():
             return found
     if platform.system() == "Darwin":
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             if found := run(["sysctl", "-n", "kern.bootsessionuuid"]).strip():
                 return found
-    path = Path(tempfile.gettempdir()) / f"senselab-host-{os.getuid()}"
-    with contextlib.suppress(FileExistsError):
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _PRIVATE)
+    base = Path(tempfile.gettempdir()) / f"senselab-host-{os.getuid()}"
+    path, generation = base, 0
+    while True:
+        if not path.exists():
+            _place_secret(path, link)
+        with contextlib.suppress(FileNotFoundError):
+            if found := path.read_text().strip():
+                return found
+        generation += 1
+        path = base.with_name(f"{base.name}.{generation}")
+
+
+def _place_secret(path: Path, link: Callable[[Path, Path], None]) -> None:
+    """Write a fresh secret under a temporary name and `link` it to `path`, unless another process got there first."""
+    staged = path.with_name(temporary_name(path.name))
+    fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _PRIVATE)
+    try:
         with os.fdopen(fd, "wb") as f:
             f.write(secrets.token_hex(_SECRET_BYTES).encode())
-    return path.read_text().strip()
+        with contextlib.suppress(FileExistsError):
+            link(staged, path)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+@functools.cache
+def host_token() -> str:
+    """Return the token of this host: a digest of a random per-host value (`host_secret`), never of its name.
+
+    It says only whether two processes share a host. Anyone with a shell on the host can compute it, so it links a
+    record to a host for them and tells every other reader nothing.
+    """
+    return identity_digest("host@1", host_secret())

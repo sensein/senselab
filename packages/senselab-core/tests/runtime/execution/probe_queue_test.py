@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -23,11 +24,10 @@ from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
     Peers,
     class_of,
-    host_token,
     mark_ready,
     read_mark,
 )
-from senselab_core.runtime.hardware import GpuInfo, HardwareInfo, device_parties, host_secret
+from senselab_core.runtime.hardware import GpuInfo, HardwareInfo, device_parties, host_secret, host_token
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import identity_digest
@@ -120,7 +120,7 @@ def test_a_ready_mark_carries_the_hardware_per_queue_and_names_the_host_by_token
 @pytest.mark.logic
 def test_the_host_token_is_stable_and_not_derived_from_the_host_name() -> None:
     """The token is the same in this process and another, and no hash of the host name gives it."""
-    probe_code = "from senselab_core.runtime.execution.substrates import host_token; print(host_token())"
+    probe_code = "from senselab_core.runtime.hardware import host_token; print(host_token())"
     other = subprocess.run(
         [sys.executable, "-c", probe_code], capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -133,11 +133,52 @@ def test_the_host_token_is_stable_and_not_derived_from_the_host_name() -> None:
 @pytest.mark.logic
 def test_without_a_boot_id_the_secret_is_a_private_random_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Off Linux and macOS, the value is random bytes in a file only its user reads, the same on every call."""
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
-    first = host_secret(run=lambda _: "")
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    first = host_secret(run=lambda _: "", boot_id=_no_boot_id)
     files = [p for p in tmp_path.iterdir() if p.name.startswith("senselab-host-")]
-    assert len(first) >= 16 and host_secret(run=lambda _: "") == first and len(files) <= 1
+    assert first and host_secret(run=lambda _: "", boot_id=_no_boot_id) == first and len(files) == 1
     assert all(p.stat().st_mode & 0o077 == 0 for p in files)
+
+
+def _no_boot_id() -> str:
+    raise OSError("no boot id")
+
+
+@pytest.mark.logic
+def test_host_secret_is_created_once_under_a_race(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rival that creates the file between this process's write and its link wins; both read the one value."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    rival: list[str] = []
+
+    def link(staged: Path, path: Path) -> None:
+        assert staged.read_text() != "", "the staged file is complete when it is linked"
+        rival.append(host_secret(run=lambda _: "", boot_id=_no_boot_id))
+        os.link(staged, path)
+
+    mine = host_secret(run=lambda _: "", boot_id=_no_boot_id, link=link)
+    files = sorted(p.name for p in tmp_path.iterdir())
+    assert rival and mine == rival[0] != "" and files == [f"senselab-host-{os.getuid()}"]
+
+
+@pytest.mark.logic
+def test_a_stale_empty_secret_file_is_passed_over(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty file is no secret; it stays as it is, so two writers that both read it empty cannot each replace it.
+
+    A rival that links the next name while this process writes there wins, and both read its one value.
+    """
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    stale = tmp_path / f"senselab-host-{os.getuid()}"
+    stale.write_bytes(b"")
+    inode = stale.stat().st_ino
+    rival: list[str] = []
+
+    def link(staged: Path, path: Path) -> None:
+        rival.append(host_secret(run=lambda _: "", boot_id=_no_boot_id))
+        os.link(staged, path)
+
+    mine = host_secret(run=lambda _: "", boot_id=_no_boot_id, link=link)
+    assert rival and mine == rival[0] != "" and host_secret(run=lambda _: "", boot_id=_no_boot_id) == mine
+    assert stale.stat().st_ino == inode and stale.read_bytes() == b""
 
 
 @pytest.mark.logic

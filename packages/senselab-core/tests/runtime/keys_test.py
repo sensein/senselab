@@ -95,7 +95,6 @@ def test_declared_slices_reach_the_key_by_identity() -> None:
     "field,value",
     [
         ("device", "cuda"),
-        ("env_root", "/elsewhere"),
         ("why", "another reason"),
         ("resource_class", "gpu:h100"),
         ("batch_size", 16),

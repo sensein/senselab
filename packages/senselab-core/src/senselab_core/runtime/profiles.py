@@ -352,13 +352,11 @@ def resolve_execution(  # noqa: PLR0913 - the brief fixes the signature and the 
             f"lists devices {list(profile.devices)} and resource classes {sorted(profile.resource_classes)}{here}"
         )
     name, resource = chosen
-    root = None if backend.env.kind == "host" else str(profile.env_root(backend.env.kind))
     why = f"stack {backend.stack!r} " + (f"preferred by profile {profile.name!r}" if preferred else "first declared")
     return Placement(
         backend=backend,
         backend_params=backend.params(),
         device=resource.device,
-        env_root=root,
         why=f"{why}; resource class {name!r} is the first that runs it",
         resource_class=name,
         batch_size=_batch_size(backend, model_entry, (name, resource), profile, hardware, catalogue),

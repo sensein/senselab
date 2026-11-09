@@ -27,6 +27,10 @@ tests:
     poll_s: 0.05
     long_poll_s: 3
     presence_refresh_s: 100
+  # Times of the fault-message test's held lease: a staleness the test never reaches, and the wait that gives up on it.
+  held_lease:
+    stale_after_s: 60
+    timeout_s: 0.2
   # Times of the probe-queue tests: the lease's staleness and beat, and how long a stand-in peer process lives.
   probe_queue:
     stale_after_s: 0.4

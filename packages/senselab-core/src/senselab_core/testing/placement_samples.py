@@ -59,7 +59,6 @@ def _node(device: str = "cpu", resource_class: str = "cpu") -> NodePlacement:
         batch_size=1,
         resource_class=resource_class,
         partition="${GPU_PARTITION}" if device == "cuda" else None,
-        env_root="/envs" if device == "cuda" else None,
         why="first declared",
     )
 
@@ -98,7 +97,7 @@ def _register_kernel(register: Register, license_: License) -> None:
             ),
             PlanPlacement(profile_digest="cd" * 32, nodes={}, licenses={}, cost=Cost()),
         ],
-        invalid_updates=[{"format": "placement@2.0"}, {"licenses": {"z": sets[1]}}, {"profile_digest": "x"}],
+        invalid_updates=[{"format": "placement@3.0"}, {"licenses": {"z": sets[1]}}, {"profile_digest": "x"}],
     )
 
 

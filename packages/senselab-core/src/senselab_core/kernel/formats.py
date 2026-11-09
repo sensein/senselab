@@ -54,10 +54,10 @@ INPUT_MANIFEST_FORMAT = "input-manifest@1.0"
 LOGICAL_PLAN_FORMAT = "logical-plan@1.0"
 """The format of a logical plan: a graph with its pinned models, profile slices, manifest digest and reuse policy."""
 
-PLACEMENT_FORMAT = "placement@1.0"
+PLACEMENT_FORMAT = "placement@2.0"
 """The format of a plan's placement: each node's backend, env, device, batch, resource class, licenses and cost."""
 
-PLAN_FRAGMENT_FORMAT = "plan-fragment@2.0"
+PLAN_FRAGMENT_FORMAT = "plan-fragment@3.0"
 """The format of a plan fragment: jobs of one node of a plan, their input identities, the placement and the attempt."""
 
 RUN_EVENT_FORMAT = "run-event@1.0"

@@ -20,6 +20,7 @@
   lists every one: the store entry, the fetch blob and the fetch dataset marker.
 """
 
+import contextlib
 import errno
 import logging
 import os
@@ -50,6 +51,8 @@ STAGING_FILE_MODE = 0o660
 STAGING_DIR_MODE = 0o2770
 PRIVATE_DIR_MODE: Final = 0o700  # invariant: owner-only access, whatever the site's group policy
 """The mode of a `Staging` directory that only this process's user can write."""
+PRIVATE_DIR = "private"
+"""A run directory's one root for state that holds paths: substrate state, manifests, placements, worker logs."""
 CLOCK_NAME = ".clock"
 """The sentinel `StorageDir.fs_now` replaces in a directory."""
 CLOCK = re.compile(re.escape(CLOCK_NAME))
@@ -788,10 +791,11 @@ class Staging:
         """Create the directory and return it open."""
         made = self.root.child(self.name, create=True, mode=self.mode)
         if self.mode == PRIVATE_DIR_MODE:
-            st = os.fstat(made.fd)
-            if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != PRIVATE_DIR_MODE:
+            try:
+                _check_private(made.fd, made.path)
+            except WrongKindError:
                 made.close()
-                raise WrongKindError(made.path, "directory", f"{made.path} is not a private staging directory")
+                raise
         self._dir = made
         return made
 
@@ -803,6 +807,40 @@ class Staging:
             self.root.remove_owned(self.name, pattern=UUID_HEX)
         except OSError as err:
             logger.warning("cannot remove staging directory %s: %s", self.root.path / self.name, err)
+
+
+def _check_private(fd: int, path: Path) -> None:
+    """Refuse the directory open at `fd` unless this process's user owns it with mode `PRIVATE_DIR_MODE`."""
+    st = os.fstat(fd)
+    if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != PRIVATE_DIR_MODE:
+        raise WrongKindError(path, "directory", f"{path} is not a private directory")
+
+
+def private_dir(path: Path) -> Path:
+    """Create `path` owner-only, its missing parents under the umask; return it once it is this user's, 0700.
+
+    An existing directory this user owns is set to `PRIVATE_DIR_MODE` whatever the umask; no parent's mode changes.
+
+    Raises:
+        WrongKindError: `path` is a symlink or not a directory, or another user owns it.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(FileExistsError):
+        path.mkdir(mode=PRIVATE_DIR_MODE)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as err:
+        if err.errno not in (errno.ELOOP, errno.ENOTDIR):
+            raise
+        raise WrongKindError(path, "symlink" if path.is_symlink() else "file", f"{path} is not a directory") from err
+    try:
+        if os.fstat(fd).st_uid == os.geteuid():
+            os.fchmod(fd, PRIVATE_DIR_MODE)
+        _check_private(fd, path)
+    finally:
+        os.close(fd)
+    return path
 
 
 PROBE_BOUND_S = 5.0
@@ -935,12 +973,14 @@ __all__ = [
     "WrongKindError",
     "owner_remedy",
     "path_component",
+    "private_dir",
     "probe_capabilities",
     "CLOCK_NAME",
     "NAME_MAX",
     "TEMPORARY_NAME",
     "STAGING_DIR_MODE",
     "STAGING_FILE_MODE",
+    "PRIVATE_DIR",
     "PRIVATE_DIR_MODE",
     "Staging",
     "AddressedFormat",

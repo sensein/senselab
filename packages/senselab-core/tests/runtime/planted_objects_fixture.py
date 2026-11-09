@@ -918,3 +918,39 @@ def probe_clock_hard_link(scratch: str, op: str) -> dict[str, Any]:
 
 
 UNOPENABLE_NAMES = (LEASE, "resolutions@2.json")
+
+
+def real_names() -> set[str]:
+    """The names this machine goes by: host (three spellings and their first labels) and account."""
+    import getpass
+    import os
+    import platform
+    import socket
+
+    full = {socket.gethostname(), platform.node(), os.uname().nodename}
+    return {n for n in {*full, *(h.split(".")[0] for h in full), getpass.getuser()} if n}
+
+
+def identities_in(data: bytes, base: Path) -> list[str]:
+    """Return each real name `data` holds as a whole token, and each path of the home or of `base` it holds anywhere."""
+    import re
+
+    paths = {str(Path.home()), str(base), str(base.resolve())}
+    names = [n for n in sorted(real_names()) if re.search(rb"(?<![\w-])" + re.escape(n.encode()) + rb"(?![\w-])", data)]
+    return names + [p for p in sorted(paths) if p.encode() in data]
+
+
+def identity_leaks(root: Path, base: Path) -> list[tuple[str, str]]:
+    """Return `(file, what)` for every file under `root` whose path or bytes hold a real name or a path of `base`.
+
+    `base` is the directory every test root sits under, so any absolute path of this machine is a needle; nothing is
+    stripped from the bytes. `root/private` is exempt, and must be mode 0700.
+    """
+    private = root / "private"
+    if private.is_dir():
+        assert private.stat().st_mode & 0o777 == 0o700, f"{private} is not owner-only"
+    found = []
+    for path in sorted(p for p in root.rglob("*") if p.is_file() and private not in p.parents):
+        relative = str(path.relative_to(root))
+        found += [(relative, n) for n in identities_in(relative.encode() + b"\0" + path.read_bytes(), base)]
+    return found

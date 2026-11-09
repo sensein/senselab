@@ -2,13 +2,17 @@
 
 import errno
 import json
+import os
+import socket
 import subprocess
 import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
+from planted_objects_fixture import identities_in, identity_leaks, real_names
 from queue_race_fixture import fragment
 from runner_test import (  # noqa: F401 - `packaged` is the autouse fixture of the fake stack
     CHAIN_EDGES,
@@ -30,11 +34,14 @@ from senselab_core.runtime.execution.run import (
     NotRun,
     Output,
     Run,
+    RunPrivate,
     bind_inputs,
     load_plan,
 )
+from senselab_core.runtime.locks import Lease, LeaseTimeout
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import attempt_id, attempt_scope, process_attempt_id
+from senselab_core.runtime.storage import owner_remedy
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import WorkerLost
 from syscall_faults_fixture import refuse_call
@@ -61,21 +68,81 @@ def _started(tmp_path: Path, rows: list[dict[str, str]] = ROWS) -> tuple[Run, Re
 
 
 @pytest.mark.contract
+def test_a_failed_run_leaves_no_path_or_account_in_its_readable_files(tmp_path: Path) -> None:
+    """A fault message that names a path is stored with the path rendered; `private/` holds the paths and is 0700."""
+    run, _ = _started(tmp_path, [{"text": "leak"}, {"text": "one"}])
+    failed = [e.failure for e in run.events() if e.failure is not None]
+    assert failed and all("<path>" in f.message for f in failed)
+    assert identity_leaks(run.run_dir, tmp_path) == []
+    assert str(tmp_path / "store") in (run.run_dir / "private" / "manifest.json").read_text()
+
+
+@pytest.mark.contract
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any directory")
+def test_another_accounts_run_is_refused_by_a_typed_error_naming_the_store(tmp_path: Path) -> None:
+    """A run whose `private/` this account cannot read raises `RunPrivate` naming `store=`; its events still read."""
+    run, _ = _started(tmp_path)
+    private = run.run_dir / "private"
+    private.chmod(0)
+    try:
+        for read in (Run(run.run_dir).manifest, Run(run.run_dir).results):
+            with pytest.raises(RunPrivate, match=r"store=<its result store>"):
+                read()
+        assert Run(run.run_dir).status().done
+    finally:
+        private.chmod(0o700)
+
+
+@pytest.mark.logic
+def test_the_sweep_matches_a_name_as_a_token_and_a_path_anywhere(tmp_path: Path) -> None:
+    """A name inside a longer word (`runner` in `runner_test`) is no leak; alone it is, and a path is anywhere."""
+    for name in real_names():
+        assert identities_in(f"{name}_test x{name} {name}-1".encode(), tmp_path) == []
+        assert name in identities_in(f"by {name}.".encode(), tmp_path)
+    assert identities_in(f"at {tmp_path}x".encode(), tmp_path) == [str(tmp_path)]
+
+
+@pytest.mark.logic
+def test_a_stored_fault_message_names_no_host(tmp_path: Path) -> None:
+    """This host's name and its first label, as a peer address or a node name in a fault, are rendered to `<host>`."""
+    host = socket.gethostname()
+    text = f"ray: connect to {host}:6379 refused; node {host.split('.')[0]} is down; job x{host} kept"
+    stored = FaultRecord.of({"fault": "infrastructure", "type": "T", "message": text}).message
+    assert stored.count("<host>") == 2 and f"x{host}" in stored, stored
+
+
+@pytest.mark.logic
+def test_a_stored_fault_message_names_no_account_or_path(tmp_path: Path, slack_tests: dict[str, Any]) -> None:
+    """A lease holder's user, an owner remedy's account and any absolute path are rendered to labels."""
+    times = slack_tests["held_lease"]
+    held = Lease(tmp_path / "lock", stale_after=times["stale_after_s"])
+    with held, pytest.raises(LeaseTimeout) as timeout:
+        Lease(tmp_path / "lock", stale_after=times["stale_after_s"], timeout=times["timeout_s"]).__enter__()
+    remedy = owner_remedy(tmp_path)
+    for text in (str(timeout.value), remedy, f"open {tmp_path / 'x.wav'}: denied", f"in ~/data and {Path.home()}"):
+        stored = FaultRecord.of({"fault": "infrastructure", "type": "T", "message": text}).message
+        assert identities_in(stored.encode(), tmp_path) == [], stored
+        assert "<path>" in stored
+    assert FaultRecord.of({"fault": "content", "type": "T", "message": "a/b and 3/4 http://h/x"}).message == (
+        "a/b and 3/4 http://h/x"
+    )
+
+
+@pytest.mark.contract
 def test_status_comes_from_events_alone_and_counts_blocked_jobs(tmp_path: Path) -> None:
     """The run directory holds no status file; blocked descendants of the failed element are counted, and done."""
     run, _ = _started(tmp_path)
     names = {p.name for p in run.run_dir.iterdir()}
     assert {
         "plan.json",
-        "inputs.json",
-        "manifest.json",
-        "placements",
+        "private",
         "events",
         "dead",
         "prov",
         "queues",
         "epoch",
     } <= names
+    assert {p.name for p in (run.run_dir / "private").iterdir()} >= {"inputs.json", "manifest.json", "placements"}
     assert set(run.manifest()) == {"plan_hash", "store"}
     status = run.status()
     assert status.counts == {"queued": 0, "running": 0, "done": 4, "failed": 1, "blocked": 1, "cancelled": 0}
@@ -95,14 +162,14 @@ def test_every_run_is_a_new_attempt_with_its_own_placement_file(
     second = placed.run(executor, store=executor.store)
     second.wait(60)
     attempts = {e.attempt for e in read_events(first.run_dir)}
-    assert len(attempts) == 2 and {p.stem for p in (first.run_dir / "placements").iterdir()} == attempts
+    assert len(attempts) == 2 and {p.stem for p in (first.run_dir / "private" / "placements").iterdir()} == attempts
     assert first.run_dir.name == placed.hash and placed.hash not in attempts
     monkeypatch.setenv("SENSELAB_RUN_ID", "pinned")
     third, fourth = placed.run(executor, store=executor.store), None
     third.wait(60)
     fourth = placed.run(executor, store=executor.store)
     fourth.wait(60)
-    pinned = {p.stem for p in (first.run_dir / "placements").iterdir()} - attempts
+    pinned = {p.stem for p in (first.run_dir / "private" / "placements").iterdir()} - attempts
     assert pinned == {"pinned", "pinned-1"}
     claimed = {p.name: p.read_text() for p in (first.run_dir / "attempts").iterdir()}
     assert sorted(claimed) == ["1", "2", "3", "4"] and claimed["3"] == "pinned" and claimed["4"] == "pinned-1"
@@ -159,7 +226,7 @@ def test_an_input_given_as_an_object_runs_in_process_and_is_recorded_as_memory(t
     run, _ = _live(tmp_path)
     assert run.status().counts["done"] == 9 and run.status().faults == {}
     assert all(isinstance(o, Output) for _, o in run.results())
-    shared = json.loads((run.run_dir / "inputs.json").read_text())["shared"]
+    shared = json.loads((run.run_dir / "private" / "inputs.json").read_text())["shared"]
     [identity] = {i for row in load_plan(run.run_dir).manifest.rows for p, i in row.inputs.items() if p == "both"}
     assert shared == {"both": {"memory": identity}}
 
@@ -215,9 +282,9 @@ def test_inputs_are_bound_from_the_run_directory_and_a_changed_one_is_refused(tm
     placed = load_plan(run.run_dir)
     values = bind_inputs(run.run_dir)
     assert set(values) == {i for row in placed.manifest.rows for i in row.inputs.values()}
-    document = json.loads((run.run_dir / "inputs.json").read_text())
+    document = json.loads((run.run_dir / "private" / "inputs.json").read_text())
     document["rows"][0]["text"] = "changed"
-    (run.run_dir / "inputs.json").write_text(json.dumps(document))
+    (run.run_dir / "private" / "inputs.json").write_text(json.dumps(document))
     with pytest.raises(InputChanged, match="r0"):
         bind_inputs(run.run_dir)
 

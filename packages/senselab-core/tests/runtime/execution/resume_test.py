@@ -159,7 +159,7 @@ def _kinds(events: Sequence[Event]) -> list[str]:
 
 def _placement(run: Run) -> dict[str, Any]:
     attempt = _latest(run)[0].attempt
-    found: dict[str, Any] = json.loads((run.run_dir / "placements" / f"{attempt}.json").read_text())
+    found: dict[str, Any] = json.loads((run.run_dir / "private" / "placements" / f"{attempt}.json").read_text())
     return found
 
 
@@ -428,7 +428,7 @@ def _heard(source: object) -> Plan:
 
 
 def _sources(run: Run) -> object:
-    return json.loads((run.run_dir / "inputs.json").read_text())["rows"][0]["audio"]
+    return json.loads((run.run_dir / "private" / "inputs.json").read_text())["rows"][0]["audio"]
 
 
 def test_a_rerun_in_memory_keeps_the_path_and_another_process_binds_from_it(tmp_path: Path) -> None:

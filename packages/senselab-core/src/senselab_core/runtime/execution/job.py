@@ -5,7 +5,6 @@ A key holds the batch formation of the request a job is sent in (`request_compon
 and a sampled cross-context hit is recomputed and compared instead. A failure is never stored.
 """
 
-import platform
 import sysconfig
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -53,7 +52,7 @@ from senselab_core.runtime.execution.records import (
 )
 from senselab_core.runtime.execution.records import verify_attributes as verify_settings
 from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, service_of
-from senselab_core.runtime.hardware import numerics_class
+from senselab_core.runtime.hardware import host_token, numerics_class
 from senselab_core.runtime.keys import Call, Placement, build_key, request_components
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.network import network_variables
@@ -303,14 +302,14 @@ def _context(  # noqa: PLR0913 - every input a context records
     job: Job,
     code_license: License | None,
 ) -> ExecutionContext:
-    """Return the context a job runs in: its env, attestation, network, host, decoder, model source and license."""
+    """Return the context a job runs in: its env, attestation, network, host token, decoder, model source, license."""
     model = job.call.model
     return ExecutionContext(
         **_env_fields(placement, env, expected, network_variables(profile.network)),
         platform=sysconfig.get_platform(),
         numerics=numerics_class(host_hardware(), placement.device, PRECISION),
         decoder=_decoder(job),
-        host=platform.node(),
+        host=host_token(),
         protocol=f"wire@{WIRE_VERSION}",
         model_source=None if model is None else model.ref.source,
         env_license=code_license,

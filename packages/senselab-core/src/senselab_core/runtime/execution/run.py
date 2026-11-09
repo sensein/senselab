@@ -52,12 +52,15 @@ from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import cache_root, fresh_attempt_id
+from senselab_core.runtime.storage import PRIVATE_DIR, private_dir
 from senselab_core.runtime.store import ResultStore
 
 PLAN_FILE = "plan.json"
-INPUTS_FILE = "inputs.json"
-MANIFEST_FILE = "manifest.json"
-PLACEMENTS_DIR = "placements"
+INPUTS_FILE = f"{PRIVATE_DIR}/inputs.json"
+MANIFEST_FILE = f"{PRIVATE_DIR}/manifest.json"
+PLACEMENTS_DIR = f"{PRIVATE_DIR}/placements"
+PYDRA_DIR = f"{PRIVATE_DIR}/pydra"
+"""The pydra runner's job and error pickles, which hold the store path and tracebacks."""
 RESULTS_DIR = "results"
 """The default result store, `<cache root>/results`."""
 ATTEMPTS_DIR = "attempts"
@@ -78,6 +81,18 @@ class MissingExtra(ImportError):
         """Name the missing package."""
         super().__init__(f"this needs {extra!r}, which is not installed; install it to use this")
         self.extra = extra
+
+
+class RunPrivate(PermissionError):
+    """Another account's run: its private state (manifest, inputs, placement) is not readable here."""
+
+    def __init__(self, run_dir: Path) -> None:
+        """Name the run directory and the argument that names its result store."""
+        super().__init__(
+            f"run {Path(run_dir).name}'s private state belongs to another account; name its result store with "
+            "Run(run_dir, store=<its result store>)"
+        )
+        self.run_dir = Path(run_dir)
 
 
 class InputChanged(StaleSource):
@@ -270,16 +285,20 @@ def load_plan(run_dir: Path) -> Plan:
 
     Raises:
         FileNotFoundError: the run has no `plan.json`, or no claimed attempt.
+        RunPrivate: the run is another account's, so its placement and inputs are not readable.
     """
     document = json.loads((Path(run_dir) / PLAN_FILE).read_text(encoding="utf-8"))
     inputs = Path(run_dir) / INPUTS_FILE
-    return Plan(
-        logical=LogicalPlan.model_validate(document["logical"]),
-        manifest=InputManifest.model_validate(document["manifest"]),
-        placement=latest_placement(run_dir),
-        hash=document["plan_hash"],
-        sources=json.loads(inputs.read_text(encoding="utf-8")) if inputs.is_file() else {},
-    )
+    try:
+        return Plan(
+            logical=LogicalPlan.model_validate(document["logical"]),
+            manifest=InputManifest.model_validate(document["manifest"]),
+            placement=latest_placement(run_dir),
+            hash=document["plan_hash"],
+            sources=json.loads(inputs.read_text(encoding="utf-8")) if inputs.is_file() else {},
+        )
+    except PermissionError as err:
+        raise RunPrivate(run_dir) from err
 
 
 def _memory(source: object) -> str | None:
@@ -457,11 +476,17 @@ class Run:
         return load_plan(self.run_dir)
 
     def manifest(self) -> dict[str, Any]:
-        """Return the manifest (plan hash and result store), `{}` if the run has none."""
+        """Return the manifest (plan hash and result store), `{}` if the run has none.
+
+        Raises:
+            RunPrivate: the run is another account's, so its manifest is not readable.
+        """
         try:
             found = json.loads((self.run_dir / MANIFEST_FILE).read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {}
+        except PermissionError as err:
+            raise RunPrivate(self.run_dir) from err
         return found if isinstance(found, dict) else {}
 
     def events(self) -> list[Event]:
@@ -611,6 +636,7 @@ def _claim_ordinal(run_dir: Path, attempt: str) -> int:
 
 def _claim_attempt(run_dir: Path, placement: PlanPlacement) -> tuple[str, int]:
     """Return a fresh attempt id and its ordinal, its placement file written and never replaced (a taken id: `-<n>`)."""
+    private_dir(run_dir / PRIVATE_DIR)
     directory = run_dir / PLACEMENTS_DIR
     directory.mkdir(parents=True, exist_ok=True)
     base, n = fresh_attempt_id(), 0
@@ -705,7 +731,7 @@ def record_sources(placed: Plan, run_dir: Path) -> None:
         LeaseTimeout: another holder kept the lease for its whole timeout.
     """
     lease = _lease_of(placed)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    private_dir(run_dir / PRIVATE_DIR)
     for _ in range(RECORD_ATTEMPTS):
         held = Lease(run_dir / INPUTS_FILE, stale_after=lease.stale_after_s)
         with held, held.keep_alive(lease.renew_fraction):
@@ -820,7 +846,7 @@ def start(
         run = Run(run_dir, store=store)
         log = EventLog(run_dir, attempt, ordinal, epoch=epoch)
         executor.bind_epoch(epoch, log)
-        runner = PydraRunner(profile=placed.execution, work_dir=run_dir / "pydra")
+        runner = PydraRunner(profile=placed.execution, work_dir=run_dir / PYDRA_DIR)
         written = provenance if store is None else store.provenance
         add_plan_entity(written, placed.hash)
     except BaseException:

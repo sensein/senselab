@@ -1,7 +1,5 @@
 """What a pool worker reports per request: walls, outcomes, co-tenancy and hardware, and how it serves a probe queue."""
 
-import getpass
-import socket
 import threading
 import time
 from collections import Counter
@@ -10,8 +8,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from planted_objects_fixture import identity_leaks
 from pool_stack_fixture import packaged, registry, scoring
-from pool_worker_test import WORKERS, _outcomes, _profile, _put, _run, _sender, _text
+from pool_worker_test import OVERRIDE, WORKERS, _outcomes, _profile, _put, _run, _sender, _text
+from senselab_core.kernel.declare import Env
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
 from senselab_core.runtime.execution.executor import Admission
 from senselab_core.runtime.execution.in_process import node_fragment
@@ -168,17 +168,21 @@ def test_no_run_record_names_the_host_the_account_or_a_home_path(tmp_path: Path)
         cotenancy=lambda _: SHARED,
     ).serve()
     mark_ready(tmp_path / "run", {"cpu": HARDWARE})
-    names = [socket.gethostname().encode(), getpass.getuser().encode(), str(Path.home()).encode()]
-    files = [p for p in (tmp_path / "run").rglob("*") if p.is_file()]
-    own = [str(tmp_path).encode(), str(tmp_path.resolve()).encode()]
+    assert [p for p in (tmp_path / "run").rglob("*") if p.is_file()]
+    assert identity_leaks(tmp_path / "run", tmp_path) == []
 
-    def content(path: Path) -> bytes:
-        data = path.read_bytes()
-        for place in own:
-            data = data.replace(place, b"")
-        return data
 
-    assert files and not [(p.name, n) for p in files for n in names if n in content(p)]
+@pytest.mark.logic
+def test_a_run_of_an_isolated_env_names_no_env_root_in_its_readable_files(tmp_path: Path) -> None:
+    """The env root, a path the profile expands, stays with the worker: no queue item or outcome of the run holds it."""
+    envs = tmp_path / "envs"
+    profile = ExecutionProfile.load("laptop", {**OVERRIDE, "env_roots": {"isolated": str(envs), "server": str(envs)}})
+    with packaged(registry(TIMED, worker=TIMER, env=Env.isolated("timed")), tmp_path / "cache"):
+        placed, store, pool_dir = _items(profile, tmp_path, ["0.0"])
+        _put(placed, pool_dir, 0)
+        _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile)).serve()
+    assert [o.outcome for o in _observations(pool_dir, profile)] == ["ok"]
+    assert identity_leaks(tmp_path / "run", tmp_path) == []
 
 
 @pytest.mark.logic

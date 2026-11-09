@@ -1,5 +1,6 @@
 """The result store's format gate: later minors read, another version's entries skipped, retired ones refused."""
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 import pytest
 from planted_objects_fixture import entry_dir, rewrite_json, store_context, store_key
 from senselab_core.kernel.identity import ReusePolicy
+from senselab_core.runtime.hardware import host_token
 from senselab_core.runtime.store import (
     CONTEXT_FORMAT,
     QUARANTINE_DIR,
@@ -17,6 +19,11 @@ from senselab_core.runtime.store import (
     StoreFormatRetired,
     StoreFormatUnknown,
 )
+
+CONTEXT_3_0_FIELDS = set(
+    "env_lock platform wheel_set numerics decoder driver host protocol model_source env_license".split()
+)
+"""The fields of `execution-context@3.0` as of 3bf258e3: a reader of it requires every one and refuses any other."""
 
 SKEWS: dict[str, tuple[str, Callable[[dict[str, Any]], None]]] = {
     "later_major_result": ("result.json", lambda r: r.update(format="result@3.0")),
@@ -50,6 +57,30 @@ def test_a_later_minor_is_read(tmp_path: Path) -> None:
     rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@3.4"))
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.outputs == {"y": 1}
+
+
+@pytest.mark.logic
+def test_an_old_context_with_a_host_field_is_still_read(tmp_path: Path) -> None:
+    """A `execution-context@3.0` member carrying `host` is served as written (an entry is never rewritten)."""
+    s, k, c = ResultStore(tmp_path), store_key(), store_context()
+    s.put(k, {"y": 1}, c)
+    entry = entry_dir(tmp_path, k, c)
+    rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@3.0", host="node1"))
+    before = (entry / "context.json").read_bytes()
+    got = s.get(k, c, ReusePolicy.EXACT)
+    assert got is not None and got.outputs == {"y": 1} and got.context.host == "node1"
+    assert (entry / "context.json").read_bytes() == before
+
+
+@pytest.mark.logic
+def test_a_written_context_is_one_a_3_0_reader_accepts(tmp_path: Path) -> None:
+    """A written context holds exactly the fields of `execution-context@3.0`, `host` among them as a host token."""
+    s, k = ResultStore(tmp_path), store_key()
+    c = store_context(host=host_token())
+    s.put(k, {"y": 1}, c)
+    record = json.loads((entry_dir(tmp_path, k, c) / "context.json").read_bytes())
+    assert record.pop("format") == CONTEXT_FORMAT == "execution-context@3.1"
+    assert set(record) == CONTEXT_3_0_FIELDS and record["host"] == host_token()
 
 
 @pytest.mark.logic

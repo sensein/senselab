@@ -37,6 +37,7 @@ from senselab_core.runtime.execution.substrates import (
     class_of,
     profile_argument,
     scale,
+    substrate_of,
 )
 from senselab_core.runtime.execution.supervisor import Supervisor
 from senselab_core.runtime.execution_settings import LeaseBoundError, PoolSettings, SlurmCommands
@@ -431,12 +432,38 @@ def test_a_pool_names_its_slurm_jobs_by_its_attempt(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_a_custom_profile_reaches_its_workers_as_a_file(tmp_path: Path) -> None:
-    """A packaged profile is named; a changed one is written whole beside the run, and loads to the same digest."""
+    """A packaged profile is named; a changed one is written whole under the run's `private/`, to the same digest."""
     assert profile_argument(ExecutionProfile.load("orcd"), tmp_path) == "orcd"
     custom = _profile(qos_cpu_cap=12, exclude_nodes=["n1"])
-    written = profile_argument(custom, tmp_path)
-    loaded = ExecutionProfile.model_validate_json(Path(written).read_text())
+    written = Path(profile_argument(custom, tmp_path))
+    loaded = ExecutionProfile.model_validate_json(written.read_text())
     assert loaded.canonical_digest() == custom.canonical_digest()
+    assert written.parent == tmp_path / "private" and written.parent.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.logic
+def test_a_custom_profile_on_a_fresh_run_leaves_the_run_readable(tmp_path: Path) -> None:
+    """A profile written before the run exists makes only `private/` owner-only; the run and parents keep the umask."""
+    run_dir = tmp_path / "runs" / "plan"
+    umask = os.umask(0o022)
+    try:
+        substrate_of(_profile(qos_cpu_cap=12), run_dir, HASH)
+    finally:
+        os.umask(umask)
+    modes = [p.stat().st_mode & 0o777 for p in (tmp_path / "runs", run_dir, run_dir / "private")]
+    assert modes == [0o755, 0o755, 0o700]
+
+
+@pytest.mark.logic
+def test_slurm_worker_logs_go_under_the_runs_private_directory(tmp_path: Path) -> None:
+    """A worker's `--output` is under `<run>/private/slurm`, made owner-only before the first submission."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    slurm = substrate_of(_profile(), run_dir, HASH)
+    slurm.start("cpu", 1)
+    [args] = _submitted(tmp_path)
+    logs = run_dir / "private" / "slurm"
+    assert f"--output={logs}/%x-%j.out" in args and logs.stat().st_mode & 0o777 == 0o700
 
 
 @pytest.mark.logic
