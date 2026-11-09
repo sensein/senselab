@@ -334,12 +334,12 @@ class PoolWorker:
         """Return the probe queues of this worker's queues it serves, oldest first.
 
         A worker serves a probe queue while it holds that queue's serve lease; it takes the lease of one with waiting
-        work whose recorded hardware class is its own (none recorded: none takes it), and skips one whose lease is live
-        under another worker. A lease it lost is dropped. The run's queues are
-        listed at most once per `pool.presence_refresh_s`.
+        work whose recorded hardware class is its own (none recorded, or the queue closed: none takes it), and skips
+        one whose lease is live under another worker. A lease it lost, or on a queue since closed, is dropped. The
+        run's queues are listed at most once per `pool.presence_refresh_s`.
         """
         for name, kept in list(self._serving.items()):
-            if not kept.held:
+            if not kept.held or self.queues.queue(name).probe_closed():
                 kept.release()
                 del self._serving[name]
         now = self._clock()
@@ -357,6 +357,8 @@ class PoolWorker:
 
     def _serves(self, queue: Queue) -> bool:
         """Return whether this worker is of the class the probe queue names; false while it names none."""
+        if queue.probe_closed():
+            return False
         wanted = queue.probe_hardware()
         try:
             return wanted is not None and self._hardware(class_of(queue.name)) == wanted

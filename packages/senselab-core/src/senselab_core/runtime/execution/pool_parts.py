@@ -181,7 +181,7 @@ class Run:
     used: set[int] = field(default_factory=set)
     put: dict[str, int] = field(default_factory=dict)
     observations: list[Observation] = field(default_factory=list)
-    touched: bool = False
+    last: float = 0.0
     lease: Lease | None = None
     stack: contextlib.ExitStack | None = None
 

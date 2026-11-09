@@ -356,3 +356,19 @@ def test_only_a_worker_of_the_recorded_class_takes_a_probe_queues_lease(tmp_path
     matching = _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile))
     matching.serve()
     assert {q for q, _ in matching.served} == {probe_queue("cpu", "p1")} and unrecorded.serve_lease() is not None
+
+
+@pytest.mark.logic
+def test_a_closed_probe_queue_is_served_by_no_one(tmp_path: Path, obs: dict[str, Any]) -> None:
+    """Once its queue is closed a worker neither takes the serve lease nor claims, and one that held it lets it go."""
+    placed, store, pool_dir, profile, queue = _probe_items(tmp_path, 3, obs)
+    worker = _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile))
+    claim = worker._next(None, 4)  # noqa: SLF001 - the claim step
+    assert claim is not None and claim.queue.name == queue.name
+    claim.release()
+    queue.close_probe()
+    assert queue.probe_closed() and worker._next(None, 4) is None  # noqa: SLF001 - drops its lease, claims nothing
+    assert queue.serve_lease() is not None
+    other = _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile))
+    other.serve()
+    assert other.served == []

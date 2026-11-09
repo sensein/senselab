@@ -77,6 +77,7 @@ def test_the_group_measures_root_is_the_variable_alone(monkeypatch: pytest.Monke
         {"drift_confidence": -1},
         {"observations_kept": 0},
         {"unmeasured_workers": 0},
+        {"resolve_s": 0},
         {"measures_roots": []},
     ],
 )

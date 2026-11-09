@@ -221,6 +221,10 @@ class Pool:
         self._releasing: list[Release] = []
         self._waited: set[str] = set()
         self._greeted: set[str] = set()
+        self._unreadable: set[str] = set()
+        self._live_since: dict[str, float] = {}
+        self._said: set[str] = set()
+        self._stragglers: list[tuple[Held, Flight, list[int]]] = []
         self._hello: dict[str, HardwareClass] = {}
         self._rates: dict[str, dict[str, tuple[float | None, int]]] = {}
 
@@ -352,6 +356,7 @@ class Pool:
         if isinstance(unit, HardwareUnseen):
             held.followed.waiting.append(held.part)
             self._resolving.append(held)
+            self._wake_scaler()
         elif isinstance(unit, Unresolved):
             self._produce(Release(held, None, None), jobs, placement)
         else:
@@ -432,7 +437,7 @@ class Pool:
         name = probe_queue(held.queue, probe_id)
         self.queues.queue(name).set_probe_hardware(unit.hardware)
         prior = tuple(self.roots.observations(unit))
-        run = Run(probe_id, name, plan, held, self._clock(), prior, lease=taken[0], stack=taken[1])
+        run = Run(probe_id, name, plan, held, self._clock(), prior, last=self._clock(), lease=taken[0], stack=taken[1])
         state = State(unit, held.queue, "probing", self._clock(), run=run)
         with self._lock:
             self._states[unit.digest()] = state
@@ -520,16 +525,20 @@ class Pool:
     def _advance(self) -> None:
         """Advance every unit's state: greet new workers, resolve what waited on a hello, tick waits and probes."""
         with self._machine:
-            self._greet()
-            waiting, self._resolving = self._resolving, []
-            for held in waiting:
-                held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
-                self._place(held)
+            fresh = self._greet()
+            if fresh and self._resolving:
+                waiting, self._resolving = self._resolving, []
+                for held in waiting:
+                    held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
+                    self._place(held)
+            if self._resolving:
+                self._expire_resolving()
             for state in list(self._states.values()):
                 if state.state == "peer_wait":
                     self._peer_tick(state)
                 elif state.state == "probing":
                     self._probe_tick(state)
+            self._release_stragglers()
             while self._releasing:
                 release = self._releasing[0]
                 placed, values = self._admitted_plan(release.held.part)
@@ -537,20 +546,69 @@ class Pool:
                 self._produce(release, jobs, placement)
                 self._releasing.pop(0)
 
-    def _greet(self) -> None:
-        """Read each new ready mark: write its class into the hardware index; a class's first hello decides it."""
+    def _release_stragglers(self) -> None:
+        """Put as production the jobs of an item of a closed probe queue whose live claim has gone stale."""
+        for held, flight, indices in list(self._stragglers):
+            queue = self.queues.queue(flight.queue)
+            if queue.outcome(flight.digest) is None and not queue.claimed(flight.digest):
+                self._stragglers.remove((held, flight, indices))
+                held.followed.flights.remove(flight)
+                part = Held(held.followed, held.queue, Dumped.of(held.part).part(indices))
+                held.followed.waiting.append(part.part)
+                self._releasing.append(Release(part, None, None))
+            elif queue.outcome(flight.digest) is not None:
+                self._stragglers.remove((held, flight, indices))
+
+    def _greet(self) -> bool:
+        """Read each new ready mark: write its class into the hardware index; a class's first hello decides it.
+
+        Return whether a mark was read that had not been.
+        """
         directory = self.run_dir / WORKERS_DIR
         if not directory.is_dir():
-            return
+            return False
+        fresh = False
         for path in sorted(directory.iterdir()):
-            if path.name.startswith(".") or path.name in self._greeted or (mark := read_mark(path)) is None:
+            if path.name.startswith(".") or path.name in self._greeted:
                 continue
+            if (mark := read_mark(path)) is None:
+                self._unreadable.add(path.name)
+                continue
+            self._unreadable.discard(path.name)
             self._greeted.add(path.name)
+            fresh = True
             for queue, seen in mark.hardware.items():
                 resource = self.profile.resource_classes.get(class_of(queue))
                 if resource is not None:
                     self.roots.note_seen(resource, seen)
                     self._hello.setdefault(class_of(queue), seen)
+        return fresh
+
+    def _expire_resolving(self) -> None:
+        """Run as production the jobs of a unit still `Resolving` `resolve_s` after its queue's first live worker."""
+        now = self._clock()
+        for handle in self._fleet.live():
+            if not handle.pending:
+                self._live_since.setdefault(handle.queue, now)
+        late = [
+            h
+            for h in self._resolving
+            if (since := self._live_since.get(h.queue)) is not None
+            and now - since >= self.profile.calibration.resolve_s
+        ]
+        self._resolving = [h for h in self._resolving if h not in late]
+        for held in late:
+            if held.queue not in self._said:
+                self._said.add(held.queue)
+                logger.warning(
+                    "no readable ready mark from a worker of %s within resolve_s of starting (%d unreadable); "
+                    "its jobs run on the safe values",
+                    held.queue,
+                    len(self._unreadable),
+                )
+            placed, values = self._admitted_plan(held.part)
+            jobs, placement = fragment_jobs(held.part, placed, values)
+            self._produce(Release(held, None, None), jobs, placement)
 
     def _peer_tick(self, state: State) -> None:
         """Return a waiting unit to `New` once its peer's lease is gone or `peer_wait_s` passed; else keep waiting."""
@@ -581,20 +639,21 @@ class Pool:
         for digest, (item, flight) in list(run.awaiting.items()):
             record = queue.outcome(digest)
             if record is None:
-                run.touched = run.touched or queue.claimed(digest)
+                if queue.claimed(digest):
+                    run.last = self._clock()
                 continue
-            run.touched = True
+            run.last = self._clock()
             del run.awaiting[digest]
             reported = record.get("observations") if record.get("outcome") == "done" else None
             found = [Observation.model_validate(o) for o in reported] if isinstance(reported, list) else []
             run.observations.extend(found)
-            if any(o.outcome == "served" for o in found):
+            if any(o.outcome == "served" for o in found) and self._warm_s(run.observations) < self.profile.probe_s:
                 old = run.plan
                 run.plan = Probe.replace_served(old, item)
                 self._put_items(state, [i for i in run.plan.items if i not in old.items])
         spent = self._warm_s(run.observations)
         if run.awaiting and spent < self.profile.probe_s:
-            if not run.touched and self._clock() - run.started >= self.profile.lease.stale_after_s:
+            if self._clock() - run.last >= self.profile.lease.stale_after_s:
                 self._conclude(state, None, write=False, abandon=True)
             return
         if run.stage == "single" and not run.awaiting and spent < self.profile.probe_s:
@@ -629,9 +688,15 @@ class Pool:
         run = state.run
         assert run is not None
         if abandon:
+            queue = self.queues.queue(run.queue)
+            queue.close_probe()
             for digest, (item, flight) in run.awaiting.items():
+                indices = [c.index for c in item.jobs]
+                if queue.claimed(digest):
+                    self._stragglers.append((run.held, flight, indices))
+                    continue
                 run.held.followed.flights.remove(flight)
-                run.used.difference_update(c.index for c in item.jobs)
+                run.used.difference_update(indices)
             run.awaiting.clear()
         if write and run.observations and (run.lease is None or run.lease.prove()):
             build = _build()
@@ -783,8 +848,11 @@ class Pool:
             followed.flights.remove(flight)
             followed.seen = True
             given.extend(self._settle(followed, flight, record))
-        held = followed.held + [self._held(f) for f in followed.flights if f.fragment.placement.env in self.broken]
-        stopped = [b for f in followed.flights if (b := self._workers_broken(f)) is not None]
+        parts = [Flight(self._queue_name(p), item_digest(p), p) for p in followed.waiting]
+        held = followed.held + [
+            self._held(f) for f in [*followed.flights, *parts] if f.fragment.placement.env in self.broken
+        ]
+        stopped = [b for f in [*followed.flights, *parts] if (b := self._workers_broken(f)) is not None]
         if (held or stopped) and not given:
             raise (held or stopped)[0]
         followed.done = not followed.flights and not followed.waiting and not held

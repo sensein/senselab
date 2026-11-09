@@ -169,6 +169,7 @@ def _pool(  # noqa: PLR0913 - the run's places, its clock and the seams a test r
     run: str = "run",
     store: str = "store",
     clock: Clock | None = None,
+    substrate: object | None = None,
     **seams: object,
 ) -> Pool:
     run_dir = tmp_path / run
@@ -182,7 +183,7 @@ def _pool(  # noqa: PLR0913 - the run's places, its clock and the seams a test r
         store=ResultStore(tmp_path / store),
         events=EventLog(run_dir, f"a{epoch}", epoch, epoch=epoch),
         profile=profile,
-        substrate=Idle(),
+        substrate=substrate if substrate is not None else Idle(),
         epoch=epoch,
         clock=clock if clock is not None else Clock(),
         **given,  # type: ignore[arg-type]
@@ -687,3 +688,92 @@ def test_an_unmeasured_units_items_end_where_the_backends_bucket_changes(tmp_pat
         items = [item for n, item in _claims(pool) if n == "cpu"]
         spans = [{job_units(j, "audio_s") for j in fragment_jobs(i, placed, values)[0]} for i in items]
     assert all(len(span) == 1 for span in spans) and sum(len(i.jobs) for i in items) == 12
+
+
+class Live(Idle):
+    """A `Substrate` with one live, started worker of `cpu` that never writes a ready mark."""
+
+    def live(self) -> list[WorkerHandle]:
+        """Return the worker."""
+        return [WorkerHandle("cpu", "w0")]
+
+
+@pytest.mark.logic
+def test_resolving_past_resolve_s_runs_unmeasured_with_its_reason(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """From a live worker's first poll, a unit waits `resolve_s` for a mark, then runs the safe values and says why."""
+    profile = _profile(tmp_path)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    clock = Clock()
+    pool = _pool(tmp_path, profile, clock=clock, substrate=Live())
+    fragment, handle = _submit(pool, placed, values)
+    pool.poll(Handle(id=handle))
+    clock.advance(profile.calibration.resolve_s - 1)
+    pool.poll(Handle(id=handle))
+    assert pool.queues.queue("cpu").work() == 0 and not _probe_queues(pool)
+    clock.advance(2)
+    with caplog.at_level(logging.WARNING, logger="senselab"):
+        pool.poll(Handle(id=handle))
+    assert pool.queues.queue("cpu").work() == JOBS
+    assert [r for r in caplog.records if "no readable ready mark from a worker of cpu" in r.getMessage()]
+    refs = _drive(pool, handle, Hand(pool, placed, values))
+    assert sorted(r.job.element for r in refs) == sorted(j.element for j in fragment.jobs)
+
+
+@pytest.mark.logic
+def test_a_broken_class_with_no_hello_fails_its_held_parts(tmp_path: Path) -> None:
+    """Workers of a class that die before their mark break it; the jobs a Resolving unit holds are then reported."""
+    import sys  # noqa: PLC0415 - one test starts real processes
+
+    from senselab_core.runtime.execution.executor import WorkersBroken, follow  # noqa: PLC0415 - one use
+    from senselab_core.runtime.execution.substrates import Local  # noqa: PLC0415 - one use
+
+    profile = ExecutionProfile.load(
+        "laptop",
+        {
+            "devices": ["cpu"],
+            "resource_classes": {"cpu": {"device": "cpu", "mem_bytes": 2**33, "max_workers": 2}},
+            "calibration": {"measures_roots": [str(tmp_path / "measures")]},
+            "pool": {"poll_s": 0.2, "first_poll_s": 0.01},
+            "faults": {"infrastructure_replacements": 1},
+            "substrate": {"start_backoff_first_s": 0.01, "start_backoff_max_s": 0.01},
+        },
+    )
+    placed, values = _plan(profile, range(1, 5))
+    local = Local(2, command=[sys.executable, "-c", "raise SystemExit(1)"])
+    pool = _pool(tmp_path, profile, substrate=local)
+    handle = pool.submit(node_fragment(placed, pool.admit(placed, values)))
+    try:
+        with pytest.raises(WorkersBroken):
+            list(follow(pool, handle))
+    finally:
+        pool.close()
+    assert not _probe_queues(pool) and "cpu" in pool.broken_workers
+
+
+@pytest.mark.logic
+def test_the_stale_window_runs_from_the_last_claim_and_closes_the_queue_first(tmp_path: Path) -> None:
+    """A probe that last progressed less than the window ago is kept; past it the queue is closed, then jobs re-put."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    clock = Clock()
+    pool = _pool(tmp_path, profile, clock=clock)
+    fragment, handle = _submit(pool, placed, values)
+    hand = Hand(pool, placed, values, limit=1)
+    hand.serve()
+    window = profile.lease.stale_after_s
+    clock.advance(window - 1)
+    given = list(pool.poll(Handle(id=handle))[0])
+    [probe] = _probe_queues(pool)
+    queue = pool.queues.queue(probe)
+    clock.advance(window - 1)
+    given += pool.poll(Handle(id=handle))[0]
+    assert not queue.probe_closed() and pool.queues.queue("cpu").work() == 0
+    clock.advance(2)
+    given += pool.poll(Handle(id=handle))[0]
+    assert queue.probe_closed() and pool.queues.queue("cpu").work() > 0
+    assert hand.serve() > 0 and all(n == "cpu" or probe_of(n) is None for n, _ in hand.items[1:])
+    refs = given + _drive(pool, handle, Hand(pool, placed, values, hardware=ELSEWHERE))
+    assert sorted(r.job.element for r in refs) == sorted(j.element for j in fragment.jobs)

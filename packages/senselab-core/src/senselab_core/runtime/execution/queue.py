@@ -21,6 +21,7 @@
 - `serve.lease`: on a probe queue, the `Lease` of the one worker that serves it (`Queue.serve_lease`).
 - `hardware`: on a probe queue, the `HardwareClass` its serving worker must report, written once by the coordinator
   (`Queue.set_probe_hardware`); a queue without it is served by no worker.
+- `closed`: on a probe queue, the mark (`Queue.close_probe`) that no worker takes its serve lease or claims from it.
 - `probe/<digest>`: on a probe queue, a JCS record `{"phase", "stratum"}` of the probe item (`Queue.mark_probe`).
 - `outcome/<digest>`: the item's one outcome, a JCS record `{"outcome": "done" | "dead", ...}` linked from a staged
   file, so the first writer wins and an item is never both done and dead.
@@ -90,6 +91,8 @@ HELD_NAME = re.compile(r"^held-([1-9][0-9]*)-([0-9a-f]{64})$")
 """The mark of an env held on a queue, naming the epoch that held it and the env's label."""
 NAME_FILE = re.compile(r"^name$")
 """The file holding a queue's name."""
+CLOSED_FILE = re.compile(r"^closed$")
+"""The mark that no worker serves a probe queue any longer."""
 HARDWARE_FILE = re.compile(r"^hardware$")
 """The file holding the hardware class a probe queue is served on."""
 PROBE_MARK = "~probe-"
@@ -441,6 +444,22 @@ class Queue:
             raise ProbeQueueError(f"{self.name!r} is not a probe queue")
         with self.open() as q:
             _publish(q, "hardware", jcs_dumps(hardware.model_dump(mode="json")), HARDWARE_FILE)
+
+    def close_probe(self) -> None:
+        """Mark this probe queue closed: no worker serves it from now on. Write-once.
+
+        Raises:
+            ProbeQueueError: this is not a probe queue.
+        """
+        if probe_of(self.name) is None:
+            raise ProbeQueueError(f"{self.name!r} is not a probe queue")
+        with self.open() as q:
+            _publish(q, "closed", b"1", CLOSED_FILE)
+
+    def probe_closed(self) -> bool:
+        """Return whether `close_probe` was called on this queue."""
+        with self.open() as q:
+            return q.lstat("closed") is not None
 
     def probe_hardware(self) -> HardwareClass | None:
         """Return the class set by `set_probe_hardware`; None while none is recorded or it cannot be read."""
