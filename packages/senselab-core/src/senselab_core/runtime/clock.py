@@ -1,5 +1,6 @@
 """The injected clock: monotonic time, the storage clock and waits, with the real one."""
 
+import selectors
 import threading
 import time
 from typing import TYPE_CHECKING, Protocol
@@ -27,6 +28,12 @@ class Clock(Protocol):
         """Wait up to `timeout` seconds for `event`; return whether it is set."""
         ...
 
+    def select(
+        self, selector: selectors.BaseSelector, timeout: float | None
+    ) -> list[tuple[selectors.SelectorKey, int]]:
+        """Wait up to `timeout` seconds (forever when None) for `selector`'s files; return those ready, else none."""
+        ...
+
 
 class SystemClock:
     """The real clock: `time.monotonic`, `StorageDir.dir_now`, `time.sleep` and `threading.Event.wait`."""
@@ -46,3 +53,31 @@ class SystemClock:
     def wait(self, event: threading.Event, timeout: float) -> bool:
         """Wait in `event.wait(timeout)`."""
         return event.wait(timeout)
+
+    def select(
+        self, selector: selectors.BaseSelector, timeout: float | None
+    ) -> list[tuple[selectors.SelectorKey, int]]:
+        """Wait in `selector.select(timeout)`."""
+        return selector.select(timeout)
+
+
+class Deadline:
+    """A point on `clock` by which a sequence of steps must finish; `None` seconds never expires."""
+
+    def __init__(self, clock: Clock, seconds: float | None) -> None:
+        """Start the deadline: it falls `seconds` after `clock`'s now."""
+        self._clock, self._seconds = clock, seconds
+        self._end = None if seconds is None else clock.now() + max(seconds, 0.0)
+
+    def remaining(self) -> float | None:
+        """Return the seconds left, at least 0, or `None` if the deadline never expires."""
+        return None if self._end is None else max(self._end - self._clock.now(), 0.0)
+
+    def expired(self) -> bool:
+        """Return whether no time is left."""
+        return self._end is not None and self._clock.now() >= self._end
+
+    def check(self, what: str) -> None:
+        """Raise `TimeoutError` naming `what` if the deadline has passed."""
+        if self.expired():
+            raise TimeoutError(f"{what} did not finish within {self._seconds} s")

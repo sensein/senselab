@@ -14,7 +14,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import uuid
 import warnings
 from collections.abc import Callable, Iterator, Mapping
@@ -28,7 +27,6 @@ from senselab_worker import WIRE_VERSION, runtime_identity
 from senselab_worker.codec import (
     FAULTS,
     MAX_LINE_BYTES,
-    Deadline,
     Kind,
     LineTooLarge,
     array_paths,
@@ -39,6 +37,7 @@ from senselab_worker.codec import (
     validate_message,
     wire_size,
 )
+from senselab_worker.codec import Deadline as ReadDeadline
 from senselab_worker.faults import (
     ArrayIntegrityError,
     FaultClass,
@@ -52,16 +51,17 @@ from senselab_worker.faults import (
 from senselab_worker.ownership import ARRAY_FILE, remove_owned
 
 from senselab_core.runtime import request_reports
+from senselab_core.runtime.clock import Clock, Deadline, SystemClock
 from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.hardware import cgroup_memory_events, oom_kills
 from senselab_core.runtime.launch import launch
+from senselab_core.runtime.worker_pipes import Lines, Pump
 
 LAUNCHER = "senselab_worker.launch"
 HELLO_TIMEOUT_S = 60.0
 DEFERRED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 STDERR_TAIL_LINES = 100
 _STDERR_LINE_BYTES = 64 * 2**10
-_READ_BYTES = 2**16
 _GROUP_POLL_MAX_S = 0.05
 _LOGGED_LINE_BYTES = 200
 
@@ -164,86 +164,6 @@ class ConcurrentUse(InfrastructureFault):
     """`run` was called while another `run` on the same client was in flight."""
 
 
-class _Pump:
-    """A daemon thread splitting one pipe into lines for `sink` until EOF, or until `finish` drains it.
-
-    Lines longer than `limit` are passed on in pieces of `limit` bytes. At the end `sink(None)` is
-    called; a trailing piece without a newline is passed on first only if `keep_partial`.
-    """
-
-    def __init__(self, fd: int, limit: int, sink: Callable[[bytes | None], None], *, keep_partial: bool) -> None:
-        """Start reading `fd`."""
-        self._fd = fd
-        self._limit = limit
-        self._sink = sink
-        self._keep_partial = keep_partial
-        self._wake_r, self._wake_w = os.pipe()
-        self._lock = threading.Lock()
-        self._closed = False
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
-
-    def finish(self) -> None:
-        """Ask the thread to read what is already in the pipe, then stop."""
-        with self._lock:
-            if not self._closed:
-                try:
-                    os.write(self._wake_w, b"x")
-                except OSError:
-                    pass
-
-    def close(self) -> None:
-        """Release the wake pipe; call only once the thread has ended."""
-        with self._lock:
-            if not self._closed:
-                self._closed = True
-                os.close(self._wake_r)
-                os.close(self._wake_w)
-
-    def _run(self) -> None:
-        buf = bytearray()
-        scanned = 0
-        try:
-            with selectors.DefaultSelector() as sel:
-                sel.register(self._fd, selectors.EVENT_READ)
-                sel.register(self._wake_r, selectors.EVENT_READ)
-                draining = False
-                while True:
-                    if not draining and any(key.fd == self._wake_r for key, _ in sel.select()):
-                        draining = True
-                        os.set_blocking(self._fd, False)
-                    try:
-                        chunk = os.read(self._fd, _READ_BYTES)
-                    except BlockingIOError:
-                        if draining:
-                            break
-                        continue
-                    except OSError:
-                        break
-                    if not chunk:
-                        break
-                    buf += chunk
-                    scanned = self._split(buf, scanned)
-        finally:
-            if buf and self._keep_partial:
-                self._sink(bytes(buf))
-            self._sink(None)
-
-    def _split(self, buf: bytearray, start: int) -> int:
-        """Pass on every complete line in `buf`, searching from `start`; return where the next search starts."""
-        while True:
-            newline = buf.find(b"\n", start, self._limit)
-            if newline >= 0:
-                self._sink(bytes(buf[: newline + 1]))
-                del buf[: newline + 1]
-            elif len(buf) >= self._limit:
-                self._sink(bytes(buf[: self._limit]))
-                del buf[: self._limit]
-            else:
-                return len(buf)
-            start = 0
-
-
 _PS = "/bin/ps"
 LEADER_PROBE_TIMEOUT_S = 2.0
 
@@ -289,20 +209,20 @@ def _exit_seen(pid: int, exited: threading.Event) -> bool:
     return exited.is_set()
 
 
-def _wait_for_exit(pid: int, exited: threading.Event, timeout: float) -> bool:
-    """Wait up to `timeout` seconds for `_exit_seen`; return whether the exit was observed."""
-    deadline = Deadline(timeout)
+def _wait_for_exit(pid: int, exited: threading.Event, timeout: float, clock: Clock) -> bool:
+    """Wait up to `timeout` seconds on `clock` for `_exit_seen`; return whether the exit was observed."""
+    deadline = Deadline(clock, timeout)
     delay = 0.001
     while not _exit_seen(pid, exited):
         remaining = deadline.remaining() or 0.0
         if remaining <= 0:
             return False
-        exited.wait(min(delay, remaining))
+        clock.wait(exited, min(delay, remaining))
         delay = min(delay * 2, _GROUP_POLL_MAX_S)
     return True
 
 
-def _reap(pid: int, exited: threading.Event, stdout: _Pump) -> None:
+def _reap(pid: int, exited: threading.Event, stdout: Pump, done: threading.Event) -> None:
     """Wait for the leader to exit without reaping it, so its pid and process group id stay reserved."""
     try:
         _wait_exit(pid)
@@ -311,6 +231,7 @@ def _reap(pid: int, exited: threading.Event, stdout: _Pump) -> None:
     finally:
         exited.set()
         stdout.finish()
+        done.set()
 
 
 def _leader_held(pid: int, exited: threading.Event, timeout: float) -> bool | None:
@@ -349,8 +270,10 @@ def _signal_group(pgid: int, sig: signal.Signals, *, leader_exited: bool) -> Non
             logger.warning("signal %s to worker process group %d failed: %s", sig.name, pgid, exc)
 
 
-def _members_gone(pgid: int, exited: threading.Event, deadline: Deadline, live: Callable[[int], bool]) -> bool:
-    """Wait until the leader has exited and group `pgid` has no member `live` names; return whether it happened."""
+def _members_gone(
+    pgid: int, exited: threading.Event, deadline: Deadline, live: Callable[[int], bool], clock: Clock
+) -> bool:
+    """Wait on `clock` until the leader has exited and group `pgid` has no member `live` names, or `deadline`."""
     delay = 0.001
     while True:
         seen = _exit_seen(pgid, exited)
@@ -361,9 +284,9 @@ def _members_gone(pgid: int, exited: threading.Event, deadline: Deadline, live: 
             return False
         pause = delay if remaining is None else min(delay, remaining)
         if not seen:
-            exited.wait(pause)
+            clock.wait(exited, pause)
         else:
-            time.sleep(pause)
+            clock.sleep(pause)
         delay = min(delay * 2, _GROUP_POLL_MAX_S)
 
 
@@ -417,6 +340,16 @@ def _restore_signals(previous: dict[int, Any], held: list[int]) -> None:
             signal.raise_signal(number)
 
 
+def _check_arguments(init: dict[str, Any], graces: object, max_line_bytes: object) -> None:
+    """Raise the `ValueError` or `TypeError` a `WorkerClient`'s arguments earn."""
+    if "array_dir" in init:
+        raise ValueError("init key 'array_dir' is reserved")
+    if type(graces) is not ShutdownGraces:
+        raise TypeError(f"graces must be a ShutdownGraces, got {type(graces).__name__}")
+    if type(max_line_bytes) is not int or not 0 < max_line_bytes <= MAX_LINE_BYTES:
+        raise ValueError(f"max_line_bytes must be an int in [1, {MAX_LINE_BYTES}], got {max_line_bytes!r}")
+
+
 def _code_text(returncode: int | None) -> str:
     return "unknown" if returncode is None else str(returncode)
 
@@ -459,13 +392,15 @@ class WorkerClient:
         variables: Mapping[str, str] | None = None,
         memory_events: Path | None = None,
         supervisor: Supervisor | None = None,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Start the worker, check its hello and wait until it has loaded `init`; stop it within `graces`.
 
         `max_line_bytes` bounds every line the client sends and every reply line it accepts after the hello;
         a longer reply is `LineTooLarge`, a `ProtocolError`.
         `variables` are set on the worker process over the launch's allowlist (`launch`). The worker is launched
-        through `supervisor` (`current()` when None), which also judges whether its group is live.
+        through `supervisor` (`current()` when None), which also judges whether its group is live. Every timeout and
+        grace is read and waited on `clock`.
 
         Raises:
             ValueError: if `init` uses the reserved key `array_dir` or has no wire form, or `max_line_bytes` is
@@ -481,22 +416,17 @@ class WorkerClient:
         """
         self._closed = True
         self._owner_pid = os.getpid()
-        if "array_dir" in init:
-            raise ValueError("init key 'array_dir' is reserved")
-        if type(graces) is not ShutdownGraces:
-            raise TypeError(f"graces must be a ShutdownGraces, got {type(graces).__name__}")
-        if type(max_line_bytes) is not int or not 0 < max_line_bytes <= MAX_LINE_BYTES:
-            raise ValueError(f"max_line_bytes must be an int in [1, {MAX_LINE_BYTES}], got {max_line_bytes!r}")
+        _check_arguments(init, graces, max_line_bytes)
         self._max_line_bytes, self._request_timeout = max_line_bytes, request_timeout
         self._supervisor = supervisor if supervisor is not None else current()
         self._memory_events = memory_events if memory_events is not None else cgroup_memory_events()
         self._oom_baseline = oom_kills(self._memory_events)
-        self._graces = graces
+        self._graces, self._clock = graces, clock
         self._stderr: collections.deque[str] = collections.deque(maxlen=STDERR_TAIL_LINES)
-        self._lines: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
+        self._lines = Lines(clock)
         self._proc: subprocess.Popen[bytes] | None = None
-        self._pumps: list[_Pump] = []
-        self._reaper: threading.Thread | None = None
+        self._pumps: list[Pump] = []
+        self._reaped = threading.Event()
         self._exited = threading.Event()
         self._run_lock = threading.Lock()
         self._run_owner: int | None = None
@@ -528,7 +458,7 @@ class WorkerClient:
             self._init_names = self._owned(array_paths(wire_init))
             self._start(python, module, variables or {})
             self.hello = self._handshake(expect_runtime or runtime_identity())
-            deadline = Deadline(load_timeout)
+            deadline = Deadline(clock, load_timeout)
             self._send(dump_line({"init": wire_init}, "init", limit=self._max_line_bytes), deadline)
             self._receive(deadline, "loading the backend", "ready")
         except BaseException as exc:
@@ -559,6 +489,10 @@ class WorkerClient:
     def alive(self) -> bool:
         """Whether the worker process is running and not discarded."""
         return not self._closed and self._proc is not None and not self._exited.is_set()
+
+    def wait_exited(self, timeout: float) -> bool:
+        """Wait up to `timeout` seconds on the client's clock for the worker process to exit; return whether it has."""
+        return self._clock.wait(self._exited, timeout)
 
     @property
     def returncode(self) -> int | None:
@@ -716,7 +650,7 @@ class WorkerClient:
         if not sent:
             return results
         request = {"id": request_id, "items": [wire for _, wire in sent]}
-        deadline = Deadline(self._request_timeout)
+        deadline = Deadline(self._clock, self._request_timeout)
         try:
             self._send(line, deadline)
             replies = self._read_replies(request, deadline)
@@ -746,17 +680,16 @@ class WorkerClient:
             if line is not None:
                 tail.append(line.decode("utf-8", "replace").rstrip("\n"))
 
-        stdout = _Pump(proc.stdout.fileno(), MAX_LINE_BYTES + 1, self._lines.put, keep_partial=False)
-        self._pumps = [stdout, _Pump(proc.stderr.fileno(), _STDERR_LINE_BYTES, keep, keep_partial=True)]
-        self._reaper = threading.Thread(target=_reap, args=(proc.pid, self._exited, stdout), daemon=True)
-        self._reaper.start()
+        stdout = Pump(proc.stdout.fileno(), MAX_LINE_BYTES + 1, self._lines.put, keep_partial=False)
+        self._pumps = [stdout, Pump(proc.stderr.fileno(), _STDERR_LINE_BYTES, keep, keep_partial=True)]
+        threading.Thread(target=_reap, args=(proc.pid, self._exited, stdout, self._reaped), daemon=True).start()
 
     def _handshake(self, expected_runtime: str) -> dict[str, Any]:
-        deadline = Deadline(HELLO_TIMEOUT_S)
+        deadline = Deadline(self._clock, HELLO_TIMEOUT_S)
         hello: dict[str, Any] | None = None
         while True:
             try:
-                line = self._lines.get(timeout=deadline.remaining())
+                line = self._lines.get(deadline)
             except queue.Empty:
                 break
             if line is None:
@@ -809,12 +742,12 @@ class WorkerClient:
                     except OSError as exc:
                         raise WorkerLost(f"cannot write to the worker: {exc}") from exc
                 deadline.check("sending to the worker")
-                sel.select(deadline.remaining())
+                self._clock.select(sel, deadline.remaining())
 
     def _write_stop(self) -> None:
         """Write the stop line if the pipe takes it at once."""
         with contextlib.suppress(WorkerLost, TimeoutError):
-            self._send(dump_line({"stop": True}, "stop"), Deadline(0.0), stopping=True)
+            self._send(dump_line({"stop": True}, "stop"), Deadline(self._clock, 0.0), stopping=True)
 
     def _retire_channel(self) -> None:
         """Close the worker's stdin under the channel lock, then wake a `_send` waiting on it."""
@@ -834,7 +767,7 @@ class WorkerClient:
         """Return the next line as a message of one of `kinds`, the first that has its key; a `fatal` raises."""
         assert self._proc is not None
         try:
-            line = self._lines.get(timeout=deadline.remaining())
+            line = self._lines.get(deadline)
         except queue.Empty:
             deadline.check(what)
             raise TimeoutError(f"{what} did not finish in time") from None
@@ -880,7 +813,12 @@ class WorkerClient:
         if "error" in result:
             return item_error(result["item"], result["error"])
         try:
-            outputs = from_wire(result["outputs"], array_dir=self._array_dir, deadline=deadline, shared=shared)
+            outputs = from_wire(
+                result["outputs"],
+                array_dir=self._array_dir,
+                deadline=ReadDeadline(deadline.remaining()),
+                shared=shared,
+            )
         except ArrayIntegrityError as exc:
             return {"id": result["item"], "error": _mapped(error_record(exc))}
         return {"id": result["item"], "outputs": outputs}
@@ -908,7 +846,7 @@ class WorkerClient:
         """Stop the worker for the host fault `exc`, then give `exc` the exit code and the stderr tail."""
         self._closed = True
         if isinstance(exc, WorkerLost) and not self._closed_by_caller:
-            self._exited.wait(self._graces.exit_code_wait)
+            self._clock.wait(self._exited, self._graces.exit_code_wait)
         self._shutdown(graceful=isinstance(exc, ProtocolMismatch))
         if isinstance(exc, WorkerLost) and exc.returncode is None:
             exc.returncode = self.returncode
@@ -965,7 +903,7 @@ class WorkerClient:
             self._shutting_down.discard(me)
 
     def _steps(self, *, graceful: bool, me: int) -> None:
-        bound = Deadline(self._graces.bound)
+        bound = Deadline(self._clock, self._graces.bound)
         if self._acquire_shutdown(bound):
             try:
                 if not self._stopped:
@@ -973,7 +911,7 @@ class WorkerClient:
             finally:
                 self._shutdown_lock.release()
         if self._run_owner not in (None, me):
-            self._run_idle.wait(bound.remaining())
+            self._clock.wait(self._run_idle, bound.remaining() or 0.0)
         if self._acquire_shutdown(bound):
             try:
                 if not self._released and self._run_owner in (None, me):
@@ -1027,9 +965,9 @@ class WorkerClient:
         _signal_group(pgid, signal.SIGTERM, leader_exited=_exit_seen(pgid, exited))
         _signal_group(pgid, signal.SIGCONT, leader_exited=_exit_seen(pgid, exited))
         live = self._supervisor.group_live
-        if not _members_gone(pgid, exited, stop, live):
+        if not _members_gone(pgid, exited, stop, live, self._clock):
             self._sigkill_group(pgid)
-            if not _members_gone(pgid, exited, Deadline(self._graces.kill), live):
+            if not _members_gone(pgid, exited, Deadline(self._clock, self._graces.kill), live, self._clock):
                 logger.error("worker process group %d still has members after SIGKILL", pgid)
 
     def _stop_group(self, proc: subprocess.Popen[bytes], stop: Deadline) -> None:
@@ -1042,7 +980,7 @@ class WorkerClient:
             except Exception:
                 logger.exception("stopping worker process group %d failed; sending SIGKILL", pgid)
                 self._sigkill_group(pgid)
-                _wait_for_exit(pgid, self._exited, self._graces.kill)
+                _wait_for_exit(pgid, self._exited, self._graces.kill, self._clock)
         elif held is None:
             logger.warning(
                 "worker %d: cannot tell whether it is still unreaped; its process group is not signalled", pgid
@@ -1061,22 +999,22 @@ class WorkerClient:
             return
         assert proc.stdout is not None and proc.stderr is not None
         pgid = proc.pid
-        stop = Deadline(self._graces.stop)
+        stop = Deadline(self._clock, self._graces.stop)
         if graceful and not self._exited.is_set():
             self._write_stop()
         self._retire_channel()
         if graceful:
-            _wait_for_exit(pgid, self._exited, max((stop.remaining() or 0.0) - self._graces.term, 0.0))
+            _wait_for_exit(pgid, self._exited, max((stop.remaining() or 0.0) - self._graces.term, 0.0), self._clock)
         if proc.returncode is None:
             self._stop_group(proc, stop)
-        join = Deadline(0.0 if sys.is_finalizing() else self._graces.join)
+        join = Deadline(self._clock, 0.0 if sys.is_finalizing() else self._graces.join)
         for pump in self._pumps:
             pump.finish()
-        threads = [pump.thread for pump in self._pumps] + ([self._reaper] if self._reaper is not None else [])
-        for thread in threads:
-            thread.join(join.remaining())
+        ended = [pump.ended for pump in self._pumps] + ([self._reaped] if self._pumps else [])
+        for event in ended:
+            self._clock.wait(event, join.remaining() or 0.0)
         self._lines.put(None)
-        if any(thread.is_alive() for thread in threads):
+        if not all(event.is_set() for event in ended):
             if not sys.is_finalizing():
                 logger.warning(
                     "worker %d: pipe readers did not stop within %s s; its pipes stay open", pgid, self._graces.join
