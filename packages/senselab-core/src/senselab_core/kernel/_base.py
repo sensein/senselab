@@ -3,6 +3,8 @@
 import math
 import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Annotated, Any, ClassVar, NoReturn, Self, TypeVar
@@ -15,11 +17,13 @@ from pydantic import (
     ConfigDict,
     Field,
     GetCoreSchemaHandler,
+    ModelWrapValidatorHandler,
     PlainSerializer,
     Strict,
     StringConstraints,
     ValidationError,
     ValidatorFunctionWrapHandler,
+    model_validator,
 )
 from senselab_worker.canonical import ARRAY_TOKEN, QUIET_NAN_BITS, Recurse, Tokeniser, Walk
 from senselab_worker.digest import identity_digest, npy_digest
@@ -212,6 +216,24 @@ def _seal(v: "Frozen") -> None:
     object.__setattr__(v, "__pydantic_private__", private)
 
 
+_IGNORING_UNKNOWN: ContextVar[bool] = ContextVar("senselab_ignoring_unknown_fields", default=False)
+"""Whether the record being validated declares a later minor of its format: every `Frozen` under it drops
+fields it does not declare. Set by `formats.reading`."""
+
+
+def ignoring_unknown_fields() -> bool:
+    """Whether the record being validated declares a later minor of its format (`formats.reading`)."""
+    return _IGNORING_UNKNOWN.get()
+
+
+def _declared(cls: type["Frozen"], data: Mapping[Any, Any]) -> dict[Any, Any]:
+    """Return `data` without the keys `cls` declares no field for, by name or alias."""
+    names = set(cls.model_fields)
+    for field in cls.model_fields.values():
+        names.update(a for a in (field.alias, field.validation_alias) if isinstance(a, str))
+    return {k: v for k, v in data.items() if k in names}
+
+
 def _held_fields(cls: type["Frozen"], data: object) -> object:
     """Return what `cls` validates: a sealed instance of exactly `cls` as itself, any other model as its fields.
 
@@ -262,6 +284,20 @@ class Frozen(BaseModel):
             return value
 
         return {"type": "function-wrap", "function": {"type": "no-info", "function": build}, "schema": inner}
+
+    @classmethod
+    def _reading(cls, data: object) -> AbstractContextManager[object]:  # noqa: ARG003
+        """Return the scope `data` is validated in; a type that declares its own format enters its reading rules."""
+        return nullcontext()
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _drop_unknown_fields(cls, data: object, handler: ModelWrapValidatorHandler[Self]) -> Self:
+        """Validate `data` in its reading scope, minus the undeclared fields while that scope is a later minor."""
+        with cls._reading(data):
+            if _IGNORING_UNKNOWN.get() and isinstance(data, Mapping):
+                data = _declared(cls, data)
+            return handler(data)
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401

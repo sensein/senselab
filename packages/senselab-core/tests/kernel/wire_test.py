@@ -80,6 +80,22 @@ def test_a_file_backed_audio_travels_as_its_samples(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
+def test_a_later_minor_wire_form_is_read_with_nested_fields_added() -> None:
+    """A later minor of a signal format, one whose type is not `Formatted`, is read past fields added at any depth."""
+    group = samples_of(RegularGroup)[0]
+    form = wire_form(group)
+    later = {
+        **form,
+        "format": "regular-group@3.1",
+        "added": 1,
+        "channels": [{**c, "added": 2} for c in form["channels"]],
+    }
+    assert from_wire_form(later).model_dump() == from_wire_form(form).model_dump()
+    with pytest.raises(ValueError):
+        from_wire_form({**later, "format": form["format"]})
+
+
+@pytest.mark.logic
 def test_unknown_or_retired_tags_are_refused() -> None:
     """A wire form of an unregistered name or another major version is refused; a later minor is read."""
     form = wire_form(Metric(name="wer", value=0.1, unit="1", items=1))

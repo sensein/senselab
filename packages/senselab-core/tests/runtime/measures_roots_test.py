@@ -2,6 +2,7 @@
 
 import errno
 import importlib.util
+import json
 import logging
 import os
 import stat
@@ -279,6 +280,21 @@ def test_a_file_of_an_unknown_format_is_skipped_not_moved(tmp_path: Path) -> Non
     assert written.exists() and malformed.exists() and not quarantine.exists()
     assert roots.observations(UNIT) == ()
     assert written.exists() and not malformed.exists() and len(list(quarantine.iterdir())) == 1
+
+
+@pytest.mark.contract
+def test_a_later_minor_file_with_nested_added_fields_is_read(tmp_path: Path) -> None:
+    """A later minor of the observations format that adds a field to an observation is read, not moved aside."""
+    roots = _roots(tmp_path)
+    written = roots.put_observations(UNIT, "p1", [_observation()], PROVENANCE)
+    assert written is not None
+    document = json.loads(written.read_text())
+    document["format"] = "measure-observations@1.1"
+    document["observations"][0]["added_later"] = 1
+    written.chmod(0o640)
+    written.write_text(json.dumps(document))
+    assert roots.observations(UNIT) == (_observation(),)
+    assert written.exists() and not (tmp_path / "measures@1" / "quarantine").exists()
 
 
 @pytest.mark.contract

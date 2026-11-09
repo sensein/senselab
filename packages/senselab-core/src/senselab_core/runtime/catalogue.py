@@ -15,7 +15,7 @@ from typing import Any
 from pydantic import field_validator, model_validator
 from senselab_worker.digest import COMMIT_HEX, SHA256_HEX
 
-from senselab_core.kernel._base import Frozen, NonEmptyStr
+from senselab_core.kernel._base import Frozen, NonEmptyStr, ignoring_unknown_fields
 from senselab_core.kernel.declare import BackendSpec
 from senselab_core.kernel.formats import (
     CATALOGUE_FORMAT,
@@ -57,8 +57,9 @@ def _license(raw: Mapping[str, Any]) -> License:
     except KeyError as err:
         raise ValueError(f"a license needs expression, source, verified and gated; missing {err}") from err
     unknown = set(given) - set(_FLAGS)
-    if unknown:
+    if unknown and not ignoring_unknown_fields():
         raise ValueError(f"a license holds no field {sorted(unknown)}")
+    given = {k: v for k, v in given.items() if k not in unknown}
     return license_record(expression, source=source, verified=verified, gated=gated, flags=given)
 
 

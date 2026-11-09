@@ -1,13 +1,19 @@
 """Format tags carried by every persisted artifact."""
 
+import logging
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from enum import Enum
-from typing import Annotated, ClassVar
+from typing import Annotated, Any, ClassVar, TypeVar
 
-from pydantic import ConfigDict, StringConstraints, model_validator
+from pydantic import StringConstraints, model_validator
 
-from senselab_core.kernel._base import Frozen
+from senselab_core.kernel._base import _IGNORING_UNKNOWN, Frozen
+
+F = TypeVar("F", bound=Frozen)
+_LOG = logging.getLogger(__name__)
+_REPORTED: set[tuple[str, str]] = set()
 
 FORMAT_PATTERN = r"^[a-z0-9_.-]+@\d+\.\d+$"
 
@@ -160,20 +166,67 @@ def later_minor(written: str, found: str) -> bool:
     return int(found.rsplit(".", 1)[1]) > int(written.rsplit(".", 1)[1])
 
 
+@contextmanager
+def reading(written: str, found: object) -> Iterator[None]:
+    """Scope in which a record declaring `found` is validated by a reader of `written`.
+
+    Under a later minor of `written`'s name and major, every `Frozen` validated inside ignores the fields it does
+    not declare, at every nesting level, and the newer minor is logged the first time it is met. Under any other
+    tag unknown fields are refused. A `Formatted` nested in a later-minor record inherits the tolerance.
+    """
+    newer = check(written, found) is FormatVerdict.ACCEPTED and later_minor(written, str(found))
+    if newer and (written, str(found)) not in _REPORTED:
+        _REPORTED.add((written, str(found)))
+        _LOG.info("reading %s as %s: fields it does not know are ignored", found, written)
+    token = _IGNORING_UNKNOWN.set(newer or _IGNORING_UNKNOWN.get())
+    try:
+        yield
+    finally:
+        _IGNORING_UNKNOWN.reset(token)
+
+
+class LaterMinorFields(ValueError):
+    """A record of a later minor held fields its reader does not declare, in a value that is part of an identity."""
+
+    def __init__(self, found: str) -> None:
+        """Name the declared format."""
+        super().__init__(f"fields of {found} that this version does not declare enter the identity")
+        self.found = found
+
+
+def validated(model: type[F], record: Mapping[str, Any], written: str, found: str) -> F:
+    """Return `record` as `model`, read under `found` by a reader of `written`.
+
+    Raises:
+        LaterMinorFields: if `found` is a later minor and `record` held fields `model` does not declare, so the value
+            is not the whole of what was written and its digest would differ.
+    """
+    with reading(written, found):
+        value = model.model_validate(record)
+    if later_minor(written, found) and value.model_dump(mode="json") != record:
+        raise LaterMinorFields(found)
+    return value
+
+
 class Formatted(Frozen):
     """A model carrying `format: "<name>@<major>.<minor>"`.
 
     A subclass declares the tag it writes as the default, `format: FormatTag = "<name>@<major>.<minor>"`,
-    and then reads only tags with that name and major version; unknown fields are ignored. A type that
-    is not `Formatted` refuses unknown fields.
+    and then reads only tags with that name and major version. Under a later minor, unknown fields are ignored
+    at every nesting level (`reading`); under its own or an earlier minor they are refused.
     """
-
-    model_config = ConfigDict(extra="ignore")
 
     format: FormatTag
 
     port_value: ClassVar[bool] = True
     """Whether a task port may name this type; a document that never flows on a port, such as a graph, sets False."""
+
+    @classmethod
+    def _reading(cls, data: object) -> AbstractContextManager[object]:
+        written = cls.model_fields["format"].default
+        if isinstance(data, Mapping) and isinstance(written, str):
+            return reading(written, data.get("format", written))
+        return nullcontext()
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: object) -> None:

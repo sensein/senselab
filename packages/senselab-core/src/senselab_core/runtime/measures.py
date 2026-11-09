@@ -37,6 +37,7 @@ from senselab_core.kernel.formats import (
     MEASURES_LAYOUT_TAG,
     FormatVerdict,
     check,
+    reading,
 )
 from senselab_core.kernel.identity import LogicalKey, ModelIdentity, Params, ProfileSliceIdentity
 from senselab_core.runtime.calibration import (
@@ -578,7 +579,8 @@ class MeasureRoots:
             document = json.loads(raw)
         except (ValueError, RecursionError):
             document = None
-        verdict = check(expected, document.get("format") if isinstance(document, dict) else None)
+        found = document.get("format") if isinstance(document, dict) else None
+        verdict = check(expected, found)
         if verdict in (FormatVerdict.UNKNOWN, FormatVerdict.RETIRED):
             self._say(
                 (path,),
@@ -590,7 +592,8 @@ class MeasureRoots:
         try:
             if verdict is FormatVerdict.MALFORMED:
                 raise ValueError("no format tag")
-            return _File(parse(document, info), info.st_uid, info.st_mtime)
+            with reading(expected, found):
+                return _File(parse(document, info), info.st_uid, info.st_mtime)
         except (ValueError, KeyError, TypeError, RecursionError, ValidationError) as err:
             self._malformed(root, directory, name, info.st_uid, type(err).__name__)
             return None

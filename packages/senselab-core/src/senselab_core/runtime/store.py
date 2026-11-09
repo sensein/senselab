@@ -44,7 +44,7 @@ import os
 import re
 import stat
 import uuid
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,7 +65,7 @@ from senselab_worker.digest import SHA256_HEX, identity_digest
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel._base import value_digest
-from senselab_core.kernel.formats import FormatVerdict, check, later_minor
+from senselab_core.kernel.formats import FormatVerdict, LaterMinorFields, check, validated
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
     Equivalence,
@@ -334,8 +334,8 @@ def _result_entity(identity: OutputIdentity) -> kprov.Record:
     return kprov.entity(identity, core_vocabulary())
 
 
-def _read_object(entry: Path, name: str, fmt: str, fields: Collection[str] | None = None) -> dict[str, Any]:
-    """Return the member's record without its format; with `fields`, a later minor's other fields are skew."""
+def _read_object(entry: Path, name: str, fmt: str) -> tuple[dict[str, Any], str]:
+    """Return the member's record and its format."""
     path = entry / name
     record = jcs_loads(_read_member(entry, name))
     if not isinstance(record, dict):
@@ -348,10 +348,7 @@ def _read_object(entry: Path, name: str, fmt: str, fields: Collection[str] | Non
         raise StoreFormatUnknown(path, found, f"this version reads {fmt} and its minors")
     if verdict is FormatVerdict.MALFORMED:
         raise CorruptEntryError(f"corrupt store entry: {path} is not {fmt}")
-    unknown = sorted(record.keys() - set(fields or record))
-    if unknown and later_minor(fmt, found):
-        raise StoreFormatUnknown(path, found, f"fields {unknown} of a later minor enter the fingerprint")
-    return record
+    return record, found
 
 
 def _guarded(entry: Path, read: Callable[[], T]) -> T:
@@ -360,6 +357,8 @@ def _guarded(entry: Path, read: Callable[[], T]) -> T:
         return read()
     except (CorruptEntryError, StoreFormatRetired, StoreFormatUnknown):
         raise
+    except LaterMinorFields as err:
+        raise StoreFormatUnknown(entry, err.found, str(err)) from err
     except OSError as err:
         raise storage_fault(err, entry) from err
     except (ValueError, KeyError, TypeError, ValidationError) as err:
@@ -368,8 +367,8 @@ def _guarded(entry: Path, read: Callable[[], T]) -> T:
 
 def _stored_context(entry: Path) -> ExecutionContext:
     _require_directory(entry)
-    record = _read_object(entry, "context.json", CONTEXT_FORMAT, ExecutionContext.model_fields)
-    return ExecutionContext.model_validate(record)
+    record, found = _read_object(entry, "context.json", CONTEXT_FORMAT)
+    return validated(ExecutionContext, record, CONTEXT_FORMAT, found)
 
 
 def _stored_address(
@@ -383,10 +382,10 @@ def _stored_address(
     """
     context = _stored_context(entry) if context is None else context
     try:
-        record = _read_object(entry, "result.json", RESULT_FORMAT)
+        record, found = _read_object(entry, "result.json", RESULT_FORMAT)
     except StoreFormatRetired as err:
         raise CorruptEntryError(f"corrupt store entry {entry}: a retired result beside a current context") from err
-    digest = LogicalKey.model_validate(record["key"]).digest()
+    digest = validated(LogicalKey, record["key"], RESULT_FORMAT, found).digest()
     if record["key_digest"] != digest:
         raise MisfiledEntryError(f"stored key digest {record['key_digest']!r} is not the digest of the stored key")
     fingerprint = context.fingerprint()
