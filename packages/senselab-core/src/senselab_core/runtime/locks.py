@@ -43,7 +43,8 @@ from typing import Any, Optional
 
 from senselab_worker.ownership import UUID_HEX
 
-from senselab_core.runtime.storage import Clock, StorageDir, SystemClock, WrongKindError, owner_remedy, path_component
+from senselab_core.runtime.clock import Clock, SystemClock
+from senselab_core.runtime.storage import StorageDir, WrongKindError, owner_remedy, path_component
 
 logger = logging.getLogger("senselab")
 
