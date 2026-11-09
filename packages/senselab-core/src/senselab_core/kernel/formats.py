@@ -63,6 +63,9 @@ LOGICAL_PLAN_FORMAT = "logical-plan@1.0"
 PLACEMENT_FORMAT = "placement@3.0"
 """The format of a plan's placement: each node's backend, env, device, batch, resource class and licenses."""
 
+RETIRED_PLACEMENT_FORMATS = frozenset({"placement@2"})
+"""Placement formats 2.x no longer reads, as `<name>@<major>`."""
+
 PLAN_FRAGMENT_FORMAT = "plan-fragment@3.0"
 """The format of a plan fragment: jobs of one node of a plan, their input identities, the placement and the attempt."""
 

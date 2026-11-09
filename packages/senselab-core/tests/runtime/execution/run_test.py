@@ -33,10 +33,12 @@ from senselab_core.runtime.execution.run import (
     InputsUnavailable,
     NotRun,
     Output,
+    PlacementFormatRetired,
     Run,
     RunPrivate,
     bind_inputs,
     load_plan,
+    read_placement,
 )
 from senselab_core.runtime.locks import Lease, LeaseTimeout
 from senselab_core.runtime.provenance import ProvStore
@@ -475,3 +477,20 @@ def test_a_new_attempt_puts_the_runs_unindexed_queue_items_again(
     again = Run(run.run_dir, store=executor.store).plan.run(executor, store=executor.store)
     assert again.wait(60).done
     assert queue.depth() == 1
+
+
+@pytest.mark.logic
+def test_a_placement_of_a_retired_format_names_the_run_as_one_of_an_older_build(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run directory written at `placement@2.0` says so, by name, to `read_placement` and to `senselab explain`."""
+    run_dir = tmp_path / "abc123"
+    (run_dir / "placements").mkdir(parents=True)
+    path = run_dir / "placements" / "a1.json"
+    path.write_text(json.dumps({"format": "placement@2.0", "cost": {}}))
+    with pytest.raises(PlacementFormatRetired, match=r"run abc123.*placement@2\.0.*older build"):
+        read_placement(path)
+    path.write_text(json.dumps({"format": "placement@9.0"}))
+    with pytest.raises(ValueError) as unknown:
+        read_placement(path)
+    assert not isinstance(unknown.value, PlacementFormatRetired)

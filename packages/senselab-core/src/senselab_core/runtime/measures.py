@@ -277,14 +277,25 @@ RecordKind = Literal["drift", "supersede", "regime", "oom"]
 _JSON_NAME = re.compile(r".+\.json")
 
 
+PACKAGE_IN_CHECKOUT = Path("packages") / "senselab-core" / "src"
+"""Where senselab-core lies inside its own checkout: a checkout's commit is this package's only from there."""
+
+
 def _git_dir(start: Path) -> Path | None:
-    """Return the git directory of the checkout holding `start`: a `.git` directory, or the one a worktree names."""
+    """Return the git directory of the checkout whose work tree holds senselab-core and `start`; None otherwise.
+
+    A `.git` found above `start` is another project's (a virtual environment inside its repository) unless
+    `packages/senselab-core/src` lies under the same work tree and `start` lies under it.
+    """
     for parent in (start, *start.parents):
         dot = parent / ".git"
+        found = None
         if dot.is_dir():
-            return dot
-        if dot.is_file() and (named := dot.read_text().strip()).startswith("gitdir:"):
-            return (parent / named.removeprefix("gitdir:").strip()).resolve()
+            found = dot
+        elif dot.is_file() and (named := dot.read_text().strip()).startswith("gitdir:"):
+            found = (parent / named.removeprefix("gitdir:").strip()).resolve()
+        if found is not None:
+            return found if start.is_relative_to(parent / PACKAGE_IN_CHECKOUT) else None
     return None
 
 
@@ -301,10 +312,11 @@ def _ref_commit(git: Path, ref: str) -> str | None:
 
 
 def checkout_commit(root: Path | None = None) -> str | None:
-    """Return the 40-hex commit `HEAD` names in the git checkout holding `root` (this package by default).
+    """Return the 40-hex commit `HEAD` names in the git checkout this package lives in (`root`: where it lives).
 
-    Read from the git directory, not by running git. None outside a checkout (an installed wheel) or where it cannot
-    be read.
+    Read from the git directory, not by running git. None unless the package lies inside the work tree of that
+    checkout, so a package installed into a virtual environment inside another repository gets none of that
+    repository's; and None where it cannot be read.
     """
     try:
         git = _git_dir(Path(__file__).resolve().parent if root is None else root.resolve())
