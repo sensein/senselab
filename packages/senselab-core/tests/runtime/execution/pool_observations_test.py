@@ -194,6 +194,21 @@ def test_a_request_names_the_one_class_all_its_items_failed_with(tmp_path: Path)
 
 
 @pytest.mark.logic
+def test_a_request_names_no_class_when_its_items_failed_with_two(tmp_path: Path) -> None:
+    """An item out of memory beside a content fault in one request of two: no class, and nothing is split."""
+    profile = _profile(quantum_items=2)
+    with packaged(registry(TIMED, worker=CROWDED), tmp_path / "cache"):
+        placed, store, pool_dir = _items(profile, tmp_path, ["oom", "fail"])
+        admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
+        fragment = node_fragment(placed, admission, elements=[(e,) for e in range(2)])
+        whole = fragment.placement.model_copy(update={"batch_size": 2})
+        QueueSet(pool_dir, profile).queue("cpu").put(fragment.model_copy(update={"placement": whole}))
+        _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile)).serve()
+    found = _observations(pool_dir, profile)
+    assert [(o.batch, o.outcome, str(o.fault)) for o in found] == [(2, "failed", "None")]
+
+
+@pytest.mark.logic
 def test_observations_carry_device_cotenancy(tmp_path: Path) -> None:
     """Each request's observation carries the co-tenancy and the hardware class read for its claim."""
     profile = _profile()

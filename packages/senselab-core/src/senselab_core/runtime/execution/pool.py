@@ -675,10 +675,10 @@ class Pool:
         """Apply `fault`'s effect to job `index` of `flight`: retry it, hold its env, or yield it dead."""
         fragment, budgets = flight.fragment, self.profile.faults
         job, placement = fragment.jobs[index], fragment.placement
+        if fault.gap:
+            self.gaps.append((job, fault))
+            logger.warning("classification gap: %s of %s, not charged", fault.type, job)
         if _counts_against_env(fault):
-            if fault.gap:
-                self.gaps.append((job, fault))
-                logger.warning("classification gap: %s of %s, retried uncharged", fault.type, job)
             if self._infrastructure(flight, job, key, fault):
                 self._again(followed, flight, index)
             else:

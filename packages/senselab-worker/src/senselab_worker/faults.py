@@ -1,8 +1,7 @@
 """Fault classes and the error records that carry them across the wire (ADR-009).
 
 A backend states a fault's class by raising `ContentFault`, `ResourceFault` or `InfrastructureFault`.
-Any other exception is classified by the fallback table, and its record is marked as a gap, except an
-out-of-memory error (`MemoryError`, or a class named `OutOfMemoryError`), which the table knows.
+Any other exception is classified by the fallback table, and its record is marked as a gap.
 """
 
 import traceback
@@ -81,12 +80,8 @@ def _classify(exc: BaseException) -> tuple[FaultClass, bool]:
     if isinstance(exc, _CONTENT):
         return FaultClass.CONTENT, True
     if isinstance(exc, _RESOURCE) or any(c.__name__ == _OOM_CLASS_NAME for c in type(exc).__mro__):
-        return FaultClass.RESOURCE, not _is_out_of_memory(exc)
+        return FaultClass.RESOURCE, True
     return FaultClass.INFRASTRUCTURE, True
-
-
-def _is_out_of_memory(exc: BaseException) -> bool:
-    return isinstance(exc, MemoryError) or any(c.__name__ == _OOM_CLASS_NAME for c in type(exc).__mro__)
 
 
 def classify(exc: BaseException) -> FaultClass:
@@ -143,8 +138,8 @@ def error_record(exc: BaseException) -> dict[str, Any]:
 
     Keys: `type` (class name), `message` (`str(exc)`, else `repr(exc)`, else `<unprintable Type>`),
     `fault`, `traceback` (the last 8 frames in total across the cause chain) and `gap`, which is false
-    for a `ContentFault`, `ResourceFault` or `InfrastructureFault` and for an out-of-memory error, and true
-    whenever the rest of the fallback table decided. Text
+    only for a `ContentFault`, `ResourceFault` or `InfrastructureFault`, and true whenever the fallback
+    table decided. Text
     fields are cut to `MAX_TEXT_CHARS`, and code points UTF-8 cannot encode, such as lone
     surrogates, are backslash-escaped.
     """

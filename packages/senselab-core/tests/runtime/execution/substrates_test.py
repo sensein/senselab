@@ -39,6 +39,7 @@ from senselab_core.runtime.execution.substrates import (
     profile_argument,
     scale,
     substrate_of,
+    worker_id,
 )
 from senselab_core.runtime.execution.supervisor import Supervisor
 from senselab_core.runtime.execution_settings import LeaseBoundError, SlurmCommands
@@ -673,7 +674,7 @@ def test_a_worker_that_reaches_the_run_marks_itself_and_one_that_cannot_exits_ty
     store = ResultStore(tmp_path / "store")
     run_dir = tmp_path / "run"
     assert serve_pool(run_dir / RUN_QUEUES, ["cpu"], profile=profile, store=store) == 0
-    assert (run_dir / "workers" / str(os.getpid())).exists()
+    assert (run_dir / "workers" / worker_id()).exists()
     other = tmp_path / "other"
     refuse_call(monkeypatch, "mkdir", ".senselab-probe", OSError(errno.ENOTSUP, "Operation not supported"))
     assert serve_pool(other / RUN_QUEUES, ["cpu"], profile=profile, store=store) == EXIT_UNREACHABLE

@@ -58,17 +58,17 @@ class BadInput(ContentFault, KeyError):
         (TypeError("x"), FaultClass.CONTENT, True),
         (KeyError("x"), FaultClass.CONTENT, True),
         (UnicodeEncodeError("utf-8", "x", 0, 1, "x"), FaultClass.CONTENT, True),
-        (MemoryError(), FaultClass.RESOURCE, False),
+        (MemoryError(), FaultClass.RESOURCE, True),
         (TimeoutError(), FaultClass.RESOURCE, True),
-        (OutOfMemoryError(), FaultClass.RESOURCE, False),
-        (DeviceOutOfMemory(), FaultClass.RESOURCE, False),
+        (OutOfMemoryError(), FaultClass.RESOURCE, True),
+        (DeviceOutOfMemory(), FaultClass.RESOURCE, True),
         (RuntimeError("x"), FaultClass.INFRASTRUCTURE, True),
         (OSError("x"), FaultClass.INFRASTRUCTURE, True),
         (KeyboardInterrupt(), FaultClass.INFRASTRUCTURE, True),
     ],
 )
 def test_fault_table(exc: BaseException, fault: FaultClass, gap: bool) -> None:
-    """Typed faults decide their class with no gap; the table marks a gap, but for an out-of-memory error."""
+    """Typed faults decide their class with no gap; the table is a fallback and always marks a gap."""
     assert classify(exc) is fault
     record = error_record(exc)
     assert record["fault"] == fault.value and record["gap"] is gap
@@ -94,7 +94,7 @@ def _instance(t: type[BaseException]) -> BaseException:
 
 @pytest.mark.logic
 def test_fallback_classification_marks_gap() -> None:
-    """Every built-in exception but `MemoryError` is classified by the fallback table, so is a gap.
+    """Every built-in exception is classified by the fallback table, so every one is a gap.
 
     The same exception mixed with a typed fault is classified by the type, with no gap.
     """
@@ -103,7 +103,7 @@ def test_fallback_classification_marks_gap() -> None:
     builtin_types = _builtin_exception_types()
     mixed_count = 0
     for t in builtin_types:
-        assert error_record(_instance(t))["gap"] is (not issubclass(t, MemoryError)), t
+        assert error_record(_instance(t))["gap"] is True, t
         for typed in (ContentFault, ResourceFault, InfrastructureFault):
             try:
                 mixed = _instance(type(f"Typed{t.__name__}", (typed, t), {}))

@@ -1,12 +1,13 @@
 """A host backend that runs out of memory as torch does: a plain exception named `OutOfMemoryError`.
 
-A request of more than `MOST` items, or one holding a text longer than `HUGE`, raises it for the whole request.
+A request whose texts hold more than `BUDGET` characters in all, or one text longer than `HUGE`, raises it for the
+whole request.
 """
 
 from typing import Any
 
-MOST = 5
-"""The most items a request holds before it runs out of memory."""
+BUDGET = 300
+"""The most characters a request holds before it runs out of memory."""
 HUGE = 70
 """The length of text no request holds, alone or not."""
 
@@ -25,8 +26,9 @@ def load(init: dict[str, Any]) -> object:
 
 
 def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Raise `OutOfMemoryError` for a request over `MOST` items or holding a `HUGE` text, else each item's identity."""
+    """Raise `OutOfMemoryError` for a request over `BUDGET` characters or holding a `HUGE` text, else each identity."""
     values = [next(iter(item["inputs"].values())) for item in items]
-    if len(items) > MOST or any(_size(v) > HUGE for v in values):
+    sizes = [_size(v) for v in values]
+    if sum(sizes) > BUDGET or any(n > HUGE for n in sizes):
         raise OutOfMemoryError(f"out of memory at a batch of {len(items)}")
     return [{"outputs": {"value": str(getattr(v, "identity", v))}} for v in values]

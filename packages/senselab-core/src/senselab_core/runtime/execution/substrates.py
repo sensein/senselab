@@ -21,6 +21,7 @@ import logging
 import math
 import os
 import re
+import secrets
 import shlex
 import subprocess
 import sys
@@ -193,14 +194,18 @@ def worker_command(run_dir: Path, profile_argument: str) -> list[str]:
     return [sys.executable, "-m", "senselab_core.cli", "execute", "--pool", pool, "--profile", profile_argument]
 
 
-def worker_id() -> str:
-    """Return this process's worker id: its process id, led by its Slurm job id and an opaque host token when set.
+_NONCE = secrets.token_hex(4)
+"""This process's nonce: a reused process id on one host still names another worker."""
 
-    Workers of one allocation share the job id, so it alone does not tell them apart; the process id does on one host
-    and the host token between hosts. The id names no host, account or path.
+
+def worker_id() -> str:
+    """Return this process's worker id: its Slurm job id (when set), an opaque host token, its process id and a nonce.
+
+    Workers of one allocation share the job id, so it alone does not tell them apart; the process id does on one host,
+    the host token between hosts and the nonce across a process id reused. The id names no host, account or path.
     """
     job = os.environ.get("SLURM_JOB_ID")
-    return f"{job}-{host_token()[:8]}-{os.getpid()}" if job else str(os.getpid())
+    return "-".join(([job] if job else []) + [host_token()[:8], str(os.getpid()), _NONCE])
 
 
 @dataclass(frozen=True)
