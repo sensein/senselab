@@ -634,7 +634,7 @@ class Pool:
                 run.used.difference_update(c.index for c in item.jobs)
             run.awaiting.clear()
         if write and run.observations and (run.lease is None or run.lease.prove()):
-            build = Build(version=importlib.metadata.version("senselab-core"))
+            build = _build()
             provenance = Provenance(
                 job=os.environ.get("SLURM_JOB_ID") or None,
                 run=self.run_dir.name,
@@ -971,6 +971,14 @@ def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float
         del pool
         woken = wake.wait(min(poll_s, backoff) if backoff > 0 else poll_s)
         wake.clear()
+
+
+def _build() -> Build | None:
+    """Return the installed senselab-core release for a record's provenance; None when it is not installed."""
+    try:
+        return Build(version=importlib.metadata.version("senselab-core"))
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 
 def _gap(kind: str, message: str) -> FaultRecord:
