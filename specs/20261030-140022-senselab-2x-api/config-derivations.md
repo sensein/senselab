@@ -174,6 +174,8 @@ Values only tests read; the `slack` fixture leaves them out of the profile overr
 
 probe.fit_ratio 50: the most the pooled-fit scaling test lets the estimate's time at 10^4 requests reach over its time at 10^3. A quadratic fit multiplies by 100 for a tenfold n, an n log² n fit by 10·(log 10⁴ / log 10³)² ≈ 18, and the rest of the estimate is linear (10). Measured 2026-11-08 on a laptop at load average 5: 17 end to end, 9 to 19 for the fit alone across data shapes, 176.7 for the replaced quadratic fit. 50 sits above the first by a factor 2.8 and below the second by 2, more than a runner's noise, and a ratio of two times taken on one machine cancels the machine's speed. Not measured on CI runners.
 
+lease_clock.poll_s 0.0005: the real seconds a test thread parked on an injected `ManualClock` waits between looks at its event. It sets no bound and asserts no time: the clock advances only when a test advances it, and this poll is how a parked thread notices. Small enough that a test of a few hundred lease steps finishes in well under a second; large enough that a parked thread does not spin a core. The hang guard that turns a never-released lease into a failure is `tier_bound`, not this value (testing.md, time in tests).
+
 probe.timing_repeats 3: each time is the best of this many runs, which drops a run a scheduler preempted; one run is exposed to that, and each added run costs the test about one more second at 10^4.
 
 ## pyproject.toml
