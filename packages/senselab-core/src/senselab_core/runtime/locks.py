@@ -36,7 +36,6 @@ import pwd
 import re
 import stat
 import threading
-import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -44,7 +43,7 @@ from typing import Any, Optional
 
 from senselab_worker.ownership import UUID_HEX
 
-from senselab_core.runtime.storage import StorageDir, WrongKindError, owner_remedy, path_component
+from senselab_core.runtime.storage import Clock, StorageDir, SystemClock, WrongKindError, owner_remedy, path_component
 
 logger = logging.getLogger("senselab")
 
@@ -131,13 +130,14 @@ class Lease:
         mode: The mode of the lease directory and of the token directory.
         directory: The directory holding `path`, already open; it is duplicated and `path`'s parent is not
             opened again.
+        clock: How the lease reads monotonic time and the storage clock, and waits.
 
     Attributes:
         broke: The paths of the stale leases this lease broke before it was taken.
         set_aside: The paths this lease moved aside: objects of the wrong kind at its name.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - the resource and its five keyword-only settings
         self,
         path: Path,
         *,
@@ -145,6 +145,7 @@ class Lease:
         stale_after: float = STALE_AFTER_S,
         mode: int = LEASE_DIR_MODE,
         directory: Optional[StorageDir] = None,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Configure a lease over `path` without taking it.
 
@@ -160,9 +161,10 @@ class Lease:
         self._stale_after = stale_after
         self._mode = mode
         self._given = directory
+        self._time = clock
         self._dir: Optional[StorageDir] = None
         self._held: Optional[str] = None
-        self._clock: Optional[tuple[float, float]] = None
+        self._probe: Optional[tuple[float, float]] = None
         self._renewer: Optional[tuple[threading.Thread, threading.Event, float]] = None
         self.broke: list[Path] = []
         self.set_aside: list[Path] = []
@@ -179,9 +181,9 @@ class Lease:
 
     def _now(self, *, fresh: bool) -> float:
         """Return the storage clock: probed now when `fresh`, else the last probe plus the monotonic time since."""
-        if fresh or self._clock is None:
-            self._clock = (self._directory().dir_now(), time.monotonic())
-        return self._clock[0] + time.monotonic() - self._clock[1]
+        if fresh or self._probe is None:
+            self._probe = (self._time.storage_now(self._directory()), self._time.now())
+        return self._probe[0] + self._time.now() - self._probe[1]
 
     def _listing(self) -> Optional[tuple[dict[str, float], Optional[dict[str, float]]]]:
         """Return the mtime of each token directory in the lease and of each other entry; None if the lease is gone.
@@ -523,11 +525,11 @@ class Lease:
         Each beat is due `interval` after the last one was due, whatever the beats took, and a beat that is already
         overdue runs at once. The renewer marks the lease lost whenever it ends for any reason but `stop`.
         """
-        last = due = time.monotonic()
+        last = due = self._time.now()
         try:
             while True:
                 due += interval
-                if stop.wait(max(0.0, due - time.monotonic())):
+                if self._time.wait(stop, max(0.0, due - self._time.now())):
                     return
                 try:
                     self._beat(directory, token, state.beats)
@@ -539,11 +541,11 @@ class Lease:
                         logger.warning("lease %s: was broken while held; its holder stops", self._lease_path)
                         return
                     logger.warning("lease %s: a beat failed: %s", self._lease_path, err)
-                    if time.monotonic() - last > self._stale_after:
+                    if self._time.now() - last > self._stale_after:
                         return
                     continue
                 state.beats += 1
-                last = time.monotonic()
+                last = self._time.now()
                 due = max(due, last - interval)
         except Exception:
             logger.exception("lease %s: the renewer failed; the lease is lost", self._lease_path)
@@ -561,21 +563,21 @@ class Lease:
                 the lease name cannot be moved.
             StorageUnsupported: the directory has no atomic `mkdir`.
         """
-        self.broke, self.set_aside, self._clock = [], [], None
-        deadline = time.monotonic() + self._timeout
+        self.broke, self.set_aside, self._probe = [], [], None
+        deadline = self._time.now() + self._timeout
         try:
             while True:
                 self._judge()
                 self._held = self._try_take()
                 if self._held is not None:
                     return self
-                if time.monotonic() >= deadline:
+                if self._time.now() >= deadline:
                     raise LeaseTimeout(
                         f"Timed out after {self._timeout:.1f}s waiting for the lease {self._lease_path}, "
                         f"held by {self.holder() or 'an unknown holder'}; it is broken once older than "
                         f"{self._stale_after:.1f}s on the storage clock"
                     )
-                time.sleep(min(POLL_S, max(0.0, deadline - time.monotonic())))
+                self._time.sleep(min(POLL_S, max(0.0, deadline - self._time.now())))
         except BaseException:
             self._close()
             raise

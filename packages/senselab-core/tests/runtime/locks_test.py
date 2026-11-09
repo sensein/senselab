@@ -2,19 +2,21 @@
 
 import contextlib
 import errno
+import multiprocessing
 import os
 import shutil
 import stat
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+import lease_stress_fixture
 import pytest
-from lease_time_fixture import LeaseTime, install
-from senselab_core.runtime.locks import RENEWER_PREFIX, Lease, LeaseState, LeaseTimeout, LeaseUnavailable
+from lease_clock_fixture import ManualClock, age
+from senselab_core.runtime.locks import GONE_PREFIX, POLL_S, RENEWER_PREFIX, Lease, LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.storage import StorageUnsupported
 
 pytestmark = pytest.mark.logic
@@ -42,12 +44,6 @@ def lease_dir(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Path]:
         shutil.rmtree(root, ignore_errors=True)
 
 
-@pytest.fixture
-def storage_clock(monkeypatch: pytest.MonkeyPatch) -> LeaseTime:
-    """A storage clock the test advances at the `os` boundary."""
-    return install(monkeypatch)
-
-
 def _lease_dir(resource: Path) -> Path:
     return Path(str(resource) + ".lease")
 
@@ -69,13 +65,6 @@ def _join(threads: list[threading.Thread]) -> None:
 
 def _renewers() -> list[threading.Thread]:
     return [t for t in threading.enumerate() if t.name.startswith(RENEWER_PREFIX)]
-
-
-def _until_beats(state: LeaseState, beats: int) -> None:
-    deadline = time.monotonic() + JOIN_S
-    while state.beats < beats and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert state.beats >= beats, f"{state.beats} beats within {JOIN_S}s"
 
 
 def _snapshot(path: Path) -> tuple[bytes, int, int]:
@@ -111,22 +100,30 @@ def test_of_concurrent_takers_exactly_one_holds_the_lease(lease_dir: Path) -> No
     assert sorted(outcomes) == ["held"] + ["timeout"] * (takers - 1)
 
 
-def test_a_waiter_takes_the_lease_once_it_is_released_and_breaks_nothing(tmp_path: Path) -> None:
+def test_a_waiter_takes_the_lease_once_it_is_released_and_breaks_nothing(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """A waiter blocks while a live lease is held, takes it after the release, and records no broken lease."""
     resource = tmp_path / "thing"
     held, release = threading.Event(), threading.Event()
 
     def hold() -> None:
-        with Lease(resource, timeout=1):
+        with Lease(resource, timeout=0):
             held.set()
             release.wait(JOIN_S)
+
+    def release_after_two(_: float) -> None:
+        if len(clock.slept) == 2:  # noqa: PLR2004 - the second poll
+            release.set()
+            holder.join(JOIN_S)
 
     holder = threading.Thread(target=hold)
     holder.start()
     assert held.wait(JOIN_S)
-    threading.Timer(0.3, release.set).start()
-    with Lease(resource, timeout=5) as waiter:
+    clock = lease_clock(on_sleep=release_after_two)
+    with Lease(resource, timeout=5, clock=clock) as waiter:
         assert waiter.owns() and waiter.broke == [] and waiter.set_aside == []
+    assert clock.slept == [POLL_S] * 2
     _join([holder])
 
 
@@ -170,26 +167,38 @@ def test_a_taker_that_finds_another_token_beside_its_own_withdraws(
 # -- renewed by beats, from a thread the lease owns --
 
 
-def test_keep_alive_renews_while_the_work_writes_nothing(tmp_path: Path) -> None:
+def test_keep_alive_renews_while_the_work_writes_nothing(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """While the work is idle the renewer beats: `<token>/` is restamped, one beat is kept, and the thread ends."""
     resource = tmp_path / "thing"
-    with Lease(resource, timeout=0, stale_after=1.0) as lease, lease.keep_alive(0.1) as state:
+    clock = lease_clock()
+    with Lease(resource, timeout=0, stale_after=1.0, clock=clock) as lease, lease.keep_alive(0.1) as state:
         token = next(_lease_dir(resource).iterdir())
-        taken = os.lstat(token).st_mtime_ns
-        _until_beats(state, 3)
-        assert os.lstat(token).st_mtime_ns > taken
+        clock.settle()
+        for beat in range(1, 4):
+            age(tmp_path, 1)
+            aged = os.lstat(token).st_mtime_ns
+            clock.advance(0.1)
+            clock.settle()
+            assert state.beats == beat and os.lstat(token).st_mtime_ns > aged
         assert len(list(token.iterdir())) == 1 and not state.lost and lease.owns()
     assert _renewers() == [] and list(tmp_path.iterdir()) == []
 
 
-def test_beat_after_break_marks_lost(tmp_path: Path) -> None:
+def test_beat_after_break_marks_lost(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A beat that finds the lease gone (`ENOENT`) marks it lost; the release removes nothing; no thread is left."""
     resource = tmp_path / "thing"
-    with Lease(resource, timeout=0, stale_after=1.0) as lease, lease.keep_alive(0.1) as state:
-        _until_beats(state, 1)
+    clock = lease_clock()
+    with Lease(resource, timeout=0, stale_after=1.0, clock=clock) as lease, lease.keep_alive(0.1) as state:
+        clock.settle()
+        clock.advance(0.1)
+        clock.settle()
+        assert state.beats == 1
         aside = tmp_path / uuid.uuid4().hex
         os.rename(_lease_dir(resource), aside)
         shutil.rmtree(aside)
+        clock.advance(0.1)
         assert state.wait_lost(JOIN_S) and not lease.owns()
         assert _renewers() == []
         with Lease(resource, timeout=0) as other:
@@ -211,28 +220,32 @@ def test_keep_alive_needs_a_held_lease_and_a_fraction_below_one(tmp_path: Path) 
 # -- judged stale on the storage clock --
 
 
-def test_dead_holder_lease_broken_after_bound(tmp_path: Path, storage_clock: LeaseTime) -> None:
+def test_dead_holder_lease_broken_after_bound(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A holder that stops beating is not broken 59 s on the storage clock after its last stamp, and is at 61 s."""
     resource = tmp_path / "thing"
-    dead = Lease(resource, timeout=0, stale_after=60)
-    dead.__enter__()
-    storage_clock.advance(59)
+    dead = _plant_lease(resource).name
+    clock = lease_clock(storage_origin=OLD)
+    clock.advance(59)
     with pytest.raises(LeaseTimeout):
-        with Lease(resource, timeout=0, stale_after=60):
+        with Lease(resource, timeout=0, stale_after=60, clock=clock):
             pass
-    storage_clock.advance(2)
-    with Lease(resource, timeout=0, stale_after=60) as breaker:
-        assert breaker.broke == [_lease_dir(resource)] and breaker.owns() and not dead.owns()
-    dead.__exit__(None, None, None)
+    assert [p.name for p in _lease_dir(resource).iterdir()] == [dead]
+    clock.advance(2)
+    with Lease(resource, timeout=0, stale_after=60, clock=clock) as breaker:
+        assert breaker.broke == [_lease_dir(resource)] and breaker.owns()
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_breaker_never_breaks_a_beating_lease(tmp_path: Path, storage_clock: LeaseTime) -> None:
+def test_breaker_never_breaks_a_beating_lease(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """Over 100 s on the storage clock, more than three stale bounds, a beating lease is never broken."""
     resource = tmp_path / "thing"
-    with Lease(resource, timeout=0, stale_after=30) as holder, holder.keep_alive(0.01) as state:
+    clock = lease_clock()
+    with Lease(resource, timeout=0, stale_after=30, clock=clock) as holder, holder.keep_alive(0.01) as state:
+        clock.settle()
         for _ in range(10):
-            storage_clock.advance(10)
-            _until_beats(state, state.beats + 1)
+            age(tmp_path, 10)
+            clock.advance(10)
+            clock.settle()
             with pytest.raises(LeaseTimeout):
                 with Lease(resource, timeout=0, stale_after=30):
                     pass
@@ -241,7 +254,7 @@ def test_breaker_never_breaks_a_beating_lease(tmp_path: Path, storage_clock: Lea
 
 
 def test_staleness_is_read_on_the_storage_clock_not_the_local_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage_clock: LeaseTime
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A local clock an hour ahead does not age a fresh lease; an hour on the storage clock does."""
     resource = tmp_path / "thing"
@@ -249,11 +262,11 @@ def test_staleness_is_read_on_the_storage_clock_not_the_local_one(
     with Lease(resource, timeout=0):
         monkeypatch.setattr(time, "time", lambda: real_time() + 3600)
         with pytest.raises(LeaseTimeout):
-            with Lease(resource, timeout=0.2, stale_after=60):
+            with Lease(resource, timeout=0, stale_after=60):
                 pass
         monkeypatch.setattr(time, "time", real_time)
-        storage_clock.advance(3600)
-        with Lease(resource, timeout=1, stale_after=60) as breaker:
+        age(tmp_path, 3600)
+        with Lease(resource, timeout=0, stale_after=60) as breaker:
             assert breaker.broke == [_lease_dir(resource)]
 
 
@@ -364,7 +377,9 @@ def test_a_late_breaker_cannot_claim_a_lease_another_breaker_already_broke(tmp_p
     assert list(tmp_path.iterdir()) == []
 
 
-def test_concurrent_breakers_remove_one_stale_lease_once_and_displace_no_holder(lease_dir: Path) -> None:
+def test_concurrent_breakers_remove_one_stale_lease_once_and_displace_no_holder(
+    lease_dir: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """Eight takers break one stale lease together: it is removed once, each holds in turn, and none is displaced.
 
     None times out waiting on an unknown holder (an orphaned lease).
@@ -380,12 +395,11 @@ def test_concurrent_breakers_remove_one_stale_lease_once_and_displace_no_holder(
     def take() -> None:
         barrier.wait(JOIN_S)
         try:
-            with Lease(resource, timeout=5, stale_after=60) as lease:
+            with Lease(resource, timeout=5, stale_after=60, clock=lease_clock(spends=False)) as lease:
                 with lock:
                     inside[0] += 1
                     most[0] = max(most[0], inside[0])
                     broke[0] += len(lease.broke)
-                time.sleep(0.02)
                 with lock:
                     inside[0] -= 1
                     displaced[0] += not lease.owns()
@@ -404,7 +418,9 @@ def test_concurrent_breakers_remove_one_stale_lease_once_and_displace_no_holder(
 # -- nothing is written under the lease --
 
 
-def test_no_file_is_written_under_the_lease(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_file_is_written_under_the_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lease_clock: Callable[..., ManualClock]
+) -> None:
     """Taking, beating, judging and releasing a lease create no file: only directories, under any name."""
     resource, real_open, created = tmp_path / "thing", os.open, []
 
@@ -414,10 +430,15 @@ def test_no_file_is_written_under_the_lease(tmp_path: Path, monkeypatch: pytest.
         return real_open(path, flags, mode, dir_fd=dir_fd)
 
     monkeypatch.setattr(os, "open", opened)
-    with Lease(resource, timeout=0, stale_after=1.0) as lease, lease.keep_alive(0.1) as state:
-        _until_beats(state, 2)
+    clock = lease_clock()
+    with Lease(resource, timeout=0, stale_after=1.0, clock=clock) as lease, lease.keep_alive(0.1) as state:
+        clock.settle()
+        for _ in range(2):
+            clock.advance(0.1)
+            clock.settle()
+        assert state.beats == 2  # noqa: PLR2004
         with pytest.raises(LeaseTimeout):
-            with Lease(resource, timeout=0.2, stale_after=1.0):
+            with Lease(resource, timeout=0.2, stale_after=1.0, clock=clock):
                 pass
         assert [f for _, _, files in os.walk(_lease_dir(resource)) for f in files] == []
     assert created == [] and list(tmp_path.iterdir()) == []
@@ -426,14 +447,16 @@ def test_no_file_is_written_under_the_lease(tmp_path: Path, monkeypatch: pytest.
 # -- every wait is bounded --
 
 
-def test_a_wait_on_a_live_lease_ends_at_its_timeout(tmp_path: Path) -> None:
+def test_a_wait_on_a_live_lease_ends_at_its_timeout(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A taker with a 0.3 s timeout against a live lease raises `LeaseTimeout` naming the holder's token."""
     resource = tmp_path / "thing"
+    clock = lease_clock()
     with Lease(resource, timeout=0) as holder:
         with pytest.raises(LeaseTimeout, match=r"thing\.lease, held by .*'token'"):
-            with Lease(resource, timeout=0.3, stale_after=3600):
+            with Lease(resource, timeout=0.3, stale_after=3600, clock=clock):
                 pass
         assert holder.owns()
+    assert clock.now() == pytest.approx(0.3)
 
 
 @pytest.mark.parametrize(("timeout", "stale_after"), [(-1.0, 60.0), (1.0, -1.0)])
@@ -647,7 +670,7 @@ def test_a_breaker_never_renames_a_lease_other_than_the_one_it_judged(
 
 @pytest.mark.parametrize("where", ["beat", "owns"])
 def test_a_stale_nfs_handle_is_a_lost_lease_at_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str, lease_clock: Callable[..., ManualClock]
 ) -> None:
     """`ESTALE` on a beat marks the lease lost at that beat, not after `stale_after`; on `owns()` it reads as False."""
     real_mkdir, real_open = os.mkdir, os.open
@@ -665,9 +688,12 @@ def test_a_stale_nfs_handle_is_a_lost_lease_at_once(
     armed = False
     monkeypatch.setattr(os, "mkdir", mkdir)
     monkeypatch.setattr(os, "open", opened)
-    with Lease(tmp_path / "thing", timeout=0, stale_after=60) as lease, lease.keep_alive(0.005) as state:
+    clock = lease_clock()
+    with Lease(tmp_path / "thing", timeout=0, stale_after=60, clock=clock) as lease, lease.keep_alive(0.005) as state:
         if where == "beat":
-            assert state.wait_lost(5.0)
+            clock.settle()
+            clock.advance(0.3)
+            assert state.wait_lost(JOIN_S)
         else:
             armed = True
             assert lease.owns() is False and lease.prove() is False
@@ -688,7 +714,9 @@ def test_prove_is_a_fresh_mkdir_that_fails_once_the_lease_is_gone(tmp_path: Path
         assert not lease.prove()
 
 
-def test_a_renewer_ended_by_any_error_marks_the_lease_lost(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_renewer_ended_by_any_error_marks_the_lease_lost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lease_clock: Callable[..., ManualClock]
+) -> None:
     """An exception that is not an `OSError` ends the renewer, and the lease is then marked lost, not left unrenewed."""
     real_mkdir = os.mkdir
 
@@ -698,26 +726,37 @@ def test_a_renewer_ended_by_any_error_marks_the_lease_lost(tmp_path: Path, monke
         real_mkdir(path, mode, dir_fd=dir_fd)
 
     monkeypatch.setattr(os, "mkdir", mkdir)
-    with Lease(tmp_path / "thing", timeout=0, stale_after=60) as lease, lease.keep_alive(0.005) as state:
-        assert state.wait_lost(5.0)
+    clock = lease_clock()
+    with Lease(tmp_path / "thing", timeout=0, stale_after=60, clock=clock) as lease, lease.keep_alive(0.005) as state:
+        clock.settle()
+        clock.advance(0.3)
+        assert state.wait_lost(JOIN_S)
     assert _renewers() == []
 
 
-def test_a_hung_beat_does_not_hold_up_the_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A beat stuck for 1.5 s delays the release by at most one interval; the renewer ends when the beat returns."""
-    real_mkdir, hung = os.mkdir, threading.Event()
+def test_a_hung_beat_does_not_hold_up_the_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lease_clock: Callable[..., ManualClock]
+) -> None:
+    """A beat that never returns does not hold up the release; the renewer ends when the beat returns."""
+    real_mkdir, hung, unhang = os.mkdir, threading.Event(), threading.Event()
 
     def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
         if os.fsdecode(path) == "beat-2":
             hung.set()
-            time.sleep(1.5)
+            unhang.wait(JOIN_S)
         real_mkdir(path, mode, dir_fd=dir_fd)
 
     monkeypatch.setattr(os, "mkdir", mkdir)
-    with Lease(tmp_path / "thing", timeout=0, stale_after=10) as lease, lease.keep_alive(0.01):
+    clock = lease_clock()
+    with Lease(tmp_path / "thing", timeout=0, stale_after=1, clock=clock) as lease, lease.keep_alive(0.001) as state:
+        clock.settle()
+        clock.advance(0.001)
+        clock.settle()
+        assert state.beats == 1
+        clock.advance(0.001)
         assert hung.wait(JOIN_S)
-        started = time.monotonic()
-    assert time.monotonic() - started < 1.0
+    assert not lease.owns() and len(_renewers()) == 1
+    unhang.set()
     for thread in _renewers():
         thread.join(JOIN_S)
     assert _renewers() == []
@@ -814,3 +853,80 @@ def test_a_take_that_reads_estale_after_its_mkdir_withdraws_and_takes_again(
     monkeypatch.setattr(os, "mkdir", mkdir)
     with Lease(tmp_path / "thing", timeout=5, stale_after=60) as lease:
         assert lease.owns() and raised and lease.broke == []
+
+
+# -- how long a wait runs, on a clock the test advances --
+
+
+def test_a_dead_holders_lease_is_broken_at_the_first_poll_past_its_stale_bound(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
+    """A lease stamped at the storage origin and never beaten is broken at the first poll past `stale_after`."""
+    resource = tmp_path / "thing"
+    _plant_lease(resource)
+    stale_after = 10.5 * POLL_S
+    clock = lease_clock(storage_origin=OLD)
+    with Lease(resource, timeout=10, stale_after=stale_after, clock=clock) as taker:
+        assert taker.broke == [_lease_dir(resource)]
+    assert stale_after < clock.now() <= stale_after + POLL_S
+    assert clock.slept == [POLL_S] * (int(stale_after // POLL_S) + 1)
+
+
+def test_beats_keep_their_cadence_when_each_beat_is_slow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lease_clock: Callable[..., ManualClock]
+) -> None:
+    """Beats that take 0.15 s each are still due every 0.3 s: the cadence does not drift by the beats' latency."""
+    clock, real_mkdir, starts = lease_clock(), os.mkdir, []
+
+    def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if os.fsdecode(path).startswith("beat-"):
+            starts.append(clock.now())
+            clock.advance(0.15)
+        real_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    with Lease(tmp_path / "thing", timeout=0, stale_after=30, clock=clock) as lease, lease.keep_alive(0.01):
+        clock.settle()
+        for k in range(1, 8):
+            clock.advance_to(0.3 * k + 0.01)
+            clock.settle()
+    periods = [b - a for a, b in zip(starts, starts[1:])]
+    assert len(periods) == 6 and periods == pytest.approx([0.3] * 6), periods  # noqa: PLR2004
+
+
+ROUNDS = 25
+TAKERS = 8
+
+
+def test_contending_processes_break_a_stale_lease_once_and_never_orphan_it(
+    tmp_path: Path, slack_tests: dict[str, Any], tier_bound: float
+) -> None:
+    """Eight processes contend for one stale lease for 25 rounds, and nothing is left behind.
+
+    In every round there is one break, every taker holds in turn and none is displaced (no overlapping holds), no taker
+    times out on an unknown holder (no orphan), and a process moves only the stale lease it judged or its own. A
+    moved lease may also hold the token of a taker that reached it before the move, which then withdrew; it never
+    holds another process's held token.
+    """
+    poll_s = slack_tests["lease_clock"]["poll_s"]
+    context = multiprocessing.get_context("spawn")
+    with context.Pool(TAKERS, initializer=lease_stress_fixture.setup) as pool:
+        for n in range(ROUNDS):
+            root = tmp_path / f"round-{n}"
+            root.mkdir()
+            planted = _plant_lease(root / "thing").name
+            gate = tmp_path / f"gate-{n}"
+            gate.mkdir()
+            reports = pool.starmap(
+                lease_stress_fixture.take, [(str(root / "thing"), str(gate), TAKERS, poll_s, tier_bound)] * TAKERS
+            )
+            assert [r["timeout"] for r in reports if r["timeout"]] == [], (n, reports)
+            assert all(r["held"] and not r["displaced"] for r in reports), (n, reports)
+            assert sum(r["broke"] for r in reports) == 1, (n, reports)
+            held = {r["token"] for r in reports}
+            for r in reports:
+                for tokens in r["renamed"]:
+                    moved = {t.removeprefix(GONE_PREFIX) for t in tokens}
+                    assert planted in moved or r["token"] in moved, (n, r)
+                    assert not moved & (held - {r["token"]}), (n, r)
+            assert list(root.iterdir()) == [], (n, list(root.iterdir()))

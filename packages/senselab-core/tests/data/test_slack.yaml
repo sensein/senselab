@@ -29,6 +29,9 @@ tests:
   held_lease:
     stale_after_s: 60
     timeout_s: 0.2
+  # Real seconds a thread parked on a lease test's manual clock waits between looks at the event it waits for.
+  lease_clock:
+    poll_s: 0.0005
   # Times of the probe-queue tests: the lease's staleness and beat, and how long a stand-in peer process lives.
   probe_queue:
     stale_after_s: 0.4

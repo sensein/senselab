@@ -1,17 +1,17 @@
 """Workers for the lease stress test: separate processes contending for one stale lease, round after round.
 
 `setup` runs once per worker process and records, at the `os` boundary, the token set of every lease directory the
-process renames. `take` contends for the lease once and returns what it saw.
+process renames. `take` starts at a barrier made of directories in shared storage, contends for the lease once and
+returns what it saw. Its clock never advances, so a waiter polls until the lease is free or the hang bound passes.
 """
 
 import os
-import time
 from pathlib import Path
 from typing import Any
 
+from lease_clock_fixture import ManualClock, gate
 from senselab_core.runtime.locks import Lease, LeaseTimeout
 
-HOLD_S = 0.01
 RENAMED: list[list[str]] = []
 
 
@@ -36,15 +36,15 @@ def setup() -> None:
     os.rename = rename
 
 
-def take(resource: str, start_at: float) -> dict[str, Any]:
-    """Wait for `start_at` (wall clock), take the lease on `resource`, hold it briefly; report what happened."""
+def take(resource: str, barrier: str, takers: int, poll_s: float, hang_s: float) -> dict[str, Any]:
+    """Join the barrier at `barrier`, take the lease on `resource` once all `takers` have, and report what happened."""
     RENAMED.clear()
-    time.sleep(max(0.0, start_at - time.time()))
+    gate(barrier, takers, hang_s=hang_s)
+    clock = ManualClock(poll_s=poll_s, hang_s=hang_s, spends=False)
     report: dict[str, Any] = {"held": False, "broke": 0, "displaced": False, "timeout": None, "token": None}
     try:
-        with Lease(Path(resource), timeout=5, stale_after=60) as lease:
+        with Lease(Path(resource), timeout=5, stale_after=60, clock=clock) as lease:
             report.update(held=True, broke=len(lease.broke), token=(lease.holder() or {}).get("token"))
-            time.sleep(HOLD_S)
             report["displaced"] = not lease.owns()
     except LeaseTimeout as err:
         report["timeout"] = str(err)
