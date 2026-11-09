@@ -1,7 +1,9 @@
 """Format tags on persisted artifacts."""
 
+import copy
 import json
 import logging
+import pickle
 
 import pytest
 from pydantic import ValidationError
@@ -195,6 +197,20 @@ def test_a_value_read_under_a_later_minor_is_not_rewritten() -> None:
         require_writable(lost)
     require_writable(_Outer.model_validate({"format": "outer@1.1", "inner": {"n": 1}}))
     require_writable(_Outer(inner=_Inner(n=1)))
+
+
+@pytest.mark.logic
+def test_a_parent_built_from_values_that_lost_fields_carries_it() -> None:
+    """A value holding tolerantly read values is itself not writable, and a copy of it is not either."""
+    lost = _Outer.model_validate(_record())
+    parent = _Holder(tagged=_Tagged(n=1), inner=lost.inner)
+    assert parent.read_under() is not None and parent.read_under().dropped == ("_Inner.later",)  # type: ignore[union-attr]
+    for copied in (parent.model_copy(), copy.copy(parent), copy.deepcopy(parent), pickle.loads(pickle.dumps(parent))):
+        with pytest.raises(FieldsOfLaterMinor):
+            require_writable(copied)
+    with pytest.raises(FieldsOfLaterMinor):
+        require_writable(lost.model_copy())
+    assert lost.model_copy().inner.read_under() is not None
 
 
 class _Defaulted(Frozen):

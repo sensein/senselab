@@ -181,8 +181,54 @@ def digest_of(v: "Frozen") -> str:
     return value_digest(_type_name(type(v)), _fields(v))
 
 
-def _rebuild(cls: type[F], fields: dict[str, Any]) -> F:
-    return cls.model_validate(fields)
+def _held_frozen(x: object) -> Iterator["Frozen"]:
+    """Yield each `Frozen` held in `x` or in the containers inside it, not entering a `Frozen` or a container twice."""
+    seen: set[int] = set()
+    pending = [x]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, Frozen):
+            yield item
+        elif isinstance(item, (Mapping, list, tuple)) and id(item) not in seen:
+            seen.add(id(item))
+            pending.extend(reversed(list(item.values() if isinstance(item, Mapping) else item)))
+
+
+def _children(value: "Frozen") -> Iterator["Frozen"]:
+    for name in type(value).model_fields:
+        yield from _held_frozen(getattr(value, name))
+
+
+def _nodes(value: "Frozen") -> list["Frozen"]:
+    """Return `value` and every `Frozen` it holds, depth first, in field order, each object once."""
+    found: dict[int, Frozen] = {}
+    pending = [value]
+    while pending:
+        node = pending.pop()
+        if id(node) not in found:
+            found[id(node)] = node
+            pending.extend(reversed(list(_children(node))))
+    return list(found.values())
+
+
+def _reads(value: "Frozen") -> list["ReadUnder | None"]:
+    return [v.read_under() for v in _nodes(value)]
+
+
+def _carry(reads: Sequence["ReadUnder | None"], built: F) -> F:
+    """Give `built`, a rebuild of the value `reads` came from, the same read of itself and of each value it holds."""
+    nodes = _nodes(built)
+    if len(nodes) != len(reads):
+        nodes, reads = nodes[:1], reads[:1]
+    for node, read in zip(nodes, reads, strict=True):
+        held = object.__getattribute__(node, "__pydantic_private__")
+        object.__setattr__(node, "__pydantic_private__", MappingProxyType({**held, "_read": read}))
+    return built
+
+
+def _rebuild(cls: type[F], fields: dict[str, Any], reads: Sequence["ReadUnder | None"] = ()) -> F:
+    built = cls.model_validate(fields)
+    return _carry(reads, built) if any(reads) else built
 
 
 def thawed(value: object, walk: Walk | None = None) -> Any:  # noqa: ANN401
@@ -342,11 +388,15 @@ class Frozen(BaseModel):
     def _derived(self) -> Mapping[str, object]:
         """Return the private values a built value holds; a subclass extends this mapping."""
         held = object.__getattribute__(self, "__pydantic_private__") or {}
-        return {"_canonical": digest_of(self), "_read": held.get("_read")}
+        read = held.get("_read")
+        if read is None:
+            below = [r for child in _children(self) if (r := child.read_under()) is not None]
+            read = ReadUnder(below[0].tag, tuple(k for r in below for k in r.dropped)) if below else None
+        return {"_canonical": digest_of(self), "_read": read}
 
     def read_under(self) -> ReadUnder | None:
         """Return what reading this value under a later minor cost, None when it was read under its own."""
-        read: ReadUnder | None = self.__pydantic_private__["_read"]  # type: ignore[index]
+        read: ReadUnder | None = (self.__pydantic_private__ or {}).get("_read")
         return read
 
     def canonical_digest(self) -> str:
@@ -393,17 +443,17 @@ class Frozen(BaseModel):
         """Return `hash(self.canonical_digest())`."""
         return hash(self.canonical_digest())
 
-    def __reduce__(self) -> tuple[Callable[..., Any], tuple[type[Self], dict[str, Any]]]:
+    def __reduce__(self) -> tuple[Callable[..., Any], tuple[type[Self], dict[str, Any], list[ReadUnder | None]]]:
         """Pickle as the dump, rebuilt through `model_validate`."""
-        return _rebuild, (type(self), self.model_dump())
+        return _rebuild, (type(self), self.model_dump(), _reads(self))
 
     def __copy__(self) -> Self:
         """Return a copy rebuilt through `model_validate`."""
-        return type(self).model_validate(self.model_dump())
+        return _rebuild(type(self), self.model_dump(), _reads(self))
 
     def __deepcopy__(self, memo: dict[int, Any] | None = None) -> Self:
         """Return a copy rebuilt through `model_validate`; a held array that `is_frozen` is shared, not copied."""
-        copied = type(self).model_validate(self.model_dump())
+        copied = _rebuild(type(self), self.model_dump(), _reads(self))
         if memo is not None:
             memo[id(self)] = copied
         return copied
@@ -417,7 +467,7 @@ class Frozen(BaseModel):
         unknown = sorted(set(update or {}) - set(type(self).model_fields), key=str)
         if unknown:
             raise ValueError(f"{type(self).__name__} has no fields {unknown}; known: {sorted(type(self).model_fields)}")
-        return type(self).model_validate({**self.model_dump(), **(update or {})})
+        return _carry(_reads(self), type(self).model_validate({**self.model_dump(), **(update or {})}))
 
     @classmethod  # type: ignore[no-redef]
     def model_construct(cls, _fields_set: set[str] | None = None, **values: object) -> Self:  # type: ignore[override]

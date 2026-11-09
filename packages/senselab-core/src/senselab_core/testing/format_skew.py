@@ -1,12 +1,14 @@
 """The format-skew value contract: a reader of a later minor ignores fields it does not declare, at every level."""
 
 import contextlib
+import copy
+import pickle
 from collections.abc import Mapping, Sequence
 
 from pydantic import ValidationError
 
 from senselab_core.kernel import formats
-from senselab_core.kernel._base import Frozen
+from senselab_core.kernel._base import Frozen, _reads
 from senselab_core.kernel.formats import Formatted
 
 
@@ -27,7 +29,7 @@ def inject_unknown(value: object, dumped: object, *, root: bool = True) -> None:
 
 
 def later_minor_ignored(samples: Sequence[Frozen]) -> None:
-    """Check each sample reads past fields a later minor added at every level, and refuses them under its own."""
+    """Check each sample reads past later-minor fields at every level, keeps that in its copies, else refuses."""
     for v in samples:
         cls = type(v)
         expected: Frozen
@@ -49,6 +51,8 @@ def later_minor_ignored(samples: Sequence[Frozen]) -> None:
             read = cls.model_validate(dumped)
         assert read == expected, cls.__qualname__
         assert read.read_under() is not None and read.read_under().dropped, cls.__qualname__  # type: ignore[union-attr]
+        copies = (pickle.loads(pickle.dumps(read)), copy.copy(read), copy.deepcopy(read), read.model_copy())
+        assert all(_reads(c) == _reads(read) for c in copies), f"{cls.__qualname__}: a copy lost what the read cost"
         try:
             cls.model_validate(strict)
         except ValidationError:
