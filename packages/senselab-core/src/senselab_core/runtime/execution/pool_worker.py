@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeAlias
 
-from senselab_worker.faults import FaultClass, ProtocolError, classify, error_record
+from senselab_worker.faults import FaultClass, ProtocolError, ResourceFault, classify, error_record
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.runtime import request_reports
@@ -96,6 +96,15 @@ def whole(exc: BaseException) -> bool:
     return isinstance(exc, (WorkerLost, WorkerFatal, ProtocolError)) or classify(exc) is FaultClass.RESOURCE
 
 
+class _RequestRanOut(ResourceFault):
+    """A request of one call that gave a resource fault for every member."""
+
+
+def _all_ran_out(outcomes: Sequence[JobOutcome]) -> bool:
+    """Whether every outcome of a request is a resource fault: the backend raised it for the request as a whole."""
+    return all(isinstance(o, Failed) and o.failure.fault == FaultClass.RESOURCE.value for o in outcomes)
+
+
 def failure_of(exc: BaseException) -> FaultRecord:
     """Return the fault record of `exc`, classified as a worker classifies it (`error_record`)."""
     return FaultRecord.of(error_record(exc))
@@ -121,9 +130,10 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
 ) -> list[JobOutcome]:
     """Return one outcome per member, sent as one request; one that fails as a whole is split in halves.
 
-    A member alone whose request fails as a whole gets that failure. Any other exception is the failure of every
-    member of the request that raised it, so a half that completed keeps its outcomes. Each call of `send` is given
-    to `record` as a `Sent`, timed by itself on `clock`, with the requests it made, each timed on `clock` too.
+    A call of one request (at most `placement.batch_size` members) that returns a resource fault for every member is
+    split too. A member alone whose request fails as a whole gets that failure. Any other exception is the failure of
+    every member of the request that raised it, so a half that completed keeps its outcomes. Each call of `send` is
+    given to `record` as a `Sent`, timed by itself on `clock`, with the requests it made, each timed on `clock` too.
 
     Raises:
         Abandoned: `cancelled` was set before a request, or while one ran.
@@ -136,6 +146,8 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
     try:
         with request_reports.collected(clock) as reported:
             outcomes = send([m.job for m in members], placement)
+            if 1 < len(members) <= placement.batch_size and _all_ran_out(outcomes):
+                raise _RequestRanOut
     except Exception as exc:
         wall = clock.now() - began
         if cancelled is not None and cancelled.is_set():
@@ -149,13 +161,25 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
             if len(members) == 1:
                 logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)
             return [Failed(m.job.ref, m.key, failure_of(exc)) for m in members]
-        half = len(members) // 2
-        return bisect(members[:half], placement, send, cancelled, record, clock) + bisect(
-            members[half:], placement, send, cancelled, record, clock
-        )
+        return _halves(members, placement, send, cancelled, record, clock)
     if record is not None:
         record(Sent(refs, clock.now() - began, tuple(reported), None))
     return outcomes
+
+
+def _halves(  # noqa: PLR0913 - `bisect`'s own arguments
+    members: Sequence[Member],
+    placement: Placement,
+    send: Send,
+    cancelled: threading.Event | None,
+    record: Callable[[Sent], None] | None,
+    clock: Clock,
+) -> list[JobOutcome]:
+    """Return the outcomes of `members` sent as two requests, each half through `bisect`."""
+    half = len(members) // 2
+    return bisect(members[:half], placement, send, cancelled, record, clock) + bisect(
+        members[half:], placement, send, cancelled, record, clock
+    )
 
 
 @dataclass

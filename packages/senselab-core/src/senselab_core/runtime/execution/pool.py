@@ -13,10 +13,10 @@ failure only as `dead/<key digest>.json` holds it, so a restarted coordinator re
 fault class has its effect here, with the budgets of the profile's `faults` section:
 
 - **content**, not a gap: charged; the job is queued again until `content_attempts` charges, then it is dead;
-- **resource**, not a gap: the job is queued
+- **resource**, gap or not: the job is queued
   again on the next larger memory class of its device, uncharged, at most `resource_replacements` times; then, or
   with no larger class, it is dead;
-- **infrastructure**, or any gap: queued again uncharged (a gap is logged as a classification gap); at
+- **infrastructure**, or a gap that is not resource: queued again uncharged (a gap is logged); at
   `infrastructure_replacements` failures of one env in this epoch the env is reported once as broken (`BrokenEnv`) and
   held on each queue it is seen on (`Queue.hold`), so its jobs wait for a later epoch and none is failed.
 
@@ -675,7 +675,7 @@ class Pool:
         """Apply `fault`'s effect to job `index` of `flight`: retry it, hold its env, or yield it dead."""
         fragment, budgets = flight.fragment, self.profile.faults
         job, placement = fragment.jobs[index], fragment.placement
-        if fault.gap or fault.fault == "infrastructure":
+        if _counts_against_env(fault):
             if fault.gap:
                 self.gaps.append((job, fault))
                 logger.warning("classification gap: %s of %s, retried uncharged", fault.type, job)
@@ -702,7 +702,7 @@ class Pool:
         yield self._dead(job, key, fault)
 
     def _env_failures(self, env: str) -> list[FaultRecord]:
-        """Return the infrastructure and gap failures of `env` this epoch's events on disk record, in order."""
+        """Return the failures of `env` that count against it, as this epoch's events on disk record, in order."""
         return [
             e.failure
             for e in read_events(self.run_dir)
@@ -710,7 +710,7 @@ class Pool:
             and e.epoch == self.epoch
             and e.env == env
             and e.failure is not None
-            and (e.failure.gap or e.failure.fault == "infrastructure")
+            and _counts_against_env(e.failure)
         ]
 
     def _held(self, flight: Flight) -> QueueHeld:
@@ -865,6 +865,11 @@ def _worker_of(record: Mapping[str, object]) -> str | None:
     measure = record.get("measure")
     worker = measure.get("job") if isinstance(measure, Mapping) else None
     return worker if isinstance(worker, str) and worker else None
+
+
+def _counts_against_env(fault: FaultRecord) -> bool:
+    """Whether `fault` is an infrastructure fault, or a gap of a class that is not resource."""
+    return fault.fault == "infrastructure" or (fault.gap and fault.fault != "resource")
 
 
 def _gap(kind: str, message: str) -> FaultRecord:
