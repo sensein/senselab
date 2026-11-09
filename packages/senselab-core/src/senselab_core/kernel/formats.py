@@ -60,7 +60,7 @@ PLACEMENT_FORMAT = "placement@2.0"
 PLAN_FRAGMENT_FORMAT = "plan-fragment@3.0"
 """The format of a plan fragment: jobs of one node of a plan, their input identities, the placement and the attempt."""
 
-RUN_EVENT_FORMAT = "run-event@1.0"
+RUN_EVENT_FORMAT = "run-event@2.0"
 WORKER_READY_FORMAT = "worker-ready@1.0"
 """The format of one run event, a line of `<run>/events/<writer>.jsonl`: a job's state change and its fault."""
 

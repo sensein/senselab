@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping, Sequence
 from senselab_core.kernel._base import Frozen
 from senselab_core.kernel.license import License, LicenseSet
 from senselab_core.kernel.placement import Cost, NodePlacement, PlanPlacement
+from senselab_core.runtime.execution.events import PlacementRecord
 from senselab_core.runtime.execution_settings import (
     FaultBudgets,
     JobLease,
@@ -24,6 +25,17 @@ from senselab_core.runtime.resources import (
     ResourceMeasure,
     ResourceRow,
     ResourceTable,
+)
+from senselab_core.runtime.site_placement import (
+    ClassNeeds,
+    ClassPlacement,
+    CurrentValues,
+    HookRef,
+    PlacementAnswer,
+    PlacementRequest,
+    PlacementValues,
+    ResolvedPlacement,
+    UnmeasuredFigure,
 )
 from senselab_core.runtime.sizing import Basis, Grant, Measure, RowSizing, Sample, Sizing
 
@@ -70,6 +82,7 @@ def register_placement_samples(register: Register, license_: License) -> None:
     _register_settings(register)
     _register_sizing(register)
     _register_sizings(register)
+    _register_site(register)
 
 
 def _register_kernel(register: Register, license_: License) -> None:
@@ -181,13 +194,15 @@ def _register_settings(register: Register) -> None:
         ),
         SubstrateSpec: (
             [
-                SubstrateSpec(kind="local", start_backoff_first_s=0.05, start_backoff_max_s=30),
+                SubstrateSpec(kind="local", start_backoff_first_s=0.05, start_backoff_max_s=30, placement_hook_s=0.05),
                 SubstrateSpec(
                     kind="slurm",
                     qos_cpu_cap=64,
                     exclude_nodes=("n1",),
                     start_backoff_first_s=1,
                     start_backoff_max_s=30,
+                    placement_hook="site.hooks:place",
+                    placement_hook_s=1,
                     commands=SlurmCommands(timeout_s=60, attempts=3, retry_first_s=0.5),
                 ),
             ],
@@ -196,6 +211,8 @@ def _register_settings(register: Register) -> None:
                 {"kind": "local", "qos_cpu_cap": 4},
                 {"kind": "slurm", "commands": None},
                 {"start_backoff_first_s": 0},
+                {"placement_hook_s": 0},
+                {"placement_hook": "not a path"},
             ],
         ),
         SlurmCommands: (
@@ -362,6 +379,89 @@ def _register_sizing(register: Register) -> None:
                 ),
             ],
             [{"jobs": 0}, {"peak_memory_bytes": -1}, {"job": ""}, {"claim_s": -1.0}, {"ended_s": -1.0}],
+        ),
+    }
+    for cls, (samples, invalid) in classes.items():
+        register(cls, lambda samples=samples: list(samples), invalid_updates=invalid)
+
+
+_CURRENT = CurrentValues(partition="gpuq", time_s=21600.0, max_workers=4, layers={"partition": "profile"})
+_NEEDS = ClassNeeds(
+    resource_class="gpu:h100",
+    device="cuda",
+    gpu_type="h100",
+    device_memory_bytes=2**36,
+    cpus=8,
+    mem_bytes=2**36,
+    workers=2,
+    workers_max=4,
+    time_per_worker_s=3600.0,
+    wall_s=7200.0,
+    gpu_hours=4.0,
+    unmeasured=(UnmeasuredFigure(figure="time_floor_s", why="the load is unmeasured"),),
+    current=_CURRENT,
+)
+_PLACED = ClassPlacement(
+    values=_CURRENT,
+    exclude=("n1",),
+    verdict="accepted",
+    answer=PlacementAnswer(why="idle"),
+    names={"q": "<partition>", "n1": "<node>"},
+)
+
+
+def _register_site(register: Register) -> None:
+    classes: Mapping[type[Frozen], tuple[Sequence[Frozen], Sequence[Mapping[str, object]]]] = {
+        PlacementValues: (
+            [PlacementValues(), PlacementValues(partition="q", time_s=60.0, max_workers=2, exclude=("n1",))],
+            [{"partition": ""}, {"exclude": ("",)}, {"max_workers": "many"}],
+        ),
+        CurrentValues: (
+            [_CURRENT, CurrentValues(max_workers=1, layers={})],
+            [{"max_workers": 0}, {"time_s": 0.0}, {"layers": {"time_s": "nobody"}}],
+        ),
+        UnmeasuredFigure: (
+            [UnmeasuredFigure(figure="wall_s", why="unmeasured")],
+            [{"why": ""}, {"figure": ""}],
+        ),
+        ClassNeeds: (
+            [_NEEDS, ClassNeeds(resource_class="cpu", device="cpu", workers=1, workers_max=1, current=_CURRENT)],
+            [{"workers": -1}, {"workers_max": 0}, {"device": "tpu"}],
+        ),
+        PlacementRequest: (
+            [PlacementRequest(classes=(_NEEDS,)), PlacementRequest(classes=())],
+            [{"format": "placement-request@2.0"}, {"classes": 3}],
+        ),
+        PlacementAnswer: (
+            [PlacementAnswer(), PlacementAnswer(classes={"cpu": PlacementValues(time_s=60.0)}, why="idle")],
+            [{"format": "placement-answer@2.0"}, {"classes": 3}],
+        ),
+        HookRef: (
+            [HookRef(path="site.hooks:place"), HookRef(path="a:b", version="1.0", importable=False)],
+            [{"path": ""}],
+        ),
+        ClassPlacement: (
+            [_PLACED, ClassPlacement(values=_CURRENT)],
+            [{"verdict": "maybe"}, {"exclude": ("",)}, {"names": {"q": "partition"}}],
+        ),
+        ResolvedPlacement: (
+            [ResolvedPlacement(classes={"cpu": _PLACED}), ResolvedPlacement(classes={})],
+            [{"classes": 3}],
+        ),
+        PlacementRecord: (
+            [
+                PlacementRecord(resource_class="cpu", verdict="no-hook", used=_CURRENT),
+                PlacementRecord(
+                    resource_class="gpu:h100",
+                    request=_NEEDS,
+                    answer=PlacementAnswer(why="idle"),
+                    hook=HookRef(path="a:b"),
+                    verdict="accepted",
+                    used=_CURRENT,
+                    exclude=("<node>",),
+                ),
+            ],
+            [{"verdict": "maybe"}, {"resource_class": ""}],
         ),
     }
     for cls, (samples, invalid) in classes.items():

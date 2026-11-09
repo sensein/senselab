@@ -47,7 +47,7 @@ from senselab_core.runtime.call import RunConfig, host_hardware
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.batching import bucket_edges
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
-from senselab_core.runtime.execution.events import BrokenEnv, EventLog, read_events
+from senselab_core.runtime.execution.events import BrokenEnv, EventLog, placement_recorder, read_events
 from senselab_core.runtime.execution.executor import (
     Admission,
     FaultRecord,
@@ -90,6 +90,7 @@ from senselab_core.runtime.execution.substrates import (
     read_mark,
     scale,
 )
+from senselab_core.runtime.execution_settings import ResourceClass
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.measures import (
     Estimates,
@@ -97,6 +98,7 @@ from senselab_core.runtime.measures import (
 )
 from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.site_placement import PlacementHook, PlacementRequest, PlacementValues, Placer
 from senselab_core.runtime.sizing import ExtrapolationLog, Grant, size
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import (
@@ -110,6 +112,8 @@ if TYPE_CHECKING:
     from senselab_core.runtime.execution.runner import RunOutcome
 
 logger = logging.getLogger("senselab")
+
+_INERT = "this substrate starts no scheduler jobs: partition, time and excluded nodes are recorded, not applied"
 
 
 class ScalerFailed(RuntimeError):
@@ -172,6 +176,8 @@ class Pool:
             clock=clock,
         )
         self.broken_workers: dict[str, BrokenClass] = {}
+        self._placer: Placer | None = None
+        self._request_of: tuple[Plan, Mapping[InputIdentity, object]] | None = None
         self._surplus: dict[str, float] = {}
         self._relogged: set[str] = set()
         self._scaler: threading.Thread | None = None
@@ -215,6 +221,8 @@ class Pool:
         self.epoch, self.events = epoch, events
         if isinstance(self.substrate, Slurm):
             self.substrate.attempt, self.substrate.epoch = events.attempt, epoch
+        if self._placer is not None:
+            self._placer.record = placement_recorder(events)
         self._fleet.reset()
         self.broken_workers.clear()
         self._relogged.clear()
@@ -232,7 +240,38 @@ class Pool:
         with self._lock:
             self._plans[admission.id] = (placed, values)
             self._admitted[admission.id] += 1
+            if self._placer is None:
+                self._request_of = (placed, values)
+                inert = None if isinstance(self.substrate, Slurm) else _INERT
+                self._placer = Placer(
+                    self.profile,
+                    placed.overrides,
+                    placed.hook,
+                    request=self._request,
+                    clock=self._clock,
+                    record=placement_recorder(self.events),
+                    inert=inert,
+                )
+                if isinstance(self.substrate, Slurm):
+                    self.substrate.placer = self._placer
         return admission
+
+    def _request(self) -> PlacementRequest:
+        """Return what the run needs this epoch, read from the plan and the input values this pool bound."""
+        assert self._request_of is not None
+        placed, values = self._request_of
+        return placed.placement_request(values=values)
+
+    def granted(self, queue: str) -> ResourceClass:
+        """Return `queue`'s class as it is placed this epoch: the one source of its worker cap.
+
+        The site's hook is asked the first time a class is read this epoch.
+
+        Raises:
+            PlacementAnswerRefused: the hook's answer could not run the work.
+        """
+        base = self.profile.resource_classes[class_of(queue)]
+        return base if self._placer is None else self._placer.for_class(class_of(queue), self.epoch).grant(base)
 
     def release(self, admission: Admission) -> None:
         """Let go of one admission of `admission`'s plan."""
@@ -374,7 +413,8 @@ class Pool:
                 slowest = max(r for r, _ in rates if r is not None)
                 cap = max(c for _, c in rates)
                 base = min(max(1, math.ceil(work * slowest / self.profile.sizing.target_wall_s)), items, cap)
-        return min(base + probing + (1 if resolving and not probing else 0), grant.max_workers)
+        wanted = base + probing + (1 if resolving and not probing else 0)
+        return min(wanted, self.granted(queue).max_workers) if wanted > 0 else 0
 
     def _queue_name(self, fragment: PlanFragment) -> str:
         """Return the queue of `fragment`: its class, with `#<model identity>` for its node's resident model."""
@@ -417,6 +457,7 @@ class Pool:
                 workers=self.workers_wanted,
                 surplus_since=self._surplus,
                 clock=self._clock,
+                granted=self.granted,
             )
         except SubstrateError as err:
             logger.warning("the substrate failed: %s", err)
@@ -779,19 +820,22 @@ def run_store(run_dir: Path) -> ResultStore:
     return ResultStore(Path(named) if isinstance(named, str) else cache_root() / RESULTS_DIR)
 
 
-def coordinate(
+def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only profile, store and placement
     run_dir: Path,
     *,
     substrate: Substrate,
     profile: ExecutionProfile | None = None,
     store: ResultStore | None = None,
+    overrides: Mapping[str, PlacementValues] | None = None,
+    hook: PlacementHook | str | None = None,
 ) -> "RunOutcome":
     """Coordinate the run in `run_dir` on a `Pool`: take the next epoch, hold its lease, and run the plan's jobs.
 
     The plan and its latest placement are read from the run directory, its inputs bound again (`bind_sources`), and a
     new epoch and its attempt prepared (`prepare`); the run's queues are reconciled and every job is sent through the
     pool, whose workers `substrate` starts. `profile` defaults to the packaged one; `store` to the one `manifest.json`
-    names.
+    names. `overrides` and `hook` are the explicit placement values and the site's hook (`plan`'s `placement`
+    and `placement_hook`).
 
     Raises:
         ValueError: the plan was placed under another profile than `profile`.
@@ -804,7 +848,7 @@ def coordinate(
 
     run_dir = Path(run_dir)
     profile = profile if profile is not None else ExecutionProfile.load()
-    placed = run_plan(run_dir, profile)
+    placed = replace(run_plan(run_dir, profile), overrides=overrides or {}, hook=hook)
     store = store if store is not None else run_store(run_dir)
     check_storage(profile, store.root)
     values = bind_sources(placed)

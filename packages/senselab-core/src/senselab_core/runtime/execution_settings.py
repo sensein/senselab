@@ -6,7 +6,7 @@ Classes, substrate, pool, calibration, leases, faults and timeouts. Each is a `F
 
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, StringConstraints, model_validator
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 
@@ -81,6 +81,8 @@ class SubstrateSpec(Frozen):
     Attributes:
         start_backoff_first_s: Seconds a class, or the substrate itself, waits after its first failure in a row.
         start_backoff_max_s: Most seconds that wait doubles to.
+        placement_hook: The `module:callable` of the site's placement hook; None for none.
+        placement_hook_s: Seconds the hook may take per call, past which it has failed.
         commands: How each Slurm command is run; required for `slurm`.
     """
 
@@ -89,6 +91,8 @@ class SubstrateSpec(Frozen):
     exclude_nodes: tuple[NonEmptyStr, ...] = ()
     start_backoff_first_s: PositiveSeconds
     start_backoff_max_s: PositiveSeconds
+    placement_hook: Annotated[str, StringConstraints(pattern=r"^[\w.]+:[\w.]+$")] | None = None
+    placement_hook_s: PositiveSeconds
     commands: SlurmCommands | None = None
 
     @model_validator(mode="after")

@@ -36,11 +36,13 @@ resource_classes:
   gpu:
     device: cuda
     max_workers: 1
-# What starts pool workers; the first and longest wait after a failed start.
+# What starts pool workers; the first and longest wait after a failed start; the site's placement hook and the seconds it may take.
 substrate:
   kind: local
   start_backoff_first_s: 0.05
   start_backoff_max_s: 30
+  placement_hook:
+  placement_hook_s: 0.05
 # The quantum ceilings, how pool workers poll and roll index segments, how often a coordinator first reads an outcome, and how long a worker reuses its read of its peers, its device and its probe queues.
 pool:
   quantum_items: 100

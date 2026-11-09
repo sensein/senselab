@@ -196,7 +196,7 @@ def _all(pool: Pool, placed: Plan, values: Mapping[InputIdentity, object]) -> li
 
 
 def _kinds(run_dir: Path) -> list[str]:
-    return [e.kind for e in read_events(run_dir) if e.kind not in ("claimed",)]
+    return [e.kind for e in read_events(run_dir) if e.kind not in ("claimed", "placement")]
 
 
 @pytest.mark.contract

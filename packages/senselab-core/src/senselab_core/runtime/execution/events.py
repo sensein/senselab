@@ -1,8 +1,8 @@
 """A run's event log and the status derived from it: `Event`, `EventLog`, `read_events` and `status_from`.
 
-Every state change of a job is one `run-event@1.0` line in `<run>/events/<writer>.jsonl`; a writer appends to its own
-file only, so any number of processes log one run without sharing a file. A run's status, its counts and its
-faults are computed from the events alone.
+Every state change of a job, and each class's placement in an epoch, is one `run-event@2.0` line in
+`<run>/events/<writer>.jsonl`; a writer appends to its own file only, so any number of processes log one run
+without sharing a file. A run's status, its counts and its faults are computed from the job events alone.
 """
 
 import heapq
@@ -25,14 +25,32 @@ from senselab_core.kernel.graph import NodeId
 from senselab_core.kernel.identity import OutputIdentity
 from senselab_core.runtime.execution.executor import FaultName, FaultRecord, Hex64, JobRef
 from senselab_core.runtime.revision import NAMESPACE, cache_root
+from senselab_core.runtime.site_placement import (
+    ClassNeeds,
+    ClassPlacement,
+    CurrentValues,
+    HookRef,
+    PlacementAnswer,
+    rendered,
+)
 
 EVENTS_DIR = "events"
 """The directory of a run holding one `<writer>.jsonl` file per writer."""
 
 EventKind = Literal[
-    "queued", "claimed", "started", "finished", "failed", "yielded", "cache_hit", "verify", "blocked", "cancelled"
+    "queued",
+    "claimed",
+    "started",
+    "finished",
+    "failed",
+    "yielded",
+    "cache_hit",
+    "verify",
+    "blocked",
+    "cancelled",
+    "placement",
 ]
-"""What happened to a job."""
+"""What happened to a job, or `placement`, which is of the run and names no node."""
 JobState = Literal["queued", "running", "done", "failed", "blocked", "cancelled"]
 """Where a job is, from its events."""
 STATES: tuple[JobState, ...] = ("queued", "running", "done", "failed", "blocked", "cancelled")
@@ -59,8 +77,27 @@ def run_dir_of(plan_hash: str, root: Path | None = None) -> Path:
     return runs_root(root) / plan_hash
 
 
+class PlacementRecord(Frozen):
+    """How one resource class was placed in one epoch: the payload of a `placement` event.
+
+    It holds the class's needs as the request gave them, the site's answer, the hook's reference, the verdict on the
+    answer, the values the class was placed with and the layer that set each, and the `--exclude` list submitted.
+    Partitions, accounts and nodes, the answer's `why` and the notes are rendered for the readers of the run
+    (`rendered`).
+    """
+
+    resource_class: NonEmptyStr
+    request: ClassNeeds | None = None
+    answer: PlacementAnswer | None = None
+    hook: HookRef | None = None
+    verdict: Literal["no-hook", "accepted", "refused", "failed"]
+    note: str | None = None
+    used: CurrentValues
+    exclude: tuple[str, ...] = ()
+
+
 class Event(Formatted):
-    """A `run-event@1.0` document: one state change of one job of one attempt.
+    """A `run-event@2.0` document: one state change of one job of one attempt, or a run-scoped `placement` of a class.
 
     `job` names the job (None for an event of the node as a whole), `key` its key digest, `attempt` the id of the
     attempt (run or resume) that wrote it, `ordinal` that attempt's place among the run's attempts (taken when it was
@@ -74,7 +111,7 @@ class Event(Formatted):
     format: FormatTag = RUN_EVENT_FORMAT
     port_value: ClassVar[bool] = False
     kind: EventKind
-    node: NodeId
+    node: NodeId | None = None
     key: Hex64 | None = None
     job: JobRef | None = None
     attempt: NonEmptyStr
@@ -88,10 +125,33 @@ class Event(Formatted):
     reuse: Literal["exact", "equivalent", "tolerant"] | None = None
     env: NonEmptyStr | None = None
     output: OutputIdentity | None = None
+    placement: PlacementRecord | None = None
     t_ns: Annotated[int, Field(ge=0)]
 
     @model_validator(mode="after")
     def _check(self) -> "Event":
+        if self.kind == "placement":
+            if (
+                self.placement is None
+                or any(
+                    v is not None
+                    for v in (
+                        self.node,
+                        self.job,
+                        self.key,
+                        self.fault,
+                        self.failure,
+                        self.output,
+                        self.reuse,
+                        self.env,
+                    )
+                )
+                or self.placement_digest is not None
+            ):
+                raise ValueError("a placement event carries its record alone: no node, job, key, fault, output or env")
+            return self
+        if self.node is None or self.placement is not None:
+            raise ValueError("a job event names its node and carries no placement record")
         if self.job is not None and self.job.node != self.node:
             raise ValueError(f"event of node {self.node!r} names job {self.job.node!r}")
         if self.failure is not None and self.fault != self.failure.fault:
@@ -187,7 +247,7 @@ def _by_job(events: Iterable[Event]) -> dict[tuple[str, tuple[int, ...]], list[E
     """Return each job's state-changing events, in the order given."""
     jobs: dict[tuple[str, tuple[int, ...]], list[Event]] = {}
     for event in events:
-        if event.kind in _STATE:
+        if event.kind in _STATE and event.node is not None:
             jobs.setdefault((event.node, event.job.element if event.job is not None else ()), []).append(event)
     return jobs
 
@@ -214,7 +274,7 @@ def status_from(events: Iterable[Event], *, broken_after: int | None = None, epo
         from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - read only when needed
 
         broken_after = ExecutionProfile.load().faults.infrastructure_replacements
-    seen = list(events)
+    seen = [e for e in events if e.kind != "placement"]
     jobs = _by_job(seen)
     faults: Counter[str] = Counter()
     failures: Counter[str] = Counter()
@@ -295,7 +355,7 @@ class EventLog:
     def record(  # noqa: PLR0913 - the fields of an event
         self,
         kind: EventKind,
-        node: str,
+        node: str | None,
         *,
         job: JobRef | None = None,
         key: str | None = None,
@@ -304,8 +364,9 @@ class EventLog:
         reuse: str | None = None,
         env: str | None = None,
         output: str | None = None,
+        placement: PlacementRecord | None = None,
     ) -> Event:
-        """Append the event of `kind` for `node`, stamped now with the next `seq`, and return it."""
+        """Append the event of `kind` for `node` (None for a `placement`), stamped now with the next `seq`."""
         with self._lock:
             writer = self.writer
             seq, self._seq = self._seq, self._seq + 1
@@ -325,6 +386,7 @@ class EventLog:
             reuse=reuse,
             env=env,
             output=output,
+            placement=placement,
             t_ns=self.clock(),
         )
         self.append(event)
@@ -356,7 +418,68 @@ def read_events(run_dir: Path) -> list[Event]:
     file; across writers it is only an interleaving, which no status reads.
 
     Raises:
-        ValueError: a line other than a file's last is not a `run-event@1` document.
+        ValueError: a line other than a file's last is not a `run-event@2` document.
     """
     streams = [_lines(path) for path in sorted((Path(run_dir) / EVENTS_DIR).glob("*.jsonl"))]
     return list(heapq.merge(*streams, key=lambda e: e.t_ns))
+
+
+def placement_record(
+    name: str, needs: ClassNeeds | None, hook: HookRef | None, placed: ClassPlacement
+) -> PlacementRecord:
+    """Return the record of class `name`'s `placed` values, every text in it rendered with `placed.names`."""
+
+    def show(text: str) -> str:
+        return rendered(text, placed.names)
+
+    def current(found: CurrentValues) -> CurrentValues:
+        return found.model_copy(update={"partition": None if found.partition is None else show(found.partition)})
+
+    answer = placed.answer
+    if answer is not None:
+        answer = answer.model_copy(
+            update={
+                "classes": {
+                    k: v.model_copy(
+                        update={
+                            "partition": None if v.partition is None else show(v.partition),
+                            "exclude": None if v.exclude is None else tuple(show(n) for n in v.exclude),
+                        }
+                    )
+                    for k, v in answer.classes.items()
+                },
+                "why": show(answer.why),
+            }
+        )
+    return PlacementRecord(
+        resource_class=name,
+        request=None
+        if needs is None
+        else needs.model_copy(
+            update={
+                "current": current(needs.current),
+                "unmeasured": tuple(u.model_copy(update={"why": show(u.why)}) for u in needs.unmeasured),
+            }
+        ),
+        answer=answer,
+        hook=hook,
+        verdict=placed.verdict,
+        note=None if placed.note is None else show(placed.note),
+        used=current(placed.values),
+        exclude=tuple(show(n) for n in placed.exclude),
+    )
+
+
+def placement_recorder(log: EventLog) -> Callable[[int, str, ClassNeeds | None, HookRef | None, ClassPlacement], None]:
+    """Return what a `Placer` calls to append each placement to `log`, the epoch's event log, as a `placement` event."""
+
+    def record(_: int, name: str, needs: ClassNeeds | None, hook: HookRef | None, placed: ClassPlacement) -> None:
+        log.record("placement", None, placement=placement_record(name, needs, hook, placed))
+
+    return record
+
+
+def placements(events: Iterable[Event]) -> list[Event]:
+    """Return the `placement` events among `events`, by epoch then class."""
+    found = [e for e in events if e.kind == "placement"]
+    return sorted(found, key=lambda e: (e.epoch, e.placement.resource_class if e.placement else ""))

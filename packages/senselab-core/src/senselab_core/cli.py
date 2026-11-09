@@ -1,15 +1,16 @@
-"""The ``data`` group and the ``status``, ``explain``, ``coordinate`` and ``execute`` commands of ``senselab.cli``."""
+"""The ``data`` group and the ``status``, ``plan``, ``explain``, ``coordinate`` and ``execute`` commands."""
 
 import argparse
 import json
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.runtime.execution.epoch import StaleCoordinator
-from senselab_core.runtime.execution.events import Event, runs_root
+from senselab_core.runtime.execution.events import Event, placements, runs_root
 from senselab_core.runtime.execution.executor import QueueHeld
 from senselab_core.runtime.execution.pool import coordinate, run_plan, run_store
 from senselab_core.runtime.execution.pool_worker import serve_pool
@@ -17,7 +18,9 @@ from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run, 
 from senselab_core.runtime.execution.substrates import ExternalWorkers, substrate_of
 from senselab_core.runtime.explain import node_line
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
+from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.site_placement import PlacementHookFailed, load_overrides
 
 
 def mount_data(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -78,6 +81,23 @@ def _tail(text: str, lines: int = 10) -> str:
     return "\n".join(text.splitlines()[-lines:])
 
 
+def _placement_lines(events: list[Event], resource_class: str | None = None) -> list[str]:
+    """Return one line per class placement in `events` (of `resource_class` when given): values, layers, verdict."""
+    lines = []
+    for event in placements(events):
+        found = event.placement
+        if found is None or resource_class not in (None, found.resource_class):
+            continue
+        layers = ", ".join(f"{k} by {v}" for k, v in found.used.layers.items())
+        note = "" if found.note is None else f"; {found.note}"
+        lines.append(
+            f"placement {found.resource_class} epoch {event.epoch}: {found.verdict}; partition {found.used.partition}, "
+            f"time_s {found.used.time_s}, max_workers {found.used.max_workers}, {len(found.exclude)} excluded "
+            f"({layers}){note}"
+        )
+    return lines
+
+
 def run_status(args: argparse.Namespace) -> int:
     """Run a parsed ``status``: the jobs of a run by state, its faults and its broken envs, from its events."""
     try:
@@ -94,6 +114,8 @@ def run_status(args: argparse.Namespace) -> int:
         print(f"broken env {broken.env}: {broken.failures} failures; {broken.fault.type}: {broken.fault.message}")
     for node, counts in status.nodes.items():
         print(f"node {node}: " + ", ".join(f"{k} {v}" for k, v in counts.items() if v))
+    for line in _placement_lines(run.events()):
+        print(line)
     return 0
 
 
@@ -125,7 +147,7 @@ def run_explain(args: argparse.Namespace) -> int:
         return 1
     tasks = {n.id: n.task for n in logical.graph.nodes}
     matched = [e for e in events if e.node == args.target or (e.key is not None and e.key.startswith(args.target))]
-    nodes = sorted({e.node for e in matched} | ({args.target} if args.target in tasks else set()))
+    nodes = sorted({e.node for e in matched if e.node is not None} | ({args.target} if args.target in tasks else set()))
     if not nodes:
         print(f"senselab: error: no node or key {args.target!r} in run {run.run_dir.name}", file=sys.stderr)
         return 1
@@ -133,6 +155,9 @@ def run_explain(args: argparse.Namespace) -> int:
         shown = [e for e in matched if e.node == node] or [e for e in events if e.node == node]
         placement = _placement(run.run_dir, shown)
         print(node_line(node, tasks[node], placement) if node in placement.nodes else f"node {node}")
+        if node in placement.nodes:
+            for line in _placement_lines(events, placement.nodes[node].resource_class):
+                print(line)
         print(f"events ({len(shown)}):")
         for event in shown:
             print(_event_line(event))
@@ -155,6 +180,31 @@ def _profile(argument: str | None) -> ExecutionProfile:
     return ExecutionProfile.load(argument)
 
 
+def _with_placement(placed: Plan, args: argparse.Namespace) -> Plan:
+    """Return `placed` with the explicit placement values and the site's hook the command line gives.
+
+    Raises:
+        PlacementAnswerRefused: `--placement` names no class of the profile or holds a refused value.
+    """
+    return replace(placed, overrides=load_overrides(args.placement), hook=args.placement_hook)
+
+
+def run_plan_request(args: argparse.Namespace) -> int:
+    """Run a parsed ``plan``: print what each resource class of a run needs, as `placement-request@1.0` JSON.
+
+    Nothing is computed, no model downloaded and no worker started.
+    """
+    try:
+        profile = _profile(args.profile)
+        placed = _with_placement(run_plan(_run_directory(args.run_ref), profile), args)
+        document = placed.placement_request().document()
+    except (OSError, ValueError) as err:
+        print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
+        return 1
+    print(json.dumps(document, indent=2, sort_keys=True))
+    return 0
+
+
 def run_coordinate(args: argparse.Namespace) -> int:
     """Run a parsed ``coordinate``: take the run's next epoch and send its jobs to its queues, for pool workers.
 
@@ -166,8 +216,14 @@ def run_coordinate(args: argparse.Namespace) -> int:
         substrate = (
             ExternalWorkers() if args.external else substrate_of(profile, run_dir, run_plan(run_dir, profile).hash)
         )
-        outcome = coordinate(run_dir, substrate=substrate, profile=profile)
-    except (OSError, ValueError, StaleCoordinator, QueueHeld) as err:
+        outcome = coordinate(
+            run_dir,
+            substrate=substrate,
+            profile=profile,
+            overrides=load_overrides(args.placement),
+            hook=args.placement_hook,
+        )
+    except (OSError, ValueError, StaleCoordinator, QueueHeld, PlacementHookFailed) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
         return 1
     blocked = sum(len(e) for e in outcome.blocked.values())
@@ -188,6 +244,15 @@ def run_execute(args: argparse.Namespace) -> int:
         return 1
 
 
+def _placement_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--placement", type=Path, default=None, help="a YAML file of explicit placement values per resource class"
+    )
+    parser.add_argument(
+        "--placement-hook", default=None, help="the site's placement hook, `module:callable`; replaces the profile's"
+    )
+
+
 def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
     """Add the ``status``, ``explain``, ``coordinate`` and ``execute`` commands to a parser's subparsers."""
     status = groups.add_parser("status", help="the jobs, faults and broken envs of a run")
@@ -197,6 +262,12 @@ def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
         help="a run directory, or a plan hash (or its unique prefix) under $SENSELAB_CACHE/2x/runs",
     )
     status.set_defaults(run=run_status)
+    planning = groups.add_parser("plan", help="what each resource class of a run needs, as placement-request@1.0")
+    planning.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
+    planning.add_argument("--json", action="store_true", help="print the request as JSON (the only output form)")
+    planning.add_argument("--profile", default=None, help="the execution profile the run was placed under")
+    _placement_arguments(planning)
+    planning.set_defaults(run=run_plan_request)
     explain = groups.add_parser("explain", help="the events, fault and placement of a node or key of a run")
     explain.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
     explain.add_argument("target", help="a node id, or a key digest or its prefix")
@@ -204,6 +275,7 @@ def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
     coordinating = groups.add_parser("coordinate", help="coordinate a run on its queues, as the next epoch")
     coordinating.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
     coordinating.add_argument("--profile", default=None, help="the execution profile the run was placed under")
+    _placement_arguments(coordinating)
     coordinating.add_argument(
         "--external", action="store_true", help="start no workers: they are started on their own (execute --pool)"
     )
