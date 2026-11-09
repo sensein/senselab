@@ -6,9 +6,8 @@
 from __future__ import annotations
 
 import contextlib
-import importlib.util
+import importlib
 import json
-import sys
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -26,13 +25,7 @@ from tests.scripts.extend_llm_review_test import _finished_run, _hints, _manifes
 pytestmark = pytest.mark.usefixtures("triage_profile")
 """The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_CLI = _REPO_ROOT / "scripts" / "extend_second_opinion.py"
-_spec = importlib.util.spec_from_file_location("extend_second_opinion_under_test", _CLI)
-assert _spec is not None and _spec.loader is not None, f"could not load {_CLI}"  # noqa: S101
-cli = importlib.util.module_from_spec(_spec)
-sys.modules["extend_second_opinion_under_test"] = cli
-_spec.loader.exec_module(cli)
+cli = importlib.import_module("senselab.audio.workflows.triage.drivers.extend_second_opinion")
 
 ON = "second_opinion:\n  enabled: true\n"
 
@@ -361,13 +354,7 @@ def test_the_driver_writes_the_opinion_and_leaves_the_verdict_to_the_refold(tmp_
 
 
 def _load_refold() -> Any:  # noqa: ANN401 — a module
-    path = _REPO_ROOT / "scripts" / "extend_refold.py"
-    spec = importlib.util.spec_from_file_location("extend_refold_for_second_opinion_test", path)
-    assert spec is not None and spec.loader is not None  # noqa: S101
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["extend_refold_for_second_opinion_test"] = module
-    spec.loader.exec_module(module)
-    return module
+    return importlib.import_module("senselab.audio.workflows.triage.drivers.extend_refold")
 
 
 def _corpus(tmp_path: Path, count: int) -> tuple[list[Path], Path]:

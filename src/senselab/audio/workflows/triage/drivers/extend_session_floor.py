@@ -135,21 +135,21 @@ def process_session(
         return [{**row, "status": ERROR, SESSION_FLOOR: f"session refused: {why}; nothing was written"} for row in rows]
     members = []
     readings = []
-    for _, run_root, store, _ in opened:
+    for _, member_root, store, _ in opened:
         own = find_measurement(store, OWN_FLOOR) if store is not None else None
         if own is not None and not own.attributes.get("missing"):
             members.append(dict(own.attributes))
-        if store is not None and run_root is not None:
-            readings.append(write_speech_residual(store, run_root / RUN_SUBDIR))
+        if store is not None and member_root is not None:
+            readings.append(write_speech_residual(store, member_root / RUN_SUBDIR))
     out: list[dict[str, Any]] = []
-    for row, run_root, store, error in opened:
-        if store is None or run_root is None:
-            out.append({**row, "status": ERROR, SESSION_FLOOR: error})
+    for row, member_root, store, failure in opened:
+        if store is None or member_root is None:
+            out.append({**row, "status": ERROR, SESSION_FLOOR: failure})
             continue
         write_session_floor(store, members, session=session, background_members=readings)
         capture_environments(store, {})
-        write_store(store, run_root)
-        export_prov(store, run_root)
+        write_store(store, member_root)
+        export_prov(store, member_root)
         written = find_measurement(store, SESSION_FLOOR)
         source = written.attributes.get("floor_source") if written is not None else None
         background = (written.attributes.get("session_background") or {}) if written is not None else {}

@@ -27,10 +27,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config  # noqa: E402
-from senselab.audio.workflows.triage.speaker_vectors import (  # noqa: E402
+from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config
+from senselab.audio.workflows.triage.speaker_vectors import (
     SCHEMA_VERSION,
     scan,
     schema,

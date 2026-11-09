@@ -235,6 +235,8 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 "src/tests/**/*.py" = []
+# The page embeds its JavaScript as one string; wrapping a line would change the page it writes.
+"src/senselab/audio/workflows/triage/drivers/free_speech_review_page.py" = ["E501"]
 # Notebooks: cells share state but ruff lints per-cell, causing false positives
 "tutorials/**/*.ipynb" = ["F821", "E402", "I001", "F811", "ANN001", "ANN201", "D103"]
 

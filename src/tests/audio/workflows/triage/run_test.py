@@ -8,11 +8,10 @@ lives in the per-node suites.
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import inspect
 import json
 import re
-import sys
 import types
 from dataclasses import replace
 from pathlib import Path
@@ -78,9 +77,6 @@ def _withheld_alone_is_reviewed(monkeypatch: pytest.MonkeyPatch) -> None:
     """These tests read other rules: the release review is narrowed to ``withheld``, its relaxed setting."""
     monkeypatch.setattr(vocabulary_module, "reviewed_releases", lambda: frozenset({"withheld"}))
 
-
-REPO_ROOT = Path(__file__).resolve().parents[5]
-CLI = REPO_ROOT / "scripts" / "triage_audio.py"
 
 GRAPH = (
     "ADMIT",
@@ -1185,13 +1181,8 @@ class TestTheEntityPath:
 
 
 def _cli() -> types.ModuleType:
-    """Import ``scripts/triage_audio.py`` as a module so its helpers can be driven directly."""
-    spec = importlib.util.spec_from_file_location("triage_audio_under_test", CLI)
-    assert spec is not None and spec.loader is not None, f"could not load {CLI}"
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["triage_audio_under_test"] = module
-    spec.loader.exec_module(module)
-    return module
+    """The ``triage_audio`` driver module, so its helpers can be driven directly."""
+    return importlib.import_module("senselab.audio.workflows.triage.drivers.triage_audio")
 
 
 @pytest.fixture

@@ -5,20 +5,14 @@ from __future__ import annotations
 import functools
 import http.client
 import http.server
-import importlib.util
-import sys
+import importlib
 import threading
 from pathlib import Path
 from typing import Iterator
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[3]
-_spec = importlib.util.spec_from_file_location("triage_review_serve", ROOT / "scripts" / "triage_review_serve.py")
-assert _spec is not None and _spec.loader is not None
-serve = importlib.util.module_from_spec(_spec)
-sys.modules["triage_review_serve"] = serve
-_spec.loader.exec_module(serve)
+serve = importlib.import_module("senselab.audio.workflows.triage.drivers.triage_review_serve")
 
 
 def test_the_source_route_maps_an_absolute_path_under_an_allowed_root(tmp_path: Path) -> None:
