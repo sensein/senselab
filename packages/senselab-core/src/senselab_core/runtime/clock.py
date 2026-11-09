@@ -2,9 +2,10 @@
 
 import threading
 import time
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from senselab_core.runtime.storage import StorageDir
+if TYPE_CHECKING:
+    from senselab_core.runtime.storage import StorageDir
 
 
 class Clock(Protocol):
@@ -14,7 +15,7 @@ class Clock(Protocol):
         """Return monotonic seconds."""
         ...
 
-    def storage_now(self, directory: StorageDir) -> float:
+    def storage_now(self, directory: "StorageDir") -> float:
         """Return the current time as `directory`'s filesystem stamps it."""
         ...
 
@@ -34,7 +35,7 @@ class SystemClock:
         """Return `time.monotonic()`."""
         return time.monotonic()
 
-    def storage_now(self, directory: StorageDir) -> float:
+    def storage_now(self, directory: "StorageDir") -> float:
         """Return `directory.dir_now()`."""
         return directory.dir_now()
 
