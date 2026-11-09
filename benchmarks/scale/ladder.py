@@ -43,11 +43,13 @@ from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.substrates import substrate_of, worker_id
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
 from senselab_core.runtime.hardware import host_token, memory_bytes
+from senselab_core.runtime.measures import MeasureRoots
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.resources import ResourceMeasure, Unit
 from senselab_core.runtime.revision import NAMESPACE, cache_root
 from senselab_core.runtime.sizing import Measures, Sample
+from senselab_core.runtime.storage import StorePolicy
 from senselab_core.runtime.store import ResultStore
 from senselab_worker.units import NS_PER_S
 
@@ -278,6 +280,17 @@ def check_suite(suite: Suite, profile: ExecutionProfile, data: Path) -> list[str
     return found
 
 
+def point_roots(profile: ExecutionProfile, directory: Path) -> MeasureRoots:
+    """Return the one measures root of a point: `directory`, so each point probes afresh and reads no other's."""
+    return MeasureRoots(
+        [directory],
+        StorePolicy.load_default(),
+        profile.calibration.trust,
+        os.geteuid(),
+        stale_after_s=profile.lease.stale_after_s,
+    )
+
+
 def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the profile, its label and where results go
     entry: Entry, point: int | str, suite: Suite, profile: ExecutionProfile, label: str, out: Path
 ) -> dict[str, Any]:
@@ -307,7 +320,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         profile=profile,
         substrate=substrate_of(profile, run_dir, placed.hash),
         epoch=0,
-        measures=Measures(out / f"{label}@{point}" / "resources", packaged=()),
+        roots=point_roots(profile, out / f"{label}@{point}" / "measures"),
     )
     began, began_s = time.monotonic(), time.time()
     try:

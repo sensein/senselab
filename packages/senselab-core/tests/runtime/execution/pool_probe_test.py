@@ -22,7 +22,7 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import Handle, PlanFragment, ResultRef
-from senselab_core.runtime.execution.in_process import InProcess, fragment_jobs, node_fragment
+from senselab_core.runtime.execution.in_process import InProcess, fragment_jobs, job_units, node_fragment
 from senselab_core.runtime.execution.job import JobOutcome
 from senselab_core.runtime.execution.observing import request_units
 from senselab_core.runtime.execution.pool import Pool, report
@@ -36,10 +36,11 @@ from senselab_core.runtime.measures import Build, MeasureUnit, Provenance
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
-from senselab_core.runtime.units import UnitResolver, measure_roots
+from senselab_core.runtime.units import UnitResolver, Unresolved, measure_roots
 from senselab_core.testing.measures import FixedEstimates, FixedUnit
 
 TEXTY = scoring("pool_probe_test.texty").model_copy(update={"inputs": {"text": "Text"}})
+BUCKETED = scoring("pool_probe_test.bucketed").model_copy(update={"inputs": {"text": "Audio"}})
 HOST = HardwareInfo(
     cpu_count=4, memory_bytes=2**33, gpus=(), apple_silicon=False, platform="linux-x86_64", cpu_model="Test CPU"
 )
@@ -639,3 +640,50 @@ def test_the_pool_and_the_in_process_executor_size_one_unit_alike(tmp_path: Path
     sized = executor.sizing(jobs, placement)
     wanted = {j.ref.element: sized.batch_at(float(n), len(jobs)) for j, n in zip(jobs, lengths, strict=True)}
     assert per_job == wanted and set(per_job.values()) == {4}
+
+
+def _audio_plan(
+    profile: ExecutionProfile, folder: Path, seconds: Sequence[float]
+) -> tuple[Plan, dict[InputIdentity, object]]:
+    """Return the plan mapping the bucketed audio task over one wav of each duration in `seconds`."""
+    import numpy  # noqa: PLC0415 - the one test that writes audio
+    import soundfile  # noqa: PLC0415 - as above
+    from senselab_core.kernel.graph import Graph  # noqa: PLC0415 - as `_plan`
+
+    paths = []
+    for i, n in enumerate(seconds):
+        soundfile.write(folder / f"{i}.wav", numpy.zeros(int(16000 * n), dtype="float32"), 16000)
+        paths.append(str(folder / f"{i}.wav"))
+    graph = {
+        "inputs": {"text": "list[Audio]"},
+        "nodes": [{"id": "a", "task": BUCKETED.name, "task_version": "1"}],
+        "edges": [{"source": "input.text", "target": "a.text", "kind": "map"}],
+    }
+    records = [Record(id=f"r{i}", inputs={"text": ValueInput(value=p)}) for i, p in enumerate(paths)]
+    placed = plan(Graph.model_validate(graph), RecordSet(records), config=RunConfig(), execution=profile)
+    return placed, {bind_input("x", "Audio", p)[0]: bind_input("x", "Audio", p)[1] for p in paths}
+
+
+@pytest.mark.logic
+def test_an_unmeasured_units_items_end_where_the_backends_bucket_changes(tmp_path: Path) -> None:
+    """With no estimate the backend's bucket edges still cut the items: no item holds jobs of two buckets."""
+    from pool_stack_fixture import registry  # noqa: PLC0415 - as the stack fixture
+    from senselab_core.kernel.declare import BackendSpec, Registry  # noqa: PLC0415 - one registry
+
+    base = registry(BUCKETED).backends(BUCKETED.name)[0]
+    found = Registry()
+    found.add_task(BUCKETED)
+    found.add_backend(
+        BackendSpec.model_validate(
+            {**base.model_dump(), "batch_invariant": False, "output_affecting": ("batch_formation",)}
+        )
+    )
+    with _env("4" * 64, found):
+        profile = _profile(tmp_path)
+        placed, values = _audio_plan(profile, tmp_path, [0.5] * 6 + [3.0] * 6)
+        unresolved = FixedUnit(profile, Unresolved("a final cause"))
+        pool = _pool(tmp_path, profile, measures=FixedEstimates(None), resolver=unresolved)
+        _submit(pool, placed, values)
+        items = [item for n, item in _claims(pool) if n == "cpu"]
+        spans = [{job_units(j, "audio_s") for j in fragment_jobs(i, placed, values)[0]} for i in items]
+    assert all(len(span) == 1 for span in spans) and sum(len(i.jobs) for i in items) == 12

@@ -172,6 +172,17 @@ def test_a_fragment_of_200_jobs_is_queued_as_20_items_of_10(tmp_path: Path) -> N
     assert {f.placement.batch_size for f in items} == {1}
 
 
+@pytest.mark.logic
+def test_workers_wanted_counts_quanta_of_jobs_whatever_the_items(tmp_path: Path) -> None:
+    """200 jobs put one to an item are 200 items but 20 quanta of ten jobs, so 20 workers are wanted, not 32."""
+    placed, values, pool, _ = _submitted(tmp_path, _profile(), 200)
+    admission = pool.admit(placed, values)
+    for element in range(200):
+        pool.submit(node_fragment(placed, admission, elements=[(element,)]))
+    pool.close()
+    assert pool.queues.queue("cpu").depth() == 200 and pool.workers_wanted("cpu", 200) == 20
+
+
 @pytest.mark.parametrize(("cap", "expected"), [(None, 20), (16, 4)], ids=["class-max", "qos-cap"])
 @pytest.mark.logic
 def test_scale_wants_a_worker_per_quantum_of_jobs(tmp_path: Path, cap: int | None, expected: int) -> None:

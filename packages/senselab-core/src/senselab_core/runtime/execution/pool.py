@@ -51,6 +51,7 @@ from senselab_core.runtime.calibration import (
     Prior,
     ProbeItem,
     ProbePlan,
+    UnitKind,
 )
 from senselab_core.runtime.call import RunConfig, host_hardware
 from senselab_core.runtime.execution.batching import bucket_edges
@@ -384,9 +385,7 @@ class Pool:
 
     def _plan_probe(self, unit: MeasureUnit, held: Held, jobs: Sequence[Job], placement: Placement) -> ProbePlan | None:
         """Return `Probe.plan` over `held`'s jobs against what the roots hold of `unit`; None when unplannable."""
-        found = [detected_units(j) for j in jobs]
-        kinds = {k for k, _ in found if k != "none"}
-        kind = next(iter(kinds)) if len(kinds) == 1 else "none"
+        found, kind = [detected_units(j) for j in jobs], detected_kind(jobs)
         keys = self._keys(held.part)
         candidates = [
             Candidate(fragment="part", index=i, key=keys[i], units=u if k == kind != "none" else None)
@@ -461,7 +460,7 @@ class Pool:
     def _produce(self, release: Release, jobs: Sequence[Job], placement: Placement) -> None:
         """Put `release`'s jobs sized (`size`) from its estimate, else the safe values: cut, and batched by length."""
         held, estimate = release.held, release.estimate
-        kind = "none" if estimate is None else estimate.unit_kind
+        kind = detected_kind(jobs) if estimate is None else estimate.unit_kind
         lengths = tuple(job_units(j, kind) for j in jobs)
         sized = size(
             estimate,
@@ -506,7 +505,8 @@ class Pool:
             rates = list(self._rates.get(queue, {}).values())
             probing = sum(1 for s in self._states.values() if s.queue == queue and s.state == "probing")
             resolving = any(h.queue == queue for h in self._resolving)
-        grant, items = self._grant(queue), self.queues.queue(queue).depth()
+        grant = self._grant(queue)
+        items = math.ceil(work / grant.quantum_items)
         base = 0
         if work > 0:
             if not rates or any(r is None for r, _ in rates):
@@ -555,7 +555,7 @@ class Pool:
     def _peer_tick(self, state: State) -> None:
         """Return a waiting unit to `New` once its peer's lease is gone or `peer_wait_s` passed; else keep waiting."""
         now = self._clock()
-        if now - state.checked < self.profile.pool.poll_s and state.checked:
+        if state.checked is not None and now - state.checked < self.profile.pool.poll_s:
             return
         state.checked = now
         expired = now - state.since >= self.profile.peer_wait_s
@@ -971,6 +971,12 @@ def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float
         del pool
         woken = wake.wait(min(poll_s, backoff) if backoff > 0 else poll_s)
         wake.clear()
+
+
+def detected_kind(jobs: Sequence[Job]) -> UnitKind:
+    """Return the kind of input the jobs share (seconds, characters); `none` when they mix or hold neither."""
+    kinds = {k for k, _ in (detected_units(j) for j in jobs) if k != "none"}
+    return next(iter(kinds)) if len(kinds) == 1 else "none"
 
 
 def _build() -> Build | None:

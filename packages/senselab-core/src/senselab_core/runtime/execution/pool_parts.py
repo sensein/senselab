@@ -197,7 +197,7 @@ class State:
     estimate: Estimate | None = None
     held: list[Held] = field(default_factory=list)
     run: Run | None = None
-    checked: float = 0.0
+    checked: float | None = None
 
 
 @dataclass(frozen=True)

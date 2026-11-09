@@ -379,3 +379,14 @@ def test_a_result_names_each_failed_record_by_its_last_failure() -> None:
     events = [event("failed", 2, "first"), event("finished", 0), event("failed", 2, "x" * 500)]
     [named] = ladder._faults(events, rows)
     assert named == {"record": "r2", "fault": "content", "type": "Bad", "message": "x" * ladder.FAULT_MESSAGE_CHARS}
+
+
+@pytest.mark.logic
+def test_a_points_measures_root_is_its_own_directory(tmp_path: Path) -> None:
+    """A point's pool probes into the point's directory, not the profile's roots, so no point reads another's."""
+    from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - the module is loaded by path above
+
+    ladder = _module("scale_ladder_point_roots", ROOT / "benchmarks" / "scale" / "ladder.py")
+    profile = ExecutionProfile.load("laptop")
+    roots = ladder.point_roots(profile, tmp_path / "point" / "measures")
+    assert roots.roots == (tmp_path / "point" / "measures",) and roots.write_root == tmp_path / "point" / "measures"
