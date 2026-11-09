@@ -87,6 +87,8 @@ def test_gathered_items_report_their_own_request_walls(tmp_path: Path) -> None:
 
     The worker's clock is a fake one that only the backend advances, by the seconds each item names, so a request's
     span is exactly its item's seconds, in binary fractions that subtract exactly, and nothing else takes any time.
+    Claiming takes none, and an item's claim-to-commit wall is that of the one call its claim's items were sent in:
+    element 0 spends one of the quantum's four items, so elements 1 to 3 are the next claim and element 4 the last.
     """
     profile = _profile(quantum_items=4)
     texts = ["0", "0.25", "0.5", "0.75", "1"]
@@ -112,6 +114,10 @@ def test_gathered_items_report_their_own_request_walls(tmp_path: Path) -> None:
         (observed,) = out["observations"]
         assert (observed["jobs"], out["measure"]["jobs"]) == (1, 1)
         assert observed["wall_s"] == out["measure"]["wall_s"] == float(texts[element])
+        assert out["measure"]["claim_s"] == 0.0
+    for claim in ([0], [1, 2, 3], [4]):
+        spent = sum(float(texts[e]) for e in claim)
+        assert [outcomes[e]["observations"][0]["item_wall_s"] for e in claim] == [spent] * len(claim)
 
 
 @pytest.mark.logic

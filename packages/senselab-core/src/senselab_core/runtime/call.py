@@ -39,7 +39,7 @@ from senselab_core.kernel.identity import (
     text_identity_fields,
 )
 from senselab_core.kernel.license import License
-from senselab_core.kernel.signals import PlainText, Recording, UndecodableSource, text_identity
+from senselab_core.kernel.signals import PlainText, Recording, StaleSource, UndecodableSource, text_identity
 from senselab_core.runtime.audio_io import DECODER, open_audio
 from senselab_core.runtime.calibration import RunCalibration
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
@@ -450,7 +450,7 @@ def bind_input(port: str, port_type: str, value: object) -> tuple[InputIdentity,
         reader, decoder = _READERS[port_type]
         try:
             value = reader(value)
-        except (OSError, RuntimeError, UndecodableSource) as err:
+        except (OSError, StaleSource, UndecodableSource) as err:
             raise InputUnreadable(f"input {port!r} cannot be read: {err}") from err
     if isinstance(value, Recording | PlainText):
         return value.identity, value, decoder

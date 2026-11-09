@@ -225,9 +225,10 @@ class PoolWorker:
 
         `hardware` gives the `HardwareClass` a resource class runs on and `cotenancy` its device and host
         co-tenancy; they default to what this host shows (`hardware_of`, `Presence`). The worker's name is its
-        `worker_id()` unless given, so no run record names its host. `clock` times each call of `send` and each request
-        it makes (`bisect`), and the reuse of what it read of its peers and of the run's probe queues
-        (`pool.presence_refresh_s`).
+        `worker_id()` unless given, so no run record names its host. `clock` times every measurement the worker
+        records (a claim, each call of `send` and each request it makes, an item's claim-to-commit wall) and the reuse
+        of what it read of its peers and of the run's probe queues (`pool.presence_refresh_s`); the quantum and idle
+        deadlines, which pair with real waits, stay on `time.monotonic`.
 
         Raises:
             ValueError: no class is named.
@@ -295,7 +296,7 @@ class PoolWorker:
         while not self.stop.is_set():
             ended = current is not None and (spent >= pool.quantum_items or time.monotonic() - began >= pool.quantum_s)
             prefer = None if ended else current
-            asked = time.monotonic()
+            asked = self._clock()
             claim = self._next(prefer, pool.quantum_items - spent)
             if claim is None:
                 current, idle = None, idle if idle is not None else time.monotonic()
@@ -319,7 +320,7 @@ class PoolWorker:
                 current, spent, began = claim.queue.name, 0, time.monotonic()
             spent += sum(len(f.jobs) for f in claim.fragments)
             self.served.extend((claim.queue.name, d) for d in claim.items)
-            self.run_claim(claim, claim_s=time.monotonic() - asked)
+            self.run_claim(claim, claim_s=self._clock() - asked)
             for service in self._workers.provided() if self._workers is not None else []:
                 service.touch()
         return 0
@@ -480,7 +481,7 @@ class PoolWorker:
         The hardware class and co-tenancy are read once per claim, when its first item is reported.
         """
         jobs = {m.job.ref: m.job for g in groups for m in g.members}
-        began = time.monotonic()
+        began = self._clock()
         seen: list[Seen | None] = []
 
         def observe(digest: str, outcomes: Sequence[JobOutcome]) -> list[Observation]:
@@ -501,7 +502,7 @@ class PoolWorker:
                 outcomes,
                 found,
                 mark=mark,
-                item_wall_s=time.monotonic() - began,
+                item_wall_s=self._clock() - began,
             )
 
         return observe

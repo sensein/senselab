@@ -450,12 +450,13 @@ def test_non_audio_file_is_undecodable_source(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_system_errors_are_not_undecodable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A libsndfile system error (code 2) is not reported as bad data."""
+    """A libsndfile system error (code 2) is an `OSError`, not bad data."""
     p = write_wav(tmp_path)
 
     def fail(*_: object, **__: object) -> None:
         raise soundfile.LibsndfileError(2, "system error")
 
     monkeypatch.setattr(soundfile, "SoundFile", fail)
-    with pytest.raises(soundfile.LibsndfileError):
+    with pytest.raises(OSError, match="system error") as caught:
         stamp(p)
+    assert isinstance(caught.value.__cause__, soundfile.LibsndfileError)
