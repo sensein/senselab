@@ -498,6 +498,7 @@ class Run:
         self.run_dir = Path(run_dir)
         self._store, self._clock = store, clock
         self._thread: threading.Thread | None = None
+        self._ended = threading.Event()
         self._cancel = threading.Event()
         self._error: BaseException | None = None
 
@@ -548,7 +549,10 @@ class Run:
         deadline = None if timeout is None else self._clock.now() + timeout
         thread = self._thread
         if thread is not None:
-            thread.join(timeout)
+            if timeout is None:
+                self._ended.wait()
+            else:
+                self._clock.wait(self._ended, timeout)
             if not thread.is_alive() and self._error is not None:
                 raise self._error
         status = self.status()
@@ -580,6 +584,11 @@ class Run:
         """Start `thread`, the run's body, and hold it for `wait`."""
         self._thread = thread
         thread.start()
+        threading.Thread(target=self._signal_end, args=(thread,), name="senselab-run-ended", daemon=True).start()
+
+    def _signal_end(self, thread: threading.Thread) -> None:
+        thread.join()
+        self._ended.set()
 
     def cancel(self) -> None:
         """Stop releasing jobs: fragments already sent finish or are left to their lease; no other is sent."""
