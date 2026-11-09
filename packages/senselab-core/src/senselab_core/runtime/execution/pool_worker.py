@@ -86,7 +86,15 @@ Send = Callable[[Sequence[Job], Placement], list[JobOutcome]]
 
 
 class Abandoned(Exception):
-    """The claim whose jobs were running was lost or halted; nothing more is sent for it."""
+    """The claim whose jobs were running was lost or halted; nothing more is sent for it.
+
+    `kept` holds the outcomes of the jobs that had finished, by index among the members of the call that raised it.
+    """
+
+    def __init__(self, kept: Mapping[int, JobOutcome] | None = None) -> None:
+        """Hold `kept`, the outcomes finished before the claim was given up."""
+        super().__init__()
+        self.kept = dict(kept or {})
 
 
 def whole(exc: BaseException) -> bool:
@@ -180,20 +188,25 @@ def _split_requests(
     """
     placement, send, cancelled, record, clock = again
     faulted = [(r, at) for r in reported if (at := _ran_out(members, outcomes, r))]
+    gone = {i for _, at in faulted for i in at}
     merged = list(outcomes)
-    for ran, at in faulted:
-        sub = [members[i] for i in at]
-        if record is not None:
-            record(Sent(tuple(m.job.ref for m in sub), ran.wall_s or 0.0, (ran,), "bisected", "resource"))
-        for i, outcome in zip(at, _halves(sub, placement, send, cancelled, record, clock), strict=True):
-            merged[i] = outcome
     if record is not None:
-        gone = {i for _, at in faulted for i in at}
         kept = tuple(r for r in reported if all(r is not f for f, _ in faulted))
         refs = tuple(m.job.ref for i, m in enumerate(members) if i not in gone)
         wall = clock.now() - began - sum(f.wall_s or 0.0 for f, _ in faulted)
         if refs:
             record(Sent(refs, max(0.0, wall), kept, None))
+    finished = {i: o for i, o in enumerate(outcomes) if i not in gone}
+    for ran, at in faulted:
+        sub = [members[i] for i in at]
+        if record is not None:
+            record(Sent(tuple(m.job.ref for m in sub), ran.wall_s or 0.0, (ran,), "bisected", "resource"))
+        try:
+            halves = _halves(sub, placement, send, cancelled, record, clock)
+        except Abandoned as stopped:
+            raise Abandoned({**finished, **{at[i]: o for i, o in stopped.kept.items()}}) from stopped
+        for i, outcome in zip(at, halves, strict=True):
+            merged[i] = finished[i] = outcome
     return merged
 
 
@@ -207,9 +220,12 @@ def _halves(  # noqa: PLR0913 - `bisect`'s own arguments
 ) -> list[JobOutcome]:
     """Return the outcomes of `members` sent as two requests, each half through `bisect`."""
     half = len(members) // 2
-    return bisect(members[:half], placement, send, cancelled, record, clock) + bisect(
-        members[half:], placement, send, cancelled, record, clock
-    )
+    first = bisect(members[:half], placement, send, cancelled, record, clock)
+    try:
+        second = bisect(members[half:], placement, send, cancelled, record, clock)
+    except Abandoned as stopped:
+        raise Abandoned({**dict(enumerate(first)), **{half + i: o for i, o in stopped.kept.items()}}) from stopped
+    return first + second
 
 
 @dataclass
@@ -698,6 +714,10 @@ class PoolWorker:
                 except LeaseTimeout as busy:
                     logger.info("pool worker %s gives its items back: %s", self.name, busy)
                     outcomes = [None] * len(group.members)
+                except Abandoned as stopped:
+                    if stopped.kept:
+                        finished.put([(group.members[i], o) for i, o in sorted(stopped.kept.items())])
+                    raise
                 finished.put(list(zip(group.members, outcomes, strict=True)))
         except Abandoned:
             logger.info("pool worker %s abandoned the rest of its claim", self.name)

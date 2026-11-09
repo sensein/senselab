@@ -198,14 +198,15 @@ _NONCE = secrets.token_hex(4)
 """This process's nonce: a reused process id on one host still names another worker."""
 
 
-def worker_id() -> str:
-    """Return this process's worker id: its Slurm job id (when set), an opaque host token, its process id and a nonce.
+def worker_id(pid: int | None = None) -> str:
+    """Return this process's worker id: its Slurm job id (when set), an opaque host token, a process id and a nonce.
 
     Workers of one allocation share the job id, so it alone does not tell them apart; the process id does on one host,
-    the host token between hosts and the nonce across a process id reused. The id names no host, account or path.
+    the host token between hosts and the nonce across a process id reused. `pid` is this process's by default. The id
+    names no host, account or path.
     """
     job = os.environ.get("SLURM_JOB_ID")
-    return "-".join(([job] if job else []) + [host_token()[:8], str(os.getpid()), _NONCE])
+    return "-".join(([job] if job else []) + [host_token()[:8], str(os.getpid() if pid is None else pid), _NONCE])
 
 
 @dataclass(frozen=True)

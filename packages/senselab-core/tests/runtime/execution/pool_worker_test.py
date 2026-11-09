@@ -16,16 +16,19 @@ from lease_clock_fixture import ManualClock, age
 from pool_stack_fixture import packaged, planned, registry, scoring
 from senselab_core.kernel.declare import TaskSpec
 from senselab_core.runtime import request_reports
+from senselab_core.runtime.calibration import FaultKind
 from senselab_core.runtime.call import RunConfig
-from senselab_core.runtime.execution.executor import Admission, PlanFragment, ResultRef
+from senselab_core.runtime.execution.executor import Admission, FaultRecord, JobRef, PlanFragment, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
-from senselab_core.runtime.execution.job import Job, JobOutcome, execute
+from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
+from senselab_core.runtime.execution.observing import Sent
 from senselab_core.runtime.execution.pool import split
-from senselab_core.runtime.execution.pool_worker import PoolWorker, Send, serve_pool
+from senselab_core.runtime.execution.pool_worker import Abandoned, Member, PoolWorker, Send, bisect, serve_pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest
 from senselab_core.runtime.execution.run import prepare
 from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
-from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.fake_backend import ECHO, FAKE, EchoParams
+from senselab_core.runtime.keys import Call, Placement
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -478,6 +481,50 @@ def test_a_load_failure_during_bisection_keeps_the_first_halfs_commits(tmp_path:
     assert sizes == [8, 4, 4] and len(done) == 4 and len(refs) == 8
     assert all(store.outputs_of(r.key_digest, r.output_identity) is not None for r in done if r.output_identity)
     assert {r.failure.type for r in refs if r.failure} == {"WorkerLoadFailed"}
+
+
+def _members(count: int) -> list[Member]:
+    return [
+        Member(
+            "d", i, Job(JobRef(plan_hash="0" * 64, node="n", element=(i,)), Call(ECHO, EchoParams(), {}), {}), f"k{i}"
+        )
+        for i in range(count)
+    ]
+
+
+def _failed(member: Member, fault: FaultKind) -> Failed:
+    failure = FaultRecord(fault=fault, type="Stand", message="", gap=False, charged=fault == "content")
+    return Failed(member.job.ref, member.key, failure)
+
+
+@pytest.mark.logic
+def test_a_cancel_during_the_halves_keeps_the_calls_other_outcomes_and_records_them_first() -> None:
+    """One call, two requests: the first fits, the second ran out. A cancel as its halves start loses neither.
+
+    The kept request is recorded before the faulted one and its halves, as it ran; `Abandoned` carries the outcomes of
+    the request that fit, so the claim commits what finished.
+    """
+    members = _members(8)
+    cancelled, recorded = threading.Event(), list[Sent]()
+
+    def send(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:  # noqa: ARG001 - a Send
+        for part in (members[:4], members[4:]):
+            with request_reports.request(tuple(m.job.ref for m in part)):
+                request_reports.record(len(part), since_load=3)
+        cancelled.set()
+        return [_failed(m, "content" if i < 4 else "resource") for i, m in enumerate(members)]
+
+    with pytest.raises(Abandoned) as stopped:
+        bisect(
+            members,
+            Placement(backend=FAKE, backend_params=FAKE.params(), device="cpu"),
+            send,
+            cancelled,
+            recorded.append,
+        )
+    assert sorted(stopped.value.kept) == [0, 1, 2, 3]
+    assert all(isinstance(o, Failed) and o.failure.fault == "content" for o in stopped.value.kept.values())
+    assert [(len(r.refs), r.failure) for r in recorded] == [(4, None), (4, "bisected")]
 
 
 class _Abandoning(WorkerSet):
