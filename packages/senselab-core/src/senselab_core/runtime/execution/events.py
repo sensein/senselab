@@ -8,6 +8,7 @@ faults are computed from the events alone.
 import heapq
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -20,11 +21,20 @@ from typing import Annotated, ClassVar, Literal
 from pydantic import Field, StringConstraints, model_validator
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
-from senselab_core.kernel.formats import RUN_EVENT_FORMAT, FormatTag, Formatted
+from senselab_core.kernel.formats import PLACEMENT_EVENT_FORMAT, RUN_EVENT_FORMAT, FormatTag, Formatted
 from senselab_core.kernel.graph import NodeId
 from senselab_core.kernel.identity import OutputIdentity
 from senselab_core.runtime.execution.executor import FaultName, FaultRecord, Hex64, JobRef
 from senselab_core.runtime.revision import NAMESPACE, cache_root
+from senselab_core.runtime.site_placement import (
+    ClassNeeds,
+    ClassPlacement,
+    CurrentValues,
+    HookRef,
+    PlacementAnswer,
+    PlacementValues,
+    rendered,
+)
 
 EVENTS_DIR = "events"
 """The directory of a run holding one `<writer>.jsonl` file per writer."""
@@ -360,3 +370,95 @@ def read_events(run_dir: Path) -> list[Event]:
     """
     streams = [_lines(path) for path in sorted((Path(run_dir) / EVENTS_DIR).glob("*.jsonl"))]
     return list(heapq.merge(*streams, key=lambda e: e.t_ns))
+
+
+PLACEMENT_EVENTS_DIR = "placement-events"
+"""The directory of a run holding one `<epoch>-<class>.json` placement event per class per epoch."""
+_NODE_LABEL = "<node>"
+
+
+class PlacementEvent(Formatted):
+    """A `placement-event@1.0` document: how one resource class was placed in one epoch.
+
+    It holds the class's needs as the request gave them, the site's answer, the hook's import path and its
+    distribution's version, the verdict on the answer, and the values the class was placed with with the layer that
+    set each. Partitions, accounts and nodes, and the answer's `why` and the notes, are rendered as for any record
+    other users read (`rendered`).
+    """
+
+    format: FormatTag = PLACEMENT_EVENT_FORMAT
+    port_value: ClassVar[bool] = False
+    epoch: Annotated[int, Field(ge=0)]
+    resource_class: NonEmptyStr
+    request: ClassNeeds | None = None
+    answer: PlacementAnswer | None = None
+    hook: HookRef | None = None
+    verdict: Literal["no-hook", "accepted", "refused", "failed"]
+    note: str | None = None
+    used: CurrentValues
+    exclude: tuple[str, ...] = ()
+
+
+def _values(values: PlacementValues, partitions: set[str]) -> PlacementValues:
+    return values.model_copy(
+        update={
+            "partition": None if values.partition is None else rendered(values.partition, partitions),
+            "exclude": None if values.exclude is None else tuple(_NODE_LABEL for _ in values.exclude),
+        }
+    )
+
+
+def placement_event(
+    epoch: int, name: str, needs: ClassNeeds | None, hook: HookRef | None, placed: ClassPlacement
+) -> PlacementEvent:
+    """Return the event of class `name`'s `placed` values in `epoch`, rendered for the readers of the run."""
+    partitions = {p for p in (placed.values.partition, *(c.partition for c in _answered(placed))) if p}
+    if needs is not None and needs.current.partition:
+        partitions.add(needs.current.partition)
+
+    def current(found: CurrentValues) -> CurrentValues:
+        return found.model_copy(
+            update={"partition": None if found.partition is None else rendered(found.partition, partitions)}
+        )
+
+    answer = placed.answer
+    if answer is not None:
+        answer = answer.model_copy(
+            update={
+                "classes": {k: _values(v, partitions) for k, v in answer.classes.items()},
+                "why": rendered(answer.why, partitions),
+            }
+        )
+    return PlacementEvent(
+        epoch=epoch,
+        resource_class=name,
+        request=None if needs is None else needs.model_copy(update={"current": current(needs.current)}),
+        answer=answer,
+        hook=hook,
+        verdict=placed.verdict,
+        note=None if placed.note is None else rendered(placed.note, partitions),
+        used=current(placed.values),
+        exclude=tuple(_NODE_LABEL for _ in placed.exclude),
+    )
+
+
+def _answered(placed: ClassPlacement) -> list[PlacementValues]:
+    return [] if placed.answer is None else list(placed.answer.classes.values())
+
+
+def record_placement(run_dir: Path, event: PlacementEvent) -> Path:
+    """Write `event` to `<run>/placement-events/<epoch>-<class>.json`, replacing the class's earlier one this epoch."""
+    directory = Path(run_dir) / PLACEMENT_EVENTS_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{event.epoch}-{re.sub(r'[^A-Za-z0-9_.-]', '_', event.resource_class)}.json"
+    staged = path.with_name(f".{path.name}.{os.getpid()}")
+    staged.write_text(json.dumps(event.model_dump(mode="json", by_alias=True), sort_keys=True), encoding="utf-8")
+    staged.replace(path)
+    return path
+
+
+def read_placement_events(run_dir: Path) -> list[PlacementEvent]:
+    """Return the run's placement events, by epoch then class."""
+    found = (Path(run_dir) / PLACEMENT_EVENTS_DIR).glob("*.json")
+    events = [PlacementEvent.model_validate_json(p.read_text(encoding="utf-8")) for p in found]
+    return sorted(events, key=lambda e: (e.epoch, e.resource_class))

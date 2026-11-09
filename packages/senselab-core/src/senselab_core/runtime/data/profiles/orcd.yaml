@@ -69,14 +69,16 @@ resource_classes:
     partition: ${GPU_PARTITION}
     gres: gpu:1
     max_workers: 4
-# What starts pool workers; the first and longest wait after a failed start; each Slurm command's timeout,
-# tries and first retry wait.
+# What starts pool workers; the first and longest wait after a failed start; the site's placement hook (a
+# `module:callable`, none by default) and the seconds it may take; each Slurm command's timeout, tries and first retry wait.
 substrate:
   kind: slurm
   qos_cpu_cap:
   exclude_nodes: []
   start_backoff_first_s: 1
   start_backoff_max_s: 30
+  placement_hook:
+  placement_hook_s: 1
   commands:
     timeout_s: 60
     attempts: 3

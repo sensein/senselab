@@ -115,6 +115,9 @@ PLACEMENT_REQUEST_FORMAT = "placement-request@1.0"
 PLACEMENT_ANSWER_FORMAT = "placement-answer@1.0"
 """The format of a site's placement hook's answer."""
 
+PLACEMENT_EVENT_FORMAT = "placement-event@1.0"
+"""The format of a run's record of one class's placement in one epoch: request, answer, verdict and values used."""
+
 FormatTag = Annotated[str, StringConstraints(pattern=FORMAT_PATTERN)]
 """`<name>@<major>.<minor>`."""
 
