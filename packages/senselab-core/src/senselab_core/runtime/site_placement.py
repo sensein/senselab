@@ -21,7 +21,7 @@ from pydantic import ConfigDict, Field, ValidationError
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.formats import PLACEMENT_ANSWER_FORMAT, PLACEMENT_REQUEST_FORMAT, FormatTag, Formatted
 from senselab_core.runtime.clock import Clock, SystemClock
-from senselab_core.runtime.config import load_yaml
+from senselab_core.runtime.config import expand_variables, load_yaml
 from senselab_core.runtime.execution_settings import PositiveInt, PositiveSeconds, ResourceClass
 from senselab_core.runtime.profiles import ExecutionProfile
 
@@ -147,7 +147,7 @@ def load_overrides(given: Mapping[str, Any] | Path | str | None) -> dict[str, Pl
 
 
 def check_values(name: str, values: PlacementValues) -> None:
-    """Raise `PlacementAnswerRefused` for a time below 1 s or fewer than one worker in `values`."""
+    """Raise `PlacementAnswerRefused` for a time that is not positive or fewer than one worker in `values`."""
     if values.time_s is not None and values.time_s <= 0:
         raise PlacementAnswerRefused(name, "time_s", values.time_s, 0, "a time must be positive")
     if values.max_workers is not None and values.max_workers < 1:
@@ -213,14 +213,18 @@ class ClassPlacement(Frozen):
 
 
 class HookRef(Frozen):
-    """A placement hook as recorded: its import path and the version of its distribution."""
+    """A placement hook as recorded: its path, whether `load_hook` can import it, its distribution's version."""
 
     path: NonEmptyStr
     version: NonEmptyStr | None = None
+    importable: bool = True
 
 
 def hook_ref(hook: PlacementHook | str) -> HookRef:
-    """Return the import path of `hook` and the version of the distribution that provides its module."""
+    """Return the path of `hook` and the version of the distribution that provides its module.
+
+    A lambda or a function defined inside another has a path no import can resolve; the reference says so.
+    """
     path = hook if isinstance(hook, str) else f"{hook.__module__}:{getattr(hook, '__qualname__', type(hook).__name__)}"
     module = path.partition(":")[0].partition(".")[0]
     try:
@@ -228,7 +232,7 @@ def hook_ref(hook: PlacementHook | str) -> HookRef:
         version = None if owner is None else metadata.version(owner)
     except metadata.PackageNotFoundError:
         version = None
-    return HookRef(path=path, version=version)
+    return HookRef(path=path, version=version, importable=_HOOK_PATH.match(path) is not None and "<" not in path)
 
 
 def load_hook(path: str) -> PlacementHook:
@@ -253,6 +257,8 @@ def load_hook(path: str) -> PlacementHook:
 
 def ask(hook: PlacementHook, request: PlacementRequest, *, bound_s: float, clock: Clock) -> PlacementAnswer:
     """Call `hook(request)` on a thread, waiting up to `bound_s` seconds on `clock`.
+
+    A hook that outlasts the bound is left running on its daemon thread; its answer is dropped.
 
     Raises:
         PlacementHookFailed: the hook raised (chained), returned another type, or had not answered in `bound_s`.
@@ -280,7 +286,7 @@ def ask(hook: PlacementHook, request: PlacementRequest, *, bound_s: float, clock
 
 
 def _layered(
-    name: str, base: ResourceClass, overrides: Mapping[str, PlacementValues]
+    name: str, base: ResourceClass, overrides: Mapping[str, PlacementValues], profile_exclude: tuple[str, ...] = ()
 ) -> tuple[CurrentValues, tuple[str, ...]]:
     given = overrides.get(name, PlacementValues())
     check_values(name, given)
@@ -289,8 +295,9 @@ def _layered(
     for field in FIELDS:
         if getattr(given, field) is not None:
             layers[field] = "override"
-            values[field] = getattr(given, field)
-    exclude = given.exclude if given.exclude is not None else base.exclude
+            if field != "exclude":
+                values[field] = getattr(given, field)
+    exclude = given.exclude if given.exclude is not None else profile_exclude
     return CurrentValues(**values, layers=layers), tuple(exclude)
 
 
@@ -314,26 +321,29 @@ class Placer:
     The hook is `hook`, else the profile's `substrate.placement_hook`; it is called with the request narrowed to the
     class, bounded by `substrate.placement_hook_s` seconds on `clock`. An answer is checked (`check_answer`); a
     failed hook falls back to the explicit and profile values and says so. Every resolution, a refused one too, is
-    handed to `record` as `(epoch, class, the class's needs, the hook's reference, its placement)`.
+    handed to `record` as `(epoch, class, the class's needs, the hook's reference, its placement)`. The profile's
+    layer of `exclude` is `substrate.exclude_nodes`; senselab adds none.
 
     Args:
-        profile: The execution profile: its classes, hook and the hook's bound.
+        profile: The execution profile: its classes, excluded nodes, hook and the hook's bound.
         overrides: The explicit values per class.
         hook: The site's hook, a callable or its `module:callable` path; None takes the profile's.
-        request: Builds the run's request when the first class needs the hook.
+        request: Builds the run's request; called once per epoch, when the first class of it needs the hook.
         clock: Times the hook's bound.
-        record: Told of each resolution.
+        record: Told of each resolution; set before the first `for_class`.
+        inert: Said in each recorded note when the substrate applies only the worker cap.
     """
 
     def __init__(  # noqa: PLR0913 - the profile and layers, then keyword-only call settings
         self,
         profile: ExecutionProfile,
-        overrides: Mapping[str, PlacementValues] | None = None,
-        hook: PlacementHook | str | None = None,
+        overrides: Mapping[str, PlacementValues] | None,
+        hook: PlacementHook | str | None,
         *,
-        request: Callable[[], PlacementRequest] | None = None,
+        request: Callable[[], PlacementRequest],
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
         record: Callable[[int, str, ClassNeeds | None, HookRef | None, ClassPlacement], None] | None = None,
+        inert: str | None = None,
     ) -> None:
         """Resolve placements under `profile`; nothing is called until `for_class`.
 
@@ -342,20 +352,21 @@ class Placer:
             PlacementHookFailed: the hook's path does not import.
         """
         self.classes, self.overrides = dict(profile.resource_classes), dict(overrides or {})
+        self._exclude = tuple(profile.substrate.exclude_nodes)
         current_values(self.classes, self.overrides)
         chosen = hook if hook is not None else profile.substrate.placement_hook
         self._hook = None if chosen is None else load_hook(chosen) if isinstance(chosen, str) else chosen
         self._ref = None if chosen is None else hook_ref(chosen)
         self._request = request
-        self._built: PlacementRequest | None = None
-        self.hook_s, self._clock, self._record = profile.substrate.placement_hook_s, clock, record
+        self._built: dict[int, PlacementRequest] = {}
+        self.hook_s, self._clock, self.record, self._inert = profile.substrate.placement_hook_s, clock, record, inert
         self._done: dict[tuple[int, str], ClassPlacement] = {}
         self._lock = threading.Lock()
 
-    def _needs(self, name: str) -> PlacementRequest:
-        if self._built is None:
-            self._built = self._request() if self._request is not None else PlacementRequest(classes=())
-        return self._built.only(name)
+    def _needs(self, name: str, epoch: int) -> PlacementRequest:
+        if epoch not in self._built:
+            self._built[epoch] = self._request()
+        return self._built[epoch].only(name)
 
     def for_class(self, name: str, epoch: int) -> ClassPlacement:
         """Return class `name`'s placement for `epoch`, asking the hook the first time this epoch.
@@ -369,14 +380,16 @@ class Placer:
                 return self._done[epoch, name]
             if name not in self.classes:
                 raise ValueError(f"no resource class {name!r}; the profile has {sorted(self.classes)}")
-            values, exclude = _layered(name, self.classes[name], self.overrides)
+            values, exclude = _layered(name, self.classes[name], self.overrides, self._exclude)
             placed, needs, refusal = ClassPlacement(values=values, exclude=exclude), None, None
             if self._hook is not None:
-                request = self._needs(name)
+                request = self._needs(name, epoch)
                 needs = request.held(name)
                 placed, refusal = self._asked(self._hook, name, request, placed)
-            if self._record is not None:
-                self._record(epoch, name, needs, self._ref, placed)
+            if self._inert is not None:
+                placed = placed.model_copy(update={"note": "; ".join(n for n in (placed.note, self._inert) if n)})
+            if self.record is not None:
+                self.record(epoch, name, needs, self._ref, placed)
             if refusal is not None:
                 raise refusal
             self._done[epoch, name] = placed
@@ -413,33 +426,35 @@ def resolve_placement(
     overrides: Mapping[str, PlacementValues] | None,
     hook: PlacementHook | str | None,
     *,
-    request: PlacementRequest | None = None,
+    request: PlacementRequest,
     clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> ResolvedPlacement:
     """Return each class's placement: the profile's values, the explicit `overrides`, then `hook`'s answer.
 
-    The classes are those `request` holds, else every class of `profile`. `hook` (a callable or its path) defaults to
+    The classes are those `request` holds. `hook` (a callable or its path) defaults to
     the profile's `substrate.placement_hook`; it is called per class with `request` narrowed to the class.
 
     Raises:
         PlacementAnswerRefused: an override or the hook's answer is refused.
     """
-    placer = Placer(profile, overrides, hook, request=None if request is None else (lambda: request), clock=clock)
-    names = [c.resource_class for c in request.classes] if request is not None else list(profile.resource_classes)
-    return ResolvedPlacement(classes={n: placer.for_class(n, 0) for n in names})
+    placer = Placer(profile, overrides, hook, request=lambda: request, clock=clock)
+    return ResolvedPlacement(classes={c.resource_class: placer.for_class(c.resource_class, 0) for c in request.classes})
 
 
-def rendered(text: str, partitions: Iterable[str] = ()) -> str:
-    """Return `text` as a record other users read: accounts and `partitions` as labels, then paths, user and host.
+def rendered(text: str, *, partitions: Iterable[str | None] = (), nodes: Iterable[str] = ()) -> str:
+    """Return `text` as a record other users read: accounts, `partitions` and `nodes` as labels, then paths, user, host.
 
-    An account is the one `--account` names or `SBATCH_ACCOUNT` or `SLURM_ACCOUNT` holds. The operator's own text
-    goes to the log (`stored_message` does the rest).
+    The one helper of every text that may name a site: the refusal of a submission and the placement record. Give it
+    the values the text was built from (a `${VAR}` is rendered both as written and as expanded). An account is the
+    one `--account` names or `SBATCH_ACCOUNT` or `SLURM_ACCOUNT` holds. The operator's own text goes to the log
+    (`stored_message` does the rest).
     """
     from senselab_core.runtime.execution.executor import stored_message  # noqa: PLC0415 - executor imports the planner
 
     shown = re.sub(r"(--account[= ])\S+", r"\1<account>", text)
     names = [(os.environ[v], "<account>") for v in ("SBATCH_ACCOUNT", "SLURM_ACCOUNT") if os.environ.get(v)]
-    names += [(p, "<partition>") for p in partitions if p]
+    for given, label in [(p, "<partition>") for p in partitions if p] + [(n, "<node>") for n in nodes]:
+        names += [(name, label) for name in {given, expand_variables(given)}]
     for name, label in sorted(names, key=lambda n: len(n[0]), reverse=True):
         shown = re.sub(rf"(?<![\w-]){re.escape(name)}(?![\w-])", label, shown)
     if shown != text:

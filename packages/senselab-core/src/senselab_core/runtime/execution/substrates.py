@@ -44,7 +44,7 @@ from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands, is_service_class
 from senselab_core.runtime.hardware import HardwareInfo, host_token, probe_hardware, process_started, visible_devices
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.site_placement import Placer, rendered
+from senselab_core.runtime.site_placement import FIELDS, Placer, rendered
 from senselab_core.runtime.storage import PRIVATE_DIR, private_dir
 
 logger = logging.getLogger("senselab")
@@ -114,7 +114,8 @@ class SiteRefused(SlurmError):
         request_line: str,
         site_message: str,
         layers: Mapping[str, str],
-        partitions: Collection[str],
+        partitions: Collection[str | None],
+        nodes: Collection[str],
         started: Sequence["WorkerHandle"] = (),
     ) -> None:
         """Refuse with the `sbatch` line and the site's message, rendered, and name the inputs that change it."""
@@ -123,7 +124,8 @@ class SiteRefused(SlurmError):
             f"the site refused the submission of class {resource_class!r}: {request_line}: {site_message} "
             f"(values set {set_by}; change them with --placement or the placement hook, then resume)"
         )
-        super().__init__(rendered(text, partitions), started, rendered(site_message, partitions))
+        shown = rendered(text, partitions=partitions, nodes=nodes)
+        super().__init__(shown, started, rendered(site_message, partitions=partitions, nodes=nodes))
         self.resource_class, self.layers = resource_class, dict(layers)
 
 
@@ -524,7 +526,7 @@ class Slurm:
         """Return the class of `queue` as it is placed this epoch, its excluded nodes and the layer of each value."""
         base = self._class(queue)
         if self.placer is None:
-            return base, base.exclude, {}
+            return base, self.exclude_nodes, dict.fromkeys(FIELDS, "profile")
         placed = self.placer.for_class(class_of(queue), self.epoch)
         return placed.grant(base), placed.exclude, placed.values.layers
 
@@ -535,8 +537,7 @@ class Slurm:
             ValueError: the queue's class is unknown, or names a variable that is not set.
             PlacementAnswerRefused: the site's hook answered with a value that could not run the work.
         """
-        grant, exclude, _ = self._granted(queue)
-        excluded = [*dict.fromkeys([*self.exclude_nodes, *exclude])]
+        grant, excluded, _ = self._granted(queue)
         args = [SBATCH, "--parsable", f"--job-name={name}", f"--comment={queue}"]
         if grant.partition is not None:
             args.append(f"--partition={expand(grant.partition)}")
@@ -610,9 +611,9 @@ class Slurm:
         except SlurmError as err:
             if err.site_message is None:
                 raise
-            partitions = [expand(c.partition) for c in self.classes.values() if c.partition and "$" not in c.partition]
+            grant, excluded, layers = self._granted(queue)
             raise SiteRefused(
-                class_of(queue), shlex.join(args), err.site_message, self._granted(queue)[2], partitions
+                class_of(queue), shlex.join(args), err.site_message, layers, [grant.partition], excluded
             ) from err
         return WorkerHandle(queue, job, pending=True, name=name)
 
@@ -645,18 +646,14 @@ class Slurm:
     def start(self, resource_class: str, count: int) -> list[WorkerHandle]:
         """Submit workers of `resource_class`, as many as `count` and the room under `qos_cpu_cap` allow.
 
-        The class's `max_workers` is its placement's: an answer below the profile's holds fewer workers alive.
-
         Raises:
             ValueError: the queue's class is unknown, or names a variable that is not set.
             PlacementAnswerRefused: the site's hook answered with a value that could not run the work.
             SlurmError: `sbatch` kept failing; it carries the workers submitted before it (`started`).
             SiteRefused: the scheduler refused the submission; names the `sbatch` line, its reply and the layers.
         """
-        grant = self._granted(resource_class)[0]
+        self._granted(resource_class)
         cached = self._cached()
-        alive = sum(1 for h in cached if class_of(h.queue) == class_of(resource_class))
-        count = min(count, grant.max_workers - alive)
         if self.qos_cpu_cap is not None:
             used = sum(self._cpus(h.queue) for h in cached)
             count = min(count, (self.qos_cpu_cap - used) // self._cpus(resource_class))
@@ -735,8 +732,11 @@ class Fleet:
             logger.error("workers of %s are broken after %d failed starts: %s", resource_class, n, reason)
 
     def fail_substrate(self, err: Exception) -> None:
-        """Count a failure of the substrate's own commands; the substrate is broken after `budget` in a row."""
-        self._fail("*", str(err))
+        """Count a failure of the substrate's commands: against the class a `SiteRefused` names, else the substrate.
+
+        A class, or the substrate (`*`), is broken after `budget` failures in a row.
+        """
+        self._fail(err.resource_class if isinstance(err, SiteRefused) else "*", str(err))
 
     def substrate_due(self) -> bool:
         """Whether the substrate may be used now: it is not broken, and its latest failure's wait has passed."""
@@ -832,7 +832,7 @@ class Fleet:
         self.stop(alive)
 
 
-def scale(  # noqa: PLR0913 - the queues and substrate, then keyword-only sizing and surplus state
+def scale(  # noqa: PLR0913, C901 - the queues and substrate, then keyword-only state; one pass over each queue
     queues: QueueSet,
     substrate: Substrate,
     profile: ExecutionProfile,
@@ -840,6 +840,7 @@ def scale(  # noqa: PLR0913 - the queues and substrate, then keyword-only sizing
     workers: Callable[[str, int], int],
     surplus_since: dict[str, float] | None = None,
     clock: Clock = SystemClock(),  # noqa: B008 - stateless
+    granted: Callable[[str], ResourceClass] | None = None,
 ) -> None:
     """Start or stop the workers each queue of `queues` needs, from one `live()` listing of `substrate`.
 
@@ -850,6 +851,8 @@ def scale(  # noqa: PLR0913 - the queues and substrate, then keyword-only sizing
     whose workers exit when their consumers stop. With `surplus_since` (the caller
     keeps it between rounds) a surplus is stopped only once it has lasted `2 × pool.poll_s`, so a queue that briefly
     empties between items keeps its workers; without it a surplus is stopped at once. The surplus is timed on `clock`.
+    `granted` gives a class as it is placed (`max_workers` is read from it, only for a queue that wants to start
+    workers); by default the profile's.
     """
     names = queues.names()
     live = substrate.live()
@@ -880,7 +883,10 @@ def scale(  # noqa: PLR0913 - the queues and substrate, then keyword-only sizing
             continue
         if surplus_since is not None:
             surplus_since.pop(name, None)
-        room = grant.max_workers - sum(len(hs) for other, hs in alive.items() if class_of(other) == class_of(name))
+        if wanted == have:
+            continue
+        limit = (granted(name) if granted is not None else grant).max_workers
+        room = limit - sum(len(hs) for other, hs in alive.items() if class_of(other) == class_of(name))
         if cap is not None:
             room = min(room, (cap - used) // cpus(name))
         count = min(wanted - have, room)
@@ -915,11 +921,8 @@ def substrate_of(
     plan_hash: str,
     *,
     hardware: HardwareInfo | None = None,
-    placer: Placer | None = None,
 ) -> Substrate:
     """Return the substrate `profile` names for the run in `run_dir` of plan `plan_hash`.
-
-    A `slurm` substrate places each class through `placer` (`Plan.placer`) when given.
 
     `local` is `Local` over the sum of the classes' `max_workers`, its `cuda` classes on the GPUs this process sees
     (`hardware`, probed when None); `slurm` is `Slurm` over the profile's classes, QOS cap and excluded nodes, logging
@@ -946,7 +949,6 @@ def substrate_of(
         exclude_nodes=spec.exclude_nodes,
         log_dir=Path(run_dir) / PRIVATE_DIR / "slurm",
         commands=spec.commands,
-        placer=placer,
     )
 
 

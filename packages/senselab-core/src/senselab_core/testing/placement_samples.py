@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping, Sequence
 from senselab_core.kernel._base import Frozen
 from senselab_core.kernel.license import License, LicenseSet
 from senselab_core.kernel.placement import Cost, NodePlacement, PlanPlacement
-from senselab_core.runtime.execution.events import PlacementEvent
+from senselab_core.runtime.execution.events import PlacementRecord
 from senselab_core.runtime.execution_settings import (
     FaultBudgets,
     JobLease,
@@ -430,17 +430,19 @@ def _register_site(register: Register) -> None:
             [PlacementAnswer(), PlacementAnswer(classes={"cpu": PlacementValues(time_s=60.0)}, why="idle")],
             [{"format": "placement-answer@2.0"}, {"classes": 3}],
         ),
-        HookRef: ([HookRef(path="site.hooks:place"), HookRef(path="a:b", version="1.0")], [{"path": ""}]),
+        HookRef: (
+            [HookRef(path="site.hooks:place"), HookRef(path="a:b", version="1.0", importable=False)],
+            [{"path": ""}],
+        ),
         ClassPlacement: ([_PLACED, ClassPlacement(values=_CURRENT)], [{"verdict": "maybe"}, {"exclude": ("",)}]),
         ResolvedPlacement: (
             [ResolvedPlacement(classes={"cpu": _PLACED}), ResolvedPlacement(classes={})],
             [{"classes": 3}],
         ),
-        PlacementEvent: (
+        PlacementRecord: (
             [
-                PlacementEvent(epoch=0, resource_class="cpu", verdict="no-hook", used=_CURRENT),
-                PlacementEvent(
-                    epoch=2,
+                PlacementRecord(resource_class="cpu", verdict="no-hook", used=_CURRENT),
+                PlacementRecord(
                     resource_class="gpu:h100",
                     request=_NEEDS,
                     answer=PlacementAnswer(why="idle"),
@@ -450,7 +452,7 @@ def _register_site(register: Register) -> None:
                     exclude=("<node>",),
                 ),
             ],
-            [{"epoch": -1}, {"verdict": "maybe"}, {"resource_class": ""}],
+            [{"verdict": "maybe"}, {"resource_class": ""}],
         ),
     }
     for cls, (samples, invalid) in classes.items():

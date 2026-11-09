@@ -10,7 +10,7 @@ from pathlib import Path
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.runtime.execution.epoch import StaleCoordinator
-from senselab_core.runtime.execution.events import Event, runs_root
+from senselab_core.runtime.execution.events import Event, placements, runs_root
 from senselab_core.runtime.execution.executor import QueueHeld
 from senselab_core.runtime.execution.pool import coordinate, run_plan, run_store
 from senselab_core.runtime.execution.pool_worker import serve_pool
@@ -81,6 +81,23 @@ def _tail(text: str, lines: int = 10) -> str:
     return "\n".join(text.splitlines()[-lines:])
 
 
+def _placement_lines(events: list[Event], resource_class: str | None = None) -> list[str]:
+    """Return one line per class placement in `events` (of `resource_class` when given): values, layers, verdict."""
+    lines = []
+    for event in placements(events):
+        found = event.placement
+        if found is None or resource_class not in (None, found.resource_class):
+            continue
+        layers = ", ".join(f"{k} by {v}" for k, v in found.used.layers.items())
+        note = "" if found.note is None else f"; {found.note}"
+        lines.append(
+            f"placement {found.resource_class} epoch {event.epoch}: {found.verdict}; partition {found.used.partition}, "
+            f"time_s {found.used.time_s}, max_workers {found.used.max_workers}, {len(found.exclude)} excluded "
+            f"({layers}){note}"
+        )
+    return lines
+
+
 def run_status(args: argparse.Namespace) -> int:
     """Run a parsed ``status``: the jobs of a run by state, its faults and its broken envs, from its events."""
     try:
@@ -97,6 +114,8 @@ def run_status(args: argparse.Namespace) -> int:
         print(f"broken env {broken.env}: {broken.failures} failures; {broken.fault.type}: {broken.fault.message}")
     for node, counts in status.nodes.items():
         print(f"node {node}: " + ", ".join(f"{k} {v}" for k, v in counts.items() if v))
+    for line in _placement_lines(run.events()):
+        print(line)
     return 0
 
 
@@ -128,7 +147,7 @@ def run_explain(args: argparse.Namespace) -> int:
         return 1
     tasks = {n.id: n.task for n in logical.graph.nodes}
     matched = [e for e in events if e.node == args.target or (e.key is not None and e.key.startswith(args.target))]
-    nodes = sorted({e.node for e in matched} | ({args.target} if args.target in tasks else set()))
+    nodes = sorted({e.node for e in matched if e.node is not None} | ({args.target} if args.target in tasks else set()))
     if not nodes:
         print(f"senselab: error: no node or key {args.target!r} in run {run.run_dir.name}", file=sys.stderr)
         return 1
@@ -136,6 +155,9 @@ def run_explain(args: argparse.Namespace) -> int:
         shown = [e for e in matched if e.node == node] or [e for e in events if e.node == node]
         placement = _placement(run.run_dir, shown)
         print(node_line(node, tasks[node], placement) if node in placement.nodes else f"node {node}")
+        if node in placement.nodes:
+            for line in _placement_lines(events, placement.nodes[node].resource_class):
+                print(line)
         print(f"events ({len(shown)}):")
         for event in shown:
             print(_event_line(event))
@@ -191,13 +213,16 @@ def run_coordinate(args: argparse.Namespace) -> int:
     try:
         profile = _profile(args.profile)
         run_dir = _run_directory(args.run_ref)
-        planned = _with_placement(run_plan(run_dir, profile), args)
         substrate = (
-            ExternalWorkers()
-            if args.external
-            else substrate_of(profile, run_dir, planned.hash, placer=planned.placer(run_dir))
+            ExternalWorkers() if args.external else substrate_of(profile, run_dir, run_plan(run_dir, profile).hash)
         )
-        outcome = coordinate(run_dir, substrate=substrate, profile=profile)
+        outcome = coordinate(
+            run_dir,
+            substrate=substrate,
+            profile=profile,
+            overrides=load_overrides(args.placement),
+            hook=args.placement_hook,
+        )
     except (OSError, ValueError, StaleCoordinator, QueueHeld, PlacementHookFailed) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
         return 1
@@ -239,7 +264,7 @@ def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
     status.set_defaults(run=run_status)
     planning = groups.add_parser("plan", help="what each resource class of a run needs, as placement-request@1.0")
     planning.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
-    planning.add_argument("--json", action="store_true", required=True, help="print the request as JSON")
+    planning.add_argument("--json", action="store_true", help="print the request as JSON (the only output form)")
     planning.add_argument("--profile", default=None, help="the execution profile the run was placed under")
     _placement_arguments(planning)
     planning.set_defaults(run=run_plan_request)

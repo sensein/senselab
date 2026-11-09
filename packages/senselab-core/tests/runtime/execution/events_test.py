@@ -242,7 +242,7 @@ def test_a_torn_last_line_is_skipped_and_a_corrupt_middle_line_raises(tmp_path: 
     log.record("queued", "a")
     log.record("started", "a")
     with log.path.open("a") as handle:
-        handle.write('{"format":"run-event@1.0","kind":"fini')
+        handle.write('{"format":"run-event@2.0","kind":"fini')
     assert [e.kind for e in read_events(tmp_path)] == ["queued", "started"]
     lines = log.path.read_text().splitlines()
     log.path.write_text("\n".join([lines[0], "not json", lines[1]]) + "\n")

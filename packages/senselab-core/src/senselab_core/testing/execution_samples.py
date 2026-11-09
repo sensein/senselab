@@ -5,7 +5,7 @@ from collections.abc import Callable
 from senselab_core.kernel.identity import Attestation, gather_identity
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.execution.batching import BucketGrid
-from senselab_core.runtime.execution.events import BrokenEnv, Event
+from senselab_core.runtime.execution.events import BrokenEnv, Event, PlacementRecord
 from senselab_core.runtime.execution.executor import (
     Admission,
     FaultRecord,
@@ -16,6 +16,7 @@ from senselab_core.runtime.execution.executor import (
     UpstreamRef,
 )
 from senselab_core.runtime.execution.services import ServiceEntry
+from senselab_core.runtime.site_placement import CurrentValues
 
 Register = Callable[..., None]
 
@@ -178,9 +179,20 @@ def register_event_samples(register: Register, jobs: tuple[JobRef, ...], faults:
             Event(kind="verify", node="n", attempt="a", ordinal=1, writer="w", seq=4, t_ns=5),
             Event(kind="blocked", node="n", job=jobs[0], attempt="a", ordinal=1, writer="w", seq=5, t_ns=6),
             Event(kind="cancelled", node="n", job=jobs[1], attempt="a", ordinal=1, writer="w", seq=6, t_ns=7),
+            Event(
+                kind="placement",
+                attempt="a",
+                ordinal=1,
+                writer="w",
+                seq=7,
+                t_ns=8,
+                placement=PlacementRecord(
+                    resource_class="cpu", verdict="no-hook", used=CurrentValues(max_workers=1, layers={})
+                ),
+            ),
         ],
         invalid_updates=[
-            {"format": "run-event@2.0"},
+            {"format": "run-event@3.0"},
             {"kind": "other"},
             {"attempt": ""},
             {"seq": -1},

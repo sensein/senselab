@@ -168,9 +168,14 @@ def class_needs(name: str, profile: ExecutionProfile, current: CurrentValues, no
     wall = per_worker = gpu = floor = memory = None
     if not open_:
         workers = max((n.sized.workers for n in nodes if n.sized is not None), default=0)
-        times = [t for n in nodes if (t := _worker_seconds(n, profile)) is not None]
-        per_worker = max(times, default=None)
-        per_worker = per_worker if per_worker is None or resource.time_s is None else min(per_worker, resource.time_s)
+        times = [_worker_seconds(n, profile) for n in nodes]
+        if None in times:
+            need("time_per_worker_s", "a node's request fit is unmeasured")
+        else:
+            per_worker = max((t for t in times if t is not None), default=None)
+            per_worker = (
+                per_worker if per_worker is None or resource.time_s is None else min(per_worker, resource.time_s)
+            )
         walls = [n.sized.wall_s for n in nodes if n.sized is not None]
         wall = None if None in walls else sum(w for w in walls if w is not None)
         gpu = (

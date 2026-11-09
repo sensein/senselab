@@ -35,7 +35,6 @@ class ResourceClass(Frozen):
         time_s: Wall-time limit per worker; None for none.
         partition: The scheduler partition, `${VAR}` expanded where a worker is submitted; None off a scheduler.
         gres: The scheduler's generic-resource request, such as `gpu:h100:1`; None for none.
-        exclude: Nodes the class's jobs are never submitted to, beside the substrate's own.
         max_workers: Workers of the class alive at once.
         memory_cap_bytes: The static memory the models resident at once on one worker may hold; None for no cap.
     """
@@ -47,7 +46,6 @@ class ResourceClass(Frozen):
     time_s: PositiveSeconds | None = None
     partition: NonEmptyStr | None = None
     gres: NonEmptyStr | None = None
-    exclude: tuple[NonEmptyStr, ...] = ()
     max_workers: PositiveInt
     memory_cap_bytes: PositiveInt | None = None
 

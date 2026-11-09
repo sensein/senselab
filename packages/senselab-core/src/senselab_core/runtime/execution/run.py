@@ -38,6 +38,7 @@ from senselab_core.runtime.execution.events import (
     Event,
     EventLog,
     RunStatus,
+    placement_recorder,
     read_events,
     run_dir_of,
     status_from,
@@ -52,6 +53,7 @@ from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import cache_root, fresh_attempt_id
+from senselab_core.runtime.site_placement import Placer
 from senselab_core.runtime.storage import PRIVATE_DIR, private_dir
 from senselab_core.runtime.store import ResultStore
 
@@ -656,9 +658,32 @@ def default_executor(placed: Plan, executor: Executor | None, store: ResultStore
         store=store,
         events=EventLog(run_dir, "a0", 1, epoch=0),
         profile=profile,
-        substrate=substrate_of(profile, run_dir, placed.hash, placer=placed.placer(run_dir)),
+        substrate=substrate_of(profile, run_dir, placed.hash),
         epoch=0,
     )
+
+
+def _record_placements(
+    placed: Plan, executor: Executor, values: Mapping[InputIdentity, object], log: EventLog, epoch: int
+) -> None:
+    """Append each class's placement to `log` for an executor that starts no scheduler jobs, as a `Pool` does itself.
+
+    The explicit values and the hook apply to every executor; one with no workers to place records them as given.
+    """
+    from senselab_core.runtime.execution.pool import Pool  # noqa: PLC0415 - imports the planner
+
+    if isinstance(executor, Pool) or placed.execution is None:
+        return
+    placer = Placer(
+        placed.execution,
+        placed.overrides,
+        placed.hook,
+        request=lambda: placed.placement_request(values=values),
+        record=placement_recorder(log),
+        inert="this executor starts no scheduler jobs: the values are recorded, not applied",
+    )
+    for name in sorted({p.resource_class for p in placed.placement.nodes.values()}):
+        placer.for_class(name, epoch)
 
 
 def _claim_ordinal(run_dir: Path, attempt: str) -> int:
@@ -889,6 +914,7 @@ def start(
         run = Run(run_dir, store=store)
         log = EventLog(run_dir, attempt, ordinal, epoch=epoch)
         executor.bind_epoch(epoch, log)
+        _record_placements(placed, executor, values, log, epoch)
         runner = PydraRunner(profile=placed.execution, work_dir=run_dir / PYDRA_DIR)
         written = provenance if store is None else store.provenance
         add_plan_entity(written, placed.hash)

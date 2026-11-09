@@ -32,7 +32,6 @@ from senselab_core.runtime.call import (
     pin_model,
 )
 from senselab_core.runtime.catalogue import Catalogue
-from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.datasets import record_bind, sourced_manifest
 from senselab_core.runtime.explain import (
     NodeSized,
@@ -54,7 +53,6 @@ from senselab_core.runtime.site_placement import (
     PlacementHook,
     PlacementRequest,
     PlacementValues,
-    Placer,
     current_values,
     load_overrides,
 )
@@ -396,7 +394,7 @@ class Plan:
     profile and run config it was placed under, the sources its inputs are read from (`_manifest`) and the values
     of the inputs given as objects (`live`), which only this process holds. The explicit placement values
     (`overrides`) and the site's placement hook (`hook`, a callable or its `module:callable` path) are not part of its
-    identity either; `placer` resolves them with the profile's.
+    identity either; the pool's `Placer` resolves them with the profile's.
     """
 
     logical: LogicalPlan
@@ -587,26 +585,6 @@ class Plan:
         current = current_values(profile.resource_classes, self.overrides)
         return PlacementRequest(
             classes=tuple(class_needs(name, profile, current[name], nodes) for name, nodes in sorted(sized.items()))
-        )
-
-    def placer(self, run_dir: Path, *, clock: Clock = SystemClock()) -> Placer:  # noqa: B008 - stateless
-        """Return the `Placer` of this plan's run in `run_dir`, recording each placement it makes.
-
-        Raises:
-            ValueError: the plan holds no execution profile.
-            PlacementAnswerRefused: an explicit value names no class of the profile, or is refused.
-            PlacementHookFailed: the hook's path does not import.
-        """
-        from senselab_core.runtime.execution.events import placement_event, record_placement  # noqa: PLC0415 - as below
-
-        if self.execution is None:
-            raise ValueError("a plan without its execution profile has no placer")
-
-        def record(epoch: int, name: str, needs: Any, ref: Any, placed: Any) -> None:  # noqa: ANN401 - see Placer
-            record_placement(run_dir, placement_event(epoch, name, needs, ref, placed))
-
-        return Placer(
-            self.execution, self.overrides, self.hook, request=self.placement_request, clock=clock, record=record
         )
 
 
