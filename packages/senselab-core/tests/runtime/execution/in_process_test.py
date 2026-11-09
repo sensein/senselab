@@ -404,6 +404,25 @@ def test_no_host_name_in_the_store_after_a_run(store: ResultStore, tmp_path: Pat
 
 
 @pytest.mark.contract
+def test_no_index_url_in_the_store_after_a_run(store: ResultStore, tmp_path: Path) -> None:
+    """A call whose env was installed from a userinfo mirror (`envs.torch_index`) stores its build, never the URL."""
+    mirror = "https://user:secret@mirror.internal/whl/cu128"
+
+    def opener(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
+        return dataclasses.replace(_this_interpreter(backend, profile), torch_index=profile.envs.torch_index)
+
+    previous = use_packaged(dataclasses.replace(packaged_now(), open_env=opener, env_read=opener))
+    try:
+        result = _in_process(
+            _call("mirrored"), execution=_profile("isolated", envs={"torch_index": mirror}), store=store
+        )
+    finally:
+        use_packaged(previous)
+    assert result.context.driver["torch_build"] == "cu128" and "torch_index" not in result.context.driver
+    assert identity_leaks(store.root, tmp_path, (mirror, "secret", "mirror.internal")) == []
+
+
+@pytest.mark.contract
 def test_isolated_worker_equals_host(store: ResultStore) -> None:
     """An isolated backend runs in a pooled worker process and gives the host backend's outputs."""
     host = _in_process(_call("same"), execution=_profile("alpha"), store=store)

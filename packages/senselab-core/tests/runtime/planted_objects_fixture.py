@@ -14,7 +14,7 @@ import os
 import re
 import stat
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -931,16 +931,16 @@ def real_names() -> set[str]:
     return {n for n in {*full, *(h.split(".")[0] for h in full), getpass.getuser()} if n}
 
 
-def identities_in(data: bytes, base: Path) -> list[str]:
-    """Return each real name `data` holds as a whole token, and each path of the home or of `base` it holds anywhere."""
+def identities_in(data: bytes, base: Path, needles: Sequence[str] = ()) -> list[str]:
+    """Return each real name `data` holds as a whole token, and each home, `base` or `needles` string anywhere."""
     import re
 
-    paths = {str(Path.home()), str(base), str(base.resolve())}
+    paths = {str(Path.home()), str(base), str(base.resolve()), *needles}
     names = [n for n in sorted(real_names()) if re.search(rb"(?<![\w-])" + re.escape(n.encode()) + rb"(?![\w-])", data)]
     return names + [p for p in sorted(paths) if p.encode() in data]
 
 
-def identity_leaks(root: Path, base: Path) -> list[tuple[str, str]]:
+def identity_leaks(root: Path, base: Path, needles: Sequence[str] = ()) -> list[tuple[str, str]]:
     """Return `(file, what)` for every file under `root` whose path or bytes hold a real name or a path of `base`.
 
     `base` is the directory every test root sits under, so any absolute path of this machine is a needle; nothing is
@@ -952,5 +952,5 @@ def identity_leaks(root: Path, base: Path) -> list[tuple[str, str]]:
     found = []
     for path in sorted(p for p in root.rglob("*") if p.is_file() and private not in p.parents):
         relative = str(path.relative_to(root))
-        found += [(relative, n) for n in identities_in(relative.encode() + b"\0" + path.read_bytes(), base)]
+        found += [(relative, n) for n in identities_in(relative.encode() + b"\0" + path.read_bytes(), base, needles)]
     return found

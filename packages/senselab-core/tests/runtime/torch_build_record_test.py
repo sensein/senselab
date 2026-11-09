@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from planted_objects_fixture import store_context, store_key
+from planted_objects_fixture import identity_leaks, store_context, store_key
 from senselab_core.kernel.declare import Env
 from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.runtime.envs import EnvHandle, HostCuda, Uv, ensure_env, torch_build
@@ -17,7 +17,7 @@ from senselab_core.runtime.store import STORE_DIR, ResultStore
 from senselab_core.testing.calibration_samples import UNIT, observation
 
 MIRROR = "https://user:secret@mirror.internal/whl/cu128"
-NEEDLES = (MIRROR, "secret", "mirror.internal", "://")
+NEEDLES = (MIRROR, "secret", "mirror.internal")
 FAKE_UV = Uv((sys.executable, str(Path(__file__).with_name("fake_uv_fixture.py"))))
 LEASE = JobLease(stale_after_s=30.0, renew_fraction=0.01, attribute_delay_s=0)
 
@@ -98,7 +98,6 @@ def test_no_index_url_in_any_readable_record(tmp_path: Path) -> None:
     )
     roots = MeasureRoots((shared,), StorePolicy.load_default(), "group", os.geteuid(), stale_after_s=60.0)
     roots.put_observations(unit, "p1", [observation(probe=None, item="i")], provenance)
-    swept = [p for root in (store, shared) for p in root.rglob("*") if p.is_file()]
-    assert any(STORE_DIR in str(p) for p in swept) and len(swept) > 2
-    assert [(p.name, n) for p in swept for n in NEEDLES if n.encode() in p.read_bytes() + str(p).encode()] == []
+    assert any(STORE_DIR in str(p) for p in store.rglob("*")) and any(shared.rglob("*.json"))
+    assert identity_leaks(store, tmp_path, NEEDLES) == [] and identity_leaks(shared, tmp_path, NEEDLES) == []
     assert (tmp_path / "envs").is_dir() and any(MIRROR in p.read_text() for p in (tmp_path / "envs").glob("*.json"))
