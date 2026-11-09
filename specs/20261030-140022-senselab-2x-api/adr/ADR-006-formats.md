@@ -613,3 +613,18 @@ so moving them needs a format change, left open.
 - A stored fault message renders paths, account names and this host's name or first label to labels (`<path>`,
   `<account>`, `<host>`), names matched as whole tokens; the operator's text goes to the log. A local model is served and attested under its content identity (`--served-model-name`), never its
   path, so the same weights at two paths are one context.
+
+## Amendment 2026-11-08: the worker ready mark is a versioned record (Phase 3 Task 20R-7a)
+
+Design: [`calibration-probe.md`](../calibration-probe.md) §3.2, §8.
+
+- A pool worker's ready mark, `<run>/workers/<worker id>`, carries `format: worker-ready@1.0`, registered in
+  `kernel/formats.py`. It holds `host` (`host_token()`), `pid`, `started`, and per queue its `HardwareClass` (or
+  null) and, per env of the queue's backends, that env's `MeasureUnit` env fields (`env_lock`, `wheel_set`, `driver`
+  with `torch_build` only, `platform`, `numerics`, `threads`), produced by the filter `MeasureEnv.from_fields`
+  applies, or an `unbuilt` cause code. It carries no server attestation field; the coordinator completes a server
+  unit from `service_of`.
+- The mark it replaces carried no tag. Before the first 2.x release there is no previous-major reader: a file
+  without the tag, or of another major, is no readable mark, and its reader logs the tag it found once. A later minor
+  is additive and readers ignore its unknown fields.
+- The mark sits in the run's readable part, so it holds no account or host name, uid, path, URL or free text.

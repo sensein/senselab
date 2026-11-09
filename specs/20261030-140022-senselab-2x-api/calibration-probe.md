@@ -137,10 +137,14 @@ never enter a digest. The coordinator resolves a resource class to the hardware 
 3. If the index is empty, or names more than one, the first worker's hello for that class decides. The unit is in
    `Resolving` (§7.1) until then; the queue's first worker is started as it would be anyway, so this costs no extra
    start. Probe and production items wait in that state; servable jobs do not (I4).
-4. A class is resolved once per run, by step 2 or step 3. When it maps to several seen classes (a partition of mixed
+4. A class is resolved once per run, by the first hello (step 3), or by step 2 until then. When it maps to several seen classes (a partition of mixed
    cards), the plan says the class is mixed and that its items are sized for the resolved class. Each observation is
    written under the class of the worker that made it; only a worker of the resolved class takes a probe queue's
    serve lease (§4.4), and drift counts only requests of the resolved class (§7.3).
+5. (Amended 2026-11-08, T20R-7a review I-3.) Step 2's class is a prediction. When the run's first hello for the class
+   names another class, the hello wins: every unit of the class resolved from the prediction is resolved again under
+   the hello's class, in whatever state it is (§7.1, "A disagreeing hello"). A later hello of another class is step 4's
+   mixed class and re-resolves nothing.
 
 On a local substrate the first worker's hello is this host's, so plan time resolves the class by the one rule: the class is
 this host's `HardwareClass` (from its report, as the worker would give it), and it must be in the index; else the plan says
@@ -148,6 +152,29 @@ this host's `HardwareClass` (from its report, as the worker would give it), and 
 classes in a shared root (a partition of mixed cards, or two workstations under one declared class) therefore change nothing
 here: only this host's class is read. On a Slurm substrate the worker's node, platform and numerics are not known before it
 starts, so the unit is unresolved until a hello (T20R-7a) says them.
+
+**Pending and final causes (amended 2026-11-08, T20R-7a review B-1).** A unit that cannot be built has one of two
+causes, and the cause, not the substrate, decides what follows:
+
+- **Pending**: a worker's start removes it. The node a Slurm worker runs on is not yet chosen, so its `HardwareClass`,
+  `platform`, `numerics` and the env fields it builds (`wheel_set`, `driver`) are unknown; the hardware is not yet
+  seen on this host; a backend's env is not yet built. The unit waits in `Resolving` (§7.1) and is built at the first
+  hello of its queue whose ready mark (§8) carries every field it lacks: the queue's `HardwareClass`, and per env of
+  the queue's backends that env's fields of §3.1 (`env_lock`, `wheel_set`, `driver`, `platform`, `numerics`, and
+  `threads`: `{}` for a host env, the served variables for a served one). A server unit's `driver` and `service` are
+  completed by the coordinator from `service_of`, as on a local substrate. The unit then goes to `Lookup`, the lease
+  and the probe like any other. The hello's values are the worker's own and win over any value the coordinator
+  predicted.
+- **Final**: nothing at run time removes it. The host or the hello names no hardware class; the jobs read both files
+  and in-memory inputs (two decoders); a server's attestation is unreadable; an env record is unreadable; the hello
+  says an env's build failed. Only a final cause takes the safe values (§6.5): the unit is `Unmeasured` with that
+  reason, which the plan and the run report state.
+
+A hello that resolves a pending unit to a final cause (no class, a failed build) makes it final. A first hello with
+no class makes the class final for the run even where a later node would name one, since a class is resolved once per
+run (step 4); this errs to the safe values. After a failed build the held parts are put as production, fail, and
+raise the env hold (`QueueHeld`): the hold, not `Unmeasured`, is what the user sees. On a local substrate
+the plan still resolves from this host's report and env records; only what they cannot yet say is pending.
 
 So a unit is never looked up under a digest that no worker writes (review B3). Plan time (`explain`, §6.6) uses the
 index only; with no entry, its figures are "unmeasured: hardware not yet seen".
@@ -574,7 +601,8 @@ write and `regime_records` reads; a payload change bumps `measure-regime@` or `m
 ### 7.1 `ProbeState`, per unit
 
 ```
- New ──► Resolving (hardware, §3.2) ──► Lookup
+ New ──► Resolving (pending causes, §3.2) ── hello ──► Lookup
+ New ── final cause ──► Unmeasured;  Resolving ── final cause at hello, or resolve_s out ──► Unmeasured
  Lookup ── get() measured ──────────────────────────────────────────────► Measured
  Lookup ── none ── lease taken ──► Probing ── estimate measured ────────► Measured
                                       └──── budget out / too few jobs ──► Unmeasured
@@ -596,6 +624,38 @@ write and `regime_records` reads; a payload change bumps `measure-regime@` or `m
   observations leave uncovered (I8).
 - A retry of a probe job is a production retry (one-job fragment), never a probe item.
 
+Amended 2026-11-08 (T20R-7a review B-1, B-2, I-2, I-3):
+
+- **Order while a unit is pending.** Servable jobs are put at once, as in every state. The pending unit's computed
+  jobs are held in the order they arrive and hold no worker. The queue wants one worker while any of its units is
+  `Resolving` (§7.2), started as it would be anyway, and other units of the queue proceed by their own states: a
+  resolved unit's production and probe items are put as they come and are never delayed by a pending one. At the
+  resolving hello every pending unit of the queue is built at once, and each unit's held parts go to `Lookup` in the
+  order held, before parts of that unit that arrive later.
+- **Held parts are checked like flights.** On every poll, each part a unit holds (in `Resolving`, `PeerWait`,
+  `Probing` or `Confirming`) is checked against its queue exactly as a flight is: an env held on the queue raises
+  `QueueHeld`, and a broken class or substrate (`Fleet.broken_for`) raises `WorkersBroken`, each once the results
+  landed with it are given. A class whose workers never say hello therefore breaks and is reported (UX-36, UX-37).
+- **Resolving is bounded.** The bound is `calibration.resolve_s` (§11), on the Pool's clock, counted from the first
+  poll at which a worker of the unit's queue is live and not pending. A worker waiting in the scheduler's queue
+  starts no clock and breaks nothing (`Fleet` counts failed starts only), so parts of a class whose jobs stay pending
+  wait as production items do today: no new hang, and no new coverage. When the bound passes with no resolving
+  hello, the unit goes `Unmeasured` with the reason `no readable ready mark from a worker of <queue> within resolve_s
+  of starting (<n> unreadable)`, and its held parts are put as production under the safe values (§6.5).
+- **The probe queue's fallback (I-2).** The stale window (`lease.stale_after_s`) runs from the probe queue's last claim
+  or outcome, else from its put. When it passes, the Pool first writes the probe queue's write-once `closed` mark,
+  which a worker checks before it takes the serve lease or claims (`_serves`): a closed probe queue is served by no
+  one. Only then are the jobs of its unclaimed items put as production; an item under a live claim finishes on the
+  closed queue, and its jobs are put as production only if that claim goes stale. The unit goes `Unmeasured` and
+  writes the warm observations it has.
+- **A disagreeing hello (I-3, §3.2 step 5).** Every unit of the class resolved from the prediction is resolved again
+  under the hello's class. A `Probing` or `Confirming` unit's probe is abandoned: its probe queue is closed as above,
+  its in-flight items finish and their results are yielded, the observations they made are written under the class of
+  the worker that made each (§3.2 step 4) and the probe lease is released; the jobs of its unclaimed items and its held
+  parts return to `Resolving` and are placed under the new unit. A `Measured` unit is dropped: items already put keep
+  their sizing, which costs efficiency and changes no result, and every later part is placed under the new unit. A
+  `PeerWait` or `Lookup` unit is placed again under the new unit.
+
 ### 7.2 What replaces what
 
 | old | new |
@@ -603,7 +663,7 @@ write and `regime_records` reads; a payload change bumps `measure-regime@` or `m
 | `_calibrating`, `_first_round`, `_round_digests`, `calibrated` | `ProbeState` per unit, with its probe id and items |
 | `_batch_round` | `BATCHED` phase planned by `Probe.plan` from the `SINGLE` estimate |
 | `_round_measure`, `calibrated` | `Probe.estimate` |
-| `workers_wanted` for an unmeasured queue (`calibration_workers`) | a probing unit wants one worker for its probe queue; other units of the queue are sized by their own estimates |
+| `workers_wanted` for an unmeasured queue (`calibration_workers`) | a probing unit wants one worker for its probe queue; a queue with a unit in `Resolving` wants one worker; other units of the queue are sized by their own estimates |
 | `_grow` | `oom` record (§7.4) |
 | `Measures` (cache root by code version) | `MeasureSource` over the measures roots, then the packaged table |
 
@@ -673,6 +733,37 @@ The bisection of the failing request, the re-placement on a larger class and the
   both on `done` (`since_load`, `load_s`), and the in-process host worker reads them directly.
 - A worker reports its `HardwareClass` to the coordinator through its ready mark; the coordinator writes the hardware
   index entry (§3.2). The worker writes nothing to a measures root.
+- **The ready mark (amended 2026-11-08, T20R-7a review B-1).** The mark at `<run>/workers/<worker id>` is a versioned
+  record, `worker-ready@1.0` (ADR-006). A file without that tag, or of another major, is no readable mark: `read_mark`
+  logs once, at warning, the tag it found and the one it reads, and the Pool counts it for the `resolve_s` reason
+  (§7.1). Before it writes the mark, the worker builds (or reads, if built) the env of each backend placed on its
+  queues. It reads that set from the run's placements (`<run>/private/placements/<attempt>.json`, the latest
+  attempt), which the coordinator writes when it binds the run, before the first `Fleet.start` of any class. A backend
+  missing from them gives a mark without its entry, and its unit stays pending until `resolve_s`. A failed build is
+  recorded in the mark, so the mark is written whether or not every build succeeded. The record:
+
+  ```
+  {"format": "worker-ready@1.0",
+   "host": <host_token()>, "pid": <int>, "started": <str | null>,
+   "queues": {<queue>: {
+       "hardware": <HardwareClass> | null,
+       "envs": {<env name[-tag]>: {"env_lock", "wheel_set", "driver", "platform", "numerics", "threads"}
+                                | {"unbuilt": "build-failed" | "unreadable"}}}}}
+  ```
+
+  `host`, `pid` and `started` serve liveness only (`Peers`). Each env entry is exactly that env's `env` fields of §3.1,
+  produced by the one filter `MeasureEnv.from_fields` applies (hoisted so both call it): `driver` holds `torch_build`
+  only, never the index URL or a server's attestation fields. `threads` is per env: `{}` for a host env, the measured
+  launch values otherwise, with the served variables for a served backend. `platform` and `numerics` are the node's
+  and agree across a queue's envs. The mark is written before any server starts, so it carries no `engine_version`; the
+  coordinator completes a server unit's `driver` and `service` from `service_of`, as on a local substrate. `hardware`
+  is null where the worker names no class, and `unbuilt` is a cause code; both are final causes (§3.2). The mark
+  carries no identifier (I7, UX-57): no account or host name, uid, path, URL or free-text message, only the host token
+  (ADR-007), digests, cause codes and the values above. `test_a_ready_mark_carries_no_identifier` builds its mark from
+  an env whose index is a mirror URL with userinfo and a backend serving a `local:` model.
+- A worker takes a probe queue's serve lease only when its `HardwareClass` and its env fields for the probe's backend
+  equal the resolved unit's (the F2 filter over every field the hello carries), and never on a `closed` probe queue
+  (§7.1).
 
 ## 9. Ladder and generator on the same Probe
 
@@ -787,6 +878,7 @@ too, until a real adapter is timed.
 | `drift_confidence` | 2.576 | 2.576 | two-sided 1 %: at most one spurious confirming probe per hundred windows of a stable unit |
 | `observations_kept` | 3 | 3 | superseded probes kept for audit: three give a median of medians tolerating one bad probe |
 | `unmeasured_workers` | 1 | 1 | S5: unmeasured work is not scaled; one worker runs it under the safe values |
+| `resolve_s` | 1800 *provisional* | 1800 *provisional* | §7.1 (2026-11-08): the longest a live worker takes from its start to its ready mark, which is dominated by the env builds it does first (§8). Provisional basis: two env builds, each at the build waiter's bound of `lease.stale_after_s` + the lock timeout (300 + 600 s, 1.5 × the slowest measured cold build, 590 s); a queue needing more builds goes `Unmeasured`, which costs efficiency only. T20R-10 replaces it with the measured start-to-mark wall, the maximum over the profile's classes |
 
 Three values are derived properties of the profile, not keys, so they cannot drift and no override restates them:
 `probe_s` = `sizing.load_share × sizing.target_wall_s` (0.05 × 1800 = 90 on both profiles: probe work, like loading,
@@ -815,11 +907,17 @@ Dated amendment text is in the ADR files, 2026-11-08:
   measured or labelled unmeasured.
 - **ADR-006**: the format list gains `placement-request@1.0`, `placement-answer@1.0`, `measures@1`,
   `measure-unit@1.0`, `measure-observations@1.0`, `measure-drift@1.0`, `measure-supersede@1.0`, `measure-regime@1.0`,
-  `measure-oom@1.0` and `resource-table@2.0`, and `run-config@2.1` (additive minor: the `calibration` section, whose
+  `measure-oom@1.0` and `resource-table@2.0`, `worker-ready@1.0` (the ready mark, §8; amended 2026-11-08 after the
+  T20R-7a review), and `run-config@2.1` (additive minor: the `calibration` section, whose
   `trust` a run sets). T20R-1 registers them in `kernel/formats.py`; `resource-table@1.0` is retired by T20R-8.
 - **Elsewhere, by the implementing tasks**: `wire-protocol.md` (`done` gains `since_load` and `load_s`, T20R-5);
   `execution.md` §3.2 and §3.6 (T20R-7a, T20R-12); `config-derivations.md` (T20R-1,
   T20R-12); `design.md`'s public API (`placement=`, `placement_hook=`, T20R-12).
+- **OPEN (2026-11-08, T20R-7a design review; not done in T20R-7a).** `ExecutionContext.driver`, and so the shared
+  store's `context.json` and the `context@4` fingerprint, still carry the torch index URL (ruling P2-42). The rule "a
+  URL is a location, never a record value; records carry `torch_build`" awaits an owner ruling on a `context@5`
+  identity amendment. The measures (`MeasureEnv.from_fields`) and the ready mark (§8) follow the rule now; the env
+  record keeps the URL.
 
 ## 13. Rulings (owner, 2026-11-08)
 
@@ -1091,6 +1189,16 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
   (a stand-in with a long load is still measured; at `5ae1fc3d` round 2 is bounded by items only);
   `test_a_second_run_reuses_the_first_runs_measure_without_probing`;
   `test_a_peer_wait_returns_to_planning_for_uncovered_strata` (I8); `test_a_point_whose_probe_measured_nothing_ships_no_measure`.
+- **Amended 2026-11-08 (review B-1, B-2, I-2, I-3).** Scope adds pending and final causes (§3.2), the
+  `worker-ready@1.0` mark with the worker's env builds before it (§8), the held-part checks, `calibration.resolve_s`,
+  the `closed` probe queue and the disagreeing hello (§7.1). Files add `runtime/units.py`,
+  `runtime/execution/substrates.py`, `runtime/execution/pool_worker.py`, `runtime/execution/queue.py`,
+  `kernel/formats.py`, the profiles and `config-derivations.md`. Tests failing now:
+  `test_a_slurm_unit_resolves_at_the_first_hello_and_probes`; `test_a_worker_builds_an_unbuilt_env_before_its_mark_and_the_unit_probes`;
+  `test_a_final_cause_takes_the_safe_values`; `test_a_broken_class_with_no_hello_fails_its_held_parts`;
+  `test_resolving_past_resolve_s_runs_unmeasured_with_its_reason`; `test_a_closed_probe_queue_is_served_by_no_one`;
+  `test_the_stale_window_runs_from_the_last_claim`; `test_a_disagreeing_hello_resolves_a_probing_unit_again`;
+  `test_a_ready_mark_carries_no_identifier`.
 - **ORCD.** Two consecutive H100 runs of one 10² suite against one shared root, the second as another group member:
   the first probes each unit once; the second plans no probe item (owner requirement 2) and its results match by key;
   a third run after an env rebuild (new `wheel_set`) probes, and its old-context entries are computed, not skipped.
@@ -1110,7 +1218,7 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 
 - **Scope.** §7.3, §7.4: ρ per regime with `spread_B`, same-hardware requests only; `drift` records; `regime` records
   from a k > 1 window; `Confirming` with the unit's jobs held, and `supersede` records; immediate `m1` raise on a device
-  peak above band; `oom` records replacing `_grow` (removed here) with the re-opened stratum, and a B = 1 fault routed
+  peak above band; `oom` records replacing `_grow` (removed by 7a) with the re-opened stratum, and a B = 1 fault routed
   to re-placement; the `placement` event's closing record of actuals (§10.3).
 - **Files.** `runtime/execution/pool.py`, `runtime/execution/events.py`.
 - **Tests failing now.** `test_drift_confirms_before_superseding`; `test_drift_under_cotenancy_records_a_regime_without_a_probe`
