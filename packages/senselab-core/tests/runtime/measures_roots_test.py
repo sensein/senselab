@@ -37,7 +37,7 @@ from senselab_core.runtime.measures import (
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.resources import PackagedTable
 from senselab_core.runtime.revision import cache_root
-from senselab_core.runtime.storage import StorePolicy
+from senselab_core.runtime.storage import StorageDir, StorePolicy
 from senselab_core.testing.calibration_samples import UNIT, observation
 from syscall_faults_fixture import fail_at
 
@@ -339,6 +339,34 @@ def test_a_live_lease_is_seen_in_a_root_that_cannot_be_written(tmp_path: Path) -
         subprocess.run(["chmod", "-R", "a-w", str(tmp_path)], check=True)
         try:
             assert _roots(tmp_path).peer_holds(UNIT)
+        finally:
+            subprocess.run(["chmod", "-R", "u+w", str(tmp_path)], check=True)
+
+
+class _Unreadable(ManualClock):
+    """A clock whose storage time cannot be read, as on a read-only root."""
+
+    def storage_now(self, directory: StorageDir) -> float:
+        raise PermissionError(errno.EACCES, "read-only")
+
+
+@pytest.mark.contract
+@needs_non_root
+def test_a_stale_lease_is_not_live_in_a_root_that_cannot_be_written(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
+    """On a read-only root the lease's age is judged on the clock's local time, so it goes stale as that advances."""
+    time_ = StorageTime(lease_clock, tmp_path)
+    holder = _roots(tmp_path, clock=time_.clock).probe_lease(UNIT)
+    assert isinstance(holder, Lease)
+    with holder:
+        subprocess.run(["chmod", "-R", "a-w", str(tmp_path)], check=True)
+        try:
+            blind = _Unreadable(poll_s=0.0, hang_s=0.0, storage_origin=time_.origin)  # never waits
+            reader = _roots(tmp_path, clock=blind)
+            assert reader.peer_holds(UNIT)
+            blind.advance(2 * STALE_S)
+            assert not reader.peer_holds(UNIT)
         finally:
             subprocess.run(["chmod", "-R", "u+w", str(tmp_path)], check=True)
 

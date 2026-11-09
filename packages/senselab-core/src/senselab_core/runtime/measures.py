@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import re
-import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -834,7 +833,7 @@ class MeasureRoots:
                 with lease.child(token) as held:
                     beats = (i.st_mtime for n in held.listdir() if (i := held.lstat(n)) is not None)
                     newest = max([newest, os.fstat(held.fd).st_mtime, *beats])
-        return time.time() - newest if newest else None
+        return self._clock.local_now() - newest if newest else None
 
     def _lease_owner(self, unit_dir: StorageDir) -> int | None:
         name = PROBE_LEASE + ".lease"

@@ -1117,13 +1117,6 @@ def test_a_blob_swapped_after_its_link_is_never_trusted_by_size(tmp_path: Path) 
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("op", ["collect", "fetch"])
-def test_a_hard_link_at_a_store_or_cache_clock_leaves_its_target_alone(tmp_path: Path, op: str) -> None:
-    """A hard link at the store's or the cache's `.clock`: the file it shares is not chmodded or re-stamped."""
-    assert bounded("probe_clock_hard_link", str(tmp_path), op) == {"error": "", "victim_unchanged": True}
-
-
-@pytest.mark.logic
 def test_superseded_version_links_removed(tmp_path: Path) -> None:
     """Fetching a new version removes the other versions of that dataset, and nothing of any other dataset."""
     fetch(_manifest(version="1"), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))

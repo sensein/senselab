@@ -624,6 +624,18 @@ def test_a_shared_dag_is_written_once_per_node() -> None:
 
 
 @pytest.mark.logic
+@pytest.mark.parametrize("levels", [12, 23])
+def test_a_shared_dag_is_built_once_per_node(levels: int) -> None:
+    """JCS and the tokeniser build one result per container of `x = [x, x]`, not one per leaf they expand to."""
+    from senselab_worker.canonical import Tokeniser, Walk, jcs_dumps
+
+    written, tokened = Walk(), Walk()
+    jcs_dumps(_quadratic_dag(levels), written)
+    Tokeniser()(_quadratic_dag(levels), walk=tokened)
+    assert written.builds == levels + 1 and tokened.builds == levels + 1
+
+
+@pytest.mark.logic
 def test_a_shared_dag_beyond_the_budget_is_refused() -> None:
     """Sixty-three levels (2**63 leaves) are refused by the work budget, not expanded."""
     from senselab_worker.canonical import jcs_dumps

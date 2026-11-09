@@ -11,8 +11,8 @@
   is followed, a mutable file is only ever replaced whole by a fresh file renamed over its name, every file
   name written matches a grammar the caller passes, and modes are set only through a
   descriptor (`set_mode`).
-- `StorageDir.fs_now` reads the current time from the filesystem itself, from a fresh sentinel file;
-  `StorageDir.dir_now` reads it from a fresh probe directory and writes no file.
+- `StorageDir.dir_now` reads the current time from the filesystem itself, from a fresh probe directory, and writes
+  no file.
 - `StorageUnsupported` is a root without a primitive the runtime needs, such as an atomic `mkdir`.
 - `probe_capabilities` measures the primitives the lease protocol needs on a root itself.
 - `write_atomically` replaces a caller's file so a reader sees the old or the new bytes, never a mix.
@@ -41,7 +41,6 @@ from pydantic import Field, StrictBool
 from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel._base import Frozen
-from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.faults import is_transient
 
@@ -54,9 +53,6 @@ PRIVATE_DIR_MODE: Final = 0o700  # invariant: owner-only access, whatever the si
 """The mode of a `Staging` directory that only this process's user can write."""
 PRIVATE_DIR = "private"
 """A run directory's one root for state that holds paths: substrate state, manifests, placements, worker logs."""
-CLOCK_NAME = ".clock"
-"""The sentinel `StorageDir.fs_now` replaces in a directory."""
-CLOCK = re.compile(re.escape(CLOCK_NAME))
 """The grammar of the storage clock's sentinel."""
 
 _FULL_ERRNOS = frozenset({errno.ENOSPC, errno.EDQUOT})
@@ -297,7 +293,7 @@ class StorageDir:
     also matches the `grammar` the caller passes. Every operation is relative to the directory's
     descriptor, and a name is never followed when it is a symlink: `child` and `walk` refuse a symlink or
     a non-directory with `WrongKindError`, files are created with `O_EXCL | O_NOFOLLOW`, and a file that
-    changes is replaced whole by a fresh one renamed over its name (`write_atomically`, `fs_now`), so a
+    changes is replaced whole by a fresh one renamed over its name (`write_atomically`), so a
     symlink or hard link at the name is replaced and its target never touched. Modes are set only through
     descriptors. The root itself is opened as given, so a root that is a symlink is followed. A
     `StorageDir` is a context manager that closes its descriptor; errors name the full path.
@@ -703,13 +699,6 @@ class StorageDir:
             raise
         return written
 
-    def fs_now(self) -> float:
-        """Return the current time as the filesystem stamps it: the mtime of a fresh `CLOCK_NAME` (`write_atomically`).
-
-        On NFS the server sets it, so ages compared with this clock do not depend on the local clock.
-        """
-        return self.write_atomically(CLOCK_NAME, b"", grammar=CLOCK, mode=STAGING_FILE_MODE).st_mtime
-
     def dir_now(self) -> float:
         """Return the current time as the filesystem stamps it: the mtime of a fresh `ASIDE_NAME` directory, removed.
 
@@ -892,27 +881,26 @@ def _refused(call: Callable[[], object], *errnos: int) -> bool:
     return False
 
 
-def _mtime_after_entry(work: Path, clock: Clock) -> tuple[bool, float]:
+def _mtime_after_entry(work: Path) -> tuple[bool, float]:
     """Return whether a new entry moves `work`'s mtime to the present, and the seconds until it showed."""
     old = time.time() - 86400
     os.utime(work, (old, old))
     before = work.stat().st_mtime_ns
     (work / "entry").write_bytes(b"")
-    began = clock.now()
+    began = time.monotonic()
     while True:
         now = work.stat()
         if now.st_mtime_ns != before:
-            return abs(now.st_mtime - time.time()) < _CLOCK_TOLERANCE_S, clock.now() - began
-        if clock.now() - began >= PROBE_BOUND_S:
+            return abs(now.st_mtime - time.time()) < _CLOCK_TOLERANCE_S, time.monotonic() - began
+        if time.monotonic() - began >= PROBE_BOUND_S:
             return False, PROBE_BOUND_S
-        clock.sleep(PROBE_POLL_S)
+        time.sleep(PROBE_POLL_S)
 
 
-def probe_capabilities(root: Path, clock: Clock = SystemClock()) -> StorageCapabilities:  # noqa: B008 - stateless
+def probe_capabilities(root: Path) -> StorageCapabilities:
     """Measure `root` itself: `mkdir`, directory and file rename, `link` and the directory mtime, in a probe directory.
 
     A root that does not exist yet is judged by its nearest existing ancestor. The probe directory is removed.
-    The wait for the directory's mtime to change is spent on `clock`.
 
     Raises:
         StorageUnsupported: `mkdir` is refused as an operation the filesystem does not support.
@@ -949,7 +937,7 @@ def probe_capabilities(root: Path, clock: Clock = SystemClock()) -> StorageCapab
             exclusive_link = _refused(lambda: os.link(work / "b", work / "c"), errno.EEXIST)
         except OSError:
             exclusive_link = False
-        server_clock, delay = _mtime_after_entry(work, clock)
+        server_clock, delay = _mtime_after_entry(work)
         return StorageCapabilities(atomic_mkdir, directory_rename, server_clock, replaced, exclusive_link, delay)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -970,14 +958,12 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "ADDRESSED_FORMATS",
     "ASIDE_NAME",
-    "CLOCK",
     "StorageDir",
     "WrongKindError",
     "owner_remedy",
     "path_component",
     "private_dir",
     "probe_capabilities",
-    "CLOCK_NAME",
     "NAME_MAX",
     "TEMPORARY_NAME",
     "STAGING_DIR_MODE",

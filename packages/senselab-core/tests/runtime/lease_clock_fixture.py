@@ -71,6 +71,10 @@ class ManualClock:
         """Return the pinned storage time, or `directory`'s filesystem's."""
         return directory.dir_now() if self._origin is None else self._origin + self.now()
 
+    def local_now(self) -> float:
+        """Return the pinned storage time, or the real wall clock."""
+        return time.time() if self._origin is None else self._origin + self.now()
+
     def advance(self, seconds: float) -> None:
         """Move the clock ahead `seconds` and wake the threads waiting on it."""
         with self._cond:

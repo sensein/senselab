@@ -38,6 +38,7 @@ from senselab_core.runtime.envs import (
     read_lock_inputs,
 )
 from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.locks import POLL_S
 from senselab_core.runtime.profiles import Envs
 from senselab_worker.digest import identity_digest
 from syscall_faults_fixture import displace_before_proof
@@ -351,7 +352,9 @@ def test_profile_lease_bound_breaks_an_expired_build_lease(
     lease = _plant_lease(tmp_path, time_, age_s=0.0)
     young = JobLease(stale_after_s=1.0, renew_fraction=0.33, attribute_delay_s=0)
     _ensure(tmp_path, _lock(tmp_path, body="scipy==1.14.0\n"), lease=young, clock=time_.clock)
-    assert time_.clock.now() >= young.stale_after_s, "the young lease was held until it aged past its bound"
+    assert young.stale_after_s <= time_.clock.now() < young.stale_after_s + 2 * POLL_S, (
+        "held until it aged past its bound"
+    )
     assert not lease.exists()
 
 

@@ -472,6 +472,7 @@ def _run(op: str, root: Path) -> bool:
         hit = ResultStore(root).get(store_key(), store_context(), ReusePolicy.EXACT)
         return hit is None or _plain(hit.outputs) == _plain(_outputs_of("linux"))
     if op == "collect":
+        # a zero poll and hang bound make any wait fail: the clock is never waited on
         far = ManualClock(poll_s=0.0, hang_s=0.0, storage_origin=time.time() + 10**9)
         ResultStore(root, clock=far).collect()
         return True
@@ -563,14 +564,6 @@ def probe_primitive(  # noqa: C901, PLR0915 - the table of probed primitives, on
                 os.link(victim / "f", root / "hard_link")
                 top.write_atomically("hard_link", b"overwritten", grammar=ANY, mode=0o640)
                 return top.kind("hard_link")
-            if operation == "fs_now_symlink":
-                os.symlink(victim / "f", root / ".clock")
-                top.fs_now()
-                return top.kind(".clock")
-            if operation == "fs_now_hard_link":
-                os.link(victim / "f", root / ".clock")
-                top.fs_now()
-                return top.kind(".clock")
             if operation == "read_regular":
                 return top.read_regular("file_link")
             if operation == "outside_grammar":
@@ -615,8 +608,6 @@ def probe_primitive(  # noqa: C901, PLR0915 - the table of probed primitives, on
 ANY = re.compile(r".+")
 PRIMITIVE = {
     "write_atomically_hard_link": "",
-    "fs_now_symlink": "",
-    "fs_now_hard_link": "",
     "read_regular": "WrongKindError",
     "outside_grammar": "ValueError",
     "child": "WrongKindError",
@@ -894,29 +885,6 @@ def probe_swap_after_link(scratch: str) -> dict[str, Any]:
         "served": paths["a/voice.wav"].read_bytes() == PAYLOAD,
         "staging_modes": sorted(set(modes)),
     }
-
-
-def probe_clock_hard_link(scratch: str, op: str) -> dict[str, Any]:
-    """Hard-link a victim at the root's `.clock`, then collect on the store clock, or fetch; report the victim."""
-    base = Path(scratch)
-    root, victim = base / "root", base / "victim"
-    victim.mkdir()
-    (victim / "f").write_bytes(VICTIM_BYTES)
-    os.chmod(victim / "f", 0o600)
-    os.utime(victim / "f", (OLD, OLD))
-    _setup("collect" if op == "collect" else "fetch", root)
-    root.mkdir(parents=True, exist_ok=True)
-    if os.path.lexists(root / ".clock"):
-        os.unlink(root / ".clock")
-    os.link(victim / "f", root / ".clock")
-    before = _snapshot(victim)
-    if op == "collect":
-        from senselab_core.runtime.store import ResultStore
-
-        error, _ = _outcome(lambda: ResultStore(root).collect())
-    else:
-        error, _ = _outcome(lambda: _run(op, root))
-    return {"error": error, "victim_unchanged": _snapshot(victim) == before}
 
 
 UNOPENABLE_NAMES = (LEASE, "resolutions@2.json")

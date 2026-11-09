@@ -600,19 +600,17 @@ def test_run_manifest_modes_do_not_depend_on_the_umask(tmp_path: Path, umask: st
 
 @pytest.mark.logic
 @pytest.mark.parametrize("plant", ["symlink", "dangling"])
-@pytest.mark.parametrize("name", [LEASE, ".clock"])
-def test_the_lease_of_a_run_manifest_never_follows_a_planted_symlink(tmp_path: Path, name: str, plant: str) -> None:
-    """A symlink at a run manifest's lease or clock is neither chmodded nor created through."""
-    report = bounded("probe_record_with_plant", str(tmp_path), name, plant)
+def test_the_lease_of_a_run_manifest_never_follows_a_planted_symlink(tmp_path: Path, plant: str) -> None:
+    """A symlink at a run manifest's lease is neither chmodded nor created through."""
+    report = bounded("probe_record_with_plant", str(tmp_path), LEASE, plant)
     assert report["error"] == "" and report["recorded"]
     assert report["victim_unchanged"] and report["victim"] == ["f"], report
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("name", [LEASE, ".clock"])
-def test_a_hard_link_at_a_lease_or_clock_leaves_its_target_alone(tmp_path: Path, name: str) -> None:
-    """A hard link at a lease or clock: the file it shares is not chmodded, truncated or re-stamped."""
-    report = bounded("probe_record_with_plant", str(tmp_path), name, "hardlink")
+def test_a_hard_link_at_a_lease_leaves_its_target_alone(tmp_path: Path) -> None:
+    """A hard link at a lease: the file it shares is not chmodded, truncated or re-stamped."""
+    report = bounded("probe_record_with_plant", str(tmp_path), LEASE, "hardlink")
     assert report["error"] == "" and report["recorded"]
     assert report["victim_unchanged"], report
 

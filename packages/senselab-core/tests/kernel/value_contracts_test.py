@@ -420,6 +420,18 @@ def test_a_shared_dag_under_the_budget_is_walked_once_per_node() -> None:
     _record_dag(22)
 
 
+@pytest.mark.logic
+@pytest.mark.parametrize("levels", [12, 22])
+def test_a_shared_dag_is_thawed_once_per_node(levels: int) -> None:
+    """`thawed` builds one list per container of `x = [x, x]`, not one per leaf."""
+    from senselab_core.kernel._base import thawed
+    from senselab_worker.canonical import Walk
+
+    walk = Walk()
+    thawed(_dag(levels), walk)
+    assert walk.builds == levels + 1
+
+
 RATE = 8_000
 
 

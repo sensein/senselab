@@ -19,6 +19,10 @@ class Clock(Protocol):
         """Return the current time as `directory`'s filesystem stamps it."""
         ...
 
+    def local_now(self) -> float:
+        """Return the local wall-clock time, for a judgement of filesystem stamps no storage clock can be read for."""
+        ...
+
     def sleep(self, seconds: float) -> None:
         """Wait `seconds`."""
         ...
@@ -38,6 +42,10 @@ class SystemClock:
     def storage_now(self, directory: "StorageDir") -> float:
         """Return `directory.dir_now()`."""
         return directory.dir_now()
+
+    def local_now(self) -> float:
+        """Return `time.time()`."""
+        return time.time()
 
     def sleep(self, seconds: float) -> None:
         """Wait `seconds` in `time.sleep`."""
