@@ -21,13 +21,21 @@ from senselab_core.runtime.calibration import (
     RequestFit,
     StratumBatch,
 )
-from senselab_core.runtime.call import EnvRead, EnvUnreadable, Packaged, RunConfig, bind_input, use_packaged
+from senselab_core.runtime.call import (
+    EnvRead,
+    EnvUnreadable,
+    Packaged,
+    RunConfig,
+    bind_input,
+    input_decoder,
+    use_packaged,
+)
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.in_process import InProcess, fragment_jobs, node_call, node_fragment
 from senselab_core.runtime.execution.job import Job
-from senselab_core.runtime.execution.plan_reads import count_items, plan_decoder
+from senselab_core.runtime.execution.plan_reads import count_items, plan_decoder, unit_of_node
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import Placement
@@ -371,3 +379,93 @@ def test_the_extrapolation_log_starts_afresh_with_each_run(tmp_path: Path, caplo
         executor.bind_epoch(2, None)  # type: ignore[arg-type]
         executor.sizing(jobs, placement)
     assert len(caplog.records) == 2
+
+
+ISOLATED = SCORE.model_copy(update={"name": "units_test.isolated", "outputs": {"label": "sha256"}})
+REGISTRY.add_task(ISOLATED)
+REGISTRY.add_backend(_backend(ISOLATED, env=Env.isolated("units-test")))
+
+
+def _isolated_unbuilt(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle | None:  # an EnvRead
+    return None if backend.env.kind == "isolated" else _handle(backend, profile)
+
+
+def _isolated_built(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # an EnvRead
+    handle = _handle(backend, profile)
+    return replace(handle, lock_sha="3" * 64) if backend.env.kind == "isolated" else handle
+
+
+@pytest.mark.logic
+def test_a_backend_name_and_version_shared_by_two_envs_reads_each_env(tmp_path: Path) -> None:
+    """A host backend and an isolated one named alike in one plan each get their env's handle, unit and context."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    graph = Graph.model_validate(
+        {
+            "inputs": {"text": "list[json]"},
+            "nodes": [
+                {"id": "a", "task": SCORE.name, "task_version": "1"},
+                {"id": "b", "task": ISOLATED.name, "task_version": "1"},
+            ],
+            "edges": [
+                {"source": "input.text", "target": "a.text", "kind": "map"},
+                {"source": "input.text", "target": "b.text", "kind": "map"},
+            ],
+        }
+    )
+    placed = plan(graph, RecordSet([Record(id="r0", inputs={"text": ValueInput(value="x")})]), execution=profile)
+    assert [(p.backend, p.backend_version) for p in placed.placement.nodes.values()] == [("score", "1")] * 2
+    use_packaged(_use(_isolated_built))
+    resolve = unit_of_node(placed, UnitResolver(profile, hardware=HOST))
+    a, b = resolve("a"), resolve("b")
+    assert isinstance(a, MeasureUnit) and isinstance(b, MeasureUnit)
+    assert (a.env.env_lock, b.env.env_lock) == ("1" * 64, "3" * 64)
+    use_packaged(_use(_isolated_unbuilt))
+    text = placed.explain(hardware=HOST)
+    assert "class cpu: 0 servable, 1 computed, 1 undetermined (the env of backend 'score' is not built)" in text
+
+
+def _memory_plan(tmp_path: Path) -> Plan:
+    """A plan read back from a run directory in another process: its one input held in memory, which is not here."""
+    placed, _ = _plan(["x"], _profile(tmp_path))
+    (row,) = placed.manifest.rows
+    return replace(placed, sources={"rows": [{"text": {"memory": row.inputs["text"]}}], "shared": {}}, live={})
+
+
+@pytest.mark.logic
+def test_a_plan_whose_inputs_cannot_be_bound_explains_with_counts_undetermined(tmp_path: Path) -> None:
+    """No recorded sources, or inputs held by another process: the plan renders, its counts undetermined, why given."""
+    _seen(_profile(tmp_path), SEEN)
+    held = _memory_plan(tmp_path)
+    for placed, why in (
+        (replace(held, sources={}), "the plan records no input sources"),
+        (held, "were held in memory by the process that planned the run"),
+    ):
+        text = placed.explain(hardware=HOST)
+        assert text.startswith(f"plan {placed.hash}") and "node a (units_test.score)" in text
+        (line,) = [x for x in text.splitlines() if x.startswith("class cpu:")]
+        assert line.startswith("class cpu: servable and computed undetermined (") and why in line
+        found = plan_decoder(placed, "a")
+        assert isinstance(found, Unresolved) and "unit unresolved" in text
+    assert plan_decoder(replace(held, sources={}), "a") == Unresolved("the plan records no input sources")
+
+
+@pytest.mark.logic
+def test_lengths_of_unbound_inputs_are_unknown_with_the_reason(tmp_path: Path) -> None:
+    """A node whose unit is measured but whose inputs cannot be bound says its lengths are unknown, and why."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    held = _memory_plan(tmp_path)
+    unit = _resolve(profile, held)
+    assert isinstance(unit, MeasureUnit)
+    line = _sizing_line(held.explain(measures=_source(), units=lambda node: unit, hardware=HOST))
+    assert "unmeasured (lengths unknown: inputs ['text'] of records ['r0'] were held in memory" in line
+
+
+@pytest.mark.logic
+def test_a_path_source_is_read_by_its_port_types_reader(tmp_path: Path) -> None:
+    """The decoder of a path source is the one the reader table gives its port type."""
+    soundfile.write(tmp_path / "a.wav", numpy.zeros(1600, dtype=numpy.float32), 16000)
+    files, _ = _plan([str(tmp_path / "a.wav")], _profile(tmp_path), AUDIO, "Audio")
+    assert plan_decoder(files, "a") == input_decoder("Audio") is not None
+    assert input_decoder("json") is None

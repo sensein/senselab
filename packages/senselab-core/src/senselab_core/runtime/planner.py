@@ -33,7 +33,7 @@ from senselab_core.runtime.call import (
 )
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import record_bind, sourced_manifest
-from senselab_core.runtime.explain import explain, item_lines, node_sizing, waits
+from senselab_core.runtime.explain import explain, item_lines, node_sizing, undetermined_lines, waits
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
@@ -399,18 +399,24 @@ class Plan:
         Each figure is labelled `measured` with its source or `unmeasured` with the reason the unit or estimate is
         missing, and a flag marks a batch-1 request over the class's memory cap. Each resource class says how many
         jobs the `store` (by default the one a run uses, `default_store`) would serve and how many compute
-        (`ResultStore.admits`); `values` default to the plan's inputs bound from their sources. The last lines name
-        where measures are written and the waits on another run.
+        (`ResultStore.admits`); `values` default to the plan's inputs bound from their sources. Inputs that cannot be
+        bound leave the counts undetermined and the lengths unknown, with the binding error's reason. The last lines
+        name where measures are written and the waits on another run.
 
         Raises:
-            As `bind_sources` and `count_items`.
+            As `count_items`.
         """
         profile = self.execution
         if profile is None:
             return explain(self.hash, self.logical, self.placement)
         from senselab_core.runtime.execution import plan_reads  # noqa: PLC0415 - plan_reads imports this module
         from senselab_core.runtime.execution.in_process import default_store  # noqa: PLC0415 - as above
-        from senselab_core.runtime.execution.run import bind_sources  # noqa: PLC0415 - run imports this module
+        from senselab_core.runtime.execution.run import (  # noqa: PLC0415 - run imports this module
+            InputChanged,
+            InputsUnavailable,
+            SourcesUnrecorded,
+            bind_sources,
+        )
         from senselab_core.runtime.units import (  # noqa: PLC0415 - units imports the executor, which imports this module
             UnitResolver,
             Unresolved,
@@ -421,7 +427,12 @@ class Plan:
         roots = measure_roots(profile)
         source = measures if measures is not None else default_measures(profile, roots)
         found = store if store is not None else default_store()
-        bound = values if values is not None else bind_sources(self)
+        bound, unbound = values, ""
+        if bound is None:
+            try:
+                bound = bind_sources(self)
+            except (InputChanged, InputsUnavailable, SourcesUnrecorded) as err:
+                unbound = str(err)
         resolver = UnitResolver(profile, roots, hardware)
         resolve = units or plan_reads.unit_of_node(self, resolver)
         sizing = {}
@@ -440,10 +451,15 @@ class Plan:
                 why_no_estimate=unit.reason if isinstance(unit, Unresolved) else "no estimate for its unit",
                 unit_label=None if isinstance(unit, Unresolved) else unit.label(),
                 bucket_edges=() if estimate is None else plan_reads.node_edges(self, node_id, estimate),
+                why_no_lengths=f"lengths unknown: {unbound}" if unbound else None,
             )
         run = self.config if self.config is not None else RunConfig()
-        counted = item_lines(
-            plan_reads.count_items(self, bound, store=found, run=run, profile=profile, envs=resolver.envs)
+        counted = (
+            undetermined_lines(self.placement, unbound)
+            if bound is None
+            else item_lines(
+                plan_reads.count_items(self, bound, store=found, run=run, profile=profile, envs=resolver.envs)
+            )
         )
         return explain(self.hash, self.logical, self.placement, sizing=sizing, footer=[*counted, *waits(profile)])
 

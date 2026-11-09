@@ -6,9 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
 from senselab_core.kernel.identity import ExecutionContext, InputIdentity
-from senselab_core.runtime import audio_io
 from senselab_core.runtime.calibration import Estimate, LengthProfile
-from senselab_core.runtime.call import RunConfig, env_license, input_binding, packaged
+from senselab_core.runtime.call import RunConfig, env_license, input_binding, input_decoder, packaged
 from senselab_core.runtime.execution.batching import BucketGrid, bucket_edges, keyed_formation
 from senselab_core.runtime.execution.in_process import (
     fragment_jobs,
@@ -19,7 +18,7 @@ from senselab_core.runtime.execution.in_process import (
     plan_nodes,
 )
 from senselab_core.runtime.execution.job import held_decoder, job_context
-from senselab_core.runtime.execution.run import port_types
+from senselab_core.runtime.execution.run import SourcesUnrecorded, port_types, recorded_sources
 from senselab_core.runtime.execution.workers import service_of
 from senselab_core.runtime.keys import request_components
 from senselab_core.runtime.measures import MeasureUnit
@@ -109,11 +108,15 @@ def count_items(  # noqa: PLR0913 - the plan and its values, the store and run, 
 def plan_decoder(placed: Plan, node: str) -> str | None | Unresolved:
     """Return the decoder `node`'s file-backed inputs are read by, from the plan's recorded sources; no file is read.
 
-    A path source of a port with a reader is file-backed, a JSON value is not, and a `{"memory": ...}` source is as the
-    value `placed.live` holds. A node fed by both kinds has two units.
+    A path source of a port with a reader is read by that reader's decoder, a JSON value by none, and a
+    `{"memory": ...}` source is as the value `placed.live` holds. A node fed by both kinds has two units; one fed by a
+    value this process does not hold, or with no recorded sources, has an unknown decoder.
     """
     types = port_types(placed)
-    rows, shared = placed.sources["rows"], placed.sources["shared"]
+    try:
+        rows, shared = recorded_sources(placed)
+    except SourcesUnrecorded as err:
+        return Unresolved(str(err))
     fed = {
         e.source.split(".", 1)[1]
         for e in placed.logical.graph.edges
@@ -124,9 +127,11 @@ def plan_decoder(placed: Plan, node: str) -> str | None | Unresolved:
         for row in rows:
             source = row[port] if port in row else shared.get(port)
             if isinstance(source, Mapping) and set(source) == {"memory"}:
-                found.add(held_decoder([placed.live.get(source["memory"])]))
+                if source["memory"] not in placed.live:
+                    return Unresolved("its inputs are held in memory by the process that planned the run")
+                found.add(held_decoder([placed.live[source["memory"]]]))
             elif isinstance(source, str) and input_binding(types[port]) == "path":
-                found.add(audio_io.DECODER)
+                found.add(input_decoder(types[port]))
             else:
                 found.add(None)
     if len(found) > 1:

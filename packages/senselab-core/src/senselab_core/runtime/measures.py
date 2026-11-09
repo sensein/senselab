@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Literal, Protocol, Self, TypeVar
+from typing import Annotated, Any, Final, Literal, Protocol, Self, TypeVar
 from urllib.parse import urlsplit
 
 from pydantic import AfterValidator, Field, PlainSerializer, ValidationError, model_validator
@@ -117,8 +117,8 @@ class MeasureEnv(Frozen):
         return cls.model_validate({**{k: fields[k] for k in cls.model_fields}, "driver": driver})
 
 
-LABEL_HEX = 12
-"""Hex digits of a digest that name a unit in text: 48 bits, as the store and fetch messages abbreviate digests."""
+LABEL_HEX: Final = 12  # invariant: 48 bits of a digest, as the store and fetch messages abbreviate digests
+"""Hex digits of a digest that name a unit in text."""
 
 
 class MeasureUnit(Frozen):

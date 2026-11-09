@@ -399,6 +399,11 @@ def input_binding(port_type: str) -> Literal["path", "text", "value"]:
     return "path" if port_type in _READERS else "value"
 
 
+def input_decoder(port_type: str) -> str | None:
+    """Return the decoder a path given for `port_type` is read by: its reader's, None for a type without one."""
+    return _READERS[port_type][1] if port_type in _READERS else None
+
+
 def _with_identities(model: type[BaseModel], value: Mapping[str, Any]) -> dict[str, Any]:
     """Return `value` with each `TextIdentity` field of `model` it gives replaced by the identity (`text_identity`)."""
     return {k: text_identity(k, v) if k in text_identity_fields(model) else v for k, v in value.items()}

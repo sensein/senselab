@@ -9,7 +9,7 @@ import sysconfig
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
-from senselab_core.kernel.declare import BackendSpec
+from senselab_core.kernel.declare import BackendSpec, Env
 from senselab_core.runtime.calibration import (
     Estimate,
     HardwareClass,
@@ -68,22 +68,32 @@ def default_measures(profile: ExecutionProfile, roots: MeasureRoots | None = Non
     return MeasureSource([held], _NoPackaged(), estimate=estimate)
 
 
+EnvIdentity = tuple[Env, tuple[tuple[str, str], ...], tuple[str, ...]]
+"""What an env read builds a handle from: the env, the worker overlay placed in it and the requirements it is checked
+against."""
+
+
+def env_identity(backend: BackendSpec) -> EnvIdentity:
+    """Return the identity of the env `backend` runs in: its env, its sorted worker sources and its requirements."""
+    return backend.env, tuple(sorted(backend.worker_sources.items())), backend.requirements
+
+
 class EnvStates:
     """What each backend's env is under a profile, read once while built: its handle, or why it is not known."""
 
     def __init__(self, profile: ExecutionProfile) -> None:
         """Read envs under `profile`."""
         self.profile = profile
-        self._built: dict[tuple[str, str], EnvHandle] = {}
+        self._built: dict[EnvIdentity, EnvHandle] = {}
 
     def get(self, backend: BackendSpec) -> EnvHandle | Unresolved:
         """Return the handle of `backend`'s built env, else the true reason it is not known before a worker starts.
 
-        A handle is kept; an unbuilt env is read again, since the run builds it.
+        A handle is kept under its `env_identity`; an unbuilt env is read again, since the run builds it.
         """
         if self.profile.substrate.kind != "local":
             return Unresolved("the node a slurm worker runs on is chosen at submission, so its platform is not known")
-        key = (backend.name, backend.version)
+        key = env_identity(backend)
         if key in self._built:
             return self._built[key]
         try:

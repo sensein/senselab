@@ -132,6 +132,14 @@ class InputsUnavailable(ValueError):
         )
 
 
+class SourcesUnrecorded(ValueError):
+    """The plan records no sources of its inputs, as one read from a run directory without its inputs file."""
+
+    def __init__(self) -> None:
+        """State that no input sources are recorded."""
+        super().__init__("the plan records no input sources")
+
+
 @dataclass(frozen=True)
 class Output:
     """What one record gave: each graph output's value by name, with the key digest and output identity it came from."""
@@ -316,6 +324,17 @@ def port_types(placed: Plan) -> dict[str, str]:
     }
 
 
+def recorded_sources(placed: Plan) -> tuple[Sequence[Mapping[str, object]], Mapping[str, object]]:
+    """Return the per-record sources of `placed`'s inputs and the shared ones.
+
+    Raises:
+        SourcesUnrecorded: the plan records no sources.
+    """
+    if "rows" not in placed.sources:
+        raise SourcesUnrecorded
+    return placed.sources["rows"], placed.sources["shared"]
+
+
 def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
     """Return the value of each input identity of `placed`, bound from its sources and its live values.
 
@@ -326,10 +345,10 @@ def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
     Raises:
         InputChanged: inputs have another identity than the manifest's, or cannot be read; it names every one.
         InputsUnavailable: an input held in memory is not in `placed.live`.
-        KeyError: the plan records no sources.
+        SourcesUnrecorded: the plan records no sources.
     """
     types = port_types(placed)
-    rows, shared = placed.sources["rows"], placed.sources["shared"]
+    rows, shared = recorded_sources(placed)
     values: dict[InputIdentity, object] = {}
     missing: list[tuple[str, str]] = []
     changed: list[tuple[str, str]] = []
@@ -373,8 +392,8 @@ def bind_inputs(run_dir: Path) -> dict[InputIdentity, object]:
     """Return the value of each input identity of the plan in `run_dir` (`bind_sources` of `load_plan`).
 
     Raises:
-        InputChanged, InputsUnavailable: as `bind_sources`; an input held in memory is never on disk.
-        FileNotFoundError, KeyError: the run has no plan or no recorded sources.
+        InputChanged, InputsUnavailable, SourcesUnrecorded: as `bind_sources`; an input held in memory is never on disk.
+        FileNotFoundError: the run has no plan.
     """
     return bind_sources(load_plan(run_dir))
 

@@ -58,12 +58,14 @@ def node_sizing(  # noqa: PLR0913 - the node's placement, the profile, the measu
     why_no_estimate: str,
     unit_label: str | None = None,
     bucket_edges: Sequence[float] = (),
+    why_no_lengths: str | None = None,
 ) -> list[str]:
     """Return the lines `size` gives a node: wall time, GPU hours and peak memory, each measured or unmeasured.
 
     `estimate` is what `MeasureSource.get` returned for the node's unit, None when there is none; then
     `why_no_estimate` is the reason printed, `unit_label` the unit's digest label when it resolved (never an
-    identifier) and `bucket_edges` the grid a bucketed formation cuts on. Every figure is a field of the node's
+    identifier), `bucket_edges` the grid a bucketed formation cuts on, and `why_no_lengths` why `work` is None when
+    the inputs could not be read (None: they are read when the run starts). Every figure is a field of the node's
     `Sizing`. Nothing here probes.
     """
     resource = profile.resource_classes[placed.resource_class]
@@ -73,7 +75,7 @@ def node_sizing(  # noqa: PLR0913 - the node's placement, the profile, the measu
     if estimate is None:
         why, sized = why_no_estimate, None
     elif work is None:
-        why, sized = "lengths unknown until the inputs are read", None
+        why, sized = why_no_lengths or "lengths unknown until the inputs are read", None
     else:
         why = "a length is unknown or outside the measured range"
         sized = size(estimate, grant, profile.sizing, work, calibration=profile.calibration, bucket_edges=bucket_edges)
@@ -109,6 +111,12 @@ def item_lines(counts: Mapping[str, "ItemCounts"]) -> list[str]:
             parts.append(f"nodes {', '.join(found.later)} wait on an upstream result")
         lines.append(f"class {name}: " + ", ".join(parts))
     return lines
+
+
+def undetermined_lines(placement: PlanPlacement, why: str) -> list[str]:
+    """Return one line per resource class of `placement` whose servable and computed jobs cannot be told, and why."""
+    classes = sorted({p.resource_class for p in placement.nodes.values()})
+    return [f"class {name}: servable and computed undetermined ({why})" for name in classes]
 
 
 def waits(profile: ExecutionProfile) -> list[str]:
