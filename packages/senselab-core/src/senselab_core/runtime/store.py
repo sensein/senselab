@@ -43,7 +43,6 @@ import logging
 import os
 import re
 import stat
-import time
 import uuid
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
@@ -76,6 +75,7 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
     acceptable,
 )
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.equivalence import EQUIVALENCE, EquivalenceEvidence
 from senselab_core.runtime.equivalence import split as split_class
 from senselab_core.runtime.provenance import ProvStore
@@ -644,13 +644,15 @@ class ResultStore:
         *,
         policy: StorePolicy | None = None,
         equivalence: Equivalence = EQUIVALENCE,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
-        """Open a store at `root`; nothing is created until the first `put`."""
+        """Open a store at `root`; nothing is created until the first `put`. `clock` ages what `collect` removes."""
         self.root = Path(root)
         self.provenance = provenance if provenance is not None else ProvStore()
         self.policy = policy if policy is not None else StorePolicy.load_default()
         self._equivalence = equivalence
         self._splits_read = False
+        self._clock = clock
         self._last_collect: float | None = None
 
     @property
@@ -884,8 +886,8 @@ class ResultStore:
             logger.warning("cannot quarantine store entry %s, skipping it: %s", entry, err)
 
     def _collect_due(self) -> None:
-        """Run `collect` if this store has not collected within `policy.collect_interval_s` (monotonic)."""
-        now = time.monotonic()
+        """Run `collect` if this store has not collected within `policy.collect_interval_s` (monotonic on the clock)."""
+        now = self._clock.now()
         if self._last_collect is None or now - self._last_collect >= self.policy.collect_interval_s:
             self._last_collect = now
             self.collect()
@@ -900,14 +902,13 @@ class ResultStore:
         if info is not None and info.st_mode & 0o222:
             _seal(parent, name, committed_modes(self.policy)[1])
 
-    def collect(self, now: float | None = None) -> int:
+    def collect(self) -> int:
         """Remove quarantined entries and staging directories older than the policy's ages; return how many.
 
-        Objects set aside in place (`<uuid>` under the root, `store@6/`, a prefix or a key, beside what
-        they displaced) count as quarantined. Ages are measured from each object's mtime to `now`, which
-        defaults to the storage's own clock (`StorageDir.fs_now` on `root`). Only uuid-named children are
-        removed, through `remove_owned`; no directory below `root` is reached through a symlink. A failure
-        to read the clock, list or remove is logged and skips that item.
+        Objects set aside in place (`<uuid>` under the root, `store@6/`, a prefix or a key, beside what they
+        displaced) count as quarantined. Ages are measured from each object's mtime to the clock's storage time on
+        `root`. Only uuid-named children are removed, through `remove_owned`; no directory below `root` is reached
+        through a symlink. A failure to read the clock, list or remove is logged and skips that item.
         """
         try:
             root = self._open_root(create=False)
@@ -916,12 +917,11 @@ class ResultStore:
                 logger.warning("cannot open store %s; not collecting: %s", self.root, err)
             return 0
         with root:
-            if now is None:
-                try:
-                    now = root.fs_now()
-                except (OSError, WrongKindError) as err:
-                    logger.warning("cannot read the clock of store %s; not collecting: %s", self.root, err)
-                    return 0
+            try:
+                now = self._clock.storage_now(root)
+            except (OSError, WrongKindError) as err:
+                logger.warning("cannot read the clock of store %s; not collecting: %s", self.root, err)
+                return 0
             aside = now - self.policy.quarantine_retention_s
             removed = root.remove_older(aside)
             for parts, cutoff in (((QUARANTINE_DIR,), aside), ((STAGING_DIR,), now - self.policy.staging_stale_s)):

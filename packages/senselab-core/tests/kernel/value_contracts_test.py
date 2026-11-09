@@ -4,7 +4,6 @@ import copy
 import hashlib
 import os
 import pickle
-import time
 import types
 import unicodedata
 from collections.abc import Callable
@@ -421,21 +420,16 @@ def test_a_shared_dag_under_the_budget_is_walked_once_per_node() -> None:
     _record_dag(22)
 
 
-@pytest.mark.limits
-@pytest.mark.parametrize("where", ["provenance", "store", "value"])
-def test_a_shared_dag_is_refused_in_bounded_time(where: str) -> None:
-    """Sixty levels of `x = [x, x]` are refused in under 5 s on every canonical path."""
-    started = time.monotonic()
-    _refuse_dag(where)
-    assert time.monotonic() - started < 5.0
+@pytest.mark.logic
+@pytest.mark.parametrize("levels", [12, 22])
+def test_a_shared_dag_is_thawed_once_per_node(levels: int) -> None:
+    """`thawed` builds one list per container of `x = [x, x]`, not one per leaf."""
+    from senselab_core.kernel._base import thawed
+    from senselab_worker.canonical import Walk
 
-
-@pytest.mark.limits
-def test_a_shared_dag_under_the_budget_is_walked_in_bounded_time() -> None:
-    """Twenty-two levels (4M leaves expanded) digest in under 5 s."""
-    started = time.monotonic()
-    _record_dag(22)
-    assert time.monotonic() - started < 5.0
+    walk = Walk()
+    thawed(_dag(levels), walk)
+    assert walk.builds == levels + 1
 
 
 RATE = 8_000

@@ -5,7 +5,6 @@ import io
 import json
 import os
 import sys
-import time
 import types
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -212,13 +211,25 @@ def test_deadline_counts_down_and_names_what_expired() -> None:
     """`None` never expires; a spent deadline raises `TimeoutError` naming the step."""
     assert Deadline(None).remaining() is None and not Deadline(None).expired()
     Deadline(None).check("anything")
-    live = Deadline(60)
-    remaining = live.remaining()
-    assert remaining is not None and 0 < remaining <= 60 and not live.expired()
     spent = Deadline(0)
     assert spent.expired() and spent.remaining() == 0
     with pytest.raises(TimeoutError, match="reading arrays"):
         spent.check("reading arrays")
+
+
+@pytest.mark.logic
+def test_deadline_follows_the_clock_it_is_given() -> None:
+    """A deadline reads its `now`: it has the seconds left, none at the end, and never moves without the clock."""
+    at = [100.0]
+    deadline = Deadline(8, now=lambda: at[0])
+    assert deadline.remaining() == 8 and not deadline.expired()
+    at[0] += 3
+    assert deadline.remaining() == 5 and not deadline.expired()
+    deadline.check("early")
+    at[0] += 5
+    assert deadline.remaining() == 0 and deadline.expired()
+    with pytest.raises(TimeoutError, match="late"):
+        deadline.check("late")
 
 
 @pytest.mark.logic
@@ -229,18 +240,6 @@ def test_fifo_array_ref_is_refused_without_blocking(tmp_path: Path) -> None:
     ref = {"__array__": {"path": str(tmp_path / f"{sha}.npy"), "sha256": sha, "dtype": "<f4", "shape": [1]}}
     with pytest.raises(ArrayIntegrityError, match="regular file"):
         from_wire(ref, array_dir=tmp_path)
-
-
-@pytest.mark.limits
-def test_fifo_array_ref_is_refused_within_a_second(tmp_path: Path) -> None:
-    """A FIFO at `<sha>.npy` is refused in under 1 s."""
-    sha = "b" * 64
-    os.mkfifo(tmp_path / f"{sha}.npy")
-    ref = {"__array__": {"path": str(tmp_path / f"{sha}.npy"), "sha256": sha, "dtype": "<f4", "shape": [1]}}
-    t0 = time.monotonic()
-    with pytest.raises(ArrayIntegrityError, match="regular file"):
-        from_wire(ref, array_dir=tmp_path)
-    assert time.monotonic() - t0 < 1
 
 
 @pytest.mark.logic

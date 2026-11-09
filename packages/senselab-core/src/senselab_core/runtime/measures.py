@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import re
-import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -49,6 +48,7 @@ from senselab_core.runtime.calibration import (
     RegimeFactor,
     RegimeRecord,
 )
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import expand
 from senselab_core.runtime.execution_settings import CalibrationSettings, ResourceClass, Trust
 from senselab_core.runtime.keys import Placement
@@ -441,8 +441,15 @@ class MeasureRoots:
     quarantined by its owner in a writable root and skipped by anyone else. `collect` removes only files `uid` owns.
     """
 
-    def __init__(
-        self, roots: Sequence[Path], policy: StorePolicy, trust: Trust, uid: int, *, stale_after_s: float
+    def __init__(  # noqa: PLR0913 - the roots, the reader, then keyword-only staleness and clock
+        self,
+        roots: Sequence[Path],
+        policy: StorePolicy,
+        trust: Trust,
+        uid: int,
+        *,
+        stale_after_s: float,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Hold `roots` in order, the reader's `trust` and `uid`; probe leases go stale after `stale_after_s`."""
         self.roots = tuple(roots)
@@ -450,6 +457,7 @@ class MeasureRoots:
         self.trust = trust
         self.uid = uid
         self.stale_after_s = stale_after_s
+        self._clock = clock
         self._dir_mode = shared_dir_mode(policy)
         self._file_mode = committed_modes(policy)[0]
         self._probed: dict[Path, bool] = {}
@@ -806,7 +814,9 @@ class MeasureRoots:
 
     def _lease_age(self, unit_dir: StorageDir) -> float | None:
         try:
-            return Lease(unit_dir.path / PROBE_LEASE, stale_after=self.stale_after_s, directory=unit_dir).age()
+            return Lease(
+                unit_dir.path / PROBE_LEASE, stale_after=self.stale_after_s, directory=unit_dir, clock=self._clock
+            ).age()
         except PermissionError:
             pass
         except OSError as err:
@@ -823,7 +833,7 @@ class MeasureRoots:
                 with lease.child(token) as held:
                     beats = (i.st_mtime for n in held.listdir() if (i := held.lstat(n)) is not None)
                     newest = max([newest, os.fstat(held.fd).st_mtime, *beats])
-        return time.time() - newest if newest else None
+        return self._clock.local_now() - newest if newest else None
 
     def _lease_owner(self, unit_dir: StorageDir) -> int | None:
         name = PROBE_LEASE + ".lease"
@@ -861,25 +871,26 @@ class MeasureRoots:
                 if (owner := self._lease_owner(unit_dir)) is not None:
                     return PeerProbing() if self._admits(owner) else Unleased("foreign lease")
                 path = unit_dir.path / PROBE_LEASE
-            return Lease(path, timeout=0, stale_after=self.stale_after_s, mode=self._dir_mode)
+            return Lease(path, timeout=0, stale_after=self.stale_after_s, mode=self._dir_mode, clock=self._clock)
 
         taken = self._in_first_writable(take)
         return Unleased("no writable root") if taken is None else taken
 
-    def collect(self, kept: int, now: float | None = None) -> int:
+    def collect(self, kept: int) -> int:
         """Remove what `uid` owns and no reader needs; return how many.
 
-        That is staging and quarantine older than the policy's ages, and the observation files of probes a trusted
-        `supersede` record names in `outdates`, beyond the newest `kept`. Another user's file is never removed.
+        That is staging and quarantine older than the policy's ages on the clock's storage time, and the
+        observation files of probes a trusted `supersede` record names in `outdates`, beyond the newest `kept`.
+        Another user's file is never removed.
         """
         removed = 0
         ages = (("tmp", self.policy.staging_stale_s), ("quarantine", self.policy.quarantine_retention_s))
         for root in list(self._writable()):
             with self._guard(root, "written"), self._open(root, create=False) as m:
-                clock = m.dir_now() if now is None else now
+                now = self._clock.storage_now(m)
                 for sub, age in ages:
                     with self._guard(root, "written"), m.child(sub) as directory:
-                        removed += self._remove_owned_before(directory, clock - age)
+                        removed += self._remove_owned_before(directory, now - age)
                 removed += self._collect_units(root, m, kept)
         return removed
 

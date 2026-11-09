@@ -203,26 +203,35 @@ def pause_replaces(
 
 
 def displace_after_take(monkeypatch: pytest.MonkeyPatch, name: str) -> list[str]:
-    """Remove the lease directory `name` at the first file created after each take of it, as a breaker would.
+    """Remove the lease directory `name` at the first file or directory made after each take of it, as a breaker would.
 
     A take is the `os.mkdir` of `name` and then of a token in it; the removal renames `name` aside in its parent
     and removes the tree. Returns the list each displacement appends `name` to.
     """
     real_mkdir, real_open = os.mkdir, os.open
     parent: list[int] = []
+    made: list[int] = [0]
     displaced: list[str] = []
 
+    def displace() -> None:
+        aside = uuid.uuid4().hex
+        os.rename(name, aside, src_dir_fd=parent[0], dst_dir_fd=parent[0])
+        shutil.rmtree(aside, dir_fd=parent.pop())
+        displaced.append(name)
+
     def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if parent and made[0]:
+            displace()
         real_mkdir(path, mode, dir_fd=dir_fd)
         if os.fsdecode(path) == name and dir_fd is not None:
             parent[:] = [dir_fd]
+            made[0] = 0
+        elif parent:
+            made[0] += 1
 
     def opened(path: Any, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:  # noqa: ANN401
         if parent and flags & os.O_CREAT:
-            aside = uuid.uuid4().hex
-            os.rename(name, aside, src_dir_fd=parent[0], dst_dir_fd=parent[0])
-            shutil.rmtree(aside, dir_fd=parent.pop())
-            displaced.append(name)
+            displace()
         return real_open(path, flags, mode, dir_fd=dir_fd)
 
     monkeypatch.setattr(os, "mkdir", mkdir)

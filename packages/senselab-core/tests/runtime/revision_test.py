@@ -7,15 +7,16 @@ import shutil
 import subprocess
 import sys
 import threading
-import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from aged_storage_fixture import StorageTime
 from huggingface_hub.errors import RepositoryNotFoundError
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from lease_clock_fixture import ManualClock
 from lease_time_fixture import install, on_create
 from planted_objects_fixture import BAD_ATTEMPT_IDS, LEASE, NAME_BOUND_S, UNOPENABLE_NAMES, bounded
 from senselab_core.runtime.execution_settings import JobLease
@@ -36,7 +37,7 @@ from senselab_core.runtime.revision import (
     record_resolution,
     resolve_revision,
 )
-from senselab_core.runtime.storage import NAME_MAX
+from senselab_core.runtime.storage import NAME_MAX, StorePolicy
 from syscall_faults_fixture import displace_after_take, displace_before_proof, pause_replaces
 
 SHA_A = "a" * 40
@@ -553,7 +554,6 @@ def test_displaced_lease_keeps_manifest_update(tmp_path: Path, monkeypatch: pyte
     b.start()
     assert b_reached.wait(60)
     a_go.set()
-    time.sleep(0.2)
     b_go.set()
     a.join(60)
     b.join(60)
@@ -564,13 +564,14 @@ def test_displaced_lease_keeps_manifest_update(tmp_path: Path, monkeypatch: pyte
 
 @pytest.mark.logic
 @pytest.mark.parametrize("run", ["job-123", "4242", str(uuid.UUID(int=7)), "0123456789abcdef0123456789abcdeF"])
-def test_an_aged_run_survives_another_runs_collection(tmp_path: Path, run: str) -> None:
+def test_an_aged_run_survives_another_runs_collection(
+    tmp_path: Path, run: str, lease_clock: Callable[..., ManualClock]
+) -> None:
     """Every accepted attempt id's manifest outlives the quarantine age when another run collects what was set aside."""
-    record_resolution("org/m", "main", SHA_A, run=run, root=tmp_path)
-    old = time.time() - 30 * 24 * 3600
-    for path in (manifest_path(run, root=tmp_path), manifest_path(run, root=tmp_path).parent):
-        os.utime(path, (old, old))
-    record_resolution("org/m", "main", SHA_B, run="otherrun", root=tmp_path)
+    time_ = StorageTime(lease_clock, tmp_path)
+    record_resolution("org/m", "main", SHA_A, run=run, root=tmp_path, clock=time_.clock)
+    time_.clock.advance(2 * StorePolicy.load_default().quarantine_retention_s)
+    record_resolution("org/m", "main", SHA_B, run="otherrun", root=tmp_path, clock=time_.clock)
     assert read_manifest(run, root=tmp_path) == {manifest_key("org/m", "main"): SHA_A}
 
 
@@ -599,19 +600,17 @@ def test_run_manifest_modes_do_not_depend_on_the_umask(tmp_path: Path, umask: st
 
 @pytest.mark.logic
 @pytest.mark.parametrize("plant", ["symlink", "dangling"])
-@pytest.mark.parametrize("name", [LEASE, ".clock"])
-def test_the_lease_of_a_run_manifest_never_follows_a_planted_symlink(tmp_path: Path, name: str, plant: str) -> None:
-    """A symlink at a run manifest's lease or clock is neither chmodded nor created through."""
-    report = bounded("probe_record_with_plant", str(tmp_path), name, plant)
+def test_the_lease_of_a_run_manifest_never_follows_a_planted_symlink(tmp_path: Path, plant: str) -> None:
+    """A symlink at a run manifest's lease is neither chmodded nor created through."""
+    report = bounded("probe_record_with_plant", str(tmp_path), LEASE, plant)
     assert report["error"] == "" and report["recorded"]
     assert report["victim_unchanged"] and report["victim"] == ["f"], report
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("name", [LEASE, ".clock"])
-def test_a_hard_link_at_a_lease_or_clock_leaves_its_target_alone(tmp_path: Path, name: str) -> None:
-    """A hard link at a lease or clock: the file it shares is not chmodded, truncated or re-stamped."""
-    report = bounded("probe_record_with_plant", str(tmp_path), name, "hardlink")
+def test_a_hard_link_at_a_lease_leaves_its_target_alone(tmp_path: Path) -> None:
+    """A hard link at a lease: the file it shares is not chmodded, truncated or re-stamped."""
+    report = bounded("probe_record_with_plant", str(tmp_path), LEASE, "hardlink")
     assert report["error"] == "" and report["recorded"]
     assert report["victim_unchanged"], report
 

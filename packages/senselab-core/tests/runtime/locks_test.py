@@ -183,6 +183,7 @@ def test_keep_alive_renews_while_the_work_writes_nothing(
             clock.settle()
             assert state.beats == beat and os.lstat(token).st_mtime_ns > aged
         assert len(list(token.iterdir())) == 1 and not state.lost and lease.owns()
+    _join(_renewers())
     assert _renewers() == [] and list(tmp_path.iterdir()) == []
 
 
@@ -200,9 +201,11 @@ def test_beat_after_break_marks_lost(tmp_path: Path, lease_clock: Callable[..., 
         shutil.rmtree(aside)
         clock.advance(0.1)
         assert state.wait_lost(JOIN_S) and not lease.owns()
+        _join(_renewers())
         assert _renewers() == []
         with Lease(resource, timeout=0) as other:
             assert other.owns()
+    _join(_renewers())
     assert _renewers() == [] and list(tmp_path.iterdir()) == []
 
 
@@ -250,6 +253,7 @@ def test_breaker_never_breaks_a_beating_lease(tmp_path: Path, lease_clock: Calla
                 with Lease(resource, timeout=0, stale_after=30):
                     pass
         assert holder.owns() and not state.lost
+    _join(_renewers())
     assert _renewers() == []
 
 
@@ -698,6 +702,7 @@ def test_a_stale_nfs_handle_is_a_lost_lease_at_once(
             armed = True
             assert lease.owns() is False and lease.prove() is False
             armed = False
+    _join(_renewers())
     assert _renewers() == []
 
 
@@ -731,6 +736,7 @@ def test_a_renewer_ended_by_any_error_marks_the_lease_lost(
         clock.settle()
         clock.advance(0.3)
         assert state.wait_lost(JOIN_S)
+    _join(_renewers())
     assert _renewers() == []
 
 

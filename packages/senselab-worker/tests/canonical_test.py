@@ -5,7 +5,6 @@ import io
 import json
 import math
 import struct
-import time
 import warnings
 from enum import Enum
 from typing import Any, Literal, cast
@@ -625,26 +624,24 @@ def test_a_shared_dag_is_written_once_per_node() -> None:
 
 
 @pytest.mark.logic
+@pytest.mark.parametrize("levels", [12, 23])
+def test_a_shared_dag_is_built_once_per_node(levels: int) -> None:
+    """JCS and the tokeniser build one result per container of `x = [x, x]`, not one per leaf they expand to."""
+    from senselab_worker.canonical import Tokeniser, Walk, jcs_dumps
+
+    written, tokened = Walk(), Walk()
+    jcs_dumps(_quadratic_dag(levels), written)
+    Tokeniser()(_quadratic_dag(levels), walk=tokened)
+    assert written.builds == levels + 1 and tokened.builds == levels + 1
+
+
+@pytest.mark.logic
 def test_a_shared_dag_beyond_the_budget_is_refused() -> None:
     """Sixty-three levels (2**63 leaves) are refused by the work budget, not expanded."""
     from senselab_worker.canonical import jcs_dumps
 
     with pytest.raises(ValueError, match="exceeds"):
         jcs_dumps(_quadratic_dag(63))
-
-
-@pytest.mark.limits
-def test_a_shared_dag_is_written_and_refused_in_bounded_time() -> None:
-    """Twenty-three levels encode, and sixty-three are refused, each in under 5 s."""
-    from senselab_worker.canonical import jcs_dumps
-
-    started = time.monotonic()
-    jcs_dumps(_quadratic_dag(23))
-    assert time.monotonic() - started < 5.0
-    started = time.monotonic()
-    with pytest.raises(ValueError, match="exceeds"):
-        jcs_dumps(_quadratic_dag(63))
-    assert time.monotonic() - started < 5.0
 
 
 @pytest.mark.logic

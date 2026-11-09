@@ -39,6 +39,7 @@ from senselab_worker.digest import file_digest, identity_digest
 
 from senselab_core.kernel.declare import Env
 from senselab_core.kernel.formats import FormatTag, Formatted
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.hardware import _run
@@ -300,6 +301,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     uv: Uv | None = None,
     host_cuda: HostCuda | None = None,
     network: Network = "online",
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> EnvHandle:
     """Return the env `env` built from `lock` and overlaid with `workers` under `root`, built once across processes.
 
@@ -322,6 +324,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         uv: The `uv` command; `Uv.find()` when None.
         host_cuda: The host's CUDA; probed with `detect_host_cuda` when None and the lock pins torch.
         network: The profile's `network`; an `offline` profile uses a built env and builds none.
+        clock: How the build lease reads time and waits.
 
     Raises:
         ManagedPythonMissing: no uv-managed interpreter of the needed version, or the host's is not uv-managed.
@@ -356,7 +359,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     current = _read_record(root, stem)
     if current is not None and (current.lock_sha, current.torch_index) == wanted:
         return _handle(root, current, parsed.path)
-    held = Lease(root / stem, stale_after=lease.stale_after_s, timeout=lease.stale_after_s + TIMEOUT_S)
+    held = Lease(root / stem, stale_after=lease.stale_after_s, timeout=lease.stale_after_s + TIMEOUT_S, clock=clock)
     with held, held.keep_alive(lease.renew_fraction) as state:
         current = _read_record(root, stem)
         if current is None or (current.lock_sha, current.torch_index) != wanted:
