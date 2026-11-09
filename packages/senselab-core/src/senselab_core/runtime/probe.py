@@ -106,7 +106,9 @@ def _rank_bound(points: Sequence[tuple[float, float]], slope: float) -> float:
     return 2 * sys.float_info.epsilon * spread / float(np.diff(np.unique(xs)).min())
 
 
-def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
+def _kth_slope(
+    xs: np.ndarray, ys: np.ndarray, k: int, total: int, inversions: Callable[[np.ndarray], int] = _inversions
+) -> float:
     """Return the `k`-th smallest (from 0) of the `total` slopes between points of distinct `x`, sorted by `(x, y)`.
 
     A pair's slope is below `t` exactly when the pair is inverted in `y − t·x`, so the slopes below `t` are counted by
@@ -121,7 +123,7 @@ def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
     low, high, below, above = _ordered(-2 * bound), _ordered(2 * bound), 0, total
     while above - below > len(xs) and high - low > 1:
         middle = (low + high) // 2
-        count = _inversions(ys - _unordered(middle) * centred)
+        count = inversions(ys - _unordered(middle) * centred)
         low, below = (middle, count) if count <= k else (low, below)
         high, above = (high, above) if count <= k else (middle, count)
     if above - below > len(xs):
@@ -138,7 +140,9 @@ def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
     return float(slopes[min(max(k - below, 0), len(slopes) - 1)])
 
 
-def _theil_sen(points: Sequence[tuple[float, float]]) -> tuple[float, float] | None:
+def _theil_sen(
+    points: Sequence[tuple[float, float]], inversions: Callable[[np.ndarray], int] = _inversions
+) -> tuple[float, float] | None:
     """Return `(intercept, slope)`: the median of the pairwise slopes, and the median intercept at that slope.
 
     The slope is the median of the n(n−1)/2 pairwise slopes, found in O(n log² n) time and O(n) memory; it equals the
@@ -151,9 +155,9 @@ def _theil_sen(points: Sequence[tuple[float, float]]) -> tuple[float, float] | N
     if total == 0:
         return None
     middle = (total - 1) // 2
-    slope = _kth_slope(xs, ys, middle, total)
+    slope = _kth_slope(xs, ys, middle, total, inversions)
     if total % 2 == 0:
-        slope = statistics.median([slope, _kth_slope(xs, ys, middle + 1, total)])
+        slope = statistics.median([slope, _kth_slope(xs, ys, middle + 1, total, inversions)])
     return _median([y - slope * x for x, y in ordered]), slope
 
 

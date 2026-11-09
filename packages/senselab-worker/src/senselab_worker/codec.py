@@ -57,18 +57,18 @@ READ_CHUNK_BYTES = 2**20
 class Deadline:
     """A point in monotonic time by which a sequence of steps must finish; `None` seconds never expires."""
 
-    def __init__(self, seconds: float | None) -> None:
-        """Start the clock: the deadline falls `seconds` from now."""
-        self._seconds = seconds
-        self._end = None if seconds is None else time.monotonic() + max(seconds, 0.0)
+    def __init__(self, seconds: float | None, now: Callable[[], float] = time.monotonic) -> None:
+        """Start the clock: the deadline falls `seconds` from now, as `now` reads it."""
+        self._seconds, self._now = seconds, now
+        self._end = None if seconds is None else now() + max(seconds, 0.0)
 
     def remaining(self) -> float | None:
         """Return the seconds left, at least 0, or `None` if the deadline never expires."""
-        return None if self._end is None else max(self._end - time.monotonic(), 0.0)
+        return None if self._end is None else max(self._end - self._now(), 0.0)
 
     def expired(self) -> bool:
         """Return whether no time is left."""
-        return self._end is not None and time.monotonic() >= self._end
+        return self._end is not None and self._now() >= self._end
 
     def check(self, what: str) -> None:
         """Raise `TimeoutError` naming `what` if the deadline has passed."""

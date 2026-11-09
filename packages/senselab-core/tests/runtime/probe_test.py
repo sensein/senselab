@@ -5,11 +5,11 @@ import math
 import random
 import statistics
 import sys
-import time
 from bisect import bisect_right
 from collections.abc import Sequence
 from typing import Any
 
+import numpy as np
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -30,7 +30,7 @@ from senselab_core.runtime.calibration import (
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings
 from senselab_core.runtime.measures import MeasureSource
-from senselab_core.runtime.probe import Probe, _rank_bound, _theil_sen, memory_batch
+from senselab_core.runtime.probe import Probe, _inversions, _rank_bound, _theil_sen, memory_batch
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Grant, Sample, calibrated, measure_of
 from senselab_core.testing.calibration_samples import UNIT
@@ -893,25 +893,25 @@ def test_a_covered_batched_phase_is_reported_without_a_device_measurement() -> N
     assert batched.unplanned[-1] == Unplanned(phase="BATCHED", stratum=None, reason="covered")
 
 
-def _pooled(n: int) -> list[Observation]:
+def _pooled(n: int) -> list[tuple[float, float]]:
     rng = random.Random(n)
-    return [_obs(x, 0.2 + 0.05 * x + rng.gauss(0, 0.05)) for x in (rng.uniform(1.0, 60.0) for _ in range(n))]
+    return [(x, 0.2 + 0.05 * x + rng.gauss(0, 0.05)) for x in (rng.uniform(1.0, 60.0) for _ in range(n))]
 
 
-def _fit_seconds(observations: Sequence[Observation], repeats: int) -> float:
-    best = float("inf")
-    for _ in range(repeats):
-        start = time.perf_counter()
-        _estimate(observations)
-        best = min(best, time.perf_counter() - start)
-    return best
+def _fit_operations(points: Sequence[tuple[float, float]]) -> int:
+    """Count the slope fit's steps: an inversion count of `m` values makes `ceil(log2 m)` levels of `m` each."""
+    sizes: list[int] = []
+
+    def counted(z: np.ndarray) -> int:
+        sizes.append(len(z))
+        return _inversions(z)
+
+    _theil_sen(points, counted)
+    return sum(m * math.ceil(math.log2(m)) for m in sizes)
 
 
-@pytest.mark.limits
-def test_fit_time_is_subquadratic(slack_tests: dict[str, Any]) -> None:
-    """The estimate's time at 10^4 pooled requests is under `tests.probe.fit_ratio` times its time at 10^3."""
-    probe = slack_tests["probe"]
-    ratio = _fit_seconds(_pooled(10_000), probe["timing_repeats"]) / _fit_seconds(
-        _pooled(1_000), probe["timing_repeats"]
-    )
-    assert ratio < probe["fit_ratio"], f"{ratio:.1f}x for 10x the requests"
+@pytest.mark.logic
+def test_fit_work_is_subquadratic(slack_tests: dict[str, Any]) -> None:
+    """The slope fit's step count at 10^4 pooled requests is under `tests.probe.fit_ops_ratio` times that at 10^3."""
+    ratio = _fit_operations(_pooled(10_000)) / _fit_operations(_pooled(1_000))
+    assert ratio < slack_tests["probe"]["fit_ops_ratio"], f"{ratio:.1f}x the operations for 10x the requests"
