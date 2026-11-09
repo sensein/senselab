@@ -13,7 +13,7 @@ from typing import Any
 import numpy
 import pytest
 import soundfile
-from pool_stack_fixture import packaged, planned, registry, scoring
+from pool_stack_fixture import packaged, planned, registry, scoring, unresolving
 from senselab_core.cli import main as cli_main
 from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.audio_io import open_audio
@@ -33,7 +33,6 @@ from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
-from senselab_core.testing.measures import FixedMeasures
 from syscall_faults_fixture import await_true, displace_before_proof, pause_replaces
 
 SCORE = scoring("pool_test.score")
@@ -184,7 +183,7 @@ def _pool(  # noqa: PLR0913 - the run, its parts, and the epoch and clock a rest
         substrate=workers,
         epoch=epoch,
         clock=clock,
-        measures=FixedMeasures(),
+        resolver=unresolving(profile),
     )
 
 
@@ -726,7 +725,7 @@ def test_plan_run_with_a_pool_binds_it_to_the_runs_own_epoch(tmp_path: Path) -> 
         profile=profile,
         substrate=workers,
         epoch=0,
-        measures=FixedMeasures(),
+        resolver=unresolving(profile),
     )
     try:
         status = placed.run(pool, store=store).wait(60)

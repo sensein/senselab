@@ -1,16 +1,16 @@
 """`Pool`: the `Executor` that puts fragments on a run's queues and reads what pool workers made of them.
 
 A fragment goes to the queue of its placement's resource class under `<run dir>/queues/`, named `<class>#<model
-identity>` when its node has a resident model, as items of a quantum of jobs each, ending on request boundaries when a
-request fits in one (`split`), in job order; a `Substrate` has as many workers serve that queue as its waiting work
-wants (`scale`, each round). Quantum and worker count are sized (`size`) from the measure of the fragment's unit (its
-task, backend, model and class): a resource-table row's, else a calibration round's. A unit without one first puts
-`sizing.calibration_items` of its jobs as one-job items for one worker and holds its other jobs; once those items have
-outcomes, their samples give the measure (`calibrated`), which is written back as a resource-table row
-(`MeasureSource.put`), and the held jobs are put. A worker records each job's `ResultRef` in the item's outcome, with
-what it measured of the item (`report`). The `Pool` yields a result only once the result store holds its outputs, and a
-failure only as `dead/<key digest>.json` holds it, so a restarted coordinator reads the same state from disk. Each fault
-class has its effect here, with the budgets of the profile's `faults` section:
+identity>` when its node has a resident model. The jobs the store would serve (`ResultStore.admits`) are put at once.
+The others are the computed jobs of a unit (`MeasureUnit`, built by `UnitResolver`), and the unit moves through a
+`ProbeState`: `Resolving` the hardware class (the index, else the first worker's ready mark), `Lookup` of its estimate,
+`PeerWait` while a peer holds the unit's probe lease, `Probing` on a probe queue `<queue>~probe-<id>` served by one
+worker of the resolved class, then `Measured` or `Unmeasured`. Computed jobs wait while the unit resolves, waits or
+probes; once it ends they are put, cut and batched by `size` from the estimate, else its safe values. Every result of
+a probe item is yielded like any other. A worker records each job's `ResultRef` in the item's outcome, with the
+`Observation`s of its requests. The `Pool` yields a result only once the result store holds its outputs, and a
+failure only as `dead/<key digest>.json` holds it, so a restarted coordinator reads the same state from disk. Each
+fault class has its effect here, with the budgets of the profile's `faults` section:
 
 - **content**, not a gap: charged; the job is queued again until `content_attempts` charges, then it is dead;
 - **resource**, not a gap: the job is queued again on the next larger memory class of its device, uncharged, at most
@@ -24,9 +24,11 @@ with its env is logged `queued` again, so it reads as waiting, never as failed.
 """
 
 import contextlib
+import importlib.metadata
 import itertools
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -34,14 +36,24 @@ import uuid
 import weakref
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement
-from senselab_core.runtime.calibration import Observation
-from senselab_core.runtime.call import RunConfig
+from senselab_core.runtime.calibration import (
+    Candidate,
+    Estimate,
+    HardwareClass,
+    LengthProfile,
+    Observation,
+    Prior,
+    ProbeItem,
+    ProbePlan,
+)
+from senselab_core.runtime.call import RunConfig, host_hardware
+from senselab_core.runtime.execution.batching import bucket_edges
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import BrokenEnv, EventLog, read_events
 from senselab_core.runtime.execution.executor import (
@@ -55,9 +67,27 @@ from senselab_core.runtime.execution.executor import (
     Status,
     WorkersBroken,
 )
-from senselab_core.runtime.execution.in_process import fragment_keys, node_request_size, result_ref
-from senselab_core.runtime.execution.job import JobOutcome
-from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest
+from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, job_units
+from senselab_core.runtime.execution.job import Job
+from senselab_core.runtime.execution.observing import job_units as detected_units
+from senselab_core.runtime.execution.plan_reads import servable_jobs
+from senselab_core.runtime.execution.pool_parts import (
+    Dumped,
+    Flight,
+    Followed,
+    Held,
+    ProbedUnit,
+    Release,
+    Run,
+    State,
+    covers,
+    jobs_of,
+    larger_class,
+    report,
+    split,
+    worth,
+)
+from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of, probe_queue
 from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
     BrokenClass,
@@ -67,23 +97,34 @@ from senselab_core.runtime.execution.substrates import (
     Substrate,
     SubstrateError,
     class_of,
+    read_mark,
     scale,
 )
-from senselab_core.runtime.planner import Plan, check_storage
-from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.resources import Measured, MeasureSource, ResourceMeasure, Unit
-from senselab_core.runtime.sizing import (
-    Grant,
-    Measure,
-    Measures,
-    RowSizing,
-    Sample,
-    calibrated,
-    code_version,
-    measure_of,
-    size_row,
+from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.locks import Lease, LeaseTimeout, LeaseUnavailable
+from senselab_core.runtime.measures import (
+    Build,
+    Estimates,
+    MeasureRoots,
+    MeasureUnit,
+    PeerProbing,
+    Provenance,
+    Unleased,
 )
+from senselab_core.runtime.planner import Plan, check_storage
+from senselab_core.runtime.probe import Probe
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.sizing import ExtrapolationLog, Grant, size
 from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.units import (
+    HardwareUnseen,
+    UnitReads,
+    UnitResolver,
+    Unresolved,
+    decoder_of,
+    default_measures,
+    measure_roots,
+)
 
 if TYPE_CHECKING:
     from senselab_core.runtime.execution.runner import RunOutcome
@@ -99,152 +140,22 @@ DEAD_DIR = "dead"
 """The directory of a run's dead jobs, one `<key digest>.json` each."""
 
 
-def report(  # noqa: PLR0913 - the claim and item, its outcomes, then what was measured of it
-    claim: Claim,
-    digest: str,
-    outcomes: Sequence[JobOutcome],
-    sample: Sample | None = None,
-    observations: Sequence[Observation] = (),
-) -> bool:
-    """Commit the claimed item `digest` with each job's `ResultRef`, the `sample` measured and its `observations`.
-
-    Return whether it committed.
-    """
-    extra: dict[str, object] = {"jobs": [result_ref(outcome).model_dump(mode="json") for outcome in outcomes]}
-    if sample is not None:
-        extra["measure"] = sample.model_dump(mode="json")
-    if observations:
-        extra["observations"] = [o.model_dump(mode="json") for o in observations]
-    return digest in claim.commit([digest], extra)
-
-
-def larger_class(profile: ExecutionProfile, name: str) -> str | None:
-    """Return the resource class of `profile` with the least memory above class `name`'s, on its device and GPU type.
-
-    A class whose `cpus` exceed the substrate's `qos_cpu_cap` is skipped: no worker of it could start. None when
-    `name` is not a class of the profile, states no memory, or no startable class of its kind has more.
-    """
-    cap = profile.substrate.qos_cpu_cap
-    current = profile.resource_classes.get(name)
-    if current is None or current.mem_bytes is None:
-        return None
-    larger = sorted(
-        (c.mem_bytes, n)
-        for n, c in profile.resource_classes.items()
-        if (c.device, c.gpu_type) == (current.device, current.gpu_type)
-        and c.mem_bytes is not None
-        and c.mem_bytes > current.mem_bytes
-        and (cap is None or c.cpus is None or c.cpus <= cap)
-    )
-    return larger[0][1] if larger else None
-
-
-_PER_JOB = frozenset({"jobs", "inputs", "upstream", "gathered"})
-
-
-@dataclass(frozen=True)
-class _Dumped:
-    """A fragment dumped once: the fields its parts share, and its jobs, inputs, upstream and gathers to slice from."""
-
-    shared: dict[str, object]
-    jobs: list[object]
-    inputs: list[dict[str, str]]
-    upstream: dict[str, object]
-    gathered: dict[str, list[str]]
-
-    @classmethod
-    def of(cls, fragment: PlanFragment) -> "_Dumped":
-        """Dump `fragment` once."""
-        return cls(
-            fragment.model_dump(mode="json", exclude=set(_PER_JOB)),
-            [j.model_dump(mode="json") for j in fragment.jobs],
-            [dict(i) for i in fragment.inputs],
-            {i: r.model_dump(mode="json") for i, r in fragment.upstream.items()},
-            {g: list(e) for g, e in fragment.gathered.items()},
-        )
-
-    def part(self, indices: Sequence[int], **update: object) -> PlanFragment:
-        """Return the fragment of jobs `indices`, in that order, with the inputs they read and `update`."""
-        named = {i for index in indices for i in self.inputs[index].values()}
-        gathered = {g: self.gathered[g] for g in named if g in self.gathered}
-        read = {i for i in named if i.startswith("output:")} | {e for es in gathered.values() for e in es}
-        return PlanFragment.model_validate(
-            {
-                **self.shared,
-                "jobs": [self.jobs[i] for i in indices],
-                "inputs": [self.inputs[i] for i in indices],
-                "upstream": {i: self.upstream[i] for i in sorted(read) if i in self.upstream},
-                "gathered": gathered,
-                **update,
-            }
-        )
-
-
-def _jobs_of(fragment: PlanFragment, indices: Sequence[int], **update: object) -> PlanFragment:
-    """Return the fragment of jobs `indices` of `fragment`, in that order, with the inputs they read and `update`."""
-    return _Dumped.of(fragment).part(indices, **update)
-
-
-def split(fragment: PlanFragment, quantum: int, request: int = 1) -> list[PlanFragment]:
-    """Return `fragment` as items of at most `quantum` jobs each, in job order; `[fragment]` when it fits in one.
-
-    The fragment is dumped once and each item is built from its own slice, so the work is linear in the jobs.
-
-    `request` is the jobs per request of the fragment's backend (`node_request_size`). When it is at most `quantum`,
-    every item but the last holds the most whole requests that fit, so no request is cut; a larger request is cut at
-    `quantum` jobs.
-
-    Raises:
-        ValueError: `quantum` or `request` is below 1.
-    """
-    if quantum < 1 or request < 1:
-        raise ValueError(f"an item and a request hold at least one job, got {quantum} and {request}")
-    count = len(fragment.jobs)
-    if count <= quantum:
-        return [fragment]
-    size = quantum - quantum % request if request <= quantum else quantum
-    dumped = _Dumped.of(fragment)
-    return [dumped.part(range(start, min(start + size, count))) for start in range(0, count, size)]
-
-
-@dataclass
-class _Flight:
-    """One item on a queue, by its digest."""
-
-    queue: str
-    digest: str
-    fragment: PlanFragment
-
-
-@dataclass
-class _Followed:
-    """A submitted fragment: its items in flight, its parts waiting on a calibration, each job's charges and moves."""
-
-    flights: list[_Flight]
-    waiting: list[tuple[Unit, PlanFragment]] = field(default_factory=list)
-    charged: Counter[tuple[int, ...]] = field(default_factory=Counter)
-    moved: Counter[tuple[int, ...]] = field(default_factory=Counter)
-    held: list[QueueHeld] = field(default_factory=list)
-    seen: bool = False
-    done: bool = False
-    cancelled: bool = False
-
-
 class Pool:
     """An `Executor` over the queues of the run in `run_dir`, its jobs run by pool workers a `substrate` starts.
 
     `submit` puts a fragment on its queue unless a newer epoch than `epoch` was taken (`StaleCoordinator`); `poll`
-    reads its items' outcomes once, never waiting, and applies each fault's effect. One scaler thread, started by the
-    first submit and stopped by `close`, sizes the substrate's workers once per `pool.poll_s` while a fragment is
-    followed, and at once after each submit or retry; nothing else scales. An admission holds the plan only: workers
-    bind graph inputs from the run's `inputs.json`. `events` is the log of `epoch`'s attempt; an env's infrastructure
-    failures are counted from that epoch's events on disk. `measures` gives each unit's measure and keeps what a
-    calibration round measured (`Measures` by default).
+    reads its items' outcomes once, never waiting, advances every unit's probe state and applies each fault's effect.
+    One scaler thread, started by the first submit and stopped by `close`, sizes the substrate's workers once per
+    `pool.poll_s` while a fragment is followed, and at once after each submit or retry; nothing else scales. An
+    admission holds the plan only: workers bind graph inputs from the run's `inputs.json`. `events` is the log of
+    `epoch`'s attempt; an env's infrastructure failures are counted from that epoch's events on disk. `measures` gives
+    each unit's estimate, `roots` keeps its observations, probe lease and hardware index, and `resolver` builds its
+    unit; each defaults to the profile's.
 
     Attributes:
         broken: Each env this pool reported broken, once.
         gaps: Each job given a fault with `gap` set, with its fault.
-        calibrated: Each unit this pool calibrated, with the digests of its rounds' items and the jobs they ran.
+        probes: Each unit this pool probed, by digest.
     """
 
     logs_claims: ClassVar[bool] = True
@@ -261,9 +172,11 @@ class Pool:
         substrate: Substrate,
         epoch: int,
         clock: Callable[[], float] = time.monotonic,
-        measures: MeasureSource | None = None,
+        measures: Estimates | None = None,
+        roots: MeasureRoots | None = None,
+        resolver: UnitReads | None = None,
     ) -> None:
-        """Coordinate the run in `run_dir` as epoch `epoch`; `clock` dates each epoch read for its reuse.
+        """Coordinate the run in `run_dir` as epoch `epoch`; `clock` dates each epoch read and each probe wait.
 
         Raises:
             ValueError: `events` is not a log of `epoch`.
@@ -287,25 +200,33 @@ class Pool:
         self._scale_error: Exception | None = None
         self._fenced: tuple[float, int] | None = None
         self._clock = clock
+        self._extrapolated = ExtrapolationLog()
         self.bind_epoch(epoch, events)
         self.broken: dict[str, BrokenEnv] = {}
         self.gaps: list[tuple[JobRef, FaultRecord]] = []
         self._epochs = Epoch(self.run_dir)
         self._plans: dict[str, tuple[Plan, Mapping[InputIdentity, object]]] = {}
         self._admitted: Counter[str] = Counter()
-        self._followed: dict[str, _Followed] = {}
+        self._followed: dict[str, Followed] = {}
         self._ids = itertools.count()
         self._lock = threading.Lock()
-        self.measures = measures if measures is not None else Measures()
-        self._sized: dict[Unit, Measure] = {}
-        self._queue_units: dict[str, set[Unit]] = {}
-        self._calibrating: dict[Unit, tuple[str, list[str]]] = {}
-        self._first_round: dict[Unit, list[Sample]] = {}
-        self.calibrated: dict[Unit, tuple[frozenset[str], int]] = {}
-        self._round_digests: dict[Unit, set[str]] = {}
+        self._machine = threading.RLock()
+        self.roots = roots if roots is not None else measure_roots(profile)
+        self.measures = measures if measures is not None else default_measures(profile, self.roots)
+        self.resolver = resolver if resolver is not None else UnitResolver(profile, self.roots)
+        self.probes: dict[str, ProbedUnit] = {}
+        self._states: dict[str, State] = {}
+        self._resolving: list[Held] = []
+        self._releasing: list[Release] = []
+        self._waited: set[str] = set()
+        self._greeted: set[str] = set()
+        self._hello: dict[str, HardwareClass] = {}
+        self._rates: dict[str, dict[str, tuple[float | None, int]]] = {}
 
     def bind_epoch(self, epoch: int, events: EventLog) -> None:
         """Coordinate as `epoch` from now on, logging to `events`, a log of that epoch's attempt.
+
+        A run starts its extrapolation log afresh.
 
         Raises:
             ValueError: `events` is not a log of `epoch`.
@@ -318,6 +239,7 @@ class Pool:
         self._fleet.reset()
         self.broken_workers.clear()
         self._relogged.clear()
+        self._extrapolated = ExtrapolationLog()
 
     def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:
         """Hold `placed` and its graph-input `values` until released as often as admitted; its id is `run-<plan hash>`.
@@ -352,15 +274,17 @@ class Pool:
         if current > self.epoch:
             raise StaleCoordinator(self.epoch, current)
 
-    def _put(
-        self, fragment: PlanFragment, *, retry: bool = False
-    ) -> tuple[list[_Flight], list[tuple[Unit, PlanFragment]]]:
-        """Put `fragment` on its queue as its items (`split`); return them and the part held for a calibration.
+    def _check_held(self, name: str, env: str) -> None:
+        """Raise `QueueHeld` when `env` is held on queue `name` by this epoch or a newer one."""
+        queue = self.queues.queue(name)
+        queue.unhold(before=self.epoch)
+        if queue.held(env) is not None:
+            failures = self._env_failures(env)
+            reason = failures[-1].message if failures else "held by an earlier coordinator of this epoch or a newer one"
+            raise QueueHeld(name, env, len(failures), reason)
 
-        A unit with a measure is split by its sized quantum, its placement's batch the sized one. One without starts
-        a calibration round with the first `sizing.calibration_items` jobs, or, while its round runs, holds the whole
-        fragment; a `retry` is put at once, one job per item. The caller wakes the scaler (`_wake_scaler`) once it
-        follows the items.
+    def _put(self, fragment: PlanFragment, followed: Followed, *, retry: bool = False) -> None:
+        """Put `fragment` for `followed`: a retry as one item, else its servable jobs at once and the rest by unit.
 
         Raises:
             StaleCoordinator: a newer epoch was taken.
@@ -368,197 +292,375 @@ class Pool:
             ValueError: the fragment's admission is not held by this pool.
         """
         self._fence()
-        name, env = self._queue_name(fragment), fragment.placement.env
-        queue = self.queues.queue(name)
-        queue.unhold(before=self.epoch)
-        if queue.held(env) is not None:
-            failures = self._env_failures(env)
-            reason = failures[-1].message if failures else "held by an earlier coordinator of this epoch or a newer one"
-            raise QueueHeld(name, env, len(failures), reason)
-        unit = self._unit(fragment)
-        measure = self._measure(unit, name)
-        quantum = 1
-        if measure is not None:
-            sized = self._sizing(name, measure)
-            placement = fragment.placement.model_copy(update={"batch_size": sized.batch_size})
-            fragment, quantum = fragment.model_copy(update={"placement": placement}), sized.quantum_items
-        request = node_request_size(self._admitted_plan(fragment)[0], fragment.node, fragment.placement)
-        part: PlanFragment | None = fragment
-        waiting: list[tuple[Unit, PlanFragment]] = []
-        if measure is None and not retry:
-            part, waiting = self._calibration_part(unit, name, fragment)
-        items = [] if part is None else split(part, quantum, request)
-        reserved = measure is None and not retry and bool(items)
-        try:
-            queue.put_all(items)
-        except BaseException:
-            if reserved:
-                with self._lock:
-                    self._calibrating.pop(unit, None)
-            raise
-        flights = [_Flight(name, item_digest(item), item) for item in items]
-        if reserved:
-            with self._lock:
-                self._calibrating[unit] = (name, [f.digest for f in flights])
-        return flights, waiting
-
-    def _unit(self, fragment: PlanFragment) -> Unit:
-        """Return what `fragment`'s jobs are measured as: its node's task, backend, model and resource class."""
-        placed = self._admitted_plan(fragment)[0]
-        model = placed.logical.models.get(fragment.node)
-        task = next(n.task for n in placed.logical.graph.nodes if n.id == fragment.node)
-        ident = (None, None) if model is None else (model.ref.id, model.identity)
-        return Unit(task, fragment.placement.backend, ident[0], ident[1], fragment.placement.resource_class)
-
-    def _measure(self, unit: Unit, queue: str) -> Measure | None:
-        """Return `unit`'s measure, read from `measures` once; note the unit as one of `queue`'s."""
-        with self._lock:
-            self._queue_units.setdefault(queue, set()).add(unit)
-            if unit in self._sized:
-                return self._sized[unit]
-        found = self.measures.get(unit)
-        if found is None:
-            return None
-        with self._lock:
-            return self._sized.setdefault(unit, self._per_item(found, queue))
-
-    def _per_item(self, found: ResourceMeasure, queue: str) -> Measure:
-        """Return `found` per item, by device memory on a `cuda` class."""
-        return measure_of(found, on_device=self.profile.resource_classes[class_of(queue)].device == "cuda")
-
-    def _grant(self, queue: str, *, on_device: bool = False) -> Grant:
-        """Return the grant of `queue`'s resource class; a local substrate's workers share its visible devices."""
-        devices = len(self.substrate.devices) if isinstance(self.substrate, Local) else None
-        resource = self.profile.resource_classes[class_of(queue)]
-        return Grant.of(resource, self.profile.pool, on_device=on_device, devices=devices)
-
-    def _sizing(self, queue: str, measure: Measure, work: int = 0) -> RowSizing:
-        """Return the sizing of `measure` on `queue`'s resource class for `work` waiting jobs."""
-        return size_row(measure, self._grant(queue, on_device=measure.on_device), self.profile.sizing, work=work)
-
-    def _calibration_part(
-        self, unit: Unit, queue: str, fragment: PlanFragment
-    ) -> tuple[PlanFragment | None, list[tuple[Unit, PlanFragment]]]:
-        """Split `fragment` into the jobs that start `unit`'s calibration round and the part held until it ends.
-
-        None is put while a round of the unit runs; otherwise the round is reserved here and its digests noted once put.
-        """
-        with self._lock:
-            running = unit in self._calibrating
-            if not running:
-                self._calibrating[unit] = (queue, [])
-        count = len(fragment.jobs)
-        k = 0 if running else min(self.profile.sizing.calibration_items, count)
-        dumped = _Dumped.of(fragment)
-        first = dumped.part(range(k)) if k else None
-        rest = [(unit, dumped.part(range(k, count)))] if k < count else []
-        return first, rest
-
-    def _batch_round(self, unit: Unit, queue: str, found: ResourceMeasure, samples: list[Sample]) -> bool:
-        """Start `unit`'s second round, batched and one-per-request items side by side, when its batch is above one.
-
-        The round is `sizing.calibration_items - 1` pairs, each an item of the batch sent as one request then an item
-        of as many jobs sent one per request, all on the worker the first round warmed: each item is one request call
-        over the same jobs, so its fixed cost weighs alike on both per-item times, and each averages as many inputs.
-        The batch is the memory batch, within what lets every pair fit in the unit's first held part; the rest of that
-        part waits on. Return whether a round was started.
-        """
-        with self._lock:
-            held = [(f, p) for f in self._followed.values() for u, p in f.waiting if u == unit]
-        if not held:
-            return False
-        followed, part = held[0]
-        pairs = self.profile.sizing.calibration_items - 1
-        fits = len(part.jobs) // (2 * pairs)
-        batch = min(self._sizing(queue, self._per_item(found, queue)).memory_batch, max(fits, 1))
-        placement = part.placement.model_copy(update={"batch_size": batch})
-        request = node_request_size(self._admitted_plan(part)[0], part.node, placement)
-        if request < 2:  # noqa: PLR2004 - a batch is two items or more
-            return False
-        dumped = _Dumped.of(part)
-        batched, single = (
-            placement.model_dump(mode="json"),
-            placement.model_copy(update={"batch_size": 1}).model_dump(mode="json"),
+        name = self._queue_name(fragment)
+        self._check_held(name, fragment.placement.env)
+        if retry:
+            self.queues.queue(name).put_all([fragment])
+            followed.flights.append(Flight(name, item_digest(fragment), fragment))
+            return
+        placed, values = self._admitted_plan(fragment)
+        jobs, placement = fragment_jobs(fragment, placed, values)
+        flags = servable_jobs(
+            jobs,
+            placement,
+            self._keys(fragment),
+            self.resolver.envs,
+            profile=self.profile,
+            store=self.store,
+            run=placed.config if placed.config is not None else RunConfig(),
         )
-        items = []
-        for i in range(pairs):
-            start = 2 * i * request
-            items += [
-                dumped.part(range(start, start + request), placement=batched),
-                dumped.part(range(start + request, start + 2 * request), placement=single),
-            ]
-        used = 2 * pairs * request
-        rest = [(unit, dumped.part(range(used, len(part.jobs))))] if used < len(part.jobs) else []
-        self.queues.queue(queue).put_all(items)
-        with self._lock:
-            followed.waiting = [(u, p) for u, p in followed.waiting if p is not part] + rest
-            followed.flights.extend(_Flight(queue, item_digest(i), i) for i in items)
-            self._first_round[unit] = samples
-            self._calibrating[unit] = (queue, [item_digest(i) for i in items])
+        dumped = Dumped.of(fragment)
+        with self._machine:
+            for wanted, served in ((True, True), (False, False)):
+                picks = [i for i, flag in enumerate(flags) if flag is wanted]
+                if not picks:
+                    continue
+                part = dumped.part(picks)
+                if served:
+                    self._put_served(followed, name, part, placement)
+                else:
+                    self._place(Held(followed, name, part))
+
+    def _put_served(self, followed: Followed, name: str, part: PlanFragment, placement: Placement) -> None:
+        """Put the jobs the store serves, `quantum_items` to an item, whole requests together."""
+        placed = self._admitted_plan(part)[0]
+        from senselab_core.runtime.execution.in_process import node_request_size  # noqa: PLC0415 - as `split`'s caller
+
+        request = node_request_size(placed, part.node, part.placement)
+        items = split(part, self._grant(name).quantum_items, request)
+        self.queues.queue(name).put_all(items)
+        followed.flights.extend(Flight(name, item_digest(i), i) for i in items)
         self._wake_scaler()
-        return True
+
+    def _grant(self, queue: str) -> Grant:
+        """Return the grant of `queue`'s resource class: the device pair on a `cuda` class, the host's otherwise."""
+        resource = self.profile.resource_classes[class_of(queue)]
+        devices = len(self.substrate.devices) if isinstance(self.substrate, Local) else None
+        seen = host_hardware() if resource.device == "cuda" or resource.mem_bytes is None else None
+        return Grant.seen(resource, self.profile.pool, seen, devices=devices)
+
+    def _place(self, held: Held) -> None:
+        """Move `held`'s computed jobs through their unit's `ProbeState`: resolve, look up, and probe or put them."""
+        placed, values = self._admitted_plan(held.part)
+        jobs, placement = fragment_jobs(held.part, placed, values)
+        decoder = decoder_of(jobs)
+        hello = self._hello.get(class_of(held.queue))
+        unit = (
+            decoder if isinstance(decoder, Unresolved) else self.resolver.unit(jobs[0].call, placement, decoder, hello)
+        )
+        if isinstance(unit, HardwareUnseen):
+            held.followed.waiting.append(held.part)
+            self._resolving.append(held)
+        elif isinstance(unit, Unresolved):
+            self._produce(Release(held, None, None), jobs, placement)
+        else:
+            self._lookup(unit, held, jobs, placement)
+
+    def _lookup(self, unit: MeasureUnit, held: Held, jobs: Sequence[Job], placement: Placement) -> None:
+        """Take `held` to its unit's state: an ended unit sizes it, a waiting or probing one holds it, else look up."""
+        digest = unit.digest()
+        state = self._states.get(digest)
+        if state is not None:
+            if state.state in ("peer_wait", "probing"):
+                held.followed.waiting.append(held.part)
+                state.held.append(held)
+            else:
+                self._produce(Release(held, state.estimate, unit.label()), jobs, placement)
+            return
+        estimate = self.measures.get(unit)
+        plan = None if covers(estimate, jobs) else self._plan_probe(unit, held, jobs, placement)
+        if plan is None or not worth(plan, estimate):
+            self._states[digest] = State(
+                unit, held.queue, "measured" if estimate else "unmeasured", self._clock(), estimate
+            )
+            self._produce(Release(held, estimate, unit.label()), jobs, placement)
+            return
+        taken = self._take_lease(unit, digest)
+        if taken == "peer":
+            held.followed.waiting.append(held.part)
+            self._states[digest] = State(unit, held.queue, "peer_wait", self._clock(), estimate, [held])
+            return
+        self._start_probe(unit, held, plan, taken)
+
+    def _plan_probe(self, unit: MeasureUnit, held: Held, jobs: Sequence[Job], placement: Placement) -> ProbePlan | None:
+        """Return `Probe.plan` over `held`'s jobs against what the roots hold of `unit`; None when unplannable."""
+        found = [detected_units(j) for j in jobs]
+        kinds = {k for k, _ in found if k != "none"}
+        kind = next(iter(kinds)) if len(kinds) == 1 else "none"
+        keys = self._keys(held.part)
+        candidates = [
+            Candidate(fragment="part", index=i, key=keys[i], units=u if k == kind != "none" else None)
+            for i, (k, u) in enumerate(found)
+        ]
+        edges = bucket_edges(placement.backend, kind)
+        if unit.formation.startswith("bucket:") and not edges:
+            return None
+        prior = Prior(observations=tuple(self.roots.observations(unit)), records=tuple(self.roots.regime_records(unit)))
+        return Probe.plan(
+            unit, candidates, prior, self.profile.calibration, unit.formation, self.profile.probe_s, bucket_edges=edges
+        )
+
+    def _take_lease(
+        self, unit: MeasureUnit, digest: str
+    ) -> Literal["peer"] | tuple[Lease | None, contextlib.ExitStack | None]:
+        """Take the unit's probe lease; "peer" while an admitted peer holds it and this unit has not yet waited."""
+        found = self.roots.probe_lease(unit)
+        if isinstance(found, PeerProbing):
+            return (None, None) if digest in self._waited else "peer"
+        if isinstance(found, Unleased):
+            return None, None
+        stack = contextlib.ExitStack()
+        try:
+            stack.enter_context(found)
+            stack.enter_context(found.keep_alive(self.profile.lease.renew_fraction))
+        except LeaseTimeout:
+            stack.close()
+            return (None, None) if digest in self._waited else "peer"
+        except LeaseUnavailable:
+            stack.close()
+            return None, None
+        return found, stack
+
+    def _start_probe(
+        self,
+        unit: MeasureUnit,
+        held: Held,
+        plan: ProbePlan,
+        taken: tuple[Lease | None, contextlib.ExitStack | None],
+    ) -> None:
+        """Put `plan`'s items on a new probe queue pinned to the unit's hardware class; its other jobs wait."""
+        probe_id = uuid.uuid4().hex
+        name = probe_queue(held.queue, probe_id)
+        self.queues.queue(name).set_probe_hardware(unit.hardware)
+        prior = tuple(self.roots.observations(unit))
+        run = Run(probe_id, name, plan, held, self._clock(), prior, lease=taken[0], stack=taken[1])
+        state = State(unit, held.queue, "probing", self._clock(), run=run)
+        with self._lock:
+            self._states[unit.digest()] = state
+        held.followed.waiting.append(held.part)
+        self._put_items(state, plan.items)
+
+    def _put_items(self, state: State, items: Sequence[ProbeItem]) -> None:
+        """Put probe `items` on the run's queue, one fragment of one request shape each."""
+        run, dumped = state.run, Dumped.of(state.run.held.part)  # type: ignore[union-attr]
+        assert run is not None
+        queue = self.queues.queue(run.queue)
+        for item in items:
+            indices = [c.index for c in item.jobs]
+            placement = run.held.part.placement.model_copy(update={"batch_size": item.request_jobs})
+            fragment = dumped.part(indices, placement=placement.model_dump(mode="json"))
+            queue.put_probe(fragment, item.phase, item.stratum)
+            flight = Flight(run.queue, item_digest(fragment), fragment)
+            run.held.followed.flights.append(flight)
+            run.awaiting[flight.digest] = (item, flight)
+            run.used.update(indices)
+            run.put[flight.digest] = len(indices)
+        self.probes[state.unit.digest()] = ProbedUnit(run.id, frozenset(run.put), sum(run.put.values()))
+        self._wake_scaler()
+
+    def _produce(self, release: Release, jobs: Sequence[Job], placement: Placement) -> None:
+        """Put `release`'s jobs sized (`size`) from its estimate, else the safe values: cut, and batched by length."""
+        held, estimate = release.held, release.estimate
+        kind = "none" if estimate is None else estimate.unit_kind
+        lengths = tuple(job_units(j, kind) for j in jobs)
+        sized = size(
+            estimate,
+            self._grant(held.queue),
+            self.profile.sizing,
+            LengthProfile(units=lengths),
+            calibration=self.profile.calibration,
+            bucket_edges=bucket_edges(placement.backend, kind),
+        )
+        if release.label is not None:
+            self._extrapolated.note(release.label, sized)
+        self._check_held(held.queue, held.part.placement.env)
+        dumped, items = Dumped.of(held.part), []
+        for start, stop in sized.cuts:
+            for batch, group in itertools.groupby(
+                range(start, stop), key=lambda i: sized.batch_at(lengths[i], len(jobs))
+            ):
+                moved = held.part.placement.model_copy(update={"batch_size": batch})
+                items.append(dumped.part(list(group), placement=moved.model_dump(mode="json")))
+        self.queues.queue(held.queue).put_all(items)
+        held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
+        held.followed.flights.extend(Flight(held.queue, item_digest(i), i) for i in items)
+        with self._lock:
+            known = sized.measured.time and all(p is not None for p in sized.predicted_s)
+            per_job = sum(p or 0.0 for p in sized.predicted_s) / len(jobs) if known else None
+            cap = self._grant(held.queue).max_workers
+            if self._grant(held.queue).devices is not None:
+                cap = min(cap, self._grant(held.queue).devices * sized.workers_per_device)  # type: ignore[operator]
+            self._rates.setdefault(held.queue, {})[release.label or "unmeasured"] = (per_job, cap)
+        self._wake_scaler()
 
     def workers_wanted(self, queue: str, work: int) -> int:
-        """Return the workers `queue`'s `work` jobs want: by its slowest measured unit, else one, to calibrate.
+        """Return the workers `queue`'s `work` jobs want.
 
-        A queue holding a measured unit beside a calibrating one is sized by the measured one, so the calibrating
-        unit's round may be run by several workers, each giving a cold sample.
+        A probe queue wants none: its unit's one worker is counted on the queue it measures, as is the one that waits
+        for a hello. The rest is by the slowest measured unit's seconds per job over `target_wall_s`; an unmeasured
+        unit is not scaled (`unmeasured_workers`).
         """
+        if probe_of(queue) is not None:
+            return 0
         with self._lock:
-            measures = [self._sized[u] for u in self._queue_units.get(queue, ()) if u in self._sized]
-        if not measures:
-            return min(self.profile.sizing.calibration_workers, work, self._grant(queue).worker_bound(None))
-        return self._sizing(queue, max(measures, key=lambda m: m.s_per_item), work).workers
+            rates = list(self._rates.get(queue, {}).values())
+            probing = sum(1 for s in self._states.values() if s.queue == queue and s.state == "probing")
+            resolving = any(h.queue == queue for h in self._resolving)
+        grant, items = self._grant(queue), self.queues.queue(queue).depth()
+        base = 0
+        if work > 0:
+            if not rates or any(r is None for r, _ in rates):
+                base = min(self.profile.calibration.unmeasured_workers, items, grant.max_workers)
+            else:
+                slowest = max(r for r, _ in rates if r is not None)
+                cap = max(c for _, c in rates)
+                base = min(max(1, math.ceil(work * slowest / self.profile.sizing.target_wall_s)), items, cap)
+        return min(base + probing + (1 if resolving and not probing else 0), grant.max_workers)
 
-    def _calibrate(self) -> None:
-        """End each calibration round whose items all have outcomes: record its measure and put its unit's held parts.
+    def _advance(self) -> None:
+        """Advance every unit's state: greet new workers, resolve what waited on a hello, tick waits and probes."""
+        with self._machine:
+            self._greet()
+            waiting, self._resolving = self._resolving, []
+            for held in waiting:
+                held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
+                self._place(held)
+            for state in list(self._states.values()):
+                if state.state == "peer_wait":
+                    self._peer_tick(state)
+                elif state.state == "probing":
+                    self._probe_tick(state)
+            while self._releasing:
+                release = self._releasing[0]
+                placed, values = self._admitted_plan(release.held.part)
+                jobs, placement = fragment_jobs(release.held.part, placed, values)
+                self._produce(release, jobs, placement)
+                self._releasing.pop(0)
 
-        A first round sends items one per request and gives the load, the claim and the memory. When its measure
-        sizes a batch above one, a second round times batched and one-per-request items of as many jobs side by side on
-        the warmed worker (`_batch_round`), and the per-item seconds alone and batched are taken from that round alone,
-        so `size` keeps the faster of two like regimes. A unit of a model backend whose `cuda` samples reported no
-        device figures is logged: its device memory stays unmeasured. A round whose items measured nothing leaves its
-        unit unmeasured, so its held parts start another. A round with no warm one-per-request item measures nothing,
-        since its load cannot be told from its items. A part refused when put (`_put`) waits again, with
-        those after it.
-        """
+    def _greet(self) -> None:
+        """Read each new ready mark: write its class into the hardware index; a class's first hello decides it."""
+        directory = self.run_dir / WORKERS_DIR
+        if not directory.is_dir():
+            return
+        for path in sorted(directory.iterdir()):
+            if path.name.startswith(".") or path.name in self._greeted or (mark := read_mark(path)) is None:
+                continue
+            self._greeted.add(path.name)
+            for queue, seen in mark.hardware.items():
+                resource = self.profile.resource_classes.get(class_of(queue))
+                if resource is not None:
+                    self.roots.note_seen(resource, seen)
+                    self._hello.setdefault(class_of(queue), seen)
+
+    def _peer_tick(self, state: State) -> None:
+        """Return a waiting unit to `New` once its peer's lease is gone or `peer_wait_s` passed; else keep waiting."""
+        now = self._clock()
+        if now - state.checked < self.profile.pool.poll_s and state.checked:
+            return
+        state.checked = now
+        expired = now - state.since >= self.profile.peer_wait_s
+        if not expired and self.roots.peer_holds(state.unit):
+            return
+        if expired:
+            self._waited.add(state.unit.digest())
         with self._lock:
-            rounds = list(self._calibrating.items())
-        for unit, (queue, digests) in rounds:
-            records = [self.queues.queue(queue).outcome(d) for d in digests]
-            if not digests or any(r is None for r in records):
+            del self._states[state.unit.digest()]
+        for held in state.held:
+            held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
+            self._place(held)
+
+    def _warm_s(self, observations: Sequence[Observation]) -> float:
+        """Return the seconds of warm requests among `observations`: those after the model's load."""
+        return sum(o.wall_s for o in observations if o.load_s is None and o.since_load)
+
+    def _probe_tick(self, state: State) -> None:
+        """Read the probe's outcomes; replace a served item, plan the batched phase, or end it on its budgets."""
+        run, cfg = state.run, self.profile.calibration
+        assert run is not None
+        queue = self.queues.queue(run.queue)
+        for digest, (item, flight) in list(run.awaiting.items()):
+            record = queue.outcome(digest)
+            if record is None:
+                run.touched = run.touched or queue.claimed(digest)
                 continue
-            with self._lock:
-                self._round_digests.setdefault(unit, set()).update(digests)
-            first = self._first_round.pop(unit, None)
-            this = [Sample.model_validate(r["measure"]) for r in records if r is not None and "measure" in r]
-            samples = (first or []) + this
-            found = _round_measure(first, this)
-            if found is not None and found.batched is None and self._batch_round(unit, queue, found, samples):
-                continue
-            _note_unmeasured_device(unit, queue, found, samples)
-            if found is not None:
-                jobs = tuple(sorted({s.job for s in samples}))
-                self.measures.put(unit, found, self._measured(jobs))
-            with self._lock:
-                del self._calibrating[unit]
-                if found is not None:
-                    self._sized[unit] = self._per_item(found, queue)
-                    self.calibrated[unit] = (frozenset(self._round_digests[unit]), sum(s.jobs for s in samples))
-                held = [(f, p) for f in self._followed.values() for u, p in f.waiting if u == unit]
-                for followed in self._followed.values():
-                    followed.waiting = [(u, p) for u, p in followed.waiting if u != unit]
-            for index, (followed, part) in enumerate(held):
-                try:
-                    flights, waiting = self._put(part)
-                except BaseException:
-                    with self._lock:
-                        for owner, left in held[index:]:
-                            owner.waiting.append((unit, left))
-                    raise
-                followed.flights.extend(flights)
-                followed.waiting.extend(waiting)
-            self._wake_scaler()
+            run.touched = True
+            del run.awaiting[digest]
+            reported = record.get("observations") if record.get("outcome") == "done" else None
+            found = [Observation.model_validate(o) for o in reported] if isinstance(reported, list) else []
+            run.observations.extend(found)
+            if any(o.outcome == "served" for o in found):
+                old = run.plan
+                run.plan = Probe.replace_served(old, item)
+                self._put_items(state, [i for i in run.plan.items if i not in old.items])
+        spent = self._warm_s(run.observations)
+        if run.awaiting and spent < self.profile.probe_s:
+            if not run.touched and self._clock() - run.started >= self.profile.lease.stale_after_s:
+                self._conclude(state, None, write=False, abandon=True)
+            return
+        if run.stage == "single" and not run.awaiting and spent < self.profile.probe_s:
+            estimate = self._estimate(state, [*run.prior, *run.observations])
+            if estimate.status == "measured" and run.plan.batched:
+                more = Probe.plan_batched(
+                    run.plan,
+                    estimate,
+                    self._grant(state.queue),
+                    cfg,
+                    self.profile.probe_s - spent,
+                    memory_headroom=self.profile.sizing.memory_headroom,
+                )
+                if more.items:
+                    run.plan, run.stage = more, "batched"
+                    self._put_items(state, more.items)
+                    return
+        final = self._estimate(state, [*run.prior, *run.observations])
+        self._conclude(state, final if final.status == "measured" else None, write=True)
+
+    def _estimate(self, state: State, observations: Sequence[Observation]) -> Estimate:
+        return Probe.estimate(
+            observations,
+            self.roots.regime_records(state.unit),
+            self.profile.calibration,
+            hardware=state.unit.hardware,
+            memory_headroom=self.profile.sizing.memory_headroom,
+        )
+
+    def _conclude(self, state: State, estimate: Estimate | None, *, write: bool, abandon: bool = False) -> None:
+        """End `state`'s probe: write its observations under its proven lease, release the lease and its held jobs."""
+        run = state.run
+        assert run is not None
+        if abandon:
+            for digest, (item, flight) in run.awaiting.items():
+                run.held.followed.flights.remove(flight)
+                run.used.difference_update(c.index for c in item.jobs)
+            run.awaiting.clear()
+        if write and run.observations and (run.lease is None or run.lease.prove()):
+            build = Build(version=importlib.metadata.version("senselab-core"))
+            provenance = Provenance(
+                job=os.environ.get("SLURM_JOB_ID") or None,
+                run=self.run_dir.name,
+                senselab=build,
+                profile=self.profile.canonical_digest(),
+                hardware=state.unit.hardware,
+            )
+            self.roots.put_observations(state.unit, run.id, tuple(run.observations), provenance)
+        elif write and run.observations:
+            logger.warning("probe %s lost its lease; its observations are not written", run.id[:12])
+        if run.stack is not None:
+            run.stack.close()
+        label = state.unit.label()
+        with self._lock:
+            state.state, state.estimate = ("measured" if estimate else "unmeasured"), estimate
+        part = run.held.part
+        left = [i for i in range(len(part.jobs)) if i not in run.used]
+        waiting = list(state.held)
+        if left:
+            waiting.insert(0, Held(run.held.followed, run.held.queue, Dumped.of(part).part(left)))
+        run.held.followed.waiting = [p for p in run.held.followed.waiting if p is not part]
+        for held in waiting:
+            if held.part is not part and held not in state.held:
+                held.followed.waiting.append(held.part)
+            self._releasing.append(Release(held, estimate, label))
+        state.held.clear()
 
     def _queue_name(self, fragment: PlanFragment) -> str:
         """Return the queue of `fragment`: its class, with `#<model identity>` for its node's resident model."""
@@ -603,7 +705,7 @@ class Pool:
         finally:
             self._scaling = False
 
-    def _workers_broken(self, flight: _Flight) -> WorkersBroken | None:
+    def _workers_broken(self, flight: Flight) -> WorkersBroken | None:
         """Return the hold of `flight`'s queue by a broken class of workers, noting the break once."""
         found = self._fleet.broken_for(flight.queue)
         if found is None:
@@ -628,10 +730,11 @@ class Pool:
             QueueHeld: the fragment's env is held on its queue; nothing is put.
             ValueError: the fragment's admission is not held by this pool; nothing is put.
         """
-        flights, waiting = self._put(fragment)
+        followed = Followed([])
+        self._put(fragment, followed)
         handle = Handle(id=f"pool-{self.epoch}-{next(self._ids)}")
         with self._lock:
-            self._followed[handle.id] = _Followed(flights, waiting)
+            self._followed[handle.id] = followed
         self._wake_scaler()
         return handle
 
@@ -671,7 +774,7 @@ class Pool:
         if followed.cancelled or followed.done:
             return [], True
         self._fence(recent=True)
-        self._calibrate()
+        self._advance()
         given: list[ResultRef] = []
         landed = [(f, r) for f in followed.flights if (r := self.queues.queue(f.queue).outcome(f.digest))]
         if landed:
@@ -695,20 +798,23 @@ class Pool:
         self._scale_wake.set()
         if scaler is not None:
             scaler.join()
+        for state in self._states.values():
+            if state.run is not None and state.run.stack is not None:
+                state.run.stack.close()
         self._fleet.close()
 
-    def _settle(self, followed: _Followed, flight: _Flight, record: Mapping[str, object]) -> Iterator[ResultRef]:
+    def _settle(self, followed: Followed, flight: Flight, record: Mapping[str, object]) -> Iterator[ResultRef]:
         """Yield the results of `flight`'s jobs from its outcome `record`, applying each failure's effect.
 
         A reported result is taken only when it names the job's own key and the store holds its outputs; one whose
         outcome was written by a claim of another epoch, or of none, is given as served under `exact` unless it was
-        served under another policy. A resource fault doubles the per-item memory of the unit's measure (`_grow`).
+        served under another policy.
         """
         fragment = flight.fragment
         jobs = record.get("jobs") if record.get("outcome") == "done" else None
         given = {r.job: r for r in (ResultRef.model_validate(j) for j in jobs)} if isinstance(jobs, list) else {}
         dead = FaultRecord.model_validate(record["fault"]) if record.get("outcome") == "dead" else None
-        keys, grown = self._keys(fragment), False
+        keys = self._keys(fragment)
         reused = record.get("epoch") != self.epoch
         for index, (job, key) in enumerate(zip(fragment.jobs, keys, strict=True)):
             ref = given.get(job)
@@ -729,35 +835,7 @@ class Pool:
                 fault = ref.failure
             else:
                 fault = dead or _gap("MissingResult", f"the outcome of the item gives no result for {job}")
-            if fault.fault == "resource" and not grown:
-                grown = True
-                self._grow(fragment, record)
             yield from self._effect(followed, flight, index, key, fault)
-
-    def _grow(self, fragment: PlanFragment, record: Mapping[str, object]) -> None:
-        """Double the per-item memory of `fragment`'s unit's measure after a resource fault, so its batch halves.
-
-        Both memory pairs the measure holds are grown; the grown measure is written back and sizes every later put.
-        """
-        unit, worker = self._unit(fragment), record.get("worker")
-        found = self.measures.get(unit)
-        if found is None or not isinstance(worker, str):
-            return
-        update: dict[str, int] = {}
-        for resident, peak, key in (
-            (found.resident_bytes, found.peak_memory_bytes, "peak_memory_bytes"),
-            (found.device_resident_bytes, found.device_peak_bytes, "device_peak_bytes"),
-        ):
-            if resident is not None and peak is not None:
-                update[key] = resident + 2 * max(1, peak - resident)
-        grown = ResourceMeasure.model_validate({**found.model_dump(exclude={"measured"}), **update})
-        self.measures.put(unit, grown, self._measured((worker,)))
-        with self._lock:
-            self._sized[unit] = self._per_item(grown, fragment.placement.resource_class)
-
-    def _measured(self, jobs: tuple[str, ...]) -> Measured:
-        """Return the derivation of a measure this pool writes: the code version and run, and the worker jobs."""
-        return Measured(sha=None, run=f"senselab-core {code_version()}, run {self.run_dir.name}", jobs=jobs)
 
     def _admitted_plan(self, fragment: PlanFragment) -> tuple[Plan, Mapping[InputIdentity, object]]:
         admitted = self._plans.get(fragment.admission)
@@ -769,7 +847,7 @@ class Pool:
         return fragment_keys(fragment, *self._admitted_plan(fragment))
 
     def _effect(  # noqa: PLR0913 - the followed fragment, the item and the job's failure
-        self, followed: _Followed, flight: _Flight, index: int, key: str, fault: FaultRecord
+        self, followed: Followed, flight: Flight, index: int, key: str, fault: FaultRecord
     ) -> Iterator[ResultRef]:
         """Apply `fault`'s effect to job `index` of `flight`: retry it, hold its env, or yield it dead."""
         fragment, budgets = flight.fragment, self.profile.faults
@@ -812,12 +890,12 @@ class Pool:
             and (e.failure.gap or e.failure.fault == "infrastructure")
         ]
 
-    def _held(self, flight: _Flight) -> QueueHeld:
+    def _held(self, flight: Flight) -> QueueHeld:
         env = flight.fragment.placement.env
         broken = self.broken[env]
         return QueueHeld(flight.queue, env, broken.failures, broken.fault.message)
 
-    def _infrastructure(self, flight: _Flight, job: JobRef, key: str, fault: FaultRecord) -> bool:
+    def _infrastructure(self, flight: Flight, job: JobRef, key: str, fault: FaultRecord) -> bool:
         """Count an infrastructure fault of `flight`'s env this epoch; return False once the env is broken and held.
 
         A broken env is held on `flight`'s queue (each queue it is seen on); `poll` has fenced afresh before.
@@ -843,13 +921,13 @@ class Pool:
     def _failed(self, job: JobRef, key: str, fault: FaultRecord, env: str) -> None:
         self.events.record("failed", job.node, job=job, key=key, failure=fault, env=env)
 
-    def _again(self, followed: _Followed, flight: _Flight, index: int, placement: NodePlacement | None = None) -> None:
+    def _again(self, followed: Followed, flight: Flight, index: int, placement: NodePlacement | None = None) -> None:
         """Queue job `index` of `flight` again alone, as the next attempt, on `placement` (its own when None)."""
         update: dict[str, object] = {"attempt": flight.fragment.attempt + 1}
         if placement is not None:
             update["placement"] = placement.model_dump(mode="json")
-        retry = _jobs_of(flight.fragment, [index], **update)
-        followed.flights.extend(self._put(retry, retry=True)[0])
+        retry = jobs_of(flight.fragment, [index], **update)
+        self._put(retry, followed, retry=True)
         self._wake_scaler()
         job, placed = retry.jobs[0], retry.placement
         key = self._keys(retry)[0]
@@ -893,26 +971,6 @@ def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float
         del pool
         woken = wake.wait(min(poll_s, backoff) if backoff > 0 else poll_s)
         wake.clear()
-
-
-def _round_measure(first: list[Sample] | None, this: list[Sample]) -> ResourceMeasure | None:
-    """Return the measure of a calibration round's samples `this`, after the first round's `first` when it is a second.
-
-    None without a warm one-job sample, whose load cannot be told from its work. A second round's per-item seconds,
-    alone and batched, are its own; the load, the claim and the memory are of both rounds.
-    """
-    samples = (first or []) + this
-    found = calibrated(samples) if any(not s.cold and s.batch_size == 1 for s in samples) else None
-    steady = calibrated(this) if first is not None else None
-    if found is None or steady is None:
-        return found
-    return found.model_copy(update={k: getattr(steady, k) for k in ("s_per_input_s", "input_s_per_item", "batched")})
-
-
-def _note_unmeasured_device(unit: Unit, queue: str, found: ResourceMeasure | None, samples: list[Sample]) -> None:
-    """Log once that `unit`'s backend ran on a device but reported no device memory per request."""
-    if found is not None and found.device_peak_bytes is None and any(s.device_bytes is not None for s in samples):
-        logger.warning("%s/%s on %s reported no device memory per request; batch 1", unit.task, unit.backend, queue)
 
 
 def _gap(kind: str, message: str) -> FaultRecord:

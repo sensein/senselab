@@ -191,6 +191,13 @@ class MeasuresRoot(Protocol):
         """Return the observations of `unit` that still pool."""
 
 
+class Estimates(Protocol):
+    """Where a unit's estimate is read: `MeasureSource`, or a double that gives one."""
+
+    def get(self, unit: "MeasureUnit") -> Estimate | None:
+        """Return the estimate of `unit`, None when it has none."""
+
+
 class PackagedMeasures(Protocol):
     """The packaged table, read: a unit's estimate on exact identity."""
 

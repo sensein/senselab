@@ -1,0 +1,641 @@
+"""The pool's probe state machine: resolve, look up, wait on a peer, probe on a pinned queue, then size by the estimate.
+
+Workers are played by hand: a `Hand` claims items, runs their jobs through `InProcess` and reports the observations a
+worker would. Every wait is read on an injected clock; no test sleeps or reads a wall time.
+"""
+
+import logging
+import platform
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import ExitStack, contextmanager
+from pathlib import Path
+
+import pytest
+from pool_stack_fixture import host_env, scoring
+from senselab_core.kernel.dataset import Record, ValueInput
+from senselab_core.kernel.identity import InputIdentity
+from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation, ProbeRef
+from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_packaged
+from senselab_core.runtime.catalogue import Catalogue
+from senselab_core.runtime.datasets import RecordSet
+from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.epoch import Epoch
+from senselab_core.runtime.execution.events import EventLog
+from senselab_core.runtime.execution.executor import Handle, PlanFragment, ResultRef
+from senselab_core.runtime.execution.in_process import InProcess, fragment_jobs, node_fragment
+from senselab_core.runtime.execution.job import JobOutcome
+from senselab_core.runtime.execution.observing import request_units
+from senselab_core.runtime.execution.pool import Pool, report
+from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of, probe_queue
+from senselab_core.runtime.execution.substrates import WorkerHandle, mark_ready
+from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.hardware import HardwareInfo
+from senselab_core.runtime.licenses import license_record
+from senselab_core.runtime.locks import Lease
+from senselab_core.runtime.measures import Build, MeasureUnit, Provenance
+from senselab_core.runtime.planner import Plan, plan
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.units import UnitResolver, measure_roots
+from senselab_core.testing.measures import FixedEstimates, FixedUnit
+
+TEXTY = scoring("pool_probe_test.texty").model_copy(update={"inputs": {"text": "Text"}})
+HOST = HardwareInfo(
+    cpu_count=4, memory_bytes=2**33, gpus=(), apple_silicon=False, platform="linux-x86_64", cpu_model="Test CPU"
+)
+SEEN = HardwareClass(device="cpu", name="Test CPU", cpus=4)
+ELSEWHERE = HardwareClass(device="cpu", name="Another CPU", cpus=4)
+JOBS = 60
+WORKERS = WorkerSet(2)
+CLOCK_START = 1000.0
+
+
+class Idle:
+    """A `Substrate` that starts no worker."""
+
+    def start(self, resource_class: str, count: int) -> list[WorkerHandle]:  # noqa: ARG002
+        """Start nothing."""
+        return []
+
+    def live(self) -> list[WorkerHandle]:
+        """Return no worker."""
+        return []
+
+    def running(self, resource_class: str) -> int:  # noqa: ARG002
+        """Return no worker."""
+        return 0
+
+    def stop(self, handles: Sequence[WorkerHandle] = ()) -> None:
+        """Stop nothing."""
+
+
+class Clock:
+    """A clock moved by hand."""
+
+    def __init__(self) -> None:
+        """Start at `CLOCK_START`."""
+        self.now = CLOCK_START
+
+    def __call__(self) -> float:
+        """Return the time."""
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        """Move the time on."""
+        self.now += seconds
+
+
+def _handle(wheel_set: str) -> Callable[..., EnvHandle]:
+    def read(backend: object, profile: object) -> EnvHandle:
+        base = host_env(backend, profile)  # type: ignore[arg-type]
+        return EnvHandle(
+            python=base.python,
+            python_version=platform.python_version(),
+            lock_sha=base.lock_sha,
+            wheel_set=wheel_set,
+            torch_index=None,
+        )
+
+    return read
+
+
+@contextmanager
+def _env(wheel_set: str, registry: object) -> Iterator[None]:
+    """Use `registry` with every env this interpreter, built, under the wheel set `wheel_set`."""
+    mit = license_record("MIT", source="lock", verified={"date": "2026-11-06", "how": "pep639"}, gated=False)
+    opener = _handle(wheel_set)
+    previous = use_packaged(
+        Packaged(
+            Catalogue.load("format: catalogue@2.0\nentries: []\n"),
+            opener,
+            registry,  # type: ignore[arg-type]
+            lambda _: {"p": mit},
+            env_read=opener,
+        )
+    )
+    try:
+        yield
+    finally:
+        use_packaged(previous)
+
+
+@pytest.fixture(autouse=True)
+def stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """A registry of one text task, its env built, the cache under `tmp_path`."""
+    from pool_stack_fixture import registry  # noqa: PLC0415 - one name in this module's namespace
+
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
+    with _env("4" * 64, registry(TEXTY)):
+        yield
+    WORKERS.close()
+
+
+def _profile(tmp_path: Path) -> ExecutionProfile:
+    override = {
+        "devices": ["cpu"],
+        "resource_classes": {"cpu": {"device": "cpu", "mem_bytes": 2**33, "max_workers": 2}},
+        "pool": {"poll_s": 0.2, "first_poll_s": 0.01, "quantum_items": 10},
+        "calibration": {"measures_roots": [str(tmp_path / "measures")], "warmup_requests": 1},
+    }
+    return ExecutionProfile.load("laptop", override)
+
+
+def _plan(profile: ExecutionProfile, lengths: Sequence[int]) -> tuple[Plan, dict[InputIdentity, object]]:
+    """Return the plan mapping the text task over one record per length, a text of that many characters."""
+    texts = ["x" * n for n in lengths]
+    graph = {
+        "inputs": {"text": "list[Text]"},
+        "nodes": [{"id": "a", "task": TEXTY.name, "task_version": "1"}],
+        "edges": [{"source": "input.text", "target": "a.text", "kind": "map"}],
+    }
+    from senselab_core.kernel.graph import Graph  # noqa: PLC0415 - as `pool_stack_fixture.planned`
+
+    records = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(texts)]
+    placed = plan(Graph.model_validate(graph), RecordSet(records), config=RunConfig(), execution=profile)
+    return placed, {bind_input("x", "Text", t)[0]: bind_input("x", "Text", t)[1] for t in texts}
+
+
+def _seen(profile: ExecutionProfile, *classes: HardwareClass) -> None:
+    roots = measure_roots(profile)
+    for seen in classes:
+        assert roots.note_seen(profile.resource_classes["cpu"], seen) is not None
+
+
+def _pool(  # noqa: PLR0913 - the run's places, its clock and the seams a test replaces
+    tmp_path: Path,
+    profile: ExecutionProfile,
+    *,
+    run: str = "run",
+    store: str = "store",
+    clock: Clock | None = None,
+    **seams: object,
+) -> Pool:
+    run_dir = tmp_path / run
+    epochs = Epoch(run_dir)
+    epoch = epochs.take()
+    roots = measure_roots(profile)
+    given: dict[str, object] = {"roots": roots, "resolver": UnitResolver(profile, roots, hardware=HOST), **seams}
+    return Pool(
+        run_dir,
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=epochs.current),
+        store=ResultStore(tmp_path / store),
+        events=EventLog(run_dir, f"a{epoch}", epoch, epoch=epoch),
+        profile=profile,
+        substrate=Idle(),
+        epoch=epoch,
+        clock=clock if clock is not None else Clock(),
+        **given,  # type: ignore[arg-type]
+    )
+
+
+def _submit(pool: Pool, placed: Plan, values: Mapping[InputIdentity, object]) -> tuple[PlanFragment, str]:
+    fragment = node_fragment(placed, pool.admit(placed, values))
+    return fragment, pool.submit(fragment).id
+
+
+class Hand:
+    """Plays a pool worker of class `hardware` by hand: claims each item, runs it, reports its observations.
+
+    A probe queue is taken only where its recorded class is `hardware`, as `PoolWorker` does. `wall` is a request's
+    seconds from its units, `load_s` the load the first request reports, `limit` the most probe items it claims, and
+    `served` the item (by claim order) whose requests are reported `served`.
+    """
+
+    def __init__(  # noqa: PLR0913 - the plan and run, then the worker's behaviour
+        self,
+        pool: Pool,
+        placed: Plan,
+        values: Mapping[InputIdentity, object],
+        hardware: HardwareClass = SEEN,
+        wall: Callable[[float], float] = lambda units: 0.05 + 0.01 * units,
+        load_s: float = 0.5,
+        limit: int | None = None,
+        served: int | None = None,
+    ) -> None:
+        """Serve `pool`'s queues for `placed`."""
+        self.pool, self.placed, self.values, self.hardware = pool, placed, values, hardware
+        self.wall, self.load_s, self.limit, self.served = wall, load_s, limit, served
+        self.since = 0
+        self.items: list[tuple[str, PlanFragment]] = []
+        self.probe_items = 0
+
+    def serve(self) -> int:
+        """Claim and run every item now claimable; return how many."""
+        count = 0
+        for name in self.pool.queues.names():
+            queue = self.pool.queues.queue(name)
+            probe = probe_of(name) is not None
+            if probe and (queue.probe_hardware() != self.hardware or self.limit == self.probe_items):
+                continue
+            while (claim := queue.claim("hand", max_items=1)) is not None:
+                if probe and self.limit == self.probe_items:
+                    claim.release()
+                    break
+                [item], [digest] = claim.fragments, claim.items
+                with claim:
+                    seen = self._observations(name, digest, item) if probe else []
+                    report(claim, digest, self._outcomes(item), observations=seen)
+                self.items.append((name, item))
+                self.probe_items += probe
+                count += 1
+        return count
+
+    def _outcomes(self, item: PlanFragment) -> list[JobOutcome]:
+        executor = InProcess(store=self.pool.store, profile=self.placed.execution, run=RunConfig(), workers=WORKERS)
+        admission = executor.admit(self.placed, self.values)
+        return list(executor.outcomes(executor.submit(item.model_copy(update={"admission": admission.id}))))
+
+    def _observations(self, name: str, digest: str, item: PlanFragment) -> list[Observation]:
+        queue, (_, probe_id) = self.pool.queues.queue(name), probe_of(name) or ("", "")
+        phase, stratum = queue.probe_mark(digest)
+        jobs, _ = fragment_jobs(item, self.placed, self.values)
+        size, found = item.placement.batch_size, []
+        for index, start in enumerate(range(0, len(jobs), size)):
+            kind, units, padded = request_units(jobs[start : start + size])
+            walls = self.wall(units)
+            last = start + size >= len(jobs)
+            found.append(
+                Observation.model_validate(
+                    {
+                        "probe": ProbeRef.model_validate({"id": probe_id, "phase": phase, "stratum": stratum}),
+                        "item": digest,
+                        "request_index": index,
+                        "jobs": len(jobs[start : start + size]),
+                        "batch": len(jobs[start : start + size]),
+                        "unit_kind": kind,
+                        "units": units,
+                        "padded_units": padded,
+                        "wall_s": walls,
+                        "item_wall_s": walls + 0.01 if last else None,
+                        "since_load": self.since,
+                        "load_s": self.load_s if self.since == 0 else None,
+                        "device_peak": None,
+                        "device_after": None,
+                        "host_peak": None,
+                        "host_after": None,
+                        "cotenancy": Cotenancy(device=1, host=1),
+                        "outcome": "served" if self.served == self.probe_items else "ok",
+                        "hardware": self.hardware,
+                    }
+                )
+            )
+            self.since += 1
+        return found
+
+
+def _drive(pool: Pool, handle: str, hand: Hand, rounds: int = 40) -> list[ResultRef]:
+    """Poll `handle` with `hand` serving between polls until it ends; return every result, in the order given."""
+    given: list[ResultRef] = []
+    for _ in range(rounds):
+        hand.serve()
+        results, done = pool.poll(Handle(id=handle))
+        given.extend(results)
+        if done:
+            return given
+    raise AssertionError(f"the fragment did not end in {rounds} rounds; {len(given)} results given")
+
+
+def _probe_queues(pool: Pool) -> list[str]:
+    return [n for n in pool.queues.names() if probe_of(n) is not None]
+
+
+@pytest.mark.logic
+def test_probe_results_are_yielded_and_never_rerun(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Every job's result comes once, probe jobs' included; no job is claimed twice; the class is on the queue."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile)
+    fragment, handle = _submit(pool, placed, values)
+    [probe] = _probe_queues(pool)
+    assert pool.queues.queue(probe).probe_hardware() == SEEN and pool.queues.queue("cpu").work() == 0
+    with caplog.at_level(logging.INFO, logger="senselab_core.runtime.sizing"):
+        refs = _drive(pool, handle, Hand(pool, placed, values))
+    assert sorted(r.job.element for r in refs) == sorted(j.element for j in fragment.jobs)
+    assert all(r.failure is None and pool.store.outputs_of(r.key_digest, str(r.output_identity)) for r in refs)
+    [unit] = pool.probes.values()
+    assert unit.jobs > 0 and len(unit.items) > 0
+    assert len([r for r in caplog.records if "extrapolated" in r.getMessage()]) == 1
+    seen = [(n, j.element) for n, item in _claims(pool) for j in item.jobs]
+    assert len({e for _, e in seen}) == len(seen) == JOBS
+
+
+def _claims(pool: Pool) -> list[tuple[str, PlanFragment]]:
+    """Return each item of each queue, by name: what the run put, claimed or not."""
+    found = []
+    for name in pool.queues.names():
+        queue = pool.queues.queue(name)
+        for digest in sorted(p.name.removesuffix(".json") for p in (queue.path / "items").iterdir()):
+            with queue.open() as q, q.child("items") as items:
+                data = items.read_regular(f"{digest}.json")
+            assert data is not None
+            found.append((name, PlanFragment.model_validate_json(data)))
+    return found
+
+
+def _stored(placed: Plan, values: Mapping[InputIdentity, object], store: ResultStore, elements: range) -> None:
+    """Run jobs `elements` of the plan into `store`, in the env the stack gives."""
+    executor = InProcess(store=store, profile=placed.execution, run=RunConfig(), workers=WORKERS)
+    admission = executor.admit(placed, values)
+    node = node_fragment(placed, admission, elements=[(i,) for i in elements])
+    list(executor.outcomes(executor.submit(node)))
+
+
+@pytest.mark.logic
+def test_servable_jobs_are_put_at_once(tmp_path: Path) -> None:
+    """Jobs the store serves are queued before any probe outcome; the computed ones are on the probe queue."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile)
+    _stored(placed, values, pool.store, range(20))
+    _submit(pool, placed, values)
+    served = [j.element for n, item in _claims(pool) if n == "cpu" for j in item.jobs]
+    probed = [j.element for n, item in _claims(pool) if probe_of(n) for j in item.jobs]
+    assert sorted(served) == [(i,) for i in range(20)] and pool.queues.queue("cpu").work() == 20
+    assert probed and not set(probed) & set(served)
+
+
+@pytest.mark.logic
+def test_entries_under_another_context_are_probed_not_skipped(tmp_path: Path) -> None:
+    """Results stored under an old env's context are not served: their jobs are probed and computed."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile)
+    with _env("5" * 64, _registry()):
+        _stored(placed, values, pool.store, range(JOBS))
+    _, handle = _submit(pool, placed, values)
+    assert pool.queues.queue("cpu").work() == 0 and len(_probe_queues(pool)) == 1
+    refs = _drive(pool, handle, Hand(pool, placed, values))
+    assert len(refs) == JOBS and all(r.served is None for r in refs)
+
+
+def _registry() -> object:
+    from pool_stack_fixture import registry  # noqa: PLC0415 - as the stack fixture
+
+    return registry(TEXTY)
+
+
+@pytest.mark.logic
+def test_a_served_probe_request_is_replaced_from_its_stratum(tmp_path: Path) -> None:
+    """An item whose request came back served is replaced by one of the same phase and stratum over other jobs."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile)
+    _, handle = _submit(pool, placed, values)
+    [unit] = pool.probes.values()
+    before = set(unit.items)
+    hand = Hand(pool, placed, values, limit=1, served=0)
+    hand.serve()
+    pool.poll(Handle(id=handle))
+    [after] = pool.probes.values()
+    [new] = after.items - before
+    queue = pool.queues.queue(probe_queue("cpu", after.probe))
+    [(_, first)] = hand.items
+    items = {item_digest(i): i for _, i in _claims(pool)}
+    assert queue.probe_mark(new) == queue.probe_mark(item_digest(first))
+    assert not set(items[new].jobs) & set(first.jobs) and len(items[new].jobs) == len(first.jobs)
+
+
+@pytest.mark.logic
+def test_held_work_waits_at_most_probe_s_of_warm_work(tmp_path: Path) -> None:
+    """Past `probe_s` of warm requests the probe ends: its held jobs are put while probe items are still unclaimed."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile)
+    _, handle = _submit(pool, placed, values)
+    [unit] = pool.probes.values()
+    queue = pool.queues.queue(probe_queue("cpu", unit.probe))
+    Hand(pool, placed, values, wall=lambda units: profile.probe_s, limit=3).serve()
+    assert pool.queues.queue("cpu").work() == 0
+    pool.poll(Handle(id=handle))
+    assert pool.queues.queue("cpu").work() > 0 and queue.depth() > 0
+
+
+@pytest.mark.logic
+def test_a_stand_in_with_a_long_load_is_still_measured(tmp_path: Path) -> None:
+    """A load many times `probe_s` is not warm work: the probe runs on and its unit is measured."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile)
+    _, handle = _submit(pool, placed, values)
+    _drive(pool, handle, Hand(pool, placed, values, load_s=1000 * profile.probe_s))
+    assert pool.measures.get(_unit(pool, placed, values)) is not None
+
+
+def _unit(pool: Pool, placed: Plan, values: Mapping[InputIdentity, object]) -> MeasureUnit:
+    """Return the unit of the plan's one node as the pool resolves it."""
+    jobs, placement = fragment_jobs(node_fragment(placed, pool.admit(placed, values)), placed, values)
+    unit = pool.resolver.unit(jobs[0].call, placement, None)
+    assert isinstance(unit, MeasureUnit)
+    return unit
+
+
+@pytest.mark.logic
+def test_a_second_run_reuses_the_first_runs_measure_without_probing(tmp_path: Path) -> None:
+    """A second run over the same unit reads the first's written observations: no probe queue, items sized."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    first = _pool(tmp_path, profile)
+    _, handle = _submit(first, placed, values)
+    assert len(_drive(first, handle, Hand(first, placed, values))) == JOBS
+    second = _pool(tmp_path, profile, run="run2", store="store2")
+    _, again = _submit(second, placed, values)
+    assert not _probe_queues(second) and not second.probes and second.queues.queue("cpu").work() == JOBS
+    assert len(_drive(second, again, Hand(second, placed, values))) == JOBS
+
+
+def _peer_observations(count: int, lengths: Sequence[int]) -> list[Observation]:
+    found = []
+    for i in range(count):
+        n = lengths[i % len(lengths)]
+        found.append(
+            Observation.model_validate(
+                {
+                    "probe": {"id": "peer", "phase": "SINGLE", "stratum": 0},
+                    "item": f"i{i}",
+                    "request_index": 0,
+                    "jobs": 1,
+                    "batch": 1,
+                    "unit_kind": "chars",
+                    "units": float(n),
+                    "padded_units": float(n),
+                    "wall_s": 0.05 + 0.01 * n,
+                    "item_wall_s": 0.1,
+                    "since_load": i + 1,
+                    "load_s": None,
+                    "device_peak": None,
+                    "device_after": None,
+                    "host_peak": None,
+                    "host_after": None,
+                    "cotenancy": {"device": 1, "host": 1},
+                    "outcome": "ok",
+                    "hardware": SEEN,
+                }
+            )
+        )
+    return found
+
+
+def _peer(pool: Pool, placed: Plan, values: Mapping[InputIdentity, object]) -> ExitStack:
+    """Make another process hold the probe lease of the plan's unit; closing the returned stack releases it."""
+    lease = pool.roots.probe_lease(_unit(pool, placed, values))
+    assert isinstance(lease, Lease)
+    stack = ExitStack()
+    stack.enter_context(lease)
+    return stack
+
+
+@pytest.mark.logic
+def test_a_peer_wait_returns_to_planning_for_uncovered_strata(tmp_path: Path) -> None:
+    """While a peer probes, the unit waits; its observations cover stratum 0, so only stratum 1 is probed after."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    clock = Clock()
+    pool = _pool(tmp_path, profile, clock=clock)
+    peer = _peer(pool, placed, values)
+    _, handle = _submit(pool, placed, values)
+    assert not _probe_queues(pool) and not pool.probes
+    unit = _unit(pool, placed, values)
+    provenance = Provenance(
+        job=None, run="peer", senselab=Build(version="2.0.0"), profile=profile.canonical_digest(), hardware=SEEN
+    )
+    pool.roots.put_observations(unit, "peer", _peer_observations(8, [3, 5, 8, 10]), provenance)
+    peer.close()
+    clock.advance(profile.pool.poll_s + 1)
+    pool.poll(Handle(id=handle))
+    [unit_probe] = pool.probes.values()
+    queue = pool.queues.queue(probe_queue("cpu", unit_probe.probe))
+    marks = [queue.probe_mark(d) for d in unit_probe.items]
+    assert ("SINGLE", 1) in marks and ("SINGLE", 0) not in marks
+
+
+@pytest.mark.logic
+def test_a_peer_that_holds_past_peer_wait_s_is_not_waited_for_again(tmp_path: Path) -> None:
+    """A unit waits `peer_wait_s` on its injected clock; then it probes unleased, and waits no more."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    clock = Clock()
+    pool = _pool(tmp_path, profile, clock=clock)
+    peer = _peer(pool, placed, values)
+    _, handle = _submit(pool, placed, values)
+    clock.advance(profile.peer_wait_s - 1)
+    pool.poll(Handle(id=handle))
+    assert not _probe_queues(pool)
+    clock.advance(2)
+    pool.poll(Handle(id=handle))
+    assert len(_probe_queues(pool)) == 1
+    peer.close()
+
+
+@pytest.mark.logic
+def test_a_point_whose_probe_measured_nothing_ships_no_measure(tmp_path: Path) -> None:
+    """A probe whose requests all failed gives no estimate: its jobs run on the safe values and none is written.
+
+    The next run finds no estimate and probes again.
+    """
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile)
+    _, handle = _submit(pool, placed, values)
+
+    class Broken(Hand):
+        def _observations(self, name: str, digest: str, item: PlanFragment) -> list[Observation]:
+            return [o.model_copy(update={"outcome": "failed"}) for o in super()._observations(name, digest, item)]
+
+    assert len(_drive(pool, handle, Broken(pool, placed, values))) == JOBS
+    assert pool.measures.get(_unit(pool, placed, values)) is None
+    again = _pool(tmp_path, profile, run="run2", store="store2")
+    _submit(again, placed, values)
+    assert len(_probe_queues(again)) == 1
+
+
+@pytest.mark.logic
+def test_a_probe_queue_with_no_eligible_worker_ends_unmeasured_and_its_items_run_as_production(
+    tmp_path: Path,
+) -> None:
+    """After the lease's stale window with no worker of the class, the unit is unmeasured and nothing waits on it."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    clock = Clock()
+    pool = _pool(tmp_path, profile, clock=clock)
+    fragment, handle = _submit(pool, placed, values)
+    assert len(_probe_queues(pool)) == 1
+    hand = Hand(pool, placed, values, hardware=ELSEWHERE)
+    pool.poll(Handle(id=handle))
+    assert pool.queues.queue("cpu").work() == 0
+    clock.advance(profile.lease.stale_after_s + 1)
+    pool.poll(Handle(id=handle))
+    assert pool.queues.queue("cpu").work() == JOBS
+    refs = _drive(pool, handle, hand)
+    assert sorted(r.job.element for r in refs) == sorted(j.element for j in fragment.jobs)
+    assert all(n == "cpu" for n, _ in hand.items)
+
+
+@pytest.mark.logic
+def test_a_unit_resolves_on_the_first_hello_and_the_hello_wins(tmp_path: Path) -> None:
+    """With the host's class not in the index, jobs wait and a worker is wanted; the first hello's class decides."""
+    profile = _profile(tmp_path)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile)
+    _, handle = _submit(pool, placed, values)
+    assert not _probe_queues(pool) and pool.queues.queue("cpu").work() == 0
+    assert pool.workers_wanted("cpu", 0) == 1
+    told = HardwareClass(device="cpu", name="Test CPU", cpus=2)
+    mark_ready(tmp_path / "run", {"cpu": told})
+    pool.poll(Handle(id=handle))
+    [probe] = _probe_queues(pool)
+    assert pool.queues.queue(probe).probe_hardware() == told
+    assert pool.roots.seen_classes(profile.resource_classes["cpu"]) == (told,)
+    assert pool.workers_wanted("cpu", 0) == 1 and pool.workers_wanted(probe, 5) == 0
+
+
+@pytest.mark.logic
+def test_the_pool_and_the_in_process_executor_size_one_unit_alike(tmp_path: Path) -> None:
+    """Over one estimate and one unit, the pool's items and the executor's sizing give each job the same batch."""
+    from senselab_core.runtime.calibration import (  # noqa: PLC0415 - one estimate, built here
+        Estimate,
+        MemoryFit,
+        RequestFit,
+        StratumBatch,
+    )
+
+    estimate = Estimate(
+        status="measured",
+        unit_kind="chars",
+        load_s=1.0,
+        load_n=3,
+        item_s=0.01,
+        item_n=3,
+        single=RequestFit(batch=1, r=0.1, u=0.01, n=6, spread=0.1, lo=1.0, hi=100.0),
+        batched=(RequestFit(batch=4, r=0.1, u=0.001, n=6, spread=0.1, lo=1.0, hi=400.0),),
+        batch=(StratumBatch(lo=1.0, hi=100.0, batch=4),),
+        host=MemoryFit(resident=2**20, m0=0.0, m1=1.0, n=6),
+    )
+    profile = _profile(tmp_path)
+    lengths = [3, 12, 25, 60, 90, 7, 33, 41]
+    placed, values = _plan(profile, lengths)
+    pool = _pool(tmp_path, profile, measures=FixedEstimates(estimate), resolver=FixedUnit(profile))
+    fragment, _ = _submit(pool, placed, values)
+    per_job = {j.element: item.placement.batch_size for _, item in _claims(pool) for j in item.jobs}
+    jobs, placement = fragment_jobs(fragment, placed, values)
+    executor = InProcess(
+        store=pool.store,
+        profile=profile,
+        run=RunConfig(),
+        workers=WORKERS,
+        measures=FixedEstimates(estimate),  # type: ignore[arg-type]
+        units=lambda call, put, decoder: FixedUnit(profile).unit(call, put, decoder),
+    )
+    sized = executor.sizing(jobs, placement)
+    wanted = {j.ref.element: sized.batch_at(float(n), len(jobs)) for j, n in zip(jobs, lengths, strict=True)}
+    assert per_job == wanted and set(per_job.values()) == {4}

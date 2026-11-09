@@ -47,7 +47,7 @@ from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.resources import ResourceMeasure, Unit
 from senselab_core.runtime.revision import NAMESPACE, cache_root
-from senselab_core.runtime.sizing import Measures, Sample, calibrated
+from senselab_core.runtime.sizing import Measures, Sample
 from senselab_core.runtime.store import ResultStore
 from senselab_worker.units import NS_PER_S
 
@@ -317,7 +317,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     wall = time.monotonic() - began
     by_digest = _samples(run_dir)
     samples = list(by_digest.values())
-    rounds = {d for digests, _ in pool.calibrated.values() for d in digests}
+    rounds = {d for probed in pool.probes.values() for d in probed.items}
     steady_s, calibration_s, round_jobs = _steady(by_digest, rounds, began_s)
     events = read_events(run_dir)
     queued = {e.job: e.t_ns for e in events if e.kind == "queued" and e.job is not None}
@@ -329,7 +329,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     items = len(placed.manifest.rows)
     ident = (None, None) if model is None else (model.ref.id, model.identity)
     unit = Unit(entry.task, node.backend, ident[0], ident[1], node.resource_class)
-    found = Measures(out / f"{label}@{point}" / "resources", packaged=()).get(unit) or calibrated(samples)
+    found = Measures(out / f"{label}@{point}" / "resources", packaged=()).get(unit)
     return {
         "format": RESULT_FORMAT,
         "suite": suite.name,

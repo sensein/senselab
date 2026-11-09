@@ -45,7 +45,7 @@ from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile, QosCapTooSmall
 from senselab_core.runtime.storage import StorageCapabilities, StorageUnsupported
 from senselab_core.runtime.store import ResultStore
-from senselab_core.testing.measures import CEILED_SIZING, FixedMeasures
+from senselab_core.testing.measures import CEILED_SIZING
 from syscall_faults_fixture import refuse_call
 
 SCORE = scoring("substrates_test.score")
@@ -223,7 +223,6 @@ def _queued(  # noqa: PLR0913 - the plan's shape, then where it is queued
             profile=profile,
             substrate=workers,
             epoch=epoch,
-            measures=FixedMeasures(),
         )
 
     pool = pool_over(recording)
@@ -424,7 +423,6 @@ def test_a_pool_names_its_slurm_jobs_by_its_attempt(tmp_path: Path) -> None:
         profile=profile,
         substrate=slurm,
         epoch=0,
-        measures=FixedMeasures(),
     )
     pool.bind_epoch(3, EventLog(run_dir, "attempt-3", 3, epoch=3))
     assert slurm.job_name("t") == f"{slurm.prefix}attempt-3-t-e3"
