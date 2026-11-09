@@ -369,6 +369,10 @@ class Delegating:
         """Release through `inner`."""
         self.inner.release(admission)
 
+    def fragment_size(self, placed: Plan, node: str) -> int:
+        """Return the size `InProcess` gives."""
+        return self.inner.fragment_size(placed, node)
+
     def submit(self, fragment: PlanFragment) -> Handle:
         """Submit through `inner`."""
         return self.inner.submit(fragment)

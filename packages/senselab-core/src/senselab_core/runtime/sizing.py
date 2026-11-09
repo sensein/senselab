@@ -9,6 +9,7 @@ import functools
 import importlib.metadata
 import math
 import statistics
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Annotated
@@ -17,9 +18,17 @@ from pydantic import Field, model_validator
 from senselab_worker.digest import file_digest, identity_digest
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
-from senselab_core.runtime.calibration import Estimate, LengthProfile, MemoryFit, RegimeFactor, StratumBatch
+from senselab_core.runtime.calibration import (
+    Estimate,
+    LengthProfile,
+    MemoryFit,
+    RegimeFactor,
+    RequestFit,
+    StratumBatch,
+)
 from senselab_core.runtime.execution_settings import CalibrationSettings, PoolSettings, ResourceClass, SizingSettings
-from senselab_core.runtime.probe import memory_batch
+from senselab_core.runtime.hardware import HardwareInfo
+from senselab_core.runtime.probe import memory_batch, peak
 from senselab_core.runtime.resources import (
     Batched,
     Measured,
@@ -82,13 +91,20 @@ class Grant(Frozen):
         *,
         on_device: bool = False,
         devices: int | None = None,
+        device_memory_bytes: int | None = None,
     ) -> "Grant":
         """Return the grant of a worker of `resource`: its device memory cap `on_device`, else its memory or the host's.
+
+        A device grant of a class with no cap takes `device_memory_bytes`, the memory of the device seen.
 
         The quantum ceilings are the pool's, `quantum_s` within the class's wall-time limit. `devices`, the devices the
         class's workers share, is kept for a `cuda` class only.
         """
-        memory = resource.memory_cap_bytes if on_device else resource.mem_bytes or host_memory_bytes or None
+        memory = (
+            resource.memory_cap_bytes or device_memory_bytes
+            if on_device
+            else resource.mem_bytes or host_memory_bytes or None
+        )
         time_s = pool.quantum_s if resource.time_s is None else min(pool.quantum_s, resource.time_s)
         return cls(
             max_workers=resource.max_workers,
@@ -98,6 +114,16 @@ class Grant(Frozen):
             devices=devices if resource.device == "cuda" else None,
             on_device=on_device,
         )
+
+    @classmethod
+    def seen(
+        cls, resource: ResourceClass, pool: PoolSettings, hardware: HardwareInfo | None, *, devices: int | None = None
+    ) -> "Grant":
+        """Return the grant of a worker of `resource` on `hardware` (None unknown), by its device's or host's memory."""
+        cuda = resource.device == "cuda"
+        host = hardware.memory_bytes if hardware is not None and not cuda else None
+        seen = min((g.memory_bytes for g in hardware.gpus), default=None) if hardware is not None and cuda else None
+        return cls.of(resource, pool, host, on_device=cuda, devices=devices, device_memory_bytes=seen)
 
     def worker_bound(self, measure: "Measure | None") -> int:
         """Return the most workers of a unit measured as `measure` (None unmeasured) this grant runs at once.
@@ -196,7 +222,8 @@ class Sizing(Frozen):
         predicted_s: Each job's median predicted seconds; None for every job unless all are of known length inside
             the measured range.
         wall_s: Predicted wall seconds of the work on `workers`; None unless every job's time is measured.
-        batch_one_peak: The memory of a batch-1 request at the longest job, `resident + m0 + m1·L`; None unmeasured.
+        batch_one_peak: The memory of a batch-1 request at the longest job (`peak`); None unmeasured.
+        batch_peak: The memory of a request at the longest job and its batch (`peak`); None unmeasured.
         measured: Which figures rest on a measure.
     """
 
@@ -211,6 +238,7 @@ class Sizing(Frozen):
     predicted_s: tuple[Seconds | None, ...] = ()
     wall_s: Seconds | None = None
     batch_one_peak: Bytes | None = None
+    batch_peak: Bytes | None = None
     measured: Basis
 
     def batch_at(self, length: float | None, jobs: int | None = None) -> int:
@@ -253,8 +281,48 @@ def _regime_workers(regimes: Sequence[RegimeFactor], bound: int) -> int:
     return best
 
 
+def estimate_of(row: ResourceMeasure, *, on_device: bool = False) -> Estimate:
+    """Return a resource-table row as an estimate over recording seconds, with no length range, spread or oom.
+
+    Time is `s_per_input_s` per input second, memory the row's pair per input second of its median item, the batch the
+    measured one where its per-second time is no slower than a single's. The spread is unmeasured, so items are cut by
+    count.
+    """
+    scale = row.input_s_per_item or 1.0
+    top = sys.float_info.max
+
+    def fit(resident: int | None, peak_bytes: int | None) -> MemoryFit | None:
+        if resident is None or peak_bytes is None:
+            return None
+        return MemoryFit(resident=resident, m0=0.0, m1=max(0, peak_bytes - resident) / scale, n=1)
+
+    def request(batch: int, per_s: float) -> RequestFit:
+        return RequestFit(batch=batch, r=0.0, u=per_s, n=1, spread=None, lo=0.0, hi=top)
+
+    found = row.batched
+    wide = found is not None and found.batch_size > 1
+    chosen = found.batch_size if found is not None and wide and found.s_per_input_s <= row.s_per_input_s else 1
+    return Estimate(
+        status="measured",
+        unit_kind="audio_s",
+        load_s=row.load_s,
+        load_n=1,
+        item_s=row.claim_s,
+        item_n=1,
+        single=request(1, row.s_per_input_s),
+        batched=(request(found.batch_size, found.s_per_input_s),) if found is not None and wide else (),
+        batch=(StratumBatch(lo=0.0, hi=top, batch=chosen),),
+        device=fit(row.device_resident_bytes, row.device_peak_bytes) if on_device else None,
+        host=fit(row.resident_bytes, row.peak_memory_bytes) if not on_device else None,
+    )
+
+
+def _by_count(grant: Grant, jobs: int) -> tuple[tuple[int, int], ...]:
+    return tuple((a, min(a + grant.quantum_items, jobs)) for a in range(0, jobs, grant.quantum_items))
+
+
 def _unmeasured(grant: Grant, calibration: CalibrationSettings, jobs: int) -> Sizing:
-    cuts = tuple((a, min(a + grant.quantum_items, jobs)) for a in range(0, jobs, grant.quantum_items))
+    cuts = _by_count(grant, jobs)
     workers = 0 if jobs == 0 else min(calibration.unmeasured_workers, len(cuts), grant.max_workers)
     return Sizing(
         cuts=cuts,
@@ -278,7 +346,8 @@ def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the cali
     A job's seconds at batch 1 are `r + u·L`, at its length's batch B `(r_B + u_B·B·L)/B`, times the regime factor of
     the co-tenancy the card's workers make. Items are cut in put order at the upper prediction
     `t·(1 + confidence·spread)`: an item closes before its upper seconds plus the per-item cost pass the grant's
-    `quantum_s`, when its seconds reach `(load_s + a)/load_share`, or at `quantum_items` jobs. Workers are the median
+    `quantum_s`, when its seconds reach `(load_s + a)/load_share`, or at `quantum_items` jobs; with `u` or `spread`
+    unmeasured they are cut by `quantum_items` alone. Workers are the median
     seconds over `target_wall_s`, at most the item count, `max_workers` and, on shared devices, `devices × w_d`.
 
     On shared devices `w_d = ⌊memory_headroom × cap / P⌋` for the batch peak `P` at the longest job, lowered where a
@@ -298,8 +367,8 @@ def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the cali
     per_device = 1
     if share is not None and fit is not None and grant.devices is not None and grant.on_device:
         star = _star(estimate.batch, longest) if longest <= span[1] else 1
-        peak = fit.resident + fit.m0 + fit.m1 * star * longest
-        fits = grant.max_workers if peak <= 0 else max(1, math.floor(config.memory_headroom * share / peak))
+        batch_peak = peak(fit, star, longest)
+        fits = grant.max_workers if batch_peak <= 0 else max(1, math.floor(config.memory_headroom * share / batch_peak))
         per_device = _regime_workers(estimate.regimes, fits)
         share //= per_device
     budget = None if share is None else config.memory_headroom * share
@@ -315,12 +384,18 @@ def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the cali
     )
     rho = {r.k: r.rho for r in estimate.regimes}.get(per_device, 1.0)
     medians = [_seconds(estimate, shell.batch_at(length), length) * rho for length in lengths]
-    spread = 1.0 + calibration.confidence * (single.spread or 0.0)
+    spread = 1.0 + calibration.confidence * (single.spread or 0.0)  # read only where the spread is measured
     per_item, load = estimate.item_s or 0.0, estimate.load_s or 0.0
-    cuts = _cut(medians, [m * spread for m in medians], per_item, (load + per_item) / config.load_share, grant)
     timed = all(length is not None and span[0] <= length <= span[1] for length in work.units)
+    by_count = single.u is None or single.spread is None
+    cuts = (
+        _by_count(grant, jobs)
+        if by_count
+        else _cut(medians, [m * spread for m in medians], per_item, (load + per_item) / config.load_share, grant)
+    )
     bound = grant.max_workers if grant.devices is None else grant.devices * per_device
-    wanted = max(1, math.ceil(sum(medians) / config.target_wall_s))
+    untimed = single.u is None and not timed
+    wanted = calibration.unmeasured_workers if untimed else max(1, math.ceil(sum(medians) / config.target_wall_s))
     workers = 0 if jobs == 0 else min(wanted, len(cuts), grant.max_workers, bound)
     wall = load + (sum(medians) + per_item * len(cuts)) / workers if timed and workers else None
     return shell.model_copy(
@@ -330,7 +405,8 @@ def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the cali
             "workers_per_device": per_device,
             "predicted_s": tuple(m if timed else None for m in medians),
             "wall_s": wall,
-            "batch_one_peak": None if fit is None else round(fit.resident + fit.m0 + fit.m1 * longest),
+            "batch_one_peak": None if fit is None else round(peak(fit, 1, longest)),
+            "batch_peak": None if fit is None else round(peak(fit, shell.batch_at(longest), longest)),
             "measured": Basis(
                 time=timed, memory=budget is not None, batch=bool(estimate.batch) and budget is not None, workers=timed
             ),

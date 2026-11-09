@@ -402,8 +402,15 @@ class Plan:
         for node_id, placed in self.placement.nodes.items():
             unit = None if units is None else units(node_id)
             estimate = None if unit is None or measures is None else measures.get(unit)
+            why = (
+                "no measure source given"
+                if measures is None
+                else "no measure unit for the node"
+                if unit is None
+                else "no estimate for its unit"
+            )
             sizing[node_id] = node_sizing(
-                placed, profile, estimate, (lengths or {}).get(node_id), hardware, unit=unit is not None
+                placed, profile, estimate, (lengths or {}).get(node_id), hardware, why_no_estimate=why
             )
         return explain(self.hash, self.logical, self.placement, sizing=sizing, footer=waits(profile))
 

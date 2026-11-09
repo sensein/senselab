@@ -617,6 +617,9 @@ class Pool:
                 self.events.record("queued", job.node, job=job, key=key, env=flight.fragment.placement.env)
         return WorkersBroken(flight.queue, found.resource_class, found.failures, found.reason)
 
+    def fragment_size(self, plan: Plan, node: str) -> None:
+        """Return None: the pool splits fragments into its own items."""
+
     def submit(self, fragment: PlanFragment) -> Handle:
         """Put `fragment` on the queue of its resource class, as quantum-sized items, and return its handle.
 

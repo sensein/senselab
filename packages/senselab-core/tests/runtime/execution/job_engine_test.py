@@ -17,11 +17,13 @@ from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_pack
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, UpstreamRef
+from senselab_core.runtime.execution.in_process import InProcess
 from senselab_core.runtime.execution.job import Completed, Failed, Job, JobOutcome, Upstream, execute
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.fake_backend import EchoParams
 from senselab_core.runtime.keys import Call, Placement, request_size
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.resources import Batched, ClassMeasure, Measured, ResourceRow, ResourceTable
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.workers import mit_lock_records
@@ -265,3 +267,39 @@ def test_a_retired_upstream_entry_fails_only_its_element_as_a_gap(tmp_path: Path
     assert isinstance(retired, Failed) and retired.failure.type == "WireFormatRetired"
     assert (retired.failure.fault, retired.failure.gap, retired.failure.charged) == ("infrastructure", True, False)
     assert sizes == [1]
+
+
+@pytest.mark.logic
+def test_in_process_runs_a_unit_with_packaged_rows_in_batches(tmp_path: Path, sizes: list[int]) -> None:
+    """Jobs of a unit with a packaged resource row are sent in the batch `size` gives, not one to a request."""
+    measure = ClassMeasure(
+        load_s=1.0,
+        claim_s=0.0,
+        resident_bytes=1024,
+        peak_memory_bytes=1280,
+        s_per_input_s=0.1,
+        input_s_per_item=1.0,
+        batched=Batched(batch_size=4, s_per_input_s=0.05),
+        measured=Measured(sha="1" * 40, jobs=("1",)),
+    )
+    row = ResourceRow(id=None, revision=None, download_bytes=None, classes={"cpu": measure})
+    table = ResourceTable(task=AUDIO_TASK.name, backend="identify", rows=(row,))
+    use_packaged(
+        Packaged(Catalogue(entries=(), resource_tables=(table,)), _this_interpreter, REGISTRY, mit_lock_records)
+    )
+    jobs = []
+    for i in range(6):
+        path = tmp_path / f"tone{i}.wav"
+        soundfile.write(path, numpy.zeros(16000, dtype=numpy.float32), 16000)
+        audio = open_audio(path)
+        ref = JobRef(plan_hash="0" * 64, node="n", element=(i,))
+        jobs.append(Job(ref, Call(AUDIO_TASK, EchoParams(), {"audio": audio.identity}), {"audio": audio}))
+    profile = ExecutionProfile.load("laptop", {"resource_classes": {"cpu": {"mem_bytes": 10_000}}})
+    placement = Placement(backend=IDENTIFY, backend_params=IDENTIFY.params(), device="cpu")
+    workers = WorkerSet(1)
+    try:
+        executor = InProcess(store=ResultStore(tmp_path / "store"), profile=profile, run=RunConfig(), workers=workers)
+        outcomes = executor._run(jobs, placement)  # noqa: SLF001 - the run `submit` makes of a fragment's jobs
+    finally:
+        workers.close()
+    assert len(_completed(outcomes)) == 6 and sizes == [4, 2]

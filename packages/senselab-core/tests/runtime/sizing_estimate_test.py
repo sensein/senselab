@@ -3,7 +3,9 @@
 from collections.abc import Sequence
 
 import pytest
-from senselab_core.kernel.declare import BackendSpec, Env
+from hypothesis import given
+from hypothesis import strategies as st
+from senselab_core.kernel.declare import BackendSpec, Env, TaskSpec
 from senselab_core.kernel.signals import PlainText
 from senselab_core.runtime.calibration import (
     Estimate,
@@ -17,8 +19,12 @@ from senselab_core.runtime.calibration import (
 from senselab_core.runtime.execution.executor import JobRef
 from senselab_core.runtime.execution.in_process import InProcess
 from senselab_core.runtime.execution.job import Job
-from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.execution_settings import ResourceClass
+from senselab_core.runtime.fake_backend import EchoParams
+from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
+from senselab_core.runtime.keys import Call, Placement
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
+from senselab_core.runtime.probe import memory_batch, peak
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Grant, Measure, Sizing, size, size_row
 from senselab_core.runtime.store import ResultStore
@@ -121,9 +127,9 @@ def test_workers_sharing_a_card_fit_it_together(length: float) -> None:
     fit = sized.memory
     assert fit is not None and sized.budget_bytes is not None and sized.workers_per_device > 1
     batch = sized.batch_at(length)
-    peak = fit.resident + fit.m0 + fit.m1 * batch * length
-    assert sized.workers_per_device * peak <= SIZING.memory_headroom * CAP
-    assert sized.budget_bytes * sized.workers_per_device <= SIZING.memory_headroom * CAP + 1e-6
+    assert sized.workers_per_device * peak(fit, batch, length) <= SIZING.memory_headroom * CAP
+    assert sized.budget_bytes == SIZING.memory_headroom * (CAP // sized.workers_per_device)
+    assert sized.batch_peak == round(peak(fit, batch, length)) and sized.batch_one_peak == round(peak(fit, 1, length))
 
 
 @pytest.mark.logic
@@ -167,20 +173,20 @@ def test_an_unmeasured_unit_runs_the_safe_values() -> None:
     sized = _sized(None, _grant(quantum_items=3), *[1.0] * 7)
     assert sized.cuts == ((0, 3), (3, 6), (6, 7)) and sized.workers == CALIBRATION.unmeasured_workers
     assert sized.batch_at(1.0) == 1 and sized.wall_s is None and not any(sized.measured.model_dump().values())
-    assert (
-        _sized(
-            None,
-            _grant(),
-        ).workers
-        == 0
-    )
+    assert _sized(None, _grant()).workers == 0
+
+
+_TEXT_TASK = TaskSpec(
+    name="t", version="1", kind="transform", inputs={"text": "json"}, outputs={"value": "sha256"}, params=EchoParams
+)
 
 
 def _text_jobs(*texts: str) -> list[Job]:
     jobs = []
     for i, text in enumerate(texts):
         held = PlainText(content=text)
-        jobs.append(Job(JobRef(plan_hash="0" * 64, node="n", element=(i,)), None, {"text": held}))  # type: ignore[arg-type]
+        call = Call(_TEXT_TASK, EchoParams(), {"text": held.identity})
+        jobs.append(Job(JobRef(plan_hash="0" * 64, node="n", element=(i,)), call, {"text": held}))
     return jobs
 
 
@@ -195,7 +201,7 @@ class _NoTable:
 
 
 @pytest.mark.logic
-def test_in_process_and_pool_size_one_unit_alike(tmp_path: object) -> None:
+def test_in_process_sizing_is_size_on_the_same_estimate_grant_and_lengths(tmp_path: object) -> None:
     """The in-process executor's sizing of a unit is `size` on the same estimate, grant and lengths."""
     estimate = _estimate(unit_kind="chars", host=MemoryFit(resident=GB, m0=0.0, m1=1e6, n=6), device=None)
     estimate = estimate.model_copy(update={"batch": (StratumBatch(lo=2.0, hi=1000.0, batch=8),)})
@@ -210,7 +216,7 @@ def test_in_process_and_pool_size_one_unit_alike(tmp_path: object) -> None:
     jobs = _text_jobs("a" * 10, "b" * 20, "c" * 30)
     backend = _backend()
     placement = Placement(backend=backend, backend_params=backend.params(), device="cpu")
-    grant = Grant.of(profile.resource_classes["cpu"], profile.pool)
+    grant = Grant.seen(profile.resource_classes["cpu"], profile.pool, None)
     direct = size(estimate, grant, SIZING, _work(10.0, 20.0, 30.0), calibration=CALIBRATION)
     assert executor.sizing(jobs, placement) == direct and direct.batch_at(30.0, 3) == 3
     bare = InProcess(store=ResultStore(tmp_path / "bare"), profile=profile)  # type: ignore[operator]
@@ -229,3 +235,106 @@ def _backend() -> BackendSpec:
         worker="senselab_worker.fake",
         load_stub={},
     )
+
+
+@pytest.mark.logic
+def test_an_unmeasured_slope_or_spread_never_enters_as_zero() -> None:
+    """With `u` unmeasured, 600 s jobs outside a short range are untimed and cut by count, as an unmeasured unit is."""
+    narrow = _estimate(u=None, hi=7.0, batch=(StratumBatch(lo=5.0, hi=7.0, batch=1),))
+    sized = _sized(narrow, _grant(), *[600.0] * 250)
+    assert sized.cuts == _sized(None, _grant(), *[600.0] * 250).cuts and sized.cuts[0] == (0, 100)
+    assert sized.workers == CALIBRATION.unmeasured_workers
+    assert sized.predicted_s == (None,) * 250 and not sized.measured.time and sized.wall_s is None
+    flat = _sized(_estimate(spread=None), _grant(), *[100.0] * 250)
+    assert flat.cuts == sized.cuts and flat.measured.time
+
+
+_UNIT = st.floats(min_value=0.0, max_value=2000.0, allow_nan=False)
+
+
+@st.composite
+def _estimates(draw: st.DrawFn) -> Estimate:
+    lo = draw(st.floats(min_value=0.0, max_value=50.0))
+    hi = lo + draw(st.floats(min_value=0.0, max_value=1000.0))
+    fit = MemoryFit(
+        resident=draw(st.integers(0, 40 * GB)),
+        m0=draw(st.floats(0.0, 1e8)),
+        m1=draw(st.floats(0.0, 1e9)),
+        n=6,
+    )
+    return Estimate(
+        status="measured",
+        unit_kind="audio_s",
+        load_s=draw(st.none() | st.floats(0.0, 60.0)),
+        load_n=3,
+        item_s=draw(st.none() | st.floats(0.0, 1.0)),
+        item_n=3,
+        single=RequestFit(
+            batch=1,
+            r=draw(st.floats(0.0, 5.0)),
+            u=draw(st.none() | st.floats(0.0, 0.5)),
+            n=6,
+            spread=draw(st.none() | st.floats(0.0, 1.0)),
+            lo=lo,
+            hi=hi,
+        ),
+        batch=(StratumBatch(lo=lo, hi=hi, batch=draw(st.integers(1, 64))),),
+        device=draw(st.none() | st.just(fit)),
+        host=draw(st.none() | st.just(fit)),
+        source=EstimateSource(probe_ids=("p",), observations=6),
+    )
+
+
+@pytest.mark.logic
+@given(
+    estimate=_estimates(),
+    lengths=st.lists(st.none() | _UNIT, max_size=40),
+    devices=st.none() | st.integers(0, 4),
+    on_device=st.booleans(),
+    memory=st.none() | st.integers(1, 80 * GB),
+)
+def test_size_keeps_its_invariants(
+    estimate: Estimate, lengths: list[float | None], devices: int | None, on_device: bool, memory: int | None
+) -> None:
+    """Cuts partition the jobs; items hold the upper bound; a card's workers and batches fit; workers stay bounded."""
+    grant = _grant(devices=devices, on_device=on_device, memory_bytes=memory, quantum_items=7)
+    sized = _sized(estimate, grant, *lengths)
+    assert [i for a, b in sized.cuts for i in range(a, b)] == list(range(len(lengths)))
+    assert all(0 < b - a <= grant.quantum_items for a, b in sized.cuts)
+    single = estimate.single
+    assert single is not None
+    if single.u is not None and single.spread is not None:
+        z = CALIBRATION.confidence
+        for a, b in sized.cuts:
+            if b - a > 1:
+                upper = sum(s or 0.0 for s in sized.predicted_s[a:b]) * (1 + z * single.spread)
+                assert not sized.measured.time or upper + (estimate.item_s or 0.0) <= grant.quantum_s * (1 + 1e-9)
+    if sized.budget_bytes is not None and sized.memory is not None:
+        assert sized.workers_per_device * sized.budget_bytes <= SIZING.memory_headroom * (memory or 0) * (1 + 1e-9)
+        for length in lengths:
+            if length is not None:
+                room = memory_batch(sized.memory, sized.budget_bytes, length, grant.quantum_items)
+                assert sized.batch_at(length) <= max(1, room)
+    bound = grant.max_workers if devices is None else devices * sized.workers_per_device
+    assert sized.workers <= min(len(sized.cuts), grant.max_workers, bound) and (sized.workers == 0) == (
+        not lengths or bound == 0
+    )
+
+
+@pytest.mark.logic
+def test_a_device_grant_without_a_class_cap_takes_the_seen_devices_memory() -> None:
+    """The device a worker sees stands in for a cap the class lacks; the cap, where set, wins."""
+    uncapped = ResourceClass(device="cuda", max_workers=2)
+    seen = HardwareInfo(
+        cpu_count=1,
+        memory_bytes=2**33,
+        gpus=(
+            GpuInfo(name="H100", memory_bytes=2**36, driver="1"),
+            GpuInfo(name="H100", memory_bytes=2**35, driver="1"),
+        ),
+        apple_silicon=False,
+        platform="linux-x86_64",
+    )
+    assert Grant.seen(uncapped, PROFILE.pool, seen).memory_bytes == 2**35
+    assert Grant.seen(uncapped, PROFILE.pool, None).memory_bytes is None
+    assert Grant.seen(uncapped.model_copy(update={"memory_cap_bytes": 2**30}), PROFILE.pool, seen).memory_bytes == 2**30

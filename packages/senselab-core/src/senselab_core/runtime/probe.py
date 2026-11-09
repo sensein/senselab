@@ -314,6 +314,11 @@ def _memory_fit(
     return MemoryFit(resident=resident, m0=fit[0], m1=fit[1], n=len(points)), None
 
 
+def peak(fit: MemoryFit, batch: int, length: float) -> float:
+    """Return the memory of one request of `batch` jobs of `length` units: `resident + m0 + m1·batch·length`."""
+    return fit.resident + fit.m0 + fit.m1 * batch * length
+
+
 def memory_batch(fit: MemoryFit, budget_bytes: float, length: float, ceiling: int) -> int:
     """Return the most jobs of `length` units whose batch peak fits `budget_bytes`, within `[1, ceiling]`."""
     room = budget_bytes - fit.resident - fit.m0

@@ -12,9 +12,9 @@ from senselab_worker.units import NS_PER_S
 
 from senselab_core.kernel.declare import BackendSpec, Registry, TaskSpec
 from senselab_core.kernel.graph import Edge, Node, order
-from senselab_core.kernel.identity import InputIdentity, LogicalKey, ReusePolicy, gather_identity
+from senselab_core.kernel.identity import InputIdentity, LogicalKey, ResolvedModel, ReusePolicy, gather_identity
 from senselab_core.kernel.placement import NodePlacement
-from senselab_core.runtime.calibration import LengthProfile, UnitKind
+from senselab_core.runtime.calibration import Estimate, LengthProfile, UnitKind
 from senselab_core.runtime.call import Result, RunConfig, TaskCall, bind_input, host_hardware, packaged
 from senselab_core.runtime.execution import batching
 from senselab_core.runtime.execution.batching import BucketGrid, job_length_ns, job_text_chars, recording_span_ns
@@ -47,7 +47,7 @@ from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
-from senselab_core.runtime.sizing import Grant, Sizing, size
+from senselab_core.runtime.sizing import Grant, Sizing, estimate_of, size
 from senselab_core.runtime.store import ResultStore
 
 
@@ -444,16 +444,11 @@ class InProcess:
                 WorkerFatal, WorkerLost, ProtocolError: as `execute`.
         """
         jobs, placement = self._jobs(fragment)
-        sized, lengths = self._size(jobs, placement)
-        batch = min((sized.batch_at(length, len(jobs)) for length in lengths), default=1)
-        placement = replace(placement, batch_size=batch)
         handle = Handle(id=f"fragment-{next(self._ids)}")
         with self._lock:
             self._status[handle.id] = Status.RUNNING
         try:
-            outcomes = execute(
-                jobs, placement, store=self.store, run=self.run, profile=self.profile, workers=self.workers
-            )
+            outcomes = self._run(jobs, placement)
         except BaseException:
             with self._lock:
                 self._status.pop(handle.id)
@@ -463,21 +458,62 @@ class InProcess:
             self._status[handle.id] = Status.DONE
         return handle
 
+    def _run(self, jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+        """Run `jobs` in runs of one batch each: a run ends where the batch for a job's length changes."""
+        sized, lengths = self._size(jobs, placement)
+        batches = [sized.batch_at(length, len(jobs)) for length in lengths]
+        outcomes: list[JobOutcome] = []
+        for batch, run in itertools.groupby(zip(jobs, batches, strict=True), key=lambda pair: pair[1]):
+            sent = replace(placement, batch_size=batch)
+            outcomes += execute(
+                [j for j, _ in run], sent, store=self.store, run=self.run, profile=self.profile, workers=self.workers
+            )
+        return outcomes
+
     def sizing(self, jobs: Sequence[Job], placement: Placement) -> Sizing:
         """Return `size` of `jobs` on `placement`: from the estimate of its unit, else the safe values (batch 1)."""
         return self._size(jobs, placement)[0]
 
-    def _size(self, jobs: Sequence[Job], placement: Placement) -> tuple[Sizing, tuple[float | None, ...]]:
-        unit = None if self.units is None else self.units(placement)
-        estimate = None if unit is None or self.measures is None else self.measures.get(unit)
+    def fragment_size(self, placed: Plan, node: str) -> int:
+        """Return the most jobs of `node` one fragment holds: `quantum_items` where `size` batches its jobs, else 1."""
+        registry = packaged().registry
+        call = _node_call(placed, node, registry)
+        placement = placement_of_record(placed.placement.nodes[node], call.task, registry)
+        estimate = self._estimate(placement, call.model)
+        grant = self._grant(placement)
+        if estimate is None or estimate.single is None:
+            return 1
+        probe = LengthProfile(units=(estimate.single.lo,) * grant.quantum_items)
+        sized = size(estimate, grant, self.profile.sizing, probe, calibration=self.profile.calibration)
+        return grant.quantum_items if sized.batch_at(estimate.single.lo) > 1 else 1
+
+    def _grant(self, placement: Placement) -> Grant:
         resource = self.profile.resource_classes[placement.resource_class]
-        on_device = resource.device == "cuda"
-        host = None if on_device or resource.mem_bytes is not None else host_hardware().memory_bytes
-        grant = Grant.of(resource, self.profile.pool, host, on_device=on_device)
-        lengths = tuple(_units_of(job, "none" if estimate is None else estimate.unit_kind) for job in jobs)
-        sized = size(
-            estimate, grant, self.profile.sizing, LengthProfile(units=lengths), calibration=self.profile.calibration
+        return Grant.seen(
+            resource,
+            self.profile.pool,
+            host_hardware() if resource.device == "cuda" or resource.mem_bytes is None else None,
         )
+
+    def _estimate(self, placement: Placement, model: ResolvedModel | None) -> Estimate | None:
+        """Return the estimate `measures` gives for the unit `units` names, else the packaged table's row as one."""
+        unit = None if self.units is None else self.units(placement)
+        found = None if unit is None or self.measures is None else self.measures.get(unit)
+        if found is not None:
+            return found
+        backend = placement.backend
+        ident = (None, None) if model is None else (model.ref.id, model.identity)
+        row = packaged().catalogue.resources(backend.task, backend.name, *ident)
+        measured = None if row is None else row.classes.get(placement.resource_class)
+        cuda = self.profile.resource_classes[placement.resource_class].device == "cuda"
+        return None if measured is None else estimate_of(measured, on_device=cuda)
+
+    def _size(self, jobs: Sequence[Job], placement: Placement) -> tuple[Sizing, tuple[float | None, ...]]:
+        estimate = self._estimate(placement, jobs[0].call.model if jobs else None)
+        kind = "none" if estimate is None else estimate.unit_kind
+        lengths = tuple(_units_of(job, kind) for job in jobs)
+        work = LengthProfile(units=lengths)
+        sized = size(estimate, self._grant(placement), self.profile.sizing, work, calibration=self.profile.calibration)
         return sized, lengths
 
     def status(self, handle: Handle) -> Status:

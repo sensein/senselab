@@ -118,6 +118,10 @@ class Recording:
         """Release through `InProcess`."""
         self.inner.release(admission)
 
+    def fragment_size(self, placed: Plan, node: str) -> int:
+        """Return the size `InProcess` gives."""
+        return self.inner.fragment_size(placed, node)
+
     def submit(self, fragment: PlanFragment) -> Handle:
         """Record `fragment` and the telemetry opt-out it is submitted under, and submit it."""
         self.fragments.append(fragment)
