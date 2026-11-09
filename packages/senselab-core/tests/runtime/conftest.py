@@ -5,10 +5,12 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 from huggingface_hub import errors
 from huggingface_hub.errors import HfHubHTTPError
+from lease_clock_fixture import ManualClock
 
 
 def _hub_client() -> ModuleType:
@@ -41,3 +43,13 @@ def backends_importable(monkeypatch: pytest.MonkeyPatch) -> None:
     here = str(Path(__file__).parent)
     existing = os.environ.get("PYTHONPATH")
     monkeypatch.setenv("PYTHONPATH", here if not existing else f"{here}{os.pathsep}{existing}")
+
+
+@pytest.fixture
+def lease_clock(slack_tests: dict[str, Any], tier_bound: float) -> Callable[..., ManualClock]:
+    """Build a `ManualClock` whose polls and hang bound come from the test slack file and the tier."""
+
+    def make(**kwargs: Any) -> ManualClock:  # noqa: ANN401 - `ManualClock`'s own keyword arguments
+        return ManualClock(poll_s=slack_tests["lease_clock"]["poll_s"], hang_s=tier_bound, **kwargs)
+
+    return make

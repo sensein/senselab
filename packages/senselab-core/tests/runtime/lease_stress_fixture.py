@@ -2,16 +2,14 @@
 
 `setup` runs once per worker process and records, at the `os` boundary, the token set of every lease directory the
 process renames. `take` starts at a barrier made of directories in shared storage, contends for the lease once and
-returns what it saw. Its clock never advances, so a waiter polls without a deadline.
+returns what it saw. Its clock never advances, so a waiter polls until the lease is free or the hang bound passes.
 """
 
 import os
-import time
-import uuid
 from pathlib import Path
 from typing import Any
 
-from lease_clock_fixture import ManualClock
+from lease_clock_fixture import ManualClock, gate
 from senselab_core.runtime.locks import Lease, LeaseTimeout
 
 RENAMED: list[list[str]] = []
@@ -38,15 +36,14 @@ def setup() -> None:
     os.rename = rename
 
 
-def take(resource: str, gate: str, takers: int) -> dict[str, Any]:
-    """Join the barrier at `gate`, take the lease on `resource` once all `takers` have, and report what happened."""
+def take(resource: str, barrier: str, takers: int, poll_s: float, hang_s: float) -> dict[str, Any]:
+    """Join the barrier at `barrier`, take the lease on `resource` once all `takers` have, and report what happened."""
     RENAMED.clear()
-    os.mkdir(os.path.join(gate, uuid.uuid4().hex))
-    while len(os.listdir(gate)) < takers:
-        time.sleep(0)
+    gate(barrier, takers, hang_s=hang_s)
+    clock = ManualClock(poll_s=poll_s, hang_s=hang_s, spends=False)
     report: dict[str, Any] = {"held": False, "broke": 0, "displaced": False, "timeout": None, "token": None}
     try:
-        with Lease(Path(resource), timeout=5, stale_after=60, clock=ManualClock(spends=False)) as lease:
+        with Lease(Path(resource), timeout=5, stale_after=60, clock=clock) as lease:
             report.update(held=True, broke=len(lease.broke), token=(lease.holder() or {}).get("token"))
             report["displaced"] = not lease.owns()
     except LeaseTimeout as err:

@@ -16,14 +16,13 @@ from typing import Optional
 
 from senselab_core.runtime.storage import StorageDir
 
-HANG_GUARD_S = 10.0
-"""Real seconds `settle` waits before it reports a hang; it is a failure bound, never a passing condition."""
-
 
 class ManualClock:
     """Monotonic time starting at 0, advanced by the test; storage time is the real filesystem's unless pinned.
 
     Args:
+        poll_s: Real seconds between a parked thread's looks at its event.
+        hang_s: Real seconds after which a wait or a `settle` that has not finished fails; a failure bound only.
         storage_origin: Pins the storage clock to `storage_origin` plus the monotonic time; leases planted with
             that stamp then age exactly as the clock advances. None reads the real filesystem's stamps.
         spends: Whether `sleep` advances the clock by the time slept.
@@ -36,6 +35,8 @@ class ManualClock:
     def __init__(
         self,
         *,
+        poll_s: float,
+        hang_s: float,
         storage_origin: Optional[float] = None,
         spends: bool = True,
         on_sleep: Optional[Callable[[float], None]] = None,
@@ -46,6 +47,8 @@ class ManualClock:
         self._cond = threading.Condition()
         self._parked: dict[threading.Thread, int] = {}
         self._origin, self._spends, self.on_sleep = storage_origin, spends, on_sleep
+        self._poll_s, self._hang_s = poll_s, hang_s
+        self._guard = time.monotonic() + hang_s
         self.slept: list[float] = []
 
     def now(self) -> float:
@@ -75,6 +78,7 @@ class ManualClock:
         if self._spends:
             self.advance(seconds)
         else:
+            assert time.monotonic() < self._guard, f"a wait under a clock that never advances outlived {self._hang_s}s"
             time.sleep(0)
 
     def wait(self, event: threading.Event, timeout: float) -> bool:
@@ -82,27 +86,36 @@ class ManualClock:
         deadline = self._now + timeout
         thread = threading.current_thread()
         while True:
-            if event.is_set():
-                self._parked.pop(thread, None)
-                return True
             with self._cond:
+                if event.is_set():
+                    self._parked.pop(thread, None)
+                    return True
                 if self._now >= deadline:
                     return False
                 self._parked[thread] = self._version
                 self._cond.notify_all()
-            event.wait(0.0005)
+            event.wait(self._poll_s)
 
     def settle(self, parked: int = 1) -> None:
         """Return once `parked` live threads are parked in `wait` and each has seen the latest advance."""
-        deadline = time.monotonic() + HANG_GUARD_S
+        deadline = time.monotonic() + self._hang_s
         with self._cond:
             while not self._settled(parked):
                 assert time.monotonic() < deadline, "a thread did not park after the clock advanced"
-                self._cond.wait(0.0005)
+                self._cond.wait(self._poll_s)
 
     def _settled(self, parked: int) -> bool:
         live = {t: v for t, v in self._parked.items() if t.is_alive()}
         return len(live) >= parked and all(v == self._version for v in live.values())
+
+
+def gate(directory: str, takers: int, *, hang_s: float) -> None:
+    """Join a barrier of `takers` directory entries in `directory`; fail if the others have not come in `hang_s`."""
+    os.mkdir(os.path.join(directory, os.urandom(8).hex()))
+    guard = time.monotonic() + hang_s
+    while len(os.listdir(directory)) < takers:
+        assert time.monotonic() < guard, f"only {len(os.listdir(directory))} of {takers} takers came in {hang_s}s"
+        time.sleep(0)
 
 
 def age(parent: Path, by: float) -> None:

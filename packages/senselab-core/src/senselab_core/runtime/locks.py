@@ -137,7 +137,7 @@ class Lease:
         set_aside: The paths this lease moved aside: objects of the wrong kind at its name.
     """
 
-    def __init__(  # noqa: PLR0913 - the resource and its four keyword-only settings
+    def __init__(  # noqa: PLR0913 - the resource and its five keyword-only settings
         self,
         path: Path,
         *,
