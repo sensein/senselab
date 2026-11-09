@@ -32,7 +32,7 @@ from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.kernel.signals import StaleSource
-from senselab_core.runtime.call import RunConfig, bind_input
+from senselab_core.runtime.call import InputUnreadable, RunConfig, bind_input
 from senselab_core.runtime.execution.epoch import EPOCH_DIR, Epoch
 from senselab_core.runtime.execution.events import (
     Event,
@@ -343,7 +343,8 @@ def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
     record is checked before anything is raised.
 
     Raises:
-        InputChanged: inputs have another identity than the manifest's, or cannot be read; it names every one.
+        InputChanged: inputs have another identity than the manifest's, or cannot be read; it names every one, and the
+            first `InputUnreadable` is its cause.
         InputsUnavailable: an input held in memory is not in `placed.live`.
         SourcesUnrecorded: the plan records no sources.
     """
@@ -352,6 +353,7 @@ def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
     values: dict[InputIdentity, object] = {}
     missing: list[tuple[str, str]] = []
     changed: list[tuple[str, str]] = []
+    unreadable: list[InputUnreadable] = []
     for row, read in zip(placed.manifest.rows, rows, strict=True):
         for port, expected in row.inputs.items():
             if port in shared and expected in values:
@@ -362,19 +364,23 @@ def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
                 missing.append((row.id, port))
                 continue
             bound = _bound(port, types[port], source, placed.live) if held in (None, expected) else None
-            if bound is None or bound[0] != expected:
+            if isinstance(bound, InputUnreadable):
+                unreadable.append(bound)
+            if not isinstance(bound, tuple) or bound[0] != expected:
                 changed.append((row.id, port))
                 continue
             values[expected] = bound[1]
     if changed:
-        raise InputChanged(changed)
+        raise InputChanged(changed) from next(iter(unreadable), None)
     if missing:
         raise InputsUnavailable(missing)
     return values
 
 
-def _bound(port: str, kind: str, source: object, live: Mapping[InputIdentity, object]) -> tuple[str, object] | None:
-    """Return the identity and value of an input read from `source`, None when its file cannot be read.
+def _bound(
+    port: str, kind: str, source: object, live: Mapping[InputIdentity, object]
+) -> tuple[str, object] | InputUnreadable:
+    """Return the identity and value of an input read from `source`, else why its file cannot be read.
 
     A `{"memory": <identity>}` source is that identity's value in `live`, which holds it.
     """
@@ -383,8 +389,8 @@ def _bound(port: str, kind: str, source: object, live: Mapping[InputIdentity, ob
         return held, live[held]
     try:
         identity, value, _ = bind_input(port, kind, source)
-    except OSError:
-        return None
+    except InputUnreadable as err:
+        return err
     return identity, value
 
 
@@ -707,7 +713,7 @@ def _kept(old: object, new: object, port: str, kind: str, expected: InputIdentit
         return old
     try:
         identity = bind_input(port, kind, old)[0]
-    except OSError:
+    except InputUnreadable:
         return new
     return new if identity == expected else None
 

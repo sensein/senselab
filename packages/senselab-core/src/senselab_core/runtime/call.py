@@ -39,7 +39,7 @@ from senselab_core.kernel.identity import (
     text_identity_fields,
 )
 from senselab_core.kernel.license import License
-from senselab_core.kernel.signals import PlainText, Recording, text_identity
+from senselab_core.kernel.signals import PlainText, Recording, UndecodableSource, text_identity
 from senselab_core.runtime.audio_io import DECODER, open_audio
 from senselab_core.runtime.calibration import RunCalibration
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
@@ -199,6 +199,10 @@ def _unread(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle | None
 
 def _no_lock(backend: BackendSpec) -> Path:
     raise LookupError(f"no package has said which lock the env of backend {backend.name!r} is built from")
+
+
+class InputUnreadable(ValueError):
+    """An input given as a path whose file its port type's reader cannot read or decode."""
 
 
 @dataclass(frozen=True)
@@ -430,6 +434,9 @@ def bind_input(port: str, port_type: str, value: object) -> tuple[InputIdentity,
     """Return an input's identity, the value its item carries and the decoder that read it from a path, if one did.
 
     A `str` for a `Text` port is held as `PlainText`.
+
+    Raises:
+        InputUnreadable: a path's file cannot be read or decoded by its port type's reader, for any cause.
     """
     decoder = None
     model = input_model(port_type)
@@ -441,7 +448,10 @@ def bind_input(port: str, port_type: str, value: object) -> tuple[InputIdentity,
         if port_type not in _READERS:
             raise ValueError(f"input {port!r} is a {port_type}, which is not read from a path; pass the value")
         reader, decoder = _READERS[port_type]
-        value = reader(value)
+        try:
+            value = reader(value)
+        except (OSError, RuntimeError, UndecodableSource) as err:
+            raise InputUnreadable(f"input {port!r} cannot be read: {err}") from err
     if isinstance(value, Recording | PlainText):
         return value.identity, value, decoder
     if isinstance(value, Frozen):

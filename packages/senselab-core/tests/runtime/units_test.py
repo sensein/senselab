@@ -2,7 +2,7 @@
 
 import logging
 import platform
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -24,6 +24,7 @@ from senselab_core.runtime.calibration import (
 from senselab_core.runtime.call import (
     EnvRead,
     EnvUnreadable,
+    InputUnreadable,
     Packaged,
     RunConfig,
     bind_input,
@@ -36,6 +37,7 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.in_process import InProcess, fragment_jobs, node_call, node_fragment
 from senselab_core.runtime.execution.job import Job
 from senselab_core.runtime.execution.plan_reads import count_items, plan_decoder, unit_of_node
+from senselab_core.runtime.execution.run import InputChanged
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import Placement
@@ -469,3 +471,48 @@ def test_a_path_source_is_read_by_its_port_types_reader(tmp_path: Path) -> None:
     files, _ = _plan([str(tmp_path / "a.wav")], _profile(tmp_path), AUDIO, "Audio")
     assert plan_decoder(files, "a") == input_decoder("Audio") is not None
     assert input_decoder("json") is None
+
+
+Content = bytes | Callable[[bytes], bytes]
+"""What replaces a planned sound file: bytes, or a function of its bytes."""
+
+
+def _unreadable_plan(tmp_path: Path, content: Content) -> tuple[Plan, Path]:
+    """A plan over a sound file whose content is then replaced by `content`, which its reader cannot decode."""
+    path = tmp_path / "a.wav"
+    soundfile.write(path, numpy.zeros(1600, dtype=numpy.float32), 16000)
+    placed, _ = _plan([str(path)], _profile(tmp_path), AUDIO, "Audio")
+    path.write_bytes(content(path.read_bytes()) if callable(content) else content)
+    return placed, path
+
+
+UNREADABLE = pytest.mark.parametrize(
+    "content",
+    [lambda wav: wav[:20], b"RIFF" + bytes(56)],
+    ids=["truncated", "garbage"],
+)
+
+
+@pytest.mark.logic
+@UNREADABLE
+def test_a_plan_over_an_undecodable_file_explains_with_counts_undetermined(tmp_path: Path, content: Content) -> None:
+    """A recorded file truncated or not audio: the plan renders, its counts undetermined with the binding reason."""
+    placed, path = _unreadable_plan(tmp_path, content)
+    with pytest.raises(InputUnreadable, match="'text'"):
+        bind_input("text", "Audio", str(path))
+    text = placed.explain(hardware=HOST)
+    (line,) = [x for x in text.splitlines() if x.startswith("class cpu:")]
+    assert line.startswith("class cpu: servable and computed undetermined (inputs ['text'] of records ['r0']")
+
+
+@pytest.mark.logic
+@UNREADABLE
+def test_a_run_over_an_undecodable_file_raises_input_unreadable(tmp_path: Path, content: Content) -> None:
+    """Planning over an undecodable file raises `InputUnreadable`; running a plan whose file became one refuses it."""
+    pytest.importorskip("pydra")
+    placed, path = _unreadable_plan(tmp_path, content)
+    with pytest.raises(InputUnreadable):
+        _plan([str(path)], _profile(tmp_path), AUDIO, "Audio")
+    with pytest.raises(InputChanged) as raised:
+        placed.run(store=ResultStore(tmp_path / "store"))
+    assert isinstance(raised.value.__cause__, InputUnreadable) and raised.value.changed == (("r0", "text"),)
