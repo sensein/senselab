@@ -4,14 +4,17 @@ import json
 import os
 import subprocess
 import sys
-import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 import senselab_worker
+from aged_storage_fixture import StorageTime
+from lease_clock_fixture import ManualClock
 from lease_time_fixture import install, on_create
 from senselab_core.kernel.declare import Env
 from senselab_core.kernel.identity import ExecutionContext
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.envs import (
     CPU_INDEX,
     LOCK_DIGEST_TAG,
@@ -74,9 +77,22 @@ def uv_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return log
 
 
-def _ensure(tmp_path: Path, lock: Path, settings: Envs = SETTINGS, lease: JobLease = LEASE) -> EnvHandle:
+def _ensure(
+    tmp_path: Path,
+    lock: Path,
+    settings: Envs = SETTINGS,
+    lease: JobLease = LEASE,
+    clock: Clock = SystemClock(),  # noqa: B008
+) -> EnvHandle:
     return ensure_env(
-        Env.isolated("demo"), lock, tmp_path / "envs", settings=settings, lease=lease, uv=FAKE_UV, host_cuda=CUDA_12_8
+        Env.isolated("demo"),
+        lock,
+        tmp_path / "envs",
+        settings=settings,
+        lease=lease,
+        uv=FAKE_UV,
+        host_cuda=CUDA_12_8,
+        clock=clock,
     )
 
 
@@ -314,27 +330,28 @@ def test_other_venv_failure_is_not_managed_python_missing(
     assert not isinstance(info.value, ManagedPythonMissing)
 
 
-def _plant_lease(tmp_path: Path, age_s: float) -> Path:
+def _plant_lease(tmp_path: Path, time_: StorageTime, age_s: float) -> Path:
     overlay = identity_digest(OVERLAY_DIGEST_TAG, [senselab_worker.runtime_identity(), []])
     lease = tmp_path / "envs" / f"demo-cu128-{overlay[:16]}.lease"
     (lease / ("0" * 32)).mkdir(parents=True)
-    then = time.time() - age_s
     for path in (lease / ("0" * 32), lease):
-        os.utime(path, (then, then))
+        time_.plant(path, age_s)
     return lease
 
 
-def test_profile_lease_bound_breaks_an_expired_build_lease(tmp_path: Path, uv_log: Path) -> None:
+def test_profile_lease_bound_breaks_an_expired_build_lease(
+    tmp_path: Path, uv_log: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """The profile's `lease.stale_after_s` reaches the build lease: older is broken at once, younger is waited out."""
-    _plant_lease(tmp_path, age_s=120.0)
-    started = time.monotonic()
-    _ensure(tmp_path, _lock(tmp_path), lease=JobLease(stale_after_s=60.0, renew_fraction=0.33, attribute_delay_s=0))
-    assert time.monotonic() - started < 20  # noqa: PLR2004 - far below the 60 s a live lease would hold it
-    lease = _plant_lease(tmp_path, age_s=0.0)
-    started = time.monotonic()
+    time_ = StorageTime(lease_clock, tmp_path)
+    _plant_lease(tmp_path, time_, age_s=120.0)
+    old = JobLease(stale_after_s=60.0, renew_fraction=0.33, attribute_delay_s=0)
+    _ensure(tmp_path, _lock(tmp_path), lease=old, clock=time_.clock)
+    assert time_.clock.slept == [], "an expired lease is broken without a wait"
+    lease = _plant_lease(tmp_path, time_, age_s=0.0)
     young = JobLease(stale_after_s=1.0, renew_fraction=0.33, attribute_delay_s=0)
-    _ensure(tmp_path, _lock(tmp_path, body="scipy==1.14.0\n"), lease=young)
-    assert time.monotonic() - started >= 0.9  # noqa: PLR2004 - the young lease was held until it aged past 1 s
+    _ensure(tmp_path, _lock(tmp_path, body="scipy==1.14.0\n"), lease=young, clock=time_.clock)
+    assert time_.clock.now() >= young.stale_after_s, "the young lease was held until it aged past its bound"
     assert not lease.exists()
 
 

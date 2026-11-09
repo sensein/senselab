@@ -457,6 +457,7 @@ def _setup(op: str, root: Path) -> None:
 
 def _run(op: str, root: Path) -> bool:
     """Run `op` against `root`; return whether its result is right."""
+    from lease_clock_fixture import ManualClock
     from senselab_core.kernel.identity import ReusePolicy
     from senselab_core.runtime import revision
     from senselab_core.runtime.fetch import fetch
@@ -471,7 +472,8 @@ def _run(op: str, root: Path) -> bool:
         hit = ResultStore(root).get(store_key(), store_context(), ReusePolicy.EXACT)
         return hit is None or _plain(hit.outputs) == _plain(_outputs_of("linux"))
     if op == "collect":
-        ResultStore(root).collect(now=time.time() + 10**9)
+        far = ManualClock(poll_s=0.0, hang_s=0.0, storage_origin=time.time() + 10**9)
+        ResultStore(root, clock=far).collect()
         return True
     if op == "fetch":
         paths = fetch(_manifest(["a/voice.wav"]), cache_root=root, opener=_opener)

@@ -41,6 +41,7 @@ from pydantic import Field, StrictBool
 from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel._base import Frozen
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.faults import is_transient
 
@@ -891,26 +892,27 @@ def _refused(call: Callable[[], object], *errnos: int) -> bool:
     return False
 
 
-def _mtime_after_entry(work: Path) -> tuple[bool, float]:
+def _mtime_after_entry(work: Path, clock: Clock) -> tuple[bool, float]:
     """Return whether a new entry moves `work`'s mtime to the present, and the seconds until it showed."""
     old = time.time() - 86400
     os.utime(work, (old, old))
     before = work.stat().st_mtime_ns
     (work / "entry").write_bytes(b"")
-    began = time.monotonic()
+    began = clock.now()
     while True:
         now = work.stat()
         if now.st_mtime_ns != before:
-            return abs(now.st_mtime - time.time()) < _CLOCK_TOLERANCE_S, time.monotonic() - began
-        if time.monotonic() - began >= PROBE_BOUND_S:
+            return abs(now.st_mtime - time.time()) < _CLOCK_TOLERANCE_S, clock.now() - began
+        if clock.now() - began >= PROBE_BOUND_S:
             return False, PROBE_BOUND_S
-        time.sleep(PROBE_POLL_S)
+        clock.sleep(PROBE_POLL_S)
 
 
-def probe_capabilities(root: Path) -> StorageCapabilities:
+def probe_capabilities(root: Path, clock: Clock = SystemClock()) -> StorageCapabilities:  # noqa: B008 - stateless
     """Measure `root` itself: `mkdir`, directory and file rename, `link` and the directory mtime, in a probe directory.
 
     A root that does not exist yet is judged by its nearest existing ancestor. The probe directory is removed.
+    The wait for the directory's mtime to change is spent on `clock`.
 
     Raises:
         StorageUnsupported: `mkdir` is refused as an operation the filesystem does not support.
@@ -947,7 +949,7 @@ def probe_capabilities(root: Path) -> StorageCapabilities:
             exclusive_link = _refused(lambda: os.link(work / "b", work / "c"), errno.EEXIST)
         except OSError:
             exclusive_link = False
-        server_clock, delay = _mtime_after_entry(work)
+        server_clock, delay = _mtime_after_entry(work, clock)
         return StorageCapabilities(atomic_mkdir, directory_rename, server_clock, replaced, exclusive_link, delay)
     finally:
         shutil.rmtree(work, ignore_errors=True)

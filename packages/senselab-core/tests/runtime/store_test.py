@@ -21,8 +21,10 @@ from typing import Any
 
 import numpy
 import pytest
-from hypothesis import given, settings
+from aged_storage_fixture import StorageTime
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from lease_clock_fixture import ManualClock
 from planted_objects_fixture import (
     ARRAY_CORRUPTIONS,
     bounded,
@@ -276,24 +278,24 @@ def test_losing_rename_returns_winner_identity(tmp_path: Path, monkeypatch: pyte
 
 
 @pytest.mark.logic
-def test_crash_leaves_no_entry(tmp_path: Path) -> None:
+def test_crash_leaves_no_entry(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A staging dir never renamed is invisible to get; put removes it once stale and keeps a fresh one."""
-    s, k, c = ResultStore(tmp_path), store_key(), store_context()
+    time_ = StorageTime(lease_clock, tmp_path)
+    s, k, c = ResultStore(tmp_path, clock=time_.clock), store_key(), store_context()
     stale = tmp_path / "tmp" / ("5" * 32)
     stale.mkdir(parents=True)
     (stale / "result.json").write_bytes(jcs_dumps({"format": "result@1.0", "outputs": {}, "output_identity": "x"}))
-    old = time.time() - StorePolicy.load_default().staging_stale_s - 60
-    os.utime(stale, (old, old))
     live = tmp_path / "tmp" / ("1" * 32)
     live.mkdir()
+    time_.plant(stale)
+    time_.clock.advance(s.policy.staging_stale_s + 1)
+    time_.plant(live)
     assert s.get(k, c, ReusePolicy.TOLERANT) is None
     s.put(store_key(task="other"), {"y": 1}, c)
-    assert not stale.exists()
-    os.utime(live, (old, old))
-    ResultStore(tmp_path).put(store_key(task="other"), {"y": 1}, c)
-    assert not live.exists()
-    live.mkdir()
-    assert live.is_dir()
+    assert not stale.exists() and live.is_dir(), "a put removes the stale staging dir and keeps the fresh one"
+    time_.clock.advance(s.policy.staging_stale_s + 1)
+    ResultStore(tmp_path, clock=time_.clock).put(store_key(task="other"), {"y": 1}, c)
+    assert not live.exists(), "the fresh one is removed once it too has aged"
     assert s.get(k, c, ReusePolicy.TOLERANT) is None
 
 
@@ -837,10 +839,11 @@ def test_quarantine_logs_reason(tmp_path: Path, caplog: pytest.LogCaptureFixture
 
 
 @pytest.mark.logic
-def test_collect_removes_only_aged_quarantine(tmp_path: Path) -> None:
+def test_collect_removes_only_aged_quarantine(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """`collect` removes quarantined entries and staging past their ages, keeps younger ones and foreign names."""
     policy = _policy(False, 1000, 100)
-    s, c = ResultStore(tmp_path, policy=policy), store_context()
+    time_ = StorageTime(lease_clock, tmp_path)
+    s, c = ResultStore(tmp_path, policy=policy, clock=time_.clock), store_context()
     for audio in ("a", "b"):
         k = store_key(audio=audio * 64)
         s.put(k, {"y": 1}, c)
@@ -852,10 +855,9 @@ def test_collect_removes_only_aged_quarantine(tmp_path: Path) -> None:
     live.mkdir()
     foreign = tmp_path / QUARANTINE_DIR / "keep-me"
     foreign.write_bytes(b"x")
-    now = time.time()
     for path, age in ((old_q, 1001), (young_q, 999), (stale, 101), (live, 99), (foreign, 10**6)):
-        os.utime(path, (now - age, now - age), follow_symlinks=False)
-    assert s.collect(now=now) == 2
+        time_.plant(path, age)
+    assert s.collect() == 2
     assert {p.name for p in (tmp_path / QUARANTINE_DIR).iterdir()} == {young_q.name, "keep-me"}
     assert not stale.exists() and live.exists()
 
@@ -1009,21 +1011,23 @@ def test_corrupt_entry_of_another_user_does_not_wedge_the_key(
 
 
 @pytest.mark.contract
-@settings(max_examples=30, deadline=None)
+@settings(max_examples=30, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(
     ages=st.lists(st.tuples(st.sampled_from(["uuid", "fingerprint", "other"]), st.integers(0, 2000)), max_size=6),
     sealed=st.booleans(),
 )
-def test_collect_removes_exactly_the_aged_entries_set_aside_in_place(ages: list[tuple[str, int]], sealed: bool) -> None:
+def test_collect_removes_exactly_the_aged_entries_set_aside_in_place(
+    ages: list[tuple[str, int]], sealed: bool, lease_clock: Callable[..., ManualClock]
+) -> None:
     """Under every key, `collect` removes the uuid-named children past the quarantine age, sealed or not, only."""
     policy = _policy(False, 1000, 100)
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        s, k, c = ResultStore(root, policy=policy), store_key(), store_context()
+        time_ = StorageTime(lease_clock, root)
+        s, k, c = ResultStore(root, policy=policy, clock=time_.clock), store_key(), store_context()
         s.put(k, {"y": 1}, c)
         entry = entry_dir(root, k, c)
         base = entry.parent
-        now = time.time()
         expected = {entry.name}
         for i, (kind, age) in enumerate(ages):
             name = {"uuid": f"{i:032x}", "fingerprint": f"{i:064x}", "other": f"keep-{i}"}[kind]
@@ -1032,23 +1036,24 @@ def test_collect_removes_exactly_the_aged_entries_set_aside_in_place(ages: list[
             (child / "result.json").write_bytes(b"{}")
             if sealed:
                 child.chmod(0o550)
-            os.utime(child, (now - age, now - age))
+            time_.plant(child, age)
             if not (kind == "uuid" and age > 1000):
                 expected.add(name)
-        os.utime(entry, (now - 10**6, now - 10**6))
-        s.collect(now=now)
+        time_.plant(entry, 10**6)
+        s.collect()
         assert {p.name for p in base.iterdir()} == expected
         for p in base.iterdir():
             p.chmod(0o750)
 
 
 @pytest.mark.logic
-def test_collect_covers_every_set_aside_location(tmp_path: Path) -> None:
+def test_collect_covers_every_set_aside_location(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """Aged set-aside objects at the store root, in place below it, in its quarantine and in run directories go."""
     store_root, cache = tmp_path / "store", tmp_path / "cache"
-    s, k, c = ResultStore(store_root), store_key(), store_context()
+    time_ = StorageTime(lease_clock, tmp_path)
+    s, k, c = ResultStore(store_root, clock=time_.clock), store_key(), store_context()
     s.put(k, {"y": 1}, c)
-    record_resolution("org/m", "main", "a" * 40, run="r", root=cache)
+    record_resolution("org/m", "main", "a" * 40, run="r", root=cache, clock=time_.clock)
     entry = entry_dir(store_root, k, c)
     runs = cache / NAMESPACE / "runs"
     (store_root / QUARANTINE_DIR).mkdir()
@@ -1061,7 +1066,6 @@ def test_collect_covers_every_set_aside_location(tmp_path: Path) -> None:
         runs,
         runs / "r",
     ]
-    old = time.time() - 30 * 24 * 3600
     planted = []
     for i, place in enumerate(places):
         directory, link = place / f"{2 * i:032x}", place / f"{2 * i + 1:032x}"
@@ -1069,18 +1073,22 @@ def test_collect_covers_every_set_aside_location(tmp_path: Path) -> None:
         (directory / "x").write_bytes(b"x")
         link.symlink_to(tmp_path / "victim")
         for path in (directory, link):
-            os.utime(path, (old, old), follow_symlinks=False)
+            time_.plant(path)
         planted += [directory, link]
+    time_.clock.advance(2 * s.policy.quarantine_retention_s)
     s.collect()
-    record_resolution("org/m", "main", "a" * 40, run="r", root=cache)
+    record_resolution("org/m", "main", "a" * 40, run="r", root=cache, clock=time_.clock)
     assert [p for p in planted if os.path.lexists(p)] == []
     assert (runs / "r" / MANIFEST_NAME).is_file() and s.get(k, c, ReusePolicy.EXACT) is not None
 
 
 @pytest.mark.logic
-def test_entry_set_aside_in_place_is_collected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_entry_set_aside_in_place_is_collected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lease_clock: Callable[..., ManualClock]
+) -> None:
     """A corrupt entry renamed aside beside its key, read-only, is removed by `collect` once past the quarantine age."""
-    s, k, c = ResultStore(tmp_path), store_key(), store_context()
+    time_ = StorageTime(lease_clock, tmp_path)
+    s, k, c = ResultStore(tmp_path, clock=time_.clock), store_key(), store_context()
     s.put(k, {"y": 1}, c)
     entry = entry_dir(tmp_path, k, c)
     CORRUPTIONS["result_garbled"](entry)
@@ -1089,7 +1097,9 @@ def test_entry_set_aside_in_place_is_collected(tmp_path: Path, monkeypatch: pyte
     s.put(k, {"y": 2}, c)
     (aside,) = [p for p in entry.parent.iterdir() if p != entry]
     monkeypatch.undo()
-    assert s.collect(now=time.time() + s.policy.quarantine_retention_s + 1) == 1
+    assert s.collect() == 0, "an entry set aside just now is kept"
+    time_.clock.advance(2 * s.policy.quarantine_retention_s)
+    assert s.collect() == 1
     assert [p.name for p in entry.parent.iterdir()] == [entry.name]
 
 
@@ -1139,14 +1149,15 @@ def test_writable_committed_entry_is_resealed(tmp_path: Path, reader: str) -> No
 
 
 @pytest.mark.logic
-def test_put_collects_at_most_once_per_interval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_put_collects_at_most_once_per_interval(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """Puts within `collect_interval_s` of each other run one collection, not one each."""
-    s, c = ResultStore(tmp_path), store_context()
+    time_ = StorageTime(lease_clock, tmp_path)
+    s, c = ResultStore(tmp_path, clock=time_.clock), store_context()
     stale = tmp_path / "tmp" / ("5" * 32)
 
     def plant() -> None:
         stale.mkdir(parents=True)
-        os.utime(stale, (0, 0))
+        time_.plant(stale, 2 * s.policy.staging_stale_s)
 
     plant()
     s.put(store_key(audio=f"{0:064x}"), {"y": 0}, c)
@@ -1155,8 +1166,7 @@ def test_put_collects_at_most_once_per_interval(tmp_path: Path, monkeypatch: pyt
     for i in range(1, 5):
         s.put(store_key(audio=f"{i:064x}"), {"y": i}, c)
     assert stale.exists(), "puts within the interval do not collect again"
-    later = time.monotonic() + s.policy.collect_interval_s
-    monkeypatch.setattr(time, "monotonic", lambda: later)
+    time_.clock.advance(s.policy.collect_interval_s)
     s.put(store_key(task="other"), {"y": 1}, c)
     assert not stale.exists(), "a put once the interval has passed collects"
 
