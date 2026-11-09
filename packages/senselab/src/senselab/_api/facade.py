@@ -3,6 +3,7 @@
 import contextvars
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from types import TracebackType
 from typing import Any, TypedDict, Unpack
 
@@ -18,6 +19,7 @@ from senselab_core.runtime.planner import Plan, one_node_graph
 from senselab_core.runtime.planner import plan as plan_runtime
 from senselab_core.runtime.planner import resume as resume_runtime
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.site_placement import PlacementHook
 from senselab_core.runtime.store import ResultStore
 
 from senselab._api.call import ConfiguredTask, reraise
@@ -109,6 +111,8 @@ class PlanKwargs(TypedDict, total=False):
     bind: Mapping[str, str] | None
     inputs: Mapping[str, object] | None
     hardware: HardwareInfo | None
+    placement: Mapping[str, Any] | Path | str | None
+    placement_hook: PlacementHook | str | None
 
 
 def plan(
@@ -135,12 +139,18 @@ def run(
     return started.results()
 
 
-def resume(target: Plan | Run | str) -> ResultSet:
+def resume(
+    target: Plan | Run | str,
+    *,
+    placement: Mapping[str, Any] | Path | str | None = None,
+    placement_hook: PlacementHook | str | None = None,
+) -> ResultSet:
     """Resume a run by its plan hash (`senselab_core.runtime.planner.resume`), wait and return its results.
 
     The run is read from its directory: its plan, its input sources and its result store, so jobs the store serves
     are not recomputed. It is placed afresh under the session's execution profile and run on the session's executor
-    and store.
+    and store. `placement` and `placement_hook` are as in `plan`: a run a site refused continues from the store with
+    corrected values.
 
     Raises:
         NoRun, ValueError, InputChanged, InputsUnavailable: as `resume`; a run whose inputs were
@@ -149,7 +159,13 @@ def resume(target: Plan | Run | str) -> ResultSet:
     plan_hash = target if isinstance(target, str) else target.run_dir.name if isinstance(target, Run) else target.hash
     current = session()
     started = resume_runtime(
-        plan_hash, execution=current.execution, store=current.store, executor=current.executor, config=current.config
+        plan_hash,
+        execution=current.execution,
+        store=current.store,
+        executor=current.executor,
+        config=current.config,
+        placement=placement,
+        placement_hook=placement_hook,
     )
     started.wait()
     return started.results()

@@ -44,6 +44,7 @@ from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands, is_service_class
 from senselab_core.runtime.hardware import HardwareInfo, host_token, probe_hardware, process_started, visible_devices
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.site_placement import Placer, rendered
 from senselab_core.runtime.storage import PRIVATE_DIR, private_dir
 
 logger = logging.getLogger("senselab")
@@ -83,7 +84,47 @@ class SubstrateError(RuntimeError):
 
 
 class SlurmError(SubstrateError):
-    """A Slurm command kept failing, or could not be run; the message gives the command and why."""
+    """A Slurm command kept failing, or could not be run; the message gives the command and why.
+
+    Attributes:
+        site_message: What `sbatch` said when it exited, the scheduler's reply to a submission; None for a command
+            that timed out or could not be run, and for any other command.
+    """
+
+    def __init__(self, message: str, started: Sequence["WorkerHandle"] = (), site_message: str | None = None) -> None:
+        """Fail with `message`, after starting `started`; `site_message` is the scheduler's reply to `sbatch`."""
+        super().__init__(message, started)
+        self.site_message = site_message
+
+
+class SiteRefused(SlurmError):
+    """The scheduler refused a submission: the class, the `sbatch` line, the site's message and who set each value.
+
+    The text is rendered as for any record other users read (`rendered`): accounts, partitions, nodes and paths
+    appear as labels; the operator's own text is logged.
+
+    Attributes:
+        resource_class: The class whose worker was refused.
+        layers: The layer, `profile`, `override` or `hook`, that set each placement value of the class.
+    """
+
+    def __init__(  # noqa: PLR0913 - the refusal's four parts, the names to render, the workers started before it
+        self,
+        resource_class: str,
+        request_line: str,
+        site_message: str,
+        layers: Mapping[str, str],
+        partitions: Collection[str],
+        started: Sequence["WorkerHandle"] = (),
+    ) -> None:
+        """Refuse with the `sbatch` line and the site's message, rendered, and name the inputs that change it."""
+        set_by = ", ".join(f"{k} by the {v}" for k, v in layers.items())
+        text = (
+            f"the site refused the submission of class {resource_class!r}: {request_line}: {site_message} "
+            f"(values set {set_by}; change them with --placement or the placement hook, then resume)"
+        )
+        super().__init__(rendered(text, partitions), started, rendered(site_message, partitions))
+        self.resource_class, self.layers = resource_class, dict(layers)
 
 
 class LocalError(SubstrateError):
@@ -441,10 +482,13 @@ class Slurm:
         log_dir: Path | None = None,
         commands: SlurmCommands,
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
+        placer: Placer | None = None,
     ) -> None:
         """Submit workers of `classes`, each `command` plus `--classes <queue>`, at most `qos_cpu_cap` CPUs alive.
 
-        The waits between a command's tries run on `clock`.
+        The waits between a command's tries run on `clock`. With a `placer` each class's partition, time, worker
+        cap and excluded nodes are its placement for the epoch (`Placer.for_class`), asked for before the class's
+        first submission; without one they are the class's own.
         """
         self.classes = dict(classes)
         self.qos_cpu_cap = qos_cpu_cap
@@ -455,7 +499,7 @@ class Slurm:
         self.epoch = epoch
         self.exclude_nodes = tuple(exclude_nodes)
         self.log_dir = log_dir
-        self.commands, self._clock = commands, clock
+        self.commands, self._clock, self.placer = commands, clock, placer
         self._cache: list[WorkerHandle] | None = None
 
     @property
@@ -476,13 +520,23 @@ class Slurm:
                 f"queue {queue!r} is of no resource class of this substrate: {sorted(self.classes)}"
             ) from None
 
+    def _granted(self, queue: str) -> tuple[ResourceClass, tuple[str, ...], Mapping[str, str]]:
+        """Return the class of `queue` as it is placed this epoch, its excluded nodes and the layer of each value."""
+        base = self._class(queue)
+        if self.placer is None:
+            return base, base.exclude, {}
+        placed = self.placer.for_class(class_of(queue), self.epoch)
+        return placed.grant(base), placed.exclude, placed.values.layers
+
     def sbatch_args(self, queue: str, name: str) -> list[str]:
-        """Return the `sbatch` command line of one worker of `queue`, named `name`.
+        """Return the `sbatch` command line of one worker of `queue`, named `name`, under its placement.
 
         Raises:
             ValueError: the queue's class is unknown, or names a variable that is not set.
+            PlacementAnswerRefused: the site's hook answered with a value that could not run the work.
         """
-        grant = self._class(queue)
+        grant, exclude, _ = self._granted(queue)
+        excluded = [*dict.fromkeys([*self.exclude_nodes, *exclude])]
         args = [SBATCH, "--parsable", f"--job-name={name}", f"--comment={queue}"]
         if grant.partition is not None:
             args.append(f"--partition={expand(grant.partition)}")
@@ -494,24 +548,25 @@ class Slurm:
             args.append(f"--mem={math.ceil(grant.mem_bytes / 2**20)}M")
         if grant.time_s is not None:
             args.append(f"--time={_minutes(grant.time_s)}")
-        if self.exclude_nodes:
-            args.append("--exclude=" + ",".join(expand(n) for n in self.exclude_nodes))
+        if excluded:
+            args.append("--exclude=" + ",".join(expand(n) for n in excluded))
         if self.log_dir is not None:
             args.append(f"--output={self.log_dir}/%x-%j.out")
         return [*args, "--wrap", shlex.join([*self.command, "--classes", queue])]
 
-    def _try(self, argv: Sequence[str]) -> tuple[str | None, str]:
-        """Run `argv` once; return its output, or None and why it failed."""
+    def _try(self, argv: Sequence[str]) -> tuple[str | None, str, str | None]:
+        """Run `argv` once; return its output, or None, why it failed and what the command said when it exited."""
         timeout = self.commands.timeout_s
         try:
             done = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout)  # noqa: S603
         except subprocess.TimeoutExpired:
-            return None, f"timed out after {timeout} s"
+            return None, f"timed out after {timeout} s", None
         except OSError as err:
-            return None, f"could not run: {err}"
+            return None, f"could not run: {err}", None
         if done.returncode == 0:
-            return done.stdout, ""
-        return None, f"exited {done.returncode}: {(done.stderr or done.stdout).strip()}"
+            return done.stdout, "", None
+        said = (done.stderr or done.stdout).strip()
+        return None, f"exited {done.returncode}: {said}", said
 
     def _run(self, argv: Sequence[str], recover: Callable[[], str | None] | None = None) -> str:
         """Run `argv` until it succeeds, at most `commands.attempts` times, `commands.retry_first_s` apart and doubling.
@@ -522,9 +577,9 @@ class Slurm:
         Raises:
             SlurmError: no try succeeded and `recover` found nothing.
         """
-        wait, last = self.commands.retry_first_s, ""
+        wait, last, said = self.commands.retry_first_s, "", None
         for attempt in range(self.commands.attempts):
-            out, last = self._try(argv)
+            out, last, said = self._try(argv)
             if out is not None:
                 return out
             if recover is None and attempt + 1 == self.commands.attempts:
@@ -533,7 +588,7 @@ class Slurm:
             wait *= 2
             if recover is not None and (found := recover()) is not None:
                 return found
-        raise SlurmError(f"{shlex.join(argv)} {last}")
+        raise SlurmError(f"{shlex.join(argv)} {last}", site_message=said if argv[0] == SBATCH else None)
 
     def _submit(self, queue: str) -> WorkerHandle:
         """Submit one worker of `queue` under a name of its own; return its pending handle.
@@ -549,7 +604,16 @@ class Slurm:
             out = self._run([SQUEUE, "--me", "--noheader", "--states=all", f"--name={name}", SQUEUE_FORMAT])
             return next((job for job, _, _, job_name in _rows(out) if job_name == name), None)
 
-        job = self._run(self.sbatch_args(queue, name), recover=lookup).strip().split(";")[0]
+        args = self.sbatch_args(queue, name)
+        try:
+            job = self._run(args, recover=lookup).strip().split(";")[0]
+        except SlurmError as err:
+            if err.site_message is None:
+                raise
+            partitions = [expand(c.partition) for c in self.classes.values() if c.partition and "$" not in c.partition]
+            raise SiteRefused(
+                class_of(queue), shlex.join(args), err.site_message, self._granted(queue)[2], partitions
+            ) from err
         return WorkerHandle(queue, job, pending=True, name=name)
 
     def live(self) -> list[WorkerHandle]:
@@ -581,12 +645,18 @@ class Slurm:
     def start(self, resource_class: str, count: int) -> list[WorkerHandle]:
         """Submit workers of `resource_class`, as many as `count` and the room under `qos_cpu_cap` allow.
 
+        The class's `max_workers` is its placement's: an answer below the profile's holds fewer workers alive.
+
         Raises:
             ValueError: the queue's class is unknown, or names a variable that is not set.
+            PlacementAnswerRefused: the site's hook answered with a value that could not run the work.
             SlurmError: `sbatch` kept failing; it carries the workers submitted before it (`started`).
+            SiteRefused: the scheduler refused the submission; names the `sbatch` line, its reply and the layers.
         """
-        self._class(resource_class)
+        grant = self._granted(resource_class)[0]
         cached = self._cached()
+        alive = sum(1 for h in cached if class_of(h.queue) == class_of(resource_class))
+        count = min(count, grant.max_workers - alive)
         if self.qos_cpu_cap is not None:
             used = sum(self._cpus(h.queue) for h in cached)
             count = min(count, (self.qos_cpu_cap - used) // self._cpus(resource_class))
@@ -597,7 +667,8 @@ class Slurm:
             try:
                 handles.append(self._submit(resource_class))
             except SlurmError as err:
-                raise SlurmError(str(err), handles) from err
+                err.started = tuple(handles)
+                raise
             cached.append(handles[-1])
         return handles
 
@@ -839,9 +910,16 @@ def profile_argument(profile: ExecutionProfile, run_dir: Path) -> str:
 
 
 def substrate_of(
-    profile: ExecutionProfile, run_dir: Path, plan_hash: str, *, hardware: HardwareInfo | None = None
+    profile: ExecutionProfile,
+    run_dir: Path,
+    plan_hash: str,
+    *,
+    hardware: HardwareInfo | None = None,
+    placer: Placer | None = None,
 ) -> Substrate:
     """Return the substrate `profile` names for the run in `run_dir` of plan `plan_hash`.
+
+    A `slurm` substrate places each class through `placer` (`Plan.placer`) when given.
 
     `local` is `Local` over the sum of the classes' `max_workers`, its `cuda` classes on the GPUs this process sees
     (`hardware`, probed when None); `slurm` is `Slurm` over the profile's classes, QOS cap and excluded nodes, logging
@@ -868,6 +946,7 @@ def substrate_of(
         exclude_nodes=spec.exclude_nodes,
         log_dir=Path(run_dir) / PRIVATE_DIR / "slurm",
         commands=spec.commands,
+        placer=placer,
     )
 
 
@@ -880,6 +959,7 @@ __all__ = [
     "Fleet",
     "Local",
     "LocalError",
+    "SiteRefused",
     "Slurm",
     "SlurmError",
     "StoreUnreachable",

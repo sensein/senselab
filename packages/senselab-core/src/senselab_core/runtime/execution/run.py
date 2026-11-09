@@ -656,7 +656,7 @@ def default_executor(placed: Plan, executor: Executor | None, store: ResultStore
         store=store,
         events=EventLog(run_dir, "a0", 1, epoch=0),
         profile=profile,
-        substrate=substrate_of(profile, run_dir, placed.hash),
+        substrate=substrate_of(profile, run_dir, placed.hash, placer=placed.placer(run_dir)),
         epoch=0,
     )
 

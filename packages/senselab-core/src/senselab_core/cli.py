@@ -1,9 +1,10 @@
-"""The ``data`` group and the ``status``, ``explain``, ``coordinate`` and ``execute`` commands of ``senselab.cli``."""
+"""The ``data`` group and the ``status``, ``plan``, ``explain``, ``coordinate`` and ``execute`` commands."""
 
 import argparse
 import json
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from senselab_core.kernel.placement import PlanPlacement
@@ -17,7 +18,9 @@ from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run, 
 from senselab_core.runtime.execution.substrates import ExternalWorkers, substrate_of
 from senselab_core.runtime.explain import node_line
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
+from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.site_placement import PlacementHookFailed, load_overrides
 
 
 def mount_data(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -155,6 +158,31 @@ def _profile(argument: str | None) -> ExecutionProfile:
     return ExecutionProfile.load(argument)
 
 
+def _with_placement(placed: Plan, args: argparse.Namespace) -> Plan:
+    """Return `placed` with the explicit placement values and the site's hook the command line gives.
+
+    Raises:
+        PlacementAnswerRefused: `--placement` names no class of the profile or holds a refused value.
+    """
+    return replace(placed, overrides=load_overrides(args.placement), hook=args.placement_hook)
+
+
+def run_plan_request(args: argparse.Namespace) -> int:
+    """Run a parsed ``plan``: print what each resource class of a run needs, as `placement-request@1.0` JSON.
+
+    Nothing is computed, no model downloaded and no worker started.
+    """
+    try:
+        profile = _profile(args.profile)
+        placed = _with_placement(run_plan(_run_directory(args.run_ref), profile), args)
+        document = placed.placement_request().document()
+    except (OSError, ValueError) as err:
+        print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
+        return 1
+    print(json.dumps(document, indent=2, sort_keys=True))
+    return 0
+
+
 def run_coordinate(args: argparse.Namespace) -> int:
     """Run a parsed ``coordinate``: take the run's next epoch and send its jobs to its queues, for pool workers.
 
@@ -163,11 +191,14 @@ def run_coordinate(args: argparse.Namespace) -> int:
     try:
         profile = _profile(args.profile)
         run_dir = _run_directory(args.run_ref)
+        planned = _with_placement(run_plan(run_dir, profile), args)
         substrate = (
-            ExternalWorkers() if args.external else substrate_of(profile, run_dir, run_plan(run_dir, profile).hash)
+            ExternalWorkers()
+            if args.external
+            else substrate_of(profile, run_dir, planned.hash, placer=planned.placer(run_dir))
         )
         outcome = coordinate(run_dir, substrate=substrate, profile=profile)
-    except (OSError, ValueError, StaleCoordinator, QueueHeld) as err:
+    except (OSError, ValueError, StaleCoordinator, QueueHeld, PlacementHookFailed) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
         return 1
     blocked = sum(len(e) for e in outcome.blocked.values())
@@ -188,6 +219,15 @@ def run_execute(args: argparse.Namespace) -> int:
         return 1
 
 
+def _placement_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--placement", type=Path, default=None, help="a YAML file of explicit placement values per resource class"
+    )
+    parser.add_argument(
+        "--placement-hook", default=None, help="the site's placement hook, `module:callable`; replaces the profile's"
+    )
+
+
 def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
     """Add the ``status``, ``explain``, ``coordinate`` and ``execute`` commands to a parser's subparsers."""
     status = groups.add_parser("status", help="the jobs, faults and broken envs of a run")
@@ -197,6 +237,12 @@ def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
         help="a run directory, or a plan hash (or its unique prefix) under $SENSELAB_CACHE/2x/runs",
     )
     status.set_defaults(run=run_status)
+    planning = groups.add_parser("plan", help="what each resource class of a run needs, as placement-request@1.0")
+    planning.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
+    planning.add_argument("--json", action="store_true", required=True, help="print the request as JSON")
+    planning.add_argument("--profile", default=None, help="the execution profile the run was placed under")
+    _placement_arguments(planning)
+    planning.set_defaults(run=run_plan_request)
     explain = groups.add_parser("explain", help="the events, fault and placement of a node or key of a run")
     explain.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
     explain.add_argument("target", help="a node id, or a key digest or its prefix")
@@ -204,6 +250,7 @@ def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
     coordinating = groups.add_parser("coordinate", help="coordinate a run on its queues, as the next epoch")
     coordinating.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
     coordinating.add_argument("--profile", default=None, help="the execution profile the run was placed under")
+    _placement_arguments(coordinating)
     coordinating.add_argument(
         "--external", action="store_true", help="start no workers: they are started on their own (execute --pool)"
     )

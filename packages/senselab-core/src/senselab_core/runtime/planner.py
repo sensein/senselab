@@ -8,7 +8,7 @@ logical plan under an execution profile on this host (`runtime.placement`), givi
 import json
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -18,9 +18,9 @@ from senselab_core.kernel.dataset import Dataset, InputManifest, ManifestRow
 from senselab_core.kernel.declare import Registry, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, GraphIssue, Node, validate
 from senselab_core.kernel.identity import InputIdentity, ModelRef, ResolvedModel, ReusePolicy
-from senselab_core.kernel.placement import PlanPlacement
+from senselab_core.kernel.placement import NodePlacement, PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan, plan_hash
-from senselab_core.runtime.calibration import LengthProfile
+from senselab_core.runtime.calibration import Estimate, LengthProfile
 from senselab_core.runtime.call import (
     ITEM_ID,
     RunConfig,
@@ -32,14 +32,32 @@ from senselab_core.runtime.call import (
     pin_model,
 )
 from senselab_core.runtime.catalogue import Catalogue
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.datasets import record_bind, sourced_manifest
-from senselab_core.runtime.explain import explain, item_lines, node_sizing, undetermined_lines, waits
+from senselab_core.runtime.explain import (
+    NodeSized,
+    class_needs,
+    explain,
+    item_lines,
+    node_sizing,
+    sized_node,
+    undetermined_lines,
+    waits,
+)
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.placement import check_caps, check_licenses, node_licenses, place_nodes, plan_cost
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver, cache_root
+from senselab_core.runtime.site_placement import (
+    PlacementHook,
+    PlacementRequest,
+    PlacementValues,
+    Placer,
+    current_values,
+    load_overrides,
+)
 from senselab_core.runtime.storage import StorageCapabilities, probe_capabilities
 
 if TYPE_CHECKING:
@@ -347,12 +365,38 @@ def resolve_bound(  # noqa: PLR0913 - as `resolve`
 
 
 @dataclass(frozen=True)
+class _Reading:
+    """What a plan is read against: the measures, the store, the bound inputs (or why not) and the unit resolvers."""
+
+    source: MeasureSource
+    store: "ResultStore"
+    bound: Mapping[InputIdentity, object] | None
+    unbound: str
+    resolver: Any
+    resolve: "Callable[[str], MeasureUnit | Unresolved]"
+
+
+@dataclass(frozen=True)
+class _NodeRead:
+    """One node as read: its placement, estimate, lengths, why it has no estimate, its unit's label, bucket edges."""
+
+    placed: NodePlacement
+    estimate: Estimate | None
+    work: LengthProfile | None
+    why: str
+    label: str | None
+    edges: Sequence[float]
+
+
+@dataclass(frozen=True)
 class Plan:
     """A placed plan: the logical plan and its manifest, its placement, and its hash, the run id (`plan_hash`).
 
     Beside the documents it holds what running it needs, none of which is part of its identity: the execution
     profile and run config it was placed under, the sources its inputs are read from (`_manifest`) and the values
-    of the inputs given as objects (`live`), which only this process holds.
+    of the inputs given as objects (`live`), which only this process holds. The explicit placement values
+    (`overrides`) and the site's placement hook (`hook`, a callable or its `module:callable` path) are not part of its
+    identity either; `placer` resolves them with the profile's.
     """
 
     logical: LogicalPlan
@@ -363,6 +407,8 @@ class Plan:
     config: RunConfig | None = field(default=None, compare=False, repr=False)
     sources: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
     live: Mapping[InputIdentity, object] = field(default_factory=dict, compare=False, repr=False)
+    overrides: Mapping[str, PlacementValues] = field(default_factory=dict, compare=False, repr=False)
+    hook: PlacementHook | str | None = field(default=None, compare=False, repr=False)
 
     def run(self, executor: "Executor | None" = None, *, store: "ResultStore | None" = None) -> "Run":
         """Start this plan on `executor` and return its `Run`, which runs in the background.
@@ -410,49 +456,22 @@ class Plan:
         if profile is None:
             return explain(self.hash, self.logical, self.placement)
         from senselab_core.runtime.execution import plan_reads  # noqa: PLC0415 - plan_reads imports this module
-        from senselab_core.runtime.execution.in_process import default_store  # noqa: PLC0415 - as above
-        from senselab_core.runtime.execution.run import (  # noqa: PLC0415 - run imports this module
-            InputChanged,
-            InputsUnavailable,
-            SourcesUnrecorded,
-            bind_sources,
-        )
-        from senselab_core.runtime.units import (  # noqa: PLC0415 - units imports the executor, which imports this module
-            UnitResolver,
-            Unresolved,
-            default_measures,
-            measure_roots,
-        )
 
-        roots = measure_roots(profile)
-        source = measures if measures is not None else default_measures(profile, roots)
-        found = store if store is not None else default_store()
-        bound, unbound = values, ""
-        if bound is None:
-            try:
-                bound = bind_sources(self)
-            except (InputChanged, InputsUnavailable, SourcesUnrecorded) as err:
-                unbound = str(err)
-        resolver = UnitResolver(profile, roots, hardware)
-        resolve = units or plan_reads.unit_of_node(self, resolver)
+        reading = self._reading(profile, measures, units, hardware, values, store)
         sizing = {}
-        for node_id, placed in self.placement.nodes.items():
-            unit = resolve(node_id)
-            estimate = None if isinstance(unit, Unresolved) else source.get(unit)
-            work = (lengths or {}).get(node_id)
-            if work is None and estimate is not None:
-                work = plan_reads.node_work(self, node_id, bound, estimate)
+        for node_id, read in self._read_nodes(reading, lengths).items():
             sizing[node_id] = node_sizing(
-                placed,
+                read.placed,
                 profile,
-                estimate,
-                work,
+                read.estimate,
+                read.work,
                 hardware,
-                why_no_estimate=unit.reason if isinstance(unit, Unresolved) else "no estimate for its unit",
-                unit_label=None if isinstance(unit, Unresolved) else unit.label(),
-                bucket_edges=() if estimate is None else plan_reads.node_edges(self, node_id, estimate),
-                why_no_lengths=f"lengths unknown: {unbound}" if unbound else None,
+                why_no_estimate=read.why,
+                unit_label=read.label,
+                bucket_edges=read.edges,
+                why_no_lengths=f"lengths unknown: {reading.unbound}" if reading.unbound else None,
             )
+        found, bound, unbound, resolver = reading.store, reading.bound, reading.unbound, reading.resolver
         run = self.config if self.config is not None else RunConfig()
         counted = (
             undetermined_lines(self.placement, unbound)
@@ -462,6 +481,133 @@ class Plan:
             )
         )
         return explain(self.hash, self.logical, self.placement, sizing=sizing, footer=[*counted, *waits(profile)])
+
+    def _reading(  # noqa: PLR0913 - what a plan is read against
+        self,
+        profile: ExecutionProfile,
+        measures: MeasureSource | None,
+        units: "Callable[[str], MeasureUnit | Unresolved] | None",
+        hardware: HardwareInfo | None,
+        values: Mapping[InputIdentity, object] | None,
+        store: "ResultStore | None",
+    ) -> "_Reading":
+        """Return what `explain` and `placement_request` read a plan against: measures, inputs, store and units."""
+        from senselab_core.runtime.execution import plan_reads  # noqa: PLC0415 - plan_reads imports this module
+        from senselab_core.runtime.execution.in_process import default_store  # noqa: PLC0415 - as above
+        from senselab_core.runtime.execution.run import (  # noqa: PLC0415 - run imports this module
+            InputChanged,
+            InputsUnavailable,
+            SourcesUnrecorded,
+            bind_sources,
+        )
+        from senselab_core.runtime.units import (  # noqa: PLC0415 - units imports the executor, which imports this module
+            UnitResolver,
+            default_measures,
+            measure_roots,
+        )
+
+        roots = measure_roots(profile)
+        source = measures if measures is not None else default_measures(profile, roots)
+        bound, unbound = values, ""
+        if bound is None:
+            try:
+                bound = bind_sources(self)
+            except (InputChanged, InputsUnavailable, SourcesUnrecorded) as err:
+                unbound = str(err)
+        resolver = UnitResolver(profile, roots, hardware)
+        return _Reading(
+            source,
+            store if store is not None else default_store(),
+            bound,
+            unbound,
+            resolver,
+            units or plan_reads.unit_of_node(self, resolver),
+        )
+
+    def _read_nodes(self, reading: "_Reading", lengths: Mapping[str, LengthProfile] | None) -> "dict[str, _NodeRead]":
+        """Return each node's unit, estimate, lengths and bucket edges, read, never probed."""
+        from senselab_core.runtime.execution import plan_reads  # noqa: PLC0415 - plan_reads imports this module
+        from senselab_core.runtime.units import Unresolved  # noqa: PLC0415 - units imports the executor
+
+        found = {}
+        for node_id, placed in self.placement.nodes.items():
+            unit = reading.resolve(node_id)
+            estimate = None if isinstance(unit, Unresolved) else reading.source.get(unit)
+            work = (lengths or {}).get(node_id)
+            if work is None and estimate is not None:
+                work = plan_reads.node_work(self, node_id, reading.bound, estimate)
+            found[node_id] = _NodeRead(
+                placed,
+                estimate,
+                work,
+                unit.reason if isinstance(unit, Unresolved) else "no estimate for its unit",
+                None if isinstance(unit, Unresolved) else unit.label(),
+                () if estimate is None else plan_reads.node_edges(self, node_id, estimate),
+            )
+        return found
+
+    def placement_request(  # noqa: PLR0913 - what a plan is read against, as `explain`
+        self,
+        *,
+        measures: MeasureSource | None = None,
+        units: "Callable[[str], MeasureUnit | Unresolved] | None" = None,
+        lengths: Mapping[str, LengthProfile] | None = None,
+        hardware: HardwareInfo | None = None,
+        store: "ResultStore | None" = None,
+        values: Mapping[InputIdentity, object] | None = None,
+    ) -> PlacementRequest:
+        """Return what each resource class of this plan needs, as `placement-request@1.0`: the figures `explain` prints.
+
+        It is read as `explain` reads: from the measures that exist, never a probe, a download or a worker start,
+        and each figure no measure supports is None and named as unmeasured with its reason.
+
+        Raises:
+            ValueError: the plan holds no execution profile.
+            PlacementAnswerRefused: an explicit placement value is refused.
+            As `count_items`.
+        """
+        profile = self.execution
+        if profile is None:
+            raise ValueError("a plan without its execution profile has no placement request")
+        reading = self._reading(profile, measures, units, hardware, values, store)
+        sized: dict[str, list[NodeSized]] = {}
+        for node_id, read in self._read_nodes(reading, lengths).items():
+            sized.setdefault(read.placed.resource_class, []).append(
+                sized_node(
+                    read.placed,
+                    profile,
+                    read.estimate,
+                    read.work,
+                    hardware,
+                    why_no_estimate=read.why,
+                    bucket_edges=read.edges,
+                    why_no_lengths=f"lengths unknown: {reading.unbound}" if reading.unbound else None,
+                )
+            )
+        current = current_values(profile.resource_classes, self.overrides)
+        return PlacementRequest(
+            classes=tuple(class_needs(name, profile, current[name], nodes) for name, nodes in sorted(sized.items()))
+        )
+
+    def placer(self, run_dir: Path, *, clock: Clock = SystemClock()) -> Placer:  # noqa: B008 - stateless
+        """Return the `Placer` of this plan's run in `run_dir`, recording each placement it makes.
+
+        Raises:
+            ValueError: the plan holds no execution profile.
+            PlacementAnswerRefused: an explicit value names no class of the profile, or is refused.
+            PlacementHookFailed: the hook's path does not import.
+        """
+        from senselab_core.runtime.execution.events import placement_event, record_placement  # noqa: PLC0415 - as below
+
+        if self.execution is None:
+            raise ValueError("a plan without its execution profile has no placer")
+
+        def record(epoch: int, name: str, needs: Any, ref: Any, placed: Any) -> None:  # noqa: ANN401 - see Placer
+            record_placement(run_dir, placement_event(epoch, name, needs, ref, placed))
+
+        return Placer(
+            self.execution, self.overrides, self.hook, request=self.placement_request, clock=clock, record=record
+        )
 
 
 def plan(  # noqa: PLR0913 - the target and records, then keyword-only run inputs
@@ -475,15 +621,21 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
     inputs: Mapping[str, object] | None = None,
     hardware: HardwareInfo | None = None,
     resolver: Resolver | None = None,
+    placement: Mapping[str, Any] | Path | str | None = None,
+    placement_hook: PlacementHook | str | None = None,
 ) -> Plan:
     """Return `target` over `dataset` resolved (`resolve`) and placed under `execution` on this host (`place`).
 
     Models are resolved through `resolver` (`None`: the process resolver under the profile's network policy) and
     the profile's source allowlist. `None` means `RunConfig()`, the `laptop` profile and this host's probed hardware
-    (`host_hardware`).
+    (`host_hardware`). `placement` gives explicit values per resource class (`partition`, `time_s`, `max_workers`,
+    `exclude`), a mapping or a YAML file, layered over the profile's; `placement_hook` is the site's hook, a callable
+    or its `module:callable` path, and replaces the profile's `substrate.placement_hook`. The hook is called when a
+    run submits workers, never here.
 
     Raises:
         InvalidGraph, UnmappedOutput, RecordBinding, ValueError, MissingProfileSlice, UnpinnedModel: as `resolve`.
+        PlacementAnswerRefused: `placement` names no class of the profile or holds a refused value.
         UnlistedSource: a model's organisation is not an allowed source.
         BackendParamsMismatch, NoBackend, NoDevice, LicenseRefused, LicenseConflict, MemoryCapExceeded: as `place`.
         StorageUnsupported: the run directory's or the result store's root lacks a primitive the leases need.
@@ -504,15 +656,18 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
         resolver=resolver if resolver is not None else replace(PROCESS_RESOLVER, network=profile.network),
         admit=lambda model_id: profile.check_source(model_id, catalogue),
     )
+    overrides = load_overrides(placement)
     return Plan(
         logical=found.logical,
         manifest=found.manifest,
-        placement=place(found.logical, profile, hardware or host_hardware(), config),
+        placement=place(found.logical, profile, hardware or host_hardware(), config, overrides),
         hash=plan_hash(found.logical),
         execution=profile,
         config=config,
         sources=found.sources,
         live=found.live,
+        overrides=overrides,
+        hook=placement_hook,
     )
 
 
@@ -560,8 +715,16 @@ def check_storage(
     return delay
 
 
-def place(logical: LogicalPlan, profile: ExecutionProfile, hardware: HardwareInfo, config: RunConfig) -> PlanPlacement:
+def place(  # noqa: PLR0913 - the plan, profile, hardware and config, then the explicit values
+    logical: LogicalPlan,
+    profile: ExecutionProfile,
+    hardware: HardwareInfo,
+    config: RunConfig,
+    overrides: Mapping[str, PlacementValues] | None = None,
+) -> PlanPlacement:
     """Return the placement of `logical` under `profile` on `hardware`; it reads the plan and resolves nothing.
+
+    A node's partition is its class's under the explicit `overrides` (`current_values`) layered over the profile.
 
     Each node is placed (`place_nodes`) with its placed backend's params validated, gets its license set
     (`node_licenses`), and the run config's license policy is checked on every record of it. The memory caps of each
@@ -576,9 +739,12 @@ def place(logical: LogicalPlan, profile: ExecutionProfile, hardware: HardwareInf
         LicenseConflict: one subject reaches a node with two license records.
         MemoryCapExceeded: a resource class's resident models exceed its memory cap.
         QosCapTooSmall: a placed resource class needs more CPUs than the substrate's QOS CPU cap.
+        PlacementAnswerRefused: `overrides` names no class of the profile or holds a refused value.
     """
     registry, catalogue = packaged().registry, packaged().catalogue
     placed = place_nodes(logical, profile, hardware, registry, catalogue)
+    current = current_values(profile.resource_classes, overrides or {})
+    placed = {n: replace(p, partition=current[p.resource_class].partition) for n, p in placed.items()}
     licenses = node_licenses(logical, placed, env_license)
     check_licenses(config.licenses, licenses)
     check_caps(logical, placed, profile, catalogue)
@@ -611,6 +777,8 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
     executor: "Executor | None" = None,
     config: RunConfig | None = None,
     hardware: HardwareInfo | None = None,
+    placement: Mapping[str, Any] | Path | str | None = None,
+    placement_hook: PlacementHook | str | None = None,
 ) -> "Run":
     """Start the run of `plan_hash` again from its run directory, as a new attempt under a fresh placement.
 
@@ -623,7 +791,8 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
     computed again, and a job the store holds is served from it. `store` is where results are read and written: by
     default the one `manifest.json` names. `executor` defaults as in `Plan.run`.
     `config` defaults to `RunConfig()` under the plan's reuse policy; given with an executor, it is that executor's
-    run config.
+    run config. `placement` and `placement_hook` are as in `plan`: a run a site refused continues from the store with
+    corrected values.
 
     Raises:
         NoRun: no run of `plan_hash` is on disk.
@@ -652,9 +821,12 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
     if config.reuse is not reuse:
         raise ValueError(f"plan {plan_hash} reuses under {reuse.value}, not {config.reuse.value}")
     profile = ExecutionProfile.load(execution) if isinstance(execution, str) else execution or ExecutionProfile.load()
-    placement = place(stored.logical, profile, hardware or host_hardware(), config)
+    overrides = load_overrides(placement)
+    placed_at = place(stored.logical, profile, hardware or host_hardware(), config, overrides)
     values = bind_sources(stored)
-    placed = replace(stored, placement=placement, execution=profile, config=config)
+    placed = replace(
+        stored, placement=placed_at, execution=profile, config=config, overrides=overrides, hook=placement_hook
+    )
     if store is None:
         named = Run(run_dir).manifest().get("store")
         store = ResultStore(Path(named)) if isinstance(named, str) else None
