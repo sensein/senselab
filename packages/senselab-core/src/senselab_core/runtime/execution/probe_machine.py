@@ -77,6 +77,7 @@ from senselab_core.runtime.measures import (
     PeerProbing,
     Provenance,
     Unleased,
+    checkout_commit,
 )
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.probe import Probe
@@ -825,8 +826,11 @@ def detected_kind(jobs: Sequence[Job]) -> UnitKind:
 
 
 def _build() -> Build | None:
-    """Return the installed senselab-core release for a record's provenance; None when it is not installed."""
+    """Return the installed senselab-core release and its checkout's commit for a record's provenance.
+
+    None when senselab-core is not installed; the commit is None outside a git checkout.
+    """
     try:
-        return Build(version=importlib.metadata.version("senselab-core"))
+        return Build(version=importlib.metadata.version("senselab-core"), commit=checkout_commit())
     except importlib.metadata.PackageNotFoundError:
         return None

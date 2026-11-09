@@ -277,6 +277,46 @@ RecordKind = Literal["drift", "supersede", "regime", "oom"]
 _JSON_NAME = re.compile(r".+\.json")
 
 
+def _git_dir(start: Path) -> Path | None:
+    """Return the git directory of the checkout holding `start`: a `.git` directory, or the one a worktree names."""
+    for parent in (start, *start.parents):
+        dot = parent / ".git"
+        if dot.is_dir():
+            return dot
+        if dot.is_file() and (named := dot.read_text().strip()).startswith("gitdir:"):
+            return (parent / named.removeprefix("gitdir:").strip()).resolve()
+    return None
+
+
+def _ref_commit(git: Path, ref: str) -> str | None:
+    """Return the commit of `ref`, loose or packed, in `git` or the common directory a worktree's names."""
+    common = git / "commondir"
+    base = (git / common.read_text().strip()).resolve() if common.is_file() else git
+    loose = base / ref
+    if loose.is_file():
+        return loose.read_text().strip()
+    packed = base / "packed-refs"
+    lines = packed.read_text().splitlines() if packed.is_file() else []
+    return next((line.split()[0] for line in lines if line.endswith(f" {ref}")), None)
+
+
+def checkout_commit(root: Path | None = None) -> str | None:
+    """Return the 40-hex commit `HEAD` names in the git checkout holding `root` (this package by default).
+
+    Read from the git directory, not by running git. None outside a checkout (an installed wheel) or where it cannot
+    be read.
+    """
+    try:
+        git = _git_dir(Path(__file__).resolve().parent if root is None else root.resolve())
+        if git is None:
+            return None
+        head = (git / "HEAD").read_text().strip()
+        found = _ref_commit(git, head.removeprefix("ref:").strip()) if head.startswith("ref:") else head
+    except OSError:
+        return None
+    return found if found is not None and COMMIT_HEX.fullmatch(found) else None
+
+
 class Build(Frozen):
     """The senselab release a record was written by: its version and, when known, its 40-hex commit."""
 

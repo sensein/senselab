@@ -35,6 +35,7 @@ from senselab_core.runtime.measures import (
     Provenance,
     RecordKind,
     Unleased,
+    checkout_commit,
     class_digest,
     resolve_roots,
 )
@@ -247,6 +248,41 @@ def test_roots_list_their_units_and_each_units_probe_files_with_their_writers(tm
     assert [p.probe for p in pooled.probes(UNIT)] == ["p2"]
     stranger = _roots(first, second, trust="own", uid=STRANGER)
     assert len(stranger.units()) == 2 and stranger.probes(UNIT) == ()
+
+
+@pytest.mark.logic
+def test_a_checkouts_commit_is_read_from_its_git_directory(tmp_path: Path) -> None:
+    """`HEAD` detached, a loose or a packed ref, a worktree's HEAD over the common directory's refs; else None."""
+    sha = [c * 40 for c in "abcd"]
+    common = tmp_path / "main" / ".git"
+    (common / "refs" / "heads").mkdir(parents=True)
+    (common / "HEAD").write_text(f"{sha[0]}\n")
+    assert checkout_commit(tmp_path / "main") == sha[0]
+    (common / "HEAD").write_text("ref: refs/heads/loose\n")
+    (common / "refs" / "heads" / "loose").write_text(f"{sha[1]}\n")
+    assert checkout_commit(tmp_path / "main") == sha[1]
+    (common / "HEAD").write_text("ref: refs/heads/packed\n")
+    (common / "packed-refs").write_text(f"# pack-refs\n{sha[2]} refs/heads/packed\n{sha[3]} refs/heads/other\n")
+    assert checkout_commit(tmp_path / "main") == sha[2]
+    tree = common / "worktrees" / "wt"
+    tree.mkdir(parents=True)
+    (tree / "HEAD").write_text("ref: refs/heads/packed\n")
+    (tree / "commondir").write_text("../..\n")
+    (tmp_path / "wt").mkdir()
+    (tmp_path / "wt" / ".git").write_text(f"gitdir: {tree}\n")
+    assert checkout_commit(tmp_path / "wt") == sha[2]
+    (common / "HEAD").write_text("ref: refs/heads/absent\n")
+    assert checkout_commit(tmp_path / "main") is None
+    (common / "HEAD").write_text("not a commit\n")
+    assert checkout_commit(tmp_path / "main") is None
+    assert checkout_commit(tmp_path / "nowhere") is None
+
+
+@pytest.mark.logic
+def test_this_checkouts_commit_is_what_git_names() -> None:
+    """The package's own checkout gives the commit `git rev-parse HEAD` does."""
+    named = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    assert checkout_commit() == named
 
 
 @pytest.mark.contract
