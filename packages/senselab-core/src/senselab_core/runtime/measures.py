@@ -167,6 +167,10 @@ class MeasureUnit(Frozen):
         """Return `identity_digest("measure-unit@1", fields)`."""
         return identity_digest(MEASURE_UNIT_TAG, self.model_dump(mode="json"))
 
+    def label(self) -> str:
+        """Return the first 12 hex digits of the digest: how a log line or `explain` names the unit, never an id."""
+        return self.digest()[:12]
+
 
 class MeasuresRoot(Protocol):
     """A measures root, read: the observations of a unit that still pool (none of a superseded probe)."""

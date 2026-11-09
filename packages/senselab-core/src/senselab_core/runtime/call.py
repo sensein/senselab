@@ -174,12 +174,18 @@ EnvOpener = Callable[[BackendSpec, ExecutionProfile], EnvHandle]
 """Open the env a backend declares under a profile, building it if needed."""
 EnvProbe = Callable[[BackendSpec, ExecutionProfile], bool]
 """Whether the env a backend declares is built under a profile, building nothing."""
+EnvRead = Callable[[BackendSpec, ExecutionProfile], EnvHandle | None]
+"""The handle of the env a backend declares if it is built under a profile, else None; builds and locks nothing."""
 EnvLock = Callable[[BackendSpec], Path]
 """The lock file the isolated or server env a backend declares is built from, reading nothing."""
 
 
 def _unbuilt(backend: BackendSpec, profile: ExecutionProfile) -> bool:  # noqa: ARG001 - an EnvProbe
     return False
+
+
+def _unread(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle | None:  # noqa: ARG001 - an EnvRead
+    return None
 
 
 def _no_lock(backend: BackendSpec) -> Path:
@@ -192,8 +198,8 @@ class Packaged:
 
     `lock_records` gives each backend's env-lock package license records, from which `env_license` derives; without
     them no stored result is served unless the run's license policy allows unlicensed hits. `env_built` says whether
-    a backend's env is built (by default none is). `env_lock` names the lock a non-host env is built from (by default
-    none is known).
+    a backend's env is built (by default none is), and `env_read` gives the built env's handle (by default none).
+    `env_lock` names the lock a non-host env is built from (by default none is known).
     """
 
     catalogue: Catalogue
@@ -201,6 +207,7 @@ class Packaged:
     registry: Registry = REGISTRY
     lock_records: LockRecords | None = None
     env_built: EnvProbe = _unbuilt
+    env_read: EnvRead = _unread
     env_lock: EnvLock = _no_lock
 
 

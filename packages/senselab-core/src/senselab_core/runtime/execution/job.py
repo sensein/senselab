@@ -169,7 +169,7 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
         job, unread = _resolved(given, store)
         picked, unrecorded = keyed_formation(job, backend, grid)
         keyed = replace(placement, **request_components(backend, picked))
-        context = _context(keyed, env, expected, profile, job, code_license)
+        context = job_context(keyed, env, expected, profile, job, code_license)
         gap = None if unrecorded is None else _upstream_gap(type(unrecorded).__name__, str(unrecorded))
         stale = unread or gap or _stale(job)
         key = build_key(job.call, keyed, context)
@@ -286,7 +286,7 @@ def _stale(job: Job) -> FaultRecord | None:
     return None
 
 
-def _decoder(job: Job) -> str | None:
+def job_decoder(job: Job) -> str | None:
     """Return the decoder a job's file-backed inputs are read by, or None when none is file-backed."""
     for value in job.values.values():
         if isinstance(value, Recording) and any(getattr(g, "source", None) is not None for g in value.groups.values()):
@@ -294,7 +294,7 @@ def _decoder(job: Job) -> str | None:
     return None
 
 
-def _context(  # noqa: PLR0913 - every input a context records
+def job_context(  # noqa: PLR0913 - every input a context records
     placement: Placement,
     env: EnvHandle,
     expected: Attestation | None,
@@ -305,10 +305,10 @@ def _context(  # noqa: PLR0913 - every input a context records
     """Return the context a job runs in: its env, attestation, network, host token, decoder, model source, license."""
     model = job.call.model
     return ExecutionContext(
-        **_env_fields(placement, env, expected, network_variables(profile.network)),
+        **env_fields(placement, env, expected, network_variables(profile.network)),
         platform=sysconfig.get_platform(),
         numerics=numerics_class(host_hardware(), placement.device, PRECISION),
-        decoder=_decoder(job),
+        decoder=job_decoder(job),
         host=host_token(),
         protocol=f"wire@{WIRE_VERSION}",
         model_source=None if model is None else model.ref.source,
@@ -316,7 +316,7 @@ def _context(  # noqa: PLR0913 - every input a context records
     )
 
 
-def _env_fields(
+def env_fields(
     placement: Placement, env: EnvHandle, expected: Attestation | None, declared: Mapping[str, str]
 ) -> dict[str, Any]:
     """Return the env's context fields: with the attestation of a server, the launch digest of any worker process.

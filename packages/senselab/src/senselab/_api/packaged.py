@@ -7,7 +7,7 @@ from pathlib import Path
 from senselab_core.kernel.declare import BackendSpec, Registry, declare_module
 from senselab_core.runtime.call import Packaged
 from senselab_core.runtime.catalogue import Catalogue
-from senselab_core.runtime.envs import EnvHandle, ensure_env, env_built
+from senselab_core.runtime.envs import EnvHandle, current_env, ensure_env, env_built
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile
 
@@ -86,8 +86,28 @@ def is_built(backend: BackendSpec, profile: ExecutionProfile) -> bool:
     return env_built(backend.env, env_lock, profile.env_root(backend.env.kind), settings=profile.envs, workers=workers)
 
 
+def read_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle | None:
+    """Return the handle of the env `backend` declares if it is built under `profile`, else None; builds nothing.
+
+    A host env is always built: its handle is this interpreter's.
+
+    Raises:
+        As `current_env` and, for a host env, `open_env`.
+    """
+    if backend.env.kind == "host":
+        return open_env(backend, profile)
+    env_lock, workers = _built_from(backend)
+    root = profile.env_root(backend.env.kind)
+    return current_env(backend.env, env_lock, root, settings=profile.envs, workers=workers)
+
+
 PACKAGED = Packaged(
-    CATALOGUE, open_env, lock_records=packaged_lock_records("senselab"), env_built=is_built, env_lock=env_lock
+    CATALOGUE,
+    open_env,
+    lock_records=packaged_lock_records("senselab"),
+    env_built=is_built,
+    env_read=read_env,
+    env_lock=env_lock,
 )
 
 

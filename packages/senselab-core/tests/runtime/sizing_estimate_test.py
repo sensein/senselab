@@ -1,5 +1,6 @@
 """`size` over an estimate and the run's lengths: items cut at the upper prediction, batch per length, card sharing."""
 
+import logging
 from collections.abc import Sequence
 
 import pytest
@@ -26,7 +27,7 @@ from senselab_core.runtime.keys import Call, Placement
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.probe import memory_batch, peak
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.sizing import Grant, Measure, Sizing, size, size_row
+from senselab_core.runtime.sizing import ExtrapolationLog, Grant, Measure, Sizing, size, size_row
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.calibration_samples import UNIT
 
@@ -211,7 +212,7 @@ def test_in_process_sizing_is_size_on_the_same_estimate_grant_and_lengths(tmp_pa
         store=ResultStore(tmp_path / "store"),  # type: ignore[operator]
         profile=profile,
         measures=source,
-        units=lambda placement: UNIT,
+        units=lambda call, placement, decoder: UNIT,
     )
     jobs = _text_jobs("a" * 10, "b" * 20, "c" * 30)
     backend = _backend()
@@ -338,3 +339,43 @@ def test_a_device_grant_without_a_class_cap_takes_the_seen_devices_memory() -> N
     assert Grant.seen(uncapped, PROFILE.pool, seen).memory_bytes == 2**35
     assert Grant.seen(uncapped, PROFILE.pool, None).memory_bytes is None
     assert Grant.seen(uncapped.model_copy(update={"memory_cap_bytes": 2**30}), PROFILE.pool, seen).memory_bytes == 2**30
+
+
+EDGES = (10.0, 60.0)
+
+
+@pytest.mark.logic
+def test_a_bucketed_formation_cuts_on_bucket_edges() -> None:
+    """With a bucket grid no item spans two buckets, measured or not; without one the same jobs are a single item."""
+    lengths = (5.0, 6.0, 12.0, 15.0, 70.0)
+    for estimate in (_estimate(), None):
+        flat = size(estimate, _grant(), SIZING, _work(*lengths), calibration=CALIBRATION)
+        cut = size(estimate, _grant(), SIZING, _work(*lengths), calibration=CALIBRATION, bucket_edges=EDGES)
+        assert flat.cuts == ((0, 5),)
+        assert cut.cuts == ((0, 2), (2, 4), (4, 5))
+    unknown = size(
+        _estimate(), _grant(), SIZING, _work(5.0, None, None, 5.0), calibration=CALIBRATION, bucket_edges=EDGES
+    )
+    assert {stop for _, stop in unknown.cuts} >= {1, 3, 4}
+
+
+@pytest.mark.logic
+def test_extrapolation_is_logged_once_per_unit(caplog: pytest.LogCaptureFixture) -> None:
+    """A length outside the measured range logs one line naming the unit's digest label and the range, once per run."""
+    inside = _sized(_estimate(), _grant(), 10.0, 20.0)
+    beyond = _sized(_estimate(), _grant(), 10.0, 5000.0)
+    assert (inside.extrapolated, beyond.extrapolated) == (False, True)
+    other = UNIT.model_copy(update={"backend": "elsewhere"})
+    said = ExtrapolationLog()
+    with caplog.at_level(logging.INFO, logger="senselab_core.runtime.sizing"):
+        results = [
+            said.note(UNIT.label(), inside),
+            said.note(UNIT.label(), beyond),
+            said.note(UNIT.label(), beyond),
+            said.note(other.label(), beyond),
+        ]
+        assert ExtrapolationLog().note(UNIT.label(), beyond)
+    assert results == [False, True, False, True]
+    first = [r.getMessage() for r in caplog.records][0]
+    assert UNIT.label() in first and "[2, 1000]" in first
+    assert UNIT.backend not in first and UNIT.digest() not in first

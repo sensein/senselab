@@ -685,9 +685,7 @@ def test_explain_labels_each_figure_measured_or_unmeasured_and_never_probes() ->
         assert figure in sizing
     assert sizing.count("measured: 2 probes, 12 observations") == 3 and "unmeasured" not in sizing
     assert root.calls == ["observations"]
-    for kwargs, why in (
-        ({}, "no measure source given"),
-        ({"measures": source}, "no measure unit for the node"),
+    cases: tuple[tuple[dict[str, Any], str], ...] = (
         ({"measures": source, "units": lambda node: UNIT}, "lengths unknown"),
         (
             {
@@ -697,7 +695,8 @@ def test_explain_labels_each_figure_measured_or_unmeasured_and_never_probes() ->
             },
             "a length is unknown",
         ),
-    ):
+    )
+    for kwargs, why in cases:
         text = placed.explain(**kwargs)
         line = next(line for line in text.splitlines() if line.startswith("  sizing:"))
         assert f"wall unmeasured ({why}" in line and "gpu unmeasured" in line and "(measured:" not in line

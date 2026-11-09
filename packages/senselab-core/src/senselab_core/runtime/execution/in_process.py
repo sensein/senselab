@@ -4,20 +4,26 @@ import atexit
 import itertools
 import threading
 import uuid
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import ClassVar
 
 from senselab_worker.units import NS_PER_S
 
 from senselab_core.kernel.declare import BackendSpec, Registry, TaskSpec
 from senselab_core.kernel.graph import Edge, Node, order
-from senselab_core.kernel.identity import InputIdentity, LogicalKey, ResolvedModel, ReusePolicy, gather_identity
+from senselab_core.kernel.identity import InputIdentity, LogicalKey, ReusePolicy, gather_identity
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.calibration import Estimate, LengthProfile, UnitKind
 from senselab_core.runtime.call import Result, RunConfig, TaskCall, bind_input, host_hardware, packaged
 from senselab_core.runtime.execution import batching
-from senselab_core.runtime.execution.batching import BucketGrid, job_length_ns, job_text_chars, recording_span_ns
+from senselab_core.runtime.execution.batching import (
+    BucketGrid,
+    bucket_edges,
+    job_length_ns,
+    job_text_chars,
+    recording_span_ns,
+)
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import (
     Admission,
@@ -43,12 +49,13 @@ from senselab_core.runtime.keys import (
     request_components,
     request_size,
 )
-from senselab_core.runtime.measures import MeasureSource, MeasureUnit
+from senselab_core.runtime.measures import MeasureSource
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
-from senselab_core.runtime.sizing import Grant, Sizing, estimate_of, size
+from senselab_core.runtime.sizing import ExtrapolationLog, Grant, Sizing, estimate_of, size
 from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.units import UnitOf, UnitResolver, Unresolved, decoder_of, default_measures, measure_roots
 
 
 class CallFailed(RuntimeError):
@@ -221,7 +228,7 @@ def placement_of_record(record: NodePlacement, spec: TaskSpec, registry: Registr
     )
 
 
-def _node_call(placed: Plan, node_id: str, registry: Registry) -> Call:
+def node_call(placed: Plan, node_id: str, registry: Registry) -> Call:
     """Return the call node `node_id` of `placed` makes, its params parsed, before any input is bound.
 
     Raises:
@@ -256,7 +263,7 @@ def job_key(
         ValueError: as `placement_of_record` or `request_components`, or the plan has no such node.
     """
     registry = packaged().registry
-    call = replace(_node_call(placed, node, registry), inputs=dict(inputs))
+    call = replace(node_call(placed, node, registry), inputs=dict(inputs))
     record = placed.placement.nodes[node] if placement is None else placement
     placed_on = placement_of_record(record, call.task, registry)
     if formation is None and fixed_formation(placed_on.backend) is None:
@@ -287,7 +294,7 @@ def fragment_keys(fragment: PlanFragment, placed: Plan, values: Mapping[InputIde
 
 def _backend(placed: Plan, fragment: PlanFragment) -> BackendSpec:
     registry = packaged().registry
-    return placement_of_record(fragment.placement, _node_call(placed, fragment.node, registry).task, registry).backend
+    return placement_of_record(fragment.placement, node_call(placed, fragment.node, registry).task, registry).backend
 
 
 def job_checksum(placed: Plan, node: str, inputs: Mapping[str, InputIdentity]) -> str:
@@ -309,7 +316,7 @@ def node_request_size(placed: Plan, node: str, placement: NodePlacement | None =
     """
     registry = packaged().registry
     record = placed.placement.nodes[node] if placement is None else placement
-    placed_on = placement_of_record(record, _node_call(placed, node, registry).task, registry)
+    placed_on = placement_of_record(record, node_call(placed, node, registry).task, registry)
     return request_size(placed_on.backend, placed_on.batch_size)
 
 
@@ -330,8 +337,16 @@ def result_ref(outcome: JobOutcome) -> ResultRef:
     )
 
 
-def plan_keys(placed: Plan, values: Mapping[InputIdentity, object]) -> dict[tuple[str, tuple[int, ...]], str]:
-    """Return the key digest of every job of `placed` by (node, element), as `fragment_keys` gives it under the plan.
+@dataclass(frozen=True)
+class PlannedNode:
+    """A node's jobs and the key digest each has before anything runs, in the fragment's order."""
+
+    fragment: PlanFragment
+    keys: tuple[str, ...]
+
+
+def plan_nodes(placed: Plan, values: Mapping[InputIdentity, object]) -> dict[str, PlannedNode]:
+    """Return each node of `placed` whose job keys are known before any job runs, with them (`fragment_keys`).
 
     An upstream input is identified by its upstream job's key digest and port, never by its outputs, so every key is
     known before any job runs, a job whose length picks its formation measured from its graph-input `values`. A node
@@ -339,7 +354,7 @@ def plan_keys(placed: Plan, values: Mapping[InputIdentity, object]) -> dict[tupl
     input, whose length is known only once it ran, or any node below either.
     """
     admission = Admission(id="keys", plan_hash=placed.hash)
-    keys: dict[tuple[str, tuple[int, ...]], str] = {}
+    nodes: dict[str, PlannedNode] = {}
     refs: dict[str, list[ResultRef]] = {}
     unread = "output:" + "0" * 64
     for node in order(placed.logical.graph):
@@ -352,13 +367,37 @@ def plan_keys(placed: Plan, values: Mapping[InputIdentity, object]) -> dict[tupl
             del refs[node]
             continue
         known = fragment_keys(fragment, placed, values)
+        nodes[node] = PlannedNode(fragment, tuple(known))
         for job, key in zip(fragment.jobs, known, strict=True):
-            keys[(node, job.element)] = key
             refs[node].append(ResultRef(job=job, key_digest=key, output_identity=unread))
-    return keys
+    return nodes
 
 
-def _units_of(job: Job, kind: UnitKind) -> float | None:
+def plan_keys(placed: Plan, values: Mapping[InputIdentity, object]) -> dict[tuple[str, tuple[int, ...]], str]:
+    """Return the key digest of every job `plan_nodes` knows, by (node, element)."""
+    return {
+        (node, job.element): key
+        for node, known in plan_nodes(placed, values).items()
+        for job, key in zip(known.fragment.jobs, known.keys, strict=True)
+    }
+
+
+def node_jobs(placed: Plan, node: str, values: Mapping[InputIdentity, object]) -> list[Job] | None:
+    """Return the jobs of `node` of `placed` over the graph-input `values`; None while they wait on an upstream."""
+    try:
+        fragment = node_fragment(placed, Admission(id="jobs", plan_hash=placed.hash), node)
+        return fragment_jobs(fragment, placed, values)[0]
+    except ValueError:
+        return None
+
+
+def node_decoder(placed: Plan, node: str, values: Mapping[InputIdentity, object]) -> str | None | Unresolved:
+    """Return the decoder the jobs of `node` read their file-backed inputs by; None when none is or they are unknown."""
+    jobs = node_jobs(placed, node, values)
+    return None if jobs is None else decoder_of(jobs)
+
+
+def job_units(job: Job, kind: UnitKind) -> float | None:
     """Return `job`'s input units of `kind`: recording seconds, held characters, or 0 for none; None when unknown."""
     if kind == "none":
         return 0.0
@@ -377,7 +416,9 @@ class InProcess:
     Jobs are sent in batches of at most the placement's batch size (`form_batches`). `None` means the packaged
     default: the store under `cache_root()/results`, the `laptop` profile, `RunConfig()` and this process's worker
     set for the profile (`process_workers`). Batches are sized (`size`) from the estimate `measures` gives for the unit
-    `units` names for a placement; with either missing the unit is unmeasured and runs the safe values, batch 1.
+    `units` resolves for a call and placement; `None` means the roots the profile names, the packaged table and the
+    resolver over the env record and the hardware index (`UnitResolver`). A unit that does not resolve is unmeasured
+    and runs the safe values, batch 1, unless the packaged resource table holds its model's row.
     """
 
     def __init__(  # noqa: PLR0913 - the executor's settings, all keyword-only
@@ -388,15 +429,17 @@ class InProcess:
         run: RunConfig | None = None,
         workers: WorkerSet | None = None,
         measures: MeasureSource | None = None,
-        units: Callable[[Placement], MeasureUnit | None] | None = None,
+        units: UnitOf | None = None,
     ) -> None:
         """Run fragments under `profile` and `run`, storing in `store`, on `workers`, sized from `measures`."""
         self.profile = profile if profile is not None else ExecutionProfile.load()
         self.run = run if run is not None else RunConfig()
         self.store = store if store is not None else ResultStore(cache_root() / "results")
         self.workers = workers if workers is not None else process_workers(self.profile)
-        self.measures = measures
-        self.units = units
+        roots = measure_roots(self.profile)
+        self.measures = measures if measures is not None else default_measures(self.profile, roots)
+        self.units = units if units is not None else UnitResolver(self.profile, roots).unit
+        self._extrapolated = ExtrapolationLog()
         self._lock = threading.Lock()
         self._admissions: dict[str, tuple[Plan, dict[InputIdentity, object]]] = {}
         self._outcomes: dict[str, list[JobOutcome]] = {}
@@ -477,9 +520,9 @@ class InProcess:
     def fragment_size(self, placed: Plan, node: str) -> int:
         """Return the most jobs of `node` one fragment holds: `quantum_items` where `size` batches its jobs, else 1."""
         registry = packaged().registry
-        call = _node_call(placed, node, registry)
+        call = node_call(placed, node, registry)
         placement = placement_of_record(placed.placement.nodes[node], call.task, registry)
-        estimate = self._estimate(placement, call.model)
+        estimate = self._estimate(placement, call, self._node_decoder(placed, node))[0]
         grant = self._grant(placement)
         if estimate is None or estimate.single is None:
             return 1
@@ -495,25 +538,42 @@ class InProcess:
             host_hardware() if resource.device == "cuda" or resource.mem_bytes is None else None,
         )
 
-    def _estimate(self, placement: Placement, model: ResolvedModel | None) -> Estimate | None:
-        """Return the estimate `measures` gives for the unit `units` names, else the packaged table's row as one."""
-        unit = None if self.units is None else self.units(placement)
-        found = None if unit is None or self.measures is None else self.measures.get(unit)
-        if found is not None:
-            return found
-        backend = placement.backend
+    def _node_decoder(self, placed: Plan, node: str) -> str | None | Unresolved:
+        """Return the decoder the node's admitted jobs read by; None when none is admitted or its jobs are not known."""
+        with self._lock:
+            held = [values for held_plan, values in self._admissions.values() if held_plan.hash == placed.hash]
+        return node_decoder(placed, node, held[0]) if held else None
+
+    def _estimate(
+        self, placement: Placement, call: Call, decoder: str | None | Unresolved
+    ) -> tuple[Estimate | None, str | None]:
+        """Return the estimate `measures` gives for the unit `units` resolves and its label, else the packaged row's."""
+        unit = decoder if isinstance(decoder, Unresolved) else self.units(call, placement, decoder)
+        found = None if isinstance(unit, Unresolved) else self.measures.get(unit)
+        if found is not None and not isinstance(unit, Unresolved):
+            return found, unit.label()
+        backend, model = placement.backend, call.model
         ident = (None, None) if model is None else (model.ref.id, model.identity)
         row = packaged().catalogue.resources(backend.task, backend.name, *ident)
         measured = None if row is None else row.classes.get(placement.resource_class)
         cuda = self.profile.resource_classes[placement.resource_class].device == "cuda"
-        return None if measured is None else estimate_of(measured, on_device=cuda)
+        return (None if measured is None else estimate_of(measured, on_device=cuda)), None
 
     def _size(self, jobs: Sequence[Job], placement: Placement) -> tuple[Sizing, tuple[float | None, ...]]:
-        estimate = self._estimate(placement, jobs[0].call.model if jobs else None)
+        estimate, label = self._estimate(placement, jobs[0].call, decoder_of(jobs)) if jobs else (None, None)
         kind = "none" if estimate is None else estimate.unit_kind
-        lengths = tuple(_units_of(job, kind) for job in jobs)
+        lengths = tuple(job_units(job, kind) for job in jobs)
         work = LengthProfile(units=lengths)
-        sized = size(estimate, self._grant(placement), self.profile.sizing, work, calibration=self.profile.calibration)
+        sized = size(
+            estimate,
+            self._grant(placement),
+            self.profile.sizing,
+            work,
+            calibration=self.profile.calibration,
+            bucket_edges=bucket_edges(placement.backend, kind),
+        )
+        if label is not None:
+            self._extrapolated.note(label, sized)
         return sized, lengths
 
     def status(self, handle: Handle) -> Status:
@@ -634,7 +694,7 @@ def fragment_jobs(
         ValueError: a job names an input no edge of its node feeds, or a graph input with no value.
     """
     registry = packaged().registry
-    base = _node_call(placed, fragment.node, registry)
+    base = node_call(placed, fragment.node, registry)
     nodes = {n.id: n for n in placed.logical.graph.nodes}
     edges = placed.logical.graph.edges
     feeds = {e.target.split(".", 1)[1]: _source(e) for e in edges if e.target.split(".", 1)[0] == fragment.node}

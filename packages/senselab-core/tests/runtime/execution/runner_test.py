@@ -33,12 +33,12 @@ from senselab_core.runtime.execution.events import TERMINAL, EventLog, read_even
 from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status, follow
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.workers import WorkerSet
-from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.planner import Plan, UnmappedOutput, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.units import UnitOf
 from senselab_core.testing.calibration_samples import UNIT, observation
 from senselab_core.testing.interpreter import source_tree_python
 
@@ -119,7 +119,7 @@ class Recording:
         store: ResultStore,
         profile: ExecutionProfile = PROFILE,
         measures: MeasureSource | None = None,
-        units: Callable[[Placement], MeasureUnit | None] | None = None,
+        units: UnitOf | None = None,
     ) -> None:
         """Run on an `InProcess` executor over `store` under `profile`, sized from `measures`."""
         self.store = store
@@ -223,7 +223,7 @@ def _run(  # noqa: PLR0913 - the plan, values and directory, then the profile an
     measures: MeasureSource | None = None,
     **kw: object,
 ) -> tuple[Any, Recording, list[Any]]:
-    executor = Recording(ResultStore(tmp_path / "store"), profile, measures, lambda placement: UNIT)
+    executor = Recording(ResultStore(tmp_path / "store"), profile, measures, lambda call, placement, decoder: UNIT)
     events = EventLog(tmp_path / "run", "a1", 1)
     work = tmp_path / "pydra"
     status = runner.PydraRunner(profile=profile, work_dir=work).run_plan(
