@@ -44,13 +44,15 @@ from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommands, is_service_class
 from senselab_core.runtime.hardware import HardwareInfo, host_token, probe_hardware, process_started, visible_devices
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.site_placement import FIELDS, Placer, rendered
+from senselab_core.runtime.site_placement import FIELDS, Placer, rendered, site_names
 from senselab_core.runtime.storage import PRIVATE_DIR, private_dir
 
 logger = logging.getLogger("senselab")
 
 SBATCH, SQUEUE, SCANCEL = "sbatch", "squeue", "scancel"
 """The Slurm commands, looked up on `PATH`."""
+CLIENTS = frozenset({SBATCH, SQUEUE, SCANCEL})
+"""The only Slurm clients `Slurm` runs; it refuses any other (`UndeclaredClient`)."""
 LIVE_STATES = "PENDING,CONFIGURING,RUNNING,COMPLETING"
 """The job states `Slurm.live` counts."""
 STOP_GRACE_S = 30.0
@@ -97,6 +99,10 @@ class SlurmError(SubstrateError):
         self.site_message = site_message
 
 
+class UndeclaredClient(RuntimeError):
+    """`Slurm` was asked to run a command that is not one of its declared clients (`CLIENTS`)."""
+
+
 class SiteRefused(SlurmError):
     """The scheduler refused a submission: the class, the `sbatch` line, the site's message and who set each value.
 
@@ -114,8 +120,7 @@ class SiteRefused(SlurmError):
         request_line: str,
         site_message: str,
         layers: Mapping[str, str],
-        partitions: Collection[str | None],
-        nodes: Collection[str],
+        names: Mapping[str, str],
         started: Sequence["WorkerHandle"] = (),
     ) -> None:
         """Refuse with the `sbatch` line and the site's message, rendered, and name the inputs that change it."""
@@ -124,8 +129,7 @@ class SiteRefused(SlurmError):
             f"the site refused the submission of class {resource_class!r}: {request_line}: {site_message} "
             f"(values set {set_by}; change them with --placement or the placement hook, then resume)"
         )
-        shown = rendered(text, partitions=partitions, nodes=nodes)
-        super().__init__(shown, started, rendered(site_message, partitions=partitions, nodes=nodes))
+        super().__init__(rendered(text, names), started, rendered(site_message, names))
         self.resource_class, self.layers = resource_class, dict(layers)
 
 
@@ -522,13 +526,14 @@ class Slurm:
                 f"queue {queue!r} is of no resource class of this substrate: {sorted(self.classes)}"
             ) from None
 
-    def _granted(self, queue: str) -> tuple[ResourceClass, tuple[str, ...], Mapping[str, str]]:
-        """Return the class of `queue` as it is placed this epoch, its excluded nodes and the layer of each value."""
+    def _granted(self, queue: str) -> tuple[ResourceClass, tuple[str, ...], Mapping[str, str], Mapping[str, str]]:
+        """Return the class of `queue` as it is placed this epoch, its excluded nodes, each value's layer, its names."""
         base = self._class(queue)
         if self.placer is None:
-            return base, self.exclude_nodes, dict.fromkeys(FIELDS, "profile")
+            names = site_names([base.partition], self.exclude_nodes)
+            return base, self.exclude_nodes, dict.fromkeys(FIELDS, "profile"), names
         placed = self.placer.for_class(class_of(queue), self.epoch)
-        return placed.grant(base), placed.exclude, placed.values.layers
+        return placed.grant(base), placed.exclude, placed.values.layers, placed.names
 
     def sbatch_args(self, queue: str, name: str) -> list[str]:
         """Return the `sbatch` command line of one worker of `queue`, named `name`, under its placement.
@@ -537,7 +542,7 @@ class Slurm:
             ValueError: the queue's class is unknown, or names a variable that is not set.
             PlacementAnswerRefused: the site's hook answered with a value that could not run the work.
         """
-        grant, excluded, _ = self._granted(queue)
+        grant, excluded, _, _ = self._granted(queue)
         args = [SBATCH, "--parsable", f"--job-name={name}", f"--comment={queue}"]
         if grant.partition is not None:
             args.append(f"--partition={expand(grant.partition)}")
@@ -556,7 +561,15 @@ class Slurm:
         return [*args, "--wrap", shlex.join([*self.command, "--classes", queue])]
 
     def _try(self, argv: Sequence[str]) -> tuple[str | None, str, str | None]:
-        """Run `argv` once; return its output, or None, why it failed and what the command said when it exited."""
+        """Run `argv` once; return its output, or None, why it failed and what the command said when it exited.
+
+        Raises:
+            UndeclaredClient: `argv[0]` is not one of `CLIENTS`.
+        """
+        if not argv or argv[0] not in CLIENTS:
+            raise UndeclaredClient(
+                f"{argv[0] if argv else '(none)'!r} is not one of the Slurm clients {sorted(CLIENTS)}"
+            )
         timeout = self.commands.timeout_s
         try:
             done = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout)  # noqa: S603
@@ -611,10 +624,8 @@ class Slurm:
         except SlurmError as err:
             if err.site_message is None:
                 raise
-            grant, excluded, layers = self._granted(queue)
-            raise SiteRefused(
-                class_of(queue), shlex.join(args), err.site_message, layers, [grant.partition], excluded
-            ) from err
+            _, _, layers, names = self._granted(queue)
+            raise SiteRefused(class_of(queue), shlex.join(args), err.site_message, layers, names) from err
         return WorkerHandle(queue, job, pending=True, name=name)
 
     def live(self) -> list[WorkerHandle]:

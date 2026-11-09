@@ -2,10 +2,10 @@
 
 import json
 import logging
-import os
+import shutil
 import stat
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -39,6 +39,7 @@ from senselab_core.runtime.execution.substrates import (
     SiteRefused,
     Slurm,
     SubstrateError,
+    UndeclaredClient,
     WorkerHandle,
     scale,
 )
@@ -70,9 +71,9 @@ CLASSES: dict[str, Any] = {
 }
 SLURM_CLIENTS = (
     "sinfo squeue scontrol sacct sacctmgr sshare sprio sstat sdiag sreport salloc srun strigger scancel sattach sbcast "
-    "scrontab sh5util"
+    "scrontab sh5util sgather scrun sview smap seff sjstat"
 ).split()
-"""Every Slurm client a stub stands for: each logs its call, so the allowlist judges every call senselab makes."""
+"""Every Slurm client a stub stands for: each logs its call, and `PATH` holds nothing else but `cat`."""
 SBATCH = """#!/bin/sh
 d="$FAKE_SLURM"
 echo "sbatch $*" >> "$d/calls.log"
@@ -101,7 +102,10 @@ def stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for name, body in stubs.items():
         (bin_dir / name).write_text(body)
         (bin_dir / name).chmod(stat.S_IRWXU)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    cat = shutil.which("cat")
+    assert cat is not None
+    (bin_dir / "cat").symlink_to(cat)
+    monkeypatch.setenv("PATH", str(bin_dir))
     monkeypatch.setenv("FAKE_SLURM", str(state))
     with packaged(REGISTRY, tmp_path / "cache"):
         yield
@@ -320,17 +324,35 @@ def test_a_failing_hook_falls_back_and_says_so(
     assert "site tool is down" in str(event.placement.note)
 
 
-def _secret_hook(_: PlacementRequest) -> PlacementAnswer:
-    return PlacementAnswer(
-        classes={"cpu": PlacementValues(partition="hookpart_secret")}, why="hookpart_secret has idle nodes"
-    )
+def _hook(why: str, values: PlacementValues) -> Callable[[PlacementRequest], PlacementAnswer]:
+    return lambda _: PlacementAnswer(classes={"cpu": values}, why=why)
 
 
 SOURCES = {
     "variable": ("realpart_secret", "realpart_secret", {}, (), None),
     "override": (PARTITION, "overridepart_secret", {"partition": "overridepart_secret"}, (), None),
-    "hook": (PARTITION, "hookpart_secret", {}, (), _secret_hook),
+    "hook": (
+        PARTITION,
+        "hookpart_secret",
+        {},
+        (),
+        _hook("hookpart_secret has idle nodes", PlacementValues(partition="hookpart_secret")),
+    ),
     "exclude": (PARTITION, PARTITION, {}, ("node-secret-7",), None),
+    "replaced partition": (
+        PARTITION,
+        "overridepart_secret",
+        {"partition": "overridepart_secret"},
+        (),
+        _hook(f"{PARTITION} is full; keep overridepart_secret", PlacementValues()),
+    ),
+    "replaced exclude": (
+        PARTITION,
+        "n-other_secret",
+        {},
+        ("node-secret-7",),
+        _hook("node-secret-7 is down; avoid n-other_secret", PlacementValues(exclude=("n-other_secret",))),
+    ),
 }
 
 
@@ -343,7 +365,7 @@ def test_a_site_refusal_renders_under_the_audience_rule(
     caplog: pytest.LogCaptureFixture,
     source: str,
 ) -> None:
-    """The refusal and the placement record render the partition, account and nodes of the line, from any source."""
+    """The refusal and the placement record render every partition, account and node of every layer, a replaced one."""
     real, secret, override, exclude, hook = SOURCES[source]
     monkeypatch.setenv("SBATCH_ACCOUNT", ACCOUNT)
     monkeypatch.setenv("REAL_PART", real)
@@ -364,7 +386,7 @@ def test_a_site_refusal_renders_under_the_audience_rule(
     assert not [x for x in secrets[2:] if x in event.model_dump_json()]
     if hook is not None:
         assert event.placement is not None and event.placement.answer is not None
-        assert "<partition>" in event.placement.answer.why
+        assert any(label in event.placement.answer.why for label in ("<partition>", "<node>"))
 
 
 @pytest.mark.logic
@@ -440,6 +462,9 @@ def test_senselab_runs_no_scheduler_query_to_place(tmp_path: Path, clock: Manual
     assert all(c.startswith("sbatch ") or c.startswith("squeue --me") for c in calls)
     assert not any("--test-only" in c for c in calls)
     assert {c.split()[0] for c in calls} <= {"sbatch", "squeue"}
+    with pytest.raises(UndeclaredClient, match="sinfo"):
+        slurm._try(["sinfo", "--partition", PARTITION])
+    assert not [c for c in _calls(tmp_path) if c.startswith("sinfo")]
 
 
 class _Holding:
@@ -599,3 +624,6 @@ def test_placement_is_an_event_of_the_one_run_log(tmp_path: Path) -> None:
         Event(kind="queued", attempt="a", ordinal=1, writer="w", seq=0, t_ns=1)
     with pytest.raises(ValueError, match="carries its record"):
         Event(kind="placement", attempt="a", ordinal=1, writer="w", seq=0, t_ns=1)
+    for stray in ({"env": "e"}, {"reuse": "exact"}, {"placement_digest": "0" * 64}):
+        with pytest.raises(ValueError, match="carries its record alone"):
+            Event(kind="placement", attempt="a", ordinal=1, writer="w", seq=0, t_ns=1, placement=record, **stray)

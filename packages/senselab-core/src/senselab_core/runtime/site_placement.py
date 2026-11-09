@@ -29,6 +29,8 @@ logger = logging.getLogger("senselab")
 
 Layer = Literal["profile", "override", "hook"]
 """Who set a placement value: the profile, the explicit overrides or the site's hook."""
+Label = Literal["<partition>", "<node>", "<account>"]
+"""What a site name is rendered as in a text other users read."""
 FIELDS = ("partition", "time_s", "max_workers", "exclude")
 """The placement values a class takes, in the order the layers are recorded."""
 
@@ -193,13 +195,17 @@ def check_answer(request: PlacementRequest, answer: PlacementAnswer) -> str | No
 
 
 class ClassPlacement(Frozen):
-    """The values one class is placed with and the layer that set each, with the hook's verdict on its answer."""
+    """The values one class is placed with and the layer that set each, with the hook's verdict on its answer.
+
+    `names` holds every site name of every layer, a replaced one too, with the label it is rendered as (`rendered`).
+    """
 
     values: CurrentValues
     exclude: tuple[NonEmptyStr, ...] = ()
     verdict: Literal["no-hook", "accepted", "refused", "failed"] = "no-hook"
     note: str | None = None
     answer: PlacementAnswer | None = None
+    names: Mapping[NonEmptyStr, Label] = Field(default_factory=dict)
 
     def grant(self, base: ResourceClass) -> ResourceClass:
         """Return `base` with the partition, time and worker count these values give."""
@@ -285,9 +291,28 @@ def ask(hook: PlacementHook, request: PlacementRequest, *, bound_s: float, clock
     return result
 
 
+def site_names(partitions: Iterable[str | None] = (), nodes: Iterable[str] = ()) -> dict[str, Label]:
+    """Return each of `partitions` and `nodes`, as written and expanded, and the accounts of the environment, labelled.
+
+    An account is the one `SBATCH_ACCOUNT` or `SLURM_ACCOUNT` holds.
+    """
+    names: dict[str, Label] = {
+        os.environ[v]: "<account>" for v in ("SBATCH_ACCOUNT", "SLURM_ACCOUNT") if os.environ.get(v)
+    }
+    labelled: list[tuple[str, Label]] = [(p, "<partition>") for p in partitions if p]
+    for given, label in labelled + [(n, "<node>") for n in nodes]:
+        names.update({name: label for name in (given, expand_variables(given)) if name})
+    return names
+
+
+def _answered(answer: PlacementAnswer) -> dict[str, Label]:
+    given = answer.classes.values()
+    return site_names((v.partition for v in given), (n for v in given for n in v.exclude or ()))
+
+
 def _layered(
     name: str, base: ResourceClass, overrides: Mapping[str, PlacementValues], profile_exclude: tuple[str, ...] = ()
-) -> tuple[CurrentValues, tuple[str, ...]]:
+) -> ClassPlacement:
     given = overrides.get(name, PlacementValues())
     check_values(name, given)
     values = {f: getattr(base, f) for f in ("partition", "time_s", "max_workers")}
@@ -298,7 +323,8 @@ def _layered(
             if field != "exclude":
                 values[field] = getattr(given, field)
     exclude = given.exclude if given.exclude is not None else profile_exclude
-    return CurrentValues(**values, layers=layers), tuple(exclude)
+    names = site_names((base.partition, given.partition), (*profile_exclude, *(given.exclude or ())))
+    return ClassPlacement(values=CurrentValues(**values, layers=layers), exclude=tuple(exclude), names=names)
 
 
 def current_values(
@@ -312,7 +338,7 @@ def current_values(
     for name in overrides:
         if name not in profile_classes:
             raise PlacementAnswerRefused(name, "class", name, sorted(profile_classes), "the profile has no such class")
-    return {name: _layered(name, base, overrides)[0] for name, base in profile_classes.items()}
+    return {name: _layered(name, base, overrides).values for name, base in profile_classes.items()}
 
 
 class Placer:
@@ -380,11 +406,14 @@ class Placer:
                 return self._done[epoch, name]
             if name not in self.classes:
                 raise ValueError(f"no resource class {name!r}; the profile has {sorted(self.classes)}")
-            values, exclude = _layered(name, self.classes[name], self.overrides, self._exclude)
-            placed, needs, refusal = ClassPlacement(values=values, exclude=exclude), None, None
+            placed, needs, refusal = _layered(name, self.classes[name], self.overrides, self._exclude), None, None
             if self._hook is not None:
                 request = self._needs(name, epoch)
                 needs = request.held(name)
+                if needs is not None:
+                    placed = placed.model_copy(
+                        update={"names": {**placed.names, **site_names([needs.current.partition])}}
+                    )
                 placed, refusal = self._asked(self._hook, name, request, placed)
             if self._inert is not None:
                 placed = placed.model_copy(update={"note": "; ".join(n for n in (placed.note, self._inert) if n)})
@@ -403,16 +432,21 @@ class Placer:
         except PlacementHookFailed as err:
             logger.warning("%s; class %s keeps its explicit and profile values", err, name)
             return placed.model_copy(update={"verdict": "failed", "note": str(err)}), None
+        names = {**placed.names, **_answered(answer)}
         try:
             note = check_answer(request, answer)
         except PlacementAnswerRefused as err:
-            return placed.model_copy(update={"verdict": "refused", "note": str(err), "answer": answer}), err
+            update = {"verdict": "refused", "note": str(err), "answer": answer, "names": names}
+            return placed.model_copy(update=update), err
         given = answer.classes.get(name, PlacementValues())
         update = {f: getattr(given, f) for f in ("partition", "time_s", "max_workers") if getattr(given, f) is not None}
         layers = {**placed.values.layers, **{f: "hook" for f in FIELDS if getattr(given, f) is not None}}
         values = placed.values.model_copy(update={**update, "layers": layers})
         exclude = given.exclude if given.exclude is not None else placed.exclude
-        return ClassPlacement(values=values, exclude=tuple(exclude), verdict="accepted", note=note, answer=answer), None
+        accepted = ClassPlacement(
+            values=values, exclude=tuple(exclude), verdict="accepted", note=note, answer=answer, names=names
+        )
+        return accepted, None
 
 
 class ResolvedPlacement(Frozen):
@@ -441,21 +475,17 @@ def resolve_placement(
     return ResolvedPlacement(classes={c.resource_class: placer.for_class(c.resource_class, 0) for c in request.classes})
 
 
-def rendered(text: str, *, partitions: Iterable[str | None] = (), nodes: Iterable[str] = ()) -> str:
-    """Return `text` as a record other users read: accounts, `partitions` and `nodes` as labels, then paths, user, host.
+def rendered(text: str, names: Mapping[str, str]) -> str:
+    """Return `text` as a record other users read: the account `--account` names and `names` as labels, then paths.
 
-    The one helper of every text that may name a site: the refusal of a submission and the placement record. Give it
-    the values the text was built from (a `${VAR}` is rendered both as written and as expanded). An account is the
-    one `--account` names or `SBATCH_ACCOUNT` or `SLURM_ACCOUNT` holds. The operator's own text goes to the log
-    (`stored_message` does the rest).
+    The one helper of every text that may name a site: the refusal of a submission and the placement record. `names`
+    maps each site name to its label (`site_names`, `ClassPlacement.names`). The operator's own text goes to the log
+    (`stored_message` renders paths, user and host).
     """
     from senselab_core.runtime.execution.executor import stored_message  # noqa: PLC0415 - executor imports the planner
 
     shown = re.sub(r"(--account[= ])\S+", r"\1<account>", text)
-    names = [(os.environ[v], "<account>") for v in ("SBATCH_ACCOUNT", "SLURM_ACCOUNT") if os.environ.get(v)]
-    for given, label in [(p, "<partition>") for p in partitions if p] + [(n, "<node>") for n in nodes]:
-        names += [(name, label) for name in {given, expand_variables(given)}]
-    for name, label in sorted(names, key=lambda n: len(n[0]), reverse=True):
+    for name, label in sorted(names.items(), key=lambda n: len(n[0]), reverse=True):
         shown = re.sub(rf"(?<![\w-]){re.escape(name)}(?![\w-])", label, shown)
     if shown != text:
         logger.info("a placement text was rendered for the record; the operator's text was: %s", text)

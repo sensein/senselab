@@ -131,10 +131,24 @@ class Event(Formatted):
     @model_validator(mode="after")
     def _check(self) -> "Event":
         if self.kind == "placement":
-            if self.placement is None or any(
-                v is not None for v in (self.node, self.job, self.key, self.fault, self.failure, self.output)
+            if (
+                self.placement is None
+                or any(
+                    v is not None
+                    for v in (
+                        self.node,
+                        self.job,
+                        self.key,
+                        self.fault,
+                        self.failure,
+                        self.output,
+                        self.reuse,
+                        self.env,
+                    )
+                )
+                or self.placement_digest is not None
             ):
-                raise ValueError("a placement event carries its record and names no node, job, key, fault or output")
+                raise ValueError("a placement event carries its record alone: no node, job, key, fault, output or env")
             return self
         if self.node is None or self.placement is not None:
             raise ValueError("a job event names its node and carries no placement record")
@@ -413,19 +427,10 @@ def read_events(run_dir: Path) -> list[Event]:
 def placement_record(
     name: str, needs: ClassNeeds | None, hook: HookRef | None, placed: ClassPlacement
 ) -> PlacementRecord:
-    """Return the record of class `name`'s `placed` values, every site name in it rendered (`rendered`).
-
-    The names rendered are those of every source of the values: the profile's, the override's, the hook's answer and
-    the request's, each as written and expanded.
-    """
-    answered = [] if placed.answer is None else list(placed.answer.classes.values())
-    partitions = [placed.values.partition, *(a.partition for a in answered)]
-    nodes = [*placed.exclude, *(n for a in answered for n in a.exclude or ())]
-    if needs is not None:
-        partitions.append(needs.current.partition)
+    """Return the record of class `name`'s `placed` values, every text in it rendered with `placed.names`."""
 
     def show(text: str) -> str:
-        return rendered(text, partitions=partitions, nodes=nodes)
+        return rendered(text, placed.names)
 
     def current(found: CurrentValues) -> CurrentValues:
         return found.model_copy(update={"partition": None if found.partition is None else show(found.partition)})
@@ -448,7 +453,14 @@ def placement_record(
         )
     return PlacementRecord(
         resource_class=name,
-        request=None if needs is None else needs.model_copy(update={"current": current(needs.current)}),
+        request=None
+        if needs is None
+        else needs.model_copy(
+            update={
+                "current": current(needs.current),
+                "unmeasured": tuple(u.model_copy(update={"why": show(u.why)}) for u in needs.unmeasured),
+            }
+        ),
         answer=answer,
         hook=hook,
         verdict=placed.verdict,

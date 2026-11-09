@@ -401,7 +401,13 @@ _NEEDS = ClassNeeds(
     unmeasured=(UnmeasuredFigure(figure="time_floor_s", why="the load is unmeasured"),),
     current=_CURRENT,
 )
-_PLACED = ClassPlacement(values=_CURRENT, exclude=("n1",), verdict="accepted", answer=PlacementAnswer(why="idle"))
+_PLACED = ClassPlacement(
+    values=_CURRENT,
+    exclude=("n1",),
+    verdict="accepted",
+    answer=PlacementAnswer(why="idle"),
+    names={"q": "<partition>", "n1": "<node>"},
+)
 
 
 def _register_site(register: Register) -> None:
@@ -434,7 +440,10 @@ def _register_site(register: Register) -> None:
             [HookRef(path="site.hooks:place"), HookRef(path="a:b", version="1.0", importable=False)],
             [{"path": ""}],
         ),
-        ClassPlacement: ([_PLACED, ClassPlacement(values=_CURRENT)], [{"verdict": "maybe"}, {"exclude": ("",)}]),
+        ClassPlacement: (
+            [_PLACED, ClassPlacement(values=_CURRENT)],
+            [{"verdict": "maybe"}, {"exclude": ("",)}, {"names": {"q": "partition"}}],
+        ),
         ResolvedPlacement: (
             [ResolvedPlacement(classes={"cpu": _PLACED}), ResolvedPlacement(classes={})],
             [{"classes": 3}],
