@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 import senselab_core.runtime.fake_backend as fake
-from planted_objects_fixture import identity_leaks
+from planted_objects_fixture import MIRROR_INDEX, identity_leaks
 from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
 from senselab_core.kernel.identity import Attestation, ModelRef, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
@@ -36,7 +36,7 @@ pytestmark = pytest.mark.logic
 SHA = "a" * 40
 MODEL = ResolvedModel(ref=ModelRef.parse(f"org/m@{SHA}"), identity=SHA)
 IDENTITY = Attestation(engine_version="0.31.0", served_model="org/m", model_identity=SHA, config_digest="c" * 64)
-ENV = EnvHandle(source_tree_python(), platform.python_version(), "1" * 64, "2" * 64, None)
+ENV = EnvHandle(source_tree_python(), platform.python_version(), "1" * 64, "2" * 64, MIRROR_INDEX)
 BACKEND = fake.FAKE.model_copy(
     update={"name": "served", "env": Env.server("s"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
 )

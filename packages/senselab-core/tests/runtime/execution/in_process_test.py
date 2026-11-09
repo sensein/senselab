@@ -16,7 +16,7 @@ import pytest
 import senselab_core.runtime.call as call_module
 import senselab_core.runtime.fake_backend as fake
 import soundfile
-from planted_objects_fixture import identity_leaks
+from planted_objects_fixture import MIRROR_INDEX, identity_leaks
 from pydantic import ValidationError
 from senselab_core.kernel import prov
 from senselab_core.kernel._base import Frozen
@@ -218,7 +218,7 @@ def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHan
         python_version=platform.python_version(),
         lock_sha="1" * 64,
         wheel_set="2" * 64,
-        torch_index=None,
+        torch_index=MIRROR_INDEX,
     )
 
 
@@ -406,7 +406,7 @@ def test_no_host_name_in_the_store_after_a_run(store: ResultStore, tmp_path: Pat
 @pytest.mark.contract
 def test_no_index_url_in_the_store_after_a_run(store: ResultStore, tmp_path: Path) -> None:
     """A call whose env was installed from a userinfo mirror (`envs.torch_index`) stores its build, never the URL."""
-    mirror = "https://user:secret@mirror.internal/whl/cu128"
+    mirror = MIRROR_INDEX
 
     def opener(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
         return dataclasses.replace(_this_interpreter(backend, profile), torch_index=profile.envs.torch_index)
@@ -419,7 +419,7 @@ def test_no_index_url_in_the_store_after_a_run(store: ResultStore, tmp_path: Pat
     finally:
         use_packaged(previous)
     assert result.context.driver["torch_build"] == "cu128" and "torch_index" not in result.context.driver
-    assert identity_leaks(store.root, tmp_path, (mirror, "secret", "mirror.internal")) == []
+    assert identity_leaks(store.root, tmp_path) == []
 
 
 @pytest.mark.contract

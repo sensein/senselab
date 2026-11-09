@@ -541,12 +541,6 @@ def test_get_coerces_policy(tmp_path: Path, policy: object) -> None:
         s.get(k, c, policy)  # type: ignore[arg-type]
 
 
-@pytest.mark.logic
-def test_store_dir_is_format_5() -> None:
-    """Entries whose context records the env license are a new key space."""
-    assert STORE_DIR == "store@6"
-
-
 def _cycles() -> list[object]:
     d: dict[str, object] = {"a": 1}
     d["self"] = d

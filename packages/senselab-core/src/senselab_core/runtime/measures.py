@@ -105,8 +105,8 @@ def env_identity(entry: Mapping[str, Any]) -> dict[str, Any]:
 class MeasureEnv(Frozen):
     """The env's fingerprinted context fields that decide cost: its lock and wheels, driver, platform and numerics.
 
-    The driver holds only `DRIVER_KEYS`: the torch build (`cu128`, `cpu`) in place of its index URL, and for a server
-    the engine and its version. `threads` are the worker launch's measured thread counts (`Launch.measured`).
+    The driver holds only `DRIVER_KEYS`: the torch build (`cu128`, `cpu`) and, for a server, the engine and its version.
+    `threads` are the worker launch's measured thread counts (`Launch.measured`).
     """
 
     env_lock: NonEmptyStr

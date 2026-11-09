@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from planted_objects_fixture import identity_leaks, store_context, store_key
+from planted_objects_fixture import MIRROR_INDEX, identity_leaks, store_context, store_key
 from senselab_core.kernel.declare import Env
 from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.runtime.envs import EnvHandle, HostCuda, Uv, ensure_env, torch_build
@@ -16,8 +16,7 @@ from senselab_core.runtime.storage import StorePolicy
 from senselab_core.runtime.store import STORE_DIR, ResultStore
 from senselab_core.testing.calibration_samples import UNIT, observation
 
-MIRROR = "https://user:secret@mirror.internal/whl/cu128"
-NEEDLES = (MIRROR, "secret", "mirror.internal")
+MIRROR = MIRROR_INDEX
 FAKE_UV = Uv((sys.executable, str(Path(__file__).with_name("fake_uv_fixture.py"))))
 LEASE = JobLease(stale_after_s=30.0, renew_fraction=0.01, attribute_delay_s=0)
 
@@ -85,7 +84,7 @@ def test_store_dir_is_store6() -> None:
 def test_no_index_url_in_any_readable_record(tmp_path: Path) -> None:
     """With a userinfo mirror as the index, the store and the measures roots hold neither it nor its parts."""
     handle = _built(tmp_path, MIRROR)
-    assert handle.torch_index == MIRROR
+    assert handle.torch_index == "https://mirror.internal/whl/cu128"
     store, shared = tmp_path / "store", tmp_path / "measures"
     ResultStore(store).put(store_key(), {"y": 1}, _context(handle))
     entry = env_entry({**handle.context_fields(), "platform": "linux", "numerics": {"device": "cpu"}, "threads": {}})
@@ -99,5 +98,4 @@ def test_no_index_url_in_any_readable_record(tmp_path: Path) -> None:
     roots = MeasureRoots((shared,), StorePolicy.load_default(), "group", os.geteuid(), stale_after_s=60.0)
     roots.put_observations(unit, "p1", [observation(probe=None, item="i")], provenance)
     assert any(STORE_DIR in str(p) for p in store.rglob("*")) and any(shared.rglob("*.json"))
-    assert identity_leaks(store, tmp_path, NEEDLES) == [] and identity_leaks(shared, tmp_path, NEEDLES) == []
-    assert (tmp_path / "envs").is_dir() and any(MIRROR in p.read_text() for p in (tmp_path / "envs").glob("*.json"))
+    assert identity_leaks(store, tmp_path) == [] and identity_leaks(shared, tmp_path) == []

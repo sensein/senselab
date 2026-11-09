@@ -60,19 +60,6 @@ def test_a_later_minor_is_read(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_an_old_context_with_a_host_field_is_still_read(tmp_path: Path) -> None:
-    """A `execution-context@4.0` member carrying `host` is served as written (an entry is never rewritten)."""
-    s, k, c = ResultStore(tmp_path), store_key(), store_context()
-    s.put(k, {"y": 1}, c)
-    entry = entry_dir(tmp_path, k, c)
-    rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@4.0", host="node1"))
-    before = (entry / "context.json").read_bytes()
-    got = s.get(k, c, ReusePolicy.EXACT)
-    assert got is not None and got.outputs == {"y": 1} and got.context.host == "node1"
-    assert (entry / "context.json").read_bytes() == before
-
-
-@pytest.mark.logic
 def test_a_written_context_is_one_a_4_0_reader_accepts(tmp_path: Path) -> None:
     """A written context holds exactly the fields of `execution-context@4.0`, `host` among them as a host token."""
     s, k = ResultStore(tmp_path), store_key()

@@ -931,11 +931,16 @@ def real_names() -> set[str]:
     return {n for n in {*full, *(h.split(".")[0] for h in full), getpass.getuser()} if n}
 
 
+MIRROR_INDEX = "https://user:secret@mirror.internal/whl/cu128"
+"""The credentialed torch index every fake env of the runner tests is installed from."""
+MIRROR_NEEDLES = (MIRROR_INDEX, "user:secret", "mirror.internal")
+
+
 def identities_in(data: bytes, base: Path, needles: Sequence[str] = ()) -> list[str]:
-    """Return each real name `data` holds as a whole token, and each home, `base` or `needles` string anywhere."""
+    """Return each real name `data` holds as a whole token, and each home, `base`, mirror or `needles` string."""
     import re
 
-    paths = {str(Path.home()), str(base), str(base.resolve()), *needles}
+    paths = {str(Path.home()), str(base), str(base.resolve()), *needles, *MIRROR_NEEDLES}
     names = [n for n in sorted(real_names()) if re.search(rb"(?<![\w-])" + re.escape(n.encode()) + rb"(?![\w-])", data)]
     return names + [p for p in sorted(paths) if p.encode() in data]
 

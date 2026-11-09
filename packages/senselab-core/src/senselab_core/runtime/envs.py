@@ -114,8 +114,9 @@ class CudaCompatibilityError(RuntimeError):
         """Name the host CUDA, the index tried and the packages it lacks."""
         cuda = ".".join(map(str, host.version)) if host.version else "none"
         super().__init__(
-            f"no wheel for {packages} on {index.url} (host CUDA {cuda}, from {host.source}); set the execution "
-            f"profile's envs.torch_index to another index, e.g. {CPU_INDEX}"
+            f"no wheel for {packages} on torch build {index.tag} at {without_userinfo(index.url)} "
+            f"(host CUDA {cuda}, from {host.source}); set the execution profile's "
+            f"envs.torch_index to another index, e.g. {CPU_INDEX}"
         )
 
 
@@ -129,7 +130,7 @@ class HostCuda:
 
 @dataclass(frozen=True)
 class TorchIndex:
-    """The PyTorch wheel index torch is installed from: its URL, tag (`cu128`, `cpu`, `profile`) and source."""
+    """The PyTorch wheel index torch is installed from: its URL, its build tag (`torch_build(url)`) and source."""
 
     url: str
     tag: str
@@ -179,6 +180,12 @@ class EnvLock:
 _BUILD_TAG = re.compile(r"cu\d+|cpu|rocm[\d.]+|xpu")
 
 
+def without_userinfo(url: str) -> str:
+    """Return `url` without its `user:password@`: the form a record or a message may name."""
+    parts = urlsplit(url)
+    return parts._replace(netloc=parts.netloc.rpartition("@")[2]).geturl()
+
+
 def torch_build(index_url: str) -> str:
     """Return the torch build tag an index URL serves, from its last path segment, else `other`.
 
@@ -193,8 +200,8 @@ class EnvHandle:
     """A ready env: its interpreter and the identities an execution context records.
 
     `lock_sha` is the lock file's sha256, `wheel_set` the digest of the installed distributions, `torch_index` the
-    URL torch came from (None for a torch-free env), `python_version` the interpreter's (`t` for free-threaded),
-    `lock` the lock file it was built from (None for a host env).
+    URL torch came from without its userinfo (None for a torch-free env), `python_version` the interpreter's
+    (`t` for free-threaded), `lock` the lock file it was built from (None for a host env).
     """
 
     python: str
@@ -271,13 +278,14 @@ def pick_torch_index(
     `max_cuda` defaults to `DEFAULT_MAX_CUDA`; a host without CUDA, or older than every index, gets the CPU index.
     """
     if override:
-        return TorchIndex(override, "profile", "profile")
+        return TorchIndex(override, torch_build(override), "profile")
     if host.version is not None:
         effective = min(host.version, max_cuda or DEFAULT_MAX_CUDA)
         for tag, version in CUDA_INDEXES.items():
             if version <= effective:
-                return TorchIndex(f"{PYTORCH_INDEX_BASE}/{tag}", tag, "probe")
-    return TorchIndex(CPU_INDEX, "cpu", "probe")
+                url = f"{PYTORCH_INDEX_BASE}/{tag}"
+                return TorchIndex(url, torch_build(url), "probe")
+    return TorchIndex(CPU_INDEX, torch_build(CPU_INDEX), "probe")
 
 
 def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings, and two injectable boundaries
@@ -344,7 +352,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     lock_sha = file_digest("file@1", parsed.path)
-    wanted = (lock_sha, index.url if index else None)
+    wanted = (lock_sha, without_userinfo(index.url) if index else None)
     current = _read_record(root, stem)
     if current is not None and (current.lock_sha, current.torch_index) == wanted:
         return _handle(root, current, parsed.path)
@@ -393,7 +401,7 @@ def current_env(  # noqa: PLR0913 - the env, its lock, root and profile settings
     parsed = EnvLock.read(lock)
     stem, index, _ = _stem(env, parsed, settings, workers, host_cuda)
     current = _read_record(Path(root), stem) if Path(root).is_dir() else None
-    wanted = (file_digest("file@1", parsed.path), index.url if index else None)
+    wanted = (file_digest("file@1", parsed.path), without_userinfo(index.url) if index else None)
     if current is None or (current.lock_sha, current.torch_index) != wanted:
         return None
     return _handle(Path(root), current, parsed.path)
@@ -497,7 +505,7 @@ def _build(  # noqa: PLR0913 - one build's inputs
     return EnvRecord(
         directory=directory.name,
         lock_sha=lock_sha,
-        torch_index=index.url if index else None,
+        torch_index=without_userinfo(index.url) if index else None,
         python_version=(version[1] if version else lock.python.rstrip("t"))
         + ("t" if lock.python.endswith("t") else ""),
         wheel_set=_wheel_set(_site(directory)),
@@ -885,4 +893,5 @@ __all__ = [
     "pick_torch_index",
     "read_lock_inputs",
     "torch_build",
+    "without_userinfo",
 ]
