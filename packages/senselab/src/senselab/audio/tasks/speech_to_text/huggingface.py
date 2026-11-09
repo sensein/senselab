@@ -45,9 +45,9 @@ _INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 
 
 class TransformersParams(BackendParams):
-    """Backend params of `transformers`: tokens per window, window length in seconds, a cap on the pipeline batch.
+    """Backend params of `transformers`: tokens per window, window length in seconds, the pipeline batch.
 
-    `batch_size` absent runs the placed batch, every item of the request, as one pipeline call.
+    `batch_size` given is the pipeline's batch, in windows, unchanged; absent, every item of the request is one batch.
     """
 
     max_new_tokens: int = Field(default=128, ge=1)
@@ -140,9 +140,9 @@ def load(init: dict[str, Any]) -> State:
 def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     """Return one `{"outputs": {"transcript": <transcript@2.0 wire form>}}` per item, or its typed fault.
 
-    Items that pass the checks run in one pipeline call of the placed batch, capped by `batch_size`. If it raises a
-    content or unclassified fault, each runs alone so a fault stays with its item; a resource-class fault propagates
-    for the pool to split.
+    Items that pass the checks run in one pipeline call, of the placed batch or of `batch_size` windows when given.
+    If it raises a content or unclassified fault, each runs alone so a fault stays with its item; a resource-class
+    fault propagates for the pool to split.
     """
     task = SpeechToTextParams.model_validate({k: v for k, v in without_fault(params).items() if k != "backend_params"})
     faults = injected(params)
@@ -193,7 +193,7 @@ def _transcribe(
         return []
     kwargs: dict[str, Any] = {
         "chunk_length_s": tuning.chunk_length_s,
-        "batch_size": len(prepared) if tuning.batch_size is None else min(len(prepared), tuning.batch_size),
+        "batch_size": len(prepared) if tuning.batch_size is None else tuning.batch_size,
         "generate_kwargs": {"max_new_tokens": tuning.max_new_tokens, "num_beams": 1}
         | ({"language": task.language.lower()} if task.language else {}),
     }

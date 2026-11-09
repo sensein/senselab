@@ -210,9 +210,9 @@ def test_the_placed_batch_is_the_pipeline_batch() -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize(("cap", "expected"), [(2, 2), (1, 1), (8, 3)])
-def test_a_declared_batch_size_caps_the_placed_batch(cap: int, expected: int) -> None:
-    """`batch_size` is a cap on the pipeline batch: never above the placed batch, never above itself."""
+@pytest.mark.parametrize(("cap", "expected"), [(2, 2), (1, 1), (8, 8)])
+def test_a_declared_batch_size_passes_to_the_pipeline_unchanged(cap: int, expected: int) -> None:
+    """An explicit `batch_size` counts windows and reaches the pipeline as given, whatever the item count."""
     pipe = _Recording()
     hf.handle(hf.State(pipe, 16000), _three(), {**PARAMS, "backend_params": {"batch_size": cap}})
     assert pipe.batch_sizes == [expected]
