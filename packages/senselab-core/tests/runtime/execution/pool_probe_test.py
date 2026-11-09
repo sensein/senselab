@@ -27,7 +27,7 @@ from senselab_core.runtime.execution.job import JobOutcome
 from senselab_core.runtime.execution.observing import request_units
 from senselab_core.runtime.execution.pool import Pool, report
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of, probe_queue
-from senselab_core.runtime.execution.substrates import WorkerHandle, mark_ready
+from senselab_core.runtime.execution.substrates import Substrate, WorkerHandle, mark_ready
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.licenses import license_record
@@ -169,7 +169,7 @@ def _pool(  # noqa: PLR0913 - the run's places, its clock and the seams a test r
     run: str = "run",
     store: str = "store",
     clock: Clock | None = None,
-    substrate: object | None = None,
+    substrate: Substrate | None = None,
     **seams: object,
 ) -> Pool:
     run_dir = tmp_path / run
@@ -213,10 +213,12 @@ class Hand:
         load_s: float = 0.5,
         limit: int | None = None,
         served: int | None = None,
+        takes: HardwareClass | None = None,
     ) -> None:
         """Serve `pool`'s queues for `placed`."""
         self.pool, self.placed, self.values, self.hardware = pool, placed, values, hardware
         self.wall, self.load_s, self.limit, self.served = wall, load_s, limit, served
+        self.takes = takes if takes is not None else hardware
         self.since = 0
         self.items: list[tuple[str, PlanFragment]] = []
         self.probe_items = 0
@@ -227,7 +229,7 @@ class Hand:
         for name in self.pool.queues.names():
             queue = self.pool.queues.queue(name)
             probe = probe_of(name) is not None
-            if probe and (queue.probe_hardware() != self.hardware or self.limit == self.probe_items):
+            if probe and (queue.probe_hardware() != self.takes or self.limit == self.probe_items):
                 continue
             while (claim := queue.claim("hand", max_items=1)) is not None:
                 if probe and self.limit == self.probe_items:
@@ -446,8 +448,11 @@ def test_a_second_run_reuses_the_first_runs_measure_without_probing(tmp_path: Pa
     first = _pool(tmp_path, profile)
     _, handle = _submit(first, placed, values)
     assert len(_drive(first, handle, Hand(first, placed, values))) == JOBS
+    [probed] = first.probes.values()
     second = _pool(tmp_path, profile, run="run2", store="store2")
     _, again = _submit(second, placed, values)
+    estimate = second.measures.get(_unit(second, placed, values))
+    assert estimate is not None and probed.probe in estimate.source.probe_ids
     assert not _probe_queues(second) and not second.probes and second.queues.queue("cpu").work() == JOBS
     assert len(_drive(second, again, Hand(second, placed, values))) == JOBS
 
@@ -776,4 +781,31 @@ def test_the_stale_window_runs_from_the_last_claim_and_closes_the_queue_first(tm
     assert queue.probe_closed() and pool.queues.queue("cpu").work() > 0
     assert hand.serve() > 0 and all(n == "cpu" or probe_of(n) is None for n, _ in hand.items[1:])
     refs = given + _drive(pool, handle, Hand(pool, placed, values, hardware=ELSEWHERE))
+    assert sorted(r.job.element for r in refs) == sorted(j.element for j in fragment.jobs)
+
+
+@pytest.mark.logic
+def test_a_disagreeing_hello_resolves_a_probing_unit_again(tmp_path: Path) -> None:
+    """With the prediction already in the index, a hello of another class closes the probe built on it and probes anew.
+
+    The in-flight item's observations are written under the class of the worker that made them, and every job's
+    result is still given once.
+    """
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile)
+    fragment, handle = _submit(pool, placed, values)
+    [first] = _probe_queues(pool)
+    told = HardwareClass(device="cpu", name="Test CPU", cpus=2)
+    hand = Hand(pool, placed, values, hardware=told, limit=1, takes=SEEN)
+    hand.serve()
+    mark_ready(tmp_path / "run", {"cpu": told})
+    given = list(pool.poll(Handle(id=handle))[0])
+    assert pool.queues.queue(first).probe_closed()
+    [second] = [q for q in _probe_queues(pool) if q != first]
+    assert pool.queues.queue(second).probe_hardware() == told
+    unit = _unit(pool, placed, values).model_copy(update={"hardware": told})
+    assert pool.roots.observations(unit)
+    refs = given + _drive(pool, handle, Hand(pool, placed, values, hardware=told))
     assert sorted(r.job.element for r in refs) == sorted(j.element for j in fragment.jobs)

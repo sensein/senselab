@@ -198,6 +198,7 @@ class State:
     held: list[Held] = field(default_factory=list)
     run: Run | None = None
     checked: float | None = None
+    predicted: bool = False
 
 
 @dataclass(frozen=True)

@@ -24,7 +24,6 @@ with its env is logged `queued` again, so it reads as waiting, never as failed.
 """
 
 import contextlib
-import importlib.metadata
 import itertools
 import json
 import logging
@@ -38,20 +37,13 @@ from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.calibration import (
-    Candidate,
-    Estimate,
     HardwareClass,
     LengthProfile,
-    Observation,
-    Prior,
-    ProbeItem,
-    ProbePlan,
-    UnitKind,
 )
 from senselab_core.runtime.call import RunConfig, host_hardware
 from senselab_core.runtime.execution.batching import bucket_edges
@@ -70,7 +62,6 @@ from senselab_core.runtime.execution.executor import (
 )
 from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, job_units
 from senselab_core.runtime.execution.job import Job
-from senselab_core.runtime.execution.observing import job_units as detected_units
 from senselab_core.runtime.execution.plan_reads import servable_jobs
 from senselab_core.runtime.execution.pool_parts import (
     Dumped,
@@ -79,16 +70,14 @@ from senselab_core.runtime.execution.pool_parts import (
     Held,
     ProbedUnit,
     Release,
-    Run,
     State,
-    covers,
     jobs_of,
     larger_class,
     report,
     split,
-    worth,
 )
-from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of, probe_queue
+from senselab_core.runtime.execution.probe_machine import ProbeMachine, detected_kind
+from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of
 from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
     BrokenClass,
@@ -98,31 +87,20 @@ from senselab_core.runtime.execution.substrates import (
     Substrate,
     SubstrateError,
     class_of,
-    read_mark,
     scale,
 )
 from senselab_core.runtime.keys import Placement
-from senselab_core.runtime.locks import Lease, LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.measures import (
-    Build,
     Estimates,
     MeasureRoots,
-    MeasureUnit,
-    PeerProbing,
-    Provenance,
-    Unleased,
 )
 from senselab_core.runtime.planner import Plan, check_storage
-from senselab_core.runtime.probe import Probe
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import ExtrapolationLog, Grant, size
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import (
-    HardwareUnseen,
     UnitReads,
     UnitResolver,
-    Unresolved,
-    decoder_of,
     default_measures,
     measure_roots,
 )
@@ -141,7 +119,7 @@ DEAD_DIR = "dead"
 """The directory of a run's dead jobs, one `<key digest>.json` each."""
 
 
-class Pool:
+class Pool(ProbeMachine):
     """An `Executor` over the queues of the run in `run_dir`, its jobs run by pool workers a `substrate` starts.
 
     `submit` puts a fragment on its queue unless a newer epoch than `epoch` was taken (`StaleCoordinator`); `poll`
@@ -344,124 +322,6 @@ class Pool:
         seen = host_hardware() if resource.device == "cuda" or resource.mem_bytes is None else None
         return Grant.seen(resource, self.profile.pool, seen, devices=devices)
 
-    def _place(self, held: Held) -> None:
-        """Move `held`'s computed jobs through their unit's `ProbeState`: resolve, look up, and probe or put them."""
-        placed, values = self._admitted_plan(held.part)
-        jobs, placement = fragment_jobs(held.part, placed, values)
-        decoder = decoder_of(jobs)
-        hello = self._hello.get(class_of(held.queue))
-        unit = (
-            decoder if isinstance(decoder, Unresolved) else self.resolver.unit(jobs[0].call, placement, decoder, hello)
-        )
-        if isinstance(unit, HardwareUnseen):
-            held.followed.waiting.append(held.part)
-            self._resolving.append(held)
-            self._wake_scaler()
-        elif isinstance(unit, Unresolved):
-            self._produce(Release(held, None, None), jobs, placement)
-        else:
-            self._lookup(unit, held, jobs, placement)
-
-    def _lookup(self, unit: MeasureUnit, held: Held, jobs: Sequence[Job], placement: Placement) -> None:
-        """Take `held` to its unit's state: an ended unit sizes it, a waiting or probing one holds it, else look up."""
-        digest = unit.digest()
-        state = self._states.get(digest)
-        if state is not None:
-            if state.state in ("peer_wait", "probing"):
-                held.followed.waiting.append(held.part)
-                state.held.append(held)
-            else:
-                self._produce(Release(held, state.estimate, unit.label()), jobs, placement)
-            return
-        estimate = self.measures.get(unit)
-        plan = None if covers(estimate, jobs) else self._plan_probe(unit, held, jobs, placement)
-        if plan is None or not worth(plan, estimate):
-            self._states[digest] = State(
-                unit, held.queue, "measured" if estimate else "unmeasured", self._clock(), estimate
-            )
-            self._produce(Release(held, estimate, unit.label()), jobs, placement)
-            return
-        taken = self._take_lease(unit, digest)
-        if taken == "peer":
-            held.followed.waiting.append(held.part)
-            self._states[digest] = State(unit, held.queue, "peer_wait", self._clock(), estimate, [held])
-            return
-        self._start_probe(unit, held, plan, taken)
-
-    def _plan_probe(self, unit: MeasureUnit, held: Held, jobs: Sequence[Job], placement: Placement) -> ProbePlan | None:
-        """Return `Probe.plan` over `held`'s jobs against what the roots hold of `unit`; None when unplannable."""
-        found, kind = [detected_units(j) for j in jobs], detected_kind(jobs)
-        keys = self._keys(held.part)
-        candidates = [
-            Candidate(fragment="part", index=i, key=keys[i], units=u if k == kind != "none" else None)
-            for i, (k, u) in enumerate(found)
-        ]
-        edges = bucket_edges(placement.backend, kind)
-        if unit.formation.startswith("bucket:") and not edges:
-            return None
-        prior = Prior(observations=tuple(self.roots.observations(unit)), records=tuple(self.roots.regime_records(unit)))
-        return Probe.plan(
-            unit, candidates, prior, self.profile.calibration, unit.formation, self.profile.probe_s, bucket_edges=edges
-        )
-
-    def _take_lease(
-        self, unit: MeasureUnit, digest: str
-    ) -> Literal["peer"] | tuple[Lease | None, contextlib.ExitStack | None]:
-        """Take the unit's probe lease; "peer" while an admitted peer holds it and this unit has not yet waited."""
-        found = self.roots.probe_lease(unit)
-        if isinstance(found, PeerProbing):
-            return (None, None) if digest in self._waited else "peer"
-        if isinstance(found, Unleased):
-            return None, None
-        stack = contextlib.ExitStack()
-        try:
-            stack.enter_context(found)
-            stack.enter_context(found.keep_alive(self.profile.lease.renew_fraction))
-        except LeaseTimeout:
-            stack.close()
-            return (None, None) if digest in self._waited else "peer"
-        except LeaseUnavailable:
-            stack.close()
-            return None, None
-        return found, stack
-
-    def _start_probe(
-        self,
-        unit: MeasureUnit,
-        held: Held,
-        plan: ProbePlan,
-        taken: tuple[Lease | None, contextlib.ExitStack | None],
-    ) -> None:
-        """Put `plan`'s items on a new probe queue pinned to the unit's hardware class; its other jobs wait."""
-        probe_id = uuid.uuid4().hex
-        name = probe_queue(held.queue, probe_id)
-        self.queues.queue(name).set_probe_hardware(unit.hardware)
-        prior = tuple(self.roots.observations(unit))
-        run = Run(probe_id, name, plan, held, self._clock(), prior, last=self._clock(), lease=taken[0], stack=taken[1])
-        state = State(unit, held.queue, "probing", self._clock(), run=run)
-        with self._lock:
-            self._states[unit.digest()] = state
-        held.followed.waiting.append(held.part)
-        self._put_items(state, plan.items)
-
-    def _put_items(self, state: State, items: Sequence[ProbeItem]) -> None:
-        """Put probe `items` on the run's queue, one fragment of one request shape each."""
-        run, dumped = state.run, Dumped.of(state.run.held.part)  # type: ignore[union-attr]
-        assert run is not None
-        queue = self.queues.queue(run.queue)
-        for item in items:
-            indices = [c.index for c in item.jobs]
-            placement = run.held.part.placement.model_copy(update={"batch_size": item.request_jobs})
-            fragment = dumped.part(indices, placement=placement.model_dump(mode="json"))
-            queue.put_probe(fragment, item.phase, item.stratum)
-            flight = Flight(run.queue, item_digest(fragment), fragment)
-            run.held.followed.flights.append(flight)
-            run.awaiting[flight.digest] = (item, flight)
-            run.used.update(indices)
-            run.put[flight.digest] = len(indices)
-        self.probes[state.unit.digest()] = ProbedUnit(run.id, frozenset(run.put), sum(run.put.values()))
-        self._wake_scaler()
-
     def _produce(self, release: Release, jobs: Sequence[Job], placement: Placement) -> None:
         """Put `release`'s jobs sized (`size`) from its estimate, else the safe values: cut, and batched by length."""
         held, estimate = release.held, release.estimate
@@ -521,211 +381,6 @@ class Pool:
                 cap = max(c for _, c in rates)
                 base = min(max(1, math.ceil(work * slowest / self.profile.sizing.target_wall_s)), items, cap)
         return min(base + probing + (1 if resolving and not probing else 0), grant.max_workers)
-
-    def _advance(self) -> None:
-        """Advance every unit's state: greet new workers, resolve what waited on a hello, tick waits and probes."""
-        with self._machine:
-            fresh = self._greet()
-            if fresh and self._resolving:
-                waiting, self._resolving = self._resolving, []
-                for held in waiting:
-                    held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
-                    self._place(held)
-            if self._resolving:
-                self._expire_resolving()
-            for state in list(self._states.values()):
-                if state.state == "peer_wait":
-                    self._peer_tick(state)
-                elif state.state == "probing":
-                    self._probe_tick(state)
-            self._release_stragglers()
-            while self._releasing:
-                release = self._releasing[0]
-                placed, values = self._admitted_plan(release.held.part)
-                jobs, placement = fragment_jobs(release.held.part, placed, values)
-                self._produce(release, jobs, placement)
-                self._releasing.pop(0)
-
-    def _release_stragglers(self) -> None:
-        """Put as production the jobs of an item of a closed probe queue whose live claim has gone stale."""
-        for held, flight, indices in list(self._stragglers):
-            queue = self.queues.queue(flight.queue)
-            if queue.outcome(flight.digest) is None and not queue.claimed(flight.digest):
-                self._stragglers.remove((held, flight, indices))
-                held.followed.flights.remove(flight)
-                part = Held(held.followed, held.queue, Dumped.of(held.part).part(indices))
-                held.followed.waiting.append(part.part)
-                self._releasing.append(Release(part, None, None))
-            elif queue.outcome(flight.digest) is not None:
-                self._stragglers.remove((held, flight, indices))
-
-    def _greet(self) -> bool:
-        """Read each new ready mark: write its class into the hardware index; a class's first hello decides it.
-
-        Return whether a mark was read that had not been.
-        """
-        directory = self.run_dir / WORKERS_DIR
-        if not directory.is_dir():
-            return False
-        fresh = False
-        for path in sorted(directory.iterdir()):
-            if path.name.startswith(".") or path.name in self._greeted:
-                continue
-            if (mark := read_mark(path)) is None:
-                self._unreadable.add(path.name)
-                continue
-            self._unreadable.discard(path.name)
-            self._greeted.add(path.name)
-            fresh = True
-            for queue, seen in mark.hardware.items():
-                resource = self.profile.resource_classes.get(class_of(queue))
-                if resource is not None:
-                    self.roots.note_seen(resource, seen)
-                    self._hello.setdefault(class_of(queue), seen)
-        return fresh
-
-    def _expire_resolving(self) -> None:
-        """Run as production the jobs of a unit still `Resolving` `resolve_s` after its queue's first live worker."""
-        now = self._clock()
-        for handle in self._fleet.live():
-            if not handle.pending:
-                self._live_since.setdefault(handle.queue, now)
-        late = [
-            h
-            for h in self._resolving
-            if (since := self._live_since.get(h.queue)) is not None
-            and now - since >= self.profile.calibration.resolve_s
-        ]
-        self._resolving = [h for h in self._resolving if h not in late]
-        for held in late:
-            if held.queue not in self._said:
-                self._said.add(held.queue)
-                logger.warning(
-                    "no readable ready mark from a worker of %s within resolve_s of starting (%d unreadable); "
-                    "its jobs run on the safe values",
-                    held.queue,
-                    len(self._unreadable),
-                )
-            placed, values = self._admitted_plan(held.part)
-            jobs, placement = fragment_jobs(held.part, placed, values)
-            self._produce(Release(held, None, None), jobs, placement)
-
-    def _peer_tick(self, state: State) -> None:
-        """Return a waiting unit to `New` once its peer's lease is gone or `peer_wait_s` passed; else keep waiting."""
-        now = self._clock()
-        if state.checked is not None and now - state.checked < self.profile.pool.poll_s:
-            return
-        state.checked = now
-        expired = now - state.since >= self.profile.peer_wait_s
-        if not expired and self.roots.peer_holds(state.unit):
-            return
-        if expired:
-            self._waited.add(state.unit.digest())
-        with self._lock:
-            del self._states[state.unit.digest()]
-        for held in state.held:
-            held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
-            self._place(held)
-
-    def _warm_s(self, observations: Sequence[Observation]) -> float:
-        """Return the seconds of warm requests among `observations`: those after the model's load."""
-        return sum(o.wall_s for o in observations if o.load_s is None and o.since_load)
-
-    def _probe_tick(self, state: State) -> None:
-        """Read the probe's outcomes; replace a served item, plan the batched phase, or end it on its budgets."""
-        run, cfg = state.run, self.profile.calibration
-        assert run is not None
-        queue = self.queues.queue(run.queue)
-        for digest, (item, flight) in list(run.awaiting.items()):
-            record = queue.outcome(digest)
-            if record is None:
-                if queue.claimed(digest):
-                    run.last = self._clock()
-                continue
-            run.last = self._clock()
-            del run.awaiting[digest]
-            reported = record.get("observations") if record.get("outcome") == "done" else None
-            found = [Observation.model_validate(o) for o in reported] if isinstance(reported, list) else []
-            run.observations.extend(found)
-            if any(o.outcome == "served" for o in found) and self._warm_s(run.observations) < self.profile.probe_s:
-                old = run.plan
-                run.plan = Probe.replace_served(old, item)
-                self._put_items(state, [i for i in run.plan.items if i not in old.items])
-        spent = self._warm_s(run.observations)
-        if run.awaiting and spent < self.profile.probe_s:
-            if self._clock() - run.last >= self.profile.lease.stale_after_s:
-                self._conclude(state, None, write=False, abandon=True)
-            return
-        if run.stage == "single" and not run.awaiting and spent < self.profile.probe_s:
-            estimate = self._estimate(state, [*run.prior, *run.observations])
-            if estimate.status == "measured" and run.plan.batched:
-                more = Probe.plan_batched(
-                    run.plan,
-                    estimate,
-                    self._grant(state.queue),
-                    cfg,
-                    self.profile.probe_s - spent,
-                    memory_headroom=self.profile.sizing.memory_headroom,
-                )
-                if more.items:
-                    run.plan, run.stage = more, "batched"
-                    self._put_items(state, more.items)
-                    return
-        final = self._estimate(state, [*run.prior, *run.observations])
-        self._conclude(state, final if final.status == "measured" else None, write=True)
-
-    def _estimate(self, state: State, observations: Sequence[Observation]) -> Estimate:
-        return Probe.estimate(
-            observations,
-            self.roots.regime_records(state.unit),
-            self.profile.calibration,
-            hardware=state.unit.hardware,
-            memory_headroom=self.profile.sizing.memory_headroom,
-        )
-
-    def _conclude(self, state: State, estimate: Estimate | None, *, write: bool, abandon: bool = False) -> None:
-        """End `state`'s probe: write its observations under its proven lease, release the lease and its held jobs."""
-        run = state.run
-        assert run is not None
-        if abandon:
-            queue = self.queues.queue(run.queue)
-            queue.close_probe()
-            for digest, (item, flight) in run.awaiting.items():
-                indices = [c.index for c in item.jobs]
-                if queue.claimed(digest):
-                    self._stragglers.append((run.held, flight, indices))
-                    continue
-                run.held.followed.flights.remove(flight)
-                run.used.difference_update(indices)
-            run.awaiting.clear()
-        if write and run.observations and (run.lease is None or run.lease.prove()):
-            build = _build()
-            provenance = Provenance(
-                job=os.environ.get("SLURM_JOB_ID") or None,
-                run=self.run_dir.name,
-                senselab=build,
-                profile=self.profile.canonical_digest(),
-                hardware=state.unit.hardware,
-            )
-            self.roots.put_observations(state.unit, run.id, tuple(run.observations), provenance)
-        elif write and run.observations:
-            logger.warning("probe %s lost its lease; its observations are not written", run.id[:12])
-        if run.stack is not None:
-            run.stack.close()
-        label = state.unit.label()
-        with self._lock:
-            state.state, state.estimate = ("measured" if estimate else "unmeasured"), estimate
-        part = run.held.part
-        left = [i for i in range(len(part.jobs)) if i not in run.used]
-        waiting = list(state.held)
-        if left:
-            waiting.insert(0, Held(run.held.followed, run.held.queue, Dumped.of(part).part(left)))
-        run.held.followed.waiting = [p for p in run.held.followed.waiting if p is not part]
-        for held in waiting:
-            if held.part is not part and held not in state.held:
-                held.followed.waiting.append(held.part)
-            self._releasing.append(Release(held, estimate, label))
-        state.held.clear()
 
     def _queue_name(self, fragment: PlanFragment) -> str:
         """Return the queue of `fragment`: its class, with `#<model identity>` for its node's resident model."""
@@ -1039,20 +694,6 @@ def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float
         del pool
         woken = wake.wait(min(poll_s, backoff) if backoff > 0 else poll_s)
         wake.clear()
-
-
-def detected_kind(jobs: Sequence[Job]) -> UnitKind:
-    """Return the kind of input the jobs share (seconds, characters); `none` when they mix or hold neither."""
-    kinds = {k for k, _ in (detected_units(j) for j in jobs) if k != "none"}
-    return next(iter(kinds)) if len(kinds) == 1 else "none"
-
-
-def _build() -> Build | None:
-    """Return the installed senselab-core release for a record's provenance; None when it is not installed."""
-    try:
-        return Build(version=importlib.metadata.version("senselab-core"))
-    except importlib.metadata.PackageNotFoundError:
-        return None
 
 
 def _gap(kind: str, message: str) -> FaultRecord:
