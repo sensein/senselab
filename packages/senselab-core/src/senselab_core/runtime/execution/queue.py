@@ -39,7 +39,6 @@ the lease proven, and the staged record linked at `outcome/<digest>` in the one 
 import contextlib
 import logging
 import re
-import time
 import uuid
 from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from pathlib import Path
@@ -49,6 +48,7 @@ from senselab_worker.canonical import jcs_dumps, jcs_loads
 from senselab_worker.digest import identity_digest
 
 from senselab_core.runtime.calibration import HardwareClass
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment
 from senselab_core.runtime.locks import Lease, LeaseState, LeaseTimeout
@@ -376,12 +376,18 @@ class Queue:
         backoffs: How many times a claim found an item under another live claim and moved on.
     """
 
-    def __init__(
-        self, root: Path, name: str, profile: ExecutionProfile, epoch: Optional[Callable[[], int]] = None
+    def __init__(  # noqa: PLR0913 - the queue's place, name and profile, then the epoch and the clock
+        self,
+        root: Path,
+        name: str,
+        profile: ExecutionProfile,
+        epoch: Optional[Callable[[], int]] = None,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Open, creating it if missing, the queue `name` under `root`; use `QueueSet.queue`.
 
         `epoch` gives the current coordinator epoch, below which a hold does not count; every hold counts when None.
+        Every lease, the storage clock and the claim backoffs are read on `clock`.
 
         Raises:
             ValueError: `name` is not a resource class with an optional `#<model identity>`.
@@ -400,7 +406,7 @@ class Queue:
         self._targets: dict[tuple[int, int], str] = {}
         self._envs: dict[str, str] = {}
         self._jobs: dict[str, int] = {}
-        self._epoch = epoch
+        self._epoch, self._clock = epoch, clock
         self._head = 0
         self._oldest = 0
         with StorageDir.open_root(self.path, create=True, mode=STAGING_DIR_MODE) as q:
@@ -425,7 +431,7 @@ class Queue:
     def serve_lease(self) -> Optional[ServeLease]:
         """Take the lease that pins this queue to one worker, beating until released; None while another's is live."""
         stack = contextlib.ExitStack()
-        lease = Lease(self.path / SERVE_LEASE, timeout=0, stale_after=self._stale_after)
+        lease = Lease(self.path / SERVE_LEASE, timeout=0, stale_after=self._stale_after, clock=self._clock)
         try:
             stack.enter_context(lease)
         except LeaseTimeout:
@@ -644,14 +650,14 @@ class Queue:
     def claimed_any(self) -> bool:
         """Return whether any item of this queue is under a claim stamped within the stale bound."""
         with self.open() as q, q.child("claims") as claims:
-            now = q.dir_now()
+            now = self._clock.storage_now(q)
             leased = [n.removesuffix(".lease") for n in claims.listdir() if n.endswith(".lease")]
             return any(self._live(claims, digest, now) for digest in leased)
 
     def claimed(self, digest: str) -> bool:
         """Return whether `digest` is under a claim stamped within the stale bound, on the storage clock."""
         with self.open() as q, q.child("claims") as claims:
-            return self._live(claims, digest, q.dir_now())
+            return self._live(claims, digest, self._clock.storage_now(q))
 
     def claim(
         self, worker: str, max_items: Optional[int] = None, max_jobs: Optional[int] = None, *, singles: bool = False
@@ -723,7 +729,7 @@ class Queue:
     ) -> None:
         """Take claims into `taken`, oldest first, until `bound` is full or no live segment has an item that fits."""
         leased = {n.removesuffix(".lease") for n in claims.listdir() if n.endswith(".lease")}
-        now = time.monotonic()
+        now = self._clock.now()
         self._judged = {d: at for d, at in self._judged.items() if d in leased and now - at < self._interval}
         self._missing = {d: at for d, at in self._missing.items() if now - at < self._interval}
         walk = self._segments(segments)
@@ -776,12 +782,14 @@ class Queue:
         None too when its env's label is in `skip`.
         """
         stack = contextlib.ExitStack()
-        lease = Lease(claims.path / digest, timeout=0, stale_after=self._stale_after, directory=claims)
+        lease = Lease(
+            claims.path / digest, timeout=0, stale_after=self._stale_after, directory=claims, clock=self._clock
+        )
         try:
             stack.enter_context(lease)
         except LeaseTimeout:
             self.backoffs += 1
-            self._judged[digest] = time.monotonic()
+            self._judged[digest] = self._clock.now()
             return None
         try:
             with q.child("outcome") as outcome:
@@ -815,7 +823,7 @@ class Queue:
             )
             logger.warning("queue %s: item %s is missing; it stays ready", self.name, digest)
             self.faults.append((digest, fault))
-            self._missing[digest] = time.monotonic()
+            self._missing[digest] = self._clock.now()
             return None
         try:
             document = jcs_loads(data)
@@ -880,7 +888,7 @@ class Queue:
         An item behind a stale claim (its holder dead) counts as waiting. None when no item waits.
         """
         with self.open() as q, q.child("segments") as segments, q.child("claims") as claims:
-            now = q.dir_now()
+            now = self._clock.storage_now(q)
             for name in sorted(n for n in segments.listdir() if SEQ_NAME.fullmatch(n) and int(n) >= self._oldest):
                 with contextlib.suppress(FileNotFoundError), segments.child(name) as segment:
                     if segment.lstat(RETIRED_MARK) is not None:
@@ -915,9 +923,14 @@ class QueueSet:
     """
 
     def __init__(
-        self, root: Path, profile: Optional[ExecutionProfile] = None, *, epoch: Optional[Callable[[], int]] = None
+        self,
+        root: Path,
+        profile: Optional[ExecutionProfile] = None,
+        *,
+        epoch: Optional[Callable[[], int]] = None,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
-        """Hold the queues under `root`; `epoch` gives the current coordinator epoch, as `Queue` reads it.
+        """Hold the queues under `root`; `epoch` and `clock` are as `Queue` reads them.
 
         A run's queues live in `<run dir>/queues`, so `epoch` is the current epoch of the run at `root`'s parent
         (`Epoch(root.parent).current`, 0 where no epoch was taken) when None.
@@ -925,13 +938,14 @@ class QueueSet:
         self.root = Path(root)
         self.profile = profile if profile is not None else ExecutionProfile.load()
         self.epoch = epoch if epoch is not None else Epoch(self.root.parent).current
+        self._clock = clock
         self._queues: dict[str, Queue] = {}
         self._labels: dict[str, str] = {}
 
     def queue(self, name: str) -> Queue:
         """Return the queue `name`, made if missing."""
         if name not in self._queues:
-            self._queues[name] = Queue(self.root, name, self.profile, self.epoch)
+            self._queues[name] = Queue(self.root, name, self.profile, self.epoch, self._clock)
         return self._queues[name]
 
     def names(self) -> list[str]:

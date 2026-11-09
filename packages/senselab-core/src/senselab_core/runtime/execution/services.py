@@ -18,7 +18,6 @@ import http.client
 import logging
 import math
 import re
-import time
 import urllib.error
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -30,6 +29,7 @@ from pydantic import ValidationError
 from senselab_core.kernel._base import NonEmptyStr
 from senselab_core.kernel.formats import SERVICE_ENTRY_FORMAT, FormatTag, Formatted
 from senselab_core.kernel.identity import Attestation
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.hardware import device_set, host_token
 from senselab_core.runtime.locks import LEASE_SUFFIX, Lease, LeaseState, LeaseTimeout, LeaseUnavailable
@@ -58,12 +58,13 @@ class ServiceRegistry:
     Args:
         root: The registry directory, made on first use.
         lease: The profile's `lease`: every registration and consumer lease beats under it.
+        clock: The clock every lease and every consumed-since reading is timed on.
     """
 
-    def __init__(self, root: Path, *, lease: JobLease) -> None:
+    def __init__(self, root: Path, *, lease: JobLease, clock: Clock = SystemClock()) -> None:  # noqa: B008 - stateless
         """Use `root` under `lease`; nothing is made until a lease is taken."""
         self.root = Path(root)
-        self.lease = lease
+        self.lease, self.clock = lease, clock
 
     @staticmethod
     def name(identity: Attestation) -> str:
@@ -71,7 +72,7 @@ class ServiceRegistry:
         return f"svc-{identity.canonical_digest()}"
 
     def _lease(self, resource: Path, timeout: float) -> Lease:
-        return Lease(resource, timeout=timeout, stale_after=self.lease.stale_after_s)
+        return Lease(resource, timeout=timeout, stale_after=self.lease.stale_after_s, clock=self.clock)
 
     def _kept(self, resource: Path) -> tuple[Lease, contextlib.ExitStack, LeaseState]:
         """Take the lease over `resource` at once and keep it alive; return it, what releases it, and its state.
@@ -182,7 +183,7 @@ class ServiceLease:
         self.registry, self.identity, self.state = registry, identity, state
         self.entry: ServiceEntry | None = None
         self._lease, self._stack = lease, stack
-        self._consumed = time.monotonic()
+        self._consumed = registry.clock.now()
 
     def publish(self, endpoint: str) -> ServiceEntry:
         """Write the entry `{identity, endpoint}` while the lease is proven held; consumed as of now.
@@ -198,12 +199,12 @@ class ServiceLease:
         write_atomically(
             self.registry.root / f"{self.registry.name(self.identity)}.json", entry.model_dump_json().encode()
         )
-        self.entry, self._consumed = entry, time.monotonic()
+        self.entry, self._consumed = entry, self.registry.clock.now()
         return entry
 
     def touch(self) -> None:
         """Count the service as consumed now: its own worker ran jobs on it."""
-        self._consumed = time.monotonic()
+        self._consumed = self.registry.clock.now()
 
     def idle_s(self) -> float:
         """Return the seconds since a consumer lease was last seen live (since registration or `touch` if later).
@@ -213,8 +214,8 @@ class ServiceLease:
         if self.state.lost:
             return math.inf
         if self.registry.live_consumers(self.identity):
-            self._consumed = time.monotonic()
-        return time.monotonic() - self._consumed
+            self._consumed = self.registry.clock.now()
+        return self.registry.clock.now() - self._consumed
 
     def close(self) -> None:
         """Remove the entry while the lease still holds it, then release the lease; safe to call twice."""
@@ -304,14 +305,18 @@ class ConsumerLease:
         self._stack.close()
 
 
-def service_registry(profile: ExecutionProfile, environ: Mapping[str, str] | None = None) -> ServiceRegistry:
+def service_registry(
+    profile: ExecutionProfile,
+    environ: Mapping[str, str] | None = None,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
+) -> ServiceRegistry:
     """Return the registry of this host's devices under `profile`: `<server env root>/services/<host token>/<devices>`.
 
     `<devices>` names the devices this process sees (`device_set` of `environ`, `os.environ` when None), so the
-    servers of each card are registered, and consumed, apart.
+    servers of each card are registered, and consumed, apart. Its leases are timed on `clock`.
     """
     root = profile.env_root("server") / "services" / host_token() / device_set(environ=environ)
-    return ServiceRegistry(root, lease=profile.lease)
+    return ServiceRegistry(root, lease=profile.lease, clock=clock)
 
 
 __all__ = [

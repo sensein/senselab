@@ -22,7 +22,6 @@ import re
 import signal
 import socket
 import subprocess
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,6 +36,7 @@ from senselab_worker.digest import identity_digest
 from senselab_worker.faults import ResourceFault
 
 from senselab_core.kernel.identity import Attestation, ResolvedModel
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.supervisor import current
 from senselab_core.runtime.execution_settings import JobLease
@@ -310,6 +310,7 @@ class VllmServer:
         log_dir: Path | None = None,
         network: Network = "online",
         memory: MemoryProbe = device_free_memory,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Describe the server; nothing starts until the context is entered.
 
@@ -327,6 +328,7 @@ class VllmServer:
             log_dir: Where the server's output goes, one mode-600 file per server; the owner's stderr when None.
             network: The profile's `network`; `offline` gives the server `OFFLINE_VARIABLES`.
             memory: Reads the free and total memory of the server's devices (None: those it inherits).
+            clock: The clock the start lease and the wait for health run on.
 
         Raises:
             ValueError: `model` is unpinned or a url model, or `settings` is not exactly the known keys.
@@ -338,7 +340,7 @@ class VllmServer:
         self.variables = server_variables(settings)
         self._digest = config_digest(settings)
         self.memory_share = float(settings["gpu_memory_utilization"])
-        self._memory = memory
+        self._memory, self._clock = memory, clock
         self.executable = Path(env.python).parent / "vllm"
         self.devices = None if devices is None else [str(device) for device in devices]
         self.start_lock_dir = Path(start_lock_dir)
@@ -378,7 +380,7 @@ class VllmServer:
         try:
             stale_after = self.lease.stale_after_s
             wait = self.startup_timeout_s + self.start_margin_s + stale_after + TIMEOUT_S
-            held = Lease(self.lock_path, stale_after=stale_after, timeout=wait)
+            held = Lease(self.lock_path, stale_after=stale_after, timeout=wait, clock=self._clock)
             with held, held.keep_alive(self.lease.renew_fraction) as state:
                 if state.lost or not held.prove():
                     raise LeaseUnavailable(held.path, f"the start lease {held.path} was lost before the server started")
@@ -460,14 +462,14 @@ class VllmServer:
 
     def _await_health(self) -> None:
         assert self._server is not None and self.url is not None
-        deadline = time.monotonic() + self.startup_timeout_s
+        deadline = self._clock.now() + self.startup_timeout_s
         while not _healthy(self.url):
             code = self._server.poll()
             if code is not None:
                 raise self._start_error("exited", f"vllm serve exited with {code} before it was healthy")
-            if time.monotonic() > deadline:
+            if self._clock.now() > deadline:
                 raise self._start_error("timeout", f"vllm serve was not healthy within {self.startup_timeout_s:g}s")
-            time.sleep(POLL_S)
+            self._clock.sleep(POLL_S)
 
     def _check_memory(self) -> None:
         """Refuse to launch on a device whose free memory is below `gpu_memory_utilization` of its total.

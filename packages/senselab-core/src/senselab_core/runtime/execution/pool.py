@@ -30,11 +30,10 @@ import logging
 import math
 import os
 import threading
-import time
 import uuid
 import weakref
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
@@ -45,6 +44,7 @@ from senselab_core.runtime.calibration import (
     LengthProfile,
 )
 from senselab_core.runtime.call import RunConfig, host_hardware
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.batching import bucket_edges
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import BrokenEnv, EventLog, read_events
@@ -151,12 +151,12 @@ class Pool:
         profile: ExecutionProfile,
         substrate: Substrate,
         epoch: int,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
         measures: Estimates | None = None,
         roots: MeasureRoots | None = None,
         resolver: UnitReads | None = None,
     ) -> None:
-        """Coordinate the run in `run_dir` as epoch `epoch`; `clock` dates each epoch read and each probe wait.
+        """Coordinate the run in `run_dir` as epoch `epoch`; `clock` times every read and wait of the pool.
 
         Raises:
             ValueError: `events` is not a log of `epoch`.
@@ -169,6 +169,7 @@ class Pool:
             budget=profile.faults.infrastructure_replacements,
             first_s=profile.substrate.start_backoff_first_s,
             max_s=profile.substrate.start_backoff_max_s,
+            clock=clock,
         )
         self.broken_workers: dict[str, BrokenClass] = {}
         self._surplus: dict[str, float] = {}
@@ -184,7 +185,7 @@ class Pool:
         self.bind_epoch(epoch, events)
         self.broken: dict[str, BrokenEnv] = {}
         self.gaps: list[tuple[JobRef, FaultRecord]] = []
-        self._epochs = Epoch(self.run_dir)
+        self._epochs = Epoch(self.run_dir, clock)
         self._plans: dict[str, tuple[Plan, Mapping[InputIdentity, object]]] = {}
         self._admitted: Counter[str] = Counter()
         self._followed: dict[str, Followed] = {}
@@ -243,7 +244,7 @@ class Pool:
 
     def _fence(self, *, recent: bool = False) -> None:
         """Raise `StaleCoordinator` once a newer epoch is taken; `recent` reuses a read younger than `first_poll_s`."""
-        now, fenced = self._clock(), self._fenced
+        now, fenced = self._clock.now(), self._fenced
         if recent and fenced is not None and now - fenced[0] < self.profile.pool.first_poll_s:
             current = fenced[1]
         else:
@@ -386,7 +387,7 @@ class Pool:
         """Have the scaler thread size the workers now, starting it the first time."""
         with self._lock:
             if self._scaler is None and not self._closing:
-                rounds = (weakref.ref(self), self._scale_wake, self.profile.pool.poll_s)
+                rounds = (weakref.ref(self), self._scale_wake, self.profile.pool.poll_s, self._clock)
                 self._scaler = threading.Thread(target=_scale_rounds, args=rounds, name="senselab-scaler", daemon=True)
                 self._scaler.start()
         self._scale_wake.set()
@@ -409,7 +410,14 @@ class Pool:
             return
         self._scaling = True
         try:
-            scale(self.queues, self._fleet, self.profile, workers=self.workers_wanted, surplus_since=self._surplus)
+            scale(
+                self.queues,
+                self._fleet,
+                self.profile,
+                workers=self.workers_wanted,
+                surplus_since=self._surplus,
+                clock=self._clock,
+            )
         except SubstrateError as err:
             logger.warning("the substrate failed: %s", err)
             self._fleet.fail_substrate(err)
@@ -722,7 +730,7 @@ class _PoolHost:
         self._pool._wake_scaler()  # noqa: SLF001
 
 
-def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float) -> None:
+def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float, clock: Clock) -> None:
     """Scale the pool `ref` names on each wake, and once per `poll_s` while it follows a fragment.
 
     While the substrate backs off, the next round comes when its wait ends, if sooner. Ends once the pool is closed or
@@ -739,7 +747,7 @@ def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float
                 return
         backoff = pool._fleet.substrate_wait()  # noqa: SLF001
         del pool
-        woken = wake.wait(min(poll_s, backoff) if backoff > 0 else poll_s)
+        woken = clock.wait(wake, min(poll_s, backoff) if backoff > 0 else poll_s)
         wake.clear()
 
 
