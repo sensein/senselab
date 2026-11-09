@@ -497,7 +497,7 @@ def test_dead_pooled_worker_is_closed_and_replaced(store: ResultStore, tier_boun
     _in_process(_call("first"), execution=_profile("isolated"), store=store)
     [old] = [w for w in WORKERS.pooled() if isinstance(w, WorkerClient) and w.alive]
     os.kill(int(old.hello["pid"]), signal.SIGKILL)
-    assert old._exited.wait(tier_bound) and not old.alive  # noqa: SLF001 - the client's own exit signal
+    assert old.wait_exited(tier_bound) and not old.alive
     result = _in_process(_call("second"), execution=_profile("isolated"), store=store)
     assert result.reused is None
     assert not old.array_dir.exists() and old not in WORKERS.pooled()

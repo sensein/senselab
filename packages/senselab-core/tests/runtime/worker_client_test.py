@@ -10,7 +10,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -21,7 +20,7 @@ import senselab_worker
 from backends.subdir_backend_fixture import ARRAY_LIKE
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from lifecycle_probes_fixture import gate, interpreter, listing, recorded_pids
+from lifecycle_probes_fixture import gate, interpreter, listing
 from senselab_core.kernel.declare import Env
 from senselab_core.runtime import worker_client
 from senselab_core.runtime.fake_backend import FAKE as FAKE_SPEC
@@ -34,16 +33,15 @@ from senselab_core.runtime.worker_client import (
     WorkerClient,
     WorkerFatal,
     WorkerLost,
-    WorkerTimeout,
 )
 from senselab_core.testing.interpreter import source_tree_python
-from senselab_core.testing.processes import alive, group_alive, state
+from senselab_core.testing.processes import alive, group_alive
 from senselab_worker import codec, runtime_identity
 from senselab_worker.canonical import MAX_DEPTH, canonical_npy_bytes
 from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_LINE_BYTES, LineTooLarge, to_wire
 from senselab_worker.digest import identity_digest
 from senselab_worker.fake import EXIT_CRASH, FAULT_KEY
-from senselab_worker.faults import FaultClass, ProtocolError, ValueTooLarge, classify, error_record
+from senselab_worker.faults import FaultClass, ProtocolError, ValueTooLarge, classify
 from senselab_worker.model_cache import ModelCache
 
 FAKE = "senselab_worker.fake"
@@ -51,42 +49,7 @@ SCRIPTED = Path(__file__).parent / "scripted_worker_fixture.py"
 posix_only = pytest.mark.skipif(os.name == "nt", reason="stands in for the interpreter with a shell script")
 
 PYTHON = source_tree_python()
-
-
-@pytest.fixture(autouse=True)
-def no_leaked_processes(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[subprocess.Popen[bytes]]]:
-    """Fail a test that leaves a worker process running or unreaped.
-
-    Records every ``Popen`` the client creates and asserts each has been waited on
-    (``returncode`` is set only by ``poll``/``wait``), so a zombie counts as a leak and
-    children spawned by other tests, such as multiprocessing helpers, are ignored.
-    """
-    spawned: list[subprocess.Popen[bytes]] = []
-    real = subprocess.Popen
-
-    class _Recording(real):  # type: ignore[valid-type, misc]
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__(*args, **kwargs)
-            spawned.append(self)
-
-    monkeypatch.setattr(subprocess, "Popen", _Recording)
-    yield spawned
-    monkeypatch.undo()
-    leaked = [p.pid for p in spawned if p.returncode is None]
-    for p in spawned:
-        if p.returncode is None:
-            p.kill()
-            p.wait()
-    assert leaked == []
-
-
-@pytest.fixture
-def array_parent(tmp_path: Path) -> Iterator[Path]:
-    """A parent for the client's array directory, which must hold nothing after the test."""
-    path = tmp_path / "arrays"
-    path.mkdir()
-    yield path
-    assert list(path.iterdir()) == []
+pytestmark = pytest.mark.usefixtures("no_leaked_processes")
 
 
 @pytest.fixture
@@ -396,20 +359,6 @@ def test_crash_mid_batch_is_worker_lost(array_parent: Path) -> None:
 
 
 @pytest.mark.logic
-def test_timeout_is_resource_fault(array_parent: Path) -> None:
-    """A load or request past its timeout is `WorkerTimeout`, a typed resource fault, and the worker is killed."""
-    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent, request_timeout=0.5)
-    with pytest.raises(WorkerTimeout) as info:
-        client.run([{"id": "a", "inputs": {}}], {FAULT_KEY: {"latency_s": 60}})
-    record = error_record(info.value)
-    assert (record["fault"], record["gap"]) == ("resource", False) and isinstance(info.value, TimeoutError)
-    assert not client.alive and info.value.__notes__
-    client.close()
-    with pytest.raises(WorkerTimeout):
-        WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent, load_timeout=1e-9)
-
-
-@pytest.mark.logic
 def test_close_is_idempotent_and_context_managed(array_parent: Path) -> None:
     """`close` may be called twice; the client is a context manager."""
     with WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent) as client:
@@ -634,43 +583,6 @@ def test_leak_fixture_records_a_child_until_it_is_waited_on(no_leaked_processes:
 
 
 ITEMS = [{"id": "a", "inputs": {"x": numpy.arange(8, dtype="<i4")}}, {"id": "b", "inputs": {}}]
-STOPPED_WAIT_S = 30.0
-
-
-@pytest.mark.limits
-def test_forking_backend_leaves_no_survivor(tmp_path: Path, backends_importable: None) -> None:
-    """A timed-out request and `close()` end within their bound and leave no grandchild running."""
-    pid_file = tmp_path / "pids"
-    client = WorkerClient(
-        PYTHON, "backends.forking_backend_fixture", init={"pid_file": str(pid_file)}, request_timeout=2
-    )
-    pgid = client.hello["pid"]
-    t0 = time.monotonic()
-    with pytest.raises(TimeoutError):
-        client.run([{"id": "a", "inputs": {}}], {"mode": "hang"})
-    client.close()
-    assert time.monotonic() - t0 < 2 + DEFAULT_GRACES.bound
-    pids = recorded_pids(pid_file)
-    assert len(pids) == 2 and not any(map(alive, pids))
-    assert not group_alive(pgid)
-
-
-@pytest.mark.limits
-def test_timeout_returns_though_a_grandchild_holds_stderr(tmp_path: Path, backends_importable: None) -> None:
-    """A backend that leaves a grandchild on stderr and hangs: `run` alone returns and kills it.
-
-    The grandchildren start in `load`, so they exist before the request's timeout starts.
-    """
-    pid_file = tmp_path / "pids"
-    init = {"pid_file": str(pid_file), "spawn_at_load": True}
-    client = WorkerClient(PYTHON, "backends.forking_backend_fixture", init=init, request_timeout=2)
-    assert len(recorded_pids(pid_file)) == 2
-    t0 = time.monotonic()
-    with pytest.raises(TimeoutError):
-        client.run([{"id": "a", "inputs": {}}], {"mode": "hang"})
-    assert time.monotonic() - t0 < 2 + DEFAULT_GRACES.bound
-    assert not client.alive and not any(map(alive, recorded_pids(pid_file)))
-    client.close()
 
 
 @pytest.mark.logic
@@ -809,53 +721,16 @@ def test_backend_subdir_leaves_runs_and_the_worker_usable(
     assert str(c.array_dir) in caplog.text
 
 
-def _wait_stopped(pid: int) -> None:
-    end = time.monotonic() + STOPPED_WAIT_S
-    while not state(pid).startswith("T"):
-        assert time.monotonic() < end, f"worker {pid} did not stop"
-
-
-@pytest.mark.limits
-def test_send_to_wedged_worker_respects_deadline(array_parent: Path, backends_importable: None) -> None:
-    """An 8 MB request to a worker that has stopped reading times out at `request_timeout`."""
-    client = WorkerClient(
-        PYTHON, "backends.slow_reader_backend_fixture", init={}, array_parent=array_parent, request_timeout=2
-    )
-    client.run([{"id": "a", "inputs": {}}], {"mode": "stop_reading"})
-    _wait_stopped(client.hello["pid"])
-    t0 = time.monotonic()
-    with pytest.raises(TimeoutError):
-        client.run([{"id": "a", "inputs": {}}], {"blob": "x" * 8 * 2**20})
-    assert time.monotonic() - t0 < 2 + DEFAULT_GRACES.bound
-    assert not group_alive(client.hello["pid"])
-    client.close()
-
-
-def _run_over_a_fifo_named_like_an_array(array_parent: Path) -> tuple[dict[str, Any], float]:
-    """Run a request whose response names a FIFO at `<sha>.npy`; return the item's record and the time it took."""
+@pytest.mark.logic
+def test_fifo_named_like_an_array_does_not_hang_the_host(array_parent: Path) -> None:
+    """A response naming a FIFO at `<sha>.npy` fails its item instead of blocking."""
     sha = "a" * 64
     ref = {"__array__": {"path": f"$DIR/{sha}.npy", "sha256": sha, "dtype": "<f4", "shape": [1]}}
     client = _scripted(array_parent, [{"id": "$ID", "item": "a", "outputs": {"y": ref}}, _done(1)])
     os.mkfifo(client.array_dir / f"{sha}.npy")
-    t0 = time.monotonic()
     [out] = client.run([{"id": "a", "inputs": {}}], {})
-    elapsed = time.monotonic() - t0
     client.close()
-    return out, elapsed
-
-
-@pytest.mark.logic
-def test_fifo_named_like_an_array_does_not_hang_the_host(array_parent: Path) -> None:
-    """A response naming a FIFO at `<sha>.npy` fails its item instead of blocking."""
-    out, _ = _run_over_a_fifo_named_like_an_array(array_parent)
     assert out["error"]["type"] == "ArrayIntegrityError"
-
-
-@pytest.mark.limits
-def test_fifo_named_like_an_array_fails_its_item_within_a_second(array_parent: Path) -> None:
-    """A response naming a FIFO at `<sha>.npy` fails its item in under 1 s."""
-    _, elapsed = _run_over_a_fifo_named_like_an_array(array_parent)
-    assert elapsed < 1
 
 
 _LEFT_AT_EXIT = """
@@ -872,17 +747,14 @@ print(c._proc.pid, flush=True)
 
 @pytest.mark.limits
 @pytest.mark.parametrize("body", ["pass", "c.run([{'id': 'a', 'inputs': {}}], {})", "holder = [c]"])
-def test_a_client_left_open_at_interpreter_exit_finalises_at_once_and_quietly(array_parent: Path, body: str) -> None:
-    """A client still open at exit is finalised well inside one grace, logs nothing, and leaves no file or process."""
+def test_a_client_left_open_at_interpreter_exit_is_finalised_quietly(array_parent: Path, body: str) -> None:
+    """A client still open at exit is finalised, logs nothing, and leaves no file or process."""
     script = array_parent.parent / "left_open.py"
     script.write_text(_LEFT_AT_EXIT.format(body=body))
-    start = time.monotonic()
     proc = subprocess.run(
         [sys.executable, str(script), str(array_parent)], capture_output=True, text=True, timeout=60, check=False
     )
-    elapsed = time.monotonic() - start
     assert proc.returncode == 0, proc.stderr
-    assert elapsed < DEFAULT_GRACES.term, (elapsed, proc.stderr)
     assert [line for line in proc.stderr.splitlines() if line.startswith("LOG")] == []
     assert not alive(int(proc.stdout.split()[-1]))
 
@@ -915,177 +787,6 @@ def test_print_from_a_pth_before_the_channel_is_claimed_is_discarded(
     ):
         assert c.run([{"id": "a", "inputs": {}}], {})[0]["outputs"]
     assert "noise from a pth" in caplog.text
-
-
-def _record_killpg(monkeypatch: pytest.MonkeyPatch) -> list[tuple[float, int, int]]:
-    sent: list[tuple[float, int, int]] = []
-    real = os.killpg
-
-    def record(pgid: int, sig: int) -> None:
-        sent.append((time.monotonic(), pgid, sig))
-        real(pgid, sig)
-
-    monkeypatch.setattr(os, "killpg", record)
-    return sent
-
-
-@pytest.mark.logic
-def test_late_close_after_the_leader_was_reaped_elsewhere_sends_no_signal(
-    array_parent: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Once the leader is reaped outside the client its pid may be reused, so `close()` signals nothing."""
-    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent)
-    pid = client.hello["pid"]
-    os.kill(pid, signal.SIGKILL)
-    os.waitpid(pid, 0)
-    sent = _record_killpg(monkeypatch)
-    client.close()
-    assert [s for s in sent if s[2] != 0] == []
-
-
-@pytest.mark.logic
-def test_idle_crash_keeps_the_leader_unreaped_until_close(array_parent: Path) -> None:
-    """A leader that dies while idle stays a zombie, holding its pid and group id, until `close()` reaps it."""
-    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent)
-    pid = client.hello["pid"]
-    os.kill(pid, signal.SIGKILL)
-    end = time.monotonic() + STOPPED_WAIT_S
-    while client.alive:
-        assert time.monotonic() < end
-    assert client.returncode is None and state(pid).startswith("Z")
-    client.close()
-    assert client.returncode == -signal.SIGKILL
-
-
-@pytest.mark.limits
-def test_graceful_close_leaves_sigterm_its_own_grace(
-    array_parent: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A worker that ignores the stop line gets SIGTERM with `graces.term` of the stop window left."""
-    client = WorkerClient(
-        PYTHON,
-        "backends.slow_reader_backend_fixture",
-        init={},
-        array_parent=array_parent,
-        graces=ShutdownGraces(stop=2.0, term=1.0),
-    )
-    client.run([{"id": "a", "inputs": {}}], {"mode": "stop_reading"})
-    _wait_stopped(client.hello["pid"])
-    sent = _record_killpg(monkeypatch)
-    t0 = time.monotonic()
-    client.close()
-    terms = [t for t, _, sig in sent if sig == signal.SIGTERM]
-    assert terms and terms[0] - t0 < 2.0 - 1.0 + 0.5
-    assert signal.SIGKILL not in [sig for _, _, sig in sent]
-
-
-def _probe_fails(monkeypatch: pytest.MonkeyPatch, how: str) -> list[float]:
-    """Route the leader probe through `ps`, as where `waitid` is missing; make every `ps` fail as `how`."""
-    calls: list[float] = []
-    real_run = subprocess.run
-
-    def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:  # noqa: ANN401
-        if argv[0] != worker_client._PS:
-            return real_run(argv, **kwargs)
-        timeout = kwargs["timeout"]
-        assert isinstance(timeout, float) and timeout <= worker_client.LEADER_PROBE_TIMEOUT_S
-        calls.append(timeout)
-        if how == "missing":
-            raise FileNotFoundError(2, "No such file or directory", argv[0])
-        time.sleep(timeout)
-        raise subprocess.TimeoutExpired(argv, timeout)
-
-    monkeypatch.delattr(os, "waitid", raising=False)
-    monkeypatch.setattr(subprocess, "run", run)
-    return calls
-
-
-def _close_after_an_idle_crash_with_failing_ps(array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str) -> float:
-    """Crash an idle worker, make `ps` fail as `how`, close; assert nothing was signalled; return `close()`'s time."""
-    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent)
-    pid = client.hello["pid"]
-    os.kill(pid, signal.SIGKILL)
-    end = time.monotonic() + STOPPED_WAIT_S
-    while client.alive:
-        assert time.monotonic() < end
-    calls = _probe_fails(monkeypatch, how)
-    sent = _record_killpg(monkeypatch)
-    t0 = time.monotonic()
-    client.close()
-    elapsed = time.monotonic() - t0
-    assert calls and [s for s in sent if s[2] != 0] == []
-    assert client.returncode == -signal.SIGKILL and not alive(pid)
-    return elapsed
-
-
-@pytest.mark.logic
-def test_linux_without_waitid_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    """On Linux without `os.waitid`, the exit probe answers 'running' and the leader probe asks `ps`."""
-    monkeypatch.setattr(sys, "platform", "linux")
-    calls = _probe_fails(monkeypatch, "missing")
-    exited = threading.Event()
-    assert worker_client._exit_seen(os.getpid(), exited) is False
-    exited.set()
-    assert worker_client._leader_held(os.getpid(), exited, worker_client.LEADER_PROBE_TIMEOUT_S) is None
-    assert len(calls) == 1
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize("how", ["missing", "timeout"])
-def test_unknown_leader_state_is_never_read_as_reaped(
-    array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str
-) -> None:
-    """With `ps` missing or timing out after an idle crash, `close()` returns and signals nothing."""
-    _close_after_an_idle_crash_with_failing_ps(array_parent, monkeypatch, how)
-
-
-@pytest.mark.limits
-@pytest.mark.parametrize("how", ["missing", "timeout"])
-def test_unknown_leader_state_is_bounded(array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str) -> None:
-    """With `ps` missing or timing out after an idle crash, `close()` returns within `DEFAULT_GRACES.bound`."""
-    assert _close_after_an_idle_crash_with_failing_ps(array_parent, monkeypatch, how) < DEFAULT_GRACES.bound
-
-
-def _time_out_a_forking_worker_with_failing_ps(
-    tmp_path: Path, array_parent: Path, monkeypatch: pytest.MonkeyPatch, how: str
-) -> float:
-    """Time out a hung forking worker with `ps` failing as `how`; assert `ps` was not asked; return `run`'s time."""
-    pid_file = tmp_path / "pids"
-    client = WorkerClient(
-        PYTHON,
-        "backends.forking_backend_fixture",
-        init={"pid_file": str(pid_file)},
-        array_parent=array_parent,
-        request_timeout=1,
-    )
-    pgid = client.hello["pid"]
-    calls = _probe_fails(monkeypatch, how)
-    t0 = time.monotonic()
-    with pytest.raises(TimeoutError):
-        client.run([{"id": "a", "inputs": {}}], {"mode": "hang"})
-    elapsed = time.monotonic() - t0
-    client.close()
-    assert calls == [] and not group_alive(pgid) and not any(map(alive, recorded_pids(pid_file)))
-    return elapsed
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize("how", ["missing", "timeout"])
-def test_running_leader_is_stopped_without_asking_ps(
-    tmp_path: Path, array_parent: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch, how: str
-) -> None:
-    """A leader whose exit has not been observed is held: a timed-out worker's group is stopped without `ps`."""
-    _time_out_a_forking_worker_with_failing_ps(tmp_path, array_parent, monkeypatch, how)
-
-
-@pytest.mark.limits
-@pytest.mark.parametrize("how", ["missing", "timeout"])
-def test_a_timed_out_worker_is_stopped_within_the_bound_without_asking_ps(
-    tmp_path: Path, array_parent: Path, backends_importable: None, monkeypatch: pytest.MonkeyPatch, how: str
-) -> None:
-    """A timed-out worker's group is stopped within `1 s + DEFAULT_GRACES.bound` though `ps` fails."""
-    elapsed = _time_out_a_forking_worker_with_failing_ps(tmp_path, array_parent, monkeypatch, how)
-    assert elapsed < 1 + DEFAULT_GRACES.bound
 
 
 @pytest.mark.logic

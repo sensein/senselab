@@ -28,7 +28,8 @@ import numpy
 from bounded_probe_fixture import limit_file_size
 from lifecycle_probes_fixture import recorded_pids
 from senselab_core.runtime import worker_client
-from senselab_core.runtime.worker_client import DEFAULT_GRACES, ShutdownGraces, WorkerClient, WorkerLost, _Pump
+from senselab_core.runtime.worker_client import DEFAULT_GRACES, ShutdownGraces, WorkerClient, WorkerLost
+from senselab_core.runtime.worker_pipes import Pump
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import alive, group_alive
 from senselab_worker.fake import FAULT_KEY
@@ -44,8 +45,6 @@ REAL_GRACES = DEFAULT_GRACES
 CASE_BOUND_S = 60.0
 LOAD_ALLOWANCE_S = 5.0
 """Added to every derived case bound for interpreter spawn, imports and hello on a loaded host."""
-CTRL_C_LOAD_ALLOWANCE_S = 3.0
-"""Added to the derived Ctrl-C bound (request timeout plus the second SIGINT's delay) for the same."""
 OTHER_THREAD_JOIN_S = 0.05
 SECOND_SIGINT_AFTER_S = 0.2
 PATHS = ("init", "init_lost", "timeout", "close")
@@ -111,7 +110,7 @@ def _owner(boundary: str) -> tuple[Any, str]:
     if boundary not in BOUNDARIES:
         raise ValueError(f"{boundary!r} is not a declared shutdown boundary")
     where, name = boundary.split(":")
-    return {"module": worker_client, "client": WorkerClient, "pump": _Pump, "popen": subprocess.Popen}[where], name
+    return {"module": worker_client, "client": WorkerClient, "pump": Pump, "popen": subprocess.Popen}[where], name
 
 
 def case_bound(case: dict[str, Any]) -> float:
@@ -119,11 +118,6 @@ def case_bound(case: dict[str, Any]) -> float:
     graces = REAL_GRACES if case.get("real_graces") else GRACES
     timeout = REQUEST_TIMEOUT_S if case["path"] == "timeout" else 0.0
     return timeout + graces.exit_code_wait + 2 * graces.bound + LOAD_ALLOWANCE_S
-
-
-def ctrl_c_bound() -> float:
-    """How long the real-grace double Ctrl-C case may take: request timeout, second-SIGINT delay, allowance."""
-    return REQUEST_TIMEOUT_S + SECOND_SIGINT_AFTER_S + CTRL_C_LOAD_ALLOWANCE_S
 
 
 class _Injector:
