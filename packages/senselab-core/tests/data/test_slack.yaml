@@ -14,12 +14,10 @@ tests:
   probe:
     fit_ratio: 50
     timing_repeats: 3
-  # Times of the worker-observation tests. wall_slack_s: the seconds a request may take beyond the sleep its backend
-  # was asked for. first_poll_s, poll_s and presence_refresh_s: a worker's polls and its reuse of what it read of its
-  # peers; long_poll_s is a poll the first one must beat, by at most first_bound_s. put_later_s and watch_poll_s: when
-  # a test puts an item after the worker started, and how often it looks for the worker's progress.
+  # Times of the worker-observation tests. first_poll_s, poll_s and presence_refresh_s: a worker's polls and its reuse
+  # of what it read of its peers; long_poll_s is a poll the first one must beat, by at most first_bound_s. put_later_s
+  # and watch_poll_s: when a test puts an item after the worker started, and how often it looks for its progress.
   observations:
-    wall_slack_s: 0.04
     first_bound_s: 1.0
     put_later_s: 0.1
     watch_poll_s: 0.005

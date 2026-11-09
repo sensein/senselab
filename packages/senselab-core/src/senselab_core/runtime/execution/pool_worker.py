@@ -111,12 +111,13 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
     send: Send,
     cancelled: threading.Event | None = None,
     record: Callable[[Sent], None] | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> list[JobOutcome]:
     """Return one outcome per member, sent as one request; one that fails as a whole is split in halves.
 
     A member alone whose request fails as a whole gets that failure. Any other exception is the failure of every
     member of the request that raised it, so a half that completed keeps its outcomes. Each call of `send` is given
-    to `record` as a `Sent`, timed by its own clock, with the requests it made.
+    to `record` as a `Sent`, timed by itself on `clock`, with the requests it made, each timed on `clock` too.
 
     Raises:
         Abandoned: `cancelled` was set before a request, or while one ran.
@@ -125,12 +126,12 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
     if cancelled is not None and cancelled.is_set():
         raise Abandoned
     refs = tuple(m.job.ref for m in members)
-    began = time.monotonic()
+    began = clock()
     try:
-        with request_reports.collected() as reported:
+        with request_reports.collected(clock) as reported:
             outcomes = send([m.job for m in members], placement)
     except Exception as exc:
-        wall = time.monotonic() - began
+        wall = clock() - began
         if cancelled is not None and cancelled.is_set():
             raise Abandoned from exc
         if isinstance(exc, LeaseTimeout):
@@ -143,11 +144,11 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
                 logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)
             return [Failed(m.job.ref, m.key, failure_of(exc)) for m in members]
         half = len(members) // 2
-        return bisect(members[:half], placement, send, cancelled, record) + bisect(
-            members[half:], placement, send, cancelled, record
+        return bisect(members[:half], placement, send, cancelled, record, clock) + bisect(
+            members[half:], placement, send, cancelled, record, clock
         )
     if record is not None:
-        record(Sent(refs, time.monotonic() - began, tuple(reported), None))
+        record(Sent(refs, clock() - began, tuple(reported), None))
     return outcomes
 
 
@@ -224,8 +225,9 @@ class PoolWorker:
 
         `hardware` gives the `HardwareClass` a resource class runs on and `cotenancy` its device and host
         co-tenancy; they default to what this host shows (`hardware_of`, `Presence`). The worker's name is its
-        `worker_id()` unless given, so no run record names its host. `clock` times the reuse of what it read of its
-        peers and of the run's probe queues (`pool.presence_refresh_s`).
+        `worker_id()` unless given, so no run record names its host. `clock` times each call of `send` and each request
+        it makes (`bisect`), and the reuse of what it read of its peers and of the run's probe queues
+        (`pool.presence_refresh_s`).
 
         Raises:
             ValueError: no class is named.
@@ -567,7 +569,14 @@ class PoolWorker:
                 owners = {m.job.ref: m.digest for m in group.members}
                 try:
                     outcomes: list[JobOutcome | None] = list(
-                        bisect(group.members, group.placement, send, cancelled, lambda sent: spans.add(sent, owners))
+                        bisect(
+                            group.members,
+                            group.placement,
+                            send,
+                            cancelled,
+                            lambda sent: spans.add(sent, owners),
+                            self._clock,
+                        )
                     )
                 except LeaseTimeout as busy:
                     logger.info("pool worker %s gives its items back: %s", self.name, busy)
