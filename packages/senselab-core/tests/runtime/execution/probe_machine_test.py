@@ -117,7 +117,7 @@ def _machine(tmp_path: Path, seen: bool, clock: Clock) -> tuple[ProbeMachine, Fa
 
 def _observations(host: FakeHost, queue: FakeQueue) -> None:
     """Give every item of `queue` that has no outcome the outcome a worker would: one request per job."""
-    since = sum(len(o["observations"]) for o in queue.outcomes.values())  # type: ignore[arg-type]
+    since = sum(len(o["observations"]) for o in queue.outcomes.values())  # type: ignore[arg-type, misc]
     for digest, item in queue.items.items():
         if digest in queue.outcomes:
             continue

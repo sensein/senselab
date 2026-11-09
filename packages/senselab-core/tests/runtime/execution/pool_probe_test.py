@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from pool_stack_fixture import host_env, scoring
 from senselab_core.kernel.dataset import Record, ValueInput
+from senselab_core.kernel.declare import Registry
 from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation, ProbeRef
 from senselab_core.runtime.call import Packaged, RunConfig, bind_input, packaged, use_packaged
@@ -27,6 +28,7 @@ from senselab_core.runtime.execution.in_process import InProcess, fragment_jobs,
 from senselab_core.runtime.execution.job import JobOutcome
 from senselab_core.runtime.execution.observing import request_units
 from senselab_core.runtime.execution.pool import Pool, report
+from senselab_core.runtime.execution.pool_parts import placed_backends
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of, probe_queue
 from senselab_core.runtime.execution.run import prepare
 from senselab_core.runtime.execution.substrates import QueueReady, Substrate, WorkerHandle, backend_key, mark_ready
@@ -103,7 +105,7 @@ def _handle(wheel_set: str) -> Callable[..., EnvHandle]:
 
 
 @contextmanager
-def _env(wheel_set: str, registry: object) -> Iterator[None]:
+def _env(wheel_set: str, registry: Registry) -> Iterator[None]:
     """Use `registry` with every env this interpreter, built, under the wheel set `wheel_set`."""
     mit = license_record("MIT", source="lock", verified={"date": "2026-11-06", "how": "pep639"}, gated=False)
     opener = _handle(wheel_set)
@@ -111,7 +113,7 @@ def _env(wheel_set: str, registry: object) -> Iterator[None]:
         Packaged(
             Catalogue.load("format: catalogue@2.0\nentries: []\n"),
             opener,
-            registry,  # type: ignore[arg-type]
+            registry,
             lambda _: {"p": mit},
             env_read=opener,
         )
@@ -143,12 +145,14 @@ def _profile(tmp_path: Path) -> ExecutionProfile:
     return ExecutionProfile.load("laptop", override)
 
 
-def _plan(profile: ExecutionProfile, lengths: Sequence[int]) -> tuple[Plan, dict[InputIdentity, object]]:
+def _plan(
+    profile: ExecutionProfile, lengths: Sequence[int], model: str | None = None
+) -> tuple[Plan, dict[InputIdentity, object]]:
     """Return the plan mapping the text task over one record per length, a text of that many characters."""
     texts = ["x" * n for n in lengths]
     graph = {
         "inputs": {"text": "list[Text]"},
-        "nodes": [{"id": "a", "task": TEXTY.name, "task_version": "1"}],
+        "nodes": [{"id": "a", "task": TEXTY.name, "task_version": "1", "model": model}],
         "edges": [{"source": "input.text", "target": "a.text", "kind": "map"}],
     }
     from senselab_core.kernel.graph import Graph  # noqa: PLC0415 - as `pool_stack_fixture.planned`
@@ -386,7 +390,7 @@ def test_entries_under_another_context_are_probed_not_skipped(tmp_path: Path) ->
     assert len(refs) == JOBS and all(r.served is None for r in refs)
 
 
-def _registry() -> object:
+def _registry() -> Registry:
     from pool_stack_fixture import registry  # noqa: PLC0415 - as the stack fixture
 
     return registry(TEXTY)
@@ -941,7 +945,12 @@ def test_a_ready_mark_carries_no_identifier(tmp_path: Path) -> None:
         )
 
     profile = _profile(tmp_path)
-    placed, values = _plan(profile, range(1, 5))
+    weights = tmp_path / "private-weights-dir" / "m.bin"
+    weights.parent.mkdir()
+    weights.write_bytes(b"weights")
+    placed, values = _plan(profile, range(1, 5), model=f"local:{weights}")
+    [queue_name] = placed_backends(placed)
+    assert queue_name.startswith("cpu#")
     previous = use_packaged(
         Packaged(packaged().catalogue, opener, packaged().registry, packaged().lock_records, env_read=opener)
     )
@@ -951,7 +960,7 @@ def test_a_ready_mark_carries_no_identifier(tmp_path: Path) -> None:
         _submit(pool, placed, values)
         worker = PoolWorker(
             tmp_path / "run" / RUN_QUEUES,
-            ["cpu"],
+            [queue_name],
             profile=profile,
             store=pool.store,
             hardware=lambda _: SEEN,
@@ -963,5 +972,13 @@ def test_a_ready_mark_carries_no_identifier(tmp_path: Path) -> None:
     [path] = [p for p in (pool.run_dir / "workers").iterdir() if not p.name.startswith(".")]
     text = path.read_text()
     assert '"torch_build":"cu128"' in text
-    for leaked in ("someone", "hunter2", "mirror.example", os.uname().nodename, str(Path.home())):
+    for leaked in (
+        "someone",
+        "hunter2",
+        "mirror.example",
+        "private-weights-dir",
+        "m.bin",
+        os.uname().nodename,
+        str(Path.home()),
+    ):
         assert leaked not in text
