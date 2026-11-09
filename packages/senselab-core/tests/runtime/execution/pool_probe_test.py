@@ -12,6 +12,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import pytest
+from lease_clock_fixture import ManualClock
 from pool_stack_fixture import host_env, scoring
 from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import Registry
@@ -53,6 +54,10 @@ ELSEWHERE = HardwareClass(device="cpu", name="Another CPU", cpus=4)
 JOBS = 60
 WORKERS = WorkerSet(2)
 CLOCK_START = 1000.0
+CLOCK_POLL_S = 0.0005
+"""Real seconds a thread parked on the clock waits between looks at its event: the slack file's `lease_clock`."""
+CLOCK_HANG_S = 60.0
+"""Real seconds after which a wait on the clock that has not ended fails; a failure bound only."""
 
 
 class Idle:
@@ -74,20 +79,13 @@ class Idle:
         """Stop nothing."""
 
 
-class Clock:
-    """A clock moved by hand."""
+class Clock(ManualClock):
+    """A `ManualClock` that starts at `CLOCK_START` and is moved by hand."""
 
     def __init__(self) -> None:
-        """Start at `CLOCK_START`."""
-        self.now = CLOCK_START
-
-    def __call__(self) -> float:
-        """Return the time."""
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        """Move the time on."""
-        self.now += seconds
+        """Start at `CLOCK_START`, its parked threads looking at their events every `CLOCK_POLL_S` real seconds."""
+        super().__init__(poll_s=CLOCK_POLL_S, hang_s=CLOCK_HANG_S)
+        self._now = CLOCK_START
 
 
 def _handle(wheel_set: str) -> Callable[..., EnvHandle]:
@@ -762,11 +760,12 @@ def test_a_broken_class_with_no_hello_fails_its_held_parts(tmp_path: Path) -> No
     )
     placed, values = _plan(profile, range(1, 5))
     local = Local(2, command=[sys.executable, "-c", "raise SystemExit(1)"])
-    pool = _pool(tmp_path, profile, substrate=local)
+    clock = Clock()
+    pool = _pool(tmp_path, profile, substrate=local, clock=clock)
     handle = pool.submit(node_fragment(placed, pool.admit(placed, values)))
     try:
         with pytest.raises(WorkersBroken):
-            list(follow(pool, handle))
+            list(follow(pool, handle, clock=clock))
     finally:
         pool.close()
     assert not _probe_queues(pool) and "cpu" in pool.broken_workers

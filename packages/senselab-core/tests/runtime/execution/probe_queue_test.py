@@ -4,10 +4,12 @@ import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
+from lease_clock_fixture import ManualClock
 from queue_race_fixture import fragment
 from senselab_core.kernel.formats import WORKER_READY_FORMAT
 from senselab_core.runtime.calibration import HardwareClass
@@ -276,7 +278,9 @@ def test_device_parties_is_none_where_nvidia_smi_cannot_answer() -> None:
 
 
 @pytest.mark.logic
-def test_presence_keeps_an_unread_device_as_none_and_reads_once_per_refresh(tmp_path: Path) -> None:
+def test_presence_keeps_an_unread_device_as_none_and_reads_once_per_refresh(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """A failing device read gives `device=None` beside the host count; claims within a refresh read nothing again."""
     profile = ExecutionProfile.load()
     asked: list[int] = []
@@ -285,15 +289,15 @@ def test_presence_keeps_an_unread_device_as_none_and_reads_once_per_refresh(tmp_
         asked.append(1)
         raise OSError("nvidia-smi timed out")
 
-    now = [0.0]
-    presence = Presence(profile, tmp_path, refresh_s=10, clock=lambda: now[0], report=lambda: HOST, run=failing)
+    clock = lease_clock()
+    presence = Presence(profile, tmp_path, refresh_s=10, clock=clock, report=lambda: HOST, run=failing)
     cuda = next(n for n, c in profile.resource_classes.items() if c.device == "cuda")
     first = presence.cotenancy(cuda)
     assert (first.device, first.host) == (None, 1)
     for _ in range(100):
         presence.cotenancy(cuda)
     assert len(asked) == 1
-    now[0] = 11.0
+    clock.advance(11.0)
     presence.cotenancy(cuda)
     assert len(asked) == 2
     cpu = next(n for n, c in profile.resource_classes.items() if c.device == "cpu")
@@ -301,17 +305,19 @@ def test_presence_keeps_an_unread_device_as_none_and_reads_once_per_refresh(tmp_
 
 
 @pytest.mark.logic
-def test_marks_read_per_refresh_do_not_grow_with_the_claims_or_the_workers_already_read(tmp_path: Path) -> None:
+def test_marks_read_per_refresh_do_not_grow_with_the_claims_or_the_workers_already_read(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """With 100 peer marks, a thousand claims read each mark once, not a hundred thousand."""
     directory, host, me = tmp_path / WORKERS_DIR, host_token(), os.getpid()
     for i in range(100):
         _mark(directory, f"w{i}", host, me + 1 + i)
-    now = [0.0]
+    clock = lease_clock()
     presence = Presence(
-        ExecutionProfile.load(), tmp_path, refresh_s=1, clock=lambda: now[0], report=lambda: HOST, run=lambda *_: ""
+        ExecutionProfile.load(), tmp_path, refresh_s=1, clock=clock, report=lambda: HOST, run=lambda *_: ""
     )
     for claim in range(1000):
-        now[0] = claim * 0.1
+        clock.advance_to(claim * 0.1)
         presence.cotenancy("cpu")
     assert presence.reads == 100
 

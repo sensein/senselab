@@ -1,17 +1,17 @@
 """What a pool worker reports per request: walls, outcomes, co-tenancy and hardware, and how it serves a probe queue."""
 
 import threading
-import time
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
 from backends import fake_time_backend_fixture
+from lease_clock_fixture import ManualClock
 from planted_objects_fixture import identity_leaks
 from pool_stack_fixture import packaged, registry, scoring
-from pool_worker_test import OVERRIDE, WORKERS, _outcomes, _profile, _put, _run, _sender, _text
+from pool_worker_test import OVERRIDE, WORKERS, _outcomes, _profile, _put, _run, _sender, _served, _text
 from senselab_core.kernel.declare import Env
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
 from senselab_core.runtime.execution.executor import Admission
@@ -65,6 +65,21 @@ def _worker(
     )
 
 
+class _BackendClock(ManualClock):
+    """A `ManualClock` read from the fake-time backend, which advances it by the seconds its requests name."""
+
+    def now(self) -> float:
+        """Return the backend's reading."""
+        return fake_time_backend_fixture.NOW[0]
+
+    def advance(self, seconds: float) -> None:
+        """Move the backend's reading ahead `seconds` and wake the threads waiting on it."""
+        with self._cond:
+            fake_time_backend_fixture.NOW[0] += seconds
+            self._version += 1
+            self._cond.notify_all()
+
+
 @pytest.fixture
 def obs(slack_tests: dict[str, Any]) -> dict[str, Any]:
     """The worker-observation test slack."""
@@ -82,21 +97,24 @@ def _one_job_items(placed: Any, elements: range) -> list[Any]:  # noqa: ANN401 -
 
 
 @pytest.mark.logic
-def test_gathered_items_report_their_own_request_walls(tmp_path: Path) -> None:
+def test_gathered_items_report_their_own_request_walls(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """Four items gathered into a claim, each its own request, are each charged their own request's span, no mean.
 
-    The worker's clock is a fake one that only the backend advances, by the seconds each item names, so a request's
-    span is exactly its item's seconds, in binary fractions that subtract exactly, and nothing else takes any time.
-    Claiming takes none, and an item's claim-to-commit wall is that of the one call its claim's items were sent in:
-    element 0 spends one of the quantum's four items, so elements 1 to 3 are the next claim and element 4 the last.
+    The worker's clock is a fake one that the backend advances, by the seconds each item names, so a request's
+    span is exactly its item's seconds, in binary fractions that subtract exactly. The test advances it only while the
+    worker waits for work. Claiming takes none, and an item's claim-to-commit wall is that of the one call its
+    claim's items were sent in: element 0 spends one of the quantum's four items, so elements 1 to 3 are the
+    next claim and element 4 the last.
     """
     profile = _profile(quantum_items=4)
     texts = ["0", "0.25", "0.5", "0.75", "1"]
+    clock = lease_clock(_BackendClock)
+    fake_time_backend_fixture.NOW[0] = 0.0
     with packaged(registry(TIMED, worker=FAKE_TIME), tmp_path / "cache"):
         placed, store, pool_dir = _items(profile, tmp_path, texts)
         _put(placed, pool_dir, 0)
         QueueSet(pool_dir, profile).queue("cpu").put_all(_one_job_items(placed, range(1, 5)))
-        PoolWorker(
+        worker = PoolWorker(
             pool_dir,
             ["cpu"],
             profile=profile,
@@ -105,8 +123,9 @@ def test_gathered_items_report_their_own_request_walls(tmp_path: Path) -> None:
             device_memory=lambda: None,
             hardware=lambda _: HARDWARE,
             cotenancy=lambda _: SHARED,
-            clock=fake_time_backend_fixture.now,
-        ).serve()
+            clock=clock,
+        )
+        _served(worker, clock)
     outcomes = {out["jobs"][0]["job"]["element"][0]: out for out in _outcomes(pool_dir, profile)}
     assert sorted(outcomes) == [0, 1, 2, 3, 4] and all(len(out["jobs"]) == 1 for out in outcomes.values())
     assert sorted(outcomes[e]["observations"][0]["since_load"] for e in range(1, 5)) == [1, 2, 3, 4]
@@ -280,11 +299,13 @@ def test_an_unmarked_probe_item_reports_no_observation_and_is_never_telemetry(
 
 
 @pytest.mark.logic
-def test_a_worker_lists_probe_queues_once_per_refresh(tmp_path: Path, obs: dict[str, Any]) -> None:
+def test_a_worker_lists_probe_queues_once_per_refresh(
+    tmp_path: Path, obs: dict[str, Any], lease_clock: Callable[..., ManualClock]
+) -> None:
     """A probe queue made after the worker listed is not served until the refresh interval has passed."""
     profile = _profile(poll_s=obs["poll_s"], presence_refresh_s=obs["presence_refresh_s"])
     placed, store, pool_dir = _items(profile, tmp_path, ["0.0", "0.00"])
-    now = [0.0]
+    clock = lease_clock()
     worker = PoolWorker(
         pool_dir,
         ["cpu"],
@@ -294,46 +315,49 @@ def test_a_worker_lists_probe_queues_once_per_refresh(tmp_path: Path, obs: dict[
         device_memory=lambda: None,
         hardware=lambda _: HARDWARE,
         cotenancy=lambda _: SHARED,
-        clock=lambda: now[0],
+        clock=clock,
     )
     assert worker._next(None, 4) is None  # noqa: SLF001 - the claim step, with nothing queued yet
     later = QueueSet(pool_dir, profile).queue(probe_queue("cpu", "p1"))
     later.set_probe_unit(HARDWARE, *_unit_env(pool_dir, profile, store))
     later.put_probe(_one_job_items(placed, range(1))[0], "SINGLE", 0)
     assert worker._next(None, 4) is None  # noqa: SLF001 - listed within the refresh: not seen
-    now[0] = obs["presence_refresh_s"] + 1
+    clock.advance(obs["presence_refresh_s"] + 1)
     claim = worker._next(None, 4)  # noqa: SLF001 - listed again: seen and taken
     assert claim is not None and claim.queue.name == probe_queue("cpu", "p1")
     claim.release()
 
 
 @pytest.mark.logic
-def test_a_pinned_worker_waits_on_its_probe_queue_from_the_first_poll(tmp_path: Path, obs: dict[str, Any]) -> None:
+def test_a_pinned_worker_waits_on_its_probe_queue_from_the_first_poll(
+    tmp_path: Path, obs: dict[str, Any], lease_clock: Callable[..., ManualClock]
+) -> None:
     """With a long poll, an item put just after the last is claimed within the first poll, not after the long one."""
     placed, store, pool_dir, profile, queue = _probe_items(tmp_path, 3, obs)
     later = _one_job_items(placed, range(3, 4))[0]
     profile = _profile(quantum_items=4, poll_s=obs["long_poll_s"], first_poll_s=obs["first_poll_s"])
-    send = _sender(store, profile)
-
-    def put_later() -> None:
-        time.sleep(obs["put_later_s"])
-        queue.put_probe(later, "SINGLE", 1)
-
-    def stop_after_four() -> None:
-        while len(worker.served) < 4:
-            time.sleep(obs["watch_poll_s"])
-        reached.append(time.monotonic())
-        worker.halt()
-
-    worker = _worker(pool_dir, ["cpu"], profile, store, send)
-    reached: list[float] = []
-    threads = [threading.Thread(target=put_later), threading.Thread(target=stop_after_four, daemon=True)]
-    began = time.monotonic()
-    for thread in threads:
-        thread.start()
-    worker.serve()
-    threads[0].join()
-    assert len(worker.served) == 4 and reached[0] - began < obs["first_bound_s"]
+    clock = lease_clock()
+    worker = PoolWorker(
+        pool_dir,
+        ["cpu"],
+        profile=profile,
+        store=store,
+        send=_sender(store, profile),
+        device_memory=lambda: None,
+        hardware=lambda _: HARDWARE,
+        cotenancy=lambda _: SHARED,
+        clock=clock,
+    )
+    exits: list[int] = []
+    thread = threading.Thread(target=lambda: exits.append(worker.serve()))
+    thread.start()
+    assert clock.parked(thread) and len(worker.served) == 3
+    queue.put_probe(later, "SINGLE", 1)
+    clock.advance(obs["first_poll_s"])
+    assert clock.parked(thread) and len(worker.served) == 4
+    worker.halt()
+    thread.join()
+    assert exits == [0]
 
 
 @pytest.mark.logic

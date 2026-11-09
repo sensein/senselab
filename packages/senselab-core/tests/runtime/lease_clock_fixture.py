@@ -68,7 +68,7 @@ class ManualClock:
 
     def advance_to(self, when: float) -> None:
         """Move the clock to `when`, which is not in the past."""
-        self.advance(max(0.0, when - self._now))
+        self.advance(max(0.0, when - self.now()))
 
     def sleep(self, seconds: float) -> None:
         """Record the sleep, call `on_sleep`, and advance the clock unless it was built with `spends=False`."""
@@ -83,14 +83,14 @@ class ManualClock:
 
     def wait(self, event: threading.Event, timeout: float) -> bool:
         """Return True once `event` is set, False once the clock is `timeout` past now; park until one happens."""
-        deadline = self._now + timeout
+        deadline = self.now() + timeout
         thread = threading.current_thread()
         while True:
             with self._cond:
                 if event.is_set():
                     self._parked.pop(thread, None)
                     return True
-                if self._now >= deadline:
+                if self.now() >= deadline:
                     return False
                 self._parked[thread] = self._version
                 self._cond.notify_all()
@@ -104,9 +104,52 @@ class ManualClock:
                 assert time.monotonic() < deadline, "a thread did not park after the clock advanced"
                 self._cond.wait(self._poll_s)
 
+    def parked(self, thread: threading.Thread) -> bool:
+        """Return once `thread` is parked in `wait` at the latest advance, or False once it has ended."""
+        deadline = time.monotonic() + self._hang_s
+        with self._cond:
+            while thread.is_alive() and self._parked.get(thread) != self._version:
+                assert time.monotonic() < deadline, "the thread did not park after the clock advanced"
+                self._cond.wait(self._poll_s)
+            return thread.is_alive()
+
+    def until(self, predicate: Callable[[], bool], what: str, step: float = 0.01) -> None:
+        """Advance the clock by `step`, once the threads parked in `wait` have seen it, until `predicate` holds.
+
+        Fails if `predicate` has not held after `hang_s` real seconds; that bound is a failure only.
+        """
+        deadline = time.monotonic() + self._hang_s
+        while not predicate():
+            assert time.monotonic() < deadline, f"not within {self._hang_s}s: {what}"
+            self.advance(step)
+            self.settle(0)
+
+    def drive(self, thread: threading.Thread, step: float) -> None:
+        """Advance the clock by `step` each time `thread` is parked in `wait` at the latest advance, until it ends.
+
+        The thread is never advanced past while it works, so what it reads between two waits is read on one time.
+        """
+        while self.parked(thread):
+            self.advance(step)
+
     def _settled(self, parked: int) -> bool:
         live = {t: v for t, v in self._parked.items() if t.is_alive()}
         return len(live) >= parked and all(v == self._version for v in live.values())
+
+
+class SpendingClock(ManualClock):
+    """A `ManualClock` for one thread: a `wait` not already satisfied spends its whole timeout at once."""
+
+    def wait(self, event: threading.Event, timeout: float) -> bool:
+        """Return True if `event` is set; else move the clock `timeout` ahead and return whether it is set now."""
+        if not event.is_set():
+            self.advance(timeout)
+        return event.is_set()
+
+
+def newest(path: Path) -> float:
+    """Return the newest modification time of `path` and of everything below it."""
+    return max(os.lstat(p).st_mtime for p in (path, *path.rglob("*")))
 
 
 def gate(directory: str, takers: int, *, hang_s: float) -> None:

@@ -13,11 +13,13 @@ from typing import Any
 import numpy
 import pytest
 import soundfile
+from lease_clock_fixture import ManualClock, SpendingClock, newest
 from pool_stack_fixture import packaged, planned, registry, scoring, unresolving
 from senselab_core.cli import main as cli_main
 from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.audio_io import open_audio
 from senselab_core.runtime.call import RunConfig, TaskCall
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import EventLog, read_events, run_dir_of, status_from
 from senselab_core.runtime.execution.executor import Admission, FaultRecord, PlanFragment, QueueHeld, ResultRef, follow
@@ -169,7 +171,7 @@ def _pool(  # noqa: PLR0913 - the run, its parts, and the epoch and clock a rest
     workers: FakeWorkers | Any,  # noqa: ANN401
     profile: ExecutionProfile,
     epoch: int | None = None,
-    clock: Callable[[], float] = time.monotonic,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> Pool:
     """Return a pool of the next epoch over `tmp_path/run` (of `epoch`, as a restart within it, when given)."""
     run_dir = tmp_path / "run"
@@ -422,7 +424,9 @@ with epochs.held(epochs.take(lease), lease):
 
 
 @pytest.mark.contract
-def test_wait_on_a_run_whose_coordinator_died_ends_interrupted(tmp_path: Path) -> None:
+def test_wait_on_a_run_whose_coordinator_died_ends_interrupted(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """A coordinator killed while holding its epoch: `wait(None)` returns once its lease is stale, interrupted."""
     run_dir = tmp_path / "run"
     log = EventLog(run_dir, "a1", 1)
@@ -431,10 +435,9 @@ def test_wait_on_a_run_whose_coordinator_died_ends_interrupted(tmp_path: Path) -
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
     crashed = subprocess.run([sys.executable, "-c", CRASH, str(run_dir)], env=env, check=False)
     assert crashed.returncode == 9 and not Epoch(run_dir).stopped()
-    started = time.monotonic()
-    status = Run(run_dir).wait(None, poll=0.1)
+    clock = lease_clock(storage_origin=newest(run_dir / "epoch" / "1"))
+    status = Run(run_dir, clock=clock).wait(None, poll=0.1)
     assert status.interrupted and not status.done and status.counts["queued"] == 1
-    assert time.monotonic() - started < 30
 
 
 def _admitted(tmp_path: Path) -> tuple[Plan, Any]:
@@ -476,7 +479,7 @@ def test_coordinate_runs_a_plan_on_the_pool_as_the_next_epoch(tmp_path: Path) ->
 
 @pytest.mark.contract
 def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(
-    tmp_path: Path, tier_bound: float
+    tmp_path: Path, tier_bound: float, lease_clock: Callable[..., ManualClock]
 ) -> None:
     """An older coordinator whose env breaks after a newer epoch was taken stops; no hold of its epoch counts.
 
@@ -485,8 +488,7 @@ def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(
     """
     profile = _profile(content_attempts=2, infrastructure_replacements=1, resource_replacements=0)
     placed, values, store, workers = _stack(tmp_path, profile, ["one", "two"])
-    frozen = time.monotonic()
-    stale = _pool(tmp_path, store, _Idle(), profile, clock=lambda: frozen)
+    stale = _pool(tmp_path, store, _Idle(), profile, clock=lease_clock())
     early = stale.submit(node_fragment(placed, stale.admit(placed, values), elements=[(0,)]))
     workers.act = lambda fragment: LOST if fragment.jobs[0].element == (0,) else None
     queue = stale.queues.queue("cpu")
@@ -508,15 +510,14 @@ def test_a_stale_coordinator_can_neither_hold_an_env_nor_stop_the_current_one(
 
 
 @pytest.mark.contract
-def test_a_stale_coordinator_writes_no_dead_record(tmp_path: Path) -> None:
+def test_a_stale_coordinator_writes_no_dead_record(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A charged fault past the budget lands on a coordinator a newer epoch replaced: it stops and `dead/` stays empty.
 
     Its clock is frozen, so its polls may reuse its submit-time epoch read.
     """
     profile = _profile(content_attempts=1, infrastructure_replacements=6, resource_replacements=0)
     placed, values, store, workers = _stack(tmp_path, profile, ["one"])
-    frozen = time.monotonic()
-    stale = _pool(tmp_path, store, _Idle(), profile, clock=lambda: frozen)
+    stale = _pool(tmp_path, store, _Idle(), profile, clock=lease_clock())
     handle = stale.submit(node_fragment(placed, stale.admit(placed, values)))
     workers.act = lambda fragment: CHARGED
     claim = stale.queues.queue("cpu").claim("w")
@@ -659,7 +660,7 @@ def test_prepare_takes_the_epoch_before_the_attempt_and_records_it(tmp_path: Pat
 
 
 @pytest.mark.contract
-def test_wait_never_reports_a_running_run_interrupted(tmp_path: Path) -> None:
+def test_wait_never_reports_a_running_run_interrupted(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A stopped latest epoch does not interrupt `wait` while this `Run`'s thread lives or a claim is live."""
     profile = _profile(**CONTENT)
     placed, values, store, workers = _stack(tmp_path, profile, ["one"])
@@ -671,26 +672,30 @@ def test_wait_never_reports_a_running_run_interrupted(tmp_path: Path) -> None:
     epochs = Epoch(run_dir)
     (run_dir / "epoch" / str(pool.epoch) / "ended").touch()
     assert epochs.stopped()
-    run = Run(run_dir)
-    run.launch(threading.Thread(target=time.sleep, args=(1.0,), daemon=True))
-    assert not run.wait(0.3, poll=0.05).interrupted
+    clock, running = lease_clock(SpendingClock), threading.Event()
+    run = Run(run_dir, clock=clock)
+    run.launch(threading.Thread(target=running.wait, daemon=True))
+    try:
+        assert not run.wait(0.3, poll=0.05).interrupted
+    finally:
+        running.set()
     claim = pool.queues.queue("cpu").claim("w")
     assert claim is not None
-    assert not Run(run_dir).wait(0.3, poll=0.05).interrupted
+    assert not Run(run_dir, clock=clock).wait(0.3, poll=0.05).interrupted
     claim.release()
-    assert Run(run_dir).wait(None, poll=0.05).interrupted
+    assert Run(run_dir, clock=clock).wait(None, poll=0.05).interrupted
 
 
 @pytest.mark.contract
-def test_an_epoch_taken_but_never_held_ends_a_wait(tmp_path: Path) -> None:
+def test_an_epoch_taken_but_never_held_ends_a_wait(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A coordinator that died between taking its epoch and holding it: `wait(None)` ends one lease bound later."""
     run_dir = tmp_path / "run"
     log = EventLog(run_dir, "a1", 1, epoch=1)
     job = node_fragment(*_admitted(tmp_path)).jobs[0]
     Epoch(run_dir).take(JobLease(stale_after_s=0.5, renew_fraction=0.2, attribute_delay_s=0))
     log.record("queued", job.node, job=job)
-    started = time.monotonic()
-    assert Run(run_dir).wait(None, poll=0.05).interrupted and time.monotonic() - started < 30
+    clock = lease_clock(storage_origin=newest(run_dir / "epoch" / "1"))
+    assert Run(run_dir, clock=clock).wait(None, poll=0.05).interrupted
 
 
 @pytest.mark.contract
