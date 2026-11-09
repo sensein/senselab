@@ -105,6 +105,7 @@ from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
 from senselab_core.testing.calibration_samples import register_calibration_samples
 from senselab_core.testing.execution_samples import register_execution_samples
+from senselab_core.testing.format_skew import later_minor_ignored
 from senselab_core.testing.placement_samples import register_placement_samples, resource_table
 
 Case = Callable[[], None]
@@ -191,6 +192,7 @@ def value_cases() -> list[tuple[str, Case]]:
             "copy_refuses_unknown_fields": functools.partial(_copy_refuses_unknown_fields, factory),
             "built_from_mappings_only": functools.partial(_built_from_mappings_only, factory),
             "read_only": functools.partial(_read_only, factory),
+            "later_minor_ignored": lambda: later_minor_ignored(_samples(factory)),
             "setstate_revalidates": functools.partial(_setstate_revalidates, factory, invalid),
         }
         if cls in ATTESTED_IDENTITIES:

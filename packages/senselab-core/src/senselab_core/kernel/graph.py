@@ -367,9 +367,24 @@ def graph_digest(graph: Graph) -> str:
     return identity_digest(GRAPH_DIGEST_TAG, canonical(graph))
 
 
+def _open_objects(node: object) -> None:
+    if isinstance(node, dict):
+        if node.get("additionalProperties") is False and "properties" in node:
+            del node["additionalProperties"]
+        for child in node.values():
+            _open_objects(child)
+    elif isinstance(node, list):
+        for child in node:
+            _open_objects(child)
+
+
 def graph_schema() -> dict[str, Any]:
-    """Return the JSON Schema (2020-12) of a `graph@1` document; `format` is required and any minor of `graph@1`."""
+    """Return the JSON Schema (2020-12) of a `graph@1` document; `format` is required and any minor of `graph@1`.
+
+    A later minor may add fields at any level, so no object of the schema refuses an unknown property.
+    """
     schema = Graph.model_json_schema(ref_template="#/$defs/{model}")
+    _open_objects(schema)
     name, major = GRAPH_FORMAT.split(".")[0].split("@")
     schema["properties"]["format"] = {
         "type": "string",

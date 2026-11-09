@@ -37,6 +37,7 @@ from senselab_core.kernel.formats import (
     MEASURES_LAYOUT_TAG,
     FormatVerdict,
     check,
+    reading,
 )
 from senselab_core.kernel.identity import LogicalKey, ModelIdentity, Params, ProfileSliceIdentity
 from senselab_core.runtime.calibration import (
@@ -398,6 +399,14 @@ def outdates(record: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(ids)
 
 
+def _typed(record: MeasureRecord) -> RegimeRecord:
+    """Return the payload of a `regime` or `oom` record as its model, read under the tag the file declared."""
+    model: type[RegimeFactor] | type[OomRecord] = RegimeFactor if record.kind == "regime" else OomRecord
+    written, read = RECORD_FORMATS[record.kind], record.read_under()
+    with reading(written, written if read is None else read.tag):
+        return model.model_validate(record.record)
+
+
 def _record_parser(kind: str) -> Callable[[Mapping[str, Any], os.stat_result], MeasureRecord]:
     def parse(document: Mapping[str, Any], info: os.stat_result) -> MeasureRecord:
         if kind == "supersede":
@@ -584,7 +593,8 @@ class MeasureRoots:
             document = json.loads(raw)
         except (ValueError, RecursionError):
             document = None
-        verdict = check(expected, document.get("format") if isinstance(document, dict) else None)
+        found = document.get("format") if isinstance(document, dict) else None
+        verdict = check(expected, found)
         if verdict in (FormatVerdict.UNKNOWN, FormatVerdict.RETIRED):
             self._say(
                 (path,),
@@ -596,7 +606,8 @@ class MeasureRoots:
         try:
             if verdict is FormatVerdict.MALFORMED:
                 raise ValueError("no format tag")
-            return _File(parse(document, info), info.st_uid, info.st_mtime)
+            with reading(expected, found):
+                return _File(parse(document, info), info.st_uid, info.st_mtime)
         except (ValueError, KeyError, TypeError, RecursionError, ValidationError) as err:
             self._malformed(root, directory, name, info.st_uid, type(err).__name__)
             return None
@@ -698,11 +709,7 @@ class MeasureRoots:
 
     def regime_records(self, unit: MeasureUnit) -> tuple[RegimeRecord, ...]:
         """Return the typed `regime` and `oom` records of `unit` the trust admits, oldest first."""
-        return tuple(
-            RegimeFactor.model_validate(r.record) if r.kind == "regime" else OomRecord.model_validate(r.record)
-            for r in self.records(unit)
-            if r.kind in ESTIMATE_RECORDS
-        )
+        return tuple(_typed(r) for r in self.records(unit) if r.kind in ESTIMATE_RECORDS)
 
     def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
         """Return the observations of `unit` that still pool, oldest file first.

@@ -22,7 +22,6 @@
         "nodes": {
             "default": [],
             "items": {
-                "additionalProperties": false,
                 "description": "One call of a declared task: its version, params, per-backend params and model reference.",
                 "properties": {
                     "id": {
@@ -81,7 +80,6 @@
         "edges": {
             "default": [],
             "items": {
-                "additionalProperties": false,
                 "description": "A wire from an output or graph input to a node's input port.\n\n`map` runs the target once per element of a `list[T]` source; `gather` collects a mapped node's outputs into a\nlist.",
                 "properties": {
                     "source": {

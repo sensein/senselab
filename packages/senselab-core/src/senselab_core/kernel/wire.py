@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from senselab_core.kernel._base import Frozen, FrozenMapping
-from senselab_core.kernel.formats import Formatted, FormatVerdict, check
+from senselab_core.kernel.formats import Formatted, FormatVerdict, check, reading
 from senselab_core.kernel.results import Annotation, Embedding, Events, Intervals, Metric, TextSpans, Transcript, Trials
 from senselab_core.kernel.signals import Audio, PlainText, Recording, RegularGroup, SourceReader
 from senselab_core.kernel.time import TimeMap
@@ -109,12 +109,14 @@ def from_wire_form(form: Mapping[str, Any]) -> Frozen:
     """
     found = form.get("format")
     verdicts = {tag: check(tag, found, RETIRED_WIRE_FORMATS) for tag in WIRE_FORMATS}
-    cls = next((WIRE_FORMATS[tag] for tag, v in verdicts.items() if v is FormatVerdict.ACCEPTED), None)
-    if cls is None and FormatVerdict.RETIRED in verdicts.values():
+    tag = next((tag for tag, v in verdicts.items() if v is FormatVerdict.ACCEPTED), None)
+    if tag is None and FormatVerdict.RETIRED in verdicts.values():
         raise WireFormatRetired(str(found))
-    if cls is None:
+    if tag is None:
         raise ValueError(f"no wire format reads {found!r}; registered: {sorted(WIRE_FORMATS)}")
+    cls = WIRE_FORMATS[tag]
     fields = dict(form)
     if not issubclass(cls, Formatted):
         del fields["format"]
-    return cls.model_validate(fields)
+    with reading(tag, found):
+        return cls.model_validate(fields)

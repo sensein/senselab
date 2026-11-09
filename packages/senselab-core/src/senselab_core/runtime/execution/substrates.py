@@ -35,7 +35,7 @@ from typing import Any, Protocol
 from senselab_worker.canonical import jcs_dumps, jcs_loads
 
 from senselab_core.kernel.declare import BackendSpec
-from senselab_core.kernel.formats import WORKER_READY_FORMAT, FormatVerdict, check
+from senselab_core.kernel.formats import WORKER_READY_FORMAT, FormatVerdict, check, reading
 from senselab_core.runtime.calibration import HardwareClass
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import expand
@@ -260,18 +260,19 @@ def read_mark(path: Path) -> ReadyMark | None:
                 WORKER_READY_FORMAT,
             )
             return None
-        return ReadyMark(
-            document["host"],
-            document["pid"],
-            document["started"],
-            {
-                name: QueueReady(
-                    None if found["hardware"] is None else HardwareClass.model_validate(found["hardware"]),
-                    {k: dict(v) for k, v in found["envs"].items()},
-                )
-                for name, found in document["queues"].items()
-            },
-        )
+        with reading(WORKER_READY_FORMAT, document["format"]):
+            return ReadyMark(
+                document["host"],
+                document["pid"],
+                document["started"],
+                {
+                    name: QueueReady(
+                        None if found["hardware"] is None else HardwareClass.model_validate(found["hardware"]),
+                        {k: dict(v) for k, v in found["envs"].items()},
+                    )
+                    for name, found in document["queues"].items()
+                },
+            )
     except (OSError, ValueError, KeyError, TypeError):
         return None
 

@@ -3,7 +3,8 @@
 from pathlib import Path
 
 import pytest
-from senselab_core.runtime.config import load_yaml
+from senselab_core.kernel.formats import FieldsOfLaterMinor
+from senselab_core.runtime.config import dump_yaml, load_yaml
 from senselab_core.runtime.execution_settings import PoolSettings, ResourceClass
 from senselab_core.runtime.resources import (
     ClassMeasure,
@@ -65,6 +66,27 @@ def test_each_class_keeps_its_own_derivation(tmp_path: Path) -> None:
         "cpu": (3.0, "c" * 40, ("303",)),
         "gpu:h100": (9.0, "b" * 40, ("202",)),
     }
+
+
+@pytest.mark.logic
+def test_a_table_of_a_later_minor_is_not_rewritten_but_one_that_lost_nothing_is(tmp_path: Path) -> None:
+    """Rewriting drops no row's later-minor fields: such a table is refused, named by its minor, and left as it was."""
+    write_row(tmp_path, UNIT, FOUND, MEASURED)
+    path = tmp_path / "t" / "b.yaml"
+    document = load_yaml(path, "table")
+    document["format"] = "resource-table@1.1"
+    path.write_text(dump_yaml(document))
+    other = Unit("t", "b", "org/n", "b" * 40, "cpu")
+    write_row(tmp_path, other, FOUND, MEASURED)
+    assert load_yaml(path, "table")["format"] == "resource-table@1.0"
+    document = load_yaml(path, "table")
+    document["format"] = "resource-table@1.1"
+    document["rows"][0]["added_later"] = 1
+    path.write_text(dump_yaml(document))
+    before = path.read_bytes()
+    with pytest.raises(FieldsOfLaterMinor, match=r"resource-table@1\.1.*ResourceRow\.added_later"):
+        write_row(tmp_path, UNIT, FOUND, MEASURED)
+    assert path.read_bytes() == before
 
 
 @pytest.mark.logic

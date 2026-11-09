@@ -60,6 +60,42 @@ def test_a_later_minor_is_read(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
+@pytest.mark.parametrize(
+    ("member", "change"),
+    [
+        (
+            "result.json",
+            lambda r: r.update(format="result@2.3", key={**r["key"], "model": {**r["key"]["model"], "added": 1}}),
+        ),
+    ],
+    ids=["key"],
+)
+def test_a_nested_field_of_a_later_minor_is_skew_not_corruption(
+    tmp_path: Path, member: str, change: Callable[[dict[str, Any]], None]
+) -> None:
+    """A later minor's field inside a value that enters the identity is read past, then the entry is skew: kept."""
+    s, k, c = ResultStore(tmp_path), store_key(), store_context()
+    s.put(k, {"y": 1}, c)
+    entry = entry_dir(tmp_path, k, c)
+    rewrite_json(entry / member, change)
+    assert s.get(k, c, ReusePolicy.EXACT) is None
+    with pytest.raises(StoreFormatUnknown):
+        s.put(k, {"y": 1}, c)
+    assert entry.is_dir() and not (tmp_path / QUARANTINE_DIR).exists()
+
+
+@pytest.mark.logic
+def test_a_nested_unknown_field_in_the_same_minor_is_corrupt(tmp_path: Path) -> None:
+    """Under the reader's own minor a nested unknown field is corruption: the entry is moved aside."""
+    s, k, c = ResultStore(tmp_path), store_key(), store_context()
+    s.put(k, {"y": 1}, c)
+    entry = entry_dir(tmp_path, k, c)
+    rewrite_json(entry / "result.json", lambda r: r["key"]["model"].update(added=1))
+    assert s.get(k, c, ReusePolicy.EXACT) is None
+    assert not entry.exists()
+
+
+@pytest.mark.logic
 def test_a_written_context_is_one_a_4_0_reader_accepts(tmp_path: Path) -> None:
     """A written context holds exactly the fields of `execution-context@4.0`, `host` among them as a host token."""
     s, k = ResultStore(tmp_path), store_key()

@@ -3,6 +3,8 @@
 import math
 import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Annotated, Any, ClassVar, NoReturn, Self, TypeVar
@@ -15,11 +17,13 @@ from pydantic import (
     ConfigDict,
     Field,
     GetCoreSchemaHandler,
+    ModelWrapValidatorHandler,
     PlainSerializer,
     Strict,
     StringConstraints,
     ValidationError,
     ValidatorFunctionWrapHandler,
+    model_validator,
 )
 from senselab_worker.canonical import ARRAY_TOKEN, QUIET_NAN_BITS, Recurse, Tokeniser, Walk
 from senselab_worker.digest import identity_digest, npy_digest
@@ -177,8 +181,54 @@ def digest_of(v: "Frozen") -> str:
     return value_digest(_type_name(type(v)), _fields(v))
 
 
-def _rebuild(cls: type[F], fields: dict[str, Any]) -> F:
-    return cls.model_validate(fields)
+def _held_frozen(x: object) -> Iterator["Frozen"]:
+    """Yield each `Frozen` held in `x` or in the containers inside it, not entering a `Frozen` or a container twice."""
+    seen: set[int] = set()
+    pending = [x]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, Frozen):
+            yield item
+        elif isinstance(item, (Mapping, list, tuple)) and id(item) not in seen:
+            seen.add(id(item))
+            pending.extend(reversed(list(item.values() if isinstance(item, Mapping) else item)))
+
+
+def _children(value: "Frozen") -> Iterator["Frozen"]:
+    for name in type(value).model_fields:
+        yield from _held_frozen(getattr(value, name))
+
+
+def _nodes(value: "Frozen") -> list["Frozen"]:
+    """Return `value` and every `Frozen` it holds, depth first, in field order, each object once."""
+    found: dict[int, Frozen] = {}
+    pending = [value]
+    while pending:
+        node = pending.pop()
+        if id(node) not in found:
+            found[id(node)] = node
+            pending.extend(reversed(list(_children(node))))
+    return list(found.values())
+
+
+def _reads(value: "Frozen") -> list["ReadUnder | None"]:
+    return [v.read_under() for v in _nodes(value)]
+
+
+def _carry(reads: Sequence["ReadUnder | None"], built: F) -> F:
+    """Give `built`, a rebuild of the value `reads` came from, the same read of itself and of each value it holds."""
+    nodes = _nodes(built)
+    if len(nodes) != len(reads):
+        nodes, reads = nodes[:1], reads[:1]
+    for node, read in zip(nodes, reads, strict=True):
+        held = object.__getattribute__(node, "__pydantic_private__")
+        object.__setattr__(node, "__pydantic_private__", MappingProxyType({**held, "_read": read}))
+    return built
+
+
+def _rebuild(cls: type[F], fields: dict[str, Any], reads: Sequence["ReadUnder | None"] = ()) -> F:
+    built = cls.model_validate(fields)
+    return _carry(reads, built) if any(reads) else built
 
 
 def thawed(value: object, walk: Walk | None = None) -> Any:  # noqa: ANN401
@@ -210,6 +260,42 @@ def _seal(v: "Frozen") -> None:
     private = MappingProxyType(dict(v._derived()))
     object.__setattr__(v, "__pydantic_fields_set__", frozenset(object.__getattribute__(v, "__pydantic_fields_set__")))
     object.__setattr__(v, "__pydantic_private__", private)
+
+
+@dataclass
+class _Reading:
+    tag: str
+    dropped: list[str]
+
+
+@dataclass(frozen=True)
+class ReadUnder:
+    """What reading a value under a later minor cost.
+
+    `tag` is the tag it was read under; `dropped` the fields the reader did not declare, as `<Type>.<field>`,
+    dropped from the value and every value below it.
+    """
+
+    tag: str
+    dropped: tuple[str, ...]
+
+
+_READING: ContextVar[_Reading | None] = ContextVar("senselab_reading", default=None)
+"""The record being validated, when it declares a later minor of its format: every `Frozen` under it drops the
+fields it does not declare and says so here. Set by `formats.reading`."""
+
+
+def ignoring_unknown_fields() -> bool:
+    """Whether the record being validated declares a later minor of its format (`formats.reading`)."""
+    return _READING.get() is not None
+
+
+def _declared(cls: type["Frozen"], data: Mapping[Any, Any]) -> dict[Any, Any]:
+    """Return `data` without the keys `cls` declares no field for, by name or alias."""
+    names = set(cls.model_fields)
+    for field in cls.model_fields.values():
+        names.update(a for a in (field.alias, field.validation_alias) if isinstance(a, str))
+    return {k: v for k, v in data.items() if k in names}
 
 
 def _held_fields(cls: type["Frozen"], data: object) -> object:
@@ -264,6 +350,27 @@ class Frozen(BaseModel):
         return {"type": "function-wrap", "function": {"type": "no-info", "function": build}, "schema": inner}
 
     @classmethod
+    def _reading(cls, data: object) -> AbstractContextManager[object]:  # noqa: ARG003
+        """Return the scope `data` is validated in; a type that declares its own format enters its reading rules."""
+        return nullcontext()
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _drop_unknown_fields(cls, data: object, handler: ModelWrapValidatorHandler[Self]) -> Self:
+        """Validate `data` in its reading scope, minus the undeclared fields while that scope is a later minor."""
+        with cls._reading(data):
+            read = _READING.get()
+            if read is None or not isinstance(data, Mapping):
+                return handler(data)
+            kept, start = _declared(cls, data), len(read.dropped)
+            read.dropped.extend(f"{cls.__name__}.{k}" for k in data if k not in kept)
+            value = handler(kept)
+            object.__setattr__(
+                value, "__pydantic_private__", {"_read": ReadUnder(read.tag, tuple(read.dropped[start:]))}
+            )
+            return value
+
+    @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
         """Hold the subclass's config as a read-only mapping, and require a clock type to declare its clock fields.
 
@@ -280,7 +387,17 @@ class Frozen(BaseModel):
 
     def _derived(self) -> Mapping[str, object]:
         """Return the private values a built value holds; a subclass extends this mapping."""
-        return {"_canonical": digest_of(self)}
+        held = object.__getattribute__(self, "__pydantic_private__") or {}
+        read = held.get("_read")
+        if read is None:
+            below = [r for child in _children(self) if (r := child.read_under()) is not None]
+            read = ReadUnder(below[0].tag, tuple(k for r in below for k in r.dropped)) if below else None
+        return {"_canonical": digest_of(self), "_read": read}
+
+    def read_under(self) -> ReadUnder | None:
+        """Return what reading this value under a later minor cost, None when it was read under its own."""
+        read: ReadUnder | None = (self.__pydantic_private__ or {}).get("_read")
+        return read
 
     def canonical_digest(self) -> str:
         """Return `value_digest("<module>.<qualname>", <each field's held value>)`, computed when the value was built.
@@ -326,17 +443,17 @@ class Frozen(BaseModel):
         """Return `hash(self.canonical_digest())`."""
         return hash(self.canonical_digest())
 
-    def __reduce__(self) -> tuple[Callable[..., Any], tuple[type[Self], dict[str, Any]]]:
+    def __reduce__(self) -> tuple[Callable[..., Any], tuple[type[Self], dict[str, Any], list[ReadUnder | None]]]:
         """Pickle as the dump, rebuilt through `model_validate`."""
-        return _rebuild, (type(self), self.model_dump())
+        return _rebuild, (type(self), self.model_dump(), _reads(self))
 
     def __copy__(self) -> Self:
         """Return a copy rebuilt through `model_validate`."""
-        return type(self).model_validate(self.model_dump())
+        return _rebuild(type(self), self.model_dump(), _reads(self))
 
     def __deepcopy__(self, memo: dict[int, Any] | None = None) -> Self:
         """Return a copy rebuilt through `model_validate`; a held array that `is_frozen` is shared, not copied."""
-        copied = type(self).model_validate(self.model_dump())
+        copied = _rebuild(type(self), self.model_dump(), _reads(self))
         if memo is not None:
             memo[id(self)] = copied
         return copied
@@ -350,7 +467,7 @@ class Frozen(BaseModel):
         unknown = sorted(set(update or {}) - set(type(self).model_fields), key=str)
         if unknown:
             raise ValueError(f"{type(self).__name__} has no fields {unknown}; known: {sorted(type(self).model_fields)}")
-        return type(self).model_validate({**self.model_dump(), **(update or {})})
+        return _carry(_reads(self), type(self).model_validate({**self.model_dump(), **(update or {})}))
 
     @classmethod  # type: ignore[no-redef]
     def model_construct(cls, _fields_set: set[str] | None = None, **values: object) -> Self:  # type: ignore[override]

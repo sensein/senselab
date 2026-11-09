@@ -1,9 +1,11 @@
 """Equivalence classes (`equivalence@4.0`), read by the runtime, and the verify evidence they are regenerated from."""
 
+import json
 from pathlib import Path
 
 import pytest
 import yaml
+from senselab_core.kernel.formats import FieldsOfLaterMinor
 from senselab_core.kernel.identity import ExecutionContext, acceptable, member_key
 from senselab_core.runtime.compare import Difference, Threshold
 from senselab_core.runtime.equivalence import (
@@ -218,6 +220,23 @@ def test_evidence_records_both_env_locks(tmp_path: Path) -> None:
     [record] = store.evidence()
     assert (record.stored.env_lock, record.current.env_lock) == (L1, L2)
     assert store.equivalence == {"b": {}}
+
+
+@pytest.mark.logic
+def test_evidence_of_a_later_minor_is_read_not_corrupt_and_not_rewritten(tmp_path: Path) -> None:
+    """A newer minor's record, whose digest this version cannot recompute, lists as read; adding it back is refused."""
+    store = ResultStore(tmp_path)
+    store.add_evidence(_evidence("b", CPU, CUDA))
+    [path] = (tmp_path / EVIDENCE_DIR).iterdir()
+    path.chmod(0o600)
+    document = json.loads(path.read_text())
+    document.update(format="equivalence-evidence@4.1", added_later=1)
+    document["stored"]["added_later"] = 2
+    path.write_text(json.dumps(document))
+    [record] = store.evidence()
+    assert record.format == "equivalence-evidence@4.1"
+    with pytest.raises(FieldsOfLaterMinor, match="equivalence-evidence@4.1"):
+        store.add_evidence(record)
 
 
 @pytest.mark.logic
