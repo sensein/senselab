@@ -25,7 +25,6 @@ import shlex
 import subprocess
 import sys
 import threading
-import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -441,8 +440,12 @@ class Slurm:
         exclude_nodes: Sequence[str] = (),
         log_dir: Path | None = None,
         commands: SlurmCommands,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
-        """Submit workers of `classes`, each `command` plus `--classes <queue>`, at most `qos_cpu_cap` CPUs alive."""
+        """Submit workers of `classes`, each `command` plus `--classes <queue>`, at most `qos_cpu_cap` CPUs alive.
+
+        The waits between a command's tries run on `clock`.
+        """
         self.classes = dict(classes)
         self.qos_cpu_cap = qos_cpu_cap
         self.command = list(command)
@@ -452,7 +455,7 @@ class Slurm:
         self.epoch = epoch
         self.exclude_nodes = tuple(exclude_nodes)
         self.log_dir = log_dir
-        self.commands = commands
+        self.commands, self._clock = commands, clock
         self._cache: list[WorkerHandle] | None = None
 
     @property
@@ -526,7 +529,7 @@ class Slurm:
                 return out
             if recover is None and attempt + 1 == self.commands.attempts:
                 break
-            time.sleep(wait)
+            self._clock.sleep(wait)
             wait *= 2
             if recover is not None and (found := recover()) is not None:
                 return found
