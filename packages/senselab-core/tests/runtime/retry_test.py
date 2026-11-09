@@ -17,6 +17,7 @@ import numpy
 import pytest
 import senselab_core.runtime.retry as retry_module
 from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
+from lease_clock_fixture import ManualClock
 from senselab_core.runtime.faults import is_transient
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import storage_fault
@@ -169,10 +170,15 @@ def test_ssl_error_classified_by_type(exc: ssl.SSLError, transient: bool) -> Non
     assert is_transient(urllib.error.URLError(exc)) is transient
 
 
+@pytest.fixture
+def clock(lease_clock: Callable[..., ManualClock]) -> ManualClock:
+    """A clock whose sleeps are recorded and advance it."""
+    return lease_clock()
+
+
 @pytest.mark.logic
-def test_retry_surfaces_a_permanent_os_error_on_the_first_attempt() -> None:
+def test_retry_surfaces_a_permanent_os_error_on_the_first_attempt(clock: ManualClock) -> None:
     """A `FileNotFoundError` inside a retried call raises at once, with no backoff."""
-    slept: list[float] = []
     calls = {"n": 0}
 
     def _missing() -> str:
@@ -180,14 +186,13 @@ def test_retry_surfaces_a_permanent_os_error_on_the_first_attempt() -> None:
         raise FileNotFoundError(errno.ENOENT, "no such file", "/models/w.bin")
 
     with pytest.raises(FileNotFoundError):
-        retry_on_transient_error(_missing, POLICY, sleep=slept.append)
-    assert calls["n"] == 1 and slept == []
+        retry_on_transient_error(_missing, POLICY, clock=clock)
+    assert calls["n"] == 1 and clock.slept == []
 
 
 @pytest.mark.logic
-def test_retry_stops_on_a_404_and_backs_off_on_a_429(hub_error: Callable[..., Exception]) -> None:
+def test_retry_stops_on_a_404_and_backs_off_on_a_429(hub_error: Callable[..., Exception], clock: ManualClock) -> None:
     """A 404 raises on the first attempt; a 429 is retried after the policy's first backoff."""
-    slept: list[float] = []
     calls = {"n": 0}
 
     def _not_found() -> str:
@@ -195,7 +200,7 @@ def test_retry_stops_on_a_404_and_backs_off_on_a_429(hub_error: Callable[..., Ex
         raise hub_error(404, RepositoryNotFoundError)
 
     with pytest.raises(RepositoryNotFoundError):
-        retry_on_transient_error(_not_found, POLICY, sleep=slept.append)
+        retry_on_transient_error(_not_found, POLICY, clock=clock)
     assert calls["n"] == 1
 
     calls["n"] = 0
@@ -206,15 +211,16 @@ def test_retry_stops_on_a_404_and_backs_off_on_a_429(hub_error: Callable[..., Ex
             raise hub_error(429)
         return "ok"
 
-    assert retry_on_transient_error(_throttled_once, POLICY, sleep=slept.append) == "ok"
-    assert calls["n"] == 2 and slept == [1.0]
+    assert retry_on_transient_error(_throttled_once, POLICY, clock=clock) == "ok"
+    assert calls["n"] == 2 and clock.slept == [1.0]
 
 
 @pytest.mark.logic
-def test_the_retry_policy_is_the_argument_and_no_environment_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_retry_policy_is_the_argument_and_no_environment_variable(
+    monkeypatch: pytest.MonkeyPatch, clock: ManualClock
+) -> None:
     """The attempts and the doubling backoff come from the policy passed; `SENSELAB_HF_MAX_RETRIES` is not read."""
     monkeypatch.setenv("SENSELAB_HF_MAX_RETRIES", "1")
-    slept: list[float] = []
     calls = {"n": 0}
 
     def _down() -> str:
@@ -222,8 +228,8 @@ def test_the_retry_policy_is_the_argument_and_no_environment_variable(monkeypatc
         raise ConnectionResetError(errno.ECONNRESET, "reset")
 
     with pytest.raises(ConnectionResetError):
-        retry_on_transient_error(_down, RetryPolicy(attempts=4, first_backoff_s=0.5), sleep=slept.append)
-    assert calls["n"] == 4 and slept == [0.5, 1.0, 2.0]
+        retry_on_transient_error(_down, RetryPolicy(attempts=4, first_backoff_s=0.5), clock=clock)
+    assert calls["n"] == 4 and clock.slept == [0.5, 1.0, 2.0]
     assert "max_retries" not in inspect.signature(retry_on_transient_error).parameters
 
 
