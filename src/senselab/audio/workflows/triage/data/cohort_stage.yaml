@@ -67,7 +67,7 @@ speech:
 # task syllables is task text.
 non_task:
   task_syllables:               # a task kind -> the syllables its task text is spelled from; a word made only of them is task text
-    syllable_repetition: [pa, pah, ta, tah, ka, kah, puh, tuh, kuh, buh, ba, da, ga]   # the standard DDK syllables; B2AI adds butter, cup
+    syllable_repetition: [pa, pah, ta, tah, ka, kah, puh, tuh, kuh, buh, ba, da, ga]   # the standard DDK syllables; a profile may add its own (e.g. butter, cup)
 
 # Distribution checks: each names its level, its bounds and the ground it raises.
 quantiles: [0.05, 0.25, 0.5, 0.75, 0.95]

@@ -32,9 +32,9 @@ from senselab.audio.workflows.triage.consensus import vocabulary_key
 from senselab.audio.workflows.triage.label_membership import LabelMembership, optional_label_membership
 from senselab.audio.workflows.triage.routing_analysis.labels import (
     CLASSIFIERS,
-    LABEL_SETS,
-    TRACKED_LABELS,
+    label_sets,
     peak_key,
+    tracked_labels,
 )
 
 SPAN_MEASURES: tuple[str, ...] = ("amplitude", "continuity", "gap")
@@ -754,7 +754,7 @@ def _absorb_measurement(
     if span_classifier is not None:
         _absorb_span_window(span_scores, span_classifier, attributes)
         if span_classifier == "hear":
-            tracked_hear = TRACKED_LABELS["hear"]
+            tracked_hear = tracked_labels()["hear"]
             for label, score in (attributes.get("raw_scores") or {}).items():
                 if label in tracked_hear:
                     key = peak_key("span", "hear", str(label))
@@ -764,7 +764,7 @@ def _absorb_measurement(
         for row in attributes.get("labels") or []:
             spellings = row.get("labels_by_classifier") or {}
             for classifier, peak in (row.get("peak_by_classifier") or {}).items():
-                tracked = TRACKED_LABELS.get(str(classifier), frozenset())
+                tracked = tracked_labels().get(str(classifier), frozenset())
                 own = [str(name) for name in spellings.get(str(classifier), ()) if str(name) in tracked]
                 for spelling in own or ([str(row.get("label"))] if str(row.get("label")) in tracked else []):
                     features.peaks[peak_key("consensus", str(classifier), spelling)] = float(peak)
@@ -774,7 +774,7 @@ def _absorb_measurement(
         return
     stream, classifier = pair
     features.classifier_streams.append(f"{stream}|{classifier}")
-    tracked = TRACKED_LABELS[classifier]
+    tracked = tracked_labels()[classifier]
     for label, entry in (attributes.get("labels") or {}).items():
         if label in tracked:
             peak = _peak_of(entry)
@@ -929,10 +929,11 @@ def _label_span_statistics(
     per_set: dict[str, float] = {}
     for classifier in SPAN_CLASSIFIERS.values():
         carried = _span_labels(spans, span_scores, classifier, memberships[classifier])
-        tracked = TRACKED_LABELS[classifier]
+        tracked = tracked_labels()[classifier]
+        sets = label_sets()
         grouped: dict[str, list[dict[str, Any]]] = {}
         by_set: dict[str, list[dict[str, Any]]] = (
-            {set_name: [] for set_name, per_classifier in LABEL_SETS.items() if per_classifier[classifier]}
+            {set_name: [] for set_name, per_classifier in sets.items() if per_classifier[classifier]}
             if classifier in span_scores
             else {}
         )
@@ -941,7 +942,7 @@ def _label_span_statistics(
             for label in labels:
                 if label in tracked:
                     grouped.setdefault(label, []).append(span)
-            for set_name, per_classifier in LABEL_SETS.items():
+            for set_name, per_classifier in sets.items():
                 members = per_classifier[classifier]
                 if members and any(label in members for label in labels):
                     by_set.setdefault(set_name, []).append(span)

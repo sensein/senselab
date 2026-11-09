@@ -31,6 +31,9 @@ from senselab.audio.workflows.triage.nodes.quality import (
 from senselab.audio.workflows.triage.vocabulary import UNDETERMINED
 from senselab.utils.prov_store import ProvStore
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_clip_amplitudes.py"
 _spec = importlib.util.spec_from_file_location("extend_clip_amplitudes_under_test", _CLI)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 r"""Measure the session background against the session floor over a sample of finished runs, read-only.
 
-    uv run python scripts/measure_session_background.py MANIFEST --out-dir DIR \
-        [--sessions 200] [--seed 0] [--slice-index I --slice-count N]
+    uv run python scripts/measure_session_background.py MANIFEST --out-dir DIR --profile PROFILE \
+        [--config OVERRIDE.yaml] [--sessions 200] [--seed 0] [--slice-index I --slice-count N]
     uv run python scripts/measure_session_background.py --summarise DIR
 
 ``MANIFEST`` is the JSONL every extend driver takes (``stem``, ``enhanced``). ``--sessions`` BIDS
@@ -39,10 +39,17 @@ from senselab.audio.workflows.triage.background_model import (
     background_model_parameters,
     regions_of,
 )
-from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.ddk_task import DDK_READING
-from senselab.audio.workflows.triage.extend import RUN_SUBDIR, read_manifest, read_store, run_root_of, take_slice
+from senselab.audio.workflows.triage.extend import (
+    RUN_SUBDIR,
+    add_config_arguments,
+    driver_config,
+    read_manifest,
+    read_store,
+    run_root_of,
+    take_slice,
+)
 from senselab.audio.workflows.triage.identity import identity_disagreement, recorded_identity, row_groups, row_identity
 from senselab.audio.workflows.triage.nodes import ddk as ddk_node
 from senselab.audio.workflows.triage.nodes.airway_task import BREATH_READING, COUGH_READING, measure_airway_task
@@ -84,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0, help="The draw's seed")
     parser.add_argument("--slice-index", type=int, default=0, help="This task's index, 0-based")
     parser.add_argument("--slice-count", type=int, default=1, help="How many tasks the array has")
+    add_config_arguments(parser)
     return parser
 
 
@@ -297,18 +305,17 @@ def draw_sessions(manifest: Path, sessions: int, seed: int) -> list[tuple[str, l
     return [(key, groups[key]) for key in chosen]
 
 
-def run(args: argparse.Namespace) -> int:
+def run(args: argparse.Namespace, config: TriageConfig) -> int:
     """Measure one shard of the drawn sessions.
 
     Args:
         args: The parsed command line.
+        config: The configuration :func:`~senselab.audio.workflows.triage.extend.driver_config` loaded.
 
     Returns:
         0.
     """
     started = time.time()
-    config = load_triage_config()
-    require_dataset_values(config.values)
     drawn = draw_sessions(args.manifest, args.sessions, args.seed)
     mine = take_slice([{"session": s, "rows": r} for s, r in drawn], args.slice_index, args.slice_count)
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -409,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
         argv: The command line, or None to read ``sys.argv``.
 
     Returns:
-        0 on success, 2 on bad arguments.
+        0 on success, 2 on bad arguments or a profile that cannot be loaded or lacks a value.
     """
     args = build_parser().parse_args(argv)
     if args.summarise is not None:
@@ -418,7 +425,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.manifest is None or args.out_dir is None or not args.manifest.exists():
         print("ERROR: a manifest that exists and --out-dir are required", file=sys.stderr)
         return 2
-    return run(args)
+    try:
+        config = driver_config(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
+    return run(args, config)
 
 
 if __name__ == "__main__":

@@ -288,6 +288,21 @@ class TestDatasetProfileLayer:
         finally:
             deactivate_profile()
 
+    def test_a_setting_only_a_profile_reaches_is_refused_in_a_run_override(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """The airway ontology roots feed labels built per profile, so a run's value is refused, not ignored."""
+        run = tmp_path / "run.yaml"
+        run.write_text("taxonomy:\n  airway_ontology_roots: [Breathing]\n")
+        with pytest.raises(ValueError, match="airway_ontology_roots.*dataset profile"):
+            load_triage_config(run)
+        root = self._profile(tmp_path / "p", "taxonomy:\n  airway_ontology_roots: [Respiratory sounds]\n")
+        try:
+            cfg = load_triage_config(profile=root)
+            assert cfg.require("taxonomy.airway_ontology_roots") == ["Respiratory sounds"]
+        finally:
+            deactivate_profile()
+
 
 class TestOverridesMayExtendADataMap:
     """A schema key is a name the code reads; a data-map key is a value the data supplies."""

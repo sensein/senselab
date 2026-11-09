@@ -10,6 +10,9 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "verify_task_squim.py"
 _spec = importlib.util.spec_from_file_location("verify_task_squim_under_test", _CLI)
@@ -160,3 +163,33 @@ def test_a_log_rows_family_is_the_task_its_run_recorded(tmp_path: Path) -> None:
     assert cli.logged_family({"stem": run_root.name, "enhanced": enhanced, "status": "ok"}) == "rainbow-passage"
     missing = {"stem": "rec-0002", "enhanced": "/nowhere.flac", "declared_family": "free-speech", "status": "ok"}
     assert cli.logged_family(missing) == "free-speech"
+
+
+def test_a_log_rows_family_is_the_recorded_task_not_its_token(tmp_path: Path) -> None:
+    """Review B2: where the token is not the task's name, the family is the task ADMIT recorded."""
+    from senselab.audio.data_structures import AudioHints
+    from senselab.audio.workflows.triage.task_catalogue import task_attributes
+    from tests.audio.workflows.triage.conftest import declared_identity_attributes
+
+    run_root = tmp_path / "p01" / "s1" / "rec-0001_20000101-000000"
+    (run_root / "run" / "streams").mkdir(parents=True)
+    attributes = {
+        "name": "recording",
+        "path": "rec-0001.wav",
+        **declared_identity_attributes("p01", "s1", "rainbow-passage", token="reading-7"),
+        **task_attributes(AudioHints(task="rainbow-passage")),
+    }
+    entity = {"record": "entity", "id": "stream-1", "prov_type": "stream", "extent": None, "attributes": attributes}
+    (run_root / "run" / "store.jsonl").write_text(json.dumps(entity) + "\n")
+    enhanced = str(run_root / "run" / "streams" / "enhanced.flac")
+    assert cli.logged_family({"stem": run_root.name, "enhanced": enhanced, "status": "ok"}) == "rainbow-passage"
+
+
+def test_without_a_profile_the_report_exits_2_naming_it(
+    tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review A1: a family's branch is the profile's; with none the driver exits 2 and writes no report."""
+    old, new = _write(tmp_path / "old.tsv", _rows(False)), _write(tmp_path / "new.tsv", _rows(True))
+    assert cli.main(["--old", str(old), "--new", str(new), "--out", str(tmp_path / "v.md")]) == 2
+    assert "dataset profile" in capsys.readouterr().err
+    assert not (tmp_path / "v.md").exists()

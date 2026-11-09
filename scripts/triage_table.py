@@ -2,7 +2,7 @@
 
     uv run python scripts/triage_table.py --decisions DIR/triage_decisions.parquet
         --evidence DIR/triage_evidence.parquet --run-root OUT --bids-root BIDS --out DIR/triage.tsv
-        [--manifest MANIFEST.jsonl] [--vectors DIR/recording_vectors.parquet]
+        --profile PROFILE [--config OVERRIDE.yaml] [--manifest MANIFEST.jsonl] [--vectors DIR/recording_vectors.parquet]
 
 The decision tables are the ones ``scripts/triage_recording_vectors.py --merge`` writes; ``--run-root``
 is the tree they were built over. The columns are ``data/triage_table.yaml``; their BIDS sidecar is
@@ -12,7 +12,9 @@ and the exit status is 2, where the table would not be one row per recording
 source path, or, with ``--manifest``, a run asked for and absent or present and not asked for. The
 manifest also supplies the source path of a run whose store records none. ``--vectors`` is the
 ``recording_vectors.parquet`` built over the same tree, read for the whole-file SNR, noise floor and
-SQUIM columns; without it they are empty. Every store is read, never written.
+SQUIM columns; without it they are empty. Every store is read, never written. ``--profile`` names the dataset
+profile the runs were made with, whose task list the per-recording columns read; nothing is written, and the exit
+status is 2, where it cannot be loaded or lacks a value.
 
     uv run python scripts/triage_table.py --sidecar-only DIR/triage.json
 
@@ -31,6 +33,7 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage import triage_table
+from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config
 from senselab.utils import fastio
 
 
@@ -42,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         0 when rows (or, with ``--sidecar-only``, the sidecar) were written, 1 when no rows were, 2 when
-        coverage failed and nothing was written.
+        coverage failed, or the profile cannot be loaded or lacks a value, and nothing was written.
     """
     if argv is None:
         argv = sys.argv[1:]
@@ -62,7 +65,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path, help="The run manifest (JSONL of stem, source) to check against.")
     parser.add_argument("--vectors", type=Path, help="recording_vectors.parquet, for the whole-file quality columns.")
     parser.add_argument("--threads", type=int, default=fastio.DEFAULT_THREADS, help="Run-tree reads in flight.")
+    add_config_arguments(parser)
     args = parser.parse_args(argv)
+    try:
+        driver_config(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
 
     decisions = pq.read_table(args.decisions)
     evidence = pq.read_table(args.evidence)

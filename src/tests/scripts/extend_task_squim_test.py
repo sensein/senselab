@@ -18,6 +18,9 @@ from senselab.audio.workflows.triage.nodes.common import find_measurement, path_
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import declared_identity_attributes
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_task_squim.py"
 _spec = importlib.util.spec_from_file_location("extend_task_squim_under_test", _CLI)

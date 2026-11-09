@@ -1,2 +1,3 @@
 version: 1
-words: [apple, banana, cherry, grape, lemon, mango, orange, peach, pear, plum]
+category: Fruit
+items: [apple, banana, cherry, grape, lemon, mango, orange, peach, pear, plum]

@@ -11,7 +11,8 @@ dataset's hints declare, naming the branch that reads the task and describing wh
         expects: {pattern: ordered_tokens, token_source: stimulus_text, connected: true}
 
 An entry may also carry ``unused_voice_reading``: a VOICE description a dataset wrote for a SPEECH task and that no
-stage applies, kept with the task it describes.
+stage applies, kept with the task it describes; and, on a syllable task, ``carrier``: the text the repeated syllables
+spell (``pa``, ``buttercup``), which a transcript of a faithful performance contains.
 
 A recording's hint names its task exactly (``AudioHints.task``), or describes it inline
 (``AudioHints.task_description``) for a dataset with no task list. ADMIT records what it resolved
@@ -45,7 +46,7 @@ TASKS_VERSION = 1
 """The task list format this module reads."""
 
 _ENTRY_KEYS = frozenset(
-    {"branch", "expects", "unused_voice_reading", "voice_reading_text", "lexicon", "categories", "traits"}
+    {"branch", "expects", "unused_voice_reading", "voice_reading_text", "lexicon", "categories", "traits", "carrier"}
 )
 
 DEFINES_A_CUE_WORD = "defines_a_cue_word"
@@ -191,11 +192,12 @@ class TaskEntry:
             :data:`~senselab.audio.workflows.triage.nodes.branches.BRANCHES`.
         expects: What the task asks a recording to contain.
         unused_voice_reading: A VOICE description of a SPEECH task that no stage applies, or None.
-        voice_reading_text: For a word task also read for its voice (B2AI's ``loudness``: say "hey", then shout it),
+        voice_reading_text: For a word task also read for its voice (a loudness task: say "hey", then shout it),
             the words the voice is read over; None for every other task.
         lexicon: The profile data file listing the task's own words and phrases (``task_lexicon/...``), or None.
         categories: For a word-generation task, the categories a recording may ask for, by name; empty otherwise.
         traits: What the entry says about its task beyond its description, each one of :data:`TRAITS`.
+        carrier: For a syllable task, the text its syllables spell, as a transcript would hold it; None otherwise.
     """
 
     name: str
@@ -206,6 +208,7 @@ class TaskEntry:
     lexicon: str | None = None
     categories: Mapping[str, ItemCategory] = field(default_factory=dict)
     traits: frozenset[str] = frozenset()
+    carrier: str | None = None
 
 
 def expectation_of(description: Mapping[str, Any], where: str) -> Expectation:
@@ -277,15 +280,22 @@ def read_task_list(text: str, source: str) -> dict[str, TaskEntry]:
         traits = entry.get("traits") or []
         if not isinstance(traits, list) or not set(traits) <= set(TRAITS):
             raise ValueError(f"{where}: traits is a list of {', '.join(TRAITS)}")
+        expects = expectation_of(entry.get("expects") or {}, where)
+        carrier = entry.get("carrier")
+        if carrier is not None and (
+            not isinstance(carrier, str) or not carrier.strip() or expects.pattern not in SYLLABLE_PATTERNS
+        ):
+            raise ValueError(f"{where}: carrier is the text a syllable task's syllables spell, on a syllable task only")
         out[str(name)] = TaskEntry(
             name=str(name),
             branch=str(entry["branch"]),
-            expects=expectation_of(entry.get("expects") or {}, where),
+            expects=expects,
             unused_voice_reading=None if voice is None else expectation_of(voice, f"{where} unused_voice_reading"),
             voice_reading_text=None if text is None else tuple(text),
             lexicon=lexicon,
             categories={str(key): _item_category(str(key), value, where) for key, value in categories.items()},
             traits=frozenset(str(trait) for trait in traits),
+            carrier=carrier,
         )
     return out
 
@@ -428,6 +438,19 @@ def voice_reading_text(task: str | None) -> tuple[str, ...] | None:
     """
     entry = task_list().get(task) if task else None
     return entry.voice_reading_text if entry is not None else None
+
+
+def task_carrier(task: str | None) -> str | None:
+    """The text a syllable task's entry says its syllables spell (:attr:`TaskEntry.carrier`).
+
+    Args:
+        task: The task's name, or None.
+
+    Returns:
+        The carrier as the entry spells it; None where the entry declares none or the task is not in the list.
+    """
+    entry = task_list().get(task) if task else None
+    return entry.carrier if entry is not None else None
 
 
 def item_category_rule(task: str | None, category: str | None) -> ItemCategory | None:

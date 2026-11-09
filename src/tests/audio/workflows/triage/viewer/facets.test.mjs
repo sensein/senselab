@@ -32,13 +32,13 @@ function corpus () {
   const rows = []
   const spec = [
     // [n, task, verdict, conformance_speech, gate_failed_names]
-    [10, 'story-recall', 'pass', 'true', []],
-    [6, 'story-recall', 'review', 'false', ['response_min_s']],
-    [4, 'story-recall', 'pass', null, []],
-    [7, 'free-speech', 'pass', 'true', []],
-    [3, 'free-speech', 'review', null, ['response_min_s', 'items_min']],
-    [2, 'cough', 'discard', 'undetermined', ['items_min']],
-    [1, 'cough', 'review', null, null]
+    [10, 'tell-a-story', 'pass', 'true', []],
+    [6, 'tell-a-story', 'review', 'false', ['response_min_s']],
+    [4, 'tell-a-story', 'pass', null, []],
+    [7, 'open-talk', 'pass', 'true', []],
+    [3, 'open-talk', 'review', null, ['response_min_s', 'items_min']],
+    [2, 'three-coughs', 'discard', 'undetermined', ['items_min']],
+    [1, 'three-coughs', 'review', null, null]
   ]
   for (const [n, task, verdict, conf, failed] of spec) {
     for (let i = 0; i < n; i++) {
@@ -89,11 +89,11 @@ test('the outcomes of the 12 applied gates are facets, and the set columns face 
 test('a value reports the whole-corpus total and, with nothing chosen, the same available', () => {
   const m = new F.FacetModel(ROWS)
   const v = m.values('task')
-  const story = v.values.find(x => x.term === 'story-recall')
+  const story = v.values.find(x => x.term === 'tell-a-story')
   assert.equal(story.total, 20)
   assert.equal(story.available, 20)
-  assert.equal(v.values.find(x => x.term === 'free-speech').total, 10)
-  assert.equal(v.values.find(x => x.term === 'cough').total, 3)
+  assert.equal(v.values.find(x => x.term === 'open-talk').total, 10)
+  assert.equal(v.values.find(x => x.term === 'three-coughs').total, 3)
   assert.equal(m.before(), 33)
   assert.equal(m.after(), 33)
 })
@@ -116,7 +116,7 @@ test('a closed vocabulary keeps its declared order and an open one sorts by coun
   )
   assert.deepEqual(
     m.values('task').values.map(x => x.term),
-    ['story-recall', 'free-speech', 'cough', ABSENT]
+    ['tell-a-story', 'open-talk', 'three-coughs', ABSENT]
   )
 })
 
@@ -124,29 +124,29 @@ test('a closed vocabulary keeps its declared order and an open one sorts by coun
 
 test('choosing one value narrows the drawn set to exactly that value count', () => {
   const m = new F.FacetModel(ROWS)
-  m.toggle('task', 'story-recall')
+  m.toggle('task', 'tell-a-story')
   assert.equal(m.before(), 33)
   assert.equal(m.after(), 20)
   const mask = m.mask()
   assert.equal(mask.length, 33)
   assert.equal(mask.reduce((a, b) => a + b, 0), 20)
-  ROWS.forEach((r, i) => assert.equal(mask[i], r.task === 'story-recall' ? 1 : 0))
+  ROWS.forEach((r, i) => assert.equal(mask[i], r.task === 'tell-a-story' ? 1 : 0))
 })
 
 test('two values of one facet are a union, not an intersection', () => {
   const m = new F.FacetModel(ROWS)
-  m.toggle('task', 'story-recall')
-  m.toggle('task', 'cough')
+  m.toggle('task', 'tell-a-story')
+  m.toggle('task', 'three-coughs')
   assert.equal(m.after(), 23)
 })
 
 test('two facets are an intersection', () => {
   const m = new F.FacetModel(ROWS)
-  m.toggle('task', 'story-recall')
+  m.toggle('task', 'tell-a-story')
   m.toggle('verdict', 'pass')
   assert.equal(m.after(), 14) // 10 + 4
   m.toggle('verdict', 'review')
-  assert.equal(m.after(), 20) // pass|review over story-recall
+  assert.equal(m.after(), 20) // pass|review over tell-a-story
 })
 
 test('a sibling value keeps a meaningful count after its neighbour is chosen', () => {
@@ -159,9 +159,9 @@ test('a sibling value keeps a meaningful count after its neighbour is chosen', (
   assert.equal(v.values.find(x => x.term === 'discard').available, 2)
   // but another facet's counts *do* narrow, which is the whole point
   const t = m.values('task')
-  assert.equal(t.values.find(x => x.term === 'story-recall').available, 14)
-  assert.equal(t.values.find(x => x.term === 'cough').available, 0)
-  assert.equal(t.values.find(x => x.term === 'story-recall').total, 20)
+  assert.equal(t.values.find(x => x.term === 'tell-a-story').available, 14)
+  assert.equal(t.values.find(x => x.term === 'three-coughs').available, 0)
+  assert.equal(t.values.find(x => x.term === 'tell-a-story').total, 20)
 })
 
 test('selecting absent keeps exactly the nulls, and never the empty sets', () => {
@@ -187,7 +187,7 @@ test('a set facet is membership, and its absent bucket is null rather than the e
 
 test('clearing one facet and clearing all restore the denominator exactly', () => {
   const m = new F.FacetModel(ROWS)
-  m.toggle('task', 'cough')
+  m.toggle('task', 'three-coughs')
   m.toggle('verdict', 'review')
   assert.equal(m.after(), 1)
   m.clear('verdict')
@@ -201,8 +201,8 @@ test('clearing one facet and clearing all restore the denominator exactly', () =
 
 test('toggling the same value twice is a no-op on the drawn set', () => {
   const m = new F.FacetModel(ROWS)
-  m.toggle('task', 'cough')
-  m.toggle('task', 'cough')
+  m.toggle('task', 'three-coughs')
+  m.toggle('task', 'three-coughs')
   assert.equal(m.after(), 33)
   assert.equal(m.mask(), null)
 })
@@ -214,7 +214,7 @@ test('a term that names an Object.prototype key is coded like any other', () => 
     { __i: 0, task: 'constructor', verdict: 'pass' },
     { __i: 1, task: '__proto__', verdict: 'pass' },
     { __i: 2, task: 'constructor', verdict: 'review' },
-    { __i: 3, task: 'story-recall', verdict: 'pass' }
+    { __i: 3, task: 'tell-a-story', verdict: 'pass' }
   ]
   const m = new F.FacetModel(rows)
   const v = m.values('task')
@@ -229,7 +229,7 @@ test('a term that names an Object.prototype key is coded like any other', () => 
 
 test('the base mask is the brushes, and the facet counts are read against it', () => {
   const m = new F.FacetModel(ROWS)
-  // a brush that keeps only the first 12 rows: 10 story-recall/pass and 2 story-recall/review
+  // a brush that keeps only the first 12 rows: 10 tell-a-story/pass and 2 tell-a-story/review
   const base = new Uint8Array(33)
   for (let i = 0; i < 12; i++) base[i] = 1
   m.setBase(base)
@@ -252,7 +252,7 @@ test('the view draws the intersection of the brushes and the facet mask', () => 
   assert.equal(view.selectedCount, 33)
 
   const m = new F.FacetModel(ROWS)
-  m.toggle('task', 'story-recall')
+  m.toggle('task', 'tell-a-story')
   view.setFacetMask(m.mask())
   assert.equal(view.selectedCount, 20)
   assert.equal(view.brushMask.reduce((a, b) => a + b, 0), 33, 'the brush mask is untouched by a facet')
@@ -274,7 +274,7 @@ test('a facet never changes which values are absent on an axis', () => {
   view.setAxes(['conformance_speech'])
   const before = view.summaries[0].absent
   const m = new F.FacetModel(ROWS)
-  m.toggle('task', 'story-recall')
+  m.toggle('task', 'tell-a-story')
   view.setFacetMask(m.mask())
   assert.equal(view.summaries[0].absent, before)
 })
@@ -303,7 +303,7 @@ test('all chooses every value, absence included, and admits every row', () => {
 
 test('none drops the facet, so it stops narrowing', () => {
   const m = new F.FacetModel(ROWS)
-  m.toggle('task', 'cough')
+  m.toggle('task', 'three-coughs')
   assert.equal(m.after(), 3)
   m.clear('task')
   assert.deepEqual(m.chosen('task'), [])

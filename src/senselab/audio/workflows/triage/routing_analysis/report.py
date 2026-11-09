@@ -32,7 +32,7 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     sweep_points,
 )
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures
-from senselab.audio.workflows.triage.routing_analysis.labels import CLASSIFIERS, TRACKED_LABELS, peak_key
+from senselab.audio.workflows.triage.routing_analysis.labels import CLASSIFIERS, peak_key, tracked_labels
 from senselab.audio.workflows.triage.routing_analysis.tables import COMPRESSION, ROW_GROUP_ROWS
 from senselab.audio.workflows.triage.task_catalogue import SYLLABLE_REPETITION_KIND, is_kind
 
@@ -735,7 +735,7 @@ def label_prevalence(records: Sequence[RecordingFeatures]) -> dict[str, Any]:
             for classifier in CLASSIFIERS:
                 if f"{stream}|{classifier}" not in record.classifier_streams:
                     continue
-                for label in TRACKED_LABELS[classifier]:
+                for label in tracked_labels()[classifier]:
                     key = peak_key(stream, classifier, label)
                     slot = counts.setdefault(key, {}).setdefault(record.family, [0, 0])
                     slot[0] += 1

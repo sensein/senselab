@@ -137,6 +137,7 @@ def _report(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@pytest.mark.usefixtures("triage_profile")
 class TestBeforeARun:
     """``--recordings``: the identity ADMIT would record, from the stem and the hint."""
 

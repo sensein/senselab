@@ -172,17 +172,20 @@ written against (plan step 8)."""
 
 @pytest.fixture
 def triage_profile() -> Iterator[Any]:
-    """Run the test with the fixture profile active, and nothing active after it.
+    """Run the test with the fixture profile active and no run ``data`` section, and neither left after it.
 
     Triage ships no dataset data, so its tests read the fixture's. A test about running without a profile takes
-    :func:`without_triage_profile` as well.
+    :func:`without_triage_profile` as well. ``load_triage_config`` sets the run's data section, so a test that loads
+    a configuration carrying one would otherwise leave it to every later test in the worker.
     """
     from senselab.audio.workflows.triage import dataset_profile
 
     dataset_profile.deactivate_profile()
+    dataset_profile.set_run_data(None)
     dataset_profile.activate_profile(_loaded_fixture_profile())
     yield dataset_profile.active_profile()
     dataset_profile.deactivate_profile()
+    dataset_profile.set_run_data(None)
 
 
 @pytest.fixture

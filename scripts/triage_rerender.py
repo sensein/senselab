@@ -3,11 +3,12 @@
 REPORT reads the store and writes nothing back, so a renderer fix does not need the graph re-run:
 the stores already hold every decision and every span the summary draws.
 
-    uv run python scripts/triage_rerender.py RUN_ROOT [--config FILE] [--limit N] [--dry-run]
+    uv run python scripts/triage_rerender.py RUN_ROOT --profile PROFILE [--config FILE] [--limit N] [--dry-run]
 
 ``RUN_ROOT`` is the directory holding the run directories — ``run/out`` for a corpus run. Each run
 directory is one recording: its ``store.jsonl`` and the sidecars the panels are drawn over. The
-summaries are rewritten in place, beside the store, exactly where the run put them.
+summaries are rewritten in place, beside the store, exactly where the run put them. ``--profile`` names the
+dataset profile the runs were made with, whose data the panels read.
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ import sys
 import traceback
 from pathlib import Path
 
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config
 from senselab.audio.workflows.triage.nodes.report import SUMMARY_STEM, report
 from senselab.utils import fastio
 from senselab.utils.prov_store import ProvStore
@@ -59,18 +61,22 @@ def main(argv: list[str] | None = None) -> int:
         argv: The command line, or None to read ``sys.argv``.
 
     Returns:
-        0 when every run rendered, 1 when any raised.
+        0 when every run rendered, 1 when any raised, 2 when the profile cannot be loaded or lacks a value.
     """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("run_root", type=Path, help="Directory holding the run directories.")
-    parser.add_argument("--config", type=Path, default=None, help="Partial YAML merged over the packaged config.")
+    add_config_arguments(parser)
     parser.add_argument("--limit", type=int, default=None, help="Render at most this many, for a spot check.")
     parser.add_argument("--slice", type=int, default=0, help="This worker's index, for a sharded re-render.")
     parser.add_argument("--slices", type=int, default=1, help="How many workers share the tree.")
     parser.add_argument("--dry-run", action="store_true", help="Count the runs and render none.")
     args = parser.parse_args(argv)
 
-    config = load_triage_config(args.config)
+    try:
+        config = driver_config(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
     found = run_dirs(args.run_root)
     mine = found[args.slice :: args.slices][: args.limit]
     print(f"{len(found)} run(s) under {args.run_root}; this worker takes {len(mine)}", flush=True)

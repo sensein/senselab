@@ -22,10 +22,8 @@ from senselab.audio.workflows.triage.config import (
 )
 from senselab.audio.workflows.triage.ddk_task import DDK_READING
 from senselab.audio.workflows.triage.nodes.branches import (
-    BUTTERCUP,
     DEVIATION_TYPES,
     PARAM_KEYS,
-    PATAKA,
     SPEECH_EXPECTATIONS,
     UNDETERMINED,
     UNMEASURED_POINTS,
@@ -143,6 +141,10 @@ def _cv_raster(
     sequence.append(("<silent>", 0.5))
     return _raster(sequence)
 
+
+PATAKA = ("p", "aa", "t", "aa", "k", "aa")
+BUTTERCUP = ("b", "ah", "t", "er", "k", "ah", "p")
+"""The phoneme sequences the fixture's ``diadochokinesis-pataka`` and ``-buttercup`` entries prescribe, in ARPAbet."""
 
 BUTTERCUP_NUCLEI = ("ah", "er", "ah")
 """/bʌ-tər-kʌp/: the nucleus of each of its three syllables, in the posteriorgram's ARPAbet."""

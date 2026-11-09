@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 r"""Give finished triage runs PREPROCESS's own-floor measurement, the first half of the session floor.
 
-    uv run python scripts/extend_background_floor.py MANIFEST --slice-index I --slice-count N [--log-dir DIR]
+    uv run python scripts/extend_background_floor.py MANIFEST --slice-index I --slice-count N --profile PROFILE \
+        [--config OVERRIDE.yaml] [--log-dir DIR]
 
 ``MANIFEST`` is a JSONL, one object per line, each carrying ``stem`` and ``enhanced`` (the absolute
 path of that recording's ``run/streams/enhanced.flac``), as every extend driver takes it. Each store
 gains one ``background_floor`` measurement, read off its ``plain`` and ``residual`` streams; a store
 already carrying a live one is skipped. Run it over the whole corpus, then
-``scripts/extend_session_floor.py``, then ``scripts/extend_replay_decisions.py``.
+``scripts/extend_session_floor.py``, then ``scripts/extend_replay_decisions.py``. ``--profile`` names the
+dataset profile the runs were made with; a run made with another is refused.
 
 Install:
     uv sync --all-extras --group dev
@@ -22,13 +24,16 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.extend import (
     ERROR,
     OK,
     RUN_SUBDIR,
     SKIPPED,
     SLICES_SUBDIR,
+    add_config_arguments,
     attempt_derivation,
+    driver_config,
     export_prov,
     read_checked_store,
     read_manifest,
@@ -57,20 +62,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-dir", type=Path, default=None, help=f"Where {SLICES_SUBDIR}/ goes (default: beside the manifest)"
     )
+    add_config_arguments(parser)
     return parser
 
 
-def extend_one(run_root: Path) -> tuple[str, str]:
+def extend_one(run_root: Path, config: TriageConfig | None = None) -> tuple[str, str]:
     """Give one finished run its own-floor measurement, or say why it gets none.
 
     Args:
         run_root: The run root.
+        config: The configuration the store is checked against (:func:`read_checked_store`), or None for the
+            recording alone.
 
     Returns:
         ``(status, detail)``.
     """
     try:
-        store = read_checked_store(run_root, None)
+        store = read_checked_store(run_root, config)
     except (OSError, ValueError) as error:
         return ERROR, describe_exception(error)
     if find_measurement(store, OWN_FLOOR) is not None:
@@ -84,11 +92,12 @@ def extend_one(run_root: Path) -> tuple[str, str]:
     return OK, outcome.detail
 
 
-def process(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def process(rows: Sequence[dict[str, Any]], config: TriageConfig | None = None) -> list[dict[str, Any]]:
     """Extend every run named by these rows, one at a time.
 
     Args:
         rows: The manifest rows this task owns.
+        config: As :func:`extend_one`.
 
     Returns:
         One outcome record per input row, in order.
@@ -100,12 +109,14 @@ def process(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         except ValueError as error:
             out.append({**row, "status": ERROR, OWN_FLOOR: describe_exception(error)})
             continue
-        status, detail = extend_one(run_root)
+        status, detail = extend_one(run_root, config)
         out.append({**row, "status": status, OWN_FLOOR: detail})
     return out
 
 
-def run_slice(manifest: Path, *, slice_index: int, slice_count: int, log_dir: Path) -> dict[str, Any]:
+def run_slice(
+    manifest: Path, *, slice_index: int, slice_count: int, log_dir: Path, config: TriageConfig | None = None
+) -> dict[str, Any]:
     """Extend every run in one array task's stride of the manifest.
 
     Args:
@@ -113,6 +124,7 @@ def run_slice(manifest: Path, *, slice_index: int, slice_count: int, log_dir: Pa
         slice_index: This task's 0-based index.
         slice_count: How many tasks the array has.
         log_dir: Where this task's ``slices/`` log goes.
+        config: As :func:`extend_one`.
 
     Returns:
         The task's summary.
@@ -120,7 +132,7 @@ def run_slice(manifest: Path, *, slice_index: int, slice_count: int, log_dir: Pa
     started = time.time()
     mine = take_slice(read_manifest(manifest, required=("stem", "enhanced")), slice_index, slice_count)
     print(f"[slice {slice_index}/{slice_count}] {len(mine)} rows", flush=True)
-    log = process(mine)
+    log = process(mine, config)
     counts: dict[str, int] = {}
     for record in log:
         counts[str(record["status"])] = counts.get(str(record["status"]), 0) + 1
@@ -156,11 +168,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: manifest not found: {args.manifest}", file=sys.stderr)
         return 2
     try:
+        config = driver_config(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
+    try:
         summary = run_slice(
             args.manifest,
             slice_index=args.slice_index,
             slice_count=args.slice_count,
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
+            config=config,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

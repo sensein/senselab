@@ -1,12 +1,16 @@
 """Write one compact row per recording from a tree of finished triage stores.
 
-    uv run python scripts/triage_recording_vectors.py RUN_ROOT --out DIR [--slice N --slices M]
+    uv run python scripts/triage_recording_vectors.py RUN_ROOT --out DIR --profile PROFILE [--config OVERRIDE.yaml] \
+        [--slice N --slices M]
     uv run python scripts/triage_recording_vectors.py --merge DIR --out DIR
 
 The first form writes one shard, ``recording_vectors.NNN.parquet``, plus its scan report, and the
 same recordings' decision tables, ``triage_decisions.NNN.parquet`` and ``triage_evidence.NNN.parquet``.
 The second concatenates every shard in a directory into ``recording_vectors.parquet``,
 ``triage_decisions.parquet`` (with ``triage_decisions.tsv``) and ``triage_evidence.parquet``.
+
+A shard reads the profile's task list and data, so the first form takes ``--profile``, the dataset profile the
+runs were made with; it exits 2, writing nothing, where the profile cannot be loaded or lacks a value.
 
 The output carries transcript text and marked PII extents. It is written mode 600 and must not be
 committed, published or copied to a shared location.
@@ -25,6 +29,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage import decision_tables
+from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config
 from senselab.audio.workflows.triage.recording_vectors import (
     DICTIONARY_KEY,
     SCHEMA_VERSION,
@@ -137,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         argv: The command line, or None to read ``sys.argv``.
 
     Returns:
-        0 when rows were written, 1 when none were.
+        0 when rows were written, 1 when none were, 2 when the profile cannot be loaded or lacks a value.
     """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("run_root", type=Path, nargs="?", help="A tree of finished run directories.")
@@ -148,12 +153,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--walk-threads", type=int, default=fastio.DEFAULT_THREADS, help="Directory listings in flight while scanning."
     )
+    add_config_arguments(parser)
     args = parser.parse_args(argv)
 
     if args.merge is not None:
         return 0 if merge(args.merge, args.out / MERGED_NAME) else 1
     if args.run_root is None:
         parser.error("run_root is required unless --merge is given")
+    try:
+        driver_config(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
 
     report = ScanReport()
     recordings = latest_recordings(args.run_root, args.slice, args.slices, report, walk_threads=args.walk_threads)

@@ -18,14 +18,19 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.extend import REFOLD_MARKER_STEP, REFOLD_NODE, REFUSED
+from senselab.audio.workflows.triage.hint_record import hint_attributes
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.run import LOG_FILE
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import declared_identity_attributes
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
+
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_refold.py"
@@ -47,8 +52,14 @@ def _config(tmp_path: Path, text: str = "") -> Any:  # noqa: ANN401 — TriageCo
     return load_triage_config(path)
 
 
-def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> Path:
-    """A finished run: streams, consensus words, a run log, and one verdict per deciding node."""
+def _finished_run(
+    root: Path, *, words: Sequence[str] = ("hello", "alicia"), hint: AudioHints | None = AudioHints(task="free-speech")
+) -> Path:
+    """A finished run: streams, consensus words, a run log, one verdict per deciding node, and the recorded hint.
+
+    ``hint`` is the hint ADMIT recorded, by default the one :func:`_hints` builds, so the re-fold has a recorded
+    hint to compare; None seeds a store from before ADMIT recorded hints.
+    """
     run_root = root / "rec-0001_20260925-000000"
     streams = run_root / "run" / "streams"
     streams.mkdir(parents=True, exist_ok=True)
@@ -70,6 +81,7 @@ def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> 
                 "sampling_rate": SR,
                 "channels": 1,
                 **(declared_identity_attributes("pa", None, "free-speech") if name == "recording" else {}),
+                **(hint_attributes(hint) if name == "recording" and hint is not None else {}),
             },
         )
         store.was_generated_by(stream, activity)
@@ -258,7 +270,7 @@ class TestItRefusesToRunBlind:
 
     def test_a_store_that_recorded_no_hint_is_refused_without_hints(self, tmp_path: Path) -> None:
         """No hint given and none recorded is refused, so the corpus-wide failure cannot read as a finding."""
-        run_root = _finished_run(tmp_path / "corpus")
+        run_root = _finished_run(tmp_path / "corpus", hint=None)
         before = (run_root / "run" / "store.jsonl").read_text()
         manifest = _manifest(tmp_path, run_root)
         assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)]) == 1

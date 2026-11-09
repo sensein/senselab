@@ -49,6 +49,7 @@ from senselab.audio.workflows.triage.cohort_stage import (
     non_task_spans,
     read_participant,
     run_checks,
+    stale_reading_facts,
     write_cohort_reading,
     write_cohort_unavailable,
 )
@@ -333,6 +334,26 @@ def test_a_corpus_reading_is_not_overwritten_by_the_single_file_fallback_and_rew
     assert store.is_invalidated(first)
 
 
+def test_a_corpus_reading_from_other_facts_is_stale_and_a_single_file_one_never_is() -> None:
+    """Review J5: VERDICT does not fold a corpus reading whose recorded facts the store no longer gives.
+
+    A single-file run's reading (no key) is written from the same store in the same run, so it is never stale; the
+    session is a label whose spelling changed since readings were first written, so it is not compared.
+    """
+    store = _store()
+    write_cohort_unavailable(store)
+    reading = find_measurement(store, COHORT_READING)
+    assert reading is not None
+    fresh = dict(reading.attributes)
+    assert fresh["cohort_key"] is None and stale_reading_facts(store, fresh) == []
+    keyed = {**fresh, "cohort_key": "k"}
+    assert stale_reading_facts(store, keyed) == []
+    assert stale_reading_facts(store, {**keyed, "task_extent_fraction": 0.5}) == ["task_extent_fraction"]
+    assert stale_reading_facts(store, {**keyed, "family": "another-task"}) == ["family"]
+    assert stale_reading_facts(store, {**keyed, "session": "another_spelling"}) == []
+    assert stale_reading_facts(store, {**fresh, "task_extent_fraction": 0.5}) == []
+
+
 def test_no_reading_folds_to_no_evidence() -> None:
     """A store COHORT never touched contributes nothing to the fold."""
     assert cohort_evidence(None) == [] and cohort_grounds(None) == []
@@ -593,3 +614,35 @@ def test_the_cohort_key_follows_the_task_list(monkeypatch: pytest.MonkeyPatch) -
     tasks["rainbow-passage"] = dataclasses.replace(entry, branch="VOICE")
     monkeypatch.setattr(cohort_stage, "task_list", lambda: tasks)
     assert key() != before
+
+
+def test_two_sessions_recordings_sharing_a_stem_are_two_members() -> None:
+    """Review D2: the same stem in two sessions is two recordings: embedded twice, pooled as two, both recorded."""
+    calls: list[int] = []
+
+    def counting(samples: np.ndarray, rate: int) -> np.ndarray | None:
+        calls.append(samples.size)
+        return _embed(samples, rate)
+
+    sessions = []
+    for session in ("pa/s1", "pa/s2"):
+        facts, audio = _speech(session, 0)
+        facts = dataclasses.replace(facts, stem="reading", recording_id=f"{session}/reading.wav")
+        sessions.append((session, [(facts, audio)]))
+    found = _participant(sessions, counting)
+    assert sorted(found.pooled.recordings) == ["pa/s1/reading.wav", "pa/s2/reading.wav"]
+    assert len(calls) == 2, "each recording embedded once, neither standing in for the other"
+
+
+def test_a_unique_stem_keys_its_member_and_the_cohort_key_ignores_the_recording_id() -> None:
+    """Review D2: where stems are unique nothing recorded changes; the recorded id is not what COHORT read."""
+    facts, audio = _speech("pa/s1", 0)
+    keyed = cohort_stage.keyed_members([("pa/s1", [(dataclasses.replace(facts, recording_id="x/a.wav"), audio)])])
+    assert keyed[0][1][0][0].key == facts.stem
+    with_id = dataclasses.replace(facts, recording_id="x/a.wav")
+
+    def key(member: RecordingFacts) -> str:
+        return cohort_stage.cohort_key(group="pa", members=[member], quantiles_sha256=None, enrollment_config={})
+
+    assert key(with_id) == key(facts)
+    assert cohort_stage._member_tuple(facts) == dataclasses.astuple(facts)[:-2]

@@ -2,7 +2,7 @@
 r"""Read SQUIM over fixed windows of every finished run's task extent, on the plain stream.
 
     uv run python scripts/extend_task_squim.py MANIFEST --slice-index I --slice-count N \
-        [--log-dir DIR] [--out-root DIR] [--config OVERRIDE.yaml]
+        --profile PROFILE [--log-dir DIR] [--out-root DIR] [--config OVERRIDE.yaml]
 
 ``MANIFEST`` is the JSONL every ``extend_*`` driver takes: ``stem`` and ``enhanced``, the path of
 the run's ``run/streams/enhanced.flac``, from which the run root is derived.
@@ -34,13 +34,14 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
-from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.extend import (
     ERROR,
     RUN_SUBDIR,
     SLICES_SUBDIR,
     SliceLog,
+    add_config_arguments,
+    driver_config,
     export_prov,
     logged,
     read_manifest,
@@ -55,12 +56,6 @@ from senselab.audio.workflows.triage.task_squim import NODE, measure_task_squim
 
 STORE_FILE = "store.jsonl"
 PROV_SUBDIR = "prov"
-
-
-def _checked(config: Any) -> Any:  # noqa: ANN401 -- a TriageConfig
-    """The configuration, once the profile is checked to supply every value a run needs."""
-    require_dataset_values(config.values)
-    return config
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--out-root", type=Path, default=None, help="Write each run's store under this tree instead of in place"
     )
-    parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
+    add_config_arguments(parser)
     return parser
 
 
@@ -255,11 +250,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: manifest not found: {args.manifest}", file=sys.stderr)
         return 2
     try:
+        config = driver_config(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
+    try:
         summary = run_slice(
             args.manifest,
             slice_index=args.slice_index,
             slice_count=args.slice_count,
-            config=_checked(load_triage_config(args.config) if args.config else load_triage_config()),
+            config=config,
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
             out_root=args.out_root,
         )

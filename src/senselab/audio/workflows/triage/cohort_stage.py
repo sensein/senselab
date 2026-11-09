@@ -56,7 +56,7 @@ from senselab.audio.workflows.triage.cohort_fold import (
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.decision import PASS, REVIEW
-from senselab.audio.workflows.triage.identity import declared_session_key, is_undeclared_session
+from senselab.audio.workflows.triage.identity import declared_session_key, is_undeclared_session, recorded_identity
 from senselab.audio.workflows.triage.live_evidence import declared_task_of, recording_stem
 from senselab.audio.workflows.triage.nodes.branches import derivative_arrays, merge
 from senselab.audio.workflows.triage.nodes.common import (
@@ -197,7 +197,9 @@ class RecordingFacts:
 
     Attributes:
         stem: The recording's file stem.
-        session: ``sub-<label>_ses-<label>``, or None where the stem names no session.
+        session: The recorded session key (``<participant>/<session>``, :attr:`~.identity.RecordingIdentity.
+            session_key`), or None where the identity names no participant and session; a corpus pass then groups the
+            recording by its stem alone.
         family: The declared task family.
         lexical_task: Whether that family is a lexical speech task.
         duration_s: The recording's duration, or None where the store records none.
@@ -214,6 +216,10 @@ class RecordingFacts:
         snr_db: The plain energy envelope's active level over its floor (``condition.snr_percentiles``), or None.
         activity: PREPROCESS's acoustic activity (its ``amplitude`` spans, merged), or None where PREPROCESS
             proposed no spans at all; the speaker pools are restricted to it.
+        recording_id: The recording's recorded id (:meth:`~.identity.RecordingIdentity.id_of`), or None where none
+            was read. Not part of :func:`cohort_key`.
+        group_key: What the recording is told apart by within its group where another member shares its stem
+            (:func:`keyed_members`), else None. Not part of :func:`cohort_key`.
     """
 
     stem: str
@@ -232,6 +238,13 @@ class RecordingFacts:
     clipped_s: float | None = None
     snr_db: float | None = None
     activity: tuple[tuple[float, float], ...] | None = None
+    recording_id: str | None = field(default=None, compare=False)
+    group_key: str | None = field(default=None, compare=False)
+
+    @property
+    def key(self) -> str:
+        """The recording's key within its group: its stem, unless another member shares it (:func:`keyed_members`)."""
+        return self.group_key or self.stem
 
     @property
     def extent_fraction(self) -> float | None:
@@ -523,6 +536,8 @@ def facts_of(
                 _yamnet_windows(store, run_dir, str(name)), classes["labels"], float(classes["score_min"])
             )
     removed_speech = _subtract(by_name.get(removed["from"], []), by_name.get(removed["kept"], []))
+    identity = recorded_identity(store)
+    readings = condition_readings(store, run_dir)
     return RecordingFacts(
         stem=stem,
         session=declared_session_key(store),
@@ -536,9 +551,54 @@ def facts_of(
         non_task=_extents(non_task_words(store, family, hull)),
         removed_speech=tuple(removed_speech),
         task_events=tuple(merge(_task_events(store))),
-        **condition_readings(store, run_dir),
+        rms_dbfs=readings["rms_dbfs"],
+        clipped_s=readings["clipped_s"],
+        snr_db=readings["snr_db"],
         activity=activity_of(store),
+        recording_id=identity.id_of(stem) if identity is not None else None,
     )
+
+
+_KEYED_FIELDS = frozenset({"recording_id", "group_key"})
+"""The :class:`RecordingFacts` fields that tell members apart and are not what COHORT reads."""
+
+
+def keyed_members(
+    sessions: Sequence[tuple[str, Sequence[tuple[RecordingFacts, Any]]]],
+) -> list[tuple[str, list[tuple[RecordingFacts, Any]]]]:
+    """A group's members, each told apart from any other sharing its stem.
+
+    Every cache and pool of a group is keyed by :attr:`RecordingFacts.key`: the stem, where it is unique in the
+    group, so every key recorded is the stem; where two members share a stem (two sessions' ``reading.wav``), each of
+    them is keyed by its recording id instead, or by the stem and its place in the group where that is shared too.
+
+    Args:
+        sessions: ``(session key, [(facts, payload), ...])`` per session, as :func:`read_participant` takes them.
+
+    Returns:
+        The same, with :attr:`RecordingFacts.group_key` set on every member whose stem another member shares.
+    """
+    stems: dict[str, int] = {}
+    for _, members in sessions:
+        for facts, _ in members:
+            stems[facts.stem] = stems.get(facts.stem, 0) + 1
+    ids: dict[str, int] = {}
+    for _, members in sessions:
+        for facts, _ in members:
+            if stems[facts.stem] > 1 and facts.recording_id:
+                ids[facts.recording_id] = ids.get(facts.recording_id, 0) + 1
+    out: list[tuple[str, list[tuple[RecordingFacts, Any]]]] = []
+    place = 0
+    for session, members in sessions:
+        keyed = []
+        for facts, payload in members:
+            place += 1
+            if stems[facts.stem] > 1:
+                unique_id = facts.recording_id if facts.recording_id and ids[facts.recording_id] == 1 else None
+                facts = dataclasses.replace(facts, group_key=unique_id or f"{facts.stem}#{place}")
+            keyed.append((facts, payload))
+        out.append((session, keyed))
+    return out
 
 
 ACTIVITY_MEASURE = "amplitude"
@@ -993,10 +1053,10 @@ class CentroidCache:
         Returns:
             ``(vector, spans embedded, seconds)``.
         """
-        stem = candidate.facts.stem
-        if stem not in self._held:
-            self._held[stem] = self._compute(candidate)
-        return self._held[stem]
+        key = candidate.facts.key
+        if key not in self._held:
+            self._held[key] = self._compute(candidate)
+        return self._held[key]
 
     def _compute(self, candidate: EnrollmentCandidate) -> Centroid | None:
         loaded = candidate.loader()
@@ -1050,7 +1110,7 @@ def pool_enrollment(
     for candidate in chosen:
         found = centroid(candidate)
         if found is not None:
-            centroids.append((candidate.facts.stem, *found))
+            centroids.append((candidate.facts.key, *found))
     if not centroids:
         return Enrollment(
             key,
@@ -1183,7 +1243,8 @@ class ParticipantEnrollments:
 
         Args:
             session: The session key.
-            stem: The recording.
+            stem: The recording's key in its group (:attr:`RecordingFacts.key`): its stem, unless another member
+                shares that.
 
         Returns:
             ``(enrollment_source, enrollment)``. Where the recording enrolled its own session, the session's
@@ -1234,6 +1295,7 @@ def enroll_participant(
     Returns:
         The enrollments.
     """
+    sessions = keyed_members(sessions)
     centroid = CentroidCache(embed)
     by_session = {
         session: enrollment_candidates(members, min_s=min_s, lexical_gap_s=lexical_gap_s, parameters=parameters)
@@ -1253,9 +1315,9 @@ def enroll_participant(
             excluded_session=excluded,
         )
 
-    def without(session: str, stem: str) -> Enrollment:
-        left = pool(session, SCOPE_SESSION, [c for c in by_session.get(session, []) if c.facts.stem != stem])
-        return dataclasses.replace(left, excluded_recording=stem)
+    def without(session: str, key: str) -> Enrollment:
+        left = pool(session, SCOPE_SESSION, [c for c in by_session.get(session, []) if c.facts.key != key])
+        return dataclasses.replace(left, excluded_recording=key)
 
     own = {session: pool(session, SCOPE_SESSION, candidates) for session, candidates in by_session.items()}
     declared = [session for session in by_session if not is_undeclared_session(session)]
@@ -1830,6 +1892,12 @@ def run_checks(facts: RecordingFacts, artefact: Mapping[str, Any] | None) -> dic
 # ------------------------------------------------------------------------------ the reading
 
 
+def _member_tuple(facts: RecordingFacts) -> tuple[Any, ...]:
+    """``dataclasses.astuple(facts)`` without the fields that only tell members apart, so a key is what COHORT read."""
+    values = dataclasses.astuple(facts)
+    return tuple(v for f, v in zip(dataclasses.fields(facts), values, strict=True) if f.name not in _KEYED_FIELDS)
+
+
 def cohort_key(
     *,
     group: str | None,
@@ -1858,7 +1926,7 @@ def cohort_key(
                 for name, entry in sorted(task_list().items())
             },
             "group": group,
-            "members": sorted(dataclasses.astuple(facts) for facts in members),
+            "members": sorted(_member_tuple(facts) for facts in members),
             "quantiles": quantiles_sha256,
             "enrollment": dict(enrollment_config),
         }
@@ -2026,6 +2094,38 @@ def write_cohort_unavailable(store: ProvStore) -> str:
     return write_cohort_reading(store, unavailable_attributes(facts_of(store, None)))
 
 
+RECORDED_FACTS = ("family", "lexical_task", "task_extent_fraction")
+"""The facts of its own recording a ``cohort_reading`` records (:func:`cohort_attributes`) that the store can give
+again; the session is a group label whose spelling has changed since readings were first written, so it is not
+compared."""
+
+
+def stale_reading_facts(store: ProvStore, attributes: Mapping[str, Any]) -> list[str]:
+    """The facts a corpus pass's ``cohort_reading`` was computed from that the store no longer gives.
+
+    A replay after the pass may move the task extent (a widened count-in) or the task; the reading, whose
+    :func:`cohort_key` covers its group's facts, was then computed from facts this run no longer has. A reading with
+    no key (a single-file run's, written in the same run from the same store) is never stale.
+
+    Args:
+        store: The recording's store.
+        attributes: The live ``cohort_reading``'s attributes.
+
+    Returns:
+        The :data:`RECORDED_FACTS` that differ, in that order; empty where the reading is current or has no key.
+    """
+    if not attributes.get("cohort_key"):
+        return []
+    facts = facts_of(store, None)
+    fraction = facts.extent_fraction
+    now = {
+        "family": facts.family,
+        "lexical_task": facts.lexical_task,
+        "task_extent_fraction": None if fraction is None else round(fraction, 4),
+    }
+    return [name for name in RECORDED_FACTS if attributes.get(name) != now[name]]
+
+
 @dataclass(frozen=True)
 class EnrollmentConfig:
     """The model, commit and cut the enrollment and the probes share.
@@ -2120,8 +2220,10 @@ def read_participant(
 
     Returns:
         The enrollments (None where the settings are unusable) and, per session, one attribute mapping
-        per member, in order.
+        per member, in order. Members are told apart by :attr:`RecordingFacts.key` (:func:`keyed_members`), the
+        stem wherever it is unique in the group.
     """
+    sessions = keyed_members(sessions)
     key = cohort_key(
         group=participant,
         members=[facts for _, members in sessions for facts, _ in members],
@@ -2155,7 +2257,7 @@ def read_participant(
             consistency = consistency_check(enrollments, session, bound=bound)
         for facts, loader in members:
             if enrollments is not None:
-                source, enrollment = enrollments.source_for_recording(session, facts.stem)
+                source, enrollment = enrollments.source_for_recording(session, facts.key)
             if enrollment is None:
                 block: dict[str, Any] = {
                     "status": UNAVAILABLE,
@@ -2179,7 +2281,7 @@ def read_participant(
                     lexical_gap_s=settings.lexical_gap_s,
                     source=source,
                     participant=second if source == SOURCE_SESSION else None,
-                    vectors=vectors.setdefault(facts.stem, {}),
+                    vectors=vectors.setdefault(facts.key, {}),
                 )
             checks = {**run_checks(facts, artefact), CONSISTENCY_CHECK: consistency}
             readings.append(
@@ -2206,7 +2308,7 @@ def with_cross_recording(
     Args:
         sessions: ``(session key, members)`` per session, members as :func:`read_participant` takes them.
         readings: Per session, one attribute mapping per member, in order.
-        vectors: By stem, each pool's vector :func:`compare_speaker` embedded.
+        vectors: By member key (:attr:`RecordingFacts.key`), each pool's vector :func:`compare_speaker` embedded.
 
     Returns:
         The readings, each with its ``non_target_voice`` and ``participant_nonmatch`` blocks.
@@ -2218,12 +2320,12 @@ def with_cross_recording(
         for (facts, _), attributes in zip(members, readings[session], strict=True):
             block = attributes[OTHER_SPEAKER]
             blocks.append(block)
-            held = vectors.get(facts.stem) or {}
+            held = vectors.get(facts.key) or {}
             pool_of = {
                 name: block.get(name) if isinstance(block.get(name), Mapping) else {}
                 for name in (POOL_TARGET, POOL_NON_TASK)
             }
-            pools[facts.stem] = {
+            pools[facts.key] = {
                 "session": session,
                 "non_task": held.get(POOL_NON_TASK) if pool_of[POOL_NON_TASK].get("match") is False else None,
                 "target": held.get(POOL_TARGET) if pool_of[POOL_TARGET].get("match") is True else None,
@@ -2233,7 +2335,7 @@ def with_cross_recording(
     out: dict[str, list[dict[str, Any]]] = {}
     for session, members in sessions:
         out[session] = [
-            {**attributes, NON_TARGET_VOICE: voices[facts.stem], PARTICIPANT_NONMATCH: dict(nonmatch)}
+            {**attributes, NON_TARGET_VOICE: voices[facts.key], PARTICIPANT_NONMATCH: dict(nonmatch)}
             for (facts, _), attributes in zip(members, readings[session], strict=True)
         ]
     return out

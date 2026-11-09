@@ -10,6 +10,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "select_replay_manifest.py"
 _spec = importlib.util.spec_from_file_location("select_replay_manifest", SCRIPT)
 assert _spec is not None and _spec.loader is not None
@@ -118,3 +121,28 @@ def test_every_manifest_row_carries_its_target_speaker_and_recording_id(
     assert selector.main() == 0
     rows = {row["stem"]: row for row in map(json.loads, out.read_text().splitlines())}
     assert (rows["a"]["target_speaker"], rows["a"]["recording_id"]) == (None, "a")
+
+
+def test_without_a_profile_the_selection_exits_2_naming_it(
+    tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review A1: a branch's families are the profile's; with none the driver exits 2 and writes nothing."""
+    table = tmp_path / "rv.parquet"
+    _table().to_parquet(table)
+    out = tmp_path / "manifest.jsonl"
+    assert selector.main([str(table), str(out), "--out-root", "/corpus"]) == 2
+    assert "dataset profile" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_with_its_profile_named_the_selection_runs_from_no_active_profile(
+    tmp_path: Path, without_triage_profile: None
+) -> None:
+    """Review A1/A7: ``--profile`` alone supplies the families, given as a directory."""
+    from tests.conftest import FIXTURE_PROFILE
+
+    table = tmp_path / "rv.parquet"
+    _table().to_parquet(table)
+    out = tmp_path / "manifest.jsonl"
+    assert selector.main([str(table), str(out), "--out-root", "/corpus", "--profile", str(FIXTURE_PROFILE)]) == 0
+    assert len(out.read_text().splitlines()) == 3

@@ -18,7 +18,7 @@ from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE
 from senselab.audio.workflows.triage.cohort_stage import write_cohort_unavailable
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.dataset_profile import require_dataset_values, unfitted_values
+from senselab.audio.workflows.triage.dataset_profile import require_dataset_values, unfitted_values, unlisted_files
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.identity import RecordingIdentity, check_label, declared_session_key, identity_of
 from senselab.audio.workflows.triage.nodes.admit import admit
@@ -480,7 +480,7 @@ def _write_log(path: Path, source: Path, config: TriageConfig, result: TriageRun
         result: What the run produced.
     """
     payload: dict[str, Any] = {
-        "source": str(source),
+        "source": os.path.abspath(source),
         "config": {
             "name": config.name,
             "version": config.version,
@@ -495,6 +495,7 @@ def _write_log(path: Path, source: Path, config: TriageConfig, result: TriageRun
                             {"name": layer.name, "version": layer.version, "digest": layer.digest}
                             for layer in config.profile.chain()[:-1]
                         ],
+                        "unlisted_files": unlisted_files(config.profile),
                         **(
                             {"pilot": True, "unfitted": unfitted_values(running_stages(config.values))}
                             if config.profile.pilot
@@ -521,14 +522,15 @@ def _write_log(path: Path, source: Path, config: TriageConfig, result: TriageRun
 
 
 def corpus_path_of(source: Path, corpus_root: Path | None) -> str | None:
-    """A recording's path relative to its corpus's root, as a POSIX string, or None without a root.
+    """A recording's path relative to its corpus's root, less its extension, as a POSIX string, or None without a root.
 
     Args:
         source: The recording.
         corpus_root: The corpus's root, or None.
 
     Returns:
-        The relative path (``p01/s2/recording.wav``), or None. Symbolic links are not followed, so a git-annex or
+        The relative path without its file extension (``p01/s2/recording`` for ``p01/s2/recording.wav``), so a
+        re-encoded copy of a recording keeps its id; or None. Symbolic links are not followed, so a git-annex or
         DataLad corpus gives the path under the root, not the content object's.
 
     Raises:
@@ -537,9 +539,10 @@ def corpus_path_of(source: Path, corpus_root: Path | None) -> str | None:
     if corpus_root is None:
         return None
     try:
-        return Path(os.path.abspath(source)).relative_to(Path(os.path.abspath(corpus_root))).as_posix()
+        relative = Path(os.path.abspath(source)).relative_to(Path(os.path.abspath(corpus_root)))
     except ValueError as error:
         raise ValueError(f"{source} is not under the corpus root {corpus_root}") from error
+    return relative.with_suffix("").as_posix()
 
 
 def run_triage(

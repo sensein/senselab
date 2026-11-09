@@ -1,8 +1,9 @@
 """Who and what a recording is: its participant, session and task, declared once and recorded on the run.
 
-A caller declares a recording's identity in its hint's ``metadata`` under :data:`PARTICIPANT_KEY`,
-:data:`SESSION_KEY` and :data:`TASK_TOKEN_KEY`. ADMIT resolves it once with :func:`identity_of` and writes
-it onto the ``recording`` stream entity it already creates (:meth:`RecordingIdentity.as_attributes`), so
+A caller declares a recording's identity in its hint's ``metadata`` under :data:`PARTICIPANT_KEY` and
+:data:`SESSION_KEY`, and its task in the hint's typed ``task`` and ``task_take`` (or, as a dataset's own task id,
+under :data:`TASK_TOKEN_KEY`, which wins where both are given). ADMIT resolves it once with :func:`identity_of` and
+writes it onto the ``recording`` stream entity it already creates (:meth:`RecordingIdentity.as_attributes`), so
 a reader that holds only the store sees the declaration too.
 
 Triage reads nothing off a file name (plan step 6a): whatever the hint leaves out is not declared. A dataset whose
@@ -26,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK
 from senselab.utils.prov_store import Entity, ProvStore
 
 PARTICIPANT_KEY = "participant_id"
@@ -39,7 +40,8 @@ RECORDING_ID_KEY = "recording_id"
 """The hint ``metadata`` key a caller declares the recording's corpus-unique id under (plan step 9b)."""
 
 TASK_TOKEN_KEY = "task_token"
-"""The hint ``metadata`` key a caller declares the task id under; lower-cased, trailing index intact."""
+"""The hint ``metadata`` key a caller may declare its own task id under; lower-cased, trailing index intact. Where it
+is absent the task id is the hint's typed ``task``, with ``-<task_take>`` where a take is declared."""
 
 DECLARED_PARTICIPANT = "declared_participant"
 DECLARED_SESSION = "declared_session"
@@ -84,6 +86,12 @@ ROW_SOURCES = {"participant": "participant_from", "session": "session_from", "ta
 RECORDING_STREAM = "recording"
 ADMIT_NODE = "ADMIT"
 
+REPLAY_NODE = "REPLAY"
+IDENTITY_RECORDED_STEP = "identity_recorded"
+"""The node a replay's own activities carry, and the step of the one recording the run's identity. Where ADMIT
+refused the recording and wrote no stream, its parameters carry the identity as ADMIT's own activity does, and
+:func:`admit_record` reads the later of the two."""
+
 _UNUSABLE_LABEL = re.compile(r"[/\\]|^\.{1,2}$")
 
 SESSION_SEPARATOR = "/"
@@ -124,11 +132,6 @@ class RecordingIdentity:
     sources: Mapping[str, str] = field(default_factory=dict)
     target_speaker: str | None = None
     recording_id: str | None = None
-
-    @property
-    def task_family(self) -> str:
-        """The family the task id collapses into: its trailing numeric segments removed."""
-        return task_family(self.task_id)
 
     @property
     def session_key(self) -> str | None:
@@ -195,6 +198,24 @@ def _declared(hint: AudioHints | None, key: str) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def declared_task_token(hint: AudioHints | None) -> str | None:
+    """The task id a hint declares: its :data:`TASK_TOKEN_KEY`, else its typed task and take.
+
+    Args:
+        hint: What the recording was declared to contain, or None.
+
+    Returns:
+        The :data:`TASK_TOKEN_KEY` value where the hint gives one; else the typed ``task``, followed by
+        ``-<task_take>`` where a take is declared, so two takes of one task in a session are two identities; None
+        where the hint names no task. Nothing is decoded: the take is the hint's own number.
+    """
+    token = _declared(hint, TASK_TOKEN_KEY)
+    if token is not None or hint is None or not (isinstance(hint.task, str) and hint.task.strip()):
+        return token
+    task = hint.task.strip()
+    return f"{task}-{hint.task_take}" if hint.task_take is not None else task
+
+
 def identity_of(
     hint: AudioHints | None = None, *, stem: str | None = None, corpus_path: str | None = None
 ) -> RecordingIdentity:
@@ -207,9 +228,9 @@ def identity_of(
             where the hint declares none (plan step 9b).
 
     Returns:
-        The identity. A declared field's source is :data:`FROM_HINT`, or :data:`FROM_STEM` where the hint says
-        under :data:`IDENTITY_FROM_KEY` that its builder read it off the file name; a field the hint does not
-        declare is None (the task :data:`UNKNOWN_TASK`) with no source.
+        The identity; its task id is :func:`declared_task_token`'s. A declared field's source is :data:`FROM_HINT`,
+        or :data:`FROM_STEM` where the hint says under :data:`IDENTITY_FROM_KEY` that its builder read it off the
+        file name; a field the hint does not declare is None (the task :data:`UNKNOWN_TASK`) with no source.
 
     Raises:
         IdentityLabelError: If the participant or session cannot name a folder (:func:`check_label`).
@@ -217,7 +238,7 @@ def identity_of(
     """
     participant = _declared(hint, PARTICIPANT_KEY)
     session = _declared(hint, SESSION_KEY)
-    token = _declared(hint, TASK_TOKEN_KEY)
+    token = declared_task_token(hint)
     source = _declared(hint, IDENTITY_FROM_KEY) or FROM_HINT
     if source not in (FROM_HINT, FROM_STEM):
         raise ValueError(f"hint metadata {IDENTITY_FROM_KEY} is {source!r}; it is {FROM_HINT!r} or {FROM_STEM!r}")
@@ -236,11 +257,11 @@ def identity_of(
     )
 
 
-def _recording_id(
-    hint: AudioHints | None, stem: str | None, corpus_path: str | None
-) -> tuple[str | None, str | None]:
-    """The id to record and its source: the hint's, else the corpus-relative path; ``(None, None)`` where that is
-    the stem or neither exists."""
+def _recording_id(hint: AudioHints | None, stem: str | None, corpus_path: str | None) -> tuple[str | None, str | None]:
+    """The id to record and its source.
+
+    The hint's id, else the corpus-relative path; ``(None, None)`` where that is the stem or neither exists.
+    """
     declared = _declared(hint, RECORDING_ID_KEY)
     found, source = (declared, FROM_HINT) if declared else (corpus_path, FROM_CORPUS_PATH)
     return (None, None) if found is None or found == stem else (found, source)
@@ -307,12 +328,27 @@ def admit_record(store: ProvStore) -> tuple[Mapping[str, Any], str] | None:
 
     Returns:
         The latest live ``recording`` stream's attributes and its ``path``; where ADMIT refused the recording
-        and wrote no stream, its activity's parameters and ``audio_file``; None when ADMIT left neither.
+        and wrote no stream, the parameters and ``audio_file`` of its activity, or of a later replay's
+        (:data:`IDENTITY_RECORDED_STEP`); None when ADMIT left neither.
     """
     entity = recording_entity(store)
     return admit_choice(
-        entity.attributes if entity is not None else None, [a.parameters for a in store.activities(ADMIT_NODE)]
+        entity.attributes if entity is not None else None,
+        [a.parameters for a in store.activities() if records_admission(a.node, a.step)],
     )
+
+
+def records_admission(node: str, step: str | None) -> bool:
+    """Whether an activity's parameters may speak for the recording where ADMIT wrote no stream.
+
+    Args:
+        node: The activity's node.
+        step: Its step.
+
+    Returns:
+        True for ADMIT's own activity, and a replay's :data:`IDENTITY_RECORDED_STEP`.
+    """
+    return node == ADMIT_NODE or (node == REPLAY_NODE and step == IDENTITY_RECORDED_STEP)
 
 
 def admit_choice(
@@ -390,7 +426,7 @@ def declared_session_key(store: ProvStore) -> str | None:
         store: The provenance store.
 
     Returns:
-        ``<participant>_<session>``, or None unless the recorded identity names both.
+        ``<participant>/<session>`` (:data:`SESSION_SEPARATOR`), or None unless the recorded identity names both.
     """
     identity = recorded_identity(store)
     return identity.session_key if identity is not None else None
@@ -464,9 +500,10 @@ def session_group(identity: RecordingIdentity, stem: str) -> str:
 
     Returns:
         :attr:`RecordingIdentity.session_key`; a recording that does not name both participant and session is its
-        own group, keyed by its stem, sharing its conditions with no other recording.
+        own group, keyed by its recording id (:meth:`RecordingIdentity.id_of`), sharing its conditions with no other
+        recording.
     """
-    return identity.session_key or stem
+    return identity.session_key or identity.id_of(stem)
 
 
 def undeclared_session(participant: str) -> str:
@@ -530,7 +567,7 @@ def row_groups(row: Mapping[str, Any]) -> tuple[str, str]:
 
     Returns:
         ``(participant, session)`` (:func:`participant_group`, :func:`session_group`); a row whose run records no
-        identity is its own group in both, keyed by its stem.
+        identity is its own group in both, keyed by its :data:`RECORDING_ID_COLUMN`, else its stem.
 
     Raises:
         ManifestWithoutIdentity: If the row carries no identity columns.
@@ -538,7 +575,8 @@ def row_groups(row: Mapping[str, Any]) -> tuple[str, str]:
     stem = str(row.get("stem") or "")
     identity = row_identity(row)
     if identity is None:
-        return stem, stem
+        own = _label(row.get(RECORDING_ID_COLUMN)) or stem
+        return own, own
     return participant_group(identity, stem), session_group(identity, stem)
 
 
@@ -550,11 +588,12 @@ def identity_disagreement(row: RecordingIdentity | None, recorded: RecordingIden
         recorded: The run's recorded identity (:func:`recorded_identity`), or None where it records none.
 
     Returns:
-        ``participant``, ``session``, ``task_id`` and/or ``target_speaker``, in that order (a row from a table that
-        carries no ``target_speaker`` column names none, so it disagrees with a run that declared one: rebuild the
-        manifest); ``recorded identity`` where either side has none. Empty when they agree.
+        ``participant``, ``session``, ``task_id``, ``target_speaker`` and/or ``recording_id``, in that order (a row
+        from a table that carries no ``target_speaker`` or ``recording_id`` column names none, so it disagrees with a
+        run that recorded one: rebuild the manifest); ``recorded identity`` where either side has none. Empty when
+        they agree.
     """
     if row is None or recorded is None:
         return ["recorded identity"]
-    fields = ("participant", "session", "task_id", "target_speaker")
+    fields = ("participant", "session", "task_id", "target_speaker", "recording_id")
     return [name for name in fields if getattr(row, name) != getattr(recorded, name)]

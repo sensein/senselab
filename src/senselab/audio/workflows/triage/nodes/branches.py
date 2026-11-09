@@ -436,7 +436,7 @@ def record_unrun_owner(
     Returns:
         The measurement's id, or None where the family is not one this branch owns.
     """
-    if family is None or family not in EXPECTATIONS.get(branch, {}):
+    if branch_expectation(store, branch, family) is None:
         return None
     software = software_agent(store)
     activity = store.activity(
@@ -683,26 +683,6 @@ class TypicalCount:
         )
 
 
-DDK_MEDIANS = "specs/20260817-triage-workflow-dag/measure-distributions.md"
-"""Where the syllable-repetition medians were measured, over 62,273 recordings."""
-
-
-PA = ("p", "aa")
-TA = ("t", "aa")
-KA = ("k", "aa")
-PUH = ("p", "ah")
-TUH = ("t", "ah")
-KUH = ("k", "ah")
-PATAKA = ("p", "aa", "t", "aa", "k", "aa")
-PUHTUHKUH = ("p", "ah", "t", "ah", "k", "ah")
-BUTTERCUP = ("b", "ah", "t", "er", "k", "ah", "p")
-"""The nine phoneme sequences the ten ``diadochokinesis-*`` instructions prescribe, in ARPAbet.
-
-One entry per phoneme, with no syllable layer.
-See ``specs/20260817-triage-workflow-dag/ddk-template-decode.md``.
-"""
-
-
 @dataclass(frozen=True)
 class Expectation:
     """What one instruction asked for, as data. One row per in-family (branch, family) pair.
@@ -726,7 +706,8 @@ class Expectation:
         repetition_allowed: Whether repeating an item is permitted.
         repetition_from_category: Whether the repetition rule follows from the recording's category.
         item_category: The category the instruction names for every recording of the family, where it
-            names one; a family whose category is per recording reads it off the instructions.
+            names one; a family whose category is per recording reads it off the recording's hint
+            (``AudioHints.item_category``), never off the instructions' text.
         lexical_separator: Whether a lexical count-in precedes the production.
         forbid_lexical: Whether any lexical content is a deviation.
         emit_filler: Whether a filler token is reported as a deviation.
@@ -928,22 +909,66 @@ def declared_task_family(store: ProvStore) -> str | None:
     return task.name if task is not None and task.name else None
 
 
-def declared_expectation(store: ProvStore, branch: str) -> Expectation | None:
-    """What the recording was asked to contain, where the branch reading it is ``branch``.
+def task_owner(store: ProvStore, task_family: str | None) -> tuple[str, Expectation] | None:
+    """The branch that reads a declared task, and what the task asks a recording to contain.
 
-    Read from ADMIT's record, so a task described inline in the hint is read as one from the task list is.
+    Read from ADMIT's record (its ``task_branch`` and ``task_expects``) where the record names ``task_family``, so a
+    task described inline in the hint is owned and read as one from the task list is. A family the record does not
+    name (a store that recorded another task, or none) is looked up in the task list by name.
+
+    Args:
+        store: The provenance store.
+        task_family: The declared family, or None.
+
+    Returns:
+        ``(branch, expectation)``, or None where no family is declared or nothing describes it.
+    """
+    from senselab.audio.workflows.triage.task_catalogue import recorded_task  # noqa: PLC0415
+
+    if not task_family:
+        return None
+    task = recorded_task(store)
+    if task is not None and task.name == task_family:
+        return (task.branch, task.expects) if task.branch is not None and task.expects is not None else None
+    for branch, table in EXPECTATIONS.items():
+        if task_family in table:
+            return branch, table[task_family]
+    return None
+
+
+def branch_expectation(store: ProvStore, branch: str, task_family: str | None) -> Expectation | None:
+    """What a declared task asks for, where ``branch`` is the branch that reads it (:func:`task_owner`).
 
     Args:
         store: The provenance store.
         branch: One of :data:`BRANCHES`.
+        task_family: The declared family, or None.
 
     Returns:
-        The recorded expectation, or None where the recording's task is another branch's, or is not described.
+        The expectation, or None where the task is another branch's, or nothing describes it.
     """
-    from senselab.audio.workflows.triage.task_catalogue import recorded_task  # noqa: PLC0415
+    owner = task_owner(store, task_family)
+    return owner[1] if owner is not None and owner[0] == branch else None
 
-    task = recorded_task(store)
-    return task.expects if task is not None and task.branch == branch else None
+
+def in_family_expectation(store: ProvStore, branch: str, task_family: str) -> Expectation:
+    """What a task of the branch's own asks for, where only the in-family mode reads it (:func:`branch_expectation`).
+
+    Args:
+        store: The provenance store.
+        branch: One of :data:`BRANCHES`.
+        task_family: The declared family.
+
+    Returns:
+        The expectation.
+
+    Raises:
+        KeyError: If the task is not one ``branch`` reads; the caller owes the out-of-family mode.
+    """
+    expectation = branch_expectation(store, branch, task_family)
+    if expectation is None:
+        raise KeyError(f"{task_family} is not a {branch} family; the caller owes the out-of-family mode")
+    return expectation
 
 
 class AlignMode(Protocol):
@@ -991,8 +1016,8 @@ def dispatch(
 ) -> Result:
     """The whole of the mode decision, and the contract each mode is held to.
 
-    A ``task_family`` absent from this branch's table — undeclared, unreadable, or another
-    branch's kind — takes the out-of-family mode.
+    A recording whose recorded task this branch does not read (:func:`task_owner`) — undeclared,
+    undescribed, or another branch's kind — takes the out-of-family mode.
 
     Args:
         branch: One of :data:`BRANCHES`.
@@ -1009,9 +1034,10 @@ def dispatch(
         KeyError: If ``branch`` is not one of :data:`BRANCHES`.
         ValueError: If a mode proposed a span outside this branch's own family.
     """
-    table = EXPECTATIONS[branch]
+    if branch not in EXPECTATIONS:
+        raise KeyError(branch)
     family = declared_task_family(store)
-    in_family = family is not None and family in table
+    in_family = branch_expectation(store, branch, family) is not None
     result = align(family, store, hint, params) if in_family and family is not None else detect(store, params)
     own = BRANCH_FAMILY[branch]
     intruders = sorted({proposal.family for proposal in result.components} - {own})
@@ -1021,22 +1047,24 @@ def dispatch(
 
 
 def declared_carrier(task_family: str | None) -> str | None:
-    """The carrier a syllable task asks for, as text, taken from the family that names it.
+    """The carrier a syllable task asks for, as text, as its task list entry declares it (``carrier``).
 
-    ``diadochokinesis-buttercup`` asks for "buttercup"; the expectation holds the same carrier as an
-    ARPAbet sequence, which no transcript can be matched against.
+    A task asking for "buttercup" said over and over declares ``carrier: buttercup``; the expectation holds the same
+    carrier as an ARPAbet sequence, which no transcript can be matched against. Nothing is read off the task's name.
     See ``specs/20260919-pii-against-the-stimulus/design.md``.
 
     Args:
         task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``, or None.
 
     Returns:
-        The carrier, case-folded, or None when the family is not a syllable task.
+        The carrier, case-folded, or None when the family is not a syllable task or its entry declares none.
     """
+    from senselab.audio.workflows.triage.task_catalogue import task_carrier  # noqa: PLC0415
+
     expectation = SPEECH_EXPECTATIONS.get(str(task_family))
     if expectation is None or expectation.pattern not in (Pattern.SYLLABLE_SEQUENCE, Pattern.SYLLABLE_TRAIN):
         return None
-    carrier = str(task_family).rsplit("-", 1)[-1].strip().casefold()
+    carrier = (task_carrier(task_family) or "").strip().casefold()
     return carrier or None
 
 
@@ -1069,16 +1097,20 @@ def item_category_of(task_family: str | None, hint: AudioHints | None) -> tuple[
             ``item_category_from`` where the dataset read it.
 
     Returns:
-        ``(category, source)``: the family's declared category (:data:`CATEGORY_FROM_FAMILY`), else the hint's,
-        with the source it names (:data:`CATEGORY_FROM_HINT` where it names none); ``(None, None)`` where neither
-        declares one. Nothing is read out of the instructions' text.
+        ``(category, source)``: the family's declared category (:data:`CATEGORY_FROM_FAMILY`), else, for a task
+        whose entry lists categories or whose repetition rule follows from the category, the hint's, with the
+        source it names (:data:`CATEGORY_FROM_HINT` where it names none); ``(None, None)`` where neither declares
+        one. Nothing is read out of the instructions' text.
     """
+    from senselab.audio.workflows.triage.task_catalogue import generates_items  # noqa: PLC0415
+
     expectation = SPEECH_EXPECTATIONS.get(str(task_family))
     if expectation is None:
         return None, None
     if expectation.item_category is not None:
         return expectation.item_category, CATEGORY_FROM_FAMILY
-    if not expectation.repetition_from_category or hint is None:
+    per_recording = expectation.repetition_from_category or generates_items(task_family)
+    if not per_recording or hint is None:
         return None, None
     declared = (hint.item_category or "").strip()
     if declared:
@@ -1113,8 +1145,10 @@ def mode_of(branch: str, store: ProvStore) -> tuple[str, str | None]:
     Raises:
         KeyError: If ``branch`` is not one of :data:`BRANCHES`.
     """
+    if branch not in EXPECTATIONS:
+        raise KeyError(branch)
     family = declared_task_family(store)
-    return ("align" if family is not None and family in EXPECTATIONS[branch] else "detect", family)
+    return ("align" if branch_expectation(store, branch, family) is not None else "detect", family)
 
 
 # --------------------------------------------------------------------- the operating points

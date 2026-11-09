@@ -79,3 +79,11 @@ class TestTheRunIdComesFromTheDirectory:
         )
         rerender_module.rerender(run_dir, config=object())
         assert seen["summary_dir"] == tmp_path / "rec_2026" / "summary"
+
+
+def test_without_a_profile_the_rerender_exits_2_naming_it(
+    tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review A2: the panels read the profile's data; with none the driver exits 2 and renders nothing."""
+    assert rerender_module.main([str(tmp_path)]) == 2
+    assert "dataset profile" in capsys.readouterr().err

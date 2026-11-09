@@ -9,8 +9,9 @@ and the corpus passes group runs by them. :func:`check_identities` reads one
   participant and its identifier together, so nothing is merged; it is reported because the passes that compare a
   speaker within a session expect one participant per session.
 * :data:`DUPLICATE_IDENTITY` -- one participant, session and task id (trailing index included) declared by two
-  recordings. A recording that does not name both a participant and a session is keyed by its stem instead: it is
-  its own session, so repeating a task outside a session is no duplicate. Refused.
+  recordings. A recording that does not name both a participant and a session is keyed by its recording id instead
+  (the recorded one, else its stem): it is its own session, so repeating a task outside a session is no duplicate.
+  Refused.
 * :data:`UNREADABLE_IDENTITY` -- a recording whose identity could not be built (its hint raised, or it declares a
   label that cannot name a folder). Refused.
 * :data:`DUPLICATE_RECORDING_ID` -- before a run, two recordings sharing one id (the hint's ``recording_id``, else the
@@ -229,12 +230,15 @@ def identity_key(record: IdentityRecord) -> tuple[str | None, ...]:
         record: The recording.
 
     Returns:
-        ``(participant, session, task_id)``; ``("stem", stem)`` for a recording whose identity does not name both a
-        participant and a session, or that has none.
+        ``(participant, session, task_id)``; ``("stem", id)`` for a recording whose identity does not name both a
+        participant and a session, keyed by its recording id (:meth:`RecordingIdentity.id_of`), or by its stem where
+        it has no identity.
     """
     identity = record.identity
-    if identity is None or identity.participant is None or identity.session is None:
+    if identity is None:
         return ("stem", record.stem)
+    if identity.participant is None or identity.session is None:
+        return ("stem", identity.id_of(record.stem))
     return (identity.participant, identity.session, identity.task_id)
 
 

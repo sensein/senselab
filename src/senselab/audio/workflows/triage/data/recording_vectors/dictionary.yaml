@@ -23,12 +23,12 @@ columns:
     computation: >-
       The run's recorded identity (ADMIT): the `declared_participant` attribute of the latest live
       `recording` stream entity, or, where ADMIT refused the recording and wrote no stream, of its last
-      activity's parameters. ADMIT resolved it once from the hint's `participant_id`, else the stem's own
-      `sub-` entity (`participant_from` says which).
+      activity's parameters. ADMIT took it from the hint's `participant_id`; nothing is read off the file name
+      (`participant_from` is `stem` only where the hint's builder says it read it there).
     source: [recording_vectors.py:view_identity, identity.py:identity_columns, identity.py:identity_of]
     null_means: >-
       The run records no identity (a store written before ADMIT recorded one; a replay records it), or
-      neither the hint nor the stem names a participant.
+      the hint names no participant.
 
   task:
     units: none
@@ -36,8 +36,8 @@ columns:
       The recording's task id, lower-cased, including any trailing index, e.g. `harvard-sentences-list-12-3`.
     computation: >-
       The run's recorded identity (ADMIT): the `declared_task_id` attribute, read as `participant` is. ADMIT
-      resolved it once from the hint's `task_token`, else the stem's `task-` entity, lower-cased
-      (`task_from` says which); `unknown` where neither names one.
+      took it from the hint's `task_token`, lower-cased (`task_from` says who declared it); `unknown` where the
+      hint names none.
     source: [recording_vectors.py:view_identity, identity.py:identity_columns, identity.py:identity_of]
     null_means: The run records no identity (a store written before ADMIT recorded one; a replay records it).
 
@@ -95,12 +95,10 @@ columns:
     description: The recording's session, as declared, e.g. `ses-02`.
     computation: >-
       The run's recorded identity (ADMIT): the `declared_session` attribute, read as `participant` is. ADMIT
-      resolved it once from the hint's `session_id`, else the stem's own `ses-` entity (`session_from` says
-      which).
+      took it from the hint's `session_id` (`session_from` says who declared it).
     source: [recording_vectors.py:view_identity, identity.py:identity_columns, identity.py:identity_of]
     null_means: >-
-      The run records no identity (a store written before ADMIT recorded one), or neither the hint nor the
-      stem names a session.
+      The run records no identity (a store written before ADMIT recorded one), or the hint names no session.
 
   recording_id:
     units: none
@@ -1797,7 +1795,7 @@ columns:
     description: Whether the syllable-task reading found the task (its decision is not `absent`).
     computation: The live `ddk_task_reading`'s `decision` is not `absent`.
     source: [recording_vectors.py:_fit_columns, nodes/verdict.py:atypical_readings]
-    null_means: No syllable-task reading.
+    null_means: No syllable-task reading, or one that took no decision.
   count_in_gap_s:
     units: s
     description: From the end of a voice task's count-in to the start of its phonation (negative where they overlap).
@@ -1805,7 +1803,9 @@ columns:
       The live `voice_phonation_reading`'s `extent.start_s` less the end of its `count_in` (3 decimals), the
       gap VOICE compares with `count_in.gap_max_s`.
     source: [recording_vectors.py:_fit_columns, voice_phonation.py:voice_task_extent]
-    null_means: No phonation reading, or no count-in or phonation extent placed.
+    null_means: >-
+      No phonation reading, no count-in or phonation extent placed, or a count-in that starts after the
+      phonation does (it precedes nothing).
   lexical_words_per_s:
     units: words/s
     description: Lexical consensus words per second of the response.

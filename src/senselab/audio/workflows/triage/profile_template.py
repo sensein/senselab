@@ -221,18 +221,42 @@ def write_template(
         extends: The profile it builds on: senselab's reference profile by default, another ``senselab:<name>`` or
             a directory (recorded as an absolute path), or None to supply every value itself.
         start_from: Copy this profile directory instead (a dataset that starts from another's values); the copy is
-            renamed, records where it came from, and keeps building on what the original built on.
+            renamed, records where it came from, and keeps building on what the original built on. The original's
+            ``fitted.yaml`` (its corpus statistics, fitted on its own recordings) is not copied, and the copy is a
+            pilot (``pilot: true``) until its own are fitted.
         supply: :func:`values_to_supply` for ``extends`` and ``off``, where the caller has it already.
         off: Stages the new profile's workflow leaves off: its config lists the rest under ``workflow.stages``, and
             a value only those stages read is not asked for. Not with ``start_from``.
 
     Returns:
-        The profile directory.
+        The profile directory. The profile active before the call, if any, and the run's data section are active
+        again after it; none is active while the template is written.
 
     Raises:
         FileExistsError: If ``out`` exists.
         ValueError: If ``extends`` names no profile; nothing is written then.
     """
+    before, run_data = dataset_profile.active_profile(), dataset_profile.run_data()
+    dataset_profile.deactivate_profile()
+    try:
+        return _write_template(out, name=name, extends=extends, start_from=start_from, supply=supply, off=off)
+    finally:
+        dataset_profile.deactivate_profile()
+        dataset_profile.set_run_data(run_data)
+        if before is not None:
+            dataset_profile.activate_profile(before)
+
+
+def _write_template(
+    out: str | Path,
+    *,
+    name: str,
+    extends: str | Path | None,
+    start_from: str | Path | None,
+    supply: Mapping[str, list[dict[str, Any]]] | None,
+    off: Collection[str],
+) -> Path:
+    """:func:`write_template`, with no profile active."""
     if off and start_from is not None:
         raise ValueError("off writes a new template; a copy (start_from) keeps the original's workflow")
     root = Path(out)
@@ -242,11 +266,13 @@ def write_template(
     if start_from is not None:
         source = Path(start_from).resolve()
         load_profile(source)
-        shutil.copytree(source, root)
-        manifest = yaml.safe_load((root / MANIFEST).read_text()) or {}
+        fitted = dataset_profile.FITTED_FILE
+        shutil.copytree(source, root, ignore=shutil.ignore_patterns(fitted, f"{fitted}.*"))
+        manifest: dict[str, Any] = yaml.safe_load((root / MANIFEST).read_text()) or {}
         copied = manifest.get("name")
         manifest["name"] = name
         manifest["version"] = "0"
+        manifest[PILOT_KEY] = True  # its corpus statistics are the original's own until it fits its own
         if manifest.get("extends"):
             manifest["extends"] = _absolute(manifest["extends"], relative_to=source)
         manifest["provenance"] = {"copied_from": str(source), "copied_from_profile": copied, "on": written}
@@ -286,7 +312,7 @@ def write_template(
         header = [f"# {name}: the senselab configuration this dataset changes (template written {written})."]
         (root / "config.yaml").write_text("\n".join([*header, *workflow]) + "\n")
         config = "config.yaml"
-    manifest: dict[str, Any] = {"name": name, "version": "0", PILOT_KEY: True}
+    manifest = {"name": name, "version": "0", PILOT_KEY: True}
     if reference is not None:
         manifest["extends"] = reference
     manifest["provenance"] = {"template": "senselab triage profile template", "written": written}
@@ -297,8 +323,8 @@ def write_template(
         f"# The {name} dataset profile, written from senselab's template. Fill in tasks.yaml and every blank value;\n"
         "# each blank carries what it means and how to set it. It starts as a pilot (pilot: true): a run may leave\n"
         "# the values computed from your own recordings (kind b) out. Run a pilot, the COHORT pass and the corpus\n"
-        "# table, then scripts/fit_profile.py writes them into fitted.yaml; run the COHORT pass again, replay the\n"
-        "# pilot and remove pilot: true.\n"
+        "# table, then scripts/fit_profile.py writes them into fitted.yaml; replay the pilot, run the COHORT pass\n"
+        "# again, replay once more and remove pilot: true.\n"
     )
     (root / MANIFEST).write_text(head + yaml.safe_dump(manifest, sort_keys=False))
     return root

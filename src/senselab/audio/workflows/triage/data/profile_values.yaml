@@ -747,7 +747,7 @@ values:
     stages: [COHORT]
     unit: "fraction (0-1)"
     means: "Share of a participant's compared recordings with a speaker non-match at which the non-match counts as shared."
-    fit: "Tukey upper fence (Q3 + 1.5 IQR) of the per-participant non-match share over a pilot corpus's participants with any non-match and at least shared_nonmatch.recordings_min compared recordings (as B2AI's was fitted; the rule itself needs recordings_min non-matching ones)."
+    fit: "Tukey upper fence (Q3 + 1.5 IQR) of the per-participant non-match share over a pilot corpus's participants with any non-match and at least shared_nonmatch.recordings_min compared recordings (as the reference corpus's was fitted; the rule itself needs recordings_min non-matching ones)."
     method: {column: cohort_participant_nonmatch_fraction, per: participant, statistic: tukey_upper, decimals: 3, clamp: [0, 1], where: [{column: cohort_participant_nonmatch_fraction, op: gt, value: 0}, {column: cohort_participant_compared_n, op: ge, setting: [shared_nonmatch, recordings_min]}]}
   - path: ["speech", "score_min"]
     kind: c
@@ -1519,7 +1519,7 @@ values:
     fit: "Tuned by listening to labelled recordings: whether a free response is too short to be the task; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["short_response", "family_median_s"]
     kind: b
-    required: false
+    required: true
     unit: "s, by task family"
     means: "Each free-response task's median response length, against which a short response is measured; a task without one is not read."
     fit: "Median of the response length (the gate response_min_s reading) per task family over a pilot corpus's free-response recordings."

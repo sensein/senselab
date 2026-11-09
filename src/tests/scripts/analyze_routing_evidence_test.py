@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import FIXTURE_PROFILE
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "analyze_routing_evidence.py"
 _spec = importlib.util.spec_from_file_location("analyze_routing_evidence_under_test", _CLI)
@@ -136,10 +138,10 @@ class TestAnExtractThatReadsNothing:
         monkeypatch.setattr(cli, "extract_all", _extracted_nothing)
 
         with pytest.raises(SystemExit, match="extracted 0 features"):
-            cli.main([str(run_dir), str(tmp_path / "analysis"), "--workers", "1"])
+            cli.main([str(run_dir), str(tmp_path / "analysis"), "--workers", "1", "--profile", str(FIXTURE_PROFILE)])
 
 
-def test_the_task_is_the_one_the_run_recorded(tmp_path: Path) -> None:
+def test_the_task_is_the_one_the_run_recorded(tmp_path: Path, triage_profile: object) -> None:
     """Review of step 8: the extractor takes the task from the run's identity record, not from any name."""
     from tests.audio.workflows.triage.conftest import declared_identity_attributes
 
@@ -153,6 +155,33 @@ def test_the_task_is_the_one_the_run_recorded(tmp_path: Path) -> None:
         json.dumps({"record": "entity", "id": "s", "prov_type": "stream", "extent": None, "attributes": attributes})
         + "\n"
     )
-    assert cli.recorded_task_id(store) == "rainbow-passage"
+    assert cli.recorded_task(store) == ("rainbow-passage", "rainbow-passage")
     (tmp_path / "bare.jsonl").write_text("")
-    assert cli.recorded_task_id(tmp_path / "bare.jsonl") == "unknown"
+    assert cli.recorded_task(tmp_path / "bare.jsonl") == ("unknown", "unknown")
+
+
+def test_the_family_is_the_task_admit_recorded_not_the_token(tmp_path: Path, triage_profile: object) -> None:
+    """Review B2: a token that is not the task's name scores the recording under the recorded task."""
+    from senselab.audio.data_structures import AudioHints
+    from senselab.audio.workflows.triage.task_catalogue import task_attributes
+    from tests.audio.workflows.triage.conftest import declared_identity_attributes
+
+    store = tmp_path / "store.jsonl"
+    attributes = {
+        "name": "recording",
+        "path": "rec-0001.wav",
+        **declared_identity_attributes("p01", "s1", "rainbow-passage", token="reading-7"),
+        **task_attributes(AudioHints(task="rainbow-passage")),
+    }
+    store.write_text(
+        json.dumps({"record": "entity", "id": "s", "prov_type": "stream", "extent": None, "attributes": attributes})
+        + "\n"
+    )
+    assert cli.recorded_task(store) == ("reading-7", "rainbow-passage")
+
+
+def test_without_a_profile_the_driver_exits_2_naming_it(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Review A2: the start check runs after the profile is activated, and a run with none is refused, exit 2."""
+    assert cli.main([str(tmp_path), str(tmp_path / "analysis")]) == 2
+    assert "dataset profile" in capsys.readouterr().err
+    assert not (tmp_path / "analysis").exists()
