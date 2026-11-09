@@ -17,7 +17,6 @@ import contextvars
 import os
 import re
 import threading
-import time
 import traceback
 import typing
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -36,6 +35,7 @@ from pydra.workers.base import Worker
 
 from senselab_core.kernel.graph import Edge, fan_out_issues, mapped_nodes, order, split
 from senselab_core.kernel.identity import InputIdentity, gather_identity, port_output_identity
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.epoch import StaleCoordinator
 from senselab_core.runtime.execution.events import TERMINAL, EventKind, EventLog, run_dir_of
 from senselab_core.runtime.execution.executor import (
@@ -629,9 +629,17 @@ class Follower:
     to `max_s`; a new handle or `cancel` ends the wait. The thread runs in the context the follower was made in.
     """
 
-    def __init__(self, executor: Executor, cancel: threading.Event, *, first_s: float, max_s: float) -> None:
-        """Follow the handles of `executor`, stopping at `cancel`."""
-        self.executor, self.cancel, self.first_s, self.max_s = executor, cancel, first_s, max_s
+    def __init__(
+        self,
+        executor: Executor,
+        cancel: threading.Event,
+        *,
+        first_s: float,
+        max_s: float,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
+    ) -> None:
+        """Follow the handles of `executor`, stopping at `cancel`; the waits between rounds run on `clock`."""
+        self.executor, self.cancel, self.first_s, self.max_s, self._clock = executor, cancel, first_s, max_s, clock
         self._open: dict[str, tuple[Handle, Callable[[ResultRef], object], Callable[[Exception | None], object]]] = {}
         self._lock = threading.Lock()
         self._wake = threading.Event()
@@ -697,9 +705,9 @@ class Follower:
 
     def _nap(self, seconds: float) -> None:
         """Wait up to `seconds`, ending early on a new handle, on `close`, or once `cancel` is set."""
-        deadline = time.monotonic() + seconds
-        while not self._wake.is_set() and not self.cancel.is_set() and (left := deadline - time.monotonic()) > 0:
-            self._wake.wait(min(left, CANCEL_CHECK_S))
+        deadline = self._clock.now() + seconds
+        while not self._wake.is_set() and not self.cancel.is_set() and (left := deadline - self._clock.now()) > 0:
+            self._clock.wait(self._wake, min(left, CANCEL_CHECK_S))
 
     def close(self) -> None:
         """Stop following; open handles are left as they are."""
@@ -738,16 +746,23 @@ class PydraRunner:
     """
 
     def __init__(
-        self, *, profile: ExecutionProfile | None = None, work_dir: Path | None = None, senders: int | None = None
+        self,
+        *,
+        profile: ExecutionProfile | None = None,
+        work_dir: Path | None = None,
+        senders: int | None = None,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Run under `profile`'s job leases, pydra's files under `work_dir` (`<run dir>/private/pydra`).
+
+        The follower's waits run on `clock`.
 
         Raises:
             ValueError: `senders` is below 1.
         """
         self.profile = profile if profile is not None else ExecutionProfile.load()
         self.lease: JobLease = self.profile.lease
-        self.work_dir = work_dir
+        self.work_dir, self._clock = work_dir, clock
         self.senders = (
             senders if senders is not None else sum(c.max_workers for c in self.profile.resource_classes.values())
         )
@@ -801,7 +816,7 @@ class PydraRunner:
         cancel = cancel if cancel is not None else threading.Event()
         pool = self.profile.pool
         senders = ThreadPoolExecutor(self.senders, thread_name_prefix="senselab-send")
-        follower = Follower(executor, cancel, first_s=pool.first_poll_s, max_s=pool.poll_s)
+        follower = Follower(executor, cancel, first_s=pool.first_poll_s, max_s=pool.poll_s, clock=self._clock)
         run = _Run(placed, admission, values, executor, store, events, cancel, senders, follower)
         keys = plan_keys(placed, values)
         for node, element in run.expected():

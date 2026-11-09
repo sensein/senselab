@@ -13,6 +13,7 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import Lease, LeaseState
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -56,9 +57,10 @@ def _bound(lease: JobLease | None) -> bytes:
 class Epoch:
     """The epochs of the run in `run_dir`."""
 
-    def __init__(self, run_dir: Path) -> None:
-        """Hold the epochs under `run_dir/epoch`."""
+    def __init__(self, run_dir: Path, clock: Clock = SystemClock()) -> None:  # noqa: B008 - stateless
+        """Hold the epochs under `run_dir/epoch`; their leases and the storage clock are read on `clock`."""
         self.root = Path(run_dir) / EPOCH_DIR
+        self._clock = clock
 
     def current(self) -> int:
         """Return the highest epoch taken, 0 when none was."""
@@ -103,7 +105,7 @@ class Epoch:
         """
         directory = self.root / str(n)
         _create(directory / BOUND_FILE, _bound(lease))
-        held = Lease(directory / COORDINATOR, timeout=0, stale_after=lease.stale_after_s)
+        held = Lease(directory / COORDINATOR, timeout=0, stale_after=lease.stale_after_s, clock=self._clock)
         try:
             with held, held.keep_alive(lease.renew_fraction) as state:
                 yield state
@@ -126,10 +128,10 @@ class Epoch:
             bound = json.loads((directory / BOUND_FILE).read_text(encoding="utf-8"))
         except (FileNotFoundError, ValueError):
             bound = json.loads(_bound(None))
-        age = Lease(directory / COORDINATOR, stale_after=bound["stale_after_s"]).age()
+        age = Lease(directory / COORDINATOR, stale_after=bound["stale_after_s"], clock=self._clock).age()
         if age is None:
             with StorageDir.open_root(self.root) as opened:
-                age = opened.dir_now() - directory.stat().st_mtime
+                age = self._clock.storage_now(opened) - directory.stat().st_mtime
         return bool(age > float(bound["stale_after_s"]) + float(bound["attribute_delay_s"]))
 
 

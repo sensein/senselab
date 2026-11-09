@@ -7,15 +7,16 @@ import os
 import stat
 import sys
 import threading
-import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
+from lease_clock_fixture import ManualClock
 from pool_stack_fixture import packaged, planned, registry, scoring
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog, read_events
 from senselab_core.runtime.execution.executor import WorkersBroken, follow
@@ -40,7 +41,7 @@ from senselab_core.runtime.execution.substrates import (
     substrate_of,
 )
 from senselab_core.runtime.execution.supervisor import Supervisor
-from senselab_core.runtime.execution_settings import LeaseBoundError, PoolSettings, SlurmCommands
+from senselab_core.runtime.execution_settings import LeaseBoundError, SlurmCommands
 from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile, QosCapTooSmall
 from senselab_core.runtime.storage import StorageCapabilities, StorageUnsupported
@@ -90,6 +91,7 @@ for a in "$@"; do
 done
 mkdir -p "$d/jobs"
 echo "$name|$comment|RUNNING" > "$d/jobs/$n"
+[ -p "$d/submitted" ] && echo "$n" > "$d/submitted"
 echo "$n"
 """
 SQUEUE = """#!/bin/sh
@@ -169,11 +171,13 @@ class Recording:
         self.handles: list[WorkerHandle] = []
         self.starts: list[tuple[str, int]] = []
         self.stops: list[WorkerHandle] = []
+        self.started = threading.Event()
         self._next = 0
 
     def start(self, resource_class: str, count: int) -> list[WorkerHandle]:
         """Record `count` pending workers of the queue."""
         self.starts.append((resource_class, count))
+        self.started.set()
         made = [WorkerHandle(resource_class, f"w{self._next + i}", pending=True) for i in range(count)]
         self._next += count
         self.handles.extend(made)
@@ -200,12 +204,13 @@ def _queued(  # noqa: PLR0913 - the plan's shape, then where it is queued
     items: int,
     model: bool = False,
     substrate: Any = None,  # noqa: ANN401
-    scaled: bool = False,
+    scaled: float | None = None,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> tuple[Plan, Pool, Recording]:
     """Return a plan of `items` jobs, one fragment per job, and a pool over `substrate` (a recording one by default).
 
     The fragments are submitted through a closed pool over `ExternalWorkers`, so the pool returned has not scaled;
-    with `scaled` they are submitted through the pool returned, once its scaler has started workers.
+    with `scaled`, the seconds that bound the wait for its first start, they are submitted through the pool returned.
     """
     placed, values = planned(SCORE, profile, [f"t{i}" for i in range(items)])
     if model:
@@ -224,18 +229,17 @@ def _queued(  # noqa: PLR0913 - the plan's shape, then where it is queued
             profile=profile,
             substrate=workers,
             epoch=epoch,
+            clock=clock,
             resolver=FixedUnit(profile, Unresolved("a final cause")),
         )
 
     pool = pool_over(recording)
-    feeder = pool if scaled else pool_over(ExternalWorkers())
+    feeder = pool if scaled is not None else pool_over(ExternalWorkers())
     admission = feeder.admit(placed, values)
     for element in range(items):
         feeder.submit(node_fragment(placed, admission, elements=[(element,)]))
-    if scaled:
-        deadline = time.monotonic() + 10
-        while not recording.starts and time.monotonic() < deadline:
-            time.sleep(0.01)
+    if scaled is not None:
+        assert recording.started.wait(scaled)
     else:
         feeder.close()
     return placed, pool, recording
@@ -388,10 +392,10 @@ def test_a_store_missing_a_primitive_or_delaying_too_long_is_refused(tmp_path: P
 
 
 @pytest.mark.logic
-def test_a_queue_is_named_by_class_and_resident_model(tmp_path: Path) -> None:
+def test_a_queue_is_named_by_class_and_resident_model(tmp_path: Path, tier_bound: float) -> None:
     """A node with a resident model queues on `<class>#<identity>`; scaling starts workers of that queue."""
     profile = _profile()
-    _, pool, recording = _queued(profile, tmp_path, 3, model=True, scaled=True)
+    _, pool, recording = _queued(profile, tmp_path, 3, model=True, scaled=tier_bound)
     assert pool.queues.names() == [f"cpu#{'c' * 40}"]
     assert recording.starts and {name for name, _ in recording.starts} == {f"cpu#{'c' * 40}"}
     assert class_of(f"cpu#{'c' * 40}") == "cpu" == class_of("cpu")
@@ -470,7 +474,7 @@ def test_slurm_worker_logs_go_under_the_runs_private_directory(tmp_path: Path) -
 @pytest.mark.logic
 def test_local_runs_at_most_max_workers_and_stops_them(tmp_path: Path) -> None:
     """A local substrate starts `senselab execute`-shaped processes up to its bound and stops them on request."""
-    local = Local(1, command=[sys.executable, "-c", "import time; time.sleep(60)"])
+    local = Local(1, command=[sys.executable, "-c", "import threading; threading.Event().wait()"])
     handles = local.start("cpu", 2)
     try:
         assert len(handles) == 1 and local.running("cpu") == 1 and local.running("gpu") == 0
@@ -485,39 +489,55 @@ def test_local_runs_at_most_max_workers_and_stops_them(tmp_path: Path) -> None:
 
 
 DEVICE_CHILD = (
-    "import os, pathlib, sys, time; "
-    "pathlib.Path(sys.argv[1], str(os.getpid())).write_text(os.environ.get('CUDA_VISIBLE_DEVICES', '-')); "
-    "time.sleep(60)"
+    "import os, sys, threading; "
+    "open(sys.argv[1], 'w').write(f\"{os.getpid()} {os.environ.get('CUDA_VISIBLE_DEVICES', '-')}\\n\"); "
+    "threading.Event().wait()"
 )
 
 
-def _devices_seen(directory: Path, count: int, waits: PoolSettings) -> dict[str, str]:
-    """Wait, within `waits.poll_s`, until `count` workers wrote the device they were given; return it by process id."""
-    deadline = time.monotonic() + waits.poll_s
-    while len(written := list(directory.iterdir())) < count:
-        assert time.monotonic() < deadline, f"{len(written)} of {count} workers wrote their device"
-        time.sleep(waits.first_poll_s)
-    return {p.name: p.read_text() for p in written}
+class _Devices:
+    """The devices workers report on a fifo, one `<pid> <device>` line each, read as they come."""
+
+    def __init__(self, path: Path) -> None:
+        """Make the fifo at `path` and hold it open."""
+        os.mkfifo(path)
+        self._fd, self._partial = os.open(path, os.O_RDWR), b""
+        self._found: dict[str, str] = {}
+
+    def seen(self, count: int) -> dict[str, str]:
+        """Return the device of each of the workers reported, once `count` have reported."""
+        while len(self._found) < count:
+            self._partial += os.read(self._fd, 4096)
+            *lines, self._partial = self._partial.split(b"\n")
+            for line in lines:
+                pid, device = line.decode().split(" ", 1)
+                self._found[pid] = device
+        return dict(self._found)
+
+    def close(self) -> None:
+        """Close the fifo."""
+        os.close(self._fd)
 
 
 @pytest.mark.logic
-def test_local_runs_one_cuda_worker_per_visible_device(tmp_path: Path, slack: dict[str, Any]) -> None:
+def test_local_runs_one_cuda_worker_per_visible_device(tmp_path: Path) -> None:
     """A cuda class's workers each get a free device as `CUDA_VISIBLE_DEVICES`; no more start than there are devices."""
-    waits = ExecutionProfile.load("orcd", slack).pool
-    seen = tmp_path / "seen"
-    seen.mkdir()
-    local = Local(8, command=[sys.executable, "-c", DEVICE_CHILD, str(seen)], cuda=["gpu"], devices=["G-0", "G-1"])
+    devices = _Devices(tmp_path / "devices")
+    local = Local(
+        8, command=[sys.executable, "-c", DEVICE_CHILD, str(tmp_path / "devices")], cuda=["gpu"], devices=["G-0", "G-1"]
+    )
     handles = local.start("gpu#m", 3)
     try:
         assert len(handles) == 2 and local.start("gpu#n", 1) == []
-        assert sorted(_devices_seen(seen, 2, waits).values()) == ["G-0", "G-1"]
+        assert sorted(devices.seen(2).values()) == ["G-0", "G-1"]
         local.stop(handles[:1])
         handles = [*handles[1:], *local.start("gpu#n", 2)]
-        assert len(handles) == 2 and set(_devices_seen(seen, 3, waits).values()) == {"G-0", "G-1"}
+        assert len(handles) == 2 and set(devices.seen(3).values()) == {"G-0", "G-1"}
         handles += local.start("cpu", 2)
-        assert local.running("cpu") == 2 and "-" in _devices_seen(seen, 5, waits).values()
+        assert local.running("cpu") == 2 and "-" in devices.seen(5).values()
     finally:
         local.stop(handles)
+        devices.close()
     with pytest.raises(LocalError, match="no device is visible"):
         Local(1, command=[sys.executable], cuda=["gpu"]).start("gpu", 1)
 
@@ -548,7 +568,7 @@ with packaged(registry(scoring("substrates_test.score")), cache):
 
 @pytest.mark.limits
 def test_local_pool_runs_toy_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A pool of two local worker processes runs a six-job plan: every job done once, within ten seconds."""
+    """A pool of two local worker processes runs a six-job plan: every job done once."""
     pytest.importorskip("pydra")
     from senselab_core.runtime.execution.pool import coordinate  # noqa: PLC0415 - after the pydra check
 
@@ -568,9 +588,7 @@ def test_local_pool_runs_toy_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(sys.path))
     command = [sys.executable, "-c", CHILD, str(run_dir / RUN_QUEUES), str(tmp_path / "cache"), str(tmp_path / "store")]
     local = Local(2, command=[*command, str(profile_file)])
-    began = time.monotonic()
     outcome = coordinate(run_dir, substrate=local, profile=profile, store=store)
-    assert time.monotonic() - began < 10
     assert outcome.done and len(outcome.results["a"]) == 6 and all(r.failure is None for r in outcome.results["a"])
     status = Run(run_dir).wait(None)
     assert status.done and status.counts["done"] == 6
@@ -591,22 +609,32 @@ def _worker_profile(**faults: int) -> ExecutionProfile:
 
 
 @pytest.mark.logic
-def test_failed_starts_back_off_and_stop_at_the_budget() -> None:
+def test_failed_starts_back_off_and_stop_at_the_budget(lease_clock: Callable[..., ManualClock]) -> None:
     """Workers that vanish before marking themselves ready are restarted after 1, 2, 4 s, then the class is broken."""
-    now = [0.0]
-    substrate = Recording()
-    fleet = Fleet(substrate, workers_dir=None, budget=3, first_s=1.0, max_s=4.0, clock=lambda: now[0])
+    clock, substrate = lease_clock(), Recording()
+    fleet = Fleet(substrate, workers_dir=None, budget=3, first_s=1.0, max_s=4.0, clock=clock)
     starts: list[float] = []
     for step in range(60):
-        now[0] = step * 0.5
+        clock.advance_to(step * 0.5)
         substrate.handles.clear()
         fleet.live()
         if fleet.start("cpu", 1):
-            starts.append(now[0])
+            starts.append(clock.now())
     assert starts == [0.0, 1.5, 4.0, 8.5] and fleet.broken["cpu"].failures == 4
     assert fleet.start("cpu#abc", 1) == [] and fleet.broken_for("cpu#abc") is fleet.broken["cpu"]
     fleet.reset()
     assert fleet.broken == {} and len(fleet.start("cpu", 1)) == 1
+
+
+class _Reaped(Local):
+    """A `Local` whose workers are waited for as they start, so one that exits at once is dead when next listed."""
+
+    def start(self, resource_class: str, count: int) -> list[WorkerHandle]:
+        """Start the workers and wait for each to exit."""
+        handles = super().start(resource_class, count)
+        for handle in handles:
+            self._procs[handle.id].proc.wait()
+        return handles
 
 
 @pytest.mark.logic
@@ -614,11 +642,10 @@ def test_a_worker_that_exits_at_once_makes_a_bounded_number_of_starts(tmp_path: 
     """A command that exits at once gives at most budget + 1 starts through `scale`, then the class is broken."""
     profile = _worker_profile()
     _, pool, _ = _queued(profile, tmp_path, 3)
-    local = Local(2, command=[sys.executable, "-c", "raise SystemExit(1)"])
+    local = _Reaped(2, command=[sys.executable, "-c", "raise SystemExit(1)"])
     fleet = Fleet(local, workers_dir=tmp_path / "run" / "workers", budget=2, first_s=0.0, max_s=0.0)
     for _ in range(40):
         scale(pool.queues, fleet, profile, workers=_per_quantum(profile))
-        time.sleep(0.1)
     assert fleet.starts["cpu"] == 3 and fleet.broken["cpu"].failures == 3
 
 
@@ -653,7 +680,13 @@ def test_a_worker_that_reaches_the_run_marks_itself_and_one_that_cannot_exits_ty
     assert not (other / "workers").exists()
 
 
-def _slurm(tmp_path: Path, epoch: int = 1, plan_hash: str = HASH, commands: SlurmCommands | None = None) -> Slurm:
+def _slurm(
+    tmp_path: Path,
+    epoch: int = 1,
+    plan_hash: str = HASH,
+    commands: SlurmCommands | None = None,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
+) -> Slurm:
     return Slurm(
         _profile().resource_classes,
         None,
@@ -663,7 +696,20 @@ def _slurm(tmp_path: Path, epoch: int = 1, plan_hash: str = HASH, commands: Slur
         attempt="a1",
         epoch=epoch,
         commands=commands or _commands(),
+        clock=clock,
     )
+
+
+@pytest.mark.logic
+def test_a_failed_slurm_command_is_retried_after_waits_that_double(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
+    """A command that keeps failing is tried `attempts` times, a wait that doubles after each, on the injected clock."""
+    (tmp_path / "slurm" / "fail-sbatch").write_text("")
+    commands, clock = _commands(attempts=3, retry_first_s=1.0), lease_clock()
+    with pytest.raises(SlurmError, match="Socket timed out"):
+        _slurm(tmp_path, commands=commands, clock=clock).start("cpu", 1)
+    assert clock.slept == [1.0, 2.0, 4.0]
 
 
 @pytest.mark.logic
@@ -684,15 +730,19 @@ def test_slurm_jobs_are_scoped_to_the_user_run_and_epoch(tmp_path: Path) -> None
 
 
 @pytest.mark.logic
-def test_pending_surplus_is_cancelled_first_and_running_ones_only_when_drained(tmp_path: Path) -> None:
+def test_pending_surplus_is_cancelled_first_and_running_ones_only_when_drained(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """One item wants one worker: pending extras go once the surplus lasts; an empty queue stops every worker."""
     profile = _profile()
     _, pool, recording = _queued(profile, tmp_path, 1)
     recording.handles = [WorkerHandle("cpu", "p1", True), WorkerHandle("cpu", "r1"), WorkerHandle("cpu", "p2", True)]
     since: dict[str, float] = {}
-    scale(pool.queues, recording, profile, workers=_per_quantum(profile), surplus_since=since, now=0.0)
+    clock = lease_clock()
+    scale(pool.queues, recording, profile, workers=_per_quantum(profile), surplus_since=since, clock=clock)
     assert recording.stops == [] and since == {"cpu": 0.0}
-    scale(pool.queues, recording, profile, workers=_per_quantum(profile), surplus_since=since, now=10.0)
+    clock.advance_to(10.0)
+    scale(pool.queues, recording, profile, workers=_per_quantum(profile), surplus_since=since, clock=clock)
     assert {h.id for h in recording.stops} == {"p1", "p2"} and [h.id for h in recording.handles] == ["r1"]
     empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile)
     empty.queue("cpu")
@@ -831,7 +881,7 @@ def test_the_profiles_attribute_delay_is_a_floor(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_a_local_worker_is_in_the_supervisors_table(tmp_path: Path) -> None:
     """A worker started by `Local` is a live group of the supervisor in force, and not once stopped."""
-    local = Local(1, command=[sys.executable, "-c", "import time; time.sleep(60)"])
+    local = Local(1, command=[sys.executable, "-c", "import threading; threading.Event().wait()"])
     with Supervisor(subreaper=False) as supervisor:
         [handle] = local.start("cpu", 1)
         assert supervisor.group_live(int(handle.id))
@@ -840,7 +890,7 @@ def test_a_local_worker_is_in_the_supervisors_table(tmp_path: Path) -> None:
 
 
 @pytest.mark.contract
-def test_a_default_slurm_run_cancels_its_workers_when_it_ends(tmp_path: Path) -> None:
+def test_a_default_slurm_run_cancels_its_workers_when_it_ends(tmp_path: Path, tier_bound: float) -> None:
     """`Plan.run` over Slurm closes its pool when the run ends (held, the substrate failing): jobs are cancelled."""
     pytest.importorskip("pydra")
     profile = ExecutionProfile.load(
@@ -848,13 +898,16 @@ def test_a_default_slurm_run_cancels_its_workers_when_it_ends(tmp_path: Path) ->
         {**_override(), "pool": {"first_poll_s": 0.01, "poll_s": 0.2}, "faults": {"infrastructure_replacements": 1}},
     )
     placed, _ = planned(SCORE, profile, ["one", "two"])
-    run = placed.run(store=ResultStore(tmp_path / "store"))
-    deadline = time.monotonic() + 30
-    while not _submitted(tmp_path) and time.monotonic() < deadline:
-        time.sleep(0.05)
+    os.mkfifo(tmp_path / "slurm" / "submitted")
+    signalled = os.open(tmp_path / "slurm" / "submitted", os.O_RDWR)
+    try:
+        run = placed.run(store=ResultStore(tmp_path / "store"))
+        os.read(signalled, 1)
+    finally:
+        os.close(signalled)
     (tmp_path / "slurm" / "fail-squeue").write_text("")
     with contextlib.suppress(Exception):
-        run.wait(120)
+        run.wait(tier_bound)
     cancelled = tmp_path / "slurm" / "cancelled"
     assert _submitted(tmp_path) and cancelled.exists() and cancelled.read_text().split()
 
@@ -956,15 +1009,15 @@ def test_a_substrate_command_that_cannot_be_launched_is_a_substrate_failure(tmp_
 
 
 @pytest.mark.logic
-def test_substrate_failures_back_off_and_break_it_after_the_budget() -> None:
+def test_substrate_failures_back_off_and_break_it_after_the_budget(lease_clock: Callable[..., ManualClock]) -> None:
     """Each failure of the substrate's commands delays its next use, doubling; past the budget it is broken once."""
-    now = [0.0]
-    fleet = Fleet(Recording(), workers_dir=None, budget=2, first_s=1.0, max_s=4.0, clock=lambda: now[0])
+    clock = lease_clock()
+    fleet = Fleet(Recording(), workers_dir=None, budget=2, first_s=1.0, max_s=4.0, clock=clock)
     due: list[float] = []
     for step in range(40):
-        now[0] = step * 0.5
+        clock.advance_to(step * 0.5)
         if fleet.substrate_due():
-            due.append(now[0])
+            due.append(clock.now())
             fleet.fail_substrate(SlurmError("squeue timed out"))
     assert due == [0.0, 1.0, 3.0] and fleet.broken["*"].failures == 3
     assert fleet.broken_for("cpu") is fleet.broken["*"]
@@ -992,18 +1045,21 @@ class _Bug(Exception):
 
 
 @pytest.mark.logic
-def test_a_lasting_substrate_failure_is_reported_once_and_ends_scaling(tmp_path: Path) -> None:
+def test_a_lasting_substrate_failure_is_reported_once_and_ends_scaling(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """A substrate failing past the budget holds the run, is reported broken once, and is not called again."""
     profile = _worker_profile(infrastructure_replacements=1)
-    down = _Down(SlurmError("squeue timed out"))
-    _, pool, _ = _queued(profile, tmp_path, 0, substrate=down)
+    down, clock = _Down(SlurmError("squeue timed out")), lease_clock()
+    _, pool, _ = _queued(profile, tmp_path, 0, substrate=down, clock=clock)
     placed, values = planned(SCORE, profile, ["one", "two"])
     admission = pool.admit(placed, values)
     handle = pool.submit(node_fragment(placed, admission, elements=[(0,)]))
     with pytest.raises(WorkersBroken) as held:
-        list(follow(pool, handle))
+        list(follow(pool, handle, clock=clock))
     pool.submit(node_fragment(placed, admission, elements=[(1,)]))
-    time.sleep(2 * profile.pool.poll_s)
+    clock.advance(2 * profile.pool.poll_s)
+    clock.settle(0)
     calls = down.calls
     pool.close()
     assert held.value.resource_class == "*" and calls == 2

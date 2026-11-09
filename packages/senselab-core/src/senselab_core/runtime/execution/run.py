@@ -19,7 +19,6 @@ import logging
 import os
 import re
 import threading
-import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -33,6 +32,7 @@ from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.kernel.signals import StaleSource
 from senselab_core.runtime.call import InputUnreadable, RunConfig, bind_input
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.epoch import EPOCH_DIR, Epoch
 from senselab_core.runtime.execution.events import (
     Event,
@@ -487,11 +487,18 @@ class Run:
     disk, written by any process. `store` is where the results are read from, by default the one the manifest names.
     """
 
-    def __init__(self, run_dir: Path, *, store: ResultStore | None = None) -> None:
-        """Open the run in `run_dir`."""
+    def __init__(
+        self,
+        run_dir: Path,
+        *,
+        store: ResultStore | None = None,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
+    ) -> None:
+        """Open the run in `run_dir`; `wait` and its liveness reads are timed on `clock`."""
         self.run_dir = Path(run_dir)
-        self._store = store
+        self._store, self._clock = store, clock
         self._thread: threading.Thread | None = None
+        self._ended = threading.Event()
         self._cancel = threading.Event()
         self._error: BaseException | None = None
 
@@ -539,23 +546,29 @@ class Run:
         Raises:
             BaseException: the error that stopped a run started here, other than its cancellation.
         """
-        deadline = None if timeout is None else time.monotonic() + timeout
+        deadline = None if timeout is None else self._clock.now() + timeout
         thread = self._thread
         if thread is not None:
-            thread.join(timeout)
+            if timeout is None:
+                self._ended.wait()
+            else:
+                self._clock.wait(self._ended, timeout)
             if not thread.is_alive() and self._error is not None:
                 raise self._error
         status = self.status()
-        while not status.done and (deadline is None or time.monotonic() < deadline):
+        while not status.done and (deadline is None or self._clock.now() < deadline):
             if (thread is None or not thread.is_alive()) and self._stopped():
                 return dataclasses.replace(self.status(), interrupted=True)
-            time.sleep(poll if deadline is None else max(0.0, min(poll, deadline - time.monotonic())))
+            self._clock.sleep(poll if deadline is None else max(0.0, min(poll, deadline - self._clock.now())))
             status = self.status()
         return status
 
     def _stopped(self) -> bool:
         """Return whether the latest coordinator stopped (`Epoch.stopped`) and no worker holds a live claim."""
-        return Epoch(self.run_dir).stopped() and not QueueSet(self.run_dir / RUN_QUEUES).claimed_any()
+        return (
+            Epoch(self.run_dir, self._clock).stopped()
+            and not QueueSet(self.run_dir / RUN_QUEUES, clock=self._clock).claimed_any()
+        )
 
     @property
     def cancelled(self) -> threading.Event:
@@ -571,6 +584,11 @@ class Run:
         """Start `thread`, the run's body, and hold it for `wait`."""
         self._thread = thread
         thread.start()
+        threading.Thread(target=self._signal_end, args=(thread,), name="senselab-run-ended", daemon=True).start()
+
+    def _signal_end(self, thread: threading.Thread) -> None:
+        thread.join()
+        self._ended.set()
 
     def cancel(self) -> None:
         """Stop releasing jobs: fragments already sent finish or are left to their lease; no other is sent."""

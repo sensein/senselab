@@ -5,7 +5,6 @@ import os
 import pwd
 import re
 import socket
-import time
 from collections.abc import Iterator, Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Protocol
@@ -33,6 +32,7 @@ from senselab_core.kernel.identity import (
 )
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.kernel.plan import ReuseName
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.planner import Plan
 
 if TYPE_CHECKING:
@@ -340,11 +340,18 @@ class Executor(Protocol):
         """Return the results of `handle` landed and not yet given, and whether every one is given; never wait."""
 
 
-def follow(executor: Executor, handle: Handle, *, first_s: float = 0.01, max_s: float = 1.0) -> Iterator[ResultRef]:
+def follow(
+    executor: Executor,
+    handle: Handle,
+    *,
+    first_s: float = 0.01,
+    max_s: float = 1.0,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
+) -> Iterator[ResultRef]:
     """Yield each result of `handle` as `executor.poll` gives it, until every one is given.
 
     A poll that gives nothing is followed by a wait of `first_s`, doubling up to `max_s`; one that gives a result
-    resets it. Errors `poll` raises are raised here, after the results given before them.
+    resets it; the waits run on `clock`. Errors `poll` raises are raised here, after the results given before them.
     """
     pause = first_s
     while True:
@@ -355,5 +362,5 @@ def follow(executor: Executor, handle: Handle, *, first_s: float = 0.01, max_s: 
         if given:
             pause = first_s
         else:
-            time.sleep(pause)
+            clock.sleep(pause)
             pause = min(2 * pause, max_s)

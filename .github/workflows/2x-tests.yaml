@@ -28,6 +28,7 @@ jobs:
   # A missing package, or a package without its src/, fails this job and every job that needs it.
   detect:
     if: github.event.pull_request.draft != true
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -39,6 +40,7 @@ jobs:
 
   pre-commit:
     if: github.event.pull_request.draft != true
+    timeout-minutes: 7
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -64,6 +66,7 @@ jobs:
   core-only:
     needs: detect
     name: core-only (${{ matrix.python-version }})
+    timeout-minutes: 26
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -105,6 +108,7 @@ jobs:
   core-pydra:
     needs: detect
     name: core-pydra (3.13)
+    timeout-minutes: 24
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -126,6 +130,7 @@ jobs:
   senselab-lean:
     needs: detect
     name: senselab-lean (${{ matrix.python-version }})
+    timeout-minutes: 19
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -156,6 +161,7 @@ jobs:
     needs: detect
     name: core-limits
     if: contains(github.event.pull_request.labels.*.name, 'limits') || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/2x/'))
+    timeout-minutes: 23
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -195,6 +201,7 @@ jobs:
   # The declared version of a task or backend moves whenever its source does (scripts/check_source_digests.py).
   source-digests:
     needs: detect
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -216,6 +223,7 @@ jobs:
   pr-models:
     needs: detect
     if: github.event_name == 'pull_request'
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -233,6 +241,7 @@ jobs:
   core-env:
     needs: detect
     name: core-env (release gate)
+    timeout-minutes: 12
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -255,6 +264,7 @@ jobs:
   licenses:
     needs: detect
     name: licenses
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -282,6 +292,7 @@ jobs:
   worker-floor:
     needs: detect
     name: worker-floor (3.10)
+    timeout-minutes: 17
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5

@@ -7,7 +7,6 @@ call itself where it failed. `observations` turns an item's records into its `Ob
 
 import functools
 import logging
-import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +22,7 @@ from senselab_core.runtime.calibration import (
     ProbeRef,
     UnitKind,
 )
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.batching import LengthUnrecorded, job_length_ns, job_text_chars
 from senselab_core.runtime.execution.executor import JobRef
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome
@@ -216,7 +216,7 @@ class Presence:
         run_dir: Path,
         *,
         refresh_s: float | None = None,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
         report: Callable[[], HardwareInfo] = host_report,
         run: Callable[[list[str], float], str] | None = None,
     ) -> None:
@@ -237,7 +237,7 @@ class Presence:
 
         A device count is the parties with compute processes on the GPUs the worker sees, the most on any one.
         """
-        now = self._clock()
+        now = self._clock.now()
         held = self._read.get(resource_class)
         if held is not None and now - held[0] < self._refresh_s:
             return held[1]

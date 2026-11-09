@@ -35,12 +35,12 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from types import TracebackType
 from typing import IO, Any, Self
 
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution_settings import SupervisorSettings
 from senselab_core.runtime.hardware import proc_stats
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -289,9 +289,17 @@ class Keeper:
     In a process forked from its owner, the next record starts that process's own keeper.
     """
 
-    def __init__(self, settings: SupervisorSettings | None = None) -> None:
-        """Start no process yet; the keeper reads start times under `settings` (`packaged_settings()` when None)."""
+    def __init__(
+        self,
+        settings: SupervisorSettings | None = None,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
+    ) -> None:
+        """Start no process yet; the keeper reads start times under `settings` (`packaged_settings()` when None).
+
+        Its reap bound in `stop` is read on `clock`.
+        """
         self.settings = settings if settings is not None else packaged_settings()
+        self._clock = clock
         self.pid: int | None = None
         self._owner = os.getpid()
         self._stdin: IO[bytes] | None = None
@@ -325,14 +333,14 @@ class Keeper:
                 stdin.close()
         if pid is None:
             return
-        deadline = time.monotonic() + timeout
+        deadline = self._clock.now() + timeout
         with contextlib.suppress(ChildProcessError):
             while os.waitpid(pid, os.WNOHANG) == (0, 0):
-                if time.monotonic() > deadline:
+                if self._clock.now() > deadline:
                     _kill(pid, signal.SIGKILL)
                     os.waitpid(pid, 0)
                     return
-                time.sleep(REAP_POLL_S)
+                self._clock.sleep(REAP_POLL_S)
 
     def _start(self) -> IO[bytes]:
         read, write = os.pipe()
@@ -373,15 +381,16 @@ class Supervisor:
         children: Callable[[], set[int]] = own_children,
         poll_s: float = REAP_POLL_S,
         settings: SupervisorSettings | None = None,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Supervise; once entered, as a subreaper where `subreaper` (by default where `subreaper_supported`).
 
         `children` lists this process's children; `poll_s` is the reaper's interval; `settings` bound the start-time
-        reads (`packaged_settings()` when None).
+        reads (`packaged_settings()` when None); the exit bound and the reaper's waits run on `clock`.
         """
         self._want_subreaper = subreaper_supported() if subreaper is None else subreaper
         self._children = children
-        self._poll_s = poll_s
+        self._poll_s, self._clock = poll_s, clock
         self._lock = threading.RLock()
         self._groups: dict[int, subprocess.Popen[bytes]] = {}
         self._launched: dict[int, subprocess.Popen[bytes]] = {}
@@ -390,7 +399,7 @@ class Supervisor:
         self._foreign: set[int] = set()
         self._foreign_groups: set[int] = set()
         self._own_pgid = os.getpgid(0)
-        self._keeper = Keeper(settings)
+        self._keeper = Keeper(settings, clock)
         self._entered = False
         self._adopting = False
         self._previous_flag = 0
@@ -433,7 +442,7 @@ class Supervisor:
         if self._reaper is not None:
             self._reaper.join()
             self._reaper = None
-        deadline = time.monotonic() + EXIT_BOUND_S
+        deadline = self._clock.now() + EXIT_BOUND_S
         with self._lock:
             for pgid, proc in self._groups.items():
                 if proc.returncode is None:
@@ -444,14 +453,14 @@ class Supervisor:
                     _kill(orphan.pid, signal.SIGKILL)
                 self.reap()
                 leaders = any(p.returncode is None and not _exited(g) for g, p in self._groups.items())
-                if (not self._orphans and not leaders) or time.monotonic() > deadline:
+                if (not self._orphans and not leaders) or self._clock.now() > deadline:
                     break
-                time.sleep(self._poll_s)
+                self._clock.sleep(self._poll_s)
             for proc in self._groups.values():
                 with contextlib.suppress(subprocess.TimeoutExpired):
-                    proc.wait(max(deadline - time.monotonic(), 0.0))
+                    proc.wait(max(deadline - self._clock.now(), 0.0))
             self._prune()
-            self._keeper.stop(max(deadline - time.monotonic(), 0.0))
+            self._keeper.stop(max(deadline - self._clock.now(), 0.0))
             self._groups.clear()
             self._launched.clear()
             if self._adopting:
@@ -564,7 +573,7 @@ class Supervisor:
             _kill(orphan.pgid, signal.SIGKILL, group=True)
 
     def _reap_loop(self) -> None:
-        while not self._stop.wait(self._poll_s):
+        while not self._clock.wait(self._stop, self._poll_s):
             try:
                 self.reap()
             except Exception:  # noqa: BLE001 - the reaper keeps running

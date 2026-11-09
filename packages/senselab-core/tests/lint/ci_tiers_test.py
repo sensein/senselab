@@ -1,5 +1,7 @@
 """The CI cadence for the test tiers: what a PR, the `limits` label and the nightly run select; the rest is ORCD."""
 
+import json
+import math
 import os
 import shlex
 import subprocess
@@ -16,6 +18,8 @@ WORKFLOW = REPO / ".github" / "workflows" / "2x-tests.yaml"
 NIGHTLY_WORKFLOW = REPO / ".github" / "workflows" / "2x-nightly.yaml"
 WORKFLOWS_2X = sorted((REPO / ".github" / "workflows").glob("2x-*.yaml"))
 PYPROJECT = REPO / "pyproject.toml"
+BUDGETS = REPO / "packages" / "senselab" / "tests" / "data" / "tier_budgets.json"
+TIMEOUTS = REPO / "packages" / "senselab" / "tests" / "data" / "ci_job_timeouts.json"
 TIERS = ("logic", "contract", "limits", "usecase", "env")
 EVERY_PR, ON_LABEL, NIGHTLY = "every_pr", "on_label", "nightly"
 LABEL = "limits"
@@ -452,3 +456,36 @@ def test_a_selection_that_can_pick_a_model_test_is_found() -> None:
     assert admits_model("logic or contract") and admits_model(None)
     assert not admits_model("(logic or contract) and not model")
     assert not admits_model("limits and not model")
+
+
+def expected_timeout_minutes(job: str, workflow: str, budgets: dict[str, float], timeouts: dict[str, Any]) -> int:
+    """The `timeout-minutes` of `job`: its slowest selected tier's budget plus its loaded measured run, over a floor."""
+    bound = max(
+        (budgets[t] for name, marker, _if in package_selections(workflow) if name == job for t in tiers_of(marker)),
+        default=0.0,
+    )
+    measured = float(timeouts["measured_s"][job])
+    return max(int(timeouts["floor_minutes"]), math.ceil((bound + float(timeouts["load_factor"]) * measured) / 60))
+
+
+@pytest.mark.logic
+def test_every_job_of_the_test_workflow_ends_at_a_timeout_derived_from_its_tier_bound() -> None:
+    """Each job sets `timeout-minutes`, so a hang costs minutes and not GitHub's six hours; its value is derived."""
+    workflow = WORKFLOW.read_text()
+    budgets = {t: float(row["budget_s"]) for t, row in json.loads(BUDGETS.read_text())["tiers"].items()}
+    timeouts = json.loads(TIMEOUTS.read_text())
+    jobs = yaml.safe_load(workflow)["jobs"]
+    assert set(timeouts["measured_s"]) == set(jobs)
+    assert {name: job.get("timeout-minutes") for name, job in jobs.items()} == {
+        name: expected_timeout_minutes(name, workflow, budgets, timeouts) for name in jobs
+    }
+
+
+@pytest.mark.logic
+def test_a_job_without_a_timeout_or_with_a_short_one_is_found() -> None:
+    """The derivation reads the slowest tier a job selects: a limits job gets its budget, a job with none the floor."""
+    planted = _workflow(("limits", ""), ("logic", ""))
+    budgets, timeouts = {"limits": 700.0, "logic": 900.0}, {"measured_s": {}, "floor_minutes": 5, "load_factor": 2}
+    assert expected_timeout_minutes("job0", planted, budgets, {**timeouts, "measured_s": {"job0": 30}}) == 13
+    assert expected_timeout_minutes("job1", planted, budgets, {**timeouts, "measured_s": {"job1": 30}}) == 16
+    assert expected_timeout_minutes("job2", planted, budgets, {**timeouts, "measured_s": {"job2": 1}}) == 5

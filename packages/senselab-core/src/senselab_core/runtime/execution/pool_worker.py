@@ -31,6 +31,7 @@ from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.runtime import request_reports
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
 from senselab_core.runtime.call import RunConfig, packaged
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, PlanFragment
@@ -116,7 +117,7 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
     send: Send,
     cancelled: threading.Event | None = None,
     record: Callable[[Sent], None] | None = None,
-    clock: Callable[[], float] = time.monotonic,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> list[JobOutcome]:
     """Return one outcome per member, sent as one request; one that fails as a whole is split in halves.
 
@@ -131,12 +132,12 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
     if cancelled is not None and cancelled.is_set():
         raise Abandoned
     refs = tuple(m.job.ref for m in members)
-    began = clock()
+    began = clock.now()
     try:
         with request_reports.collected(clock) as reported:
             outcomes = send([m.job for m in members], placement)
     except Exception as exc:
-        wall = clock() - began
+        wall = clock.now() - began
         if cancelled is not None and cancelled.is_set():
             raise Abandoned from exc
         if isinstance(exc, LeaseTimeout):
@@ -153,7 +154,7 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
             members[half:], placement, send, cancelled, record, clock
         )
     if record is not None:
-        record(Sent(refs, clock() - began, tuple(reported), None))
+        record(Sent(refs, clock.now() - began, tuple(reported), None))
     return outcomes
 
 
@@ -224,7 +225,7 @@ class PoolWorker:
         device_memory: Callable[[], int | None] | None = None,
         hardware: Callable[[str], HardwareClass] | None = None,
         cotenancy: Callable[[str], Cotenancy] | None = None,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Serve `classes` under `profile`, storing into `store`; jobs go through `send` (`execute` when None).
 
@@ -233,7 +234,7 @@ class PoolWorker:
         `worker_id()` unless given, so no run record names its host. `clock` times every measurement the worker
         records (a claim, each call of `send` and each request it makes, an item's claim-to-commit wall) and the reuse
         of what it read of its peers and of the run's probe queues (`pool.presence_refresh_s`); the quantum and idle
-        deadlines, which pair with real waits, stay on `time.monotonic`.
+        deadlines and every wait too.
 
         Raises:
             ValueError: no class is named.
@@ -241,8 +242,8 @@ class PoolWorker:
         if not classes:
             raise ValueError("a pool worker serves at least one resource class")
         self.run_dir = Path(pool_dir).parent
-        self.epochs = Epoch(self.run_dir)
-        self.queues = QueueSet(Path(pool_dir), profile, epoch=self.epochs.current)
+        self.epochs = Epoch(self.run_dir, clock)
+        self.queues = QueueSet(Path(pool_dir), profile, epoch=self.epochs.current, clock=clock)
         self.classes = tuple(classes)
         self.profile, self.store = profile, store
         self.name = name if name is not None else worker_id()
@@ -327,35 +328,35 @@ class PoolWorker:
     def _claim_loop(self) -> int:
         pool = self.profile.pool
         current: str | None = None
-        spent, began, idle, waited = 0, time.monotonic(), None, 0.0
+        spent, began, idle, waited = 0, self._clock.now(), None, 0.0
         while not self.stop.is_set():
-            ended = current is not None and (spent >= pool.quantum_items or time.monotonic() - began >= pool.quantum_s)
+            ended = current is not None and (spent >= pool.quantum_items or self._clock.now() - began >= pool.quantum_s)
             prefer = None if ended else current
-            asked = self._clock()
+            asked = self._clock.now()
             claim = self._next(prefer, pool.quantum_items - spent)
             if claim is None:
-                current, idle = None, idle if idle is not None else time.monotonic()
+                current, idle = None, idle if idle is not None else self._clock.now()
                 provided = self._workers.provided() if self._workers is not None else []
                 if provided:
                     if all(p.idle_s() >= self.profile.services.idle_exit_s for p in provided):
                         break
-                    self.stop.wait(pool.poll_s)
+                    self._clock.wait(self.stop, pool.poll_s)
                     continue
-                left = IDLE_POLLS * pool.poll_s - (time.monotonic() - idle)
+                left = IDLE_POLLS * pool.poll_s - (self._clock.now() - idle)
                 if left <= 0:
                     break
                 pause = pool.poll_s
                 if self._serving:
                     waited = min(pool.poll_s, max(waited * 2, pool.first_poll_s))
                     pause = waited
-                self.stop.wait(min(pause, left))
+                self._clock.wait(self.stop, min(pause, left))
                 continue
             idle, waited = None, 0.0
             if claim.queue.name != current or ended:
-                current, spent, began = claim.queue.name, 0, time.monotonic()
+                current, spent, began = claim.queue.name, 0, self._clock.now()
             spent += sum(len(f.jobs) for f in claim.fragments)
             self.served.extend((claim.queue.name, d) for d in claim.items)
-            self.run_claim(claim, claim_s=self._clock() - asked)
+            self.run_claim(claim, claim_s=self._clock.now() - asked)
             for service in self._workers.provided() if self._workers is not None else []:
                 service.touch()
         return 0
@@ -377,7 +378,7 @@ class PoolWorker:
             if not kept.held or self.queues.queue(name).probe_closed():
                 kept.release()
                 del self._serving[name]
-        now = self._clock()
+        now = self._clock.now()
         if self._listed is None or now - self._listed >= self.profile.pool.presence_refresh_s:
             self._listed = now
             for name in self.queues.names():
@@ -542,7 +543,7 @@ class PoolWorker:
         The hardware class and co-tenancy are read once per claim, when its first item is reported.
         """
         jobs = {m.job.ref: m.job for g in groups for m in g.members}
-        began = self._clock()
+        began = self._clock.now()
         seen: list[Seen | None] = []
 
         def observe(digest: str, outcomes: Sequence[JobOutcome]) -> list[Observation]:
@@ -563,7 +564,7 @@ class PoolWorker:
                 outcomes,
                 found,
                 mark=mark,
-                item_wall_s=self._clock() - began,
+                item_wall_s=self._clock.now() - began,
             )
 
         return observe
@@ -720,6 +721,7 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
     workers: WorkerSet | None = None,
     send: Send | None = None,
     join_s: float = DEFAULT_GRACES.bound,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> int:
     """Serve the queues of `classes` in `pool_dir` (a run's `queues` directory) as one `PoolWorker`; return 0.
 
@@ -739,8 +741,10 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
     owned = None
     if workers is None and any(is_service_class(c) for c in classes):
         bound = sum(profile.resource_classes[class_of(c)].max_workers for c in classes)
-        workers = owned = WorkerSet(bound, registry=service_registry(profile), provide=True)
-    worker = PoolWorker(pool_dir, classes, profile=profile, store=store, workers=workers, send=send, join_s=join_s)
+        workers = owned = WorkerSet(bound, registry=service_registry(profile, clock=clock), provide=True)
+    worker = PoolWorker(
+        pool_dir, classes, profile=profile, store=store, workers=workers, send=send, join_s=join_s, clock=clock
+    )
     with Supervisor(settings=profile.supervisor), contextlib.ExitStack() as stack:
         if owned is not None:
             stack.callback(owned.close)

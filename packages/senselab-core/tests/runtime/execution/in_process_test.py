@@ -7,7 +7,6 @@ import os
 import platform
 import signal
 import threading
-import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -493,15 +492,12 @@ def test_call_shape_validates_against_the_declaration() -> None:
 
 
 @pytest.mark.contract
-def test_dead_pooled_worker_is_closed_and_replaced(store: ResultStore) -> None:
+def test_dead_pooled_worker_is_closed_and_replaced(store: ResultStore, tier_bound: float) -> None:
     """A pooled worker that died is closed, its array directory removed, and a new one runs the next call."""
     _in_process(_call("first"), execution=_profile("isolated"), store=store)
     [old] = [w for w in WORKERS.pooled() if isinstance(w, WorkerClient) and w.alive]
     os.kill(int(old.hello["pid"]), signal.SIGKILL)
-    deadline = time.monotonic() + 10
-    while old.alive and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert not old.alive
+    assert old._exited.wait(tier_bound) and not old.alive  # noqa: SLF001 - the client's own exit signal
     result = _in_process(_call("second"), execution=_profile("isolated"), store=store)
     assert result.reused is None
     assert not old.array_dir.exists() and old not in WORKERS.pooled()

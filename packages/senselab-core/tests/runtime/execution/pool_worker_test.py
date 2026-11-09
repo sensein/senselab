@@ -7,12 +7,12 @@ import signal
 import subprocess
 import sys
 import threading
-import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
+from lease_clock_fixture import ManualClock, age
 from pool_stack_fixture import packaged, planned, registry, scoring
 from senselab_core.kernel.declare import TaskSpec
 from senselab_core.runtime import request_reports
@@ -80,7 +80,6 @@ def _put(placed: Plan, pool_dir: Path, element: int | range, queue: str = "cpu",
     update: dict[str, object] = {"resource_class": queue, **({"why": why} if why else {})}
     fragment = fragment.model_copy(update={"placement": fragment.placement.model_copy(update=update)})
     QueueSet(pool_dir, placed.execution).queue(queue).put(fragment)
-    time.sleep(0.01)
     return item_digest(fragment)
 
 
@@ -98,6 +97,20 @@ def _outcomes(pool_dir: Path, profile: ExecutionProfile, queue: str = "cpu") -> 
 
 def _text(job: Job) -> object:
     return next(iter(job.values.values()))
+
+
+def _served(worker: PoolWorker, clock: ManualClock) -> int:
+    """Serve `worker` on a thread, advancing `clock` by the pool's poll each time it waits, until it returns."""
+    exits: list[int] = []
+    thread = threading.Thread(target=lambda: exits.append(worker.serve()), daemon=True)
+    thread.start()
+    try:
+        clock.drive(thread, worker.profile.pool.poll_s)
+    finally:
+        worker.halt()
+        thread.join(clock.hang_s)
+    assert not thread.is_alive()
+    return exits[0]
 
 
 @pytest.mark.logic
@@ -123,7 +136,7 @@ def test_worker_yields_after_quantum_to_older_queue(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a_worker_gathers_one_job_items_once_warm(tmp_path: Path) -> None:
+def test_a_worker_gathers_one_job_items_once_warm(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A cold queue's first item is claimed alone; then one-job items gather into one claim, never a 4-job item."""
     profile = _profile(quantum_items=4)
     placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(11)])
@@ -132,18 +145,19 @@ def test_a_worker_gathers_one_job_items_once_warm(tmp_path: Path) -> None:
     for element in range(3):
         _put(placed, pool_dir, element)
     queue.put_all(split(node_fragment(placed, admission, elements=[(i,) for i in range(3, 11)]), 4))
-    send, sizes = _sender(store, profile), []
+    send, sizes, clock = _sender(store, profile), [], lease_clock()
 
     def recorded(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
         sizes.append(len(jobs))
+        clock.advance(len(jobs))
         return send(jobs, placement)
 
-    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=recorded)
-    assert worker.serve() == 0
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=recorded, clock=clock)
+    assert _served(worker, clock) == 0
     assert sizes == [1, 2, 4, 4] and len(worker.served) == 5 and queue.work() == 0
     samples = [Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)]
     assert sorted((s.jobs, s.cold) for s in samples) == [(1, False), (1, False), (1, True), (4, False), (4, False)]
-    assert all(s.input_s is None and s.wall_s > 0 and s.claim_s >= 0 for s in samples)
+    assert all(s.input_s is None and s.wall_s == s.jobs and s.claim_s == 0 for s in samples)
 
 
 @pytest.mark.logic
@@ -181,22 +195,27 @@ def test_samples_leave_the_resident_model_out_of_the_per_item_memory(tmp_path: P
 
 
 @pytest.mark.logic
-def test_each_gathered_item_is_timed_by_the_requests_it_ran_in(tmp_path: Path) -> None:
+def test_each_gathered_item_is_timed_by_the_requests_it_ran_in(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """Three one-job items gathered into one claim but sent one at a time each read at least their own request."""
     profile = _profile()
     placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(4)])
     _put(placed, pool_dir, 0)
     for element in range(1, 4):
         _put(placed, pool_dir, element, why=f"own request {element}")
-    send, took = _sender(store, profile), 0.05
+    send, took, clock = _sender(store, profile), 0.0625, lease_clock()
 
     def slow(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
-        time.sleep(took * len(jobs))
+        clock.advance(took * len(jobs))
         return send(jobs, placement)
 
-    PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=slow, device_memory=lambda: None).serve()
+    worker = PoolWorker(
+        pool_dir, ["cpu"], profile=profile, store=store, send=slow, device_memory=lambda: None, clock=clock
+    )
+    _served(worker, clock)
     warm = [s for s in (Sample.model_validate(o["measure"]) for o in _outcomes(pool_dir, profile)) if not s.cold]
-    assert len(warm) == 3 and all(s.wall_s >= took for s in warm)
+    assert len(warm) == 3 and all(s.wall_s == took for s in warm)
 
 
 @pytest.mark.logic
@@ -307,28 +326,32 @@ def _placement(fragment: PlanFragment) -> Any:  # noqa: ANN401 - the fragment's 
 
 
 @pytest.mark.logic
-def test_claim_renewed_during_long_item(tmp_path: Path) -> None:
+def test_claim_renewed_during_long_item(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """An item running past twice the lease's stale bound stays claimed by its worker, which commits it."""
     profile = _profile()
     placed, store, pool_dir = _run(tmp_path, profile, ["slow"])
     _put(placed, pool_dir, 0)
-    send, stolen = _sender(store, profile), []
+    send, stolen, clock = _sender(store, profile), [], lease_clock()
+    claims = QueueSet(pool_dir, profile, clock=clock).queue("cpu")
+    beat_s = profile.lease.renew_fraction * profile.lease.stale_after_s
 
     def slow(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
-        until = time.monotonic() + 2.5 * profile.lease.stale_after_s
-        while time.monotonic() < until:
-            stolen.append(QueueSet(pool_dir, profile).queue("cpu").claim("thief"))
-            time.sleep(0.05)
+        clock.settle()
+        for _ in range(round(2.5 * profile.lease.stale_after_s / beat_s)):
+            age(claims.path / "claims", beat_s)
+            clock.advance(beat_s)
+            clock.settle()
+            stolen.append(claims.claim("thief"))
         return send(jobs, placement)
 
-    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=slow, name="owner")
-    assert worker.serve() == 0
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=slow, name="owner", clock=clock)
+    assert _served(worker, clock) == 0
     [outcome] = _outcomes(pool_dir, profile)
     assert not any(stolen) and len(stolen) > 5 and (outcome["outcome"], outcome["worker"]) == ("done", "owner")
 
 
 CHILD = """
-import json, sys, time
+import json, sys, threading
 from pathlib import Path
 from pool_stack_fixture import packaged, registry, scoring
 from senselab_core.runtime.call import RunConfig
@@ -343,8 +366,8 @@ profile, store, workers = ExecutionProfile.load("laptop", override), ResultStore
 
 def send(jobs, placement):
     if any(next(iter(j.values.values())) == "slow" for j in jobs):
-        (pool_dir.parent / "slow-started").touch()
-        time.sleep(600)
+        print("slow-started", flush=True)
+        threading.Event().wait()
     return execute(jobs, placement, store=store, run=RunConfig(), profile=profile, workers=workers)
 
 with packaged(registry(scoring("pool_worker_test.score")), cache):
@@ -353,7 +376,7 @@ with packaged(registry(scoring("pool_worker_test.score")), cache):
 
 
 @pytest.mark.logic
-def test_sigterm_releases_claims(tmp_path: Path) -> None:
+def test_sigterm_releases_claims(tmp_path: Path, tier_bound: float) -> None:
     """On SIGTERM a worker process commits the item that finished, releases the one running and exits 0, at once."""
     override = {
         **OVERRIDE,
@@ -366,14 +389,11 @@ def test_sigterm_releases_claims(tmp_path: Path) -> None:
     _put(placed, pool_dir, 1)
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
     args = [str(pool_dir), str(tmp_path / "cache"), json.dumps(override), str(tmp_path / "store")]
-    child = subprocess.Popen([sys.executable, "-c", CHILD, *args], env=env)
+    child = subprocess.Popen([sys.executable, "-c", CHILD, *args], env=env, stdout=subprocess.PIPE, text=True)
     try:
-        deadline = time.monotonic() + 60
-        while not (tmp_path / "run" / "slow-started").exists() and time.monotonic() < deadline:
-            assert child.poll() is None
-            time.sleep(0.05)
+        assert child.stdout is not None and child.stdout.readline() == "slow-started\n"
         child.send_signal(signal.SIGTERM)
-        assert child.wait(timeout=30) == 0
+        assert child.wait(timeout=tier_bound) == 0
     finally:
         child.kill()
         child.wait()
@@ -475,7 +495,7 @@ class _Abandoning(WorkerSet):
 
 
 @pytest.mark.logic
-def test_a_lost_claim_abandons_its_request(tmp_path: Path) -> None:
+def test_a_lost_claim_abandons_its_request(tmp_path: Path, tier_bound: float) -> None:
     """A claim broken mid-request: its worker set abandons the request, nothing is committed, nothing more is sent."""
     profile = _profile()
     placed, store, pool_dir = _run(tmp_path, profile, ["one", "two"])
@@ -489,7 +509,7 @@ def test_a_lost_claim_abandons_its_request(tmp_path: Path) -> None:
         for lease in (queue.path / "claims").iterdir():
             shutil.rmtree(lease)
         thief.append(queue.claim("thief", max_items=2))
-        seen.append(workers.abandoned.wait(10))
+        seen.append(workers.abandoned.wait(tier_bound))
         raise WorkerLost("closed by abandon")
 
     worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, workers=workers, send=stolen)
@@ -500,7 +520,7 @@ def test_a_lost_claim_abandons_its_request(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_halt_commits_finished_groups_and_releases_the_rest(tmp_path: Path) -> None:
+def test_halt_commits_finished_groups_and_releases_the_rest(tmp_path: Path, tier_bound: float) -> None:
     """Halted while a claim's second group runs, the worker commits the first group's item and releases the second."""
     profile = _profile()
     placed, store, pool_dir = _run(tmp_path, profile, ["fast", "slow"])
@@ -511,7 +531,7 @@ def test_halt_commits_finished_groups_and_releases_the_rest(tmp_path: Path) -> N
 
     def halting(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
         if _text(jobs[0]) == "slow":
-            release.wait(10)
+            release.wait(tier_bound)
             raise WorkerLost("closed by abandon")
         outcomes = send(jobs, placement)
         worker.halt()
@@ -530,30 +550,38 @@ def test_halt_commits_finished_groups_and_releases_the_rest(tmp_path: Path) -> N
 
 
 @pytest.mark.logic
-def test_a_lost_claim_releases_its_other_items_before_its_request_ends(tmp_path: Path) -> None:
+def test_a_lost_claim_releases_its_other_items_before_its_request_ends(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """A request that cannot be abandoned outlives the lease it lost; the claim's other item is claimable at once."""
     profile = _profile()
     placed, store, pool_dir = _run(tmp_path, profile, ["one", "two"])
     lost = _put(placed, pool_dir, 0)
     kept = _put(placed, pool_dir, 1, why="second")
-    queue = QueueSet(pool_dir, profile).queue("cpu")
+    clock = lease_clock()
+    queue = QueueSet(pool_dir, profile, clock=clock).queue("cpu")
     taken: list[Claim] = []
     seen: list[str] = []
+    beat_s = profile.lease.renew_fraction * profile.lease.stale_after_s
 
     def uninterruptible(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
         shutil.rmtree(queue.path / "claims" / f"{lost}.lease")
-        until = time.monotonic() + 2.5 * profile.lease.stale_after_s
-        while time.monotonic() < until and kept not in seen:
+        clock.settle(0)
+        for _ in range(round(2.5 * profile.lease.stale_after_s / beat_s)):
+            if kept in seen:
+                break
+            clock.advance(beat_s)
+            clock.settle(0)
             claim = queue.claim("other", max_items=2)
             taken.extend([claim] if claim is not None else [])
             seen.extend(claim.items if claim is not None else ())
-            time.sleep(0.02)
-        time.sleep(max(0.0, until - time.monotonic()))
         raise WorkerLost("the request ended after its claim was lost")
 
-    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, workers=WORKERS, send=uninterruptible)
+    worker = PoolWorker(
+        pool_dir, ["cpu"], profile=profile, store=store, workers=WORKERS, send=uninterruptible, clock=clock
+    )
     try:
-        assert worker.serve() == 0
+        assert _served(worker, clock) == 0
     finally:
         for claim in taken:
             claim.release()

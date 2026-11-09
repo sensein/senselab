@@ -7,17 +7,18 @@ import stat
 import subprocess
 import sys
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
-from lease_time_fixture import install
+from lease_clock_fixture import ManualClock, age
 from senselab_core.kernel.identity import Attestation, ExecutionContext, ModelRef, ResolvedModel
 from senselab_core.runtime import vllm_server as vs
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.hardware import DeviceMemory
+from senselab_core.runtime.locks import Lease, LeaseTimeout
 from senselab_core.testing.processes import group_gone
 from senselab_worker.digest import identity_digest
 from senselab_worker.faults import ResourceFault
@@ -40,7 +41,7 @@ FAKE = Path(__file__).with_name("fake_vllm_fixture.py")
 LEASE = JobLease(stale_after_s=30, renew_fraction=0.01, attribute_delay_s=0)
 
 _HOLDER = r"""
-import sys, time
+import sys, threading
 from pathlib import Path
 from senselab_core.runtime.envs import EnvHandle
 from senselab_worker.digest import identity_digest
@@ -55,7 +56,7 @@ lease = JobLease(stale_after_s=30, renew_fraction=0.1, attribute_delay_s=0)
 kwargs = {"start_lock_dir": Path(locks), "startup_timeout_s": 30, "start_margin_s": 1, "lease": lease}
 with VllmServer(env, model, __import__("json").loads(settings), **kwargs):
     print("up", flush=True)
-    time.sleep(600)
+    threading.Event().wait()
 """
 
 
@@ -345,31 +346,44 @@ def test_unreadable_media_error_names_no_path(tmp_path: Path, kind: str) -> None
 
 
 def test_the_start_lease_outlasts_its_stale_bound_while_it_beats(
-    env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lease_clock: Callable[..., ManualClock]
 ) -> None:
     """While the server starts, the storage clock passes the start lease's stale bound; it beats and is never broken."""
-    clock, real_popen = install(monkeypatch), subprocess.Popen
-    started: list[int] = []
+    clock, real_popen = lease_clock(spends=False), subprocess.Popen
+    started, breaks = [0], [0]
 
     class Popen(real_popen):  # type: ignore[misc,valid-type]
         def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
-            if not started:
-                started.append(1)
-                clock.outlast(tmp_path / "locks", LEASE.stale_after_s)
+            if not started[0]:
+                for _ in range(4):
+                    started[0] += 1
+                    age(tmp_path / "locks", LEASE.stale_after_s / 3)
+                    clock.advance(LEASE.stale_after_s / 3)
+                    clock.settle()
+                    (lease,) = (tmp_path / "locks").glob("*.lease")
+                    try:
+                        with Lease(lease.with_suffix(""), timeout=0, stale_after=LEASE.stale_after_s):
+                            breaks[0] += 1
+                    except LeaseTimeout:
+                        pass
             super().__init__(*args, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", Popen)
-    with _server(env, tmp_path) as server:
+    with _server(env, tmp_path, clock=clock) as server:
         assert server.attestation is not None
-    assert clock.attempts == 4 and clock.breaks == 0
+    assert started[0] == 4 and breaks[0] == 0
 
 
 def test_a_start_lease_lost_after_the_launch_keeps_the_healthy_server(
-    env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    env: EnvHandle,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lease_clock: Callable[..., ManualClock],
+    tier_bound: float,
 ) -> None:
     """The start lease only orders starts: lost while the launched server comes up, it is logged and the server kept."""
     real_mkdir, real_popen = os.mkdir, subprocess.Popen
-    failing, failed = threading.Event(), threading.Event()
+    failing, failed, clock = threading.Event(), threading.Event(), lease_clock(spends=False)
 
     def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
         if failing.is_set() and os.fsdecode(path).startswith("beat-"):
@@ -381,10 +395,11 @@ def test_a_start_lease_lost_after_the_launch_keeps_the_healthy_server(
         def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
             if not failing.is_set():
                 failing.set()
-                assert failed.wait(10)
+                clock.advance(LEASE.renew_fraction * LEASE.stale_after_s)
+                assert failed.wait(tier_bound)
             super().__init__(*args, **kwargs)
 
     monkeypatch.setattr(os, "mkdir", mkdir)
     monkeypatch.setattr(subprocess, "Popen", Popen)
-    with _server(env, tmp_path) as server:
+    with _server(env, tmp_path, clock=clock) as server:
         assert server.attestation is not None

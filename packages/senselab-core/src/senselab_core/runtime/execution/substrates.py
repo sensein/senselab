@@ -25,7 +25,6 @@ import shlex
 import subprocess
 import sys
 import threading
-import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -38,6 +37,7 @@ from senselab_worker.canonical import jcs_dumps, jcs_loads
 from senselab_core.kernel.declare import BackendSpec
 from senselab_core.kernel.formats import WORKER_READY_FORMAT, FormatVerdict, check
 from senselab_core.runtime.calibration import HardwareClass
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import expand
 from senselab_core.runtime.execution.queue import PROBE_MARK, RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.supervisor import Supervisor, current
@@ -440,8 +440,12 @@ class Slurm:
         exclude_nodes: Sequence[str] = (),
         log_dir: Path | None = None,
         commands: SlurmCommands,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
-        """Submit workers of `classes`, each `command` plus `--classes <queue>`, at most `qos_cpu_cap` CPUs alive."""
+        """Submit workers of `classes`, each `command` plus `--classes <queue>`, at most `qos_cpu_cap` CPUs alive.
+
+        The waits between a command's tries run on `clock`.
+        """
         self.classes = dict(classes)
         self.qos_cpu_cap = qos_cpu_cap
         self.command = list(command)
@@ -451,7 +455,7 @@ class Slurm:
         self.epoch = epoch
         self.exclude_nodes = tuple(exclude_nodes)
         self.log_dir = log_dir
-        self.commands = commands
+        self.commands, self._clock = commands, clock
         self._cache: list[WorkerHandle] | None = None
 
     @property
@@ -525,7 +529,7 @@ class Slurm:
                 return out
             if recover is None and attempt + 1 == self.commands.attempts:
                 break
-            time.sleep(wait)
+            self._clock.sleep(wait)
             wait *= 2
             if recover is not None and (found := recover()) is not None:
                 return found
@@ -629,7 +633,7 @@ class Fleet:
         budget: int,
         first_s: float,
         max_s: float,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Wrap `substrate`; `budget` consecutive failed starts of a class break it."""
         self.substrate = substrate
@@ -654,7 +658,7 @@ class Fleet:
     def _fail(self, resource_class: str, reason: str) -> None:
         self._failures[resource_class] += 1
         n = self._failures[resource_class]
-        self._not_before[resource_class] = self._clock() + min(self.first_s * 2 ** (n - 1), self.max_s)
+        self._not_before[resource_class] = self._clock.now() + min(self.first_s * 2 ** (n - 1), self.max_s)
         if n > self.budget and resource_class not in self.broken:
             self.broken[resource_class] = BrokenClass(resource_class, n, reason)
             logger.error("workers of %s are broken after %d failed starts: %s", resource_class, n, reason)
@@ -665,7 +669,7 @@ class Fleet:
 
     def substrate_due(self) -> bool:
         """Whether the substrate may be used now: it is not broken, and its latest failure's wait has passed."""
-        return "*" not in self.broken and self._clock() >= self._not_before.get("*", 0.0)
+        return "*" not in self.broken and self._clock.now() >= self._not_before.get("*", 0.0)
 
     def substrate_ok(self) -> None:
         """End the run of the substrate's failures."""
@@ -702,7 +706,7 @@ class Fleet:
         times; before that only `max_workers` and the QOS cap bound starts.
         """
         cls = class_of(resource_class)
-        if self.broken_for(resource_class) is not None or self._clock() < self._not_before.get(cls, 0.0):
+        if self.broken_for(resource_class) is not None or self._clock.now() < self._not_before.get(cls, 0.0):
             return []
         if self._failures[cls] > 0:
             pending = {h.id for h in self._snapshot or [] if h.pending}
@@ -746,7 +750,7 @@ class Fleet:
 
     def substrate_wait(self) -> float:
         """Return the seconds until the substrate may be used again; 0 when it may be now or is broken."""
-        return max(0.0, self._not_before.get("*", 0.0) - self._clock())
+        return max(0.0, self._not_before.get("*", 0.0) - self._clock.now())
 
     def close(self) -> None:
         """Stop every worker the substrate lists, late duplicates included; when it cannot list, every one tracked."""
@@ -764,7 +768,7 @@ def scale(  # noqa: PLR0913 - the queues and substrate, then keyword-only sizing
     *,
     workers: Callable[[str, int], int],
     surplus_since: dict[str, float] | None = None,
-    now: float | None = None,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> None:
     """Start or stop the workers each queue of `queues` needs, from one `live()` listing of `substrate`.
 
@@ -774,8 +778,7 @@ def scale(  # noqa: PLR0913 - the queues and substrate, then keyword-only sizing
     ones are stopped only once the queue has no unresolved item, so none is working, and never on a service class,
     whose workers exit when their consumers stop. With `surplus_since` (the caller
     keeps it between rounds) a surplus is stopped only once it has lasted `2 × pool.poll_s`, so a queue that briefly
-    empties between items keeps its workers; without it a surplus is stopped at once. `now` is the clock,
-    `time.monotonic` by default.
+    empties between items keeps its workers; without it a surplus is stopped at once. The surplus is timed on `clock`.
     """
     names = queues.names()
     live = substrate.live()
@@ -796,7 +799,7 @@ def scale(  # noqa: PLR0913 - the queues and substrate, then keyword-only sizing
         have = len(alive[name])
         if have > wanted:
             if surplus_since is not None:
-                at = time.monotonic() if now is None else now
+                at = clock.now()
                 if at - surplus_since.setdefault(name, at) < 2 * profile.pool.poll_s:
                     continue
                 del surplus_since[name]

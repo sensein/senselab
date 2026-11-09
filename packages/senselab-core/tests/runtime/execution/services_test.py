@@ -1,13 +1,11 @@
 """Services: a registry entry under a renewed lease, consumer leases deciding idle exit, and per-reply attestation."""
 
 import json
-import os
 import platform
 import threading
-import time
 import urllib.error
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,6 +13,7 @@ from typing import Any
 
 import pytest
 import senselab_core.runtime.fake_backend as fake
+from lease_clock_fixture import ManualClock, age
 from planted_objects_fixture import MIRROR_INDEX, identity_leaks
 from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
 from senselab_core.kernel.identity import Attestation, ModelRef, ResolvedModel
@@ -124,11 +123,18 @@ def _provider(registry: ServiceRegistry, starts: list[StandIn], identity: Attest
     return WorkerSet(1, start_server=start, registry=registry, provide=True)
 
 
-def test_service_registered_under_renewed_lease(registry: ServiceRegistry) -> None:
+def test_service_registered_under_renewed_lease(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """An entry `{identity, endpoint}` stays live past its stale bound while its lease beats, and not once it stops."""
+    clock = lease_clock()
+    registry = ServiceRegistry(tmp_path / "registry", lease=PROFILE.lease, clock=clock)
     service = registry.register(IDENTITY, "http://127.0.0.1:1")
     try:
-        time.sleep(3 * PROFILE.lease.stale_after_s)
+        beat_s = PROFILE.lease.renew_fraction * PROFILE.lease.stale_after_s
+        clock.settle()
+        for _ in range(round(3 * PROFILE.lease.stale_after_s / beat_s)):
+            age(registry.root, beat_s)
+            clock.advance(beat_s)
+            clock.settle()
         assert registry.lookup(IDENTITY) == ServiceEntry(identity=IDENTITY, endpoint="http://127.0.0.1:1")
         assert service.state.beats >= 2 and not service.state.lost
         written = json.loads((registry.root / f"{registry.name(IDENTITY)}.json").read_text())
@@ -144,9 +150,7 @@ def test_service_registered_under_renewed_lease(registry: ServiceRegistry) -> No
     )
     token = registry.root / f"{name}.lease" / uuid.uuid4().hex
     token.mkdir(parents=True)
-    past = time.time() - 10 * PROFILE.lease.stale_after_s
-    for path in (token, token.parent):
-        os.utime(path, (past, past))
+    age(registry.root, 10 * PROFILE.lease.stale_after_s)
     assert registry.lookup(IDENTITY) is None
     registry.register(IDENTITY, "http://127.0.0.1:3").close()
 
@@ -213,27 +217,41 @@ def test_each_device_set_registers_its_own_server(tmp_path: Path, starts: list[S
             workers.close()
 
 
-def test_service_exits_after_idle_consumers(tmp_path: Path, registry: ServiceRegistry, starts: list[StandIn]) -> None:
+def test_service_exits_after_idle_consumers(
+    tmp_path: Path, starts: list[StandIn], lease_clock: Callable[..., ManualClock]
+) -> None:
     """A `svc` worker with an empty queue stays while a consumer lease is live and exits `idle_exit_s` after it ends."""
+    clock = lease_clock()
+    registry = ServiceRegistry(tmp_path / "registry", lease=PROFILE.lease, clock=clock)
     provider = _provider(registry, starts)
     provider.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY)
     consumer = registry.consume(IDENTITY)
-    held_s = 4 * PROFILE.services.idle_exit_s
-    assert held_s > IDLE_POLLS * PROFILE.pool.poll_s
-    timer = threading.Timer(held_s, consumer.stop)
+    idle_s, poll_s = PROFILE.services.idle_exit_s, PROFILE.pool.poll_s
+    held_s = 4 * idle_s
+    assert held_s > IDLE_POLLS * poll_s
     store = ResultStore(tmp_path / "store")
-    worker = PoolWorker(tmp_path / "run" / RUN_QUEUES, ["svc:pii"], profile=PROFILE, store=store, workers=provider)
-    began = time.monotonic()
-    timer.start()
+    worker = PoolWorker(
+        tmp_path / "run" / RUN_QUEUES, ["svc:pii"], profile=PROFILE, store=store, workers=provider, clock=clock
+    )
+    exits: list[int] = []
+    thread = threading.Thread(target=lambda: exits.append(worker.serve()), daemon=True)
+    thread.start()
     try:
-        assert worker.serve() == 0
-        elapsed = time.monotonic() - began
+        for _ in range(round(held_s / poll_s)):
+            clock.settle(parked=3)
+            clock.advance(poll_s)
+        clock.settle(parked=3)
+        assert thread.is_alive()
+        consumer.stop()
+        left = clock.now()
+        clock.drive(thread, poll_s)
+        assert exits == [0]
+        assert idle_s - poll_s <= clock.now() - left <= idle_s + 2 * poll_s
     finally:
-        timer.cancel()
+        worker.halt()
+        thread.join(clock.hang_s)
         consumer.stop()
         provider.close()
-    idle_s, poll_s = PROFILE.services.idle_exit_s, PROFILE.pool.poll_s
-    assert held_s + idle_s - poll_s <= elapsed < held_s + idle_s + 2
     assert worker.served == [] and registry.lookup(IDENTITY) is None
 
 
@@ -311,19 +329,17 @@ def test_a_dead_consumer_counts_until_its_lease_is_stale(registry: ServiceRegist
     token = consumers / f"{uuid.uuid4().hex}.lease" / uuid.uuid4().hex
     token.mkdir(parents=True)
     assert registry.live_consumers(IDENTITY) == 1
-    past = time.time() - 10 * PROFILE.lease.stale_after_s
-    for path in (token, token.parent):
-        os.utime(path, (past, past))
+    age(consumers, 10 * PROFILE.lease.stale_after_s)
     assert registry.live_consumers(IDENTITY) == 0 and list(consumers.iterdir()) == []
 
 
-def test_two_providers_racing_start_one_server(registry: ServiceRegistry) -> None:
+def test_two_providers_racing_start_one_server(registry: ServiceRegistry, tier_bound: float) -> None:
     """Two providing sets of one identity: one reserves, starts and publishes; the other starts nothing."""
     starts: list[StandIn] = []
-    barrier = threading.Barrier(2)
+    barrier, refused = threading.Barrier(2), threading.Event()
 
     def start(backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profile: ExecutionProfile) -> StandIn:  # noqa: ARG001 - a ServerStart
-        time.sleep(PROFILE.lease.stale_after_s / 4)
+        assert refused.wait(tier_bound)
         starts.append(StandIn(IDENTITY))
         return starts[-1]
 
@@ -336,6 +352,7 @@ def test_two_providers_racing_start_one_server(registry: ServiceRegistry) -> Non
             outcomes.append(workers.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY))
         except LeaseTimeout as busy:
             outcomes.append(busy)
+            refused.set()
 
     threads = [threading.Thread(target=provide, args=(p,)) for p in providers]
     try:
@@ -361,9 +378,7 @@ def test_a_reservation_withdraws_a_dead_holders_entry(registry: ServiceRegistry)
     )
     token = registry.root / f"{name}.lease" / uuid.uuid4().hex
     token.mkdir(parents=True)
-    past = time.time() - 10 * PROFILE.lease.stale_after_s
-    for path in (token, token.parent):
-        os.utime(path, (past, past))
+    age(registry.root, 10 * PROFILE.lease.stale_after_s)
     service = registry.reserve(IDENTITY)
     try:
         assert registry.lookup(IDENTITY) is None and not (registry.root / f"{name}.json").exists()

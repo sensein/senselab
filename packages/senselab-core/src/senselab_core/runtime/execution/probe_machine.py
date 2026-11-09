@@ -11,7 +11,7 @@ import logging
 import os
 import threading
 import uuid
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Literal, Protocol
 
 from senselab_core.kernel.identity import InputIdentity
@@ -25,6 +25,7 @@ from senselab_core.runtime.calibration import (
     ProbePlan,
     UnitKind,
 )
+from senselab_core.runtime.clock import Clock
 from senselab_core.runtime.execution.batching import bucket_edges
 from senselab_core.runtime.execution.executor import (
     PlanFragment,
@@ -143,7 +144,7 @@ class ProbeMachine:
         roots: MeasureRoots,
         measures: Estimates,
         resolver: UnitReads,
-        clock: Callable[[], float],
+        clock: Clock,
         host: Host,
     ) -> None:
         """Run units under `profile`, reading `roots`, `measures`, `resolver`; timed by `clock`, acting by `host`."""
@@ -232,7 +233,12 @@ class ProbeMachine:
         plan = None if covers(estimate, jobs) else self._plan_probe(unit, held, jobs, placement)
         if plan is None or not worth(plan, estimate):
             ended = State(
-                unit, held.queue, "measured" if estimate else "unmeasured", self._clock(), estimate, predicted=predicted
+                unit,
+                held.queue,
+                "measured" if estimate else "unmeasured",
+                self._clock.now(),
+                estimate,
+                predicted=predicted,
             )
             with self.lock:
                 self._states[digest] = ended
@@ -241,7 +247,7 @@ class ProbeMachine:
         taken = self._take_lease(unit, digest)
         if taken == "peer":
             held.followed.waiting.append(held.part)
-            waiting = State(unit, held.queue, "peer_wait", self._clock(), estimate, [held], predicted=predicted)
+            waiting = State(unit, held.queue, "peer_wait", self._clock.now(), estimate, [held], predicted=predicted)
             with self.lock:
                 self._states[digest] = waiting
             return
@@ -299,8 +305,10 @@ class ProbeMachine:
         env = {k: v for k, v in unit.env.model_dump(mode="json").items() if k != "decoder"}
         self.host.queue(name).set_probe_unit(unit.hardware, backend_key(placement.backend), env)
         prior = tuple(self.roots.observations(unit))
-        run = Run(probe_id, name, plan, held, self._clock(), prior, last=self._clock(), lease=taken[0], stack=taken[1])
-        state = State(unit, held.queue, "probing", self._clock(), run=run, predicted=predicted)
+        run = Run(
+            probe_id, name, plan, held, self._clock.now(), prior, last=self._clock.now(), lease=taken[0], stack=taken[1]
+        )
+        state = State(unit, held.queue, "probing", self._clock.now(), run=run, predicted=predicted)
         with self.lock:
             self._states[unit.digest()] = state
         held.followed.waiting.append(held.part)
@@ -390,7 +398,7 @@ class ProbeMachine:
 
     def _expire_resolving(self) -> None:
         """Run as production the jobs of a unit still `Resolving` `resolve_s` after its queue's first live worker."""
-        now = self._clock()
+        now = self._clock.now()
         for handle in self.host.live_workers():
             if not handle.pending:
                 self._live_since.setdefault(handle.queue, now)
@@ -417,7 +425,7 @@ class ProbeMachine:
 
     def _peer_tick(self, state: State) -> None:
         """Return a waiting unit to `New` once its peer's lease is gone or `peer_wait_s` passed; else keep waiting."""
-        now = self._clock()
+        now = self._clock.now()
         if state.checked is not None and now - state.checked < self.profile.pool.poll_s:
             return
         state.checked = now
@@ -445,9 +453,9 @@ class ProbeMachine:
             record = queue.outcome(digest)
             if record is None:
                 if queue.claimed(digest):
-                    run.last = self._clock()
+                    run.last = self._clock.now()
                 continue
-            run.last = self._clock()
+            run.last = self._clock.now()
             del run.awaiting[digest]
             reported = record.get("observations") if record.get("outcome") == "done" else None
             found = [Observation.model_validate(o) for o in reported] if isinstance(reported, list) else []
@@ -465,7 +473,7 @@ class ProbeMachine:
         self._read_outcomes(state, replace=True)
         spent = self._warm_s(run.observations)
         if run.awaiting and spent < self.profile.probe_s:
-            if self._clock() - run.last >= self.profile.lease.stale_after_s:
+            if self._clock.now() - run.last >= self.profile.lease.stale_after_s:
                 self._conclude(state, None, abandon=True)
             return
         if run.stage == "single" and not run.awaiting and spent < self.profile.probe_s:

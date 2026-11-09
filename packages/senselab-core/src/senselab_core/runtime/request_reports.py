@@ -6,10 +6,11 @@ the reports of the requests the calling thread runs inside it, timed by the cloc
 """
 
 import threading
-import time
-from collections.abc import Callable, Hashable, Iterator
+from collections.abc import Hashable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+
+from senselab_core.runtime.clock import Clock, SystemClock
 
 _LOCAL = threading.local()
 
@@ -66,28 +67,28 @@ def record(
 def request(tags: tuple[Hashable, ...]) -> Iterator[None]:
     """Open the report of a request carrying the jobs `tags`; kept, with its wall, once the block ends and recorded.
 
-    Its wall is read on the clock of the enclosing `collected`, else `time.monotonic`.
+    Its wall is read on the clock of the enclosing `collected`, else the system clock.
 
     A block that raises or records nothing (a request every job of which the store served) keeps no report.
     """
     report = RequestReport(tags=tags)
     opened = _open()
     opened.append(report)
-    clock: Callable[[], float] = getattr(_LOCAL, "clock", time.monotonic)
-    began = clock()
+    clock: Clock = getattr(_LOCAL, "clock", None) or SystemClock()
+    began = clock.now()
     try:
         yield
     finally:
-        report.wall_s = clock() - began
+        report.wall_s = clock.now() - began
         opened.pop()
     if (found := _collector()) is not None and report.items:
         found.append(report)
 
 
 @contextmanager
-def collected(clock: Callable[[], float] = time.monotonic) -> Iterator[list[RequestReport]]:
+def collected(clock: Clock = SystemClock()) -> Iterator[list[RequestReport]]:
     """Yield the list the requests this thread runs inside the block are reported in, their walls read on `clock`."""
-    previous = getattr(_LOCAL, "found", None), getattr(_LOCAL, "clock", time.monotonic)
+    previous = getattr(_LOCAL, "found", None), getattr(_LOCAL, "clock", None)
     found: list[RequestReport] = []
     _LOCAL.found, _LOCAL.clock = found, clock
     try:

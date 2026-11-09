@@ -15,12 +15,8 @@ tests:
     fit_ratio: 50
     timing_repeats: 3
   # Times of the worker-observation tests. first_poll_s, poll_s and presence_refresh_s: a worker's polls and its reuse
-  # of what it read of its peers; long_poll_s is a poll the first one must beat, by at most first_bound_s. put_later_s
-  # and watch_poll_s: when a test puts an item after the worker started, and how often it looks for its progress.
+  # of what it read of its peers; long_poll_s is a poll the first one must beat, by advancing the test's clock one first poll.
   observations:
-    first_bound_s: 1.0
-    put_later_s: 0.1
-    watch_poll_s: 0.005
     first_poll_s: 0.01
     poll_s: 0.05
     long_poll_s: 3
@@ -29,9 +25,16 @@ tests:
   held_lease:
     stale_after_s: 60
     timeout_s: 0.2
-  # Real seconds a thread parked on a lease test's manual clock waits between looks at the event it waits for.
+  # The real seconds a fake worker thread waits between looks at its queue; no outcome depends on it.
+  fake_worker:
+    poll_s: 0.01
+  # A lease test's manual clock: the real seconds a parked thread waits between looks at its event, the fake seconds
+  # `until` advances by, and the share of the tier's budget after which a wait nobody ends fails, so the failure comes
+  # before the tier's timeout.
   lease_clock:
     poll_s: 0.0005
+    step_s: 0.01
+    hang_fraction: 0.5
   # Times of the probe-queue tests: the lease's staleness and beat, and how long a stand-in peer process lives.
   probe_queue:
     stale_after_s: 0.4
