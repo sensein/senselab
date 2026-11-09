@@ -21,6 +21,7 @@ from typing import Optional
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import COMMIT_HEX
 
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import LEASE_SUFFIX, Lease, LeaseUnavailable
 from senselab_core.runtime.network import Network, require_online
@@ -235,6 +236,7 @@ def record_resolution(  # noqa: PLR0913 - the binding and its run, then keyword-
     *,
     root: Optional[Path] = None,
     lease: Optional[JobLease] = None,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> str:
     """Record ``(repo_id, ref) -> sha`` for this run under `root` (`cache_root()` when None); return the binding SHA.
 
@@ -242,8 +244,9 @@ def record_resolution(  # noqa: PLR0913 - the binding and its run, then keyword-
     existing commit SHA for the key wins over ``sha``. ``2x/runs/<run>/`` is reached through `StorageDir`
     and made with the `StorePolicy`'s `shared_dir_mode`, as is the manifest's lease; the manifest gets the policy's
     file mode, whatever the umask. Under the lease, a dead writer's temporaries beside the manifest are removed,
-    as are objects moved aside under ``2x/runs/`` past the quarantine age. The lease beats under `lease` (the
-    packaged `laptop` profile's when None); a holder whose lease was lost does not write.
+    as are objects moved aside under ``2x/runs/`` past the quarantine age on `clock`'s storage time. The lease
+    beats under `lease` (the packaged `laptop` profile's when None) and waits on `clock`; a holder whose lease was
+    lost does not write.
 
     Raises:
         RevisionResolutionError: ``sha`` is not a 40-hex commit SHA.
@@ -266,11 +269,11 @@ def record_resolution(  # noqa: PLR0913 - the binding and its run, then keyword-
         runs.walk(name, create=True, mode=shared_dir_mode(policy), aside=lambda: None) as run_dir,
     ):
         settings = lease if lease is not None else ExecutionProfile.load().lease
-        return _record_in(runs, run_dir, manifest_key(repo_id, ref), sha, policy, settings)
+        return _record_in(runs, run_dir, manifest_key(repo_id, ref), sha, policy, settings, clock)
 
 
 def _record_in(  # noqa: PLR0913 - the two directories, the entry, then the store policy and the lease settings
-    runs: StorageDir, run_dir: StorageDir, key: str, sha: str, policy: StorePolicy, settings: JobLease
+    runs: StorageDir, run_dir: StorageDir, key: str, sha: str, policy: StorePolicy, settings: JobLease, clock: Clock
 ) -> str:
     """Append-if-absent `key -> sha` to the manifest in `run_dir`, under the manifest's lease.
 
@@ -284,13 +287,15 @@ def _record_in(  # noqa: PLR0913 - the two directories, the entry, then the stor
     """
     path = run_dir.path / MANIFEST_NAME
     for _ in range(RECORD_ATTEMPTS):
-        lease = Lease(path, stale_after=settings.stale_after_s, mode=shared_dir_mode(policy), directory=run_dir)
+        lease = Lease(
+            path, stale_after=settings.stale_after_s, mode=shared_dir_mode(policy), directory=run_dir, clock=clock
+        )
         with lease, lease.keep_alive(settings.renew_fraction) as state:
 
             def owns() -> bool:
                 return not state.lost and lease.prove()
 
-            _remove_leftovers(runs, run_dir, policy)
+            _remove_leftovers(runs, run_dir, policy, clock)
             current = _read_in(run_dir)
             winner = current.get(key)
             if winner is not None and COMMIT_HEX.fullmatch(winner):
@@ -317,7 +322,7 @@ def _record_in(  # noqa: PLR0913 - the two directories, the entry, then the stor
     )
 
 
-def _remove_leftovers(runs: StorageDir, run_dir: StorageDir, policy: StorePolicy) -> None:
+def _remove_leftovers(runs: StorageDir, run_dir: StorageDir, policy: StorePolicy, clock: Clock) -> None:
     """Remove dead writers' leftovers under the manifest's lease.
 
     That is the manifest's temporaries in `run_dir` (any there under the lease is a dead writer's), and objects
@@ -327,7 +332,7 @@ def _remove_leftovers(runs: StorageDir, run_dir: StorageDir, policy: StorePolicy
         if _MANIFEST_TEMPORARY.fullmatch(name):
             run_dir.remove_owned(name, pattern=TEMPORARY_NAME)
     try:
-        cutoff = run_dir.fs_now() - policy.quarantine_retention_s
+        cutoff = clock.storage_now(run_dir) - policy.quarantine_retention_s
     except (OSError, WrongKindError) as err:
         logger.warning("cannot read the clock of %s; not collecting: %s", run_dir.path, err)
         return

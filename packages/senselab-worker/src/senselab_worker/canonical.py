@@ -197,7 +197,7 @@ class Walk:
 
     `enter` builds a container's result inside `entered` and keeps it by identity and depth, so a
     container shared by many parents is built once per depth. The memo holds each container it
-    keys, so no identity is reused while the pass lives.
+    keys, so no identity is reused while the pass lives. `builds` counts the results built, not reused.
     """
 
     def __init__(self, base: int = 0, budget: int = MAX_CANONICAL_CHARS) -> None:
@@ -206,6 +206,7 @@ class Walk:
         self.base = base
         self.budget = budget
         self.spent = 0
+        self.builds = 0
         self._done: dict[tuple[int, int], tuple[object, object]] = {}
 
     def charge(self, size: int) -> None:
@@ -230,6 +231,7 @@ class Walk:
             return cast(T, held[1])
         with entered(container, self.active, self.base):
             result = build()
+        self.builds += 1
         self._done[key] = (container, result)
         return result
 
@@ -240,16 +242,17 @@ class Walk:
         if held is not None:
             return cast(T, held[1])
         result = build()
+        self.builds += 1
         self._done[key] = (value, result)
         return result
 
 
-def jcs_dumps(obj: object) -> bytes:
+def jcs_dumps(obj: object, walk: Walk | None = None) -> bytes:
     """Serialise a JSON value as RFC 8785 canonical UTF-8 bytes.
 
     Containers are exactly `list`, `tuple` and `dict` with `str` keys; scalars are what
     `canonical_scalar` accepts. Strings and keys are in their canonical form (`canonical_text`); keys
-    sort by UTF-16 code units.
+    sort by UTF-16 code units. `walk`, when given, is the pass's `Walk`, which the caller reads afterwards.
 
     Raises:
         ValueError: on a NaN or infinite float, an integer outside +/-(2**53 - 1), a lone surrogate
@@ -258,15 +261,15 @@ def jcs_dumps(obj: object) -> bytes:
             `MAX_CANONICAL_CHARS` (`WorkBudgetExceeded`).
         TypeError: on any other type, including container subclasses, non-`str` keys and arrays.
     """
-    writer = _Writer()
+    writer = _Writer(walk)
     writer.write(obj)
     return "".join(writer.parts).encode("utf-8")
 
 
 class _Writer:
-    def __init__(self) -> None:
+    def __init__(self, walk: Walk | None) -> None:
         self.parts: list[str] = []
-        self.walk = Walk()
+        self.walk = Walk() if walk is None else walk
 
     def out(self, text: str) -> None:
         self.walk.charge(len(text))
@@ -596,15 +599,15 @@ class Tokeniser:
         self.extra = extra
         self.error = error
 
-    def __call__(self, value: object, path: str = "value") -> object:
-        """Return `value` in tokens.
+    def __call__(self, value: object, path: str = "value", walk: Walk | None = None) -> object:
+        """Return `value` in tokens, in `walk` when given (one the caller reads afterwards).
 
         Raises:
             NoCanonicalForm: (`error`) naming the path and type, for a value of no family, a non-`str`
                 key, a key holding a lone surrogate, two keys with one canonical form, a container that contains itself,
                 nesting deeper than `MAX_DEPTH`, or an integer with more digits than the interpreter writes as text.
         """
-        return _Tokens(self, Walk()).value(value, path)
+        return _Tokens(self, Walk() if walk is None else walk).value(value, path)
 
 
 class _Tokens:

@@ -51,12 +51,29 @@ def _median(values: Sequence[float]) -> float:
     return statistics.median(sorted(values))
 
 
-def _inversions(z: np.ndarray) -> int:
-    """Count the pairs `i < j` with `z[i] > z[j]`, by merging runs of doubling length level by level."""
+class Work:
+    """The steps a slope fit takes, charged by the code that takes them."""
+
+    def __init__(self) -> None:
+        """Start at no steps."""
+        self.steps = 0
+
+
+def _charge(work: Work | None, steps: int) -> None:
+    if work is not None:
+        work.steps += steps
+
+
+def _inversions(z: np.ndarray, work: Work | None = None) -> int:
+    """Count the pairs `i < j` with `z[i] > z[j]`, by merging runs of doubling length level by level.
+
+    Each merge level charges its `len(z)` values to `work`.
+    """
     ranks = np.unique(z, return_inverse=True)[1].ravel().astype(np.int64)
     n, span, total = len(ranks), int(ranks.max(initial=0)) + 1, 0
     index, run = np.arange(n), 1
     while run < n:
+        _charge(work, n)
         block, right = index // (2 * run), (index // run) % 2 == 1
         keys = block * span + ranks
         left = np.sort(keys[~right])
@@ -66,16 +83,22 @@ def _inversions(z: np.ndarray) -> int:
     return total
 
 
-def _inverted_pairs(z: Sequence[float]) -> list[tuple[int, int]]:
-    """List the pairs `i < j` with `z[i] > z[j]`, in time linear in their number beyond n log n."""
+def _inverted_pairs(z: Sequence[float], work: Work | None = None) -> list[tuple[int, int]]:
+    """List the pairs `i < j` with `z[i] > z[j]`, in time linear in their number beyond n log n.
+
+    Each merge charges its run's length to `work`, and each pair listed charges one.
+    """
 
     def merge(run: list[int]) -> list[int]:
         if len(run) <= 1:
             return run
+        _charge(work, len(run))
         half = len(run) // 2
         left, right = merge(run[:half]), merge(run[half:])
         keys = [z[i] for i in left]
+        before = len(pairs)
         pairs.extend((i, j) for j in right for i in left[bisect_right(keys, z[j]) :])
+        _charge(work, len(pairs) - before)
         return sorted(left + right, key=z.__getitem__)
 
     pairs: list[tuple[int, int]] = []
@@ -106,7 +129,7 @@ def _rank_bound(points: Sequence[tuple[float, float]], slope: float) -> float:
     return 2 * sys.float_info.epsilon * spread / float(np.diff(np.unique(xs)).min())
 
 
-def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
+def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int, work: Work | None = None) -> float:
     """Return the `k`-th smallest (from 0) of the `total` slopes between points of distinct `x`, sorted by `(x, y)`.
 
     A pair's slope is below `t` exactly when the pair is inverted in `y − t·x`, so the slopes below `t` are counted by
@@ -121,28 +144,29 @@ def _kth_slope(xs: np.ndarray, ys: np.ndarray, k: int, total: int) -> float:
     low, high, below, above = _ordered(-2 * bound), _ordered(2 * bound), 0, total
     while above - below > len(xs) and high - low > 1:
         middle = (low + high) // 2
-        count = _inversions(ys - _unordered(middle) * centred)
+        count = _inversions(ys - _unordered(middle) * centred, work)
         low, below = (middle, count) if count <= k else (low, below)
         high, above = (high, above) if count <= k else (middle, count)
     if above - below > len(xs):
         pivot = _unordered(low)
         near = np.argsort(ys - pivot * centred, kind="stable")
+        _charge(work, len(near))
         tied = [(ys[b] - ys[a]) / (xs[b] - xs[a]) for a, b in itertools.pairwise(near.tolist()) if xs[a] != xs[b]]
         return float(min(tied, key=lambda slope: abs(slope - pivot), default=pivot))
     lower, upper = ys - _unordered(low) * centred, ys - _unordered(high) * centred
     order = sorted(range(len(xs)), key=lambda i: (lower[i], i))
     slopes = sorted(
         (ys[order[j]] - ys[order[i]]) / (xs[order[j]] - xs[order[i]])
-        for i, j in _inverted_pairs([upper[o] for o in order])
+        for i, j in _inverted_pairs([upper[o] for o in order], work)
     )
     return float(slopes[min(max(k - below, 0), len(slopes) - 1)])
 
 
-def _theil_sen(points: Sequence[tuple[float, float]]) -> tuple[float, float] | None:
+def _theil_sen(points: Sequence[tuple[float, float]], work: Work | None = None) -> tuple[float, float] | None:
     """Return `(intercept, slope)`: the median of the pairwise slopes, and the median intercept at that slope.
 
     The slope is the median of the n(n−1)/2 pairwise slopes, found in O(n log² n) time and O(n) memory; it equals the
-    reference's except for slopes closer than `_rank_bound` to it.
+    reference's except for slopes closer than `_rank_bound` to it. `work` counts the steps taken.
     """
     ordered = sorted(points)
     xs, ys = np.array([x for x, _ in ordered]), np.array([y for _, y in ordered])
@@ -151,9 +175,9 @@ def _theil_sen(points: Sequence[tuple[float, float]]) -> tuple[float, float] | N
     if total == 0:
         return None
     middle = (total - 1) // 2
-    slope = _kth_slope(xs, ys, middle, total)
+    slope = _kth_slope(xs, ys, middle, total, work)
     if total % 2 == 0:
-        slope = statistics.median([slope, _kth_slope(xs, ys, middle + 1, total)])
+        slope = statistics.median([slope, _kth_slope(xs, ys, middle + 1, total, work)])
     return _median([y - slope * x for x, y in ordered]), slope
 
 

@@ -10,10 +10,9 @@ pool:
   poll_s: 10
 # Test-only values, which the execution profile does not take: the `slack` fixture returns the rest, `slack_tests` these.
 tests:
-  # Times of the pooled-fit scaling test: the ratio its 10^4-request time may reach over its 10^3-request time, and the runs it takes the best of.
+  # The pooled-fit scaling test: the ratio its 10^4-request operation count may reach over its 10^3-request count.
   probe:
-    fit_ratio: 50
-    timing_repeats: 3
+    fit_ops_ratio: 25
   # Times of the worker-observation tests. first_poll_s, poll_s and presence_refresh_s: a worker's polls and its reuse
   # of what it read of its peers; long_poll_s is a poll the first one must beat, by advancing the test's clock one first poll.
   observations:

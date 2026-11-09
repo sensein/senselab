@@ -38,6 +38,7 @@ from senselab_worker.digest import SHA256_HEX, file_digest, identity_digest
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.license import License
 from senselab_core.kernel.prov import Record, Vocabulary
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import ConfigError, load_yaml
 from senselab_core.runtime.network import Network, Offline, offline
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -262,10 +263,10 @@ def _offline(url: str) -> BinaryIO:
     raise offline(f"downloading {url}")
 
 
-def _remove_stale_downloads(top: StorageDir, tmp: StorageDir, stale_s: int) -> None:
-    """Remove downloads in `tmp` older than `stale_s` on the cache's own clock; failures are logged."""
+def _remove_stale_downloads(top: StorageDir, tmp: StorageDir, stale_s: int, clock: Clock) -> None:
+    """Remove downloads in `tmp` older than `stale_s` on the clock's storage time; failures are logged."""
     try:
-        cutoff = top.fs_now() - stale_s
+        cutoff = clock.storage_now(top) - stale_s
     except (OSError, WrongKindError) as err:
         logger.warning("cannot clear stale downloads in %s: %s", tmp.path, err)
         return
@@ -676,6 +677,7 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
     policy: StorePolicy | None = None,
     retry: RetryPolicy | None = None,
     network: Network = "online",
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> dict[str, Path]:
     """Download every file of `manifest` into the cache and return `{file path: path under datasets/.../files/}`.
 
@@ -710,7 +712,7 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
     try:
         with StorageDir.open_root(root, create=True, mode=dir_mode) as top:
             with top.walk("tmp", create=True, mode=dir_mode, aside=lambda: None) as tmp:
-                return _fetch_into(manifest, top, tmp, open_url, verify, policy, retry)
+                return _fetch_into(manifest, top, tmp, open_url, verify, policy, retry, clock)
     except OSError as err:
         raise storage_fault(err, root) from err
 
@@ -723,6 +725,7 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
     verify: str,
     policy: StorePolicy,
     retry: RetryPolicy,
+    clock: Clock,
 ) -> dict[str, Path]:
     file_mode, _ = committed_modes(policy)
     dir_mode = shared_dir_mode(policy)
@@ -730,7 +733,7 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
     def aside() -> StorageDir:
         return StorageDir(tmp.path, os.dup(tmp.fd))
 
-    _remove_stale_downloads(top, tmp, policy.staging_stale_s)
+    _remove_stale_downloads(top, tmp, policy.staging_stale_s, clock)
     with (
         top.walk("blobs", create=True, mode=dir_mode, aside=aside) as blobs,
         top.walk("datasets", create=True, mode=dir_mode, aside=aside) as datasets,
