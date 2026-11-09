@@ -498,7 +498,9 @@ P-23, R-116 (taint), R-199; rulings P3-19, P3-20, P3-21, P3-22, P3-23, P3-50. **
   records no env license is refused by default and recomputed; a `RunConfig.licenses` policy may allow it, and the
   allowance is recorded on the reuse activity (ruling P3-20, R-199).
 - Caps: per resource class, the static memory cap must cover the models resident at once, from the resource tables;
-  a node without a table is admitted and listed under `unmeasured` (P3-21).
+  a node without a table is admitted and listed under `unmeasured` (P3-21). Superseded by `calibration-probe.md` §6.6
+  (T20R-8): the resource tables are `resource-table@2.0` units, plan time refuses no cap, and `explain` flags a job whose
+  batch-1 peak passes its class's cap from the node's `Sizing`.
 - `execution-profile@2.0` adds, each with a derivation: `resource_classes: {name: ResourceClass{device, gpu_type,
   cpus, mem_bytes, time_s, partition, gres, max_workers, memory_cap_bytes}}` (the one `ResourceClass`; the 1.x
   `work_pool.ResourceClass` and `PartitionSpec` are not ported), `substrate: {kind: local | slurm, ...}`, `pool:

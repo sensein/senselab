@@ -296,6 +296,13 @@ A packaged row is read only on an exact identity match, so it is never applied t
 params or another card (M10, must-fix 6). Under ruling O-2 a host backend's `env` is the whole host env, so a host row
 matches only the env that generated it.
 
+The packaged table is `PackagedTable.load(senselab/data/resources)`, handed to the runtime as `Packaged.measures`;
+`default_measures` is `MeasureSource` over the profile's roots and that table, and it is the one source `explain`, the
+in-process executor and the Pool read, so a packaged row sizes the run and the plan alike (T20R-8). A row's
+`estimate.source.commit` and `probe_ids` equal its `derivation`'s (`MeasureRow` validates it): the file states where a
+row was measured once. `data/resources/` holds no rows until T20R-10 generates them; the `@1.0` loader, its seven rows
+and `Catalogue.resource_tables` are deleted.
+
 ## 4. The Probe protocol (`Probe.plan`, pure)
 
 ### 4.1 Inputs
@@ -500,9 +507,9 @@ Sizing: batch(L) per length bucket, item cuts (job index ranges), workers, worke
 
 `size` also takes `calibration: CalibrationSettings` as a keyword: its `confidence` is the z of the item cut and its
 `unmeasured_workers` the workers of an unmeasured unit. Every figure that sizes work at plan time or run time (batch,
-cuts, workers, predicted seconds, wall time, GPU hours, peak memory, the refusal of a job whose batch-1 peak passes the
-cap) is a field of `Sizing`; no other function estimates one. The packaged `resource-table@1.0` rows are read through
-`estimate_of` (an `Estimate` over recording seconds with no range, spread or oom) only until T20R-8 removes them.
+cuts, workers, predicted seconds, wall time, GPU hours, peak memory, the flag of a job whose batch-1 peak passes the
+cap) is a field of `Sizing`; no other function estimates one. `estimate_of`, which read the `resource-table@1.0` rows
+as an `Estimate` over recording seconds with no range, spread or oom, is deleted (T20R-8).
 
 ### 6.2 Time, scaled to the run's lengths (S1, must-fix 1)
 
@@ -577,8 +584,11 @@ length, `resident + m0 + m1·L`, exceeds the class's memory cap is flagged befor
 the same `size` at run time with the same device selection: the device pair on a `cuda` class, the host pair
 otherwise. The in-process executor never probes; without an estimate it runs the safe values of §6.5.
 
-`plan_cost` and `check_caps` (the resource-table@1 readers at plan time) are routed through each node's `Sizing` or
-deleted by T20R-8, and `explain()`'s `cost:` line carries only the download until then. A reason printed for an
+`plan_cost`, `check_caps`, `MemoryCapExceeded` (and its `memory_cap_exceeded` envelope code) and `Cost` are deleted
+(T20R-8): a plan states no cost of its own. Wall time, GPU hours and peak memory are each node's `Sizing`; the flag for
+a job whose batch-1 peak exceeds its class's cap is `explain`'s, as above; `placement@3.0` drops `cost` and `explain()`
+prints no `cost:` line. The download size went with the `@1.0` rows' `download_bytes`; the probe measures requests, not
+downloads. A reason printed for an
 unmeasured figure is true of the state: the unit's reason above, `no estimate for its unit`, `lengths unknown`. One `MeasureUnit` resolver (`UnitResolver`, T20R-7a-0) over the env record and the hardware index is what `explain()` and
 the in-process executor use by default, with `MeasureSource` over the profile's roots; the Pool builds every unit it reads
 or writes through it (T20R-7a). The env comes from one `EnvStates.get` (`Packaged.env_read`, raising `EnvUnreadable` for any
@@ -780,9 +790,12 @@ Amended 2026-11-09 (T20R-7b):
   shared host whose workers `w = min(⌊memory_headroom · host / P⌋, max_workers) ≥ k`, each then sized in `host / w`: `m1′ = max(m1, (memory_headroom ·
   grant/k − resident − m0)/((B − 1)·L))` (`probe.raised`, the one formula); a probe never lifts it. The raised `m1` is one
   slope, so lengths just below `L` (within `L/B`) also read a batch below `B`.
-- **A backend out-of-memory is recorded, not bisected.** Nothing raises on the host for it, so the request is not
-  split: every job is `Failed` with `resource` and re-placed on a larger class (or dies without one), uncharged. The
-  record at `B` makes the next `size` avoid the batch; the bisection above applies to faults the host raised.
+- **A backend out-of-memory is bisected per request and recorded.** A call that did not raise but gave a resource
+  fault for every job of one of its requests (a backend's out-of-memory raises inside the worker and reaches the host as
+  each item's error record) has that request split in halves, found by the request report's tags; the call's other
+  requests keep their outcomes and reports. A backend that returns per-item resource errors is re-run about
+  log₂ n + 1 times, because on the wire it is indistinguishable from a raised out-of-memory. The record at `B` makes the
+  next `size` avoid the batch. A cancel as the halves start keeps the call's other outcomes (`Abandoned.kept`).
 - **`since_load` across processes.** A second consumer of a warm server in another process is not covered: the server
   does not report its count, and a `served` request is no evidence for any estimate or drift, so nothing reads it.
 
@@ -797,6 +810,9 @@ Amended 2026-11-09 (T20R-7b):
   `bisected` and its halves are their own requests.
 - `ModelCache.get_or_load` returns whether it loaded and keeps a per-entry request count; the worker process reports
   both on `done` (`since_load`, `load_s`), and the in-process host worker reads them directly.
+- `worker_id()` is `[SLURM_JOB_ID-]<host_token[:8]>-<pid>-<nonce>`, in or out of Slurm: the job id (when set), an opaque
+  host token, the process id and a per-process nonce (`secrets.token_hex(4)`), so workers of one allocation, and a
+  process id reused on one host, name distinct workers. It names no host, account or path.
 - A worker reports its `HardwareClass` to the coordinator through its ready mark; the coordinator writes the hardware
   index entry (§3.2). The worker writes nothing to a measures root.
 - **The ready mark (amended 2026-11-08, T20R-7a review B-1).** The mark at `<run>/workers/<worker id>` is a versioned
@@ -833,19 +849,57 @@ Amended 2026-11-09 (T20R-7b):
 
 ## 9. Ladder and generator on the same Probe
 
-- A ladder point runs the Pool with one measures root in the point's output directory and `calibration` overridden by
-  the suite's table profile (`benchmarks/scale/suites/ladder.yaml`, `calibration:` section): more strata, two batch
-  sizes, a larger item budget and seconds budget, so a 10³ GPU point measures B up to the memory batch (R-237) over
-  three length strata (R-221).
-- A point's result records the probe's observations and its `Estimate`, and nothing else as its measure. The fallback
-  `or calibrated(samples)` is deleted (must-fix 5): a point whose probe is unmeasured has `estimate: unmeasured` with
-  reasons, and the generator skips it and lists why.
-- Per-item flatness (`budgets.yaml`) is read from production requests' walls (`Observation.wall_s`, `item_wall_s`),
-  not from item end times across workers, so neither poll waits nor clock skew enter it (R-233, budget side).
-- `generate_resources.py` reads measures roots (a ladder run's, or a cluster's with `--from-measures`), runs
-  `Probe.estimate` per unit, and writes `resource-table@2.0` rows with the full `MeasureUnit`, the estimate's counts
-  and spreads, commit, job ids and probe ids (never user or host, §3.5). It refuses an unmeasured estimate and rows of
-  more than one commit, as now.
+- A ladder point runs the Pool with one measures root in the point's output directory. A suite may carry a table
+  profile, a `calibration:` section that overrides `length_strata`, `batched_sizes` and `probe_items` only (`Suite.load`
+  refuses any other key, a seconds key among them), so a 10³ GPU point measures B up to the memory batch (R-237) over
+  three length strata (R-221); `probe_s` stays the profile's derived property. The suite's `point_wall_s` is the
+  per-point wall budget: the ladder passes it to the Pool (`Pool(probe_s=)`), which gives it to `Probe.plan` as its
+  seconds budget. Suites carrying them are `scale-suite@1.1` (the reader takes any `@1.x`).
+- **Two kinds of suite.** `suites/table.yaml` (CPU, `signal.resample`, points 10² and 10³) and `suites/gpu-table.yaml`
+  (the Phase 2 backends, 10³) carry the table profile (`length_strata` 3, `batched_sizes` 2, `probe_items` 923,
+  `point_wall_s` 900) and exist to be generated from. `suites/ladder.yaml` and `suites/gpu.yaml` carry none and are
+  the flatness ladders: under the table profile a 10² point's items are all probe items (923 probe jobs), so no
+  production request is left to judge flatness by.
+- A point's result (`scale-result@2.0`, replacing `@1.0`) records, per unit its measures root holds, the unit, the
+  probe's observations and its `Estimate`, and nothing else as its measure; the calibration settings it ran under; and
+  the per-item figures below. The fallback `or calibrated(samples)` is deleted (must-fix 5): a unit whose probe is
+  unmeasured has `estimate.status: unmeasured` with reasons. The result's `measure`, `samples`, `calibration_s`,
+  `calibration_jobs`, `began_s` and `calibration_per_item_s` are gone: they were read from item end times.
+- Per-item flatness (`budgets.yaml`) is judged on `per_item_s`, the **throughput wall per production job**: the
+  production span over the production jobs that gave a result. Both ends of the span are the workers' own clock, from
+  the production items' `Sample`s (`ended_s`, taken just before the commit; a claim's start is `ended_s - wall_s -
+  claim_s`): the latest `ended_s` less the earliest start. Every ladder suite runs on one allocation, so one host's
+  clock covers both ends. The coordinator's events do not enter it: a `finished` event is written when the follower next
+  reads, up to `pool.poll_s` after the commit. Production items are those committed on a queue that is not a probe's,
+  and the job count is read from their outcome records, so no request identity enters it. A worker start, a model load
+  before the first claim, the wait after the last commit, the coordinator's lag in settling and shutdown are outside
+  the span, and a probe running beside production neither lies in it nor is subtracted from it.
+  That is the basis the ceilings and `flat_ratio` were derived on (wall across all workers per job), with the
+  idle time between items in it. `worker_s_per_item`, worker seconds per job (the walls of the `ok`
+  production requests that did not load the model over their jobs), is a separate field judged against no ceiling. A
+  request spanning several items is in each one's observations, so for this field requests are told apart by
+  everything they reported and counted once, and each is timed from its own start, never by an item's wall, which runs
+  from its claim's start when a claim holds several items. With no production job `per_item_s` is None and flatness and
+  ceiling read n/a. The ceiling is judged at the largest flatness point the entry ran, always on `per_item_s`.
+- `generate_resources.py ROOT... [--suite SUITE] [--execution PROFILE] [--out DIR]` reads measures roots (a ladder
+  run directory's `<label>@<point>/measures` roots, or a cluster's), runs `Probe.estimate` per unit under the execution
+  profile's calibration settings, and writes each (task, backend)'s `resource-table@2.0`: one row per unit, the full
+  `MeasureUnit`, the estimate with its commit and probe ids, and the derivation (commit, scheduler job ids, probe
+  ids; never user, host or uid). A table that exists keeps the rows of units the run does not regenerate and takes
+  the regenerated ones in their place; it refuses when a kept row is of another commit than the run's, so a table holds
+  rows of one commit. A ladder run directory is read with `--suite` naming the suite whose table profile it ran under:
+  each point's result records the calibration settings it ran under, and the generator refuses a point whose
+  settings differ from the ones it would estimate under, naming the keys. The commit and jobs are read from the
+  provenance of the probe files behind the estimate (`MeasureRoots.probes`); `Build.commit` is the `HEAD` of the
+  checkout the package lives in (`checkout_commit`: the package must lie under `packages/senselab-core/src` of the work
+  tree whose git directory is read, so an installation inside another repository records none), and uncommitted
+  changes are not recorded: measure from a pinned clean clone. It refuses, and writes nothing, when a declared unit's
+  estimate is unmeasured, a probe behind a row carries no commit or no scheduler job, or the rows are of more than one
+  commit; each reason is a line. A unit of a task and backend the packaged registry does not declare (the fake stack)
+  is listed and skipped. A shared cluster root that holds an interrupted probe or probes of a second commit is therefore
+  refused by construction: the cluster use is for a root curated to one commit (a `--commit` filter is not built).
+  Nothing leaves the store but probe ids and counts: no `MeasureRecord.uid` is in a row or in `explain`'s text
+  (T20R-2b N-9).
 
 ## 10. What a run needs, and a site placement hook (owner, 2026-11-08)
 
@@ -1102,6 +1156,7 @@ To open at merge (ids assigned then):
 | N-8 | P3 | host memory is not per request and not of the process holding the model | T20R-11 (after exit) |
 | N-9 | P3 | `_grow` doubles per-item bytes for the whole unit, unmarked and without decay | T20R-7b |
 | N-10 | P2 | placement values are fixed per profile and a site refusal is not actionable: Task 21 Step 3 submitted `--time=360` to a 4 h partition and every start was refused | T20R-12 |
+| N-11 | P3 | `explain` lost the model download-size figure (it was the `@1.0` rows' `download_bytes`; the probe measures requests, not downloads), so a user no longer sees the bytes a fetch will take before it | T20R-12 (placement request) |
 
 R-224, R-225, R-235 and R-165 follow exit as the review says; R-221's grid edges stay open, with T20R-10's per-stratum
 costs as their first evidence.
@@ -1328,6 +1383,13 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 - **Tests failing now.** `test_generator_refuses_an_unmeasured_estimate`; `test_a_packaged_row_of_another_env_build_is_not_read`;
   `test_flatness_reads_request_walls_not_end_times`; `test_generated_rows_carry_probe_ids_not_users`.
 - **ORCD.** A CPU ladder smoke at 10² with the table profile, to check the result shape before T20R-10.
+- **Delivered (2026-11-09).** `plan_cost`, `check_caps`, `MemoryCapExceeded`, `Cost` and `estimate_of` are deleted, with
+  `Unit`, `write_row`, `Measures`, `code_version`, `Catalogue.resource_tables` and the unused `sizing.Measure`;
+  `placement@3.0` drops `cost`; `Packaged.measures` is the packaged table and `default_measures` its one reader;
+  `scale-result@2.0`; the carried items: T20R-6 R-1 (the `sizing.relative_tolerance` test slack), R-2 and R-3 (moot with
+  `estimate_of`), R-4 (`HOUR_S` is public), N-7 (rows read on exact identity); T20R-2a N-3 (`MeasureRow` validates its
+  derivation); T20R-2b N-9 (above); T20R-7c R-1 to R-4. A run directory's placement of a retired major (`placement@2`) raises
+  `PlacementFormatRetired`, naming the run as made by an older build, from resume, the pool and `senselab explain`.
 
 ### T20R-10: ORCD measurement and table regeneration
 
