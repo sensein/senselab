@@ -574,10 +574,12 @@ def _run_cancelled(  # noqa: PLR0913 - the plan and its gate, then the cancel an
     try:
         assert queued.wait(clock.hang_s)
         guard = time.monotonic() + clock.hang_s
-        while (follower := next((t for t in threading.enumerate() if t.name == "senselab-follower"), None)) is None:
-            assert time.monotonic() < guard, "the runner never started its follower"
+        while not (
+            waiting := [t for t in threading.enumerate() if t.name == "senselab-follower" and clock.is_parked(t)]
+        ):
+            assert time.monotonic() < guard, "no follower of this run parked on its clock"
             cancel.wait(clock.poll_s)
-        assert clock.parked(follower)
+        follower = waiting[0]
         cancel.set()
         before = clock.now()
         while not noticed.is_set():
