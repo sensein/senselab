@@ -1,0 +1,18 @@
+{
+    "derivation": "A job's timeout-minutes is the larger of floor_minutes and ceil((bound_s + load_factor * measured_s) / 60), where bound_s is the budget of the slowest tier its pytest commands select (tier_budgets.json; 0 for a job without pytest): a hang costs one test's budget before pytest-timeout ends the process, on top of a run slowed by load. measured_s is the job's duration in the green run 42579214662 at ef52fd13; pr-models was skipped there, so it is 0 and the floor applies. load_factor 2 doubles the measured run for a loaded runner. floor_minutes 5 covers a runner that is slow to start on a job of a few seconds.",
+    "floor_minutes": 5,
+    "load_factor": 2,
+    "measured_s": {
+        "detect": 6,
+        "pre-commit": 206,
+        "core-only": 301,
+        "core-pydra": 251,
+        "senselab-lean": 112,
+        "core-limits": 316,
+        "source-digests": 36,
+        "pr-models": 0,
+        "core-env": 40,
+        "licenses": 36,
+        "worker-floor": 48
+    }
+}
