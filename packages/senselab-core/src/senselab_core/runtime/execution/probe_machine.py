@@ -3,11 +3,14 @@
 `ProbeMachine` holds the state of each unit this run (`State`), the parts waiting on a hello, the worker marks read,
 and the stragglers of closed probe queues. The `Pool` supplies what it acts through: the queues and roots, the plan and
 keys of a fragment, the grant, the scaler, and `_produce`, which puts a part sized by an estimate.
+A unit that drifts at co-tenancy 1 is `confirming`: its next part is held and probed afresh, and a probe that disagrees
+with the estimate supersedes it.
 """
 
 import contextlib
 import importlib.metadata
 import logging
+import math
 import os
 import threading
 import uuid
@@ -20,9 +23,11 @@ from senselab_core.runtime.calibration import (
     Estimate,
     HardwareClass,
     Observation,
+    OomRecord,
     Prior,
     ProbeItem,
     ProbePlan,
+    RegimeFactor,
     UnitKind,
 )
 from senselab_core.runtime.clock import Clock
@@ -30,13 +35,14 @@ from senselab_core.runtime.execution.batching import bucket_edges
 from senselab_core.runtime.execution.executor import (
     PlanFragment,
 )
-from senselab_core.runtime.execution.in_process import fragment_jobs
+from senselab_core.runtime.execution.in_process import fragment_jobs, job_units
 from senselab_core.runtime.execution.job import Job
 from senselab_core.runtime.execution.observing import job_units as detected_units
 from senselab_core.runtime.execution.pool_parts import (
     Dumped,
     Flight,
     Held,
+    Origin,
     ProbedUnit,
     Release,
     Run,
@@ -51,6 +57,15 @@ from senselab_core.runtime.execution.substrates import (
     WorkerHandle,
     backend_key,
     class_of,
+)
+from senselab_core.runtime.execution.telemetry import (
+    Drift,
+    Drifted,
+    Reading,
+    disagree,
+    is_evidence,
+    peak_beyond,
+    predicted,
 )
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import Lease, LeaseTimeout, LeaseUnavailable
@@ -164,6 +179,10 @@ class ProbeMachine:
         self._stragglers: list[tuple[Held, Flight, list[int]]] = []
         self._hello: dict[str, HardwareClass] = {}
         self._marks: dict[str, QueueReady] = {}
+        self._origins: dict[str, Origin] = {}
+        self._oomed: set[str] = set()
+        self._shortest: dict[tuple[object, ...], float] = {}
+        self._drift = Drift(profile.calibration.drift_window, profile.calibration.drift_confidence)
 
     def place(self, held: Held) -> None:
         """Move `held`'s computed jobs through their unit's state: resolve, look up, and probe or put them."""
@@ -176,9 +195,11 @@ class ProbeMachine:
             self._advance()
 
     def counts(self, queue: str) -> tuple[int, bool]:
-        """Return the units of `queue` probing, and whether any of its parts is `Resolving`."""
+        """Return the units of `queue` probing or confirming, and whether any of its parts is `Resolving`."""
         with self.lock:
-            probing = sum(1 for s in self._states.values() if s.queue == queue and s.state == "probing")
+            probing = sum(
+                1 for s in self._states.values() if s.queue == queue and s.state in ("probing", "confirming") and s.run
+            )
             return probing, any(h.queue == queue for h in self._resolving)
 
     def close(self) -> None:
@@ -223,11 +244,13 @@ class ProbeMachine:
         predicted = self._hello.get(class_of(held.queue)) is None
         state = self._states.get(digest)
         if state is not None:
-            if state.state in ("peer_wait", "probing"):
+            if state.state == "confirming" and state.run is None:
+                self._confirm(state, held, jobs, placement)
+            elif state.state in ("peer_wait", "probing", "confirming"):
                 held.followed.waiting.append(held.part)
                 state.held.append(held)
             else:
-                self.host.produce(Release(held, state.estimate, unit.label()), jobs, placement)
+                self.host.produce(Release(held, state.estimate, unit), jobs, placement)
             return
         estimate = self.measures.get(unit)
         plan = None if covers(estimate, jobs) else self._plan_probe(unit, held, jobs, placement)
@@ -242,7 +265,7 @@ class ProbeMachine:
             )
             with self.lock:
                 self._states[digest] = ended
-            self.host.produce(Release(held, estimate, unit.label()), jobs, placement)
+            self.host.produce(Release(held, estimate, unit), jobs, placement)
             return
         taken = self._take_lease(unit, digest)
         if taken == "peer":
@@ -253,8 +276,13 @@ class ProbeMachine:
             return
         self._start_probe(unit, held, plan, taken, predicted, placement)
 
-    def _plan_probe(self, unit: MeasureUnit, held: Held, jobs: Sequence[Job], placement: Placement) -> ProbePlan | None:
-        """Return `Probe.plan` over `held`'s jobs against what the roots hold of `unit`; None when unplannable."""
+    def _plan_probe(
+        self, unit: MeasureUnit, held: Held, jobs: Sequence[Job], placement: Placement, *, fresh: bool = False
+    ) -> ProbePlan | None:
+        """Return `Probe.plan` over `held`'s jobs against what the roots hold of `unit`; None when unplannable.
+
+        `fresh` leaves the stored observations out of the prior, as a confirming probe does.
+        """
         found, kind = [detected_units(j) for j in jobs], detected_kind(jobs)
         keys = self.host.keys(held.part)
         candidates = [
@@ -264,7 +292,8 @@ class ProbeMachine:
         edges = bucket_edges(placement.backend, kind)
         if unit.formation.startswith("bucket:") and not edges:
             return None
-        prior = Prior(observations=tuple(self.roots.observations(unit)), records=tuple(self.roots.regime_records(unit)))
+        stored = () if fresh else tuple(self.roots.observations(unit))
+        prior = Prior(observations=stored, records=tuple(self.roots.regime_records(unit)))
         return Probe.plan(
             unit, candidates, prior, self.profile.calibration, unit.formation, self.profile.probe_s, bucket_edges=edges
         )
@@ -298,17 +327,22 @@ class ProbeMachine:
         taken: tuple[Lease | None, contextlib.ExitStack | None],
         predicted: bool,
         placement: Placement,
+        confirming: State | None = None,
     ) -> None:
-        """Put `plan`'s items on a new probe queue pinned to the unit's hardware class; its other jobs wait."""
+        """Put `plan`'s items on a new probe queue pinned to the unit's hardware class; its other jobs wait.
+
+        A `confirming` unit's probe leaves the stored observations out of its prior and keeps its state.
+        """
         probe_id = uuid.uuid4().hex
         name = probe_queue(held.queue, probe_id)
         env = {k: v for k, v in unit.env.model_dump(mode="json").items() if k != "decoder"}
         self.host.queue(name).set_probe_unit(unit.hardware, backend_key(placement.backend), env)
-        prior = tuple(self.roots.observations(unit))
+        prior = () if confirming is not None else tuple(self.roots.observations(unit))
         run = Run(
             probe_id, name, plan, held, self._clock.now(), prior, last=self._clock.now(), lease=taken[0], stack=taken[1]
         )
-        state = State(unit, held.queue, "probing", self._clock.now(), run=run, predicted=predicted)
+        state = confirming or State(unit, held.queue, "probing", self._clock.now(), predicted=predicted)
+        state.run = run
         with self.lock:
             self._states[unit.digest()] = state
         held.followed.waiting.append(held.part)
@@ -325,6 +359,7 @@ class ProbeMachine:
             fragment = dumped.part(indices, placement=placement.model_dump(mode="json"))
             queue.put_probe(fragment, item.phase, item.stratum)
             flight = Flight(run.queue, item_digest(fragment), fragment)
+            self._origins[flight.digest] = Origin(state.unit, None, state.queue, run.id)
             run.held.followed.flights.append(flight)
             run.awaiting[flight.digest] = (item, flight)
             run.used.update(indices)
@@ -346,7 +381,7 @@ class ProbeMachine:
         for state in list(self._states.values()):
             if state.state == "peer_wait":
                 self._peer_tick(state)
-            elif state.state == "probing":
+            elif state.run is not None and state.state in ("probing", "confirming"):
                 self._probe_tick(state)
         self._release_stragglers()
         while self._releasing:
@@ -513,17 +548,34 @@ class ProbeMachine:
             logger.warning("probe %s lost its lease; its observations are not written", state.unit.label())
             return
         for hardware in dict.fromkeys(o.hardware for o in run.observations):
-            provenance = Provenance(
-                job=os.environ.get("SLURM_JOB_ID") or None,
-                run=self.host.run_name,
-                senselab=_build(),
-                profile=self.profile.canonical_digest(),
-                hardware=hardware,
-            )
             unit = state.unit.model_copy(update={"hardware": hardware})
             self.roots.put_observations(
-                unit, run.id, tuple(o for o in run.observations if o.hardware == hardware), provenance
+                unit, run.id, tuple(o for o in run.observations if o.hardware == hardware), self._provenance(hardware)
             )
+
+    def _provenance(self, hardware: HardwareClass) -> Provenance:
+        """Return what a record this run writes carries: the scheduler job, the run, the build and the hardware."""
+        return Provenance(
+            job=os.environ.get("SLURM_JOB_ID") or None,
+            run=self.host.run_name,
+            senselab=_build(),
+            profile=self.profile.canonical_digest(),
+            hardware=hardware,
+        )
+
+    def _abandon(self, state: State, run: Run) -> None:
+        """Close `run`'s probe queue: an item under a live claim finishes on it, the others are given up."""
+        self._read_outcomes(state, replace=False)
+        queue = self.host.queue(run.queue)
+        queue.close_probe()
+        for digest, (item, flight) in run.awaiting.items():
+            indices = [c.index for c in item.jobs]
+            if queue.claimed(digest):
+                self._stragglers.append((run.held, flight, indices))
+                continue
+            run.held.followed.flights.remove(flight)
+            run.used.difference_update(indices)
+        run.awaiting.clear()
 
     def _conclude(self, state: State, estimate: Estimate | None, *, abandon: bool = False, again: bool = False) -> None:
         """End `state`'s probe: write its observations, release the lease and its held jobs.
@@ -534,21 +586,12 @@ class ProbeMachine:
         run = state.run
         assert run is not None
         if abandon:
-            self._read_outcomes(state, replace=False)
-            queue = self.host.queue(run.queue)
-            queue.close_probe()
-            for digest, (item, flight) in run.awaiting.items():
-                indices = [c.index for c in item.jobs]
-                if queue.claimed(digest):
-                    self._stragglers.append((run.held, flight, indices))
-                    continue
-                run.held.followed.flights.remove(flight)
-                run.used.difference_update(indices)
-            run.awaiting.clear()
+            self._abandon(state, run)
         self._write_observations(state)
         if run.stack is not None:
             run.stack.close()
-        label = state.unit.label()
+        if state.suspect is not None:
+            estimate = self._confirmed(state, estimate)
         with self.lock:
             state.state, state.estimate = ("measured" if estimate else "unmeasured"), estimate
             if again:
@@ -566,8 +609,163 @@ class ProbeMachine:
                 held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
                 self._place(held)
             else:
-                self._releasing.append(Release(held, estimate, label))
+                self._releasing.append(Release(held, estimate, state.unit))
         state.held.clear()
+        state.run = None
+
+    def note(self, release: Release, digests: Iterable[str]) -> None:
+        """Note the items a `release` was put as, so their outcomes are read against its unit and estimate."""
+        if release.unit is not None:
+            for digest in digests:
+                self._origins[digest] = Origin(release.unit, release.estimate, release.held.queue, None)
+
+    def forget(self, digest: str) -> None:
+        """Forget item `digest`: its outcome has been read."""
+        self._origins.pop(digest, None)
+        self._oomed.discard(digest)
+
+    def settled(self, digest: str, observations: Sequence[Observation]) -> None:
+        """Read the `observations` of production item `digest` against the estimate that sized it (§7.3)."""
+        origin = self._origins.get(digest)
+        if origin is None or origin.probe is not None or origin.estimate is None:
+            return
+        cfg = self.profile.calibration
+        with self._machine:
+            state = self._states.get(origin.unit.digest())
+            if state is None or state.state != "measured":
+                return
+            for request in observations:
+                if not is_evidence(request, origin.unit.hardware, cfg.warmup_requests):
+                    continue
+                found = predicted(origin.estimate, request)
+                if found is None or found[1] is None or found[0] <= 0:
+                    continue
+                self._raise_peak(state, origin.estimate, request)
+                if request.cotenancy.device is None:
+                    continue
+                reading = Reading(request.wall_s / found[0], found[1], request.batch)
+                if (drifted := self._drift.add(state.unit.digest(), request.cotenancy.device, reading)) is not None:
+                    self._drifted(state, origin.estimate, drifted)
+
+    def _raise_peak(self, state: State, estimate: Estimate, request: Observation) -> None:
+        """Raise the unit's `m1` for this run to a device peak above its band; the first is noted as `drift`."""
+        cfg = self.profile.calibration
+        m1 = peak_beyond(estimate, request, cfg.drift_confidence, cfg.drift_window)
+        if m1 is None or (state.m1_floor is not None and m1 <= state.m1_floor):
+            return
+        first, state.m1_floor = state.m1_floor is None, m1
+        state.estimate = _floored(state.estimate, m1)
+        if first:
+            self._note_drift(state, {"metric": "device_peak", "m1": m1, "batch": request.batch})
+
+    def _note_drift(self, state: State, found: Mapping[str, object]) -> None:
+        """Write a `drift` record of `state`'s unit: the evidence beside the sources of the estimate it doubts."""
+        source = state.estimate.source.probe_ids if state.estimate is not None else ()
+        self.roots.put_record(
+            state.unit, "drift", {**found, "source": list(source)}, self._provenance(state.unit.hardware)
+        )
+
+    def _drifted(self, state: State, estimate: Estimate, drifted: Drifted) -> None:
+        """Act on a window of production requests that drifted: a `regime` record at k > 1, a confirming probe at 1.
+
+        A drift record alone supersedes nothing. A unit writes at most one regime record per co-tenancy and confirms at
+        most once per run.
+        """
+        if (drifted.k > 1 and drifted.k in state.regimes) or (drifted.k == 1 and state.confirmed):
+            return
+        self._note_drift(
+            state,
+            {
+                "metric": "wall_s",
+                "k": drifted.k,
+                "rho": list(drifted.rhos),
+                "median": drifted.rho,
+                "band": [drifted.low, drifted.high],
+                "batch": drifted.batch,
+            },
+        )
+        if drifted.k > 1:
+            state.regimes.add(drifted.k)
+            factor = RegimeFactor(k=drifted.k, rho=drifted.rho, n=drifted.n)
+            self.roots.put_record(state.unit, "regime", factor, self._provenance(state.unit.hardware))
+            self._refresh(state)
+        else:
+            with self.lock:
+                state.confirmed, state.suspect, state.state = True, estimate, "confirming"
+
+    def _refresh(self, state: State) -> None:
+        """Read the unit's estimate again, now that a record was written; the unit's `m1` floor still holds."""
+        fresh = self.measures.get(state.unit)
+        if fresh is not None and state.state == "measured":
+            state.estimate = _floored(fresh, state.m1_floor)
+
+    def _confirm(self, state: State, held: Held, jobs: Sequence[Job], placement: Placement) -> None:
+        """Start the confirming probe on `held`, the unit's next part, else size it by the estimate in force."""
+        plan = self._plan_probe(state.unit, held, jobs, placement, fresh=True)
+        taken = (
+            None
+            if plan is None or not worth(plan, state.suspect)
+            else self._take_lease(state.unit, state.unit.digest())
+        )
+        if plan is None or taken is None or taken == "peer":
+            with self.lock:
+                state.state, state.suspect = "measured", None
+            self.host.produce(Release(held, state.estimate, state.unit), jobs, placement)
+            return
+        self._start_probe(state.unit, held, plan, taken, state.predicted, placement, state)
+
+    def _confirmed(self, state: State, probed: Estimate | None) -> Estimate | None:
+        """Return the estimate in force once the confirming probe ended; write `supersede` where it disagreed.
+
+        The probe disagrees with the suspect estimate beyond their bands: the suspect's probes stop pooling and the
+        probe's observations are the unit's basis. Where it agrees, or measured nothing, no record is written.
+        """
+        suspect, state.suspect = state.suspect, None
+        assert suspect is not None
+        cfg = self.profile.calibration
+        if probed is not None and suspect.source.probe_ids and disagree(suspect, probed, cfg.drift_confidence):
+            record = {"outdates": list(suspect.source.probe_ids), "confirmed_by": state.run.id if state.run else ""}
+            self.roots.put_record(state.unit, "supersede", record, self._provenance(state.unit.hardware))
+        return _floored(self.measures.get(state.unit) or suspect, state.m1_floor)
+
+    def oom(self, digest: str, fragment: PlanFragment, observations: Sequence[Observation], worker: str | None) -> None:
+        """Write the `oom` record of a resource fault on item `digest` and read the unit's estimate under it (§7.4).
+
+        The record is of the item's batch and longest length, under the co-tenancy its requests reported; an item
+        that reported none, or whose grant states no memory, is not recorded. A fault at a length no shorter than one
+        already written this run for the same batch, co-tenancy, grant and basis adds nothing: the shorter one holds.
+        """
+        origin = self._origins.get(digest)
+        if origin is None or digest in self._oomed:
+            return
+        self._oomed.add(digest)
+        placed, values = self.host.plan_of(fragment)
+        jobs, _ = fragment_jobs(fragment, placed, values)
+        kind = detected_kind(jobs) if origin.estimate is None else origin.estimate.unit_kind
+        length = max((n for j in jobs if (n := job_units(j, kind)) is not None), default=0.0)
+        grant = self.host.grant(origin.queue)
+        shared = [k for o in observations if (k := o.cotenancy.device if grant.on_device else o.cotenancy.host)]
+        if grant.memory_bytes is None or not shared:
+            logger.warning("no oom record of %s: its grant or its co-tenancy is unread", origin.unit.label())
+            return
+        basis = origin.estimate.fault_basis(origin.probe) if origin.estimate else tuple(filter(None, [origin.probe]))
+        record = OomRecord(
+            resource="device" if grant.on_device else "host",
+            batch=max(1, min(fragment.placement.batch_size, len(jobs))),
+            length=length,
+            cotenancy=max(shared),
+            grant_bytes=grant.memory_bytes,
+            basis=basis,
+            worker=worker,
+        )
+        shape = (origin.unit.digest(), record.resource, record.batch, record.cotenancy, record.grant_bytes, basis)
+        with self._machine:
+            if self._shortest.get(shape, math.inf) <= length:
+                return
+            self._shortest[shape] = length
+            self.roots.put_record(origin.unit, "oom", record, self._provenance(origin.unit.hardware))
+            if (state := self._states.get(origin.unit.digest())) is not None:
+                self._refresh(state)
 
     def _reresolve(self, resource_class: str, seen: HardwareClass) -> None:
         """Place again every unit of `resource_class` built from the prediction `seen` contradicts.
@@ -578,7 +776,7 @@ class ProbeMachine:
         for state in list(self._states.values()):
             if not (state.predicted and class_of(state.queue) == resource_class and state.unit.hardware != seen):
                 continue
-            if state.state == "probing":
+            if state.run is not None and state.state in ("probing", "confirming"):
                 self._conclude(state, None, abandon=True, again=True)
                 continue
             with self.lock:
@@ -586,6 +784,13 @@ class ProbeMachine:
             for held in state.held:
                 held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
                 self._place(held)
+
+
+def _floored(estimate: Estimate | None, floor: float | None) -> Estimate | None:
+    """Return `estimate` with its device `m1` at least `floor`."""
+    if floor is None or estimate is None or estimate.device is None or estimate.device.m1 >= floor:
+        return estimate
+    return estimate.model_copy(update={"device": estimate.device.model_copy(update={"m1": floor})})
 
 
 def detected_kind(jobs: Sequence[Job]) -> UnitKind:

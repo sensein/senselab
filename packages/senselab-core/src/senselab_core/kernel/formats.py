@@ -60,7 +60,7 @@ PLACEMENT_FORMAT = "placement@2.0"
 PLAN_FRAGMENT_FORMAT = "plan-fragment@3.0"
 """The format of a plan fragment: jobs of one node of a plan, their input identities, the placement and the attempt."""
 
-RUN_EVENT_FORMAT = "run-event@2.0"
+RUN_EVENT_FORMAT = "run-event@2.1"
 WORKER_READY_FORMAT = "worker-ready@1.0"
 """The format of one run event, a line of `<run>/events/<writer>.jsonl`: a job's state change and its fault."""
 
@@ -104,7 +104,7 @@ MEASURE_SUPERSEDE_FORMAT = "measure-supersede@1.0"
 """The format of a record that a confirming probe disagreed, so earlier observations stop pooling."""
 MEASURE_REGIME_FORMAT = "measure-regime@1.0"
 """The format of a co-tenancy factor of an estimate."""
-MEASURE_OOM_FORMAT = "measure-oom@1.0"
+MEASURE_OOM_FORMAT = "measure-oom@1.1"
 """The format of a resource fault at a batch and length."""
 
 RUN_CONFIG_FORMAT = "run-config@2.1"

@@ -264,7 +264,8 @@ class OomRecord(Frozen):
     """A resource fault at batch `batch` and length `length`, under co-tenancy `cotenancy`.
 
     `grant_bytes` is the faulting grant's memory. `basis` is `Estimate.fault_basis` of the estimate that sized the
-    faulting batch: a probe not among them, run after the fault, can lift the record.
+    faulting batch: a probe not among them, run after the fault, can lift the record. `worker` is the `worker_id()`
+    of the worker that ran the item, None when its outcome names none.
     """
 
     resource: Literal["device", "host"]
@@ -273,6 +274,7 @@ class OomRecord(Frozen):
     cotenancy: Positive
     grant_bytes: Positive
     basis: tuple[NonEmptyStr, ...]
+    worker: NonEmptyStr | None = None
 
 
 class EstimateSource(Frozen):

@@ -362,7 +362,7 @@ def _holding(spans: Sequence[tuple[float, float]], length: float) -> tuple[float
     return min(spans, key=lambda s: (min(abs(length - s[0]), abs(length - s[1])), s[0] < length, s))
 
 
-def _probe_regime(record: OomRecord) -> bool:
+def probe_regime(record: OomRecord) -> bool:
     """Whether a probe can measure the fault: one process on the device, at a batch of two or more."""
     return record.cotenancy == 1 and record.batch >= 2  # noqa: PLR2004 - a batch of one is re-placed, not raised
 
@@ -384,7 +384,7 @@ def _in_force(records: Sequence[RegimeRecord], kept: _Kept, minimum: int) -> tup
             and o.probe.id not in r.basis
             and span[0] <= _length(o) <= span[1]
         )
-        if not (_probe_regime(r) and any(n >= minimum for n in later.values())):
+        if not (probe_regime(r) and any(n >= minimum for n in later.values())):
             live.append(r)
     return tuple(live)
 
@@ -459,7 +459,7 @@ def _reopened(strata: Sequence[Stratum], records: Sequence[OomRecord]) -> set[in
     measured = [s for s in strata if s.lo is not None and s.hi is not None]
     spans = [(s.lo or 0.0, s.hi or 0.0) for s in measured]
     found: set[int] = set()
-    for r in filter(_probe_regime, records):
+    for r in filter(probe_regime, records):
         span = _holding(spans, r.length)
         found |= {s.index for s in measured if span == (s.lo, s.hi)}
     return found
@@ -652,7 +652,7 @@ class Probe:
             if why is not None:
                 reasons.append(why)
         ooms = _in_force(records, kept, config.min_requests)
-        probed = list(filter(_probe_regime, ooms))
+        probed = list(filter(probe_regime, ooms))
         device = _raised(memory["device"], [r for r in probed if r.resource == "device"], memory_headroom)
         host = _raised(memory["host"], [r for r in probed if r.resource == "host"], memory_headroom)
         lengths = {

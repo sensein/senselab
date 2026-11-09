@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping, Sequence
 from senselab_core.kernel._base import Frozen
 from senselab_core.kernel.license import License, LicenseSet
 from senselab_core.kernel.placement import Cost, NodePlacement, PlanPlacement
-from senselab_core.runtime.execution.events import PlacementRecord
+from senselab_core.runtime.execution.events import ClassActuals, PlacementRecord
 from senselab_core.runtime.execution_settings import (
     FaultBudgets,
     JobLease,
@@ -459,9 +459,14 @@ def _register_site(register: Register) -> None:
                     verdict="accepted",
                     used=_CURRENT,
                     exclude=("<node>",),
+                    closing=ClassActuals(wall_s=12.5, gpu_hours=0.25, device_peak_bytes=2**30),
                 ),
             ],
-            [{"verdict": "maybe"}, {"resource_class": ""}],
+            [{"verdict": "maybe"}, {"resource_class": ""}, {"closing": {"wall_s": -1.0}}],
+        ),
+        ClassActuals: (
+            [ClassActuals(), ClassActuals(wall_s=0.0, gpu_hours=1.5, device_peak_bytes=0)],
+            [{"wall_s": -1.0}, {"gpu_hours": float("nan")}, {"device_peak_bytes": -1}],
         ),
     }
     for cls, (samples, invalid) in classes.items():

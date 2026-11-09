@@ -26,7 +26,7 @@ import subprocess
 import sys
 import threading
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -724,12 +724,25 @@ class Fleet:
         self._failures: Counter[str] = Counter()
         self._not_before: dict[str, float] = {}
         self._snapshot: list[WorkerHandle] | None = None
+        self._began: dict[str, tuple[str, float]] = {}
+        self._lived: defaultdict[str, float] = defaultdict(float)
 
     def reset(self) -> None:
-        """Forget every failure and every broken class, as a new epoch does."""
+        """Forget every failure, every broken class and the worker lifetimes, as a new epoch does."""
         self.broken.clear()
         self._failures.clear()
         self._not_before.clear()
+        self._lived.clear()
+        now = self._clock.now()
+        self._began = {i: (c, now) for i, (c, _) in self._began.items()}
+
+    def worker_seconds(self, resource_class: str) -> float:
+        """Return the seconds the workers of `resource_class` have lived since the epoch began, as `live` saw them.
+
+        A worker lives from the first `live` that lists it started (not pending) to the first that does not list it.
+        """
+        now = self._clock.now()
+        return self._lived[resource_class] + sum(now - b for c, b in self._began.values() if c == resource_class)
 
     def _ready(self, handle: WorkerHandle) -> bool:
         return self.workers_dir is not None and (self.workers_dir / handle.id).exists()
@@ -765,6 +778,13 @@ class Fleet:
         """List the substrate's workers once, and judge the tracked workers that left it."""
         found = self.substrate.live()
         ids = {h.id for h in found}
+        now = self._clock.now()
+        for handle in found:
+            if not handle.pending:
+                self._began.setdefault(handle.id, (class_of(handle.queue), now))
+        for gone in [i for i in self._began if i not in ids]:
+            cls, began = self._began.pop(gone)
+            self._lived[cls] += now - began
         for handle in list(self._tracked.values()):
             if handle.id in ids:
                 if self._ready(handle):

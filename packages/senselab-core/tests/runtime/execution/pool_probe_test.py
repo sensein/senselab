@@ -130,10 +130,10 @@ def _profile(tmp_path: Path) -> ExecutionProfile:
 
 
 def _plan(
-    profile: ExecutionProfile, lengths: Sequence[int], model: str | None = None
+    profile: ExecutionProfile, lengths: Sequence[int], model: str | None = None, char: str = "x"
 ) -> tuple[Plan, dict[InputIdentity, object]]:
-    """Return the plan mapping the text task over one record per length, a text of that many characters."""
-    texts = ["x" * n for n in lengths]
+    """Return the plan mapping the text task over one record per length, a text of that many `char`s."""
+    texts = [char * n for n in lengths]
     graph = {
         "inputs": {"text": "list[Text]"},
         "nodes": [{"id": "a", "task": TEXTY.name, "task_version": "1", "model": model}],
@@ -227,12 +227,18 @@ class Hand:
                     break
                 [item], [digest] = claim.fragments, claim.items
                 with claim:
-                    seen = self._observations(name, digest, item) if probe else []
-                    report(claim, digest, self._outcomes(item), observations=seen)
+                    outcomes, seen = self._run(name, digest, item, probe=probe)
+                    report(claim, digest, outcomes, observations=seen)
                 self.items.append((name, item))
                 self.probe_items += probe
                 count += 1
         return count
+
+    def _run(
+        self, name: str, digest: str, item: PlanFragment, *, probe: bool
+    ) -> tuple[list[JobOutcome], list[Observation]]:
+        """Return the outcomes of `item` and the observations its worker reports: a probe item's, else none."""
+        return self._outcomes(item), self._observations(name, digest, item) if probe else []
 
     def _outcomes(self, item: PlanFragment) -> list[JobOutcome]:
         executor = InProcess(store=self.pool.store, profile=self.placed.execution, run=RunConfig(), workers=WORKERS)
