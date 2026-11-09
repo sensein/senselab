@@ -39,6 +39,8 @@ from senselab_core.runtime.revision import (
 from senselab_core.runtime.storage import NAME_MAX, StorePolicy
 from syscall_faults_fixture import displace_after_take, displace_before_proof, pause_replaces
 
+FIRST_BACKOFF_S = 2.0
+"""A backoff on the test clock, which sleeps it without waiting."""
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 
@@ -46,7 +48,7 @@ HubLookup = Callable[[str, str, "str | None"], object]
 
 
 @pytest.fixture
-def offline(tmp_path: Path) -> Callable[[HubLookup], Resolver]:
+def offline(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> Callable[[HubLookup], Resolver]:
     """Build a fresh `Resolver` over an empty local HF cache and this test's cache root, asking `hub` on a miss."""
 
     def make(hub: HubLookup) -> Resolver:
@@ -54,10 +56,17 @@ def offline(tmp_path: Path) -> Callable[[HubLookup], Resolver]:
             cache_dir=tmp_path / "hf-hub",
             hub=hub,
             cache_root=tmp_path / "senselab",
-            retry=RetryPolicy(attempts=3, first_backoff_s=0),
+            retry=RetryPolicy(attempts=3, first_backoff_s=FIRST_BACKOFF_S),
+            clock=lease_clock(),
         )
 
     return make
+
+
+def _slept(resolver: Resolver) -> list[float]:
+    """The waits a resolver's retry slept on its test clock."""
+    assert isinstance(resolver.clock, ManualClock)
+    return resolver.clock.slept
 
 
 def _answers(sha: str) -> HubLookup:
@@ -371,12 +380,16 @@ def test_resolution_retries_a_transient_hub_error(
             raise hub_error(429)
         return SHA_A
 
-    assert resolve_revision("org/model", "main", resolver=offline(_flaky)) == SHA_A
+    resolver = offline(_flaky)
+    assert resolve_revision("org/model", "main", resolver=resolver) == SHA_A
     assert calls["n"] == 2, "the transient error must have been retried once"
+    assert _slept(resolver) == [FIRST_BACKOFF_S]
 
 
 @pytest.mark.logic
-def test_the_resolver_retries_the_hub_under_its_own_policy(tmp_path: Path, hub_error: Callable[..., Exception]) -> None:
+def test_the_resolver_retries_the_hub_under_its_own_policy(
+    tmp_path: Path, hub_error: Callable[..., Exception], lease_clock: Callable[..., ManualClock]
+) -> None:
     """The attempts come from the resolver's `retry`, and the packaged policy is the default."""
     calls = {"n": 0}
 
@@ -388,11 +401,12 @@ def test_the_resolver_retries_the_hub_under_its_own_policy(tmp_path: Path, hub_e
         cache_dir=tmp_path / "hf-hub",
         hub=_down,
         cache_root=tmp_path / "s",
-        retry=RetryPolicy(attempts=2, first_backoff_s=0),
+        retry=RetryPolicy(attempts=2, first_backoff_s=FIRST_BACKOFF_S),
+        clock=lease_clock(),
     )
     with pytest.raises(RevisionResolutionError):
         resolver.lookup("org/model", "main")
-    assert calls["n"] == 2
+    assert calls["n"] == 2 and _slept(resolver) == [FIRST_BACKOFF_S]
     assert Resolver().retry == ExecutionProfile.load().retry
 
 

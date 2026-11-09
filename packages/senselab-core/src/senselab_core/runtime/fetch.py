@@ -273,13 +273,20 @@ def _remove_stale_downloads(top: StorageDir, tmp: StorageDir, stale_s: int, cloc
     tmp.remove_older(cutoff)
 
 
-def _download(  # noqa: PLR0913 - the source, the file it streams into, and the bound and retry on the transfer
-    url: str, opener: Callable[[str], BinaryIO], out: BinaryIO, where: Path, *, size: int, retry: RetryPolicy
+def _download(  # noqa: PLR0913 - the source, the file it streams into, and the bound, retry and clock of the transfer
+    url: str,
+    opener: Callable[[str], BinaryIO],
+    out: BinaryIO,
+    where: Path,
+    *,
+    size: int,
+    retry: RetryPolicy,
+    clock: Clock,
 ) -> None:
     """Stream `url` into the open file `out` (at `where`), reading at most `size + 1` bytes.
 
     A transfer that fails transiently (`faults.is_transient` of the opener's or the read's error) is
-    started again from the first byte under `retry`.
+    started again from the first byte under `retry`, its waits slept on `clock`.
 
     Raises:
         FetchError: the URL is not `https`, the opener or a read failed, or the source served more
@@ -305,7 +312,7 @@ def _download(  # noqa: PLR0913 - the source, the file it streams into, and the 
             raise _SourceError(f"ended after {received} of the declared {size} bytes")
 
     try:
-        retry_on_transient_error(transfer, retry)
+        retry_on_transient_error(transfer, retry, clock=clock)
     except (_SourceError, StoreUnavailable, Offline):
         raise
     except Exception as err:  # noqa: BLE001 - any other failure of the opener or a read is this source's
@@ -453,6 +460,7 @@ def _ensure_blob(  # noqa: PLR0913 - the per-file step of _fetch_into, passed th
     verify: str,
     file_mode: int,
     retry: RetryPolicy,
+    clock: Clock,
 ) -> tuple[Path, BlobStamp | None]:
     """Return `blobs/<sha256>` holding the file's bytes, and the stamp of the inode this call verified there.
 
@@ -468,7 +476,7 @@ def _ensure_blob(  # noqa: PLR0913 - the per-file step of _fetch_into, passed th
         try:
             with Staging(tmp, mode=PRIVATE_DIR_MODE) as private:
                 with os.fdopen(private.open_new(STAGED_BLOB, file_mode, grammar=STAGED_NAME), "w+b") as out:
-                    _download(url, opener, out, private.path / STAGED_BLOB, size=file.size, retry=retry)
+                    _download(url, opener, out, private.path / STAGED_BLOB, size=file.size, retry=retry, clock=clock)
                     actual = _hashed(out.fileno())
                     if actual != file.sha256:
                         tried.append(f"{url} (sha256 {actual[:12]}..., expected {file.sha256[:12]}...)")
@@ -749,7 +757,7 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
             result: dict[str, Path] = {}
             stamps: dict[str, BlobStamp] = {}
             for file in manifest.files:
-                blob, stamp = _ensure_blob(file, blobs, tmp, open_url, recorded, verify, file_mode, retry)
+                blob, stamp = _ensure_blob(file, blobs, tmp, open_url, recorded, verify, file_mode, retry, clock)
                 result[file.path] = _link(files, file.path, blob, dir_mode)
                 if stamp is not None:
                     stamps[file.sha256] = stamp
