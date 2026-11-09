@@ -1,5 +1,6 @@
 """The injected clock: monotonic time, the storage clock and waits, with the real one."""
 
+import selectors
 import threading
 import time
 from typing import TYPE_CHECKING, Protocol
@@ -31,6 +32,12 @@ class Clock(Protocol):
         """Wait up to `timeout` seconds for `event`; return whether it is set."""
         ...
 
+    def select(
+        self, selector: selectors.BaseSelector, timeout: float | None
+    ) -> list[tuple[selectors.SelectorKey, int]]:
+        """Wait up to `timeout` seconds (forever when None) for `selector`'s files; return those ready, else none."""
+        ...
+
 
 class SystemClock:
     """The real clock: `time.monotonic`, `StorageDir.dir_now`, `time.sleep` and `threading.Event.wait`."""
@@ -54,3 +61,9 @@ class SystemClock:
     def wait(self, event: threading.Event, timeout: float) -> bool:
         """Wait in `event.wait(timeout)`."""
         return event.wait(timeout)
+
+    def select(
+        self, selector: selectors.BaseSelector, timeout: float | None
+    ) -> list[tuple[selectors.SelectorKey, int]]:
+        """Wait in `selector.select(timeout)`."""
+        return selector.select(timeout)

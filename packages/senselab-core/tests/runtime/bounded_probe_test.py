@@ -5,10 +5,15 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from bounded_probe_fixture import MIB, FiniteSource, ProbeFailed, ProbeOverrun, run_bounded
+from lease_clock_fixture import Called, ManualClock
+
+PROBE_TIMEOUT_S = 8.0
+"""A probe timeout on the test clock, which a test reaches by advancing it."""
 
 
 def probe_echo(*args: str) -> list[str]:
@@ -70,13 +75,20 @@ def test_a_probe_writing_without_end_is_stopped_at_the_file_size_limit(tmp_path:
     assert target.stat().st_size <= 4 * MIB
 
 
-@pytest.mark.limits
-def test_a_probe_that_never_returns_is_killed_at_the_timeout() -> None:
-    """A child that never returns is killed once the timeout passes."""
-    started = time.monotonic()
+@pytest.mark.contract
+def test_a_probe_that_never_returns_is_killed_at_the_timeout(lease_clock: Callable[..., ManualClock]) -> None:
+    """A child that never returns is still running when half the timeout has passed, and killed at the timeout."""
+    clock = lease_clock()
+    call = Called(
+        lambda: run_bounded("bounded_probe_test:probe_sleep_forever", timeout=PROBE_TIMEOUT_S, clock=clock),
+        hang_s=clock.hang_s,
+    )
+    assert clock.parked(call.thread)
+    clock.advance(PROBE_TIMEOUT_S / 2)
+    assert clock.parked(call.thread), "the child was given up on before its timeout"
+    clock.advance_to(PROBE_TIMEOUT_S)
     with pytest.raises(subprocess.TimeoutExpired):
-        run_bounded("bounded_probe_test:probe_sleep_forever", timeout=2)
-    assert time.monotonic() - started < 30
+        call.result()
 
 
 @pytest.mark.limits

@@ -8,7 +8,7 @@ import os
 import signal
 import subprocess
 import sys
-import time
+import threading
 import warnings
 from collections.abc import Callable, Iterator
 from concurrent.futures import ProcessPoolExecutor
@@ -29,13 +29,8 @@ from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import group_alive
 from senselab_worker.fake import FAULT_KEY
 from shutdown_schedule_fixture import (
-    CASE_BOUND_S,
     KINDS,
-    PATHS,
-    REAL_GRACES,
-    case_bound,
     counted,
-    ctrl_c_bound,
     run_schedule,
     schedule,
     violations,
@@ -88,20 +83,6 @@ def test_every_injection_at_every_later_boundary_call_ends_typed_bounded_and_cle
     _check(tmp_path, kind, range(2, 100))
 
 
-@pytest.mark.logic
-@pytest.mark.parametrize("path", PATHS)
-@pytest.mark.parametrize("real_graces", [False, True])
-def test_every_case_bound_carries_load_slack_yet_fails_a_real_hang(path: str, real_graces: bool) -> None:
-    """A shrunk-grace bound stays below the real STOP grace and a real-grace bound below the faulthandler timeout.
-
-    A case that ignores the shrunk graces waits out at least the real STOP grace, and a deadlock ends at
-    `CASE_BOUND_S`; both must exceed the bound, so the load allowance never hides either.
-    """
-    bound = case_bound({"path": path, "real_graces": real_graces})
-    assert bound < (CASE_BOUND_S if real_graces else REAL_GRACES.stop)
-    assert ctrl_c_bound() < REAL_GRACES.stop
-
-
 RUNTIME_TESTS = Path(__file__).resolve().parents[1] / "runtime"
 
 
@@ -142,16 +123,8 @@ def test_close_from_a_signal_handler_inside_close_returns(tmp_path: Path) -> Non
     case = {"path": "close", "boundary": "module:_members_gone", "kind": "handler_close", "occurrence": 1}
     [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])
     assert report["fired"] and report["outcome"] is None
+    assert report["nested_acquires"] == 0, "the nested close tried to take the shutdown lock"
     assert shutdown_schedule_fixture.violations(report) == []
-
-
-@pytest.mark.limits
-def test_close_from_a_signal_handler_inside_close_returns_within_the_shutdown_bound(tmp_path: Path) -> None:
-    """The nested `close()` returns within the shrunk graces' bound."""
-    case = {"path": "close", "boundary": "module:_members_gone", "kind": "handler_close", "occurrence": 1}
-    [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])
-    assert report["fired"] and report["outcome"] is None
-    assert report["elapsed"] < shutdown_schedule_fixture.GRACES.bound
 
 
 def _in_a_child(fn: Callable[..., T], *args: object) -> T:
@@ -166,16 +139,9 @@ def test_close_from_another_thread_while_encoding_is_worker_lost(parent: Path) -
     assert _in_a_child(shutdown_schedule_fixture.close_while_encoding, str(parent), WAIT_S) == ["WorkerLost"]
 
 
-def _await_exit(client: WorkerClient) -> None:
-    end = time.monotonic() + WAIT_S
-    while client.alive:
-        assert time.monotonic() < end, "the worker did not exit"
-        time.sleep(0.01)
-
-
 @pytest.mark.logic
 @pytest.mark.parametrize("how", ["idle_sigkill", "crash_mid_request", "late_exit_notification", "exit_before_hello"])
-def test_every_death_carries_its_exit_code(parent: Path, how: str) -> None:
+def test_every_death_carries_its_exit_code(parent: Path, how: str, tier_bound: float) -> None:
     """A worker that dies idle, mid-request, before its hello or before the exit watch registers raises `WorkerLost`.
 
     The fault names the code the worker exited with.
@@ -200,7 +166,7 @@ def test_every_death_carries_its_exit_code(parent: Path, how: str) -> None:
         expected = EXIT_CRASH
         if how == "idle_sigkill":
             os.kill(client.hello["pid"], signal.SIGKILL)
-            _await_exit(client)
+            assert client.wait_exited(tier_bound), "the worker did not exit"
             expected = -signal.SIGKILL
         with pytest.raises(WorkerLost) as lost:
             client.run([{"id": "a", "inputs": {}}], params)
@@ -210,11 +176,8 @@ def test_every_death_carries_its_exit_code(parent: Path, how: str) -> None:
         client.close()
 
 
-FORK_WAIT_S = 30.0
-
-
-def _forked(action: Any) -> int:
-    """Run `action` in a forked child that exits 0, or 1 if it raised; return the child's exit status."""
+def _forked(action: Any, hang_s: float) -> int:
+    """Run `action` in a forked child that exits 0, or 1 if it raised; return its exit status; kill it at `hang_s`."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         pid = os.fork()
@@ -225,21 +188,20 @@ def _forked(action: Any) -> int:
             code = 0
         finally:
             os._exit(code)
-    end = time.monotonic() + FORK_WAIT_S
-    while True:
-        done, status = os.waitpid(pid, os.WNOHANG)
-        if done:
-            return os.waitstatus_to_exitcode(status)
-        if time.monotonic() > end:
-            os.kill(pid, signal.SIGKILL)
-            os.waitpid(pid, 0)
-            raise AssertionError("the forked child did not finish")
-        time.sleep(0.01)
+    hang_guard = threading.Timer(hang_s, os.kill, (pid, signal.SIGKILL))
+    hang_guard.start()
+    try:
+        status = os.waitpid(pid, 0)[1]
+    finally:
+        hang_guard.cancel()
+    code = os.waitstatus_to_exitcode(status)
+    assert code != -signal.SIGKILL, "the forked child did not finish"
+    return code
 
 
 @pytest.mark.contract
 @pytest.mark.parametrize("how", ["close", "collect", "run"])
-def test_a_forked_child_never_touches_the_parents_worker(parent: Path, how: str) -> None:
+def test_a_forked_child_never_touches_the_parents_worker(parent: Path, how: str, tier_bound: float) -> None:
     """In a forked child, closing, collecting or running the inherited client leaves the parent's worker alone.
 
     The parent's worker, files and channel are as they were.
@@ -257,7 +219,7 @@ def test_a_forked_child_never_touches_the_parents_worker(parent: Path, how: str)
                 with pytest.raises(WorkerLost):
                     box[0].run([{"id": "a", "inputs": {}}], {})
 
-        assert _forked(act) == 0
+        assert _forked(act, tier_bound) == 0
         client = box[0]
         assert client.alive and client.array_dir.is_dir()
         assert "outputs" in client.run([{"id": "a", "inputs": {}}], {})[0]
@@ -396,39 +358,23 @@ def test_the_escalation_hint_is_logged_once_per_process() -> None:
 
 
 @pytest.mark.contract
-def test_ctrl_c_twice_kills_reaps_and_releases_within_the_ctrl_c_bound(tmp_path: Path) -> None:
-    """With the real graces, a second SIGINT while a SIGTERM-ignoring group is stopped ends the close in about 1 s.
+def test_ctrl_c_twice_kills_reaps_and_releases(tmp_path: Path) -> None:
+    """A second SIGINT while a SIGTERM-ignoring group is stopped SIGKILLs the group before anything else is sent.
 
-    The bound adds a load allowance and stays below the real STOP grace, so a held second SIGINT still fails.
-
-    The group is SIGKILLed and reaped and the files are removed before `KeyboardInterrupt` surfaces.
+    The group is reaped and the files are removed before `KeyboardInterrupt` surfaces.
     """
     case = {
         "path": "timeout",
         "boundary": "module:_members_gone",
         "kind": "double_sigint",
         "occurrence": 1,
-        "real_graces": True,
     }
     [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])
     assert report["fired"] and report["outcome"] == "KeyboardInterrupt"
     assert report["at_outcome"] == shutdown_schedule_fixture.CLEAN
+    after = report["signals"][report["signals"].index("SIGINT2") + 1 :]
+    assert after[:1] == ["SIGKILL"], f"the first signal sent after the second SIGINT was not SIGKILL: {after}"
     assert shutdown_schedule_fixture.violations(report) == []
-
-
-@pytest.mark.limits
-def test_ctrl_c_twice_ends_the_close_within_the_ctrl_c_bound(tmp_path: Path) -> None:
-    """With the real graces, a second SIGINT ends the close within `ctrl_c_bound()`, below the real STOP grace."""
-    case = {
-        "path": "timeout",
-        "boundary": "module:_members_gone",
-        "kind": "double_sigint",
-        "occurrence": 1,
-        "real_graces": True,
-    }
-    [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])
-    assert report["fired"] and report["outcome"] == "KeyboardInterrupt"
-    assert report["elapsed"] < shutdown_schedule_fixture.ctrl_c_bound()
 
 
 @pytest.mark.contract

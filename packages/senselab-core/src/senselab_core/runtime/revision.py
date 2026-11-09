@@ -418,6 +418,8 @@ class Resolver:
     """How `hub` is retried on a transient fault; the packaged `laptop` profile's by default."""
     lease: JobLease = field(default_factory=lambda: ExecutionProfile.load().lease)
     """How the run manifest's lease beats; the packaged `laptop` profile's by default."""
+    clock: Clock = SystemClock()  # noqa: RUF009 - stateless
+    """The clock `hub`'s retry waits on."""
     memo: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
     """This resolver's answers so far, by `manifest_key`."""
 
@@ -466,7 +468,7 @@ class Resolver:
         require_online(self.network, f"resolving {repo_id}@{ref} on the Hub")
 
         try:
-            sha = retry_on_transient_error(lambda: self.hub(repo_id, ref, token), self.retry)
+            sha = retry_on_transient_error(lambda: self.hub(repo_id, ref, token), self.retry, clock=self.clock)
         except Exception as exc:
             raise RevisionResolutionError(
                 f"Cannot resolve {repo_id}@{ref} to a commit SHA: {exc}. "

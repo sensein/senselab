@@ -1,13 +1,13 @@
 """Retry of a call on a transient fault (`faults.is_transient`), under an explicit `RetryPolicy`."""
 
 import logging
-import time
 from collections.abc import Callable
 from typing import Annotated, TypeVar
 
 from pydantic import Field
 
 from senselab_core.kernel.formats import FormatTag, Formatted
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.faults import is_transient
 
 logger = logging.getLogger("senselab")
@@ -31,11 +31,14 @@ class RetryPolicy(Formatted):
 
 
 def retry_on_transient_error(
-    fn: Callable[[], _T], policy: RetryPolicy, *, sleep: Callable[[float], None] = time.sleep
+    fn: Callable[[], _T],
+    policy: RetryPolicy,
+    *,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> _T:
     """Return `fn()`, trying again after a transient fault while `policy` allows.
 
-    The waits are `policy.first_backoff_s`, then doubling. A permanent fault, or a transient one on
+    The waits, slept on `clock`, are `policy.first_backoff_s`, then doubling. A permanent fault, or a transient one on
     the last attempt, is raised as is.
     """
     for attempt in range(policy.attempts):
@@ -48,5 +51,5 @@ def retry_on_transient_error(
             logger.warning(
                 "Transient error on attempt %d/%d: %s. Retrying in %ss...", attempt + 1, policy.attempts, exc, wait
             )
-            sleep(wait)
+            clock.sleep(wait)
     raise AssertionError("unreachable: RetryPolicy.attempts is at least 1")

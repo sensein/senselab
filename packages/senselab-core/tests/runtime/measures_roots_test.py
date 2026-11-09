@@ -12,7 +12,6 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
-from aged_storage_fixture import StorageTime
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from lease_clock_fixture import ManualClock
@@ -207,8 +206,8 @@ def test_a_supersede_record_names_the_probes_it_outdates_whatever_their_mtime(tm
 @pytest.mark.contract
 def test_collect_never_removes_another_users_file(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A collector removes superseded observations, stale staging and quarantine its uid owns, and nothing else."""
-    time_ = StorageTime(lease_clock, tmp_path)
-    roots = _roots(tmp_path, clock=time_.clock)
+    clock = lease_clock(storage_root=tmp_path)
+    roots = _roots(tmp_path, clock=clock)
     paths = [roots.put_observations(UNIT, f"p{n}", [_observation()], PROVENANCE) for n in range(3)]
     for n, path in enumerate(paths):
         assert path is not None
@@ -220,12 +219,12 @@ def test_collect_never_removes_another_users_file(tmp_path: Path, lease_clock: C
     quarantined.parent.mkdir(exist_ok=True)
     for old in (staging, quarantined):
         old.mkdir()
-        time_.plant(old)
-    time_.clock.advance(2 * POLICY.quarantine_retention_s)
+        clock.plant(old)
+    clock.advance(2 * POLICY.quarantine_retention_s)
     young = measures / "tmp" / uuid.uuid4().hex
     young.mkdir()
-    time_.plant(young)
-    assert _roots(tmp_path, uid=STRANGER, clock=time_.clock).collect(kept=1) == 0
+    clock.plant(young)
+    assert _roots(tmp_path, uid=STRANGER, clock=clock).collect(kept=1) == 0
     assert all(p is not None and p.exists() for p in paths) and staging.exists() and quarantined.exists()
     assert roots.collect(kept=1) == 4
     assert [p.exists() for p in paths if p is not None] == [False, False, True]
@@ -356,13 +355,13 @@ def test_a_stale_lease_is_not_live_in_a_root_that_cannot_be_written(
     tmp_path: Path, lease_clock: Callable[..., ManualClock]
 ) -> None:
     """On a read-only root the lease's age is judged on the clock's local time, so it goes stale as that advances."""
-    time_ = StorageTime(lease_clock, tmp_path)
-    holder = _roots(tmp_path, clock=time_.clock).probe_lease(UNIT)
+    clock = lease_clock(storage_root=tmp_path)
+    holder = _roots(tmp_path, clock=clock).probe_lease(UNIT)
     assert isinstance(holder, Lease)
     with holder:
         subprocess.run(["chmod", "-R", "a-w", str(tmp_path)], check=True)
         try:
-            blind = _Unreadable(poll_s=0.0, hang_s=0.0, storage_origin=time_.origin)  # never waits
+            blind = _Unreadable(poll_s=0.0, hang_s=0.0, storage_origin=clock.origin)  # never waits
             reader = _roots(tmp_path, clock=blind)
             assert reader.peer_holds(UNIT)
             blind.advance(2 * STALE_S)

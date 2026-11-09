@@ -2,7 +2,8 @@
 
 import importlib
 import os
-from collections.abc import Callable
+import subprocess
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -56,3 +57,39 @@ def lease_clock(slack_tests: dict[str, Any], tier_bound: float) -> Callable[...,
         )
 
     return make
+
+
+@pytest.fixture
+def no_leaked_processes(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[subprocess.Popen[bytes]]]:
+    """Fail a test that leaves a worker process running or unreaped.
+
+    Records every ``Popen`` the client creates and asserts each has been waited on
+    (``returncode`` is set only by ``poll``/``wait``), so a zombie counts as a leak and
+    children spawned by other tests, such as multiprocessing helpers, are ignored.
+    """
+    spawned: list[subprocess.Popen[bytes]] = []
+    real = subprocess.Popen
+
+    class _Recording(real):  # type: ignore[valid-type, misc]
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)
+            spawned.append(self)
+
+    monkeypatch.setattr(subprocess, "Popen", _Recording)
+    yield spawned
+    monkeypatch.undo()
+    leaked = [p.pid for p in spawned if p.returncode is None]
+    for p in spawned:
+        if p.returncode is None:
+            p.kill()
+            p.wait()
+    assert leaked == []
+
+
+@pytest.fixture
+def array_parent(tmp_path: Path) -> Iterator[Path]:
+    """A parent for the client's array directory, which must hold nothing after the test."""
+    path = tmp_path / "arrays"
+    path.mkdir()
+    yield path
+    assert list(path.iterdir()) == []

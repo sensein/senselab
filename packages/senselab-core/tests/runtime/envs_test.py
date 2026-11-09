@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 import senselab_worker
-from aged_storage_fixture import StorageTime
 from lease_clock_fixture import ManualClock
 from lease_time_fixture import install, on_create
 from senselab_core.kernel.declare import Env
@@ -331,12 +330,12 @@ def test_other_venv_failure_is_not_managed_python_missing(
     assert not isinstance(info.value, ManagedPythonMissing)
 
 
-def _plant_lease(tmp_path: Path, time_: StorageTime, age_s: float) -> Path:
+def _plant_lease(tmp_path: Path, clock: ManualClock, age_s: float) -> Path:
     overlay = identity_digest(OVERLAY_DIGEST_TAG, [senselab_worker.runtime_identity(), []])
     lease = tmp_path / "envs" / f"demo-cu128-{overlay[:16]}.lease"
     (lease / ("0" * 32)).mkdir(parents=True)
     for path in (lease / ("0" * 32), lease):
-        time_.plant(path, age_s)
+        clock.plant(path, age_s)
     return lease
 
 
@@ -344,17 +343,15 @@ def test_profile_lease_bound_breaks_an_expired_build_lease(
     tmp_path: Path, uv_log: Path, lease_clock: Callable[..., ManualClock]
 ) -> None:
     """The profile's `lease.stale_after_s` reaches the build lease: older is broken at once, younger is waited out."""
-    time_ = StorageTime(lease_clock, tmp_path)
-    _plant_lease(tmp_path, time_, age_s=120.0)
+    clock = lease_clock(storage_root=tmp_path)
+    _plant_lease(tmp_path, clock, age_s=120.0)
     old = JobLease(stale_after_s=60.0, renew_fraction=0.33, attribute_delay_s=0)
-    _ensure(tmp_path, _lock(tmp_path), lease=old, clock=time_.clock)
-    assert time_.clock.slept == [], "an expired lease is broken without a wait"
-    lease = _plant_lease(tmp_path, time_, age_s=0.0)
+    _ensure(tmp_path, _lock(tmp_path), lease=old, clock=clock)
+    assert clock.slept == [], "an expired lease is broken without a wait"
+    lease = _plant_lease(tmp_path, clock, age_s=0.0)
     young = JobLease(stale_after_s=1.0, renew_fraction=0.33, attribute_delay_s=0)
-    _ensure(tmp_path, _lock(tmp_path, body="scipy==1.14.0\n"), lease=young, clock=time_.clock)
-    assert young.stale_after_s <= time_.clock.now() < young.stale_after_s + 2 * POLL_S, (
-        "held until it aged past its bound"
-    )
+    _ensure(tmp_path, _lock(tmp_path, body="scipy==1.14.0\n"), lease=young, clock=clock)
+    assert young.stale_after_s <= clock.now() < young.stale_after_s + 2 * POLL_S, "held until it aged past its bound"
     assert not lease.exists()
 
 

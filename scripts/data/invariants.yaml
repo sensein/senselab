@@ -119,10 +119,10 @@ pending:
   name: _LOGGED_LINE_BYTES
   register: R-219
 - path: packages/senselab-core/src/senselab_core/runtime/worker_client.py
-  name: _READ_BYTES
-  register: R-219
-- path: packages/senselab-core/src/senselab_core/runtime/worker_client.py
   name: _STDERR_LINE_BYTES
+  register: R-219
+- path: packages/senselab-core/src/senselab_core/runtime/worker_pipes.py
+  name: READ_BYTES
   register: R-219
 - path: packages/senselab-core/src/senselab_core/testing/contracts.py
   name: HASH_SEED_TIMEOUT_S
