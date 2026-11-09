@@ -194,8 +194,13 @@ def worker_command(run_dir: Path, profile_argument: str) -> list[str]:
 
 
 def worker_id() -> str:
-    """Return this process's worker id: its Slurm job id, else its process id."""
-    return os.environ.get("SLURM_JOB_ID") or str(os.getpid())
+    """Return this process's worker id: its process id, led by its Slurm job id and an opaque host token when set.
+
+    Workers of one allocation share the job id, so it alone does not tell them apart; the process id does on one host
+    and the host token between hosts. The id names no host, account or path.
+    """
+    job = os.environ.get("SLURM_JOB_ID")
+    return f"{job}-{host_token()[:8]}-{os.getpid()}" if job else str(os.getpid())
 
 
 @dataclass(frozen=True)
