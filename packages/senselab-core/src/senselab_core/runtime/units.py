@@ -8,6 +8,7 @@ what is true of the state.
 import sysconfig
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from typing import Protocol
 
 from senselab_core.kernel.declare import BackendSpec, Env
 from senselab_core.runtime.calibration import (
@@ -40,6 +41,17 @@ class Unresolved:
     """A unit that cannot be built yet, with the reason, true of the state, that it cannot."""
 
     reason: str
+
+
+@dataclass(frozen=True)
+class HardwareUnseen(Unresolved):
+    """A unit whose only gap is that no worker of its class has reported the hardware it runs on.
+
+    Attributes:
+        seen: The class this host reports for the resource class: the one a first hello would confirm.
+    """
+
+    seen: HardwareClass | None = None
 
 
 class _NoPackaged:
@@ -123,18 +135,26 @@ class UnitResolver:
         """The hardware the resolver reads: the given, else this host's probe (once per process)."""
         return self._hardware_info if self._hardware_info is not None else host_hardware()
 
-    def unit(self, call: Call, placement: Placement, decoder: str | None = None) -> MeasureUnit | Unresolved:
+    def unit(
+        self,
+        call: Call,
+        placement: Placement,
+        decoder: str | None = None,
+        hardware: HardwareClass | None = None,
+    ) -> MeasureUnit | Unresolved:
         """Return the unit of `call` run as `placement`, whose file-backed inputs are read by `decoder` (None: none).
 
-        A bucketed backend's formation is the grid's, whichever bucket a job falls in.
+        A bucketed backend's formation is the grid's, whichever bucket a job falls in. `hardware` is the class a
+        worker's hello reported; it replaces this host's, which then need not be in the index.
         """
         backend = placement.backend
         handle = self.envs.get(backend)
         if isinstance(handle, Unresolved):
             return handle
-        hardware = self._hardware(placement)
-        if isinstance(hardware, Unresolved):
-            return hardware
+        found = hardware if hardware is not None else self._hardware(placement)
+        if isinstance(found, Unresolved):
+            return found
+        hardware = found
         try:
             expected = service_of(backend, call.model)
         except (LookupError, ValueError) as err:
@@ -167,8 +187,9 @@ class UnitResolver:
         except ValueError as err:
             return Unresolved(f"this host reports no hardware class for {placement.resource_class!r}: {err}")
         if here not in self.roots.seen_classes(resource):
-            return Unresolved(
-                f"hardware not yet seen on this host: no worker of class {placement.resource_class!r} reported it"
+            return HardwareUnseen(
+                f"hardware not yet seen on this host: no worker of class {placement.resource_class!r} reported it",
+                here,
             )
         return here
 
@@ -181,7 +202,31 @@ def decoder_of(jobs: Sequence[Job]) -> str | None | Unresolved:
     return next(iter(found), None)
 
 
+class UnitReads(Protocol):
+    """What a pool reads to place a call: the env states and the unit of a call."""
+
+    envs: EnvStates
+
+    def unit(
+        self,
+        call: Call,
+        placement: Placement,
+        decoder: str | None = None,
+        hardware: HardwareClass | None = None,
+    ) -> MeasureUnit | Unresolved:
+        """Return the unit of `call` run as `placement`, `hardware` the class a worker's hello reported."""
+
+
 UnitOf = Callable[[Call, Placement, str | None], MeasureUnit | Unresolved]
 """What the in-process executor resolves a unit by: the call (its model set), its placement and its decoder."""
 
-__all__ = ["UnitOf", "UnitResolver", "Unresolved", "decoder_of", "default_measures", "measure_roots"]
+__all__ = [
+    "HardwareUnseen",
+    "UnitOf",
+    "UnitReads",
+    "UnitResolver",
+    "Unresolved",
+    "decoder_of",
+    "default_measures",
+    "measure_roots",
+]

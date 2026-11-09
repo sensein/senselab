@@ -226,6 +226,7 @@ def _probe_items(
     )
     placed, store, pool_dir = _items(profile, tmp_path, [f"0.00{i}" for i in range(count + 1)])
     queue = QueueSet(pool_dir, profile).queue(probe_queue("cpu", "p1"))
+    queue.set_probe_hardware(HARDWARE)
     for item in _one_job_items(placed, range(count)):
         queue.put_probe(item, "SINGLE", 1)
     return placed, store, pool_dir, profile, queue
@@ -290,9 +291,9 @@ def test_a_worker_lists_probe_queues_once_per_refresh(tmp_path: Path, obs: dict[
         clock=lambda: now[0],
     )
     assert worker._next(None, 4) is None  # noqa: SLF001 - the claim step, with nothing queued yet
-    QueueSet(pool_dir, profile).queue(probe_queue("cpu", "p1")).put_probe(
-        _one_job_items(placed, range(1))[0], "SINGLE", 0
-    )
+    later = QueueSet(pool_dir, profile).queue(probe_queue("cpu", "p1"))
+    later.set_probe_hardware(HARDWARE)
+    later.put_probe(_one_job_items(placed, range(1))[0], "SINGLE", 0)
     assert worker._next(None, 4) is None  # noqa: SLF001 - listed within the refresh: not seen
     now[0] = obs["presence_refresh_s"] + 1
     claim = worker._next(None, 4)  # noqa: SLF001 - listed again: seen and taken
@@ -327,3 +328,31 @@ def test_a_pinned_worker_waits_on_its_probe_queue_from_the_first_poll(tmp_path: 
     worker.serve()
     threads[0].join()
     assert len(worker.served) == 4 and reached[0] - began < obs["first_bound_s"]
+
+
+@pytest.mark.logic
+def test_only_a_worker_of_the_recorded_class_takes_a_probe_queues_lease(tmp_path: Path, obs: dict[str, Any]) -> None:
+    """A worker of another class than the probe queue's recorded one skips it, and so does any while none is recorded.
+
+    The lease is never taken, so nothing runs the probe on the wrong card.
+    """
+    placed, store, pool_dir, profile, queue = _probe_items(tmp_path, 2, obs)
+    other = HardwareClass(device="cpu", name="another cpu", cpus=2)
+    elsewhere = PoolWorker(
+        pool_dir,
+        ["cpu"],
+        profile=profile,
+        store=store,
+        send=_sender(store, profile),
+        device_memory=lambda: None,
+        hardware=lambda _: other,
+        cotenancy=lambda _: SHARED,
+    )
+    elsewhere.serve()
+    assert elsewhere.served == []
+    unrecorded = QueueSet(pool_dir, profile).queue(probe_queue("cpu", "p2"))
+    unrecorded.put_probe(_one_job_items(placed, range(2, 3))[0], "SINGLE", 0)
+    assert queue.probe_hardware() == HARDWARE and unrecorded.probe_hardware() is None
+    matching = _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile))
+    matching.serve()
+    assert {q for q, _ in matching.served} == {probe_queue("cpu", "p1")} and unrecorded.serve_lease() is not None

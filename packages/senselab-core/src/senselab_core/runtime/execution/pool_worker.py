@@ -47,7 +47,7 @@ from senselab_core.runtime.execution.observing import (
     records_of,
 )
 from senselab_core.runtime.execution.pool import report, run_plan
-from senselab_core.runtime.execution.queue import Claim, QueueSet, ServeLease, UnmarkedProbeItem, probe_of
+from senselab_core.runtime.execution.queue import Claim, Queue, QueueSet, ServeLease, UnmarkedProbeItem, probe_of
 from senselab_core.runtime.execution.services import service_registry
 from senselab_core.runtime.execution.substrates import (
     EXIT_UNREACHABLE,
@@ -334,7 +334,8 @@ class PoolWorker:
         """Return the probe queues of this worker's queues it serves, oldest first.
 
         A worker serves a probe queue while it holds that queue's serve lease; it takes the lease of one with waiting
-        work, and skips one whose lease is live under another worker. A lease it lost is dropped. The run's queues are
+        work whose recorded hardware class is its own (none recorded: none takes it), and skips one whose lease is live
+        under another worker. A lease it lost is dropped. The run's queues are
         listed at most once per `pool.presence_refresh_s`.
         """
         for name, kept in list(self._serving.items()):
@@ -348,10 +349,19 @@ class PoolWorker:
                 found = probe_of(name)
                 if found is not None and found[0] in self.classes and name not in self._serving:
                     queue = self.queues.queue(name)
-                    if queue.oldest_age_s() is not None and (lease := queue.serve_lease()) is not None:
-                        self._serving[name] = lease
+                    if queue.oldest_age_s() is not None and self._serves(queue):
+                        if (lease := queue.serve_lease()) is not None:
+                            self._serving[name] = lease
         ages = {n: self.queues.queue(n).oldest_age_s() or 0.0 for n in self._serving}
         return sorted(ages, key=lambda n: -ages[n])
+
+    def _serves(self, queue: Queue) -> bool:
+        """Return whether this worker is of the class the probe queue names; false while it names none."""
+        wanted = queue.probe_hardware()
+        try:
+            return wanted is not None and self._hardware(class_of(queue.name)) == wanted
+        except ValueError:
+            return False
 
     def _next(self, prefer: str | None, left: int) -> Claim | None:
         """Claim up to `left` jobs from `prefer`, else from the class with the oldest work; None if none.
