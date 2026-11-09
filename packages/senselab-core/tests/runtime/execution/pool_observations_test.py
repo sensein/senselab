@@ -174,7 +174,7 @@ def test_a_request_reports_the_class_of_the_fault_it_raised(tmp_path: Path) -> N
 
 @pytest.mark.logic
 def test_a_request_names_the_one_class_all_its_items_failed_with(tmp_path: Path) -> None:
-    """Nothing raises on the host: two items out of memory say `resource`; one beside a content fault, none."""
+    """Nothing raises: two items out of memory say `resource` and split; one beside a content fault, none."""
     profile = _profile(quantum_items=2)
     with packaged(registry(TIMED, worker=CROWDED), tmp_path / "cache"):
         placed, store, pool_dir = _items(profile, tmp_path, ["oom", "oom", "oom", "fail"])
@@ -186,9 +186,26 @@ def test_a_request_names_the_one_class_all_its_items_failed_with(tmp_path: Path)
         _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile)).serve()
     found = _observations(pool_dir, profile)
     assert sorted((o.batch, o.outcome, str(o.fault)) for o in found) == [
+        (1, "failed", "resource"),
+        (1, "failed", "resource"),
+        (2, "bisected", "resource"),
         (2, "failed", "None"),
-        (2, "failed", "resource"),
     ]
+
+
+@pytest.mark.logic
+def test_a_request_names_no_class_when_its_items_failed_with_two(tmp_path: Path) -> None:
+    """An item out of memory beside a content fault in one request of two: no class, and nothing is split."""
+    profile = _profile(quantum_items=2)
+    with packaged(registry(TIMED, worker=CROWDED), tmp_path / "cache"):
+        placed, store, pool_dir = _items(profile, tmp_path, ["oom", "fail"])
+        admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
+        fragment = node_fragment(placed, admission, elements=[(e,) for e in range(2)])
+        whole = fragment.placement.model_copy(update={"batch_size": 2})
+        QueueSet(pool_dir, profile).queue("cpu").put(fragment.model_copy(update={"placement": whole}))
+        _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile)).serve()
+    found = _observations(pool_dir, profile)
+    assert [(o.batch, o.outcome, str(o.fault)) for o in found] == [(2, "failed", "None")]
 
 
 @pytest.mark.logic

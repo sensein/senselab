@@ -49,7 +49,8 @@ class Sent:
     """One call of a claim's `send` for `refs`: its wall seconds, the requests it made, and how it failed if it did.
 
     `failure` is `bisected` where the call raised and was split in halves, `failed` where it raised and was not;
-    a call that raised made no request of its own to report.
+    a call that raised made no request of its own to report. A request that returned only resource faults is a
+    `bisected` call of its own jobs with its report.
     """
 
     refs: tuple[JobRef, ...]
@@ -78,6 +79,11 @@ def records_of(sent: Sent) -> list[RequestRecord]:
 
     A report tagged with nothing belongs to every job of the call.
     """
+    if sent.failure is not None and sent.reports:
+        return [
+            RequestRecord(sent.refs, sent.wall_s, r.items, r.since_load, r.load_s, r.device, sent.failure, sent.fault)
+            for r in sent.reports
+        ]
     if sent.failure is not None:
         return [RequestRecord(sent.refs, sent.wall_s, len(sent.refs), None, None, None, sent.failure, sent.fault)]
     return [

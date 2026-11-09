@@ -69,6 +69,7 @@ from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.measures import env_identity
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.request_reports import RequestReport
 from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.storage import StorageUnsupported, probe_capabilities
 from senselab_core.runtime.store import ResultStore
@@ -96,6 +97,16 @@ def whole(exc: BaseException) -> bool:
     return isinstance(exc, (WorkerLost, WorkerFatal, ProtocolError)) or classify(exc) is FaultClass.RESOURCE
 
 
+def _ran_out(members: "Sequence[Member]", outcomes: Sequence[JobOutcome], report: RequestReport) -> list[int]:
+    """Return the indices of the members of the request `report` names, when it has several and every one ran out."""
+    named = {t for t in report.tags if isinstance(t, JobRef)}
+    at = [i for i, m in enumerate(members) if m.job.ref in named]
+    if len(at) < 2 or len(at) != len(named):  # noqa: PLR2004 - a request of one has none to split
+        return []
+    ran = all(isinstance(o, Failed) and o.failure.fault == FaultClass.RESOURCE.value for o in (outcomes[i] for i in at))
+    return at if ran else []
+
+
 def failure_of(exc: BaseException) -> FaultRecord:
     """Return the fault record of `exc`, classified as a worker classifies it (`error_record`)."""
     return FaultRecord.of(error_record(exc))
@@ -121,9 +132,11 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
 ) -> list[JobOutcome]:
     """Return one outcome per member, sent as one request; one that fails as a whole is split in halves.
 
-    A member alone whose request fails as a whole gets that failure. Any other exception is the failure of every
-    member of the request that raised it, so a half that completed keeps its outcomes. Each call of `send` is given
-    to `record` as a `Sent`, timed by itself on `clock`, with the requests it made, each timed on `clock` too.
+    A request of a call that did not raise, which holds several jobs and gave a resource fault for each, is split too;
+    the call's other requests keep their outcomes and reports. A member alone whose request fails as a whole gets that
+    failure. Any other exception is the failure of every member of the request that raised it, so a half that
+    completed keeps its outcomes. Each call of `send` is given to `record` as a `Sent`, timed by itself on `clock`,
+    with the requests it made, each timed on `clock` too.
 
     Raises:
         Abandoned: `cancelled` was set before a request, or while one ran.
@@ -149,13 +162,54 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
             if len(members) == 1:
                 logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)
             return [Failed(m.job.ref, m.key, failure_of(exc)) for m in members]
-        half = len(members) // 2
-        return bisect(members[:half], placement, send, cancelled, record, clock) + bisect(
-            members[half:], placement, send, cancelled, record, clock
-        )
+        return _halves(members, placement, send, cancelled, record, clock)
+    return _split_requests(members, outcomes, reported, began, (placement, send, cancelled, record, clock))
+
+
+def _split_requests(
+    members: Sequence[Member],
+    outcomes: list[JobOutcome],
+    reported: Sequence[RequestReport],
+    began: float,
+    again: tuple[Placement, Send, threading.Event | None, Callable[[Sent], None] | None, Clock],
+) -> list[JobOutcome]:
+    """Return `outcomes`, where each request of several jobs that all ran out is replaced by its halves' outcomes.
+
+    The requests that did not run out keep their outcomes and reports; each that did is given to `record` as a
+    `bisected` resource fault with its own report, and its jobs are sent again in halves.
+    """
+    placement, send, cancelled, record, clock = again
+    faulted = [(r, at) for r in reported if (at := _ran_out(members, outcomes, r))]
+    merged = list(outcomes)
+    for ran, at in faulted:
+        sub = [members[i] for i in at]
+        if record is not None:
+            record(Sent(tuple(m.job.ref for m in sub), ran.wall_s or 0.0, (ran,), "bisected", "resource"))
+        for i, outcome in zip(at, _halves(sub, placement, send, cancelled, record, clock), strict=True):
+            merged[i] = outcome
     if record is not None:
-        record(Sent(refs, clock.now() - began, tuple(reported), None))
-    return outcomes
+        gone = {i for _, at in faulted for i in at}
+        kept = tuple(r for r in reported if all(r is not f for f, _ in faulted))
+        refs = tuple(m.job.ref for i, m in enumerate(members) if i not in gone)
+        wall = clock.now() - began - sum(f.wall_s or 0.0 for f, _ in faulted)
+        if refs:
+            record(Sent(refs, max(0.0, wall), kept, None))
+    return merged
+
+
+def _halves(  # noqa: PLR0913 - `bisect`'s own arguments
+    members: Sequence[Member],
+    placement: Placement,
+    send: Send,
+    cancelled: threading.Event | None,
+    record: Callable[[Sent], None] | None,
+    clock: Clock,
+) -> list[JobOutcome]:
+    """Return the outcomes of `members` sent as two requests, each half through `bisect`."""
+    half = len(members) // 2
+    return bisect(members[:half], placement, send, cancelled, record, clock) + bisect(
+        members[half:], placement, send, cancelled, record, clock
+    )
 
 
 @dataclass

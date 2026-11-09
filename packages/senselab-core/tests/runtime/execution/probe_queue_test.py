@@ -349,3 +349,41 @@ def test_only_another_major_of_the_ready_mark_is_no_mark(tmp_path: Path) -> None
         path = tmp_path / f"mark-{tag}"
         path.write_bytes(jcs_dumps({**document, **({} if tag is None else {"format": tag})}))
         assert (read_mark(path) is not None) is readable, tag
+
+
+@pytest.mark.logic
+def test_workers_of_one_slurm_allocation_have_distinct_marks_and_see_each_other(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, probe: dict[str, Any]
+) -> None:
+    """Two workers under one `SLURM_JOB_ID` write two marks, and each reads a co-tenancy of 2."""
+    monkeypatch.setenv("SLURM_JOB_ID", "4242")
+    code = (
+        "import sys, time; from pathlib import Path; from senselab_core.runtime.execution.substrates import mark_ready;"
+        f"mark_ready(Path(sys.argv[1])); print('ready', flush=True); time.sleep({probe['peer_lifetime_s']})"
+    )
+    peer = subprocess.Popen([sys.executable, "-c", code, str(tmp_path)], stdout=subprocess.PIPE, text=True)
+    try:
+        assert peer.stdout is not None and peer.stdout.readline().strip() == "ready"
+        mark_ready(tmp_path)
+        marks = [p for p in (tmp_path / WORKERS_DIR).iterdir() if not p.name.startswith(".")]
+        assert len(marks) == 2
+        presence = Presence(ExecutionProfile.load(), tmp_path, report=lambda: HOST, run=lambda *_: "")
+        assert presence.cotenancy("cpu").host == 2
+    finally:
+        peer.kill()
+        peer.wait()
+
+
+@pytest.mark.logic
+def test_a_worker_id_ends_in_a_per_process_nonce_in_or_out_of_slurm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The id carries the process id and a nonce fixed for the process, so a process id reused names another worker."""
+    from senselab_core.runtime.execution.substrates import worker_id  # noqa: PLC0415 - beside its one use
+
+    code = "from senselab_core.runtime.execution.substrates import worker_id; print(worker_id())"
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    here = worker_id()
+    assert here == worker_id() and here.split("-")[1] == str(os.getpid())
+    ids = {subprocess.check_output([sys.executable, "-c", code], text=True).strip() for _ in range(2)}
+    assert len(ids) == 2 and all(len(i.split("-")[-1]) == 8 for i in ids)
+    monkeypatch.setenv("SLURM_JOB_ID", "77")
+    assert worker_id().startswith("77-") and worker_id().split("-")[2] == str(os.getpid())
