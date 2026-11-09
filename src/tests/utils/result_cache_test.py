@@ -86,6 +86,19 @@ def test_the_first_writer_wins() -> None:
     assert entry is not None and entry["result"] == {"n": 1}
 
 
+def test_a_replacing_write_takes_the_key() -> None:
+    """A caller that found the held result stale replaces it whole, its origin with it."""
+    key = ci.result_cache_key(**_BASE)
+    assert ci.result_store(key, {"n": 1}, process="clearvoice", model_id=None, commit_sha=None)
+    assert ci.annotate_result_origin(key, {"run": "r1"})
+    assert ci.result_store(key, {"n": 2}, process="clearvoice", model_id=None, commit_sha=None, replace=True)
+    entry = ci.result_lookup(key)
+    assert entry is not None and entry["result"] == {"n": 2} and entry["origin"] is None
+    assert not [
+        path for path in ci._entry_dir(ci.result_cache_dir(), key).parent.iterdir() if path.name.startswith(".")
+    ]  # type: ignore[arg-type]
+
+
 def test_the_origin_is_recorded_once() -> None:
     """The first caller to name where an entry was computed is the one a later hit reports."""
     key = ci.result_cache_key(**_BASE)

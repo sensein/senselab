@@ -38,6 +38,7 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.redaction.api import apply_redactions
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE, COHORT_READING
+from senselab.audio.workflows.triage.cohort_stage import stale_reading_facts
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.ddk_task import CYCLE, DDK_READING, SYLLABLE
@@ -52,10 +53,10 @@ from senselab.audio.workflows.triage.nodes.airway_task import (
 from senselab.audio.workflows.triage.nodes.background import BACKGROUND_NODE, SESSION_FLOOR, SESSION_NODE
 from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
-    EXPECTATIONS,
     Expectation,
     Pattern,
     declared_task_family,
+    task_owner,
 )
 from senselab.audio.workflows.triage.nodes.common import (
     REMINT,
@@ -595,7 +596,8 @@ def _task_evidence(
         on its cough-onset reading; the reading's absent inputs
         then stand for the owner's, and a reading AIRWAY never wrote is itself an absent input.
     """
-    owners = tuple(branch for branch, rows in EXPECTATIONS.items() if declared_family and declared_family in rows)
+    owner = task_owner(store, declared_family)
+    owners = (owner[0],) if owner is not None else ()
     recording = next(
         (
             stream
@@ -605,7 +607,7 @@ def _task_evidence(
         None,
     )
     duration = recording.extent[1] - recording.extent[0] if recording is not None and recording.extent else None
-    airway = EXPECTATIONS["AIRWAY"].get(declared_family or "") if "AIRWAY" in owners else None
+    airway = owner[1] if owner is not None and owner[0] == "AIRWAY" else None
     needed = required_event(declared_family) if "AIRWAY" in owners else None
     absent = _owner_absent_inputs(store, owners, gate_record)
     breath_mode: str | None = None
@@ -620,14 +622,14 @@ def _task_evidence(
         cough_mode = COUGH_PERFORMED if airway.required_count is None else COUGH_COUNTED
         cough, missing = _airway_reading(store, COUGH_READING)
         absent = missing if cough is not None or missing else absent
-    voice = EXPECTATIONS["VOICE"].get(declared_family or "") if "VOICE" in owners else None
+    voice = owner[1] if owner is not None and owner[0] == "VOICE" else None
     voice_mode: str | None = None
     phonation: dict[str, Any] | None = None
     if voice is not None:
         voice_mode = "glide" if voice.pattern == Pattern.GLIDE else "sustained"
         phonation, missing = _voice_reading(store)
         absent = missing if phonation is not None or missing else absent
-    speech = EXPECTATIONS["SPEECH"].get(declared_family or "") if "SPEECH" in owners else None
+    speech = owner[1] if owner is not None and owner[0] == "SPEECH" else None
     ddk_mode: str | None = None
     ddk: dict[str, Any] | None = None
     if speech is not None and speech.pattern in SYLLABLE_PATTERNS:
@@ -1121,21 +1123,17 @@ def _hint_claims(
     return {decision.branch: True for decision in decisions.values() if decision.declared}
 
 
-def declared_expectation(declared_family: str | None) -> tuple[str, Expectation] | None:
-    """The branch that owns the declared task, and the row it holds for it.
+def declared_expectation(store: ProvStore, declared_family: str | None) -> tuple[str, Expectation] | None:
+    """The branch that owns the declared task, and what the task asks for, as ADMIT recorded them.
 
     Args:
+        store: The provenance store, read for ADMIT's record of the task (:func:`~.branches.task_owner`).
         declared_family: The task family the recording declares, or None.
 
     Returns:
-        ``(branch, expectation)``, or None when nothing declares a family this graph has a row for.
+        ``(branch, expectation)``, or None when nothing declares a family or describes it.
     """
-    if declared_family is None:
-        return None
-    for branch, table in EXPECTATIONS.items():
-        if declared_family in table:
-            return branch, table[declared_family]
-    return None
+    return task_owner(store, declared_family)
 
 
 def gate_readings(store: ProvStore, names: Sequence[str]) -> dict[str, Any]:
@@ -1340,7 +1338,7 @@ def gate_conformance(
         The outcome. Its conformance is :data:`UNDETERMINED` whenever no group was resolved, the
         owning branch left no in-family report, or any applied gate could not be answered.
     """
-    owner = declared_expectation(declared_family)
+    owner = declared_expectation(store, declared_family)
     if owner is None:
         return GateOutcome(None, UNDETERMINED, None, ())
     branch, expectation = owner
@@ -1482,6 +1480,10 @@ def verdict(
     annotation, annotation_ids = _llm_redaction(store)
     opinion, opinion_ids = _second_opinion(store)
     cohort = find_measurement(store, COHORT_READING)
+    stale = stale_reading_facts(store, cohort.attributes) if cohort is not None else []
+    stale_cohort = {"reading": cohort.id, "facts": stale} if cohort is not None and stale else None
+    if stale_cohort is not None:
+        cohort = None
     resolved_ran = {**_derived_ran(store, node_verdicts, reports), **(ran or {})}
     policy = FoldPolicy.from_config(config)
     off_stages = frozenset(off_notes(config.values))
@@ -1516,7 +1518,11 @@ def verdict(
     )
 
     software = software_agent(store)
-    activity = store.activity(node=NODE, step=None, parameters={"config_hash": config.config_hash})
+    activity = store.activity(
+        node=NODE,
+        step=None,
+        parameters={"config_hash": config.config_hash, **({"cohort_stale": stale_cohort} if stale_cohort else {})},
+    )
     store.was_associated_with(activity, software)
     folded_ids = (
         [entity.id for entity, _ in pairs]

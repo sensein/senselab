@@ -344,6 +344,28 @@ def test_a_rerun_of_one_recording_contributes_once_at_its_latest_timestamp(tmp_p
     assert extent.start_s == 2.0
 
 
+def test_two_recordings_sharing_a_stem_in_one_folder_are_two_rows(tmp_path: Path) -> None:
+    """Review D1: the table's recording id, not the stem, tells a rerun from another recording named alike."""
+    rows = [
+        {
+            "participant": "p",
+            "session": "s",
+            "task": "x",
+            "stem": "rec",
+            "run_dir": f"p/s/rec_{stamp}",
+            "recording_id": rid,
+        }
+        for stamp, rid in (("20260920-010000", "a/rec"), ("20260920-020000", "b/rec"), ("20260920-030000", "b/rec"))
+    ]
+    path = tmp_path / "recording_vectors.parquet"
+    pq.write_table(pa.table({name: [row[name] for row in rows] for name in rows[0]}), path)
+    grouped = sv.table_recordings(path, sv.ScanReport())
+    assert sorted((row["recording_id"], row["run_dir"]) for row in grouped["p"]) == [
+        ("a/rec", "p/s/rec_20260920-010000"),
+        ("b/rec", "p/s/rec_20260920-030000"),
+    ]
+
+
 def test_speakers_are_the_table_s_participants_wherever_the_runs_sit(tmp_path: Path) -> None:
     """Runs in folders that name no subject are grouped by the participant the table records for them."""
     elsewhere = {"participant": "x", "session": "y", "task": "one"}
@@ -680,3 +702,42 @@ def test_two_overlapping_extents_of_one_recording_cast_one_vote(
     # Per-extent weighting would have given the two-extent recording two of three votes (0.89/0.45).
     assert vector[0] == pytest.approx(0.7071, abs=1e-3)
     assert vector[1] == pytest.approx(0.7071, abs=1e-3)
+
+
+def test_the_floor_is_read_from_the_newest_dated_profile_any_layer_holds(
+    without_triage_profile: None, tmp_path: Path
+) -> None:
+    """A profile's newer speaker-vector file is read; the floor names no one dated file (review H2)."""
+    import yaml  # type: ignore[import-untyped]
+
+    from senselab.audio.workflows.triage.dataset_profile import activate_profile, deactivate_profile, load_profile
+    from senselab.audio.workflows.triage.speaker_vectors import load_min_extent_s
+
+    root = tmp_path / "p"
+    (root / "svp").mkdir(parents=True)
+    (root / "svp" / "2099-01-01.yaml").write_text("schema_version: '1'\nmin_extent_s: 2.5\n")
+    manifest = {"name": "p", "version": "0", "extends": "senselab:adult_clinical_speech"}
+    (root / "profile.yaml").write_text(yaml.safe_dump({**manifest, "files": {"speaker_vector_profile": "svp"}}))
+    activate_profile(load_profile(root))
+    try:
+        assert load_min_extent_s() == 2.5
+    finally:
+        deactivate_profile()
+    activate_profile(load_profile("senselab:adult_clinical_speech"))
+    try:
+        assert load_min_extent_s() != 2.5
+    finally:
+        deactivate_profile()
+
+
+def test_one_speakers_runs_sharing_a_stem_are_told_apart() -> None:
+    """Review D2: two runs of one stem give two extent ids and two recordings; a unique stem's id is unchanged."""
+    from senselab.audio.workflows.triage.speaker_vectors import Extent, tell_shared_stems_apart
+
+    def extent(stem: str, run_dir: str) -> Extent:
+        return Extent("p1", "s1", "t", stem, run_dir, Path("/x.flac"), 1.0, 4.0, "speech", None)
+
+    marked = tell_shared_stems_apart([extent("reading", "p1/s1/a"), extent("reading", "p1/s2/b"), extent("rec", "c")])
+    assert marked[0].extent_id != marked[1].extent_id
+    assert marked[0].recording != marked[1].recording
+    assert marked[2].extent_id == "rec@1.000-4.000"

@@ -178,8 +178,8 @@ def hint_for(
         participant: The participant, e.g. ``p07``.
         session: The session, e.g. ``s2``.
         task: The task's name in the profile's task list, e.g. ``rainbow-passage``.
-        token: The task id recorded in the identity, with any trailing index (``harvard-sentences-list-3``); the
-            task's name when None.
+        token: A dataset's own task id (``task_token``), with any trailing index (``harvard-sentences-list-3``); None
+            declares the task in the typed fields alone, so the identity's task id is the task's name and take.
         variant: The task's declared variants.
         take: Which take of the task.
         item_category: The word-generation category declared for the recording.
@@ -190,7 +190,7 @@ def hint_for(
     """
     metadata = {
         key: value
-        for key, value in ((PARTICIPANT_KEY, participant), (SESSION_KEY, session), (TASK_TOKEN_KEY, token or task))
+        for key, value in ((PARTICIPANT_KEY, participant), (SESSION_KEY, session), (TASK_TOKEN_KEY, token))
         if value
     }
     return AudioHints(
@@ -206,10 +206,10 @@ def hint_for(
 def declared_identity_attributes(
     participant: str | None = None, session: str | None = None, task: str | None = None, *, token: str | None = None
 ) -> dict[str, Any]:
-    """The identity attributes ADMIT records for a recording whose hint declares these (:func:`hint_for`).
+    """The identity and task attributes ADMIT records for a recording whose hint declares these (:func:`hint_for`).
 
     For a test that seeds a ``recording`` stream by hand: senselab reads nothing off the file name (plan step 6a),
-    so the identity is recorded beside it, as on a real run.
+    so the identity, and the task resolved from the profile's task list, are recorded beside it, as on a real run.
 
     Args:
         participant: The participant.
@@ -218,9 +218,10 @@ def declared_identity_attributes(
         token: The task id with its trailing index, where it differs from the name.
 
     Returns:
-        ``identity_of(...).as_attributes()``.
+        ``identity_of(...).as_attributes()`` and ``task_attributes(...)`` of the hint.
     """
-    return identity_of(hint_for(participant, session, task, token=token)).as_attributes()
+    hint = hint_for(participant, session, task, token=token)
+    return {**identity_of(hint).as_attributes(), **task_attributes(hint)}
 
 
 def seed_recorded_identity(

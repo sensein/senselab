@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Score the family taxonomy ruleset over a completed triage run's extracted features.
 
-    uv run python scripts/score_taxonomy_ruleset.py <features> <out_dir> [--config FILE]
+    uv run python scripts/score_taxonomy_ruleset.py <features> <out_dir> --profile PROFILE [--config FILE]
 
 ``features`` is the shard directory ``analyze_routing_evidence.py`` wrote under ``features/``, or
 one shard file out of it. The ruleset is read from the triage configuration, so a partial override
@@ -31,8 +31,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
+from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config
 from senselab.audio.workflows.triage.routing_analysis.report import OVER_ROUTING_BUDGETS, load_features
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     AXES,
@@ -227,12 +226,12 @@ def main(argv: list[str] | None = None) -> int:
         argv: Command-line arguments, or None for ``sys.argv``.
 
     Returns:
-        0 on success.
+        0 on success; 2 when the profile cannot be loaded or lacks a value.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("features", type=Path, help="a features shard written by analyze_routing_evidence.py")
     parser.add_argument("out_dir", type=Path, help="where the score is written")
-    parser.add_argument("--config", type=Path, default=None, help="a partial triage config override")
+    add_config_arguments(parser)
     parser.add_argument(
         "--budget",
         type=float,
@@ -244,9 +243,12 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     budgets = tuple(arguments.budgets) if arguments.budgets else OVER_ROUTING_BUDGETS
 
+    try:
+        config = driver_config(arguments)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
     arguments.out_dir.mkdir(parents=True, exist_ok=True)
-    config = load_triage_config(arguments.config)
-    require_dataset_values(config.values)
     ruleset: Ruleset = load_ruleset(config)
     print(f"[ruleset] {len(ruleset.gates)} gates, config hash {config.config_hash}", flush=True)
 

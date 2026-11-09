@@ -23,7 +23,7 @@ from typing import Any, Mapping
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.identity import declared_task_id
 from senselab.audio.workflows.triage.label_membership import LabelMembership
-from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     extract_features,
@@ -95,14 +95,15 @@ def declared_task_of(store: ProvStore) -> tuple[str, str]:
 
     The family is the task ADMIT recorded from the hint (:func:`~senselab.audio.workflows.triage.task_catalogue.
     recorded_task`). The task id is :func:`~senselab.audio.workflows.triage.identity.declared_task_id` (the hint's
-    task token), or the task's name where the hint declares none. Only a store from before ADMIT recorded the task
-    reads both off the task id, which it records none of until a replay records one.
+    task token), or the task's name where the hint declares none. A store from before ADMIT recorded the task names
+    its task id but no family: nothing decodes a family from the id, and a replay records the task.
 
     Args:
         store: The provenance store.
 
     Returns:
-        ``(task_id, family)``, both :data:`UNDECLARED` when nothing declares a task.
+        ``(task_id, family)``, both :data:`UNDECLARED` when nothing declares a task; the family :data:`UNDECLARED`
+        where the store records a task id and no task.
     """
     from senselab.audio.workflows.triage.task_catalogue import recorded_task  # noqa: PLC0415
 
@@ -114,7 +115,7 @@ def declared_task_of(store: ProvStore) -> tuple[str, str]:
         return (task.name if task_id == UNKNOWN_TASK else task_id), task.name
     if task_id == UNKNOWN_TASK:
         return UNDECLARED, UNDECLARED
-    return task_id, task_family(task_id)
+    return task_id, UNDECLARED
 
 
 def read_live_features(

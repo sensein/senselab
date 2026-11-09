@@ -16,9 +16,13 @@ from senselab.audio.workflows.triage.cohort_fold import COHORT_READING, MEASURED
 from senselab.audio.workflows.triage.extend import read_store, write_store
 from senselab.audio.workflows.triage.identity import ManifestWithoutIdentity, identity_columns, identity_of
 from senselab.audio.workflows.triage.nodes.common import find_measurement
+from senselab.audio.workflows.triage.task_catalogue import task_attributes
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import hint_for
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
+
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 RATE = 16000
@@ -84,11 +88,13 @@ def _run(  # noqa: ANN202
         extent=None,
         attributes={"name": "yamnet_scores", "signal": "plain", "path": "derivatives/yamnet_scores.json"},
     )
-    identity = identity_of(hint_for(participant, session, token=task_id))
+    task, _, take = task_id.rpartition("-") if task_id[-1].isdigit() else (task_id, "", "")
+    hint = hint_for(participant, session, task, take=int(take) if take else None)
+    identity = identity_of(hint)
     store.entity(
         prov_type="stream",
         extent=(0.0, duration),
-        attributes={"name": "recording", "path": f"/b/{stem}.wav", **identity.as_attributes()},
+        attributes={"name": "recording", "path": f"/b/{stem}.wav", **identity.as_attributes(), **task_attributes(hint)},
     )
     store.entity(prov_type="stream", extent=None, attributes={"name": "plain", "path": "streams/plain.wav"})
     store.entity(
@@ -346,3 +352,73 @@ def test_recordings_declaring_no_session_pool_under_their_participant() -> None:
     ]
     grouped = {p: [s for s, _ in sessions] for p, sessions in cli.participants_of(rows)}
     assert grouped == {"pa": ["pa/"], "c": ["c"]}
+
+
+def _made_with_another_profile(row: dict) -> None:
+    """Record in the row's run.json that the run was made with a profile of another name."""
+    log = Path(row["enhanced"]).parents[1] / "run.json"
+    log.write_text(json.dumps({"config": {"profile": {"name": "another-dataset", "version": "1", "digest": "x"}}}))
+
+
+def test_a_member_made_with_another_profile_refuses_its_whole_participant(
+    tmp_path: Path, config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review J4: any member's refusal, not only a stale row, refuses the group; its other members are not enrolled."""
+    monkeypatch.setattr(cli, "ecapa_embedder", lambda *a, **k: _embed)
+    manifest = _two_participants(tmp_path)
+    rows = [json.loads(line) for line in manifest.read_text().splitlines()]
+    quantiles = _quantiles(manifest)
+    _made_with_another_profile(rows[1])
+    stores = {r["stem"]: (Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows}
+    assert _apply(manifest, config, quantiles, "--participants", "pa") == 1
+    pa = [r for r in rows if r["participant"] == "pa"]
+    assert all((Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() == stores[r["stem"]] for r in pa)
+    logged = [json.loads(line) for line in next((tmp_path / "logs" / "slices").glob("cohort-slice-*.jsonl")).open()]
+    assert {r["status"] for r in logged} == {"error"} and all("refused" in r["error"] for r in logged)
+
+
+def test_collect_reads_through_the_checked_store(tmp_path: Path) -> None:
+    """Review A3: collect refuses, as an error row, a run made with another profile."""
+    manifest = _two_participants(tmp_path)
+    rows = [json.loads(line) for line in manifest.read_text().splitlines()]
+    _made_with_another_profile(rows[0])
+    logs = tmp_path / "logs"
+    assert cli.main(["collect", str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(logs)]) == 0
+    facts = [json.loads(line) for line in next((logs / "slices").glob("cohort-facts-*.jsonl")).open()]
+    assert [bool(f.get("error")) for f in facts] == [True] + [False] * (len(rows) - 1)
+
+
+@pytest.mark.parametrize("command", ["collect", "quantiles", "apply", "consistency"])
+def test_without_a_profile_every_phase_exits_2_naming_it(
+    command: str, tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review A3: each phase activates the profile before it reads; with none it exits 2, before reading anything."""
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("")
+    argv = {
+        "collect": ["collect", str(manifest), "--slice-index", "0", "--slice-count", "1"],
+        "quantiles": ["quantiles", "--facts", str(tmp_path), "--out", str(tmp_path / "q.json")],
+        "apply": ["apply", str(manifest), "--slice-index", "0", "--slice-count", "1"],
+        "consistency": ["consistency", str(tmp_path)],
+    }[command]
+    assert cli.main(argv) == 2
+    assert "dataset profile" in capsys.readouterr().err
+    assert not (tmp_path / "q.json").exists()
+
+
+def test_a_pilot_consistency_cosine_is_read_beside_its_unset_bound() -> None:
+    """Review J2: a pilot's block holds the cosine at top level, with no comparison; the log reads it."""
+    assert cli._consistency_cosine({"status": "unavailable", "reason": "consistency_unset", "cosine": 0.71}) == 0.71
+    measured = {"comparisons": [{"name": "session_vs_other_sessions_cosine", "value": 0.6}]}
+    assert cli._consistency_cosine(measured) == 0.6
+    assert cli._consistency_cosine({"status": "not_applicable"}) is None
+
+
+def test_enrollment_vectors_of_two_target_speakers_of_one_session_are_two_files(tmp_path: Path) -> None:
+    """Review J1: a group that is its participant keeps ``<session>.npy``; a target speaker's goes under it."""
+    assert cli._vector_path(tmp_path, "pa", "pa", "pa/s1") == tmp_path / "pa/s1.npy"
+    child = cli._vector_path(tmp_path, "pa:child", "pa", "pa/s1")
+    parent = cli._vector_path(tmp_path, "pa:parent", "pa", "pa/s1")
+    assert child != parent and child == tmp_path / "pa:child" / "pa/s1.npy"
+    sessions = [("pa/s1", [{"stem": "a", "participant": "pa"}, {"stem": "b", "participant": "pa"}])]
+    assert cli._participants_of_group(sessions) == {"pa"}

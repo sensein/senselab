@@ -37,6 +37,9 @@ from senselab.utils.data_structures import DeviceType
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import seed_recorded_identity
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_ppg_praat.py"
 _spec = importlib.util.spec_from_file_location("extend_ppg_praat_under_test", _CLI)

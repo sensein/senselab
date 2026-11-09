@@ -24,9 +24,9 @@ import pyarrow.compute as pc
 import yaml
 
 from senselab.audio.workflows.triage.decision import reason_vocabulary
+from senselab.audio.workflows.triage.identity import RECORDING_ID_COLUMN, ROW_TARGET_SPEAKER
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
 from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, StoreView, read_store
-from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.audio.workflows.triage.vocabulary import release_ground_meanings
 from senselab.utils import fastio
 
@@ -232,26 +232,43 @@ def field_text(value: Any) -> str:  # noqa: ANN401 -- a cell is any scalar or li
     return _clean(str(value))
 
 
-def acquisition_by_stem(evidence: pa.Table) -> dict[str, dict[str, Any]]:
+def recording_key(row: Mapping[str, Any]) -> tuple[str, str]:
+    """The key ``triage.tsv`` joins a recording's decision, evidence and vector rows on (plan step 9b).
+
+    Args:
+        row: A ``triage_decisions``, ``triage_evidence`` or ``recording_vectors`` row.
+
+    Returns:
+        ``(recording_id, target_speaker)``: its recording id, else its stem (a table from before the tables
+        carried one), and its declared target speaker, else empty.
+    """
+    return str(row.get(RECORDING_ID_COLUMN) or row.get("stem") or ""), str(row.get(ROW_TARGET_SPEAKER) or "")
+
+
+def _key_columns(table: pa.Table) -> list[str]:
+    return ["stem", *(name for name in (RECORDING_ID_COLUMN, ROW_TARGET_SPEAKER) if name in table.column_names)]
+
+
+def acquisition_by_recording(evidence: pa.Table) -> dict[tuple[str, str], dict[str, Any]]:
     """The acquisition and task-count readings of every recording.
 
     Args:
         evidence: ``triage_evidence``.
 
     Returns:
-        By stem: ``level_rel_session_db``, ``active_s``, ``interference_in_task``, ``fault_in_task``,
-        ``task_events_found`` and ``task_events_instructed``; keys without a reading are absent.
+        By :func:`recording_key`: ``level_rel_session_db``, ``active_s``, ``interference_in_task``,
+        ``fault_in_task``, ``task_events_found`` and ``task_events_instructed``; keys without a reading are absent.
     """
     names = evidence.column("name")
     keep = pc.or_(
         pc.is_in(names, value_set=pa.array(sorted(_SCALAR_ITEMS))),
         pc.or_(pc.starts_with(names, INTERFERENCE_PREFIX), pc.starts_with(names, FAULT_PREFIX)),
     )
-    subset = evidence.filter(keep).select(["stem", "name", "value", "threshold"]).to_pylist()
-    items: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    subset = evidence.filter(keep).select([*_key_columns(evidence), "name", "value", "threshold"]).to_pylist()
+    items: dict[tuple[str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in subset:
-        items[row["stem"]][row["name"]] = row
-    return {stem: acquisition(by_name) for stem, by_name in items.items()}
+        items[recording_key(row)][row["name"]] = row
+    return {key: acquisition(by_name) for key, by_name in items.items()}
 
 
 def acquisition(by_name: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
@@ -261,7 +278,7 @@ def acquisition(by_name: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
         by_name: The recording's evidence rows, by item name.
 
     Returns:
-        The readings, as :func:`acquisition_by_stem` describes.
+        The readings, as :func:`acquisition_by_recording` describes.
     """
 
     def value(name: str) -> Any:  # noqa: ANN401 -- a decoded reading
@@ -320,7 +337,7 @@ def _cohort_columns(reading: Mapping[str, Any] | None) -> dict[str, Any]:
             for c in consistency.get("comparisons") or ()
             if c.get("name") == "session_vs_other_sessions_cosine"
         ),
-        None,
+        consistency.get("cosine"),  # a pilot run's: recorded beside the unset bound, with no comparison
     )
     return {
         "speaker_target_cosine": cosine("target"),
@@ -473,12 +490,13 @@ def rows(
         bids_root: The BIDS root.
         threads: Run-tree reads in flight.
         sources: :func:`manifest_sources`, the source of a run whose store records none.
-        vectors: ``recording_vectors``, read for :data:`VECTOR_COLUMNS` by stem; None leaves them empty.
+        vectors: ``recording_vectors``, read for :data:`VECTOR_COLUMNS` by :func:`recording_key`; None leaves them
+            empty.
 
     Yields:
         One mapping per recording, keyed by :func:`columns`.
     """
-    by_stem = acquisition_by_stem(evidence)
+    by_recording = acquisition_by_recording(evidence)
     by_vector = vector_readings(vectors)
     records = decisions.to_pylist()
     version = column_dictionary()["version"]
@@ -491,24 +509,25 @@ def rows(
         return run_tree_facts(run_dir, record.get("audio_paths") or (), run_root, bids_root, source, extent)
 
     for record, tree in zip(records, fastio.ordered_map(facts, records, threads=threads)):
-        stem = str(record["stem"])
-        yield row(record, {**by_stem.get(stem, {}), **by_vector.get(stem, {})}, tree, version)
+        key = recording_key(record)
+        yield row(record, {**by_recording.get(key, {}), **by_vector.get(key, {})}, tree, version)
 
 
-def vector_readings(vectors: pa.Table | None) -> dict[str, dict[str, Any]]:
+def vector_readings(vectors: pa.Table | None) -> dict[tuple[str, str], dict[str, Any]]:
     """The whole-file readings ``triage.tsv`` takes from the recording vectors.
 
     Args:
-        vectors: ``recording_vectors`` (at least ``stem`` and the :data:`VECTOR_COLUMNS` it holds), or None.
+        vectors: ``recording_vectors`` (at least ``stem``, its ``recording_id`` and ``target_speaker`` where it
+            carries them, and the :data:`VECTOR_COLUMNS` it holds), or None.
 
     Returns:
-        By stem, the readings keyed by their ``triage.tsv`` column; empty where no table was given.
+        By :func:`recording_key`, the readings keyed by their ``triage.tsv`` column; empty where no table was given.
     """
     if vectors is None:
         return {}
     present = [name for name in VECTOR_COLUMNS if name in vectors.column_names]
-    table = vectors.select(["stem", *present]).to_pylist()
-    return {str(r["stem"]): {VECTOR_COLUMNS[name]: _number_or_none(r.get(name)) for name in present} for r in table}
+    table = vectors.select([*_key_columns(vectors), *present]).to_pylist()
+    return {recording_key(r): {VECTOR_COLUMNS[name]: _number_or_none(r.get(name)) for name in present} for r in table}
 
 
 def row(
@@ -526,7 +545,11 @@ def row(
         The row, keyed by :func:`columns`.
     """
     verdict = decision.get("verdict")
-    family = decision.get("declared_family") or task_family(str(decision.get("task") or ""))
+    family = str(decision.get("declared_family") or "")
+    if not family and branch_of(str(decision.get("task") or "")) != NO_BRANCH:
+        # A fold that records no family (ADMIT refused the file before it recorded the task): a task id that names a
+        # task-list entry exactly is that task; nothing is decoded from it.
+        family = str(decision["task"])
     branch = branch_of(family)
     reasons = list(decision.get("reasons") or ())
     annotations = list(decision.get("annotations") or ())
@@ -602,19 +625,21 @@ def coverage_problems(
     """What stops the table being one row per recording.
 
     Args:
-        decisions: ``triage_decisions``, read for each row's run directory and stem.
+        decisions: ``triage_decisions``, read for each row's run directory and recording key.
         table_rows: The rows :func:`rows` built from it, in its order.
         expected: The run directory names the run was asked for (the manifest), or None.
 
     Returns:
-        One line per problem: a stem or run directory that appears twice, a run asked for and absent or
-        present and not asked for, a row with no source path, a source path held by two rows. Empty
-        where there are none.
+        One line per problem: a recording (:func:`recording_key`) or run directory that appears twice, a run asked
+        for and absent or present and not asked for, a row with no source path, a source path held by two rows.
+        Empty where there are none.
     """
     problems: list[str] = []
-    stems = [str(s) for s in decisions.column("stem").to_pylist()]
+    keyed = decisions.select(_key_columns(decisions)).to_pylist()
+    stems = [str(r["stem"]) for r in keyed]
+    recordings = ["/".join(part for part in recording_key(r) if part) for r in keyed]
     names = [Path(str(d)).name for d in decisions.column("run_dir").to_pylist()]
-    for label, values in (("stem", stems), ("run directory", names)):
+    for label, values in (("recording", recordings), ("run directory", names)):
         repeated = sorted(value for value, n in Counter(values).items() if n > 1)
         if repeated:
             problems.append(f"{len(repeated)} {label}s appear more than once, e.g. {repeated[:3]}")

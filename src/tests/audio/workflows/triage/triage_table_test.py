@@ -450,9 +450,31 @@ def test_the_squim_columns_read_the_task_extent_vectors_not_the_per_span_ones() 
             "q_task_squim_si_sdr": [17.0],
         }
     )
-    readings = triage_table.vector_readings(vectors)["s1"]
+    readings = triage_table.vector_readings(vectors)[("s1", "")]
     assert (readings["squim_pesq"], readings["squim_stoi"], readings["squim_si_sdr"]) == (2.9, 0.98, 17.0)
     assert triage_table.column_dictionary()["version"] == 5
+
+
+def test_two_recordings_sharing_a_stem_join_their_own_readings() -> None:
+    """Review D4: evidence and vectors join on the recording id (and target speaker), never the stem alone."""
+    evidence = pa.Table.from_pylist(
+        [
+            {"stem": "rec", "recording_id": rid, "name": "capture.level_rel_db", "value": value}
+            for rid, value in (("a/rec", "-3.0"), ("b/rec", "1.5"))
+        ],
+        schema=decision_tables.evidence_schema(),
+    )
+    by_recording = triage_table.acquisition_by_recording(evidence)
+    assert by_recording[("a/rec", "")]["level_rel_session_db"] == -3.0
+    assert by_recording[("b/rec", "")]["level_rel_session_db"] == 1.5
+    vectors = pa.table({"stem": ["rec", "rec"], "recording_id": ["a/rec", "b/rec"], "q_task_squim_pesq": [2.0, 3.0]})
+    assert triage_table.vector_readings(vectors)[("b/rec", "")]["squim_pesq"] == 3.0
+    decisions = pa.Table.from_pylist(
+        [{"stem": "rec", "recording_id": rid, "run_dir": f"p/s/rec_{n}"} for n, rid in enumerate(("a/rec", "b/rec"))],
+        schema=decision_tables.decisions_schema(),
+    )
+    rows = [{"source_path": "a/rec.wav"}, {"source_path": "b/rec.wav"}]
+    assert triage_table.coverage_problems(decisions, rows) == []
 
 
 def test_a_voice_row_carries_no_squim_even_where_the_vectors_hold_one() -> None:
@@ -463,3 +485,20 @@ def test_a_voice_row_carries_no_squim_even_where_the_vectors_hold_one() -> None:
     assert voice["branch"] == "VOICE"
     assert (voice["squim_pesq"], voice["squim_stoi"], voice["squim_si_sdr"]) == (None, None, None)
     assert speech["squim_pesq"] == 1.3
+
+
+def test_a_pilots_session_consistency_cosine_reaches_the_table() -> None:
+    """Review J2: a pilot COHORT reading holds the cosine beside its unset bound, with no comparison; it is read."""
+    from senselab.audio.workflows.triage.triage_table import _cohort_columns
+
+    pilot = {"checks": {"session_speaker_consistency": {"status": "unavailable", "cosine": 0.7134}}}
+    assert _cohort_columns(pilot)["session_consistency_cosine"] == 0.7134
+    measured = {
+        "checks": {
+            "session_speaker_consistency": {
+                "status": "measured",
+                "comparisons": [{"name": "session_vs_other_sessions_cosine", "value": 0.82}],
+            }
+        }
+    }
+    assert _cohort_columns(measured)["session_consistency_cosine"] == 0.82

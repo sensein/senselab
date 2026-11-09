@@ -375,7 +375,11 @@ class TestWhatTheReaderReads:
         assert declared_task_of(store) == (UNDECLARED, UNDECLARED)
 
     def test_a_hint_declaration_recorded_by_admit_is_read_before_the_stem(self) -> None:
-        """A reader holding only the store sees the task a hint declared; otherwise there is none."""
+        """A reader holding only the store sees the task id a hint declared; no family is decoded from it.
+
+        A store with an identity and no recorded task (before ADMIT recorded one) names its task id only; a replay
+        records the task, whose name is the family.
+        """
         hinted, unhinted = ProvStore(run_id="hinted"), ProvStore(run_id="unhinted")
         path = "/data/recording-0042.wav"
         declared = identity_of(AudioHints(metadata={"task_token": "prolonged-vowel-2"}))
@@ -385,7 +389,7 @@ class TestWhatTheReaderReads:
             attributes={"name": "recording", "path": path, **declared.as_attributes()},
         )
         unhinted.entity(prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording", "path": path})
-        assert declared_task_of(hinted) == ("prolonged-vowel-2", "prolonged-vowel")
+        assert declared_task_of(hinted) == ("prolonged-vowel-2", UNDECLARED)
         assert declared_task_of(unhinted) == (UNDECLARED, UNDECLARED)
 
     def test_a_task_literally_named_unknown_declares_nothing(self) -> None:

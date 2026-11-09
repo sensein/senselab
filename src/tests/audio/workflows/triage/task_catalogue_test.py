@@ -250,6 +250,8 @@ class TestTheTaskList:
             (_WORDS.format(category="{rule: letters, repetition_allowed: sometimes}"), "true or false"),
             (_WORDS.format(category="{rule: letters, language: en}"), "language"),
             ("version: 1\ntasks:\n  a: {branch: VOICE, expects: {pattern: sustained}, traits: [loud]}\n", "traits"),
+            ("version: 1\ntasks:\n  a: {branch: VOICE, expects: {pattern: sustained}, carrier: ah}\n", "carrier"),
+            ("version: 1\ntasks:\n  a: {branch: SPEECH, expects: {pattern: syllable_train}, carrier: ''}\n", "carrier"),
         ],
     )
     def test_a_malformed_list_is_refused(self, text: str, message: str) -> None:
@@ -267,6 +269,16 @@ class TestTheTaskList:
             ["cape-v-sentences", "cape-v-sentences-v2", "loudness", "loudness-v2"]
         )
         assert all(name in SPEECH_EXPECTATIONS for name in VOICE_EXPECTATIONS_PENDING_DECLARATION)
+
+    def test_a_syllable_task_declares_its_carrier(self) -> None:
+        """The text its syllables spell, as the entry writes it; an entry without one declares none."""
+        text = (
+            "version: 1\ntasks:\n"
+            "  pa-ta-ka: {branch: SPEECH, carrier: pataka, expects: {pattern: syllable_sequence}}\n"
+            "  pa-pa: {branch: SPEECH, expects: {pattern: syllable_train}}\n"
+        )
+        tasks = read_task_list(text, "t")
+        assert (tasks["pa-ta-ka"].carrier, tasks["pa-pa"].carrier) == ("pataka", None)
 
     def test_a_task_names_one_of_the_branches_triage_has(self) -> None:
         """The task list's branches are the graph's (kept apart only so neither module imports the other)."""
@@ -463,6 +475,7 @@ def _lab_profile(root: Path) -> Path:
     (root / "tasks.yaml").write_text(LAB_TASKS)
     (root / "airway_event_tokens.yaml").write_text("version: 3\ncough: [cough]\n")
     (root / "review_policy.txt").write_text("LAB POLICY. Remove every name and every date.\n\n")
+    (root / "task_guidance.yaml").write_text("families: []\nnatures: []\n")
     shutil.copy(FIXTURE_PROFILE / "time_release.yaml", root / "time_release.yaml")
     for relative, entries in values_to_supply().items():
         target = root / ("config.yaml" if relative == "config/default.yaml" else relative)

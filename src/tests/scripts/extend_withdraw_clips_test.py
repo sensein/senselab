@@ -50,6 +50,9 @@ from senselab.audio.workflows.triage.nodes.quality import (
 from senselab.audio.workflows.triage.vocabulary import QUALITY
 from senselab.utils.prov_store import ProvStore
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_withdraw_clips.py"
 _spec = importlib.util.spec_from_file_location("extend_withdraw_clips_under_test", _CLI)

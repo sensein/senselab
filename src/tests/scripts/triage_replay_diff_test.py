@@ -26,6 +26,9 @@ from senselab.audio.workflows.triage.vocabulary import FileVerdict, Release, Tri
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import hint_for
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "triage_replay_diff.py"
 _spec = importlib.util.spec_from_file_location("triage_replay_diff_under_test", _CLI)

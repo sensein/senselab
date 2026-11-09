@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-r"""Write SESSION's floor into finished triage runs, one BIDS session at a time.
+r"""Write SESSION's floor into finished triage runs, one session at a time.
 
-    uv run python scripts/extend_session_floor.py MANIFEST --slice-index I --slice-count N [--log-dir DIR]
+    uv run python scripts/extend_session_floor.py MANIFEST --slice-index I --slice-count N --profile PROFILE \
+        [--config OVERRIDE.yaml] [--log-dir DIR]
 
-``MANIFEST`` is the JSONL every extend driver takes (``stem``, ``enhanced``). Rows are grouped by
-their BIDS session (``sub-<label>_ses-<label>`` off the stem); ``--slice-index`` / ``--slice-count``
-shard the sessions, never a session's members, so each task sees every member of the sessions it
-owns. Every member's store must already carry PREPROCESS's ``background_floor``
-(``scripts/extend_background_floor.py``); a member without one is left out of its session's floor,
-and its own store records the missing floor. Each store gains one ``speech_residual`` measurement,
-read off its plain, enhanced and residual streams, and one ``session_floor`` measurement carrying
-the session floor and the session background over the session's speech tasks' residuals. Run
+``MANIFEST`` is the JSONL every extend driver takes (``stem``, ``enhanced``, and the corpus table's identity
+columns). Rows are grouped by the session their recorded identity names (``<participant>/<session>``; a recording
+naming no participant and session is its own group, keyed by its recording id); ``--slice-index`` /
+``--slice-count`` shard the sessions, never a session's members, so each task sees every member of the sessions it
+owns. A session any of whose
+members' runs is refused (a stale manifest row, a recording or profile that differs from the run's record) is
+written into nowhere. ``--profile`` names the dataset profile the runs were made with. Every member's store must
+already carry PREPROCESS's ``background_floor`` (``scripts/extend_background_floor.py``); a member without one
+is left out of its session's floor, and its own store records the missing floor. Each store gains one
+``speech_residual`` measurement, read off its plain, enhanced and residual streams, and one ``session_floor``
+measurement carrying the session floor and the session background over the session's speech tasks' residuals. Run
 ``scripts/extend_replay_decisions.py`` afterwards: BACKGROUND reads this floor.
 
 Install:
@@ -26,12 +30,16 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.extend import (
     ERROR,
     OK,
     RUN_SUBDIR,
     SLICES_SUBDIR,
+    ReplayRefused,
     StaleManifestRow,
+    add_config_arguments,
+    driver_config,
     export_prov,
     read_checked_store,
     read_manifest,
@@ -67,6 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-dir", type=Path, default=None, help=f"Where {SLICES_SUBDIR}/ goes (default: beside the manifest)"
     )
+    add_config_arguments(parser)
     return parser
 
 
@@ -89,29 +98,41 @@ def sessions_of(rows: Sequence[dict[str, Any]]) -> list[tuple[str, list[dict[str
     return sorted(groups.items())
 
 
-def process_session(session: str, rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def process_session(
+    session: str, rows: Sequence[dict[str, Any]], config: TriageConfig | None = None
+) -> list[dict[str, Any]]:
     """Write the session floor into every member store of one session.
 
     Args:
         session: The session key.
         rows: Its members' manifest rows.
+        config: The configuration each store is checked against (:func:`read_checked_store`), or None for the
+            recording alone.
 
     Returns:
-        One outcome record per member.
+        One outcome record per member. Where any member's run is refused (:class:`ReplayRefused`: a stale row, or
+        a recording or profile that differs from the run's record), every member is an error and nothing is
+        written: the floor of the rest would be read without it.
     """
     opened: list[tuple[dict[str, Any], Path | None, ProvStore | None, str]] = []
     stale: list[str] = []
+    refused: list[str] = []
     for row in rows:
         try:
             run_root = run_root_of(Path(row["enhanced"]))
-            opened.append((row, run_root, read_checked_store(run_root, None, row=row), ""))
+            opened.append((row, run_root, read_checked_store(run_root, config, row=row), ""))
         except (OSError, ValueError) as error:
             if isinstance(error, StaleManifestRow):
                 stale.append(str(row["stem"]))
+            elif isinstance(error, ReplayRefused):
+                refused.append(f"{row['stem']} ({describe_exception(error)})")
             opened.append((row, None, None, describe_exception(error)))
-    if stale:
-        why = f"session refused: the manifest is stale for {', '.join(sorted(stale))}; nothing was written"
-        return [{**row, "status": ERROR, SESSION_FLOOR: why} for row in rows]
+    if stale or refused:
+        why = "; ".join(
+            [f"the manifest is stale for {', '.join(sorted(stale))}"] * bool(stale)
+            + [f"the run of {member} is refused" for member in sorted(refused)]
+        )
+        return [{**row, "status": ERROR, SESSION_FLOOR: f"session refused: {why}; nothing was written"} for row in rows]
     members = []
     readings = []
     for _, run_root, store, _ in opened:
@@ -147,7 +168,9 @@ def process_session(session: str, rows: Sequence[dict[str, Any]]) -> list[dict[s
     return out
 
 
-def run_slice(manifest: Path, *, slice_index: int, slice_count: int, log_dir: Path) -> dict[str, Any]:
+def run_slice(
+    manifest: Path, *, slice_index: int, slice_count: int, log_dir: Path, config: TriageConfig | None = None
+) -> dict[str, Any]:
     """Write the session floor for every session in one array task's stride.
 
     Args:
@@ -155,6 +178,7 @@ def run_slice(manifest: Path, *, slice_index: int, slice_count: int, log_dir: Pa
         slice_index: This task's 0-based index.
         slice_count: How many tasks the array has.
         log_dir: Where this task's ``slices/`` log goes.
+        config: As :func:`process_session`.
 
     Returns:
         The task's summary.
@@ -165,7 +189,7 @@ def run_slice(manifest: Path, *, slice_index: int, slice_count: int, log_dir: Pa
     print(f"[slice {slice_index}/{slice_count}] {len(mine)} sessions", flush=True)
     log: list[dict[str, Any]] = []
     for group in mine:
-        log.extend(process_session(group["session"], group["rows"]))
+        log.extend(process_session(group["session"], group["rows"], config))
     counts: dict[str, int] = {}
     for record in log:
         key = f"{record['status']}:{record.get(SESSION_FLOOR)}"
@@ -203,11 +227,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: manifest not found: {args.manifest}", file=sys.stderr)
         return 2
     try:
+        config = driver_config(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
+    try:
         summary = run_slice(
             args.manifest,
             slice_index=args.slice_index,
             slice_count=args.slice_count,
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
+            config=config,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

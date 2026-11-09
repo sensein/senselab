@@ -54,16 +54,16 @@ PER_PARTICIPANT = 20
 # name, weight. A long tail, because `task` is the facet with the most levels the panel must cope
 # with and a flat vocabulary would not exercise the top-K cap.
 TASKS = [
-    ("story-recall", 26),
-    ("free-speech", 20),
-    ("maximum-phonation", 14),
-    ("diadochokinesis-pa", 11),
-    ("picture-description", 9),
-    ("glide-up", 6),
-    ("word-color-stroop", 5),
-    ("harvard-sentences-list", 4),
-    ("cough", 3),
-    ("breath-hold", 2),
+    ("tell-a-story", 26),
+    ("open-talk", 20),
+    ("hold-a-tone", 14),
+    ("pa-pa-pa", 11),
+    ("describe-the-picture", 9),
+    ("slide-up", 6),
+    ("say-the-colour", 5),
+    ("read-the-card", 4),
+    ("three-coughs", 3),
+    ("quiet-breathing", 2),
 ]
 FAMILIES = ["speech", "voice", "airway", "ddk"]
 VERDICTS = [("pass", 78), ("review", 21), ("discard", 1)]
@@ -110,14 +110,14 @@ def rows(seed: int = SEED, participants: int = PARTICIPANTS) -> list[dict[str, o
     rng = random.Random(seed)
     out: list[dict[str, object]] = []
     for p in range(participants):
-        participant = f"sub-f{p:04d}"
-        session = f"ses-{rng.choice(['s0', 's1'])}"
+        participant = f"p{p:04d}"
+        session = rng.choice(["s0", "s1"])
         for k in range(PER_PARTICIPANT):
             task = _pick(rng, TASKS)
             verdict = _pick(rng, VERDICTS)
             declined = rng.random() < 0.38
             row: dict[str, object] = {
-                "stem": f"{participant}_{session}_task-{task}_{k:02d}",
+                "stem": f"{participant}.{session}.{task}.{k:02d}",
                 "participant": participant,
                 "session": session,
                 "task": task,

@@ -1141,6 +1141,74 @@ class TestAReadingIsKeptInTheResultCache:
         second = self._reviewed(tmp_path, monkeypatch, [])
         assert _annotation(second)["result_cache"]["hit"] is True
 
+    def test_an_entry_the_earlier_code_wrote_still_hits_under_an_unchanged_policy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fingerprint stays out of the key: an entry kept before this change, with or without it, is a hit."""
+        from senselab.audio.workflows.triage.review_inputs import policy_fingerprint
+        from senselab.utils.tasks.cached_inference import result_lookup, result_store
+
+        first = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        key = _annotation(first)["result_cache"]["key"]
+        held = result_lookup(key)
+        assert held is not None
+        reading, reviews = held["result"]["reading"], held["result"]["reviews"]
+        for name, earlier in (
+            ("fingerprinted", {"reading": reading, "reviews": reviews, "policy_fingerprint": policy_fingerprint()}),
+            ("before-the-fingerprint", {"reading": reading, "reviews": reviews}),
+        ):
+            monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / name))
+            assert result_store(key, earlier, process=review_module.REVIEW_PROCESS, model_id="s/m", commit_sha="a" * 40)
+            again = self._reviewed(tmp_path, monkeypatch, [])
+            assert _annotation(again)["result_cache"] == {"key": key, "hit": True}
+            assert _annotation(again)["status"] == "clean"
+            assert result_lookup(key)["result"] == earlier, "a hit leaves the entry as it was"  # type: ignore[index]
+
+    def test_a_changed_policy_reads_again_and_replaces_the_entry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reading under another policy is read again under the same key, and the new reading is the one kept."""
+        from senselab.utils.tasks.cached_inference import result_lookup
+
+        first = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        before = _annotation(first)
+        key = before["result_cache"]["key"]
+        assert before[review_module.POLICY_FINGERPRINT] == result_lookup(key)["result"]["policy_fingerprint"]  # type: ignore[index]
+        assert review_module.annotation_read_under_this_policy(before)
+        monkeypatch.setattr(review_module, "policy_fingerprint", lambda: "f" * 64)
+        second = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        reread = _annotation(second)
+        assert reread["result_cache"] == {"key": key, "hit": False, "stored": True}
+        assert reread[review_module.POLICY_FINGERPRINT] == "f" * 64
+        entry = result_lookup(key)["result"]  # type: ignore[index]
+        assert entry["policy_fingerprint"] == "f" * 64
+        assert entry[review_module.POLICY_REPLACED] == [before[review_module.POLICY_FINGERPRINT]]
+        third = self._reviewed(tmp_path, monkeypatch, [])
+        assert _annotation(third)["result_cache"] == {"key": key, "hit": True}
+        assert _annotation(third)[review_module.POLICY_FINGERPRINT] == "f" * 64
+        assert not review_module.annotation_read_under_this_policy(before), "the first reading's own record"
+        unrecorded = {k: v for k, v in before.items() if k != review_module.POLICY_FINGERPRINT}
+        assert not review_module.annotation_read_under_this_policy(unrecorded), "its entry was replaced"
+        assert review_module.annotation_read_under_this_policy(reread)
+
+    def test_a_backfill_stamps_only_the_fingerprint_the_annotation_records(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A store whose annotation records no fingerprint seeds an entry recording none (step-6 review 3)."""
+        from senselab.utils.tasks.cached_inference import result_lookup
+
+        first = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        annotation = find_measurement(first, REDACTION_LLM_ANNOTATION)
+        assert annotation is not None
+        recorded = annotation.attributes[review_module.POLICY_FINGERPRINT]
+        monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / "recorded"))
+        state, key = backfill_from_store(first, _config(tmp_path))
+        assert state == BACKFILL_STORED and result_lookup(key)["result"]["policy_fingerprint"] == recorded  # type: ignore[index]
+        annotation.attributes.pop(review_module.POLICY_FINGERPRINT)
+        monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / "unrecorded"))
+        state, key = backfill_from_store(first, _config(tmp_path))
+        assert state == BACKFILL_STORED and "policy_fingerprint" not in result_lookup(key)["result"]  # type: ignore[index]
+
     def test_a_reading_from_another_prompt_version_is_not_backfilled(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1219,6 +1287,19 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
         assert state == REVIEW_NEEDS_REREAD and why is not None and "changed" in why
         live = find_measurement(store, REDACTION_LLM_ANNOTATION)
         assert live is not None and live.attributes["status"] == "disabled"
+
+    def test_a_reading_under_another_policy_is_read_again(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The annotation's own fingerprint decides, so a changed policy is caught with the cache entry gone."""
+        store, held, software = self._read_then_retire(tmp_path, monkeypatch)
+        assert held.annotation.attributes.get(review_module.POLICY_FINGERPRINT)
+        monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / "emptied-cache"))
+        monkeypatch.setattr(review_module, "policy_fingerprint", lambda: "e" * 64)
+        off = load_triage_config()
+        review(store, off)
+        state, why = carry_reading_forward(store, off, None, held, software=software)
+        assert state == REVIEW_NEEDS_REREAD and why is not None and "policy" in why
 
     def test_a_replay_that_reads_again_keeps_its_own_reading(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

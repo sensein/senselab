@@ -162,6 +162,19 @@ def test_the_identity_is_the_one_the_run_recorded_not_the_stem_s(tmp_path: Path)
     assert row["stem"] == STEM
 
 
+def test_both_tables_carry_the_recording_id_and_target_speaker_they_join_on(tmp_path: Path) -> None:
+    """Review D4: the recorded id and target speaker ride on every decision and evidence row; else the stem."""
+    sources = {"participant": "hint", "task_id": "hint", "recording_id": "corpus_path"}
+    declared = RecordingIdentity("P1", "visit-1", "breath-2", sources, target_speaker="P1:child", recording_id="a/rec")
+    fold = _fold(**_breath(24.0, 20.0))
+    row, evidence = decision_tables.decision_rows(_run_root(tmp_path / "a", fold, declared), tmp_path)  # type: ignore[misc]
+    assert (row["recording_id"], row["target_speaker"]) == ("a/rec", "P1:child")
+    assert {(item["recording_id"], item["target_speaker"]) for item in evidence} == {("a/rec", "P1:child")}
+    row, _ = decision_tables.decision_rows(_run_root(tmp_path / "b", fold, None), tmp_path)  # type: ignore[misc]
+    assert (row["recording_id"], row["target_speaker"]) == (STEM, None)
+    assert decision_tables.decisions_schema().get_field_index("recording_id") >= 0
+
+
 def test_a_discard_row_names_the_one_reading_that_discarded_it(tmp_path: Path) -> None:
     """No breath over the floor: the floor reading is the only decisive item, and there is no release."""
     row, _ = decision_tables.decision_rows(_run_root(tmp_path, _fold(**_breath(6.0, None))), tmp_path)  # type: ignore[misc]

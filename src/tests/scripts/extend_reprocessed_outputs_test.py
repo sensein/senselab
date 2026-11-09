@@ -49,6 +49,9 @@ from senselab.audio.workflows.triage.nodes.taxonomy import PER_SPAN_CLASSIFIERS,
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import seed_recorded_identity
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_reprocessed_outputs.py"
 _spec = importlib.util.spec_from_file_location("extend_reprocessed_outputs_under_test", _CLI)

@@ -4,6 +4,7 @@ A run refuses this file while it still begins with TEMPLATE.
 Write the rules the reviewer applies, in plain sentences, one paragraph per kind of identifier: names (whose, and
 which public names may be released), dates (which elements are removed: years, months, holidays, days of the month),
 ages, places (which levels: street, city, state, country), organizations, health conditions, and the languages your
-transcripts are in. Give one quoted example of each. senselab sends this text, then the HIPAA Safe Harbor identifiers
-your rules do not already cover, ahead of the reviewer's questions.
+transcripts are in. Give one quoted example of each. senselab sends this text, then HIPAA Safe Harbor identifiers (D)
+to (R), the numbers, contact details, codes and the like, ahead of the reviewer's questions. It never adds names (A),
+places (B) or dates and ages (C): your rules above are the reviewer's only instructions for those.
 

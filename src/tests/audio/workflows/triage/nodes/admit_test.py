@@ -192,7 +192,7 @@ class TestStoreWrites:
         admit(store, path, config, hint, run_dir=tmp_path)
         identity = recorded_identity(store)
         assert identity is not None
-        assert (identity.participant, identity.session, identity.task_family) == ("P7", "s1", "cough")
+        assert (identity.participant, identity.session, identity.task_id) == ("P7", "s1", "cough-2")
 
     def test_a_name_contradicting_the_hint_is_not_read(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]

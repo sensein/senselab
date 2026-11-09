@@ -23,7 +23,6 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.identity import declared_task_id
 from senselab.audio.workflows.triage.nodes.airway_task import measure_airway_task
 from senselab.audio.workflows.triage.nodes.branches import (
-    AIRWAY_EXPECTATIONS,
     DETECT_GROUP,
     NO_TASK_ACTIVITY,
     NOT_SEPARABLE_BY_THIS_DESIGN,
@@ -41,6 +40,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     acquisition_covariates,
     airway_span,
     amplitude_spans,
+    branch_expectation,
     branch_params,
     contest,
     count,
@@ -52,6 +52,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     duration,
     events_in_span,
     hull,
+    in_family_expectation,
     instructed_fraction,
     measured,
     merge,
@@ -1019,7 +1020,7 @@ def align_airway(
     """
     if run_dir is None:
         raise ValueError("align_airway reads persisted derivatives and needs the run directory")
-    expectation = AIRWAY_EXPECTATIONS[task_family]
+    expectation = in_family_expectation(store, NODE, task_family)
     params.bind(expectation.pattern, task_family)
     if expectation.pattern is Pattern.EVENT_SERIES:
         result = _airway_event_series(expectation, store, hint, params, run_dir)
@@ -1175,14 +1176,15 @@ def airway(
     findings = [*result.deviations, *params.record()]
     span_ids = propose_spans(store, activity, software, result.components)
     finding_ids = write_findings(store, activity, software, findings, signal=source)
-    if mode == "align" and family in AIRWAY_EXPECTATIONS:
+    declared = branch_expectation(store, NODE, family)
+    if mode == "align" and family is not None and declared is not None:
         finding_ids.extend(
             measure_airway_task(
                 store,
                 activity,
                 software,
                 family=family,
-                expectation=AIRWAY_EXPECTATIONS[family],
+                expectation=declared,
                 sampling_hz=float(config.require("resample.target_hz")),
                 language=None if hint is None else str(hint.metadata.get("language") or "") or None,
                 run_dir=run_dir,

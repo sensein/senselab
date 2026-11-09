@@ -862,6 +862,21 @@ def test_the_same_stem_in_two_folders_is_two_recordings(tmp_path: Path) -> None:
     assert report.superseded == []
 
 
+def test_two_recordings_sharing_a_stem_in_one_folder_are_both_read(tmp_path: Path) -> None:
+    """Review D1: one participant/session folder, one stem, two recorded ids: two recordings; a rerun still yields."""
+
+    def recorded(recording_id: str) -> RecordingIdentity:
+        sources = {"participant": "hint", "session": "hint", "task_id": "hint", "recording_id": "corpus_path"}
+        return RecordingIdentity("p01", "s2", "diadochokinesis-pa", sources, recording_id=recording_id)
+
+    build_recording(tmp_path, timestamp="20260920-030735", identity=recorded("site-a/rec-0001"))
+    build_recording(tmp_path, timestamp="20260921-101010", identity=recorded("site-b/rec-0001"))
+    build_recording(tmp_path, timestamp="20260922-000000", identity=recorded("site-b/rec-0001"))
+    rows, report = rv.scan(tmp_path)
+    assert sorted(row["recording_id"] for row in rows) == ["site-a/rec-0001", "site-b/rec-0001"]
+    assert report.superseded == ["rec-0001_20260921-101010"]
+
+
 def test_an_unfinished_recording_is_counted_rather_than_written(tmp_path: Path) -> None:
     """One slice still running must show up as a number, not as a silently short table."""
     build_recording(tmp_path, stem="rec-0001", participant="p01", task="done")
@@ -1522,6 +1537,39 @@ def test_the_fit_columns_copy_the_readings_a_fit_reads(tmp_path: Path) -> None:
     assert row["cough_event_s_median"] == pytest.approx(0.4)
     assert (row["ddk_syllable_rate_hz"], row["ddk_task_found"]) == (5.5, False)
     assert row["count_in_gap_s"] == pytest.approx(1.6)
+
+
+def test_an_undecided_syllable_reading_and_a_late_count_in_are_null(tmp_path: Path) -> None:
+    """Review J6: a reading that took no decision found nothing; a count-in after the phonation began precedes none."""
+    run_root = build_recording(tmp_path)
+    store = run_root / "run" / "store.jsonl"
+    extra = [
+        _entity("m-ddk", "measurement", None, name="ddk_task_reading", decision=None, annotations={}),
+        json.dumps(
+            {
+                "record": "entity",
+                "id": "m-voice",
+                "prov_type": "measurement",
+                "extent": None,
+                "attributes": {"name": "voice_phonation_reading", "count_in": [5.0, 6.0], "extent": {"start_s": 4.8}},
+            }
+        ),
+    ]
+    store.write_text(store.read_text() + "\n".join(extra) + "\n")
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert (row["ddk_task_found"], row["count_in_gap_s"]) == (None, None)
+
+
+def test_an_overlapping_count_in_reads_a_negative_gap(tmp_path: Path) -> None:
+    """A count-in that begins before the phonation and runs into it is still read, as the dictionary says."""
+    run_root = build_recording(tmp_path)
+    store = run_root / "run" / "store.jsonl"
+    voice = {"name": "voice_phonation_reading", "count_in": [3.0, 5.0], "extent": {"start_s": 4.8}}
+    record = {"record": "entity", "id": "m-voice", "prov_type": "measurement", "extent": None, "attributes": voice}
+    store.write_text(store.read_text() + json.dumps(record) + "\n")
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None and row["count_in_gap_s"] == pytest.approx(-0.2)
 
 
 def test_a_recording_without_those_readings_has_null_fit_columns(one_row: dict[str, Any]) -> None:

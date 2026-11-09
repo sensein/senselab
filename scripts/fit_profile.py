@@ -8,13 +8,14 @@ the profile sets in its own files wins over its fitted one; this script lists ea
 The order for a new dataset (plan step 10):
 
 1. a pilot run, with ``pilot: true`` in the profile's ``profile.yaml`` (the corpus statistics may stay empty;
-   until step 5 a voice task's count-in stays outside its extent and the checks that read them flag nothing);
+   until step 4 a voice task's count-in stays outside its extent and the checks that read them flag nothing);
 2. the COHORT pass (``extend_cohort.py``) and the corpus table (``triage_recording_vectors.py``);
 3. this script;
-4. the COHORT pass again (``extend_cohort.py apply``): the session consistency outcome is decided when COHORT runs,
-   so only a rerun reads the fitted bound;
-5. a replay of the pilot runs (``extend_replay_decisions.py``), so their verdicts read the fitted values; then
-   ``pilot: true`` comes out of the profile.
+4. a replay of the pilot runs (``extend_replay_decisions.py``), so the branches read the fitted values: a voice
+   task's count-in now joins its extent, which moves the facts COHORT reads;
+5. the COHORT pass again (``extend_cohort.py apply``) over the replayed runs: the session consistency outcome is
+   decided when COHORT runs, so only a rerun reads the fitted bound, and it reads the extents the replay placed;
+6. a second replay, so the verdicts fold the new COHORT readings; then ``pilot: true`` comes out of the profile.
 
 Usage:
     python scripts/fit_profile.py <recording_vectors.parquet> --profile <profile dir> [--out FILE] [--force]
@@ -43,6 +44,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     active_profile,
     data_values,
     lookup_value,
+    profile_directory,
     run_data,
 )
 from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config
@@ -50,6 +52,13 @@ from senselab.audio.workflows.triage.fit import Fit, columns_read, fit_values, f
 
 PREVIOUS = ".previous"
 """The suffix a refit keeps the fit it replaces under."""
+
+NEXT_STEPS = (
+    "a replay of the pilot runs (extend_replay_decisions.py)",
+    "the COHORT pass again (extend_cohort.py apply)",
+    "a second replay; then remove pilot: true from profile.yaml",
+)
+"""What follows the fit, in order (steps 4 to 6 of the module's order)."""
 
 HEADER = (
     "# Written by scripts/fit_profile.py (plan step 10): this profile's corpus statistics, fitted on the corpus\n"
@@ -183,7 +192,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.profile is None:
         print("refusing: --profile names the profile to fit", file=sys.stderr)
         return 2
-    loaded = args.profile / FITTED_FILE
+    try:
+        loaded = profile_directory(str(args.profile)) / FITTED_FILE
+    except ValueError as error:
+        print(f"refusing: {error}", file=sys.stderr)
+        return 2
     out = args.out or loaded
     if out.exists() and not args.force:
         print(f"refusing: {out} exists; pass --force to refit it", file=sys.stderr)
@@ -192,17 +205,21 @@ def main(argv: list[str] | None = None) -> int:
     if out.exists() and out.resolve() == loaded.resolve():
         previous = loaded.with_name(FITTED_FILE + PREVIOUS)
         os.replace(loaded, previous)  # the fit reads the profile without the values it replaces
+    written = False
     try:
-        fits, held = _fit(args)
-    except (OSError, ValueError, yaml.YAMLError, pa.ArrowException) as error:
-        if previous is not None:
-            os.replace(previous, loaded)
-        print(f"refusing: {error}", file=sys.stderr)
-        return 2
-    out.parent.mkdir(parents=True, exist_ok=True)
-    partial = out.with_name(out.name + ".partial")
-    partial.write_text(HEADER + yaml.safe_dump(held, sort_keys=False), encoding="utf-8")
-    os.replace(partial, out)
+        try:
+            fits, held = _fit(args)
+        except (OSError, ValueError, RuntimeError, yaml.YAMLError, pa.ArrowException) as error:
+            print(f"refusing: {error}", file=sys.stderr)
+            return 2
+        out.parent.mkdir(parents=True, exist_ok=True)
+        partial = out.with_name(out.name + ".partial")
+        partial.write_text(HEADER + yaml.safe_dump(held, sort_keys=False), encoding="utf-8")
+        os.replace(partial, out)
+        written = True
+    finally:
+        if previous is not None and not written:
+            os.replace(previous, loaded)  # any failure, an interrupt too, leaves the profile's fit as it was
     print(f"{held['fitted_on']['rows']} rows of {args.table} -> {out}")
     if out.resolve() != loaded.resolve():
         print(f"  the profile reads none of these until they are its {loaded}")
@@ -216,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
             else f"  (the profile sets {own!r} itself, which wins)"
         )
         print(f"  {fit.key}: {fit.value!r} over {fit.n}{note}")
+    print("Next: " + "; then ".join(NEXT_STEPS) + ".")
     return 0
 
 

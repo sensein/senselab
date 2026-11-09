@@ -22,7 +22,7 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml  # type: ignore[import-untyped]
 
@@ -276,6 +276,41 @@ def _validate(values: dict[str, Any]) -> None:
         raise ValueError(f"windows.ast.hop_s must be at least {MIN_AST_HOP_S:g} s; received {hop_s:g} s")
 
 
+def profile_config_values(profile: DatasetProfile | None) -> dict[str, Any]:
+    """The packaged configuration with each profile layer's override merged over it, the base first.
+
+    Reads files only: no profile is activated and the run's ``data`` section is left as it is, so a loader may
+    ask it what the active profile configures without resetting the run (:func:`load_triage_config` sets both).
+
+    Args:
+        profile: The profile, or None for the packaged configuration alone.
+
+    Returns:
+        The merged mapping, before a run's override and before validation.
+
+    Raises:
+        ValueError: If a layer introduces a key the packaged file does not have, outside a data mapping, or
+            carries a ``data`` section.
+    """
+    values = yaml.safe_load(_DEFAULT.read_text())
+    for layer in profile.chain() if profile is not None else ():
+        if layer.config is not None:
+            layer_values = yaml.safe_load(layer.config.read_text()) or {}
+            if layer_values.get(DATA_SECTION):
+                raise ValueError(
+                    f"{layer.config}: a profile changes data files by supplying them, not through a `data:` section, "
+                    "which is a run's (it would apply after every profile's files, out of the chain's order)"
+                )
+            values = _merge(values, layer_values)
+    return values
+
+
+PROFILE_ONLY_KEYS: tuple[tuple[str, str], ...] = (("taxonomy", "airway_ontology_roots"),)
+"""Settings a dataset profile may set and a run's override may not: the routing labels are built from the packaged
+configuration and the profile's layers (:func:`profile_config_values`), once per profile, so a run's value would be
+recorded in its configuration and never applied."""
+
+
 def load_triage_config(
     override: str | Path | None = None, *, profile: str | Path | DatasetProfile | None = None
 ) -> TriageConfig:
@@ -301,18 +336,16 @@ def load_triage_config(
     loaded = load_profile(profile) if isinstance(profile, (str, Path)) else profile
     if loaded is None:
         loaded = active_profile()
-    values = yaml.safe_load(_DEFAULT.read_text())
-    for layer in loaded.chain() if loaded is not None else ():
-        if layer.config is not None:
-            layer_values = yaml.safe_load(layer.config.read_text()) or {}
-            if layer_values.get(DATA_SECTION):
-                raise ValueError(
-                    f"{layer.config}: a profile changes data files by supplying them, not through a `data:` section, "
-                    "which is a run's (it would apply after every profile's files, out of the chain's order)"
-                )
-            values = _merge(values, layer_values)
+    values = profile_config_values(loaded)
     if override is not None:
-        values = _merge(values, yaml.safe_load(Path(override).read_text()) or {})
+        run_values = yaml.safe_load(Path(override).read_text()) or {}
+        for section, key in PROFILE_ONLY_KEYS:
+            if isinstance(run_values.get(section), Mapping) and key in run_values[section]:
+                raise ValueError(
+                    f"{override}: {section}.{key} is read when the routing labels are built from the dataset "
+                    "profile, so a run's override cannot change it; set it in the dataset profile's config"
+                )
+        values = _merge(values, run_values)
     _validate(values)
     hashed = json.dumps(values, sort_keys=True, default=str)
     listed_stages(values)  # an unknown stage, or one that may not be off, is refused here

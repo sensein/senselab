@@ -77,6 +77,19 @@ class TestWhichRowsAMethodReads:
         assert len(select(rows, {"column": "x", "per": "session"}, tasks={}, setting=_no_setting)) == 3
         assert len(select(rows, {"column": "x"}, tasks={}, setting=_no_setting)) == 4
 
+    def test_a_target_speaker_is_its_own_group_as_cohort_reads_it(self) -> None:
+        """Review J1: two target speakers of one participant are two groups, as COHORT groups them, not one."""
+        rows = [
+            {"participant": "p1", "session": "s1", "target_speaker": "p1:child", "x": 1.0},
+            {"participant": "p1", "session": "s1", "target_speaker": "p1:parent", "x": 2.0},
+            {"participant": "p1", "session": "s1", "target_speaker": "p1:parent", "x": 2.0},
+            {"participant": "p2", "session": "s1", "target_speaker": None, "x": 3.0},
+        ]
+        by_participant = select(rows, {"column": "x", "per": "participant"}, tasks={}, setting=_no_setting)
+        assert [r["x"] for r in by_participant] == [1.0, 2.0, 3.0]
+        by_session = select(rows, {"column": "x", "per": "session"}, tasks={}, setting=_no_setting)
+        assert [r["x"] for r in by_session] == [1.0, 2.0, 3.0]
+
     def test_a_filter_may_read_another_value_of_the_profile(self) -> None:
         """The shared non-match fence reads only participants compared ``recordings_min`` times or more."""
         rows = [{"participant": f"p{n}", "x": 0.5, "compared": n} for n in range(1, 6)]

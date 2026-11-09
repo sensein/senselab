@@ -2171,3 +2171,68 @@ def test_a_candidate_is_picked_by_the_task_admit_recorded(tmp_path: Path) -> Non
     assert page.admitted_family(run_root / "run" / "store.jsonl") == "free-speech"
     bare = _store(tmp_path, _FAMILY_TOKEN, [], recording="rec-0002", identity=False)
     assert page.admitted_family(bare / "run" / "store.jsonl") is None
+
+
+def test_the_admitted_family_is_the_recorded_task_not_its_token(tmp_path: Path) -> None:
+    """Review B2: where the hint's token is not the task's name, the candidate's family is the task ADMIT recorded."""
+    from senselab.audio.data_structures import AudioHints
+    from senselab.audio.workflows.triage.task_catalogue import task_attributes
+
+    attributes = {
+        "name": "recording",
+        **declared_identity_attributes("p01", "s1", "free-speech", token="talk-3"),
+        **task_attributes(AudioHints(task="free-speech")),
+    }
+    run_root = tmp_path / "p01" / "s1" / "rec-0001_20260101-000000"
+    (run_root / "run").mkdir(parents=True)
+    records = [_entity("stream-recording", "stream", attributes, [0.0, 1.0]), _word(0, "one"), _verdict("redacted")]
+    (run_root / "run" / "store.jsonl").write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    assert page.admitted_family(run_root / "run" / "store.jsonl") == "free-speech"
+    assert page.candidates_under(tmp_path, page.free_response_families()) == [run_root]
+
+
+def test_an_unreadable_recording_makes_extract_exit_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review A5: a worker's failure is an error line in the extract and exit 1, not a quiet 0."""
+    _store(tmp_path, _FAMILY_TOKEN, [_word(0, "one"), _verdict("redacted")])
+
+    def _fails(run_root: Path, families: object) -> None:
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(page, "recording_record", _fails)
+    out = tmp_path / "out.jsonl"
+    assert page.main(["extract", str(tmp_path), "--out", str(out), "--workers", "1"]) == 1
+    assert "unreadable" in out.read_text()
+
+
+def test_a_worker_that_could_not_activate_the_profile_reports_it_on_every_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review A5: the pool initializer never raises; its failure is each row's error."""
+    from senselab.audio.workflows.triage import extend
+
+    run_root = _store(tmp_path, _FAMILY_TOKEN, [_word(0, "one"), _verdict("redacted")])
+    monkeypatch.setattr(extend, "_WORKER_FAILURE", "the worker could not activate the driver's profile: x")
+    row = page._worker((str(run_root), ["free-speech"]))
+    assert row is not None and "could not activate" in row["error"]
+
+
+def test_worker_processes_activate_the_drivers_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review A5: spawned workers start with no profile; the initializer activates the driver's, so they read alike."""
+    from tests.conftest import FIXTURE_PROFILE
+
+    monkeypatch.syspath_prepend(str(_SCRIPT.parent))  # a spawned worker imports the page by its module name, as run
+
+    _store(tmp_path, _FAMILY_TOKEN, [_word(0, "one"), _verdict("redacted")])
+    _store(
+        tmp_path,
+        "cinderella-story",
+        [_word(0, "two"), _verdict("as_is", "x", "cinderella-story")],
+        recording="rec-0002",
+        participant="p02",
+    )
+    serial = page.extract(tmp_path, tmp_path / "serial.jsonl", workers=1)
+    pooled = page.extract(tmp_path, tmp_path / "pooled.jsonl", workers=2, worker_config=(None, str(FIXTURE_PROFILE)))
+    assert pooled == serial and pooled["counts"].get("errors") is None
+    assert sorted((tmp_path / "pooled.jsonl").read_text().splitlines()) == sorted(
+        (tmp_path / "serial.jsonl").read_text().splitlines()
+    )

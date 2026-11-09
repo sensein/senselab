@@ -125,6 +125,9 @@ file's ``version`` / ``schema_version`` may be restated but not changed."""
 
 _VERSION_KEYS = frozenset({"version", "schema_version"})
 
+_AS_BASE = object()
+""":func:`merge_values`' default for ``packaged``: judge a new key against the merged lower layers."""
+
 SUPPLIABLE_PATHS = DATASET_PATHS | DEFAULTED_PATHS
 """Every path a profile may list. Anything else is an engine file, a typo, or a file no loader reads."""
 
@@ -179,16 +182,24 @@ class DatasetProfile:
     def resolve(self, relative: str) -> Path | None:
         """Where the profile, or the nearest profile it extends, supplies a data path; None when none does.
 
+        A file inside a supplied directory is the nearest layer's that holds it: two layers may each supply a
+        directory, each with the files it changes. Where no layer holds it, the nearest layer's (absent) path.
+
         Args:
             relative: A path under ``data/``.
 
         Returns:
             The supplied path, or None.
         """
-        own = self.supplies(relative)
-        if own is not None:
-            return own
-        return self.base.resolve(relative) if self.base is not None else None
+        nearest = None
+        for layer in reversed(self.chain()):
+            own = layer.supplies(relative)
+            if own is None:
+                continue
+            if len(PurePosixPath(relative).parts) == 1 or own.exists():
+                return own
+            nearest = nearest or own
+        return nearest
 
     def chain(self) -> tuple["DatasetProfile", ...]:
         """This profile and those it extends, the outermost base first: the order their values are merged in."""
@@ -318,6 +329,42 @@ def load_profile(directory: str | Path, *, _seen: tuple[Path, ...] = ()) -> Data
     )
 
 
+UNLISTED_SKIPPED = ("__pycache__",)
+"""Directories under a profile whose files :func:`unlisted_files` leaves out: the interpreter's byte-code caches."""
+
+
+def unlisted_files(profile: DatasetProfile) -> dict[str, Any]:
+    """The files in a profile's directories that its manifest does not list, and their digest.
+
+    These are what a profile carries beside its data: its ``hints.py`` and whatever resources that reads (a task
+    registry's copy). Triage reads none of them, so :attr:`DatasetProfile.digest` leaves them out and a change to one
+    is no profile change; a run records this digest beside it, so a reader can tell which hint builder it ran with.
+
+    Args:
+        profile: The profile; every layer of its chain is read.
+
+    Returns:
+        ``{"digest": <16 hex>, "files": ["<layer name>/<path>", ...]}``, the outermost base's first; an empty list
+        where every file is listed.
+    """
+    hasher = hashlib.sha256()
+    names = []
+    for layer in profile.chain():
+        listed = {layer.root / MANIFEST, layer.root / FITTED_FILE, *layer.files.values()}
+        if layer.config is not None:
+            listed.add(layer.config)
+        for path in sorted(layer.root.rglob("*")):
+            inside = path.relative_to(layer.root)
+            if not path.is_file() or path.suffix == ".pyc" or set(inside.parts) & set(UNLISTED_SKIPPED):
+                continue
+            if any(path == target or target in path.parents for target in listed):
+                continue
+            name = f"{layer.name}/{inside.as_posix()}"
+            names.append(name)
+            hasher.update(f"\0{name}\0{hashlib.sha256(path.read_bytes()).hexdigest()}".encode())
+    return {"digest": hasher.hexdigest()[:16], "files": names}
+
+
 def load_fitted(path: Path) -> dict[str, Any]:
     """The values a profile's :data:`FITTED_FILE` holds, by data file.
 
@@ -385,14 +432,15 @@ def data_path(relative: str) -> Path:
         relative: A path under ``data/``, e.g. ``task_extent.yaml`` or ``task_lexicon/cinderella-story.yaml``.
 
     Returns:
-        The active profile's path where it supplies one, otherwise the packaged path.
+        The active profile's path where it supplies one (:meth:`DatasetProfile.resolve`), unless the profile's copy is
+        absent and senselab packages the file; otherwise the packaged path.
 
     Raises:
         DatasetDataMissing: If the path is a dataset path (:data:`DATASET_PATHS`) and no active profile supplies
             it.
     """
     supplied = _ACTIVE.resolve(relative) if _ACTIVE is not None else None
-    if supplied is not None:
+    if supplied is not None and (supplied.exists() or not (PACKAGED_DATA / relative).exists()):
         return supplied
     parts = PurePosixPath(relative).parts
     top = parts[0] if parts else ""
@@ -403,6 +451,27 @@ def data_path(relative: str) -> Path:
             "Run with a dataset profile: load_triage_config(profile=...), or --profile on the scripts."
         )
     return PACKAGED_DATA / relative
+
+
+def newest_member(directory: str) -> str:
+    """The newest dated file of a value directory, across senselab's copy and every layer of the active profile.
+
+    Args:
+        directory: A supplied directory under ``data/``, e.g. ``speaker_vector_profile``, holding ``<date>.yaml``
+            files.
+
+    Returns:
+        ``<directory>/<newest name>``, for :func:`data_values` and :func:`data_path`.
+
+    Raises:
+        FileNotFoundError: If neither senselab nor any layer holds one.
+    """
+    folders = [PACKAGED_DATA / directory]
+    folders += [supplied for layer in (_ACTIVE.chain() if _ACTIVE else ()) if (supplied := layer.supplies(directory))]
+    names = sorted({path.name for folder in folders if folder.is_dir() for path in folder.glob("*.yaml")})
+    if not names:
+        raise FileNotFoundError(f"no {directory} file in {[str(folder) for folder in folders]}")
+    return f"{directory}/{names[-1]}"
 
 
 _RUN_DATA: dict[str, Any] = {}
@@ -473,16 +542,20 @@ def merge_values(
     where: str,
     fixed: frozenset[str] = frozenset(),
     open_mappings: frozenset[str] = frozenset(),
+    packaged: Any = _AS_BASE,  # noqa: ANN401 -- a YAML value
 ) -> Any:  # noqa: ANN401
     """Merge a value file's override over its packaged values, key by key.
 
     Args:
-        base: The packaged values at this level.
+        base: The values at this level so far: the packaged file's, with every lower layer merged over them.
         over: The override at this level.
         where: ``<file>:<dotted key>`` of this level, for messages.
         fixed: Top-level keys that may not change (:data:`FIXED_KEYS`).
         open_mappings: ``<file>:<dotted key>`` of mappings keyed by task family, which take keys the lower layers
             lack (:func:`open_mappings`).
+        packaged: The packaged file's values at this level, which say whether senselab leaves a mapping empty: one
+            it leaves empty takes new keys from every layer, though a lower layer has filled it. Omitted, ``base``
+            stands in for them.
 
     Returns:
         The merged values. A list or a scalar is replaced whole; a mapping is merged.
@@ -495,6 +568,7 @@ def merge_values(
         return over
     out = dict(base)
     top = ":" not in where or where.endswith(":")
+    left_empty = packaged is not _AS_BASE and isinstance(packaged, Mapping) and not packaged
     for key, value in over.items():
         here = f"{where}{key}" if where.endswith(":") else f"{where}.{key}"
         if top and (key in _VERSION_KEYS or key in fixed):
@@ -503,11 +577,37 @@ def merge_values(
             out[key] = base.get(key, value)
             continue
         if key not in base:
-            if base and where not in open_mappings:
+            if base and where not in open_mappings and not left_empty:
                 raise ValueError(f"{here} is not a key senselab's file has; an override may not introduce keys")
             out[key] = value
             continue
-        out[key] = merge_values(base[key], value, where=here, open_mappings=open_mappings)
+        below = _AS_BASE
+        if packaged is not _AS_BASE:
+            below = packaged.get(key, _AS_BASE) if isinstance(packaged, Mapping) else _AS_BASE
+        out[key] = merge_values(base[key], value, where=here, open_mappings=open_mappings, packaged=below)
+    return out
+
+
+def _yield_to_own(fitted: Any, own: Any, *, where: str, open_mappings: frozenset[str]) -> Any:  # noqa: ANN401
+    """A layer's fitted values without the per-family mappings its own file sets: there, its own mapping wins whole.
+
+    Args:
+        fitted: The layer's fitted values at this level (:data:`FITTED_FILE`).
+        own: The layer's own file's values at this level.
+        where: ``<file>:<dotted key>`` of this level, as :func:`merge_values` names it.
+        open_mappings: :func:`open_mappings`.
+
+    Returns:
+        ``fitted``, less each mapping of :func:`open_mappings` the own file also sets.
+    """
+    if not isinstance(fitted, Mapping) or not isinstance(own, Mapping):
+        return fitted
+    out = {}
+    for key, value in fitted.items():
+        here = f"{where}{key}" if where.endswith(":") else f"{where}.{key}"
+        if key in own and here in open_mappings:
+            continue
+        out[key] = _yield_to_own(value, own[key], where=here, open_mappings=open_mappings) if key in own else value
     return out
 
 
@@ -553,20 +653,28 @@ def data_values(relative: str) -> Any:  # noqa: ANN401 -- a YAML document
     top = parts[0] if parts else ""
     run = _RUN_DATA.get(relative)
     if top in MERGED_PATHS:
-        packaged = PACKAGED_DATA / relative
-        values = _load(packaged) if packaged.is_file() else {}
-        fixed, opened = FIXED_KEYS.get(relative, frozenset()), open_mappings()
+        packaged_file = PACKAGED_DATA / relative
+        packaged = _load(packaged_file) if packaged_file.is_file() else {}
+        values = packaged
+        rules: dict[str, Any] = {
+            "where": f"{relative}:",
+            "fixed": FIXED_KEYS.get(relative, frozenset()),
+            "open_mappings": open_mappings(),
+            "packaged": packaged if packaged_file.is_file() else _AS_BASE,
+        }
         for layer in _ACTIVE.chain() if _ACTIVE is not None else ():
-            if relative in layer.fitted:
-                values = merge_values(
-                    values, layer.fitted[relative], where=f"{relative}:", fixed=fixed, open_mappings=opened
-                )
             supplied = layer.supplies(relative)
-            if supplied is not None:
-                values = merge_values(values, _load(supplied), where=f"{relative}:", fixed=fixed, open_mappings=opened)
+            own = _load(supplied) if supplied is not None and supplied.is_file() else None
+            if relative in layer.fitted:
+                fitted = layer.fitted[relative]
+                if own is not None:
+                    fitted = _yield_to_own(fitted, own, where=f"{relative}:", open_mappings=rules["open_mappings"])
+                values = merge_values(values, fitted, **rules)
+            if own is not None:
+                values = merge_values(values, own, **rules)
         if run is None:
             return values
-        return merge_values(values, run, where=f"{relative}:", fixed=fixed, open_mappings=opened)
+        return merge_values(values, run, **rules)
     if top in REPLACED_PATHS:
         return run if run is not None else _load(data_path(relative))
     if top in DATASET_PATHS:
@@ -614,7 +722,22 @@ REQUIRED_DATASET_PATHS = (
 runs, so the redaction word lists are among them."""
 
 TEMPLATE_MARKER = b"TEMPLATE:"
-"""What a template's text file begins with until a dataset writes its own; the start check refuses it."""
+"""What a template's file begins with until a dataset writes its own, after ``# `` in a YAML file; the start check
+refuses it."""
+
+
+def is_template(path: Path) -> bool:
+    """Whether a file is still a template: its first line begins with :data:`TEMPLATE_MARKER`, as a comment or not.
+
+    Args:
+        path: The file.
+
+    Returns:
+        True while the dataset has not written its own.
+    """
+    first = path.read_bytes().split(b"\n", 1)[0]
+    return first.startswith(TEMPLATE_MARKER) or first.lstrip(b"#").lstrip().startswith(TEMPLATE_MARKER)
+
 
 STAGE_DATASET_PATHS: Mapping[str, tuple[str, ...]] = {
     "review_policy.txt": ("REVIEW", "SECOND_OPINION"),
@@ -758,7 +881,7 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
             continue
         if not path.exists():
             missing.append(f"{relative} (the profile lists it, but the file is absent)")
-        elif path.is_file() and path.read_bytes().startswith(TEMPLATE_MARKER):
+        elif path.is_file() and is_template(path):
             missing.append(f"{relative} (still the template: write your own)")
     pilot = _ACTIVE is not None and _ACTIVE.pilot
     for relative, paths in required_profile_values(running, pilot=pilot).items():
@@ -766,6 +889,8 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
             document = config_values if relative == CONFIG_FILE else data_values(relative)
         except DatasetDataMissing:
             continue  # the file itself is listed missing above
+        except ValueError:
+            continue  # a file that does not merge is listed below (_value_file_problems)
         where = "config" if relative == CONFIG_FILE else relative
         missing += [f"{where} {'.'.join(path)}" for path in paths if lookup_value(document, path) is None]
     recruited = (config_values.get("verdict") or {}).get("recruited_conditions")
@@ -784,7 +909,120 @@ def missing_dataset_values(config_values: Mapping[str, Any]) -> list[str]:
             branch = entry.get("branch") if isinstance(entry, Mapping) else None
             if branch in off:
                 missing.append(f"tasks.yaml task {name}: its branch {branch} is {off[branch]} ({WORKFLOW_SETTING})")
-    return missing
+        missing += _task_list_problems(config_values)
+    if not any(item.split()[0] == "redaction_policy.yaml" for item in missing):
+        from senselab.text.tasks.pii_detection.redaction_policy import lexicon_problems  # noqa: PLC0415
+
+        missing += [
+            f"redaction_policy.yaml ({problem})" for problem in lexicon_problems(data_path("redaction_policy.yaml"))
+        ]
+    return missing + _value_file_problems()
+
+
+def _declared_file(relative: str, key: str, expected: str, where: str) -> list[str]:
+    """Why a task list's data file cannot be read for what names it, if it cannot.
+
+    Args:
+        relative: The file's data path, as the task list gives it.
+        key: The key the file declares its owner under (``family``, ``category``).
+        expected: The owner it must declare: the task, or the category.
+        where: The task list entry, for the message.
+
+    Returns:
+        One description, or none where the file is there and declares ``expected``.
+    """
+    try:
+        path = data_path(relative)
+    except DatasetDataMissing:
+        return [f"{where}: {relative} (no profile supplies it)"]
+    if not path.is_file():
+        return [f"{where}: {relative} (the file is absent)"]
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    declared = document.get(key) if isinstance(document, Mapping) else None
+    if str(declared) != expected:
+        return [f"{where}: {relative} declares {key} {declared!r}, not {expected!r}: each names its own file"]
+    return []
+
+
+def _task_list_problems(config_values: Mapping[str, Any]) -> list[str]:
+    """What in the task list, or keyed by its tasks and kinds, would fail only once a recording reads it.
+
+    Args:
+        config_values: The merged configuration.
+
+    Returns:
+        One description per problem: a task list that does not parse; a task's lexicon or a list category's words
+        file that is absent or declares another task or category (so two tasks sharing one lexicon); a task whose
+        fixed ``item_category`` is not one of its categories; a configured per-task gate or flag naming no task, or a
+        gate triage does not have; a task-content kind triage does not know.
+    """
+    from senselab.audio.workflows.triage.nodes.gates import GATE_SPECS  # noqa: PLC0415
+    from senselab.audio.workflows.triage.task_catalogue import KINDS, task_list  # noqa: PLC0415
+
+    try:
+        tasks = task_list()
+    except ValueError as error:
+        return [f"tasks.yaml (it does not parse: {error})"]
+    problems: list[str] = []
+    for name, entry in tasks.items():
+        where = f"tasks.yaml task {name}"
+        if entry.lexicon is not None:
+            problems += _declared_file(entry.lexicon, "family", name, f"{where} lexicon")
+        for category in entry.categories.values():
+            if category.words is not None:
+                problems += _declared_file(category.words, "category", category.name, f"{where} category words")
+        fixed = entry.expects.item_category
+        if fixed is not None and fixed not in entry.categories:
+            problems.append(f"{where}: expects.item_category {fixed!r} is not one of its categories")
+    verdict = config_values.get("verdict") or {}
+    by_family = (verdict.get("gates") or {}).get("by_family") or {}
+    for path, keyed in (
+        ("verdict.gates.by_family", by_family),
+        ("verdict.conformance_flags_by_family", verdict.get("conformance_flags_by_family") or {}),
+    ):
+        unknown = sorted(str(key) for key in keyed if key not in tasks)
+        if unknown:
+            problems.append(f"config {path} names tasks the task list lacks: {unknown}")
+    for task, gates in by_family.items():
+        unknown = sorted(str(gate) for gate in (gates or {}) if gate not in GATE_SPECS)
+        if unknown:
+            problems.append(f"config verdict.gates.by_family.{task} names gates triage does not have: {unknown}")
+    try:
+        content = data_values("task_content.yaml")
+    except ValueError:
+        return problems  # a file that does not merge is listed by _value_file_problems
+    for key in ("families", "any_word_families"):
+        unknown = sorted(str(kind) for kind in content.get(key) or () if kind not in KINDS)
+        if unknown:
+            problems.append(f"task_content.yaml {key} names kinds triage does not know: {unknown} (of {list(KINDS)})")
+    return problems
+
+
+def _value_file_problems() -> list[str]:
+    """Every value file the profile chain or the run's ``data`` section changes that does not merge.
+
+    A key senselab's file lacks, or a fixed one changed, would otherwise raise only once a node reads the file.
+
+    Returns:
+        ``<data path> (<why>)`` per file that does not merge (:func:`data_values`).
+    """
+    paths = set(_RUN_DATA)
+    for layer in _ACTIVE.chain() if _ACTIVE is not None else ():
+        paths |= set(layer.fitted)
+        for relative, supplied in layer.files.items():
+            if relative not in MERGED_PATHS:
+                continue
+            if supplied.is_dir():
+                paths |= {f"{relative}/{member.name}" for member in supplied.glob("*.yaml")}
+            elif relative.endswith((".yaml", ".yml")):
+                paths.add(relative)
+    problems = []
+    for relative in sorted(paths):
+        try:
+            data_values(relative)
+        except (ValueError, OSError) as error:
+            problems.append(f"{relative} ({error})")
+    return problems
 
 
 def require_dataset_values(config_values: Mapping[str, Any]) -> None:

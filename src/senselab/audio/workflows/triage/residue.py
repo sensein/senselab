@@ -14,12 +14,12 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 import yaml
 
 from senselab.audio.workflows.audio_analysis.harmonize import align_pair, normalise_token
-from senselab.audio.workflows.triage.dataset_profile import data_path, data_values
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
     SPEECH_EXPECTATIONS,
@@ -39,7 +39,7 @@ __all__ = [
     "ALIGNED",
     "FREE",
     "RECALL",
-    "FUNCTION_WORDS",
+    "function_words",
     "SYLLABLE",
     "VOCAL",
     "Residue",
@@ -91,7 +91,7 @@ _VOCAL_RUN = re.compile(r"h*([aeiou])\1*h*|h*m+h*")
 SPANISH_FUNCTION_WORDS_PATH = Path(__file__).parent / "data" / "function_words_es.yaml"
 """Spanish closed-class words, merged into :data:`FUNCTION_WORDS`."""
 
-FUNCTION_WORDS = frozenset(
+ENGLISH_FUNCTION_WORDS = frozenset(
     """
     a an the this that these those it its it's i me my mine we us our you your he him his she her they them
     their there here and or but nor so if then than as at by for from in into of off on onto out over to up
@@ -110,8 +110,30 @@ FUNCTION_WORDS = frozenset(
     hasn't haven't hadn't wouldn't couldn't shouldn't mustn't shan't
     we've they've you've we'll they'll it'll he'll she'll he'd she'd we'd they'd you'd it'd
     """.split()
-) | frozenset(str(word).casefold() for word in data_values("function_words_es.yaml").get("words") or ())
-"""Closed-class words, English and Spanish: a residue made of nothing else carries no content a detector could find."""
+)
+"""English closed-class words."""
+
+
+@profile_cache
+def function_words() -> frozenset[str]:
+    """Closed-class words, English and Spanish: a residue made of nothing else carries no content a detector could find.
+
+    The Spanish list is ``function_words_es.yaml``, which a profile or a run may replace, so it is read under the
+    active profile when first asked for, never at import. ``FUNCTION_WORDS`` is the same set, read on each access.
+
+    Returns:
+        The words, casefolded.
+    """
+    spanish = data_values("function_words_es.yaml").get("words") or ()
+    return ENGLISH_FUNCTION_WORDS | frozenset(str(word).casefold() for word in spanish)
+
+
+def __getattr__(name: str) -> Any:  # noqa: ANN401 -- module attribute protocol
+    """``FUNCTION_WORDS``, read under the active profile (:func:`function_words`)."""
+    if name == "FUNCTION_WORDS":
+        return function_words()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 _NUMERALS = {
     "0": "zero",
@@ -342,7 +364,7 @@ def is_content_word(text: str) -> bool:
         word whose base form is in :data:`FUNCTION_WORDS`; True otherwise, numbers included.
     """
     key = _key(text)
-    return bool(key) and not is_non_lexical(text) and _base(key) not in FUNCTION_WORDS
+    return bool(key) and not is_non_lexical(text) and _base(key) not in function_words()
 
 
 def is_function_word(text: str) -> bool:
@@ -356,7 +378,7 @@ def is_function_word(text: str) -> bool:
         character (``a``, ``I``, ``y``, ``o``) is False, as a letter said as an item is.
     """
     key = _key(text)
-    return len(_base(key)) > 1 and not is_non_lexical(text) and _base(key) in FUNCTION_WORDS
+    return len(_base(key)) > 1 and not is_non_lexical(text) and _base(key) in function_words()
 
 
 def _syllable_letters(sequence: Sequence[str]) -> frozenset[str]:

@@ -7,8 +7,13 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from senselab.audio.workflows.triage.extend import read_store
 from tests.audio.workflows.triage.task_audio_test import _seed
+
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_task_audio.py"

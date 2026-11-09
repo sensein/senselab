@@ -1,5 +1,6 @@
 version: 1
-# The lab corpus: a made-up dataset, one invented task per kind of task triage reads (plan step 8c).
+# The lab corpus: a made-up dataset, one invented task per kind of task triage reads (plan step 8c), and a second
+# word-list task whose category each recording's hint declares.
 tasks:
   hold-a-tone:
     branch: VOICE
@@ -18,11 +19,19 @@ tasks:
     categories:
       Fruit: {rule: list, words: task_lexicon/categories/fruit.yaml}
     expects: {pattern: item_list, item_category: Fruit, declared_duration_s: 30.0, repetition_allowed: false}
+  name-from-the-card:
+    branch: SPEECH
+    categories:
+      Fruit: {rule: list, words: task_lexicon/categories/fruit.yaml}
+      Letters: {rule: letters}
+    expects: {pattern: item_list, declared_duration_s: 30.0, repetition_allowed: false}
   pa-pa-pa:
     branch: SPEECH
+    carrier: pa
     expects: {pattern: syllable_train, required_count: {unit: repetitions, value: 8}, sequence: [p, aa]}
   pa-ta-ka:
     branch: SPEECH
+    carrier: pataka
     expects: {pattern: syllable_sequence, required_count: {unit: repetitions, value: 8}, sequence: [p, aa, t, aa, k, aa]}
   three-coughs:
     branch: AIRWAY

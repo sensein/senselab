@@ -10,6 +10,9 @@ from types import ModuleType
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -326,3 +329,31 @@ def test_a_record_carries_the_recording_id_its_run_recorded(tmp_path: Path) -> N
     script.extract(corpus, extract, 1)
     (record,) = script.load(extract)
     assert record["recording_id"] == "p01/s2/recording.wav" and record["stem"] == fixtures.STEM
+
+
+def test_without_a_profile_extract_exits_2_naming_it(
+    tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review A1: the records read the profile's data; with none extract exits 2 and writes nothing."""
+    extract = tmp_path / "review.jsonl"
+    assert script.main(["extract", str(tmp_path), "--out", str(extract), "--workers", "1"]) == 2
+    assert "dataset profile" in capsys.readouterr().err
+    assert not extract.exists()
+
+
+def test_extract_in_worker_processes_reads_the_drivers_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review A5: a spawned worker activates the profile the driver was given, so its rows are the serial ones."""
+    from tests.conftest import FIXTURE_PROFILE
+
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))  # a spawned worker imports the page by its module name, as run
+
+    from senselab.audio.workflows.triage.dataset_profile import deactivate_profile
+
+    corpus = tmp_path / "corpus"
+    fixtures._run_root(corpus)
+    deactivate_profile()  # the corpus is built; the driver activates its own
+    serial, pooled = tmp_path / "serial.jsonl", tmp_path / "pooled.jsonl"
+    profile = ["--profile", str(FIXTURE_PROFILE)]
+    assert script.main(["extract", str(corpus), "--out", str(serial), "--workers", "1", *profile]) == 0
+    assert script.main(["extract", str(corpus), "--out", str(pooled), "--workers", "2", *profile]) == 0
+    assert pooled.read_text() == serial.read_text()

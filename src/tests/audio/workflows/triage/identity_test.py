@@ -37,8 +37,9 @@ from senselab.audio.workflows.triage.identity import (
     recorded_identity,
     row_groups,
     row_identity,
+    session_group,
 )
-from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import hint_for
 
@@ -62,6 +63,31 @@ def _recording(store: ProvStore, path: str, **attributes: Any) -> str:  # noqa: 
     return store.entity(
         prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording", "path": path, **attributes}
     )
+
+
+class TestTheRecordingIdIsTheKeyNotTheStem:
+    """Review D3 and D5: a recording without a session, and a manifest row, are keyed and compared by recording id."""
+
+    def test_a_recording_without_a_session_is_grouped_by_its_recording_id(self) -> None:
+        """Two such recordings sharing a stem are two groups."""
+        first = identity_of(hint_for("p01", None, "x"), stem=REC, corpus_path="a/rec-0001")
+        second = identity_of(hint_for("p01", None, "x"), stem=REC, corpus_path="b/rec-0001")
+        assert session_group(first, REC) == "a/rec-0001" != session_group(second, REC)
+        assert session_group(identity_of(hint_for("p01", None, "x")), REC) == REC
+
+    def test_a_row_whose_run_records_no_identity_is_its_recording_id(self) -> None:
+        """The row's ``recording_id`` names its own group; a row without one falls back to the stem."""
+        empty = identity_columns(None)
+        assert row_groups({"stem": REC, **empty, RECORDING_ID_COLUMN: "a/rec-0001"}) == ("a/rec-0001", "a/rec-0001")
+        assert row_groups({"stem": REC, **empty}) == (REC, REC)
+
+    def test_a_row_naming_another_recording_id_disagrees(self) -> None:
+        """A stale manifest row with the same identity but another recording is refused, not grouped."""
+        recorded = identity_of(hint_for("p01", "s1", "x"), stem=REC, corpus_path="a/rec-0001")
+        row = {"stem": REC, **identity_columns(recorded), RECORDING_ID_COLUMN: "b/rec-0001"}
+        assert identity_disagreement(row_identity(row), recorded) == ["recording_id"]
+        same = {"stem": REC, **identity_columns(recorded), RECORDING_ID_COLUMN: "a/rec-0001"}
+        assert identity_disagreement(row_identity(same), recorded) == []
 
 
 class TestANameIsNeverRead:
@@ -92,7 +118,6 @@ class TestFromTheHint:
         hint = AudioHints(metadata={PARTICIPANT_KEY: "P7", SESSION_KEY: "visit-2", TASK_TOKEN_KEY: " Cough-3 "})
         identity = identity_of(hint)
         assert (identity.participant, identity.session, identity.task_id) == ("P7", "visit-2", "cough-3")
-        assert identity.task_family == "cough"
         assert identity.session_key == "P7/visit-2"
         assert set(identity.sources.values()) == {FROM_HINT}
 
@@ -101,6 +126,24 @@ class TestFromTheHint:
         identity = identity_of(AudioHints(metadata={TASK_TOKEN_KEY: "loudness"}))
         assert (identity.participant, identity.session, identity.task_id) == (None, None, "loudness")
         assert identity.sources == {"task_id": FROM_HINT}
+
+    def test_a_typed_task_alone_is_the_task_id(self) -> None:
+        """A hint naming its task only in the typed fields (no token) declares it: the task, then its take."""
+        assert identity_of(hint_for("p01", "s1", "rainbow-passage")).task_id == "rainbow-passage"
+        identity = identity_of(hint_for("p01", "s1", TASK, take=2))
+        assert (identity.task_id, identity.sources["task_id"]) == (TOKEN, FROM_HINT)
+        assert identity_of(AudioHints(task=" Hum-A-Note ", task_take=None)).task_id == "hum-a-note"
+
+    def test_a_token_wins_over_the_typed_task(self) -> None:
+        """A dataset's own task id, where it gives one, is the identity's; the typed task is its fallback."""
+        identity = identity_of(hint_for("p01", "s1", TASK, token="fivebreaths-take-b", take=2))
+        assert identity.task_id == "fivebreaths-take-b"
+
+    def test_two_takes_of_a_typed_task_are_two_identities(self) -> None:
+        """Typed-only hints of two takes in one session are distinct; without a take they are one task id."""
+        first, second = (identity_of(hint_for("p01", "s1", TASK, take=take)) for take in (1, 2))
+        assert first.task_id != second.task_id
+        assert identity_of(hint_for("p01", "s1", TASK)).task_id == TASK
 
     @pytest.mark.parametrize("label", ["a/b", "..", ".", "a\\b"])
     def test_a_label_that_cannot_name_a_folder_is_refused(self, label: str) -> None:

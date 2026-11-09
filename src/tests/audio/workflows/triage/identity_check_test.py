@@ -34,6 +34,7 @@ from senselab.audio.workflows.triage.task_catalogue import (
     NO_TASK,
     NOT_IN_TASK_LIST,
 )
+from tests.audio.workflows.triage.conftest import hint_for
 
 
 def _named(stem: str) -> RecordingIdentity:
@@ -324,6 +325,38 @@ def test_a_task_repeated_outside_any_session_is_no_duplicate(scope: str) -> None
         scope,
     )
     assert report.counts[DUPLICATE_IDENTITY] == 0
+
+
+@pytest.mark.parametrize("scope", SESSION_SCOPES)
+def test_hints_declaring_the_task_only_in_typed_fields_are_distinct_identities(scope: str) -> None:
+    """Review B1/B3: typed-only hints (no task token) give their task and take, not ``unknown`` duplicates."""
+    hints = [hint_for("p1", "s1", "hum-a-note", take=1), hint_for("p1", "s1", "hum-a-note", take=2)]
+    hints.append(hint_for("p1", "s1", "read-the-card"))
+    records = [
+        IdentityRecord(
+            f"rec-{n}", f"/corpus/rec-{n}.wav", identity_of(hint), task=hint.task, task_source=FROM_TASK_LIST
+        )
+        for n, hint in enumerate(hints)
+    ]
+    assert [record.identity.task_id for record in records if record.identity] == [
+        "hum-a-note-1",
+        "hum-a-note-2",
+        "read-the-card",
+    ]
+    report = _check(records, scope)
+    assert report.counts[DUPLICATE_IDENTITY] == 0 and not report.refused
+    twice = [records[2], records[2]._replace(stem="rec-9", location="/corpus/rec-9.wav")]
+    assert _check(twice, scope).counts[DUPLICATE_IDENTITY] == 1
+
+
+def test_recordings_outside_a_session_are_keyed_by_recording_id_not_stem() -> None:
+    """Review D3: two files both called ``recording`` with their own ids, no session declared, do not collide."""
+    flat = [
+        IdentityRecord("recording", f"/c/{d}/recording.wav", RecordingIdentity("p01", None, "x", {}, recording_id=d))
+        for d in ("a/recording", "b/recording")
+    ]
+    assert {identity_key(record) for record in flat} == {("stem", "a/recording"), ("stem", "b/recording")}
+    assert check_identities(flat, session_scope="participant").counts[DUPLICATE_IDENTITY] == 0
 
 
 def test_a_repeated_recording_id_is_refused_before_a_run_and_reported_after() -> None:

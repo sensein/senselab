@@ -8,8 +8,9 @@ and how it is rounded. :func:`fit_values` computes every one from the table ``re
 (:data:`~senselab.audio.workflows.triage.dataset_profile.FITTED_FILE`).
 
 The order for a new dataset: a pilot run (a profile with ``pilot: true`` may leave these values empty), the COHORT
-pass, the corpus table, the fit, the COHORT pass again, then a replay of the pilot so its verdicts read the fitted
-values (``scripts/fit_profile.py`` lists the steps).
+pass, the corpus table, the fit, a replay of the pilot so its branches read the fitted values, the COHORT pass again
+over the replayed runs, then a second replay so its verdicts fold the new COHORT readings (``scripts/fit_profile.py``
+lists the steps).
 """
 
 from __future__ import annotations
@@ -35,7 +36,31 @@ STATISTICS = ("median", "percentile", "percentile_band", "tukey_upper", "tukey_l
 
 PER = {"recording": (), "session": ("participant", "session"), "participant": ("participant",)}
 """The columns a method's ``per`` groups rows by: one value per group (COHORT repeats a group's reading on each of
-its recordings)."""
+its recordings). COHORT groups by target speaker, so a row that declares one (:data:`SPEAKER_COLUMN`) is grouped
+under it in place of its participant (:func:`group_of`)."""
+
+SPEAKER_COLUMN = "target_speaker"
+"""The corpus-table column naming a recording's declared target speaker; null where the target is the participant."""
+
+
+def group_of(row: Mapping[str, Any], keys: Sequence[str]) -> tuple[Any, ...]:
+    """The group a ``per`` method files a row under: :data:`PER`'s columns, with the speaker COHORT read.
+
+    Args:
+        row: A corpus-table row.
+        keys: The method's :data:`PER` columns.
+
+    Returns:
+        One value per key; ``participant`` is the declared target speaker where the row names one, so recordings of
+        two target speakers of one participant are two groups, as COHORT reads them (plan step 9a). A session is
+        then its speaker's session: ``(speaker, session)``, with the participant kept beside it.
+    """
+    speaker = row.get(SPEAKER_COLUMN)
+    if not _present(speaker):
+        return tuple(row.get(key) for key in keys)
+    group = tuple(speaker if key == "participant" else row.get(key) for key in keys)
+    return (*group, row.get("participant")) if "session" in keys else group
+
 
 OPERATORS: Mapping[str, Callable[[Any, Any], bool]] = {
     "eq": lambda cell, value: cell == value,
@@ -159,7 +184,7 @@ def select(
         seen: set[tuple[Any, ...]] = set()
         grouped = []
         for row in chosen:
-            group = tuple(row.get(key) for key in keys)
+            group = group_of(row, keys)
             if any(not _present(part) for part in group) or group in seen:
                 continue
             seen.add(group)
@@ -300,7 +325,7 @@ def columns_read() -> list[str]:
     Returns:
         The columns, sorted.
     """
-    names = {"participant", "session", "declared_family"}
+    names = {"participant", "session", SPEAKER_COLUMN, "declared_family"}
     for _, _, method in fit_methods():
         names.add(str(method["column"]))
         names.update(str(condition["column"]) for condition in method.get("where") or ())

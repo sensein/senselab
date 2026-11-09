@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -33,7 +32,7 @@ from senselab.audio.workflows.triage.routing_analysis.features import (
     SPAN_CLASSIFIERS,
     RecordingFeatures,
 )
-from senselab.audio.workflows.triage.routing_analysis.labels import FAMILIES, LABEL_SETS, peak_key
+from senselab.audio.workflows.triage.routing_analysis.labels import FAMILY_CLASSIFIERS, families, label_sets, peak_key
 from senselab.audio.workflows.triage.routing_analysis.tables import read_header
 from senselab.audio.workflows.triage.vocabulary import BRANCHES
 
@@ -227,7 +226,7 @@ def _validate(profile: Mapping[str, Any], source: str) -> None:
             raise ValueError(f"{source}: {name} has a quantile ladder that decreases")
 
 
-@lru_cache(maxsize=None)
+@profile_cache
 def load_detector_profile(path: str | None = None) -> dict[str, Any]:
     """Load and validate a detector profile.
 
@@ -563,7 +562,7 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
         stream, classifier, kind = arguments
         if stream in ("plain", "enhanced", "residual") and f"{stream}|{classifier}" not in features.classifier_streams:
             return None
-        labels = FAMILIES[kind][classifier]
+        labels = families()[kind][classifier]
         if not labels:
             return None
         return max((features.peaks.get(peak_key(stream, classifier, label), 0.0) for label in labels), default=0.0)
@@ -587,7 +586,7 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
         stream, classifier, set_name = arguments
         if stream in ("plain", "enhanced", "residual") and f"{stream}|{classifier}" not in features.classifier_streams:
             return None
-        labels = LABEL_SETS[set_name][classifier]
+        labels = label_sets()[set_name][classifier]
         if not labels:
             return None
         return max((features.peaks.get(peak_key(stream, classifier, label), 0.0) for label in labels), default=0.0)
@@ -710,10 +709,8 @@ def _peak_detectors() -> list[Detector]:
         The classifier-score detectors.
     """
     built: list[Detector] = []
-    for kind, per_classifier in FAMILIES.items():
-        for classifier, labels in per_classifier.items():
-            if not labels:
-                continue
+    for kind, classifiers in FAMILY_CLASSIFIERS.items():
+        for classifier in classifiers:
             for stream in ("plain", "enhanced", "residual"):
                 built.append(
                     _candidate(

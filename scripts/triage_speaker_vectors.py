@@ -1,12 +1,15 @@
 """Build one speaker embedding per subject from a tree of finished triage runs.
 
-    uv run python scripts/triage_speaker_vectors.py <corpus_root> --table <recording_vectors.parquet> --out <dir>
-    uv run python scripts/triage_speaker_vectors.py <corpus_root> --table <parquet> --out <dir> --slice 3 --slices 64
+    uv run python scripts/triage_speaker_vectors.py <corpus_root> --table <recording_vectors.parquet> --out <dir> \
+        --profile <profile>
+    uv run python scripts/triage_speaker_vectors.py <corpus_root> --table <parquet> --out <dir> --profile <profile> \
+        --slice 3 --slices 64
     uv run python scripts/triage_speaker_vectors.py --merge <dir>
 
 ``--table`` is the corpus table ``scripts/triage_recording_vectors.py`` built over the same root: it names
 each run directory and the participant, session and task its run recorded. A speaker is a participant; a
-run the table has no row for is not embedded.
+run the table has no row for is not embedded. The shortest extent embedded is the profile's: ``--profile`` names
+the dataset profile the runs were made with.
 
 The parquet is a biometric derived from human-subject audio: it is written mode 600, is gitignored,
 and must never be copied to a shared location.
@@ -26,6 +29,7 @@ import pyarrow.parquet as pq
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config  # noqa: E402
 from senselab.audio.workflows.triage.speaker_vectors import (  # noqa: E402
     SCHEMA_VERSION,
     scan,
@@ -96,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         argv: Command line, or ``None`` for ``sys.argv[1:]``.
 
     Returns:
-        A process exit code: 1 when a shard wrote no row.
+        A process exit code: 1 when a shard wrote no row, 2 when the profile cannot be loaded or lacks a value.
     """
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -110,12 +114,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--merge", type=Path, default=None, help="Concatenate the shards in this directory.")
     parser.add_argument("--created-at", default=None, help="ISO-8601 timestamp stamped into provenance.")
     parser.add_argument("--device", default=None, choices=("cpu", "cuda"), help="Force a device.")
+    add_config_arguments(parser)
     args = parser.parse_args(argv)
 
     if args.merge is not None:
         return merge(args.merge)
     if args.corpus_root is None or args.table is None or args.out is None:
         parser.error("corpus_root, --table and --out are required unless --merge is given")
+    try:
+        driver_config(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
 
     device = None
     if args.device is not None:
