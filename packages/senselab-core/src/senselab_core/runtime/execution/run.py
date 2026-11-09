@@ -308,7 +308,7 @@ def _memory(source: object) -> str | None:
     return None
 
 
-def _port_types(placed: Plan) -> dict[str, str]:
+def port_types(placed: Plan) -> dict[str, str]:
     """Return the type one record gives of each graph input of `placed`."""
     return {
         port: (found[1] if (found := _LIST.match(declared)) else declared)
@@ -328,7 +328,7 @@ def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
         InputsUnavailable: an input held in memory is not in `placed.live`.
         KeyError: the plan records no sources.
     """
-    types = _port_types(placed)
+    types = port_types(placed)
     rows, shared = placed.sources["rows"], placed.sources["shared"]
     values: dict[InputIdentity, object] = {}
     missing: list[tuple[str, str]] = []
@@ -704,7 +704,7 @@ def merged_sources(placed: Plan, run_dir: Path) -> dict[str, Any]:
     if not path.is_file():
         return given
     held = json.loads(path.read_text(encoding="utf-8"))
-    types = _port_types(placed)
+    types = port_types(placed)
     rows, conflicts = placed.manifest.rows, []
     merged_rows = []
     for row, old, new in zip(rows, held["rows"], given["rows"], strict=True):

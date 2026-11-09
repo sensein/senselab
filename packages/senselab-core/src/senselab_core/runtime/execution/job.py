@@ -6,7 +6,7 @@ and a sampled cross-context hit is recomputed and compared instead. A failure is
 """
 
 import sysconfig
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
@@ -288,7 +288,12 @@ def _stale(job: Job) -> FaultRecord | None:
 
 def job_decoder(job: Job) -> str | None:
     """Return the decoder a job's file-backed inputs are read by, or None when none is file-backed."""
-    for value in job.values.values():
+    return held_decoder(job.values.values())
+
+
+def held_decoder(values: Iterable[object]) -> str | None:
+    """Return the decoder the file-backed recordings among `values` are read by, or None when none is."""
+    for value in values:
         if isinstance(value, Recording) and any(getattr(g, "source", None) is not None for g in value.groups.values()):
             return audio_io.DECODER
     return None

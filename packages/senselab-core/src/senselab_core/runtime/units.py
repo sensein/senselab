@@ -14,12 +14,9 @@ from senselab_core.runtime.calibration import (
     Estimate,
     HardwareClass,
     HardwareGrant,
-    OomRecord,
-    RegimeFactor,
-    RegimeRecord,
 )
-from senselab_core.runtime.call import host_hardware, packaged
-from senselab_core.runtime.envs import EnvHandle, EnvLockError, ManagedPythonMissing
+from senselab_core.runtime.call import EnvUnreadable, host_hardware, packaged
+from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.batching import BucketGrid
 from senselab_core.runtime.execution.job import Job, env_fields, job_decoder
 from senselab_core.runtime.execution.workers import PRECISION, service_of
@@ -65,13 +62,38 @@ def measure_roots(profile: ExecutionProfile) -> MeasureRoots:
 def default_measures(profile: ExecutionProfile, roots: MeasureRoots | None = None) -> MeasureSource:
     """Return the source over `roots` (`measure_roots` when None) and the packaged table, estimated by `Probe`."""
     held = measure_roots(profile) if roots is None else roots
-    kinds: dict[str, type[RegimeFactor | OomRecord]] = {"regime": RegimeFactor, "oom": OomRecord}
-
-    def records(unit: MeasureUnit) -> Sequence[RegimeRecord]:
-        return [kinds[r.kind].model_validate(r.record) for r in held.records(unit) if r.kind in kinds]
-
-    estimate = Probe.estimator(profile.calibration, records_of=records, memory_headroom=profile.sizing.memory_headroom)
+    estimate = Probe.estimator(
+        profile.calibration, records_of=held.regime_records, memory_headroom=profile.sizing.memory_headroom
+    )
     return MeasureSource([held], _NoPackaged(), estimate=estimate)
+
+
+class EnvStates:
+    """What each backend's env is under a profile, read once while built: its handle, or why it is not known."""
+
+    def __init__(self, profile: ExecutionProfile) -> None:
+        """Read envs under `profile`."""
+        self.profile = profile
+        self._built: dict[tuple[str, str], EnvHandle] = {}
+
+    def get(self, backend: BackendSpec) -> EnvHandle | Unresolved:
+        """Return the handle of `backend`'s built env, else the true reason it is not known before a worker starts.
+
+        A handle is kept; an unbuilt env is read again, since the run builds it.
+        """
+        if self.profile.substrate.kind != "local":
+            return Unresolved("the node a slurm worker runs on is chosen at submission, so its platform is not known")
+        key = (backend.name, backend.version)
+        if key in self._built:
+            return self._built[key]
+        try:
+            handle = packaged().env_read(backend, self.profile)
+        except EnvUnreadable as err:
+            return Unresolved(f"the env of backend {backend.name!r} cannot be read: {err}")
+        if handle is None:
+            return Unresolved(f"the env of backend {backend.name!r} is not built")
+        self._built[key] = handle
+        return handle
 
 
 class UnitResolver:
@@ -83,6 +105,7 @@ class UnitResolver:
         """Resolve under `profile` over `roots` (`measure_roots`) on `hardware` (this host's probe)."""
         self.profile = profile
         self.roots = measure_roots(profile) if roots is None else roots
+        self.envs = EnvStates(profile)
         self._hardware_info = hardware
 
     @property
@@ -95,18 +118,13 @@ class UnitResolver:
 
         A bucketed backend's formation is the grid's, whichever bucket a job falls in.
         """
-        if self.profile.substrate.kind != "local":
-            return Unresolved("the node a slurm worker runs on is chosen at submission, so its platform is not known")
         backend = placement.backend
+        handle = self.envs.get(backend)
+        if isinstance(handle, Unresolved):
+            return handle
         hardware = self._hardware(placement)
         if isinstance(hardware, Unresolved):
             return hardware
-        try:
-            handle = packaged().env_read(backend, self.profile)
-        except (EnvLockError, ManagedPythonMissing) as err:
-            return Unresolved(f"the env of backend {backend.name!r} cannot be read: {err}")
-        if handle is None:
-            return Unresolved(f"the env of backend {backend.name!r} is not built")
         try:
             expected = service_of(backend, call.model)
         except (LookupError, ValueError) as err:
@@ -132,22 +150,17 @@ class UnitResolver:
         return dict(launch(handle.python, declared).measured)
 
     def _hardware(self, placement: Placement) -> HardwareClass | Unresolved:
+        """Return this host's class for the placement's resource class, which the hardware index must hold."""
         resource = self.profile.resource_classes[placement.resource_class]
-        seen = self.roots.seen_classes(resource)
-        if len(seen) == 1:
-            return seen[0]
-        if not seen:
-            return Unresolved(f"hardware not yet seen: no worker of class {placement.resource_class!r} reported one")
         try:
             here = HardwareClass.from_report(self.hardware, HardwareGrant(device=resource.device, cpus=resource.cpus))
-        except ValueError:
-            here = None
-        if here in seen:
-            return here
-        return Unresolved(
-            f"class {placement.resource_class!r} maps to {len(seen)} seen hardware classes, none this host's; "
-            "the first worker's hello decides"
-        )
+        except ValueError as err:
+            return Unresolved(f"this host reports no hardware class for {placement.resource_class!r}: {err}")
+        if here not in self.roots.seen_classes(resource):
+            return Unresolved(
+                f"hardware not yet seen on this host: no worker of class {placement.resource_class!r} reported it"
+            )
+        return here
 
 
 def decoder_of(jobs: Sequence[Job]) -> str | None | Unresolved:

@@ -5,9 +5,17 @@ from importlib import resources
 from pathlib import Path
 
 from senselab_core.kernel.declare import BackendSpec, Registry, declare_module
-from senselab_core.runtime.call import Packaged
+from senselab_core.runtime.call import EnvUnreadable, Packaged
 from senselab_core.runtime.catalogue import Catalogue
-from senselab_core.runtime.envs import EnvHandle, current_env, ensure_env, env_built
+from senselab_core.runtime.envs import (
+    CudaCompatibilityError,
+    EnvHandle,
+    EnvLockError,
+    ManagedPythonMissing,
+    current_env,
+    ensure_env,
+    env_built,
+)
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile
 
@@ -92,13 +100,16 @@ def read_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle | Non
     A host env is always built: its handle is this interpreter's.
 
     Raises:
-        As `current_env` and, for a host env, `open_env`.
+        EnvUnreadable: for any cause `current_env` or, for a host env, `open_env` fails.
     """
-    if backend.env.kind == "host":
-        return open_env(backend, profile)
-    env_lock, workers = _built_from(backend)
-    root = profile.env_root(backend.env.kind)
-    return current_env(backend.env, env_lock, root, settings=profile.envs, workers=workers)
+    try:
+        if backend.env.kind == "host":
+            return open_env(backend, profile)
+        env_lock, workers = _built_from(backend)
+        root = profile.env_root(backend.env.kind)
+        return current_env(backend.env, env_lock, root, settings=profile.envs, workers=workers)
+    except (EnvLockError, ManagedPythonMissing, CudaCompatibilityError, OSError, RuntimeError, LookupError) as err:
+        raise EnvUnreadable(str(err)) from err
 
 
 PACKAGED = Packaged(

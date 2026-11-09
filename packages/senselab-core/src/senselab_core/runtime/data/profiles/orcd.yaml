@@ -89,6 +89,7 @@ pool:
   first_poll_s: 1
   presence_refresh_s: 30
   segment_items: 512
+  admit_threads: 8
 # The fractions and targets each unit's batch, quantum and worker count are derived from: the load's largest share of a
 # quantum, the share of a worker's memory a batch fills, the wall time a queue's work aims to end in, and the one-job
 # items a unit without a measure runs first, the workers its queue is given for them, and the seconds a worker's read

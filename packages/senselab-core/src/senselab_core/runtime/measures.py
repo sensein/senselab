@@ -41,7 +41,15 @@ from senselab_core.kernel.formats import (
     check,
 )
 from senselab_core.kernel.identity import LogicalKey, ModelIdentity, Params, ProfileSliceIdentity
-from senselab_core.runtime.calibration import Estimate, HardwareClass, Observation, Positive
+from senselab_core.runtime.calibration import (
+    Estimate,
+    HardwareClass,
+    Observation,
+    OomRecord,
+    Positive,
+    RegimeFactor,
+    RegimeRecord,
+)
 from senselab_core.runtime.config import expand
 from senselab_core.runtime.execution_settings import CalibrationSettings, ResourceClass, Trust
 from senselab_core.runtime.keys import Placement
@@ -109,6 +117,10 @@ class MeasureEnv(Frozen):
         return cls.model_validate({**{k: fields[k] for k in cls.model_fields}, "driver": driver})
 
 
+LABEL_HEX = 12
+"""Hex digits of a digest that name a unit in text: 48 bits, as the store and fetch messages abbreviate digests."""
+
+
 class MeasureUnit(Frozen):
     """What a measure is of: the logical key without its inputs, plus env, hardware and formation.
 
@@ -168,8 +180,8 @@ class MeasureUnit(Frozen):
         return identity_digest(MEASURE_UNIT_TAG, self.model_dump(mode="json"))
 
     def label(self) -> str:
-        """Return the first 12 hex digits of the digest: how a log line or `explain` names the unit, never an id."""
-        return self.digest()[:12]
+        """Return the first `LABEL_HEX` hex digits of the digest: how a log line or `explain` names the unit."""
+        return self.digest()[:LABEL_HEX]
 
 
 class MeasuresRoot(Protocol):
@@ -224,6 +236,8 @@ RECORD_FORMATS: Mapping[str, str] = FrozenMapping(
     }
 )
 """The record kinds below a unit, each with the format its files carry."""
+RECORD_MODELS: Mapping[str, type[RegimeFactor | OomRecord]] = FrozenMapping({"regime": RegimeFactor, "oom": OomRecord})
+"""The record kinds whose payload has a type: `put_record` validates it on write and `regime_records` reads it back."""
 RecordKind = Literal["drift", "supersede", "regime", "oom"]
 _JSON_NAME = re.compile(r".+\.json")
 
@@ -640,6 +654,12 @@ class MeasureRoots:
         """Return the `drift`, `supersede`, `regime` and `oom` records of `unit` the trust admits, oldest first."""
         return tuple(self._records(self._digest(unit)))
 
+    def regime_records(self, unit: MeasureUnit) -> tuple[RegimeRecord, ...]:
+        """Return the typed `regime` and `oom` records of `unit` the trust admits, oldest first (`RECORD_MODELS`)."""
+        return tuple(
+            RECORD_MODELS[r.kind].model_validate(r.record) for r in self.records(unit) if r.kind in RECORD_MODELS
+        )
+
     def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
         """Return the observations of `unit` that still pool, oldest file first.
 
@@ -712,10 +732,13 @@ class MeasureRoots:
 
         Raises:
             ValueError: `kind` is not a record kind, or a `supersede` payload names no probe id.
+            pydantic.ValidationError: a `regime` or `oom` payload is not a `RegimeFactor` or `OomRecord`.
         """
         if kind not in RECORD_FORMATS:
             raise ValueError(f"{kind!r} is not a measures record kind; they are {sorted(RECORD_FORMATS)}")
         payload = record.model_dump(mode="json") if isinstance(record, Frozen) else dict(record)
+        if kind in RECORD_MODELS:
+            payload = RECORD_MODELS[kind].model_validate(payload).model_dump(mode="json")
         if kind == "supersede":
             outdates(payload)
         record_id = uuid.uuid4().hex

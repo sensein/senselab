@@ -174,8 +174,17 @@ EnvOpener = Callable[[BackendSpec, ExecutionProfile], EnvHandle]
 """Open the env a backend declares under a profile, building it if needed."""
 EnvProbe = Callable[[BackendSpec, ExecutionProfile], bool]
 """Whether the env a backend declares is built under a profile, building nothing."""
+
+
+class EnvUnreadable(Exception):  # noqa: N818 - a state, not an error of the caller
+    """The env a backend declares cannot be read without building it; the message says why."""
+
+
 EnvRead = Callable[[BackendSpec, ExecutionProfile], EnvHandle | None]
-"""The handle of the env a backend declares if it is built under a profile, else None; builds and locks nothing."""
+"""The handle of the env a backend declares if it is built under a profile, else None; builds and locks nothing.
+
+Raises `EnvUnreadable` for any cause it cannot read it.
+"""
 EnvLock = Callable[[BackendSpec], Path]
 """The lock file the isolated or server env a backend declares is built from, reading nothing."""
 

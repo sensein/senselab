@@ -49,7 +49,7 @@ from senselab_core.runtime.keys import (
     request_components,
     request_size,
 )
-from senselab_core.runtime.measures import MeasureSource
+from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
@@ -408,6 +408,11 @@ def job_units(job: Job, kind: UnitKind) -> float | None:
     return None if length is None else length / NS_PER_S if kind == "audio_s" else float(length)
 
 
+def default_store() -> ResultStore:
+    """Return the result store a run uses when none is given: `cache_root()/results`."""
+    return ResultStore(cache_root() / "results")
+
+
 class InProcess:
     """An `Executor` whose `submit` runs a fragment's jobs through `execute` in this process, before returning.
 
@@ -434,7 +439,7 @@ class InProcess:
         """Run fragments under `profile` and `run`, storing in `store`, on `workers`, sized from `measures`."""
         self.profile = profile if profile is not None else ExecutionProfile.load()
         self.run = run if run is not None else RunConfig()
-        self.store = store if store is not None else ResultStore(cache_root() / "results")
+        self.store = store if store is not None else default_store()
         self.workers = workers if workers is not None else process_workers(self.profile)
         roots = measure_roots(self.profile)
         self.measures = measures if measures is not None else default_measures(self.profile, roots)
@@ -450,7 +455,8 @@ class InProcess:
     splits_fragments: ClassVar[bool] = False
 
     def bind_epoch(self, epoch: int, events: EventLog) -> None:
-        """Do nothing: an in-process run has no queue for an older coordinator to write."""
+        """Start a run's extrapolation log afresh: an in-process run has no queue for an older coordinator to write."""
+        self._extrapolated = ExtrapolationLog()
 
     def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:
         """Hold `placed` and the values of the graph-input identities its fragments name, until `release`.
@@ -550,7 +556,7 @@ class InProcess:
         """Return the estimate `measures` gives for the unit `units` resolves and its label, else the packaged row's."""
         unit = decoder if isinstance(decoder, Unresolved) else self.units(call, placement, decoder)
         found = None if isinstance(unit, Unresolved) else self.measures.get(unit)
-        if found is not None and not isinstance(unit, Unresolved):
+        if found is not None and isinstance(unit, MeasureUnit):
             return found, unit.label()
         backend, model = placement.backend, call.model
         ident = (None, None) if model is None else (model.ref.id, model.identity)

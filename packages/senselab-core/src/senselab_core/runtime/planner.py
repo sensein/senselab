@@ -397,18 +397,19 @@ class Plan:
         the estimate `measures` (by default the profile's roots and the packaged table) reads for that unit, never a
         probe, a download or a worker start, over `lengths[node]` or, with `values`, the lengths of the node's jobs.
         Each figure is labelled `measured` with its source or `unmeasured` with the reason the unit or estimate is
-        missing, and a flag marks a batch-1 request over the class's memory cap. With a `store`, each resource class
-        says how many jobs it would serve and how many compute (`ResultStore.admits`); `values` default to the
-        plan's inputs bound from their sources. The last lines name where measures are written and the waits on
-        another run.
+        missing, and a flag marks a batch-1 request over the class's memory cap. Each resource class says how many
+        jobs the `store` (by default the one a run uses, `default_store`) would serve and how many compute
+        (`ResultStore.admits`); `values` default to the plan's inputs bound from their sources. The last lines name
+        where measures are written and the waits on another run.
 
         Raises:
-            As `bind_sources` and `count_items`, when `store` or `values` is given.
+            As `bind_sources` and `count_items`.
         """
         profile = self.execution
         if profile is None:
             return explain(self.hash, self.logical, self.placement)
         from senselab_core.runtime.execution import plan_reads  # noqa: PLC0415 - plan_reads imports this module
+        from senselab_core.runtime.execution.in_process import default_store  # noqa: PLC0415 - as above
         from senselab_core.runtime.execution.run import bind_sources  # noqa: PLC0415 - run imports this module
         from senselab_core.runtime.units import (  # noqa: PLC0415 - units imports the executor, which imports this module
             UnitResolver,
@@ -419,8 +420,10 @@ class Plan:
 
         roots = measure_roots(profile)
         source = measures if measures is not None else default_measures(profile, roots)
-        bound = values if values is not None else bind_sources(self) if store is not None else None
-        resolve = units or plan_reads.unit_of_node(self, UnitResolver(profile, roots, hardware), bound)
+        found = store if store is not None else default_store()
+        bound = values if values is not None else bind_sources(self)
+        resolver = UnitResolver(profile, roots, hardware)
+        resolve = units or plan_reads.unit_of_node(self, resolver)
         sizing = {}
         for node_id, placed in self.placement.nodes.items():
             unit = resolve(node_id)
@@ -438,11 +441,10 @@ class Plan:
                 unit_label=None if isinstance(unit, Unresolved) else unit.label(),
                 bucket_edges=() if estimate is None else plan_reads.node_edges(self, node_id, estimate),
             )
-        if store is None or bound is None:
-            counted = ["items: servable and computed are not counted without a result store"]
-        else:
-            run = self.config if self.config is not None else RunConfig()
-            counted = item_lines(plan_reads.count_items(self, bound, store=store, run=run, profile=profile))
+        run = self.config if self.config is not None else RunConfig()
+        counted = item_lines(
+            plan_reads.count_items(self, bound, store=found, run=run, profile=profile, envs=resolver.envs)
+        )
         return explain(self.hash, self.logical, self.placement, sizing=sizing, footer=[*counted, *waits(profile)])
 
 

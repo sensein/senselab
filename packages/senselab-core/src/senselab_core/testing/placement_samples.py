@@ -214,9 +214,16 @@ def _register_settings(register: Register) -> None:
                     first_poll_s=0.05,
                     presence_refresh_s=1,
                     segment_items=10,
+                    admit_threads=2,
                 ),
                 PoolSettings(
-                    quantum_items=1, quantum_s=1, poll_s=0.5, first_poll_s=0.5, presence_refresh_s=0.5, segment_items=1
+                    quantum_items=1,
+                    quantum_s=1,
+                    poll_s=0.5,
+                    first_poll_s=0.5,
+                    presence_refresh_s=0.5,
+                    segment_items=1,
+                    admit_threads=1,
                 ),
             ],
             [{"poll_s": 0}, {"quantum_items": 0}],

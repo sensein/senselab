@@ -686,7 +686,7 @@ def test_explain_labels_each_figure_measured_or_unmeasured_and_never_probes() ->
     assert sizing.count("measured: 2 probes, 12 observations") == 3 and "unmeasured" not in sizing
     assert root.calls == ["observations"]
     cases: tuple[tuple[dict[str, Any], str], ...] = (
-        ({"measures": source, "units": lambda node: UNIT}, "lengths unknown"),
+        ({"measures": source, "units": lambda node: UNIT}, "a length is unknown"),
         (
             {
                 "measures": MeasureSource([root], _NoTable(), estimate=lambda u, o: _measured()),

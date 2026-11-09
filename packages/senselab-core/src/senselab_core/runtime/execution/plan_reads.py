@@ -1,30 +1,32 @@
 """What a placed plan says of itself before it runs: its nodes' units and lengths, and what the store would serve."""
 
+import functools
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
-from senselab_core.kernel.identity import InputIdentity
+from senselab_core.kernel.identity import ExecutionContext, InputIdentity
+from senselab_core.runtime import audio_io
 from senselab_core.runtime.calibration import Estimate, LengthProfile
-from senselab_core.runtime.call import RunConfig, env_license, packaged
-from senselab_core.runtime.envs import EnvLockError, ManagedPythonMissing
+from senselab_core.runtime.call import RunConfig, env_license, input_binding, packaged
 from senselab_core.runtime.execution.batching import BucketGrid, bucket_edges, keyed_formation
 from senselab_core.runtime.execution.in_process import (
     fragment_jobs,
     job_units,
     node_call,
-    node_decoder,
     node_jobs,
     placement_of_record,
     plan_nodes,
 )
-from senselab_core.runtime.execution.job import job_context
+from senselab_core.runtime.execution.job import held_decoder, job_context
+from senselab_core.runtime.execution.run import port_types
 from senselab_core.runtime.execution.workers import service_of
 from senselab_core.runtime.keys import request_components
 from senselab_core.runtime.measures import MeasureUnit
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
-from senselab_core.runtime.units import UnitResolver, Unresolved
+from senselab_core.runtime.units import EnvStates, UnitResolver, Unresolved
 
 
 @dataclass(frozen=True)
@@ -42,26 +44,34 @@ class ItemCounts:
     later: tuple[str, ...] = ()
 
 
-def count_items(
+def _admitted(store: ResultStore, key: str, context: ExecutionContext, run: RunConfig, backend: str) -> bool:
+    return store.admits(key, context, run, backend=backend) is not None
+
+
+def count_items(  # noqa: PLR0913 - the plan and its values, the store and run, the profile and the env reads
     placed: Plan,
     values: Mapping[InputIdentity, object],
     *,
     store: ResultStore,
     run: RunConfig,
     profile: ExecutionProfile,
+    envs: EnvStates | None = None,
 ) -> dict[str, ItemCounts]:
     """Return, per resource class, the jobs of `placed` the store would serve under `run` and the ones computed.
 
     The one servable predicate is `ResultStore.admits`, asked of each job's key digest and the context it would run
-    in (`job_context`). Nothing is read from a result, built or started: a job whose env is not built, or whose key
-    waits on an upstream result, is undetermined.
+    in (`job_context`), on up to `pool.admit_threads` threads. Nothing is read from a result, built or started: a job
+    whose env is not built or not readable, whose context is not knowable before a worker starts (a slurm node), or
+    whose key waits on an upstream result, is undetermined.
 
     Raises:
         As `ResultStore.admits`, `fragment_jobs` and `service_of`.
     """
+    states = envs if envs is not None else EnvStates(profile)
     counts: dict[str, ItemCounts] = {}
     planned = plan_nodes(placed, values)
     grid = BucketGrid.load_default()
+    asked: list[tuple[str, Callable[[], bool]]] = []
     for node, record in placed.placement.nodes.items():
         held = counts.get(record.resource_class, ItemCounts())
         if node not in planned:
@@ -70,50 +80,69 @@ def count_items(
         known = planned[node]
         jobs, placement = fragment_jobs(known.fragment, placed, values)
         backend = placement.backend
-        try:
-            env = packaged().env_read(backend, profile)
-        except (EnvLockError, ManagedPythonMissing) as err:
-            env, reason = None, f"the env of backend {backend.name!r} cannot be read: {err}"
-        else:
-            reason = f"the env of backend {backend.name!r} is not built"
-        if env is None:
+        env = states.get(backend)
+        if isinstance(env, Unresolved):
             counts[record.resource_class] = replace(
-                held, undetermined=held.undetermined + len(jobs), why=(*held.why, reason)
+                held, undetermined=held.undetermined + len(jobs), why=(*held.why, env.reason)
             )
             continue
         expected = service_of(backend, jobs[0].call.model) if jobs else None
         code = env_license(backend)
-        servable = computed = 0
         for job, key in zip(jobs, known.keys, strict=True):
             picked, _ = keyed_formation(job, backend, grid)
             keyed = replace(placement, **request_components(backend, picked))
             context = job_context(keyed, env, expected, profile, job, code)
-            if store.admits(key, context, run, backend=backend.name) is None:
-                computed += 1
-            else:
-                servable += 1
-        counts[record.resource_class] = replace(
-            held, servable=held.servable + servable, computed=held.computed + computed
-        )
+            asked.append(
+                (
+                    record.resource_class,
+                    functools.partial(_admitted, store, key, context, run, backend.name),
+                )
+            )
+    with ThreadPoolExecutor(max_workers=profile.pool.admit_threads) as pool:
+        answers = list(pool.map(lambda a: a[1](), asked))
+    for (name, _), servable in zip(asked, answers, strict=True):
+        held = counts.get(name, ItemCounts())
+        counts[name] = replace(held, servable=held.servable + servable, computed=held.computed + (not servable))
     return counts
 
 
-def unit_of_node(
-    placed: Plan, resolver: UnitResolver, values: Mapping[InputIdentity, object] | None
-) -> Callable[[str], MeasureUnit | Unresolved]:
-    """Return what resolves each node of `placed` to its unit: its call, placement and the decoder of its jobs.
+def plan_decoder(placed: Plan, node: str) -> str | None | Unresolved:
+    """Return the decoder `node`'s file-backed inputs are read by, from the plan's recorded sources; no file is read.
 
-    Without `values` the decoder is unknown and taken as None, which is the unit of in-memory inputs.
+    A path source of a port with a reader is file-backed, a JSON value is not, and a `{"memory": ...}` source is as the
+    value `placed.live` holds. A node fed by both kinds has two units.
     """
+    types = port_types(placed)
+    rows, shared = placed.sources["rows"], placed.sources["shared"]
+    fed = {
+        e.source.split(".", 1)[1]
+        for e in placed.logical.graph.edges
+        if e.target.split(".", 1)[0] == node and e.source.startswith("input.")
+    }
+    found: set[str | None] = set()
+    for port in fed:
+        for row in rows:
+            source = row[port] if port in row else shared.get(port)
+            if isinstance(source, Mapping) and set(source) == {"memory"}:
+                found.add(held_decoder([placed.live.get(source["memory"])]))
+            elif isinstance(source, str) and input_binding(types[port]) == "path":
+                found.add(audio_io.DECODER)
+            else:
+                found.add(None)
+    if len(found) > 1:
+        return Unresolved("its jobs read both files and in-memory inputs, which are two units")
+    return next(iter(found), None)
+
+
+def unit_of_node(placed: Plan, resolver: UnitResolver) -> Callable[[str], MeasureUnit | Unresolved]:
+    """Return what resolves each node of `placed` to its unit: its call, placement and the decoder its sources give."""
     registry = packaged().registry
 
     def of(node: str) -> MeasureUnit | Unresolved:
         call = node_call(placed, node, registry)
         placement = placement_of_record(placed.placement.nodes[node], call.task, registry)
-        decoder = None if values is None else node_decoder(placed, node, values)
-        if isinstance(decoder, Unresolved):
-            return decoder
-        return resolver.unit(call, placement, decoder=decoder)
+        decoder = plan_decoder(placed, node)
+        return decoder if isinstance(decoder, Unresolved) else resolver.unit(call, placement, decoder)
 
     return of
 
@@ -130,6 +159,5 @@ def node_edges(placed: Plan, node: str, estimate: Estimate) -> tuple[float, ...]
     """Return the bucket edges, in the units of `estimate`, `node`'s jobs are cut on; none unless bucketed."""
     registry = packaged().registry
     call = node_call(placed, node, registry)
-    return bucket_edges(
-        placement_of_record(placed.placement.nodes[node], call.task, registry).backend, estimate.unit_kind
-    )
+    backend = placement_of_record(placed.placement.nodes[node], call.task, registry).backend
+    return bucket_edges(backend, estimate.unit_kind)
