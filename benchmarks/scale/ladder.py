@@ -2,7 +2,7 @@
 
 `uv run python benchmarks/scale/ladder.py run SUITE --execution PROFILE`
 
-A suite (`scale-suite@1.0`, `suites/<name>.yaml`; `suites/fake.yaml` runs with `fake_stack/` on PYTHONPATH) names a
+A suite (`scale-suite@1.1`, `suites/<name>.yaml`; `suites/fake.yaml` runs with `fake_stack/` on PYTHONPATH) names a
 seed, the long signal's seconds and its tasks, and may name a table profile: `calibration:` overrides of
 `length_strata`, `batched_sizes` and `probe_items`, and `point_wall_s`, the seconds of warm probe work a point's probe
 may take (`Probe.plan`'s budget, in place of the profile's `probe_s`). Each task names the input port its data binds
@@ -15,10 +15,10 @@ measures root of the point's own (so each unit is probed in the run, not read fr
 events, its files, the samples each pool worker reported and the observations of every request. One
 `scale-result@2.0` document per point is written under `$SENSELAB_CACHE/2x/benchmarks/scale/<suite>/<commit>/`: per
 measures-root unit its probe observations and its `Estimate` (unmeasured, with reasons, where the probe did not
-measure), and the per-item seconds of the production requests' walls. One line is printed per point, then each task's
-flatness against `budgets.yaml` (`scale-budgets@1.0`). A point whose run directory already exists is refused, so no
-point is measured from reused results, and every entry is planned before any point is measured, so a suite with an
-entry that does not plan is refused, every such entry listed.
+measure), the per-item seconds (`request_cost`) and the calibration settings it ran under. One line is printed per
+point, then each task's flatness against `budgets.yaml` (`scale-budgets@1.0`). A point whose run directory already
+exists is refused, so no point is measured from reused results, and every entry is planned before any point is
+measured, so a suite with an entry that does not plan is refused, every such entry listed.
 """
 
 import argparse
@@ -35,6 +35,7 @@ from typing import Any
 
 import soundfile
 from senselab_core.kernel.dataset import ManifestRow
+from senselab_core.kernel.formats import readable
 from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.runtime.bids import bids_dataset
 from senselab_core.runtime.calibration import Observation
@@ -65,7 +66,8 @@ sys.path[:0] = [str(HERE), str(HERE.parent)]
 import bids_tree  # noqa: E402 - beside this script
 from batch_invariance import harness  # noqa: E402 - the suites' adapters
 
-SUITE_FORMAT = "scale-suite@1.0"
+SUITE_FORMAT = "scale-suite@1.1"
+"""The suite format this reads and writes; `@1.1` added `calibration` and `point_wall_s`, and any `@1.x` is read."""
 RESULT_FORMAT = "scale-result@2.0"
 BUDGETS_FORMAT = "scale-budgets@1.0"
 LONG = "long"
@@ -95,7 +97,7 @@ class Entry:
 
 @dataclass(frozen=True)
 class Suite:
-    """A `scale-suite@1.0` file: name, seed, long seconds, tasks, table profile and per-point wall budget.
+    """A `scale-suite@1.1` file: name, seed, long seconds, tasks, table profile and per-point wall budget.
 
     `calibration` overrides `TABLE_KEYS` of the execution profile's calibration settings; `point_wall_s` is the seconds
     of warm probe work a point's probe may take, None for the profile's `probe_s`.
@@ -117,8 +119,8 @@ class Suite:
                 `TABLE_KEYS` (a seconds key among them).
         """
         raw = load_yaml(path, "scale suite")
-        if raw.get("format") != SUITE_FORMAT:
-            raise ValueError(f"{path.name} is not a {SUITE_FORMAT} file")
+        if not readable(SUITE_FORMAT, raw.get("format")):
+            raise ValueError(f"{path.name} is not a {SUITE_FORMAT.split('.', maxsplit=1)[0]}.x file")
         tasks = tuple(Entry(**{**t, "points": tuple(t["points"])}) for t in raw["tasks"])
         bad = [p for t in tasks for p in t.points if p != LONG and not (isinstance(p, int) and p >= 1)]
         if bad:
@@ -230,26 +232,40 @@ def _observations(outcomes: Sequence[Mapping[str, Any]]) -> list[Observation]:
     return [Observation.model_validate(r) for o in outcomes for r in o.get("observations", ())]
 
 
-def request_cost(observations: Sequence[Observation]) -> dict[str, Any]:
-    """Return per-item seconds from the production requests' walls: their items' walls over their jobs.
+def _own_requests(observations: Sequence[Observation]) -> list[Observation]:
+    """Return the production requests, each once: a request spanning several items is in each one's observations.
 
-    An item's wall is the `item_wall_s` its last request reports (claim taken to commit), so neither the workers' poll
-    waits nor the clocks they end by enter it. A probe item, an item with a failed request and an item that loaded the
-    model (whose wall carries the load, `load_s`'s) are left out; with none left there are no per-item seconds.
+    A request is told by everything it reported, so two items' requests that agree in every figure are one request.
     """
-    items: dict[str, list[Observation]] = {}
+    owner: dict[tuple[object, ...], str] = {}
+    found = []
     for o in observations:
         if o.probe is None:
-            items.setdefault(o.item, []).append(o)
-    walls, jobs = [], 0
-    for requests in items.values():
-        wall = next((r.item_wall_s for r in requests if r.item_wall_s is not None), None)
-        if wall is not None and all(r.outcome == "ok" and r.load_s is None for r in requests):
-            walls.append(wall)
-            jobs += sum(r.jobs for r in requests)
-    if not walls:
-        return {"per_item_s": None, "per_item_basis": "no production items"}
-    return {"per_item_s": sum(walls) / jobs, "per_item_basis": "production request walls"}
+            key = (o.wall_s, o.units, o.padded_units, o.batch, o.jobs, o.since_load, o.load_s, o.outcome)
+            key += (o.device_peak, o.device_after, o.host_peak, o.host_after)
+            if owner.setdefault(key, o.item) == o.item:
+                found.append(o)
+    return found
+
+
+def request_cost(observations: Sequence[Observation], wall_s: float) -> dict[str, Any]:
+    """Return a point's per-item figures from what its requests reported and the run's wall seconds `wall_s`.
+
+    `per_item_s` is the throughput wall per production job: the run's wall less its probe items' own walls, over the
+    jobs of the production requests that were `ok`, each counted once, so the coordinator's overhead stays in it.
+    `worker_s_per_item` is worker seconds per job: the walls of those requests that did not load the model over their
+    jobs, each request counted once however many items it spanned, and timed from its own start. With no production
+    request `per_item_s` is None.
+    """
+    probe_s = sum({o.item: o.item_wall_s for o in observations if o.probe is not None and o.item_wall_s}.values())
+    ok = [o for o in _own_requests(observations) if o.outcome == "ok"]
+    warm = [o for o in ok if o.load_s is None]
+    jobs, warm_jobs = sum(o.jobs for o in ok), sum(o.jobs for o in warm)
+    return {
+        "per_item_s": None if not jobs else max(0.0, wall_s - probe_s) / jobs,
+        "per_item_basis": "run wall less probe items, per production job" if jobs else "no production items",
+        "worker_s_per_item": sum(o.wall_s for o in warm) / warm_jobs if warm_jobs else None,
+    }
 
 
 def _median(values: Sequence[float]) -> float | None:
@@ -399,12 +415,13 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         "profile": profile.name,
         "profile_digest": profile.canonical_digest(),
         "probe_s": profile.probe_s if suite.point_wall_s is None else suite.point_wall_s,
+        "calibration": profile.calibration.model_dump(mode="json"),
         "sha": commit(),
         "jobs": sorted(workers | {worker_id()}),
         "done": status.done,
         "counts": dict(status.counts),
         "wall_s": wall,
-        **request_cost(_observations(outcomes)),
+        **request_cost(_observations(outcomes), wall),
         "units": _units(roots, profile),
         "faults": _faults(events, placed.manifest.rows),
         "host": host_token(),
@@ -543,7 +560,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ladder.py")
     commands = parser.add_subparsers(dest="command", required=True)
     running = commands.add_parser("run", help="measure every point of a scale suite")
-    running.add_argument("suite", type=Path, help="a scale-suite@1.0 file")
+    running.add_argument("suite", type=Path, help="a scale-suite@1.x file")
     running.add_argument("--execution", required=True, help="a packaged execution profile, or a YAML file over one")
     args = parser.parse_args(argv)
     run(args.suite, _profile(args.execution))

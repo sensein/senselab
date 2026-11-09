@@ -20,15 +20,17 @@ import soundfile
 from senselab_core.kernel.dataset import ManifestRow
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry
 from senselab_core.runtime import fake_backend
-from senselab_core.runtime.calibration import EstimateSource, Observation, ProbeRef
+from senselab_core.runtime.calibration import EstimateSource, HardwareClass, Observation, ProbeRef
 from senselab_core.runtime.call import Packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution import pool_parts
 from senselab_core.runtime.execution.executor import FaultRecord
 from senselab_core.runtime.measures import Build, MeasureRoots, MeasureUnit, Provenance
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.resources import Derivation, MeasureTable, PackagedTable
+from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.storage import StorePolicy
 from senselab_core.testing.calibration_samples import UNIT, observation
 from senselab_core.testing.workers import mit_lock_records
@@ -119,7 +121,9 @@ PROVENANCE = Provenance(
 DECLARED = {(UNIT.task, UNIT.backend)}
 
 
-def _line(units: Sequence[float], probe: str = "p1", count: int | None = None) -> list[Observation]:
+def _line(
+    units: Sequence[float], probe: str = "p1", count: int | None = None, hardware: HardwareClass = UNIT.hardware
+) -> list[Observation]:
     """`count` (default `min_requests`) warm batch-1 requests of each length, one stratum per length."""
     return [
         observation(
@@ -129,6 +133,7 @@ def _line(units: Sequence[float], probe: str = "p1", count: int | None = None) -
             padded_units=x,
             wall_s=0.1 + 0.01 * x,
             since_load=CONFIG.warmup_requests,
+            hardware=hardware,
         )
         for i, x in enumerate(units)
         for n in range(CONFIG.min_requests if count is None else count)
@@ -192,6 +197,53 @@ def test_generated_rows_carry_probe_ids_not_users(tmp_path: Path) -> None:
         return {k for v in value for k in keys(v)} if isinstance(value, list) else set()
 
     assert not keys(load_yaml(path, "table")) & {"uid", "user", "username", "hostname", "account", "run"}
+
+
+@pytest.mark.logic
+def test_a_partial_regeneration_keeps_the_rows_of_the_units_it_does_not_regenerate(tmp_path: Path) -> None:
+    """Regenerating one unit of a table replaces its row and leaves the others; a row of another commit is refused."""
+    out = tmp_path / "out"
+    other = UNIT.model_copy(update={"hardware": UNIT.hardware.model_copy(update={"cpus": 4})})
+    first, second = tmp_path / "first", tmp_path / "second"
+    _write(first, UNIT, _line([2.0, 8.0]))
+    _write(second, other, _line([3.0, 9.0], "p2", hardware=other.hardware), PROVENANCE)
+    for unit in (UNIT, other):
+        generate.generate([first if unit is UNIT else second], out, DECLARED, PROFILE)
+    table = PackagedTable.load(out)
+    assert table.get(UNIT) is not None and table.get(other) is not None
+    again = tmp_path / "again"
+    _write(again, UNIT, _line([2.0, 9.0], "p3"))
+    generate.generate([again], out, DECLARED, PROFILE)
+    kept = PackagedTable.load(out)
+    assert kept.get(other) == table.get(other) and kept.get(UNIT) is not None and kept.get(UNIT) != table.get(UNIT)
+    later = tmp_path / "later"
+    _write(
+        later,
+        UNIT,
+        _line([2.0, 8.0], "p4"),
+        PROVENANCE.model_copy(update={"senselab": Build(version="2.0.0", commit="b" * 40)}),
+    )
+    with pytest.raises(generate.Refused, match="does not regenerate"):
+        generate.generate([later], out, DECLARED, PROFILE)
+    assert PackagedTable.load(out).get(UNIT) == kept.get(UNIT)
+
+
+@pytest.mark.logic
+def test_a_ladder_run_read_under_other_calibration_settings_is_refused(tmp_path: Path) -> None:
+    """The estimate is made under the settings the points were probed under: a table-profiled run needs its suite."""
+    run = tmp_path / "run"
+    table = PROFILE.calibration.model_copy(update={"length_strata": 3})
+    for point, ran in (("t~b@100", table), ("t~b@200", PROFILE.calibration)):
+        (run / point / "measures" / "measures@1").mkdir(parents=True)
+        (run / f"{point}.json").write_text(json.dumps({"calibration": ran.model_dump(mode="json")}))
+    (run / "t~b@300" / "measures" / "measures@1").mkdir(parents=True)
+    lines = generate.ladder_mismatches([run], PROFILE)
+    assert [line.split(":")[0] for line in lines] == ["t~b@100", "t~b@300"]
+    assert "length_strata" in lines[0] and "no result" in lines[1]
+    assert generate.ladder_mismatches([run], PROFILE.model_copy(update={"calibration": table}))[:1] == [
+        "t~b@200: probed under other calibration settings (length_strata); give --suite"
+    ]
+    assert generate.ladder_mismatches([run / "t~b@100" / "measures"], PROFILE) == []
 
 
 @pytest.mark.logic
@@ -382,11 +434,11 @@ def _request(item: str, jobs: int, wall: float, item_wall: float | None, **updat
 
 @pytest.mark.logic
 def test_flatness_reads_request_walls_not_end_times() -> None:
-    """Per-item seconds are the production items' own walls over their jobs, from the observations alone.
+    """Per-item seconds are the run's wall less its probe items' walls over its production jobs, from reports alone.
 
-    An item's wall is the one its last request reports (claim taken to commit), so neither the workers' poll waits
-    nor the clocks they end by enter it. A probe item, an item that loaded the model and a failed request are left
-    out; with no production item there are no per-item seconds.
+    The jobs are those of the `ok` production requests, a request that loaded the model among them (its load is run
+    time); a probe item's own wall is the probe's. Worker seconds per job leave the loading request out. No end time
+    enters either, so neither poll waits nor clock skew do; with no production request there are no per-item seconds.
     """
     ladder = _module("scale_ladder_walls_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
     probe = ProbeRef(id="p1", phase="SINGLE", stratum=0)
@@ -398,39 +450,72 @@ def test_flatness_reads_request_walls_not_end_times() -> None:
         _request("cold", 4, 4.0, 4.0, since_load=0, load_s=3.0),
         _request("lost", 4, 0.1, 0.1, outcome="failed", since_load=None, fault="content"),
     ]
-    assert ladder.request_cost(observations) == {"per_item_s": 1.5 / 8, "per_item_basis": "production request walls"}
-    assert ladder.request_cost(observations[3:]) == {"per_item_s": None, "per_item_basis": "no production items"}
+    assert ladder.request_cost(observations, 21.0) == {
+        "per_item_s": (21.0 - 9.0) / 12,
+        "per_item_basis": "run wall less probe items, per production job",
+        "worker_s_per_item": pytest.approx((0.1 + 0.2 + 0.3) / 8),
+    }
+    assert ladder.request_cost([observations[3], observations[5]], 21.0)["per_item_s"] is None
     assert not hasattr(ladder, "_steady") and not hasattr(ladder, "_item_samples")
 
 
 @pytest.mark.logic
-def test_the_table_profile_overrides_no_seconds_key_and_its_budget_is_the_suites(tmp_path: Path) -> None:
-    """A suite's `calibration:` overrides strata, batched sizes and the item budget only; its wall budget is a key.
+def test_a_claim_of_several_items_and_a_request_spanning_them_count_each_job_once() -> None:
+    """Items claimed together carry the claim's clock, and a batched request is in every item it spans.
 
-    The shipped ladder suite carries the table profile and a per-point wall budget, and the profile built from it
-    leaves every other calibration setting, and `probe_s`, as the execution profile had them.
+    Three one-job items of one claim report item walls 0.1, 0.2 and 0.3 (from the claim's start), and one request of the
+    three jobs, 0.3 s, is reported in each of them: the worker seconds per job are 0.1, not the 0.2 or 0.6 the sums of
+    those would give.
     """
-    ladder = _module("scale_ladder_table_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
-    suite = ladder.Suite.load(ROOT / "benchmarks" / "scale" / "suites" / "ladder.yaml")
-    assert suite.point_wall_s is not None and set(suite.calibration) == {
-        "length_strata",
-        "batched_sizes",
-        "probe_items",
-    }
-    table = ladder.table_profile(PROFILE, suite)
-    assert (table.calibration.length_strata, table.calibration.batched_sizes) == (3, 2)
-    assert table.calibration.probe_items == (
-        CONFIG.warmup_requests + 3 * CONFIG.min_requests * (1 + 100) + CONFIG.min_requests * CONFIG.single_item_jobs
+    ladder = _module("scale_ladder_claims_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    spanning = [_request(f"i{k}", 3, 0.3, 0.1 * (k + 1), request_index=k) for k in range(3)]
+    cost = ladder.request_cost(spanning, 1.0)
+    assert cost["worker_s_per_item"] == pytest.approx(0.1) and cost["per_item_s"] == pytest.approx(1.0 / 3)
+    walls = (0.05, 0.1, 0.15)
+    singles = [_request(f"j{k}", 1, w, sum(walls[: k + 1])) for k, w in enumerate(walls)]
+    cost = ladder.request_cost(singles, 0.6)
+    assert cost["worker_s_per_item"] == pytest.approx(0.1) and cost["per_item_s"] == pytest.approx(0.2)
+    twice = [*singles, *[o.model_copy(update={"item": f"k{n}"}) for n, o in enumerate(singles[:1])]]
+    assert ladder.request_cost(twice, 0.6)["per_item_s"] == pytest.approx(0.6 / 3)
+
+
+@pytest.mark.logic
+def test_the_outcome_record_a_pool_worker_commits_is_what_the_ladder_reads(tmp_path: Path) -> None:
+    """`pool_parts.report`'s outcome record is read by `_outcomes`, `_samples` and `_observations` of the ladder.
+
+    The key the worker writes the observations under is the one the ladder reads, so a rename on either side fails here
+    rather than turning every point's per-item seconds into "no production items".
+    """
+    ladder = _module("scale_ladder_join_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    sample = Sample(
+        wall_s=1.0,
+        claim_s=0.0,
+        jobs=2,
+        batch_size=2,
+        input_s=None,
+        baseline_bytes=0,
+        resident_bytes=None,
+        peak_memory_bytes=5,
+        cold=False,
+        job="7",
+        ended_s=1.0,
     )
-    same = {k for k, v in CONFIG.model_dump().items() if table.calibration.model_dump()[k] == v}
-    assert same == set(CONFIG.model_dump()) - set(suite.calibration) and table.probe_s == PROFILE.probe_s
-    head = "format: scale-suite@1.0\nname: s\nseed: 0\nlong_s: 1\ntasks: []\n"
-    for key in ("resolve_s", "probe_s", "no_such_key"):
-        bad = tmp_path / f"{key}.yaml"
-        bad.write_text(head + f"calibration: {{{key}: 5}}\n")
-        with pytest.raises(ValueError, match=key):
-            ladder.Suite.load(bad)
-    assert ladder.table_profile(PROFILE, ladder.Suite("s", 0, 1, (), {}, None)) == PROFILE
+    seen = [_request("a", 2, 0.4, 0.5)]
+    written: dict[str, Any] = {}
+
+    class Claim:
+        def commit(self, digests: list[str], extra: dict[str, Any]) -> list[str]:
+            written.update(extra)
+            return digests
+
+    assert pool_parts.report(Claim(), "d" * 8, [], sample, seen)  # type: ignore[arg-type]
+    run_dir = tmp_path / "run"
+    outcome = run_dir / ladder.RUN_QUEUES / "cpu" / "outcome"
+    outcome.mkdir(parents=True)
+    (outcome / ("d" * 8)).write_text(json.dumps(written))
+    outcomes = ladder._outcomes(run_dir)
+    assert ladder._observations(outcomes) == seen and ladder._samples(outcomes) == [sample]
+    assert ladder.request_cost(ladder._observations(outcomes), 2.0)["per_item_s"] == 1.0
 
 
 @pytest.mark.logic
