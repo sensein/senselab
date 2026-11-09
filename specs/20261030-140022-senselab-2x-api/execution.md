@@ -118,6 +118,97 @@ dir>/queues --classes <list> [--profile NAME]` runs `serve_pool`.
   is the substrate's job: the coordinator's substrate (`Substrate.ensure`, Task 16) starts workers again while its
   queues hold work.
 
+**As built (Phase 3 Task 20R-7a).** `runtime/execution/pool.py`, with its items, followed fragments and unit states in
+`pool_parts.py`. The Pool no longer calibrates: a unit's measure is an `Estimate` read through `MeasureSource`, and its
+computed jobs move through the `ProbeState` of `calibration-probe.md` §7.1.
+
+- **Units.** Every unit the Pool reads or writes is built by `UnitResolver.unit` (the env record and the hardware
+  index only), under the decoder `decoder_of` gives the fragment's jobs. A unit that cannot be built is `Unresolved`
+  and runs the safe values (`size(None, …)`); a slurm env is one such, since its node, platform and numerics are not
+  known before a worker starts. On a local substrate the Pool resolves the class as this host's report, the rule the
+  resolver and `explain` use; when that class is not in the hardware index the unit is `Resolving` and its computed
+  jobs wait for a worker's ready mark. A worker's hello (`workers/<id>`, its `HardwareClass` per queue) is written
+  into the index (`MeasureRoots.note_seen`, write-once); the first hello of a class decides it, and where it
+  disagrees with the prediction the hello wins: units are built with it from then on. A `Resolving` queue wants one
+  worker, so the wait costs no extra start.
+- **Servable jobs bypass the state machine.** `ResultStore.admits` is asked of each job's key digest in the context its
+  env gives (`servable_jobs`, on `pool.admit_threads` threads, the predicate `explain`'s counts use); jobs it admits
+  are put at once, in every state, in items of `quantum_items` that end on request boundaries. Where the env is not
+  known every job is computed. An entry under an old context is not admitted, so its job is computed and probed.
+- **Lookup.** The estimate is `MeasureSource.get(unit)`. It is used as it is when its unit of input is `none`, or it
+  measures a slope and every known length of the jobs lies in the lengths it measured; otherwise `Probe.plan` plans
+  over the held jobs against the roots' pooled observations and regime records, so only the strata they do not cover
+  are probed, and `bucket_edges` come from the backend's formation (`bucket_edges`) whether or not an estimate exists.
+  A plan with no `SINGLE` item, and no warm-up a batched phase could use (a batched phase needs a device memory fit),
+  is not run: the unit is `Measured` by its estimate, else `Unmeasured`, and a unit probes at most once per run.
+- **PeerWait.** `MeasureRoots.probe_lease` returns the lease or `PeerProbing`. A unit that finds a peer's lease waits,
+  re-reading once per `pool.poll_s` on the Pool's clock, until the peer's lease is gone or `peer_wait_s` has passed;
+  it then returns to `New` and plans only what the peer's observations leave uncovered. Having waited once, it takes
+  a lease still held by the peer as `Unleased` and probes without waiting again.
+- **Probing.** A probe has an id and a queue `<queue>~probe-<id>`. The Pool records the unit's resolved class on that
+  queue (`Queue.set_probe_hardware`) before it puts anything, with `put_probe`; a worker takes the serve lease only
+  when its own class is the one recorded, so a queue with none recorded is served by none. `WARMUP` and `SINGLE` items
+  are put together; a request that comes back `served` has its item replaced from the stratum
+  (`Probe.replace_served`); when they have outcomes `Probe.estimate` runs and `Probe.plan_batched` adds the `BATCHED`
+  items inside the seconds left. The budget counts the walls of warm requests (those after the model's load) in the
+  observations read: past `probe_s` no further phase is planned and the probe ends with what it has, its unclaimed
+  items left to run as the ordinary work they are. The model load and the waits between phases do not count.
+  After the lease's stale window (`lease.stale_after_s`, on the Pool's clock) with no item claimed or finished, the
+  unit is `Unmeasured`: its unclaimed probe items are dropped from the followed fragment and their jobs run as
+  production. A retry is never a probe item.
+- **End of a probe.** The observations are written (`MeasureRoots.put_observations`, `obs/<probe id>.json`) once the
+  probe lease is proven (`Lease.prove`), the lease is released, and the held jobs are put cut and batched by
+  `size`; each probe job's result is yielded like any other. `Unmeasured` writes its warm observations too. The
+  held jobs of one unit are put in one `size` call per fragment; an item's jobs of one batch share its placement's
+  `batch_size`, so the Pool and `InProcess` give each job the same batch.
+- **Workers wanted.** A probe queue wants none. The queue a probe measures wants, beyond its sized work, one worker
+  per probing unit; sized work is the slowest measured unit's seconds per job over `target_wall_s`, within the items
+  waiting and the class's workers; an unmeasured unit's is `unmeasured_workers`.
+- **One extrapolation log per run**, made again by `bind_epoch`. `Pool.probes` maps each unit probed to its probe id,
+  the digests of its items and their jobs.
+- **Removed here, left to Task 20R-7b:** a resource fault no longer grows the unit's measure (`_grow`); the `oom`
+  record that replaces it is 7b's. Resource faults still move a job to the next larger class.
+
+**As built, fix rounds 1 and 2 (Task 20R-7a).** `runtime/execution/probe_machine.py` holds `ProbeMachine`, a class over a
+`Host` (queues, worker marks, live workers, fragment reads, `produce`, `wake`); its other inputs are the clock, the
+`UnitResolver`, the measures and roots, and `Probe`. `Pool` composes it and is its host (`_PoolHost`), so the machine is
+tested with a host of fake queues (`probe_machine_test.py`). What changed against the block above:
+
+- **Pending causes wait in `Resolving`.** A unit that cannot be built because its node, hardware or env is not yet known
+  (`Pending`: a slurm node, hardware not in the index, an unbuilt env) is held and built from the first hello's
+  `worker-ready@1.0` mark; only a final cause (the mark names no class, an env failed to build or is unreadable, two
+  decoders) runs the safe values. A worker reads the backends of its queues from the run's placement of its latest
+  attempt (`private/placements/<attempt>.json`, written by `prepare`) and builds each env before it writes the mark.
+  Each env entry is `env_entry` (the §3.1 fields but the decoder, held to `MeasureEnv`'s filter; `driver` is the torch
+  build only); a server's `driver` is completed from `service_of` by the coordinator. An entry is keyed by
+  `<task>~<backend name>`, not by env name, since two backends of one env name carry their own overlay. A mark lacking
+  the backend's entry demotes only a pending unit: a unit this host resolves is placed as it is. Only another major of
+  the mark's format is no mark (logged once); a later minor is read.
+- **Held parts are checked like flights**: a part held in `Resolving`, `PeerWait` or `Probing` raises `QueueHeld` and
+  `WorkersBroken` as a flight does. `calibration.resolve_s` bounds `Resolving`, from the first poll with a live,
+  non-pending worker of the queue; past it the unit runs the safe values and the Pool logs why, once per queue. A
+  `Resolving` unit wakes the scaler, so a worker starts. A mark is placed against its parts once, when read. Every
+  change to the unit states and the resolving parts is made under the machine's lock, the one `counts` reads under.
+- **A closed probe queue.** The stale window runs from the probe queue's last claim or outcome. Past it the Pool writes
+  the queue's `closed` mark (`Queue.close_probe`), which a worker checks before it takes the serve lease or claims
+  (and drops a lease it holds on a closed queue); items under a live claim finish there, and their jobs are put as
+  production only if the claim goes stale.
+- **The F2 filter covers the env.** A probe queue records the unit's class and the backend's env
+  (`Queue.set_probe_unit`, which replaces `set_probe_hardware`); a worker takes the serve lease only when its own class
+  and its env for that backend (`env_identity`: lock, wheels, platform, numerics, threads, torch build) equal them. A
+  queue recording none is served by none.
+- **A disagreeing hello** places every unit built from the prediction again: a probing unit's queue is closed, its
+  finished items' observations are written under the class of the worker that made each, and its parts return to
+  `Resolving`; a finished unit is dropped, its put items keeping their sizing.
+- **Workers wanted** count quanta of jobs (`ceil(work / quantum_items)`), not items, so one-job items start no more
+  workers than a quantum of jobs does. The unmeasured unit's lengths and bucket edges are read in the kind its jobs
+  hold.
+- **Evidence.** `local_probe_test.py` runs real `senselab execute` workers through `Local`: a run probes, a second run
+  over the same measures root plans none and its estimate's source names the first's probe, a run after the env's
+  `wheel_set` changed is another unit and probes again, and a run whose env is unbuilt when planned resolves at its
+  worker's mark and probes. The no-identifier test builds the mark from a `local:` model's plan and an env whose index
+  is a mirror URL with userinfo.
+
 ### 3.3 Fault taxonomy
 
 Faults are classified at the source by the worker runtime's error table
