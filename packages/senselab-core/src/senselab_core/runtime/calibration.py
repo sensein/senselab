@@ -282,6 +282,30 @@ class OomRecord(Frozen):
     worker: NonEmptyStr | None = None
 
 
+class DriftRecord(Frozen):
+    """Production evidence that an estimate is suspect: a window of wall ratios, or one device peak above its band.
+
+    `rho`, `median`, `band` and `k` describe a `wall_s` window (`band` is the interval its median had to lie in);
+    `m1` is the slope a `device_peak` request implies; `source` is the probe ids of the estimate doubted.
+    """
+
+    metric: Literal["wall_s", "device_peak"]
+    batch: Positive
+    k: Positive | None = None
+    rho: tuple[Annotated[float, Field(allow_inf_nan=False)], ...] = ()
+    median: Annotated[float, Field(allow_inf_nan=False)] | None = None
+    band: tuple[float, float] | None = None
+    m1: Annotated[float, Field(allow_inf_nan=False)] | None = None
+    source: tuple[NonEmptyStr, ...] = ()
+
+
+class SupersedeRecord(Frozen):
+    """A confirming probe's disagreement: the probes it outdates and the probe that confirmed."""
+
+    outdates: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    confirmed_by: NonEmptyStr | None = None
+
+
 class EstimateSource(Frozen):
     """Where an estimate came from: probe ids and observation count, or a packaged row's commit and probe ids."""
 

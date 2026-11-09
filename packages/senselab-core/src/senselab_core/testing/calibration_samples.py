@@ -6,6 +6,7 @@ from senselab_core.kernel.identity import ModelIdentity
 from senselab_core.runtime.calibration import (
     Candidate,
     Cotenancy,
+    DriftRecord,
     Estimate,
     EstimateSource,
     HardwareClass,
@@ -23,6 +24,7 @@ from senselab_core.runtime.calibration import (
     RunCalibration,
     Stratum,
     StratumBatch,
+    SupersedeRecord,
     Unplanned,
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings
@@ -124,9 +126,27 @@ def _register_measures_roots_samples(register: Register) -> None:
     )
 
 
+def _register_record_samples(register: Register) -> None:
+    """Register the payload types of the measures records written below a unit."""
+    register(
+        DriftRecord,
+        lambda: [
+            DriftRecord(metric="wall_s", batch=1, k=2, rho=(1.8, 2.1), median=1.95, band=(0.9, 1.1), source=("p1",)),
+            DriftRecord(metric="device_peak", batch=4, m1=3e7),
+        ],
+        invalid_updates=[{"metric": "other"}, {"batch": 0}, {"k": 0}],
+    )
+    register(
+        SupersedeRecord,
+        lambda: [SupersedeRecord(outdates=("p1", "p2"), confirmed_by="p3"), SupersedeRecord(outdates=("p1",))],
+        invalid_updates=[{"outdates": ()}, {"outdates": ("",)}, {"confirmed_by": ""}],
+    )
+
+
 def register_calibration_samples(register: Register, packaged: CalibrationSettings) -> None:
     """Register the samples of every calibration type through `register` (`values.register_samples`)."""
     _register_measures_roots_samples(register)
+    _register_record_samples(register)
     register(CalibrationSettings, lambda: [packaged], invalid_updates=[{"trust": "all"}, {"measures_roots": ()}])
     register(RunCalibration, lambda: [RunCalibration(), RunCalibration(trust="own")], invalid_updates=[{"trust": "x"}])
     register(

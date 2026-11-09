@@ -144,13 +144,23 @@ def test_the_hardware_index_obeys_the_trust_filter(tmp_path: Path) -> None:
 
 
 PAYLOADS: dict[str, dict[str, object]] = {
+    "drift": {
+        "metric": "wall_s",
+        "batch": 1,
+        "k": 2,
+        "rho": [1.5],
+        "median": 1.5,
+        "band": [0.9, 1.1],
+        "source": ["p1"],
+    },
+    "supersede": {"outdates": ["p1"], "confirmed_by": "p2"},
     "regime": {"k": 2, "rho": 1.5, "n": 3},
     "oom": {"resource": "device", "batch": 2, "length": 10.0, "cotenancy": 1, "grant_bytes": 10**9, "basis": ["p1"]},
 }
 
 
 def _payload(kind: str) -> dict[str, object]:
-    return PAYLOADS.get(kind, {"reason": kind, "outdates": ["p1"]})
+    return PAYLOADS[kind]
 
 
 @pytest.mark.contract
@@ -376,7 +386,7 @@ def test_a_file_that_cannot_be_parsed_is_malformed_never_raised(tmp_path: Path) 
     """Deeply nested JSON and an out-of-range mtime are read as malformed or harmless, not raised."""
     roots = _roots(tmp_path)
     written = roots.put_observations(UNIT, "p1", [_observation()], PROVENANCE)
-    record = roots.put_record(UNIT, "drift", {"n": 1}, PROVENANCE)
+    record = roots.put_record(UNIT, "drift", PAYLOADS["drift"], PROVENANCE)
     assert written is not None and record is not None
     written.chmod(0o640)
     written.write_text("[" * 200000)
@@ -543,10 +553,10 @@ def test_the_local_clock_fallback_is_logged_once_per_root(tmp_path: Path, caplog
 
 
 @pytest.mark.logic
-def test_regime_and_oom_payloads_are_typed_on_write_and_read_back(tmp_path: Path) -> None:
-    """`put_record` refuses a `regime` or `oom` payload the reader could not parse; a valid one reads back typed."""
+def test_every_record_payload_is_typed_on_write_and_the_estimate_kinds_read_back(tmp_path: Path) -> None:
+    """`put_record` refuses a payload its kind's type does not hold; a valid regime or oom reads back typed."""
     roots = _roots(tmp_path)
-    for kind in ("regime", "oom"):
+    for kind in ("drift", "supersede", "regime", "oom"):
         with pytest.raises(ValidationError):
             roots.put_record(UNIT, kind, {"n": 1}, PROVENANCE)
         assert roots.put_record(UNIT, kind, PAYLOADS[kind], PROVENANCE) is not None
