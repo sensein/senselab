@@ -31,6 +31,7 @@ from senselab_worker.fake import OutOfMemoryError
 TIMED = scoring("pool_observations_test.timed")
 TIMER = "backends.timed_backend_fixture"
 FAKE_TIME = "backends.fake_time_backend_fixture"
+CROWDED = "backends.crowding_backend_fixture"
 HARDWARE = HardwareClass(device="cpu", name="a cpu", cpus=2)
 SHARED = Cotenancy(device=2, host=3)
 
@@ -169,6 +170,25 @@ def test_a_request_reports_the_class_of_the_fault_it_raised(tmp_path: Path) -> N
         (4, "bisected", "resource"),
     }
     assert all(o.fault is None for o in found if o.outcome == "ok")
+
+
+@pytest.mark.logic
+def test_a_request_names_the_one_class_all_its_items_failed_with(tmp_path: Path) -> None:
+    """Nothing raises on the host: two items out of memory say `resource`; one beside a content fault, none."""
+    profile = _profile(quantum_items=2)
+    with packaged(registry(TIMED, worker=CROWDED), tmp_path / "cache"):
+        placed, store, pool_dir = _items(profile, tmp_path, ["oom", "oom", "oom", "fail"])
+        admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
+        for pair in ((0, 1), (2, 3)):
+            fragment = node_fragment(placed, admission, elements=[(e,) for e in pair])
+            paired = fragment.placement.model_copy(update={"batch_size": 2})
+            QueueSet(pool_dir, profile).queue("cpu").put(fragment.model_copy(update={"placement": paired}))
+        _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile)).serve()
+    found = _observations(pool_dir, profile)
+    assert sorted((o.batch, o.outcome, str(o.fault)) for o in found) == [
+        (2, "failed", "None"),
+        (2, "failed", "resource"),
+    ]
 
 
 @pytest.mark.logic

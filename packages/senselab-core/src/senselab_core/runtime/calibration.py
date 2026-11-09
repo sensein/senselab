@@ -169,7 +169,8 @@ class Observation(Frozen):
         host_after: Its host memory after the request, else None.
         cotenancy: The co-tenancy the request ran under.
         outcome: `ok`, `failed`, `bisected` or `served`.
-        fault: The class of the exception a `failed` or `bisected` request raised, else None.
+        fault: A `failed` or `bisected` request's fault class: its exception's, else the one class all its jobs
+            failed with; else None.
         hardware: The hardware as the worker reads it.
     """
 

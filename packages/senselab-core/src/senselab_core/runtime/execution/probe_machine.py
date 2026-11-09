@@ -745,7 +745,7 @@ class ProbeMachine:
         return _floored(self.measures.get(state.unit) or suspect, state.m1_floor)
 
     def oom(self, digest: str, observations: Sequence[Observation], worker: str | None) -> None:
-        """Write the `oom` record of item `digest` from its requests that raised a resource fault (§7.4).
+        """Write the `oom` record of item `digest` from its requests that failed with a resource fault (§7.4).
 
         The record is of the largest faulting request (the shortest of equals): its batch, its longest job's length
         and the co-tenancy of its grant (the device's, the host's on a shared host, else 1; an unread count is 1). The
