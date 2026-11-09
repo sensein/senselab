@@ -300,16 +300,23 @@ def test_an_installed_package_inside_another_repository_has_no_commit(tmp_path: 
 
 
 @pytest.mark.logic
-def test_this_checkouts_commit_is_what_git_names() -> None:
-    """The package's own checkout gives the commit `git rev-parse HEAD` does; skipped where it is not run from one."""
-    here = Path(__file__).resolve().parent
-    top = subprocess.run(
-        ["git", "-C", str(here), "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False
-    )
-    if top.returncode != 0 or not (Path(top.stdout.strip()) / PACKAGE_IN_CHECKOUT).is_dir():
-        pytest.skip("the tests do not run in a senselab checkout")
-    named = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True, cwd=here)
-    assert checkout_commit() == named.stdout.strip()
+def test_a_git_checkouts_commit_is_what_git_names(tmp_path: Path) -> None:
+    """A repository git made, loose then packed, gives the commit `git rev-parse HEAD` does."""
+    repo = tmp_path / "repo"
+    package = _package(repo)
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+    def git(*args: str) -> str:
+        done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True, env=env)
+        return done.stdout.strip()
+
+    git("init", "-q")
+    (repo / "f").write_text("x")
+    git("add", "f")
+    git("commit", "-q", "-m", "x")
+    assert checkout_commit(package) == git("rev-parse", "HEAD")
+    git("pack-refs", "--all")
+    assert checkout_commit(package) == git("rev-parse", "HEAD")
 
 
 @pytest.mark.contract
