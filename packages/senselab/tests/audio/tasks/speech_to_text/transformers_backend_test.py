@@ -19,6 +19,7 @@ from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.testing.contracts import contract_cases
 from senselab_worker.fake import FAULT_KEY
 from senselab_worker.faults import ContentFault, ResourceFault, error_record
+from senselab_worker.serve import call_handle
 
 LOCK_RECORDS = packaged_lock_records("senselab")
 
@@ -178,6 +179,64 @@ def test_a_pipeline_failure_is_isolated_by_rerunning_items_alone() -> None:
     out = hf.handle(state, items, PARAMS)
     assert "outputs" in out[0] and "outputs" in out[2]
     assert (error_record(out[1]["error"])["fault"], error_record(out[1]["error"])["gap"]) == ("infrastructure", True)
+
+
+class _Recording:
+    """A pipeline that records the `batch_size` of each call and raises `error` when it is given one."""
+
+    feature_extractor = hf.StubPipeline.feature_extractor
+
+    def __init__(self, error: BaseException | None = None) -> None:
+        self.batch_sizes: list[int] = []
+        self.error = error
+
+    def __call__(self, inputs: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        self.batch_sizes.append(kwargs["batch_size"])
+        if self.error is not None and len(inputs) > 1:
+            raise self.error
+        return hf.StubPipeline()(inputs, **kwargs)
+
+
+def _three() -> list[dict[str, Any]]:
+    return [{"id": i, "inputs": {"audio": _audio(1600 + n)}} for n, i in enumerate("abc")]
+
+
+@pytest.mark.logic
+def test_the_placed_batch_is_the_pipeline_batch() -> None:
+    """A request of three items is one pipeline call of batch three."""
+    pipe = _Recording()
+    out = hf.handle(hf.State(pipe, 16000), _three(), PARAMS)
+    assert pipe.batch_sizes == [3] and all("outputs" in o for o in out)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(("cap", "expected"), [(2, 2), (1, 1), (8, 3)])
+def test_a_declared_batch_size_caps_the_placed_batch(cap: int, expected: int) -> None:
+    """`batch_size` is a cap on the pipeline batch: never above the placed batch, never above itself."""
+    pipe = _Recording()
+    hf.handle(hf.State(pipe, 16000), _three(), {**PARAMS, "backend_params": {"batch_size": cap}})
+    assert pipe.batch_sizes == [expected]
+
+
+@pytest.mark.logic
+def test_a_batched_resource_fault_reaches_the_pool_through_call_handle() -> None:
+    """A torch-style out of memory in the batched call is a resource failure of the request, not per-item ok."""
+    torch_oom = type("OutOfMemoryError", (RuntimeError,), {})("CUDA out of memory")
+    pipe = _Recording(torch_oom)
+    state: object = hf.State(pipe, 16000)
+    out = call_handle(lambda _, items, params: hf.handle(hf.State(pipe, 16000), items, params), state, _three(), PARAMS)
+    assert pipe.batch_sizes == [3]
+    assert [error_record(o["error"])["fault"] for o in out] == ["resource"] * 3
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("error", [ResourceFault("device lost memory"), MemoryError(), TimeoutError()])
+def test_every_resource_class_fault_propagates_from_handle(error: BaseException) -> None:
+    """The worker's classification decides: a resource-class exception is not re-run per item."""
+    pipe = _Recording(error)
+    with pytest.raises(type(error)):
+        hf.handle(hf.State(pipe, 16000), _three(), PARAMS)
+    assert pipe.batch_sizes == [3]
 
 
 @pytest.mark.logic

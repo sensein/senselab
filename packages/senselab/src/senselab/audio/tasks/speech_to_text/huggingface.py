@@ -20,6 +20,7 @@ from senselab_core.kernel.time import Span
 from senselab_core.kernel.wire import wire_form
 from senselab_core.runtime.audio_io import READER
 from senselab_worker.fake import FakeFaults, injected, without_fault
+from senselab_worker.faults import FaultClass, classify
 from senselab_worker.units import NS_PER_S
 
 from senselab._api.declarations import SpeechToTextParams
@@ -44,11 +45,14 @@ _INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
 
 
 class TransformersParams(BackendParams):
-    """Backend params of `transformers`: tokens per window, window length in seconds, windows per batch."""
+    """Backend params of `transformers`: tokens per window, window length in seconds, a cap on the pipeline batch.
+
+    `batch_size` absent runs the placed batch, every item of the request, as one pipeline call.
+    """
 
     max_new_tokens: int = Field(default=128, ge=1)
     chunk_length_s: int = Field(default=30, ge=1)
-    batch_size: int = Field(default=1, ge=1)
+    batch_size: int | None = Field(default=None, ge=1)
 
 
 @backend(
@@ -129,13 +133,16 @@ def load(init: dict[str, Any]) -> State:
         revision=str(model["identity"]),
         device=init.get("device", "cpu"),
     )
-    return State(pipe, int(pipe.feature_extractor.sampling_rate))  # type: ignore[union-attr]
+    extractor: Any = pipe.feature_extractor
+    return State(pipe, int(extractor.sampling_rate))
 
 
 def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     """Return one `{"outputs": {"transcript": <transcript@2.0 wire form>}}` per item, or its typed fault.
 
-    Items that pass the checks run in one pipeline call; if it raises, each runs alone so a fault stays with its item.
+    Items that pass the checks run in one pipeline call of the placed batch, capped by `batch_size`. If it raises a
+    content or unclassified fault, each runs alone so a fault stays with its item; a resource-class fault propagates
+    for the pool to split.
     """
     task = SpeechToTextParams.model_validate({k: v for k, v in without_fault(params).items() if k != "backend_params"})
     faults = injected(params)
@@ -150,7 +157,9 @@ def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) ->
     try:
         for (index, _), transcript in zip(ready, _transcribe(state, [p for _, p in ready], task, tuning)):
             results[index] = {"outputs": {"transcript": transcript}}
-    except Exception:  # noqa: BLE001 - re-run each item alone to find the one at fault
+    except Exception as batch_fault:  # noqa: BLE001 - re-run each item alone to find the one at fault
+        if classify(batch_fault) is FaultClass.RESOURCE:
+            raise
         for index, prepared in ready:
             try:
                 results[index] = {"outputs": {"transcript": _transcribe(state, [prepared], task, tuning)[0]}}
@@ -184,7 +193,7 @@ def _transcribe(
         return []
     kwargs: dict[str, Any] = {
         "chunk_length_s": tuning.chunk_length_s,
-        "batch_size": tuning.batch_size,
+        "batch_size": len(prepared) if tuning.batch_size is None else min(len(prepared), tuning.batch_size),
         "generate_kwargs": {"max_new_tokens": tuning.max_new_tokens, "num_beams": 1}
         | ({"language": task.language.lower()} if task.language else {}),
     }
