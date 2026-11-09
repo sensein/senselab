@@ -464,8 +464,8 @@ def expected_timeout_minutes(job: str, workflow: str, budgets: dict[str, float],
         (budgets[t] for name, marker, _if in package_selections(workflow) if name == job for t in tiers_of(marker)),
         default=0.0,
     )
-    measured = timeouts["measured_s"][job]
-    return max(timeouts["floor_minutes"], math.ceil((bound + timeouts["load_factor"] * measured) / 60))
+    measured = float(timeouts["measured_s"][job])
+    return max(int(timeouts["floor_minutes"]), math.ceil((bound + float(timeouts["load_factor"]) * measured) / 60))
 
 
 @pytest.mark.logic
