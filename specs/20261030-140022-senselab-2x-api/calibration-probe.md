@@ -464,6 +464,12 @@ Sizing: batch(L) per length bucket, item cuts (job index ranges), workers, worke
 
 `size` stays pure and is the one sizing site (S6), for the Pool, the in-process executor and `explain()`.
 
+`size` also takes `calibration: CalibrationSettings` as a keyword: its `confidence` is the z of the item cut and its
+`unmeasured_workers` the workers of an unmeasured unit. Every figure that sizes work at plan time or run time (batch,
+cuts, workers, predicted seconds, wall time, GPU hours, peak memory, the refusal of a job whose batch-1 peak passes the
+cap) is a field of `Sizing`; no other function estimates one. The packaged `resource-table@1.0` rows are read through
+`estimate_of` (an `Estimate` over recording seconds with no range, spread or oom) only until T20R-8 removes them.
+
 ### 6.2 Time, scaled to the run's lengths (S1, must-fix 1)
 
 - Per job at batch 1: `t(L) = r + u·L`; at the chosen batch B for its bucket: `(r_B + u_B·B·L_pad)/B`; under a
@@ -477,6 +483,10 @@ Sizing: batch(L) per length bucket, item cuts (job index ranges), workers, worke
   bound (§6.3).
 - Outside the estimate's measured `range`, time is extrapolated linearly for cutting items only, logged once per unit,
   and the batch is 1 (§6.4).
+- A job of unknown length is cut at the range's `hi` and its time is unmeasured. An unmeasured spread or slope never
+  enters as 0: with `u` or the spread unmeasured, items are cut by `pool.quantum_items` alone, and with `u` unmeasured
+  a job outside the range is untimed and its unit takes the no-estimate workers (§6.5). A gap between two strata takes
+  the smaller neighbouring batch.
 
 ### 6.3 Device memory divided among a card's workers (S3, S4, must-fix 2)
 
@@ -490,6 +500,10 @@ On a substrate whose workers share devices (`Local` with visible GPUs):
    workers of one card together stay within `memory_headroom` of it.
 4. The device bound on workers is `devices × w_d`.
 
+A device grant is the class's `memory_cap_bytes`, else the least memory of the devices seen (`Grant.seen`), as the host
+grant falls back to the host's. Regime lowering treats an unmeasured `k` as linear (`ρ_k = 1`) and stops at the first
+measured `k` whose `k/ρ_k` does not rise (ruling O-4).
+
 On Slurm each worker holds its own card: `w_d = 1` and the grant is the whole `memory_cap`. Ruling O-4: `w_d` is
 bounded by memory, and lowered only by a measured regime factor (§7.3).
 
@@ -498,7 +512,10 @@ bounded by memory, and lowered only by a measured regime factor (§7.3).
 For each length bucket of the run (the formation's grid for a bucketed backend, else the estimate's strata):
 `B(L) = min(B*(L), memory batch at L, the item's jobs)`, the memory batch at L being
 `⌊(memory_headroom·grant − resident − m0)/(m1·L)⌋` with `m1` as §7.4 raises it. `B(L) = 1` when L lies above the
-measured range, or when device memory or batched time is unmeasured. The item's placement carries its bucket's
+measured range, or when device memory or batched time is unmeasured.
+An executor that does not split fragments asks `size` for its fragment size (`fragment_size`) and cuts a fragment into
+runs of equal batch at stratum boundaries; cutting at a formation grid's buckets needs the grid as an input of `size`
+(T20R-7a). The item's placement carries its bucket's
 batch; a fragment whose jobs fall in several buckets is cut at bucket boundaries.
 
 ### 6.5 Missing measure: the safe value per dimension (S5)
@@ -506,9 +523,10 @@ batch; a fragment whose jobs fall in several buckets is cut at bucket boundaries
 | missing | value |
 |---|---|
 | no estimate, probe not possible or over budget | batch 1; one worker per device; items of `pool.quantum_items` jobs bounded by `quantum_s` with the worker's own yielding; `calibration.unmeasured_workers` workers |
+| spread | items cut by count |
 | device memory | batch 1; one worker per shared device |
 | batched time | batch 1 |
-| `u` | per-request median, items cut by count within the measured request range |
+| `u` | per-request median, items cut by count within the measured request range; a job outside the range is untimed and its unit takes the no-estimate row |
 | grant memory | batch 1 |
 
 ### 6.6 One site for plan time and run time (S6, must-fix 4, UX-31)
@@ -524,6 +542,12 @@ length, `resident + m0 + m1·L`, exceeds the class's memory cap is flagged befor
 (UX-2, UX-4). The Pool and the in-process executor call
 the same `size` at run time with the same device selection: the device pair on a `cuda` class, the host pair
 otherwise. The in-process executor never probes; without an estimate it runs the safe values of §6.5.
+
+`plan_cost` and `check_caps` (the resource-table@1 readers at plan time) are routed through each node's `Sizing` or
+deleted by T20R-8, and `explain()`'s `cost:` line carries only the download until then. A reason printed for an
+unmeasured figure is true of the state: `no measure source given`, `no measure unit for the node`, `no estimate for its
+unit`, `lengths unknown`. One `MeasureUnit` resolver over the env record and the hardware index, which `explain()` and
+the in-process executor use by default, is T20R-7a's.
 
 ## 7. The Pool: probe and production items
 
@@ -1036,7 +1060,10 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
   `replace_served`, budgets over warm probe work, servable jobs put at once (T20R-3's predicate), observation writes,
   release under §6 or the safe values; `workers_wanted` for probing units; the ladder's two reads (`pool.calibrated`
   becomes `pool.probes`; the `or calibrated(samples)` fallback is deleted, must-fix 5). The old calibration path is
-  left with no caller, for T20R-7a′. `execution.md` §3.2 updated.
+  left with no caller, for T20R-7a′. Also here: the `MeasureUnit` resolver (§6.6), the once-per-unit extrapolation log,
+  `explain()`'s servable and computed counts, a formation grid as an input of `size`, a probe of a stratum the estimate
+  does not cover before production on a unit with `u` unmeasured, and the Pool half of
+  `test_the_pool_and_the_in_process_executor_size_one_unit_alike`. `execution.md` §3.2 updated.
 - **Files.** `runtime/execution/pool.py`, `benchmarks/scale/ladder.py` (the two reads only), `execution.md`.
 - **Tests failing now.** `test_probe_results_are_yielded_and_never_rerun`; `test_servable_jobs_are_put_at_once`
   (at `5ae1fc3d` they wait behind the calibration round, I4); `test_entries_under_another_context_are_probed_not_skipped`
@@ -1052,7 +1079,7 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 
 - **Scope.** Deletes what T20R-7a left without a caller: `_calibrating`, `_first_round`, `_round_measure`,
   `_batch_round`, `_round_digests`, `_note_unmeasured_device`, `calibrated`, `_batched`, `Measures`, `code_version`,
-  `Unit`, `measure_of`, `size_row`, `Sample.cold`, `PoolWorker._warm`, `sizing.calibration_*` and their
+  `Unit`, `measure_of`, `size_row`, `RowSizing`, `Grant.worker_bound`, `_held`, `Sample.cold`, `PoolWorker._warm`, `sizing.calibration_*` and their
   `config-derivations.md` sections. No behaviour change. Sonnet at low effort.
 - **Files.** `runtime/execution/pool.py`, `runtime/execution/pool_worker.py`, `runtime/sizing.py`,
   `runtime/resources.py`, profiles, `config-derivations.md`.
@@ -1081,8 +1108,8 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 - **Scope.** §9: table profile in the suite; point results carry observations and `Estimate`; flatness from request
   walls; the table profile overrides no seconds key, the ladder passing its suite's per-point wall budget to
   `Probe.plan`; generator from measures roots, refusing unmeasured, writing no user or host; `@1.0` loader and its seven rows
-  deleted (the generator, rewritten here, is their last reader once T20R-7a′ removes `Measures`, `measure_of` and
-  `size_row`); the `config-derivations.md` resources section.
+  deleted (their readers after T20R-7a′ are `plan_cost`, `check_caps`, `estimate_of` and the generator; this task routes the
+  first two through `Sizing` or deletes them, deletes `estimate_of`, and rewrites the generator); the `config-derivations.md` resources section.
 - **Files.** `benchmarks/scale/ladder.py`, `benchmarks/scale/suites/ladder.yaml`, `scripts/generate_resources.py`,
   `runtime/resources.py`, `packages/senselab/src/senselab/data/resources/` (emptied), `config-derivations.md`.
 - **Tests failing now.** `test_generator_refuses_an_unmeasured_estimate`; `test_a_packaged_row_of_another_env_build_is_not_read`;
