@@ -30,7 +30,7 @@ from senselab_core.runtime.keys import MissingProfileSlice
 from senselab_core.runtime.licenses import LicenseRefused
 from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.models import ModelResolutionError
-from senselab_core.runtime.placement import BackendParamsMismatch, MemoryCapExceeded
+from senselab_core.runtime.placement import BackendParamsMismatch
 from senselab_core.runtime.profiles import NoBackend, NoDevice, UnlistedSource
 from senselab_core.runtime.vllm_server import AttestationMismatch, VllmStartError
 from senselab_core.runtime.worker_client import WorkerFatal, WorkerLost
@@ -90,7 +90,6 @@ ERROR_CODES: tuple[tuple[type[Exception], str, str], ...] = (
     (ModelResolutionError, "model_resolution_failed", "check the model reference and the network, then retry"),
     (BackendParamsMismatch, "invalid_backend_params", "give params only for a declared backend, as it declares them"),
     (LicenseConflict, "license_conflict", "one subject has two license records; report the catalogue"),
-    (MemoryCapExceeded, "memory_cap_exceeded", "raise the resource class's memory cap, or choose a smaller model"),
     (MissingProfileSlice, "missing_profile_slice", "set the run settings or dataset profile value the task reads"),
     (VllmStartError, "server_start_failed", "see the server log; retry once the host has the resources it needs"),
     (AttestationMismatch, "attestation_mismatch", "start the server as the backend declares it"),

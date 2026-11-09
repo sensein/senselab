@@ -39,3 +39,7 @@ tests:
     stale_after_s: 0.4
     renew_fraction: 0.25
     peer_lifetime_s: 60
+  # The sizing invariants test: the relative slack its float comparisons (item seconds against the quantum, a card's
+  # budget against its headroom) allow for rounding in sums of at most a hundred jobs.
+  sizing:
+    relative_tolerance: 1.0e-9

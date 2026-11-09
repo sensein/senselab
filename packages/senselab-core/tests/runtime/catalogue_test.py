@@ -200,42 +200,10 @@ def test_backend_entry_is_the_first_model_else_the_task_default() -> None:
         Catalogue.load(_text(_entry())).backend_entry(backend.model_copy(update={"models": ("org/absent",)}))
 
 
-def _table(task: str = "t", backend: str = "b", model: str = f"id: org/m\n  revision: {SHA}") -> str:
-    return f"""format: resource-table@1.0
-task: {task}
-backend: {backend}
-rows:
-- {model}
-  download_bytes: 1000
-  classes:
-    cpu:
-      load_s: 2.0
-      claim_s: 0.01
-      resident_bytes: 1024
-      peak_memory_bytes: 4096
-      s_per_input_s: 0.5
-      input_s_per_item: 8.0
-      measured: {{sha: {SHA}, jobs: ["1"]}}
-"""
-
-
 @pytest.mark.logic
-def test_resource_tables_join_entries_by_id_and_revision(tmp_path: Path) -> None:
-    """A table under `<task>/<backend>.yaml` is joined to the entry it measures; an unmeasured pair has no row."""
-    (tmp_path / "t").mkdir()
-    (tmp_path / "t" / "b.yaml").write_text(_table())
-    catalogue = Catalogue.load(_text(_entry()), resources=tmp_path)
-    row = catalogue.resources("t", "b", "org/m", SHA)
-    assert row is not None and row.classes["cpu"].peak_memory_bytes == 4096 and row.download_bytes == 1000
-    assert catalogue.resources("t", "b", "org/m", DIGEST) is None and catalogue.resources("t", "c", None, None) is None
-    assert Catalogue.load(_text(_entry()), resources=tmp_path / "absent").resource_tables == ()
-    (tmp_path / "t" / "b.yaml").write_text(_table(model=f"id: org/other\n  revision: {SHA}"))
-    with pytest.raises(ValidationError, match="no catalogue entry"):
-        Catalogue.load(_text(_entry()), resources=tmp_path)
-    (tmp_path / "t" / "b.yaml").write_text(_table(backend="c"))
-    with pytest.raises(ValueError, match="holds the table of t/c"):
-        Catalogue.load(_text(_entry()), resources=tmp_path)
-    with pytest.raises(ValueError, match="no resource tables"):
+def test_a_catalogue_file_holds_no_resource_tables() -> None:
+    """Measures are not the catalogue's: a file that names `resource_tables` is refused, not read."""
+    with pytest.raises(ValueError, match="resource_tables"):
         Catalogue.load(_text(_entry()) + "resource_tables: []\n")
 
 

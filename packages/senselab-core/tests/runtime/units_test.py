@@ -45,6 +45,7 @@ from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit, Provenance
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable, PackagedTable
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import UnitResolver, Unresolved, decoder_of, default_measures, measure_roots
 from senselab_core.testing.calibration_samples import UNIT, observation
@@ -240,6 +241,31 @@ def test_a_measure_written_under_the_resolved_unit_is_read_by_the_default_source
     assert default_measures(profile).get(unit) is not None
     line = _sizing_line(placed.explain(hardware=HOST))
     assert "wall 0.5 s (measured: 1 probes, 6 observations)" in line
+
+
+@pytest.mark.logic
+def test_a_packaged_row_of_another_env_build_is_not_read(tmp_path: Path) -> None:
+    """The packaged table is read by the one default source on a unit's whole identity; another build's row is not.
+
+    `explain` and the in-process executor both read it, so a plan states what the run sizes by.
+    """
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, _ = _plan(["x"], profile)
+    unit = _resolve(profile, placed)
+    assert isinstance(unit, MeasureUnit)
+    packaged_row = _estimate().model_copy(
+        update={"source": EstimateSource(probe_ids=("p9",), observations=12, commit="e" * 40)}
+    )
+    row = MeasureRow(
+        unit=unit, estimate=packaged_row, derivation=Derivation(commit="e" * 40, jobs=("7",), probe_ids=("p9",))
+    )
+    table = PackagedTable([MeasureTable(task=SCORE.name, backend="score", rows=(row,))])
+    use_packaged(replace(_use(), measures=table))
+    assert default_measures(profile).get(unit) == packaged_row
+    build = unit.env.model_copy(update={"wheel_set": "f" * 64})
+    assert default_measures(profile).get(unit.model_copy(update={"env": build})) is None
+    assert "(measured: packaged row eeeeeeeeeeee)" in _sizing_line(placed.explain(hardware=HOST))
 
 
 @pytest.mark.logic

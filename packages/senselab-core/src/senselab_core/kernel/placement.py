@@ -1,4 +1,4 @@
-"""The placement `placement@2.0`: where each node of a logical plan runs, the licenses it carries and its cost.
+"""The placement `placement@3.0`: where each node of a logical plan runs and the licenses it carries.
 
 A placement is never part of an identity: a plan placed on another site keeps its hash.
 """
@@ -16,9 +16,6 @@ from senselab_core.kernel.license import LicenseSet
 
 ResourceClassName = Annotated[str, StringConstraints(pattern=r"^(cpu|mps|gpu)(:[a-z0-9_.-]+)?$|^svc:[a-z0-9_.-]+$")]
 """A resource class name: `cpu`, `mps`, `gpu` or `gpu:<type>`, or `svc:<id>`, each optionally `:<variant>`."""
-
-Figure = Annotated[float, Field(ge=0, allow_inf_nan=False)] | None
-"""A cost figure; None when it is not measured."""
 
 
 def _frozen(v: Mapping[str, object]) -> Mapping[str, object]:
@@ -44,27 +41,8 @@ class NodePlacement(Frozen):
     why: str = ""
 
 
-class Cost(Frozen):
-    """A plan's measured cost: wall seconds, GPU hours and bytes to download.
-
-    A figure is None when a node or model it needs has no resource table, or an input it needs is not known;
-    `unmeasured` names every node and model without a table.
-    """
-
-    wall_s: Figure = None
-    gpu_hours: Figure = None
-    download_bytes: Annotated[int, Field(ge=0)] | None = None
-    unmeasured: tuple[NonEmptyStr, ...] = ()
-
-    @model_validator(mode="after")
-    def _check_unmeasured(self) -> "Cost":
-        if list(self.unmeasured) != sorted(set(self.unmeasured)):
-            raise ValueError("unmeasured names each node or model once, sorted")
-        return self
-
-
 class PlanPlacement(Formatted):
-    """A `placement@2.0` document: each node's placement and license set, the envs to build and the cost.
+    """A `placement@3.0` document: each node's placement and license set and the envs to build.
 
     `profile_digest` is the canonical digest of the execution profile placed under; `nodes` and `licenses` name the
     same node ids; `env_builds` names the envs, as `<kind>:<name>`, not yet built.
@@ -76,7 +54,6 @@ class PlanPlacement(Formatted):
     nodes: Annotated[Mapping[NodeId, NodePlacement], AfterValidator(_frozen), PlainSerializer(thawed)]
     env_builds: tuple[NonEmptyStr, ...] = ()
     licenses: Annotated[Mapping[NodeId, LicenseSet], AfterValidator(_frozen), PlainSerializer(thawed)]
-    cost: Cost
 
     @model_validator(mode="after")
     def _check_nodes(self) -> "PlanPlacement":

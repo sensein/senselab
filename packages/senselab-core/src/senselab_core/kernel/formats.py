@@ -60,8 +60,8 @@ INPUT_MANIFEST_FORMAT = "input-manifest@1.0"
 LOGICAL_PLAN_FORMAT = "logical-plan@1.0"
 """The format of a logical plan: a graph with its pinned models, profile slices, manifest digest and reuse policy."""
 
-PLACEMENT_FORMAT = "placement@2.0"
-"""The format of a plan's placement: each node's backend, env, device, batch, resource class, licenses and cost."""
+PLACEMENT_FORMAT = "placement@3.0"
+"""The format of a plan's placement: each node's backend, env, device, batch, resource class and licenses."""
 
 PLAN_FRAGMENT_FORMAT = "plan-fragment@3.0"
 """The format of a plan fragment: jobs of one node of a plan, their input identities, the placement and the attempt."""
@@ -79,16 +79,12 @@ RETIRED_EXECUTION_PROFILE_FORMATS = frozenset({"execution-profile@1", "execution
 """Execution-profile formats 2.x no longer reads, as `<name>@<major>`."""
 
 CATALOGUE_FORMAT = "catalogue@2.0"
-"""The format of a model catalogue; its resource tables are separate `resource-table@1.0` files."""
+"""The format of a model catalogue."""
 RETIRED_CATALOGUE_FORMATS = frozenset({"catalogue@1"})
 """Catalogue formats 2.x no longer reads, as `<name>@<major>`."""
 
-RESOURCE_TABLE_FORMAT = "resource-table@1.0"
-"""The format of one task and backend's measured resources, `data/resources/<task>/<backend>.yaml`."""
-
-RESOURCE_TABLE_2_FORMAT = "resource-table@2.0"
-"""The format of a measured resource table whose rows are measure units with their estimates (`resource-table@1.0`'s
-successor)."""
+RESOURCE_TABLE_FORMAT = "resource-table@2.0"
+"""The format of a task and backend's packaged measures, `data/resources/<task>/<backend>.yaml`: units, estimates."""
 
 MEASURES_LAYOUT_TAG = "measures@1"
 """The layout tag of a measures root: the directory `<root>/measures@1/` holds every record kind."""

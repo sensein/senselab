@@ -46,7 +46,7 @@ from senselab_core.runtime.explain import (
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
-from senselab_core.runtime.placement import check_caps, check_licenses, node_licenses, place_nodes, plan_cost
+from senselab_core.runtime.placement import check_licenses, node_licenses, place_nodes
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver, cache_root
 from senselab_core.runtime.site_placement import (
@@ -615,7 +615,7 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
         InvalidGraph, UnmappedOutput, RecordBinding, ValueError, MissingProfileSlice, UnpinnedModel: as `resolve`.
         PlacementAnswerRefused: `placement` names no class of the profile or holds a refused value.
         UnlistedSource: a model's organisation is not an allowed source.
-        BackendParamsMismatch, NoBackend, NoDevice, LicenseRefused, LicenseConflict, MemoryCapExceeded: as `place`.
+        BackendParamsMismatch, NoBackend, NoDevice, LicenseRefused, LicenseConflict: as `place`.
         StorageUnsupported: the run directory's or the result store's root lacks a primitive the leases need.
         LeaseBoundError: the effective attribute delay breaks the profile's lease bound.
         QosCapTooSmall: a resource class needs more CPUs than the substrate's QOS cap.
@@ -705,9 +705,8 @@ def place(  # noqa: PLR0913 - the plan, profile, hardware and config, then the e
     A node's partition is its class's under the explicit `overrides` (`current_values`) layered over the profile.
 
     Each node is placed (`place_nodes`) with its placed backend's params validated, gets its license set
-    (`node_licenses`), and the run config's license policy is checked on every record of it. The memory caps of each
-    resource class are checked (`check_caps`), the envs not yet built are named and the cost is summed from the
-    resource tables (`plan_cost`).
+    (`node_licenses`), and the run config's license policy is checked on every record of it. The envs not yet built are
+    named.
 
     Raises:
         UnlistedSource: a model's organisation is not an allowed source.
@@ -715,7 +714,6 @@ def place(  # noqa: PLR0913 - the plan, profile, hardware and config, then the e
         NoBackend, NoDevice: no backend or resource class runs a node; the error names the node.
         LicenseRefused: the run config's license policy refuses a record of a node's license set.
         LicenseConflict: one subject reaches a node with two license records.
-        MemoryCapExceeded: a resource class's resident models exceed its memory cap.
         QosCapTooSmall: a placed resource class needs more CPUs than the substrate's QOS CPU cap.
         PlacementAnswerRefused: `overrides` names no class of the profile or holds a refused value.
     """
@@ -725,7 +723,6 @@ def place(  # noqa: PLR0913 - the plan, profile, hardware and config, then the e
     placed = {n: replace(p, partition=current[p.resource_class].partition) for n, p in placed.items()}
     licenses = node_licenses(logical, placed, env_license)
     check_licenses(config.licenses, licenses)
-    check_caps(logical, placed, profile, catalogue)
     builds = sorted(
         {
             p.env()
@@ -739,7 +736,6 @@ def place(  # noqa: PLR0913 - the plan, profile, hardware and config, then the e
         nodes={n: p.record() for n, p in placed.items()},
         env_builds=tuple(builds),
         licenses=licenses,
-        cost=plan_cost(logical, placed, catalogue),
     )
 
 
@@ -777,8 +773,7 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
         ValueError: `plan.json` is not the plan `plan_hash` names, or `config` reuses under another policy.
         InputChanged: an input changed since the plan was made; it names every record, and nothing is written.
         InputsUnavailable: an input was held in memory by the process that planned the run.
-        UnlistedSource, BackendParamsMismatch, NoBackend, NoDevice, LicenseRefused, LicenseConflict,
-            MemoryCapExceeded: as `place`.
+        UnlistedSource, BackendParamsMismatch, NoBackend, NoDevice, LicenseRefused, LicenseConflict: as `place`.
         MissingExtra: as `Plan.run`.
     """
     from senselab_core.runtime.execution.events import run_dir_of  # noqa: PLC0415 - execution imports the planner

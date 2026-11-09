@@ -1,11 +1,11 @@
-"""`explain`: a placed plan as text, one line per node after its hash, env builds and cost."""
+"""`explain`: a placed plan as text, one line per node after its hash and env builds."""
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from senselab_core.kernel.license import LicenseSet
-from senselab_core.kernel.placement import Cost, NodePlacement, PlanPlacement
+from senselab_core.kernel.placement import NodePlacement, PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.runtime.calibration import Estimate, LengthProfile
 from senselab_core.runtime.hardware import HardwareInfo
@@ -18,10 +18,6 @@ from senselab_core.runtime.sizing import Grant, Sizing, size
 
 if TYPE_CHECKING:
     from senselab_core.runtime.execution.plan_reads import ItemCounts
-
-
-def _cost(cost: Cost) -> str:
-    return f"download {'unmeasured' if cost.download_bytes is None else f'{cost.download_bytes:g} bytes'}"
 
 
 def _licenses(found: LicenseSet) -> str:
@@ -254,7 +250,7 @@ def explain(
     sizing: Mapping[str, Sequence[str]] | None = None,
     footer: Sequence[str] = (),
 ) -> str:
-    """Return the plan hash, envs to build and cost, then per node in graph order its placement, licenses and cost.
+    """Return the plan hash and envs to build, then per node in graph order its placement, licenses and sizing.
 
     `sizing` gives each node's lines after its own (`node_sizing`); `footer` closes the text (`waits`).
     """
@@ -262,7 +258,6 @@ def explain(
     lines = [
         f"plan {plan_hash} under profile {placement.profile_digest[:12]}",
         f"envs to build: {builds}",
-        f"cost: {_cost(placement.cost)}",
     ]
     for n in logical.graph.nodes:
         if n.id in placement.nodes:

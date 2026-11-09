@@ -48,8 +48,10 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.hardware import HardwareInfo, probe_hardware
 from senselab_core.runtime.keys import Placement, request_components
 from senselab_core.runtime.licenses import LicensePolicy, LockRecords, backend_license
+from senselab_core.runtime.measures import PackagedMeasures
 from senselab_core.runtime.models import resolve
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
+from senselab_core.runtime.resources import PackagedTable
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
 
 ITEM_ID = "call"
@@ -212,7 +214,8 @@ class Packaged:
     `lock_records` gives each backend's env-lock package license records, from which `env_license` derives; without
     them no stored result is served unless the run's license policy allows unlicensed hits. `env_built` says whether
     a backend's env is built (by default none is), and `env_read` gives the built env's handle (by default none).
-    `env_lock` names the lock a non-host env is built from (by default none is known).
+    `env_lock` names the lock a non-host env is built from (by default none is known). `measures` is the packaged
+    table of `resource-table@2.0` rows (by default none), read on a unit's whole identity.
     """
 
     catalogue: Catalogue
@@ -222,6 +225,7 @@ class Packaged:
     env_built: EnvProbe = _unbuilt
     env_read: EnvRead = _unread
     env_lock: EnvLock = _no_lock
+    measures: PackagedMeasures = PackagedTable(())
 
 
 def env_license(backend: BackendSpec) -> License | None:

@@ -1,10 +1,10 @@
-"""Samples of the placement, license-set, resource-table and execution-settings types, for the value contracts."""
+"""Samples of the placement, license-set and execution-settings types, for the value contracts."""
 
 from collections.abc import Callable, Mapping, Sequence
 
 from senselab_core.kernel._base import Frozen
 from senselab_core.kernel.license import License, LicenseSet
-from senselab_core.kernel.placement import Cost, NodePlacement, PlanPlacement
+from senselab_core.kernel.placement import NodePlacement, PlanPlacement
 from senselab_core.runtime.execution.events import ClassActuals, PlacementRecord
 from senselab_core.runtime.execution_settings import (
     FaultBudgets,
@@ -18,14 +18,6 @@ from senselab_core.runtime.execution_settings import (
     SupervisorSettings,
     Timeouts,
 )
-from senselab_core.runtime.resources import (
-    Batched,
-    ClassMeasure,
-    Measured,
-    ResourceMeasure,
-    ResourceRow,
-    ResourceTable,
-)
 from senselab_core.runtime.site_placement import (
     ClassNeeds,
     ClassPlacement,
@@ -37,27 +29,9 @@ from senselab_core.runtime.site_placement import (
     ResolvedPlacement,
     UnmeasuredFigure,
 )
-from senselab_core.runtime.sizing import Basis, Grant, Measure, RowSizing, Sample, Sizing
+from senselab_core.runtime.sizing import Basis, Grant, RowSizing, Sample, Sizing
 
 Register = Callable[..., None]
-
-_COMMIT = "0" * 40
-_MEASURED = Measured(sha="1" * 40, jobs=("100", "101"))
-_MEASURE = ResourceMeasure(
-    load_s=2.5, claim_s=0.01, resident_bytes=1024, peak_memory_bytes=4096, s_per_input_s=0.1, input_s_per_item=8.0
-)
-_CLASS = ClassMeasure(**_MEASURE.model_dump(), measured=_MEASURED)
-
-
-def resource_table(task: str, backend: str, model_id: str | None, revision: str | None = _COMMIT) -> ResourceTable:
-    """Return a one-row table of `task` and `backend` measuring `model_id` at `revision` on `cpu`."""
-    row = ResourceRow(
-        id=model_id,
-        revision=None if model_id is None else revision,
-        download_bytes=1000,
-        classes={"cpu": _CLASS},
-    )
-    return ResourceTable(task=task, backend=backend, rows=(row,))
 
 
 def _node(device: str = "cpu", resource_class: str = "cpu") -> NodePlacement:
@@ -78,7 +52,6 @@ def _node(device: str = "cpu", resource_class: str = "cpu") -> NodePlacement:
 def register_placement_samples(register: Register, license_: License) -> None:
     """Register the samples of every type here through `register` (`values.register_samples`)."""
     _register_kernel(register, license_)
-    _register_resources(register)
     _register_settings(register)
     _register_sizing(register)
     _register_sizings(register)
@@ -93,12 +66,6 @@ def _register_kernel(register: Register, license_: License) -> None:
         lambda: [_node(), _node("cuda", "gpu:h100")],
         invalid_updates=[{"batch_size": 0}, {"resource_class": "tpu"}, {"backend": ""}],
     )
-    costs = (Cost(wall_s=12.5, gpu_hours=0.25, download_bytes=10), Cost(unmeasured=("call", "org/m@" + _COMMIT)))
-    register(
-        Cost,
-        lambda: list(costs),
-        invalid_updates=[{"wall_s": -1.0}, {"download_bytes": -1}, {"unmeasured": ("b", "a")}],
-    )
     register(
         PlanPlacement,
         lambda: [
@@ -107,69 +74,10 @@ def _register_kernel(register: Register, license_: License) -> None:
                 nodes={"n": _node()},
                 env_builds=("isolated:x",),
                 licenses={"n": sets[0]},
-                cost=costs[1],
             ),
-            PlanPlacement(profile_digest="cd" * 32, nodes={}, licenses={}, cost=Cost()),
+            PlanPlacement(profile_digest="cd" * 32, nodes={}, licenses={}),
         ],
-        invalid_updates=[{"format": "placement@3.0"}, {"licenses": {"z": sets[1]}}, {"profile_digest": "x"}],
-    )
-
-
-def _register_resources(register: Register) -> None:
-    register(
-        ResourceMeasure,
-        lambda: [
-            _MEASURE,
-            ResourceMeasure(
-                load_s=0,
-                claim_s=0,
-                resident_bytes=0,
-                peak_memory_bytes=1,
-                device_resident_bytes=2**30,
-                device_peak_bytes=2**31,
-                s_per_input_s=0,
-                input_s_per_item=None,
-                batched=Batched(batch_size=8, s_per_input_s=0.05),
-            ),
-        ],
-        invalid_updates=[
-            {"peak_memory_bytes": 0},
-            {"load_s": -1.0},
-            {"claim_s": -1.0},
-            {"resident_bytes": 8192},
-            {"input_s_per_item": 0.0},
-            {"device_resident_bytes": 1, "device_peak_bytes": None},
-            {"device_resident_bytes": 2**32, "device_peak_bytes": 2**31},
-        ],
-    )
-    register(
-        Batched,
-        lambda: [Batched(batch_size=8, s_per_input_s=0.05), Batched(batch_size=2, s_per_input_s=0)],
-        invalid_updates=[{"batch_size": 1}, {"s_per_input_s": -1.0}],
-    )
-    register(
-        ClassMeasure,
-        lambda: [_CLASS, _CLASS.model_copy(update={"measured": Measured(sha=None, run="r", jobs=("7",))})],
-        invalid_updates=[{"measured": None}, {"load_s": -1.0}],
-    )
-    register(
-        Measured,
-        lambda: [_MEASURED, Measured(sha=None, run="0a" * 32, jobs=("host:1",))],
-        invalid_updates=[{"sha": "main"}, {"jobs": ("",)}, {"jobs": ()}],
-    )
-    rows: Sequence[ResourceRow] = (
-        resource_table("t", "b", "org/m").rows[0],
-        resource_table("t", "b", None).rows[0],
-    )
-    register(
-        ResourceRow,
-        lambda: list(rows),
-        invalid_updates=[{"revision": "main"}, {"classes": {}}, {"classes": {"tpu": _CLASS}}],
-    )
-    register(
-        ResourceTable,
-        lambda: [resource_table("t", "b", "org/m"), resource_table("u", "c", None)],
-        invalid_updates=[{"format": "resource-table@2.0"}, {"rows": (rows[0], rows[0])}],
+        invalid_updates=[{"format": "placement@4.0"}, {"licenses": {"z": sets[1]}}, {"profile_digest": "x"}],
     )
 
 
@@ -323,13 +231,6 @@ def _register_sizing(register: Register) -> None:
                 {"calibration_workers": 0},
                 {"device_query_s": 0},
             ],
-        ),
-        Measure: (
-            [
-                Measure(load_s=2.5, claim_s=0.01, resident_bytes=1024, bytes_per_item=256, s_per_item=0.5),
-                Measure(load_s=0, claim_s=0, resident_bytes=0, bytes_per_item=0, s_per_item=0, on_device=True),
-            ],
-            [{"load_s": -1.0}, {"bytes_per_item": -1}],
         ),
         Grant: (
             [

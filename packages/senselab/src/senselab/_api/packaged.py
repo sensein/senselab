@@ -18,12 +18,15 @@ from senselab_core.runtime.envs import (
 )
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.resources import PackagedTable
 
 from senselab._api.declarations import DECLARATION_MODULES
 
 _DATA = resources.files("senselab").joinpath("data")
-CATALOGUE = Catalogue.load(_DATA.joinpath("catalogue.yaml").read_text("utf-8"), resources=_DATA.joinpath("resources"))
-"""The packaged catalogue, `senselab/data/catalogue.yaml`, joined to the tables under `senselab/data/resources/`."""
+CATALOGUE = Catalogue.load(_DATA.joinpath("catalogue.yaml").read_text("utf-8"))
+"""The packaged catalogue, `senselab/data/catalogue.yaml`."""
+MEASURES = PackagedTable.load(_DATA.joinpath("resources"))
+"""The packaged measures, the `resource-table@2.0` files under `senselab/data/resources/`; none until generated."""
 
 
 def host_lock() -> Path | None:
@@ -119,6 +122,7 @@ PACKAGED = Packaged(
     env_built=is_built,
     env_read=read_env,
     env_lock=env_lock,
+    measures=MEASURES,
 )
 
 

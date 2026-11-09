@@ -106,7 +106,7 @@ from senselab_core.runtime.storage import StorePolicy
 from senselab_core.testing.calibration_samples import register_calibration_samples
 from senselab_core.testing.execution_samples import register_execution_samples
 from senselab_core.testing.format_skew import later_minor_ignored
-from senselab_core.testing.placement_samples import register_placement_samples, resource_table
+from senselab_core.testing.placement_samples import register_placement_samples
 
 Case = Callable[[], None]
 Factory = Callable[[], Sequence[Frozen]]
@@ -907,12 +907,11 @@ def _register_runtime_samples() -> None:
         Catalogue,
         lambda: [
             Catalogue(entries=(_catalogue_entry(),)),
-            Catalogue(entries=(_catalogue_entry("org/n"),), resource_tables=(resource_table("t", "b", "org/n"),)),
+            Catalogue(entries=(_catalogue_entry("org/n"),)),
         ],
         invalid_updates=[
             {"entries": (_catalogue_entry(), _catalogue_entry())},
             {"format": "catalogue@3.0"},
-            {"resource_tables": (resource_table("t", "b", "org/absent"),)},
         ],
     )
     register_samples(

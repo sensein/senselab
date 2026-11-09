@@ -2,9 +2,10 @@
 
 import logging
 from collections.abc import Sequence
+from typing import Any
 
 import pytest
-from hypothesis import example, given
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 from senselab_core.kernel.declare import BackendSpec, Env, TaskSpec
 from senselab_core.kernel.signals import PlainText
@@ -308,6 +309,7 @@ def test_a_denormal_memory_term_bounds_the_batch_by_the_ceiling_not_by_infinity(
 
 @pytest.mark.logic
 @example(estimate=DENORMAL, lengths=[1.0], devices=None, on_device=False, memory=1)
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(
     estimate=_estimates(),
     lengths=st.lists(st.none() | _UNIT, max_size=40),
@@ -315,10 +317,16 @@ def test_a_denormal_memory_term_bounds_the_batch_by_the_ceiling_not_by_infinity(
     on_device=st.booleans(),
     memory=st.none() | st.integers(1, 80 * GB),
 )
-def test_size_keeps_its_invariants(
-    estimate: Estimate, lengths: list[float | None], devices: int | None, on_device: bool, memory: int | None
+def test_size_keeps_its_invariants(  # noqa: PLR0913 - the fixture, then the strategies' draws
+    slack_tests: dict[str, Any],
+    estimate: Estimate,
+    lengths: list[float | None],
+    devices: int | None,
+    on_device: bool,
+    memory: int | None,
 ) -> None:
     """Cuts partition the jobs; items hold the upper bound; a card's workers and batches fit; workers stay bounded."""
+    tolerance = slack_tests["sizing"]["relative_tolerance"]
     grant = _grant(devices=devices, on_device=on_device, memory_bytes=memory, quantum_items=7)
     sized = _sized(estimate, grant, *lengths)
     assert [i for a, b in sized.cuts for i in range(a, b)] == list(range(len(lengths)))
@@ -330,9 +338,9 @@ def test_size_keeps_its_invariants(
         for a, b in sized.cuts:
             if b - a > 1:
                 upper = sum(s or 0.0 for s in sized.predicted_s[a:b]) * (1 + z * single.spread)
-                assert not sized.measured.time or upper + (estimate.item_s or 0.0) <= grant.quantum_s * (1 + 1e-9)
+                assert not sized.measured.time or upper + (estimate.item_s or 0.0) <= grant.quantum_s * (1 + tolerance)
     if sized.budget_bytes is not None and sized.memory is not None:
-        assert sized.workers_per_device * sized.budget_bytes <= SIZING.memory_headroom * (memory or 0) * (1 + 1e-9)
+        assert sized.workers_per_device * sized.budget_bytes <= SIZING.memory_headroom * (memory or 0) * (1 + tolerance)
         for length in lengths:
             if length is not None:
                 room = memory_batch(sized.memory, sized.budget_bytes, length, grant.quantum_items)

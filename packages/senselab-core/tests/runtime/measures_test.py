@@ -1,4 +1,4 @@
-"""Measure identity, the canonical hardware class and the lookup order, each against what `Measures.get` did."""
+"""Measure identity, the canonical hardware class and the lookup order."""
 
 import getpass
 import platform
@@ -9,14 +9,14 @@ from pathlib import Path
 
 import pytest
 from senselab_core.kernel.identity import Attestation, LogicalKey, ModelIdentity
-from senselab_core.runtime.calibration import Estimate, HardwareClass, HardwareGrant, Observation
+from senselab_core.runtime.calibration import Estimate, EstimateSource, HardwareClass, HardwareGrant, Observation
 from senselab_core.runtime.config import dump_yaml
 from senselab_core.runtime.fake_backend import FAKE
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo, _cpu_model, probe_hardware, process_cpus
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
-from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable, PackagedTable, load_resource_tables
+from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable, PackagedTable
 from senselab_core.testing.calibration_samples import ENV, UNIT
 from senselab_worker.digest import identity_digest
 
@@ -71,7 +71,7 @@ def _unit(placement: Placement = PLACEMENT, key: LogicalKey = KEY, env: dict[str
 
 @pytest.mark.logic
 def test_units_differing_only_in_backend_params_have_different_measures() -> None:
-    """`Measures.get` keyed on (task, backend, model, class), so engine and dtype shared one row; these do not."""
+    """Backend params that shape cost (engine, dtype) are part of a unit: units differing in them have two measures."""
     other = KEY.model_copy(update={"backend_params": {"dtype": "float32"}})
     assert _unit().digest() != _unit(key=other).digest()
     assert _unit().digest() == _unit().digest()
@@ -80,7 +80,7 @@ def test_units_differing_only_in_backend_params_have_different_measures() -> Non
 
 @pytest.mark.logic
 def test_units_differing_only_in_task_params_or_chunk_grid_have_different_measures() -> None:
-    """A task param that shapes cost, or a chunk grid, changes the measure; `Measures.get` had neither."""
+    """A task param that shapes cost, or a chunk grid, changes the measure."""
     words = KEY.model_copy(update={"params": {"word_timestamps": True}})
     assert _unit().digest() != _unit(key=words).digest()
     gridded = replace(PLACEMENT, chunk_grid="30s")
@@ -298,9 +298,12 @@ def test_the_estimator_is_called_once_over_the_pooled_observations() -> None:
     assert calls == [6]
 
 
+PACKAGED = MEASURED.model_copy(update={"source": EstimateSource(probe_ids=("p1",), observations=6, commit="d" * 40)})
+
+
 def _table() -> MeasureTable:
     row = MeasureRow(
-        unit=UNIT, estimate=MEASURED, derivation=Derivation(commit="d" * 40, jobs=("j1",), probe_ids=("p1",))
+        unit=UNIT, estimate=PACKAGED, derivation=Derivation(commit="d" * 40, jobs=("j1",), probe_ids=("p1",))
     )
     return MeasureTable(task=UNIT.task, backend=UNIT.backend, rows=(row,))
 
@@ -314,10 +317,10 @@ def _write(root: Path, table: MeasureTable) -> Path:
 
 @pytest.mark.logic
 def test_a_packaged_row_is_read_only_on_exact_identity(tmp_path: Path) -> None:
-    """`Unit` matched a row on (model, class) alone; a row now answers for its own env, params and card only."""
+    """A packaged row answers for its own env, params and card only, never for another unit of the same model."""
     _write(tmp_path, _table())
     packaged = PackagedTable.load(tmp_path)
-    assert packaged.get(UNIT) == MEASURED
+    assert packaged.get(UNIT) == PACKAGED
     for update in (
         {"backend_params": {"dtype": "float32"}},
         {"env": ENV.model_copy(update={"wheel_set": "f" * 64})},
@@ -363,15 +366,23 @@ def test_an_absent_root_holds_no_rows(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_both_table_readers_refuse_a_file_under_another_name(tmp_path: Path) -> None:
-    """The directory walk is one function: a `@2.0` file and a `@1.0` file are held to their path alike."""
+def test_a_table_file_under_another_name_is_refused(tmp_path: Path) -> None:
+    """The directory walk holds a file to its path: `<task>/<backend>.yaml` must hold that task and backend."""
     path = _write(tmp_path, _table())
-    moved = path.with_name("other.yaml")
-    path.rename(moved)
+    path.rename(path.with_name("other.yaml"))
     with pytest.raises(ValueError, match="holds the table of"):
         PackagedTable.load(tmp_path)
-    with pytest.raises(ValueError):
-        load_resource_tables(tmp_path)
+
+
+@pytest.mark.logic
+def test_a_row_names_the_commit_and_probes_its_derivation_names() -> None:
+    """The estimate's source and the derivation say where a row was measured once each, so they cannot disagree."""
+    row = _table().rows[0]
+    other = row.derivation.model_copy(update={"commit": "e" * 40})
+    with pytest.raises(ValueError, match="names the commit and probes"):
+        MeasureRow(unit=row.unit, estimate=row.estimate, derivation=other)
+    with pytest.raises(ValueError, match="names the commit and probes"):
+        MeasureRow(unit=row.unit, estimate=MEASURED, derivation=row.derivation)
 
 
 LSCPU_X86 = "Architecture: x86_64\nModel name: AMD EPYC 9654 96-Core Processor\nCPU(s): 192\n"

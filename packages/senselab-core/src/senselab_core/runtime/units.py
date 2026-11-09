@@ -1,8 +1,8 @@
 """The plan-time `MeasureUnit` resolver: a call's unit from the env record, the hardware index and the placement.
 
 `explain` and the in-process executor resolve a unit here before any worker starts, so a measure the roots or the
-packaged table hold is read at plan time. A field that is not knowable yet gives `Unresolved`, whose reason names
-what is true of the state.
+packaged table hold is read at plan time, from the one source `default_measures`. A field that is not knowable yet
+gives `Unresolved`, whose reason names what is true of the state.
 """
 
 import sysconfig
@@ -12,7 +12,6 @@ from typing import Any, Protocol
 
 from senselab_core.kernel.declare import BackendSpec, Env
 from senselab_core.runtime.calibration import (
-    Estimate,
     HardwareClass,
     HardwareGrant,
 )
@@ -59,13 +58,6 @@ class HardwareUnseen(Pending):
     seen: HardwareClass | None = None
 
 
-class _NoPackaged:
-    """The packaged measures until `resource-table@2.0` ships: none."""
-
-    def get(self, unit: MeasureUnit) -> Estimate | None:  # noqa: ARG002 - a PackagedMeasures
-        return None
-
-
 def measure_roots(profile: ExecutionProfile) -> MeasureRoots:
     """Return the measures roots `profile` names, read as this process's user."""
     return MeasureRoots.from_profile(
@@ -82,7 +74,7 @@ def default_measures(profile: ExecutionProfile, roots: MeasureRoots | None = Non
     estimate = Probe.estimator(
         profile.calibration, records_of=held.regime_records, memory_headroom=profile.sizing.memory_headroom
     )
-    return MeasureSource([held], _NoPackaged(), estimate=estimate)
+    return MeasureSource([held], packaged().measures, estimate=estimate)
 
 
 EnvIdentity = tuple[Env, tuple[tuple[str, str], ...], tuple[str, ...]]

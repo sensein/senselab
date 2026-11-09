@@ -1,8 +1,7 @@
-"""Placing a logical plan: each node's placement under a profile, its license set, the memory caps and the cost.
+"""Placing a logical plan: each node's placement under a profile and its license set.
 
 `place_nodes` picks each node's backend, resource class and device (`resolve_execution`) and validates its backend
-params; `node_licenses` gives each node the union of its own licenses and its upstream nodes'; `check_caps` refuses a
-resource class whose resident models exceed its memory cap; `plan_cost` sums the measured resource tables.
+params; `node_licenses` gives each node the union of its own licenses and its upstream nodes'.
 """
 
 from collections.abc import Callable, Mapping
@@ -16,14 +15,12 @@ from senselab_core.kernel.graph import Node, NodeId, split
 from senselab_core.kernel.graph import order as graph_order
 from senselab_core.kernel.identity import ResolvedModel
 from senselab_core.kernel.license import License, LicenseConflict, LicenseSet
-from senselab_core.kernel.placement import Cost
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import Placement, request_components
 from senselab_core.runtime.licenses import LicensePolicy
 from senselab_core.runtime.profiles import ExecutionProfile, NoBackend, NoDevice, resolve_execution
-from senselab_core.runtime.resources import ResourceMeasure, ResourceRow
 
 HOUR_S: Final = 3600.0  # invariant: seconds in one hour
 
@@ -37,21 +34,6 @@ class BackendParamsMismatch(ValueError):
         self.node = node
         self.backend = backend
         self.errors = errors
-
-
-class MemoryCapExceeded(ValueError):
-    """A resource class whose resident models need more memory than its static cap."""
-
-    def __init__(self, resource_class: str, cap: int, needed: int, nodes: list[str]) -> None:
-        """Name the class, its cap, what its resident models need and the nodes placed on it."""
-        super().__init__(
-            f"resource class {resource_class!r} caps memory at {cap} bytes; the models resident at once for nodes "
-            f"{nodes} need {needed}"
-        )
-        self.resource_class = resource_class
-        self.cap = cap
-        self.needed = needed
-        self.nodes = nodes
 
 
 def _entry(catalogue: Catalogue, model: ResolvedModel | None) -> CatalogueEntry | None:
@@ -134,80 +116,3 @@ def check_licenses(policy: LicensePolicy | None, licenses: Mapping[NodeId, Licen
     for node_id, found in licenses.items():
         for subject, record in found.records.items():
             policy.check(f"node {node_id!r}: {subject}", record)
-
-
-def _measure(
-    catalogue: Catalogue, placement: Placement, model: ResolvedModel | None
-) -> tuple[ResourceRow, ResourceMeasure] | None:
-    backend = placement.backend
-    ident = (None, None) if model is None else (model.ref.id, model.identity)
-    row = catalogue.resources(backend.task, backend.name, *ident)
-    measure = None if row is None else row.classes.get(placement.resource_class)
-    return None if row is None or measure is None else (row, measure)
-
-
-def check_caps(
-    plan: LogicalPlan, placed: Mapping[NodeId, Placement], profile: ExecutionProfile, catalogue: Catalogue
-) -> None:
-    """Refuse a resource class whose models resident at once need more than its `memory_cap_bytes`.
-
-    The models resident at once on a class are the distinct backend and model pairs of its nodes, each at its
-    measured peak; a worker may hold several, so the sum is an upper bound. A node without a resource table is
-    admitted (`plan_cost` lists it as unmeasured).
-
-    Raises:
-        MemoryCapExceeded: a class's resident peaks sum past its cap.
-    """
-    resident: dict[str, dict[tuple[str, str | None], int]] = {}
-    nodes: dict[str, list[str]] = {}
-    for node_id, placement in placed.items():
-        model = plan.models[node_id]
-        measured = _measure(catalogue, placement, model)
-        if measured is None:
-            continue
-        pair = (placement.backend.name, None if model is None else model.identity)
-        peak = measured[1].peak_memory_bytes
-        if peak is None:
-            continue
-        resident.setdefault(placement.resource_class, {})[pair] = peak
-        nodes.setdefault(placement.resource_class, []).append(node_id)
-    for name, peaks in sorted(resident.items()):
-        cap = profile.resource_classes[name].memory_cap_bytes
-        if cap is not None and sum(peaks.values()) > cap:
-            raise MemoryCapExceeded(name, cap, sum(peaks.values()), sorted(nodes[name]))
-
-
-def plan_cost(
-    plan: LogicalPlan,
-    placed: Mapping[NodeId, Placement],
-    catalogue: Catalogue,
-    input_s: float | None = None,
-) -> Cost:
-    """Return the plan's cost from the measured resource tables over `input_s` seconds of input per node.
-
-    A node's wall time is its load plus `s_per_input_s` times `input_s`; GPU hours are the wall time of nodes on a
-    `cuda` class; download bytes sum once per model. A figure is None when any node or model is unmeasured, download
-    bytes also when a row leaves them unmeasured, and wall time and GPU hours when `input_s` is None; nothing is
-    estimated.
-    """
-    unmeasured: set[str] = set()
-    downloads: dict[tuple[str, str | None], int | None] = {}
-    wall, gpu = 0.0, 0.0
-    for node_id, placement in placed.items():
-        model = plan.models[node_id]
-        measured = _measure(catalogue, placement, model)
-        if measured is None:
-            unmeasured.update([node_id] + ([] if model is None else [str(model.ref)]))
-            continue
-        row, measure = measured
-        downloads[(row.id, row.revision) if row.id is not None else (placement.backend.name, None)] = row.download_bytes
-        node_wall = measure.load_s + measure.s_per_input_s * (input_s or 0.0)
-        wall += node_wall
-        gpu += node_wall / HOUR_S if placement.device == "cuda" else 0.0
-    timed = not unmeasured and input_s is not None
-    return Cost(
-        wall_s=wall if timed else None,
-        gpu_hours=gpu if timed else None,
-        download_bytes=None if unmeasured or None in downloads.values() else sum(d or 0 for d in downloads.values()),
-        unmeasured=tuple(sorted(unmeasured)),
-    )
