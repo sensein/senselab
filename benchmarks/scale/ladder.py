@@ -44,7 +44,6 @@ from senselab_core.runtime.config import ConfigError, load_yaml
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import Event, EventLog, read_events, run_dir_of
-from senselab_core.runtime.execution.executor import JobRef
 from senselab_core.runtime.execution.pool import Pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, probe_of
 from senselab_core.runtime.execution.substrates import substrate_of, worker_id
@@ -249,30 +248,26 @@ def _own_requests(observations: Sequence[Observation]) -> list[Observation]:
     return found
 
 
-def production_cost(events: Sequence[Event], outcomes: Sequence[Mapping[str, Any]]) -> tuple[float, int] | None:
-    """Return the span in seconds of the production jobs and the count of those that gave a result, else None.
+def production_cost(outcomes: Sequence[Mapping[str, Any]]) -> tuple[float, int] | None:
+    """Return the span in seconds of the production items and the count of their jobs that gave a result, else None.
 
-    Production jobs are those of items committed on a queue that is not a probe's. The span runs on the coordinator's
-    clock (the event log's) from the first production `claimed` to the last production `finished` or `failed`, so worker
-    starts, model loads before the first claim, the wait after the last commit and probe items running beside
+    Production items are those committed on a queue that is not a probe's. Both ends of the span are the workers' own
+    clock (`Sample.ended_s`, taken just before the commit; the claim's start is `ended_s - wall_s - claim_s`), the
+    latest end less the earliest start, so one allocation's clock covers both. Worker starts, model loads before the
+    first claim, the wait after the last commit, the coordinator's lag in settling and probe items running beside
     production do not enter it.
     """
-    jobs = {
-        JobRef.model_validate(j["job"]): j.get("failure") is None
-        for o in outcomes
-        if probe_of(o["queue"]) is None
-        for j in o.get("jobs", ())
-    }
-    claimed = [e.t_ns for e in events if e.kind == "claimed" and e.job in jobs]
-    ended = [e.t_ns for e in events if e.kind in ("finished", "failed") and e.job in jobs]
-    if not claimed or not ended:
+    mine = [o for o in outcomes if probe_of(o["queue"]) is None]
+    samples = [Sample.model_validate(o["measure"]) for o in mine if "measure" in o]
+    if not samples:
         return None
-    return (max(ended) - min(claimed)) / NS_PER_S, sum(jobs.values())
+    began = min(s.ended_s - s.wall_s - s.claim_s for s in samples)
+    return max(s.ended_s for s in samples) - began, sum(
+        j.get("failure") is None for o in mine for j in o.get("jobs", ())
+    )
 
 
-def request_cost(
-    observations: Sequence[Observation], events: Sequence[Event], outcomes: Sequence[Mapping[str, Any]]
-) -> dict[str, Any]:
+def request_cost(observations: Sequence[Observation], outcomes: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Return a point's per-item figures.
 
     `per_item_s` is the throughput wall per production job: `production_cost`'s span over its job count, counted from
@@ -282,10 +277,10 @@ def request_cost(
     """
     warm = [o for o in _own_requests(observations) if o.outcome == "ok" and o.load_s is None]
     warm_jobs = sum(o.jobs for o in warm)
-    found = production_cost(events, outcomes)
+    found = production_cost(outcomes)
     return {
         "per_item_s": None if found is None or not found[1] else found[0] / found[1],
-        "per_item_basis": "production span, first claim to last commit, per production job"
+        "per_item_basis": "production span on the worker clock, first claim to last commit, per production job"
         if found is not None and found[1]
         else "no production items",
         "worker_s_per_item": sum(o.wall_s for o in warm) / warm_jobs if warm_jobs else None,
@@ -445,7 +440,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         "done": status.done,
         "counts": dict(status.counts),
         "wall_s": wall,
-        **request_cost(_observations(outcomes), events, outcomes),
+        **request_cost(_observations(outcomes), outcomes),
         "units": _units(roots, profile),
         "faults": _faults(events, placed.manifest.rows),
         "host": host_token(),
