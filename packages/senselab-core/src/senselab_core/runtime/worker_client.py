@@ -27,6 +27,7 @@ from senselab_worker import WIRE_VERSION, runtime_identity
 from senselab_worker.codec import (
     FAULTS,
     MAX_LINE_BYTES,
+    Deadline,
     Kind,
     LineTooLarge,
     array_paths,
@@ -37,7 +38,6 @@ from senselab_worker.codec import (
     validate_message,
     wire_size,
 )
-from senselab_worker.codec import Deadline as ReadDeadline
 from senselab_worker.faults import (
     ArrayIntegrityError,
     FaultClass,
@@ -51,7 +51,7 @@ from senselab_worker.faults import (
 from senselab_worker.ownership import ARRAY_FILE, remove_owned
 
 from senselab_core.runtime import request_reports
-from senselab_core.runtime.clock import Clock, Deadline, SystemClock
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.supervisor import Supervisor, current
 from senselab_core.runtime.hardware import cgroup_memory_events, oom_kills
 from senselab_core.runtime.launch import launch
@@ -211,7 +211,7 @@ def _exit_seen(pid: int, exited: threading.Event) -> bool:
 
 def _wait_for_exit(pid: int, exited: threading.Event, timeout: float, clock: Clock) -> bool:
     """Wait up to `timeout` seconds on `clock` for `_exit_seen`; return whether the exit was observed."""
-    deadline = Deadline(clock, timeout)
+    deadline = Deadline(timeout, clock.now)
     delay = 0.001
     while not _exit_seen(pid, exited):
         remaining = deadline.remaining() or 0.0
@@ -458,7 +458,7 @@ class WorkerClient:
             self._init_names = self._owned(array_paths(wire_init))
             self._start(python, module, variables or {})
             self.hello = self._handshake(expect_runtime or runtime_identity())
-            deadline = Deadline(clock, load_timeout)
+            deadline = Deadline(load_timeout, clock.now)
             self._send(dump_line({"init": wire_init}, "init", limit=self._max_line_bytes), deadline)
             self._receive(deadline, "loading the backend", "ready")
         except BaseException as exc:
@@ -650,7 +650,7 @@ class WorkerClient:
         if not sent:
             return results
         request = {"id": request_id, "items": [wire for _, wire in sent]}
-        deadline = Deadline(self._clock, self._request_timeout)
+        deadline = Deadline(self._request_timeout, self._clock.now)
         try:
             self._send(line, deadline)
             replies = self._read_replies(request, deadline)
@@ -685,7 +685,7 @@ class WorkerClient:
         threading.Thread(target=_reap, args=(proc.pid, self._exited, stdout, self._reaped), daemon=True).start()
 
     def _handshake(self, expected_runtime: str) -> dict[str, Any]:
-        deadline = Deadline(self._clock, HELLO_TIMEOUT_S)
+        deadline = Deadline(HELLO_TIMEOUT_S, self._clock.now)
         hello: dict[str, Any] | None = None
         while True:
             try:
@@ -747,7 +747,7 @@ class WorkerClient:
     def _write_stop(self) -> None:
         """Write the stop line if the pipe takes it at once."""
         with contextlib.suppress(WorkerLost, TimeoutError):
-            self._send(dump_line({"stop": True}, "stop"), Deadline(self._clock, 0.0), stopping=True)
+            self._send(dump_line({"stop": True}, "stop"), Deadline(0.0, self._clock.now), stopping=True)
 
     def _retire_channel(self) -> None:
         """Close the worker's stdin under the channel lock, then wake a `_send` waiting on it."""
@@ -816,7 +816,7 @@ class WorkerClient:
             outputs = from_wire(
                 result["outputs"],
                 array_dir=self._array_dir,
-                deadline=ReadDeadline(deadline.remaining()),
+                deadline=deadline,
                 shared=shared,
             )
         except ArrayIntegrityError as exc:
@@ -903,7 +903,7 @@ class WorkerClient:
             self._shutting_down.discard(me)
 
     def _steps(self, *, graceful: bool, me: int) -> None:
-        bound = Deadline(self._clock, self._graces.bound)
+        bound = Deadline(self._graces.bound, self._clock.now)
         if self._acquire_shutdown(bound):
             try:
                 if not self._stopped:
@@ -967,7 +967,7 @@ class WorkerClient:
         live = self._supervisor.group_live
         if not _members_gone(pgid, exited, stop, live, self._clock):
             self._sigkill_group(pgid)
-            if not _members_gone(pgid, exited, Deadline(self._clock, self._graces.kill), live, self._clock):
+            if not _members_gone(pgid, exited, Deadline(self._graces.kill, self._clock.now), live, self._clock):
                 logger.error("worker process group %d still has members after SIGKILL", pgid)
 
     def _stop_group(self, proc: subprocess.Popen[bytes], stop: Deadline) -> None:
@@ -999,7 +999,7 @@ class WorkerClient:
             return
         assert proc.stdout is not None and proc.stderr is not None
         pgid = proc.pid
-        stop = Deadline(self._clock, self._graces.stop)
+        stop = Deadline(self._graces.stop, self._clock.now)
         if graceful and not self._exited.is_set():
             self._write_stop()
         self._retire_channel()
@@ -1007,7 +1007,7 @@ class WorkerClient:
             _wait_for_exit(pgid, self._exited, max((stop.remaining() or 0.0) - self._graces.term, 0.0), self._clock)
         if proc.returncode is None:
             self._stop_group(proc, stop)
-        join = Deadline(self._clock, 0.0 if sys.is_finalizing() else self._graces.join)
+        join = Deadline(0.0 if sys.is_finalizing() else self._graces.join, self._clock.now)
         for pump in self._pumps:
             pump.finish()
         ended = [pump.ended for pump in self._pumps] + ([self._reaped] if self._pumps else [])

@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, Optional, TypeVar, Union
 
+from senselab_core.runtime.clock import SystemClock
 from senselab_core.runtime.storage import StorageDir
 
 _T = TypeVar("_T")
@@ -33,6 +34,7 @@ class ManualClock:
         start: The time the clock starts at.
         waits: `park` to hold a wait until the clock is advanced; `spend` to spend its timeout when it is called.
         cell: The one-element list that holds the time, which a fake backend may advance too.
+        storage_root: Pins `storage_origin` to the time `storage_root` (made if missing) reports now.
         storage_origin: Pins the storage clock to `storage_origin` plus the monotonic time; leases planted with
             that stamp then age exactly as the clock advances. None reads the real filesystem's stamps.
         spends: `True` for a `sleep` that advances the clock by the time slept, `False` for one that only yields,
@@ -53,6 +55,7 @@ class ManualClock:
         waits: Literal["park", "spend"] = "park",
         cell: Optional[list[float]] = None,
         storage_origin: Optional[float] = None,
+        storage_root: Optional[Path] = None,
         spends: Union[bool, Literal["park"]] = True,
         on_sleep: Optional[Callable[[float], None]] = None,
     ) -> None:
@@ -62,6 +65,9 @@ class ManualClock:
         self._version = 0
         self._cond = threading.Condition()
         self._parked: dict[threading.Thread, int] = {}
+        if storage_root is not None:
+            with StorageDir.open_root(storage_root, create=True) as top:
+                storage_origin = SystemClock().storage_now(top)
         self._origin, self._spends, self.on_sleep = storage_origin, spends, on_sleep
         self.poll_s, self.hang_s = poll_s, hang_s
         self._guard = time.monotonic() + hang_s
@@ -78,6 +84,17 @@ class ManualClock:
     def local_now(self) -> float:
         """Return the pinned storage time, or the real wall clock."""
         return time.time() if self._origin is None else self._origin + self.now()
+
+    @property
+    def origin(self) -> Optional[float]:
+        """The storage time the clock started at, or None if it reads the real filesystem's."""
+        return self._origin
+
+    def plant(self, path: Path, ago: float = 0.0) -> None:
+        """Stamp `path` as made `ago` seconds before the clock's present, without following a symlink."""
+        assert self._origin is not None, "the clock has no pinned storage time"
+        then = self._origin + self.now() - ago
+        os.utime(path, (then, then), follow_symlinks=False)
 
     def advance(self, seconds: float) -> None:
         """Move the clock ahead `seconds` and wake the threads waiting on it."""

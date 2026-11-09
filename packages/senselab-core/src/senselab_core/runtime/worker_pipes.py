@@ -6,7 +6,9 @@ import selectors
 import threading
 from collections.abc import Callable
 
-from senselab_core.runtime.clock import Clock, Deadline
+from senselab_worker.codec import Deadline
+
+from senselab_core.runtime.clock import Clock
 
 READ_BYTES = 2**16
 

@@ -12,7 +12,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from aged_storage_fixture import StorageTime
 from huggingface_hub.errors import RepositoryNotFoundError
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -568,10 +567,10 @@ def test_an_aged_run_survives_another_runs_collection(
     tmp_path: Path, run: str, lease_clock: Callable[..., ManualClock]
 ) -> None:
     """Every accepted attempt id's manifest outlives the quarantine age when another run collects what was set aside."""
-    time_ = StorageTime(lease_clock, tmp_path)
-    record_resolution("org/m", "main", SHA_A, run=run, root=tmp_path, clock=time_.clock)
-    time_.clock.advance(2 * StorePolicy.load_default().quarantine_retention_s)
-    record_resolution("org/m", "main", SHA_B, run="otherrun", root=tmp_path, clock=time_.clock)
+    clock = lease_clock(storage_root=tmp_path)
+    record_resolution("org/m", "main", SHA_A, run=run, root=tmp_path, clock=clock)
+    clock.advance(2 * StorePolicy.load_default().quarantine_retention_s)
+    record_resolution("org/m", "main", SHA_B, run="otherrun", root=tmp_path, clock=clock)
     assert read_manifest(run, root=tmp_path) == {manifest_key("org/m", "main"): SHA_A}
 
 

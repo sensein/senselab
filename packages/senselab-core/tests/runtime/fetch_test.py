@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 import pytest
-from aged_storage_fixture import StorageTime
 from bounded_probe_fixture import MIB, FiniteSource, run_bounded
 from hypothesis import event, given, settings
 from hypothesis import strategies as st
@@ -213,16 +212,16 @@ def test_permissions_independent_of_umask(tmp_path: Path, umask: int) -> None:
 @pytest.mark.logic
 def test_stale_download_removed_but_live_one_kept(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """Stale download removed but live one kept."""
-    time_ = StorageTime(lease_clock, tmp_path)
+    clock = lease_clock(storage_root=tmp_path)
     (tmp_path / "tmp").mkdir()
     stale = tmp_path / "tmp" / ("5" * 32)
     live = tmp_path / "tmp" / ("1" * 32)
     stale.write_bytes(b"x")
-    time_.plant(stale)
-    time_.clock.advance(STALE_SECONDS + 1)
+    clock.plant(stale)
+    clock.advance(STALE_SECONDS + 1)
     live.write_bytes(b"y")
-    time_.plant(live)
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), clock=time_.clock)
+    clock.plant(live)
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), clock=clock)
     assert not stale.exists()
     assert live.exists()
 
@@ -461,16 +460,16 @@ def test_stale_cleanup_tolerates_unremovable_entries(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, lease_clock: Callable[..., ManualClock]
 ) -> None:
     """A stale entry that cannot be removed does not abort the fetch; the failure is logged."""
-    time_ = StorageTime(lease_clock, tmp_path)
+    clock = lease_clock(storage_root=tmp_path)
     odd = tmp_path / "tmp" / ("5" * 32)
     (odd / "inner").mkdir(parents=True)
     (odd / "inner" / "x").write_bytes(b"x")
     (odd / "inner").chmod(0o500)
-    time_.plant(odd)
-    time_.clock.advance(STALE_SECONDS + 1)
+    clock.plant(odd)
+    clock.advance(STALE_SECONDS + 1)
     try:
         with caplog.at_level("WARNING", logger="senselab"):
-            fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), clock=time_.clock)
+            fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), clock=clock)
     finally:
         (odd / "inner").chmod(0o700)
     assert "cannot collect" in caplog.text
