@@ -13,9 +13,7 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from senselab.audio.workflows.triage.viewer import BUILT_PAGE, write  # noqa: E402
+from senselab.audio.workflows.triage.viewer import BUILT_PAGE, write
 
 
 def main(argv: list[str] | None = None) -> int:

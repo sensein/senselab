@@ -1,4 +1,4 @@
-"""No triage test, and no driver under ``scripts/``, names the dataset its fixture profile was taken from (plan step 8).
+"""No triage test, and no triage driver, names the dataset its fixture profile was taken from (plan step 8).
 
 The tests run on a fixture profile and a made-up one, recordings carry plain names and declare their identity, so
 nothing in them needs the source dataset's name. The fixture's task guidance is the exception, which reviewer
@@ -16,7 +16,9 @@ TESTS = Path(__file__).resolve().parents[3]
 SCRIPTS = TESTS.parents[1] / "scripts"
 """The repository's ``scripts/``: the drivers take every dataset value from the profile they are given."""
 
-SCANNED = (TESTS / "audio" / "workflows" / "triage", TESTS / "scripts", TESTS / "text", SCRIPTS)
+DRIVERS = TESTS.parent / "senselab" / "audio" / "workflows" / "triage" / "drivers"
+"""The triage drivers, moved into the package from ``scripts/``, which keeps a wrapper for each."""
+SCANNED = (TESTS / "audio" / "workflows" / "triage", TESTS / "scripts", TESTS / "text", SCRIPTS, DRIVERS)
 """The trees whose tests run triage, and the drivers they run."""
 
 EXEMPT = {

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
-import sys
 from pathlib import Path
 
 import pandas as pd
@@ -13,12 +12,7 @@ import yaml
 
 from tests.conftest import FIXTURE_PROFILE
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "evaluate_task_events.py"
-_spec = importlib.util.spec_from_file_location("evaluate_task_events", SCRIPT)
-assert _spec is not None and _spec.loader is not None
-ev = importlib.util.module_from_spec(_spec)
-sys.modules["evaluate_task_events"] = ev
-_spec.loader.exec_module(ev)
+ev = importlib.import_module("senselab.audio.workflows.triage.drivers.evaluate_task_events")
 
 EVALUATION = FIXTURE_PROFILE / "evaluation"
 LABEL_MAP = yaml.safe_load((EVALUATION / "owner_label_map.yaml").read_text())

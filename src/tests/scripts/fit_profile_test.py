@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
+import importlib
 from pathlib import Path
 from typing import Any
 
@@ -15,12 +14,7 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.workflows.triage.dataset_profile import deactivate_profile, load_profile
 from senselab.audio.workflows.triage.fit import columns_read
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "fit_profile.py"
-_spec = importlib.util.spec_from_file_location("fit_profile", SCRIPT)
-assert _spec is not None and _spec.loader is not None
-cli = importlib.util.module_from_spec(_spec)
-sys.modules["fit_profile"] = cli
-_spec.loader.exec_module(cli)
+cli = importlib.import_module("senselab.audio.workflows.triage.drivers.fit_profile")
 
 TASKS = "version: 1\ntasks:\n  chat:\n    branch: SPEECH\n    expects: {pattern: free_response}\n"
 

@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _broadband(band_db: Sequence[float] | None) -> float | None:
+def _broadband(band_db: Sequence[float] | np.ndarray | None) -> float | None:
     if band_db is None:
         return None
     return float(10.0 * np.log10(np.sum(10.0 ** (np.asarray(band_db, dtype=np.float64) / 10.0)) + 1e-12))
@@ -228,7 +228,7 @@ def measure_session(session: str, rows: Sequence[dict[str, Any]], config: Any) -
     Returns:
         One row per member.
     """
-    opened = []
+    opened: list[tuple[dict[str, Any], Path | None, ProvStore | None, dict[str, Any], str | None]] = []
     for row in rows:
         try:
             run_root = run_root_of(Path(row["enhanced"]))
@@ -246,15 +246,15 @@ def measure_session(session: str, rows: Sequence[dict[str, Any]], config: Any) -
             opened.append((row, None, None, {"missing": ["store"]}, describe_exception(error)))
     background = session_background_of([r for _, _, _, r, _ in opened if not r.get("missing")])
     out = []
-    for row, run_root, store, reading, error in opened:
-        record: dict[str, Any] = {"stem": row["stem"], "session": session, "error": error}
-        if store is None or run_root is None:
+    for row, member_root, member_store, reading, failure in opened:
+        record: dict[str, Any] = {"stem": row["stem"], "session": session, "error": failure}
+        if member_store is None or member_root is None:
             out.append(record)
             continue
-        family = declared_family(store)
+        family = declared_family(member_store)
         kind = kind_of(family)
-        floor = find_measurement(store, SESSION_FLOOR)
-        model = find_measurement(store, BACKGROUND_MODEL)
+        floor = find_measurement(member_store, SESSION_FLOOR)
+        model = find_measurement(member_store, BACKGROUND_MODEL)
         model_floor = ((model.attributes.get("floor") or {}) if model is not None else {}) or {}
         record.update(
             {
@@ -270,15 +270,15 @@ def measure_session(session: str, rows: Sequence[dict[str, Any]], config: Any) -
             }
         )
         if kind in DECIDED_KINDS and family is not None:
-            record["stored_decision"] = stored_decision(store, kind)
+            record["stored_decision"] = stored_decision(member_store, kind)
             band = background.get("band_db")
-            stored_view = generic_view_of(store, run_root / RUN_SUBDIR)
+            stored_view = generic_view_of(member_store, member_root / RUN_SUBDIR)
             try:
-                record["old_decision"] = branch_decision(run_root, family, None, config)
+                record["old_decision"] = branch_decision(member_root, family, None, config)
                 record["new_decision"] = (
                     None
                     if band is None or stored_view is None
-                    else branch_decision(run_root, family, background_view(stored_view, band), config)
+                    else branch_decision(member_root, family, background_view(stored_view, band), config)
                 )
             except Exception as error:  # noqa: BLE001 -- a reading that raises is recorded, not fatal
                 record["decision_error"] = describe_exception(error)

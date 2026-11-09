@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import inspect
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -29,13 +28,7 @@ from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TA
 from senselab.audio.workflows.triage.task_catalogue import FROM_TASK_LIST
 from tests.conftest import FIXTURE_PROFILE
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_CLI = _REPO_ROOT / "scripts" / "check_identity.py"
-_spec = importlib.util.spec_from_file_location("check_identity_under_test", _CLI)
-assert _spec is not None and _spec.loader is not None, f"could not load {_CLI}"  # noqa: S101
-cli = importlib.util.module_from_spec(_spec)
-sys.modules["check_identity_under_test"] = cli
-_spec.loader.exec_module(cli)
+cli = importlib.import_module("senselab.audio.workflows.triage.drivers.check_identity")
 
 
 def identity_from_name(stem: str) -> RecordingIdentity:

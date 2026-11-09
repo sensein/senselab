@@ -8,9 +8,8 @@ still the dict a consumer reads.
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
-import sys
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence
 
@@ -40,13 +39,7 @@ from tests.audio.workflows.triage.conftest import seed_recorded_identity
 pytestmark = pytest.mark.usefixtures("triage_profile")
 """The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_CLI = _REPO_ROOT / "scripts" / "extend_ppg_praat.py"
-_spec = importlib.util.spec_from_file_location("extend_ppg_praat_under_test", _CLI)
-assert _spec is not None and _spec.loader is not None, f"could not load {_CLI}"  # noqa: S101
-cli = importlib.util.module_from_spec(_spec)
-sys.modules["extend_ppg_praat_under_test"] = cli
-_spec.loader.exec_module(cli)
+cli = importlib.import_module("senselab.audio.workflows.triage.drivers.extend_ppg_praat")
 
 _FRAMES_PER_SECOND = 116
 """The posteriorgram frame rate the fake reproduces, so the shapes the tests read are the real ones."""

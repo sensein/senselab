@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import importlib.util
 import json
 import sys
 from collections import Counter
@@ -55,23 +54,21 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Collection, Iterator, Mapping, Sequence
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from senselab.audio.workflows.triage.extend import (  # noqa: E402
+from senselab.audio.workflows.triage.extend import (
     activate_in_worker,
     add_config_arguments,
     driver_config,
     worker_arguments,
     worker_failure,
 )
-from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, recording_dirs  # noqa: E402
-from senselab.audio.workflows.triage.review_page import ListenSet, review_record, write_page  # noqa: E402
+from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, recording_dirs
+from senselab.audio.workflows.triage.review_page import ListenSet, review_record, write_page
 from senselab.audio.workflows.triage.review_page.page import (
-    SOURCE_BASE,  # noqa: E402
+    SOURCE_BASE,
     record_key,
 )
-from senselab.audio.workflows.triage.review_page.records import transcripts  # noqa: E402
-from senselab.utils import fastio  # noqa: E402
+from senselab.audio.workflows.triage.review_page.records import transcripts
+from senselab.utils import fastio
 
 EXTRACT_SCHEMA = "senselab.triage.review.extract"
 EXTRACT_VERSION = 4
@@ -79,15 +76,9 @@ EXTRACT_VERSION = 4
 
 def _free_speech_page() -> Any:  # noqa: ANN401 -- a module
     """The free-speech review page's module, whose transcript reader and mark rules this page shares."""
-    name = "free_speech_review_page"
-    if name in sys.modules:
-        return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(f"{name}.py"))
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    from senselab.audio.workflows.triage.drivers import free_speech_review_page
+
+    return free_speech_review_page
 
 
 def _agreement_word(entry: Sequence[Any]) -> str:
@@ -268,7 +259,7 @@ def listen_set(
     header = lines[0].split("\t") if lines else []
     key = "recording_id" if "recording_id" in header else "stem"
     if key not in header:
-        checks = {line.strip(): () for line in lines}
+        checks: dict[str, tuple[str, ...]] = {line.strip(): () for line in lines}
         return ListenSet(name, question, tuple(labels), (), checks, directions=tuple(directions))
     rows = list(csv.DictReader(lines, delimiter="\t"))
     columns = tuple(c for c in header if c not in ("stem", "recording_id") and not c.startswith(OWNER_PREFIX))

@@ -8,9 +8,8 @@ is the shape the completed corpus is in.
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
-import sys
 from pathlib import Path
 from typing import Callable
 
@@ -34,13 +33,7 @@ from senselab.utils.prov_store import ProvStore
 pytestmark = pytest.mark.usefixtures("triage_profile")
 """The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_CLI = _REPO_ROOT / "scripts" / "extend_clip_amplitudes.py"
-_spec = importlib.util.spec_from_file_location("extend_clip_amplitudes_under_test", _CLI)
-assert _spec is not None and _spec.loader is not None, f"could not load {_CLI}"  # noqa: S101
-cli = importlib.util.module_from_spec(_spec)
-sys.modules["extend_clip_amplitudes_under_test"] = cli
-_spec.loader.exec_module(cli)
+cli = importlib.import_module("senselab.audio.workflows.triage.drivers.extend_clip_amplitudes")
 
 SR = 16000
 """The fixture's sampling rate, so a sample index and a time are one conversion apart."""
