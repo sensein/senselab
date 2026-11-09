@@ -2,12 +2,12 @@
 
 A worker client records what its worker's `done` reports, and an in-process host worker what it measured; `request`
 opens the report of the request a thread is about to send, tagged with the jobs it carries, and `collected()` gathers
-the reports of the requests the calling thread runs inside it.
+the reports of the requests the calling thread runs inside it, timed by the clock it is given.
 """
 
 import threading
 import time
-from collections.abc import Hashable, Iterator
+from collections.abc import Callable, Hashable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -66,28 +66,31 @@ def record(
 def request(tags: tuple[Hashable, ...]) -> Iterator[None]:
     """Open the report of a request carrying the jobs `tags`; kept, with its wall, once the block ends and recorded.
 
+    Its wall is read on the clock of the enclosing `collected`, else `time.monotonic`.
+
     A block that raises or records nothing (a request every job of which the store served) keeps no report.
     """
     report = RequestReport(tags=tags)
     opened = _open()
     opened.append(report)
-    began = time.monotonic()
+    clock: Callable[[], float] = getattr(_LOCAL, "clock", time.monotonic)
+    began = clock()
     try:
         yield
     finally:
-        report.wall_s = time.monotonic() - began
+        report.wall_s = clock() - began
         opened.pop()
     if (found := _collector()) is not None and report.items:
         found.append(report)
 
 
 @contextmanager
-def collected() -> Iterator[list[RequestReport]]:
-    """Yield the list the requests this thread runs inside the block are reported in."""
-    previous = getattr(_LOCAL, "found", None)
+def collected(clock: Callable[[], float] = time.monotonic) -> Iterator[list[RequestReport]]:
+    """Yield the list the requests this thread runs inside the block are reported in, their walls read on `clock`."""
+    previous = getattr(_LOCAL, "found", None), getattr(_LOCAL, "clock", time.monotonic)
     found: list[RequestReport] = []
-    _LOCAL.found = found
+    _LOCAL.found, _LOCAL.clock = found, clock
     try:
         yield found
     finally:
-        _LOCAL.found = previous
+        _LOCAL.found, _LOCAL.clock = previous

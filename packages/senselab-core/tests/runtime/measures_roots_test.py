@@ -15,6 +15,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from planted_objects_fixture import identity_leaks
+from pydantic import ValidationError
 from senselab_core.kernel.identity import ModelIdentity
 from senselab_core.runtime.calibration import Estimate, HardwareClass, Observation
 from senselab_core.runtime.execution_settings import ResourceClass, Trust
@@ -139,13 +140,23 @@ def test_the_hardware_index_obeys_the_trust_filter(tmp_path: Path) -> None:
     assert _roots(tmp_path, trust="group", uid=STRANGER).seen_classes(DECLARED) == (UNIT.hardware,)
 
 
+PAYLOADS: dict[str, dict[str, object]] = {
+    "regime": {"k": 2, "rho": 1.5, "n": 3},
+    "oom": {"resource": "device", "batch": 2, "length": 10.0, "cotenancy": 1, "grant_bytes": 10**9, "basis": ["p1"]},
+}
+
+
+def _payload(kind: str) -> dict[str, object]:
+    return PAYLOADS.get(kind, {"reason": kind, "outdates": ["p1"]})
+
+
 @pytest.mark.contract
 def test_no_measures_record_carries_an_account_or_host_name(tmp_path: Path) -> None:
     """Every file of every record kind, the unit, the index and the lease holds neither the account nor the host."""
     roots = _roots(tmp_path)
     roots.put_observations(UNIT, "p1", [_observation()], PROVENANCE)
     for kind in ("drift", "supersede", "regime", "oom"):
-        roots.put_record(UNIT, kind, {"reason": kind, "outdates": ["p1"]}, PROVENANCE)
+        roots.put_record(UNIT, kind, _payload(kind), PROVENANCE)
     roots.note_seen(DECLARED, UNIT.hardware)
     lease = roots.probe_lease(UNIT)
     assert isinstance(lease, Lease)
@@ -161,7 +172,7 @@ def test_another_users_drift_record_does_not_act_under_trust_own(tmp_path: Path)
     writer = _roots(tmp_path)
     writer.put_observations(UNIT, "p1", [_observation()], PROVENANCE)
     for kind in ("drift", "supersede", "oom"):
-        writer.put_record(UNIT, kind, {"n": 1, "outdates": ["p1"]}, PROVENANCE)
+        writer.put_record(UNIT, kind, _payload(kind), PROVENANCE)
     assert {r.kind for r in _roots(tmp_path, trust="group", uid=STRANGER).records(UNIT)} == {
         "drift",
         "supersede",
@@ -494,3 +505,15 @@ def test_the_local_clock_fallback_is_logged_once_per_root(tmp_path: Path, caplog
             assert caplog.text.count("local clock") == 1
         finally:
             subprocess.run(["chmod", "-R", "u+w", str(tmp_path)], check=True)
+
+
+@pytest.mark.logic
+def test_regime_and_oom_payloads_are_typed_on_write_and_read_back(tmp_path: Path) -> None:
+    """`put_record` refuses a `regime` or `oom` payload the reader could not parse; a valid one reads back typed."""
+    roots = _roots(tmp_path)
+    for kind in ("regime", "oom"):
+        with pytest.raises(ValidationError):
+            roots.put_record(UNIT, kind, {"n": 1}, PROVENANCE)
+        assert roots.put_record(UNIT, kind, PAYLOADS[kind], PROVENANCE) is not None
+    kinds = {type(r).__name__ for r in roots.regime_records(UNIT)}
+    assert kinds == {"RegimeFactor", "OomRecord"}

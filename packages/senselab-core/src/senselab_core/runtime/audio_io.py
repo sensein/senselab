@@ -10,6 +10,7 @@ from collections import OrderedDict
 from collections.abc import Hashable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Final
 
 import numpy
 import soundfile
@@ -33,8 +34,8 @@ DECODER = f"soundfile {soundfile.__version__}, libsndfile {soundfile.__libsndfil
 """The decoder `open_audio` reads with, as an execution context records it."""
 
 
-_DECODE_ERROR_CODES = frozenset({1, 3, 4})
-"""The libsndfile codes of a file that is not decodable: unrecognised format, malformed, unsupported encoding."""
+_SYSTEM_ERROR: Final = 2  # invariant: libsndfile's SF_ERR_SYSTEM, a failure of the system, not of the file's data
+"""The libsndfile code of a system error; every other code is a file that cannot be decoded."""
 
 
 class Memo:
@@ -111,6 +112,8 @@ def _opened(
 
     Raises:
         StaleSource: if the file's stat fields changed while its content was read.
+        UndecodableSource: if libsndfile cannot decode it, truncated or not a sound file.
+        OSError: if it cannot be read, a libsndfile system error among them.
         ValueError: if `channels` is not as many as the file's.
     """
     with open(path, "rb") as raw:
@@ -123,8 +126,8 @@ def _opened(
         try:
             sound = soundfile.SoundFile(raw)
         except soundfile.LibsndfileError as exc:
-            if exc.code not in _DECODE_ERROR_CODES:
-                raise
+            if exc.code == _SYSTEM_ERROR:
+                raise OSError(f"{path} cannot be opened: {exc}") from exc
             raise UndecodableSource(f"{path} is not a sound file: {exc}") from exc
         with sound as f:
             if channels is not None and len(channels) != f.channels:

@@ -32,7 +32,7 @@ from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.kernel.signals import StaleSource
-from senselab_core.runtime.call import RunConfig, bind_input
+from senselab_core.runtime.call import InputUnreadable, RunConfig, bind_input
 from senselab_core.runtime.execution.epoch import EPOCH_DIR, Epoch
 from senselab_core.runtime.execution.events import (
     Event,
@@ -130,6 +130,14 @@ class InputsUnavailable(ValueError):
             f"inputs {ports} of records {records[:5]} were held in memory by the process that planned the run; run the"
             " plan in that process, or give them as paths or JSON values"
         )
+
+
+class SourcesUnrecorded(ValueError):
+    """The plan records no sources of its inputs, as one read from a run directory without its inputs file."""
+
+    def __init__(self) -> None:
+        """State that no input sources are recorded."""
+        super().__init__("the plan records no input sources")
 
 
 @dataclass(frozen=True)
@@ -308,12 +316,23 @@ def _memory(source: object) -> str | None:
     return None
 
 
-def _port_types(placed: Plan) -> dict[str, str]:
+def port_types(placed: Plan) -> dict[str, str]:
     """Return the type one record gives of each graph input of `placed`."""
     return {
         port: (found[1] if (found := _LIST.match(declared)) else declared)
         for port, declared in placed.logical.graph.inputs.items()
     }
+
+
+def recorded_sources(placed: Plan) -> tuple[Sequence[Mapping[str, object]], Mapping[str, object]]:
+    """Return the per-record sources of `placed`'s inputs and the shared ones.
+
+    Raises:
+        SourcesUnrecorded: the plan records no sources.
+    """
+    if "rows" not in placed.sources:
+        raise SourcesUnrecorded
+    return placed.sources["rows"], placed.sources["shared"]
 
 
 def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
@@ -324,15 +343,17 @@ def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
     record is checked before anything is raised.
 
     Raises:
-        InputChanged: inputs have another identity than the manifest's, or cannot be read; it names every one.
+        InputChanged: inputs have another identity than the manifest's, or cannot be read; it names every one, and the
+            first `InputUnreadable` is its cause.
         InputsUnavailable: an input held in memory is not in `placed.live`.
-        KeyError: the plan records no sources.
+        SourcesUnrecorded: the plan records no sources.
     """
-    types = _port_types(placed)
-    rows, shared = placed.sources["rows"], placed.sources["shared"]
+    types = port_types(placed)
+    rows, shared = recorded_sources(placed)
     values: dict[InputIdentity, object] = {}
     missing: list[tuple[str, str]] = []
     changed: list[tuple[str, str]] = []
+    unreadable: list[InputUnreadable] = []
     for row, read in zip(placed.manifest.rows, rows, strict=True):
         for port, expected in row.inputs.items():
             if port in shared and expected in values:
@@ -343,19 +364,23 @@ def bind_sources(placed: Plan) -> dict[InputIdentity, object]:
                 missing.append((row.id, port))
                 continue
             bound = _bound(port, types[port], source, placed.live) if held in (None, expected) else None
-            if bound is None or bound[0] != expected:
+            if isinstance(bound, InputUnreadable):
+                unreadable.append(bound)
+            if not isinstance(bound, tuple) or bound[0] != expected:
                 changed.append((row.id, port))
                 continue
             values[expected] = bound[1]
     if changed:
-        raise InputChanged(changed)
+        raise InputChanged(changed) from next(iter(unreadable), None)
     if missing:
         raise InputsUnavailable(missing)
     return values
 
 
-def _bound(port: str, kind: str, source: object, live: Mapping[InputIdentity, object]) -> tuple[str, object] | None:
-    """Return the identity and value of an input read from `source`, None when its file cannot be read.
+def _bound(
+    port: str, kind: str, source: object, live: Mapping[InputIdentity, object]
+) -> tuple[str, object] | InputUnreadable:
+    """Return the identity and value of an input read from `source`, else why its file cannot be read.
 
     A `{"memory": <identity>}` source is that identity's value in `live`, which holds it.
     """
@@ -364,8 +389,8 @@ def _bound(port: str, kind: str, source: object, live: Mapping[InputIdentity, ob
         return held, live[held]
     try:
         identity, value, _ = bind_input(port, kind, source)
-    except OSError:
-        return None
+    except InputUnreadable as err:
+        return err
     return identity, value
 
 
@@ -373,8 +398,8 @@ def bind_inputs(run_dir: Path) -> dict[InputIdentity, object]:
     """Return the value of each input identity of the plan in `run_dir` (`bind_sources` of `load_plan`).
 
     Raises:
-        InputChanged, InputsUnavailable: as `bind_sources`; an input held in memory is never on disk.
-        FileNotFoundError, KeyError: the run has no plan or no recorded sources.
+        InputChanged, InputsUnavailable, SourcesUnrecorded: as `bind_sources`; an input held in memory is never on disk.
+        FileNotFoundError: the run has no plan.
     """
     return bind_sources(load_plan(run_dir))
 
@@ -688,7 +713,7 @@ def _kept(old: object, new: object, port: str, kind: str, expected: InputIdentit
         return old
     try:
         identity = bind_input(port, kind, old)[0]
-    except OSError:
+    except InputUnreadable:
         return new
     return new if identity == expected else None
 
@@ -704,7 +729,7 @@ def merged_sources(placed: Plan, run_dir: Path) -> dict[str, Any]:
     if not path.is_file():
         return given
     held = json.loads(path.read_text(encoding="utf-8"))
-    types = _port_types(placed)
+    types = port_types(placed)
     rows, conflicts = placed.manifest.rows, []
     merged_rows = []
     for row, old, new in zip(rows, held["rows"], given["rows"], strict=True):

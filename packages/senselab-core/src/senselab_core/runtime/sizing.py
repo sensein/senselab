@@ -5,11 +5,14 @@ run first on one worker, the first carrying the model load (`calibrated`, from e
 the packaged tables, then the ones calibration rounds wrote under the cache.
 """
 
+import bisect
 import functools
 import importlib.metadata
+import logging
 import math
 import statistics
 import sys
+import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Annotated
@@ -224,6 +227,7 @@ class Sizing(Frozen):
         wall_s: Predicted wall seconds of the work on `workers`; None unless every job's time is measured.
         batch_one_peak: The memory of a batch-1 request at the longest job (`peak`); None unmeasured.
         batch_peak: The memory of a request at the longest job and its batch (`peak`); None unmeasured.
+        extrapolated: Whether a job's known length lies outside `measured_range`, so its time is extrapolated.
         measured: Which figures rest on a measure.
     """
 
@@ -239,6 +243,7 @@ class Sizing(Frozen):
     wall_s: Seconds | None = None
     batch_one_peak: Bytes | None = None
     batch_peak: Bytes | None = None
+    extrapolated: bool = False
     measured: Basis
 
     def batch_at(self, length: float | None, jobs: int | None = None) -> int:
@@ -248,6 +253,33 @@ class Sizing(Frozen):
         one above the measured range, or unmeasured memory.
         """
         return _batch(self, length, self.ceiling if jobs is None else min(jobs, self.ceiling))
+
+
+logger = logging.getLogger(__name__)
+
+
+class ExtrapolationLog:
+    """Says once per unit per run that `size` extrapolated beyond the unit's measured lengths."""
+
+    def __init__(self) -> None:
+        """Start a run with no unit said."""
+        self._said: set[str] = set()
+        self._lock = threading.Lock()
+
+    def note(self, label: str, sized: Sizing) -> bool:
+        """Log, the first time for `label` (a unit's `MeasureUnit.label`), the measured range `sized` extrapolated past.
+
+        Returns whether a line was logged.
+        """
+        if not sized.extrapolated or sized.measured_range is None:
+            return False
+        with self._lock:
+            if label in self._said:
+                return False
+            self._said.add(label)
+        lo, hi = sized.measured_range
+        logger.info("unit %s: lengths outside the measured range [%g, %g] are extrapolated linearly", label, lo, hi)
+        return True
 
 
 def _star(strata: Sequence[StratumBatch], length: float) -> int:
@@ -321,8 +353,28 @@ def _by_count(grant: Grant, jobs: int) -> tuple[tuple[int, int], ...]:
     return tuple((a, min(a + grant.quantum_items, jobs)) for a in range(0, jobs, grant.quantum_items))
 
 
-def _unmeasured(grant: Grant, calibration: CalibrationSettings, jobs: int) -> Sizing:
-    cuts = _by_count(grant, jobs)
+def _bucket(length: float | None, edges: Sequence[float]) -> int:
+    """Return the index of the bucket holding `length` (`bucket i` is `[edges[i-1], edges[i])`), -1 when unknown."""
+    return -1 if length is None else bisect.bisect_right(edges, length)
+
+
+def _on_edges(cuts: tuple[tuple[int, int], ...], buckets: Sequence[int]) -> tuple[tuple[int, int], ...]:
+    """Return `cuts` split wherever the bucket of consecutive jobs changes; unchanged without buckets."""
+    if not buckets:
+        return cuts
+    split: list[tuple[int, int]] = []
+    for start, stop in cuts:
+        at = start
+        for i in range(start + 1, stop):
+            if buckets[i] != buckets[i - 1]:
+                split.append((at, i))
+                at = i
+        split.append((at, stop))
+    return tuple(split)
+
+
+def _unmeasured(grant: Grant, calibration: CalibrationSettings, jobs: int, buckets: Sequence[int]) -> Sizing:
+    cuts = _on_edges(_by_count(grant, jobs), buckets)
     workers = 0 if jobs == 0 else min(calibration.unmeasured_workers, len(cuts), grant.max_workers)
     return Sizing(
         cuts=cuts,
@@ -340,6 +392,7 @@ def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the cali
     work: LengthProfile,
     *,
     calibration: CalibrationSettings,
+    bucket_edges: Sequence[float] = (),
 ) -> Sizing:
     """Return the sizing of `work` under `grant` from `estimate` (None: unmeasured, so the safe values), purely.
 
@@ -347,7 +400,8 @@ def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the cali
     the co-tenancy the card's workers make. Items are cut in put order at the upper prediction
     `t·(1 + confidence·spread)`: an item closes before its upper seconds plus the per-item cost pass the grant's
     `quantum_s`, when its seconds reach `(load_s + a)/load_share`, or at `quantum_items` jobs; with `u` or `spread`
-    unmeasured they are cut by `quantum_items` alone. Workers are the median
+    unmeasured they are cut by `quantum_items` alone; with `bucket_edges` (a bucketed formation's grid, in input units)
+    every item is also cut where the bucket changes, so no item spans two. Workers are the median
     seconds over `target_wall_s`, at most the item count, `max_workers` and, on shared devices, `devices × w_d`.
 
     On shared devices `w_d = ⌊memory_headroom × cap / P⌋` for the batch peak `P` at the longest job, lowered where a
@@ -357,8 +411,9 @@ def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the cali
     """
     jobs = len(work.units)
     single = None if estimate is None else estimate.single
+    buckets = [_bucket(length, bucket_edges) for length in work.units] if bucket_edges else []
     if estimate is None or single is None:
-        return _unmeasured(grant, calibration, jobs)
+        return _unmeasured(grant, calibration, jobs, buckets)
     fit = estimate.device if grant.on_device else estimate.host
     span = (single.lo, single.hi)
     lengths = [single.hi if length is None else length for length in work.units]
@@ -393,6 +448,7 @@ def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the cali
         if by_count
         else _cut(medians, [m * spread for m in medians], per_item, (load + per_item) / config.load_share, grant)
     )
+    cuts = _on_edges(cuts, buckets)
     bound = grant.max_workers if grant.devices is None else grant.devices * per_device
     untimed = single.u is None and not timed
     wanted = calibration.unmeasured_workers if untimed else max(1, math.ceil(sum(medians) / config.target_wall_s))
@@ -407,6 +463,7 @@ def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the cali
             "wall_s": wall,
             "batch_one_peak": None if fit is None else round(peak(fit, 1, longest)),
             "batch_peak": None if fit is None else round(peak(fit, shell.batch_at(longest), longest)),
+            "extrapolated": any(length is not None and not span[0] <= length <= span[1] for length in work.units),
             "measured": Basis(
                 time=timed, memory=budget is not None, batch=bool(estimate.batch) and budget is not None, workers=timed
             ),

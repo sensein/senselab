@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from backends import fake_time_backend_fixture
 from planted_objects_fixture import identity_leaks
 from pool_stack_fixture import packaged, registry, scoring
 from pool_worker_test import OVERRIDE, WORKERS, _outcomes, _profile, _put, _run, _sender, _text
@@ -28,6 +29,7 @@ from senselab_core.runtime.worker_client import WorkerLost
 
 TIMED = scoring("pool_observations_test.timed")
 TIMER = "backends.timed_backend_fixture"
+FAKE_TIME = "backends.fake_time_backend_fixture"
 HARDWARE = HardwareClass(device="cpu", name="a cpu", cpus=2)
 SHARED = Cotenancy(device=2, host=3)
 
@@ -79,27 +81,43 @@ def _one_job_items(placed: Any, elements: range) -> list[Any]:  # noqa: ANN401 -
     return split(node_fragment(placed, admission, elements=[(i,) for i in elements]), 1)
 
 
-def _near(want: Sequence[float], got: Sequence[float], slack: float) -> bool:
-    return all(w <= g < w + slack for w, g in zip(want, got, strict=True))
-
-
 @pytest.mark.logic
-def test_gathered_items_report_their_own_request_walls(tmp_path: Path, obs: dict[str, Any]) -> None:
-    """Four items gathered into a claim, each its own request of 0.05 s more than the last, are timed one by one."""
+def test_gathered_items_report_their_own_request_walls(tmp_path: Path) -> None:
+    """Four items gathered into a claim, each its own request, are each charged their own request's span, no mean.
+
+    The worker's clock is a fake one that only the backend advances, by the seconds each item names, so a request's
+    span is exactly its item's seconds, in binary fractions that subtract exactly, and nothing else takes any time.
+    Claiming takes none, and an item's claim-to-commit wall is that of the one call its claim's items were sent in:
+    element 0 spends one of the quantum's four items, so elements 1 to 3 are the next claim and element 4 the last.
+    """
     profile = _profile(quantum_items=4)
-    placed, store, pool_dir = _items(profile, tmp_path, ["0.0", "0.05", "0.1", "0.15", "0.2"])
-    _put(placed, pool_dir, 0)
-    QueueSet(pool_dir, profile).queue("cpu").put_all(_one_job_items(placed, range(1, 5)))
-    _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile)).serve()
-    gathered = sorted(
-        (o for out in _outcomes(pool_dir, profile) for o in out["observations"] if o["since_load"] > 0),
-        key=lambda o: o["wall_s"],
-    )
-    assert [o["jobs"] for o in gathered] == [1, 1, 1, 1]
-    wants = (0.05, 0.1, 0.15, 0.2)
-    assert _near(wants, [o["wall_s"] for o in gathered], obs["wall_slack_s"])
-    samples = sorted(out["measure"]["wall_s"] for out in _outcomes(pool_dir, profile) if out["measure"]["jobs"] == 1)
-    assert _near(wants, samples[1:], obs["wall_slack_s"])
+    texts = ["0", "0.25", "0.5", "0.75", "1"]
+    with packaged(registry(TIMED, worker=FAKE_TIME), tmp_path / "cache"):
+        placed, store, pool_dir = _items(profile, tmp_path, texts)
+        _put(placed, pool_dir, 0)
+        QueueSet(pool_dir, profile).queue("cpu").put_all(_one_job_items(placed, range(1, 5)))
+        PoolWorker(
+            pool_dir,
+            ["cpu"],
+            profile=profile,
+            store=store,
+            send=_sender(store, profile),
+            device_memory=lambda: None,
+            hardware=lambda _: HARDWARE,
+            cotenancy=lambda _: SHARED,
+            clock=fake_time_backend_fixture.now,
+        ).serve()
+    outcomes = {out["jobs"][0]["job"]["element"][0]: out for out in _outcomes(pool_dir, profile)}
+    assert sorted(outcomes) == [0, 1, 2, 3, 4] and all(len(out["jobs"]) == 1 for out in outcomes.values())
+    assert sorted(outcomes[e]["observations"][0]["since_load"] for e in range(1, 5)) == [1, 2, 3, 4]
+    for element, out in outcomes.items():
+        (observed,) = out["observations"]
+        assert (observed["jobs"], out["measure"]["jobs"]) == (1, 1)
+        assert observed["wall_s"] == out["measure"]["wall_s"] == float(texts[element])
+        assert out["measure"]["claim_s"] == 0.0
+    for claim in ([0], [1, 2, 3], [4]):
+        spent = sum(float(texts[e]) for e in claim)
+        assert [outcomes[e]["observations"][0]["item_wall_s"] for e in claim] == [spent] * len(claim)
 
 
 @pytest.mark.logic

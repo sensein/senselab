@@ -111,12 +111,13 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
     send: Send,
     cancelled: threading.Event | None = None,
     record: Callable[[Sent], None] | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> list[JobOutcome]:
     """Return one outcome per member, sent as one request; one that fails as a whole is split in halves.
 
     A member alone whose request fails as a whole gets that failure. Any other exception is the failure of every
     member of the request that raised it, so a half that completed keeps its outcomes. Each call of `send` is given
-    to `record` as a `Sent`, timed by its own clock, with the requests it made.
+    to `record` as a `Sent`, timed by itself on `clock`, with the requests it made, each timed on `clock` too.
 
     Raises:
         Abandoned: `cancelled` was set before a request, or while one ran.
@@ -125,12 +126,12 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
     if cancelled is not None and cancelled.is_set():
         raise Abandoned
     refs = tuple(m.job.ref for m in members)
-    began = time.monotonic()
+    began = clock()
     try:
-        with request_reports.collected() as reported:
+        with request_reports.collected(clock) as reported:
             outcomes = send([m.job for m in members], placement)
     except Exception as exc:
-        wall = time.monotonic() - began
+        wall = clock() - began
         if cancelled is not None and cancelled.is_set():
             raise Abandoned from exc
         if isinstance(exc, LeaseTimeout):
@@ -143,11 +144,11 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
                 logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)
             return [Failed(m.job.ref, m.key, failure_of(exc)) for m in members]
         half = len(members) // 2
-        return bisect(members[:half], placement, send, cancelled, record) + bisect(
-            members[half:], placement, send, cancelled, record
+        return bisect(members[:half], placement, send, cancelled, record, clock) + bisect(
+            members[half:], placement, send, cancelled, record, clock
         )
     if record is not None:
-        record(Sent(refs, time.monotonic() - began, tuple(reported), None))
+        record(Sent(refs, clock() - began, tuple(reported), None))
     return outcomes
 
 
@@ -224,8 +225,10 @@ class PoolWorker:
 
         `hardware` gives the `HardwareClass` a resource class runs on and `cotenancy` its device and host
         co-tenancy; they default to what this host shows (`hardware_of`, `Presence`). The worker's name is its
-        `worker_id()` unless given, so no run record names its host. `clock` times the reuse of what it read of its
-        peers and of the run's probe queues (`pool.presence_refresh_s`).
+        `worker_id()` unless given, so no run record names its host. `clock` times every measurement the worker
+        records (a claim, each call of `send` and each request it makes, an item's claim-to-commit wall) and the reuse
+        of what it read of its peers and of the run's probe queues (`pool.presence_refresh_s`); the quantum and idle
+        deadlines, which pair with real waits, stay on `time.monotonic`.
 
         Raises:
             ValueError: no class is named.
@@ -293,7 +296,7 @@ class PoolWorker:
         while not self.stop.is_set():
             ended = current is not None and (spent >= pool.quantum_items or time.monotonic() - began >= pool.quantum_s)
             prefer = None if ended else current
-            asked = time.monotonic()
+            asked = self._clock()
             claim = self._next(prefer, pool.quantum_items - spent)
             if claim is None:
                 current, idle = None, idle if idle is not None else time.monotonic()
@@ -317,7 +320,7 @@ class PoolWorker:
                 current, spent, began = claim.queue.name, 0, time.monotonic()
             spent += sum(len(f.jobs) for f in claim.fragments)
             self.served.extend((claim.queue.name, d) for d in claim.items)
-            self.run_claim(claim, claim_s=time.monotonic() - asked)
+            self.run_claim(claim, claim_s=self._clock() - asked)
             for service in self._workers.provided() if self._workers is not None else []:
                 service.touch()
         return 0
@@ -478,7 +481,7 @@ class PoolWorker:
         The hardware class and co-tenancy are read once per claim, when its first item is reported.
         """
         jobs = {m.job.ref: m.job for g in groups for m in g.members}
-        began = time.monotonic()
+        began = self._clock()
         seen: list[Seen | None] = []
 
         def observe(digest: str, outcomes: Sequence[JobOutcome]) -> list[Observation]:
@@ -499,7 +502,7 @@ class PoolWorker:
                 outcomes,
                 found,
                 mark=mark,
-                item_wall_s=time.monotonic() - began,
+                item_wall_s=self._clock() - began,
             )
 
         return observe
@@ -567,7 +570,14 @@ class PoolWorker:
                 owners = {m.job.ref: m.digest for m in group.members}
                 try:
                     outcomes: list[JobOutcome | None] = list(
-                        bisect(group.members, group.placement, send, cancelled, lambda sent: spans.add(sent, owners))
+                        bisect(
+                            group.members,
+                            group.placement,
+                            send,
+                            cancelled,
+                            lambda sent: spans.add(sent, owners),
+                            self._clock,
+                        )
                     )
                 except LeaseTimeout as busy:
                     logger.info("pool worker %s gives its items back: %s", self.name, busy)

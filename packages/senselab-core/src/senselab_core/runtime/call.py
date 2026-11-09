@@ -39,7 +39,7 @@ from senselab_core.kernel.identity import (
     text_identity_fields,
 )
 from senselab_core.kernel.license import License
-from senselab_core.kernel.signals import PlainText, Recording, text_identity
+from senselab_core.kernel.signals import PlainText, Recording, StaleSource, UndecodableSource, text_identity
 from senselab_core.runtime.audio_io import DECODER, open_audio
 from senselab_core.runtime.calibration import RunCalibration
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry, UnknownModel
@@ -174,6 +174,17 @@ EnvOpener = Callable[[BackendSpec, ExecutionProfile], EnvHandle]
 """Open the env a backend declares under a profile, building it if needed."""
 EnvProbe = Callable[[BackendSpec, ExecutionProfile], bool]
 """Whether the env a backend declares is built under a profile, building nothing."""
+
+
+class EnvUnreadable(Exception):  # noqa: N818 - a state, not an error of the caller
+    """The env a backend declares cannot be read without building it; the message says why."""
+
+
+EnvRead = Callable[[BackendSpec, ExecutionProfile], EnvHandle | None]
+"""The handle of the env a backend declares if it is built under a profile, else None; builds and locks nothing.
+
+Raises `EnvUnreadable` for any cause it cannot read it.
+"""
 EnvLock = Callable[[BackendSpec], Path]
 """The lock file the isolated or server env a backend declares is built from, reading nothing."""
 
@@ -182,8 +193,16 @@ def _unbuilt(backend: BackendSpec, profile: ExecutionProfile) -> bool:  # noqa: 
     return False
 
 
+def _unread(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle | None:  # noqa: ARG001 - an EnvRead
+    return None
+
+
 def _no_lock(backend: BackendSpec) -> Path:
     raise LookupError(f"no package has said which lock the env of backend {backend.name!r} is built from")
+
+
+class InputUnreadable(ValueError):
+    """An input given as a path whose file its port type's reader cannot read or decode."""
 
 
 @dataclass(frozen=True)
@@ -192,8 +211,8 @@ class Packaged:
 
     `lock_records` gives each backend's env-lock package license records, from which `env_license` derives; without
     them no stored result is served unless the run's license policy allows unlicensed hits. `env_built` says whether
-    a backend's env is built (by default none is). `env_lock` names the lock a non-host env is built from (by default
-    none is known).
+    a backend's env is built (by default none is), and `env_read` gives the built env's handle (by default none).
+    `env_lock` names the lock a non-host env is built from (by default none is known).
     """
 
     catalogue: Catalogue
@@ -201,6 +220,7 @@ class Packaged:
     registry: Registry = REGISTRY
     lock_records: LockRecords | None = None
     env_built: EnvProbe = _unbuilt
+    env_read: EnvRead = _unread
     env_lock: EnvLock = _no_lock
 
 
@@ -383,6 +403,11 @@ def input_binding(port_type: str) -> Literal["path", "text", "value"]:
     return "path" if port_type in _READERS else "value"
 
 
+def input_decoder(port_type: str) -> str | None:
+    """Return the decoder a path given for `port_type` is read by: its reader's, None for a type without one."""
+    return _READERS[port_type][1] if port_type in _READERS else None
+
+
 def _with_identities(model: type[BaseModel], value: Mapping[str, Any]) -> dict[str, Any]:
     """Return `value` with each `TextIdentity` field of `model` it gives replaced by the identity (`text_identity`)."""
     return {k: text_identity(k, v) if k in text_identity_fields(model) else v for k, v in value.items()}
@@ -409,6 +434,9 @@ def bind_input(port: str, port_type: str, value: object) -> tuple[InputIdentity,
     """Return an input's identity, the value its item carries and the decoder that read it from a path, if one did.
 
     A `str` for a `Text` port is held as `PlainText`.
+
+    Raises:
+        InputUnreadable: a path's file cannot be read or decoded by its port type's reader, for any cause.
     """
     decoder = None
     model = input_model(port_type)
@@ -420,7 +448,10 @@ def bind_input(port: str, port_type: str, value: object) -> tuple[InputIdentity,
         if port_type not in _READERS:
             raise ValueError(f"input {port!r} is a {port_type}, which is not read from a path; pass the value")
         reader, decoder = _READERS[port_type]
-        value = reader(value)
+        try:
+            value = reader(value)
+        except (OSError, StaleSource, UndecodableSource) as err:
+            raise InputUnreadable(f"input {port!r} cannot be read: {err}") from err
     if isinstance(value, Recording | PlainText):
         return value.identity, value, decoder
     if isinstance(value, Frozen):

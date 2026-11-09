@@ -361,7 +361,32 @@ def _stem(
     return stem, index, host_cuda
 
 
-def env_built(  # noqa: PLR0913 - the env, its lock, root and profile settings, and the injectable CUDA probe
+def current_env(  # noqa: PLR0913 - the env, its lock, root and profile settings, and the injectable CUDA probe
+    env: Env,
+    lock: Path,
+    root: Path,
+    *,
+    settings: Envs,
+    workers: Mapping[str, Path] | None = None,
+    host_cuda: HostCuda | None = None,
+) -> EnvHandle | None:
+    """Return the handle `ensure_env` would return for `env` built from `lock` under `root`, or None if not built.
+
+    Nothing is built, locked or created.
+
+    Raises:
+        EnvLockError: the lock's header lacks what a build needs.
+    """
+    parsed = EnvLock.read(lock)
+    stem, index, _ = _stem(env, parsed, settings, workers, host_cuda)
+    current = _read_record(Path(root), stem) if Path(root).is_dir() else None
+    wanted = (file_digest("file@1", parsed.path), index.url if index else None)
+    if current is None or (current.lock_sha, current.torch_index) != wanted:
+        return None
+    return _handle(Path(root), current, parsed.path)
+
+
+def env_built(  # noqa: PLR0913 - as `current_env`
     env: Env,
     lock: Path,
     root: Path,
@@ -375,11 +400,7 @@ def env_built(  # noqa: PLR0913 - the env, its lock, root and profile settings, 
     Raises:
         EnvLockError: the lock's header lacks what a build needs.
     """
-    parsed = EnvLock.read(lock)
-    stem, index, _ = _stem(env, parsed, settings, workers, host_cuda)
-    current = _read_record(Path(root), stem) if Path(root).is_dir() else None
-    wanted = (file_digest("file@1", parsed.path), index.url if index else None)
-    return current is not None and (current.lock_sha, current.torch_index) == wanted
+    return current_env(env, lock, root, settings=settings, workers=workers, host_cuda=host_cuda) is not None
 
 
 def _handle(root: Path, record: EnvRecord, lock: Path) -> EnvHandle:
@@ -841,6 +862,7 @@ __all__ = [
     "TorchIndex",
     "Uv",
     "compile_lock",
+    "current_env",
     "detect_host_cuda",
     "ensure_env",
     "host_lock_gaps",

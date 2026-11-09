@@ -1,6 +1,7 @@
 """`explain`: a placed plan as text, one line per node after its hash, env builds and cost."""
 
 from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
 from senselab_core.kernel.license import LicenseSet
 from senselab_core.kernel.placement import Cost, NodePlacement, PlanPlacement
@@ -12,6 +13,9 @@ from senselab_core.runtime.placement import _HOUR_S
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
 from senselab_core.runtime.sizing import Grant, size
+
+if TYPE_CHECKING:
+    from senselab_core.runtime.execution.plan_reads import ItemCounts
 
 
 def _cost(cost: Cost) -> str:
@@ -52,11 +56,17 @@ def node_sizing(  # noqa: PLR0913 - the node's placement, the profile, the measu
     hardware: HardwareInfo | None,
     *,
     why_no_estimate: str,
+    unit_label: str | None = None,
+    bucket_edges: Sequence[float] = (),
+    why_no_lengths: str | None = None,
 ) -> list[str]:
     """Return the lines `size` gives a node: wall time, GPU hours and peak memory, each measured or unmeasured.
 
     `estimate` is what `MeasureSource.get` returned for the node's unit, None when there is none; then
-    `why_no_estimate` is the reason printed. Every figure is a field of the node's `Sizing`. Nothing here probes.
+    `why_no_estimate` is the reason printed, `unit_label` the unit's digest label when it resolved (never an
+    identifier), `bucket_edges` the grid a bucketed formation cuts on, and `why_no_lengths` why `work` is None when
+    the inputs could not be read (None: they are read when the run starts). Every figure is a field of the node's
+    `Sizing`. Nothing here probes.
     """
     resource = profile.resource_classes[placed.resource_class]
     cuda = resource.device == "cuda"
@@ -65,10 +75,10 @@ def node_sizing(  # noqa: PLR0913 - the node's placement, the profile, the measu
     if estimate is None:
         why, sized = why_no_estimate, None
     elif work is None:
-        why, sized = "lengths unknown until the inputs are read", None
+        why, sized = why_no_lengths or "lengths unknown until the inputs are read", None
     else:
         why = "a length is unknown or outside the measured range"
-        sized = size(estimate, grant, profile.sizing, work, calibration=profile.calibration)
+        sized = size(estimate, grant, profile.sizing, work, calibration=profile.calibration, bucket_edges=bucket_edges)
     source = None if estimate is None else _source(estimate)
     wall = None if sized is None else sized.wall_s
     gpu = wall * sized.workers / _HOUR_S if wall is not None and sized is not None and cuda else None
@@ -80,7 +90,7 @@ def node_sizing(  # noqa: PLR0913 - the node's placement, the profile, the measu
         *([f"gpu {_labelled(gpu, 'h', source, why)}"] if cuda else []),
         f"peak {kind} memory {_labelled(batch_peak, 'bytes', source, peak_why)}",
     ]
-    lines = ["  sizing: " + "; ".join(figures)]
+    lines = [f"  unit {unit_label}" if unit_label else "  unit unresolved", "  sizing: " + "; ".join(figures)]
     cap = grant.memory_bytes
     if sized is not None and sized.batch_one_peak is not None and cap is not None and sized.batch_one_peak > cap:
         lines.append(
@@ -88,6 +98,25 @@ def node_sizing(  # noqa: PLR0913 - the node's placement, the profile, the measu
             f"class {placed.resource_class} caps it at {cap} bytes"
         )
     return lines
+
+
+def item_lines(counts: Mapping[str, "ItemCounts"]) -> list[str]:
+    """Return one line per resource class: its jobs the store would serve, those computed, and any it cannot tell."""
+    lines = []
+    for name, found in sorted(counts.items()):
+        parts = [f"{found.servable} servable", f"{found.computed} computed"]
+        if found.undetermined:
+            parts.append(f"{found.undetermined} undetermined ({'; '.join(found.why)})")
+        if found.later:
+            parts.append(f"nodes {', '.join(found.later)} wait on an upstream result")
+        lines.append(f"class {name}: " + ", ".join(parts))
+    return lines
+
+
+def undetermined_lines(placement: PlanPlacement, why: str) -> list[str]:
+    """Return one line per resource class of `placement` whose servable and computed jobs cannot be told, and why."""
+    classes = sorted({p.resource_class for p in placement.nodes.values()})
+    return [f"class {name}: servable and computed undetermined ({why})" for name in classes]
 
 
 def waits(profile: ExecutionProfile) -> list[str]:

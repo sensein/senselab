@@ -106,7 +106,8 @@ class PoolSettings(Frozen):
     `quantum_items` and `quantum_s` bound the quantum `size` derives; a worker stays on a class for at most that many
     jobs or seconds. `poll_s` is a worker's empty-queue poll and the longest wait between a coordinator's reads of an
     outcome, which start at `first_poll_s` and double. `presence_refresh_s` is the longest a worker reuses what it read
-    of the workers on its host, the processes on its device and the probe queues of its run.
+    of the workers on its host, the processes on its device and the probe queues of its run. `admit_threads` bounds the
+    threads that ask the result store which jobs it would serve, for a plan's counts.
     """
 
     quantum_items: PositiveInt
@@ -115,6 +116,7 @@ class PoolSettings(Frozen):
     first_poll_s: PositiveSeconds
     presence_refresh_s: PositiveSeconds
     segment_items: PositiveInt
+    admit_threads: PositiveInt
 
 
 class SizingSettings(Frozen):

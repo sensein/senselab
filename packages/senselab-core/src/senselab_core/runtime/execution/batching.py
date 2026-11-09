@@ -46,6 +46,11 @@ class BucketGrid(Frozen):
         return cls.model_validate(load_policy_values("senselab_core.runtime", "batching.yaml", BATCHING_FORMAT))
 
     @property
+    def edges_s(self) -> tuple[float, ...]:
+        """The bucket edges in seconds, the unit of an `audio_s` estimate."""
+        return tuple(e / NS_PER_S for e in self.edges_ns)
+
+    @property
     def unindexed(self) -> str:
         """The formation `bucket:<id>` naming this grid but no bucket, for a job whose length is unknown."""
         return f"{BUCKET}:{self.id}"
@@ -108,6 +113,16 @@ def job_text_chars(job: "Job") -> int | None:
     """Return the characters of `job`'s held text inputs, None when it holds none; an upstream text is not read."""
     held = [len(v.content) for port, v in job.values.items() if port not in job.upstream and isinstance(v, Text)]
     return sum(held) if held else None
+
+
+def bucket_edges(backend: BackendSpec, unit_kind: str) -> tuple[float, ...]:
+    """Return the grid's edges in the units of an estimate of `unit_kind` when `backend` keys a bucket, else none.
+
+    Only recording seconds are cut by length buckets; the edges of any other unit kind are not the grid's.
+    """
+    if fixed_formation(backend) is not None or unit_kind != "audio_s":
+        return ()
+    return BucketGrid.load_default().edges_s
 
 
 def formation(job: "Job", backend: BackendSpec, grid: BucketGrid) -> str:
