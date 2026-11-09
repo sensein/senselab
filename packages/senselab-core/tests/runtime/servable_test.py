@@ -192,7 +192,7 @@ def test_a_skipped_entry_does_not_rerank_the_key(tmp_path: Path, caplog: pytest.
         store.put(key, {"v": 1}, _ctx(platform=platform))
     rewrite_json(
         entry_dir(tmp_path, key, _ctx(platform="windows")) / "context.json",
-        lambda r: r.update(format="execution-context@4.0"),
+        lambda r: r.update(format="execution-context@5.0"),
     )
     _plant(tmp_path, _ctx(platform="macos"), "result_corrupt")
     with caplog.at_level("INFO", logger="senselab"):

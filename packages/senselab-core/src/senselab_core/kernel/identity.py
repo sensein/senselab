@@ -327,12 +327,12 @@ class ExecutionContext(Frozen):
     env_license: License | None
 
     def fingerprint(self) -> str:
-        """Return `identity_digest("context@4", fields)`: every field but the four not fingerprinted, and `licensed`.
+        """Return `identity_digest("context@5", fields)`: every field but the four not fingerprinted, and `licensed`.
 
         `licensed` is whether `env_license` is recorded.
         """
         fields = self.model_dump(exclude={"host", "protocol", "model_source", "env_license"})
-        return identity_digest("context@4", {**fields, "licensed": self.env_license is not None})
+        return identity_digest("context@5", {**fields, "licensed": self.env_license is not None})
 
 
 class ReusePolicy(str, Enum):

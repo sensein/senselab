@@ -6,6 +6,7 @@ import platform
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
+from planted_objects_fixture import MIRROR_INDEX
 from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, Node
@@ -74,7 +75,7 @@ def host_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # n
         python_version=platform.python_version(),
         lock_sha="3" * 64,
         wheel_set="4" * 64,
-        torch_index=None,
+        torch_index=MIRROR_INDEX,
     )
 
 

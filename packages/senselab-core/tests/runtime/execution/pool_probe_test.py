@@ -98,7 +98,7 @@ def _handle(wheel_set: str) -> Callable[..., EnvHandle]:
             python_version=platform.python_version(),
             lock_sha=base.lock_sha,
             wheel_set=wheel_set,
-            torch_index=None,
+            torch_index=base.torch_index,
         )
 
     return read

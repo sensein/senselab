@@ -44,6 +44,7 @@ pytestmark = pytest.mark.logic
 FAKE_UV = Uv((sys.executable, str(Path(__file__).with_name("fake_uv_fixture.py"))))
 CUDA_12_8 = HostCuda((12, 8), "nvidia-smi")
 PROFILE_INDEX = "https://mirror.example/whl/cu126"
+MIRROR = "https://user:secret@mirror.internal/whl/cu128"
 SETTINGS = Envs(server_start_margin_s=1.0)
 LEASE = JobLease(stale_after_s=30.0, renew_fraction=0.01, attribute_delay_s=0)
 
@@ -113,9 +114,9 @@ def test_cuda_index_routing(smi: str | None, nvcc: str | None, ceiling: tuple[in
     assert index.source == "probe"
 
 
-def test_profile_torch_index_overrides_probe(tmp_path: Path, uv_log: Path) -> None:
+def test_profile_torch_index_overrides_probe_and_names_its_build(tmp_path: Path, uv_log: Path) -> None:
     """The profile's `envs.torch_index` replaces the probed index, and torch installs from it."""
-    assert pick_torch_index(CUDA_12_8, override=PROFILE_INDEX) == TorchIndex(PROFILE_INDEX, "profile", "profile")
+    assert pick_torch_index(CUDA_12_8, override=PROFILE_INDEX) == TorchIndex(PROFILE_INDEX, "cu126", "profile")
     handle = _ensure(tmp_path, _lock(tmp_path), Envs(server_start_margin_s=1.0, torch_index=PROFILE_INDEX))
     (stage_one,) = [c for c in _calls(uv_log) if "--index-url" in c]
     assert stage_one[stage_one.index("--index-url") + 1] == PROFILE_INDEX
@@ -135,7 +136,7 @@ def test_torch_index_recorded_in_context(tmp_path: Path, uv_log: Path) -> None:
         model_source=None,
         env_license=None,
     )
-    assert context.driver["torch_index"] == "https://download.pytorch.org/whl/cu128"
+    assert context.driver == {"torch_build": "cu128"}
     assert context.env_lock == handle.lock_sha
     assert context.wheel_set == handle.wheel_set
     torch_free = ensure_env(
@@ -219,6 +220,29 @@ def test_missing_wheel_is_cuda_compatibility_error(
         _ensure(tmp_path, _lock(tmp_path))
     assert "envs.torch_index" in str(info.value)
     assert "SENSELAB_TORCH_INDEX_URL" not in str(info.value)
+
+
+def test_the_cuda_error_names_the_build_and_no_userinfo(
+    tmp_path: Path, uv_log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The error reaches Slurm output: it names the build and the index without its `user:secret@`."""
+    monkeypatch.setenv("FAKE_UV_NO_WHEEL", "1")
+    with pytest.raises(CudaCompatibilityError) as info:
+        _ensure(tmp_path, _lock(tmp_path), Envs(server_start_margin_s=1.0, torch_index=MIRROR))
+    text = str(info.value)
+    assert "cu128" in text and "mirror.internal/whl/cu128" in text
+    assert "secret" not in text and "user:" not in text
+
+
+def test_the_env_record_holds_no_userinfo_and_still_matches(tmp_path: Path, uv_log: Path) -> None:
+    """An index with userinfo is recorded without it; a second call finds the build and does not redo it."""
+    settings = Envs(server_start_margin_s=1.0, torch_index=MIRROR)
+    first = _ensure(tmp_path, _lock(tmp_path), settings)
+    again = _ensure(tmp_path, _lock(tmp_path), settings)
+    records = [p.read_text() for p in (tmp_path / "envs").glob("*.json")]
+    assert records and all("secret" not in r and "user:" not in r for r in records)
+    assert first.torch_index == again.torch_index == "https://mirror.internal/whl/cu128"
+    assert [c[0] for c in _calls(uv_log)].count("venv") == 1
 
 
 def test_worker_runtime_is_an_overlay(tmp_path: Path, uv_log: Path) -> None:

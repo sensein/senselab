@@ -2,11 +2,11 @@
 
 Layout under `root`:
 
-- `store@5/<d[:2]>/<d>/<f>/`, where `d` is `LogicalKey.digest()` and `f` is
+- `store@6/<d[:2]>/<d>/<f>/`, where `d` is `LogicalKey.digest()` and `f` is
   `ExecutionContext.fingerprint()`, holding:
   - `result.json`: JCS JSON with `format: "result@2.0"`, the key, its digest, the context fingerprint,
     the encoded outputs and their output identity;
-  - `context.json`: JCS JSON with `format: "execution-context@3.1"` and the context's fields;
+  - `context.json`: JCS JSON with `format: "execution-context@4.0"` and the context's fields;
   - `<sha256>.npy`: each array output in canonical `.npy`, named by the sha256 of its bytes.
 - `equivalence-evidence@4/<d>.json`: one verify-sampling comparison (`EquivalenceEvidence`), JSON named by
   `d`, its canonical digest.
@@ -100,13 +100,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("senselab")
 
-STORE_DIR = "store@5"
+STORE_DIR = "store@6"
 STAGING_DIR = "tmp"
 EVIDENCE_DIR = "equivalence-evidence@4"
 EVIDENCE_NAME = re.compile(r"[0-9a-f]{64}\.json")
 QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@2.0"
-CONTEXT_FORMAT = "execution-context@3.1"
+CONTEXT_FORMAT = "execution-context@4.0"
 RETIRED_STORE_FORMATS = frozenset({"result@1", "execution-context@1", "execution-context@2"})
 """Store member formats 2.x no longer reads, as `<name>@<major>`."""
 STORE_MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-store-formats"
@@ -309,7 +309,7 @@ def key_record(key: LogicalKey) -> object:
 
 
 def context_record(context: ExecutionContext) -> dict[str, object]:
-    """Return `context` as an `execution-context@3.1` record: its format tag and its fields."""
+    """Return `context` as an `execution-context@4.0` record: its format tag and its fields."""
     return {"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}
 
 
@@ -903,7 +903,7 @@ class ResultStore:
     def collect(self, now: float | None = None) -> int:
         """Remove quarantined entries and staging directories older than the policy's ages; return how many.
 
-        Objects set aside in place (`<uuid>` under the root, `store@5/`, a prefix or a key, beside what
+        Objects set aside in place (`<uuid>` under the root, `store@6/`, a prefix or a key, beside what
         they displaced) count as quarantined. Ages are measured from each object's mtime to `now`, which
         defaults to the storage's own clock (`StorageDir.fs_now` on `root`). Only uuid-named children are
         removed, through `remove_owned`; no directory below `root` is reached through a symlink. A failure

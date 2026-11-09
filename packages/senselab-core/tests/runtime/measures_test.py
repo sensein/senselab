@@ -31,7 +31,7 @@ KEY = LogicalKey(
     backend_params={"dtype": "float16"},
     inputs={},
 )
-ENV_FIELDS = {**ENV.model_dump(), "driver": {"torch_index": "https://download.pytorch.org/whl/cu128"}}
+ENV_FIELDS = {**ENV.model_dump(), "driver": {"torch_build": "cu128"}}
 OBSERVATION = Observation.model_validate(
     {
         "probe": None,
@@ -99,28 +99,18 @@ def test_the_formation_is_read_from_the_placement() -> None:
 @pytest.mark.logic
 def test_units_differing_only_in_wheel_set_have_different_measures() -> None:
     """An env rebuilt on another torch index changes the wheel set, and the old row no longer answers for it."""
-    rebuilt = {**ENV_FIELDS, "wheel_set": "f" * 64, "driver": {"torch_index": "https://download.pytorch.org/whl/cu121"}}
+    rebuilt = {**ENV_FIELDS, "wheel_set": "f" * 64, "driver": {"torch_build": "cu121"}}
     assert _unit().digest() != _unit(env=rebuilt).digest()
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize(
-    ("index", "build"),
-    [
-        ("https://download.pytorch.org/whl/cu128", "cu128"),
-        ("https://download.pytorch.org/whl/cpu", "cpu"),
-        ("https://deploy:s3cret@mirror.corp.internal/pytorch/cu121/", "cu121"),
-        ("https://deploy:s3cret@mirror.corp.internal/simple", "other"),
-    ],
-)
-def test_the_unit_holds_the_torch_build_never_the_index_url(index: str, build: str) -> None:
-    """The index URL may carry userinfo or an internal host; neither reaches the unit, its JSON or its digest input."""
-    unit = _unit(env={**ENV_FIELDS, "driver": {"torch_index": index}})
-    text = unit.model_dump_json()
-    assert unit.env.driver == {"torch_build": build}
-    assert "s3cret" not in text and "internal" not in text and "://" not in text
-    other = _unit(env={**ENV_FIELDS, "driver": {"torch_index": "https://other.example/whl/cu999"}})
-    assert unit.digest() != other.digest()
+def test_a_measure_refuses_an_index_url_in_its_driver() -> None:
+    """A driver holds the torch build; an index URL, with its userinfo or internal host, is outside its domain."""
+    with pytest.raises(ValueError, match="holds"):
+        _unit(
+            env={**ENV_FIELDS, "driver": {"torch_index": "https://deploy:s3cret@mirror.corp.internal/pytorch/cu121/"}}
+        )
+    assert _unit().digest() != _unit(env={**ENV_FIELDS, "driver": {"torch_build": "cu999"}}).digest()
 
 
 @pytest.mark.logic
@@ -183,7 +173,7 @@ L40S = GpuInfo(
 
 def _measured(declared: dict[str, str], grant: HardwareGrant, environ: dict[str, str]) -> str:
     started = launch("/env/bin/python", declared)
-    driver = {"torch_index": "https://download.pytorch.org/whl/cu128", "launch_env": started.digest}
+    driver = {"torch_build": "cu128", "launch_env": started.digest}
     hosts = _host(gpus=(L40S, replace(L40S, index=1, uuid="GPU-b")))
     hardware = HardwareClass.from_report(hosts, grant, environ=environ)
     fields = {**ENV_FIELDS, "driver": driver, "threads": started.measured}
@@ -455,7 +445,7 @@ ATTESTATION = Attestation(
     config_digest="f" * 64,
 )
 SERVER_DRIVER = {
-    "torch_index": "https://download.pytorch.org/whl/cu128",
+    "torch_build": "cu128",
     "engine": "vllm",
     **ATTESTATION.driver(),
     "launch_env": "9" * 64,

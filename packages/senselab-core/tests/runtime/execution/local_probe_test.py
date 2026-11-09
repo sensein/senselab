@@ -44,7 +44,8 @@ TEXTY = scoring("pool_probe_test.texty").model_copy(update={"inputs": {"text": "
 
 def _opener(backend, profile):
     base = host_env(backend, profile)
-    return EnvHandle(base.python, platform.python_version(), base.lock_sha, os.environ["PROBE_WHEEL_SET"], None)
+    wheel_set = os.environ["PROBE_WHEEL_SET"]
+    return EnvHandle(base.python, platform.python_version(), base.lock_sha, wheel_set, base.torch_index)
 
 
 CATALOGUE = Catalogue.load("format: catalogue@2.0\\nentries: []\\n")
