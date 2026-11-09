@@ -88,6 +88,14 @@ UX-50) governs; this amendment brings the decision in line.
   audience. "Publishable by default" and the export refusal of paths and `sub-`/`ses-` labels describe the
   rule for a public audience, not for every recipient.
 
+## Amendment 2026-11-09: placement records (Phase 3 Task 20R-12)
+
+- The writers of a run's readable part are unchanged: the run's event log carries the `placement` events. Partitions,
+  accounts, node names (as written and as expanded from `${VAR}`), the site hook's `why` and the notes are rendered
+  under the audience rule by one helper before they are stored or raised, for every source of the value (profile,
+  override, hook answer), a value a later layer replaced included, as is the text of `SiteRefused`; both render from
+  one set of names collected as the layers are applied. The operator's text goes to the log.
+
 ## Amendment 2026-11-08: the host token's guarantee (Phase 3 Task 20R-S1)
 
 - `host_token()` is a digest of a random per-host, per-boot value (Linux boot id, macOS boot session uuid, else a

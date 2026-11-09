@@ -281,6 +281,47 @@ current one.
   fails the probe is refused (sshfs, SMB and some object-store mounts).
 - **Mixed placement** of laptop and cluster pools requires a store both can reach; otherwise the
   laptop plans and submits only.
+- **Placement values and the site hook** ([calibration-probe.md](calibration-probe.md) §10, T20R-12).
+  senselab runs no scheduler query: it never calls `sinfo`, `squeue` (beyond listing its own jobs),
+  `sacctmgr`, `scontrol` or `sbatch --test-only` to choose a value. `Slurm` runs only its declared
+  clients (`sbatch`, `squeue`, `scancel`) and raises `UndeclaredClient` for any other command. A class's partition, time, worker
+  cap and excluded nodes come from three layers in order: the profile (`substrate.exclude_nodes` is
+  the profile's layer of the excluded nodes; senselab adds none), the explicit override
+  (`sl.plan(..., placement=mapping_or_yaml)`, `senselab plan|coordinate --placement FILE`), then the
+  hook's answer. `Plan.placement_request()` and `senselab plan RUN --json` give each class's needs as
+  `placement-request@1.0`, read from existing measures and starting nothing.
+  - **One placer, every substrate.** The pool owns one `Placer` (built from the first admitted plan's
+    overrides and hook) and reads each class's worker cap from it (`Pool.granted`); `Slurm` reads the
+    partition, time and excluded nodes from the same object. A substrate that starts no scheduler jobs
+    (`Local`, `InProcess`) records the values with a note that they are recorded, not applied, so no
+    explicit value is silently ignored.
+  - **The hook** is `substrate.placement_hook` (`module:callable`), replaced by the run's
+    `placement_hook` (`sl.plan(..., placement_hook=)`, `--placement-hook`). It is called once per class
+    per epoch, before that class's first worker is submitted, with the request narrowed to the class,
+    bounded by `substrate.placement_hook_s` on the injected `Clock`. The request is built per epoch from
+    the input values the pool bound, never by binding inputs again.
+  - **Validation** (`check_answer`): a time below `time_per_worker_s` (below `time_floor_s` when that
+    is unmeasured, accepted and noted when both are) and a `max_workers` below 1 or above the
+    request's `workers_max` raise `PlacementAnswerRefused`, naming the class, field and both values,
+    before any submission. A hook that raises, answers with another type or outlasts its bound is
+    `PlacementHookFailed`: the class keeps its explicit and profile values and the event says so.
+    A hook path that does not import is `PlacementHookFailed` at start, not a fallback.
+  - **Events.** A `placement` event is a run-scoped kind of `run-event@2.0`, appended to the epoch's
+    `EventLog` (no node), one per class per epoch: the class's needs, the answer, the hook's path (and
+    whether it is importable) and distribution version, the verdict (`no-hook`, `accepted`, `refused`,
+    `failed`), the values used with the layer that set each, and the `--exclude` list submitted.
+    Partitions, accounts, nodes (as written and as expanded), the answer's `why`, the request's
+    unmeasured reasons and the notes render under the reader's audience rule (`rendered`, one helper
+    shared with `SiteRefused`) from one set of names, `ClassPlacement.names`: the `Placer` collects every
+    layer's partitions and excluded nodes (profile, override, request, hook answer), a replaced one too,
+    and the account; the operator's text goes to the log. `senselab status` and `senselab explain` print them from the log; status
+    ignores them. The closing actuals record (T20R-7b) is a further `placement`-scoped event appended
+    to the same log.
+  - **A site's refusal.** An `sbatch` that exits with a reply raises `SiteRefused` (a `SlurmError`): the
+    class, the `sbatch` line, the site's message and the layer of each value, rendered from the
+    class's `ClassPlacement.names` under the audience rule, naming `--placement` and the hook as the inputs that change it. It is counted against its
+    class (`Fleet`), so the class is held and others keep starting; `resume(..., placement=)`
+    continues from the store. senselab never rewrites the request.
 
 ### 3.7 Result store at scale
 - **Store budgets.** The store has its own per-item budgets for files and stats (P-33). The scale

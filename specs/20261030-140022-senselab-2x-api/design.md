@@ -346,6 +346,9 @@ run.status(); run.wait(); rs = run.results(); run.cancel()
 rs.to_frame()              # entities as index
 sl.run(p, ds, ...)         # = sl.plan(...).run(); task or pipeline
 sl.use(execution="laptop") # session default
+plan = sl.plan(p, ds, placement="site.yaml", placement_hook="site.hooks:place")
+plan.placement_request()   # placement-request@1.0: each class's needs; starts nothing
+sl.resume(plan, placement="fixed.yaml")  # a run a site refused, continued from the store
 ```
 
 - **A plan has two parts** ([ADR-004](adr/ADR-004-logical-plan.md)).

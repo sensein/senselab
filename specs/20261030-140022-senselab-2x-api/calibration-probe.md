@@ -799,10 +799,13 @@ For each resource class a run will use, `plan.explain()` and `senselab plan --js
   unmeasured), `cpus`, `mem_bytes`;
 - `workers`: the count `size` wants (§6.2), and `workers_max`, the class's `max_workers`;
 - `time_per_worker_s`: the longest a worker needs: its largest item's upper-predicted seconds plus the load, held
-  within the class's `time_s`;
+  within the class's `time_s`; None when any node's time is unmeasured, or its request fit is;
+- `time_floor_s`: given only when `time_per_worker_s` is None: the largest load plus per-item cost of the class's
+  nodes whose load is measured, None otherwise (the lower bound §10.3 checks an answer's time against);
 - `wall_s` and `gpu_hours` for the class's work, from §6.6;
 - for each figure, `measured` or `unmeasured` with the reason (UX-31);
-- the current placement values (`partition`, `time_s`, `max_workers`) from the profile and run overrides.
+- the current placement values (`partition`, `time_s`, `max_workers`) from the profile and run overrides, each with the
+  layer that set it.
 
 It is data, the same figures `explain()` prints. Producing it starts no computation and downloads no model.
 
@@ -833,8 +836,13 @@ override file, then the hook's answer (§10.3). The plan records the value it us
   worker unable to finish an item, and never asks for more than the run needs.
 - **A hook that fails or times out** is reported (`PlacementHookFailed`, chaining its error) and the run falls back
   to the explicit and profile values; the event says so. The fallback is logged, not silent.
-- **Recorded.** One `placement` event per class per epoch holds the request, the answer, the callable's import path
-  and the version of its distribution (`importlib.metadata`), the validation verdict, and the values used. Its request
+- **A hook that cannot be imported** (a malformed or unresolvable `module:callable`) is `PlacementHookFailed` when
+  the run starts, not a fallback: a misconfigured hook fails loudly. A callable given as an object that no import
+  can resolve (a lambda, a nested function) is recorded with `importable: false`.
+- **Recorded.** One `placement` event per class per epoch, a run-scoped kind of `run-event@2.0` in the epoch's event
+  log, holds the request, the answer, the callable's path and the version of its distribution
+  (`importlib.metadata`), the validation verdict, the values used with the layer of each, and the `--exclude` list
+  submitted. The request is built per epoch from the input values the pool bound. Its request
   values (partition, account) and `why` render under the reader's audience rule, like any error text (Terms, UX-45).
 - **Actuals beside the estimate.** At the epoch's end the event gains a closing record per class: the actual wall
   time, GPU hours (from worker lifetimes) and peak device memory (from the epoch's `Observation`s) of the class's work, beside the request's

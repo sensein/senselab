@@ -480,6 +480,15 @@ profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`)
   [<element port-output identities, in element order>])`. A logical key's input is now `content:`, `output:` or
   `gather:` and 64 hex digits.
 
+## Amendment 2026-11-09: `run-event@2.0` carries run-scoped placement (Phase 3 Task 20R-12)
+
+- **`run-event@2.0`** replaces `run-event@1.0` outright (pre-release: H-R2; no dual reader, nothing in 2.x is released).
+  `node` is `NodeId | null`: required for every job kind, null for the run-scoped kind `placement`. A `placement`
+  event carries `placement: PlacementRecord` (`resource_class`, `request: ClassNeeds | null`, `answer`, `hook:
+  {path, version, importable} | null`, `verdict: no-hook | accepted | refused | failed`, `note`, `used`
+  (partition, time_s, max_workers, the layer of each, exclude), `exclude`) and no node, job, key, fault, failure or
+  output. `status_from` ignores it. `placement-event@1.0` is not a format.
+
 ## Amendment 2026-11-04: run events (Phase 3 Task 10)
 
 - **`run-event@1.0`** (new). One state change of one job, a line of `<run>/events/<writer uuid>.jsonl` (a writer appends
