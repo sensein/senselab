@@ -271,11 +271,11 @@ Owner: "aren't timing tests very brittle since they are dependent on resources t
   the runner's load, CPU and disk, so the test fails without a code change.
 - Logic that depends on time passing (leases going stale, peer waits, presence refresh, retries, dead-holder
   detection, per-request wall attribution) is tested with an injected clock: the code reads time through a clock
-  passed in, production passes the real monotonic clock, and the test advances it. Use it where the logic would
-  otherwise need real waits or where misattributed times change a decision; do not thread a clock where the time
-  logic is trivial.
+  passed in, production passes the real monotonic clock, and the test advances it. Avoiding a brittle test
+  overrides the cost of the seam: any test whose outcome depends on real elapsed time gets an injected clock or is
+  removed (owner: "brittleness should still override").
 - Real durations, throughput and contention are measured only on controlled hardware (the ORCD benchmark and
   ladder runs on typed resources) and are recorded, not used as pass/fail gates.
 - A complexity bound is asserted by counting operations at two sizes, not by timing them.
-- Existing tests that assert walls or rely on sleeps with slack are converted when their area is next touched;
-  the sweep is a Task 22/23 item.
+- Existing tests that assert walls or rely on sleeps with slack are converted now, in a dedicated task, not left
+  until their area is next touched.
