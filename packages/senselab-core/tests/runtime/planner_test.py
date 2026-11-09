@@ -15,18 +15,33 @@ from senselab_core.kernel.identity import ReusePolicy
 from senselab_core.kernel.license import License
 from senselab_core.kernel.plan import plan_hash, slice_identity
 from senselab_core.runtime import planner
+from senselab_core.runtime.calibration import (
+    Estimate,
+    EstimateSource,
+    LengthProfile,
+    MemoryFit,
+    Observation,
+    RequestFit,
+    StratumBatch,
+)
 from senselab_core.runtime.call import Packaged, RunConfig, TaskCall, use_packaged
 from senselab_core.runtime.call import packaged as packaged_now
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.in_process import InProcess
+from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.keys import MissingProfileSlice
 from senselab_core.runtime.licenses import LicensePolicy, LicenseRefused, license_record
+from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.placement import BackendParamsMismatch, MemoryCapExceeded, place_nodes, plan_cost
 from senselab_core.runtime.planner import CALL_NODE, InvalidGraph, RecordBinding, UnmappedOutput, plan, resolve
 from senselab_core.runtime.profiles import ExecutionProfile, NoDevice
+from senselab_core.runtime.resources import Batched, ClassMeasure, Measured, ResourceRow, ResourceTable
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
+from senselab_core.runtime.store import ResultStore
+from senselab_core.testing.calibration_samples import UNIT, observation
 from senselab_core.testing.placement_samples import resource_table
 
 TOY = "toyorg/toy"
@@ -496,9 +511,9 @@ def test_explain_lists_every_placement_field() -> None:
     """`explain` names the plan hash, env builds and cost, and per node every placement field and its licenses."""
     placed = _plan(_call(backend_params={"beta": {}}), _records("x"))
     text = placed.explain()
-    for field in (placed.hash, "envs to build: none", "cost: wall unmeasured", "unmeasured: call"):
+    for field in (placed.hash, "envs to build: none", "cost: download unmeasured"):
         assert field in text, field
-    node = text.splitlines()[-1]
+    node = next(line for line in text.splitlines() if line.startswith("node call"))
     for field in (
         "node call",
         "backend 'alpha' 1",
@@ -510,7 +525,6 @@ def test_explain_lists_every_placement_field() -> None:
         "partition none",
         f"model {TOY}@{PIN} MIT",
         "env of backend planner_test.score/alpha no record",
-        "cost unmeasured",
         "first declared",
     ):
         assert field in node, field
@@ -616,3 +630,171 @@ def test_a_map_over_a_node_output_is_refused_at_plan_time() -> None:
     with pytest.raises(UnmappedOutput, match="has no identity yet") as raised:
         resolve(graph, _records("x"), config=RunConfig(), bind={"text": "text"}, inputs={"seed": 1})
     assert (raised.value.node, raised.value.source) == ("n", "s.items")
+
+
+_GB = 10**9
+
+
+def _measured(spread: float | None = 0.1, resident: int = 10 * _GB) -> Estimate:
+    return Estimate(
+        status="measured",
+        unit_kind="audio_s",
+        load_s=2.0,
+        load_n=3,
+        item_s=0.05,
+        item_n=3,
+        single=RequestFit(batch=1, r=0.5, u=0.05, n=6, spread=spread, lo=2.0, hi=1000.0),
+        batch=(StratumBatch(lo=2.0, hi=1000.0, batch=1),),
+        device=MemoryFit(resident=resident, m0=0.0, m1=1e7, n=6),
+        source=EstimateSource(probe_ids=("p1", "p2"), observations=12),
+    )
+
+
+class _Reads:
+    """A measures root that records every call: `explain` may read observations and do nothing else."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
+        self.calls.append("observations")
+        return (observation(),)
+
+
+class _NoTable:
+    def get(self, unit: MeasureUnit) -> None:
+        return None
+
+
+def _gpu_plan(cap: int | None = None) -> planner.Plan:
+    gpu = {} if cap is None else {"memory_cap_bytes": cap}
+    profile = ExecutionProfile.load("laptop", {"resource_classes": {"gpu": gpu}})
+    return _plan(_call(GPU_ONLY), _records("x"), hardware=GPU, execution=profile)
+
+
+@pytest.mark.logic
+def test_explain_labels_each_figure_measured_or_unmeasured_and_never_probes() -> None:
+    """Each sized figure says `measured` with its source or `unmeasured` with why; nothing is probed."""
+    placed = _gpu_plan()
+    root = _Reads()
+    source = MeasureSource([root], _NoTable(), estimate=lambda unit, observed: _measured())
+    work = {CALL_NODE: LengthProfile(units=(60.0, 120.0))}
+    text = placed.explain(measures=source, units=lambda node: UNIT, lengths=work, hardware=GPU)
+    sizing = next(line for line in text.splitlines() if line.startswith("  sizing:"))
+    for figure in ("wall ", "gpu ", "peak device memory "):
+        assert figure in sizing
+    assert sizing.count("measured: 2 probes, 12 observations") == 3 and "unmeasured" not in sizing
+    assert root.calls == ["observations"]
+    for kwargs, why in (
+        ({}, "no measure source given"),
+        ({"measures": source}, "no measure unit for the node"),
+        ({"measures": source, "units": lambda node: UNIT}, "lengths unknown"),
+        (
+            {
+                "measures": MeasureSource([root], _NoTable(), estimate=lambda u, o: _measured()),
+                "units": lambda n: UNIT,
+                "lengths": {CALL_NODE: LengthProfile(units=(None,))},
+            },
+            "a length is unknown",
+        ),
+    ):
+        text = placed.explain(**kwargs)
+        line = next(line for line in text.splitlines() if line.startswith("  sizing:"))
+        assert f"wall unmeasured ({why}" in line and "gpu unmeasured" in line and "(measured:" not in line
+    assert not any(
+        "measured:" in line for line in _gpu_plan().explain(measures=source).splitlines() if "sizing" in line
+    )
+
+
+@pytest.mark.logic
+def test_explain_states_the_waits_on_another_run() -> None:
+    """The text names where measures are written, the lease takeover delay and the wait for a peer's probe."""
+    placed = _plan(_call(), _records("x"))
+    text = placed.explain()
+    profile = placed.execution
+    assert profile is not None
+    assert "measures are written to the first writable of:" in text and "2x/measures" in text
+    assert f"a lease is taken over after {profile.lease.stale_after_s:g} s" in text
+    assert f"waited for up to {profile.peer_wait_s:g} s" in text
+    assert text.splitlines()[-1].startswith("waits on another run")
+
+
+@pytest.mark.logic
+def test_explain_flags_a_job_whose_batch_one_peak_exceeds_the_cap() -> None:
+    """A job whose `resident + m0 + m1·L` passes the class's memory cap is flagged with the bytes it needs."""
+    cap = 12 * _GB
+    source = MeasureSource([_Reads()], _NoTable(), estimate=lambda unit, observed: _measured())
+    work = {CALL_NODE: LengthProfile(units=(100.0, 500.0))}
+    text = _gpu_plan(cap).explain(measures=source, units=lambda node: UNIT, lengths=work, hardware=GPU)
+    needed = 10 * _GB + 1e7 * 500.0
+    assert (
+        f"needs {round(needed)} bytes of device memory at batch 1 for its longest job; class gpu caps it at {cap}"
+        in text
+    )
+    short = {CALL_NODE: LengthProfile(units=(100.0,))}
+    fits = _gpu_plan(cap).explain(measures=source, units=lambda node: UNIT, lengths=short, hardware=GPU)
+    assert "needs " not in fits
+
+
+def _with_rows(batched_s: float = 0.1) -> ExecutionProfile:
+    measure = ClassMeasure(
+        load_s=2.5,
+        claim_s=0.01,
+        resident_bytes=1024,
+        peak_memory_bytes=1280,
+        s_per_input_s=0.1,
+        input_s_per_item=5.0,
+        batched=Batched(batch_size=64, s_per_input_s=batched_s),
+        measured=Measured(sha="1" * 40, jobs=("1",)),
+    )
+    row = ResourceRow(id=TOY, revision=PIN, download_bytes=None, classes={"cpu": measure})
+    table = ResourceTable(task=SCORE.name, backend="alpha", rows=(row,))
+    _use(catalogue=Catalogue(entries=CATALOGUE.entries, resource_tables=(table,)))
+    return ExecutionProfile.load("laptop", {"resource_classes": {"cpu": {"mem_bytes": 10_000}}})
+
+
+@pytest.mark.logic
+def test_a_unit_with_packaged_rows_batches_in_process(tmp_path: Path) -> None:
+    """The executor sizes a node's fragment from `size` over its packaged row: many jobs where it batches, else one."""
+    profile = _with_rows()
+    placed = _plan(_call(), _records("x", "y"), execution=profile)
+    assert placed.placement.nodes[CALL_NODE].batch_size == 1
+    executor = InProcess(store=ResultStore(tmp_path / "a"), profile=profile, workers=WorkerSet(1))
+    assert executor.fragment_size(placed, CALL_NODE) == profile.pool.quantum_items
+    slower = _with_rows(batched_s=0.2)
+    unbatched = _plan(_call(), _records("x"), execution=slower)
+    assert (
+        InProcess(store=ResultStore(tmp_path / "b"), profile=slower, workers=WorkerSet(1)).fragment_size(
+            unbatched, CALL_NODE
+        )
+        == 1
+    )
+
+
+@pytest.mark.logic
+def test_explain_prints_no_plan_cost_from_a_second_estimator() -> None:
+    """The cost line holds only what no `size` reads, the download; wall time and GPU hours are the nodes' sizing."""
+    _with_rows()
+    text = _plan(_call(), _records("x")).explain()
+    assert "cost: download" in text and "cost: wall" not in text and "; cost " not in text
+
+
+@pytest.mark.logic
+def test_a_gpu_without_a_class_cap_is_flagged_against_the_device_it_sees() -> None:
+    """A class with no `memory_cap_bytes` is judged against the seen device's memory."""
+    source = MeasureSource([_Reads()], _NoTable(), estimate=lambda unit, observed: _measured(resident=70 * _GB))
+    work = {CALL_NODE: LengthProfile(units=(100.0,))}
+    text = _gpu_plan().explain(measures=source, units=lambda node: UNIT, lengths=work, hardware=GPU)
+    assert f"caps it at {2**36} bytes" in text
+    roomy = MeasureSource([_Reads()], _NoTable(), estimate=lambda unit, observed: _measured())
+    assert "needs " not in _gpu_plan().explain(measures=roomy, units=lambda node: UNIT, lengths=work, hardware=GPU)
+
+
+@pytest.mark.logic
+def test_a_gpu_node_with_a_host_only_estimate_prints_device_memory_unmeasured() -> None:
+    """A device grant never reads the host fit: peak device memory is unmeasured, not the host's figure."""
+    host_only = _measured().model_copy(update={"device": None, "host": MemoryFit(resident=_GB, m0=0.0, m1=1e6, n=6)})
+    source = MeasureSource([_Reads()], _NoTable(), estimate=lambda unit, observed: host_only)
+    work = {CALL_NODE: LengthProfile(units=(60.0,))}
+    text = _gpu_plan().explain(measures=source, units=lambda node: UNIT, lengths=work, hardware=GPU)
+    assert "peak device memory unmeasured (memory unmeasured)" in text

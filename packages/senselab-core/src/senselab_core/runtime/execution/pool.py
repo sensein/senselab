@@ -76,12 +76,12 @@ from senselab_core.runtime.sizing import (
     Grant,
     Measure,
     Measures,
+    RowSizing,
     Sample,
-    Sizing,
     calibrated,
     code_version,
     measure_of,
-    size,
+    size_row,
 )
 from senselab_core.runtime.store import ResultStore
 
@@ -432,9 +432,9 @@ class Pool:
         resource = self.profile.resource_classes[class_of(queue)]
         return Grant.of(resource, self.profile.pool, on_device=on_device, devices=devices)
 
-    def _sizing(self, queue: str, measure: Measure, work: int = 0) -> Sizing:
+    def _sizing(self, queue: str, measure: Measure, work: int = 0) -> RowSizing:
         """Return the sizing of `measure` on `queue`'s resource class for `work` waiting jobs."""
-        return size(measure, self._grant(queue, on_device=measure.on_device), self.profile.sizing, work=work)
+        return size_row(measure, self._grant(queue, on_device=measure.on_device), self.profile.sizing, work=work)
 
     def _calibration_part(
         self, unit: Unit, queue: str, fragment: PlanFragment
@@ -616,6 +616,9 @@ class Pool:
             for job, key in zip(flight.fragment.jobs, keys, strict=True):
                 self.events.record("queued", job.node, job=job, key=key, env=flight.fragment.placement.env)
         return WorkersBroken(flight.queue, found.resource_class, found.failures, found.reason)
+
+    def fragment_size(self, plan: Plan, node: str) -> None:
+        """Return None: the pool splits fragments into its own items."""
 
     def submit(self, fragment: PlanFragment) -> Handle:
         """Put `fragment` on the queue of its resource class, as quantum-sized items, and return its handle.

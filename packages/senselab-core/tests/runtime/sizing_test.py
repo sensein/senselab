@@ -18,7 +18,7 @@ from senselab_core.runtime.resources import (
     Unit,
     write_row,
 )
-from senselab_core.runtime.sizing import Grant, Measure, Measures, Sample, calibrated, measure_of, size
+from senselab_core.runtime.sizing import Grant, Measure, Measures, Sample, calibrated, measure_of, size_row
 
 SETTINGS = SizingSettings(
     load_share=0.05,
@@ -67,7 +67,7 @@ settings = st.builds(
 @given(measure=measures, grant=grants, config=settings, work=st.integers(0, 10**6))
 def test_sizing_keeps_every_bound(measure: Measure, grant: Grant, config: SizingSettings, work: int) -> None:
     """Quantum within its ceilings and the load share, batch within memory, workers within the work and the grant."""
-    sized = size(measure, grant, config, work=work)
+    sized = size_row(measure, grant, config, work=work)
     fixed = measure.load_s + measure.claim_s
     per, q, eps = measure.s_per_item, sized.quantum_items, 1e-9
     share = fixed / config.load_share
@@ -100,19 +100,19 @@ def test_the_quantum_holds_the_load_and_claim_to_their_share_and_workers_meet_th
     """
     measure = Measure(load_s=1.9, claim_s=0.1, resident_bytes=1000, bytes_per_item=100, s_per_item=0.1)
     grant = Grant(max_workers=32, memory_bytes=10_000, quantum_items=1000, quantum_s=3600)
-    sized = size(measure, grant, SETTINGS, work=4000)
+    sized = size_row(measure, grant, SETTINGS, work=4000)
     assert (sized.quantum_items, sized.workers) == (400, 7) and sized.quantum_s == pytest.approx(42.0)
     assert sized.memory_batch == (0.9 * 10_000 - 1000) // 100 and sized.batch_size == 1
     proven = Measure(**{**measure.model_dump(), "batched_s_per_item": 0.1, "batched_batch_size": 16})
-    assert sized.memory_batch == 80 and size(proven, grant, SETTINGS).batch_size == 16
+    assert sized.memory_batch == 80 and size_row(proven, grant, SETTINGS).batch_size == 16
     wide = proven.model_copy(update={"batched_batch_size": 200})
-    assert size(wide, grant, SETTINGS).batch_size == sized.memory_batch
+    assert size_row(wide, grant, SETTINGS).batch_size == sized.memory_batch
     with pytest.raises(ValidationError, match="both"):
         Measure(**{**measure.model_dump(), "batched_s_per_item": 0.1})
-    assert size(proven, grant, SETTINGS, batchable=False).batch_size == 1
-    assert size(measure, grant.model_copy(update={"quantum_s": 12.0}), SETTINGS).quantum_items == 100
+    assert size_row(proven, grant, SETTINGS, batchable=False).batch_size == 1
+    assert size_row(measure, grant.model_copy(update={"quantum_s": 12.0}), SETTINGS).quantum_items == 100
     free = measure.model_copy(update={"load_s": 0.0, "claim_s": 0.0})
-    assert size(free, grant, SETTINGS).quantum_items == grant.quantum_items
+    assert size_row(free, grant, SETTINGS).quantum_items == grant.quantum_items
 
 
 @pytest.mark.logic
@@ -128,6 +128,7 @@ def test_a_grant_takes_device_memory_on_a_device_and_host_memory_otherwise() -> 
         "quantum_items": 100,
         "quantum_s": 60,
         "devices": None,
+        "on_device": True,
     }
     assert Grant.of(capped, pool, devices=2).devices == 2
     assert Grant.of(capped, pool).memory_bytes == 2**36
@@ -157,12 +158,12 @@ def test_workers_on_shared_devices_are_bounded_by_device_memory() -> None:
     )
     small = big.model_copy(update={"resident_bytes": 25 * 10**9})
     host = big.model_copy(update={"on_device": False})
-    assert size(big, gpu, SETTINGS, work=100).workers == 1
-    assert size(small, gpu, SETTINGS, work=100).workers == 2
-    assert size(host, gpu, SETTINGS, work=100).workers == 1
-    assert size(big, gpu.model_copy(update={"devices": 3}), SETTINGS, work=100).workers == 3
-    assert size(big, gpu.model_copy(update={"devices": 0}), SETTINGS, work=100).workers == 0
-    assert size(big, gpu.model_copy(update={"devices": None}), SETTINGS, work=100).workers == 8
+    assert size_row(big, gpu, SETTINGS, work=100).workers == 1
+    assert size_row(small, gpu, SETTINGS, work=100).workers == 2
+    assert size_row(host, gpu, SETTINGS, work=100).workers == 1
+    assert size_row(big, gpu.model_copy(update={"devices": 3}), SETTINGS, work=100).workers == 3
+    assert size_row(big, gpu.model_copy(update={"devices": 0}), SETTINGS, work=100).workers == 0
+    assert size_row(big, gpu.model_copy(update={"devices": None}), SETTINGS, work=100).workers == 8
     assert gpu.worker_bound(None) == 1
 
 
@@ -207,7 +208,7 @@ def test_calibrated_separates_the_load_and_the_model_from_the_items() -> None:
     unmeasured = measure_of(unread)
     assert (unmeasured.resident_bytes, unmeasured.bytes_per_item) == (None, None)
     grant = Grant(max_workers=1, memory_bytes=2**36, quantum_items=100, quantum_s=300)
-    assert size(unmeasured, grant, SETTINGS).batch_size == 1
+    assert size_row(unmeasured, grant, SETTINGS).batch_size == 1
     read = [
         s.model_copy(update={"device_baseline_bytes": 0, "device_bytes": used})
         for s, used in ((_sample(10, cold=True), 1000), (_sample(2), 1010))
@@ -275,4 +276,4 @@ def test_items_measured_slower_in_a_batch_are_sized_one_per_request(batched_wall
     measure = measure_of(found)
     assert (measure.s_per_item, measure.batched_s_per_item, measure.batched_batch_size) == (2.0, batched_wall, 4)
     grant = Grant(max_workers=1, memory_bytes=10_000_000, quantum_items=4, quantum_s=3600)
-    assert size(measure, grant, SETTINGS).batch_size == batch
+    assert size_row(measure, grant, SETTINGS).batch_size == batch

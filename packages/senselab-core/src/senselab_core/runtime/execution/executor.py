@@ -324,6 +324,9 @@ class Executor(Protocol):
     def release(self, admission: Admission) -> None:
         """Let go of `admission` and its values."""
 
+    def fragment_size(self, plan: Plan, node: str) -> int | None:
+        """Return the most jobs of `node` one fragment holds; None for an executor that splits fragments."""
+
     def submit(self, fragment: PlanFragment) -> Handle:
         """Take `fragment` and return its handle."""
 

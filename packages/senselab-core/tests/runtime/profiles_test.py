@@ -111,9 +111,9 @@ def test_profile_digest_not_in_key() -> None:
 
 
 @pytest.mark.logic
-def test_batch_size_is_sized_from_the_measure_and_not_in_key() -> None:
-    """The batch fills the memory headroom beside the resident model; 1 unmeasured or unknown; never in the key."""
-    registry = _registry(_backend("b1", "one"))
+def test_plan_time_never_sizes_a_gpu_batch_against_host_memory() -> None:
+    """A placement records batch 1 whatever the table holds: a GPU row's host pair never sizes a device batch."""
+    registry = _registry(_backend("b1", "one", devices=("cpu", "cuda")))
     measure = ClassMeasure(
         load_s=2.5,
         claim_s=0.01,
@@ -124,24 +124,18 @@ def test_batch_size_is_sized_from_the_measure_and_not_in_key() -> None:
         batched=Batched(batch_size=64, s_per_input_s=0.1),
         measured=Measured(sha="1" * 40, jobs=("1",)),
     )
-    row = ResourceRow(id="org/m", revision="a" * 40, download_bytes=None, classes={"cpu": measure})
+    row = ResourceRow(id="org/m", revision="a" * 40, download_bytes=None, classes={"cpu": measure, "gpu": measure})
     measured = Catalogue(entries=CAT.entries, resource_tables=(ResourceTable(task="t", backend="b1", rows=(row,)),))
-    host = HardwareInfo(cpu_count=1, memory_bytes=10_000, gpus=(), apple_silicon=False, platform="linux-x86_64")
+    big = HardwareInfo(cpu_count=1, memory_bytes=2**40, gpus=GPU.gpus, apple_silicon=False, platform="linux-x86_64")
     placements = [
-        resolve_execution(TASK, _entry(), _profile(), host, registry, CAT),
-        resolve_execution(TASK, _entry(), _profile(), host, registry, measured),
-        resolve_execution(TASK, _entry(), _profile(), None, registry, measured),
+        resolve_execution(TASK, _entry(), _profile(), hardware, registry, catalogue)
+        for hardware in (big, NO_GPU, None)
+        for catalogue in (CAT, measured)
     ]
-    batch = placements[1].batch_size
-    assert measure.resident_bytes is not None and measure.peak_memory_bytes is not None
-    room = _profile().sizing.memory_headroom * host.memory_bytes - measure.resident_bytes
-    per_item = measure.peak_memory_bytes - measure.resident_bytes
-    assert batch * per_item <= room < (batch + 1) * per_item
-    assert [p.batch_size for p in placements] == [1, batch, 1] and placements[1].record().batch_size == batch > 1
+    assert [p.batch_size for p in placements] == [1] * len(placements)
+    assert placements[1].device == "cuda" and placements[3].device == "cpu"
     call, _ = base_call(TASK, placements[0].backend)
-    keys = [build_key(call, p, BASE) for p in placements]
-    assert len({k.digest() for k in keys}) == 1 and all("batch_size" not in str(k.model_dump()) for k in keys)
-    assert len({p.backend_params.model_dump_json() for p in placements}) == 1 and "batch" not in str(call.params)
+    assert len({build_key(call, p, BASE).digest() for p in placements[:2]}) == 1
 
 
 @pytest.mark.logic

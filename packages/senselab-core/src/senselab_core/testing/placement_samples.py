@@ -25,7 +25,7 @@ from senselab_core.runtime.resources import (
     ResourceRow,
     ResourceTable,
 )
-from senselab_core.runtime.sizing import Grant, Measure, Sample, Sizing
+from senselab_core.runtime.sizing import Basis, Grant, Measure, RowSizing, Sample, Sizing
 
 Register = Callable[..., None]
 
@@ -69,6 +69,7 @@ def register_placement_samples(register: Register, license_: License) -> None:
     _register_resources(register)
     _register_settings(register)
     _register_sizing(register)
+    _register_sizings(register)
 
 
 def _register_kernel(register: Register, license_: License) -> None:
@@ -245,6 +246,30 @@ def _register_settings(register: Register) -> None:
         register(cls, lambda samples=samples: list(samples), invalid_updates=invalid)
 
 
+_BASIS = Basis(time=True, memory=False, batch=False, workers=True)
+
+
+def _register_sizings(register: Register) -> None:
+    classes: Mapping[type[Frozen], tuple[Sequence[Frozen], Sequence[Mapping[str, object]]]] = {
+        Basis: (
+            [
+                Basis(time=True, memory=True, batch=True, workers=True),
+                Basis(time=False, memory=False, batch=False, workers=False),
+            ],
+            [{"time": "maybe"}],
+        ),
+        Sizing: (
+            [
+                Sizing(cuts=((0, 3), (3, 4)), workers=2, predicted_s=(1.0, None, 2.5, 0.5), measured=_BASIS),
+                Sizing(cuts=(), workers=0, measured=Basis(time=False, memory=False, batch=False, workers=False)),
+            ],
+            [{"cuts": ((0,),)}, {"workers": -1}, {"ceiling": 0}],
+        ),
+    }
+    for cls, (samples, invalid) in classes.items():
+        register(cls, lambda samples=samples: list(samples), invalid_updates=invalid)
+
+
 def _register_sizing(register: Register) -> None:
     classes: Mapping[type[Frozen], tuple[Sequence[Frozen], Sequence[Mapping[str, object]]]] = {
         SizingSettings: (
@@ -289,10 +314,10 @@ def _register_sizing(register: Register) -> None:
             ],
             [{"max_workers": 0}, {"memory_bytes": 0}, {"quantum_s": 0}],
         ),
-        Sizing: (
+        RowSizing: (
             [
-                Sizing(batch_size=8, memory_batch=8, quantum_items=50, quantum_s=27.5, workers=4),
-                Sizing(batch_size=1, memory_batch=4, quantum_items=1, quantum_s=0, workers=0),
+                RowSizing(batch_size=8, memory_batch=8, quantum_items=50, quantum_s=27.5, workers=4),
+                RowSizing(batch_size=1, memory_batch=4, quantum_items=1, quantum_s=0, workers=0),
             ],
             [{"batch_size": 0}, {"memory_batch": 0}, {"workers": -1}],
         ),

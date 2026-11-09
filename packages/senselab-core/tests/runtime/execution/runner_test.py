@@ -17,6 +17,14 @@ from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams,
 from senselab_core.kernel.graph import Edge, Graph, Node, fan_out_issues
 from senselab_core.kernel.identity import InputIdentity, gather_identity, port_output_identity
 from senselab_core.kernel.license import License
+from senselab_core.runtime.calibration import (
+    Estimate,
+    EstimateSource,
+    MemoryFit,
+    Observation,
+    RequestFit,
+    StratumBatch,
+)
 from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
@@ -25,10 +33,13 @@ from senselab_core.runtime.execution.events import TERMINAL, EventLog, read_even
 from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status, follow
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.licenses import license_record
+from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.planner import Plan, UnmappedOutput, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
+from senselab_core.testing.calibration_samples import UNIT, observation
 from senselab_core.testing.interpreter import source_tree_python
 
 T = TypeVar("T")
@@ -103,10 +114,18 @@ class Recording:
         """Bind through `InProcess`."""
         self.inner.bind_epoch(epoch, events)
 
-    def __init__(self, store: ResultStore, profile: ExecutionProfile = PROFILE) -> None:
-        """Run on an `InProcess` executor over `store` under `profile`."""
+    def __init__(
+        self,
+        store: ResultStore,
+        profile: ExecutionProfile = PROFILE,
+        measures: MeasureSource | None = None,
+        units: Callable[[Placement], MeasureUnit | None] | None = None,
+    ) -> None:
+        """Run on an `InProcess` executor over `store` under `profile`, sized from `measures`."""
         self.store = store
-        self.inner = InProcess(store=store, profile=profile, run=RunConfig(), workers=WORKERS)
+        self.inner = InProcess(
+            store=store, profile=profile, run=RunConfig(), workers=WORKERS, measures=measures, units=units
+        )
         self.fragments: list[PlanFragment] = []
         self.telemetry: list[str | None] = []
 
@@ -117,6 +136,10 @@ class Recording:
     def release(self, admission: Admission) -> None:
         """Release through `InProcess`."""
         self.inner.release(admission)
+
+    def fragment_size(self, placed: Plan, node: str) -> int:
+        """Return the size `InProcess` gives."""
+        return self.inner.fragment_size(placed, node)
 
     def submit(self, fragment: PlanFragment) -> Handle:
         """Record `fragment` and the telemetry opt-out it is submitted under, and submit it."""
@@ -162,15 +185,45 @@ def _plan(
     return placed, {bind_input("x", "json", v)[0]: v for v in given}
 
 
-def _batched(placed: Plan, size: int) -> Plan:
-    nodes = {n: p.model_copy(update={"batch_size": size}) for n, p in placed.placement.nodes.items()}
-    return dataclasses.replace(placed, placement=placed.placement.model_copy(update={"nodes": nodes}))
+class _Root:
+    def observations(self, unit: MeasureUnit) -> Sequence[Observation]:
+        return (observation(),)
 
 
-def _run(
-    placed: Plan, values: Mapping[str, object], tmp_path: Path, profile: ExecutionProfile = PROFILE, **kw: object
+class _NoTable:
+    def get(self, unit: MeasureUnit) -> None:
+        return None
+
+
+def _batching() -> tuple[ExecutionProfile, MeasureSource]:
+    """A profile whose fragments hold two jobs, and a measure under which `size` batches them."""
+    profile = ExecutionProfile.load(
+        "laptop", {"devices": ["cpu"], "pool": {"quantum_items": 2}, "resource_classes": {"cpu": {"mem_bytes": 2**30}}}
+    )
+    estimate = Estimate(
+        status="measured",
+        unit_kind="audio_s",
+        load_s=1.0,
+        load_n=3,
+        item_s=0.01,
+        item_n=3,
+        single=RequestFit(batch=1, r=0.1, u=0.01, n=6, spread=0.1, lo=1.0, hi=10.0),
+        batch=(StratumBatch(lo=1.0, hi=10.0, batch=2),),
+        host=MemoryFit(resident=2**20, m0=0.0, m1=1.0, n=6),
+        source=EstimateSource(probe_ids=("p",), observations=6),
+    )
+    return profile, MeasureSource([_Root()], _NoTable(), estimate=lambda unit, observed: estimate)
+
+
+def _run(  # noqa: PLR0913 - the plan, values and directory, then the profile and what sizes the fragments
+    placed: Plan,
+    values: Mapping[str, object],
+    tmp_path: Path,
+    profile: ExecutionProfile = PROFILE,
+    measures: MeasureSource | None = None,
+    **kw: object,
 ) -> tuple[Any, Recording, list[Any]]:
-    executor = Recording(ResultStore(tmp_path / "store"), profile)
+    executor = Recording(ResultStore(tmp_path / "store"), profile, measures, lambda placement: UNIT)
     events = EventLog(tmp_path / "run", "a1", 1)
     work = tmp_path / "pydra"
     status = runner.PydraRunner(profile=profile, work_dir=work).run_plan(
@@ -201,9 +254,11 @@ ZIPPED_ROWS = [{"text": f"t{i}", "other": f"o{i}"} for i in range(3)]
 
 @pytest.mark.contract
 def test_map_node_submits_one_fragment_per_batch(tmp_path: Path) -> None:
-    """Five records at batch size 2: each mapped node is sent as fragments of 2, 2 and 1 jobs, every element once."""
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": f"t{i}"} for i in range(5)])
-    status, executor, _ = _run(_batched(placed, 2), values, tmp_path)
+    """Under a measure that batches two, five records go as fragments of 2, 2 and 1 jobs, every element once."""
+    profile, measures = _batching()
+    graph = _graph(CHAINED, CHAIN_EDGES, text="list[json]")
+    placed, values = _plan(graph, [{"text": f"t{i}"} for i in range(5)], profile=profile)
+    status, executor, _ = _run(placed, values, tmp_path, profile, measures)
     assert sorted(executor.sizes("a")) == [1, 2, 2]
     assert sum(executor.sizes("b")) == 5 and max(executor.sizes("b")) <= 2
     assert status.done and [r.job.element for r in status.results["b"]] == [(i,) for i in range(5)]

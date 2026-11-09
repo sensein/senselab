@@ -20,6 +20,7 @@ from senselab_core.kernel.graph import Edge, Graph, GraphIssue, Node, validate
 from senselab_core.kernel.identity import InputIdentity, ModelRef, ResolvedModel, ReusePolicy
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan, plan_hash
+from senselab_core.runtime.calibration import LengthProfile
 from senselab_core.runtime.call import (
     ITEM_ID,
     RunConfig,
@@ -32,9 +33,10 @@ from senselab_core.runtime.call import (
 )
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import record_bind, sourced_manifest
-from senselab_core.runtime.explain import explain
+from senselab_core.runtime.explain import explain, node_sizing, waits
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
+from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.placement import check_caps, check_licenses, node_licenses, place_nodes, plan_cost
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver, cache_root
@@ -376,12 +378,41 @@ class Plan:
 
         return start(self, executor, store=store)
 
-    def explain(self) -> str:
+    def explain(
+        self,
+        *,
+        measures: MeasureSource | None = None,
+        units: Callable[[str], MeasureUnit | None] | None = None,
+        lengths: Mapping[str, LengthProfile] | None = None,
+        hardware: HardwareInfo | None = None,
+    ) -> str:
         """Return, per node, the backend, stack, env, device, batch, resource class, partition, licenses and reason.
 
-        The first lines give the plan hash, the envs to build and the cost, naming what is unmeasured.
+        The first lines give the plan hash, the envs to build and the cost, naming what is unmeasured. With the plan's
+        profile, each node also gets the wall time, GPU hours and peak memory `size` gives it from the estimate
+        `measures.get(units(node))` reads (never a probe, a download or a worker start) over `lengths[node]`, each
+        labelled `measured` with its source or `unmeasured` with the reason, and a flag where a batch-1 request
+        exceeds the class's memory cap. The last lines name where measures are written and the waits on another run.
+        A node without a unit, an estimate or known lengths is unmeasured.
         """
-        return explain(self.hash, self.logical, self.placement)
+        profile = self.execution
+        if profile is None:
+            return explain(self.hash, self.logical, self.placement)
+        sizing = {}
+        for node_id, placed in self.placement.nodes.items():
+            unit = None if units is None else units(node_id)
+            estimate = None if unit is None or measures is None else measures.get(unit)
+            why = (
+                "no measure source given"
+                if measures is None
+                else "no measure unit for the node"
+                if unit is None
+                else "no estimate for its unit"
+            )
+            sizing[node_id] = node_sizing(
+                placed, profile, estimate, (lengths or {}).get(node_id), hardware, why_no_estimate=why
+            )
+        return explain(self.hash, self.logical, self.placement, sizing=sizing, footer=waits(profile))
 
 
 def plan(  # noqa: PLR0913 - the target and records, then keyword-only run inputs

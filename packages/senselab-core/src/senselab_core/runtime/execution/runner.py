@@ -351,8 +351,8 @@ class _Run:
         ]
 
     def fragment_size(self, node: str) -> int | None:
-        """Return the most jobs of `node` one fragment holds: its batch size, None for an executor that splits."""
-        return None if self.executor.splits_fragments else self.placed.placement.nodes[node].batch_size
+        """Return the most jobs of `node` one fragment holds, as the executor sizes it; None for one that splits."""
+        return None if self.executor.splits_fragments else self.executor.fragment_size(self.placed, node)
 
     def close(self) -> None:
         """Give every job with no terminal event its own: `cancelled` once cancelled, else `blocked`.
