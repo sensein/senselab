@@ -48,6 +48,8 @@ from senselab_core.runtime.execution.queue import QueueSet, item_digest, probe_q
 from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
     Fleet,
+    QueueReady,
+    backend_key,
     class_of,
     read_mark,
 )
@@ -67,7 +69,7 @@ from senselab_core.runtime.probe import Probe
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Grant
 from senselab_core.runtime.units import (
-    HardwareUnseen,
+    Pending,
     UnitReads,
     Unresolved,
     decoder_of,
@@ -103,6 +105,7 @@ class ProbeMachine:
     _said: set[str]
     _stragglers: list[tuple[Held, Flight, list[int]]]
     _hello: dict[str, HardwareClass]
+    _marks: dict[str, QueueReady]
 
     def _keys(self, fragment: PlanFragment) -> list[str]:
         raise NotImplementedError
@@ -124,11 +127,22 @@ class ProbeMachine:
         placed, values = self._admitted_plan(held.part)
         jobs, placement = fragment_jobs(held.part, placed, values)
         decoder = decoder_of(jobs)
-        hello = self._hello.get(class_of(held.queue))
-        unit = (
+        ready, hello = self._marks.get(held.queue), self._hello.get(class_of(held.queue))
+        unit: MeasureUnit | Unresolved = (
             decoder if isinstance(decoder, Unresolved) else self.resolver.unit(jobs[0].call, placement, decoder, hello)
         )
-        if isinstance(unit, HardwareUnseen):
+        if ready is not None and not isinstance(decoder, Unresolved):
+            entry = ready.envs.get(backend_key(placement.backend))
+            if ready.hardware is None:
+                unit = Unresolved(f"a worker of {held.queue} names no hardware class")
+            elif entry is None:
+                unit = Pending(f"the ready mark of a worker of {held.queue} holds no env of {placement.backend.name!r}")
+            elif "unbuilt" in entry:
+                why = entry["unbuilt"]
+                unit = Unresolved(f"the env of backend {placement.backend.name!r} could not be built: {why}")
+            else:
+                unit = self.resolver.unit(jobs[0].call, placement, decoder, hello or ready.hardware, entry)
+        if isinstance(unit, Pending):
             held.followed.waiting.append(held.part)
             self._resolving.append(held)
             self._wake_scaler()
@@ -301,13 +315,14 @@ class ProbeMachine:
             self._unreadable.discard(path.name)
             self._greeted.add(path.name)
             fresh = True
-            for queue, seen in mark.hardware.items():
+            for queue, ready in mark.queues.items():
+                self._marks.setdefault(queue, ready)
                 resource = self.profile.resource_classes.get(class_of(queue))
-                if resource is not None:
-                    self.roots.note_seen(resource, seen)
+                if resource is not None and ready.hardware is not None:
+                    self.roots.note_seen(resource, ready.hardware)
                     if class_of(queue) not in self._hello:
-                        self._hello[class_of(queue)] = seen
-                        disagreed.append((class_of(queue), seen))
+                        self._hello[class_of(queue)] = ready.hardware
+                        disagreed.append((class_of(queue), ready.hardware))
         for resource_class, seen in disagreed:
             self._reresolve(resource_class, seen)
         return fresh

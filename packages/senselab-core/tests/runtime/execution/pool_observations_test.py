@@ -21,7 +21,7 @@ from senselab_core.runtime.execution.observing import hardware_of
 from senselab_core.runtime.execution.pool import split
 from senselab_core.runtime.execution.pool_worker import PoolWorker, Send
 from senselab_core.runtime.execution.queue import QueueSet, probe_queue
-from senselab_core.runtime.execution.substrates import mark_ready
+from senselab_core.runtime.execution.substrates import QueueReady, mark_ready
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
@@ -185,7 +185,7 @@ def test_no_run_record_names_the_host_the_account_or_a_home_path(tmp_path: Path)
         hardware=lambda _: HARDWARE,
         cotenancy=lambda _: SHARED,
     ).serve()
-    mark_ready(tmp_path / "run", {"cpu": HARDWARE})
+    mark_ready(tmp_path / "run", {"cpu": QueueReady(HARDWARE, {})})
     assert [p for p in (tmp_path / "run").rglob("*") if p.is_file()]
     assert identity_leaks(tmp_path / "run", tmp_path) == []
 

@@ -14,22 +14,17 @@ from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_pack
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.units import UnitResolver
+from senselab_core.runtime.units import Unresolved
 from senselab_core.testing.interpreter import source_tree_python
-
-NAMELESS_HOST = HardwareInfo(
-    cpu_count=2, memory_bytes=2**33, gpus=(), apple_silicon=False, platform="linux-x86_64", cpu_model=None
-)
-"""A host that names no CPU model: no unit resolves on it, so every unit runs the safe values and none is probed."""
+from senselab_core.testing.measures import FixedUnit
 
 
-def unresolving(profile: ExecutionProfile) -> UnitResolver:
-    """Return a resolver on a host with no hardware class: every unit is unresolved, whatever the machine running."""
-    return UnitResolver(profile, hardware=NAMELESS_HOST)
+def unresolving(profile: ExecutionProfile) -> FixedUnit:
+    """Return a resolver whose every unit is unresolved for a final cause, so every unit runs the safe values."""
+    return FixedUnit(profile, Unresolved("the host names no hardware class"))
 
 
 BACKEND = "backends.sizes_backend_fixture"

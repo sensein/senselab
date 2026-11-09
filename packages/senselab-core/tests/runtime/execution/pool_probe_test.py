@@ -5,6 +5,7 @@ worker would. Every wait is read on an injected clock; no test sleeps or reads a
 """
 
 import logging
+import os
 import platform
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
@@ -15,7 +16,7 @@ from pool_stack_fixture import host_env, scoring
 from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation, ProbeRef
-from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_packaged
+from senselab_core.runtime.call import Packaged, RunConfig, bind_input, packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
@@ -27,7 +28,8 @@ from senselab_core.runtime.execution.job import JobOutcome
 from senselab_core.runtime.execution.observing import request_units
 from senselab_core.runtime.execution.pool import Pool, report
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of, probe_queue
-from senselab_core.runtime.execution.substrates import Substrate, WorkerHandle, mark_ready
+from senselab_core.runtime.execution.run import prepare
+from senselab_core.runtime.execution.substrates import QueueReady, Substrate, WorkerHandle, backend_key, mark_ready
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.licenses import license_record
@@ -36,7 +38,7 @@ from senselab_core.runtime.measures import Build, MeasureUnit, Provenance
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
-from senselab_core.runtime.units import UnitResolver, Unresolved, measure_roots
+from senselab_core.runtime.units import UnitResolver, Unresolved, mark_entry, measure_roots
 from senselab_core.testing.measures import FixedEstimates, FixedUnit
 
 TEXTY = scoring("pool_probe_test.texty").model_copy(update={"inputs": {"text": "Text"}})
@@ -297,6 +299,15 @@ def _drive(pool: Pool, handle: str, hand: Hand, rounds: int = 40) -> list[Result
         if done:
             return given
     raise AssertionError(f"the fragment did not end in {rounds} rounds; {len(given)} results given")
+
+
+def _hello(pool: Pool, placed: Plan, values: Mapping[InputIdentity, object], hardware: HardwareClass) -> None:
+    """Write the ready mark a worker of class `hardware` writes for the plan's one node: its class and built env."""
+    jobs, placement = fragment_jobs(node_fragment(placed, pool.admit(placed, values)), placed, values)
+    handle = packaged().open_env(placement.backend, pool.profile)
+    entry = mark_entry(pool.profile, placement.backend, handle, HOST, "cpu")
+    mark_ready(pool.run_dir, {"cpu": QueueReady(hardware, {backend_key(placement.backend): entry})})
+    del jobs
 
 
 def _probe_queues(pool: Pool) -> list[str]:
@@ -598,7 +609,7 @@ def test_a_unit_resolves_on_the_first_hello_and_the_hello_wins(tmp_path: Path) -
     assert not _probe_queues(pool) and pool.queues.queue("cpu").work() == 0
     assert pool.workers_wanted("cpu", 0) == 1
     told = HardwareClass(device="cpu", name="Test CPU", cpus=2)
-    mark_ready(tmp_path / "run", {"cpu": told})
+    _hello(pool, placed, values, told)
     pool.poll(Handle(id=handle))
     [probe] = _probe_queues(pool)
     assert pool.queues.queue(probe).probe_hardware() == told
@@ -800,7 +811,7 @@ def test_a_disagreeing_hello_resolves_a_probing_unit_again(tmp_path: Path) -> No
     told = HardwareClass(device="cpu", name="Test CPU", cpus=2)
     hand = Hand(pool, placed, values, hardware=told, limit=1, takes=SEEN)
     hand.serve()
-    mark_ready(tmp_path / "run", {"cpu": told})
+    _hello(pool, placed, values, told)
     given = list(pool.poll(Handle(id=handle))[0])
     assert pool.queues.queue(first).probe_closed()
     [second] = [q for q in _probe_queues(pool) if q != first]
@@ -809,3 +820,148 @@ def test_a_disagreeing_hello_resolves_a_probing_unit_again(tmp_path: Path) -> No
     assert pool.roots.observations(unit)
     refs = given + _drive(pool, handle, Hand(pool, placed, values, hardware=told))
     assert sorted(r.job.element for r in refs) == sorted(j.element for j in fragment.jobs)
+
+
+def _slurm_profile(tmp_path: Path) -> ExecutionProfile:
+    cpu = {"device": "cpu", "cpus": 4, "mem_bytes": 2**33, "time_s": 3600, "max_workers": 2, "partition": "cpuq"}
+    override = {
+        "devices": ["cpu"],
+        "resource_classes": {"cpu": cpu, "cpu:large": {**cpu, "mem_bytes": 2**34}},
+        "pool": {"poll_s": 0.2, "first_poll_s": 0.01, "quantum_items": 10},
+        "calibration": {"measures_roots": [str(tmp_path / "measures")], "warmup_requests": 1},
+    }
+    return ExecutionProfile.load("orcd", override)
+
+
+@pytest.mark.logic
+def test_a_slurm_unit_resolves_at_the_first_hello_and_probes(tmp_path: Path) -> None:
+    """On a slurm profile no env is readable here; the unit waits and the first hello's class and env resolve it."""
+    profile = _slurm_profile(tmp_path)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile)
+    fragment, handle = _submit(pool, placed, values)
+    assert not _probe_queues(pool) and pool.workers_wanted("cpu", 0) == 1
+    _hello(pool, placed, values, SEEN)
+    given = list(pool.poll(Handle(id=handle))[0])
+    [probe] = _probe_queues(pool)
+    assert pool.queues.queue(probe).probe_hardware() == SEEN
+    refs = given + _drive(pool, handle, Hand(pool, placed, values))
+    assert sorted(r.job.element for r in refs) == sorted(j.element for j in fragment.jobs) and pool.probes
+
+
+@pytest.mark.logic
+def test_a_worker_builds_an_unbuilt_env_before_its_mark_and_the_unit_probes(tmp_path: Path) -> None:
+    """An env not built when the plan is read leaves the unit pending; the worker builds it, its mark carries it."""
+    from senselab_core.runtime.execution.pool_worker import PoolWorker  # noqa: PLC0415 - one use
+    from senselab_core.testing.interpreter import source_tree_python  # noqa: PLC0415 - as `pool_stack_fixture`
+
+    del source_tree_python
+    profile = _profile(tmp_path)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    resolver = UnitResolver(profile, hardware=HOST)
+    built: list[str] = []
+
+    def unbuilt(backend: object, profile: object) -> None:  # noqa: ARG001 - an EnvRead
+        return None
+
+    previous = use_packaged(
+        Packaged(packaged().catalogue, _counting(built), packaged().registry, packaged().lock_records, env_read=unbuilt)
+    )
+    try:
+        prepare(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
+        pool = _pool(tmp_path, profile, resolver=UnitResolver(profile, measure_roots(profile), hardware=HOST))
+        fragment, handle = _submit(pool, placed, values)
+        assert not _probe_queues(pool) and not built
+        worker = PoolWorker(
+            tmp_path / "run" / RUN_QUEUES,
+            ["cpu"],
+            profile=profile,
+            store=pool.store,
+            hardware=lambda _: SEEN,
+            device_memory=lambda: None,
+        )
+        ready = worker.ready()
+        assert built and set(ready) == {"cpu"} and ready["cpu"].hardware == SEEN
+        [entry] = ready["cpu"].envs.values()
+        assert {"env_lock", "wheel_set", "driver", "platform", "numerics", "threads"} <= set(entry)
+        mark_ready(pool.run_dir, ready)
+        given = list(pool.poll(Handle(id=handle))[0])
+        assert len(_probe_queues(pool)) == 1
+        refs = given + _drive(pool, handle, Hand(pool, placed, values))
+    finally:
+        use_packaged(previous)
+    assert sorted(r.job.element for r in refs) == sorted(j.element for j in fragment.jobs)
+    del resolver
+
+
+def _counting(built: list[str]) -> Callable[..., EnvHandle]:
+    opener = _handle("4" * 64)
+
+    def build(backend: object, profile: object) -> EnvHandle:
+        built.append("built")
+        return opener(backend, profile)
+
+    return build
+
+
+@pytest.mark.logic
+def test_a_final_cause_takes_the_safe_values(tmp_path: Path) -> None:
+    """A hello whose env failed to build, or that names no class, is final: the jobs run unmeasured, none probed."""
+    profile = _slurm_profile(tmp_path)
+    causes: list[Callable[[str], QueueReady]] = [
+        lambda b: QueueReady(SEEN, {b: {"unbuilt": "build-failed"}}),
+        lambda b: QueueReady(None, {b: {}}),
+    ]
+    for index, ready in enumerate(causes):
+        placed, values = _plan(profile, range(1, 9))
+        pool = _pool(tmp_path, profile, run=f"run{index}", store=f"store{index}")
+        _, handle = _submit(pool, placed, values)
+        jobs, placement = fragment_jobs(node_fragment(placed, pool.admit(placed, values)), placed, values)
+        mark_ready(pool.run_dir, {"cpu": ready(backend_key(placement.backend))})
+        pool.poll(Handle(id=handle))
+        assert not _probe_queues(pool) and pool.queues.queue("cpu").work() == 8
+        del jobs
+
+
+@pytest.mark.logic
+def test_a_ready_mark_carries_no_identifier(tmp_path: Path) -> None:
+    """A mark built from an env whose torch index is a mirror URL with userinfo names the build tag and nothing else."""
+    from senselab_core.runtime.execution.pool_worker import PoolWorker  # noqa: PLC0415 - one use
+
+    mirror = "https://someone:hunter2@mirror.example.org/whl/cu128"
+
+    def opener(backend: object, profile: object) -> EnvHandle:
+        base = host_env(backend, profile)  # type: ignore[arg-type]
+        return EnvHandle(
+            python=base.python,
+            python_version=base.python_version,
+            lock_sha=base.lock_sha,
+            wheel_set=base.wheel_set,
+            torch_index=mirror,
+        )
+
+    profile = _profile(tmp_path)
+    placed, values = _plan(profile, range(1, 5))
+    previous = use_packaged(
+        Packaged(packaged().catalogue, opener, packaged().registry, packaged().lock_records, env_read=opener)
+    )
+    try:
+        prepare(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
+        pool = _pool(tmp_path, profile)
+        _submit(pool, placed, values)
+        worker = PoolWorker(
+            tmp_path / "run" / RUN_QUEUES,
+            ["cpu"],
+            profile=profile,
+            store=pool.store,
+            hardware=lambda _: SEEN,
+            device_memory=lambda: None,
+        )
+        mark_ready(pool.run_dir, worker.ready())
+    finally:
+        use_packaged(previous)
+    [path] = [p for p in (pool.run_dir / "workers").iterdir() if not p.name.startswith(".")]
+    text = path.read_text()
+    assert '"torch_build":"cu128"' in text
+    for leaked in ("someone", "hunter2", "mirror.example", os.uname().nodename, str(Path.home())):
+        assert leaked not in text

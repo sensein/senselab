@@ -23,14 +23,14 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 from senselab_worker.faults import FaultClass, ProtocolError, classify, error_record
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.runtime import request_reports
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
-from senselab_core.runtime.call import RunConfig
+from senselab_core.runtime.call import RunConfig, packaged
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, PlanFragment
@@ -42,15 +42,18 @@ from senselab_core.runtime.execution.observing import (
     Seen,
     Sent,
     hardware_of,
+    host_report,
     job_units,
     observations,
     records_of,
 )
 from senselab_core.runtime.execution.pool import report, run_plan
+from senselab_core.runtime.execution.pool_parts import placed_backends
 from senselab_core.runtime.execution.queue import Claim, Queue, QueueSet, ServeLease, UnmarkedProbeItem, probe_of
 from senselab_core.runtime.execution.services import service_registry
 from senselab_core.runtime.execution.substrates import (
     EXIT_UNREACHABLE,
+    QueueReady,
     StoreUnreachable,
     class_of,
     mark_ready,
@@ -67,6 +70,7 @@ from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.storage import StorageUnsupported, probe_capabilities
 from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.units import mark_entry
 from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerFatal, WorkerLost
 
 logger = logging.getLogger("senselab")
@@ -261,15 +265,44 @@ class PoolWorker:
         self._clock = clock
         self._listed: float | None = None
 
-    def hardware(self) -> dict[str, HardwareClass]:
-        """Return the `HardwareClass` of each queue this worker serves that this host describes, for its ready mark."""
+    def ready(self) -> dict[str, QueueReady]:
+        """Return what this worker says of each queue it serves: its class, and the env of each backend placed on it.
+
+        The backends come from the run's placement of its latest attempt (`private/placements/<attempt>.json`). Each
+        env is built here, or read when built, so the mark that carries it is written after the builds; a build that
+        fails is recorded in the mark, not raised.
+        """
+        try:
+            placed = placed_backends(run_plan(self.run_dir, self.profile))
+        except (FileNotFoundError, ValueError):
+            placed = {}
         found = {}
         for name in self.classes:
             try:
-                found[name] = self._hardware(class_of(name))
+                hardware: HardwareClass | None = self._hardware(class_of(name))
             except ValueError as err:
                 logger.warning("pool worker %s cannot describe the hardware of %s: %s", self.name, name, err)
+                hardware = None
+            envs = {f"{task}~{backend}": self._env(name, task, backend) for task, backend in placed.get(name, ())}
+            found[name] = QueueReady(hardware, envs)
         return found
+
+    def _env(self, queue: str, task: str, backend_name: str) -> dict[str, Any]:
+        """Return the mark's entry for the env of `task`'s backend `backend_name`, built here; else its cause."""
+        registry = packaged().registry
+        backend = next((b for b in registry.backends(task) if b.name == backend_name), None)
+        if backend is None:
+            return {"unbuilt": "unreadable"}
+        try:
+            handle = packaged().open_env(backend, self.profile)
+        except Exception:  # noqa: BLE001 - a build fails in many ways; the mark records it, the Pool holds the env
+            logger.exception("pool worker %s could not build the env of %s/%s", self.name, task, backend_name)
+            return {"unbuilt": "build-failed"}
+        device = self.profile.resource_classes[class_of(queue)].device
+        try:
+            return mark_entry(self.profile, backend, handle, host_report(), device)
+        except ValueError:
+            return {"unbuilt": "unreadable"}
 
     def halt(self) -> None:
         """Set `stop` and wake the wait for a running claim's outcomes; safe in a signal handler."""
@@ -678,8 +711,8 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
     Without `workers`, a worker of service classes runs on a set that provides its servers to this host's registry
     (`service_registry`), closed when it returns.
     A worker that cannot reach the run directory or the store returns `EXIT_UNREACHABLE` and marks nothing; one that can
-    marks itself ready (`mark_ready`, with the `HardwareClass` of each queue it serves) once its worker is built and
-    supervised, just before it serves. On the main
+    marks itself ready (`mark_ready`, with each queue's `HardwareClass` and the env of each backend placed on it, built
+    first) once its worker is built and supervised, just before it serves. On the main
     thread SIGTERM halts the worker (`PoolWorker.halt`); the previous handler is restored after.
     """
     try:
@@ -696,11 +729,11 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
         if owned is not None:
             stack.callback(owned.close)
         if threading.current_thread() is not threading.main_thread():
-            mark_ready(Path(pool_dir).parent, worker.hardware())
+            mark_ready(Path(pool_dir).parent, worker.ready())
             return worker.serve()
         previous = signal.signal(signal.SIGTERM, lambda *_: worker.halt())
         try:
-            mark_ready(Path(pool_dir).parent, worker.hardware())
+            mark_ready(Path(pool_dir).parent, worker.ready())
             return worker.serve()
         finally:
             signal.signal(signal.SIGTERM, previous)

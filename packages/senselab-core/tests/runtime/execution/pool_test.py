@@ -26,7 +26,7 @@ from senselab_core.runtime.execution.job import Failed, JobOutcome
 from senselab_core.runtime.execution.pool import Pool, larger_class, report, split
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet
 from senselab_core.runtime.execution.run import INPUTS_FILE, RECORD_ATTEMPTS, Run, prepare, record_sources
-from senselab_core.runtime.execution.substrates import WorkerHandle
+from senselab_core.runtime.execution.substrates import QueueReady, WorkerHandle, mark_ready
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import LeaseUnavailable
@@ -100,6 +100,7 @@ class FakeWorkers:
     def start(self, resource_class: str, count: int) -> list[WorkerHandle]:  # noqa: ARG002
         """Serve `resource_class` from the worker thread, started on the first call."""
         self.names.add(resource_class)
+        mark_ready(self.run_dir, {resource_class: QueueReady(None, {})})
         if self._thread is None:
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()

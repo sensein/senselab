@@ -6,9 +6,9 @@ what is true of the state.
 """
 
 import sysconfig
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Protocol
+from typing import Any, Protocol
 
 from senselab_core.kernel.declare import BackendSpec, Env
 from senselab_core.runtime.calibration import (
@@ -24,13 +24,13 @@ from senselab_core.runtime.execution.workers import PRECISION, service_of
 from senselab_core.runtime.hardware import HardwareInfo, numerics_class
 from senselab_core.runtime.keys import Call, Placement, call_key, fixed_formation, request_components
 from senselab_core.runtime.launch import launch
-from senselab_core.runtime.measures import MeasureRoots, MeasureSource, MeasureUnit
+from senselab_core.runtime.measures import MeasureRoots, MeasureSource, MeasureUnit, env_entry
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.probe import Probe
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
 from senselab_core.runtime.storage import StorePolicy
-from senselab_core.runtime.vllm_server import server_variables
+from senselab_core.runtime.vllm_server import ENGINE, server_variables
 
 _NO_INPUT = "content:" + "0" * 64
 """The identity every input port holds while a key is built only to be read for its unit, which holds no inputs."""
@@ -44,7 +44,12 @@ class Unresolved:
 
 
 @dataclass(frozen=True)
-class HardwareUnseen(Unresolved):
+class Pending(Unresolved):
+    """A unit a worker's start would build: its node, hardware or env is not yet known. It waits for a ready mark."""
+
+
+@dataclass(frozen=True)
+class HardwareUnseen(Pending):
     """A unit whose only gap is that no worker of its class has reported the hardware it runs on.
 
     Attributes:
@@ -104,7 +109,7 @@ class EnvStates:
         A handle is kept under its `env_identity`; an unbuilt env is read again, since the run builds it.
         """
         if self.profile.substrate.kind != "local":
-            return Unresolved("the node a slurm worker runs on is chosen at submission, so its platform is not known")
+            return Pending("the node a slurm worker runs on is chosen at submission, so its platform is not known")
         key = env_identity(backend)
         if key in self._built:
             return self._built[key]
@@ -113,7 +118,7 @@ class EnvStates:
         except EnvUnreadable as err:
             return Unresolved(f"the env of backend {backend.name!r} cannot be read: {err}")
         if handle is None:
-            return Unresolved(f"the env of backend {backend.name!r} is not built")
+            return Pending(f"the env of backend {backend.name!r} is not built")
         self._built[key] = handle
         return handle
 
@@ -141,16 +146,20 @@ class UnitResolver:
         placement: Placement,
         decoder: str | None = None,
         hardware: HardwareClass | None = None,
+        env: Mapping[str, Any] | None = None,
     ) -> MeasureUnit | Unresolved:
         """Return the unit of `call` run as `placement`, whose file-backed inputs are read by `decoder` (None: none).
 
         A bucketed backend's formation is the grid's, whichever bucket a job falls in. `hardware` is the class a
-        worker's hello reported; it replaces this host's, which then need not be in the index.
+        worker's hello reported, and `env` its `env_entry` for the backend: they replace this host's class and the env
+        record, which then need not be in the index or built. A server's driver is completed from its attestation.
         """
         backend = placement.backend
-        handle = self.envs.get(backend)
-        if isinstance(handle, Unresolved):
-            return handle
+        handle: EnvHandle | Unresolved | None = None
+        if env is None:
+            handle = self.envs.get(backend)
+            if isinstance(handle, Unresolved):
+                return handle
         found = hardware if hardware is not None else self._hardware(placement)
         if isinstance(found, Unresolved):
             return found
@@ -161,13 +170,20 @@ class UnitResolver:
             return Unresolved(f"the attestation of backend {backend.name!r}'s server is unreadable: {err}")
         formation = fixed_formation(backend) or BucketGrid.load_default().unindexed
         keyed = replace(placement, **request_components(backend, formation))
-        fields = {
-            **env_fields(keyed, handle, expected, network_variables(self.profile.network)),
-            "platform": sysconfig.get_platform(),
-            "numerics": numerics_class(self.hardware, placement.device, PRECISION),
-            "decoder": decoder,
-            "threads": self._threads(backend, handle, expected is not None, call),
-        }
+        if env is not None:
+            driver = (
+                dict(env["driver"]) if expected is None else {**env["driver"], "engine": ENGINE, **expected.driver()}
+            )
+            fields = {**env, "driver": driver, "decoder": decoder}
+        else:
+            assert isinstance(handle, EnvHandle)
+            fields = {
+                **env_fields(keyed, handle, expected, network_variables(self.profile.network)),
+                "platform": sysconfig.get_platform(),
+                "numerics": numerics_class(self.hardware, placement.device, PRECISION),
+                "decoder": decoder,
+                "threads": self._threads(backend, handle, expected is not None, call),
+            }
         blank = dict.fromkeys(call.task.inputs, _NO_INPUT)
         return MeasureUnit.of(keyed, call_key(replace(call, service=expected, inputs=blank), keyed), fields, hardware)
 
@@ -194,6 +210,28 @@ class UnitResolver:
         return here
 
 
+def mark_entry(
+    profile: ExecutionProfile, backend: BackendSpec, handle: EnvHandle, hardware: HardwareInfo, device: str
+) -> dict[str, Any]:
+    """Return the ready-mark entry of `backend`'s built env `handle` on this node: its §3.1 fields, but the decoder.
+
+    Raises:
+        ValueError: a field is outside what a measure holds (`env_entry`).
+    """
+    declared = network_variables(profile.network)
+    if backend.server is not None:
+        declared = {**server_variables(backend.server.settings), **declared}
+    threads = {} if backend.env.kind == "host" else dict(launch(handle.python, declared).measured)
+    return env_entry(
+        {
+            **handle.context_fields(),
+            "platform": sysconfig.get_platform(),
+            "numerics": numerics_class(hardware, device, PRECISION),
+            "threads": threads,
+        }
+    )
+
+
 def decoder_of(jobs: Sequence[Job]) -> str | None | Unresolved:
     """Return the decoder the file-backed inputs of `jobs` are read by (None: none is), or why they are two units."""
     found = {job_decoder(j) for j in jobs}
@@ -213,8 +251,9 @@ class UnitReads(Protocol):
         placement: Placement,
         decoder: str | None = None,
         hardware: HardwareClass | None = None,
+        env: Mapping[str, Any] | None = None,
     ) -> MeasureUnit | Unresolved:
-        """Return the unit of `call` run as `placement`, `hardware` the class a worker's hello reported."""
+        """Return the unit of `call` run as `placement`; `hardware` and `env` are what a worker's hello reported."""
 
 
 UnitOf = Callable[[Call, Placement, str | None], MeasureUnit | Unresolved]

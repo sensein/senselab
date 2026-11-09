@@ -1,6 +1,7 @@
 """Doubles for the pool's estimate and unit reads: one estimate for every unit, and one unit for every call."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from senselab_core.kernel.declare import BackendSpec
 from senselab_core.runtime.calibration import Estimate, EstimateSource, HardwareClass, RequestFit, StratumBatch
@@ -49,7 +50,12 @@ class FixedUnit:
         self.calls: list[tuple[Call, Placement, str | None, HardwareClass | None]] = []
 
     def unit(
-        self, call: Call, placement: Placement, decoder: str | None = None, hardware: HardwareClass | None = None
+        self,
+        call: Call,
+        placement: Placement,
+        decoder: str | None = None,
+        hardware: HardwareClass | None = None,
+        env: Mapping[str, Any] | None = None,
     ) -> MeasureUnit | Unresolved:
         """Return the unit given, noting the call."""
         self.calls.append((call, placement, decoder, hardware))

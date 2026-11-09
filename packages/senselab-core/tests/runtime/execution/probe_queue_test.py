@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from queue_race_fixture import fragment
+from senselab_core.kernel.formats import WORKER_READY_FORMAT
 from senselab_core.runtime.calibration import HardwareClass
 from senselab_core.runtime.execution.observing import Presence
 from senselab_core.runtime.execution.queue import (
@@ -23,6 +24,7 @@ from senselab_core.runtime.execution.queue import (
 from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
     Peers,
+    QueueReady,
     class_of,
     mark_ready,
     read_mark,
@@ -109,10 +111,14 @@ def test_an_item_of_a_probe_queue_without_a_mark_is_a_typed_error(tmp_path: Path
 @pytest.mark.logic
 def test_a_ready_mark_carries_the_hardware_per_queue_and_names_the_host_by_token(tmp_path: Path) -> None:
     """The mark reads back as written, holds no host name, and writes nothing but the mark."""
-    mark_ready(tmp_path, {"cpu": CPU, "gpu": CUDA})
+    mark_ready(tmp_path, {"cpu": QueueReady(CPU, {}), "gpu": QueueReady(CUDA, {})})
     [path] = list((tmp_path / WORKERS_DIR).iterdir())
     mark = read_mark(path)
-    assert mark is not None and mark.hardware == {"cpu": CPU, "gpu": CUDA} and mark.pid == os.getpid()
+    assert (
+        mark is not None
+        and {q: r.hardware for q, r in mark.queues.items()} == {"cpu": CPU, "gpu": CUDA}
+        and mark.pid == os.getpid()
+    )
     assert mark.host == host_token() and os.uname().nodename not in path.read_text()
     assert [p.name for p in tmp_path.iterdir()] == [WORKERS_DIR]
 
@@ -192,7 +198,9 @@ def test_an_empty_or_foreign_mark_is_no_mark(tmp_path: Path) -> None:
 
 def _mark(directory: Path, name: str, host: str, pid: int, started: str | None = None) -> None:
     directory.mkdir(exist_ok=True)
-    (directory / name).write_bytes(jcs_dumps({"host": host, "pid": pid, "started": started, "hardware": {}}))
+    (directory / name).write_bytes(
+        jcs_dumps({"format": WORKER_READY_FORMAT, "host": host, "pid": pid, "started": started, "queues": {}})
+    )
 
 
 @pytest.mark.logic

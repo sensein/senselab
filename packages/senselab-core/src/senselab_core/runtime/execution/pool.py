@@ -83,6 +83,7 @@ from senselab_core.runtime.execution.substrates import (
     BrokenClass,
     Fleet,
     Local,
+    QueueReady,
     Slurm,
     Substrate,
     SubstrateError,
@@ -204,6 +205,7 @@ class Pool(ProbeMachine):
         self._said: set[str] = set()
         self._stragglers: list[tuple[Held, Flight, list[int]]] = []
         self._hello: dict[str, HardwareClass] = {}
+        self._marks: dict[str, QueueReady] = {}
         self._rates: dict[str, dict[str, tuple[float | None, int]]] = {}
 
     def bind_epoch(self, epoch: int, events: EventLog) -> None:

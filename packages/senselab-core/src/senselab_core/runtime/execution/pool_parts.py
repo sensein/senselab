@@ -13,6 +13,7 @@ from senselab_core.runtime.execution.job import Job, JobOutcome
 from senselab_core.runtime.execution.queue import Claim
 from senselab_core.runtime.locks import Lease
 from senselab_core.runtime.measures import MeasureUnit
+from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Sample
 
@@ -230,3 +231,14 @@ def covers(estimate: Estimate | None, jobs: Sequence[Job]) -> bool:
         return True
     lengths = [job_units(j, estimate.unit_kind) for j in jobs]
     return single.u is not None and all(n is None or single.lo <= n <= single.hi for n in lengths)
+
+
+def placed_backends(placed: Plan) -> dict[str, set[tuple[str, str]]]:
+    """Return the backends, as `(task, backend name)`, the plan places on each queue."""
+    found: dict[str, set[tuple[str, str]]] = {}
+    tasks = {n.id: n.task for n in placed.logical.graph.nodes}
+    for node, record in placed.placement.nodes.items():
+        model = placed.logical.models.get(node)
+        name = record.resource_class if model is None else f"{record.resource_class}#{model.identity}"
+        found.setdefault(name, set()).add((tasks[node], record.backend))
+    return found
