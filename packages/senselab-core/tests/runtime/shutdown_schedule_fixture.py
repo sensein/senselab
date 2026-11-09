@@ -7,9 +7,11 @@ Every boundary is wrapped to count its calls on the main thread; at the `occurre
 runs a request in `deaf` mode (SIGTERM ignored, so the group needs SIGKILL) past its timeout; `close` closes
 the idle client. A case of kind `count` injects nothing and reports the calls each boundary got, from which
 the schedule is generated. The client runs on a `ManualClock` that a driver thread advances only while the
-client is parked in a shutdown wait (or, on the `timeout` path, once the worker has gone deaf), so a case's
-`elapsed` is clock time and its bound is derived from the default graces. One JSON line per case reports what
-surfaced, the state at that moment, the order of the signals sent to the group and after a final `close()`.
+client is parked, only on the `timeout` path, only once the worker has gone deaf and only until SIGKILL is sent:
+every other wait ends with a real event, so the number of calls each boundary gets does not depend on how fast
+the host reaps a process. A case's `elapsed` is clock time and its bound is derived from the default graces. One
+JSON line per case reports what surfaced, the state at that moment, the order of the signals sent to the group
+and after a final `close()`.
 `faulthandler` ends the process with a traceback if a case outlives `CASE_BOUND_S`, so a deadlock fails the
 case instead of hanging the test.
 """
@@ -218,9 +220,8 @@ def _drive(clock: ManualClock, injector: _Injector, may: Callable[[], bool], don
     """Until `done`, advance `clock` by `STEP_S` each time the main thread is parked on it and `may` allows."""
     main = threading.main_thread()
     while not done.is_set():
-        if may() and clock.is_parked(main):
-            if not injector.on_parked():
-                clock.advance(STEP_S)
+        if clock.is_parked(main) and not injector.on_parked() and may():
+            clock.advance(STEP_S)
         else:
             done.wait(clock.poll_s)
 
@@ -257,7 +258,7 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
     """Run one case and return its report."""
     pid_file = parent / f"pids-{index}"
     injector = _Injector(case)
-    clock = ManualClock(poll_s=CLOCK_POLL_S, hang_s=CASE_BOUND_S / 2, spends="park")
+    clock = ManualClock(poll_s=CLOCK_POLL_S, hang_s=CASE_BOUND_S / 2, spends=False)
     gate_open = threading.Event()
     done = threading.Event()
     killpg = os.killpg
@@ -268,8 +269,7 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
         killpg(pgid, sig)
 
     def may_advance() -> bool:
-        stopping = bool(injector.clients) and bool(getattr(injector.clients[0], "_shutting_down", None))
-        return stopping or gate_open.is_set()
+        return gate_open.is_set() and "SIGKILL" not in injector.events
 
     def build(port: int = 0) -> None:
         timeout = REQUEST_TIMEOUT_S if case["path"] == "timeout" else None
