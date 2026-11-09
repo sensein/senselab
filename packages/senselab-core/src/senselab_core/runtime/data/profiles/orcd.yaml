@@ -130,6 +130,8 @@ calibration:
   observations_kept: 3
   # Workers a unit without a measure runs on.
   unmeasured_workers: 1
+  # Seconds a unit waits for a ready mark, from its queue's first live worker.
+  resolve_s: 1800
 # Every lease: seconds after which another process breaks it, the share of that between beats, and the
 # storage's attribute delay; load refuses 2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.
 lease:

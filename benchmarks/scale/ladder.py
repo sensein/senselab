@@ -43,11 +43,13 @@ from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.substrates import substrate_of, worker_id
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
 from senselab_core.runtime.hardware import host_token, memory_bytes
+from senselab_core.runtime.measures import MeasureRoots
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.resources import ResourceMeasure, Unit
 from senselab_core.runtime.revision import NAMESPACE, cache_root
-from senselab_core.runtime.sizing import Measures, Sample, calibrated
+from senselab_core.runtime.sizing import Measures, Sample
+from senselab_core.runtime.storage import StorePolicy
 from senselab_core.runtime.store import ResultStore
 from senselab_worker.units import NS_PER_S
 
@@ -278,6 +280,17 @@ def check_suite(suite: Suite, profile: ExecutionProfile, data: Path) -> list[str
     return found
 
 
+def point_roots(profile: ExecutionProfile, directory: Path) -> MeasureRoots:
+    """Return the one measures root of a point: `directory`, so each point probes afresh and reads no other's."""
+    return MeasureRoots(
+        [directory],
+        StorePolicy.load_default(),
+        profile.calibration.trust,
+        os.geteuid(),
+        stale_after_s=profile.lease.stale_after_s,
+    )
+
+
 def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the profile, its label and where results go
     entry: Entry, point: int | str, suite: Suite, profile: ExecutionProfile, label: str, out: Path
 ) -> dict[str, Any]:
@@ -307,7 +320,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         profile=profile,
         substrate=substrate_of(profile, run_dir, placed.hash),
         epoch=0,
-        measures=Measures(out / f"{label}@{point}" / "resources", packaged=()),
+        roots=point_roots(profile, out / f"{label}@{point}" / "measures"),
     )
     began, began_s = time.monotonic(), time.time()
     try:
@@ -317,7 +330,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     wall = time.monotonic() - began
     by_digest = _samples(run_dir)
     samples = list(by_digest.values())
-    rounds = {d for digests, _ in pool.calibrated.values() for d in digests}
+    rounds = {d for probed in pool.probes.values() for d in probed.items}
     steady_s, calibration_s, round_jobs = _steady(by_digest, rounds, began_s)
     events = read_events(run_dir)
     queued = {e.job: e.t_ns for e in events if e.kind == "queued" and e.job is not None}
@@ -329,7 +342,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     items = len(placed.manifest.rows)
     ident = (None, None) if model is None else (model.ref.id, model.identity)
     unit = Unit(entry.task, node.backend, ident[0], ident[1], node.resource_class)
-    found = Measures(out / f"{label}@{point}" / "resources", packaged=()).get(unit) or calibrated(samples)
+    found = Measures(out / f"{label}@{point}" / "resources", packaged=()).get(unit)
     return {
         "format": RESULT_FORMAT,
         "suite": suite.name,

@@ -4,7 +4,7 @@ import logging
 from collections.abc import Sequence
 
 import pytest
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 from senselab_core.kernel.declare import BackendSpec, Env, TaskSpec
 from senselab_core.kernel.signals import PlainText
@@ -286,7 +286,30 @@ def _estimates(draw: st.DrawFn) -> Estimate:
     )
 
 
+DENORMAL = Estimate(
+    status="measured",
+    unit_kind="audio_s",
+    load_n=3,
+    item_n=3,
+    single=RequestFit(batch=1, r=0.0, u=None, n=6, spread=None, lo=0.0, hi=0.0),
+    batch=(StratumBatch(lo=0.0, hi=0.0, batch=1),),
+    host=MemoryFit(resident=0, m0=0.0, m1=2.225073858507e-311, n=6),
+    source=EstimateSource(probe_ids=("p",), observations=6),
+)
+"""A memory term so small that bytes per job times length is a positive float whose reciprocal overflows."""
+
+
 @pytest.mark.logic
+def test_a_denormal_memory_term_bounds_the_batch_by_the_ceiling_not_by_infinity() -> None:
+    """Room over a denormal per-job memory is infinite as a float; the batch is the ceiling, never converted from it."""
+    assert DENORMAL.host is not None
+    assert memory_batch(DENORMAL.host, 1.0, 1.0, 7) == 7
+    sized = _sized(DENORMAL, _grant(devices=None, on_device=False, memory_bytes=1, quantum_items=7), 1.0)
+    assert sized.batch_at(1.0) <= 7 and sized.cuts == ((0, 1),)
+
+
+@pytest.mark.logic
+@example(estimate=DENORMAL, lengths=[1.0], devices=None, on_device=False, memory=1)
 @given(
     estimate=_estimates(),
     lengths=st.lists(st.none() | _UNIT, max_size=40),

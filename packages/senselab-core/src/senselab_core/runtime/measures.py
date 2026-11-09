@@ -78,6 +78,36 @@ OBSERVATION_FORMAT = MEASURE_OBSERVATIONS_FORMAT.split(".")[0]
 """The observation format an identity names, as `<name>@<major>`: an observation of another cannot be pooled."""
 
 
+def measure_driver(driver: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the driver entries a measure holds: the torch build in place of its index URL, nothing else of it."""
+    kept = {k: v for k, v in driver.items() if k not in _UNMEASURED_DRIVER_KEYS}
+    if (index := kept.pop("torch_index", None)) is not None:
+        tag = urlsplit(index).path.rstrip("/").rsplit("/", 1)[-1]
+        kept["torch_build"] = tag if _BUILD_TAG.fullmatch(tag) else "other"
+    return kept
+
+
+ENV_ENTRY_KEYS = ("env_lock", "wheel_set", "platform", "numerics", "threads")
+"""The fields of an env a worker's ready mark carries beside its `driver`; the decoder is the job's, not the env's."""
+
+
+def env_entry(fields: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a ready mark's entry for an env: `fields` held to `MeasureEnv`'s filter, without the job's decoder.
+
+    Raises:
+        ValueError: a field is missing or outside `MeasureEnv`'s domain.
+    """
+    entry = {**{k: fields[k] for k in ENV_ENTRY_KEYS}, "driver": measure_driver(fields["driver"])}
+    MeasureEnv.model_validate({**entry, "decoder": None})
+    return entry
+
+
+def env_identity(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Return what two env entries must share for one measure to hold for both: the torch build and the rest whole."""
+    driver = entry.get("driver") or {}
+    return {**{k: entry.get(k) for k in ENV_ENTRY_KEYS}, "torch_build": driver.get("torch_build")}
+
+
 class MeasureEnv(Frozen):
     """The env's fingerprinted context fields that decide cost: its lock and wheels, driver, platform and numerics.
 
@@ -110,10 +140,7 @@ class MeasureEnv(Frozen):
         """
         if missing := sorted(set(cls.model_fields) - set(fields)):
             raise ValueError(f"env fields lack {missing}")
-        driver = {k: v for k, v in fields["driver"].items() if k not in _UNMEASURED_DRIVER_KEYS}
-        if (index := driver.pop("torch_index", None)) is not None:
-            tag = urlsplit(index).path.rstrip("/").rsplit("/", 1)[-1]
-            driver["torch_build"] = tag if _BUILD_TAG.fullmatch(tag) else "other"
+        driver = measure_driver(fields["driver"])
         return cls.model_validate({**{k: fields[k] for k in cls.model_fields}, "driver": driver})
 
 
@@ -189,6 +216,13 @@ class MeasuresRoot(Protocol):
 
     def observations(self, unit: MeasureUnit) -> Sequence[Observation]:
         """Return the observations of `unit` that still pool."""
+
+
+class Estimates(Protocol):
+    """Where a unit's estimate is read: `MeasureSource`, or a double that gives one."""
+
+    def get(self, unit: "MeasureUnit") -> Estimate | None:
+        """Return the estimate of `unit`, None when it has none."""
 
 
 class PackagedMeasures(Protocol):

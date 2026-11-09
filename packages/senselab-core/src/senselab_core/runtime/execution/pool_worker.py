@@ -23,14 +23,14 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 from senselab_worker.faults import FaultClass, ProtocolError, classify, error_record
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.runtime import request_reports
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
-from senselab_core.runtime.call import RunConfig
+from senselab_core.runtime.call import RunConfig, packaged
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, PlanFragment
@@ -42,15 +42,18 @@ from senselab_core.runtime.execution.observing import (
     Seen,
     Sent,
     hardware_of,
+    host_report,
     job_units,
     observations,
     records_of,
 )
 from senselab_core.runtime.execution.pool import report, run_plan
-from senselab_core.runtime.execution.queue import Claim, QueueSet, ServeLease, UnmarkedProbeItem, probe_of
+from senselab_core.runtime.execution.pool_parts import placed_backends
+from senselab_core.runtime.execution.queue import Claim, Queue, QueueSet, ServeLease, UnmarkedProbeItem, probe_of
 from senselab_core.runtime.execution.services import service_registry
 from senselab_core.runtime.execution.substrates import (
     EXIT_UNREACHABLE,
+    QueueReady,
     StoreUnreachable,
     class_of,
     mark_ready,
@@ -62,11 +65,13 @@ from senselab_core.runtime.execution_settings import is_service_class
 from senselab_core.runtime.hardware import device_memory_bytes, memory_bytes, process_tree
 from senselab_core.runtime.keys import Placement, request_size
 from senselab_core.runtime.locks import LeaseTimeout
+from senselab_core.runtime.measures import env_identity
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.storage import StorageUnsupported, probe_capabilities
 from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.units import mark_entry
 from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerFatal, WorkerLost
 
 logger = logging.getLogger("senselab")
@@ -260,16 +265,46 @@ class PoolWorker:
         self._cotenancy = cotenancy or Presence(profile, self.run_dir, clock=clock).cotenancy
         self._clock = clock
         self._listed: float | None = None
+        self._entries: dict[tuple[str, str], dict[str, Any]] = {}
 
-    def hardware(self) -> dict[str, HardwareClass]:
-        """Return the `HardwareClass` of each queue this worker serves that this host describes, for its ready mark."""
+    def ready(self) -> dict[str, QueueReady]:
+        """Return what this worker says of each queue it serves: its class, and the env of each backend placed on it.
+
+        The backends come from the run's placement of its latest attempt (`private/placements/<attempt>.json`). Each
+        env is built here, or read when built, so the mark that carries it is written after the builds; a build that
+        fails is recorded in the mark, not raised.
+        """
+        try:
+            placed = placed_backends(run_plan(self.run_dir, self.profile))
+        except (FileNotFoundError, ValueError):
+            placed = {}
         found = {}
         for name in self.classes:
             try:
-                found[name] = self._hardware(class_of(name))
+                hardware: HardwareClass | None = self._hardware(class_of(name))
             except ValueError as err:
                 logger.warning("pool worker %s cannot describe the hardware of %s: %s", self.name, name, err)
+                hardware = None
+            envs = {f"{task}~{backend}": self._env(name, task, backend) for task, backend in placed.get(name, ())}
+            found[name] = QueueReady(hardware, envs)
         return found
+
+    def _env(self, queue: str, task: str, backend_name: str) -> dict[str, Any]:
+        """Return the mark's entry for the env of `task`'s backend `backend_name`, built here; else its cause."""
+        registry = packaged().registry
+        backend = next((b for b in registry.backends(task) if b.name == backend_name), None)
+        if backend is None:
+            return {"unbuilt": "unreadable"}
+        try:
+            handle = packaged().open_env(backend, self.profile)
+        except Exception:  # noqa: BLE001 - a build fails in many ways; the mark records it, the Pool holds the env
+            logger.exception("pool worker %s could not build the env of %s/%s", self.name, task, backend_name)
+            return {"unbuilt": "build-failed"}
+        device = self.profile.resource_classes[class_of(queue)].device
+        try:
+            return mark_entry(self.profile, backend, handle, host_report(), device)
+        except ValueError:
+            return {"unbuilt": "unreadable"}
 
     def halt(self) -> None:
         """Set `stop` and wake the wait for a running claim's outcomes; safe in a signal handler."""
@@ -334,11 +369,12 @@ class PoolWorker:
         """Return the probe queues of this worker's queues it serves, oldest first.
 
         A worker serves a probe queue while it holds that queue's serve lease; it takes the lease of one with waiting
-        work, and skips one whose lease is live under another worker. A lease it lost is dropped. The run's queues are
-        listed at most once per `pool.presence_refresh_s`.
+        work whose recorded hardware class is its own (none recorded, or the queue closed: none takes it), and skips
+        one whose lease is live under another worker. A lease it lost, or on a queue since closed, is dropped. The
+        run's queues are listed at most once per `pool.presence_refresh_s`.
         """
         for name, kept in list(self._serving.items()):
-            if not kept.held:
+            if not kept.held or self.queues.queue(name).probe_closed():
                 kept.release()
                 del self._serving[name]
         now = self._clock()
@@ -348,10 +384,35 @@ class PoolWorker:
                 found = probe_of(name)
                 if found is not None and found[0] in self.classes and name not in self._serving:
                     queue = self.queues.queue(name)
-                    if queue.oldest_age_s() is not None and (lease := queue.serve_lease()) is not None:
-                        self._serving[name] = lease
+                    if queue.oldest_age_s() is not None and self._serves(queue):
+                        if (lease := queue.serve_lease()) is not None:
+                            self._serving[name] = lease
         ages = {n: self.queues.queue(n).oldest_age_s() or 0.0 for n in self._serving}
         return sorted(ages, key=lambda n: -ages[n])
+
+    def _serves(self, queue: Queue) -> bool:
+        """Return whether this worker is what the probe queue names: its class and its env for the probe's backend.
+
+        False while the queue names none, or is closed; the lease is never taken on a guess.
+        """
+        if queue.probe_closed():
+            return False
+        wanted, env = queue.probe_hardware(), queue.probe_env()
+        if wanted is None or env is None:
+            return False
+        try:
+            if self._hardware(class_of(queue.name)) != wanted:
+                return False
+        except ValueError:
+            return False
+        production = probe_of(queue.name)
+        if production is None or "~" not in env[0]:
+            return False
+        task, backend = env[0].split("~", 1)
+        mine = self._entries.get((production[0], env[0]))
+        if mine is None:
+            mine = self._entries[production[0], env[0]] = self._env(production[0], task, backend)
+        return "unbuilt" not in mine and env_identity(mine) == env_identity(env[1])
 
     def _next(self, prefer: str | None, left: int) -> Claim | None:
         """Claim up to `left` jobs from `prefer`, else from the class with the oldest work; None if none.
@@ -666,8 +727,8 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
     Without `workers`, a worker of service classes runs on a set that provides its servers to this host's registry
     (`service_registry`), closed when it returns.
     A worker that cannot reach the run directory or the store returns `EXIT_UNREACHABLE` and marks nothing; one that can
-    marks itself ready (`mark_ready`, with the `HardwareClass` of each queue it serves) once its worker is built and
-    supervised, just before it serves. On the main
+    marks itself ready (`mark_ready`, with each queue's `HardwareClass` and the env of each backend placed on it, built
+    first) once its worker is built and supervised, just before it serves. On the main
     thread SIGTERM halts the worker (`PoolWorker.halt`); the previous handler is restored after.
     """
     try:
@@ -684,11 +745,11 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
         if owned is not None:
             stack.callback(owned.close)
         if threading.current_thread() is not threading.main_thread():
-            mark_ready(Path(pool_dir).parent, worker.hardware())
+            mark_ready(Path(pool_dir).parent, worker.ready())
             return worker.serve()
         previous = signal.signal(signal.SIGTERM, lambda *_: worker.halt())
         try:
-            mark_ready(Path(pool_dir).parent, worker.hardware())
+            mark_ready(Path(pool_dir).parent, worker.ready())
             return worker.serve()
         finally:
             signal.signal(signal.SIGTERM, previous)

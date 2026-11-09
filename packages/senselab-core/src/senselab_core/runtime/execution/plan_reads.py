@@ -1,13 +1,14 @@
 """What a placed plan says of itself before it runs: its nodes' units and lengths, and what the store would serve."""
 
 import functools
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
 from senselab_core.kernel.identity import ExecutionContext, InputIdentity
 from senselab_core.runtime.calibration import Estimate, LengthProfile
 from senselab_core.runtime.call import RunConfig, env_license, input_binding, input_decoder, packaged
+from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.batching import BucketGrid, bucket_edges, keyed_formation
 from senselab_core.runtime.execution.in_process import (
     fragment_jobs,
@@ -17,10 +18,10 @@ from senselab_core.runtime.execution.in_process import (
     placement_of_record,
     plan_nodes,
 )
-from senselab_core.runtime.execution.job import held_decoder, job_context
+from senselab_core.runtime.execution.job import Job, held_decoder, job_context
 from senselab_core.runtime.execution.run import SourcesUnrecorded, port_types, recorded_sources
 from senselab_core.runtime.execution.workers import service_of
-from senselab_core.runtime.keys import request_components
+from senselab_core.runtime.keys import Placement, request_components
 from senselab_core.runtime.measures import MeasureUnit
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -45,6 +46,52 @@ class ItemCounts:
 
 def _admitted(store: ResultStore, key: str, context: ExecutionContext, run: RunConfig, backend: str) -> bool:
     return store.admits(key, context, run, backend=backend) is not None
+
+
+def job_asks(  # noqa: PLR0913 - the jobs and their keys, the env, and what the predicate reads
+    jobs: Sequence[Job],
+    placement: Placement,
+    keys: Sequence[str],
+    env: EnvHandle,
+    *,
+    profile: ExecutionProfile,
+    store: ResultStore,
+    run: RunConfig,
+    grid: BucketGrid,
+) -> list[Callable[[], bool]]:
+    """Return, per job, the call that asks `ResultStore.admits` whether the store would serve it in its context."""
+    backend = placement.backend
+    expected = service_of(backend, jobs[0].call.model) if jobs else None
+    code = env_license(backend)
+    asks: list[Callable[[], bool]] = []
+    for job, key in zip(jobs, keys, strict=True):
+        picked, _ = keyed_formation(job, backend, grid)
+        keyed = replace(placement, **request_components(backend, picked))
+        context = job_context(keyed, env, expected, profile, job, code)
+        asks.append(functools.partial(_admitted, store, key, context, run, backend.name))
+    return asks
+
+
+def servable_jobs(  # noqa: PLR0913 - the fragment's jobs and keys, the env, and what the predicate reads
+    jobs: Sequence[Job],
+    placement: Placement,
+    keys: Sequence[str],
+    envs: EnvStates,
+    *,
+    profile: ExecutionProfile,
+    store: ResultStore,
+    run: RunConfig,
+) -> list[bool]:
+    """Return whether the store would serve each job (`ResultStore.admits`, on `pool.admit_threads` threads).
+
+    Every job is computed where its env is not known: not built, not readable, or on a slurm node.
+    """
+    env = envs.get(placement.backend)
+    if isinstance(env, Unresolved):
+        return [False] * len(jobs)
+    asks = job_asks(jobs, placement, keys, env, profile=profile, store=store, run=run, grid=BucketGrid.load_default())
+    with ThreadPoolExecutor(max_workers=profile.pool.admit_threads) as threads:
+        return list(threads.map(lambda ask: ask(), asks))
 
 
 def count_items(  # noqa: PLR0913 - the plan and its values, the store and run, the profile and the env reads
@@ -85,18 +132,8 @@ def count_items(  # noqa: PLR0913 - the plan and its values, the store and run, 
                 held, undetermined=held.undetermined + len(jobs), why=(*held.why, env.reason)
             )
             continue
-        expected = service_of(backend, jobs[0].call.model) if jobs else None
-        code = env_license(backend)
-        for job, key in zip(jobs, known.keys, strict=True):
-            picked, _ = keyed_formation(job, backend, grid)
-            keyed = replace(placement, **request_components(backend, picked))
-            context = job_context(keyed, env, expected, profile, job, code)
-            asked.append(
-                (
-                    record.resource_class,
-                    functools.partial(_admitted, store, key, context, run, backend.name),
-                )
-            )
+        for ask in job_asks(jobs, placement, known.keys, env, profile=profile, store=store, run=run, grid=grid):
+            asked.append((record.resource_class, ask))
     with ThreadPoolExecutor(max_workers=profile.pool.admit_threads) as pool:
         answers = list(pool.map(lambda a: a[1](), asked))
     for (name, _), servable in zip(asked, answers, strict=True):

@@ -1,36 +1,66 @@
-"""A `MeasureSource` for tests: one measure for every unit, and a record of what calibration rounds put."""
+"""Doubles for the pool's estimate and unit reads: one estimate for every unit, and one unit for every call."""
 
-from senselab_core.runtime.resources import Batched, Measured, ResourceMeasure, Unit
+from collections.abc import Mapping, Sequence
+from typing import Any
 
-CEILED = ResourceMeasure(
+from senselab_core.kernel.declare import BackendSpec
+from senselab_core.runtime.calibration import Estimate, EstimateSource, HardwareClass, RequestFit, StratumBatch
+from senselab_core.runtime.keys import Call, Placement
+from senselab_core.runtime.measures import MeasureUnit
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.units import EnvStates, Unresolved
+from senselab_core.testing.calibration_samples import UNIT
+
+CEILED = Estimate(
+    status="measured",
+    unit_kind="none",
     load_s=1e-3,
-    claim_s=0,
-    resident_bytes=0,
-    peak_memory_bytes=1,
-    s_per_input_s=1e-6,
-    input_s_per_item=None,
-    batched=Batched(batch_size=1024, s_per_input_s=1e-6),
+    load_n=3,
+    item_s=0.0,
+    item_n=3,
+    single=RequestFit(batch=1, r=1e-6, u=None, n=6, spread=0.1, lo=0.0, hi=0.0),
+    batch=(StratumBatch(lo=0.0, hi=0.0, batch=1),),
+    source=EstimateSource(probe_ids=("p1",), observations=6),
 )
-"""A measure under which the pool's quantum ceilings bind: a load many items long, each item far under a second, as
-fast in a batch as alone at a measured batch above every quantum the tests set."""
+"""An estimate under which the pool's quantum ceilings bind: each request far under a second, so a queue wants a
+worker per item once `CEILED_SIZING` shortens the target."""
 
 CEILED_SIZING = {"target_wall_s": 1e-12}
 """A `sizing` override under which a queue wants a worker per quantum of `CEILED` items: a target that short."""
 
 
-class FixedMeasures:
-    """Gives every unit `measure` (None: every unit is unmeasured, so pools calibrate); keeps each `put`."""
+class FixedEstimates:
+    """Gives every unit `estimate` (None: every unit is unmeasured); the read of `MeasureSource.get`."""
 
-    def __init__(self, measure: ResourceMeasure | None = CEILED) -> None:
-        """Give `measure` for every unit."""
-        self.measure = measure
-        self.puts: list[tuple[Unit, ResourceMeasure, Measured]] = []
+    def __init__(self, estimate: Estimate | None = CEILED) -> None:
+        """Give `estimate` for every unit."""
+        self.estimate = estimate
 
-    def get(self, unit: Unit) -> ResourceMeasure | None:
-        """Return the measure, or a measure put for `unit` since."""
-        put = [m for u, m, _ in self.puts if u == unit]
-        return put[-1] if put else self.measure
+    def get(self, unit: MeasureUnit) -> Estimate | None:  # noqa: ARG002 - one estimate for every unit
+        """Return the estimate."""
+        return self.estimate
 
-    def put(self, unit: Unit, measure: ResourceMeasure, measured: Measured) -> None:
-        """Keep `measure` of `unit`."""
-        self.puts.append((unit, measure, measured))
+
+class FixedUnit:
+    """A `UnitResolver` whose every call is the unit `unit` (or the `Unresolved` it is given), over `profile`'s envs."""
+
+    def __init__(self, profile: ExecutionProfile, unit: MeasureUnit | Unresolved = UNIT) -> None:
+        """Resolve every call to `unit`; `envs` reads `profile`'s envs as the pool's servable reads do."""
+        self.unit_given, self.envs = unit, EnvStates(profile)
+        self.calls: list[tuple[Call, Placement, str | None, HardwareClass | None]] = []
+
+    def unit(
+        self,
+        call: Call,
+        placement: Placement,
+        decoder: str | None = None,
+        hardware: HardwareClass | None = None,
+        env: Mapping[str, Any] | None = None,
+    ) -> MeasureUnit | Unresolved:
+        """Return the unit given, noting the call."""
+        self.calls.append((call, placement, decoder, hardware))
+        return self.unit_given
+
+    def backends(self) -> Sequence[BackendSpec]:
+        """Return the backends of the calls seen."""
+        return [p.backend for _, p, _, _ in self.calls]

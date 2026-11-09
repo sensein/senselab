@@ -31,10 +31,12 @@ from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from senselab_worker.canonical import jcs_dumps, jcs_loads
 
+from senselab_core.kernel.declare import BackendSpec
+from senselab_core.kernel.formats import WORKER_READY_FORMAT, FormatVerdict, check
 from senselab_core.runtime.calibration import HardwareClass
 from senselab_core.runtime.config import expand
 from senselab_core.runtime.execution.queue import PROBE_MARK, RUN_QUEUES, QueueSet
@@ -150,24 +152,47 @@ def worker_id() -> str:
 
 
 @dataclass(frozen=True)
+class QueueReady:
+    """What a worker says of one queue it serves: its `HardwareClass` (None: it names none) and each backend's env.
+
+    An env is its `env_entry`, or `{"unbuilt": "build-failed" | "unreadable"}`.
+    """
+
+    hardware: HardwareClass | None
+    envs: Mapping[str, Mapping[str, Any]]
+
+
+@dataclass(frozen=True)
 class ReadyMark:
-    """What a worker's ready mark says: its host's token, its process id and start, and a `HardwareClass` per queue."""
+    """A `worker-ready@1.0` mark: its host's token, its process id and start, and what it says per queue."""
 
     host: str
     pid: int
     started: str | None
-    hardware: Mapping[str, HardwareClass]
+    queues: Mapping[str, QueueReady]
 
 
-def mark_ready(run_dir: Path, hardware: Mapping[str, HardwareClass] | None = None) -> None:
-    """Record that this worker started: it reached the run and its store; `hardware` is its class per queue."""
+def backend_key(backend: BackendSpec) -> str:
+    """Return the name a ready mark gives `backend`'s env: its task and backend, which fix its env and overlay."""
+    return f"{backend.task}~{backend.name}"
+
+
+def mark_ready(run_dir: Path, queues: Mapping[str, QueueReady] | None = None) -> None:
+    """Record that this worker started: it reached the run and its store, and what it says of each queue it serves."""
     directory = Path(run_dir) / WORKERS_DIR
     directory.mkdir(parents=True, exist_ok=True)
     document = {
+        "format": WORKER_READY_FORMAT,
         "host": host_token(),
         "pid": os.getpid(),
         "started": process_started(os.getpid()),
-        "hardware": {name: found.model_dump(mode="json") for name, found in (hardware or {}).items()},
+        "queues": {
+            name: {
+                "hardware": None if ready.hardware is None else ready.hardware.model_dump(mode="json"),
+                "envs": {k: dict(v) for k, v in ready.envs.items()},
+            }
+            for name, ready in (queues or {}).items()
+        },
     }
     staged = directory / f".{worker_id()}.{os.getpid()}"
     staged.write_bytes(jcs_dumps(document))
@@ -175,19 +200,42 @@ def mark_ready(run_dir: Path, hardware: Mapping[str, HardwareClass] | None = Non
 
 
 def read_mark(path: Path) -> ReadyMark | None:
-    """Return the ready mark at `path`; None when it is unreadable or is not a mark (an empty one, or another's)."""
+    """Return the `worker-ready@1.0` mark at `path`; None when it is unreadable or of another format (logged once)."""
     try:
         document = jcs_loads(Path(path).read_bytes())
         if not isinstance(document, dict):
+            return None
+        if check(WORKER_READY_FORMAT, document.get("format")) is not FormatVerdict.ACCEPTED:
+            _say_once(
+                ("mark", str(document.get("format"))),
+                "a worker mark is %r; %r is read",
+                document.get("format"),
+                WORKER_READY_FORMAT,
+            )
             return None
         return ReadyMark(
             document["host"],
             document["pid"],
             document["started"],
-            {name: HardwareClass.model_validate(found) for name, found in document["hardware"].items()},
+            {
+                name: QueueReady(
+                    None if found["hardware"] is None else HardwareClass.model_validate(found["hardware"]),
+                    {k: dict(v) for k, v in found["envs"].items()},
+                )
+                for name, found in document["queues"].items()
+            },
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
+
+
+_SAID: set[tuple[str, ...]] = set()
+
+
+def _say_once(key: tuple[str, ...], message: str, *args: object) -> None:
+    if key not in _SAID:
+        _SAID.add(key)
+        logger.warning(message, *args)
 
 
 class Peers:

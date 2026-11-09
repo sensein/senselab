@@ -327,7 +327,7 @@ def memory_batch(fit: MemoryFit, budget_bytes: float, length: float, ceiling: in
         return 1
     if per_job <= 0:
         return ceiling
-    return max(1, min(ceiling, math.floor(room / per_job)))
+    return max(1, math.floor(min(ceiling, room / per_job)))
 
 
 def _holding(spans: Sequence[tuple[float, float]], length: float) -> tuple[float, float] | None:

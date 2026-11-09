@@ -17,7 +17,15 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.units import Unresolved
 from senselab_core.testing.interpreter import source_tree_python
+from senselab_core.testing.measures import FixedUnit
+
+
+def unresolving(profile: ExecutionProfile) -> FixedUnit:
+    """Return a resolver whose every unit is unresolved for a final cause, so every unit runs the safe values."""
+    return FixedUnit(profile, Unresolved("the host names no hardware class"))
+
 
 BACKEND = "backends.sizes_backend_fixture"
 """The host backend every task here is served by: it records request sizes and fails inputs `fail` and `gap`."""
