@@ -817,18 +817,17 @@ def _check_private(fd: int, path: Path) -> None:
 
 
 def private_dir(path: Path) -> Path:
-    """Create `path`, and any missing parent, owner-only; return it once it is this user's with `PRIVATE_DIR_MODE`.
+    """Create `path` owner-only, its missing parents under the umask; return it once it is this user's, 0700.
 
-    An existing directory this user owns is set to that mode whatever the umask.
+    An existing directory this user owns is set to `PRIVATE_DIR_MODE` whatever the umask; no parent's mode changes.
 
     Raises:
         WrongKindError: `path` is a symlink or not a directory, or another user owns it.
     """
     path = Path(path)
-    missing = [p for p in (path, *path.parents) if not os.path.lexists(p)]
-    for made in reversed(missing):
-        with contextlib.suppress(FileExistsError):
-            made.mkdir(mode=PRIVATE_DIR_MODE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(FileExistsError):
+        path.mkdir(mode=PRIVATE_DIR_MODE)
     try:
         fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError as err:

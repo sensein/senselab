@@ -1,6 +1,7 @@
 """`probe_capabilities`: what a root does, measured on the root itself."""
 
 import errno
+import os
 from pathlib import Path
 
 import pytest
@@ -56,9 +57,13 @@ def test_require_names_each_missing_primitive() -> None:
 
 @pytest.mark.logic
 def test_a_private_directory_is_made_owner_only_and_a_planted_symlink_is_refused(tmp_path: Path) -> None:
-    """Missing parents and the directory are made 0700; a loose one is tightened; a symlink at the name is refused."""
-    made = private_dir(tmp_path / "run" / "private" / "pydra")
-    assert all((tmp_path / p).stat().st_mode & 0o777 == 0o700 for p in ("run", "run/private", "run/private/pydra"))
+    """The leaf is made 0700, missing parents under the umask; a loose leaf is tightened; a symlink is refused."""
+    umask = os.umask(0o022)
+    try:
+        made = private_dir(tmp_path / "run" / "private")
+    finally:
+        os.umask(umask)
+    assert [(tmp_path / p).stat().st_mode & 0o777 for p in ("run", "run/private")] == [0o755, 0o700]
     made.chmod(0o755)
     assert private_dir(made).stat().st_mode & 0o777 == 0o700
     (tmp_path / "elsewhere").mkdir()

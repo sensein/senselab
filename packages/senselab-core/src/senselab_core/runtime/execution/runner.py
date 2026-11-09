@@ -54,7 +54,7 @@ from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.planner import Plan, check_mapped_outputs
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import attempt_scope
-from senselab_core.runtime.storage import private_dir
+from senselab_core.runtime.storage import PRIVATE_DIR, private_dir
 
 RECORDS = "records"
 """The pydra node split over the manifest's rows; every mapped node reads its row from it."""
@@ -793,6 +793,8 @@ class PydraRunner:
         store: SenselabStore | None,
         cancel: threading.Event | None,
     ) -> RunOutcome:
+        if self.work_dir is None:
+            private_dir(run_dir_of(placed.hash) / PRIVATE_DIR)
         root = private_dir(self.work_dir if self.work_dir is not None else run_dir_of(placed.hash) / PYDRA_DIR)
         store = store if store is not None else SenselabStore(root)
         admission = executor.admit(placed, values)
