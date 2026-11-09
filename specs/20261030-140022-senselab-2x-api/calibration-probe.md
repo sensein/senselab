@@ -142,6 +142,13 @@ never enter a digest. The coordinator resolves a resource class to the hardware 
    written under the class of the worker that made it; only a worker of the resolved class takes a probe queue's
    serve lease (§4.4), and drift counts only requests of the resolved class (§7.3).
 
+On a local substrate the first worker's hello is this host's, so plan time resolves the class by the one rule: the class is
+this host's `HardwareClass` (from its report, as the worker would give it), and it must be in the index; else the plan says
+`hardware not yet seen on this host`, or `this host reports no hardware class` where the host names none. Several seen
+classes in a shared root (a partition of mixed cards, or two workstations under one declared class) therefore change nothing
+here: only this host's class is read. On a Slurm substrate the worker's node, platform and numerics are not known before it
+starts, so the unit is unresolved until a hello (T20R-7a) says them.
+
 So a unit is never looked up under a digest that no worker writes (review B3). Plan time (`explain`, §6.6) uses the
 index only; with no entry, its figures are "unmeasured: hardware not yet seen".
 
@@ -514,8 +521,8 @@ For each length bucket of the run (the formation's grid for a bucketed backend, 
 `⌊(memory_headroom·grant − resident − m0)/(m1·L)⌋` with `m1` as §7.4 raises it. `B(L) = 1` when L lies above the
 measured range, or when device memory or batched time is unmeasured.
 An executor that does not split fragments asks `size` for its fragment size (`fragment_size`) and cuts a fragment into
-runs of equal batch at stratum boundaries; cutting at a formation grid's buckets needs the grid as an input of `size`
-(T20R-7a). The item's placement carries its bucket's
+runs of equal batch at stratum boundaries; cutting at a formation grid's buckets takes the grid as `size`'s `bucket_edges` keyword, in the estimate's input units
+(T20R-7a-0): no item spans two buckets. The item's placement carries its bucket's
 batch; a fragment whose jobs fall in several buckets is cut at bucket boundaries.
 
 ### 6.5 Missing measure: the safe value per dimension (S5)
@@ -545,9 +552,22 @@ otherwise. The in-process executor never probes; without an estimate it runs the
 
 `plan_cost` and `check_caps` (the resource-table@1 readers at plan time) are routed through each node's `Sizing` or
 deleted by T20R-8, and `explain()`'s `cost:` line carries only the download until then. A reason printed for an
-unmeasured figure is true of the state: `no measure source given`, `no measure unit for the node`, `no estimate for its
-unit`, `lengths unknown`. One `MeasureUnit` resolver over the env record and the hardware index, which `explain()` and
-the in-process executor use by default, is T20R-7a's.
+unmeasured figure is true of the state: the unit's reason above, `no estimate for its unit`, `lengths unknown`. One `MeasureUnit` resolver (`UnitResolver`, T20R-7a-0) over the env record and the hardware index is what `explain()` and
+the in-process executor use by default, with `MeasureSource` over the profile's roots; the Pool builds every unit it reads
+or writes through it (T20R-7a). The env comes from one `EnvStates.get` (`Packaged.env_read`, raising `EnvUnreadable` for any
+cause; a built handle is kept under the env's identity, its env, worker overlay and requirements, so backends sharing a name and version across tasks read their own envs; an unbuilt env is read again), which the servable counts use too. The decoder is read from the
+plan's recorded sources (a path source of a port with a reader is file-backed, a JSON value is not, a `{"memory": ...}` source
+is as the live value, unresolved when this process does not hold it), else the unit is unresolved, as it is when the plan records no sources; a node fed by both has two units. A bucketed backend's formation is the
+grid's `bucket:<grid id>`. An unresolved unit says why: `hardware not yet seen on this host`, `this host reports no hardware
+class`, `the env of backend <b> is not built` (or `cannot be read`), `the node a slurm worker runs on is chosen at
+submission`, an unreadable server attestation, or `its jobs read both files and in-memory inputs, which are two units`.
+`explain` and logs name a unit by the first 12 hex digits of its digest, never an identifier. `explain` counts against the
+store a run would use (`default_store()`, or the `store` given), binding the plan's inputs as a run does: per resource class
+the jobs servable (`ResultStore.admits`, the one predicate, asked on `pool.admit_threads` threads), computed, and
+undetermined (an unbuilt, unreadable or Slurm env; a key that waits on an upstream result). Binding is needed only for the counts and lengths: a plan whose inputs cannot be bound (changed, held by another process, or no sources recorded, `SourcesUnrecorded`) still renders, every class's counts undetermined and its lengths unknown, each with the binding error's reason (UX-32). `size` marks
+`Sizing.extrapolated` when a known length lies outside the measured range; the executor logs it once per unit per run (a new
+log at `bind_epoch`). `regime` and `oom` payloads are typed by one table (`RECORD_MODELS`) that `put_record` validates on
+write and `regime_records` reads; a payload change bumps `measure-regime@` or `measure-oom@`.
 
 ## 7. The Pool: probe and production items
 
@@ -1060,8 +1080,8 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
   `replace_served`, budgets over warm probe work, servable jobs put at once (T20R-3's predicate), observation writes,
   release under §6 or the safe values; `workers_wanted` for probing units; the ladder's two reads (`pool.calibrated`
   becomes `pool.probes`; the `or calibrated(samples)` fallback is deleted, must-fix 5). The old calibration path is
-  left with no caller, for T20R-7a′. Also here: the `MeasureUnit` resolver (§6.6), the once-per-unit extrapolation log,
-  `explain()`'s servable and computed counts, a formation grid as an input of `size`, a probe of a stratum the estimate
+  left with no caller, for T20R-7a′. Also here: every unit the Pool reads or writes is built through `UnitResolver.unit`, the Pool passes `bucket_edges` from the
+  backend's formation whether or not it has an estimate, and holds one `ExtrapolationLog` per run; a probe of a stratum the estimate
   does not cover before production on a unit with `u` unmeasured, and the Pool half of
   `test_the_pool_and_the_in_process_executor_size_one_unit_alike`. `execution.md` §3.2 updated.
 - **Files.** `runtime/execution/pool.py`, `benchmarks/scale/ladder.py` (the two reads only), `execution.md`.
