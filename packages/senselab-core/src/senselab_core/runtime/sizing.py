@@ -17,7 +17,9 @@ from pydantic import Field, model_validator
 from senselab_worker.digest import file_digest, identity_digest
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
-from senselab_core.runtime.execution_settings import PoolSettings, ResourceClass, SizingSettings
+from senselab_core.runtime.calibration import Estimate, LengthProfile, MemoryFit, RegimeFactor, StratumBatch
+from senselab_core.runtime.execution_settings import CalibrationSettings, PoolSettings, ResourceClass, SizingSettings
+from senselab_core.runtime.probe import memory_batch
 from senselab_core.runtime.resources import (
     Batched,
     Measured,
@@ -61,7 +63,7 @@ class Grant(Frozen):
     """What a unit's workers are granted: the most alive at once, memory per worker (None unknown), quantum ceilings.
 
     `devices` is the count of devices a `cuda` class's workers share; None where each worker is granted its own device
-    or runs on none.
+    or runs on none. `on_device` says `memory_bytes` is a device's, so sizing reads the device memory fit.
     """
 
     max_workers: Count
@@ -69,6 +71,7 @@ class Grant(Frozen):
     quantum_items: Count
     quantum_s: Annotated[float, Field(gt=0, allow_inf_nan=False)]
     devices: Annotated[int, Field(ge=0)] | None = None
+    on_device: bool = False
 
     @classmethod
     def of(  # noqa: PLR0913 - the class and pool, then what the host measured
@@ -93,6 +96,7 @@ class Grant(Frozen):
             quantum_items=pool.quantum_items,
             quantum_s=time_s,
             devices=devices if resource.device == "cuda" else None,
+            on_device=on_device,
         )
 
     def worker_bound(self, measure: "Measure | None") -> int:
@@ -110,7 +114,7 @@ class Grant(Frozen):
         return min(self.max_workers, self.devices * each)
 
 
-class Sizing(Frozen):
+class RowSizing(Frozen):
     """Items per request, the most memory allows, jobs and seconds per quantum, and the workers a queue's work wants."""
 
     batch_size: Count
@@ -120,8 +124,10 @@ class Sizing(Frozen):
     workers: Annotated[int, Field(ge=0)]
 
 
-def size(measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 0, batchable: bool = True) -> Sizing:
-    """Return the sizing of a unit measured as `measure` under `grant`, for `work` waiting jobs.
+def size_row(
+    measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 0, batchable: bool = True
+) -> RowSizing:
+    """Return the sizing of a unit measured as `measure` under `grant`, for `work` waiting jobs; the Pool's until 7a.
 
     - `quantum_items`: the fewest jobs whose time keeps the load and the claim within `load_share` of the quantum
       (the ceiling when both are 0), within the ceilings: `quantum_items`, and the jobs that fit in `quantum_s` after
@@ -152,7 +158,7 @@ def size(measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 
     if work > 0:
         timely = max(1, _held(work * per / config.target_wall_s, grant.max_workers, math.ceil))
         workers = min(timely, math.ceil(work / quantum), grant.worker_bound(measure))
-    return Sizing(
+    return RowSizing(
         batch_size=batch,
         memory_batch=memory_batch,
         quantum_items=quantum,
@@ -164,6 +170,197 @@ def size(measure: Measure, grant: Grant, config: SizingSettings, *, work: int = 
 def _held(x: float, bound: int, rounded: Callable[[float], int]) -> int:
     """Return `rounded(x)` held within `[0, bound]`, for an infinite `x` too."""
     return bound if x >= bound else rounded(max(x, 0.0))
+
+
+class Basis(Frozen):
+    """Which figures of a `Sizing` rest on a measure: `time` (per-job seconds), `memory`, `batch` and `workers`."""
+
+    time: bool
+    memory: bool
+    batch: bool
+    workers: bool
+
+
+class Sizing(Frozen):
+    """What `size` derives for a unit's waiting jobs: item cuts, batch per length, workers and predicted seconds.
+
+    Attributes:
+        cuts: Half-open job index ranges `[start, stop)` of the items, in put order, covering every job.
+        strata: The estimate's batch per length range.
+        measured_range: The `(lo, hi)` units the single fit measured; None when unmeasured.
+        memory: The device or host memory fit the batches are sized against; None when unmeasured.
+        budget_bytes: The memory a batch may fill, `memory_headroom` of one worker's share of the grant.
+        ceiling: The most jobs of one item.
+        workers: Workers the work wants.
+        workers_per_device: Workers that share one card; 1 where each holds its own.
+        predicted_s: Each job's median predicted seconds; None for every job unless all are of known length inside
+            the measured range.
+        wall_s: Predicted wall seconds of the work on `workers`; None unless every job's time is measured.
+        batch_one_peak: The memory of a batch-1 request at the longest job, `resident + m0 + m1·L`; None unmeasured.
+        measured: Which figures rest on a measure.
+    """
+
+    cuts: tuple[tuple[int, int], ...]
+    strata: tuple[StratumBatch, ...] = ()
+    measured_range: tuple[float, float] | None = None
+    memory: MemoryFit | None = None
+    budget_bytes: float | None = None
+    ceiling: Count = 1
+    workers: Annotated[int, Field(ge=0)]
+    workers_per_device: Count = 1
+    predicted_s: tuple[Seconds | None, ...] = ()
+    wall_s: Seconds | None = None
+    batch_one_peak: Bytes | None = None
+    measured: Basis
+
+    def batch_at(self, length: float | None, jobs: int | None = None) -> int:
+        """Return the batch for jobs of `length` units in an item of `jobs` jobs.
+
+        It is the least of the estimate's batch for that length, the memory batch and `jobs`; 1 for an unknown length,
+        one above the measured range, or unmeasured memory.
+        """
+        return _batch(self, length, self.ceiling if jobs is None else min(jobs, self.ceiling))
+
+
+def _star(strata: Sequence[StratumBatch], length: float) -> int:
+    """Return the estimate's batch at `length`: its stratum's, the smaller of the two beside a gap, else the nearest."""
+    holding = [s.batch for s in strata if s.lo <= length <= s.hi]
+    if holding:
+        return min(holding)
+    below = [s for s in strata if s.hi < length]
+    above = [s for s in strata if s.lo > length]
+    near = ([max(below, key=lambda s: s.hi)] if below else []) + ([min(above, key=lambda s: s.lo)] if above else [])
+    return min((s.batch for s in near), default=1)
+
+
+def _batch(sized: Sizing, length: float | None, jobs: int) -> int:
+    span = sized.measured_range
+    if length is None or span is None or sized.memory is None or sized.budget_bytes is None or length > span[1]:
+        return 1
+    room = memory_batch(sized.memory, sized.budget_bytes, length, max(jobs, 1))
+    return max(1, min(_star(sized.strata, length), room, jobs))
+
+
+def _regime_workers(regimes: Sequence[RegimeFactor], bound: int) -> int:
+    """Return the most workers up to `bound` whose throughput `k/ρ_k` keeps increasing, where `ρ_k` is measured."""
+    rho = {r.k: r.rho for r in regimes}
+    best, throughput = 1, 1.0
+    for k in range(2, bound + 1):
+        if k in rho and k / rho[k] <= throughput:
+            break
+        throughput = k / rho.get(k, 1.0)
+        best = k
+    return best
+
+
+def _unmeasured(grant: Grant, calibration: CalibrationSettings, jobs: int) -> Sizing:
+    cuts = tuple((a, min(a + grant.quantum_items, jobs)) for a in range(0, jobs, grant.quantum_items))
+    workers = 0 if jobs == 0 else min(calibration.unmeasured_workers, len(cuts), grant.max_workers)
+    return Sizing(
+        cuts=cuts,
+        ceiling=grant.quantum_items,
+        workers=workers,
+        predicted_s=(None,) * jobs,
+        measured=Basis(time=False, memory=False, batch=False, workers=False),
+    )
+
+
+def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the calibration settings
+    estimate: Estimate | None,
+    grant: Grant,
+    config: SizingSettings,
+    work: LengthProfile,
+    *,
+    calibration: CalibrationSettings,
+) -> Sizing:
+    """Return the sizing of `work` under `grant` from `estimate` (None: unmeasured, so the safe values), purely.
+
+    A job's seconds at batch 1 are `r + u·L`, at its length's batch B `(r_B + u_B·B·L)/B`, times the regime factor of
+    the co-tenancy the card's workers make. Items are cut in put order at the upper prediction
+    `t·(1 + confidence·spread)`: an item closes before its upper seconds plus the per-item cost pass the grant's
+    `quantum_s`, when its seconds reach `(load_s + a)/load_share`, or at `quantum_items` jobs. Workers are the median
+    seconds over `target_wall_s`, at most the item count, `max_workers` and, on shared devices, `devices × w_d`.
+
+    On shared devices `w_d = ⌊memory_headroom × cap / P⌋` for the batch peak `P` at the longest job, lowered where a
+    measured regime says another worker adds no throughput, and each worker's memory is `cap / w_d`. The fit read is
+    the device's on a device grant, the host's otherwise, never the other. A length above the measured range, or an
+    unmeasured memory, gives batch 1; so does an unknown length. Lengths are `0` for an estimate of unit kind `none`.
+    """
+    jobs = len(work.units)
+    single = None if estimate is None else estimate.single
+    if estimate is None or single is None:
+        return _unmeasured(grant, calibration, jobs)
+    fit = estimate.device if grant.on_device else estimate.host
+    span = (single.lo, single.hi)
+    lengths = [single.hi if length is None else length for length in work.units]
+    longest = max(lengths, default=0.0)
+    share = grant.memory_bytes if fit is not None else None
+    per_device = 1
+    if share is not None and fit is not None and grant.devices is not None and grant.on_device:
+        star = _star(estimate.batch, longest) if longest <= span[1] else 1
+        peak = fit.resident + fit.m0 + fit.m1 * star * longest
+        fits = grant.max_workers if peak <= 0 else max(1, math.floor(config.memory_headroom * share / peak))
+        per_device = _regime_workers(estimate.regimes, fits)
+        share //= per_device
+    budget = None if share is None else config.memory_headroom * share
+    shell = Sizing(
+        cuts=(),
+        strata=estimate.batch,
+        measured_range=span,
+        memory=fit,
+        budget_bytes=budget,
+        ceiling=grant.quantum_items,
+        workers=0,
+        measured=Basis(time=False, memory=False, batch=False, workers=False),
+    )
+    rho = {r.k: r.rho for r in estimate.regimes}.get(per_device, 1.0)
+    medians = [_seconds(estimate, shell.batch_at(length), length) * rho for length in lengths]
+    spread = 1.0 + calibration.confidence * (single.spread or 0.0)
+    per_item, load = estimate.item_s or 0.0, estimate.load_s or 0.0
+    cuts = _cut(medians, [m * spread for m in medians], per_item, (load + per_item) / config.load_share, grant)
+    timed = all(length is not None and span[0] <= length <= span[1] for length in work.units)
+    bound = grant.max_workers if grant.devices is None else grant.devices * per_device
+    wanted = max(1, math.ceil(sum(medians) / config.target_wall_s))
+    workers = 0 if jobs == 0 else min(wanted, len(cuts), grant.max_workers, bound)
+    wall = load + (sum(medians) + per_item * len(cuts)) / workers if timed and workers else None
+    return shell.model_copy(
+        update={
+            "cuts": cuts,
+            "workers": workers,
+            "workers_per_device": per_device,
+            "predicted_s": tuple(m if timed else None for m in medians),
+            "wall_s": wall,
+            "batch_one_peak": None if fit is None else round(fit.resident + fit.m0 + fit.m1 * longest),
+            "measured": Basis(
+                time=timed, memory=budget is not None, batch=bool(estimate.batch) and budget is not None, workers=timed
+            ),
+        }
+    )
+
+
+def _seconds(estimate: Estimate, batch: int, length: float) -> float:
+    """Return the median seconds per job at `length` units sent `batch` to a request."""
+    single = estimate.single
+    assert single is not None
+    fit = next((f for f in estimate.batched if f.batch == batch), None)
+    if batch > 1 and fit is not None:
+        return max(0.0, (fit.r + (fit.u or 0.0) * batch * length) / batch)
+    return max(0.0, single.r + (single.u or 0.0) * length)
+
+
+def _cut(
+    medians: Sequence[float], uppers: Sequence[float], per_item: float, floor_s: float, grant: Grant
+) -> tuple[tuple[int, int], ...]:
+    """Return the item cuts: walk the jobs, closing an item at the grant's quantum or once it earns its load."""
+    cuts: list[tuple[int, int]] = []
+    start, upper, median = 0, 0.0, 0.0
+    for i, (m, u) in enumerate(zip(medians, uppers, strict=True)):
+        full = i - start >= grant.quantum_items or upper + u + per_item > grant.quantum_s or median >= floor_s > 0
+        if i > start and full:
+            cuts.append((start, i))
+            start, upper, median = i, 0.0, 0.0
+        upper, median = upper + u, median + m
+    return (*cuts, (start, len(medians))) if medians else ()
 
 
 def measure_of(row: ResourceMeasure, *, on_device: bool = False) -> Measure:

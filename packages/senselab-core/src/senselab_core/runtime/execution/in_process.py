@@ -4,17 +4,20 @@ import atexit
 import itertools
 import threading
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import ClassVar
+
+from senselab_worker.units import NS_PER_S
 
 from senselab_core.kernel.declare import BackendSpec, Registry, TaskSpec
 from senselab_core.kernel.graph import Edge, Node, order
 from senselab_core.kernel.identity import InputIdentity, LogicalKey, ReusePolicy, gather_identity
 from senselab_core.kernel.placement import NodePlacement
-from senselab_core.runtime.call import Result, RunConfig, TaskCall, bind_input, packaged
+from senselab_core.runtime.calibration import LengthProfile, UnitKind
+from senselab_core.runtime.call import Result, RunConfig, TaskCall, bind_input, host_hardware, packaged
 from senselab_core.runtime.execution import batching
-from senselab_core.runtime.execution.batching import BucketGrid, recording_span_ns
+from senselab_core.runtime.execution.batching import BucketGrid, job_length_ns, job_text_chars, recording_span_ns
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import (
     Admission,
@@ -40,9 +43,11 @@ from senselab_core.runtime.keys import (
     request_components,
     request_size,
 )
+from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
+from senselab_core.runtime.sizing import Grant, Sizing, size
 from senselab_core.runtime.store import ResultStore
 
 
@@ -353,6 +358,17 @@ def plan_keys(placed: Plan, values: Mapping[InputIdentity, object]) -> dict[tupl
     return keys
 
 
+def _units_of(job: Job, kind: UnitKind) -> float | None:
+    """Return `job`'s input units of `kind`: recording seconds, held characters, or 0 for none; None when unknown."""
+    if kind == "none":
+        return 0.0
+    try:
+        length = job_length_ns(job) if kind == "audio_s" else job_text_chars(job)
+    except batching.LengthUnrecorded:
+        return None
+    return None if length is None else length / NS_PER_S if kind == "audio_s" else float(length)
+
+
 class InProcess:
     """An `Executor` whose `submit` runs a fragment's jobs through `execute` in this process, before returning.
 
@@ -360,22 +376,27 @@ class InProcess:
     identity its jobs name; an upstream input is read from the store.
     Jobs are sent in batches of at most the placement's batch size (`form_batches`). `None` means the packaged
     default: the store under `cache_root()/results`, the `laptop` profile, `RunConfig()` and this process's worker
-    set for the profile (`process_workers`).
+    set for the profile (`process_workers`). Batches are sized (`size`) from the estimate `measures` gives for the unit
+    `units` names for a placement; with either missing the unit is unmeasured and runs the safe values, batch 1.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - the executor's settings, all keyword-only
         self,
         *,
         store: ResultStore | None = None,
         profile: ExecutionProfile | None = None,
         run: RunConfig | None = None,
         workers: WorkerSet | None = None,
+        measures: MeasureSource | None = None,
+        units: Callable[[Placement], MeasureUnit | None] | None = None,
     ) -> None:
-        """Run fragments under `profile` and `run`, storing in `store`, on `workers`."""
+        """Run fragments under `profile` and `run`, storing in `store`, on `workers`, sized from `measures`."""
         self.profile = profile if profile is not None else ExecutionProfile.load()
         self.run = run if run is not None else RunConfig()
         self.store = store if store is not None else ResultStore(cache_root() / "results")
         self.workers = workers if workers is not None else process_workers(self.profile)
+        self.measures = measures
+        self.units = units
         self._lock = threading.Lock()
         self._admissions: dict[str, tuple[Plan, dict[InputIdentity, object]]] = {}
         self._outcomes: dict[str, list[JobOutcome]] = {}
@@ -423,6 +444,9 @@ class InProcess:
                 WorkerFatal, WorkerLost, ProtocolError: as `execute`.
         """
         jobs, placement = self._jobs(fragment)
+        sized, lengths = self._size(jobs, placement)
+        batch = min((sized.batch_at(length, len(jobs)) for length in lengths), default=1)
+        placement = replace(placement, batch_size=batch)
         handle = Handle(id=f"fragment-{next(self._ids)}")
         with self._lock:
             self._status[handle.id] = Status.RUNNING
@@ -438,6 +462,23 @@ class InProcess:
             self._outcomes[handle.id] = outcomes
             self._status[handle.id] = Status.DONE
         return handle
+
+    def sizing(self, jobs: Sequence[Job], placement: Placement) -> Sizing:
+        """Return `size` of `jobs` on `placement`: from the estimate of its unit, else the safe values (batch 1)."""
+        return self._size(jobs, placement)[0]
+
+    def _size(self, jobs: Sequence[Job], placement: Placement) -> tuple[Sizing, tuple[float | None, ...]]:
+        unit = None if self.units is None else self.units(placement)
+        estimate = None if unit is None or self.measures is None else self.measures.get(unit)
+        resource = self.profile.resource_classes[placement.resource_class]
+        on_device = resource.device == "cuda"
+        host = None if on_device or resource.mem_bytes is not None else host_hardware().memory_bytes
+        grant = Grant.of(resource, self.profile.pool, host, on_device=on_device)
+        lengths = tuple(_units_of(job, "none" if estimate is None else estimate.unit_kind) for job in jobs)
+        sized = size(
+            estimate, grant, self.profile.sizing, LengthProfile(units=lengths), calibration=self.profile.calibration
+        )
+        return sized, lengths
 
     def status(self, handle: Handle) -> Status:
         """Return where the fragment of `handle` is: `done` once `submit` returned it.
