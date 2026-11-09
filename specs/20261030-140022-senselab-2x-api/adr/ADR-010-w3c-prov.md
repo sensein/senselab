@@ -215,7 +215,7 @@ Source: bids-standard/BEP028_BIDSprov, `bep028spec.md` at master 162bea57 (2026-
   from the stored context, so it is the same node the execution that computed the result recorded.
 - **Core terms added** (`senselab-vocab@1.2`): `senselab:envLock` (`prov:Agent`, `xsd:string`),
   `senselab:license` (`prov:Agent`, `rdf:JSON`), `senselab:storedAgent` (`prov:Activity`, `xsd:string`).
-  `senselab:context` and `senselab:storedContext` are `execution-context@3.1` records (a stored 3.0 record is left as written).
+  `senselab:context` and `senselab:storedContext` are `execution-context@4.0` records (was `@3.0`/`@3.1`; ADR-006 amendment 2026-11-08, Task 20R-S2).
 
 ## Amendment 2026-11-02: the thresholds of a verify decision are recorded (P2-95; Phase 2 Task 34e)
 

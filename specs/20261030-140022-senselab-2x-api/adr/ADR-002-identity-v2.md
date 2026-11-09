@@ -240,7 +240,7 @@ Ruling P2-93 (owner item 46). Phase 2 Task 34d.
 
 - `ExecutionContext.env_license` (a `License` or None) is the code license of the env, `backend_license` over its
   env lock's license records. It is recorded, never fingerprinted, like `host` (the writer's `host_token()`, never a name), `protocol` and `model_source`.
-  Stored contexts are `execution-context@3.1` (a 3.0 member is read; its `host` may be a name, left as written); entries live under `store@5/`, and `execution-context@2` is a
+  Stored contexts were `execution-context@3.1` under `store@5/` (the 2026-11-08 amendment below makes them `@4.0` under `store@6/`), and `execution-context@2` is a
   retired store format (the store format gate, Task 34a).
 - `RunConfig.licenses` (`LicensePolicy`, the user's allowed and refused SPDX ids, `allow` None meaning every id not
   refused) is the only thing that refuses a call for its license: a refused env or model license raises
@@ -309,3 +309,10 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3, §4.2, §12. Adds
   context. A probe request that comes back served is discarded and replaced.
 - 2026-11-08: measures keyed by `MeasureUnit` in their own namespace; probe jobs keyed and stored as ordinary jobs;
   probe candidates are the jobs the reuse predicate would not serve (Phase 3 Task 20R).
+
+## Amendment 2026-11-08: the context records the torch build (Phase 3 Task 20R-S2)
+
+Owner ruling, 2026-11-08. A URL is a location, never a record value. `ExecutionContext.driver` holds `torch_build`,
+derived by one function (`torch_build(index_url)`, the index URL's last path segment when it is a build tag, else
+`other`), which the measures and a worker's ready mark use too. The index URL stays in the process environment and the
+operator log. The context fingerprint is `context@5`; stored contexts are `execution-context@4.0` under `store@6/`.

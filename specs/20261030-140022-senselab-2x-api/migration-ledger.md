@@ -309,7 +309,7 @@ within. A stored transcript output is recomputed; a hand-built timed transcript 
 
 ## Retired store formats
 
-2.x reads `result@2` and `execution-context@3` store members, any minor, under `store@5/`. `result@1`,
+2.x reads `result@2` and `execution-context@4` store members, any minor, under `store@6/` (Task 20R-S2). `result@1`,
 `execution-context@1` and `execution-context@2` are retired with no converter (P2-44; `@2` by Phase 2 Task 34d, whose
 `@3` adds the env license): a store read of a retired context raises `StoreFormatRetired`, naming the member, and
 leaves the entry in place. A `STORE_DIR` major holds one member format pair (ADR-006 amendment 2026-11-08), so a
@@ -324,3 +324,10 @@ documents already written keep their `senselab:context` records as they were. No
 `placement@2.0` and `plan-fragment@3.0` drop `NodePlacement.env_root`; a run's placements and queue items written
 under `@1.0`/`@2.0` are not read, and a run with such items is re-run. The pydra work directory, Slurm worker logs and
 a run's own profile file moved under `<run>/private/`.
+
+## Records carry the torch build (Phase 3 Task 20R-S2, 2026-11-08)
+
+`execution-context@3` and `store@5` are not read: 2.x reads `result@2` and `execution-context@4` members under
+`store@6/`. `ExecutionContext.driver["torch_index"]` (a URL) is replaced by `driver["torch_build"]`; the fingerprint is
+`context@5`. No converter, shim or dual read (owner, 2026-11-08, nothing released for 2.x). Recomputing under this
+version migrates; an old `store@5/` tree can be deleted.

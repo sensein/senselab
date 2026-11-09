@@ -87,7 +87,7 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
   `digests-are-tagged` forbids hash modules everywhere except the digest module, and `raw-digest-owners`
   names the few owners allowed to hash bytes already in memory.
 
-  **Registered identity tags:** `logical-key@7`, `output@3`, `context@3`, `content-root@2`, `audio@4`, `audio-file@1`,
+  **Registered identity tags:** `logical-key@7`, `output@3`, `context@5`, `content-root@2`, `audio@4`, `audio-file@1`,
   `weights@3`, `value@2`, `provenance-id@4`, `data-manifest@3`, `worker-runtime@1`, `fake-output@1`,
   `contract-probe@1`, `prov-activity@1`, `prov-node@1`, `wheel-set@1`, `env-lock@1`, `env-overlay@1`, `launch-env@1`, `vllm-config@1`, `source@1`. **Registered blob tags:** `file@1`, `npy@1`. **Data formats** (a
   `format:` line in a packaged YAML file or in a store entry): `equivalence@2.0`, `equivalence-evidence@1.0`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, and
@@ -341,7 +341,7 @@ per-item differences and the digest of the thresholds it was made under); `sense
 
 Restates the **Data formats** list of the 2026-10-31 amendment, which this supersedes: `equivalence@3.0`,
 `equivalence-evidence@3.0`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, `comparison@1.0`,
-`run-config@1.0`, and `execution-context@3.0` (3.1 by Task 20R-S1, same shape, `host` a token) in a store entry's `context.json`; `env-record@1.0`, an env root's
+`run-config@1.0`, and `execution-context@4.0` (was `@3.0`, `@3.1` by Task 20R-S1; Task 20R-S2) in a store entry's `context.json`; `env-record@1.0`, an env root's
 `<name>[-<tag>].json`; `senselab-vocab@1.3`, a vocabulary document's `owl:versionInfo` (ADR-010). The tolerance
 profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`) are retired and not listed.
 
@@ -628,3 +628,16 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3.2, §8.
   without the tag, or of another major, is no readable mark, and its reader logs the tag it found once. A later minor
   is additive and readers ignore its unknown fields.
 - The mark sits in the run's readable part, so it holds no account or host name, uid, path, URL or free text.
+
+## Amendment 2026-11-08: records carry the torch build, never the index URL (Phase 3 Task 20R-S2)
+
+- `execution-context@3.x` -> `@4.0`: `driver` holds `torch_build` (`cu128`, `cu126`, `cpu`, `rocm...`, `xpu`, else
+  `other`) in place of `torch_index`, the PyTorch wheel index URL. `STORE_DIR` `store@5` -> `store@6` (one member pair
+  per `STORE_DIR` major: `result@2`, `execution-context@4`). Nothing was released for 2.x, so there is no reader of
+  `store@5`, no migration and no dual read: its entries are not read.
+- `context@4` -> `context@5` (identity tag): the fingerprint covers the build, so two mirrors of one build are one
+  context. Logical keys and the plan hash are unchanged.
+- The torch build is `torch_build(index_url)`, the one derivation. `TorchIndex.tag` is that build for a probed and for a
+  profile index alike. `env-record@1.0` stores the index URL without its userinfo (read only for equality; the
+  credentialed URL lives in the process environment), and `CudaCompatibilityError` names the build and the URL
+  without userinfo, since a worker logs it into scheduler output (UX-57).

@@ -1181,7 +1181,9 @@ decision takes effect only through the dated amendment its task commits (ADR-000
   them on a held-out split. No profile is fitted to the data it judges, and no bound is refitted to turn a failure
   green; a parity failure is a finding.
 - **P2-42** ruling (a-10): The torch index override is the profile key `envs.torch_index`, recorded in the env context;
-  `SENSELAB_TORCH_INDEX_URL` is removed. The probed CUDA routing keeps its semantics.
+  `SENSELAB_TORCH_INDEX_URL` is removed. The probed CUDA routing keeps its semantics. **Reversed by the owner,
+  2026-11-08:** the index URL is not recorded; records carry the torch build tag (ADR-002 and ADR-006 amendments of
+  that date; Phase 3 Task 20R-S2). The profile key and the routing stand.
 - **P2-43** ruling (a-11, Table 1 #15): One signature, `run_call(call, *, execution=None, run=None, store=None)`; `verify`
   is a run-config key beside `reuse`.
 - **P2-44** ruling (a-12): ADR-006 is amended: before the first 2.x release a major format bump has no previous-major
