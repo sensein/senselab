@@ -172,11 +172,9 @@ first_poll_s 0.01 and poll_s 10: the device-pinning test reads what its local wo
 
 Values only tests read; the `slack` fixture leaves them out of the profile override and `slack_tests` returns them.
 
-probe.fit_ratio 50: the most the pooled-fit scaling test lets the estimate's time at 10^4 requests reach over its time at 10^3. A quadratic fit multiplies by 100 for a tenfold n, an n log² n fit by 10·(log 10⁴ / log 10³)² ≈ 18, and the rest of the estimate is linear (10). Measured 2026-11-08 on a laptop at load average 5: 17 end to end, 9 to 19 for the fit alone across data shapes, 176.7 for the replaced quadratic fit. 50 sits above the first by a factor 2.8 and below the second by 2, more than a runner's noise, and a ratio of two times taken on one machine cancels the machine's speed. Not measured on CI runners.
+probe.fit_ops_ratio 25: the most the pooled-fit scaling test lets the slope fit's step count at 10^4 requests reach over its count at 10^3. The test counts the steps the code charges itself (`Work`): each merge level of an inversion count charges its n values, each merge of the final pair listing charges its run, and each pair listed and each tie-path value charges one. The count does not depend on the host. The fit bisects over the doubles, so the number of inversion counts depends on n only through the stop rule (at most n slopes left between the bounds). On the test's seeded data the counts are exact: 461,740 steps at n = 10^3 and 7,558,156 at n = 10^4, a ratio of 16.4 (2026-11-09). An n log n fit is about 13 and an n log² n fit about 18 (10·(log 10⁴ / log 10³)²); a quadratic inversion count or a stop rule that lists a constant fraction of the n(n−1)/2 slopes multiplies by 100. 25 is 1.5 times the measured ratio and a quarter of the quadratic one. Checked by mutation (2026-11-09): an O(n²) inversion count and a stop rule that lists a constant fraction of all slopes each make the test fail.
 
 lease_clock.poll_s 0.0005: the real seconds a test thread parked on an injected `ManualClock` waits between looks at its event. It sets no bound and asserts no time: the clock advances only when a test advances it, and this poll is how a parked thread notices. Small enough that a test of a few hundred lease steps finishes in well under a second; large enough that a parked thread does not spin a core. The hang guard that turns a never-released lease into a failure is `tier_bound`, not this value (testing.md, time in tests).
-
-probe.timing_repeats 3: each time is the best of this many runs, which drops a run a scheduler preempted; one run is exposed to that, and each added run costs the test about one more second at 10^4.
 
 ## pyproject.toml
 
@@ -294,7 +292,7 @@ One day, as before this policy existed. A staging directory or download lives fo
 
 ### collect_interval_s
 
-One hour. A collection touches the clock sentinel and lists quarantine/ and tmp/, which costs metadata round trips on NFS; running it on every put multiplied them by the put rate. What it removes is at least a day old (staging_stale_s) or a week old (quarantine_retention_s), so collecting hourly delays a removal by at most an hour against ages of a day or more.
+One hour. A collection makes and removes a probe directory to read the storage clock and lists quarantine/ and tmp/, which costs metadata round trips on NFS; running it on every put multiplied them by the put rate. What it removes is at least a day old (staging_stale_s) or a week old (quarantine_retention_s), so collecting hourly delays a removal by at most an hour against ages of a day or more.
 
 ### measures_file_bytes_max
 
