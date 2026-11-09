@@ -17,7 +17,6 @@ import yaml
 from senselab.audio.data_structures import AudioHints, ExpectedSpeech
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.branches import (
-    DDK_MEDIANS,
     NO_TASK_ITEMS,
     SPEECH_EXPECTATIONS,
     TASK_EXTENT_ABSENT,

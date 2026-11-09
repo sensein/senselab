@@ -9,7 +9,7 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `30`; any
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `32`; any
 change to a column, a byte layout or a categorical column's controlled vocabulary bumps it and
 changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
@@ -45,6 +45,8 @@ What each bump added:
 | **16** | the task-extent cut (§8a) |
 | **17** | `released_by_kind_n`, `released_by_kind_categories` (§8a) |
 | **18** | the second-opinion columns renamed `nimble_*` → `second_opinion_*` when Clef replaced Nimble, plus `second_opinion_model_id`. See `specs/20261003-clef-second-opinion/design.md` |
+| **31** | `declared_task_source`: what describes the recorded task (the profile's task list, the hint's own description, or nothing). Step 9 then added `target_speaker` and `recording_id` under the same number. See `specs/20261022-triage-dataset-profile/plan.md` steps 4 and 9 |
+| **32** | the corpus statistics a profile is fitted from (§2a): `cohort_participant_rms_dbfs_median`, `cohort_participant_clipped_fraction`, `cohort_session_level_shift_db`, `cohort_session_snr_shift_db`, `cohort_session_consistency_cosine`, `cohort_participant_nonmatch_fraction`, `cohort_participant_compared_n`, `cough_event_s_median`, `ddk_syllable_rate_hz`, `ddk_task_found`, `count_in_gap_s`, `lexical_words_per_s`. See `specs/20261022-triage-dataset-profile/plan.md` step 10 |
 | **30** | `participant`, `session` and `task` are the run's **recorded identity** (what ADMIT wrote on the `recording` stream, or on its activity where it refused the recording) instead of a regex over the stem; `task` is the recorded `declared_task_id`, lower-cased with its trailing index. `participant_from`, `session_from`, `task_from` (`hint` \| `stem`) say where ADMIT read each. A run that records no identity still has a row, all six null, and is listed in the scan report's `unidentified`. Run directories are found at any depth, and the same stem in two folders is two rows (§10). See `specs/20261022-triage-dataset-profile/plan.md` step 3c |
 
 The data dictionary in the file's metadata was added without a bump: it adds no column, changes no
@@ -104,11 +106,18 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `participant` | string | the run's recorded participant (ADMIT's `declared_participant`), e.g. `sub-<uuid>` | the run records no identity, or none names a participant |
 | `task` | string | the run's recorded task id (ADMIT's `declared_task_id`), lower-cased, e.g. `diadochokinesis-pa` | the run records no identity |
 | `verdict` | string | `pass` \| `flag` \| `discard` — VERDICT's `triage` | never; a row exists only when the fold does |
+| `run_status` | string | whether the pipeline finished what the decision needs; `incomplete` names a recording owed a derivative, a node, a readable configuration or a release reading | never |
+| `missing` | list\<string\> | where `run_status` is `incomplete`, the operational ground keys and the release ground key that left it so | never; `[]` otherwise |
+| `reason`, `reason_keys` | string, list\<string\> | the decision's primary reason and every reason behind it, by `data/decision_reasons.yaml` `precedence` | the fold was written before the reasons existed |
 | `session` | string | the run's recorded session (ADMIT's `declared_session`), e.g. `ses-<uuid>` | the run records no identity, or none names a session |
-| `participant_from`, `session_from`, `task_from` | string | `hint` \| `stem`: where ADMIT read that field (`declared_from`) | the run records no identity |
-| `stem` | string | the BIDS stem, the run directory's name minus its `_YYYYmmdd-HHMMSS` suffix | never |
+| `target_speaker` | string | whose voice the task asks for, where the hint declared a target speaker other than the participant | the target is the participant (no declaration), or the run records no identity |
+| `participant_from`, `session_from`, `task_from` | string | `hint` \| `stem`: where ADMIT read that field (`declared_from`; `stem` where the hint's builder says it read the file name) | the run records no identity |
+| `stem` | string | the file stem, the run directory's name minus its `_YYYYmmdd-HHMMSS` suffix | never |
+| `recording_id` | string | the recording's corpus-unique id, which the tables and review pages join on: the hint's, else its path under the corpus root, else the stem | never |
 | `run_dir` | string | the run directory, relative to the scan root | never |
 | `declared_family` | string | the declared task family, e.g. `story-recall-v2` | nothing was declared |
+| `declared_task_source` | string | what describes the recorded task (`task_from` of ADMIT's task record) | the store predates ADMIT recording the task |
+| `release_ground_key`, `ground_keys`, `annotation_keys` | string, list\<string\> | the stable keys of `release_ground`, of every ground behind the triage state, and of every annotation (vocabulary.py) | as `release_ground`; `[]` for the lists |
 | `release` | string | `release_without_redaction` \| `release_with_redaction` \| `withheld` \| `not_assessed` | the fold wrote none |
 | `release_ground` | string | why the release axis reads as it does — one of the controlled grounds `vocabulary.py` declares under `RELEASE_WITHOUT_REDACTION_GROUNDS`, `RELEASE_UNKNOWN_GROUNDS`, `RELEASE_WITHHELD_GROUNDS` and `RELEASE_WITH_REDACTION_GROUNDS` | **REDACT itself decided**, so the state stands on its own verdict and needs no ground |
 | `grounds` | string | VERDICT's `discard_ground` | **nothing was discarded** — the common case |
@@ -117,7 +126,7 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `duration_conditioned_s` | double | seconds, the conditioned stream | PREPROCESS wrote no stream |
 | `time_scale_s` | double | seconds — **the denominator for every `uint16` time** | neither duration is known |
 | `sampling_rate` | int32 | Hz, of the conditioned stream | no conditioned stream |
-| `schema_version` | int32 | `15` | never |
+| `schema_version` | int32 | `32` | never |
 | `malformed_store_lines` | int32 | lines of `store.jsonl` that did not parse; `0` is the normal value | never |
 | `flags_n` | int32 | how many node verdicts in the fold carry outcome `flag`, `fail` or `discard` — the same filter `report.py` calls a flag | never |
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
@@ -153,7 +162,27 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 
 Three further column groups belong to the decision record and are large enough to have sections of
 their own: the gates VERDICT resolved (§6), the multi-speaker instrument (§7) and the
-enhanced/residual levels (§8).
+enhanced/residual levels (§8). The redaction-policy columns added since (`policy_version`, `language`,
+`policy_masks_n`, `task_event_words_n`, `person_name_masked_n`, `name_release_proposed_n`, `propagated_masked_n`,
+`redact_by_kind_n`, `conditions_n`) and the second-opinion status columns (`second_opinion_status`,
+`second_opinion_bypass_reason`, `second_opinion_disagrees_n`, `second_opinion_blob_digest`) are in the data
+dictionary only.
+
+### 2a. The fitted corpus statistics (schema 32)
+
+One value per recording, read for `scripts/fit_profile.py` (plan step 10); a COHORT reading is repeated on every
+recording of its participant (or target speaker) and session. Units and null meanings are the dictionary's.
+
+| column | type | what it reads |
+| --- | --- | --- |
+| `cohort_participant_rms_dbfs_median`, `cohort_participant_clipped_fraction` | double | COHORT's participant condition summary |
+| `cohort_session_level_shift_db`, `cohort_session_snr_shift_db` | double | the session's medians less the other sessions' |
+| `cohort_session_consistency_cosine` | double | the session's enrollment against the other sessions' (a pilot's cosine too, recorded beside its unset bound) |
+| `cohort_participant_nonmatch_fraction`, `cohort_participant_compared_n` | double, int32 | the shared speaker non-match |
+| `cough_event_s_median` | double | AIRWAY's cough events |
+| `ddk_syllable_rate_hz`, `ddk_task_found` | double, bool | the syllable-task reading; `ddk_task_found` null where the reading took no decision |
+| `count_in_gap_s` | double | a voice task's count-in end to its phonation start (negative where they overlap); null where the count-in starts after the phonation |
+| `lexical_words_per_s` | double | lexical consensus words per second of the response |
 
 ---
 

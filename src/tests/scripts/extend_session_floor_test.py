@@ -9,6 +9,7 @@ from pathlib import Path
 from types import ModuleType
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 from senselab.audio.workflows.triage.extend import read_store, write_store
@@ -22,6 +23,9 @@ from senselab.audio.workflows.triage.nodes.background import (
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import hint_for, record_task
+
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 RATE = 16000
@@ -152,3 +156,41 @@ def test_a_stale_manifest_row_refuses_its_whole_session(tmp_path: Path) -> None:
     assert {r["status"] for r in out} == {"error"}
     assert all("stale" in r[SESSION_FLOOR] for r in out)
     assert [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows] == stores
+
+
+def test_a_member_made_with_another_profile_refuses_its_whole_session(tmp_path: Path) -> None:
+    """Review J4: a member's run refused for its profile refuses the session; no member's store is written."""
+    from senselab.audio.workflows.triage.config import load_triage_config
+
+    rows = [_run(tmp_path, f"rec-000{i}", _breaths(i), "pa", "s1", f"t{i}") for i in range(3)]
+    log = Path(rows[1]["enhanced"]).parents[1] / "run.json"
+    log.write_text(json.dumps({"config": {"profile": {"name": "another-dataset", "version": "1", "digest": "x"}}}))
+    stores = [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows]
+    out = session_cli.process_session("pa/s1", rows, load_triage_config())
+    assert {r["status"] for r in out} == {"error"}
+    assert all("refused" in r[SESSION_FLOOR] for r in out)
+    assert [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows] == stores
+
+
+@pytest.mark.parametrize("cli", [floor_cli, session_cli], ids=["background_floor", "session_floor"])
+def test_without_a_profile_the_driver_exits_2_naming_it(
+    cli: ModuleType, tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review A1: the driver activates the profile it is given; with none it exits 2 before reading a store."""
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("")
+    assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 2
+    assert "dataset profile" in capsys.readouterr().err
+
+
+def test_with_its_profile_named_the_driver_runs_from_no_active_profile(
+    tmp_path: Path, without_triage_profile: None
+) -> None:
+    """Review A1: ``--profile`` alone supplies what the driver reads."""
+    from tests.conftest import FIXTURE_PROFILE
+
+    rows = [_run(tmp_path, f"rec-000{i}", _breaths(i), "pa", "s1", f"t{i}") for i in range(2)]
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    argv = [str(manifest), "--slice-index", "0", "--slice-count", "1", "--profile", str(FIXTURE_PROFILE)]
+    assert floor_cli.main(argv) == 0

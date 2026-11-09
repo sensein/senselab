@@ -801,7 +801,12 @@ def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[
 
 
 POLICY_FINGERPRINT = "policy_fingerprint"
-"""The cached reading's record of the policy and word lists it was read under (:func:`policy_fingerprint`)."""
+"""The record of the policy and word lists a reading was read under (:func:`policy_fingerprint`), kept on the cached
+reading and on the annotation. The cache key leaves it out, so a dataset's readings keep their keys while its policy
+is unchanged; a reading recorded under another fingerprint is read again and replaces the cached one."""
+
+POLICY_REPLACED = "policy_fingerprints_replaced"
+"""The cached reading's record of the fingerprints of the readings it replaced (:func:`cache_reading`)."""
 
 
 def read_under_this_policy(payload: Mapping[str, Any]) -> bool:
@@ -820,29 +825,69 @@ def read_under_this_policy(payload: Mapping[str, Any]) -> bool:
     return recorded is None or recorded == policy_fingerprint()
 
 
-def cache_reading(key: str, reading: _Reading, reviews: Sequence[Mapping[str, Any]]) -> bool:
+def annotation_read_under_this_policy(attributes: Mapping[str, Any]) -> bool:
+    """Whether a stored annotation's reading was read under the active profile's policy and word lists.
+
+    The annotation's own record decides. An annotation written before it kept one is judged by the cached reading
+    its key names, which is the reading it holds unless a reading under another policy has since replaced it: then
+    which policy the annotation was read under is unknown, and it does not stand. With no cached reading to ask,
+    nothing says otherwise and it stands, as :func:`read_under_this_policy` lets an unrecorded reading stand.
+
+    Args:
+        attributes: The ``redaction_llm_annotation`` entity's attributes.
+
+    Returns:
+        False where the annotation, or the cached reading standing in for it, records another fingerprint.
+    """
+    recorded = attributes.get(POLICY_FINGERPRINT)
+    if recorded is not None:
+        return bool(recorded == policy_fingerprint())
+    key = (attributes.get("result_cache") or {}).get("key")
+    cached = result_lookup(str(key)) if key else None
+    if cached is None:
+        return True
+    return not cached["result"].get(POLICY_REPLACED) and read_under_this_policy(cached["result"])
+
+
+def cache_reading(
+    key: str,
+    reading: _Reading,
+    reviews: Sequence[Mapping[str, Any]],
+    *,
+    fingerprint: str | None,
+    replacing: Mapping[str, Any] | None = None,
+) -> bool:
     """Keep one answered reading under its key; an absent one is never kept.
 
     Args:
         key: From :func:`review_cache_key`.
         reading: The loop's summary.
         reviews: Its per-round payloads.
+        fingerprint: The policy fingerprint the reading was read under, or None where nothing recorded it (a
+            reading seeded from a store that predates the record); none is then stamped.
+        replacing: The held cached result this reading replaces, read under another policy; None writes only
+            where the key is free.
 
     Returns:
         True when this call wrote the entry.
     """
     if reading.status not in READ_STATES or reading.revision is None:
         return False
+    result: dict[str, Any] = {"reading": asdict(reading), "reviews": [dict(review) for review in reviews]}
+    if fingerprint is not None:
+        result[POLICY_FINGERPRINT] = fingerprint
+    if replacing is not None:
+        result[POLICY_REPLACED] = [
+            *(replacing.get(POLICY_REPLACED) or ()),
+            replacing.get(POLICY_FINGERPRINT),
+        ]
     return result_store(
         key,
-        {
-            "reading": asdict(reading),
-            "reviews": [dict(review) for review in reviews],
-            POLICY_FINGERPRINT: policy_fingerprint(),
-        },
+        result,
         process=REVIEW_PROCESS,
         model_id=reading.model_id,
         commit_sha=reading.revision,
+        replace=replacing is not None,
     )
 
 
@@ -856,7 +901,9 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
 
     The key is rebuilt from what the store says the loop read -- its transcript texts, the annotation's
     task context, the model and commit the reading loaded -- under the configuration's generation
-    settings, which must be the ones the run used.
+    settings, which must be the ones the run used. The seeded reading carries the policy fingerprint the
+    annotation records, and none where it records none: the policy active now need not be the one it was
+    read under.
 
     Args:
         store: A finished run's store.
@@ -916,7 +963,9 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
         reading.revision or "",
         placeable_tokens(store),
     )
-    return (BACKFILL_STORED, key) if cache_reading(key, reading, reviews) else (BACKFILL_HELD, key)
+    fingerprint = held.get(POLICY_FINGERPRINT)
+    stored = cache_reading(key, reading, reviews, fingerprint=None if fingerprint is None else str(fingerprint))
+    return (BACKFILL_STORED, key) if stored else (BACKFILL_HELD, key)
 
 
 def _resolved(settings: Mapping[str, Any]) -> str | None:
@@ -986,6 +1035,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
     started = _stamp()
     reviews: list[dict[str, Any]] = []
     cache: dict[str, Any] = {"key": None, "hit": False}
+    read_under: str | None = None
     if not settings["enabled"]:
         reading = _Reading(DISABLED, 0, (), "", "", "", (), "", None, None)
     elif not original.strip():
@@ -1001,11 +1051,14 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
         revision = _resolved(settings)
         key = None if revision is None else review_cache_key(original, redacted, context, settings, revision, placeable)
         held = None if key is None else result_lookup(key)
+        stale = None
         if held is not None and not read_under_this_policy(held["result"]):
-            held = None
+            stale, held = held["result"], None
         if held is not None:
             reading, reviews = reading_from_cache(held["result"])
             cache = {"key": key, "hit": True}
+            recorded = held["result"].get(POLICY_FINGERPRINT)
+            read_under = None if recorded is None else str(recorded)
         else:
             reading, reviews = _read(original, redacted, settings, context, placeable)
             answered = [review for review in reviews if review.get("available")]
@@ -1021,7 +1074,12 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
                     engine=dict(answered[-1].get("engine") or {}),
                     **_task_reading(answered[-1]),
                 )
-            stored = key is not None and reading.revision == revision and cache_reading(key, reading, reviews)
+            read_under = policy_fingerprint() if reading.status in READ_STATES else None
+            stored = (
+                key is not None
+                and reading.revision == revision
+                and cache_reading(key, reading, reviews, fingerprint=read_under, replacing=stale)
+            )
             cache = {"key": key, "hit": False, "stored": stored}
 
     software = software_agent(store)
@@ -1118,6 +1176,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "task_context": dict(context),
             "review_inputs": dict(inputs),
             "result_cache": cache,
+            POLICY_FINGERPRINT: read_under,
         },
     )
     store.was_generated_by(annotation_id, activity)

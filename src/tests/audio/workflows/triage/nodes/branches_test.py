@@ -22,7 +22,6 @@ from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
     BRANCH_FAMILY,
     BRANCHES,
-    DDK_MEDIANS,
     DEVIATION_TYPES,
     EXPECTATIONS,
     PARAM_KEYS,
@@ -55,6 +54,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     count,
     count_against_instruction,
     count_beside_typical,
+    declared_carrier,
     declared_duration_count,
     declared_task_family,
     deviation,
@@ -86,6 +86,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     spans_by_measure,
     spectral_balance_db,
     stream_extent,
+    task_owner,
     token_occurrences,
     touches_edge,
     trace_slice,
@@ -103,7 +104,7 @@ from senselab.audio.workflows.triage.nodes.gates import (
     TYPICAL_COUNT,
     UNGATEABLE_READINGS,
 )
-from senselab.audio.workflows.triage.task_catalogue import TASKS_BY_KIND, task_attributes
+from senselab.audio.workflows.triage.task_catalogue import SYLLABLE_PATTERNS, TASKS_BY_KIND, task_attributes, task_list
 from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.conftest import declare_hint_identity, record_admitted_hint, record_task
 
@@ -112,6 +113,9 @@ BIDS_STEM = "sub-abc123_ses-1_task-harvard-sentences-list-10-3"
 
 PLAIN_PATH = "rec-0001.wav"
 """A recording's path that carries no identity: the default every store here is seeded at."""
+
+DDK_MEDIANS = "specs/20260817-triage-workflow-dag/measure-distributions.md"
+"""Where the fixture's syllable-repetition medians were measured: the derivation its typical counts cite."""
 
 
 def _store(*, path: str | None = PLAIN_PATH, task: str | None = None, duration_s: float = 20.0) -> ProvStore:
@@ -779,6 +783,32 @@ class TestTheModeSelector:
     def test_no_declaration_takes_the_out_of_family_mode(self) -> None:
         """The safe arm: annotate the speciality, conclude nothing. There is no third arm."""
         assert mode_of("AIRWAY", _store(path="/tmp/plain.wav")) == ("detect", None)
+
+    def test_the_recorded_task_is_owned_as_the_task_list_owns_it(self) -> None:
+        """For every listed task, ADMIT's record gives the branch and description the task list gives."""
+        for name, entry in task_list().items():
+            assert task_owner(_store(task=name), name) == (entry.branch, entry.expects), name
+
+    def test_a_task_the_list_lacks_is_owned_by_no_branch(self) -> None:
+        """ADMIT recorded the name and no description, so every branch takes its out-of-family mode."""
+        store = _store(task="audio-check")
+        assert task_owner(store, "audio-check") is None
+        assert all(mode_of(branch, store) == ("detect", "audio-check") for branch in BRANCHES)
+
+    def test_a_family_the_record_does_not_name_is_read_from_the_task_list(self) -> None:
+        """A caller asking about another task than the one recorded gets the list's entry for it."""
+        assert task_owner(_store(task="prolonged-vowel"), "diadochokinesis-pa") == (
+            "SPEECH",
+            SPEECH_EXPECTATIONS["diadochokinesis-pa"],
+        )
+
+    def test_the_fixtures_carriers_are_the_last_part_of_each_syllable_tasks_name(self) -> None:
+        """The carriers its entries declare are exactly what senselab read off the names before they did."""
+        syllable = [name for name, row in SPEECH_EXPECTATIONS.items() if row.pattern in SYLLABLE_PATTERNS]
+        assert len(syllable) == 10
+        assert {name: declared_carrier(name) for name in syllable} == {
+            name: name.rsplit("-", 1)[-1] for name in syllable
+        }
 
     def test_a_syllable_family_is_in_family_for_speech_and_no_other_branch(self) -> None:
         """One recording, one align mode. There is no second branch to divide the task with."""

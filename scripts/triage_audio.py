@@ -65,6 +65,7 @@ import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.data_structures import AudioHints, SpeakerEmbeddingProvenance
 from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.dataset_profile import DatasetDataMissing, require_dataset_values
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.identity import identity_of
 from senselab.audio.workflows.triage.run import corpus_path_of, run_triage
@@ -110,10 +111,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--profile",
-        type=Path,
         default=None,
-        help="Dataset profile directory (holding profile.yaml): its config override is merged before --config, "
-        "and the data files it supplies are read instead of the packaged ones.",
+        help="Dataset profile directory (holding profile.yaml), or senselab:<name> for one senselab ships: its "
+        "config override is merged before --config, and the data files it supplies are read instead of the "
+        "packaged ones.",
     )
     parser.add_argument(
         "--hint",
@@ -229,8 +230,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         config = load_triage_config(args.config, profile=args.profile)
-    except (OSError, ValueError, KeyError) as error:
+    except (OSError, ValueError, KeyError, RuntimeError) as error:
         print(f"ERROR: invalid triage config {args.config} or profile {args.profile}: {error}", file=sys.stderr)
+        return 2
+    try:
+        require_dataset_values(config.values)
+    except DatasetDataMissing as error:
+        print(f"ERROR: {error}", file=sys.stderr)
         return 2
     hint = None
     if args.hint is not None:

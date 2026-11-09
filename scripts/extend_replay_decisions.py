@@ -16,13 +16,15 @@ TAXONOMY on generated is retired with an invalidation edge, and TAXONOMY, routin
 branches, QUALITY, REDACT, VERDICT and REPORT run again. Nothing is deleted, so a replayed store
 reads as the new decision, the old one, and the edge between them.
 
-``--hints DIR`` names a directory holding a ``hints.py`` exposing ``build_hint(wav)``. The hint is
-the one input the run does not record, and routing, the branches, REDACT and VERDICT all read it;
-without ``--hints`` the replay passes none, which is a different run and is recorded as such on
-every row.
+``--hints DIR`` names a directory holding a ``hints.py`` exposing ``build_hint(wav)``; routing, the branches,
+REDACT and VERDICT all read the hint. Without ``--hints`` the replay runs with the hint the store records
+(``hint: recorded`` on the row); a store that records none, or no task, is refused unless ``--no-hint`` is given,
+which runs with no hint and is recorded as such. A hint that declares another identity or task than the record, or
+a task list that now describes the task otherwise, is recorded as the run's own, and the row's ``identity_change``
+names what moved.
 
 ``--out-root DIR`` writes each replayed run into a fresh root under ``DIR`` instead of in place,
-with the finished run's ``derivatives/`` and the streams the replay only reads reachable through
+with the finished run's ``derivatives/``, its ``run.json`` and the streams the replay only reads reachable through
 symlinks. A stream a replayed node writes -- REDACT's ``redacted``, SPEECH's ``separated_*`` -- is
 never linked, so that write lands in the new root. Use it when the finished tree must not be
 modified.
@@ -150,7 +152,8 @@ def mirror_run_root(run_root: Path, out_root: Path, identity: RecordingIdentity)
     writers a replay runs remove the entry before writing, so a rewrite replaces the link here and never
     follows it. A ``derivatives`` that an earlier mirror made a link to the whole directory is replaced.
     ``streams/`` is a real directory holding a symlink per stream the replay only *reads*; a stream a
-    replayed node writes is never linked.
+    replayed node writes is never linked. ``run.json`` is linked, so a later pass over the mirror checks the
+    recording and the profile against the run's record as it would over the finished root.
 
     Args:
         run_root: The finished run root.
@@ -179,6 +182,9 @@ def mirror_run_root(run_root: Path, out_root: Path, identity: RecordingIdentity)
         link = run_dir / STREAMS_SUBDIR / stream.name
         if not link.is_symlink() and not link.exists():
             link.symlink_to(stream)
+    log = run_dir / LOG_FILE
+    if (finished / LOG_FILE).is_file() and not log.is_symlink() and not log.exists():
+        log.symlink_to(finished / LOG_FILE)
     return dest
 
 
@@ -306,6 +312,7 @@ def replay_one(
         "summary": sorted(outcome.summary),
         "review": outcome.review,
         "review_why": outcome.review_why,
+        "identity_change": outcome.identity_change,
     }
 
 
@@ -422,6 +429,7 @@ def run_slice(
     node_errors: dict[str, int] = {}
     reviews: dict[str, int] = {}
     needs_reread: list[str] = []
+    identity_changed: list[str] = []
     retired = 0
     for record in log:
         counts[str(record["status"])] = counts.get(str(record["status"]), 0) + 1
@@ -430,6 +438,8 @@ def run_slice(
             reviews[str(record["review"])] = reviews.get(str(record["review"]), 0) + 1
         if record.get("review") == REVIEW_NEEDS_REREAD:
             needs_reread.append(str(record["stem"]))
+        if record.get("identity_change"):
+            identity_changed.append(str(record["stem"]))
         for node in record.get("errors") or {}:
             node_errors[node] = node_errors.get(node, 0) + 1
 
@@ -447,6 +457,7 @@ def run_slice(
         "node_errors": node_errors,
         "reviews": reviews,
         "needs_reread": needs_reread,
+        "identity_changed": identity_changed,
         "elapsed_s": time.time() - started,
         "log": str(log_path),
     }
@@ -499,6 +510,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  node error {node:<10} {number}")
     for state, number in sorted(summary["reviews"].items()):
         print(f"  review {state:<12} {number}")
+    if summary["identity_changed"]:
+        print(f"  identity recorded anew on {len(summary['identity_changed'])} runs (each row's identity_change)")
     if summary["needs_reread"]:
         print(f"REVIEW: {len(summary['needs_reread'])} recordings need the reviewer again", file=sys.stderr)
         return 3

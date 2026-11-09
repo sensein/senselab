@@ -2,13 +2,14 @@
 r"""Compare the per-span SQUIM columns of one ``triage.tsv`` with the task-extent ones of another.
 
     uv run python scripts/verify_task_squim.py --old OLD/triage.tsv --new NEW/triage.tsv \
-        --logs ROWS_DIR [--logs ROWS_DIR ...] --out verify.md
+        --logs ROWS_DIR [--logs ROWS_DIR ...] --out verify.md --profile PROFILE [--config OVERRIDE.yaml]
 
 ``--old`` is the table whose ``squim_*`` are the per-span medians (``triage.tsv`` schema 3);
 ``--new`` the one whose ``squim_*`` are the task-extent medians (schema 4). Rows are joined on
 participant, session and task, inside this process only. ``--logs`` names directories holding the
 ``slices/task-squim-slice-*.jsonl`` logs of ``scripts/extend_task_squim.py``, read for the window
-counts and seconds covered.
+counts and seconds covered. A family's branch is the profile's task list's, so ``--profile`` names the profile
+the corpus was run with.
 
 The report is aggregates only: no participant, session, stem, path or transcript is printed, and a
 group under ``--min-group`` rows is not reported on its own.
@@ -29,8 +30,14 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 import numpy as np
 from scipy.stats import spearmanr
 
-from senselab.audio.workflows.triage.extend import run_root_of
-from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, read_store, view_identity
+from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config, run_root_of
+from senselab.audio.workflows.triage.recording_vectors import (
+    RUN_SUBDIR,
+    STORE_NAME,
+    read_store,
+    view_identity,
+    view_task,
+)
 from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
 from senselab.audio.workflows.triage.task_squim import branch_of_family
 
@@ -264,13 +271,18 @@ def logged_family(record: Mapping[str, Any]) -> str:
         record: One driver-log row: the manifest row (``stem``, ``enhanced``) and the driver's outcome.
 
     Returns:
-        The family of the task the run recorded; else the row's ``declared_family``; else ``""``.
+        The task ADMIT recorded (a store written before it recorded the task: the family its task id collapses
+        into); else the row's ``declared_family``; else ``""``.
     """
     try:
         run_root = run_root_of(Path(str(record.get("enhanced") or "")))
-        identity = view_identity(read_store(run_root / RUN_SUBDIR / STORE_NAME))
+        view = read_store(run_root / RUN_SUBDIR / STORE_NAME)
     except (OSError, ValueError):
-        identity = None
+        view = None
+    task = view_task(view) if view is not None else None
+    if task is not None and task.name:
+        return str(task.name)
+    identity = view_identity(view) if view is not None and task is None else None
     if identity is not None and identity.task_id != UNKNOWN_TASK:
         return task_family(identity.task_id)
     return str(record.get("declared_family") or "")
@@ -454,7 +466,7 @@ def main(argv: list[str] | None = None) -> int:
         argv: The command line, or None for ``sys.argv``.
 
     Returns:
-        0 when the sanity checks hold, 1 when any is violated.
+        0 when the sanity checks hold, 1 when any is violated, 2 when the profile cannot be loaded or lacks a value.
     """
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0] if __doc__ else None)
     parser.add_argument("--old", type=Path, required=True, help="triage.tsv with the per-span squim_*")
@@ -462,7 +474,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--logs", type=Path, action="append", default=[], help="extend_task_squim log directory")
     parser.add_argument("--out", type=Path, required=True, help="The markdown report")
     parser.add_argument("--min-group", type=int, default=20, help="Fewest rows a group is reported with")
+    add_config_arguments(parser)
     args = parser.parse_args(argv)
+    try:
+        driver_config(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
     joined = join(read_table(args.old), read_table(args.new))
     lines = report(joined, read_logs(args.logs), args.min_group)
     args.out.parent.mkdir(parents=True, exist_ok=True)

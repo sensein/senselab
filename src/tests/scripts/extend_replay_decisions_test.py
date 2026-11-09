@@ -34,6 +34,7 @@ from senselab.audio.workflows.triage.extend import (
     DECISION_SUPERSEDED,
     HINT_GIVEN,
     HINT_RECORDED,
+    OFF_STAGES_KEY,
     REPLAY_MARKER_STEP,
     REPLAY_NODE,
     REPLAYED_NODES,
@@ -41,10 +42,12 @@ from senselab.audio.workflows.triage.extend import (
     ReplayRefused,
     check_replay_inputs,
     corpus_inputs_digest,
+    decided_under,
     find_replay_marker,
     live_decisions,
     read_store,
     realign_stimulus,
+    record_moved,
     record_replayed_hint,
     replay_decisions,
     replay_run_id,
@@ -67,16 +70,21 @@ from senselab.audio.workflows.triage.identity import (
     DECLARED_TASK_ID,
     declared_task_id,
     identity_of,
+    recorded_identity,
     recording_entity,
 )
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent, write_stream, write_verdict
 from senselab.audio.workflows.triage.nodes.preprocess import STIMULUS_MEASUREMENT, write_stimulus_alignment
 from senselab.audio.workflows.triage.stimulus import StimulusAlignment
-from senselab.audio.workflows.triage.task_catalogue import TASK_FROM
+from senselab.audio.workflows.triage.task_catalogue import TASK_EXPECTS_DIGEST, TASK_FROM
 from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, Outcome
+from senselab.audio.workflows.triage.workflow import OFF_IN_WORKFLOW
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import hint_for
+
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_replay_decisions.py"
@@ -317,6 +325,19 @@ def test_mirror_run_root_is_writable_and_reads_through_to_the_finished_run(tmp_p
     assert (mirrored / "released").is_dir()
 
     assert not (mirrored / "run" / "streams" / "redacted.flac").exists()
+
+
+def test_the_mirror_links_the_runs_log_so_later_passes_check_its_record(tmp_path: Path) -> None:
+    """Review K3: a pass over the mirror reads the finished run's run.json, so the recording is verified."""
+    root = tmp_path / "finished" / "rec-0001_20260920-030808"
+    _seed_run(root, hint=HINT_COUGH)
+    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", identity_of(hint_for("p01", "s1", "x")))
+    assert (mirrored / "run" / "run.json").is_symlink()
+    assert (mirrored / "run" / "run.json").read_text() == (root / "run" / "run.json").read_text()
+    store = read_store(root)
+    assert check_replay_inputs(store, mirrored, load_triage_config(), hint=None, hint_given=False).audio == (
+        AUDIO_VERIFIED
+    )
 
 
 def test_a_stream_a_replayed_node_writes_is_never_a_link_into_the_finished_run(tmp_path: Path) -> None:
@@ -770,6 +791,61 @@ class TestTheReplayChecksTheRunsRecord:
             _checked(root, hint=HINT_RAINBOW, hint_given=True, allow_hint_change=False)
         assert _checked(root, hint=HINT_COUGH, hint_given=True, allow_hint_change=False).changed == []
 
+    def test_a_refold_refuses_a_store_that_records_no_hint(self, tmp_path: Path) -> None:
+        """Nothing to compare the re-fold's hint with: the message says to replay first (review K8)."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=HINT_COUGH)
+        store = read_store(root)
+        [stream] = store.entities("stream")
+        for key in (HINT, HINT_DIGEST, HINT_FIELD_DIGESTS):
+            del stream.attributes[key]
+        config = load_triage_config()
+        with pytest.raises(ReplayRefused, match="replay it first"):
+            check_replay_inputs(store, root, config, hint=HINT_RAINBOW, hint_given=True, allow_hint_change=False)
+        replayed = check_replay_inputs(store, root, config, hint=HINT_RAINBOW, hint_given=True)
+        assert replayed.changed is None
+
+    def test_a_refold_refuses_decisions_taken_under_another_profile_digest(self, tmp_path: Path) -> None:
+        """Same profile name, other digest: VERDICT would re-score the old reports; a replay is accepted (C3)."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        source = _seed_run(root, hint=HINT_COUGH)
+        config = load_triage_config()
+        assert config.profile is not None
+        recorded = {"name": config.profile.name, "version": config.profile.version, "digest": "another-digest"}
+        (root / "run" / "run.json").write_text(json.dumps({"source": str(source), "config": {"profile": recorded}}))
+        with pytest.raises(ReplayRefused, match="replay the run instead"):
+            _checked(root, hint=HINT_COUGH, hint_given=True, allow_hint_change=False)
+        assert _checked(root, hint=HINT_COUGH, hint_given=True).profile["recorded"] == recorded
+
+    def test_a_refold_refuses_decisions_taken_with_other_stages_off(self, tmp_path: Path) -> None:
+        """The run left REDACT off and this configuration runs it: a re-fold would fold another graph (C3)."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        source = _seed_run(root, hint=HINT_COUGH)
+        log = {"source": str(source), "notes": {"REDACT": OFF_IN_WORKFLOW}}
+        (root / "run" / "run.json").write_text(json.dumps(log))
+        with pytest.raises(ReplayRefused, match="off"):
+            _checked(root, hint=HINT_COUGH, hint_given=True, allow_hint_change=False)
+        (root / "run" / "run.json").write_text(json.dumps({**log, "notes": {}}))
+        assert _checked(root, hint=HINT_COUGH, hint_given=True, allow_hint_change=False).changed == []
+
+    def test_the_stages_and_profile_a_replay_ran_under_speak_for_its_decisions(self, tmp_path: Path) -> None:
+        """A replay's marker records the stages off; the next re-fold compares against it, not run.json."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        source = _seed_run(root, hint=HINT_COUGH)
+        (root / "run" / "run.json").write_text(json.dumps({"source": str(source), "notes": {"REDACT": "x"}}))
+        store = read_store(root)
+        assert decided_under(store, {"notes": {"REDACT": OFF_IN_WORKFLOW}})[1] == frozenset({"REDACT"})
+        store.activity(node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters={OFF_STAGES_KEY: []})
+        assert decided_under(store, {"notes": {"REDACT": OFF_IN_WORKFLOW}}) == (None, frozenset())
+
+    def test_a_hint_whose_identity_cannot_be_built_is_refused_not_raised(self, tmp_path: Path) -> None:
+        """A label that cannot name a folder refuses this row; the rest of the slice goes on (review K4)."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=HINT_COUGH)
+        bad = AudioHints(metadata={"participant_id": "a/b", "task_token": "voluntary-cough"})
+        with pytest.raises(ReplayRefused, match="cannot name a folder"):
+            _checked(root, hint=bad, hint_given=True)
+
     def test_a_recorded_target_speaker_is_not_reused(self, tmp_path: Path) -> None:
         """Only its digest is stored, so the hint cannot be rebuilt from the record."""
         root = tmp_path / "rec-0001_20260920-030808"
@@ -812,6 +888,57 @@ class TestAChangedHintBecomesTheRunsRecord:
         store = read_store(root)
         inputs = check_replay_inputs(store, root, load_triage_config(), hint=HINT_COUGH, hint_given=True)
         assert not inputs.hint_moved
+        assert not record_moved(store, HINT_COUGH)
+
+    def test_a_task_the_task_list_now_describes_otherwise_is_recorded_anew(self, tmp_path: Path) -> None:
+        """The hint is unchanged but the recorded description is not the list's now: the replay records it (C1)."""
+        hint = hint_for("p01", "s1", "voluntary-cough")
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=hint)
+        config = load_triage_config()
+        store = read_store(root, run_id=replay_run_id(root, config.config_hash))
+        held = recording_entity(store)
+        assert held is not None
+        held.attributes[TASK_EXPECTS_DIGEST] = "described-otherwise"
+        assert record_moved(store, hint)
+        inputs = check_replay_inputs(store, root, config, hint=hint, hint_given=True)
+        assert not inputs.hint_moved
+        outcome = replay_decisions(
+            store,
+            config,
+            inputs.hint,
+            run_dir=root / "run",
+            artifacts_dir=root / "released",
+            summary_dir=root / "summary",
+            inputs=inputs,
+        )
+        recorded = recording_entity(store)
+        assert recorded is not None and recorded.id != held.id
+        assert recorded.attributes[TASK_EXPECTS_DIGEST] != "described-otherwise"
+        assert outcome.identity_change is None
+        assert not record_moved(store, hint)
+
+    def test_the_identity_change_is_on_the_outcome_as_on_the_marker(self, tmp_path: Path) -> None:
+        """The replay log's row names what moved, not only the marker (review K1)."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=HINT_COUGH)
+        config = load_triage_config()
+        store = read_store(root, run_id=replay_run_id(root, config.config_hash))
+        inputs = check_replay_inputs(store, root, config, hint=HINT_RAINBOW, hint_given=True)
+        outcome = replay_decisions(
+            store,
+            config,
+            inputs.hint,
+            run_dir=root / "run",
+            artifacts_dir=root / "released",
+            summary_dir=root / "summary",
+            inputs=inputs,
+        )
+        marker = store.get_activity(outcome.marker).parameters
+        assert outcome.identity_change == marker["identity_change"]
+        assert outcome.identity_change is not None
+        assert outcome.identity_change["to"]["declared_task_id"] == "rainbow-passage"
+        assert marker[OFF_STAGES_KEY] == []
 
 
 class TestTheStimulusAlignmentFollowsTheExpectedSpeech:
@@ -886,6 +1013,17 @@ class TestTheRecordAReplayWrites:
         for hint in (HINT_RAINBOW, HINT_COUGH, HINT_RAINBOW):
             record_replayed_hint(store, hint, software="s")
             assert recording_entity(store) is not None
+        assert declared_task_id(store) == "rainbow-passage"
+
+    def test_a_refused_recording_gets_the_identity_on_the_replays_activity(self) -> None:
+        """ADMIT wrote no stream: the replay records the identity on its own activity, and readers see it (K7)."""
+        store = ProvStore(run_id="refused")
+        store.activity(node="ADMIT", step=None, parameters={"audio_file": "/d/rec-0001.wav"})
+        assert recorded_identity(store) is None
+        assert record_replayed_hint(store, hint_for("p01", "s1", "rainbow-passage"), software="s") is not None
+        identity = recorded_identity(store)
+        assert identity is not None
+        assert (identity.participant, identity.session, identity.task_id) == ("p01", "s1", "rainbow-passage")
         assert declared_task_id(store) == "rainbow-passage"
 
     def test_without_a_hint_nothing_is_read_off_the_file_admit_was_given(self) -> None:

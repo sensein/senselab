@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 r"""Score triage decisions against the owner's listening labels.
 
-    uv run python scripts/evaluate_task_events.py LABELS.csv DECISIONS \
-        [--split <profile>/evaluation/task_events_split.yaml] \
-        [--label-map <profile>/evaluation/owner_label_map.yaml] \
+    uv run python scripts/evaluate_task_events.py LABELS.csv DECISIONS --profile PROFILE \
+        --split <profile>/evaluation/task_events_split.yaml \
+        --label-map <profile>/evaluation/owner_label_map.yaml \
         [--out DIR]
 
 ``LABELS.csv`` is the owner label table (``listen_set``, ``stem``, ``family``, ``owner_label``,
 ``owner_note``), or a ``.json`` exported from the triage review page, whose entries carry the same
 keys. ``DECISIONS`` is either a ``recording_vectors.parquet`` (``stem``, ``verdict``,
-``ground_keys``, ``declared_family``) or a directory of replay/refold row files (``*.jsonl``, each
-row carrying ``stem`` and ``verdict``, or ``REFOLD``/``VERDICT`` as ``<verdict>/<release>``, and
-optionally ``ground_keys``). On ORCD, point ``DECISIONS`` at a replay's rows directory.
+``ground_keys``, ``declared_family``, ``participant``) or a directory of replay/refold row files (``*.jsonl``,
+each row carrying ``stem`` and ``verdict``, or ``REFOLD``/``VERDICT`` as ``<verdict>/<release>``, and
+optionally ``ground_keys`` and the manifest's ``participant``). On ORCD, point ``DECISIONS`` at a replay's rows
+directory.
 
-The split file is read when it exists and written when it does not; a labelled subject missing
-from it is held out. ``--out`` receives ``report.json`` and ``disagreements.csv`` (per-recording,
+A label's subject is the participant its recording's decision names (the corpus table's ``participant`` column);
+a recording whose decision names none is its own subject. A label's group is its family's kind in the profile's
+task list (``--profile``): voice, cough or breath. The split file and the label map are the dataset's
+(``--split``, ``--label-map``). The split file is read when it exists and written when it does not; a split entry
+names every subject whose label, or whose label after a leading ``sub-``, starts with it, and a labelled subject
+missing from it is held out. ``--out`` receives ``report.json`` and ``disagreements.csv`` (per-recording,
 so keep it outside the repository). The summary is printed. The protocol is in
 ``specs/20261007-task-events-in-background/design.md``.
 
@@ -27,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -35,19 +41,16 @@ import numpy as np
 import pandas as pd
 import yaml
 
-DATA = Path(__file__).resolve().parents[1] / "src/tests/audio/workflows/triage/profiles/adult_speech_fixture/evaluation"
-"""The Bridge2AI-Voice adult listening labels and split, which live in the B2AI dataset profile."""
+from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config
+from senselab.audio.workflows.triage.task_catalogue import BREATH_KIND, COUGH_KIND, VOICE_KIND, kinds_of
+
 SPLIT_SEED = 20261007
 HELDOUT_FRACTION = 0.3
 REVIEW_BAND_KEYS = ("breath_review_low_confidence", "cough_review_low_confidence", "voice_review_low_confidence")
-VOICE_FAMILIES = (
-    "maximum-phonation-time",
-    "maximum-phonation-time-v2",
-    "prolonged-vowel",
-    "glides-low-to-high",
-    "glides-high-to-low",
-    "high-to-low",
-)
+GROUP_KINDS = (("voice", VOICE_KIND), ("cough", COUGH_KIND), ("breath", BREATH_KIND))
+"""The family groups scored, each the task-list kind its families are of, in the order a family is tried."""
+SUBJECT_COLUMN = "participant"
+"""The corpus-table column naming a recording's subject."""
 REVIEW_SETS = ("breath_review_check", "discard_contested_check")
 _TIMESTAMP = re.compile(r"_\d{8}-\d{6}$")
 _OUTCOME = {"pass": "pass", "review": "review", "discard": "discard", "flag": "review", "rerun": "incomplete"}
@@ -66,24 +69,37 @@ def recording_key(stem: str) -> str:
     return _TIMESTAMP.sub("", str(stem))
 
 
-def subject(stem: str) -> str:
-    """The 8-hex subject prefix of a BIDS stem."""
-    match = re.match(r"sub-([0-9a-fA-F]{8})", str(stem))
-    return match.group(1).lower() if match else str(stem)[:8]
+def subject(stem: str, decisions: pd.DataFrame) -> str:
+    """The subject of a labelled recording: the participant its decision names, else the recording itself.
+
+    Args:
+        stem: The labelled recording's stem.
+        decisions: :func:`load_decisions`'s table.
+
+    Returns:
+        The participant, or the recording's key where its decision is absent or names no participant.
+    """
+    key = recording_key(stem)
+    if SUBJECT_COLUMN in decisions.columns and key in decisions.index:
+        named = decisions.at[key, SUBJECT_COLUMN]
+        if isinstance(named, str) and named:
+            return named
+    return key
+
+
+def with_subjects(labels: pd.DataFrame, decisions: pd.DataFrame) -> pd.DataFrame:
+    """The labels with a ``subject`` column (:func:`subject`)."""
+    out = labels.copy()
+    out["subject"] = [subject(stem, decisions) for stem in out["stem"]]
+    return out
 
 
 def family_group(family: str, listen_set: str) -> str:
-    """breath, cough, voice, contested_review or other."""
+    """breath, cough, voice (the family's kind in the profile's task list), contested_review or other."""
     if listen_set.startswith(REVIEW_SETS):
         return "contested_review"
-    fam = str(family)
-    if fam in VOICE_FAMILIES:
-        return "voice"
-    if "cough" in fam and "breath" not in fam:
-        return "cough"
-    if "breath" in fam:
-        return "breath"
-    return "other"
+    kinds = kinds_of(str(family)) if isinstance(family, str) and family else frozenset()
+    return next((group for group, kind in GROUP_KINDS if kind in kinds), "other")
 
 
 REVIEW_EXPORT_SCHEMA = "senselab.triage.review"
@@ -130,7 +146,7 @@ def map_labels(labels: pd.DataFrame, label_map: dict[str, Any]) -> tuple[pd.Data
             note = str(row.get("owner_note") or "").lower()
             entry = next((rule for rule in notes if str(rule["match"]).lower() in note), None)
         if entry is None:
-            unmapped.append(f"{row['listen_set']} {subject(row['stem'])} {row.get('owner_label')!r}")
+            unmapped.append(f"{row['listen_set']} {row.get('subject', row['stem'])} {row.get('owner_label')!r}")
             targets.append("excluded")
             remarks.append("")
         else:
@@ -150,7 +166,7 @@ def make_split(labels: pd.DataFrame) -> dict[str, dict[str, list[str]]]:
         rows = labels[labels["listen_set"] == listen_set]
         by_subject: dict[str, Counter[str]] = defaultdict(Counter)
         for _, row in rows.iterrows():
-            by_subject[subject(row["stem"])][row["target"]] += 1
+            by_subject[str(row["subject"])][row["target"]] += 1
         strata: dict[str, list[str]] = defaultdict(list)
         for subj in sorted(by_subject):
             strata[by_subject[subj].most_common(1)[0][0]].append(subj)
@@ -175,7 +191,7 @@ def load_or_write_split(path: Path, labels: pd.DataFrame) -> dict[str, dict[str,
     split = make_split(labels)
     path.parent.mkdir(parents=True, exist_ok=True)
     header = (
-        f"# Fit and held-out subjects (8-hex prefixes) per listen set; numpy default_rng({SPLIT_SEED}), "
+        f"# Fit and held-out subjects per listen set; numpy default_rng({SPLIT_SEED}), "
         f"{int(HELDOUT_FRACTION * 100)}% held out,\n# stratified by target, grouped by subject. "
         "Written once by scripts/evaluate_task_events.py;\n# subjects absent here are held out.\n"
     )
@@ -183,9 +199,19 @@ def load_or_write_split(path: Path, labels: pd.DataFrame) -> dict[str, dict[str,
     return split
 
 
+def named_by(entry: str, subject_label: str) -> bool:
+    """Whether a split entry names a subject: the label, or the label after a leading ``sub-``, starts with it.
+
+    Matching ignores case, so a split may name a subject by a prefix of its label.
+    """
+    label, entry = str(subject_label).lower(), str(entry).lower()
+    return bool(entry) and (label.startswith(entry) or label.removeprefix("sub-").startswith(entry))
+
+
 def side(row: pd.Series, split: dict[str, dict[str, list[str]]]) -> str:
     """``fit`` when the split file puts the row's subject there; otherwise ``heldout``."""
-    return "fit" if subject(row["stem"]) in split.get(str(row["listen_set"]), {}).get("fit", []) else "heldout"
+    fit = split.get(str(row["listen_set"]), {}).get("fit", [])
+    return "fit" if any(named_by(entry, row["subject"]) for entry in fit) else "heldout"
 
 
 def _parse_verdict(record: dict[str, Any]) -> str | None:
@@ -202,8 +228,8 @@ def load_decisions(source: Path) -> pd.DataFrame:
     """Decisions keyed by recording: ``verdict`` and ``ground_keys``, from a parquet or a rows directory."""
     if source.is_file():
         table = pd.read_parquet(source)
-        keep = [c for c in ("stem", "verdict", "run_status", "ground_keys", "declared_family") if c in table.columns]
-        table = table[keep].copy()
+        wanted = ("stem", "verdict", "run_status", "ground_keys", "declared_family", SUBJECT_COLUMN)
+        table = table[[c for c in wanted if c in table.columns]].copy()
     else:
         records = []
         for path in sorted(source.rglob("*.jsonl")):
@@ -215,9 +241,14 @@ def load_decisions(source: Path) -> pd.DataFrame:
                 verdict = _parse_verdict(record)
                 if record.get("stem") and verdict:
                     records.append(
-                        {"stem": record["stem"], "verdict": verdict, "ground_keys": record.get("ground_keys") or []}
+                        {
+                            "stem": record["stem"],
+                            "verdict": verdict,
+                            "ground_keys": record.get("ground_keys") or [],
+                            SUBJECT_COLUMN: record.get(SUBJECT_COLUMN),
+                        }
                     )
-        table = pd.DataFrame(records, columns=["stem", "verdict", "ground_keys"])
+        table = pd.DataFrame(records, columns=["stem", "verdict", "ground_keys", SUBJECT_COLUMN])
     if "ground_keys" not in table.columns:
         table["ground_keys"] = [[] for _ in range(len(table))]
     table["key"] = table["stem"].map(recording_key)
@@ -237,7 +268,7 @@ def score(labels: pd.DataFrame, decisions: pd.DataFrame, label_map: dict[str, An
         rows.append(
             {
                 "listen_set": row["listen_set"],
-                "subject": subject(row["stem"]),
+                "subject": row["subject"],
                 "stem": row["stem"],
                 "group": family_group(row.get("family", ""), str(row["listen_set"])),
                 "target": row["target"],
@@ -294,27 +325,36 @@ def summarise(scored: pd.DataFrame, decisions: pd.DataFrame, unmapped: list[str]
     return report
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Score, print the summary and write the report.
 
+    Args:
+        argv: The command line, or None to read ``sys.argv``.
+
     Returns:
-        0.
+        0; 2 when the profile cannot be loaded or lacks a value.
     """
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0] if __doc__ else None)
     parser.add_argument("labels", type=Path)
     parser.add_argument("decisions", type=Path)
-    parser.add_argument("--split", type=Path, default=DATA / "task_events_split.yaml")
-    parser.add_argument("--label-map", type=Path, default=DATA / "owner_label_map.yaml")
+    parser.add_argument("--split", type=Path, required=True, help="The dataset's split file (read, or written)")
+    parser.add_argument("--label-map", type=Path, required=True, help="The dataset's owner-label map")
     parser.add_argument("--out", type=Path, default=None)
-    args = parser.parse_args()
+    add_config_arguments(parser)
+    args = parser.parse_args(argv)
+    try:
+        driver_config(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
 
     label_map = yaml.safe_load(args.label_map.read_text())
+    decisions = load_decisions(args.decisions)
     labels = load_labels(args.labels)
     labels = labels.drop_duplicates(["listen_set", "stem"], keep="last")
-    labels, unmapped = map_labels(labels, label_map)
+    labels, unmapped = map_labels(with_subjects(labels, decisions), label_map)
     split = load_or_write_split(args.split, labels[labels["target"] != "excluded"])
     labels["side"] = [side(row, split) for _, row in labels.iterrows()]
-    decisions = load_decisions(args.decisions)
     scored = score(labels, decisions, label_map)
     report = summarise(scored, decisions, unmapped)
 

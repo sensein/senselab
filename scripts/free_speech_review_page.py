@@ -3,7 +3,9 @@
 Two phases, because the corpus lives on a cluster and the page is read on a laptop.
 
 ``extract`` walks a finished run tree, keeps the recordings whose declared family carries
-``Pattern.FREE_RESPONSE``, and writes one compact JSON line per recording.
+``Pattern.FREE_RESPONSE``, and writes one compact JSON line per recording. The families are the profile's task
+list's, so ``extract`` and ``families`` take ``--profile`` (and ``--config``), which every worker process activates
+too; a recording that could not be read is an error line, and ``extract`` then exits 1.
 
 ``render`` turns those lines into a self-contained HTML page: no network reference, no external
 asset, grouped by participant, each recording one paragraph of consensus text with its redaction
@@ -26,6 +28,13 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
+from senselab.audio.workflows.triage.extend import (
+    activate_in_worker,
+    add_config_arguments,
+    driver_config,
+    worker_arguments,
+    worker_failure,
+)
 from senselab.audio.workflows.triage.hint_record import HINT
 from senselab.audio.workflows.triage.identity import (
     ADMIT_NODE,
@@ -44,6 +53,7 @@ from senselab.audio.workflows.triage.recording_vectors import (
     recording_dirs,
     stem_of,
     view_identity,
+    view_task,
 )
 from senselab.audio.workflows.triage.recruited_conditions import (
     DIAGNOSES_KEY,
@@ -55,6 +65,7 @@ from senselab.audio.workflows.triage.recruited_conditions import (
 )
 from senselab.audio.workflows.triage.residue import is_content_word
 from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
+from senselab.audio.workflows.triage.task_catalogue import task_from_attributes
 from senselab.utils import fastio
 
 PII_LABEL = "pii"
@@ -732,6 +743,17 @@ def language_name(code: str) -> str:
     return {"en": "English", "es": "Spanish"}.get(base, code.strip() or "unknown")
 
 
+def _recorded_family(task: Any, identity: Any) -> str | None:  # noqa: ANN401 -- a ResolvedTask and an identity
+    """The task ADMIT recorded, as a family name.
+
+    Its name; for a store from before ADMIT recorded the task, the family its task id collapses into; None where the
+    run records no identity.
+    """
+    if task is not None:
+        return str(task.name) if task.name else UNKNOWN_TASK
+    return task_family(identity.task_id) if identity is not None else None
+
+
 def recording_record(run_root: Path, families: frozenset[str] | None) -> dict[str, Any] | None:
     """One recording's row, or None when its declared family is out of scope.
 
@@ -747,7 +769,7 @@ def recording_record(run_root: Path, families: frozenset[str] | None) -> dict[st
     verdict = view.last("verdict", node=VERDICT_NODE)
     attributes = verdict.attributes if verdict is not None else {}
     recorded = view_identity(view)
-    declared = attributes.get("declared_family") or (task_family(recorded.task_id) if recorded is not None else None)
+    declared = attributes.get("declared_family") or _recorded_family(view_task(view), recorded)
     if not declared or declared == UNKNOWN_TASK or (families is not None and declared not in families):
         return None
     declared = str(declared)
@@ -968,6 +990,9 @@ def _worker(payload: tuple[str, list[str]]) -> dict[str, Any] | None:
         The row, an error record, or None.
     """
     run_root, families = payload
+    failed = worker_failure()
+    if failed is not None:
+        return {"error": failed, "run_dir": run_root}
     try:
         return recording_record(Path(run_root), frozenset(families))
     except Exception as error:  # noqa: BLE001 -- one unreadable store must not stop the sweep
@@ -1022,20 +1047,38 @@ def admitted_family(store: Path) -> str | None:
                     record.get("record") == "entity"
                     and (record.get("attributes") or {}).get("name") == RECORDING_STREAM
                 ):
-                    return task_family(str(record["attributes"].get(DECLARED_TASK_ID) or UNKNOWN_TASK))
+                    return _admitted_task(record["attributes"])
                 if record.get("record") == "activity" and record.get("node") == ADMIT_NODE:
-                    refused = str((record.get("parameters") or {}).get(DECLARED_TASK_ID) or UNKNOWN_TASK)
+                    refused = _admitted_task(record.get("parameters") or {})
     except OSError:
         return None
-    return task_family(refused) if refused is not None else None
+    return refused
 
 
-def _rows(payloads: Sequence[tuple[str, list[str]]], workers: int) -> Iterator[dict[str, Any] | None]:
+def _admitted_task(attributes: Mapping[str, Any]) -> str:
+    """The task one of ADMIT's records names, as a family name.
+
+    Its name (:func:`~senselab.audio.workflows.triage.task_catalogue.task_from_attributes`), :data:`UNKNOWN_TASK`
+    where it names none; for a record from before ADMIT recorded the task, the family its task id collapses into.
+    """
+    task = task_from_attributes(attributes)
+    if task is not None:
+        return str(task.name) if task.name else UNKNOWN_TASK
+    return task_family(str(attributes.get(DECLARED_TASK_ID) or UNKNOWN_TASK))
+
+
+def _rows(
+    payloads: Sequence[tuple[str, list[str]]],
+    workers: int,
+    worker_config: tuple[str | None, str | None] = (None, None),
+) -> Iterator[dict[str, Any] | None]:
     """Read every candidate store, in a pool or in this process.
 
     Args:
         payloads: One ``(run directory, family names)`` per candidate.
         workers: How many processes to read with; one reads serially.
+        worker_config: The config override and profile each worker activates
+            (:func:`~senselab.audio.workflows.triage.extend.worker_arguments`): a spawned worker starts with none.
 
     Yields:
         Each row, error record or None.
@@ -1043,11 +1086,18 @@ def _rows(payloads: Sequence[tuple[str, list[str]]], workers: int) -> Iterator[d
     if workers <= 1:
         yield from (_worker(payload) for payload in payloads)
         return
-    with Pool(workers) as pool:
+    with Pool(workers, initializer=activate_in_worker, initargs=worker_config) as pool:
         yield from pool.imap_unordered(_worker, list(payloads), chunksize=8)
 
 
-def extract(corpus: Path, out: Path, workers: int, *, walk_threads: int = fastio.DEFAULT_THREADS) -> dict[str, Any]:
+def extract(
+    corpus: Path,
+    out: Path,
+    workers: int,
+    *,
+    walk_threads: int = fastio.DEFAULT_THREADS,
+    worker_config: tuple[str | None, str | None] = (None, None),
+) -> dict[str, Any]:
     """Walk a corpus and write one JSON line per free-response recording.
 
     Args:
@@ -1055,6 +1105,7 @@ def extract(corpus: Path, out: Path, workers: int, *, walk_threads: int = fastio
         out: The JSONL to write.
         workers: How many processes to read stores with.
         walk_threads: How many participants are listed at once while finding run directories.
+        worker_config: As :func:`_rows`.
 
     Returns:
         The sweep's counts.
@@ -1068,7 +1119,7 @@ def extract(corpus: Path, out: Path, workers: int, *, walk_threads: int = fastio
     payloads = [(str(run_root), sorted(families)) for run_root in candidates]
     with out.open("w") as handle:
         handle.write(json.dumps({"schema": EXTRACT_SCHEMA, "version": EXTRACT_VERSION}) + "\n")
-        for row in _rows(payloads, workers):
+        for row in _rows(payloads, workers, worker_config):
             if row is None:
                 counts["skipped"] += 1
                 continue
@@ -3089,7 +3140,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         argv: The command line, or None for ``sys.argv``.
 
     Returns:
-        The exit status.
+        The exit status: 0; for ``extract``, 1 where a recording could not be read (its error line is in the
+        extract); 2 where the profile cannot be loaded or lacks a value.
     """
     parser = argparse.ArgumentParser(description="Free-speech transcript review page.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -3099,6 +3151,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     extractor.add_argument("--out", type=Path, required=True)
     extractor.add_argument("--workers", type=int, default=8)
     extractor.add_argument("--walk-threads", type=int, default=fastio.DEFAULT_THREADS)
+    add_config_arguments(extractor)
 
     renderer = sub.add_parser("render", help="turn an extract into a self-contained HTML page")
     renderer.add_argument("data", type=Path)
@@ -3106,7 +3159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     renderer.add_argument("--title", default="Free-speech review")
     renderer.add_argument("--shard-size", type=int, default=0, help="participants per file; 0 for one file")
 
-    sub.add_parser("families", help="print the free-response family names the graph declares")
+    add_config_arguments(sub.add_parser("families", help="print the free-response family names the graph declares"))
 
     census_parser = sub.add_parser("census", help="what one extract holds, in counts")
     census_parser.add_argument("data", type=Path)
@@ -3116,18 +3169,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     compare_parser.add_argument("after", type=Path)
 
     arguments = parser.parse_args(argv)
+    config = None
+    if arguments.command in ("families", "extract"):
+        try:
+            config = driver_config(arguments)
+        except (OSError, ValueError, RuntimeError) as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 2
     if arguments.command == "families":
         for name in sorted(free_response_families()):
             print(name)
         return 0
     if arguments.command == "extract":
-        print(
-            json.dumps(
-                extract(arguments.corpus, arguments.out, arguments.workers, walk_threads=arguments.walk_threads),
-                indent=2,
-            )
+        assert config is not None
+        summary = extract(
+            arguments.corpus,
+            arguments.out,
+            arguments.workers,
+            walk_threads=arguments.walk_threads,
+            worker_config=worker_arguments(arguments, config),
         )
-        return 0
+        print(json.dumps(summary, indent=2))
+        return 1 if summary["counts"].get("errors") else 0
     if arguments.command == "census":
         print(json.dumps(census(arguments.data), indent=2))
         return 0

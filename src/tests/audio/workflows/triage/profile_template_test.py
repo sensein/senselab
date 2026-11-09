@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,8 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import (
     REQUIRED_DATASET_PATHS,
+    activate_profile,
+    active_profile,
     load_profile,
     missing_dataset_values,
     profile_values,
@@ -17,6 +20,11 @@ from senselab.audio.workflows.triage.dataset_profile import (
 )
 from senselab.audio.workflows.triage.profile_template import REFERENCE_PROFILE, values_to_supply, write_template
 from tests.conftest import FIXTURE_PROFILE
+
+
+def _values(missing: list[str]) -> list[str]:
+    """The start check's missing values, without the files it names as still the template."""
+    return [item for item in missing if "(still the template" not in item]
 
 
 @pytest.mark.usefixtures("without_triage_profile")
@@ -28,7 +36,7 @@ class TestTheTemplate:
         asked = values_to_supply()
         kinds = {entry["kind"] for entries in asked.values() for entry in entries}
         assert kinds <= {"a", "b", "d"}
-        assert sum(len(entries) for entries in asked.values()) == 39
+        assert sum(len(entries) for entries in asked.values()) == 40
 
     def test_without_a_base_every_required_value_is_asked_for(self) -> None:
         """A dataset that builds on no profile supplies every value senselab leaves to one."""
@@ -55,11 +63,12 @@ class TestTheTemplate:
         assert set(REQUIRED_DATASET_PATHS) <= files | inherited
         missing = missing_dataset_values(load_triage_config(profile=root).values)
         assert "tasks.yaml tasks (the task list names no task)" in missing
-        assert "review_policy.txt (still the template: write your own)" in missing
-        values = [item for item in missing if item.split()[0] not in {"tasks.yaml", "review_policy.txt"}]
+        for template in ("review_policy.txt", "time_release.yaml", "airway_event_tokens.yaml", "task_guidance.yaml"):
+            assert f"{template} (still the template: write your own)" in missing
+        values = [item for item in _values(missing) if item.split()[0] not in {"tasks.yaml", "review_policy.txt"}]
         unfitted = unfitted_values()
-        assert len(values) + len(unfitted) == 39, "the dataset files' values too"
-        assert manifest["pilot"] is True and len(unfitted) == 10, "a pilot is not asked for its corpus statistics"
+        assert len(values) + len(unfitted) == 40, "the dataset files' values too"
+        assert manifest["pilot"] is True and len(unfitted) == 11, "a pilot is not asked for its corpus statistics"
 
     def test_each_blank_carries_its_kind(self, tmp_path: Path) -> None:
         """A dataset reads, beside each blank, how it is set."""
@@ -128,7 +137,7 @@ class TestTheTemplate:
         asked = values_to_supply(off=off)
         stages = {stage for entries in asked.values() for entry in entries for stage in entry.get("stages") or ()}
         assert stages.isdisjoint(off)
-        assert sum(len(entries) for entries in asked.values()) < 39
+        assert sum(len(entries) for entries in asked.values()) < 40
 
     def test_the_written_workflow_loads_and_the_start_check_asks_only_for_what_runs(self, tmp_path: Path) -> None:
         """The template's config lists the stages that run; the run is asked for no value of the others."""
@@ -138,7 +147,10 @@ class TestTheTemplate:
         assert set(off).isdisjoint(values["workflow"]["stages"])
         missing = missing_dataset_values(values)
         asked = sum(1 for entries in values_to_supply(off=off).values() for entry in entries if entry["kind"] != "b")
-        assert len([item for item in missing if item.split()[0] not in {"tasks.yaml", "review_policy.txt"}]) == asked
+        assert (
+            len([item for item in _values(missing) if item.split()[0] not in {"tasks.yaml", "review_policy.txt"}])
+            == asked
+        )
 
     def test_without_review_the_reviewers_files_are_neither_written_nor_asked_for(self, tmp_path: Path) -> None:
         """REVIEW and SECOND_OPINION off: no review policy or task guidance (plan step 6b, e)."""
@@ -152,3 +164,25 @@ class TestTheTemplate:
         """Copying a profile and leaving stages off at once is refused; the copy is edited instead."""
         with pytest.raises(ValueError, match="start_from"):
             write_template(tmp_path / "copy", name="copy", start_from=FIXTURE_PROFILE, off=("AIRWAY",))
+
+    def test_a_copy_leaves_the_originals_fit_behind_and_is_a_pilot(self, tmp_path: Path) -> None:
+        """Review K9: another corpus's statistics are not the copy's; it fits its own, as a pilot."""
+        original = tmp_path / "original"
+        shutil.copytree(FIXTURE_PROFILE, original)
+        manifest = yaml.safe_load((original / "profile.yaml").read_text())
+        manifest.pop("pilot", None)
+        (original / "profile.yaml").write_text(yaml.safe_dump(manifest))
+        (original / "fitted.yaml").write_text("fitted_on: {rows: 3}\nvalues: {}\n")
+        (original / "fitted.yaml.previous").write_text("fitted_on: {rows: 2}\nvalues: {}\n")
+        root = write_template(tmp_path / "copy", name="copy", start_from=original)
+        assert not (root / "fitted.yaml").exists() and not (root / "fitted.yaml.previous").exists()
+        assert yaml.safe_load((root / "profile.yaml").read_text())["pilot"] is True
+        assert load_profile(root).pilot
+
+    def test_a_template_is_written_with_a_profile_active_and_leaves_it_active(self, tmp_path: Path) -> None:
+        """Review K9: an active profile is set aside while the template is written, then active again."""
+        loaded = load_profile(FIXTURE_PROFILE)
+        activate_profile(loaded)
+        root = write_template(tmp_path / "new", name="new-dataset")
+        assert (root / "profile.yaml").is_file()
+        assert active_profile() is loaded

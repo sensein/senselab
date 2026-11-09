@@ -1,27 +1,37 @@
 #!/usr/bin/env python3
 r"""Run COHORT over finished triage runs: corpus quantiles, then speaker enrollment and readings.
 
-    uv run python scripts/extend_cohort.py collect MANIFEST --slice-index I --slice-count N [--log-dir DIR]
-    uv run python scripts/extend_cohort.py quantiles (--facts DIR | --table TRIAGE_TSV) --out FILE [--commit SHA]
+    uv run python scripts/extend_cohort.py collect MANIFEST --slice-index I --slice-count N --profile PROFILE \
+        [--config OVERRIDE.yaml] [--log-dir DIR]
+    uv run python scripts/extend_cohort.py quantiles (--facts DIR | --table TRIAGE_TSV) --out FILE --profile PROFILE \
+        [--config OVERRIDE.yaml] [--commit SHA]
     uv run python scripts/extend_cohort.py apply MANIFEST --quantiles FILE --slice-index I --slice-count N \
-        [--participants SUB ...] [--readings-out DIR] [--enrollments-out DIR] [--force] [--config OVERRIDE.yaml] \
-        [--commit SHA] [--log-dir DIR] [--device cpu|cuda]
-    uv run python scripts/extend_cohort.py consistency LOG_DIR [--iqr-multiple K]
+        --profile PROFILE [--participants SUB ...] [--readings-out DIR] [--enrollments-out DIR] [--force] \
+        [--config OVERRIDE.yaml] [--commit SHA] [--log-dir DIR] [--device cpu|cuda]
+    uv run python scripts/extend_cohort.py consistency LOG_DIR --profile PROFILE [--config OVERRIDE.yaml] \
+        [--iqr-multiple K]
 
 ``MANIFEST`` is the JSONL every extend driver takes (``stem``, ``enhanced``).
 
+Every phase reads the profile's data, so each takes ``--profile``, the dataset profile the runs were made with
+(exit 2 where it cannot be loaded or lacks a value).
+
 - ``collect`` reads each store's duration, declared family and task extent into
-  ``slices/cohort-facts-slice-I-of-N.jsonl``; nothing is written into a store.
+  ``slices/cohort-facts-slice-I-of-N.jsonl``; nothing is written into a store. A store whose recording or profile
+  differs from the run's record is an error row.
 - ``quantiles`` takes the per-family quantiles over every collected row (or over a ``triage.tsv``,
   whose ``task_family``, ``recording_duration_s`` and ``task_duration_s`` columns are the same facts)
   and writes the run's cohort artefact, ``cohort_quantiles.json``, with its provenance.
-- ``apply`` groups the manifest by participant and shards the participants, never a participant's
-  sessions. Per participant it builds each session's enrollment and, per session, the participant
+- ``apply`` groups the manifest by target speaker (the participant, where none is declared) and shards the
+  groups, never a group's sessions; ``--participants`` keeps the groups of those participants or speakers. A group
+  any member of which is refused (a stale row, a recording or profile that differs from the run's record) is
+  written into nowhere. Per participant it builds each session's enrollment and, per session, the participant
   enrollment of the other sessions; compares every member's speech runs with its session's (or, where
   the session has none, the other sessions'); checks each session against the other sessions and
   every member against the quantiles; and writes one ``cohort_reading`` into each store. With
   ``--readings-out`` nothing is written into a store: each participant's readings go to
-  ``<DIR>/<participant>.jsonl`` instead.
+  ``<DIR>/<group>.jsonl`` instead. ``--enrollments-out`` writes ``<DIR>/<group>.npy`` and, per session,
+  ``<DIR>/<session>.npy`` where the group is its participant, else ``<DIR>/<group>/<session>.npy``.
 - ``consistency`` reads the apply logs' session-vs-other-sessions cosines and prints their
   distribution and lower fence, from which ``participant.consistency_cosine_min`` is set.
 
@@ -63,6 +73,7 @@ from senselab.audio.workflows.triage.cohort_stage import (
     ecapa_embedder,
     enrollment_config,
     facts_of,
+    keyed_members,
     plain_loader,
     read_participant,
     read_quantile_artefact,
@@ -77,6 +88,7 @@ from senselab.audio.workflows.triage.extend import (
     RUN_SUBDIR,
     SKIPPED,
     SLICES_SUBDIR,
+    ReplayRefused,
     StaleManifestRow,
     add_config_arguments,
     driver_config,
@@ -97,7 +109,6 @@ from senselab.audio.workflows.triage.identity import (
     undeclared_session,
 )
 from senselab.audio.workflows.triage.nodes.common import capture_environments, describe_exception, find_measurement
-from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.utils.prov_store import ProvStore
 
 FACTS_PREFIX = "cohort-facts-slice-"
@@ -120,6 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--slice-index", type=int, required=True)
     collect.add_argument("--slice-count", type=int, required=True)
     collect.add_argument("--log-dir", type=Path, default=None, help=f"Where {SLICES_SUBDIR}/ goes")
+    add_config_arguments(collect)
 
     quantiles = sub.add_parser("quantiles", help="Write the run's cohort quantile artefact")
     source = quantiles.add_mutually_exclusive_group(required=True)
@@ -127,13 +139,16 @@ def build_parser() -> argparse.ArgumentParser:
     source.add_argument("--table", type=Path, help="A triage.tsv carrying the same facts")
     quantiles.add_argument("--out", type=Path, required=True, help=f"The artefact path, e.g. DIR/{QUANTILES_FILE}")
     quantiles.add_argument("--commit", default=None)
+    add_config_arguments(quantiles)
 
     apply = sub.add_parser("apply", help="Enroll each participant and session and write every member's reading")
     apply.add_argument("manifest", type=Path)
     apply.add_argument("--quantiles", type=Path, default=None, help="The artefact; omitted, every check is unavailable")
     apply.add_argument("--slice-index", type=int, required=True)
     apply.add_argument("--slice-count", type=int, required=True)
-    apply.add_argument("--participants", nargs="*", default=None, help="Only these sub-<label> participants")
+    apply.add_argument(
+        "--participants", nargs="*", default=None, help="Only the groups of these participants or target speakers"
+    )
     apply.add_argument("--readings-out", type=Path, default=None, help="Write readings here, never into a store")
     apply.add_argument(
         "--enrollments-out", type=Path, default=None, help="Write each session's and participant's vector here, 0600"
@@ -147,27 +162,29 @@ def build_parser() -> argparse.ArgumentParser:
     consistency = sub.add_parser("consistency", help="The session-vs-other-sessions cosines and their lower fence")
     consistency.add_argument("logs", type=Path, help="The apply --log-dir, its slices/, or a --readings-out directory")
     consistency.add_argument("--iqr-multiple", type=float, default=1.5)
+    add_config_arguments(consistency)
     return parser
 
 
 # ------------------------------------------------------------------------------ collect
 
 
-def collect_rows(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def collect_rows(rows: Sequence[dict[str, Any]], config: TriageConfig | None = None) -> list[dict[str, Any]]:
     """The fact row of every recording named, reading only its store.
 
     Args:
         rows: Manifest rows.
+        config: The configuration each store is checked against (:func:`read_checked_store`), or None for the
+            recording alone.
 
     Returns:
-        One fact row per readable store; an unreadable one carries ``error``.
+        One fact row per readable store; an unreadable or refused one carries ``error``.
     """
     out: list[dict[str, Any]] = []
     for row in rows:
         try:
             run_root = run_root_of(Path(row["enhanced"]))
-            store = read_store(run_root)
-            require_recorded_identity(store, run_root)
+            store = read_checked_store(run_root, config)
         except (OSError, ValueError) as error:
             out.append({"stem": row["stem"], "error": describe_exception(error)})
             continue
@@ -175,7 +192,9 @@ def collect_rows(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def run_collect(manifest: Path, *, slice_index: int, slice_count: int, log_dir: Path) -> Path:
+def run_collect(
+    manifest: Path, *, slice_index: int, slice_count: int, log_dir: Path, config: TriageConfig | None = None
+) -> Path:
     """Collect one shard's fact rows into its slice file.
 
     Args:
@@ -183,12 +202,13 @@ def run_collect(manifest: Path, *, slice_index: int, slice_count: int, log_dir: 
         slice_index: This task's index.
         slice_count: How many tasks.
         log_dir: Where ``slices/`` goes.
+        config: As :func:`collect_rows`.
 
     Returns:
         The slice file.
     """
     mine = take_slice(read_manifest(manifest, required=("stem", "enhanced")), slice_index, slice_count)
-    found = collect_rows(mine)
+    found = collect_rows(mine, config)
     path = log_dir / SLICES_SUBDIR / f"{FACTS_PREFIX}{slice_index}-of-{slice_count}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in found), encoding="utf-8")
@@ -237,7 +257,7 @@ def facts_from_table(path: Path) -> list[dict[str, Any]]:
             rows.append(
                 {
                     "stem": stem,
-                    "family": record.get("task_family") or task_family(str(record.get("task") or "")),
+                    "family": record.get("task_family") or "",
                     "duration_s": duration,
                     "extent_s": extent,
                     "extent_fraction": round((extent or 0.0) / duration, 4) if duration else None,
@@ -341,10 +361,29 @@ def _write_vector(vector: np.ndarray | None, path: Path) -> None:
 
 
 def _consistency_cosine(block: dict[str, Any]) -> float | None:
+    """The session-vs-other-sessions cosine of a consistency block.
+
+    Its comparison's value; where the bound is unset (a pilot run), the cosine recorded beside the block's
+    ``unavailable`` status, which a fit reads (review J2).
+    """
     for comparison in block.get("comparisons") or ():
         if comparison.get("name") == "session_vs_other_sessions_cosine":
             return comparison.get("value")
-    return None
+    return block.get("cosine")
+
+
+def _vector_path(enrollments_out: Path, group: str, participant: str | None, session: str) -> Path:
+    """Where a session's enrollment vector goes.
+
+    ``<session>.npy`` (``<participant>/<session>.npy``) where the group is its participant; else under the group's own
+    directory, so two target speakers of one session do not overwrite each other's vector.
+    """
+    return enrollments_out / (f"{session}.npy" if group == participant else f"{group}/{session}.npy")
+
+
+def _participants_of_group(sessions: Sequence[tuple[str, Sequence[dict[str, Any]]]]) -> set[str]:
+    """The participants a group's manifest rows name."""
+    return {str(row["participant"]) for _, rows in sessions for row in rows if row.get("participant")}
 
 
 def process_participant(
@@ -390,6 +429,7 @@ def process_participant(
     stream = str(cohort_parameters()["comparison"]["diarization_stream"])
     opened: list[tuple[str, list[tuple[RecordingFacts, Path, ProvStore]]]] = []
     stale: list[str] = []
+    refused: list[str] = []
     for session, rows in sessions:
         members: list[tuple[RecordingFacts, Path, ProvStore]] = []
         for row in rows:
@@ -399,6 +439,8 @@ def process_participant(
             except (OSError, ValueError) as error:
                 if isinstance(error, StaleManifestRow):
                     stale.append(str(row["stem"]))
+                elif isinstance(error, ReplayRefused):
+                    refused.append(f"{row['stem']} ({describe_exception(error)})")
                 failed.append(
                     {
                         "stem": row["stem"],
@@ -413,13 +455,21 @@ def process_participant(
             members.append((facts, run_root, store))
         if members:
             opened.append((session, members))
-    if stale:
-        why = f"participant refused: the manifest is stale for {', '.join(sorted(stale))}; nothing was written"
+    if stale or refused:
+        why = "; ".join(
+            [f"the manifest is stale for {', '.join(sorted(stale))}"] * bool(stale)
+            + [f"the run of {member} is refused" for member in sorted(refused)]
+        )
+        why = f"participant refused: {why}; nothing was written"
         return [
             {"stem": row["stem"], "participant": participant, "session": session, "status": ERROR, "error": why}
             for session, rows in sessions
             for row in rows
         ]
+    keyed = keyed_members(
+        [(session, [(facts, (run_root, store)) for facts, run_root, store in members]) for session, members in opened]
+    )
+    opened = [(session, [(facts, *held) for facts, held in members]) for session, members in keyed]
     every = [member for _, members in opened for member in members]
     key = cohort_key(
         group=participant,
@@ -447,14 +497,16 @@ def process_participant(
         quantiles_ref=quantiles_ref,
     )
     if enrollments is not None and enrollments_out is not None:
+        named = _participants_of_group(sessions)
+        own = next(iter(named)) if len(named) == 1 else None if named else participant  # no participant: its own
         for session, enrollment in enrollments.sessions.items():
             if not is_undeclared_session(session):
-                _write_vector(enrollment.vector, enrollments_out / f"{session}.npy")
+                _write_vector(enrollment.vector, _vector_path(enrollments_out, participant, own, session))
         _write_vector(enrollments.pooled.vector, enrollments_out / f"{participant}.npy")
     out: list[dict[str, Any]] = []
     for session, members in opened:
         for (facts, run_root, store), attributes in zip(members, readings[session], strict=True):
-            compared = None if enrollments is None else enrollments.source_for_recording(session, facts.stem)[1]
+            compared = None if enrollments is None else enrollments.source_for_recording(session, facts.key)[1]
             if readings_out is None:
                 reading_id = write_cohort_reading(store, attributes)
                 if compared is not None and compared.vector is not None:
@@ -527,17 +579,18 @@ def process_participant(
     return out + failed
 
 
-def run_apply(args: argparse.Namespace) -> dict[str, Any]:
+def run_apply(args: argparse.Namespace, config: TriageConfig | None = None) -> dict[str, Any]:
     """Apply COHORT over one shard of participants.
 
     Args:
         args: The parsed ``apply`` arguments.
+        config: The configuration :func:`driver_config` loaded; None loads it from ``args``.
 
     Returns:
         The task's summary.
     """
     started = time.time()
-    config = driver_config(args, stage="COHORT")
+    config = config if config is not None else driver_config(args, stage="COHORT")
     settings = enrollment_config(config)
     artefact, quantiles_ref = None, None
     if args.quantiles is not None:
@@ -561,7 +614,9 @@ def run_apply(args: argparse.Namespace) -> dict[str, Any]:
     participants = participants_of(read_manifest(args.manifest, required=("stem", "enhanced")))
     if args.participants:
         wanted = set(args.participants)
-        participants = [(p, sessions) for p, sessions in participants if p in wanted]
+        participants = [
+            (p, sessions) for p, sessions in participants if p in wanted or _participants_of_group(sessions) & wanted
+        ]
     mine = take_slice(
         [{"participant": p, "sessions": sessions} for p, sessions in participants], args.slice_index, args.slice_count
     )
@@ -656,7 +711,7 @@ def run_consistency(logs: Path, *, iqr_multiple: float) -> dict[str, Any]:
         iqr_multiple: The fence's multiple of the interquartile range.
 
     Returns:
-        The fence summary and, at the packaged bound, how many sessions it flags.
+        The fence summary and, at the active profile's bound, how many sessions it flags.
     """
     base = logs / SLICES_SUBDIR if (logs / SLICES_SUBDIR).is_dir() else logs
     paths = sorted(base.glob("cohort-slice-*.jsonl")) or sorted(p for p in base.glob("*.jsonl") if p.parent == base)
@@ -689,6 +744,11 @@ def main(argv: list[str] | None = None) -> int:
     """
     args = build_parser().parse_args(argv)
     try:
+        config = driver_config(args, stage="COHORT")
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
+    try:
         if args.command == "collect":
             if not args.manifest.exists():
                 print(f"ERROR: manifest not found: {args.manifest}", file=sys.stderr)
@@ -698,6 +758,7 @@ def main(argv: list[str] | None = None) -> int:
                 slice_index=args.slice_index,
                 slice_count=args.slice_count,
                 log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
+                config=config,
             )
             print(f"Facts: {path}")
             return 0
@@ -711,7 +772,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.manifest.exists():
             print(f"ERROR: manifest not found: {args.manifest}", file=sys.stderr)
             return 2
-        summary = run_apply(args)
+        summary = run_apply(args, config)
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2

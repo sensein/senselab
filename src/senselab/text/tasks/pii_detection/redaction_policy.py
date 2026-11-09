@@ -31,6 +31,77 @@ _AGE_DIGITS = re.compile(r"^\d{1,3}$")
 _HYPHEN_AGE = re.compile(r"^(\d{1,3}|[a-z]+(-[a-z]+)?)-years?-olds?$")
 
 
+LEXICON_KEYS = frozenset(
+    {
+        "age_after",
+        "age_before",
+        "age_decade_before",
+        "age_decades",
+        "age_units",
+        "birthday",
+        "countries",
+        "country_abbreviations",
+        "country_phrases",
+        "first_person_be",
+        "holiday_phrases",
+        "holidays",
+        "kinship",
+        "months",
+        "months_es",
+        "number_words",
+        "ordinal_words",
+        "season_context_after",
+        "season_context_before",
+        "seasons",
+        "seasons_in_context",
+        "state_abbreviations",
+        "state_phrases",
+        "states",
+        "version",
+        "year_centuries",
+        "year_lead",
+        "year_thousand_heads",
+        "year_twenty_followers",
+    }
+)
+"""Every key of a lexicon file the rules here read: ``version`` (a number), and a list for each other key -- of words,
+or for ``*_phrases`` and ``year_thousand_heads`` of word lists."""
+
+
+def lexicon_problems(path: str | Path) -> list[str]:
+    """What keeps a lexicon file from serving every rule here, checked before a run reads it.
+
+    Args:
+        path: The YAML file (``redaction_policy.yaml``).
+
+    Returns:
+        One description per problem: a key the rules read that the file lacks, a key no rule reads, a version that
+        is not a number, a key whose value is not a list, or a phrase that is not a list of words. Empty where the
+        file serves every rule.
+    """
+    raw = yaml.safe_load(Path(path).read_text()) or {}
+    if not isinstance(raw, Mapping):
+        return ["it is not a mapping of key to word list"]
+    problems = []
+    lacking = sorted(LEXICON_KEYS - set(raw))
+    if lacking:
+        problems.append(f"it lacks the keys {lacking}")
+    unknown = sorted(str(key) for key in raw if key not in LEXICON_KEYS)
+    if unknown:
+        problems.append(f"no rule reads its keys {unknown}")
+    if "version" in raw and (isinstance(raw["version"], bool) or not isinstance(raw["version"], int)):
+        problems.append(f"version is {raw['version']!r}, not a number")
+    for key in sorted(LEXICON_KEYS - {"version"}):
+        value = raw.get(key, [])
+        if not isinstance(value, list):
+            problems.append(f"{key} is not a list")
+        elif (key.endswith("_phrases") or key == "year_thousand_heads") and not all(
+            isinstance(phrase, list) for phrase in value
+        ):
+            problems.append(f"{key} is not a list of word lists")
+    return problems
+
+
 def load_lexicon(path: str | Path) -> Lexicon:
     """A lexicon file, its token lists as sets and its phrases as token tuples.
 

@@ -87,7 +87,7 @@ test('a BIDS id is labelled by its key, and only a BIDS id is', () => {
   // case is never folded: folding could merge two ids the file keeps apart
   assert.notEqual(A.categoryLabel(s, bids('ses', UUIDS[2])), A.categoryLabel(s, bids('ses', UUIDS[2].toUpperCase())))
   // every other column is left exactly as it is
-  assert.equal(A.categoryLabel(A.BY_NAME.task, 'diadochokinesis-pa'), 'diadochokinesis-pa')
+  assert.equal(A.categoryLabel(A.BY_NAME.task, 'pa-pa-pa'), 'pa-pa-pa')
   assert.equal(A.categoryLabel(A.BY_NAME.verdict, 'pass'), 'pass')
   assert.equal(A.categoryLabel('release', 'withheld'), 'withheld')
 })

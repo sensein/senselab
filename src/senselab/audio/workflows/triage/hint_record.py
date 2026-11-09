@@ -143,8 +143,9 @@ def recorded_hint_digest(store: ProvStore) -> str | None:
 def recorded_hint(store: ProvStore) -> AudioHints | None:
     """The hint ADMIT recorded, rebuilt, or None where it recorded none or the store predates the record.
 
-    ``target_speaker`` is not rebuilt, since only its digest is stored: for a hint that carried one, the
-    rebuilt hint differs from the original in that field.
+    ``target_speaker`` and each of ``target_speakers``' ``embedding`` are not rebuilt, since only their digests are
+    stored: for a hint that carried one, the rebuilt hint differs from the original there (each target speaker is
+    kept, without its voice). A reader that needs the voice checks :func:`recorded_voice` first.
 
     Args:
         store: The provenance store.
@@ -156,7 +157,27 @@ def recorded_hint(store: ProvStore) -> AudioHints | None:
     stored = None if record is None else record.get(HINT)
     if not isinstance(stored, Mapping):
         return None
-    return AudioHints.model_validate({key: value for key, value in stored.items() if key != TARGET_SPEAKER})
+    rebuilt = {key: value for key, value in stored.items() if key != TARGET_SPEAKER}
+    if rebuilt.get(TARGET_SPEAKERS):
+        rebuilt[TARGET_SPEAKERS] = [
+            {key: value for key, value in dict(entry).items() if key != "embedding"}
+            for entry in rebuilt[TARGET_SPEAKERS]
+        ]
+    return AudioHints.model_validate(rebuilt)
+
+
+def recorded_voice(store: ProvStore) -> bool:
+    """Whether the hint ADMIT recorded carried a target speaker's voice, which :func:`recorded_hint` cannot rebuild.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        True where the recorded hint carried one (:func:`carries_voice`).
+    """
+    record = _record(store)
+    stored = None if record is None else record.get(HINT)
+    return isinstance(stored, Mapping) and carries_voice(stored)
 
 
 def changed_fields(store: ProvStore, hint: AudioHints | None) -> list[str] | None:

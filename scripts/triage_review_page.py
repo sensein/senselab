@@ -7,7 +7,10 @@ item (from the decision tables' reader), overlays, stream paths, a quantised spe
 declared family with a transcript its transcript, PII and redactions (from the free-speech review
 page's reader)::
 
-    uv run python scripts/triage_review_page.py extract CORPUS --out review.jsonl --workers 16
+    uv run python scripts/triage_review_page.py extract CORPUS --out review.jsonl --workers 16 --profile PROFILE
+
+``--profile`` (and ``--config``) name the dataset profile the corpus was run with; every worker process activates
+it too. A recording that could not be read is an error line, and ``extract`` then exits 1.
 
 ``render`` turns those lines into ``index.html`` plus side files under ``data/``::
 
@@ -54,6 +57,13 @@ from typing import Any, Collection, Iterator, Mapping, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from senselab.audio.workflows.triage.extend import (  # noqa: E402
+    activate_in_worker,
+    add_config_arguments,
+    driver_config,
+    worker_arguments,
+    worker_failure,
+)
 from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, recording_dirs  # noqa: E402
 from senselab.audio.workflows.triage.review_page import ListenSet, review_record, write_page  # noqa: E402
 from senselab.audio.workflows.triage.review_page.page import (
@@ -142,17 +152,24 @@ def speech_view(run_root: Path) -> dict[str, Any] | None:
 def _worker(payload: tuple[str, str]) -> dict[str, Any] | None:
     """Pool entry point: one recording's record, an error record, or None."""
     run_root, root = payload
+    failed = worker_failure()
+    if failed is not None:
+        return {"error": failed, "run_dir": run_root}
     try:
         return review_record(Path(run_root), Path(root), speech_view)
     except Exception as error:  # noqa: BLE001 -- one unreadable store must not stop the sweep
         return {"error": f"{type(error).__name__}: {error}", "run_dir": run_root}
 
 
-def _rows(payloads: Sequence[tuple[str, str]], workers: int) -> Iterator[dict[str, Any] | None]:
+def _rows(
+    payloads: Sequence[tuple[str, str]],
+    workers: int,
+    worker_config: tuple[str | None, str | None] = (None, None),
+) -> Iterator[dict[str, Any] | None]:
     if workers <= 1:
         yield from (_worker(payload) for payload in payloads)
         return
-    with Pool(workers) as pool:
+    with Pool(workers, initializer=activate_in_worker, initargs=worker_config) as pool:
         yield from pool.imap_unordered(_worker, list(payloads), chunksize=8)
 
 
@@ -163,6 +180,7 @@ def extract(
     *,
     manifest: Path | None = None,
     walk_threads: int = fastio.DEFAULT_THREADS,
+    worker_config: tuple[str | None, str | None] = (None, None),
 ) -> dict[str, Any]:
     """Write one JSON line per recording.
 
@@ -172,6 +190,8 @@ def extract(
         workers: Processes reading stores.
         manifest: A file of run roots, one per line, to read instead of walking the tree.
         walk_threads: Participants listed at once while walking.
+        worker_config: The config override and profile each worker activates
+            (:func:`~senselab.audio.workflows.triage.extend.worker_arguments`): a spawned worker starts with none.
 
     Returns:
         The sweep's counts.
@@ -184,7 +204,7 @@ def extract(
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w") as handle:
         handle.write(json.dumps({"schema": EXTRACT_SCHEMA, "version": EXTRACT_VERSION}) + "\n")
-        for row in _rows([(str(r), str(corpus)) for r in run_roots], workers):
+        for row in _rows([(str(r), str(corpus)) for r in run_roots], workers, worker_config):
             if row is None:
                 counts["no_fold"] += 1
                 continue
@@ -330,6 +350,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     extractor.add_argument("--workers", type=int, default=8)
     extractor.add_argument("--manifest", type=Path, default=None, help="run roots, one per line, instead of a walk")
     extractor.add_argument("--walk-threads", type=int, default=fastio.DEFAULT_THREADS)
+    add_config_arguments(extractor)
     renderer = sub.add_parser("render", help="turn an extract into index.html and its side files")
     renderer.add_argument("data", type=Path)
     renderer.add_argument("--out", type=Path, required=True)
@@ -365,15 +386,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     arguments = parser.parse_args(argv)
     if arguments.command == "extract":
+        try:
+            config = driver_config(arguments)
+        except (OSError, ValueError, RuntimeError) as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 2
         summary = extract(
             arguments.corpus,
             arguments.out,
             arguments.workers,
             manifest=arguments.manifest,
             walk_threads=arguments.walk_threads,
+            worker_config=worker_arguments(arguments, config),
         )
         print(json.dumps(summary, indent=2))
-        return 0
+        return 1 if summary.get("errors") else 0
     listen = None
     if arguments.stems is not None:
         listen = listen_set(

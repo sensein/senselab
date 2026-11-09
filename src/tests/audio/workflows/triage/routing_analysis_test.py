@@ -2272,3 +2272,24 @@ def test_the_decibel_population_is_the_measure_not_the_attribute(tmp_path: Path)
     assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"] == pytest.approx(30.0)
     assert record.span_stats["all.peak_over_floor_db_max"] == pytest.approx(30.0)
     assert "gap.peak_over_floor_db_max" not in record.span_stats
+
+
+def test_the_detector_profile_is_read_under_the_active_profile() -> None:
+    """A profile switch is never served the profile an earlier one loaded (review G3)."""
+    from senselab.audio.workflows.triage.dataset_profile import (
+        DatasetDataMissing,
+        activate_profile,
+        active_profile,
+        deactivate_profile,
+    )
+
+    assert load_detector_profile()["detectors"]
+    held = active_profile()
+    assert held is not None
+    deactivate_profile()
+    try:
+        with pytest.raises(DatasetDataMissing):
+            load_detector_profile()
+    finally:
+        activate_profile(held)
+    assert load_detector_profile()["detectors"]

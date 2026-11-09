@@ -34,7 +34,8 @@ and an unresolvable declaration is a flag ground of its own, so re-folding witho
 every recording's triage axis to ``flag``. Only VERDICT's own conclusion is retired; every branch
 report and every other node's verdict stands, which is what separates this from the replay driver.
 ``--no-refold`` leaves the recorded decisions exactly where they were, for a pass whose only purpose
-is to collect readings.
+is to collect readings; REVIEW still reads with the ``--hints`` hint where one is given, else with the hint the store
+records (none where it records none, or one carrying a target speaker's voice, which is stored only as a digest).
 
 Resumability is the store's, as in the other adding drivers: a recording whose store already holds
 a live ``redaction_llm_annotation`` **that a REVIEW activity generated**, under the current prompt version
@@ -106,6 +107,7 @@ from senselab.audio.workflows.triage.extend import (
     take_slice,
     write_store,
 )
+from senselab.audio.workflows.triage.hint_record import recorded_hint, recorded_voice
 from senselab.audio.workflows.triage.nodes.common import (
     capture_environments,
     describe_exception,
@@ -117,6 +119,7 @@ from senselab.audio.workflows.triage.nodes.review import (
     ABSENT,
     DISABLED,
     NODE,
+    annotation_read_under_this_policy,
     apply_proposal,
     configured_engine,
     review,
@@ -224,8 +227,10 @@ def standing(store: ProvStore, engine: Mapping[str, Any] | None = None) -> Entit
 
     Args:
         store: The run's store.
-        engine: The configured engine's identity; where given, a reading under an earlier prompt version or
-            on another engine is not standing. A reading that records no engine was the transformers worker's.
+        engine: The configured engine's identity; where given, a reading under an earlier prompt version, on
+            another engine, or under another review policy or word lists
+            (:func:`~senselab.audio.workflows.triage.nodes.review.annotation_read_under_this_policy`) is not
+            standing. A reading that records no engine was the transformers worker's.
 
     Returns:
         The annotation entity, or None where REVIEW has left none, left only ``disabled``, left only a
@@ -246,6 +251,8 @@ def standing(store: ProvStore, engine: Mapping[str, Any] | None = None) -> Entit
     if engine is not None:
         held = dict(annotation.attributes.get("engine") or engine_identity(ENGINE_TRANSFORMERS))
         if annotation.attributes.get("prompt_version") != PROMPT_VERSION or held != dict(engine):
+            return None
+        if not annotation_read_under_this_policy(annotation.attributes):
             return None
     return annotation
 
@@ -348,6 +355,7 @@ def extend_one(
     source: Path | None,
     commit: str | None = None,
     finished: Path | None = None,
+    refold: bool = True,
 ) -> dict[str, str]:
     """Read one finished run back, re-fold its verdict over the reading, and write the store once.
 
@@ -360,10 +368,12 @@ def extend_one(
         config: The triage configuration.
         apply: Whether to write the redacted stream from the proposal.
         force: Whether to retire a standing annotation and read again.
-        build_hint: The hint populator, or None to leave the recorded verdict as it stands.
+        build_hint: The hint populator, or None to read with the recorded hint (:func:`review_hint`) and leave the
+            recorded verdict as it stands.
         source: The recording the run was over, for the hint. None where no hint is built.
         commit: The code revision to record on the re-fold marker.
         finished: The finished run root ``run_root`` mirrors, read for ``run.json``; None when they are one.
+        refold: Whether to decide the file again over a reading that landed (False for ``--no-refold``).
 
     Returns:
         ``{status, REVIEW}`` -- ``ok`` when a reading landed, ``present`` when one already stood,
@@ -382,13 +392,13 @@ def extend_one(
         return {"status": PRESENT, NODE: str(held.attributes.get("status") or "")}
     replaced = live_annotations(store)
     try:
-        hint = build_hint(source)[0] if build_hint is not None and source is not None else None
+        hint = build_hint(source)[0] if build_hint is not None and source is not None else review_hint(store)
     except Exception as error:  # noqa: BLE001 — a hint that cannot be built is this row's error
         return {"status": ERROR, NODE: f"hint: {describe_exception(error)}"}
     log_root = finished if finished is not None else run_root
     inputs: ReplayInputs | None = None
     try:
-        if hint is None:
+        if hint is None or build_hint is None or source is None or not refold:
             check_run_inputs(store, log_root, config, source=source)
         else:
             inputs = check_replay_inputs(
@@ -413,6 +423,19 @@ def extend_one(
     write_store(store, run_root)
     export_prov(store, run_root)
     return {"status": OK, NODE: outcome.detail, REFOLD: refolded}
+
+
+def review_hint(store: ProvStore) -> AudioHints | None:
+    """The hint REVIEW reads with where no ``--hints`` is given: the one the store records.
+
+    Args:
+        store: The run's store.
+
+    Returns:
+        The recorded hint; None where the store records none, or where it carried a target speaker's voice, which
+        is stored only as a digest (pass ``--hints`` for such a run).
+    """
+    return None if recorded_voice(store) else recorded_hint(store)
 
 
 def _refold(
@@ -470,6 +493,7 @@ def process(
     build_hint: Callable[[Path], Any] | None = None,
     commit: str | None = None,
     log: SliceLog | None = None,
+    refold: bool = True,
 ) -> list[dict[str, Any]]:
     """Read back every run named by these rows, one at a time.
 
@@ -479,9 +503,11 @@ def process(
         out_root: Where to mirror each run root, or None to write in place.
         apply: Whether to write the redacted stream from the proposal.
         force: Whether to retire a standing annotation and read again.
-        build_hint: The hint populator, or None to leave each recorded verdict as it stands.
+        build_hint: The hint populator, or None to read with each run's recorded hint and leave its verdict as it
+            stands.
         commit: The code revision to record on each re-fold marker.
         log: Where each row's record is appended as it lands, or None.
+        refold: Whether to decide each file again over a reading that landed.
 
     A row's own ``source`` wins over the run's log, because a mirrored run root carries no log.
 
@@ -512,6 +538,7 @@ def process(
                 source=source,
                 commit=commit,
                 finished=finished,
+                refold=refold,
             ),
         }
 
@@ -530,6 +557,7 @@ def run_slice(
     force: bool = False,
     hints: Path | None = None,
     commit: str | None = None,
+    refold: bool = True,
 ) -> dict[str, Any]:
     """Read back every run in one array task's stride of the manifest.
 
@@ -542,8 +570,10 @@ def run_slice(
         out_root: Where to mirror each run root, or None to write in place.
         apply: Whether to write the redacted stream from the proposal.
         force: Whether to retire a standing annotation and read again.
-        hints: The directory holding ``hints.py``, or None to leave each recorded verdict alone.
+        hints: The directory holding ``hints.py``, or None to read with each run's recorded hint and leave each
+            recorded verdict alone.
         commit: The code revision to record on each re-fold marker.
+        refold: Whether to decide each file again over a reading that landed (False for ``--no-refold``).
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -567,6 +597,7 @@ def run_slice(
             build_hint=build_hint,
             commit=commit,
             log=rows_log,
+            refold=refold,
         )
     finally:
         rows_log.close()
@@ -635,8 +666,9 @@ def main(argv: list[str] | None = None) -> int:
             out_root=args.out_root,
             apply=args.apply,
             force=args.force,
-            hints=None if args.no_refold else args.hints,
+            hints=args.hints,
             commit=args.commit,
+            refold=not args.no_refold,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

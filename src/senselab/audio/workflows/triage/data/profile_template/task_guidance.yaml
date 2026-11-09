@@ -1,3 +1,4 @@
+# TEMPLATE: fill in your dataset's own lists below, then delete this line; a run refuses the file while it keeps it.
 # What counts as each task's own content, as the reviewer is told it, and what kind of task each is. `families`: for
 # each entry, the task names it applies to (a name matches a task equal to it or starting with it and a hyphen) and
 # one guidance sentence, e.g. "The target word and everything that explains its meaning are task content". `natures`:

@@ -31,7 +31,6 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import (
     DETECT_GROUP,
     UNDETERMINED,
-    VOICE_EXPECTATIONS,
     BranchParams,
     ContinuityTrack,
     Expectation,
@@ -49,6 +48,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     deviation_names,
     dispatch,
     duration,
+    in_family_expectation,
     lexical,
     longest_free_interval,
     longest_monotone_run,
@@ -464,7 +464,7 @@ def read_phonation(store: ProvStore, run_dir: Path, task_family: str) -> Phonati
     Returns:
         The reading, or the inputs that were absent.
     """
-    expectation = VOICE_EXPECTATIONS[task_family]
+    expectation = in_family_expectation(store, NODE, task_family)
     direction = expectation.declared_direction if expectation.pattern is Pattern.GLIDE else None
     return phonation_reading_of(
         store, run_dir, words=phonation_words(store), glide_direction=direction, agreed=agreed_speech_spans(store)
@@ -502,7 +502,7 @@ def count_in_span(task_family: str, store: ProvStore, params: BranchParams) -> t
     Returns:
         The span, or None where the family declares no count-in or none of it was read.
     """
-    expectation = VOICE_EXPECTATIONS[task_family]
+    expectation = in_family_expectation(store, NODE, task_family)
     if expectation.pattern is not Pattern.SUSTAINED or expectation.tokens is None:
         return None
     matched, _ = ordered_run(expectation.tokens, lexical(consensus_words(store)), params.p_normalise)
@@ -553,7 +553,7 @@ def align_voice(
     Raises:
         KeyError: If ``task_family`` is not a key of :data:`VOICE_EXPECTATIONS`.
     """
-    expectation = VOICE_EXPECTATIONS[task_family]
+    expectation = in_family_expectation(store, NODE, task_family)
     params.bind(expectation.pattern, task_family)
     evidence = read_evidence(store, run_dir)
     read = read_phonation(store, run_dir, task_family) if reading is None else reading

@@ -160,3 +160,27 @@ def test_a_broken_fit_is_replaced_with_force_and_kept_aside(no_profile: None, tm
     assert (root / "fitted.yaml.previous").read_text().startswith("values: [not")
     deactivate_profile()
     assert load_profile(root).fitted["task_extent.yaml"]["count_in"]["gap_max_s"] is not None
+
+
+def test_any_failure_of_a_refit_puts_the_earlier_fit_back(
+    no_profile: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review K9: the earlier fitted.yaml is restored whatever stops the refit, an interrupt or an unexpected error."""
+    root = _profile(tmp_path / "lab")
+    table = _table(tmp_path / "rv.parquet", _rows())
+    assert cli.main([str(table), "--profile", str(root)]) == 0
+    earlier = (root / "fitted.yaml").read_bytes()
+    for stop in (KeyboardInterrupt, TypeError, RuntimeError):
+
+        def _stops(args: object, stop: type[BaseException] = stop) -> None:
+            raise stop("stopped")
+
+        monkeypatch.setattr(cli, "_fit", _stops)
+        if stop is RuntimeError:
+            assert cli.main([str(table), "--profile", str(root), "--force"]) == 2
+        else:
+            with pytest.raises(stop):
+                cli.main([str(table), "--profile", str(root), "--force"])
+        assert (root / "fitted.yaml").read_bytes() == earlier, stop.__name__
+        assert not (root / "fitted.yaml.previous").exists()
+        deactivate_profile()

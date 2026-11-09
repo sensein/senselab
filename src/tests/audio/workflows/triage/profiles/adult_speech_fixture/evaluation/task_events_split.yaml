@@ -32,7 +32,7 @@ breath_modspec_check_20261005:
 breath_pattern_check_20261005:
   fit:
   - 1c2f13bb
-  - .inf
+  - '.inf'
   - 89505e27
   - 943a8bbc
   - ba1d1459
@@ -116,7 +116,7 @@ cough_check_20261006:
   - f286ac55
 discard_contested_check_20261006:
   fit:
-  - .inf
+  - '.inf'
   - 249a4469
   - 5201d61d
   - 6087f14c

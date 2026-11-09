@@ -1,6 +1,10 @@
 # A test fixture: a real adult clinical-speech dataset's triage profile, the data and settings triage was built and
 # fitted on, extracted on 2026-10-22 and kept with each plan step's changes through step 10; renamed for the tests on
 # 2026-11-06 (plan step 8). The tests that use it read its tasks and values.
+#
+# A frozen snapshot, not a mirror: the dataset's own profile is kept by its release pipeline and changes there
+# (task renames, fitted values) are not copied here. Change this copy only for what senselab's tests need; the
+# review fixes of 2026-11-06 added each syllable task's `carrier`, the one later change.
 name: adult-speech-fixture
 extends: senselab:adult_clinical_speech   # the detector and model tuning it shares with any adult clinical speech dataset
 version: "2026-10-22"

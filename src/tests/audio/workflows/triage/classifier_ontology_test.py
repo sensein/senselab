@@ -338,14 +338,21 @@ class TestTheAirwayKindIsOneOntologyClosure:
         with pytest.raises(ValueError, match="not AudioSet classes"):
             audioset_labels_under_roots(["Respiratory sound"])
 
-    def test_naming_a_second_root_widens_the_kind(self, tmp_path: Path) -> None:
-        """Restoring `Sigh` as airway evidence is one line of configuration, not a code change."""
-        override = tmp_path / "roots.yaml"
-        override.write_text("taxonomy:\n  airway_ontology_roots: [Respiratory sounds, Sigh]\n")
-        config = load_triage_config(override)
-        assert "Sigh" in airway_audioset_labels(config)
-        assert set(AUDIOSET_AIRWAY) < set(airway_audioset_labels(config))
-        assert airway_hear_labels(config) == HEAR_AIRWAY
+    def test_naming_a_second_root_widens_the_kind(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """Restoring `Sigh` as airway evidence is one line of a profile's configuration, not a code change."""
+        from senselab.audio.workflows.triage.dataset_profile import deactivate_profile
+
+        root = tmp_path / "p"
+        root.mkdir()
+        (root / "config.yaml").write_text("taxonomy:\n  airway_ontology_roots: [Respiratory sounds, Sigh]\n")
+        (root / "profile.yaml").write_text("name: p\nversion: '1'\nconfig: config.yaml\n")
+        try:
+            config = load_triage_config(profile=root)
+            assert "Sigh" in airway_audioset_labels(config)
+            assert set(AUDIOSET_AIRWAY) < set(airway_audioset_labels(config))
+            assert airway_hear_labels(config) == HEAR_AIRWAY
+        finally:
+            deactivate_profile()
 
     def test_the_packaged_configuration_is_what_the_routing_tuples_read(self) -> None:
         """The config key and the routing tuple are one definition, not two that agree today."""
@@ -399,3 +406,41 @@ class TestLabelIdentity:
         path.write_text(json.dumps(profile))
         with pytest.raises(ValueError, match="itself an AudioSet class name"):
             load_classifier_ontology(str(path))
+
+
+class TestTheLabelsFollowTheActiveProfile:
+    """The derived label families are read when asked for, under the active profile, never at import (review G1)."""
+
+    def test_importing_the_labels_leaves_the_runs_data_section(self) -> None:
+        """Loading the module used to load the packaged configuration, which reset the run's data section."""
+        import importlib
+
+        from senselab.audio.workflows.triage.dataset_profile import run_data, set_run_data
+        from senselab.audio.workflows.triage.routing_analysis import labels
+
+        section = {"breath_pattern.yaml": {"train": {"distance_s": 0.5}}}
+        set_run_data(section)
+        try:
+            importlib.reload(labels)
+            assert run_data() == section
+        finally:
+            set_run_data(None)
+
+    def test_a_profiles_airway_roots_are_the_airway_family(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """A profile naming other ontology roots routes on their closure, as the configuration it records says."""
+        from senselab.audio.workflows.triage.dataset_profile import activate_profile, deactivate_profile, load_profile
+        from senselab.audio.workflows.triage.routing_analysis import labels
+
+        packaged = labels.families()["airway"]["yamnet"]
+        root = tmp_path / "p"
+        root.mkdir()
+        (root / "config.yaml").write_text("taxonomy:\n  airway_ontology_roots: [Cough]\n")
+        (root / "profile.yaml").write_text("name: p\nversion: '1'\nconfig: config.yaml\n")
+        activate_profile(load_profile(root))
+        try:
+            narrowed = audioset_labels_under_roots(["Cough"])
+            assert labels.families()["airway"]["yamnet"] == narrowed == labels.AUDIOSET_AIRWAY
+            assert narrowed != packaged and labels.airway_labels()[1] == hear_labels_under_roots(["Cough"])
+        finally:
+            deactivate_profile()
+        assert labels.families()["airway"]["yamnet"] == packaged

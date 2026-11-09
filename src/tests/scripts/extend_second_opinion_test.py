@@ -23,6 +23,9 @@ from senselab.audio.workflows.triage.vocabulary import (
 from senselab.utils.prov_store import ProvStore
 from tests.scripts.extend_llm_review_test import _finished_run, _hints, _manifest, _seed_verdicts
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_second_opinion.py"
 _spec = importlib.util.spec_from_file_location("extend_second_opinion_under_test", _CLI)
@@ -134,7 +137,7 @@ def test_a_store_review_has_not_read_is_an_error_and_a_later_review_asks_again(t
 
 def test_without_hints_a_store_that_records_no_hint_is_refused(tmp_path: Path) -> None:
     """The command line without --hints asks with the recorded hint, and refuses where there is none."""
-    run_root = _reviewed_run(tmp_path / "corpus")
+    run_root = _reviewed_run(tmp_path / "corpus", hint=None)
     opener = _Opener()
     assert _run(tmp_path, run_root, opener, recorded_hint_default=True)["counts"] == {"refused": 1}
     assert opener.opened == 0 and _opinions(run_root) == []

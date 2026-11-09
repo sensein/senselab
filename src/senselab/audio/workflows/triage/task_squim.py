@@ -234,9 +234,12 @@ def verify_weights(asset: str, sha256: str) -> str:
     return digest
 
 
-@functools.cache
+@profile_cache
 def squim_scorer() -> Scorer:
     """The objective-SQUIM reader senselab ships, after the pinned weights are verified.
+
+    Cached per active profile (:func:`~senselab.audio.workflows.triage.dataset_profile.profile_cache`): the model
+    asset and its pinned digest are the profile's values (``task_squim.yaml``).
 
     Returns:
         A scorer reading each window in one pass of

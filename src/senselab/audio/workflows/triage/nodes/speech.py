@@ -48,7 +48,6 @@ from senselab.audio.workflows.triage.nodes.branches import (
     NO_TASK_ITEMS,
     PARAM_SECTION,
     PROPOSERS,
-    SPEECH_EXPECTATIONS,
     UNDETERMINED,
     BranchParams,
     Expectation,
@@ -56,6 +55,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Pattern,
     Proposal,
     Result,
+    branch_expectation,
     branch_params,
     content_coverage,
     contest,
@@ -1624,7 +1624,7 @@ def align_speech(
         KeyError: If the family is not a SPEECH family.
         NotImplementedError: If the row names a pattern this branch serves no body for.
     """
-    expectation = SPEECH_EXPECTATIONS.get(task_family)
+    expectation = branch_expectation(store, NODE, task_family)
     if expectation is None:
         raise KeyError(f"{task_family} is not a SPEECH family; the caller owes detect_speech")
     params.bind(expectation.pattern, task_family)

@@ -5,7 +5,9 @@ from the fold's own record, so neither can disagree with the decision. ``triage_
 the decision and the decisive evidence items; ``triage_evidence`` every item the fold weighed. Its
 ``participant``, ``session`` and ``task`` are the run's recorded identity
 (:func:`~senselab.audio.workflows.triage.recording_vectors.view_identity`), the task being the recorded
-``declared_task_id``, lower-cased; all three are null for a run that records none.
+``declared_task_id``, lower-cased; all three are null for a run that records none. Both tables carry each run's
+``recording_id`` (the recorded one, else its stem; plan step 9b) and its declared ``target_speaker``, which
+``triage.tsv`` joins its rows on; the stem is a label.
 ``specs/20261007-task-events-in-background/design.md`` ("Decision table") holds the vocabulary.
 """
 
@@ -23,6 +25,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
 
+from senselab.audio.workflows.triage.identity import RECORDING_ID_COLUMN, ROW_TARGET_SPEAKER
 from senselab.audio.workflows.triage.recording_vectors import (
     RUN_SUBDIR,
     STORE_NAME,
@@ -34,7 +37,7 @@ from senselab.audio.workflows.triage.recording_vectors import (
 )
 from senselab.audio.workflows.triage.vocabulary import release_ground_key
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 DECISIONS_NAME = "triage_decisions"
 EVIDENCE_NAME = "triage_evidence"
 FIGURE_PATH = Path("summary") / "summary.pdf"
@@ -177,6 +180,8 @@ def decision_rows(run_root: Path, root: Path) -> tuple[dict[str, Any], list[dict
     decision = fold.attributes
     stem = stem_of(run_root)
     identity = view_identity(view)
+    recording_id = identity.id_of(stem) if identity is not None else stem
+    target_speaker = identity.target_speaker if identity is not None else None
     recording = view.last("stream", name="recording")
     duration_s = recording.extent[1] if recording and recording.extent else None
     extent = _extent_columns(view, duration_s)
@@ -189,6 +194,8 @@ def decision_rows(run_root: Path, root: Path) -> tuple[dict[str, Any], list[dict
         "task": identity.task_id if identity else None,
         "declared_family": decision.get("declared_family"),
         "stem": stem,
+        RECORDING_ID_COLUMN: recording_id,
+        ROW_TARGET_SPEAKER: target_speaker,
         "run_dir": str(run_root.relative_to(root)) if run_root.is_relative_to(root) else str(run_root),
         "verdict": decision.get("triage"),
         "release": decision.get("release"),
@@ -224,6 +231,8 @@ def decision_rows(run_root: Path, root: Path) -> tuple[dict[str, Any], list[dict
     evidence = [
         {
             "stem": stem,
+            RECORDING_ID_COLUMN: recording_id,
+            ROW_TARGET_SPEAKER: target_speaker,
             "declared_family": decision.get("declared_family"),
             "verdict": decision.get("triage"),
             "group": item_group(str(entry.get("name"))),
@@ -256,6 +265,8 @@ def decisions_schema() -> pa.Schema:
             pa.field("task", text),
             pa.field("declared_family", text),
             pa.field("stem", text),
+            pa.field(RECORDING_ID_COLUMN, text),
+            pa.field(ROW_TARGET_SPEAKER, text),
             pa.field("run_dir", text),
             pa.field("verdict", text),
             pa.field("release", text),
@@ -288,6 +299,8 @@ def evidence_schema() -> pa.Schema:
     return pa.schema(
         [
             pa.field("stem", text),
+            pa.field(RECORDING_ID_COLUMN, text),
+            pa.field(ROW_TARGET_SPEAKER, text),
             pa.field("declared_family", text),
             pa.field("verdict", text),
             pa.field("group", text),

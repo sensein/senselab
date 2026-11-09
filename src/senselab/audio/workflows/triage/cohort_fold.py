@@ -183,9 +183,12 @@ def _hot_or_clipped(summary: Any) -> bool | None:  # noqa: ANN401 -- a stored bl
     rms, clipped = summary.get("rms_dbfs_median"), summary.get("clipped_fraction")
     if rms is None and clipped is None:
         return None
-    return bool(
-        _at_least(rms, bounds.get("hot_rms_dbfs_min")) or _at_least(clipped, bounds.get("clipped_fraction_min"))
-    )
+    hot, clip = bounds.get("hot_rms_dbfs_min"), bounds.get("clipped_fraction_min")
+    if _at_least(rms, hot) or _at_least(clipped, clip):
+        return True
+    if (rms is not None and hot is None) or (clipped is not None and clip is None):
+        return None  # a reading whose bound a pilot run has not fitted is not measured as under it
+    return False
 
 
 def _at_least(value: Any, bound: Any) -> bool:  # noqa: ANN401 -- stored readings and YAML values

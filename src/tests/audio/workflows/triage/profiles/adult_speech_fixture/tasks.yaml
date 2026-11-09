@@ -11,6 +11,8 @@
 # permits saying an item twice (Letters, Numbers: senselab's REPETITION_ALLOWED_CATEGORIES before step 4). The ten are
 # The source dataset's questionnaire field random_item_generation_category, as its phenotype table spells them.
 # `traits` (step 5a) name what an entry says about its task beyond its description (task_catalogue.TRAITS).
+# `carrier` (a syllable task) is the text its syllables spell, as a transcript holds it: the last hyphenated part of
+# the task's name, which senselab read off the name until the task list declared it.
 # Why each task carries its traits, and the airway and word-task rules that replaced per-task lists:
 # specs/20261022-triage-dataset-profile/plan.md, step 5, section 1.
 # Moved unchanged from senselab's packaged tables (step 4 of specs/20261022-triage-dataset-profile/plan.md).
@@ -141,54 +143,63 @@ tasks:
     categories: *random_item_categories
   diadochokinesis-pa:
     branch: SPEECH
+    carrier: pa
     expects:
       pattern: syllable_train
       required_count: {value: 10, unit: repetitions}
       sequence: [p, aa]
   diadochokinesis-ta:
     branch: SPEECH
+    carrier: ta
     expects:
       pattern: syllable_train
       required_count: {value: 10, unit: repetitions}
       sequence: [t, aa]
   diadochokinesis-ka:
     branch: SPEECH
+    carrier: ka
     expects:
       pattern: syllable_train
       required_count: {value: 10, unit: repetitions}
       sequence: [k, aa]
   diadochokinesis-v2-puh:
     branch: SPEECH
+    carrier: puh
     expects:
       pattern: syllable_train
       declared_duration_s: 5.0
       sequence: [p, ah]
   diadochokinesis-v2-tuh:
     branch: SPEECH
+    carrier: tuh
     expects:
       pattern: syllable_train
       declared_duration_s: 5.0
       sequence: [t, ah]
   diadochokinesis-v2-kuh:
     branch: SPEECH
+    carrier: kuh
     expects:
       pattern: syllable_train
       declared_duration_s: 5.0
       sequence: [k, ah]
   diadochokinesis-pataka:
     branch: SPEECH
+    carrier: pataka
     expects:
       pattern: syllable_sequence
       required_count: {value: 10, unit: repetitions}
       sequence: [p, aa, t, aa, k, aa]
   diadochokinesis-v2-puhtuhkuh:
     branch: SPEECH
+    carrier: puhtuhkuh
     expects:
       pattern: syllable_sequence
       declared_duration_s: 5.0
       sequence: [p, ah, t, ah, k, ah]
   diadochokinesis-buttercup:
     branch: SPEECH
+    carrier: buttercup
     traits: [spans_the_recording]
     expects:
       pattern: syllable_sequence
@@ -196,6 +207,7 @@ tasks:
       sequence: [b, ah, t, er, k, ah, p]
   diadochokinesis-v2-buttercup:
     branch: SPEECH
+    carrier: buttercup
     traits: [spans_the_recording]
     expects:
       pattern: syllable_sequence

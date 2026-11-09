@@ -23,6 +23,9 @@ from typing import Any
 import pytest
 import torch
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "scripts" / "analyze_audio.py"
 
@@ -68,7 +71,7 @@ def test_out_overrides_the_configs_output_dir(aa: types.ModuleType) -> None:
 
 
 def test_a_removed_flag_is_rejected_rather_than_ignored(aa: types.ModuleType) -> None:
-    """argparse errors on an unknown flag, so an old command line fails loudly.
+    """Argparse errors on an unknown flag, so an old command line fails loudly.
 
     Worth pinning for the *grid* flags in particular: a run that accepted ``--asr-win-length`` and
     ignored it would report a grid it did not use.

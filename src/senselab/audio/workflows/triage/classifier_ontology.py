@@ -18,11 +18,10 @@ See ``specs/20260910-classifier-ontology-mapping/design.md``.
 from __future__ import annotations
 
 import json
-from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 
-from senselab.audio.workflows.triage.dataset_profile import data_path
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle would be runtime-only
     from senselab.audio.workflows.triage.config import TriageConfig
@@ -109,7 +108,7 @@ def resolved_profile_path(path: str | None = None) -> Path:
     return _bundled_profile_path() if path is None else Path(path)
 
 
-@lru_cache(maxsize=None)
+@profile_cache
 def load_classifier_ontology(path: str | None = None) -> dict[str, Any]:
     """Load and validate a classifier-ontology profile.
 

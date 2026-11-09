@@ -348,3 +348,32 @@ def test_the_shipped_scorer_reads_each_window_in_one_pass(monkeypatch: pytest.Mo
     finally:
         task_squim.squim_scorer.cache_clear()
     assert calls and calls[0]["window_s"] is None and "floor_s" not in calls[0]
+
+
+def test_the_scorer_is_built_per_active_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The model asset and its digest are profile values, so another profile builds its own scorer (review G3)."""
+    from senselab.audio.workflows.triage import task_squim
+    from senselab.audio.workflows.triage.dataset_profile import (
+        activate_profile,
+        active_profile,
+        deactivate_profile,
+        load_profile,
+    )
+
+    verified: list[str] = []
+    monkeypatch.setattr(task_squim, "verify_weights", lambda asset, sha256: verified.append(sha256) or sha256)
+    held = active_profile()
+    task_squim.squim_scorer.cache_clear()
+    try:
+        task_squim.squim_scorer()
+        task_squim.squim_scorer()
+        assert len(verified) == 1, "one profile, one scorer"
+        deactivate_profile()
+        activate_profile(load_profile(Path(__file__).parent / "profiles" / "lab_corpus"))
+        task_squim.squim_scorer()
+        assert len(verified) == 2, "another profile builds its own"
+    finally:
+        task_squim.squim_scorer.cache_clear()
+        deactivate_profile()
+        if held is not None:
+            activate_profile(held)

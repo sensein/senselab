@@ -1519,7 +1519,7 @@ values:
     fit: "Tuned by listening to labelled recordings: whether a free response is too short to be the task; no derivation written; the reference profile carries the value set on adult clinical speech."
   - path: ["short_response", "family_median_s"]
     kind: b
-    required: false
+    required: true
     unit: "s, by task family"
     means: "Each free-response task's median response length, against which a short response is measured; a task without one is not read."
     fit: "Median of the response length (the gate response_min_s reading) per task family over a pilot corpus's free-response recordings."

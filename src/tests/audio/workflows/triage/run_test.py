@@ -1114,6 +1114,16 @@ class TestFreshArtifactsDir:
         assert log["ran"]["VOICE"] == RunState.ERRORED.value
         assert "RuntimeError" in log["errors"]["VOICE"]
 
+    def test_the_runner_log_names_the_source_by_its_absolute_path(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Review K6: a source given relative to the working directory is logged absolute, so a replay finds it."""
+        graph()
+        monkeypatch.chdir(tmp_path)
+        result = run_triage(Path("recording.wav"), tmp_path / "out", config)
+        source = json.loads((result.run_dir / "run.json").read_text())["source"]
+        assert Path(source).is_absolute() and Path(source) == Path.cwd() / "recording.wav"
+
 
 class TestTheEntityPath:
     """Run roots nest under the recording's participant and session, as ADMIT records them."""
@@ -1272,6 +1282,21 @@ class TestCli:
         assert seen["out_dir"] == cli.DEFAULT_OUT_DIR
         assert seen["config"].config_hash == load_triage_config().config_hash
 
+    def test_without_a_profile_the_cli_exits_2_naming_it(
+        self, tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Review A6: the start check runs inside the CLI's error handling, so no profile is exit 2, not a traceback."""
+        source = tmp_path / "recording.wav"
+        source.write_bytes(b"")
+        assert _cli().main([str(source), "--out", str(tmp_path / "out")]) == 2
+        assert "dataset profile" in capsys.readouterr().err
+        assert not (tmp_path / "out").exists()
+
+    def test_a_shipped_profile_is_named_by_reference(self) -> None:
+        """Review A7: ``--profile senselab:<name>`` is a reference, not a path."""
+        args = _cli().build_parser().parse_args(["x.wav", "--profile", "senselab:adult_clinical_speech"])
+        assert args.profile == "senselab:adult_clinical_speech"
+
     def test_a_missing_recording_is_refused_before_anything_runs(self, tmp_path: Path) -> None:
         """A path that does not exist is a caller error, not a recording finding."""
         cli = _cli()
@@ -1299,10 +1324,17 @@ class TestCli:
         link = root / "p01" / "s2" / "recording.wav"
         link.parent.mkdir(parents=True)
         link.symlink_to(content)
-        assert run_module.corpus_path_of(link, root) == "p01/s2/recording.wav"
+        assert run_module.corpus_path_of(link, root) == "p01/s2/recording"
         assert run_module.corpus_path_of(root / "p01" / ".." / "p01" / "s2" / "recording.wav", root) == (
-            "p01/s2/recording.wav"
+            "p01/s2/recording"
         )
+
+    def test_the_corpus_path_id_carries_no_extension(self, tmp_path: Path) -> None:
+        """A recording re-encoded under its root (``.wav`` to ``.flac``) keeps one id; only the last suffix goes."""
+        root = tmp_path / "dataset"
+        assert run_module.corpus_path_of(root / "p01" / "recording.wav", root) == "p01/recording"
+        assert run_module.corpus_path_of(root / "p01" / "recording.flac", root) == "p01/recording"
+        assert run_module.corpus_path_of(root / "p01" / "take.v2.wav", root) == "p01/take.v2"
 
     def test_it_has_no_per_knob_flags(self) -> None:
         """Every option is a path; every value lives in a file (the config, or a dataset profile)."""
