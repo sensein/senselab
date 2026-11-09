@@ -696,7 +696,7 @@ already places them. Walked through with the user on 2026-11-06.
 
 **Facts checked first.** senselab's frozen registry copy (b2aiprep 8c43256) is byte-identical, file for file, to
 b2aiprep `release/v4.1.0`, so a builder reading b2aiprep's own registry writes the same hints. No published senselab
-carries this refactor (PyPI's newest is 1.4.0a9, from `alpha`; the stack #607-#638 is unmerged), and the hint builder
+carries this refactor (PyPI's newest was 1.4.0a9 then, 1.4.0a14 by 2026-11-06, neither with it; the stack #607-#638 is unmerged), and the hint builder
 imports senselab's identity record, task list and profile loader, so b2aiprep's copy needs a senselab with the stack.
 
 **7a — what moves where** (agreed). The profile (the fixture's content, named `bridge2ai-voice-adult` again) to
@@ -736,7 +736,8 @@ senselab branch.
   senselab without them, b2aiprep's profile and its `hints.py`): every store entity identical (ids normalized), the
   same decisions and replay rows, the same rereads (59 / 133); run.json names `bridge2ai-voice-adult` again.
 - Suites: senselab 6,700 passed, the same 12 failures as the base tree; b2aiprep with the senselab branch 625 passed
-  (25 moved tests), with its installed senselab 1.3.0 600 passed and 2 skipped, the same 13 failures as
+  (25 moved tests), with the env's own senselab (1.3.1a29, editable from `claude_safe/senselab`, not 1.3.0 as first written here)
+  600 passed and 2 skipped, the same 13 failures as
   `release/v4.1.0` in both.
 
 ## Step 8 — tests on a fixture profile and a made-up one (agreed 2026-11-06; before step 7)
@@ -793,6 +794,8 @@ the run record naming the new profile (the replays take `--allow-profile-change`
 - The made-up profile: `profiles/lab_corpus/`, written from the template, ten invented tasks (one per kind a branch
   reads; `effort` and `per_sentence` have no matcher), its corpus statistics in `fitted.yaml`; `lab_corpus_test.py`,
   42 tests (start check, ADMIT, the owning branch's matcher, the gates, the fold, per kind), all passing.
+  *Corrected 2026-11-06:* the step's review dropped the fold test (f06526391) and nothing replaced it, so at step 8
+  the made-up profile had no SPEECH matcher, REDACT or VERDICT test; the review fixes (below) added them.
 - Naming check: `no_dataset_name_test.py` fails on any line naming the source dataset under the triage, scripts and
   text tests, but the two moving modules' tests, the byte-hashed task guidance and the packaged registry's directory
   name (until step 7). `quality_control_test.py` (outside triage) names senselab's own Bridge2AI taxonomy.
@@ -1055,6 +1058,53 @@ each task kind completes with those stages skipped and the others' decisions unc
   is REVIEW, not COHORT.
 - Suite: 4,339 passed, 20 skipped (job 27899647).
 
+## Review fixes (2026-11-06 to 11-09)
+
+**The review.** Eight reviewers read the whole design and code (126 findings, merged into 78 items in themes A-O:
+drivers, task identity, the stem as a key, the policy fingerprint, B2AI rules in the reviewer, loading and caching,
+merge order, the start check, COHORT and pilots, replay, B2AI conventions left in code, tests, docs, b2aiprep #365);
+five verifiers checked each against the code (`triage_env_2026_10_22/review_full/`). Every item held but I3 (docs
+only) and the Python part of O6 (already wrong before this plan).
+
+**The fixes.** Four agents fixed disjoint groups (drivers and COHORT; identity and replay; loading, merging and the
+reviewer cache; SPEECH and tests), merged onto step 7 (`refactor/triage-handover`); b2aiprep's on #365. Among them:
+every driver takes `--profile` and checks at its start, the free-speech page's workers carry the profile; the
+reviewer's answers record the policy they were read under and are read again when it changes, while an unchanged
+policy still finds every existing answer; typed task fields declare identity; replay re-records a changed task and
+refuses a refold across a profile or stage change; decision tables join on recording id; a syllable task's carrier
+is declared in the task list (`carrier:`), not read off its name; a per-recording category is read whatever the
+repetition setting; data is read under the active profile, not at import; the start check reads the policy keys,
+the task list and its lexicons, and the per-task settings; the made-up profile gains SPEECH, REDACT, VERDICT and
+stages-off tests; senselab's copy of B2AI's profile is a frozen snapshot; b2aiprep's task lookup is the release's own.
+
+**B2AI unchanged** (`triage_env_2026_10_22/rf/ev/`; base 783d4c267 with b2aiprep 43e1c94, against the fixes with
+b2aiprep's fix branch). The 5 paired runs and the 192-run replay: every store entity identical (ids normalized) but
+the reviewer annotation's added `policy_fingerprint` (2 entities each); replay rows identical (133 none, 59
+needs_reread, as at step 7) but the new `identity_change` field, which reports the identity a v4-era store records for
+the first time, the same in both trees. The profile digest changes (the carrier lines), so replays take
+`--allow-profile-change`. Suites: senselab 6,833 passed with the base tree's 12 failures; b2aiprep 635 passed with
+`release/v4.1.0`'s 13.
+
+**Decided 2026-11-09, one by one** (the later-work list holds each follow-up):
+1. b2aiprep moves to senselab 1.4 when an alpha carries this plan; the features are compared 1.3 against 1.4 first.
+2. b2aiprep passes `recording_id` (and a registry fingerprint) in the hint only from the next fresh full run, so no
+   stored run sees an identity change.
+3. b2aiprep's triage task lookup is `fhir_utils`' resolver: over 856 v4 task names only the bare `high-to-low`
+   changes (None to `adult.glides`).
+4. Spanish `Categoría:` lines stay unread (the questionnaire's category is right); language-aware word lists are a
+   later piece of work, measured first.
+5. `triage_viewer_fixture.py` stays in senselab with made-up task names.
+6. An empty task list stays refused until a dataset needs a list-free switch.
+7. What each task pattern needs is documented first; the start check follows.
+8. senselab's B2AI copy is a frozen snapshot; no sync.
+9. No wheel-content CI step: a built wheel carries all 28 profile files.
+10. A run override of `taxonomy.airway_ontology_roots` is refused: the routing labels are built per profile.
+11. Not fixed, by decision: the reviewer's and answer check's B2AI rules (F1-F6) wait for the redaction-policy module.
+
+The 62,550 stored runs used the 2026-09-04 tree's names; the next `redcap2bids` renames 43 (`high-to-low` to
+`glides-high-to-low`), so the patch rerun is a fresh run on the new tree, with the extend passes including
+`extend_task_squim` (#614), not a replay.
+
 ## After this plan
 
 - **A pediatric profile:** the first second protocol.
@@ -1069,6 +1119,17 @@ each task kind completes with those stages skipped and the others' decisions unc
   is expected. Step 9 shapes the target-speaker declaration as a list and refuses more than one; making triage read
   interactions (which voices are expected, each one's task conformance, consent and release per person) is its own
   walkthrough.
+- **Merging the stack and moving b2aiprep's pin (7b):** the stack into `alpha`, a published alpha, b2aiprep's pin
+  moved to it and #365 merged, then senselab #639. Moving the pin also moves b2aiprep's feature extraction to
+  senselab 1.4: the resampler below changes its feature values, and its `articulatory` extra no longer exists, so the
+  release either takes a separate triage env or accepts and re-baselines the features. #365's tests fail, rather
+  than skip, until then.
+- **`triage_viewer_fixture.py`** still writes demo data with the source dataset's task names; left for the user to
+  place (step 7). `evaluate_task_events.py` takes its split and labels as arguments since the review fixes.
+- **The release runs' `--force`** setting for replay (step 9c) is still [UNVERIFIED — assumption].
+- **The reviewer prompt's and answer check's redaction rules** (`text/tasks/redaction_review.py`, the speaker rules
+  and skipped codes the full review of 2026-11-06 found, F1-F6) wait for the redaction-policy module with the fold's
+  rules (6b); until then they are B2AI's, as the fold's are.
 - **senselab alpha's resampler** (#632, c4bb902b7, 2026-11-04): `resample_audios` now band-limits with a Kaiser sinc
   filter, which PREPROCESS uses; merging alpha into the stack changes every resampled stream, so it needs its own
   evidence run.

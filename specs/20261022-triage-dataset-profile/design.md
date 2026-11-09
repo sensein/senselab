@@ -1,6 +1,7 @@
 # Dataset profiles for triage — 2026-10-22
 
-**Status:** proposal, for review by the triage owner. No code. Citations are to `origin/alpha` at
+**Status:** the original proposal, kept as written except where marked; what was built, and every change of course,
+is in `plan.md` (steps 1-11, built 2026-10-22 to 11-06), and where they disagree the plan holds. No code. Citations are to `origin/alpha` at
 `98c8048b6`, relative to `src/senselab/audio/workflows/triage/` unless a path says otherwise. The staged
 work is in `plan.md` beside this file.
 
@@ -143,8 +144,9 @@ difference is explained in the PR (see "Acceptance"). `plan.md` has the detail.
   - Where a change is intended or a fair consequence of the step, the PR names it and the reviewer accepts
     it case by case.
   - An unexplained difference blocks the step.
-- **The engine runs without the profile.** A synthetic recording with no hint and no profile runs to a
-  verdict through detect mode (`nodes/branches.py:1253`).
+- ~~**The engine runs without the profile.**~~ Reversed in step 5 (`inventory.md`, "Consequence"): the routing
+  gates and some corpus fences have no default, so a run with no profile is refused at its start check with a clear
+  error (`dataset_profile.require_dataset_values`), rather than running in detect mode.
 - **A second profile comes after this plan.** B2AI pediatric is the planned next extension and the first
   real test of a second protocol. Its tasks (identifying pictures, repeating words, the sounds tasks) are
   named nowhere in triage today.
@@ -176,8 +178,10 @@ difference is explained in the PR (see "Acceptance"). `plan.md` has the detail.
   - A way to fit a new dataset's values programmatically is not part of this plan. It needs train/test
     split support that senselab does not have yet, and is a follow-up issue after the refactor.
 - **Pediatric** is the planned next extension, after this plan.
-- **Dependency.** b2aiprep points at a senselab alpha on PyPI (`>=1.4.0a7`). 1.4.0a7 is `origin/alpha` as
-  of 2026-10-21, triage included.
+- **Dependency.** b2aiprep points at the first senselab alpha on PyPI that carries this refactor. None does yet
+  (checked 2026-11-06: 1.4.0a4 and 1.4.0a14 wheels, tags a7-a14 lack `dataset_profile` and `task_catalogue`), so
+  `>=1.4.0a7`, as first planned here, would admit alphas without it. Moving the pin also moves b2aiprep's feature
+  code to senselab 1.4 (plan, "After this plan").
 
 ## Open questions
 
