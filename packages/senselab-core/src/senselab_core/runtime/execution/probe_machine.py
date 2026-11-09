@@ -621,6 +621,12 @@ class ProbeMachine:
             for digest in digests:
                 self._origins[digest] = Origin(release.unit, release.estimate, release.held.queue, None)
 
+    def follow(self, parent: str, digest: str) -> None:
+        """Note retry item `digest` under the unit of production item `parent`, whose outcome is being read."""
+        origin = self._origins.get(parent)
+        if origin is not None and origin.probe is None:
+            self._origins[digest] = origin
+
     def forget(self, digest: str) -> None:
         """Forget item `digest`: its outcome has been read."""
         self._origins.pop(digest, None)

@@ -751,6 +751,8 @@ class Pool:
             update["placement"] = placement.model_dump(mode="json")
         retry = jobs_of(flight.fragment, [index], **update)
         self._put(retry, followed, retry=True)
+        if placement is None:
+            self._machine.follow(flight.digest, item_digest(retry))
         self._wake_scaler()
         job, placed = retry.jobs[0], retry.placement
         key = self._keys(retry)[0]

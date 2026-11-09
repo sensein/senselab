@@ -52,8 +52,9 @@ class Worker(Hand):
 
     A probe request takes `probe_rho` times the base wall and a production request `production_rho` times, each
     jittered by the same fixed pattern so the fits have a spread. A production item reports `cotenancy` and
-    `production_hardware`. An item of `queue` whose longest job has `fault_units` units or more fails every job with a
-    resource fault on its first attempt; `peak` gives the device bytes a request reports as `(peak, after)`.
+    `production_hardware`. An item whose longest job has `fault_units` units or more fails every job with a resource
+    fault on its first attempt, `content_units` with a content fault; `peak` gives the device bytes a request reports as
+    `(peak, after)`.
     """
 
     def __init__(  # noqa: PLR0913 - the plan, then what the worker does differently from a probe's hand
@@ -67,6 +68,7 @@ class Worker(Hand):
         cotenancy: Cotenancy = ALONE,
         production_hardware: HardwareClass = SEEN,
         fault_units: float | None = None,
+        content_units: float | None = None,
         limit: int | None = None,
         max_items: int | None = None,
         peak: Callable[[float], tuple[int, int]] | None = None,
@@ -75,7 +77,7 @@ class Worker(Hand):
         self._pattern = itertools.cycle((-1.0, 0.0, 1.0))
         self.probe_rho, self.production_rho = probe_rho, production_rho
         self.cotenancy, self.production_hardware = cotenancy, production_hardware
-        self.fault_units, self.peak = fault_units, peak
+        self.fault_units, self.content_units, self.peak = fault_units, content_units, peak
         self.peaks: list[int] = []
         super().__init__(
             pool, placed, values, wall=lambda units: self._base(units) * probe_rho, limit=limit, max_items=max_items
@@ -93,7 +95,9 @@ class Worker(Hand):
     def _production(self, item: PlanFragment, digest: str) -> tuple[list[JobOutcome], list[Observation]]:
         jobs, _ = fragment_jobs(item, self.placed, self.values)
         longest = max(request_units([j])[1] for j in jobs)
-        faulted = self.fault_units is not None and item.attempt == 1 and longest >= self.fault_units
+        kinds = (("resource", self.fault_units), ("content", self.content_units))
+        fault = next((k for k, at in kinds if at is not None and item.attempt == 1 and longest >= at), None)
+        faulted = fault is not None
         found: list[Observation] = []
         for index, job in enumerate(jobs):
             kind, units, padded = request_units([job])
@@ -121,18 +125,16 @@ class Worker(Hand):
                         "cotenancy": self.cotenancy,
                         "outcome": "failed" if faulted else "ok",
                         "hardware": self.production_hardware,
-                        "fault": "resource" if faulted else None,
+                        "fault": fault,
                     }
                 )
             )
             self.since += 1
         if not faulted:
             return self._outcomes(item), found
-        fault = FaultRecord(
-            fault="resource", type="OutOfMemoryError", message="out of memory", gap=False, charged=False
-        )
+        record = FaultRecord(fault=fault, type="Fault", message="asked to fail", gap=False, charged=fault == "content")
         keys = fragment_keys(item, self.placed, self.values)
-        return [Failed(j.ref, k, fault) for j, k in zip(jobs, keys, strict=True)], found
+        return [Failed(j.ref, k, record) for j, k in zip(jobs, keys, strict=True)], found
 
 
 def _first(
@@ -228,6 +230,35 @@ def test_a_confirming_probe_waits_for_the_units_items_already_put(tmp_path: Path
     assert len(_probe_queues(pool)) == probes + 1
     refs = _drive(pool, second, Worker(pool, placed2, values2), rounds=200)
     assert len(refs) == JOBS
+
+
+def test_a_confirming_probe_waits_for_a_retry_of_the_units_jobs(tmp_path: Path, clock: ManualClock) -> None:
+    """The unit's items after the drift fail once and are retried on their queue: the probe starts once all are read."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile, clock=clock)
+    _, first = _submit(pool, placed, values)
+    unit = _unit(pool, placed, values)
+    worker = Worker(pool, placed, values, production_rho=SLOW, max_items=1)
+    queue = pool.queues.queue("cpu")
+    while "drift" not in _kinds(pool, unit):
+        worker.serve()
+        pool.poll(Handle(id=first))
+    worker.content_units = 0.0
+    while worker.items[-1][1].attempt == 1:
+        worker.serve()
+        pool.poll(Handle(id=first))
+    assert queue.work() > 0
+    probes = len(_probe_queues(pool))
+    second, placed2, values2 = _more(pool, profile, "y")
+    while queue.work():
+        assert len(_probe_queues(pool)) == probes
+        worker.serve()
+        pool.poll(Handle(id=first))
+    pool.poll(Handle(id=second))
+    assert len(_probe_queues(pool)) == probes + 1
+    assert len(_drive(pool, second, Worker(pool, placed2, values2), rounds=200)) == JOBS
 
 
 def test_a_regime_in_force_is_not_recorded_again_by_the_next_run(tmp_path: Path, clock: ManualClock) -> None:
