@@ -218,6 +218,12 @@ def test_a_worker_reads_its_own_hardware_and_alone_on_its_host_it_counts_one(tmp
     assert (found.hardware, found.cotenancy) == (expected, Cotenancy(device=1, host=1))
 
 
+def _unit_env(pool_dir: Path, profile: ExecutionProfile, store: ResultStore) -> tuple[str, dict[str, Any]]:
+    """Return the backend and env entry a worker of this test's stack has: what a probe queue records for its unit."""
+    worker = _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile))
+    return f"{TIMED.name}~dsp", worker._env("cpu", TIMED.name, "dsp")  # noqa: SLF001 - the worker's own env read
+
+
 def _probe_items(
     tmp_path: Path, count: int, obs: dict[str, Any]
 ) -> tuple[Any, ResultStore, Path, ExecutionProfile, Any]:
@@ -226,7 +232,7 @@ def _probe_items(
     )
     placed, store, pool_dir = _items(profile, tmp_path, [f"0.00{i}" for i in range(count + 1)])
     queue = QueueSet(pool_dir, profile).queue(probe_queue("cpu", "p1"))
-    queue.set_probe_hardware(HARDWARE)
+    queue.set_probe_unit(HARDWARE, *_unit_env(pool_dir, profile, store))
     for item in _one_job_items(placed, range(count)):
         queue.put_probe(item, "SINGLE", 1)
     return placed, store, pool_dir, profile, queue
@@ -292,7 +298,7 @@ def test_a_worker_lists_probe_queues_once_per_refresh(tmp_path: Path, obs: dict[
     )
     assert worker._next(None, 4) is None  # noqa: SLF001 - the claim step, with nothing queued yet
     later = QueueSet(pool_dir, profile).queue(probe_queue("cpu", "p1"))
-    later.set_probe_hardware(HARDWARE)
+    later.set_probe_unit(HARDWARE, *_unit_env(pool_dir, profile, store))
     later.put_probe(_one_job_items(placed, range(1))[0], "SINGLE", 0)
     assert worker._next(None, 4) is None  # noqa: SLF001 - listed within the refresh: not seen
     now[0] = obs["presence_refresh_s"] + 1
@@ -372,3 +378,17 @@ def test_a_closed_probe_queue_is_served_by_no_one(tmp_path: Path, obs: dict[str,
     other = _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile))
     other.serve()
     assert other.served == []
+
+
+@pytest.mark.logic
+def test_a_worker_whose_env_differs_from_the_units_takes_no_lease(tmp_path: Path, obs: dict[str, Any]) -> None:
+    """The class is the unit's but the env's `wheel_set` is not: no lease, nothing claimed; the same env serves it."""
+    placed, store, pool_dir, profile, queue = _probe_items(tmp_path, 2, obs)
+    key, entry = _unit_env(pool_dir, profile, store)
+    other = QueueSet(pool_dir, profile).queue(probe_queue("cpu", "p2"))
+    other.set_probe_unit(HARDWARE, key, {**entry, "wheel_set": "9" * 64})
+    for item in _one_job_items(placed, range(2, 3)):
+        other.put_probe(item, "SINGLE", 0)
+    worker = _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile))
+    worker.serve()
+    assert {q for q, _ in worker.served} == {queue.name} and other.serve_lease() is not None

@@ -65,6 +65,7 @@ from senselab_core.runtime.execution_settings import is_service_class
 from senselab_core.runtime.hardware import device_memory_bytes, memory_bytes, process_tree
 from senselab_core.runtime.keys import Placement, request_size
 from senselab_core.runtime.locks import LeaseTimeout
+from senselab_core.runtime.measures import env_identity
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Sample
@@ -264,6 +265,7 @@ class PoolWorker:
         self._cotenancy = cotenancy or Presence(profile, self.run_dir, clock=clock).cotenancy
         self._clock = clock
         self._listed: float | None = None
+        self._entries: dict[tuple[str, str], dict[str, Any]] = {}
 
     def ready(self) -> dict[str, QueueReady]:
         """Return what this worker says of each queue it serves: its class, and the env of each backend placed on it.
@@ -389,14 +391,28 @@ class PoolWorker:
         return sorted(ages, key=lambda n: -ages[n])
 
     def _serves(self, queue: Queue) -> bool:
-        """Return whether this worker is of the class the probe queue names; false while it names none."""
+        """Return whether this worker is what the probe queue names: its class and its env for the probe's backend.
+
+        False while the queue names none, or is closed; the lease is never taken on a guess.
+        """
         if queue.probe_closed():
             return False
-        wanted = queue.probe_hardware()
+        wanted, env = queue.probe_hardware(), queue.probe_env()
+        if wanted is None or env is None:
+            return False
         try:
-            return wanted is not None and self._hardware(class_of(queue.name)) == wanted
+            if self._hardware(class_of(queue.name)) != wanted:
+                return False
         except ValueError:
             return False
+        production = probe_of(queue.name)
+        if production is None or "~" not in env[0]:
+            return False
+        task, backend = env[0].split("~", 1)
+        mine = self._entries.get((production[0], env[0]))
+        if mine is None:
+            mine = self._entries[production[0], env[0]] = self._env(production[0], task, backend)
+        return "unbuilt" not in mine and env_identity(mine) == env_identity(env[1])
 
     def _next(self, prefer: str | None, left: int) -> Claim | None:
         """Claim up to `left` jobs from `prefer`, else from the class with the oldest work; None if none.

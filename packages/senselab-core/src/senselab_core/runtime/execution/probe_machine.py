@@ -11,9 +11,8 @@ import logging
 import os
 import threading
 import uuid
-from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import Literal, Protocol
 
 from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.calibration import (
@@ -44,14 +43,13 @@ from senselab_core.runtime.execution.pool_parts import (
     covers,
     worth,
 )
-from senselab_core.runtime.execution.queue import QueueSet, item_digest, probe_queue
+from senselab_core.runtime.execution.queue import item_digest, probe_queue
 from senselab_core.runtime.execution.substrates import (
-    WORKERS_DIR,
-    Fleet,
     QueueReady,
+    ReadyMark,
+    WorkerHandle,
     backend_key,
     class_of,
-    read_mark,
 )
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import Lease, LeaseTimeout, LeaseUnavailable
@@ -75,56 +73,122 @@ from senselab_core.runtime.units import (
     decoder_of,
 )
 
-if TYPE_CHECKING:
-    pass
-
 logger = logging.getLogger("senselab")
 
 
+class Host(Protocol):
+    """What the machine acts through, and the `Pool` is: queues, worker marks and liveness, and fragment reads."""
+
+    @property
+    def run_name(self) -> str:
+        """The run directory's name."""
+
+    def queue(self, name: str) -> "ProbeQueue":
+        """Return the queue `name`."""
+
+    def marks(self) -> Iterable[tuple[str, ReadyMark | None]]:
+        """Return each worker mark not yet given, by file name; None for one that cannot be read."""
+
+    def live_workers(self) -> list[WorkerHandle]:
+        """Return the substrate's workers alive now."""
+
+    def keys(self, part: PlanFragment) -> list[str]:
+        """Return the key digest of each job of `part`."""
+
+    def plan_of(self, part: PlanFragment) -> tuple[Plan, Mapping[InputIdentity, object]]:
+        """Return the admitted plan `part` belongs to and its graph-input values."""
+
+    def grant(self, queue: str) -> Grant:
+        """Return the grant of `queue`'s resource class."""
+
+    def produce(self, release: Release, jobs: Sequence[Job], placement: Placement) -> None:
+        """Put `release`'s jobs sized by its estimate, else the safe values."""
+
+    def wake(self) -> None:
+        """Have the scaler size the workers now."""
+
+
+class ProbeQueue(Protocol):
+    """The probe queue operations the machine makes (`Queue` has them all)."""
+
+    def set_probe_unit(self, hardware: HardwareClass, backend: str, env: Mapping[str, object]) -> None:
+        """Record the class and the backend's env a worker must have to serve this queue."""
+
+    def put_probe(self, fragment: PlanFragment, phase: str, stratum: int) -> None:
+        """Put a probe item."""
+
+    def outcome(self, digest: str) -> dict[str, object] | None:
+        """Return the outcome record of item `digest`, None while it has none."""
+
+    def claimed(self, digest: str) -> bool:
+        """Return whether `digest` is under a live claim."""
+
+    def close_probe(self) -> None:
+        """Close the queue to every worker."""
+
+
 class ProbeMachine:
-    """The `ProbeState` of each unit of a run (`calibration-probe.md` §7.1); mixed into the `Pool`."""
+    """The `ProbeState` of each unit of a run (`calibration-probe.md` §7.1), over a `Host`.
 
-    run_dir: Path
-    profile: ExecutionProfile
-    queues: QueueSet
-    roots: MeasureRoots
-    measures: Estimates
-    resolver: UnitReads
-    probes: dict[str, ProbedUnit]
-    _clock: Callable[[], float]
-    _lock: threading.Lock
-    _machine: threading.RLock
-    _fleet: Fleet
-    _states: dict[str, State]
-    _resolving: list[Held]
-    _releasing: list[Release]
-    _waited: set[str]
-    _greeted: set[str]
-    _unreadable: set[str]
-    _live_since: dict[str, float]
-    _said: set[str]
-    _stragglers: list[tuple[Held, Flight, list[int]]]
-    _hello: dict[str, HardwareClass]
-    _marks: dict[str, QueueReady]
+    Its inputs are the clock, the unit resolver, the measures and roots, and `Probe`; what it does to the world it does
+    through `host`, so a test drives it with a host of its own.
 
-    def _keys(self, fragment: PlanFragment) -> list[str]:
-        raise NotImplementedError
+    Attributes:
+        probes: Each unit probed, by digest.
+    """
 
-    def _admitted_plan(self, fragment: PlanFragment) -> tuple[Plan, Mapping[InputIdentity, object]]:
-        raise NotImplementedError
+    def __init__(  # noqa: PLR0913 - the profile and its reads, the clock, and the host
+        self,
+        profile: ExecutionProfile,
+        roots: MeasureRoots,
+        measures: Estimates,
+        resolver: UnitReads,
+        clock: Callable[[], float],
+        host: Host,
+    ) -> None:
+        """Run units under `profile`, reading `roots`, `measures`, `resolver`; timed by `clock`, acting by `host`."""
+        self.profile, self.roots, self.measures, self.resolver = profile, roots, measures, resolver
+        self._clock, self.host = clock, host
+        self.probes: dict[str, ProbedUnit] = {}
+        self.lock = threading.Lock()
+        self._machine = threading.RLock()
+        self._states: dict[str, State] = {}
+        self._resolving: list[Held] = []
+        self._releasing: list[Release] = []
+        self._waited: set[str] = set()
+        self._greeted: set[str] = set()
+        self._unreadable: set[str] = set()
+        self._live_since: dict[str, float] = {}
+        self._said: set[str] = set()
+        self._stragglers: list[tuple[Held, Flight, list[int]]] = []
+        self._hello: dict[str, HardwareClass] = {}
+        self._marks: dict[str, QueueReady] = {}
 
-    def _grant(self, queue: str) -> Grant:
-        raise NotImplementedError
+    def place(self, held: Held) -> None:
+        """Move `held`'s computed jobs through their unit's state: resolve, look up, and probe or put them."""
+        with self._machine:
+            self._place(held)
 
-    def _wake_scaler(self) -> None:
-        raise NotImplementedError
+    def advance(self) -> None:
+        """Read the new marks, place what waited on them, and tick every waiting and probing unit."""
+        with self._machine:
+            self._advance()
 
-    def _produce(self, release: Release, jobs: Sequence[Job], placement: Placement) -> None:
-        raise NotImplementedError
+    def counts(self, queue: str) -> tuple[int, bool]:
+        """Return the units of `queue` probing, and whether any of its parts is `Resolving`."""
+        with self.lock:
+            probing = sum(1 for s in self._states.values() if s.queue == queue and s.state == "probing")
+            return probing, any(h.queue == queue for h in self._resolving)
+
+    def close(self) -> None:
+        """Release every probe lease still held."""
+        for state in self._states.values():
+            if state.run is not None and state.run.stack is not None:
+                state.run.stack.close()
 
     def _place(self, held: Held) -> None:
         """Move `held`'s computed jobs through their unit's `ProbeState`: resolve, look up, and probe or put them."""
-        placed, values = self._admitted_plan(held.part)
+        placed, values = self.host.plan_of(held.part)
         jobs, placement = fragment_jobs(held.part, placed, values)
         decoder = decoder_of(jobs)
         ready, hello = self._marks.get(held.queue), self._hello.get(class_of(held.queue))
@@ -145,9 +209,9 @@ class ProbeMachine:
         if isinstance(unit, Pending):
             held.followed.waiting.append(held.part)
             self._resolving.append(held)
-            self._wake_scaler()
+            self.host.wake()
         elif isinstance(unit, Unresolved):
-            self._produce(Release(held, None, None), jobs, placement)
+            self.host.produce(Release(held, None, None), jobs, placement)
         else:
             self._lookup(unit, held, jobs, placement)
 
@@ -161,7 +225,7 @@ class ProbeMachine:
                 held.followed.waiting.append(held.part)
                 state.held.append(held)
             else:
-                self._produce(Release(held, state.estimate, unit.label()), jobs, placement)
+                self.host.produce(Release(held, state.estimate, unit.label()), jobs, placement)
             return
         estimate = self.measures.get(unit)
         plan = None if covers(estimate, jobs) else self._plan_probe(unit, held, jobs, placement)
@@ -174,7 +238,7 @@ class ProbeMachine:
                 estimate,
                 predicted=predicted,
             )
-            self._produce(Release(held, estimate, unit.label()), jobs, placement)
+            self.host.produce(Release(held, estimate, unit.label()), jobs, placement)
             return
         taken = self._take_lease(unit, digest)
         if taken == "peer":
@@ -183,12 +247,12 @@ class ProbeMachine:
                 unit, held.queue, "peer_wait", self._clock(), estimate, [held], predicted=predicted
             )
             return
-        self._start_probe(unit, held, plan, taken, predicted)
+        self._start_probe(unit, held, plan, taken, predicted, placement)
 
     def _plan_probe(self, unit: MeasureUnit, held: Held, jobs: Sequence[Job], placement: Placement) -> ProbePlan | None:
         """Return `Probe.plan` over `held`'s jobs against what the roots hold of `unit`; None when unplannable."""
         found, kind = [detected_units(j) for j in jobs], detected_kind(jobs)
-        keys = self._keys(held.part)
+        keys = self.host.keys(held.part)
         candidates = [
             Candidate(fragment="part", index=i, key=keys[i], units=u if k == kind != "none" else None)
             for i, (k, u) in enumerate(found)
@@ -222,22 +286,24 @@ class ProbeMachine:
             return None, None
         return found, stack
 
-    def _start_probe(
+    def _start_probe(  # noqa: PLR0913 - the unit and its part, the plan, the lease, and what the queue records
         self,
         unit: MeasureUnit,
         held: Held,
         plan: ProbePlan,
         taken: tuple[Lease | None, contextlib.ExitStack | None],
         predicted: bool,
+        placement: Placement,
     ) -> None:
         """Put `plan`'s items on a new probe queue pinned to the unit's hardware class; its other jobs wait."""
         probe_id = uuid.uuid4().hex
         name = probe_queue(held.queue, probe_id)
-        self.queues.queue(name).set_probe_hardware(unit.hardware)
+        env = {k: v for k, v in unit.env.model_dump(mode="json").items() if k != "decoder"}
+        self.host.queue(name).set_probe_unit(unit.hardware, backend_key(placement.backend), env)
         prior = tuple(self.roots.observations(unit))
         run = Run(probe_id, name, plan, held, self._clock(), prior, last=self._clock(), lease=taken[0], stack=taken[1])
         state = State(unit, held.queue, "probing", self._clock(), run=run, predicted=predicted)
-        with self._lock:
+        with self.lock:
             self._states[unit.digest()] = state
         held.followed.waiting.append(held.part)
         self._put_items(state, plan.items)
@@ -246,7 +312,7 @@ class ProbeMachine:
         """Put probe `items` on the run's queue, one fragment of one request shape each."""
         run, dumped = state.run, Dumped.of(state.run.held.part)  # type: ignore[union-attr]
         assert run is not None
-        queue = self.queues.queue(run.queue)
+        queue = self.host.queue(run.queue)
         for item in items:
             indices = [c.index for c in item.jobs]
             placement = run.held.part.placement.model_copy(update={"batch_size": item.request_jobs})
@@ -258,36 +324,35 @@ class ProbeMachine:
             run.used.update(indices)
             run.put[flight.digest] = len(indices)
         self.probes[state.unit.digest()] = ProbedUnit(run.id, frozenset(run.put), sum(run.put.values()))
-        self._wake_scaler()
+        self.host.wake()
 
     def _advance(self) -> None:
         """Advance every unit's state: greet new workers, resolve what waited on a hello, tick waits and probes."""
-        with self._machine:
-            fresh = self._greet()
-            if fresh and self._resolving:
-                waiting, self._resolving = self._resolving, []
-                for held in waiting:
-                    held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
-                    self._place(held)
-            if self._resolving:
-                self._expire_resolving()
-            for state in list(self._states.values()):
-                if state.state == "peer_wait":
-                    self._peer_tick(state)
-                elif state.state == "probing":
-                    self._probe_tick(state)
-            self._release_stragglers()
-            while self._releasing:
-                release = self._releasing[0]
-                placed, values = self._admitted_plan(release.held.part)
-                jobs, placement = fragment_jobs(release.held.part, placed, values)
-                self._produce(release, jobs, placement)
-                self._releasing.pop(0)
+        fresh = self._greet()
+        if fresh and self._resolving:
+            waiting, self._resolving = self._resolving, []
+            for held in waiting:
+                held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
+                self._place(held)
+        if self._resolving:
+            self._expire_resolving()
+        for state in list(self._states.values()):
+            if state.state == "peer_wait":
+                self._peer_tick(state)
+            elif state.state == "probing":
+                self._probe_tick(state)
+        self._release_stragglers()
+        while self._releasing:
+            release = self._releasing[0]
+            placed, values = self.host.plan_of(release.held.part)
+            jobs, placement = fragment_jobs(release.held.part, placed, values)
+            self.host.produce(release, jobs, placement)
+            self._releasing.pop(0)
 
     def _release_stragglers(self) -> None:
         """Put as production the jobs of an item of a closed probe queue whose live claim has gone stale."""
         for held, flight, indices in list(self._stragglers):
-            queue = self.queues.queue(flight.queue)
+            queue = self.host.queue(flight.queue)
             if queue.outcome(flight.digest) is None and not queue.claimed(flight.digest):
                 self._stragglers.remove((held, flight, indices))
                 held.followed.flights.remove(flight)
@@ -302,18 +367,15 @@ class ProbeMachine:
 
         Return whether a mark was read that had not been.
         """
-        directory = self.run_dir / WORKERS_DIR
-        if not directory.is_dir():
-            return False
         fresh, disagreed = False, []
-        for path in sorted(directory.iterdir()):
-            if path.name.startswith(".") or path.name in self._greeted:
+        for name, mark in self.host.marks():
+            if name in self._greeted:
                 continue
-            if (mark := read_mark(path)) is None:
-                self._unreadable.add(path.name)
+            if mark is None:
+                self._unreadable.add(name)
                 continue
-            self._unreadable.discard(path.name)
-            self._greeted.add(path.name)
+            self._unreadable.discard(name)
+            self._greeted.add(name)
             fresh = True
             for queue, ready in mark.queues.items():
                 self._marks.setdefault(queue, ready)
@@ -330,7 +392,7 @@ class ProbeMachine:
     def _expire_resolving(self) -> None:
         """Run as production the jobs of a unit still `Resolving` `resolve_s` after its queue's first live worker."""
         now = self._clock()
-        for handle in self._fleet.live():
+        for handle in self.host.live_workers():
             if not handle.pending:
                 self._live_since.setdefault(handle.queue, now)
         late = [
@@ -349,9 +411,9 @@ class ProbeMachine:
                     held.queue,
                     len(self._unreadable),
                 )
-            placed, values = self._admitted_plan(held.part)
+            placed, values = self.host.plan_of(held.part)
             jobs, placement = fragment_jobs(held.part, placed, values)
-            self._produce(Release(held, None, None), jobs, placement)
+            self.host.produce(Release(held, None, None), jobs, placement)
 
     def _peer_tick(self, state: State) -> None:
         """Return a waiting unit to `New` once its peer's lease is gone or `peer_wait_s` passed; else keep waiting."""
@@ -364,7 +426,7 @@ class ProbeMachine:
             return
         if expired:
             self._waited.add(state.unit.digest())
-        with self._lock:
+        with self.lock:
             del self._states[state.unit.digest()]
         for held in state.held:
             held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
@@ -378,7 +440,7 @@ class ProbeMachine:
         """Take the observations of every awaited item that has an outcome; `replace` swaps a served item."""
         run = state.run
         assert run is not None
-        queue = self.queues.queue(run.queue)
+        queue = self.host.queue(run.queue)
         for digest, (item, _) in list(run.awaiting.items()):
             record = queue.outcome(digest)
             if record is None:
@@ -412,7 +474,7 @@ class ProbeMachine:
                 more = Probe.plan_batched(
                     run.plan,
                     estimate,
-                    self._grant(state.queue),
+                    self.host.grant(state.queue),
                     cfg,
                     self.profile.probe_s - spent,
                     memory_headroom=self.profile.sizing.memory_headroom,
@@ -445,7 +507,7 @@ class ProbeMachine:
         for hardware in dict.fromkeys(o.hardware for o in run.observations):
             provenance = Provenance(
                 job=os.environ.get("SLURM_JOB_ID") or None,
-                run=self.run_dir.name,
+                run=self.host.run_name,
                 senselab=_build(),
                 profile=self.profile.canonical_digest(),
                 hardware=hardware,
@@ -465,7 +527,7 @@ class ProbeMachine:
         assert run is not None
         if abandon:
             self._read_outcomes(state, replace=False)
-            queue = self.queues.queue(run.queue)
+            queue = self.host.queue(run.queue)
             queue.close_probe()
             for digest, (item, flight) in run.awaiting.items():
                 indices = [c.index for c in item.jobs]
@@ -479,7 +541,7 @@ class ProbeMachine:
         if run.stack is not None:
             run.stack.close()
         label = state.unit.label()
-        with self._lock:
+        with self.lock:
             state.state, state.estimate = ("measured" if estimate else "unmeasured"), estimate
             if again:
                 self._states.pop(state.unit.digest(), None)
@@ -511,7 +573,7 @@ class ProbeMachine:
             if state.state == "probing":
                 self._conclude(state, None, abandon=True, again=True)
                 continue
-            with self._lock:
+            with self.lock:
                 self._states.pop(state.unit.digest(), None)
             for held in state.held:
                 held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]

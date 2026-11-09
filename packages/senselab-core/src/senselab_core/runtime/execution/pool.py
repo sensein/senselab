@@ -42,7 +42,6 @@ from typing import TYPE_CHECKING, ClassVar
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.calibration import (
-    HardwareClass,
     LengthProfile,
 )
 from senselab_core.runtime.call import RunConfig, host_hardware
@@ -70,24 +69,25 @@ from senselab_core.runtime.execution.pool_parts import (
     Held,
     ProbedUnit,
     Release,
-    State,
     jobs_of,
     larger_class,
     report,
     split,
 )
-from senselab_core.runtime.execution.probe_machine import ProbeMachine, detected_kind
+from senselab_core.runtime.execution.probe_machine import ProbeMachine, ProbeQueue, detected_kind
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of
 from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
     BrokenClass,
     Fleet,
     Local,
-    QueueReady,
+    ReadyMark,
     Slurm,
     Substrate,
     SubstrateError,
+    WorkerHandle,
     class_of,
+    read_mark,
     scale,
 )
 from senselab_core.runtime.keys import Placement
@@ -120,7 +120,7 @@ DEAD_DIR = "dead"
 """The directory of a run's dead jobs, one `<key digest>.json` each."""
 
 
-class Pool(ProbeMachine):
+class Pool:
     """An `Executor` over the queues of the run in `run_dir`, its jobs run by pool workers a `substrate` starts.
 
     `submit` puts a fragment on its queue unless a newer epoch than `epoch` was taken (`StaleCoordinator`); `poll`
@@ -190,23 +190,16 @@ class Pool(ProbeMachine):
         self._followed: dict[str, Followed] = {}
         self._ids = itertools.count()
         self._lock = threading.Lock()
-        self._machine = threading.RLock()
         self.roots = roots if roots is not None else measure_roots(profile)
         self.measures = measures if measures is not None else default_measures(profile, self.roots)
         self.resolver = resolver if resolver is not None else UnitResolver(profile, self.roots)
-        self.probes: dict[str, ProbedUnit] = {}
-        self._states: dict[str, State] = {}
-        self._resolving: list[Held] = []
-        self._releasing: list[Release] = []
-        self._waited: set[str] = set()
-        self._greeted: set[str] = set()
-        self._unreadable: set[str] = set()
-        self._live_since: dict[str, float] = {}
-        self._said: set[str] = set()
-        self._stragglers: list[tuple[Held, Flight, list[int]]] = []
-        self._hello: dict[str, HardwareClass] = {}
-        self._marks: dict[str, QueueReady] = {}
+        self._machine = ProbeMachine(profile, self.roots, self.measures, self.resolver, clock, _PoolHost(self))
         self._rates: dict[str, dict[str, tuple[float | None, int]]] = {}
+
+    @property
+    def probes(self) -> dict[str, ProbedUnit]:
+        """Each unit this pool probed, by digest."""
+        return self._machine.probes
 
     def bind_epoch(self, epoch: int, events: EventLog) -> None:
         """Coordinate as `epoch` from now on, logging to `events`, a log of that epoch's attempt.
@@ -295,16 +288,15 @@ class Pool(ProbeMachine):
             run=placed.config if placed.config is not None else RunConfig(),
         )
         dumped = Dumped.of(fragment)
-        with self._machine:
-            for wanted, served in ((True, True), (False, False)):
-                picks = [i for i, flag in enumerate(flags) if flag is wanted]
-                if not picks:
-                    continue
-                part = dumped.part(picks)
-                if served:
-                    self._put_served(followed, name, part, placement)
-                else:
-                    self._place(Held(followed, name, part))
+        for wanted in (True, False):
+            picks = [i for i, flag in enumerate(flags) if flag is wanted]
+            if not picks:
+                continue
+            part = dumped.part(picks)
+            if wanted:
+                self._put_served(followed, name, part, placement)
+            else:
+                self._machine.place(Held(followed, name, part))
 
     def _put_served(self, followed: Followed, name: str, part: PlanFragment, placement: Placement) -> None:
         """Put the jobs the store serves, `quantum_items` to an item, whole requests together."""
@@ -370,8 +362,7 @@ class Pool(ProbeMachine):
             return 0
         with self._lock:
             rates = list(self._rates.get(queue, {}).values())
-            probing = sum(1 for s in self._states.values() if s.queue == queue and s.state == "probing")
-            resolving = any(h.queue == queue for h in self._resolving)
+        probing, resolving = self._machine.counts(queue)
         grant = self._grant(queue)
         items = math.ceil(work / grant.quantum_items)
         base = 0
@@ -496,7 +487,7 @@ class Pool(ProbeMachine):
         if followed.cancelled or followed.done:
             return [], True
         self._fence(recent=True)
-        self._advance()
+        self._machine.advance()
         given: list[ResultRef] = []
         landed = [(f, r) for f in followed.flights if (r := self.queues.queue(f.queue).outcome(f.digest))]
         if landed:
@@ -523,9 +514,7 @@ class Pool(ProbeMachine):
         self._scale_wake.set()
         if scaler is not None:
             scaler.join()
-        for state in self._states.values():
-            if state.run is not None and state.run.stack is not None:
-                state.run.stack.close()
+        self._machine.close()
         self._fleet.close()
 
     def _settle(self, followed: Followed, flight: Flight, record: Mapping[str, object]) -> Iterator[ResultRef]:
@@ -675,6 +664,62 @@ class Pool(ProbeMachine):
             staging.unlink()
         held = json.loads(path.read_text(encoding="utf-8"))
         return ResultRef(job=job, key_digest=key, failure=FaultRecord.model_validate(held["failure"]))
+
+
+class _PoolHost:
+    """What the `Pool` gives its `ProbeMachine`: its queues, its workers' marks and liveness, and its fragment reads."""
+
+    def __init__(self, pool: "Pool") -> None:
+        """Act for `pool`."""
+        self._pool = pool
+        self._read: dict[str, ReadyMark] = {}
+
+    @property
+    def run_name(self) -> str:
+        """The run directory's name."""
+        return self._pool.run_dir.name
+
+    def queue(self, name: str) -> ProbeQueue:
+        """Return the queue `name`."""
+        return self._pool.queues.queue(name)
+
+    def marks(self) -> list[tuple[str, ReadyMark | None]]:
+        """Return each worker mark of the run, a readable one read once."""
+        directory = self._pool.run_dir / WORKERS_DIR
+        if not directory.is_dir():
+            return []
+        found: list[tuple[str, ReadyMark | None]] = []
+        for path in sorted(directory.iterdir()):
+            if path.name.startswith("."):
+                continue
+            if path.name not in self._read and (mark := read_mark(path)) is not None:
+                self._read[path.name] = mark
+            found.append((path.name, self._read.get(path.name)))
+        return found
+
+    def live_workers(self) -> list[WorkerHandle]:
+        """Return the workers the substrate lists alive."""
+        return self._pool._fleet.live()  # noqa: SLF001 - the pool's own adapter
+
+    def keys(self, part: PlanFragment) -> list[str]:
+        """Return the key digest of each job of `part`."""
+        return self._pool._keys(part)  # noqa: SLF001
+
+    def plan_of(self, part: PlanFragment) -> tuple[Plan, Mapping[InputIdentity, object]]:
+        """Return the admitted plan of `part`."""
+        return self._pool._admitted_plan(part)  # noqa: SLF001
+
+    def grant(self, queue: str) -> Grant:
+        """Return the grant of `queue`'s resource class."""
+        return self._pool._grant(queue)  # noqa: SLF001
+
+    def produce(self, release: Release, jobs: Sequence[Job], placement: Placement) -> None:
+        """Put `release`'s jobs sized by its estimate."""
+        self._pool._produce(release, jobs, placement)  # noqa: SLF001
+
+    def wake(self) -> None:
+        """Wake the scaler."""
+        self._pool._wake_scaler()  # noqa: SLF001
 
 
 def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float) -> None:

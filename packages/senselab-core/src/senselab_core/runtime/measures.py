@@ -102,6 +102,12 @@ def env_entry(fields: Mapping[str, Any]) -> dict[str, Any]:
     return entry
 
 
+def env_identity(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Return what two env entries must share for one measure to hold for both: the torch build and the rest whole."""
+    driver = entry.get("driver") or {}
+    return {**{k: entry.get(k) for k in ENV_ENTRY_KEYS}, "torch_build": driver.get("torch_build")}
+
+
 class MeasureEnv(Frozen):
     """The env's fingerprinted context fields that decide cost: its lock and wheels, driver, platform and numerics.
 
