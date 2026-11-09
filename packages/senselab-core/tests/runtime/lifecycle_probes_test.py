@@ -85,7 +85,7 @@ def test_group_gone_waits_out_its_timeout_on_the_clock(
     clock = lease_clock()
     timeout_s = 8 * POLL_S
     assert not group_gone(leader.pid, timeout_s, clock)
-    assert clock.slept == [POLL_S] * 9
+    assert set(clock.slept) == {POLL_S} and sum(clock.slept[:-1]) <= timeout_s < sum(clock.slept)
     leader.kill()
     leader.wait()
     clock = lease_clock()

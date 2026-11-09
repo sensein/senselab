@@ -29,7 +29,7 @@ from typing import Any, Callable, Iterator
 import numpy
 from bounded_probe_fixture import limit_file_size
 from lease_clock_fixture import ManualClock
-from lifecycle_probes_fixture import gate, recorded_pids
+from lifecycle_probes_fixture import Gate, gate, recorded_pids
 from senselab_core.runtime import worker_client
 from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerClient, WorkerLost
 from senselab_core.runtime.worker_pipes import Pump
@@ -208,6 +208,12 @@ def _state(client: WorkerClient, pid_file: Path) -> dict[str, Any]:
     }
 
 
+def _open_when_entered(server: Gate, gate_open: threading.Event) -> None:
+    """Set `gate_open` once the backend behind `server` is in its request."""
+    server.entered()
+    gate_open.set()
+
+
 def _drive(clock: ManualClock, injector: _Injector, may: Callable[[], bool], done: threading.Event) -> None:
     """Until `done`, advance `clock` by `STEP_S` each time the main thread is parked on it and `may` allows."""
     main = threading.main_thread()
@@ -282,13 +288,13 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
     _handlers(case["kind"], injector)
     driver = threading.Thread(target=_drive, args=(clock, injector, may_advance, done), daemon=True)
     driver.start()
-    os.killpg = record_killpg  # type: ignore[assignment]
+    os.killpg = record_killpg
     with contextlib.ExitStack() as stack:
         port = 0
         if case["path"] == "timeout":
             server = stack.enter_context(gate())
             port = server.port
-            threading.Thread(target=lambda: (server.entered(), gate_open.set()), daemon=True).start()
+            threading.Thread(target=_open_when_entered, args=(server, gate_open), daemon=True).start()
         outcome, built, elapsed = _perform(case, injector, build, port, clock)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)

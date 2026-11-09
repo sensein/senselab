@@ -1,10 +1,10 @@
 """A clock a test advances, for leases: monotonic time, the storage clock and waits all move only when told to.
 
-`ManualClock` is passed as `Lease(clock=...)`. `sleep` advances it (or only yields, when built with `spends=False`),
-`wait` on an event returns when the event is set or the clock has been advanced past the timeout (or, built with
-`waits="spend"`, spends the timeout at once), and `settle` returns once every thread parked in `wait` has seen the
-latest advance, so a test that advanced the clock reads the beats that advance caused. Every wait and loop that
-a real event ends keeps a real failure bound, `hang_s`.
+`ManualClock` is passed as `Lease(clock=...)`. `wait` on an event, and `select` on a selector, return when it is
+ready or the clock has been advanced past the timeout (or, built with `waits="spend"`, spends the timeout at
+once). `sleep` advances the clock, only yields (`spends=False`) or parks until advanced (`spends="park"`).
+`settle` returns once every thread parked in `wait` has seen the latest advance, so a test that advanced the clock
+reads the beats that advance caused. Every wait and loop that a real event ends keeps a real failure bound, `hang_s`.
 
 `age` backdates the stamps in a lease's directory, which is how a test makes storage time
 pass for a lease nobody is renewing.

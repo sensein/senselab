@@ -178,9 +178,14 @@ def test_timeout_returns_though_a_grandchild_holds_stderr(
     client.close()
 
 
-def _wait_stopped(pid: int) -> None:
-    """Return once child `pid` has been stopped; the wait ends with the stop, or with the test's timeout."""
-    _, status = os.waitpid(pid, os.WUNTRACED)
+def _wait_stopped(pid: int, hang_s: float) -> None:
+    """Return once child `pid` has been stopped; kill it if it has not been by `hang_s`, so the wait fails."""
+    guard = threading.Timer(hang_s, os.kill, (pid, signal.SIGKILL))
+    guard.start()
+    try:
+        _, status = os.waitpid(pid, os.WUNTRACED)
+    finally:
+        guard.cancel()
     assert os.WIFSTOPPED(status), f"worker {pid} ended instead of stopping"
 
 
@@ -200,7 +205,7 @@ def test_send_to_wedged_worker_respects_deadline(
         clock=clock,
     )
     client.run([{"id": "a", "inputs": {}}], {"mode": "stop_reading"})
-    _wait_stopped(client.hello["pid"])
+    _wait_stopped(client.hello["pid"], clock.hang_s)
     call = Called(lambda: client.run([{"id": "a", "inputs": {}}], {"blob": "x" * 8 * 2**20}), hang_s=clock.hang_s)
     _timed_out(clock, call)
     assert not group_alive(client.hello["pid"])
@@ -260,7 +265,7 @@ def test_graceful_close_leaves_sigterm_its_own_grace(
         PYTHON, "backends.slow_reader_backend_fixture", init={}, array_parent=array_parent, graces=graces, clock=clock
     )
     client.run([{"id": "a", "inputs": {}}], {"mode": "stop_reading"})
-    _wait_stopped(client.hello["pid"])
+    _wait_stopped(client.hello["pid"], clock.hang_s)
     sent = _record_killpg(monkeypatch, clock)
     closing = Called(client.close, hang_s=clock.hang_s)
     assert clock.parked(closing.thread)

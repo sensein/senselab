@@ -973,7 +973,7 @@ class WorkerClient:
     def _stop_group(self, proc: subprocess.Popen[bytes], stop: Deadline) -> None:
         """Signal the unreaped leader's group until it is gone within `stop`, then reap the leader if it exited."""
         pgid = proc.pid
-        held = _leader_held(pgid, self._exited, min(LEADER_PROBE_TIMEOUT_S, stop.remaining() or 0.0))
+        held = _leader_held(pgid, self._exited, LEADER_PROBE_TIMEOUT_S)
         if held:
             try:
                 self._signal_group_until_gone(pgid, stop)

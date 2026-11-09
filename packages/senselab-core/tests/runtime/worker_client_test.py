@@ -10,7 +10,7 @@ import signal
 import subprocess
 import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,7 @@ import senselab_worker
 from backends.subdir_backend_fixture import ARRAY_LIKE
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from lease_clock_fixture import ManualClock
 from lifecycle_probes_fixture import gate, interpreter, listing
 from senselab_core.kernel.declare import Env
 from senselab_core.runtime import worker_client
@@ -745,14 +746,25 @@ print(c._proc.pid, flush=True)
 """
 
 
-@pytest.mark.limits
+@pytest.mark.contract
 @pytest.mark.parametrize("body", ["pass", "c.run([{'id': 'a', 'inputs': {}}], {})", "holder = [c]"])
-def test_a_client_left_open_at_interpreter_exit_is_finalised_quietly(array_parent: Path, body: str) -> None:
-    """A client still open at exit is finalised, logs nothing, and leaves no file or process."""
+def test_a_client_left_open_at_interpreter_exit_is_finalised_quietly(
+    array_parent: Path, body: str, tier_bound: float
+) -> None:
+    """A client still open at exit is finalised, logs nothing, and leaves no file or process.
+
+    That the finaliser waits on no grace is asserted in-process, on a clock that never advances, by
+    `test_leaked_client_is_closed_with_a_resource_warning`: at interpreter exit the reaper thread is gone, so the
+    finaliser polls the worker's exit in timed waits that a frozen clock cannot serve.
+    """
     script = array_parent.parent / "left_open.py"
     script.write_text(_LEFT_AT_EXIT.format(body=body))
     proc = subprocess.run(
-        [sys.executable, str(script), str(array_parent)], capture_output=True, text=True, timeout=60, check=False
+        [sys.executable, str(script), str(array_parent)],
+        capture_output=True,
+        text=True,
+        timeout=tier_bound / 2,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert [line for line in proc.stderr.splitlines() if line.startswith("LOG")] == []
@@ -760,9 +772,14 @@ def test_a_client_left_open_at_interpreter_exit_is_finalised_quietly(array_paren
 
 
 @pytest.mark.logic
-def test_leaked_client_is_closed_with_a_resource_warning(array_parent: Path) -> None:
-    """A client dropped without `close` warns, stops its worker and removes its directory."""
-    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent)
+def test_leaked_client_is_closed_with_a_resource_warning(
+    array_parent: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
+    """A client dropped without `close` warns, stops its worker and removes its directory, with no grace passing.
+
+    The clock is never advanced: a finaliser that waited on a grace would fail at the clock's hang bound.
+    """
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent, clock=lease_clock(spends=False))
     pgid = client.hello["pid"]
     with pytest.warns(ResourceWarning):
         del client
