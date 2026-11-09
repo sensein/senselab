@@ -190,7 +190,8 @@ class Hand:
 
     A probe queue is taken only where its recorded class is `hardware`, as `PoolWorker` does. `wall` is a request's
     seconds from its units, `load_s` the load the first request reports, `limit` the most probe items it claims, and
-    `served` the item (by claim order) whose requests are reported `served`.
+    `served` the item (by claim order) whose requests are reported `served`; `max_items` the most items it takes in
+    one `serve`.
     """
 
     def __init__(  # noqa: PLR0913 - the plan and run, then the worker's behaviour
@@ -204,11 +205,13 @@ class Hand:
         limit: int | None = None,
         served: int | None = None,
         takes: HardwareClass | None = None,
+        max_items: int | None = None,
     ) -> None:
         """Serve `pool`'s queues for `placed`."""
         self.pool, self.placed, self.values, self.hardware = pool, placed, values, hardware
         self.wall, self.load_s, self.limit, self.served = wall, load_s, limit, served
         self.takes = takes if takes is not None else hardware
+        self.max_items = max_items
         self.since = 0
         self.items: list[tuple[str, PlanFragment]] = []
         self.probe_items = 0
@@ -222,7 +225,7 @@ class Hand:
             if probe and (queue.probe_hardware() != self.takes or self.limit == self.probe_items):
                 continue
             while (claim := queue.claim("hand", max_items=1)) is not None:
-                if probe and self.limit == self.probe_items:
+                if (probe and self.limit == self.probe_items) or count == self.max_items:
                     claim.release()
                     break
                 [item], [digest] = claim.fragments, claim.items

@@ -68,6 +68,7 @@ class Worker(Hand):
         production_hardware: HardwareClass = SEEN,
         fault_units: float | None = None,
         limit: int | None = None,
+        max_items: int | None = None,
         peak: Callable[[float], tuple[int, int]] | None = None,
     ) -> None:
         """Serve `pool`'s queues for `placed`."""
@@ -76,7 +77,9 @@ class Worker(Hand):
         self.cotenancy, self.production_hardware = cotenancy, production_hardware
         self.fault_units, self.peak = fault_units, peak
         self.peaks: list[int] = []
-        super().__init__(pool, placed, values, wall=lambda units: self._base(units) * probe_rho, limit=limit)
+        super().__init__(
+            pool, placed, values, wall=lambda units: self._base(units) * probe_rho, limit=limit, max_items=max_items
+        )
 
     def _base(self, units: float) -> float:
         return (0.05 + 0.01 * units) * (1 + 0.01 * next(self._pattern))
@@ -199,6 +202,43 @@ def test_a_confirming_probe_holds_the_units_jobs(tmp_path: Path, clock: ManualCl
     assert pool.queues.queue("cpu").work() == 0
     refs = [*early, *_drive(pool, handle, Worker(pool, placed2, values2), rounds=200)]
     assert len(refs) == JOBS and all(r.failure is None for r in refs)
+
+
+def test_a_confirming_probe_waits_for_the_units_items_already_put(tmp_path: Path, clock: ManualClock) -> None:
+    """Items of the unit still on the queue run beside no probe: the probe starts once they are all read."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile, clock=clock)
+    _, first = _submit(pool, placed, values)
+    unit = _unit(pool, placed, values)
+    worker = Worker(pool, placed, values, production_rho=SLOW, max_items=1)
+    while "drift" not in _kinds(pool, unit):
+        worker.serve()
+        pool.poll(Handle(id=first))
+    left = pool.queues.queue("cpu").work()
+    assert left > 0
+    probes = len(_probe_queues(pool))
+    second, placed2, values2 = _more(pool, profile, "y")
+    assert len(_probe_queues(pool)) == probes
+    while not pool.poll(Handle(id=first))[1]:
+        assert len(_probe_queues(pool)) == probes
+        worker.serve()
+    pool.poll(Handle(id=second))
+    assert len(_probe_queues(pool)) == probes + 1
+    refs = _drive(pool, second, Worker(pool, placed2, values2), rounds=200)
+    assert len(refs) == JOBS
+
+
+def test_a_regime_in_force_is_not_recorded_again_by_the_next_run(tmp_path: Path, clock: ManualClock) -> None:
+    """A window at k = 2 is judged against the factor already written: the next run writes no second record."""
+    profile, _, _, _, unit = _first(tmp_path, clock, production_rho=SLOW, cotenancy=SHARED)
+    other = _pool(tmp_path, profile, run="run2", store="store2", clock=clock)
+    placed, values = _plan(profile, range(1, JOBS + 1), char="z")
+    _, handle = _submit(other, placed, values)
+    _drive(other, handle, Worker(other, placed, values, production_rho=SLOW, cotenancy=SHARED), rounds=200)
+    kinds = _kinds(other, unit)
+    assert kinds.count("regime") == 1 and kinds.count("drift") == 1
 
 
 def test_drift_under_cotenancy_records_a_regime_without_a_probe(tmp_path: Path, clock: ManualClock) -> None:

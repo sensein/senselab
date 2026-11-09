@@ -52,11 +52,16 @@ def band(confidence: float, spread: float, window: int) -> float:
 
 @dataclass(frozen=True)
 class Reading:
-    """One production request against its prediction: the ratio, the spread at its batch, and the batch."""
+    """One production request against its prediction: the ratio, the spread at its batch, and the batch.
+
+    `rho` is `wall_s` over the probe-regime prediction; `expected` is the factor of its co-tenancy in force (1 where
+    none is), the ratio the window is judged against.
+    """
 
     rho: float
     spread: float
     batch: int
+    expected: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -100,8 +105,9 @@ class Drift:
         if len(seen) < self.window:
             return None
         rho = statistics.median(r.rho for r in seen)
+        expected = statistics.median(r.expected for r in seen)
         half = band(self.confidence, statistics.median(r.spread for r in seen), self.window)
-        if abs(rho - 1.0) <= half:
+        if abs(statistics.median(r.rho / r.expected for r in seen) - 1.0) <= half:
             return None
         found = Drifted(
             k,
@@ -109,8 +115,8 @@ class Drift:
             len(seen),
             round(statistics.median(r.batch for r in seen)),
             tuple(r.rho for r in seen),
-            1.0 - half,
-            1.0 + half,
+            expected * (1.0 - half),
+            expected * (1.0 + half),
         )
         seen.clear()
         return found

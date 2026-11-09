@@ -244,7 +244,7 @@ class ProbeMachine:
         predicted = self._hello.get(class_of(held.queue)) is None
         state = self._states.get(digest)
         if state is not None:
-            if state.state == "confirming" and state.run is None:
+            if state.state == "confirming" and state.run is None and not self._inflight(state.unit):
                 self._confirm(state, held, jobs, placement)
             elif state.state in ("peer_wait", "probing", "confirming"):
                 held.followed.waiting.append(held.part)
@@ -383,6 +383,8 @@ class ProbeMachine:
                 self._peer_tick(state)
             elif state.run is not None and state.state in ("probing", "confirming"):
                 self._probe_tick(state)
+            elif state.state == "confirming" and state.held and not self._inflight(state.unit):
+                self._start_confirming(state)
         self._release_stragglers()
         while self._releasing:
             release = self._releasing[0]
@@ -643,7 +645,8 @@ class ProbeMachine:
                 self._raise_peak(state, origin.estimate, request)
                 if request.cotenancy.device is None:
                     continue
-                reading = Reading(request.wall_s / found[0], found[1], request.batch)
+                expected = {r.k: r.rho for r in origin.estimate.regimes}.get(request.cotenancy.device, 1.0)
+                reading = Reading(request.wall_s / found[0], found[1], request.batch, expected)
                 if (drifted := self._drift.add(state.unit.digest(), request.cotenancy.device, reading)) is not None:
                     self._drifted(state, origin.estimate, drifted)
 
@@ -699,6 +702,17 @@ class ProbeMachine:
         if fresh is not None and state.state == "measured":
             state.estimate = _floored(fresh, state.m1_floor)
 
+    def _inflight(self, unit: MeasureUnit) -> bool:
+        """Whether an item of `unit`'s production is on a queue, claimed or not, with its outcome unread."""
+        digest = unit.digest()
+        return any(o.probe is None and o.unit.digest() == digest for o in self._origins.values())
+
+    def _start_confirming(self, state: State) -> None:
+        """Place the first part the unit held while its items drained: it is the confirming probe's part."""
+        held = state.held.pop(0)
+        held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
+        self._place(held)
+
     def _confirm(self, state: State, held: Held, jobs: Sequence[Job], placement: Placement) -> None:
         """Start the confirming probe on `held`, the unit's next part, else size it by the estimate in force."""
         plan = self._plan_probe(state.unit, held, jobs, placement, fresh=True)
@@ -711,6 +725,8 @@ class ProbeMachine:
             with self.lock:
                 state.state, state.suspect = "measured", None
             self.host.produce(Release(held, state.estimate, state.unit), jobs, placement)
+            while state.held:
+                self._start_confirming(state)
             return
         self._start_probe(state.unit, held, plan, taken, state.predicted, placement, state)
 
