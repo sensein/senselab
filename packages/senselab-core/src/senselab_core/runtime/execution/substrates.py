@@ -36,7 +36,7 @@ from typing import Any, Protocol
 from senselab_worker.canonical import jcs_dumps, jcs_loads
 
 from senselab_core.kernel.declare import BackendSpec
-from senselab_core.kernel.formats import WORKER_READY_FORMAT
+from senselab_core.kernel.formats import WORKER_READY_FORMAT, FormatVerdict, check
 from senselab_core.runtime.calibration import HardwareClass
 from senselab_core.runtime.config import expand
 from senselab_core.runtime.execution.queue import PROBE_MARK, RUN_QUEUES, QueueSet
@@ -205,7 +205,7 @@ def read_mark(path: Path) -> ReadyMark | None:
         document = jcs_loads(Path(path).read_bytes())
         if not isinstance(document, dict):
             return None
-        if document.get("format") != WORKER_READY_FORMAT:
+        if check(WORKER_READY_FORMAT, document.get("format")) is not FormatVerdict.ACCEPTED:
             _say_once(
                 ("mark", str(document.get("format"))),
                 "a worker mark is %r; %r is read",

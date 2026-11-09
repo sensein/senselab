@@ -328,3 +328,18 @@ def test_a_names_listing_reads_each_queue_once_and_forgets_a_removed_one(tmp_pat
 
     shutil.rmtree(made.path)
     assert queues.names() == ["cpu"]
+
+
+@pytest.mark.logic
+def test_only_another_major_of_the_ready_mark_is_no_mark(tmp_path: Path) -> None:
+    """A later minor of `worker-ready@1` is read; `worker-ready@2` and an untagged mark are not."""
+    for tag, readable in (
+        ("worker-ready@1.0", True),
+        ("worker-ready@1.3", True),
+        ("worker-ready@2.0", False),
+        (None, False),
+    ):
+        document = {"host": "x", "pid": 1, "started": None, "queues": {"cpu": {"hardware": None, "envs": {}}}}
+        path = tmp_path / f"mark-{tag}"
+        path.write_bytes(jcs_dumps({**document, **({} if tag is None else {"format": tag})}))
+        assert (read_mark(path) is not None) is readable, tag

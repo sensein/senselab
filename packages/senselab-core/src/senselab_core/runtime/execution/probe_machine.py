@@ -199,16 +199,17 @@ class ProbeMachine:
             entry = ready.envs.get(backend_key(placement.backend))
             if ready.hardware is None:
                 unit = Unresolved(f"a worker of {held.queue} names no hardware class")
-            elif entry is None:
+            elif entry is None and isinstance(unit, Pending):
                 unit = Pending(f"the ready mark of a worker of {held.queue} holds no env of {placement.backend.name!r}")
-            elif "unbuilt" in entry:
+            elif entry is not None and "unbuilt" in entry:
                 why = entry["unbuilt"]
                 unit = Unresolved(f"the env of backend {placement.backend.name!r} could not be built: {why}")
-            else:
+            elif entry is not None:
                 unit = self.resolver.unit(jobs[0].call, placement, decoder, hello or ready.hardware, entry)
         if isinstance(unit, Pending):
             held.followed.waiting.append(held.part)
-            self._resolving.append(held)
+            with self.lock:
+                self._resolving.append(held)
             self.host.wake()
         elif isinstance(unit, Unresolved):
             self.host.produce(Release(held, None, None), jobs, placement)
@@ -230,22 +231,19 @@ class ProbeMachine:
         estimate = self.measures.get(unit)
         plan = None if covers(estimate, jobs) else self._plan_probe(unit, held, jobs, placement)
         if plan is None or not worth(plan, estimate):
-            self._states[digest] = State(
-                unit,
-                held.queue,
-                "measured" if estimate else "unmeasured",
-                self._clock(),
-                estimate,
-                predicted=predicted,
+            ended = State(
+                unit, held.queue, "measured" if estimate else "unmeasured", self._clock(), estimate, predicted=predicted
             )
+            with self.lock:
+                self._states[digest] = ended
             self.host.produce(Release(held, estimate, unit.label()), jobs, placement)
             return
         taken = self._take_lease(unit, digest)
         if taken == "peer":
             held.followed.waiting.append(held.part)
-            self._states[digest] = State(
-                unit, held.queue, "peer_wait", self._clock(), estimate, [held], predicted=predicted
-            )
+            waiting = State(unit, held.queue, "peer_wait", self._clock(), estimate, [held], predicted=predicted)
+            with self.lock:
+                self._states[digest] = waiting
             return
         self._start_probe(unit, held, plan, taken, predicted, placement)
 
@@ -330,7 +328,8 @@ class ProbeMachine:
         """Advance every unit's state: greet new workers, resolve what waited on a hello, tick waits and probes."""
         fresh = self._greet()
         if fresh and self._resolving:
-            waiting, self._resolving = self._resolving, []
+            with self.lock:
+                waiting, self._resolving = self._resolving, []
             for held in waiting:
                 held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
                 self._place(held)
@@ -401,7 +400,8 @@ class ProbeMachine:
             if (since := self._live_since.get(h.queue)) is not None
             and now - since >= self.profile.calibration.resolve_s
         ]
-        self._resolving = [h for h in self._resolving if h not in late]
+        with self.lock:
+            self._resolving = [h for h in self._resolving if h not in late]
         for held in late:
             if held.queue not in self._said:
                 self._said.add(held.queue)

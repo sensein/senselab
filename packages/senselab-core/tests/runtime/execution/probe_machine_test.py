@@ -1,5 +1,6 @@
 """`ProbeMachine` on its own: a host of fake queues, the injected clock, the real resolver, roots and `Probe`."""
 
+import threading
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -218,3 +219,124 @@ def test_a_probe_with_no_progress_for_the_stale_window_closes_its_queue_and_give
     clock.advance(window + 1)
     machine.advance()
     assert queue.closed and host.released and host.released[0].estimate is None
+
+
+def test_a_built_local_unit_probes_at_once_under_a_mark_with_no_entry_for_its_env(tmp_path: Path) -> None:
+    """A mark lacking the backend's entry demotes only a pending unit: one this host resolves is placed as it is."""
+    machine, host, held, _ = _machine(tmp_path, True, Clock())
+    host.new_marks = [("w1", ReadyMark("h", 1, None, {"cpu": QueueReady(SEEN, {})}))]
+    machine.advance()
+    machine.place(held)
+    assert len(host.queues) == 1 and machine.counts("cpu") == (1, False)
+
+
+class _OwnedLock:
+    """A lock that knows whether the current thread holds it."""
+
+    def __init__(self) -> None:
+        """Start free."""
+        self._lock = threading.Lock()
+        self._owner: int | None = None
+
+    def __enter__(self) -> "_OwnedLock":
+        """Take the lock."""
+        self._lock.acquire()
+        self._owner = threading.get_ident()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Release it."""
+        self._owner = None
+        self._lock.release()
+
+    @property
+    def held(self) -> bool:
+        """Whether the calling thread holds it."""
+        return self._owner == threading.get_ident()
+
+
+class _GuardedDict(dict[str, Any]):
+    """A dict that refuses a change made without the machine's lock."""
+
+    def __init__(self, lock: _OwnedLock) -> None:
+        """Guard with `lock`."""
+        super().__init__()
+        self.lock = lock
+
+    def __setitem__(self, key: str, value: Any) -> None:  # noqa: ANN401
+        """Set under the lock only."""
+        assert self.lock.held, "an insert into the unit states without the lock"
+        super().__setitem__(key, value)
+
+    def pop(self, key: str, *default: Any) -> Any:  # noqa: ANN401
+        """Pop under the lock only."""
+        assert self.lock.held, "a removal from the unit states without the lock"
+        return super().pop(key, *default)
+
+    def __delitem__(self, key: str) -> None:
+        """Delete under the lock only."""
+        assert self.lock.held, "a removal from the unit states without the lock"
+        super().__delitem__(key)
+
+
+class _GuardedList(list[Held]):
+    """A list that refuses an append made without the machine's lock."""
+
+    def __init__(self, lock: _OwnedLock) -> None:
+        """Guard with `lock`."""
+        super().__init__()
+        self.lock = lock
+
+    def append(self, item: Held) -> None:
+        """Append under the lock only."""
+        assert self.lock.held, "an append to the resolving parts without the lock"
+        super().append(item)
+
+
+class _Guarded(ProbeMachine):
+    """A machine whose unit states and resolving parts change only under its lock, asserted at every change."""
+
+    def __init__(self, *args: Any) -> None:  # noqa: ANN401
+        """Build as a `ProbeMachine`, then guard."""
+        super().__init__(*args)
+        self.owned = _OwnedLock()
+        self.lock = self.owned  # type: ignore[assignment]
+        self._states = _GuardedDict(self.owned)
+        self._resolving = _GuardedList(self.owned)
+        self._armed = True
+
+    def __setattr__(self, name: str, value: Any) -> None:  # noqa: ANN401
+        """Rebinding the guarded attributes needs the lock too."""
+        if name in ("_states", "_resolving") and getattr(self, "_armed", False):
+            assert self.owned.held, f"{name} rebound without the lock"
+        super().__setattr__(name, value)
+
+
+def _guarded(tmp_path: Path, seen: bool, clock: Clock) -> tuple[_Guarded, FakeHost, Held, Any]:
+    plain, host, held, profile = _machine(tmp_path, seen, clock)
+    return _Guarded(profile, plain.roots, plain.measures, plain.resolver, clock, host), host, held, profile
+
+
+def test_every_change_to_the_unit_states_and_the_resolving_parts_holds_the_lock_counts_reads_under(
+    tmp_path: Path,
+) -> None:
+    """Probing, an ended unit, a held part and its expiry, and a disagreeing hello each change under the lock."""
+    clock = Clock()
+    machine, host, held, profile = _guarded(tmp_path, False, clock)
+    machine.place(held)
+    host.workers = [WorkerHandle("cpu", "w0")]
+    machine.advance()
+    clock.advance(profile.calibration.resolve_s + 1)
+    machine.advance()
+    machine, host, held, profile = _guarded(tmp_path / "again", True, clock)
+    machine.place(held)
+    [queue] = host.queues.values()
+    host.new_marks = [
+        ("w1", ReadyMark("h", 1, None, {"cpu": QueueReady(HardwareClass(device="cpu", name="Test CPU", cpus=2), {})}))
+    ]
+    machine.advance()
+    assert queue.closed
+    _observations(host, queue)
+    again, host2, held2, _ = _guarded(tmp_path / "third", True, clock)
+    again.place(held2)
+    assert again.counts("cpu")[0] == 1
