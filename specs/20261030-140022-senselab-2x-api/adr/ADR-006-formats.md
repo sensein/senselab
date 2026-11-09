@@ -341,7 +341,7 @@ per-item differences and the digest of the thresholds it was made under); `sense
 
 Restates the **Data formats** list of the 2026-10-31 amendment, which this supersedes: `equivalence@3.0`,
 `equivalence-evidence@3.0`, `retry-policy@1.0`, `catalogue@1.0`, `spdx-licenses@1.0`, `comparison@1.0`,
-`run-config@1.0`, and `execution-context@3.0` in a store entry's `context.json`; `env-record@1.0`, an env root's
+`run-config@1.0`, and `execution-context@3.0` (3.1 by Task 20R-S1, same shape, `host` a token) in a store entry's `context.json`; `env-record@1.0`, an env root's
 `<name>[-<tag>].json`; `senselab-vocab@1.3`, a vocabulary document's `owl:versionInfo` (ADR-010). The tolerance
 profile formats (`tolerance@`, `tolerance-observations@`, `tolerance-coverage@`) are retired and not listed.
 
@@ -584,3 +584,32 @@ so moving them needs a format change, left open.
   member, the 2026-11-01 amendment's "a retired format is refused".
 - A plan's reuse count is the admitted count; result integrity is decided at read, and the run's report states the
   difference.
+
+## Amendment 2026-11-08: `execution-context@3.1` holds a host token (Phase 3 Task 20R-S1)
+
+- `host` stays a required, never-fingerprinted field of `execution-context@3`, and is written as `host_token()`
+  instead of the host name. A shared store's `context.json` named the host that computed an entry, so a group member
+  learned which hosts other members ran on (UX-57, UX-28). Nothing reads `host`; the field is removed at the next
+  context major.
+- The tag becomes 3.1, additive: a 3.0 reader requires and accepts exactly the same fields, so it reads a 3.1 entry
+  and quarantines nothing (UX-10). A 3.1 reader reads a 3.0 member whose `host` is a name, as written, and never
+  rewrites it. Addresses are unchanged, so `STORE_DIR` stays `store@5` with `result@2` and `execution-context@3`.
+- A record written where another user can read it (result store, measures roots, run directory, service and server
+  state, benchmark results) holds no host name, account name or home path. Where it needs host identity it holds
+  `host_token()` when the reader needs liveness or ownership, and the `HardwareClass` when the reader needs cost or
+  compatibility. `scripts/check_host_identity.py` refuses the calls that read a name outside its allowlist.
+- Every substrate's state root sits under `<run>/private/` (mode 0700, owned by the writer; one check,
+  `storage.private_dir`), beside `labels@1.json`: `manifest.json` (the store path), `inputs.json` (source paths),
+  `placements/<attempt>.json`, `pydra/` (the runner's job and error pickles), `slurm/` (worker logs) and a run's own
+  `profile-<digest prefix>.json`. The readable part of a run holds digests, labels and profile keys only. Opening
+  another account's run raises `RunPrivate`, which names `Run(run_dir, store=...)`.
+- **`placement@2.0`** replaces `@1.0` outright and **`plan-fragment@3.0`** replaces `@2.0` outright: `NodePlacement`
+  drops `env_root`, which held the profile's expanded env root (under `~` on both packaged profiles) and reached every
+  queue item. A worker derives the root from its own profile and the node's `env`. Queue items are named under
+  identity tag `plan-fragment@3`, which replaces `plan-fragment@2`. Logical keys and the plan hash are unchanged.
+- `local-weights-state@1` (new identity tag): `identity_digest("local-weights-state@1", [realpath, [[file realpath,
+  size, str(mtime_ns)], ...]])` names the file under `<cache root>/local-identities/` that keeps a local model's
+  weights identity, so an unchanged checkpoint is hashed once. It is never a key.
+- A stored fault message renders paths, account names and this host's name or first label to labels (`<path>`,
+  `<account>`, `<host>`), names matched as whole tokens; the operator's text goes to the log. A local model is served and attested under its content identity (`--served-model-name`), never its
+  path, so the same weights at two paths are one context.

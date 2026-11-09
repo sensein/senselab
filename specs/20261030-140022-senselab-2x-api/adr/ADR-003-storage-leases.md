@@ -307,7 +307,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
 Completes the 2026-11-01 staging. A registry entry is `{identity, endpoint}` under a renewed lease, replacing
 `{identity, endpoint, heartbeat}`: the lease's beats are the liveness (2026-11-03 amendment).
 
-- **Registry.** One directory per host, `<server env root>/services/<host>`, because a server listens on loopback
+- **Registry.** One directory per host, `<server env root>/services/<host token>`, because a server listens on loopback
   only. A service is named `svc-<canonical digest of its Attestation>`: `<name>.json` is its `service-entry@1.0`
   entry, written by atomic replace after `prove()`, and `<name>.lease` is its server process's lease, renewed by
   `keep_alive`. An entry is live only while that lease is held and younger than `stale_after`. A provider reserves
@@ -323,7 +323,7 @@ Completes the 2026-11-01 staging. A registry entry is `{identity, endpoint}` und
   places it as any backend. A providing set, like a consuming one, consumes a live entry attesting the identity
   before it reserves one, so the `svc` workers of one identity on a host start one server; one that finds the
   registration reserved but not yet published gets `LeaseTimeout` and gives its items back. The registry is one
-  directory per host and set of visible devices (`<server env root>/services/<host>/<devices>`, the devices named as
+  directory per host and set of visible devices (`<server env root>/services/<host token>/<devices>`, the devices named as
   the start lease names them), so each card registers its own server and a consumer binds to its own card's.
 - **Device memory (amended 2026-11-07).** Inside the start lease, before the launch, a server reads the free and
   total memory of its devices (`nvidia-smi`) and is refused with `VllmOutOfMemory`, a resource fault, when any device

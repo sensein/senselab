@@ -316,3 +316,11 @@ leaves the entry in place. A `STORE_DIR` major holds one member format pair (ADR
 retired `result.json` beside a current `context.json` is corruption: set aside and recomputed. Migrating it is removing the entry and recomputing it under this version. An entry written in a later major, or
 a later minor whose context carries fields this version does not know, is another version's: it is skipped, never
 quarantined (Phase 2 Task 34a).
+
+`execution-context@3.1` (Phase 3 Task 20R-S1) writes `host` as a host token, not a name; the shape is `3.0`'s. A 3.0
+member is read as written, its name left in place and not rewritten; a 3.0 reader reads a 3.1 member. Provenance
+documents already written keep their `senselab:context` records as they were. No converter. A run directory's
+`manifest.json`, `inputs.json` and `placements/` moved under `private/`; a run written before it is re-run.
+`placement@2.0` and `plan-fragment@3.0` drop `NodePlacement.env_root`; a run's placements and queue items written
+under `@1.0`/`@2.0` are not read, and a run with such items is re-run. The pydra work directory, Slurm worker logs and
+a run's own profile file moved under `<run>/private/`.

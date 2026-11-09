@@ -200,7 +200,7 @@ Rulings P2-23, P2-43, P2-60, P2-83, P2-89 (Phase 2 Task 21; R-112, R-155). This 
   amendment 2026-11-03; Phase 2 Task 22f).
 - 2026-11-02: equivalence members are (numerics class, env lock), `equivalence@3.0`, `equivalence-evidence@2.0`;
   consistency (`exact`, `equivalent`) vs availability (`tolerant`); `ExecutionContext.env_license`,
-  `execution-context@3.0`, `store@5`; `RunConfig.licenses` (P2-92, P2-93; Phase 2 Task 34d).
+  `execution-context@3.1`, `store@5`; `RunConfig.licenses` (P2-92, P2-93; Phase 2 Task 34d).
 
 ## Amendment 2026-11-02: the producers of batch formation and chunk grid (Phase 2 Task 34a)
 
@@ -239,8 +239,8 @@ Ruling P2-92 (owner item 45; supersedes the P2-23 reading in R-185). Phase 2 Tas
 Ruling P2-93 (owner item 46). Phase 2 Task 34d.
 
 - `ExecutionContext.env_license` (a `License` or None) is the code license of the env, `backend_license` over its
-  env lock's license records. It is recorded, never fingerprinted, like `host`, `protocol` and `model_source`.
-  Stored contexts are `execution-context@3.0`; entries live under `store@5/`, and `execution-context@2` is a
+  env lock's license records. It is recorded, never fingerprinted, like `host` (the writer's `host_token()`, never a name), `protocol` and `model_source`.
+  Stored contexts are `execution-context@3.1` (a 3.0 member is read; its `host` may be a name, left as written); entries live under `store@5/`, and `execution-context@2` is a
   retired store format (the store format gate, Task 34a).
 - `RunConfig.licenses` (`LicensePolicy`, the user's allowed and refused SPDX ids, `allow` None meaning every id not
   refused) is the only thing that refuses a call for its license: a refused env or model license raises

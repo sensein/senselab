@@ -87,3 +87,20 @@ UX-50) governs; this amendment brings the decision in line.
 - **Exports and shared reports render for their recipient audience**, never above what the policy allows that
   audience. "Publishable by default" and the export refusal of paths and `sub-`/`ses-` labels describe the
   rule for a public audience, not for every recipient.
+
+## Amendment 2026-11-08: the host token's guarantee (Phase 3 Task 20R-S1)
+
+- `host_token()` is a digest of a random per-host, per-boot value (Linux boot id, macOS boot session uuid, else a
+  private file in the host's temporary directory), never of the host name. It says only whether two records share a
+  host on one boot.
+- Anyone with a shell on that node can compute the token and so link records to the node; a group reader without
+  node access cannot name the host from it, and can tell that two runs shared a host on one boot. That is the stated
+  guarantee. Naming a host to its user is the audience rule above, rendered from the user's local state.
+- Service registries, vLLM start locks and server logs are keyed by `host_token()`, so no shared path or file holds a
+  host name.
+- A run's readable part is written only by the run, its event log and its queues, as path-free documents; every
+  substrate's state (pydra's pickles, Slurm worker logs, the run's own profile file, placements, manifest, inputs) sits
+  under `<run>/private/`, mode 0700. On an NFSv4-ACL filesystem an inherited ACE may survive that `chmod`; that is
+  residual, and a site that shares runs over such ACLs restricts the parent.
+- A stored fault message renders this host's name to `<host>`. IP address literals in a fault message are not
+  rendered; they are out of this amendment.

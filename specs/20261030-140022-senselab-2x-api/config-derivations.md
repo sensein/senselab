@@ -465,6 +465,12 @@ Per executor, the wall seconds and resident bytes the coordinator and its worker
 
 wall_slack_s 0.04: the seconds a request may take beyond the sleep its test backend was asked for, over four requests of 0.05 to 0.2 s; one request is a thread hand-off and a file write, a few milliseconds, and 0.04 s is over ten times that. first_bound_s 1.0: with a poll of 3 s the first-poll wait must claim an item within a second, a third of the poll, over the 0.1 s the item is put after and the 0.01 s first poll; a worker without the short wait takes the whole 3 s. put_later_s 0.1 and watch_poll_s 0.005: the item is put a tenth of a second after the worker starts, so the worker is waiting, and the test looks for the worker's progress every 5 ms, below the first poll. first_poll_s 0.01, poll_s 0.05, long_poll_s 3: the worker's polls in the tests that need it to finish fast, and the long poll the first poll must beat. presence_refresh_s 100: longer than any test, so a worker reuses its first read of the run's probe queues. Not measured on CI runners.
 
+### test_slack.held_lease
+
+stale_after_s 60 and timeout_s 0.2: the fault-message test holds a lease that must not go stale while a second
+acquirer waits 0.2 s and times out; a minute is longer than any test, and the timeout only needs to end the wait. Not
+measured.
+
 ### test_slack.probe_queue
 
 stale_after_s 0.4 and renew_fraction 0.25: the serve lease goes stale in 0.4 s and is beaten every 0.1 s, as the queue tests' lease; peer_lifetime_s 60: a stand-in peer process sleeps for a minute and is killed by its test, so it outlives any test of this file. Not measured.
