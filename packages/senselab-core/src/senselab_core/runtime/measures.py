@@ -18,7 +18,6 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Final, Literal, Protocol, Self, TypeVar
-from urllib.parse import urlsplit
 
 from pydantic import AfterValidator, Field, PlainSerializer, ValidationError, model_validator
 from senselab_worker.digest import COMMIT_HEX, SHA256_HEX, identity_digest
@@ -69,7 +68,6 @@ T = TypeVar("T")
 DRIVER_KEYS = frozenset({"torch_build", "engine", "engine_version"})
 """The driver entries a measure holds."""
 _UNMEASURED_DRIVER_KEYS = frozenset({"launch_env", "served_model", "model_identity", "config_digest", "observed"})
-_BUILD_TAG = re.compile(r"cu\d+|cpu|rocm[\d.]+|xpu")
 
 Formation = Annotated[str, Field(pattern=r"^(mixed|single|bucket:\S+)$")]
 """How a backend forms batches: `mixed`, `single`, or `bucket:<grid id>`."""
@@ -79,12 +77,8 @@ OBSERVATION_FORMAT = MEASURE_OBSERVATIONS_FORMAT.split(".")[0]
 
 
 def measure_driver(driver: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the driver entries a measure holds: the torch build in place of its index URL, nothing else of it."""
-    kept = {k: v for k, v in driver.items() if k not in _UNMEASURED_DRIVER_KEYS}
-    if (index := kept.pop("torch_index", None)) is not None:
-        tag = urlsplit(index).path.rstrip("/").rsplit("/", 1)[-1]
-        kept["torch_build"] = tag if _BUILD_TAG.fullmatch(tag) else "other"
-    return kept
+    """Return the driver entries a measure holds: `driver` without the launch digest and the attestation."""
+    return {k: v for k, v in driver.items() if k not in _UNMEASURED_DRIVER_KEYS}
 
 
 ENV_ENTRY_KEYS = ("env_lock", "wheel_set", "platform", "numerics", "threads")
@@ -133,7 +127,7 @@ class MeasureEnv(Frozen):
     def from_fields(cls, fields: Mapping[str, Any]) -> Self:
         """Return the env of `fields` as `EnvHandle.context_fields()`, the ready mark and `Launch.measured` give them.
 
-        The driver's `torch_index` URL is replaced by its build tag; its launch digest and attestation are dropped.
+        The driver's launch digest and attestation are dropped.
 
         Raises:
             ValueError: a field is missing.

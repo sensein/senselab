@@ -377,11 +377,11 @@ def test_every_policy_member_is_dispatched(policy: ReusePolicy) -> None:
 
 @pytest.mark.logic
 def test_fingerprint_is_the_context_tagged_digest() -> None:
-    """The fingerprint is `identity_digest("context@4", ...)` over all but the recorded-only fields, plus `licensed`."""
+    """The fingerprint is `identity_digest("context@5", ...)` over all but the recorded-only fields, plus `licensed`."""
     c = _ctx()
     recorded_only = {"host", "protocol", "model_source", "env_license"}
     fields = {**c.model_dump(exclude=recorded_only), "licensed": c.env_license is not None}
-    assert c.fingerprint() == identity_digest("context@4", fields)
+    assert c.fingerprint() == identity_digest("context@5", fields)
 
 
 @pytest.mark.logic

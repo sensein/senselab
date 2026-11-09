@@ -30,6 +30,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import senselab_worker
 from packaging.requirements import InvalidRequirement, Requirement
@@ -175,6 +176,18 @@ class EnvLock:
         )
 
 
+_BUILD_TAG = re.compile(r"cu\d+|cpu|rocm[\d.]+|xpu")
+
+
+def torch_build(index_url: str) -> str:
+    """Return the torch build tag an index URL serves, from its last path segment, else `other`.
+
+    A URL is a location and may carry userinfo or an internal host; no record another user reads holds one.
+    """
+    tag = urlsplit(index_url).path.rstrip("/").rsplit("/", 1)[-1]
+    return tag if _BUILD_TAG.fullmatch(tag) else "other"
+
+
 @dataclass(frozen=True)
 class EnvHandle:
     """A ready env: its interpreter and the identities an execution context records.
@@ -193,7 +206,7 @@ class EnvHandle:
 
     def context_fields(self) -> dict[str, Any]:
         """Return the `ExecutionContext` fields this env decides: `env_lock`, `wheel_set` and `driver`."""
-        driver = {"torch_index": self.torch_index} if self.torch_index else {}
+        driver = {"torch_build": torch_build(self.torch_index)} if self.torch_index else {}
         return {"env_lock": self.lock_sha, "wheel_set": self.wheel_set, "driver": driver}
 
 
@@ -871,4 +884,5 @@ __all__ = [
     "lock_identity_digest",
     "pick_torch_index",
     "read_lock_inputs",
+    "torch_build",
 ]

@@ -20,15 +20,15 @@ from senselab_core.runtime.store import (
     StoreFormatUnknown,
 )
 
-CONTEXT_3_0_FIELDS = set(
+CONTEXT_4_0_FIELDS = set(
     "env_lock platform wheel_set numerics decoder driver host protocol model_source env_license".split()
 )
-"""The fields of `execution-context@3.0` as of 3bf258e3: a reader of it requires every one and refuses any other."""
+"""The fields of `execution-context@4.0`: a reader of it requires every one and refuses any other."""
 
 SKEWS: dict[str, tuple[str, Callable[[dict[str, Any]], None]]] = {
     "later_major_result": ("result.json", lambda r: r.update(format="result@3.0")),
-    "later_major_context": ("context.json", lambda r: r.update(format="execution-context@4.0")),
-    "later_minor_context_field": ("context.json", lambda r: r.update(format="execution-context@3.4", added=1)),
+    "later_major_context": ("context.json", lambda r: r.update(format="execution-context@5.0")),
+    "later_minor_context_field": ("context.json", lambda r: r.update(format="execution-context@4.4", added=1)),
 }
 
 
@@ -54,18 +54,18 @@ def test_a_later_minor_is_read(tmp_path: Path) -> None:
     s.put(k, {"y": 1}, c)
     entry = entry_dir(tmp_path, k, c)
     rewrite_json(entry / "result.json", lambda r: r.update(format="result@2.3", added=1))
-    rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@3.4"))
+    rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@4.4"))
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.outputs == {"y": 1}
 
 
 @pytest.mark.logic
 def test_an_old_context_with_a_host_field_is_still_read(tmp_path: Path) -> None:
-    """A `execution-context@3.0` member carrying `host` is served as written (an entry is never rewritten)."""
+    """A `execution-context@4.0` member carrying `host` is served as written (an entry is never rewritten)."""
     s, k, c = ResultStore(tmp_path), store_key(), store_context()
     s.put(k, {"y": 1}, c)
     entry = entry_dir(tmp_path, k, c)
-    rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@3.0", host="node1"))
+    rewrite_json(entry / "context.json", lambda r: r.update(format="execution-context@4.0", host="node1"))
     before = (entry / "context.json").read_bytes()
     got = s.get(k, c, ReusePolicy.EXACT)
     assert got is not None and got.outputs == {"y": 1} and got.context.host == "node1"
@@ -73,14 +73,14 @@ def test_an_old_context_with_a_host_field_is_still_read(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a_written_context_is_one_a_3_0_reader_accepts(tmp_path: Path) -> None:
-    """A written context holds exactly the fields of `execution-context@3.0`, `host` among them as a host token."""
+def test_a_written_context_is_one_a_4_0_reader_accepts(tmp_path: Path) -> None:
+    """A written context holds exactly the fields of `execution-context@4.0`, `host` among them as a host token."""
     s, k = ResultStore(tmp_path), store_key()
     c = store_context(host=host_token())
     s.put(k, {"y": 1}, c)
     record = json.loads((entry_dir(tmp_path, k, c) / "context.json").read_bytes())
-    assert record.pop("format") == CONTEXT_FORMAT == "execution-context@3.1"
-    assert set(record) == CONTEXT_3_0_FIELDS and record["host"] == host_token()
+    assert record.pop("format") == CONTEXT_FORMAT == "execution-context@4.0"
+    assert set(record) == CONTEXT_4_0_FIELDS and record["host"] == host_token()
 
 
 @pytest.mark.logic
@@ -129,6 +129,6 @@ def test_a_stored_execution_context_2_is_refused_as_retired(tmp_path: Path) -> N
 def test_a_store_dir_holds_one_member_format_pair() -> None:
     """`STORE_DIR` and the result and context members' majors change as one unit (ADR-006, 2026-11-08)."""
     majors = (STORE_DIR, RESULT_FORMAT.rsplit(".", 1)[0], CONTEXT_FORMAT.rsplit(".", 1)[0])
-    assert majors == ("store@5", "result@2", "execution-context@3"), (
+    assert majors == ("store@6", "result@2", "execution-context@4"), (
         "one member pair per STORE_DIR major: a major bump of result or context bumps STORE_DIR; update this pin"
     )

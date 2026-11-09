@@ -130,7 +130,7 @@ def test_put_get_exact(tmp_path: Path) -> None:
     assert result["output_identity"] == ident
     sha = _sha(canonical_npy_bytes(outputs["y"]))  # type: ignore[arg-type]
     assert (entry / f"{sha}.npy").read_bytes() == canonical_npy_bytes(outputs["y"])  # type: ignore[arg-type]
-    assert json.loads((entry / "context.json").read_bytes())["format"] == "execution-context@3.1"
+    assert json.loads((entry / "context.json").read_bytes())["format"] == "execution-context@4.0"
     assert s.get(store_key(task="other"), c, ReusePolicy.TOLERANT) is None
 
 
@@ -465,8 +465,8 @@ def test_store_writes_entity_and_reuse_only(tmp_path: Path, caplog: pytest.LogCa
     assert sorted(_reuses(s), key=lambda a: str(a["senselab:reusePolicy"])) == [
         {
             "senselab:logicalKey": store_module.key_record(k),
-            "senselab:context": {"format": "execution-context@3.1", **current.model_dump(mode="json")},
-            "senselab:storedContext": {"format": "execution-context@3.1", **linux.model_dump(mode="json")},
+            "senselab:context": {"format": "execution-context@4.0", **current.model_dump(mode="json")},
+            "senselab:storedContext": {"format": "execution-context@4.0", **linux.model_dump(mode="json")},
             "senselab:reusePolicy": policy,
             "senselab:storedAgent": store_module.agent_record(k, linux).id,
         }
@@ -544,7 +544,7 @@ def test_get_coerces_policy(tmp_path: Path, policy: object) -> None:
 @pytest.mark.logic
 def test_store_dir_is_format_5() -> None:
     """Entries whose context records the env license are a new key space."""
-    assert STORE_DIR == "store@5"
+    assert STORE_DIR == "store@6"
 
 
 def _cycles() -> list[object]:

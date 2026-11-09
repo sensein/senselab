@@ -118,7 +118,7 @@
             "rdfs:range": {
                 "@id": "rdf:JSON"
             },
-            "rdfs:comment": "The execution context the activity ran in, as an execution-context@3.1 record."
+            "rdfs:comment": "The execution context the activity ran in, as an execution-context@4.0 record."
         },
         {
             "@id": "senselab:executionProfile",
@@ -140,7 +140,7 @@
             "rdfs:range": {
                 "@id": "rdf:JSON"
             },
-            "rdfs:comment": "The execution context the served result was computed in, as an execution-context@3.0 record."
+            "rdfs:comment": "The execution context the served result was computed in, as an execution-context@4.0 record."
         },
         {
             "@id": "senselab:reusePolicy",
