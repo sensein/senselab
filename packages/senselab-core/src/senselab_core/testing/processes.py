@@ -1,7 +1,8 @@
 """Process probes for tests, read from `ps` state: whether a process or any process of a group can still run code."""
 
 import subprocess
-import time
+
+from senselab_core.runtime.clock import Clock, SystemClock
 
 POLL_S = 0.05
 ROW_FIELDS = 2
@@ -34,11 +35,11 @@ def group_alive(pgid: int) -> bool:
     return any(len(row) == ROW_FIELDS and int(row[0]) == pgid and can_run(row[1]) for row in rows)
 
 
-def group_gone(pgid: int, timeout_s: float) -> bool:
-    """Whether group `pgid` has no process that can run user code within `timeout_s` seconds."""
-    deadline = time.monotonic() + timeout_s
+def group_gone(pgid: int, timeout_s: float, clock: Clock = SystemClock()) -> bool:  # noqa: B008 - stateless
+    """Whether group `pgid` has no process that can run user code within `timeout_s` seconds of `clock`."""
+    deadline = clock.now() + timeout_s
     while group_alive(pgid):
-        if time.monotonic() > deadline:
+        if clock.now() > deadline:
             return False
-        time.sleep(POLL_S)
+        clock.sleep(POLL_S)
     return True
