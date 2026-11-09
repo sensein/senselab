@@ -16,6 +16,7 @@ from senselab_worker.units import NS_PER_S
 
 from senselab_core.runtime.calibration import (
     Cotenancy,
+    FaultKind,
     HardwareClass,
     HardwareGrant,
     Observation,
@@ -55,6 +56,7 @@ class Sent:
     wall_s: float
     reports: tuple[RequestReport, ...]
     failure: Failure | None
+    fault: FaultKind | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,7 @@ class RequestRecord:
     load_s: float | None
     device: tuple[int, int] | None
     failure: Failure | None
+    fault: FaultKind | None = None
 
 
 def records_of(sent: Sent) -> list[RequestRecord]:
@@ -76,7 +79,7 @@ def records_of(sent: Sent) -> list[RequestRecord]:
     A report tagged with nothing belongs to every job of the call.
     """
     if sent.failure is not None:
-        return [RequestRecord(sent.refs, sent.wall_s, len(sent.refs), None, None, None, sent.failure)]
+        return [RequestRecord(sent.refs, sent.wall_s, len(sent.refs), None, None, None, sent.failure, sent.fault)]
     return [
         RequestRecord(
             tuple(r for r in report.tags if isinstance(r, JobRef)) or sent.refs,
@@ -141,14 +144,17 @@ def observations(  # noqa: PLR0913 - an item's requests, then what they ran on a
     `records` are the requests the item's jobs were in, in the order they finished; `jobs` holds every job of the
     claim by ref. A request that raised has no `since_load`; any other is `ok` unless its class is a service class
     (`served`) or one of the item's jobs in it failed. The last request carries `item_wall_s`. A probe's phase and
-    stratum are `mark`.
+    stratum are `mark`. A failed request's `fault` is the class of the exception it raised, else the one class every
+    one of its jobs failed with.
     """
-    failed = {o.ref for o in outcomes if isinstance(o, Failed)}
+    failed = {o.ref: o.failure.fault for o in outcomes if isinstance(o, Failed)}
     heard = [r for r in records if r.since_load is not None or r.failure is not None]
     found: list[Observation] = []
     for index, record in enumerate(heard):
         kind, units, padded = request_units([jobs[ref] for ref in record.refs])
-        outcome = record.failure or ("served" if seen.served else "failed" if failed & set(record.refs) else "ok")
+        outcome = record.failure or ("served" if seen.served else "failed" if failed.keys() & record.refs else "ok")
+        classes = {failed.get(ref) for ref in record.refs}
+        fault = record.fault or (classes.pop() if outcome == "failed" and len(classes) == 1 else None)
         probe = None
         if seen.probe is not None and mark is not None:
             probe = ProbeRef.model_validate({"id": seen.probe[1], "phase": mark[0], "stratum": mark[1]})
@@ -173,6 +179,7 @@ def observations(  # noqa: PLR0913 - an item's requests, then what they ran on a
                 cotenancy=seen.cotenancy,
                 outcome=outcome,
                 hardware=seen.hardware,
+                fault=fault,
             )
         )
     return found

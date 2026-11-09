@@ -28,7 +28,7 @@ from senselab_core.runtime.calibration import (
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings, PoolSettings, ResourceClass, SizingSettings
 from senselab_core.runtime.hardware import HardwareInfo
-from senselab_core.runtime.probe import memory_batch, peak
+from senselab_core.runtime.probe import memory_batch, peak, raised
 from senselab_core.runtime.resources import (
     Measured,
     ResourceMeasure,
@@ -71,7 +71,8 @@ class Grant(Frozen):
     """What a unit's workers are granted: the most alive at once, memory per worker (None unknown), quantum ceilings.
 
     `devices` is the count of devices a `cuda` class's workers share; None where each worker is granted its own device
-    or runs on none. `on_device` says `memory_bytes` is a device's, so sizing reads the device memory fit.
+    or runs on none. `on_device` says `memory_bytes` is a device's, so sizing reads the device memory fit; `shared_host`
+    says it is the host's, shared by every worker of the class on it.
     """
 
     max_workers: Count
@@ -80,6 +81,7 @@ class Grant(Frozen):
     quantum_s: Annotated[float, Field(gt=0, allow_inf_nan=False)]
     devices: Annotated[int, Field(ge=0)] | None = None
     on_device: bool = False
+    shared_host: bool = False
 
     @classmethod
     def of(  # noqa: PLR0913 - the class and pool, then what the host measured
@@ -112,6 +114,7 @@ class Grant(Frozen):
             quantum_s=time_s,
             devices=devices if resource.device == "cuda" else None,
             on_device=on_device,
+            shared_host=not on_device and not resource.mem_bytes and memory is not None,
         )
 
     @classmethod
@@ -339,7 +342,9 @@ def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the cali
     seconds over `target_wall_s`, at most the item count, `max_workers` and, on shared devices, `devices × w_d`.
 
     On shared devices `w_d = ⌊memory_headroom × cap / P⌋` for the batch peak `P` at the longest job, lowered where a
-    measured regime says another worker adds no throughput, and each worker's memory is `cap / w_d`. The fit read is
+    measured regime says another worker adds no throughput, and each worker's memory is `cap / w_d`; on a shared host
+    `w` is that count at most `max_workers`, and each worker's memory is `host / w`. Either way the `oom` records of
+    co-tenancy 2 to `w` raise the fit (`raised`). The fit read is
     the device's on a device grant, the host's otherwise, never the other. A length above the measured range, or an
     unmeasured memory, gives batch 1; so does an unknown length. Lengths are `0` for an estimate of unit kind `none`.
     """
@@ -354,12 +359,16 @@ def size(  # noqa: PLR0913 - the estimate, grant, config and work, then the cali
     longest = max(lengths, default=0.0)
     share = grant.memory_bytes if fit is not None else None
     per_device = 1
-    if share is not None and fit is not None and grant.devices is not None and grant.on_device:
+    if share is not None and fit is not None and (grant.shared_host or grant.devices is not None and grant.on_device):
         star = _star(estimate.batch, longest) if longest <= span[1] else 1
         batch_peak = peak(fit, star, longest)
         fits = grant.max_workers if batch_peak <= 0 else max(1, math.floor(config.memory_headroom * share / batch_peak))
-        per_device = _regime_workers(estimate.regimes, fits)
-        share //= per_device
+        sharing = _regime_workers(estimate.regimes, fits) if grant.on_device else min(fits, grant.max_workers)
+        resource = "device" if grant.on_device else "host"
+        shared = [r for r in estimate.oom if r.resource == resource and 2 <= r.cotenancy <= sharing]  # noqa: PLR2004
+        fit = raised(fit, shared, config.memory_headroom)
+        share //= sharing
+        per_device = sharing if grant.on_device else 1
     budget = None if share is None else config.memory_headroom * share
     shell = Sizing(
         cuts=(),

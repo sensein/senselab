@@ -25,7 +25,7 @@ from senselab_core.runtime.licenses import LicensePolicy
 from senselab_core.runtime.profiles import ExecutionProfile, NoBackend, NoDevice, resolve_execution
 from senselab_core.runtime.resources import ResourceMeasure, ResourceRow
 
-_HOUR_S: Final = 3600.0  # invariant: seconds in one hour
+HOUR_S: Final = 3600.0  # invariant: seconds in one hour
 
 
 class BackendParamsMismatch(ValueError):
@@ -203,7 +203,7 @@ def plan_cost(
         downloads[(row.id, row.revision) if row.id is not None else (placement.backend.name, None)] = row.download_bytes
         node_wall = measure.load_s + measure.s_per_input_s * (input_s or 0.0)
         wall += node_wall
-        gpu += node_wall / _HOUR_S if placement.device == "cuda" else 0.0
+        gpu += node_wall / HOUR_S if placement.device == "cuda" else 0.0
     timed = not unmeasured and input_s is not None
     return Cost(
         wall_s=wall if timed else None,

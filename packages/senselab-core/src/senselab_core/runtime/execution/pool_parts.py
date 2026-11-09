@@ -14,6 +14,7 @@ from senselab_core.runtime.execution.queue import Claim
 from senselab_core.runtime.locks import Lease
 from senselab_core.runtime.measures import MeasureUnit
 from senselab_core.runtime.planner import Plan
+from senselab_core.runtime.probe import probe_regime
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Sample
 
@@ -189,26 +190,45 @@ class Run:
 
 @dataclass
 class State:
-    """The `ProbeState` of a unit this run: `peer_wait`, `probing`, `measured` or `unmeasured`, and what waits on it."""
+    """The `ProbeState` of a unit this run: `peer_wait`, `probing`, `confirming`, `measured` or `unmeasured`.
+
+    A `confirming` unit has no `run` until the next part of the unit arrives to be held; `suspect` is the estimate
+    the confirming probe tests. `regimes` are the co-tenancies a regime record was written for this run, `m1_floor`
+    the `m1` a device peak above band raised the unit to this run.
+    """
 
     unit: MeasureUnit
     queue: str
-    state: Literal["peer_wait", "probing", "measured", "unmeasured"]
+    state: Literal["peer_wait", "probing", "confirming", "measured", "unmeasured"]
     since: float
     estimate: Estimate | None = None
     held: list[Held] = field(default_factory=list)
     run: Run | None = None
     checked: float | None = None
     predicted: bool = False
+    suspect: Estimate | None = None
+    regimes: set[int] = field(default_factory=set)
+    confirmed: bool = False
+    m1_floor: float | None = None
 
 
 @dataclass(frozen=True)
 class Release:
-    """Computed jobs a unit's end lets go: the part, and the unit's estimate and label to size it by."""
+    """Computed jobs a unit's end lets go: the part, and the unit and the estimate to size it by."""
 
     held: Held
     estimate: Estimate | None
-    label: str | None
+    unit: MeasureUnit | None
+
+
+@dataclass(frozen=True)
+class Origin:
+    """What an item was put under: its unit, the estimate that sized it, its queue and, for a probe item, its probe."""
+
+    unit: MeasureUnit
+    estimate: Estimate | None
+    queue: str
+    probe: str | None
 
 
 def worth(plan: ProbePlan, estimate: Estimate | None) -> bool:
@@ -223,9 +243,12 @@ def worth(plan: ProbePlan, estimate: Estimate | None) -> bool:
 
 
 def covers(estimate: Estimate | None, jobs: Sequence[Job]) -> bool:
-    """Return whether `estimate` measures every length of `jobs`: it has no unit of length, or a slope and the range."""
+    """Return whether `estimate` measures every length of `jobs`: it has no unit of length, or a slope and the range.
+
+    An `oom` record a probe can lift (`probe_regime`) leaves its stratum uncovered.
+    """
     single = None if estimate is None else estimate.single
-    if estimate is None or single is None:
+    if estimate is None or single is None or any(probe_regime(r) for r in estimate.oom):
         return False
     if estimate.unit_kind == "none":
         return True

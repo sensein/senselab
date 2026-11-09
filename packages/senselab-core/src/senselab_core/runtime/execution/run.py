@@ -38,7 +38,6 @@ from senselab_core.runtime.execution.events import (
     Event,
     EventLog,
     RunStatus,
-    placement_recorder,
     read_events,
     run_dir_of,
     status_from,
@@ -47,6 +46,7 @@ from senselab_core.runtime.execution.events import (
 from senselab_core.runtime.execution.executor import Executor, FaultRecord
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
+from senselab_core.runtime.execution.telemetry import Actuals, Placements
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import Lease, LeaseUnavailable
 from senselab_core.runtime.planner import Plan, check_storage
@@ -665,25 +665,43 @@ def default_executor(placed: Plan, executor: Executor | None, store: ResultStore
 
 def _record_placements(
     placed: Plan, executor: Executor, values: Mapping[InputIdentity, object], log: EventLog, epoch: int
-) -> None:
+) -> Callable[[], None]:
     """Append each class's placement to `log` for an executor that starts no scheduler jobs, as a `Pool` does itself.
 
     The explicit values and the hook apply to every executor; one with no workers to place records them as given.
+    Return what closes the epoch: it appends each class's record again with the run's wall time beside the request.
     """
     from senselab_core.runtime.execution.pool import Pool  # noqa: PLC0415 - imports the planner
 
-    if isinstance(executor, Pool) or placed.execution is None:
-        return
+    execution = placed.execution
+    if isinstance(executor, Pool) or execution is None:
+        return lambda: None
+    actuals = Actuals(SystemClock())
+    ledger = Placements(
+        log,
+        lambda: placed.placement_request(values=values),
+        actuals,
+        lambda name: execution.resource_classes[name].device == "cuda",
+    )
     placer = Placer(
-        placed.execution,
+        execution,
         placed.overrides,
         placed.hook,
         request=lambda: placed.placement_request(values=values),
-        record=placement_recorder(log),
+        record=ledger.record,
         inert="this executor starts no scheduler jobs: the values are recorded, not applied",
     )
-    for name in sorted({p.resource_class for p in placed.placement.nodes.values()}):
+    names = sorted({p.resource_class for p in placed.placement.nodes.values()})
+    for name in names:
         placer.for_class(name, epoch)
+        actuals.began(name)
+
+    def close() -> None:
+        for name in names:
+            actuals.landed(name, ())
+        ledger.close()
+
+    return close
 
 
 def _claim_ordinal(run_dir: Path, attempt: str) -> int:
@@ -914,7 +932,7 @@ def start(
         run = Run(run_dir, store=store)
         log = EventLog(run_dir, attempt, ordinal, epoch=epoch)
         executor.bind_epoch(epoch, log)
-        _record_placements(placed, executor, values, log, epoch)
+        close_placements = _record_placements(placed, executor, values, log, epoch)
         runner = PydraRunner(profile=placed.execution, work_dir=run_dir / PYDRA_DIR)
         written = provenance if store is None else store.provenance
         add_plan_entity(written, placed.hash)
@@ -932,6 +950,7 @@ def start(
                     failed = True
                     run.fail(err)
             finally:
+                close_placements()
                 _close_owned(executor, owned, run, failed)
             try:
                 written.write(run_dir)

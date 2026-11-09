@@ -41,6 +41,7 @@ EstimateReason = Literal[
 ]
 """The reasons an `Estimate` may carry; none names an identifier."""
 Outcome = Literal["ok", "failed", "bisected", "served"]
+FaultKind = Literal["content", "resource", "infrastructure"]
 UnitKind = Literal["audio_s", "chars", "none"]
 
 
@@ -168,6 +169,8 @@ class Observation(Frozen):
         host_after: Its host memory after the request, else None.
         cotenancy: The co-tenancy the request ran under.
         outcome: `ok`, `failed`, `bisected` or `served`.
+        fault: A `failed` or `bisected` request's fault class: its exception's, else the one class all its jobs
+            failed with; else None.
         hardware: The hardware as the worker reads it.
     """
 
@@ -190,9 +193,12 @@ class Observation(Frozen):
     cotenancy: Cotenancy
     outcome: Outcome
     hardware: HardwareClass
+    fault: FaultKind | None = None
 
     @model_validator(mode="after")
     def _check_request(self) -> Self:
+        if self.fault is not None and self.outcome not in ("failed", "bisected"):
+            raise ValueError(f"a {self.outcome} request names no fault")
         if self.padded_units < self.units:
             raise ValueError(f"padded_units {self.padded_units} is below units {self.units}")
         if self.load_s is not None and self.since_load != 0:
@@ -264,7 +270,8 @@ class OomRecord(Frozen):
     """A resource fault at batch `batch` and length `length`, under co-tenancy `cotenancy`.
 
     `grant_bytes` is the faulting grant's memory. `basis` is `Estimate.fault_basis` of the estimate that sized the
-    faulting batch: a probe not among them, run after the fault, can lift the record.
+    faulting batch: a probe not among them, run after the fault, can lift the record. `worker` is the `worker_id()`
+    of the worker that ran the item, None when its outcome names none.
     """
 
     resource: Literal["device", "host"]
@@ -273,6 +280,31 @@ class OomRecord(Frozen):
     cotenancy: Positive
     grant_bytes: Positive
     basis: tuple[NonEmptyStr, ...]
+    worker: NonEmptyStr | None = None
+
+
+class DriftRecord(Frozen):
+    """Production evidence that an estimate is suspect: a window of wall ratios, or one device peak above its band.
+
+    `rho`, `median`, `band` and `k` describe a `wall_s` window (`band` is the interval its median had to lie in);
+    `m1` is the slope a `device_peak` request implies; `source` is the probe ids of the estimate doubted.
+    """
+
+    metric: Literal["wall_s", "device_peak"]
+    batch: Positive
+    k: Positive | None = None
+    rho: tuple[Annotated[float, Field(allow_inf_nan=False)], ...] = ()
+    median: Annotated[float, Field(allow_inf_nan=False)] | None = None
+    band: tuple[float, float] | None = None
+    m1: Annotated[float, Field(allow_inf_nan=False)] | None = None
+    source: tuple[NonEmptyStr, ...] = ()
+
+
+class SupersedeRecord(Frozen):
+    """A confirming probe's disagreement: the probes it outdates and the probe that confirmed."""
+
+    outdates: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    confirmed_by: NonEmptyStr | None = None
 
 
 class EstimateSource(Frozen):

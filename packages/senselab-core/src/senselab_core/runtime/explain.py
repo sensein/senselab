@@ -10,7 +10,7 @@ from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.runtime.calibration import Estimate, LengthProfile
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.measures import resolve_roots
-from senselab_core.runtime.placement import _HOUR_S
+from senselab_core.runtime.placement import HOUR_S
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
 from senselab_core.runtime.site_placement import ClassNeeds, CurrentValues, UnmeasuredFigure
@@ -118,7 +118,7 @@ def node_sizing(  # noqa: PLR0913 - the node's placement, the profile, the measu
     cuda = profile.resource_classes[placed.resource_class].device == "cuda"
     source = None if estimate is None else _source(estimate)
     wall = None if sized is None else sized.wall_s
-    gpu = wall * sized.workers / _HOUR_S if wall is not None and sized is not None and cuda else None
+    gpu = wall * sized.workers / HOUR_S if wall is not None and sized is not None and cuda else None
     batch_peak = None if sized is None or not sized.measured.time else sized.batch_peak
     peak_why = "memory unmeasured" if sized is not None and sized.batch_peak is None else why
     kind = "device" if cuda else "host"
@@ -181,7 +181,7 @@ def class_needs(name: str, profile: ExecutionProfile, current: CurrentValues, no
         gpu = (
             None
             if wall is None or not cuda
-            else sum((n.sized.wall_s or 0.0) * n.sized.workers / _HOUR_S for n in nodes if n.sized is not None)
+            else sum((n.sized.wall_s or 0.0) * n.sized.workers / HOUR_S for n in nodes if n.sized is not None)
         )
     else:
         for figure in ("workers", "time_per_worker_s", "wall_s", *(("gpu_hours",) if cuda else ())):

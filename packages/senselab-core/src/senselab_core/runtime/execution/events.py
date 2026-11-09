@@ -1,6 +1,6 @@
 """A run's event log and the status derived from it: `Event`, `EventLog`, `read_events` and `status_from`.
 
-Every state change of a job, and each class's placement in an epoch, is one `run-event@2.0` line in
+Every state change of a job, and each class's placement in an epoch, is one `run-event@2` line in
 `<run>/events/<writer>.jsonl`; a writer appends to its own file only, so any number of processes log one run
 without sharing a file. A run's status, its counts and its faults are computed from the job events alone.
 """
@@ -77,13 +77,26 @@ def run_dir_of(plan_hash: str, root: Path | None = None) -> Path:
     return runs_root(root) / plan_hash
 
 
+class ClassActuals(Frozen):
+    """What a class's work took in an epoch, to read beside the request's `wall_s`, `gpu_hours` and memory.
+
+    `wall_s` runs from the class's first put to its last outcome; `gpu_hours` is the lifetimes of its workers on a
+    `cuda` class; `device_peak_bytes` is the largest device peak an `Observation` of the class reports. A figure is
+    None where nothing measured it.
+    """
+
+    wall_s: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    gpu_hours: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    device_peak_bytes: Annotated[int, Field(ge=0)] | None = None
+
+
 class PlacementRecord(Frozen):
     """How one resource class was placed in one epoch: the payload of a `placement` event.
 
     It holds the class's needs as the request gave them, the site's answer, the hook's reference, the verdict on the
     answer, the values the class was placed with and the layer that set each, and the `--exclude` list submitted.
     Partitions, accounts and nodes, the answer's `why` and the notes are rendered for the readers of the run
-    (`rendered`).
+    (`rendered`). The epoch's end appends the class's record again with `closing` set: its actuals beside the request.
     """
 
     resource_class: NonEmptyStr
@@ -94,10 +107,11 @@ class PlacementRecord(Frozen):
     note: str | None = None
     used: CurrentValues
     exclude: tuple[str, ...] = ()
+    closing: ClassActuals | None = None
 
 
 class Event(Formatted):
-    """A `run-event@2.0` document: one state change of one job of one attempt, or a run-scoped `placement` of a class.
+    """A `run-event@2` document: one state change of one job of one attempt, or a run-scoped `placement` of a class.
 
     `job` names the job (None for an event of the node as a whole), `key` its key digest, `attempt` the id of the
     attempt (run or resume) that wrote it, `ordinal` that attempt's place among the run's attempts (taken when it was
@@ -480,6 +494,6 @@ def placement_recorder(log: EventLog) -> Callable[[int, str, ClassNeeds | None, 
 
 
 def placements(events: Iterable[Event]) -> list[Event]:
-    """Return the `placement` events among `events`, by epoch then class."""
+    """Return the `placement` events among `events`, by epoch then class; a class's closing record follows its own."""
     found = [e for e in events if e.kind == "placement"]
     return sorted(found, key=lambda e: (e.epoch, e.placement.resource_class if e.placement else ""))

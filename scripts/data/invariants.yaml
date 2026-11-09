@@ -10,7 +10,7 @@ invariants:
   name: PRIVATE_DIR_MODE
   reason: A private directory is owner-only whatever the site's group policy.
 - path: packages/senselab-core/src/senselab_core/runtime/placement.py
-  name: _HOUR_S
+  name: HOUR_S
   reason: 'Seconds in one hour: a unit conversion.'
 - path: packages/senselab-worker/src/senselab_worker/codec.py
   name: MAX_LINE_BYTES

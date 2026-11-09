@@ -362,7 +362,7 @@ def _holding(spans: Sequence[tuple[float, float]], length: float) -> tuple[float
     return min(spans, key=lambda s: (min(abs(length - s[0]), abs(length - s[1])), s[0] < length, s))
 
 
-def _probe_regime(record: OomRecord) -> bool:
+def probe_regime(record: OomRecord) -> bool:
     """Whether a probe can measure the fault: one process on the device, at a batch of two or more."""
     return record.cotenancy == 1 and record.batch >= 2  # noqa: PLR2004 - a batch of one is re-placed, not raised
 
@@ -384,19 +384,23 @@ def _in_force(records: Sequence[RegimeRecord], kept: _Kept, minimum: int) -> tup
             and o.probe.id not in r.basis
             and span[0] <= _length(o) <= span[1]
         )
-        if not (_probe_regime(r) and any(n >= minimum for n in later.values())):
+        if not (probe_regime(r) and any(n >= minimum for n in later.values())):
             live.append(r)
     return tuple(live)
 
 
-def _raised(fit: MemoryFit | None, records: Sequence[OomRecord], memory_headroom: float) -> MemoryFit | None:
-    """Return `fit` with `m1` raised so that every unlifted faulting pair is infeasible (§7.4)."""
+def raised(fit: MemoryFit | None, records: Sequence[OomRecord], memory_headroom: float) -> MemoryFit | None:
+    """Return `fit` with `m1` raised so that every faulting pair of `records` (batch of two or more) is infeasible.
+
+    A record's room is its grant divided among the processes that shared the device when it faulted (§7.4).
+    """
     if fit is None:
         return None
     m1 = fit.m1
     for r in records:
-        if r.length > 0:
-            m1 = max(m1, (memory_headroom * r.grant_bytes - fit.resident - fit.m0) / ((r.batch - 1) * r.length))
+        if r.length > 0 and r.batch >= 2:  # noqa: PLR2004 - a batch of one has none to shrink
+            share = r.grant_bytes / r.cotenancy
+            m1 = max(m1, (memory_headroom * share - fit.resident - fit.m0) / ((r.batch - 1) * r.length))
     return fit.model_copy(update={"m1": m1})
 
 
@@ -459,7 +463,7 @@ def _reopened(strata: Sequence[Stratum], records: Sequence[OomRecord]) -> set[in
     measured = [s for s in strata if s.lo is not None and s.hi is not None]
     spans = [(s.lo or 0.0, s.hi or 0.0) for s in measured]
     found: set[int] = set()
-    for r in filter(_probe_regime, records):
+    for r in filter(probe_regime, records):
         span = _holding(spans, r.length)
         found |= {s.index for s in measured if span == (s.lo, s.hi)}
     return found
@@ -652,9 +656,9 @@ class Probe:
             if why is not None:
                 reasons.append(why)
         ooms = _in_force(records, kept, config.min_requests)
-        probed = list(filter(_probe_regime, ooms))
-        device = _raised(memory["device"], [r for r in probed if r.resource == "device"], memory_headroom)
-        host = _raised(memory["host"], [r for r in probed if r.resource == "host"], memory_headroom)
+        probed = list(filter(probe_regime, ooms))
+        device = raised(memory["device"], [r for r in probed if r.resource == "device"], memory_headroom)
+        host = raised(memory["host"], [r for r in probed if r.resource == "host"], memory_headroom)
         lengths = {
             kept.ranges[s]: _median([o.units for o in group])
             for s, group in _by_stratum(kept.single, kept.ranges).items()

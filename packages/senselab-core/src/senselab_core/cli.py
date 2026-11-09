@@ -88,6 +88,16 @@ def _placement_lines(events: list[Event], resource_class: str | None = None) -> 
         found = event.placement
         if found is None or resource_class not in (None, found.resource_class):
             continue
+        if found.closing is not None:
+            asked = found.request
+            lines.append(
+                f"placement {found.resource_class} epoch {event.epoch}: closed; "
+                f"wall_s {found.closing.wall_s} (requested {None if asked is None else asked.wall_s}), "
+                f"gpu_hours {found.closing.gpu_hours} (requested {None if asked is None else asked.gpu_hours}), "
+                f"device peak bytes {found.closing.device_peak_bytes} "
+                f"(requested {None if asked is None else asked.device_memory_bytes})"
+            )
+            continue
         layers = ", ".join(f"{k} by {v}" for k, v in found.used.layers.items())
         note = "" if found.note is None else f"; {found.note}"
         lines.append(

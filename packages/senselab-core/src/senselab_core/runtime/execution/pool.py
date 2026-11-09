@@ -13,14 +13,20 @@ failure only as `dead/<key digest>.json` holds it, so a restarted coordinator re
 fault class has its effect here, with the budgets of the profile's `faults` section:
 
 - **content**, not a gap: charged; the job is queued again until `content_attempts` charges, then it is dead;
-- **resource**, not a gap: the job is queued again on the next larger memory class of its device, uncharged, at most
-  `resource_replacements` times; then, or with no larger class, it is dead;
+- **resource**, not a gap: the job is queued
+  again on the next larger memory class of its device, uncharged, at most `resource_replacements` times; then, or
+  with no larger class, it is dead;
 - **infrastructure**, or any gap: queued again uncharged (a gap is logged as a classification gap); at
   `infrastructure_replacements` failures of one env in this epoch the env is reported once as broken (`BrokenEnv`) and
   held on each queue it is seen on (`Queue.hold`), so its jobs wait for a later epoch and none is failed.
 
 A retry is a one-job fragment of the next `attempt`, logged `failed` then `queued` by this coordinator; a job held
 with its env is logged `queued` again, so it reads as waiting, never as failed.
+
+The `Observation`s of production items are read against the estimate that sized them (`ProbeMachine.settled`):
+drift, `regime` and `supersede` records, and the unit's `m1` raised at once by a device peak above its band; a
+request that raised a resource fault writes an `oom` record. Each
+class's `placement` event is appended again when its epoch ends, with the work's actuals (`ClassActuals`).
 """
 
 import contextlib
@@ -42,12 +48,17 @@ from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.calibration import (
     LengthProfile,
+    Observation,
 )
 from senselab_core.runtime.call import RunConfig, host_hardware
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.batching import bucket_edges
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
-from senselab_core.runtime.execution.events import BrokenEnv, EventLog, placement_recorder, read_events
+from senselab_core.runtime.execution.events import (
+    BrokenEnv,
+    EventLog,
+    read_events,
+)
 from senselab_core.runtime.execution.executor import (
     Admission,
     FaultRecord,
@@ -90,6 +101,7 @@ from senselab_core.runtime.execution.substrates import (
     read_mark,
     scale,
 )
+from senselab_core.runtime.execution.telemetry import Actuals, Placements
 from senselab_core.runtime.execution_settings import ResourceClass
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.measures import (
@@ -98,7 +110,12 @@ from senselab_core.runtime.measures import (
 )
 from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.site_placement import PlacementHook, PlacementRequest, PlacementValues, Placer
+from senselab_core.runtime.site_placement import (
+    PlacementHook,
+    PlacementRequest,
+    PlacementValues,
+    Placer,
+)
 from senselab_core.runtime.sizing import ExtrapolationLog, Grant, size
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import (
@@ -188,6 +205,7 @@ class Pool:
         self._fenced: tuple[float, int] | None = None
         self._clock = clock
         self._extrapolated = ExtrapolationLog()
+        self._bound = False
         self.bind_epoch(epoch, events)
         self.broken: dict[str, BrokenEnv] = {}
         self.gaps: list[tuple[JobRef, FaultRecord]] = []
@@ -211,18 +229,25 @@ class Pool:
     def bind_epoch(self, epoch: int, events: EventLog) -> None:
         """Coordinate as `epoch` from now on, logging to `events`, a log of that epoch's attempt.
 
-        A run starts its extrapolation log afresh.
+        A run starts its extrapolation log afresh, and the epoch it leaves is closed (`_close_placements`).
 
         Raises:
             ValueError: `events` is not a log of `epoch`.
         """
         if events.epoch != epoch:
             raise ValueError(f"the pool coordinates epoch {epoch}; its event log is of epoch {events.epoch}")
+        if self._bound:
+            self._close_placements()
+        self._bound = True
         self.epoch, self.events = epoch, events
+        self._actuals = Actuals(self._clock)
+        self._ledger = Placements(
+            events, self._request, self._actuals, lambda name: self.profile.resource_classes[name].device == "cuda"
+        )
         if isinstance(self.substrate, Slurm):
             self.substrate.attempt, self.substrate.epoch = events.attempt, epoch
         if self._placer is not None:
-            self._placer.record = placement_recorder(events)
+            self._placer.record = self._ledger.record
         self._fleet.reset()
         self.broken_workers.clear()
         self._relogged.clear()
@@ -249,7 +274,7 @@ class Pool:
                     placed.hook,
                     request=self._request,
                     clock=self._clock,
-                    record=placement_recorder(self.events),
+                    record=self._ledger.record,
                     inert=inert,
                 )
                 if isinstance(self.substrate, Slurm):
@@ -261,6 +286,10 @@ class Pool:
         assert self._request_of is not None
         placed, values = self._request_of
         return placed.placement_request(values=values)
+
+    def _close_placements(self) -> None:
+        """Append each placed class's record again with its actuals beside the request, once per epoch."""
+        self._ledger.close(self._fleet.worker_seconds)
 
     def granted(self, queue: str) -> ResourceClass:
         """Return `queue`'s class as it is placed this epoch: the one source of its worker cap.
@@ -312,6 +341,7 @@ class Pool:
         self._fence()
         name = self._queue_name(fragment)
         self._check_held(name, fragment.placement.env)
+        self._actuals.began(class_of(name))
         if retry:
             self.queues.queue(name).put_all([fragment])
             followed.flights.append(Flight(name, item_digest(fragment), fragment))
@@ -369,8 +399,9 @@ class Pool:
             calibration=self.profile.calibration,
             bucket_edges=bucket_edges(placement.backend, kind),
         )
-        if release.label is not None:
-            self._extrapolated.note(release.label, sized)
+        label = None if release.unit is None else release.unit.label()
+        if label is not None:
+            self._extrapolated.note(label, sized)
         self._check_held(held.queue, held.part.placement.env)
         dumped, items = Dumped.of(held.part), []
         for start, stop in sized.cuts:
@@ -382,13 +413,14 @@ class Pool:
         self.queues.queue(held.queue).put_all(items)
         held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
         held.followed.flights.extend(Flight(held.queue, item_digest(i), i) for i in items)
+        self._machine.note(release, [item_digest(i) for i in items])
         with self._lock:
             known = sized.measured.time and all(p is not None for p in sized.predicted_s)
             per_job = sum(p or 0.0 for p in sized.predicted_s) / len(jobs) if known else None
             cap = self._grant(held.queue).max_workers
             if self._grant(held.queue).devices is not None:
                 cap = min(cap, self._grant(held.queue).devices * sized.workers_per_device)  # type: ignore[operator]
-            self._rates.setdefault(held.queue, {})[release.label or "unmeasured"] = (per_job, cap)
+            self._rates.setdefault(held.queue, {})[label or "unmeasured"] = (per_job, cap)
         self._wake_scaler()
 
     def workers_wanted(self, queue: str, work: int) -> int:
@@ -563,6 +595,7 @@ class Pool:
         self._scale_wake.set()
         if scaler is not None:
             scaler.join()
+        self._close_placements()
         self._machine.close()
         self._fleet.close()
 
@@ -579,6 +612,28 @@ class Pool:
         dead = FaultRecord.model_validate(record["fault"]) if record.get("outcome") == "dead" else None
         keys = self._keys(fragment)
         reused = record.get("epoch") != self.epoch
+        seen = _observed(record)
+        if not reused:
+            self._actuals.landed(class_of(flight.queue), seen)
+        self._machine.settled(flight.digest, seen)
+        self._machine.oom(flight.digest, seen, _worker_of(record))
+        try:
+            yield from self._results(followed, flight, record, seen, given, dead, keys, reused)
+        finally:
+            self._machine.forget(flight.digest)
+
+    def _results(  # noqa: PLR0913 - the item and its outcome, then what `_settle` read of it
+        self,
+        followed: Followed,
+        flight: Flight,
+        record: Mapping[str, object],
+        seen: Sequence[Observation],
+        given: Mapping[JobRef, ResultRef],
+        dead: FaultRecord | None,
+        keys: Sequence[str],
+        reused: bool,  # noqa: FBT001 - whether another epoch's claim wrote the outcome
+    ) -> Iterator[ResultRef]:
+        fragment = flight.fragment
         for index, (job, key) in enumerate(zip(fragment.jobs, keys, strict=True)):
             ref = given.get(job)
             if ref is not None and ref.key_digest != key:
@@ -610,7 +665,12 @@ class Pool:
         return fragment_keys(fragment, *self._admitted_plan(fragment))
 
     def _effect(  # noqa: PLR0913 - the followed fragment, the item and the job's failure
-        self, followed: Followed, flight: Flight, index: int, key: str, fault: FaultRecord
+        self,
+        followed: Followed,
+        flight: Flight,
+        index: int,
+        key: str,
+        fault: FaultRecord,
     ) -> Iterator[ResultRef]:
         """Apply `fault`'s effect to job `index` of `flight`: retry it, hold its env, or yield it dead."""
         fragment, budgets = flight.fragment, self.profile.faults
@@ -691,6 +751,8 @@ class Pool:
             update["placement"] = placement.model_dump(mode="json")
         retry = jobs_of(flight.fragment, [index], **update)
         self._put(retry, followed, retry=True)
+        if placement is None:
+            self._machine.follow(flight.digest, item_digest(retry))
         self._wake_scaler()
         job, placed = retry.jobs[0], retry.placement
         key = self._keys(retry)[0]
@@ -790,6 +852,19 @@ def _scale_rounds(ref: "weakref.ref[Pool]", wake: threading.Event, poll_s: float
         del pool
         woken = clock.wait(wake, min(poll_s, backoff) if backoff > 0 else poll_s)
         wake.clear()
+
+
+def _observed(record: Mapping[str, object]) -> list[Observation]:
+    """Return the `Observation`s an item's outcome `record` reports."""
+    reported = record.get("observations")
+    return [Observation.model_validate(o) for o in reported] if isinstance(reported, list) else []
+
+
+def _worker_of(record: Mapping[str, object]) -> str | None:
+    """Return the `worker_id()` of the worker an item's outcome `record` names, None when it names none."""
+    measure = record.get("measure")
+    worker = measure.get("job") if isinstance(measure, Mapping) else None
+    return worker if isinstance(worker, str) and worker else None
 
 
 def _gap(kind: str, message: str) -> FaultRecord:

@@ -40,6 +40,7 @@ from senselab_core.kernel.formats import (
 )
 from senselab_core.kernel.identity import LogicalKey, ModelIdentity, Params, ProfileSliceIdentity
 from senselab_core.runtime.calibration import (
+    DriftRecord,
     Estimate,
     HardwareClass,
     Observation,
@@ -47,6 +48,7 @@ from senselab_core.runtime.calibration import (
     Positive,
     RegimeFactor,
     RegimeRecord,
+    SupersedeRecord,
 )
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import expand
@@ -264,8 +266,12 @@ RECORD_FORMATS: Mapping[str, str] = FrozenMapping(
     }
 )
 """The record kinds below a unit, each with the format its files carry."""
-RECORD_MODELS: Mapping[str, type[RegimeFactor | OomRecord]] = FrozenMapping({"regime": RegimeFactor, "oom": OomRecord})
-"""The record kinds whose payload has a type: `put_record` validates it on write and `regime_records` reads it back."""
+RECORD_MODELS: Mapping[str, type[Frozen]] = FrozenMapping(
+    {"drift": DriftRecord, "supersede": SupersedeRecord, "regime": RegimeFactor, "oom": OomRecord}
+)
+"""The type of each record kind's payload: `put_record` validates it on write."""
+ESTIMATE_RECORDS = ("regime", "oom")
+"""The kinds `regime_records` reads back typed: the ones an estimate is derived from."""
 RecordKind = Literal["drift", "supersede", "regime", "oom"]
 _JSON_NAME = re.compile(r".+\.json")
 
@@ -691,9 +697,11 @@ class MeasureRoots:
         return tuple(self._records(self._digest(unit)))
 
     def regime_records(self, unit: MeasureUnit) -> tuple[RegimeRecord, ...]:
-        """Return the typed `regime` and `oom` records of `unit` the trust admits, oldest first (`RECORD_MODELS`)."""
+        """Return the typed `regime` and `oom` records of `unit` the trust admits, oldest first."""
         return tuple(
-            RECORD_MODELS[r.kind].model_validate(r.record) for r in self.records(unit) if r.kind in RECORD_MODELS
+            RegimeFactor.model_validate(r.record) if r.kind == "regime" else OomRecord.model_validate(r.record)
+            for r in self.records(unit)
+            if r.kind in ESTIMATE_RECORDS
         )
 
     def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
@@ -767,16 +775,13 @@ class MeasureRoots:
         A `supersede` payload names the probe ids it outdates (`outdates`).
 
         Raises:
-            ValueError: `kind` is not a record kind, or a `supersede` payload names no probe id.
-            pydantic.ValidationError: a `regime` or `oom` payload is not a `RegimeFactor` or `OomRecord`.
+            ValueError: `kind` is not a record kind.
+            pydantic.ValidationError: a payload is not its kind's type (`RECORD_MODELS`).
         """
         if kind not in RECORD_FORMATS:
             raise ValueError(f"{kind!r} is not a measures record kind; they are {sorted(RECORD_FORMATS)}")
         payload = record.model_dump(mode="json") if isinstance(record, Frozen) else dict(record)
-        if kind in RECORD_MODELS:
-            payload = RECORD_MODELS[kind].model_validate(payload).model_dump(mode="json")
-        if kind == "supersede":
-            outdates(payload)
+        payload = RECORD_MODELS[kind].model_validate(payload).model_dump(mode="json")
         record_id = uuid.uuid4().hex
         document = {
             "format": RECORD_FORMATS[kind],
