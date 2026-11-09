@@ -166,6 +166,33 @@ def test_snapshot_files_that_are_links_into_blobs_are_pinned(tmp_path: Path) -> 
 
 
 @pytest.mark.logic
+def test_xet_blobs_behind_the_snapshot_and_savedir_links_are_pinned(tmp_path: Path) -> None:
+    """A large file's blob may itself link into the hub-wide `blobs/xx/` store; savedir links and a linked HF_HOME pass.
+
+    Only that file, reached through the snapshot, is pinned: a sibling in the shared store is not.
+    """
+    real_home = tmp_path / "real"
+    hub = real_home / "hub"
+    repo = hub / "models--speechbrain--spkrec-ecapa-voxceleb"
+    snapshot = repo / "snapshots" / ("a" * 40)
+    snapshot.mkdir(parents=True)
+    (repo / "blobs").mkdir()
+    (hub / "blobs" / "ed").mkdir(parents=True)
+    (hub / "blobs" / "ed" / "ed9d").write_bytes(b"w")
+    (hub / "blobs" / "ed" / "other").write_bytes(b"w")
+    (repo / "blobs" / "b1").symlink_to("../../blobs/ed/ed9d")
+    (snapshot / "embedding_model.ckpt").symlink_to("../../blobs/b1")
+    (tmp_path / "home").symlink_to(real_home)
+    linked = str(tmp_path / "home" / "hub" / repo.name / "snapshots" / ("a" * 40))
+    savedir = tmp_path / "scratch"
+    savedir.mkdir()
+    (savedir / "embedding_model.ckpt").symlink_to(Path(linked) / "embedding_model.ckpt")
+    (savedir / "stray.ckpt").symlink_to(hub / "blobs" / "ed" / "other")
+    paths = {"embedding_model": str(savedir / "embedding_model.ckpt"), "stray": str(savedir / "stray.ckpt")}
+    assert set(sb.unpinned_paths(paths, linked)) == {"stray"}
+
+
+@pytest.mark.logic
 def test_checkpoint_paths_outside_the_pinned_snapshot_are_named() -> None:
     """A path still addressed to the hub repo, as the packaged `hyperparams.yaml` leaves it, is outside the snapshot."""
     snapshot = "/cache/models--speechbrain--spkrec-ecapa-voxceleb/snapshots/" + "a" * 40
