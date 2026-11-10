@@ -297,7 +297,7 @@ def _decode(value: object, entry: Path, sizes: Mapping[str, int] | None = None) 
     return value
 
 
-def _equivalence_digest(table: Equivalence) -> str:
+def equivalence_digest(table: Equivalence) -> str:
     """Return the `value_digest` of an equivalence table, each class as its sorted members."""
     fields = {backend: {name: sorted(members) for name, members in cls.items()} for backend, cls in table.items()}
     return value_digest("equivalence", {"classes": fields})
@@ -1014,7 +1014,7 @@ class ResultStore:
             "senselab:reusePolicy": hit.policy_used.value,
         }
         if hit.policy_used is ReusePolicy.EQUIVALENT:
-            own["senselab:equivalence"] = _equivalence_digest(self.equivalence)
+            own["senselab:equivalence"] = equivalence_digest(self.equivalence)
         reuse = kprov.activity(
             core_vocabulary(),
             types=["senselab:Reuse"],
@@ -1130,26 +1130,26 @@ class ResultStore:
                 return use(base)
 
     def outputs_of(self, key_digest: str, identity: OutputIdentity) -> dict[str, object] | None:
-        """Return the stored outputs of output identity `identity` under the key of digest `key_digest`, or None.
+        """Return the outputs of `entry_of(key_digest, identity)`, or None; raises what it raises."""
+        found = self.entry_of(key_digest, identity)
+        return None if found is None else found.outputs
 
-        Every committed context of the key is read, as `get` reads it, until one holds those outputs.
+    def entry_of(self, key_digest: str, identity: OutputIdentity) -> StoredResult | None:
+        """Return the stored result of output identity `identity` under the key of digest `key_digest`, or None.
+
+        Every committed context of the key is read, as `get` reads it, until one holds those outputs; the policy is
+        `exact` and no reuse is recorded.
 
         Raises:
             StoreUnavailable: an entry could not be read.
         """
 
-        def find(base_dir: StorageDir) -> dict[str, object] | None:
+        def find(base_dir: StorageDir) -> StoredResult | None:
             base = base_dir.path
             for name in _fingerprints(base_dir):
-                read = self._readable(
-                    base,
-                    key_digest,
-                    name,
-                    functools.partial(_read_result, base / name, digest=key_digest, fingerprint=name),
-                    [],
-                )
-                if read is not None and read[0] == identity:
-                    return read[1]
+                one = functools.partial(_read_result, base / name, digest=key_digest, fingerprint=name)
+                if (read := self._readable(base, key_digest, name, one, [])) is not None and read[0] == identity:
+                    return StoredResult(read[1], read[0], read[2], ReusePolicy.EXACT)
             return None
 
         return self._within(key_digest, find)

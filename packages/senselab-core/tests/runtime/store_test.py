@@ -162,8 +162,8 @@ def test_equivalence_class_admits_under_equivalent(tmp_path: Path) -> None:
     got = s.get(k, mac, ReusePolicy.EQUIVALENT)
     assert got is not None and got.policy_used is ReusePolicy.EQUIVALENT
     (reuse,) = _reuses(s)
-    assert reuse["senselab:equivalence"] == store_module._equivalence_digest(table)
-    assert reuse["senselab:equivalence"] != store_module._equivalence_digest(EQUIVALENCE)
+    assert reuse["senselab:equivalence"] == store_module.equivalence_digest(table)
+    assert reuse["senselab:equivalence"] != store_module.equivalence_digest(EQUIVALENCE)
     with pytest.raises(AttributeError):
         s.equivalence = {}  # type: ignore[misc]
     assert s.get(k, mac, ReusePolicy.EXACT) is None

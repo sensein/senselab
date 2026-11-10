@@ -214,6 +214,19 @@ def test_a_plan_an_association_names_is_read_back_and_must_be_held(tmp_path: Pat
     assert read.get(linked.id) == linked and read.get(alone.id) == alone and read.plans() == [plan]
 
 
+def test_an_association_without_an_agent_is_read_back_with_its_node_and_plan(tmp_path: Path) -> None:
+    """An agentless association round-trips through write and read; its plan must still be held."""
+    plan = prov.plan("3" * 64, VOCAB)
+    settled = prov.activity(
+        VOCAB, associations=[Association(None, node_id="asr", plan=plan.id)], used=[Usage(INPUT)], started=T0
+    )
+    with pytest.raises(DanglingReference) as caught:
+        ProvStore.read(_run(tmp_path, ProvStore([settled, *_entities()])), VOCAB)
+    assert (caught.value.node_id, caught.value.target) == (settled.id, plan.id)
+    read = ProvStore.read(_run(tmp_path, ProvStore([plan, settled])), VOCAB)
+    assert read.get(settled.id) == settled and "prov:wasAssociatedWith" not in settled.node()
+
+
 def test_dangling_attribute_reference_refused(tmp_path: Path) -> None:
     """An attribute naming a file no writer holds is refused."""
     entity = prov.entity(INPUT, VOCAB, attributes={"senselab:waveform": numpy.zeros(2)})

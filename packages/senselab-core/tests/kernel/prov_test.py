@@ -314,6 +314,27 @@ def test_plan_is_an_entity_named_by_its_hash_and_an_association_names_it() -> No
 
 
 @pytest.mark.logic
+def test_an_association_without_an_agent_names_its_plan_and_none_names_neither() -> None:
+    """With a plan the agent is optional: no `prov:agent`, no `prov:wasAssociatedWith`; neither is refused."""
+    plan = prov.plan("3" * 64, CORE)
+    settled = _execution(associations=[Association(None, node_id="node-1", plan=plan.id)])
+    node = settled.node()
+    assert "prov:wasAssociatedWith" not in node
+    assert node["prov:qualifiedAssociation"] == [
+        {
+            "@type": "prov:Association",
+            "prov:hadRole": cast("Any", node["prov:qualifiedAssociation"])[0]["prov:hadRole"],
+            "prov:hadPlan": {"@id": plan.id},
+        }
+    ]
+    assert "prov:agent" not in cast("list[dict[str, Any]]", node["prov:qualifiedAssociation"])[0]
+    with pytest.raises(ValueError, match="associations"):
+        _execution(associations=[Association(None, node_id="node-1")])
+    with pytest.raises(ValueError, match="associations"):
+        _execution(associations=[Association()])
+
+
+@pytest.mark.logic
 def test_relation_order_does_not_change_the_activity() -> None:
     """Relations are sorted, so the order they are given in does not change the node or its @id."""
     used = [Usage(E1, port="x"), Usage(E2, port="z")]

@@ -275,6 +275,17 @@ def job_key(
 def fragment_keys(fragment: PlanFragment, placed: Plan, values: Mapping[InputIdentity, object]) -> list[str]:
     """Return the key digest `execute` gives each job of `fragment`.
 
+    Raises:
+        ValueError: as `fragment_logical_keys`.
+    """
+    return [k.digest() for k in fragment_logical_keys(fragment, placed, values)]
+
+
+def fragment_logical_keys(
+    fragment: PlanFragment, placed: Plan, values: Mapping[InputIdentity, object]
+) -> list[LogicalKey]:
+    """Return the logical key `execute` gives each job of `fragment`.
+
     A job whose length picks its formation is measured from its graph-input `values` and its upstream refs' recorded
     lengths; no stored value is read.
 
@@ -283,11 +294,11 @@ def fragment_keys(fragment: PlanFragment, placed: Plan, values: Mapping[InputIde
     """
     record, backend = fragment.placement, _backend(placed, fragment)
     if fixed_formation(backend) is not None:
-        return [job_key(placed, fragment.node, i, record).digest() for i in fragment.inputs]
+        return [job_key(placed, fragment.node, i, record) for i in fragment.inputs]
     jobs, _ = fragment_jobs(fragment, placed, values)
     grid = BucketGrid.load_default()
     return [
-        job_key(placed, fragment.node, i, record, formation=batching.keyed_formation(j, backend, grid)[0]).digest()
+        job_key(placed, fragment.node, i, record, formation=batching.keyed_formation(j, backend, grid)[0])
         for i, j in zip(fragment.inputs, jobs, strict=True)
     ]
 

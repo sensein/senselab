@@ -180,6 +180,21 @@ def test_resume_executes_only_missing(tmp_path: Path) -> None:
         resume("0" * 64)
 
 
+@pytest.mark.contract
+def test_an_in_process_resume_records_a_reuse_for_each_item_it_settles_from_the_stopped_attempt(tmp_path: Path) -> None:
+    """InProcess shares the run's store: the resume's 2 reused items are 2 Reuse, and 4 executions stand in all."""
+    store = ResultStore(tmp_path / "store")
+    placed = _plan(4)
+    stopped = placed.run(Stopping(store, 2), store=store)
+    with pytest.raises(RuntimeError, match="planted stop"):
+        stopped.wait(60)
+    resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
+    assert resumed.wait(60).done
+    read = ProvStore.read(resumed.run_dir)
+    reused = [a for a in read.activities() if "senselab:Reuse" in a.types()]
+    assert len(reused) == 2 and len(read.activities()) == 6
+
+
 def _hub(answers: dict[str, str], seen: list[str]) -> Callable[[str, str, str | None], str]:
     def hub(repo: str, ref: str, token: str | None) -> str:  # noqa: ARG001 - a hub lookup
         seen.append(f"{repo}@{ref}")

@@ -35,16 +35,18 @@ import json
 import logging
 import math
 import os
+import sys
 import threading
 import uuid
 import weakref
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
-from senselab_core.kernel.identity import InputIdentity, ReusePolicy
+from senselab_core.kernel.identity import InputIdentity, LogicalKey, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.calibration import (
     LengthProfile,
@@ -70,7 +72,7 @@ from senselab_core.runtime.execution.executor import (
     Status,
     WorkersBroken,
 )
-from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, job_units
+from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, fragment_logical_keys, job_units
 from senselab_core.runtime.execution.job import Job
 from senselab_core.runtime.execution.plan_reads import servable_jobs
 from senselab_core.runtime.execution.pool_parts import (
@@ -87,6 +89,7 @@ from senselab_core.runtime.execution.pool_parts import (
 )
 from senselab_core.runtime.execution.probe_machine import ProbeMachine, ProbeQueue, detected_kind
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of
+from senselab_core.runtime.execution.records import add_plan_entity, record_settled_reuse, reuse_attributes
 from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
     BrokenClass,
@@ -118,7 +121,7 @@ from senselab_core.runtime.site_placement import (
     Placer,
 )
 from senselab_core.runtime.sizing import ExtrapolationLog, Grant, size
-from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.store import ResultStore, StoredResult
 from senselab_core.runtime.units import (
     UnitReads,
     UnitResolver,
@@ -215,6 +218,8 @@ class Pool:
         self.gaps: list[tuple[JobRef, FaultRecord]] = []
         self._epochs = Epoch(self.run_dir, clock)
         self._plans: dict[str, tuple[Plan, Mapping[InputIdentity, object]]] = {}
+        self._reused: set[str] = set()
+        self._reuses_unwritten = False
         self._admitted: Counter[str] = Counter()
         self._followed: dict[str, Followed] = {}
         self._ids = itertools.count()
@@ -586,6 +591,7 @@ class Pool:
             followed.flights.remove(flight)
             followed.seen = True
             given.extend(self._settle(followed, flight, record))
+        self._flush_reuses()
         parts = [Flight(self._queue_name(p), item_digest(p), p) for p in followed.waiting]
         held = followed.held + [
             self._held(f) for f in [*followed.flights, *parts] if f.fragment.placement.env in self.broken
@@ -597,7 +603,11 @@ class Pool:
         return given, followed.done
 
     def close(self) -> None:
-        """Stop the scaler thread, then the workers the substrate started."""
+        """Stop the scaler thread, then the workers the substrate started; write the reuses recorded, if any.
+
+        Raises:
+            RunIOError: the reuses cannot be written and no other error is ending the run.
+        """
         with self._lock:
             self._closing = True
             scaler = self._scaler
@@ -607,19 +617,24 @@ class Pool:
         self._close_placements()
         self._machine.close()
         self._fleet.close()
+        if self._reuses_unwritten and sys.exc_info()[0] is None:
+            self.store.provenance.write(self.run_dir)
+            self._reuses_unwritten = False
+        else:
+            self._flush_reuses()
 
     def _settle(self, followed: Followed, flight: Flight, record: Mapping[str, object]) -> Iterator[ResultRef]:
         """Yield the results of `flight`'s jobs from its outcome `record`, applying each failure's effect.
 
         A reported result is taken only when it names the job's own key and the store holds its outputs; one whose
         outcome was written by a claim of another epoch, or of none, is given as served under `exact` unless it was
-        served under another policy.
+        served under another policy, and is recorded as a reuse in the store's provenance (`_reuse`).
         """
         fragment = flight.fragment
         jobs = record.get("jobs") if record.get("outcome") == "done" else None
         given = {r.job: r for r in (ResultRef.model_validate(j) for j in jobs)} if isinstance(jobs, list) else {}
         dead = FaultRecord.model_validate(record["fault"]) if record.get("outcome") == "dead" else None
-        keys = self._keys(fragment)
+        logical = fragment_logical_keys(fragment, *self._admitted_plan(fragment))
         reused = record.get("epoch") != self.epoch
         seen = _observed(record)
         if not reused:
@@ -627,7 +642,7 @@ class Pool:
         self._machine.settled(flight.digest, seen)
         self._machine.oom(flight.digest, seen, _worker_of(record))
         try:
-            yield from self._results(followed, flight, record, seen, given, dead, keys, reused)
+            yield from self._results(followed, flight, record, seen, given, dead, logical, reused)
         finally:
             self._machine.forget(flight.digest)
 
@@ -639,11 +654,12 @@ class Pool:
         seen: Sequence[Observation],
         given: Mapping[JobRef, ResultRef],
         dead: FaultRecord | None,
-        keys: Sequence[str],
+        logical: Sequence[LogicalKey],
         reused: bool,  # noqa: FBT001 - whether another epoch's claim wrote the outcome
     ) -> Iterator[ResultRef]:
         fragment = flight.fragment
-        for index, (job, key) in enumerate(zip(fragment.jobs, keys, strict=True)):
+        placed = self._admitted_plan(fragment)[0]
+        for index, (job, key) in enumerate(zip(fragment.jobs, (k.digest() for k in logical), strict=True)):
             ref = given.get(job)
             if ref is not None and ref.key_digest != key:
                 fault = FaultRecord(
@@ -654,7 +670,10 @@ class Pool:
                     charged=True,
                 )
             elif ref is not None and ref.failure is None and ref.output_identity is not None:
-                if self.store.outputs_of(key, ref.output_identity) is not None:
+                found = self.store.entry_of(key, ref.output_identity)
+                if found is not None:
+                    if reused:
+                        self._reuse(placed, job, logical[index], found, ref.served)
                     yield ref.model_copy(update={"served": "exact"}) if reused and ref.served is None else ref
                     continue
                 fault = _gap("MissingOutput", f"the outputs of {job} are not in the result store")
@@ -663,6 +682,36 @@ class Pool:
             else:
                 fault = dead or _gap("MissingResult", f"the outcome of the item gives no result for {job}")
             yield from self._effect(followed, flight, index, key, fault)
+
+    def _reuse(self, placed: Plan, job: JobRef, key: LogicalKey, hit: StoredResult, served: str | None) -> None:
+        """Record that this attempt settles `hit` for `key` from an earlier attempt, under the policy `served`."""
+        settled = f"{job.node}:{key.digest()}"
+        if settled in self._reused:
+            return
+        run = placed.config if placed.config is not None else RunConfig()
+        add_plan_entity(self.store.provenance, placed.hash)
+        record_settled_reuse(
+            self.store,
+            key,
+            hit,
+            datetime.now(timezone.utc),
+            ReusePolicy(served or ReusePolicy.EXACT.value),
+            reuse_attributes(run, hit),
+            job,
+        )
+        self._reused.add(settled)
+        self._reuses_unwritten = True
+
+    def _flush_reuses(self) -> None:
+        """Write the store's provenance document if reuses are unwritten; an error is logged and retried next time."""
+        if not self._reuses_unwritten:
+            return
+        try:
+            self.store.provenance.write(self.run_dir)
+        except OSError:
+            logger.exception("the pool could not write its provenance; it is retried at the next poll and at close")
+        else:
+            self._reuses_unwritten = False
 
     def _admitted_plan(self, fragment: PlanFragment) -> tuple[Plan, Mapping[InputIdentity, object]]:
         admitted = self._plans.get(fragment.admission)
