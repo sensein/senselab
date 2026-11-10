@@ -612,6 +612,8 @@ def _qualified(b: _Builder, kind: str, rel: Usage | Generation) -> dict[str, obj
 
 
 def _association(b: _Builder, a: Association) -> dict[str, object]:
+    if a.agent is None and a.plan is None:
+        raise ValueError("associations: an association names an agent, a plan or both")
     q: dict[str, object] = {"@type": "prov:Association"}
     if a.agent is not None:
         q["prov:agent"] = {"@id": a.agent}

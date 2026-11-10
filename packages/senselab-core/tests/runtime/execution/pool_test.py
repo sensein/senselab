@@ -990,7 +990,7 @@ def _planned_nodes(
 def _stopped(
     tmp_path: Path, tier_bound: float, k: int, texts: Sequence[str], nodes: Sequence[str] = ("a",)
 ) -> tuple[Plan, ExecutionProfile, FakeWorkers]:
-    """Run `texts` through `nodes` one item to a claim, stopped once the workers committed `k` items; they stay up."""
+    """Run `texts` through `nodes` one item to a claim and cancel once `k` executions and reuses are recorded."""
     profile = ExecutionProfile.load(
         "laptop",
         {
@@ -1005,11 +1005,17 @@ def _stopped(
     workers = FakeWorkers(run_dir, ResultStore(tmp_path / "store"), placed, values)
     workers.ready = lambda: len(workers.served) < k
     pool = _coordinator(placed, profile, workers, tmp_path / "store")
-    run = placed.run(pool, store=pool.store)
-    await_true(lambda: sum(map(len, _activities(run_dir))) >= k, tier_bound, profile.pool.poll_s, "the first k items")
-    run.cancel()
-    run.wait(60)
-    pool.close()
+    try:
+        run = placed.run(pool, store=pool.store)
+        await_true(
+            lambda: sum(map(len, _activities(run_dir))) >= k, tier_bound, profile.pool.poll_s, "the first k items"
+        )
+        run.cancel()
+        run.wait(60)
+    finally:
+        pool.close()
+        if sys.exc_info()[0] is not None:
+            workers.stop()
     workers.ready = lambda: True
     return placed, profile, workers
 
@@ -1094,6 +1100,7 @@ def test_a_reuse_settled_from_an_equivalent_outcome_records_that_policy(tmp_path
 @pytest.mark.contract
 def test_a_failed_provenance_write_costs_no_settled_result_and_is_retried(tmp_path: Path, tier_bound: float) -> None:
     """A `prov/` that cannot be written when the earlier items settle leaves their results given; close writes it."""
+    pytest.importorskip("pydra")
     placed, profile, workers = _stopped(tmp_path, tier_bound, 2, ["one", "two"])
     run_dir = run_dir_of(placed.hash)
     epoch = Epoch(run_dir).take()
