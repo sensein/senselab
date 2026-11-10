@@ -45,7 +45,6 @@ from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit, Provenance
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable, PackagedTable
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import UnitResolver, Unresolved, decoder_of, default_measures, measure_roots
 from senselab_core.testing.calibration_samples import UNIT, observation
@@ -154,11 +153,6 @@ class _Root:
         return (observation(),)
 
 
-class _NoTable:
-    def get(self, unit: MeasureUnit) -> None:
-        return None
-
-
 def _estimate(unit_kind: str = "none", hi: float = 0.0) -> Estimate:
     return Estimate(
         status="measured",
@@ -185,7 +179,7 @@ def _seen(profile: ExecutionProfile, *classes: HardwareClass) -> None:
 
 
 def _source() -> MeasureSource:
-    return MeasureSource([_Root()], _NoTable(), estimate=lambda unit, observed: _estimate())
+    return MeasureSource([_Root()], estimate=lambda unit, observed: _estimate())
 
 
 def _resolve(profile: ExecutionProfile, placed: Plan, hardware: HardwareInfo = HOST) -> MeasureUnit | Unresolved:
@@ -211,7 +205,7 @@ def test_explain_is_measured_when_the_store_has_the_unit(tmp_path: Path) -> None
         asked.append(unit)
         return _estimate()
 
-    text = placed.explain(measures=MeasureSource([_Root()], _NoTable(), estimate=estimate), hardware=HOST)
+    text = placed.explain(measures=MeasureSource([_Root()], estimate=estimate), hardware=HOST)
     (unit,) = {u.digest(): u for u in asked}.values()
     assert unit.hardware == SEEN and unit.env.wheel_set == "2" * 64 and unit.env.env_lock == "1" * 64
     assert (unit.task, unit.backend, unit.formation, unit.model, unit.env.decoder) == (
@@ -244,28 +238,21 @@ def test_a_measure_written_under_the_resolved_unit_is_read_by_the_default_source
 
 
 @pytest.mark.logic
-def test_a_packaged_row_of_another_env_build_is_not_read(tmp_path: Path) -> None:
-    """The packaged table is read by the one default source on a unit's whole identity; another build's row is not.
-
-    `explain` and the in-process executor both read it, so a plan states what the run sizes by.
-    """
+def test_a_unit_no_measures_root_holds_is_unmeasured_in_explain(tmp_path: Path) -> None:
+    """A unit whose identity no root matches is read as no estimate, and `explain` says unmeasured, naming no table."""
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     placed, _ = _plan(["x"], profile)
     unit = _resolve(profile, placed)
     assert isinstance(unit, MeasureUnit)
-    packaged_row = _estimate().model_copy(
-        update={"source": EstimateSource(probe_ids=("p9",), observations=12, commit="e" * 40)}
-    )
-    row = MeasureRow(
-        unit=unit, estimate=packaged_row, derivation=Derivation(commit="e" * 40, jobs=("7",), probe_ids=("p9",))
-    )
-    table = PackagedTable([MeasureTable(task=SCORE.name, backend="score", rows=(row,))])
-    use_packaged(replace(_use(), measures=table))
-    assert default_measures(profile).get(unit) == packaged_row
-    build = unit.env.model_copy(update={"wheel_set": "f" * 64})
-    assert default_measures(profile).get(unit.model_copy(update={"env": build})) is None
-    assert "(measured: packaged row eeeeeeeeeeee)" in _sizing_line(placed.explain(hardware=HOST))
+    other = unit.model_copy(update={"env": unit.env.model_copy(update={"wheel_set": "f" * 64})})
+    written = [
+        observation(hardware=SEEN, unit_kind="none", units=0.0, padded_units=0.0, request_index=i) for i in range(6)
+    ]
+    assert measure_roots(profile).put_observations(other, "p1", written, PROVENANCE) is not None
+    assert default_measures(profile).get(other) is not None and default_measures(profile).get(unit) is None
+    line = _sizing_line(placed.explain(hardware=HOST))
+    assert "unmeasured" in line and "measured:" not in line and "packaged" not in placed.explain(hardware=HOST)
 
 
 @pytest.mark.logic
@@ -321,7 +308,7 @@ def test_the_decoder_is_read_from_the_plans_sources_never_assumed(tmp_path: Path
         asked.append(unit)
         return _estimate()
 
-    files.explain(measures=MeasureSource([_Root()], _NoTable(), estimate=estimate), hardware=HOST)
+    files.explain(measures=MeasureSource([_Root()], estimate=estimate), hardware=HOST)
     assert {u.env.decoder for u in asked} == {asked[0].env.decoder} and asked[0].env.decoder is not None
 
 
@@ -395,7 +382,7 @@ def test_the_extrapolation_log_starts_afresh_with_each_run(tmp_path: Path, caplo
     """An executor reused for a second run logs a unit's extrapolation again: once per unit per run."""
     profile = _profile(tmp_path)
     placed, bound = _plan(["a long enough text"], profile, TEXTY, "Text")
-    source = MeasureSource([_Root()], _NoTable(), estimate=lambda unit, observed: _estimate("chars", hi=5.0))
+    source = MeasureSource([_Root()], estimate=lambda unit, observed: _estimate("chars", hi=5.0))
     executor = InProcess(
         profile=profile, workers=WorkerSet(1), measures=source, units=lambda call, placement, decoder: UNIT
     )

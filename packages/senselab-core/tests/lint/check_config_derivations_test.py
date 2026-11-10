@@ -60,15 +60,3 @@ def test_a_new_data_file_is_checked_without_being_listed(tmp_path: Path) -> None
     found = cd.findings(tmp_path, tmp_path / "absent.md")
     assert "packages/p/src/p/data/new.yaml: limit.derivation is inline" in " ".join(found)
     assert any("is exempt but not tracked" in line for line in found)
-
-
-def test_a_generated_resource_table_needs_no_section(tmp_path: Path) -> None:
-    """A resource table under the generated directory is checked for inline derivations only, never for sections."""
-    table = tmp_path / "packages" / "senselab" / "src" / "senselab" / "data" / "resources" / "t" / "b.yaml"
-    table.parent.mkdir(parents=True)
-    table.write_text("task: t\nrows: []\n")
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
-    spec = tmp_path / "spec.md"
-    spec.write_text(SPEC)
-    assert [f for f in cd.findings(tmp_path, spec) if "resources/" in f] == []

@@ -1,6 +1,6 @@
 format: scale-suite@1.1
 name: gpu-table
-# Every Phase 2 backend on one GPU allocation at 10^3 items under the table profile, to generate resource-table@2.0 rows.
+# Every Phase 2 backend on one GPU allocation at 10^3 items under the table profile, whose measures roots a group shares.
 # The seed of the synthetic trees; unused by these tasks.
 seed: 0
 # The long signal's seconds: two hours of audio.

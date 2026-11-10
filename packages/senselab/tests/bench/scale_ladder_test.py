@@ -1,13 +1,11 @@
-"""The scale ladder's trees and the resource tables generated from its results."""
+"""The scale ladder's trees, flatness checks and results."""
 
-import getpass
 import hashlib
 import importlib.util
 import io
 import json
 import os
 import platform
-import socket
 import sys
 import tarfile
 from collections.abc import Sequence
@@ -20,17 +18,16 @@ import soundfile
 from senselab_core.kernel.dataset import ManifestRow
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry
 from senselab_core.runtime import fake_backend
-from senselab_core.runtime.calibration import EstimateSource, HardwareClass, Observation, ProbeRef
+from senselab_core.runtime.calibration import HardwareClass, Observation, ProbeRef
 from senselab_core.runtime.call import Packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
-from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution import pool_parts
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef
 from senselab_core.runtime.execution.queue import probe_queue
-from senselab_core.runtime.measures import Build, MeasureRoots, MeasureUnit, Provenance
+from senselab_core.runtime.measures import Build, MeasureRoots, MeasureSource, MeasureUnit, Provenance
+from senselab_core.runtime.probe import Probe
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.resources import Derivation, MeasureTable, PackagedTable
 from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.storage import StorePolicy
 from senselab_core.testing.calibration_samples import UNIT, observation
@@ -49,7 +46,6 @@ def _module(name: str, path: Path) -> ModuleType:
 
 
 bids_tree = _module("scale_bids_tree_under_test", ROOT / "benchmarks" / "scale" / "bids_tree.py")
-generate = _module("generate_resources_under_test", ROOT / "scripts" / "generate_resources.py")
 
 TREE_DIGEST = "d9fabd59a9907c1ffd7afea617a5327ba9deb56d5be2947e7a80d49a9e63ebb9"
 """The digest of `synthetic(root, 3, 0)`: its relative paths and bytes, the same on every host."""
@@ -156,123 +152,55 @@ def _write(
         assert _roots(path).put_observations(unit, probe, mine, provenance) is not None
 
 
-@pytest.mark.logic
-def test_generator_refuses_an_unmeasured_estimate(tmp_path: Path) -> None:
-    """A declared unit whose estimate is unmeasured refuses the whole run, naming it and why; nothing is written.
-
-    An undeclared unit (the fake stack) is skipped and listed, measured or not.
-    """
-    root, out = tmp_path / "measures", tmp_path / "out"
-    thin = UNIT.model_copy(update={"backend": "thin"})
-    _write(root, UNIT, _line([2.0, 8.0]))
-    _write(root, thin, _line([2.0, 8.0], count=1))
-    with pytest.raises(generate.Refused, match="unmeasured") as refused:
-        generate.generate([root], out, {*DECLARED, (UNIT.task, "thin")}, PROFILE)
-    assert thin.label() in str(refused.value) and "single_below_min_requests" in str(refused.value)
-    assert UNIT.label() not in str(refused.value) and not out.exists()
-    lines = generate.generate([root], out, DECLARED, PROFILE)
-    assert lines[0] == f"{UNIT.task}~thin unit {thin.label()}: not a packaged backend; skipped"
-    assert sorted(p.name for p in out.rglob("*.yaml")) == ["whisper.yaml"]
+class _Stop(Exception):
+    """Raised by the stand-in pool once it has been given its roots."""
 
 
 @pytest.mark.logic
-def test_generated_rows_carry_probe_ids_not_users(tmp_path: Path) -> None:
-    """A row is the full unit, its estimate with the commit and probe ids, and the jobs; no account, host or uid."""
-    root, out = tmp_path / "measures", tmp_path / "out"
-    _write(root, UNIT, _line([2.0, 8.0], "p1") + _line([3.0, 9.0], "p2"))
-    generate.generate([root], out, DECLARED, PROFILE)
-    path = out / UNIT.task / f"{UNIT.backend}.yaml"
-    table = MeasureTable.model_validate(load_yaml(path, "table"))
-    [row] = table.rows
-    assert row.unit == UNIT
-    assert row.derivation == Derivation(commit=COMMIT, jobs=("1234",), probe_ids=("p1", "p2"))
-    assert row.estimate.source == EstimateSource(probe_ids=("p1", "p2"), observations=12, commit=COMMIT)
-    assert PackagedTable.load(out).get(UNIT) == row.estimate
-    text = path.read_text()
-    for name in (getpass.getuser(), socket.gethostname(), str(tmp_path), str(os.geteuid())):
-        assert name not in text.split() and name not in text
+def test_a_ladder_run_with_a_measures_root_probes_into_it_and_a_profile_listing_it_reads_the_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--measures-root` is the root every point's pool is given; a unit measured there is read on identity match."""
+    ladder = _module("scale_ladder_root_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
+    registry = Registry()
+    registry.add_task(fake_backend.ECHO)
+    registry.add_backend(fake_backend.FAKE)
+    given: list[MeasureRoots] = []
 
-    def keys(value: object) -> set[str]:
-        if isinstance(value, dict):
-            return set(value) | {k for v in value.values() for k in keys(v)}
-        return {k for v in value for k in keys(v)} if isinstance(value, list) else set()
+    def pool(*args: Any, roots: MeasureRoots, **kwargs: Any) -> None:  # noqa: ANN401, ARG001 - the Pool signature
+        given.append(roots)
+        raise _Stop
 
-    assert not keys(load_yaml(path, "table")) & {"uid", "user", "username", "hostname", "account", "run"}
-
-
-@pytest.mark.logic
-def test_a_partial_regeneration_keeps_the_rows_of_the_units_it_does_not_regenerate(tmp_path: Path) -> None:
-    """Regenerating one unit of a table replaces its row and leaves the others; a row of another commit is refused."""
-    out = tmp_path / "out"
-    other = UNIT.model_copy(update={"hardware": UNIT.hardware.model_copy(update={"cpus": 4})})
-    first, second = tmp_path / "first", tmp_path / "second"
-    _write(first, UNIT, _line([2.0, 8.0]))
-    _write(second, other, _line([3.0, 9.0], "p2", hardware=other.hardware), PROVENANCE)
-    for unit in (UNIT, other):
-        generate.generate([first if unit is UNIT else second], out, DECLARED, PROFILE)
-    table = PackagedTable.load(out)
-    assert table.get(UNIT) is not None and table.get(other) is not None
-    again = tmp_path / "again"
-    _write(again, UNIT, _line([2.0, 9.0], "p3"))
-    generate.generate([again], out, DECLARED, PROFILE)
-    kept = PackagedTable.load(out)
-    assert kept.get(other) == table.get(other) and kept.get(UNIT) is not None and kept.get(UNIT) != table.get(UNIT)
-    later = tmp_path / "later"
-    _write(
-        later,
-        UNIT,
-        _line([2.0, 8.0], "p4"),
-        PROVENANCE.model_copy(update={"senselab": Build(version="2.0.0", commit="b" * 40)}),
+    monkeypatch.setattr(ladder, "Pool", pool)
+    suite = tmp_path / "one.yaml"
+    suite.write_text(
+        "format: scale-suite@1.1\nname: one\nseed: 0\nlong_s: 1\ntasks:\n"
+        "- {task: fake.echo, port: payload, data: payloads, points: [1]}\n"
     )
-    with pytest.raises(generate.Refused, match="does not regenerate"):
-        generate.generate([later], out, DECLARED, PROFILE)
-    assert PackagedTable.load(out).get(UNIT) == kept.get(UNIT)
-
-
-@pytest.mark.logic
-def test_a_ladder_run_read_under_other_calibration_settings_is_refused(tmp_path: Path) -> None:
-    """The estimate is made under the settings the points were probed under: a table-profiled run needs its suite."""
-    run = tmp_path / "run"
-    table = PROFILE.calibration.model_copy(update={"length_strata": 3})
-    for point, ran in (("t~b@100", table), ("t~b@200", PROFILE.calibration)):
-        (run / point / "measures" / "measures@1").mkdir(parents=True)
-        (run / f"{point}.json").write_text(json.dumps({"calibration": ran.model_dump(mode="json")}))
-    (run / "t~b@300" / "measures" / "measures@1").mkdir(parents=True)
-    lines = generate.ladder_mismatches([run], PROFILE)
-    assert [line.split(":")[0] for line in lines] == ["t~b@100", "t~b@300"]
-    assert "length_strata" in lines[0] and "no result" in lines[1]
-    assert generate.ladder_mismatches([run], PROFILE.model_copy(update={"calibration": table}))[:1] == [
-        "t~b@200: probed under other calibration settings (length_strata); give --suite"
-    ]
-    assert generate.ladder_mismatches([run / "t~b@100" / "measures"], PROFILE) == []
-
-
-@pytest.mark.logic
-def test_generator_refuses_rows_it_cannot_derive_or_of_two_commits(tmp_path: Path) -> None:
-    """A probe with no commit or no scheduler job, or units measured at two commits, refuse the run; none is written."""
-    out = tmp_path / "out"
-    other = UNIT.model_copy(update={"backend": "other"})
-    declared = {*DECLARED, (UNIT.task, "other")}
-    cases = {
-        "commit": (PROVENANCE.model_copy(update={"senselab": Build(version="2.0.0")}), "no commit"),
-        "job": (PROVENANCE.model_copy(update={"job": None}), "no scheduler job"),
-    }
-    for name, (provenance, why) in cases.items():
-        root = tmp_path / name
-        _write(root, UNIT, _line([2.0, 8.0]), provenance)
-        with pytest.raises(generate.Refused, match=why):
-            generate.generate([root], out, DECLARED, PROFILE)
-    root = tmp_path / "two"
-    _write(root, UNIT, _line([2.0, 8.0]))
-    _write(
-        root,
-        other,
-        _line([2.0, 8.0]),
-        PROVENANCE.model_copy(update={"senselab": Build(version="2.0.0", commit="b" * 40)}),
+    group = tmp_path / "group" / "measures"
+    previous = use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, registry, mit_lock_records))
+    try:
+        with pytest.raises(_Stop):
+            ladder.main(["run", str(suite), "--execution", "laptop", "--measures-root", str(group)])
+        assert [r.roots for r in given] == [(group,)]
+    finally:
+        use_packaged(previous)
+    other = UNIT.model_copy(update={"env": UNIT.env.model_copy(update={"wheel_set": "f" * 64})})
+    _write(group, UNIT, _line([2.0, 8.0]))
+    listed = PROFILE.model_copy(
+        update={"calibration": CONFIG.model_copy(update={"measures_roots": (str(group),), "trust": "group"})}
     )
-    with pytest.raises(generate.Refused, match="several commits"):
-        generate.generate([root], out, declared, PROFILE)
-    assert not out.exists()
+    roots = MeasureRoots.from_profile(
+        listed.calibration, StorePolicy.load_default(), stale_after_s=listed.lease.stale_after_s, cache=tmp_path
+    )
+    source = MeasureSource(
+        [roots],
+        estimate=Probe.estimator(
+            listed.calibration, records_of=roots.regime_records, memory_headroom=listed.sizing.memory_headroom
+        ),
+    )
+    assert source.get(UNIT) is not None and source.get(other) is None
 
 
 @pytest.mark.logic
@@ -379,7 +307,7 @@ def test_two_entries_of_one_task_write_two_results_and_two_stores(
     registry.add_backend(fake_backend.FAKE)
     registry.add_backend(fake_backend.FAKE.model_copy(update={"name": "fake2", "stack": "fake2"}))
 
-    def measured(entry: Any, point: Any, suite: Any, profile: Any, label: str, out: Path) -> dict[str, Any]:  # noqa: ANN401, ARG001, PLR0913 - the measure_point signature
+    def measured(entry: Any, point: Any, suite: Any, profile: Any, label: str, out: Path, **_: Any) -> dict[str, Any]:  # noqa: ANN401, ARG001, PLR0913 - the measure_point signature
         (out / f"{label}@{point}" / "store").mkdir(parents=True)
         row = {"per_item_s": 1.0, "peak_rss_bytes": 1, "files_written": 1, "bytes_written": 1, "items": 1, "units": []}
         return {"sha": "a", "jobs": ["1"], "task": entry.task, "label": label, "point": point, "done": True, **row}
@@ -409,22 +337,28 @@ def test_two_entries_of_one_task_write_two_results_and_two_stores(
 
 
 @pytest.mark.logic
-def test_a_points_units_hold_their_probe_observations_and_estimate(tmp_path: Path) -> None:
-    """Per unit its measures root holds: the unit, its probe observations and the `Estimate`, measured or not."""
+def test_a_points_units_are_those_its_plan_resolved_with_what_this_run_probed(tmp_path: Path) -> None:
+    """A unit the root already held is listed `probed` false with no probe ids; a probed one carries its own probes."""
     ladder = _module("scale_ladder_units_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    held = UNIT.model_copy(update={"backend": "held"})
     thin = UNIT.model_copy(update={"backend": "thin"})
-    _write(tmp_path, UNIT, _line([2.0, 8.0]))
+    _write(tmp_path, held, _line([2.0, 8.0], "old"))
+    _write(tmp_path, UNIT, _line([2.0, 8.0], "new"))
     _write(tmp_path, thin, _line([2.0, 8.0], count=1))
-    units = ladder._units(_roots(tmp_path), PROFILE)
+    roots = _roots(tmp_path)
+    resolved = {u.digest(): u for u in (UNIT, thin)}
+    units = ladder._units(roots, PROFILE, resolved, {UNIT.digest(): "new", thin.digest(): "absent"})
     by_label = {u["label"]: u for u in units}
-    assert set(by_label) == {UNIT.label(), thin.label()} and [u["label"] for u in units] == sorted(by_label)
-    assert (
-        by_label[UNIT.label()]["estimate"]["status"] == "measured" and len(by_label[UNIT.label()]["observations"]) == 6
-    )
-    assert (
-        by_label[thin.label()]["estimate"]["status"] == "unmeasured" and by_label[thin.label()]["estimate"]["reasons"]
-    )
-    assert MeasureUnit.model_validate(by_label[UNIT.label()]["unit"]) == UNIT
+    assert set(by_label) == {UNIT.label(), thin.label()} and held.label() not in by_label
+    mine = by_label[UNIT.label()]
+    assert mine["probed"] is True and mine["probe_ids"] == ["new"] and len(mine["observations"]) == 6
+    assert mine["estimate"]["status"] == "measured" and MeasureUnit.model_validate(mine["unit"]) == UNIT
+    assert by_label[thin.label()]["probed"] is True and by_label[thin.label()]["probe_ids"] == []
+    served = ladder._units(roots, PROFILE, {held.digest(): held}, {})
+    assert [(u["label"], u["probed"], u["probe_ids"], u["observations"]) for u in served] == [
+        (held.label(), False, [], [])
+    ]
+    assert served[0]["estimate"]["status"] == "measured"
     assert json.loads(json.dumps(units, sort_keys=True)) == units
 
 

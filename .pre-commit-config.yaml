@@ -102,7 +102,6 @@ repos:
   rev: v2.15.0
   hooks:
   - id: pretty-format-yaml
-    exclude: ^packages/senselab/src/senselab/data/resources/
     args:
     - --autofix
     - --indent=2

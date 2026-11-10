@@ -41,7 +41,6 @@ from senselab_core.runtime.measures import (
     resolve_roots,
 )
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.resources import PackagedTable
 from senselab_core.runtime.revision import cache_root
 from senselab_core.runtime.storage import StorageDir, StorePolicy
 from senselab_core.testing.calibration_samples import UNIT, observation
@@ -544,8 +543,7 @@ def test_the_roots_are_one_source_of_the_measure_source(tmp_path: Path) -> None:
         seen.append(len(observations))
         return Estimate(status="unmeasured", unit_kind="none", reasons=("no_usable_observations",))
 
-    packaged = PackagedTable.load(tmp_path / "none")
-    assert MeasureSource([roots], packaged, estimate=estimate).get(UNIT) is None
+    assert MeasureSource([roots], estimate=estimate).get(UNIT) is None
     assert seen == [2]
 
 

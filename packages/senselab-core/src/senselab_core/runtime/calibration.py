@@ -308,11 +308,10 @@ class SupersedeRecord(Frozen):
 
 
 class EstimateSource(Frozen):
-    """Where an estimate came from: probe ids and observation count, or a packaged row's commit and probe ids."""
+    """Where an estimate came from: the probe ids and observation count."""
 
     probe_ids: tuple[NonEmptyStr, ...] = ()
     observations: Count = 0
-    commit: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")] | None = None
 
 
 def _refuse_repeat(field: str, label: str, keys: list[int]) -> None:

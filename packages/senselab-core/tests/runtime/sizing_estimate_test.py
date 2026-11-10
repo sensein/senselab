@@ -195,17 +195,12 @@ class _Root:
         return (object(),)
 
 
-class _NoTable:
-    def get(self, unit: MeasureUnit) -> None:
-        return None
-
-
 @pytest.mark.logic
 def test_in_process_sizing_is_size_on_the_same_estimate_grant_and_lengths(tmp_path: object) -> None:
     """The in-process executor's sizing of a unit is `size` on the same estimate, grant and lengths."""
     estimate = _estimate(unit_kind="chars", host=MemoryFit(resident=GB, m0=0.0, m1=1e6, n=6), device=None)
     estimate = estimate.model_copy(update={"batch": (StratumBatch(lo=2.0, hi=1000.0, batch=8),)})
-    source = MeasureSource([_Root()], _NoTable(), estimate=lambda unit, observed: estimate)  # type: ignore[list-item]
+    source = MeasureSource([_Root()], estimate=lambda unit, observed: estimate)  # type: ignore[list-item]
     profile = ExecutionProfile.load("laptop", {"resource_classes": {"cpu": {"mem_bytes": 2**33}}})
     executor = InProcess(
         store=ResultStore(tmp_path / "store"),  # type: ignore[operator]

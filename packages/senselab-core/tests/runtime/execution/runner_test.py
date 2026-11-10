@@ -190,11 +190,6 @@ class _Root:
         return (observation(),)
 
 
-class _NoTable:
-    def get(self, unit: MeasureUnit) -> None:
-        return None
-
-
 def _batching() -> tuple[ExecutionProfile, MeasureSource]:
     """A profile whose fragments hold two jobs, and a measure under which `size` batches them."""
     profile = ExecutionProfile.load(
@@ -212,7 +207,7 @@ def _batching() -> tuple[ExecutionProfile, MeasureSource]:
         host=MemoryFit(resident=2**20, m0=0.0, m1=1.0, n=6),
         source=EstimateSource(probe_ids=("p",), observations=6),
     )
-    return profile, MeasureSource([_Root()], _NoTable(), estimate=lambda unit, observed: estimate)
+    return profile, MeasureSource([_Root()], estimate=lambda unit, observed: estimate)
 
 
 def _run(  # noqa: PLR0913 - the plan, values and directory, then the profile and what sizes the fragments

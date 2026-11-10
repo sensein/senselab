@@ -107,6 +107,7 @@ from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.measures import (
     Estimates,
     MeasureRoots,
+    MeasureUnit,
 )
 from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -228,6 +229,11 @@ class Pool:
     def probes(self) -> dict[str, ProbedUnit]:
         """Each unit this pool probed, by digest."""
         return self._machine.probes
+
+    @property
+    def resolved(self) -> dict[str, MeasureUnit]:
+        """Each unit a fragment of this run resolved to, by digest."""
+        return self._machine.resolved
 
     def bind_epoch(self, epoch: int, events: EventLog) -> None:
         """Coordinate as `epoch` from now on, logging to `events`, a log of that epoch's attempt.

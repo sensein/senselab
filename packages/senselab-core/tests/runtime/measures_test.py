@@ -1,22 +1,17 @@
 """Measure identity, the canonical hardware class and the lookup order."""
 
-import getpass
 import platform
-import socket
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 from senselab_core.kernel.identity import Attestation, LogicalKey, ModelIdentity
-from senselab_core.runtime.calibration import Estimate, EstimateSource, HardwareClass, HardwareGrant, Observation
-from senselab_core.runtime.config import dump_yaml
+from senselab_core.runtime.calibration import Estimate, HardwareClass, HardwareGrant, Observation
 from senselab_core.runtime.fake_backend import FAKE
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo, _cpu_model, probe_hardware, process_cpus
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
-from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable, PackagedTable
 from senselab_core.testing.calibration_samples import ENV, UNIT
 from senselab_worker.digest import identity_digest
 
@@ -249,14 +244,6 @@ class _Root:
         return tuple(OBSERVATION for _ in range(self.observed))
 
 
-class _Packaged:
-    def __init__(self, estimate: Estimate | None) -> None:
-        self.estimate = estimate
-
-    def get(self, unit: MeasureUnit) -> Estimate | None:
-        return self.estimate
-
-
 def _estimator(minimum: int) -> Callable[[MeasureUnit, Sequence[Observation]], Estimate]:
     def estimate(unit: MeasureUnit, observations: Sequence[Observation]) -> Estimate:
         return MEASURED if len(observations) >= minimum else UNMEASURED
@@ -266,22 +253,12 @@ def _estimator(minimum: int) -> Callable[[MeasureUnit, Sequence[Observation]], E
 
 @pytest.mark.logic
 @pytest.mark.parametrize(
-    ("roots", "packaged", "expected"),
-    [
-        ([3], None, MEASURED),
-        ([1], None, None),
-        ([0], MEASURED, MEASURED),
-        ([1], UNMEASURED, None),
-        ([], None, None),
-        ([2, 1], None, MEASURED),
-        ([1, 1], None, None),
-    ],
+    ("roots", "expected"),
+    [([3], MEASURED), ([1], None), ([0], None), ([], None), ([2, 1], MEASURED), ([1, 1], None)],
 )
-def test_roots_are_pooled_then_estimated_once_then_the_packaged_table(
-    roots: list[int], packaged: Estimate | None, expected: Estimate | None
-) -> None:
+def test_roots_are_pooled_then_estimated_once(roots: list[int], expected: Estimate | None) -> None:
     """Observations of every root are estimated together, so two roots below the threshold alone can reach it."""
-    source = MeasureSource([_Root(n) for n in roots], _Packaged(packaged), estimate=_estimator(3))
+    source = MeasureSource([_Root(n) for n in roots], estimate=_estimator(3))
     assert source.get(UNIT) == expected
 
 
@@ -294,95 +271,8 @@ def test_the_estimator_is_called_once_over_the_pooled_observations() -> None:
         calls.append(len(observations))
         return MEASURED
 
-    MeasureSource([_Root(2), _Root(4)], _Packaged(None), estimate=estimate).get(UNIT)
+    MeasureSource([_Root(2), _Root(4)], estimate=estimate).get(UNIT)
     assert calls == [6]
-
-
-PACKAGED = MEASURED.model_copy(update={"source": EstimateSource(probe_ids=("p1",), observations=6, commit="d" * 40)})
-
-
-def _table() -> MeasureTable:
-    row = MeasureRow(
-        unit=UNIT, estimate=PACKAGED, derivation=Derivation(commit="d" * 40, jobs=("j1",), probe_ids=("p1",))
-    )
-    return MeasureTable(task=UNIT.task, backend=UNIT.backend, rows=(row,))
-
-
-def _write(root: Path, table: MeasureTable) -> Path:
-    path = root / table.task / f"{table.backend}.yaml"
-    path.parent.mkdir(parents=True)
-    path.write_text(dump_yaml(table.model_dump(mode="json")))
-    return path
-
-
-@pytest.mark.logic
-def test_a_packaged_row_is_read_only_on_exact_identity(tmp_path: Path) -> None:
-    """A packaged row answers for its own env, params and card only, never for another unit of the same model."""
-    _write(tmp_path, _table())
-    packaged = PackagedTable.load(tmp_path)
-    assert packaged.get(UNIT) == PACKAGED
-    for update in (
-        {"backend_params": {"dtype": "float32"}},
-        {"env": ENV.model_copy(update={"wheel_set": "f" * 64})},
-        {"hardware": UNIT.hardware.model_copy(update={"cpus": 4})},
-        {"model": None},
-    ):
-        assert packaged.get(UNIT.model_copy(update=update)) is None
-
-
-@pytest.mark.logic
-def test_packaged_rows_carry_no_user_or_host(tmp_path: Path) -> None:
-    """I7: no account or host name in a row, and a row that adds one is refused, not ignored.
-
-    The refusal is a row's: the table's top level keeps the format's minor-version rule.
-    """
-    path = _write(tmp_path, _table())
-    text = path.read_text()
-    assert getpass.getuser() not in text.split() and socket.gethostname() not in text
-    row = _table().model_dump(mode="json")["rows"][0]
-    for part in (row, row["unit"], row["unit"]["env"], row["derivation"]):
-        assert not {"user", "username", "host", "hostname", "account"} & set(part)
-    doc = _table().model_dump(mode="json")
-    doc["rows"][0]["derivation"]["host"] = "node1"
-    path.write_text(dump_yaml(doc))
-    with pytest.raises(ValueError):
-        PackagedTable.load(tmp_path)
-
-
-@pytest.mark.logic
-def test_a_table_refuses_a_row_of_another_backend_or_a_unit_twice() -> None:
-    """A table holds rows of its own task and backend, one per unit."""
-    row = _table().rows[0]
-    with pytest.raises(ValueError, match="holds a row of"):
-        MeasureTable(task="speech_to_text", backend="other", rows=(row,))
-    with pytest.raises(ValueError, match="two rows"):
-        MeasureTable(task=UNIT.task, backend=UNIT.backend, rows=(row, row))
-
-
-@pytest.mark.logic
-def test_an_absent_root_holds_no_rows(tmp_path: Path) -> None:
-    """A root that is not there holds no packaged rows."""
-    assert PackagedTable.load(tmp_path / "none").get(UNIT) is None
-
-
-@pytest.mark.logic
-def test_a_table_file_under_another_name_is_refused(tmp_path: Path) -> None:
-    """The directory walk holds a file to its path: `<task>/<backend>.yaml` must hold that task and backend."""
-    path = _write(tmp_path, _table())
-    path.rename(path.with_name("other.yaml"))
-    with pytest.raises(ValueError, match="holds the table of"):
-        PackagedTable.load(tmp_path)
-
-
-@pytest.mark.logic
-def test_a_row_names_the_commit_and_probes_its_derivation_names() -> None:
-    """The estimate's source and the derivation say where a row was measured once each, so they cannot disagree."""
-    row = _table().rows[0]
-    other = row.derivation.model_copy(update={"commit": "e" * 40})
-    with pytest.raises(ValueError, match="names the commit and probes"):
-        MeasureRow(unit=row.unit, estimate=row.estimate, derivation=other)
-    with pytest.raises(ValueError, match="names the commit and probes"):
-        MeasureRow(unit=row.unit, estimate=MEASURED, derivation=row.derivation)
 
 
 LSCPU_X86 = "Architecture: x86_64\nModel name: AMD EPYC 9654 96-Core Processor\nCPU(s): 192\n"

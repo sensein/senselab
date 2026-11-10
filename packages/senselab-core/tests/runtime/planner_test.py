@@ -38,7 +38,6 @@ from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.placement import BackendParamsMismatch
 from senselab_core.runtime.planner import CALL_NODE, InvalidGraph, RecordBinding, UnmappedOutput, plan, resolve
 from senselab_core.runtime.profiles import ExecutionProfile, NoDevice
-from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable, PackagedTable
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.calibration_samples import UNIT, observation
@@ -620,18 +619,6 @@ class _Reads:
         return (observation(),)
 
 
-class _Bare:
-    """A measures root that holds nothing."""
-
-    def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:
-        return ()
-
-
-class _NoTable:
-    def get(self, unit: MeasureUnit) -> None:
-        return None
-
-
 def _gpu_plan(cap: int | None = None) -> planner.Plan:
     gpu = {} if cap is None else {"memory_cap_bytes": cap}
     profile = ExecutionProfile.load("laptop", {"resource_classes": {"gpu": gpu}})
@@ -643,7 +630,7 @@ def test_explain_labels_each_figure_measured_or_unmeasured_and_never_probes() ->
     """Each sized figure says `measured` with its source or `unmeasured` with why; nothing is probed."""
     placed = _gpu_plan()
     root = _Reads()
-    source = MeasureSource([root], _NoTable(), estimate=lambda unit, observed: _measured())
+    source = MeasureSource([root], estimate=lambda unit, observed: _measured())
     work = {CALL_NODE: LengthProfile(units=(60.0, 120.0))}
     text = placed.explain(measures=source, units=lambda node: UNIT, lengths=work, hardware=GPU)
     sizing = next(line for line in text.splitlines() if line.startswith("  sizing:"))
@@ -655,7 +642,7 @@ def test_explain_labels_each_figure_measured_or_unmeasured_and_never_probes() ->
         ({"measures": source, "units": lambda node: UNIT}, "a length is unknown"),
         (
             {
-                "measures": MeasureSource([root], _NoTable(), estimate=lambda u, o: _measured()),
+                "measures": MeasureSource([root], estimate=lambda u, o: _measured()),
                 "units": lambda n: UNIT,
                 "lengths": {CALL_NODE: LengthProfile(units=(None,))},
             },
@@ -688,7 +675,7 @@ def test_explain_states_the_waits_on_another_run() -> None:
 def test_explain_flags_a_job_whose_batch_one_peak_exceeds_the_cap() -> None:
     """A job whose `resident + m0 + m1·L` passes the class's memory cap is flagged with the bytes it needs."""
     cap = 12 * _GB
-    source = MeasureSource([_Reads()], _NoTable(), estimate=lambda unit, observed: _measured())
+    source = MeasureSource([_Reads()], estimate=lambda unit, observed: _measured())
     work = {CALL_NODE: LengthProfile(units=(100.0, 500.0))}
     text = _gpu_plan(cap).explain(measures=source, units=lambda node: UNIT, lengths=work, hardware=GPU)
     needed = 10 * _GB + 1e7 * 500.0
@@ -701,8 +688,8 @@ def test_explain_flags_a_job_whose_batch_one_peak_exceeds_the_cap() -> None:
     assert "needs " not in fits
 
 
-def _packaged(batched_s: float = 0.1) -> tuple[MeasureSource, ExecutionProfile]:
-    """A source whose packaged table holds a row of `UNIT` that batches 64 where `batched_s` is no slower than 0.1."""
+def _sized(batched_s: float = 0.1) -> tuple[MeasureSource, ExecutionProfile]:
+    """A source whose measures hold an estimate of `UNIT` that batches 64 where `batched_s` is no slower than 0.1."""
     fit = {"n": 6, "spread": 0.1, "lo": 1.0, "hi": 100.0}
     estimate = Estimate(
         status="measured",
@@ -715,33 +702,23 @@ def _packaged(batched_s: float = 0.1) -> tuple[MeasureSource, ExecutionProfile]:
         batched=(RequestFit(batch=64, r=0.0, u=batched_s, **fit),),
         batch=(StratumBatch(lo=1.0, hi=100.0, batch=64 if batched_s <= 0.1 else 1),),
         host=MemoryFit(resident=1024, m0=0.0, m1=1.0, n=6),
-        source=EstimateSource(probe_ids=("p9",), observations=12, commit="1" * 40),
-    )
-    derivation = Derivation(commit="1" * 40, jobs=("1",), probe_ids=("p9",))
-    table = PackagedTable(
-        [
-            MeasureTable(
-                task=UNIT.task,
-                backend=UNIT.backend,
-                rows=(MeasureRow(unit=UNIT, estimate=estimate, derivation=derivation),),
-            )
-        ]
+        source=EstimateSource(probe_ids=("p9",), observations=12),
     )
     profile = ExecutionProfile.load("laptop", {"resource_classes": {"cpu": {"mem_bytes": 10_000}}})
-    return MeasureSource([_Bare()], table, estimate=lambda unit, observed: _measured()), profile
+    return MeasureSource([_Reads()], estimate=lambda unit, observed: estimate), profile
 
 
 @pytest.mark.logic
-def test_a_unit_with_a_packaged_row_batches_in_process(tmp_path: Path) -> None:
-    """The executor sizes a node's fragment from `size` over its packaged row: many jobs where it batches, else one."""
-    source, profile = _packaged()
+def test_a_measured_unit_batches_in_process(tmp_path: Path) -> None:
+    """The executor sizes a node's fragment from `size` over its estimate: many jobs where it batches, else one."""
+    source, profile = _sized()
     placed = _plan(_call(), _records("x", "y"), execution=profile)
     assert placed.placement.nodes[CALL_NODE].batch_size == 1
     executor = InProcess(
         store=ResultStore(tmp_path / "a"), profile=profile, workers=WorkerSet(1), measures=source, units=_unit
     )
     assert executor.fragment_size(placed, CALL_NODE) == profile.pool.quantum_items
-    slower, _ = _packaged(batched_s=0.2)
+    slower, _ = _sized(batched_s=0.2)
     unbatched = _plan(_call(), _records("x"), execution=profile)
     assert (
         InProcess(
@@ -765,11 +742,11 @@ def test_explain_prints_no_cost_line_the_nodes_sizing_is_the_one_estimate() -> N
 @pytest.mark.logic
 def test_a_gpu_without_a_class_cap_is_flagged_against_the_device_it_sees() -> None:
     """A class with no `memory_cap_bytes` is judged against the seen device's memory."""
-    source = MeasureSource([_Reads()], _NoTable(), estimate=lambda unit, observed: _measured(resident=70 * _GB))
+    source = MeasureSource([_Reads()], estimate=lambda unit, observed: _measured(resident=70 * _GB))
     work = {CALL_NODE: LengthProfile(units=(100.0,))}
     text = _gpu_plan().explain(measures=source, units=lambda node: UNIT, lengths=work, hardware=GPU)
     assert f"caps it at {2**36} bytes" in text
-    roomy = MeasureSource([_Reads()], _NoTable(), estimate=lambda unit, observed: _measured())
+    roomy = MeasureSource([_Reads()], estimate=lambda unit, observed: _measured())
     assert "needs " not in _gpu_plan().explain(measures=roomy, units=lambda node: UNIT, lengths=work, hardware=GPU)
 
 
@@ -777,7 +754,7 @@ def test_a_gpu_without_a_class_cap_is_flagged_against_the_device_it_sees() -> No
 def test_a_gpu_node_with_a_host_only_estimate_prints_device_memory_unmeasured() -> None:
     """A device grant never reads the host fit: peak device memory is unmeasured, not the host's figure."""
     host_only = _measured().model_copy(update={"device": None, "host": MemoryFit(resident=_GB, m0=0.0, m1=1e6, n=6)})
-    source = MeasureSource([_Reads()], _NoTable(), estimate=lambda unit, observed: host_only)
+    source = MeasureSource([_Reads()], estimate=lambda unit, observed: host_only)
     work = {CALL_NODE: LengthProfile(units=(60.0,))}
     text = _gpu_plan().explain(measures=source, units=lambda node: UNIT, lengths=work, hardware=GPU)
     assert "peak device memory unmeasured (memory unmeasured)" in text

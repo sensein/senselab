@@ -152,6 +152,7 @@ class ProbeMachine:
 
     Attributes:
         probes: Each unit probed, by digest.
+        resolved: Each unit a fragment of the run resolved to, by digest.
     """
 
     def __init__(  # noqa: PLR0913 - the profile and its reads, the clock, and the host
@@ -172,6 +173,7 @@ class ProbeMachine:
         self.probe_s = profile.probe_s if probe_s is None else probe_s
         self._clock, self.host = clock, host
         self.probes: dict[str, ProbedUnit] = {}
+        self.resolved: dict[str, MeasureUnit] = {}
         self.lock = threading.Lock()
         self._machine = threading.RLock()
         self._states: dict[str, State] = {}
@@ -247,6 +249,7 @@ class ProbeMachine:
     def _lookup(self, unit: MeasureUnit, held: Held, jobs: Sequence[Job], placement: Placement) -> None:
         """Take `held` to its unit's state: an ended unit sizes it, a waiting or probing one holds it, else look up."""
         digest = unit.digest()
+        self.resolved[digest] = unit
         predicted = self._hello.get(class_of(held.queue)) is None
         state = self._states.get(digest)
         if state is not None:
