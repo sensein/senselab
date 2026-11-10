@@ -1,6 +1,8 @@
 """The `transformers` backend of `speech_to_text`: transcript construction, typed faults and batch isolation."""
 
+import gc
 import importlib
+from collections.abc import Iterator
 from typing import Any
 
 import numpy
@@ -280,10 +282,12 @@ def test_backend_is_a_host_backend_the_senselab_lock_covers() -> None:
     assert lock is not None and host_lock_gaps(lock, spec.requirements) == []
 
 
-def _real_state() -> Any:  # noqa: ANN401
+@pytest.fixture
+def real_state() -> Iterator[Any]:
     """Load the catalogue's default `speech_to_text` model by its pinned commit on CUDA; skip the test without it.
 
-    The default is Whisper large, which a CPU does not run in bounded time.
+    The default is Whisper large, which a CPU does not run in bounded time. The model is released at teardown,
+    with the allocator's cache, so the next test on the card finds it free.
     """
     from senselab._api.packaged import CATALOGUE
 
@@ -293,7 +297,11 @@ def _real_state() -> Any:  # noqa: ANN401
 
     entry = CATALOGUE.default("speech_to_text")
     model = {"source": "hf", "id": entry.id, "identity": entry.revision}
-    return hf.load({"model": model, "device": "cuda"})
+    state = hf.load({"model": model, "device": "cuda"})
+    yield state
+    del state
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 def _timed(result: dict[str, Any]) -> list[tuple[Any, ...]]:
@@ -309,13 +317,13 @@ def _tone(seconds: float, rate: int = 16000, *, gain: float = 0.3) -> Audio:
 
 @pytest.mark.env
 @pytest.mark.model
-def test_transformers_backend_content_fault_isolated_with_real_weights() -> None:
+def test_transformers_backend_content_fault_isolated_with_real_weights(real_state: Any) -> None:  # noqa: ANN401
     """On the pinned model a content fault on one item is typed and leaves its batch-mates' text and spans unchanged.
 
     The backend is declared non-batch-invariant, so confidences are not compared.
     """
     items = [{"id": i, "inputs": {"audio": _tone(1.0 + n)}} for n, i in enumerate("abc")]
-    state = _real_state()
+    state = real_state
     clean = hf.handle(state, items, PARAMS)
     faulted = hf.handle(state, items, {**PARAMS, FAULT_KEY: {"fail_items": ["b"]}})
     assert all("outputs" in r for r in clean)
@@ -325,9 +333,9 @@ def test_transformers_backend_content_fault_isolated_with_real_weights() -> None
 
 @pytest.mark.limits
 @pytest.mark.model
-def test_transformers_backend_edge_inputs_with_real_weights() -> None:
+def test_transformers_backend_edge_inputs_with_real_weights(real_state: Any) -> None:  # noqa: ANN401
     """One sample, silence, clipping, long input and every rate each give a transcript or a typed fault, never a gap."""
-    state = _real_state()
+    state = real_state
     cases = {
         "one-sample": _tone(1 / 16000),
         "silence": _tone(2.0, gain=0.0),
@@ -371,7 +379,7 @@ def test_a_chunk_ending_past_the_audio_is_clamped_to_its_extent() -> None:
     """A pipeline chunk (1.0 s, 9.0 s) of a 2 s recording ends at 2 s, as the other backend's spans do."""
     out = {"text": "late", "chunks": [{"text": "late", "timestamp": (1.0, 9.0)}]}
     (word,) = hf.transcript(out, "word", CLOCK, 2 * 10**9).segments[0].children
-    assert (word.span.start_ns, word.span.end_ns) == (10**9, 2 * 10**9)  # type: ignore[union-attr]
+    assert (getattr(word.span, "start_ns"), getattr(word.span, "end_ns")) == (10**9, 2 * 10**9)
 
 
 @pytest.mark.logic
