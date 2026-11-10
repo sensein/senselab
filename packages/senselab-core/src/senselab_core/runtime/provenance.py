@@ -489,7 +489,9 @@ class _Rebuild:
         usages += [kprov.Usage(e) for e in _ids(node, "prov:used") - {u.entity for u in usages}]
         generations += [kprov.Generation(e) for e in _ids(node, "prov:generated") - {g.entity for g in generations}]
         associations = [
-            kprov.Association(q["prov:agent"]["@id"], _role(q, "senselab:nodeId"), _plan_of(q))
+            kprov.Association(
+                q["prov:agent"]["@id"] if "prov:agent" in q else None, _role(q, "senselab:nodeId"), _plan_of(q)
+            )
             for q in node.get("prov:qualifiedAssociation", [])
         ]
         return kprov.activity(

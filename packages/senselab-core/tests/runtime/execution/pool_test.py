@@ -17,10 +17,13 @@ from lease_clock_fixture import ManualClock, newest
 from pool_stack_fixture import packaged, planned, registry, scoring, unresolving
 from senselab_core.cli import main as cli_main
 from senselab_core.kernel import prov as kprov
+from senselab_core.kernel.dataset import Record, ValueInput
+from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.audio_io import open_audio
-from senselab_core.runtime.call import RunConfig, TaskCall
+from senselab_core.runtime.call import RunConfig, TaskCall, bind_input
 from senselab_core.runtime.clock import Clock, SystemClock
+from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import EventLog, read_events, run_dir_of, status_from
 from senselab_core.runtime.execution.executor import Admission, FaultRecord, PlanFragment, QueueHeld, ResultRef, follow
@@ -969,10 +972,25 @@ def _resumed(
     return (pool, *_activities(run_dir_of(placed.hash)))
 
 
+def _planned_nodes(
+    profile: ExecutionProfile, texts: Sequence[str], nodes: Sequence[str]
+) -> tuple[Plan, dict[InputIdentity, object]]:
+    """Return the plan running `SCORE` over each text at each of `nodes`, every node reading the one input."""
+    graph = Graph(
+        inputs={"text": "list[json]"},
+        nodes=tuple(Node(id=n, task=SCORE.name, task_version="1") for n in nodes),
+        edges=tuple(Edge(source="input.text", target=f"{n}.text", kind="map") for n in nodes),
+        outputs={f"v{n}": f"{n}.value" for n in nodes},
+    )
+    rows = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(texts)]
+    placed = plan(graph, RecordSet(rows), config=RunConfig(), execution=profile)
+    return placed, {bind_input("x", "json", t)[0]: t for t in texts}
+
+
 def _stopped(
-    tmp_path: Path, tier_bound: float, k: int, texts: Sequence[str]
+    tmp_path: Path, tier_bound: float, k: int, texts: Sequence[str], nodes: Sequence[str] = ("a",)
 ) -> tuple[Plan, ExecutionProfile, FakeWorkers]:
-    """Run `texts` one item to a claim and stop the run once the workers committed `k` items; its workers stay up."""
+    """Run `texts` through `nodes` one item to a claim, stopped once the workers committed `k` items; they stay up."""
     profile = ExecutionProfile.load(
         "laptop",
         {
@@ -982,13 +1000,13 @@ def _stopped(
             "faults": CONTENT,
         },
     )
-    placed, values = _planned(profile, texts)
+    placed, values = _planned(profile, texts) if nodes == ("a",) else _planned_nodes(profile, texts, nodes)
     run_dir = run_dir_of(placed.hash)
     workers = FakeWorkers(run_dir, ResultStore(tmp_path / "store"), placed, values)
     workers.ready = lambda: len(workers.served) < k
     pool = _coordinator(placed, profile, workers, tmp_path / "store")
     run = placed.run(pool, store=pool.store)
-    await_true(lambda: len(_activities(run_dir)[0]) == k, tier_bound, profile.pool.poll_s, "the first k items")
+    await_true(lambda: sum(map(len, _activities(run_dir))) >= k, tier_bound, profile.pool.poll_s, "the first k items")
     run.cancel()
     run.wait(60)
     pool.close()
@@ -1011,11 +1029,11 @@ def test_a_resume_records_a_reuse_for_each_item_it_settles_from_the_stopped_atte
     assert set(_logical(reused)) <= set(_logical(executed))
     for reuse in reused:
         node = reuse.node()
-        assert (
-            "senselab:context" not in node
-            and "senselab:storedContext" in node
-            and "prov:qualifiedAssociation" not in node
-        )
+        assert "senselab:context" not in node and "senselab:storedContext" in node
+        assert "prov:wasAssociatedWith" not in node
+        [association] = node["prov:qualifiedAssociation"]
+        assert association["prov:hadRole"]["senselab:nodeId"] == "a" and "prov:agent" not in association
+        assert association["prov:hadPlan"] == {"@id": f"plan:{placed.hash}"}
         assert kprov.literal_value(node["senselab:reusePolicy"]) == "exact"
 
 
@@ -1031,6 +1049,21 @@ def test_a_second_resume_of_a_completed_run_records_a_reuse_per_item_and_no_exec
     finally:
         workers.stop()
     assert len(executed) == 4 and len(reused) == 4 and _logical(reused) == _logical(executed)
+
+
+@pytest.mark.contract
+def test_two_nodes_running_one_call_on_one_input_settle_one_reuse_each(tmp_path: Path, tier_bound: float) -> None:
+    """Nodes `a` and `b` apply one task to the same texts: the resume settles one Reuse per node and item."""
+    pytest.importorskip("pydra")
+    placed, profile, workers = _stopped(tmp_path, tier_bound, 4, ["one", "two"], nodes=("a", "b"))
+    before = len(_activities(run_dir_of(placed.hash))[1])
+    try:
+        _, _, reused = _resumed(placed, profile, workers, tmp_path / "store")
+    finally:
+        workers.stop()
+    settled = [r for r in reused if "senselab:context" not in r.node()]
+    nodes = sorted(r.node()["prov:qualifiedAssociation"][0]["prov:hadRole"]["senselab:nodeId"] for r in settled)
+    assert nodes == ["a", "a", "b", "b"] and len(reused) == before + 4
 
 
 @pytest.mark.contract

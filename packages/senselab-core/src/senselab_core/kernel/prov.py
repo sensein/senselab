@@ -316,10 +316,11 @@ class Generation:
 class Association:
     """An activity's association with an agent, within a plan: its role carries the node id, `plan` the plan's `@id`.
 
-    Outside a plan both are None and the association names the agent alone.
+    Outside a plan both are None and the association names the agent alone. With no `agent` the association is
+    qualified only, naming the node and the plan (PROV-DM: the agent of an association is optional given a plan).
     """
 
-    agent: str
+    agent: str | None = None
     node_id: str | None = None
     plan: str | None = None
 
@@ -573,7 +574,11 @@ def activity(  # noqa: PLR0913 - keyword-only, one argument per PROV relation
     reverse = [_qualified(b, "prov:Generation", g) for g in generations if g.port or g.time]
     if reverse:
         node["@reverse"] = {"prov:activity": _sorted_unique(reverse)}
-    _put(node, "prov:wasAssociatedWith", [{"@id": _checked(AGENT_ID, a.agent, "associations")} for a in assocs])
+    _put(
+        node,
+        "prov:wasAssociatedWith",
+        [{"@id": _checked(AGENT_ID, a.agent, "associations")} for a in assocs if a.agent is not None],
+    )
     _put(node, "prov:qualifiedAssociation", [_association(b, a) for a in assocs])
     return b.record(_addressed("activity:", PROV_ACTIVITY_TAG, node))
 
@@ -607,7 +612,9 @@ def _qualified(b: _Builder, kind: str, rel: Usage | Generation) -> dict[str, obj
 
 
 def _association(b: _Builder, a: Association) -> dict[str, object]:
-    q: dict[str, object] = {"@type": "prov:Association", "prov:agent": {"@id": a.agent}}
+    q: dict[str, object] = {"@type": "prov:Association"}
+    if a.agent is not None:
+        q["prov:agent"] = {"@id": a.agent}
     if a.node_id is not None:
         q["prov:hadRole"] = _role(b, "senselab:nodeId", a.node_id)
     if a.plan is not None:

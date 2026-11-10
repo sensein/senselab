@@ -89,7 +89,7 @@ from senselab_core.runtime.execution.pool_parts import (
 )
 from senselab_core.runtime.execution.probe_machine import ProbeMachine, ProbeQueue, detected_kind
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of
-from senselab_core.runtime.execution.records import record_settled_reuse, reuse_attributes
+from senselab_core.runtime.execution.records import add_plan_entity, record_settled_reuse, reuse_attributes
 from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
     BrokenClass,
@@ -673,7 +673,7 @@ class Pool:
                 found = self.store.entry_of(key, ref.output_identity)
                 if found is not None:
                     if reused:
-                        self._reuse(placed, logical[index], found, ref.served)
+                        self._reuse(placed, job, logical[index], found, ref.served)
                     yield ref.model_copy(update={"served": "exact"}) if reused and ref.served is None else ref
                     continue
                 fault = _gap("MissingOutput", f"the outputs of {job} are not in the result store")
@@ -683,12 +683,13 @@ class Pool:
                 fault = dead or _gap("MissingResult", f"the outcome of the item gives no result for {job}")
             yield from self._effect(followed, flight, index, key, fault)
 
-    def _reuse(self, placed: Plan, key: LogicalKey, hit: StoredResult, served: str | None) -> None:
+    def _reuse(self, placed: Plan, job: JobRef, key: LogicalKey, hit: StoredResult, served: str | None) -> None:
         """Record that this attempt settles `hit` for `key` from an earlier attempt, under the policy `served`."""
-        digest = key.digest()
-        if digest in self._reused:
+        settled = f"{job.node}:{key.digest()}"
+        if settled in self._reused:
             return
         run = placed.config if placed.config is not None else RunConfig()
+        add_plan_entity(self.store.provenance, placed.hash)
         record_settled_reuse(
             self.store,
             key,
@@ -696,8 +697,9 @@ class Pool:
             datetime.now(timezone.utc),
             ReusePolicy(served or ReusePolicy.EXACT.value),
             reuse_attributes(run, hit),
+            job,
         )
-        self._reused.add(digest)
+        self._reused.add(settled)
         self._reuses_unwritten = True
 
     def _flush_reuses(self) -> None:

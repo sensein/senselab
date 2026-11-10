@@ -43,12 +43,14 @@ def record_settled_reuse(  # noqa: PLR0913 - the settled hit, then what its acti
     started: datetime,
     policy: ReusePolicy,
     attributes: Mapping[str, object],
+    job: JobRef,
 ) -> None:
     """Add to `store`'s provenance the `senselab:Reuse` of a process that settled `hit` for `key` without running it.
 
     Unlike `ResultStore.record_reuse`, no execution context or agent of the settling process is recorded: the activity
     names the stored context (`senselab:storedContext`) and the agent that computed `hit` (`senselab:storedAgent`),
-    and is associated with no agent. `policy` is the policy `hit` was served under; `attributes` are recorded beside.
+    and its association names `job`'s node and plan and no agent.
+    `policy` is the policy `hit` was served under; `attributes` are recorded beside.
     """
     stored_agent = agent_record(key, hit.context)
     own: dict[str, object] = {
@@ -66,6 +68,7 @@ def record_settled_reuse(  # noqa: PLR0913 - the settled hit, then what its acti
         started=started,
         ended=datetime.now(timezone.utc),
         used=[used],
+        associations=[kprov.Association(None, job.node, f"plan:{job.plan_hash}")],
         attributes=own,
         types=["senselab:Reuse"],
     )
