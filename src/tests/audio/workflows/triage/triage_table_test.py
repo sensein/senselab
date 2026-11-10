@@ -502,3 +502,15 @@ def test_a_pilots_session_consistency_cosine_reaches_the_table() -> None:
         }
     }
     assert _cohort_columns(measured)["session_consistency_cosine"] == 0.82
+
+
+def test_manifest_sources_name_the_run_directory_in_either_manifest_form(tmp_path: Path) -> None:
+    """``stem`` as the run directory name (no ``enhanced``), or as the recording's stem with ``enhanced``: same keys."""
+    run = tmp_path / "out" / "p1" / "s1" / "rec_20261110-012101"
+    by_run_name = tmp_path / "by_run_name.jsonl"
+    by_run_name.write_text(json.dumps({"stem": run.name, "source": "/a/rec.wav"}) + "\n")
+    by_recording = tmp_path / "by_recording.jsonl"
+    enhanced = run / "run" / "streams" / "enhanced.flac"
+    by_recording.write_text(json.dumps({"stem": "rec", "source": "/a/rec.wav", "enhanced": str(enhanced)}) + "\n")
+    assert triage_table.manifest_sources(by_run_name) == {"rec_20261110-012101": "/a/rec.wav"}
+    assert triage_table.manifest_sources(by_recording) == {"rec_20261110-012101": "/a/rec.wav"}
