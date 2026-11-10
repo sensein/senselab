@@ -152,39 +152,55 @@ def _write(
         assert _roots(path).put_observations(unit, probe, mine, provenance) is not None
 
 
-merge = _module("merge_measures_under_test", ROOT / "scripts" / "merge_measures.py")
-
-
-def _reads(root: Path) -> MeasureSource:
-    roots = _roots(root)
-    return MeasureSource(
-        [roots],
-        estimate=Probe.estimator(
-            CONFIG, records_of=roots.regime_records, memory_headroom=PROFILE.sizing.memory_headroom
-        ),
-    )
+class _Stop(Exception):
+    """Raised by the stand-in pool once it has been given its roots."""
 
 
 @pytest.mark.logic
-def test_merged_ladder_points_are_a_root_the_source_reads_on_an_identity_match(tmp_path: Path, capsys: Any) -> None:  # noqa: ANN401
-    """The script merges a ladder run's points into one root: its unit is measured there, another unit is not."""
-    run, dest = tmp_path / "run", tmp_path / "group"
+def test_a_ladder_run_with_a_measures_root_probes_into_it_and_a_profile_listing_it_reads_the_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--measures-root` is the root every point's pool is given; a unit measured there is read on identity match."""
+    ladder = _module("scale_ladder_root_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
+    registry = Registry()
+    registry.add_task(fake_backend.ECHO)
+    registry.add_backend(fake_backend.FAKE)
+    given: list[MeasureRoots] = []
+
+    def pool(*args: Any, roots: MeasureRoots, **kwargs: Any) -> None:  # noqa: ANN401, ARG001 - the Pool signature
+        given.append(roots)
+        raise _Stop
+
+    monkeypatch.setattr(ladder, "Pool", pool)
+    suite = tmp_path / "one.yaml"
+    suite.write_text(
+        "format: scale-suite@1.1\nname: one\nseed: 0\nlong_s: 1\ntasks:\n"
+        "- {task: fake.echo, port: payload, data: payloads, points: [1]}\n"
+    )
+    group = tmp_path / "group" / "measures"
+    previous = use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, registry, mit_lock_records))
+    try:
+        with pytest.raises(_Stop):
+            ladder.main(["run", str(suite), "--execution", "laptop", "--measures-root", str(group)])
+        assert [r.roots for r in given] == [(group,)]
+    finally:
+        use_packaged(previous)
     other = UNIT.model_copy(update={"env": UNIT.env.model_copy(update={"wheel_set": "f" * 64})})
-    _write(run / "t~b@100" / "measures", UNIT, _line([2.0, 8.0], "p1"))
-    _write(run / "t~b@1000" / "measures", UNIT, _line([3.0, 9.0], "p2"))
-    oom = {"resource": "host", "batch": 4, "length": 8.0, "cotenancy": 1, "grant_bytes": 1024, "basis": ["p1"]}
-    assert _roots(run / "t~b@100" / "measures").put_record(UNIT, "oom", oom, PROVENANCE) is not None
-    assert merge.main([str(run), "--out", str(dest)]) == 0
-    assert f"unit {UNIT.label()}: 2 probes, 1 records" in capsys.readouterr().out
-    assert [r.kind for r in _roots(dest).records(UNIT)] == ["oom"]
-    source = _reads(dest)
-    found = source.get(UNIT)
-    assert found is not None and found.source.probe_ids == ("p1", "p2")
-    assert source.get(other) is None
-    assert merge.main([str(run), "--out", str(dest)]) == 0
-    assert f"unit {UNIT.label()}: 0 probes, 0 records" in capsys.readouterr().out
-    assert _reads(dest).get(UNIT) == found
-    assert merge.main([str(tmp_path / "empty"), "--out", str(dest)]) == 1
+    _write(group, UNIT, _line([2.0, 8.0]))
+    listed = PROFILE.model_copy(
+        update={"calibration": CONFIG.model_copy(update={"measures_roots": (str(group),), "trust": "group"})}
+    )
+    roots = MeasureRoots.from_profile(
+        listed.calibration, StorePolicy.load_default(), stale_after_s=listed.lease.stale_after_s, cache=tmp_path
+    )
+    source = MeasureSource(
+        [roots],
+        estimate=Probe.estimator(
+            listed.calibration, records_of=roots.regime_records, memory_headroom=listed.sizing.memory_headroom
+        ),
+    )
+    assert source.get(UNIT) is not None and source.get(other) is None
 
 
 @pytest.mark.logic
@@ -291,7 +307,7 @@ def test_two_entries_of_one_task_write_two_results_and_two_stores(
     registry.add_backend(fake_backend.FAKE)
     registry.add_backend(fake_backend.FAKE.model_copy(update={"name": "fake2", "stack": "fake2"}))
 
-    def measured(entry: Any, point: Any, suite: Any, profile: Any, label: str, out: Path) -> dict[str, Any]:  # noqa: ANN401, ARG001, PLR0913 - the measure_point signature
+    def measured(entry: Any, point: Any, suite: Any, profile: Any, label: str, out: Path, **_: Any) -> dict[str, Any]:  # noqa: ANN401, ARG001, PLR0913 - the measure_point signature
         (out / f"{label}@{point}" / "store").mkdir(parents=True)
         row = {"per_item_s": 1.0, "peak_rss_bytes": 1, "files_written": 1, "bytes_written": 1, "items": 1, "units": []}
         return {"sha": "a", "jobs": ["1"], "task": entry.task, "label": label, "point": point, "done": True, **row}

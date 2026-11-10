@@ -201,7 +201,7 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
     register(
         EstimateSource,
         lambda: [EstimateSource(), EstimateSource(probe_ids=("p1",), observations=9)],
-        invalid_updates=[{"commit": "abc"}, {"probe_ids": ("",)}],
+        invalid_updates=[{"observations": -1}, {"probe_ids": ("",)}],
     )
     register(
         Estimate,

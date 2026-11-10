@@ -3,7 +3,8 @@
 Every YAML file git tracks under a ``data/`` directory of ``packages/`` or ``scripts/`` holds values only; why each
 top-level key has its value is a ``### <key>`` section under the file's ``## <path>`` section of config-derivations.md
 (P-17). A ``derivation`` or ``derivations`` key at any depth is refused. ``INLINE_EXEMPT`` and ``SECTION_EXEMPT``
-name the files outside one check or the other, each with its reason. Without config-derivations.md in the tree (a code branch), only the inline keys are checked.
+name the files outside one check or the other, each with its reason. Without config-derivations.md in the tree (a code branch), only the inline keys are
+checked.
 
 Usage::
 

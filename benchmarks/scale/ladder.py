@@ -1,6 +1,6 @@
 """The scale ladder: each task of a suite run at its scale points and measured per item (`scale-result@2.0`).
 
-`uv run python benchmarks/scale/ladder.py run SUITE --execution PROFILE`
+`uv run python benchmarks/scale/ladder.py run SUITE --execution PROFILE [--measures-root PATH]`
 
 A suite (`scale-suite@1.1`, `suites/<name>.yaml`; `suites/fake.yaml` runs with `fake_stack/` on PYTHONPATH) names a
 seed, the long signal's seconds and its tasks, and may name a table profile: `calibration:` overrides of
@@ -15,7 +15,10 @@ measures root of the point's own (so each unit is probed in the run, not read fr
 events, its files, the samples each pool worker reported and the observations of every request. One
 `scale-result@2.0` document per point is written under `$SENSELAB_CACHE/2x/benchmarks/scale/<suite>/<commit>/`: per
 measures-root unit its probe observations and its `Estimate` (unmeasured, with reasons, where the probe did not
-measure), the per-item seconds (`request_cost`) and the calibration settings it ran under. One line is printed per
+measure), the per-item seconds (`request_cost`) and the calibration settings it ran under. With `--measures-root PATH`
+every point's pool probes into and reads that one root instead, so a group calibrating its own resource lists `PATH` in
+its profile's `calibration.measures_roots` and a unit measured there is read on an identity match (a unit already in
+`PATH` is not probed again). One line is printed per
 point, then each task's flatness against `budgets.yaml` (`scale-budgets@1.0`). A point whose run directory already
 exists is refused, so no point is measured from reused results, and every entry is planned before any point is
 measured, so a suite with an entry that does not plan is refused, every such entry listed.
@@ -373,13 +376,20 @@ def point_roots(profile: ExecutionProfile, directory: Path) -> MeasureRoots:
 
 
 def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the profile, its label and where results go
-    entry: Entry, point: int | str, suite: Suite, profile: ExecutionProfile, label: str, out: Path
+    entry: Entry,
+    point: int | str,
+    suite: Suite,
+    profile: ExecutionProfile,
+    label: str,
+    out: Path,
+    measures_root: Path | None = None,
 ) -> dict[str, Any]:
     """Plan, run and measure `entry` at `point` under `profile`; return its `scale-result@2.0` document.
 
     Its store is `<out>/<label>@<point>/store`, and its pool probes into the measures root beside it, with the
     suite's per-point wall budget as its probe seconds, so each point probes afresh and reads no other point's
-    measure. Its `units` hold, per unit that root holds, the probe's observations and its `Estimate` (`Probe.estimate`;
+    measure; with `measures_root` it probes into and reads that root instead.
+    Its `units` hold, per unit that root holds, the probe's observations and its `Estimate` (`Probe.estimate`;
     unmeasured, with reasons, where the probe did not measure). `per_item_s` is `request_cost` over every request
     the run reported.
 
@@ -392,7 +402,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         raise FileExistsError(f"{run_dir} exists; remove it to measure {entry.task} at {point} afresh")
     store_root = out / f"{label}@{point}" / "store"
     store = ResultStore(store_root)
-    roots = point_roots(profile, out / f"{label}@{point}" / "measures")
+    roots = point_roots(profile, measures_root or out / f"{label}@{point}" / "measures")
     pool = Pool(
         run_dir,
         queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
@@ -542,7 +552,7 @@ def _profile(argument: str) -> ExecutionProfile:
     return ExecutionProfile.load(argument)
 
 
-def run(suite_path: Path, profile: ExecutionProfile) -> list[dict[str, Any]]:
+def run(suite_path: Path, profile: ExecutionProfile, measures_root: Path | None = None) -> list[dict[str, Any]]:
     """Measure every point of every task of the suite at `suite_path`; write and return the results.
 
     Every entry is planned first (`check_suite`), so a suite with an entry that does not plan measures nothing.
@@ -555,7 +565,7 @@ def run(suite_path: Path, profile: ExecutionProfile) -> list[dict[str, Any]]:
     results = []
     for entry, label in zip(suite.tasks, found, strict=True):
         for point in entry.points:
-            result = measure_point(entry, point, suite, profile, label, out)
+            result = measure_point(entry, point, suite, profile, label, out, measures_root=measures_root)
             (out / f"{label}@{point}.json").write_text(json.dumps(result, indent=1, sort_keys=True) + "\n")
             per = "n/a" if result["per_item_s"] is None else f"{result['per_item_s']:.4f}"
             measured = sum(u["estimate"]["status"] == "measured" for u in result["units"])
@@ -575,14 +585,15 @@ def run(suite_path: Path, profile: ExecutionProfile) -> list[dict[str, Any]]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run `ladder.py run SUITE --execution PROFILE`; return 0."""
+    """Run `ladder.py run SUITE --execution PROFILE [--measures-root PATH]`; return 0."""
     parser = argparse.ArgumentParser(prog="ladder.py")
     commands = parser.add_subparsers(dest="command", required=True)
     running = commands.add_parser("run", help="measure every point of a scale suite")
     running.add_argument("suite", type=Path, help="a scale-suite@1.x file")
     running.add_argument("--execution", required=True, help="a packaged execution profile, or a YAML file over one")
+    running.add_argument("--measures-root", type=Path, help="one measures root every point probes into and reads")
     args = parser.parse_args(argv)
-    run(args.suite, _profile(args.execution))
+    run(args.suite, _profile(args.execution), args.measures_root)
     return 0
 
 
