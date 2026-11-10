@@ -128,6 +128,11 @@ Rulings P2-4, P2-6; implemented in Phase 2 Task 3b.
   (`ConflictingNode`). A temporary of an interrupted write is skipped; any other file in `prov/` is refused. A writer
   is one process: a store used after `fork` mints a new writer id in the child, because children sharing the parent's
   id would replace one another's document and lose records. An `add` that meets a conflict adds nothing.
+- **A pool worker writes when it finishes a claim.** A worker's store holds its own `ProvStore`, so the executions and
+  `senselab:Reuse` activities of its items are the worker's records. It replaces its document, as above, when each
+  claim ends and when it returns, so a worker that dies loses at most the claim it is running or has just committed (its results stand). Its document also holds the
+  run's `senselab:Plan` entity, which the coordinator adds too (equal bytes, one node), so a worker's document names
+  only nodes the union holds even before the coordinator writes.
 - **A reader rebuilds every node.** Each node read is rebuilt through the record builders over the reader's vocabulary
   and must equal its bytes, so an `@id` that is not the node's address, a term outside the vocabulary or a literal
   outside its range is refused (`MalformedDocument`) rather than wrapped as a record. Read errors name the writer and
