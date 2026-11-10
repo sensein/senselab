@@ -601,7 +601,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     running = commands.add_parser("run", help="measure every point of a scale suite")
     running.add_argument("suite", type=Path, help="a scale-suite@1.x file")
-    running.add_argument("--execution", required=True, help="a packaged execution profile, or a YAML file over one")
+    running.add_argument(
+        "--execution", required=True, help="a packaged profile name, or a path to a whole profile file"
+    )
     running.add_argument("--measures-root", type=Path, help="one measures root every point probes into and reads")
     args = parser.parse_args(argv)
     run(args.suite, _profile(args.execution), args.measures_root)

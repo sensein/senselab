@@ -94,6 +94,19 @@ class UnfilledProfile(ValueError):
         self.name, self.unfilled = name, dict(unfilled)
 
 
+class IncompleteProfile(ValueError):
+    """A profile file that omits keys: a file passed as a profile is a whole one."""
+
+    def __init__(self, source: str, missing: list[str]) -> None:
+        """Name the file and the keys it lacks."""
+        super().__init__(
+            f"{source}: a profile file must be complete, and this one lacks {', '.join(missing)}. To change a few"
+            " values of a packaged profile, pass them as an override: `ExecutionProfile.load(name, file)`,"
+            " or `--override FILE` where a command takes one"
+        )
+        self.source, self.missing = source, missing
+
+
 class QosCapTooSmall(ValueError):
     """A resource class whose workers need more CPUs than the substrate's QOS CPU cap allows at all."""
 
@@ -193,6 +206,7 @@ class ExecutionProfile(Formatted):
 
         Raises:
             FileNotFoundError: `source` is neither a packaged profile nor a file.
+            IncompleteProfile: the merged mapping lacks keys, as a partial file passed as a profile does.
             ProfileFormatRetired: the merged mapping declares a retired format.
             UnfilledProfile: a value is still a `<fill: ...>` placeholder.
             UnknownProfileKey: a key of `override` that the format does not define, naming the closest one.
@@ -206,6 +220,9 @@ class ExecutionProfile(Formatted):
             FormatVerdict.RETIRED
         ):
             raise ProfileFormatRetired(str(merged.get("format")))
+        missing = [k for k, f in cls.model_fields.items() if f.is_required() and k not in merged]
+        if missing:
+            raise IncompleteProfile(os.fspath(source), missing)
         unfilled = _unfilled(merged)
         if unfilled:
             raise UnfilledProfile(str(merged.get("name", source)), unfilled)

@@ -13,6 +13,7 @@ from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.keys import build_key
 from senselab_core.runtime.profiles import (
     ExecutionProfile,
+    IncompleteProfile,
     NoBackend,
     NoDevice,
     ProfileFormatRetired,
@@ -200,16 +201,18 @@ def test_packaged_profile_comments_every_key_and_holds_no_derivations(name: str)
 
 @pytest.mark.logic
 def test_env_root_expands_home_and_refuses_unset_variable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The fixture roots sit in the home directory unless `SENSELAB_ENV_ROOT` names one; unset is an error."""
+    """`SENSELAB_ENV_ROOT` names the fixture's roots; unset is an error; `${VAR:-fallback}` falls back."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("SCRATCH", raising=False)
     monkeypatch.setenv("SENSELAB_ENV_ROOT", str(tmp_path / "group"))
     assert ExecutionProfile.load(CLUSTER).env_root("isolated") == tmp_path / "group"
     assert ExecutionProfile.load(CLUSTER).env_root("server") == tmp_path / "group" / "servers"
     monkeypatch.delenv("SENSELAB_ENV_ROOT")
-    root = tmp_path / "cluster" / "scratch" / "senselab-2x-venvs"
-    assert ExecutionProfile.load(CLUSTER).env_root("isolated") == root
-    assert ExecutionProfile.load(CLUSTER).env_root("server") == root / "servers"
+    with pytest.raises(ValueError, match="not set"):
+        ExecutionProfile.load(CLUSTER).env_root("isolated")
+    root = tmp_path / "fallback"
+    fallback = {"env_roots": {"isolated": f"${{SENSELAB_ENV_ROOT:-{root}}}"}}
+    assert ExecutionProfile.load(CLUSTER, fallback).env_root("isolated") == root
     with pytest.raises(ValueError, match="not set"):
         ExecutionProfile.load(CLUSTER, {"env_roots": {"isolated": "$SENSELAB_UNSET_ROOT/v"}}).env_root("isolated")
     registry = _registry(_backend("b1", "one", env=Env.isolated("x")))
@@ -246,11 +249,11 @@ def test_resource_class_follows_device_order_and_host() -> None:
     on_gpu = resolve_execution(TASK, _entry(), _profile(), GPU, registry, CAT)
     assert (on_gpu.resource_class, on_gpu.device, on_gpu.partition) == ("gpu", "cuda", None)
     assert resolve_execution(TASK, _entry(), _profile(), NO_GPU, registry, CAT).resource_class == "cpu"
-    orcd = ExecutionProfile.load(CLUSTER)
-    scheduled = resolve_execution(TASK, _entry(), orcd, None, registry, CAT)
+    cluster = ExecutionProfile.load(CLUSTER)
+    scheduled = resolve_execution(TASK, _entry(), cluster, None, registry, CAT)
     assert (scheduled.resource_class, scheduled.partition) == ("gpu:h100", "${GPU_PARTITION}")
     other_gpu = GPU.__class__(**{**GPU.__dict__, "gpus": (GpuInfo(name="A100", memory_bytes=1, driver="1"),)})
-    assert resolve_execution(TASK, _entry(), orcd, other_gpu, registry, CAT).resource_class == "gpu"
+    assert resolve_execution(TASK, _entry(), cluster, other_gpu, registry, CAT).resource_class == "gpu"
     cpu_only = ExecutionProfile.load(CLUSTER, {"devices": ["cpu"]})
     assert resolve_execution(TASK, _entry(), cpu_only, other_gpu, registry, CAT).resource_class == "cpu"
 
@@ -262,11 +265,11 @@ def test_a_server_backend_takes_a_service_class_first() -> None:
     server = BackendSpec.model_validate(
         {**host.model_dump(), "env": Env.server("e"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
     )
-    orcd = ExecutionProfile.load(CLUSTER)
-    placed = resolve_execution(TASK, _entry(), orcd, None, _registry(server), CAT)
+    cluster = ExecutionProfile.load(CLUSTER)
+    placed = resolve_execution(TASK, _entry(), cluster, None, _registry(server), CAT)
     assert (placed.resource_class, placed.device) == ("svc:h100", "cuda")
-    assert resolve_execution(TASK, _entry(), orcd, GPU, _registry(server), CAT).resource_class == "svc:h100"
-    assert resolve_execution(TASK, _entry(), orcd, None, _registry(host), CAT).resource_class == "gpu:h100"
+    assert resolve_execution(TASK, _entry(), cluster, GPU, _registry(server), CAT).resource_class == "svc:h100"
+    assert resolve_execution(TASK, _entry(), cluster, None, _registry(host), CAT).resource_class == "gpu:h100"
     assert resolve_execution(TASK, _entry(), _profile(), GPU, _registry(server), CAT).resource_class == "gpu"
 
 
@@ -311,6 +314,16 @@ def test_senselab_ships_only_generic_profiles() -> None:
         ExecutionProfile.load("orcd")
     with pytest.raises(FileNotFoundError, match="not a profile file"):
         ExecutionProfile.load("missing.yaml")
+
+
+@pytest.mark.logic
+def test_a_partial_file_passed_as_a_profile_says_to_use_an_override(tmp_path: Path) -> None:
+    """One clear error, not a list of missing fields, and `load(name, file)` is the layering that works."""
+    partial = tmp_path / "partial.yaml"
+    partial.write_text("format: execution-profile@3.0\nretry:\n  attempts: 6\n  first_backoff_s: 1.0\n")
+    with pytest.raises(IncompleteProfile, match=r"must be complete.*override"):
+        ExecutionProfile.load(partial)
+    assert ExecutionProfile.load("laptop", partial).retry.attempts == 6
 
 
 @pytest.mark.logic

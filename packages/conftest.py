@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -87,6 +88,19 @@ def real_cache_untouched() -> Iterator[None]:
     yield
     written = (set(kept.iterdir()) if kept.is_dir() else set()) - before
     assert not written, f"tests wrote {len(written)} file(s) under the real cache root {kept}; give them tmp_path"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _env_root(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Give `SENSELAB_ENV_ROOT` a session temp directory when unset, so the test profile builds envs nowhere else."""
+    if os.environ.get("SENSELAB_ENV_ROOT"):
+        yield
+        return
+    os.environ["SENSELAB_ENV_ROOT"] = str(tmp_path_factory.mktemp("envs"))
+    try:
+        yield
+    finally:
+        del os.environ["SENSELAB_ENV_ROOT"]
 
 
 def _slack_document(request: pytest.FixtureRequest) -> dict[str, Any]:

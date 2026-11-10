@@ -10,8 +10,8 @@ stack_preferences: {}
 devices: [cuda, cpu]
 # Per env kind, the directory env trees are built under.
 env_roots:
-  isolated: ${SENSELAB_ENV_ROOT:-~/cluster/scratch/senselab-2x-venvs}
-  server: ${SENSELAB_ENV_ROOT:-~/cluster/scratch/senselab-2x-venvs}/servers
+  isolated: ${SENSELAB_ENV_ROOT}
+  server: ${SENSELAB_ENV_ROOT}/servers
 # The server start wait margin and the torch wheel index override (null: probed from the host).
 envs:
   server_start_margin_s: 60

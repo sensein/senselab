@@ -119,7 +119,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     running = commands.add_parser("run", help="run the agent's call")
     running.add_argument("--call", type=Path, required=True)
     running.add_argument("--work", type=Path, required=True)
-    running.add_argument("--profile", required=True, help="a packaged execution profile, or a YAML file over one")
+    running.add_argument("--profile", required=True, help="a packaged profile name, or a path to a whole profile file")
     running.add_argument("--executor", required=True, choices=exitlib.EXECUTORS)
     running.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)

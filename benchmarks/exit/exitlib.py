@@ -531,6 +531,8 @@ def identity_cli(step: str, argv: Sequence[str] | None = None) -> int:
         except PlanIdentityError as error:
             print(error)
             return 1
+        except (ValueError, FileNotFoundError) as error:
+            parser.error(f"{error}; name a site profile with `plan --profile FILE`")
         print(
             f"{step}: one plan hash {plan_hash} under {', '.join([*config.plan_profiles, *args.profile])}; "
             f"{len(found)} differences, all in placement"

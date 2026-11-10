@@ -1,5 +1,6 @@
 """One registered vLLM server of the catalogue's PII model consumed by two worker sets (ORCD, H100)."""
 
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -20,6 +21,7 @@ CLUSTER = (
     next(p for p in Path(__file__).resolve().parents if p.name == "packages")
     / "senselab-core/tests/data/profiles/cluster.yaml"
 )
+SITE = Path(os.environ.get("SENSELAB_TEST_PROFILE") or CLUSTER)
 
 pytestmark = [pytest.mark.limits, pytest.mark.gpu, pytest.mark.model, pytest.mark.network]
 
@@ -37,7 +39,7 @@ def _backend(settings: dict[str, object]) -> BackendSpec:
 @pytest.mark.timeout(4 * STARTUP_TIMEOUT_S)
 def test_two_plans_share_one_pii_server_and_a_new_config_is_another_service(tmp_path: Path) -> None:
     """Two consumers share one started server; restarted with a new config it attests anew, changing the call's key."""
-    profile = ExecutionProfile.load(CLUSTER)
+    profile = ExecutionProfile.load(SITE)
     env = ensure_env(
         Env.server("vllm-server"),
         DATA / "env_locks/vllm-server.txt",

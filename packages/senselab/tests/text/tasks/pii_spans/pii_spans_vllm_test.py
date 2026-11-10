@@ -39,6 +39,7 @@ CLUSTER = (
     next(p for p in Path(__file__).resolve().parents if p.name == "packages")
     / "senselab-core/tests/data/profiles/cluster.yaml"
 )
+SITE = Path(os.environ.get("SENSELAB_TEST_PROFILE") or CLUSTER)
 
 LOCK_RECORDS = packaged_lock_records("senselab")
 
@@ -259,7 +260,7 @@ def test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs(tmp_path:
 
     Empty, non-BMP and long texts each give spans inside the text or a typed fault.
     """
-    profile = ExecutionProfile.load(CLUSTER, {"stack_preferences": {"pii_spans": ["vllm"]}})
+    profile = ExecutionProfile.load(SITE, {"stack_preferences": {"pii_spans": ["vllm"]}})
     store = ResultStore(tmp_path / "results")
 
     def run(text: str) -> Any:  # noqa: ANN401
