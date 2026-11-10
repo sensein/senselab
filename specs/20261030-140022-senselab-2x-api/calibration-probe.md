@@ -255,7 +255,7 @@ is caught by drift (§7.3). So shared records need provenance and a reader's cho
 - **One reader filter over all of them.** `calibration.trust` is `group` (read every file of every root) or `own`
   (only files whose owner uid is the current user's). A `drift`, `supersede`, `regime` or `oom` record acts only for readers whose filter
   admits it; under `own`, another user's records never supersede or cap your measures.
-- **Who sets it.** The profile sets the site default (`orcd` `group`, `laptop` `own`). A user opts out per run with the
+- **Who sets it.** The profile sets the default (`laptop` and the `slurm` template `own`; a user's site profile may set `group`). A user opts out per run with the
   run config key `calibration.trust: own`, which overrides the profile's value (P-34's run-config form; ruling O-3).
 - **`collect`** removes only files the collector's uid owns, or files a record it trusts supersedes and that its uid
   owns. It never removes another user's file.

@@ -241,6 +241,18 @@ it is amended here.
 ### P-30 Tests are tiered; benchmarks are separate
 - **Status**: active. Full text in [`engineering.md`](engineering.md#p-30).
 
+### P-42 Packaged execution profiles are generic; site profiles are user files
+- **Status**: active
+- **Statement**: senselab is general purpose, so it packages no profile of one site. The packaged execution
+  profiles are `laptop` (a workstation; resources are discovered, not declared) and `slurm` (a template whose
+  site values are `<fill: ...>` placeholders). `ExecutionProfile.load` refuses a profile with a placeholder left,
+  naming each key. A site's profile is a file its users own and pass by path (`--execution FILE`, or
+  `ExecutionProfile.load(path)`); tests and benchmarks that need cluster values read a fixture file with
+  invented ones. No tracked file names a site, an account, a partition or a personal path (P-28).
+- **Source**: owner, 2026-11-09: senselab is general purpose; it ships no site execution profile.
+- **Check**: `packaged_profiles()` is `("laptop", "slurm")`; the template refuses to load unfilled; the
+  profile tests use the fixture, not a packaged name.
+
 ### P-41 Docs communicate senselab and its progress, with examples on public data
 - **Status**: active
 - **Statement**: The docs are written for scientists, clinicians and engineers, with rich examples
@@ -439,6 +451,7 @@ amending its origin.
 - 2026-10-30: added P-39 (reconcile concurrent 1.x work on `alpha`; `migration-ledger.md`).
 - 2026-10-30: added P-40 (agent and model selection per task, independent reviewers) with its
   roster in `engineering.md`.
+- 2026-11-09: added P-42 (packaged execution profiles are generic; site profiles are user files).
 - 2026-10-30: added P-41 (docs for three audiences, PR previews showing progress, toy fixtures in
   the repo versus pulled versioned data); see `docs.md`.
 - 2026-11-01: owner decisions D-1..D-7 on the full review, recorded in

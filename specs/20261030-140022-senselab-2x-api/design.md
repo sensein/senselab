@@ -339,7 +339,7 @@ ds = ds.filter(task="reading-passage")
 ### 4.7 Plan and run lifecycle (P-2, P-5, P-10)
 
 ```python
-plan = sl.plan(p, ds, config="cfg.yaml", dataset_profile=..., execution="orcd.yaml")
+plan = sl.plan(p, ds, config="cfg.yaml", dataset_profile=..., execution="site.yaml")
 plan.explain()             # backend, stack, env, device, batch, partition, licenses, cost, why
 run  = plan.run()          # -> Run
 run.status(); run.wait(); rs = run.results(); run.cancel()
@@ -929,7 +929,7 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
   - port the tutorials (`p.loop` only if a use case needs it);
   - replace `agentic_interface` with MCP;
   - keep the review-page and VLM tooling outside the package;
-  - move ORCD scripts into site profiles;
+  - move ORCD scripts into site profiles, which are user files: senselab packages only generic profiles (P-42);
   - keep benchmarks as dev scripts.
 - **Also:** locked isolated envs (P-25), signals (P-26), license sets with raise by default
   (P-23), process principles (P-27..P-29), testing tiers (P-30) and engineering standards

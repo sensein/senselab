@@ -560,7 +560,7 @@ are recorded here (R-200).
   `pool.poll_s` while a fragment is followed, a submit or retry wakes it, `close` stops it, and it is the only caller
   of `scale`, so a slow `sbatch` never delays settling or a cancel and concurrent submits cannot over-start. `poll`
   reads the epoch fence at most once per `first_poll_s`. The sender threads are explicit: the profile's summed
-  `max_workers` (3 under `laptop`, 48 under `orcd`), or `PydraRunner(senders=...)`. For `InProcess` they are where
+  `max_workers` (3 under `laptop`; a Slurm profile's is the sum its user sets), or `PydraRunner(senders=...)`. For `InProcess` they are where
   the jobs run, so they bound its concurrency at the `WorkerSet` bound; before, the default executor gave
   `min(32, cpus + 4)` threads (14 on a 10-CPU laptop), whose extras only waited on leases.
 - **Worker report (Task 14, for Task 15a).** A pool worker commits each item with `report(claim, digest, outcomes)`:

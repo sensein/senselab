@@ -257,10 +257,10 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
   is not published; the manifest and the label map
   are not written. The vLLM start lease only orders starts: lost before the launch (checked by `prove()`), the
   start is refused; lost after it, the healthy server is kept and the loss is logged.
-- **The beat bound is checked at load.** `lease.attribute_delay_s` is data (the NFS default acdirmax, 60 s, on
-  `orcd`; 0 on local disk) and a floor: `probe_capabilities` measures, from one client, how long a directory's mtime takes to show a new entry, and `check_storage` checks the bound at plan time against the larger of the two. One client cannot see another's stale attribute cache, so the probe only ever raises the floor. `ExecutionProfile.load` refuses a profile where
+- **The beat bound is checked at load.** `lease.attribute_delay_s` is data (the NFS default acdirmax, 60 s, in
+  the `slurm` template; 0 on local disk) and a floor: `probe_capabilities` measures, from one client, how long a directory's mtime takes to show a new entry, and `check_storage` checks the bound at plan time against the larger of the two. One client cannot see another's stale attribute cache, so the probe only ever raises the floor. `ExecutionProfile.load` refuses a profile where
   `(1 + lease.missed_beats) × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s` with
-  `LeaseBoundError`; the packaged profiles allow one missed beat (`lease.missed_beats` 1). Both packaged profiles load (orcd: 198 + 60 = 258 < 300).
+  `LeaseBoundError`; the packaged profiles allow one missed beat (`lease.missed_beats` 1). Both packaged profiles load (slurm, once filled: 198 + 60 = 258 < 300).
 - **Unsupported roots.** `StorageUnsupported` is raised when `mkdir` fails as an unsupported operation (`ENOTSUP`,
   `EOPNOTSUPP`, `ENOSYS`). `probe_capabilities` measures directory rename, server-clock mtimes, file rename, exclusive `link` and the attribute delay on the root, and `require` raises the same type naming each missing primitive.
 - **Not guaranteed.** On NFS a breaker's `lstat` of a token may be served from its attribute cache for up to
