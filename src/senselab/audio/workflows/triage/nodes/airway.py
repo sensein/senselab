@@ -20,6 +20,7 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.classifier_ontology import PROFILE_PATH_KEY, corroboration_sets
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.identity import task_id_candidates
 from senselab.audio.workflows.triage.nodes.airway_task import measure_airway_task
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
@@ -79,7 +80,6 @@ from senselab.audio.workflows.triage.nodes.common import (
     software_agent,
     write_report,
 )
-from senselab.audio.workflows.triage.routing_analysis.families import task_id_of
 from senselab.audio.workflows.triage.task_speech import write_task_speech
 from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.utils.prov_store import Entity, ProvStore
@@ -582,30 +582,6 @@ def lexical_intrusions(store: ProvStore) -> list[Finding]:
     return out
 
 
-def declared_task_ids(store: ProvStore, hint: AudioHints | None) -> list[str]:
-    """Every task id the store and the hint carry, best carrier first, trailing index intact.
-
-    The foundation's ``declared_task_family`` collapses the trailing index, so the id is read again
-    here rather than recovered from the family.
-
-    Args:
-        store: The provenance store.
-        hint: The recording's hints, or None.
-
-    Returns:
-        The candidate task ids, lowercased.
-    """
-    found: list[str] = []
-    token = (hint.metadata or {}).get("task_token") if hint is not None else None
-    if isinstance(token, str) and token.strip():
-        found.append(token.strip().lower())
-    recording = stream_entity(store, "recording")
-    path = None if recording is None else recording.attributes.get("path")
-    if path:
-        found.append(task_id_of(Path(str(path)).stem))
-    return found
-
-
 def declared_route(
     expectation: Expectation, store: ProvStore, hint: AudioHints | None, params: BranchParams
 ) -> str | None:
@@ -623,7 +599,7 @@ def declared_route(
     if not expectation.route_from_index:
         return expectation.declared_route
     routes = {str(index): str(route) for index, route in (params.config.require(ROUTE_INDEX_KEY) or {}).items()}
-    for task_id in declared_task_ids(store, hint):
+    for task_id in task_id_candidates(store, hint):
         segment = task_id.rsplit("-", 1)[-1]
         if segment in routes:
             return routes[segment]

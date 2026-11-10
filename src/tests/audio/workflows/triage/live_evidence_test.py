@@ -13,12 +13,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.identity import identity_of
 from senselab.audio.workflows.triage.live_evidence import (
     EVIDENCE_PREFIX,
     UNDECLARED,
     declared_task,
+    declared_task_of,
     evaluate_live_routes,
     read_live_features,
     recording_stem,
@@ -358,6 +361,21 @@ class TestWhatTheReaderReads:
         assert declared_task("sub-01_ses-01_task-prolonged-vowel-2") == ("prolonged-vowel-2", "prolonged-vowel")
         assert declared_task("plain-run-id") == (UNDECLARED, UNDECLARED)
         assert declared_task("") == (UNDECLARED, UNDECLARED)
+
+    def test_a_hint_declaration_recorded_by_admit_is_read_before_the_stem(self) -> None:
+        """A reader holding only the store sees the task a hint declared; otherwise it reads the stem."""
+        hinted, unhinted = ProvStore(run_id="hinted"), ProvStore(run_id="unhinted")
+        path = "/data/recording-0042.wav"
+        declared = identity_of("recording-0042", AudioHints(metadata={"task_token": "prolonged-vowel-2"}))
+        hinted.entity(
+            prov_type="stream",
+            extent=(0.0, 1.0),
+            attributes={"name": "recording", "path": path, **declared.as_attributes()},
+        )
+        unhinted.entity(prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording", "path": path})
+        assert declared_task_of(hinted) == ("prolonged-vowel-2", "prolonged-vowel")
+        assert declared_task_of(unhinted) == (UNDECLARED, UNDECLARED)
+        assert declared_task_of(ProvStore(run_id="none"), "sub-01_task-loudness") == ("loudness", "loudness")
 
     def test_a_task_literally_named_unknown_declares_nothing(self) -> None:
         """``task_id_of``'s sentinel collides with a literal ``task-unknown``; undeclared is the safe read.

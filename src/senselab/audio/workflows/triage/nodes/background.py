@@ -18,7 +18,6 @@ The parameters are in ``data/background_model.yaml``; the design is
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -36,6 +35,7 @@ from senselab.audio.workflows.triage.background_model import (
     session_floor_db,
     write_view_arrays,
 )
+from senselab.audio.workflows.triage.identity import recorded_identity, session_key_of
 from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
     lexical_words,
@@ -44,7 +44,6 @@ from senselab.audio.workflows.triage.nodes.common import (
     word_hull,
     write_measurement,
 )
-from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 from senselab.audio.workflows.triage.session_background import (
     background_floor_for,
     session_background_of,
@@ -75,8 +74,6 @@ FLOOR_FROM_RECORDING = "recording"
 VIEW_SIDECAR = "derivatives/background_view.npz"
 """The arrays a branch reads the background through, beside the ``background_model`` measurement."""
 
-_SESSION_KEY = re.compile(r"(sub-[^_]+)_(ses-[^_]+)")
-
 
 def session_key(stem: str) -> str | None:
     """The BIDS session a recording belongs to, ``sub-<label>_ses-<label>``, or None.
@@ -87,8 +84,7 @@ def session_key(stem: str) -> str | None:
     Returns:
         The participant and session labels, or None where the stem names no session.
     """
-    found = _SESSION_KEY.search(stem)
-    return f"{found.group(1)}_{found.group(2)}" if found else None
+    return session_key_of(stem)
 
 
 def _activity(store: ProvStore, node: str, step: str) -> tuple[str, str]:
@@ -166,16 +162,16 @@ def _recording_stream_stem(store: ProvStore) -> str:
 
 
 def declared_family(store: ProvStore) -> str | None:
-    """The declared family off the ``recording`` stream's path.
+    """The declared family: the task ADMIT recorded, or the ``recording`` stream path's task id.
 
     Args:
         store: The provenance store.
 
     Returns:
-        The family of the stem's task id; None where no recording stream names one.
+        The family of the declared task id; None where no recording stream names a path.
     """
-    stem = _recording_stream_stem(store)
-    return task_family(task_id_of(stem)) if stem else None
+    identity = recorded_identity(store) if _recording_stream_stem(store) else None
+    return identity.task_family if identity is not None else None
 
 
 def _enhanced_speech(store: ProvStore, run_dir: Path) -> tuple[float | None, list[tuple[float, float]]]:
