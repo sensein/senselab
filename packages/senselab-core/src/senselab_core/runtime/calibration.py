@@ -338,8 +338,9 @@ class Estimate(Frozen):
         host: Host memory; None when unmeasured.
         regimes: The factor per measured co-tenancy.
         oom: The resource faults in force: every one a probe has not lifted.
-        warmup_unsettled: Whether requests 1 to 3 after a load differ from the later median by more than the single
-            fit's spread band, so `calibration.warmup_requests` was too short for this unit.
+        warmup_unsettled: Whether, within a length stratum, the first three warm requests (`since_load` from
+            `warmup_requests`) differ from the later ones by more than the single fit's spread band, so
+            `calibration.warmup_requests` was too short for this unit; None when no stratum holds both.
         source: Where it came from.
         estimator: The estimator's format tag.
     """
@@ -358,7 +359,7 @@ class Estimate(Frozen):
     host: MemoryFit | None = None
     regimes: tuple[RegimeFactor, ...] = ()
     oom: tuple[OomRecord, ...] = ()
-    warmup_unsettled: bool = False
+    warmup_unsettled: bool | None = None
     source: EstimateSource = EstimateSource()
     estimator: NonEmptyStr = ESTIMATE_FORMAT
 

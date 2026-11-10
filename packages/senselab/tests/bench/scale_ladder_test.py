@@ -175,7 +175,7 @@ def test_a_ladder_run_with_a_measures_root_probes_into_it_and_a_profile_listing_
     monkeypatch.setattr(ladder, "Pool", pool)
     suite = tmp_path / "one.yaml"
     suite.write_text(
-        "format: scale-suite@1.1\nname: one\nseed: 0\nlong_s: 1\ntasks:\n"
+        "format: scale-suite@2.0\nname: one\nseed: 0\nlong_s: 1\ntasks:\n"
         "- {task: fake.echo, port: payload, data: payloads, points: [1]}\n"
     )
     group = tmp_path / "group" / "measures"
@@ -264,7 +264,7 @@ def test_a_suite_with_entries_that_do_not_plan_is_refused_before_anything_runs(
     assert fake_backend.FAKE in REGISTRY.backends(fake_backend.ECHO.name)
     suite = tmp_path / "bad.yaml"
     suite.write_text(
-        "format: scale-suite@1.0\nname: bad\nseed: 0\nlong_s: 1\ntasks:\n"
+        "format: scale-suite@2.0\nname: bad\nseed: 0\nlong_s: 1\ntasks:\n"
         "- {task: fake.echo, port: payload, data: payloads, points: [1, 100]}\n"
         "- {task: fake.echo, stack: absent, port: payload, data: payloads, points: [1]}\n"
         "- {task: no.such.task, port: x, data: payloads, points: [1]}\n"
@@ -284,6 +284,24 @@ def test_a_suite_with_entries_that_do_not_plan_is_refused_before_anything_runs(
     assert not list((tmp_path / "cache").rglob(ladder.commit()))
     runs = tmp_path / "cache" / "2x" / "runs"
     assert not list((tmp_path / "cache").rglob("*@*.json")) and not (runs.is_dir() and any(runs.iterdir()))
+
+
+@pytest.mark.logic
+def test_a_retired_suite_format_is_refused_naming_the_change_and_the_table_suites_are_current(tmp_path: Path) -> None:
+    """A `scale-suite@1` file is refused naming the dropped key; the packaged suites read and derive a budget."""
+    ladder = _module("scale_ladder_suite_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    old = tmp_path / "old.yaml"
+    old.write_text(
+        "format: scale-suite@1.1\nname: old\nseed: 0\nlong_s: 1\ncalibration:\n  probe_items: 923\n"
+        "tasks:\n- {task: fake.echo, port: payload, data: payloads, points: [1]}\n"
+    )
+    with pytest.raises(ValueError, match=r"retired scale-suite@1.*probe_items"):
+        ladder.Suite.load(old)
+    assert ladder.RESULT_FORMAT == "scale-result@3.0"
+    table = ladder.Suite.load(ROOT / "benchmarks" / "scale" / "suites" / "table.yaml")
+    assert "probe_items" not in table.calibration
+    profile = ladder.table_profile(PROFILE, table)
+    assert ladder.probe_items(profile.calibration, profile.pool.quantum_items) == 1 + 3 * 3 * (1 + 100 + 10) + 3 * 2
 
 
 @pytest.mark.logic
@@ -313,7 +331,7 @@ def test_two_entries_of_one_task_write_two_results_and_two_stores(
         return {"sha": "a", "jobs": ["1"], "task": entry.task, "label": label, "point": point, "done": True, **row}
 
     monkeypatch.setattr(ladder, "measure_point", measured)
-    head = "format: scale-suite@1.0\nname: two\nseed: 0\nlong_s: 1\ntasks:\n"
+    head = "format: scale-suite@2.0\nname: two\nseed: 0\nlong_s: 1\ntasks:\n"
     twins = tmp_path / "twins.yaml"
     twins.write_text(
         head + "- {task: fake.echo, port: payload, data: payloads, points: [1]}\n"

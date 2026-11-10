@@ -44,18 +44,20 @@ if TYPE_CHECKING:
 MAD_TO_SIGMA: Final = 1 / statistics.NormalDist().inv_cdf(
     0.75
 )  # invariant: a median absolute deviation to a normal's σ
-EARLY_REQUESTS: Final = 3  # invariant: the last request after a load the warm-up diagnostic reads as early
+EARLY_REQUESTS: Final = 3  # invariant: the warm requests the warm-up diagnostic reads as early
 MEDIAN_SE: Final = math.sqrt(math.pi / 2)  # invariant: the standard error of a median relative to that of a mean
 
 
 def probe_items(config: CalibrationSettings, quantum_items: int) -> int:
     """Return the most jobs a probe plans, counted from its protocol.
 
-    `warmup_requests + length_strata × min_requests × (1 + quantum_items) + min_requests × single_item_jobs`.
+    `warmup_requests + length_strata × min_requests × (1 + J) + min_requests × single_item_jobs`, where `J` is the
+    jobs of one repetition of a stratum's batched sizes at `B₁ = quantum_items`: `B₁`, plus `round(√B₁)` when
+    `batched_sizes` is 2 and that is at least 2 and not `B₁`.
     """
     return (
         config.warmup_requests
-        + config.length_strata * config.min_requests * (1 + quantum_items)
+        + config.length_strata * config.min_requests * (1 + _per_set(quantum_items, config)[0])
         + config.min_requests * config.single_item_jobs
     )
 
@@ -314,23 +316,29 @@ def _request_fit(
     return RequestFit(batch=batch, r=centre, u=None, n=len(points), spread=spread, lo=min(xs), hi=max(xs))
 
 
-def _warmup_unsettled(single: RequestFit | None, kept: _Kept, config: CalibrationSettings) -> bool:
-    """Whether requests 1 to 3 after a load differ from the later median by more than the single fit's band.
+def _warmup_unsettled(single: RequestFit | None, kept: _Kept, config: CalibrationSettings) -> bool | None:
+    """Whether the first three warm requests differ from the later ones by more than the single fit's band.
 
-    Each warm single request is read as a ratio to the fit's prediction at its length; the two groups' median
-    ratios differ by more than `confidence × spread` when the warm-up floor was too short.
+    The comparison is within one length stratum, by each warm single request's ratio to the fit's prediction at its
+    length. The early requests are those with `since_load` from `warmup_requests` to `warmup_requests + 2`; the later
+    ones follow them and must number `min_requests`. True when a stratum holding both has medians of the ratio
+    differing by more than `confidence × spread`; False when every such stratum is within it; None (unknown) when no
+    stratum holds both, or the fit has no spread or a zero spread.
     """
-    if single is None or single.spread is None:
-        return False
-    ratios: dict[bool, list[float]] = {True: [], False: []}
-    for o in kept.single:
-        predicted = single.r + (single.u or 0.0) * o.units
-        if o.since_load is not None and o.since_load >= 1 and predicted > 0:
-            ratios[o.since_load <= EARLY_REQUESTS].append(o.wall_s / predicted)
-    early, later = ratios[True], ratios[False]
-    if not early or len(later) < config.min_requests:
-        return False
-    return abs(_median(early) - _median(later)) > config.confidence * single.spread
+    if single is None or single.spread is None or single.spread <= 0:
+        return None
+    first = config.warmup_requests
+    verdicts = []
+    for group in _by_stratum(kept.single, kept.ranges).values():
+        ratios: dict[bool, list[float]] = {True: [], False: []}
+        for o in group:
+            predicted = single.r + (single.u or 0.0) * o.units
+            if o.since_load is not None and o.since_load >= first and predicted > 0:
+                ratios[o.since_load < first + EARLY_REQUESTS].append(o.wall_s / predicted)
+        early, later = ratios[True], ratios[False]
+        if early and len(later) >= config.min_requests:
+            verdicts.append(abs(_median(early) - _median(later)) > config.confidence * single.spread)
+    return any(verdicts) if verdicts else None
 
 
 def _relative_spread(residuals: Sequence[float], predicted: Sequence[float]) -> float | None:
@@ -867,6 +875,7 @@ class Probe:
         left = plan.probe_items - plan.used_jobs
         item_s = single_estimate.item_s or 0.0
         supplied = fits_jobs = False
+        refused: PlanReason | None = None
         for top in range(max(caps.values(), default=0), 1, -1):
             sizes = {i: _supply(min(c, top), plan.remaining[i], plan.edges, config) for i, c in caps.items()}
             sizes = {i: b for i, b in sizes.items() if b >= 2}  # noqa: PLR2004 - a batch of one is the single phase
@@ -880,7 +889,9 @@ class Probe:
             )
             fits_jobs = fits_jobs or jobs <= left
             if jobs <= left and wall <= seconds_left:
-                return _batched_items(plan, sizes, none, config, jobs)
+                planned = _batched_items(plan, sizes, none, config, jobs)
+                return planned if refused is None else _unplanned(planned, refused)
+            refused = refused or ("over_budget" if jobs > left else "over_seconds")
         if not caps:
             return none
         if max(caps.values()) < 2:  # noqa: PLR2004 - a batch of one is the single phase
