@@ -45,6 +45,7 @@ from senselab_core.runtime.execution_settings import (
 )
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.locks import TIMEOUT_S as BUILD_LOCK_TIMEOUT_S
 from senselab_core.runtime.network import Network
 from senselab_core.runtime.retry import RetryPolicy
 
@@ -240,6 +241,11 @@ class ExecutionProfile(Formatted):
     def peer_wait_s(self) -> float:
         """Seconds a coordinator waits for a peer's probe of the same unit: `probe_s + lease.stale_after_s`."""
         return self.probe_s + self.lease.stale_after_s
+
+    @property
+    def resolve_s(self) -> float:
+        """Seconds a unit waits for a worker's ready mark: `2 × (lease.stale_after_s + the build lock timeout)`."""
+        return 2 * (self.lease.stale_after_s + BUILD_LOCK_TIMEOUT_S)
 
     def env_root(self, kind: str) -> Path:
         """Return the root for env `kind` with `${VAR:-fallback}`, then `~` and `$VAR`, expanded.

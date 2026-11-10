@@ -195,7 +195,7 @@ def test_a_unit_resolving_past_resolve_s_is_released_unmeasured(tmp_path: Path, 
     machine.place(held)
     host.workers = [WorkerHandle("cpu", "w0")]
     machine.advance()
-    clock.advance(profile.calibration.resolve_s - 1)
+    clock.advance(profile.resolve_s - 1)
     machine.advance()
     assert not host.released
     clock.advance(2)
@@ -330,7 +330,7 @@ def test_every_change_to_the_unit_states_and_the_resolving_parts_holds_the_lock_
     machine.place(held)
     host.workers = [WorkerHandle("cpu", "w0")]
     machine.advance()
-    clock.advance(profile.calibration.resolve_s + 1)
+    clock.advance(profile.resolve_s + 1)
     machine.advance()
     machine, host, held, profile = _guarded(tmp_path / "again", True, clock)
     machine.place(held)

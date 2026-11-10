@@ -458,8 +458,7 @@ class ProbeMachine:
         late = [
             h
             for h in self._resolving
-            if (since := self._live_since.get(h.queue)) is not None
-            and now - since >= self.profile.calibration.resolve_s
+            if (since := self._live_since.get(h.queue)) is not None and now - since >= self.profile.resolve_s
         ]
         with self.lock:
             self._resolving = [h for h in self._resolving if h not in late]

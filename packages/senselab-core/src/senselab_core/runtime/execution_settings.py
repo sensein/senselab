@@ -164,7 +164,6 @@ class CalibrationSettings(Frozen):
         drift_confidence: The two-sided z of the drift test.
         observations_kept: Superseded probes' observation files kept for audit.
         unmeasured_workers: Workers a unit without a measure runs on.
-        resolve_s: Seconds a unit waits for a worker's ready mark, from its queue's first live worker.
     """
 
     measures_roots: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
@@ -178,7 +177,6 @@ class CalibrationSettings(Frozen):
     drift_confidence: PositiveFloat
     observations_kept: PositiveInt
     unmeasured_workers: PositiveInt
-    resolve_s: PositiveSeconds
 
     @model_validator(mode="after")
     def _check_roots(self) -> "CalibrationSettings":

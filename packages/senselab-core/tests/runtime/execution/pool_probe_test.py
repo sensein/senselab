@@ -764,7 +764,7 @@ def test_resolving_past_resolve_s_runs_unmeasured_with_its_reason(
     pool = _pool(tmp_path, profile, clock=clock, substrate=Live())
     fragment, handle = _submit(pool, placed, values)
     pool.poll(Handle(id=handle))
-    clock.advance(profile.calibration.resolve_s - 1)
+    clock.advance(profile.resolve_s - 1)
     pool.poll(Handle(id=handle))
     assert pool.queues.queue("cpu").work() == 0 and not _probe_queues(pool)
     clock.advance(2)

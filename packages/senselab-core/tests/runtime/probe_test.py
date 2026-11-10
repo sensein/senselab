@@ -935,7 +935,9 @@ def _stratified(cost: Any, early: float = 1.0, first: int = 1, later: int = 6) -
     for x in (2.0, 8.0):
         for k in range(3 + later):
             jitter = 1 + 0.01 * ((k * 7) % 5 - 2)
-            out.append(_obs(x, cost(x) * jitter * (early if k < 3 else 1.0), since_load=first + k))
+            out.append(
+                _obs(x, cost(x) * jitter * (early if k < 3 else 1.0), stratum=int(x > 2.0), since_load=first + k)
+            )
     return out
 
 
@@ -950,18 +952,45 @@ def test_the_warmup_diagnostic_is_set_by_a_real_warmup_effect_and_unset_without_
     assert _estimate(_stratified(_linear)).warmup_unsettled is False
 
 
+def _planned_requests(early: float, cost: Any) -> list[Observation]:  # noqa: ANN401
+    """Observations of `Probe.plan`'s own order for 40 candidates: one warm request per job after the load."""
+    plan = _plan(_candidates([float(i + 1) for i in range(40)]))
+    out, since = [], -1
+    for n, item in enumerate(i for i in plan.items if i.phase != "BATCHED"):
+        for job in item.jobs:
+            since += 1
+            if since >= CONFIG.warmup_requests and job.units is not None:
+                jitter = 1 + 0.01 * ((n + since) * 7 % 5 - 2)
+                slow = early if since < CONFIG.warmup_requests + 3 else 1.0
+                out.append(
+                    _obs(job.units, cost(job.units) * jitter * slow, stratum=item.stratum or 0, since_load=since)
+                )
+    return out
+
+
+@pytest.mark.logic
+def test_the_plans_own_order_lets_the_diagnostic_find_a_warmup_effect() -> None:
+    """The middle stratum is planned first, so it holds the first warm requests and later ones: True with an effect."""
+    assert _estimate(_planned_requests(3.0, _linear)).warmup_unsettled is True
+    assert _estimate(_planned_requests(1.0, _linear)).warmup_unsettled is False
+
+
 @pytest.mark.logic
 @pytest.mark.parametrize("cost", [lambda x: 0.1 + 0.002 * x * x, lambda x: 0.2 + 0.3 * math.sqrt(x)])
 def test_cost_not_linear_in_length_is_not_a_warmup_effect(cost: Any) -> None:  # noqa: ANN401
-    """Under the plan's order stratum 0 is early and stratum 1 later, so no stratum holds both: unknown, never set."""
-    plan_order = [
-        _obs(x, cost(x) * (1 + 0.01 * ((k * 7) % 5 - 2)), since_load=1 + k + (0 if x == 2.0 else 3))
-        for x in (2.0, 8.0)
-        for k in range(3)
-    ]
-    plan_order += [_obs(8.0, cost(8.0) * (1 + 0.01 * ((k * 7) % 5 - 2)), since_load=7 + k) for k in range(6)]
-    assert _estimate(plan_order).warmup_unsettled is None
+    """Under the plan's order a convex or concave cost with no warm-up effect is False, never set."""
+    assert _estimate(_planned_requests(1.0, cost)).warmup_unsettled is False
     assert _estimate(_stratified(cost)).warmup_unsettled is False
+
+
+@pytest.mark.logic
+def test_the_plan_puts_the_middle_stratums_singles_first() -> None:
+    """After the WARMUP items, the first SINGLE items are the middle stratum's, then the others in order."""
+    plan = _plan(_candidates([float(i + 1) for i in range(40)]))
+    singles = [i for i in plan.items if i.phase == "SINGLE"]
+    middle = len(plan.strata) // 2
+    assert singles[0].stratum == middle
+    assert [i.stratum for i in singles] == sorted((i.stratum for i in singles), key=lambda s: s != middle)
 
 
 @pytest.mark.logic
