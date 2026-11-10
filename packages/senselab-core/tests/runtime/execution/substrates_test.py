@@ -1017,9 +1017,12 @@ def test_a_start_aborted_by_a_failed_submission_keeps_the_jobs_it_submitted(tmp_
 
 
 @pytest.mark.logic
-def test_a_substrate_command_that_cannot_be_launched_is_a_substrate_failure(tmp_path: Path) -> None:
+def test_a_substrate_command_that_cannot_be_launched_is_a_substrate_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """An `sbatch` that cannot be executed is a `SlurmError`; a local command that does not exist is a `LocalError`."""
     (tmp_path / "bin" / "sbatch").chmod(stat.S_IRUSR | stat.S_IWUSR)
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))  # a host's own `sbatch` further along PATH must not be found
     with pytest.raises(SlurmError, match="could not run"):
         _slurm(tmp_path).start("cpu", 1)
     with pytest.raises(LocalError, match="could not launch"):
