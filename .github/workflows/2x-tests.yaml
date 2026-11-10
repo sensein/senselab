@@ -4,7 +4,7 @@ on:
   # The 2.x line only. Python 3.13 (scripts/data/default_python.yaml) on every run; the full matrix runs nightly and on
   # PRs labelled full-matrix. 1.x branches (alpha, main) run tests.yaml.
   push:
-    branches: [2.x, senselab-2x-api, 2x/**]
+    branches: [2.x, senselab-2x-api, 2x/**, '!2x/full-matrix/**']
   pull_request:
     branches: [2.x, senselab-2x-api, 2x/**]
     # `ready_for_review` re-triggers a draft PR marked ready; `edited` re-checks the models named in the body.

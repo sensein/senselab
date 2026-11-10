@@ -25,9 +25,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The refs the limits matrix runs: with `ref`, that branch and the phase's code branch (STATE.md, Branches and PRs; a
-  # phase branch merges directly, with no PR to carry the `limits` label, so only this job runs its timing bounds
-  # before the phase merges); without it, the commit under test.
+  # The refs the limits matrix runs: with `ref`, that branch and the phase's code branch (the highest `2x/phase-<N>`
+  # on the remote; a phase branch merges directly, with no PR to carry the `limits` label, so only this job runs its
+  # timing bounds before the phase merges); without it, the commit under test.
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -79,10 +79,41 @@ def test_fable_reviews_only_a_declared_high_stakes_class(stakes: str) -> None:
     assert _fails(no_line, "high-stakes classes only")
 
 
-def test_fable_implementing_needs_a_class_too() -> None:
-    """Fable on either side needs the declared class; the same model on both sides is not itself the rule."""
-    assert _fails(_body("Fable 1", "Opus 5.5"), "high-stakes classes only")
-    assert not pr.problems(_body("Fable 1", "Fable 1", stakes="protocol-adr"), REQUIRED)
+def test_fable_never_implements_and_never_reviews_itself() -> None:
+    """Fable as implementer fails whatever the class or the reviewer, so fable reviewing fable fails too."""
+    for reviewer in ("Opus 5.5", "Fable 1"):
+        assert _fails(_body("Fable 1", reviewer, stakes="protocol-adr"), "never fable")
+
+
+def test_opus_is_the_only_model_that_may_review_itself() -> None:
+    """The same sonnet on both sides fails; opus on both sides passes only with `fresh`."""
+    assert _fails(_body("Sonnet 5.5", "Sonnet 5.5"), "reviews run on opus")
+    assert _fails(_body("Opus, escalated", "Opus"), "only opus may review opus")
+
+
+@pytest.mark.parametrize("name", ["Claude Sonnet 5.5, medium", "claude-sonnet-5-5", "the Sonnet model"])
+def test_a_model_name_is_found_anywhere_in_its_field(name: str) -> None:
+    """The trailer's spelling names sonnet."""
+    assert not pr.problems(_body(name, "Claude Opus 5.5, high"), REQUIRED)
+
+
+@pytest.mark.parametrize(
+    ("implementer", "reviewer"),
+    [
+        ("Opus, not escalated", "Opus, fresh"),
+        ("Opus, escalated", "Opus, not fresh"),
+        ("Opus, never design", "Opus, fresh"),
+    ],
+)
+def test_a_negated_note_does_not_count(implementer: str, reviewer: str) -> None:
+    """`not escalated` and `not fresh` fail like a missing note."""
+    assert pr.problems(_body(implementer, reviewer), REQUIRED)
+
+
+def test_a_class_may_carry_a_note() -> None:
+    """`protocol-adr (ADR-003)` names the class."""
+    assert not pr.problems(_body("Sonnet 5.5", "Fable 1", stakes="protocol-adr (ADR-003)"), REQUIRED)
+    assert not pr.problems(_body("Sonnet 5.5", "Fable 1", stakes="identity-privacy-security: UX-28"), REQUIRED)
 
 
 def test_an_unknown_high_stakes_class_is_refused() -> None:
