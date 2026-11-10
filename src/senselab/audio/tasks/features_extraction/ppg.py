@@ -93,6 +93,10 @@ _PPGS_REQUIREMENTS = [
     "numpy",
     "soundfile",
     "huggingface-hub<2",  # see specs/20261002-ppgs-venv-resolution/design.md
+    # espnet 202609 moved its `espnet` package to `espnet2/legacy`; ppgs 0.0.9 still imports
+    # `espnet.nets...`. Python 3.11 cannot install 202609+ (it needs 3.12), so this guards a move
+    # of the venv to 3.12 or a lock regeneration.
+    "espnet<202609",
 ]
 _PPGS_PYTHON = "3.11"
 
