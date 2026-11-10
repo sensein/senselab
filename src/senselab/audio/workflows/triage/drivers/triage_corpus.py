@@ -47,6 +47,7 @@ from senselab.audio.workflows.triage.extend import (
 )
 from senselab.audio.workflows.triage.identity import RECORDING_ID_COLUMN, identity_columns, identity_of
 from senselab.audio.workflows.triage.run import corpus_path_of, entity_subdir, run_triage
+from senselab.utils.portable_audio_io import audio_info
 from senselab.utils.venv_worker import shutdown_venv_workers, venv_worker_events, venv_worker_stats
 
 RUNS_SUBDIR = "out"
@@ -169,9 +170,8 @@ def glob_escape(text: str) -> str:
 def _audio_seconds(path: Path) -> float | None:
     """The recording's duration from its header, or None where it cannot be read."""
     try:
-        import soundfile
-
-        return float(soundfile.info(str(path)).duration)
+        info = audio_info(path)
+        return float(info.frames) / float(info.sampling_rate) if info.frames and info.sampling_rate else None
     except Exception:  # noqa: BLE001 -- a header that cannot be read only skips the isolation rule
         return None
 

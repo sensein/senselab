@@ -169,3 +169,14 @@ def test_the_manifest_lists_finished_runs_and_reports_the_rest(tmp_path: Path, m
     assert Path(rows[0]["enhanced"]).is_file()
     summary = driver.write_manifest(out, listing, expect=manifest)
     assert summary["missing"] == ["b"]
+
+
+def test_the_duration_is_read_from_the_header(tmp_path: Path) -> None:
+    """The isolation rule reads a recording's length from its header, through senselab's audio reader."""
+    import numpy as np
+    import soundfile as sf
+
+    wav = tmp_path / "one.wav"
+    sf.write(wav, np.zeros(16000 * 3, dtype=np.float32), 16000)
+    assert driver._audio_seconds(wav) == pytest.approx(3.0)
+    assert driver._audio_seconds(tmp_path / "missing.wav") is None
