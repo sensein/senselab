@@ -40,7 +40,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "calls", type=Path, help="a JSON array of calls `{task, inputs, params, model, backend_params}`"
     )
-    parser.add_argument("--execution", default="laptop", help="the packaged execution profile to run under")
+    parser.add_argument("--execution", default="laptop", help="a packaged profile name, or a path to a whole profile file, to run under")
     args = parser.parse_args(argv)
     calls = json.loads(args.calls.read_text())
     if not isinstance(calls, list):

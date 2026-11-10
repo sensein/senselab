@@ -10,6 +10,11 @@ from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.compare import RunConfigFile, UnknownThreshold
 from senselab_core.runtime.profiles import ExecutionProfile
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 
 @pytest.mark.logic
 def test_one_run_config_file_validates_thresholds_and_calibration(tmp_path: Path) -> None:
@@ -18,7 +23,7 @@ def test_one_run_config_file_validates_thresholds_and_calibration(tmp_path: Path
     config.write_text("format: run-config@2.1\nthresholds:\n  embedding:\n    atol: 2\ncalibration:\n  trust: own\n")
     loaded = RunConfigFile.load(config)
     assert loaded.calibration == RunCalibration(trust="own")
-    assert loaded.calibration.apply(ExecutionProfile.load("orcd").calibration).trust == "own"
+    assert loaded.calibration.apply(ExecutionProfile.load(CLUSTER).calibration).trust == "own"
     assert loaded.thresholds.by_name["embedding"].atol == 2.0
     assert RunConfigFile.load().calibration == RunCalibration()
     with pytest.raises(UnknownThreshold, match="did you mean 'trust'"):

@@ -1,16 +1,18 @@
+# A Slurm template, not a site profile: every `<fill: ...>` is yours to set, and the profile refuses to load until none is left.
+# Copy it to your own file, fill the values, rename it, and pass the file as `--execution`.
 # Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, by profile and key.
 # The profile's format.
 format: execution-profile@3.0
-# The packaged profile's name.
-name: orcd
+# The profile's name; rename it in your copy.
+name: slurm
 # Per task, its stacks best first; empty lets each task's declared backend order decide.
 stack_preferences: {}
 # Device kinds best first; a node takes the first one its backend declares that a class offers.
 devices: [cuda, cpu]
 # Per env kind, the directory env trees are built under.
 env_roots:
-  isolated: ${SENSELAB_ENV_ROOT:-~/orcd/scratch/senselab-2x-venvs}
-  server: ${SENSELAB_ENV_ROOT:-~/orcd/scratch/senselab-2x-venvs}/servers
+  isolated: '<fill: a directory on storage every compute node reaches, not the home directory>'
+  server: '<fill: a directory on that storage for server envs>'
 # The server start wait margin and the torch wheel index override (null: probed from the host).
 envs:
   server_start_margin_s: 60
@@ -26,49 +28,23 @@ retry:
 # online, or offline to forbid any fetch.
 network: online
 # The worker classes nodes are placed on, by name, each with its grant and caps; a server backend takes a svc class first.
+# `gpu:<type>` and `svc:<type>` classes are added the same way; a class that is not wanted is deleted.
 resource_classes:
   cpu:
     device: cpu
-    cpus: 4
-    mem_bytes: 17179869184
-    time_s: 21600
-    partition: ${CPU_PARTITION}
-    max_workers: 32
-  cpu:large:
-    device: cpu
-    cpus: 8
-    mem_bytes: 68719476736
-    time_s: 21600
-    partition: ${CPU_PARTITION}
-    max_workers: 8
-  gpu:h100:
-    device: cuda
-    gpu_type: h100
-    cpus: 8
-    mem_bytes: 103079215104
-    time_s: 21600
-    partition: ${GPU_PARTITION}
-    gres: gpu:h100:1
-    max_workers: 4
-    memory_cap_bytes: 85899345920
-  svc:h100:
-    device: cuda
-    gpu_type: h100
-    cpus: 8
-    mem_bytes: 103079215104
-    time_s: 21600
-    partition: ${GPU_PARTITION}
-    gres: gpu:h100:1
-    max_workers: 4
-    memory_cap_bytes: 85899345920
+    cpus: '<fill: CPUs per CPU worker>'
+    mem_bytes: '<fill: host memory in bytes per CPU worker>'
+    time_s: '<fill: seconds a CPU worker may run>'
+    partition: '<fill: Slurm partition for CPU workers>'
+    max_workers: '<fill: most CPU workers at once>'
   gpu:
     device: cuda
-    cpus: 8
-    mem_bytes: 103079215104
-    time_s: 21600
-    partition: ${GPU_PARTITION}
-    gres: gpu:1
-    max_workers: 4
+    cpus: '<fill: CPUs per GPU worker>'
+    mem_bytes: '<fill: host memory in bytes per GPU worker>'
+    time_s: '<fill: seconds a GPU worker may run>'
+    partition: '<fill: Slurm partition for GPU workers>'
+    gres: '<fill: the Slurm gres of one GPU, for example gpu:1>'
+    max_workers: '<fill: most GPU workers at once>'
 # What starts pool workers; the first and longest wait after a failed start; the site's placement hook (a
 # `module:callable`, none by default) and the seconds it may take; each Slurm command's timeout, tries and first retry wait.
 substrate:
@@ -105,13 +81,12 @@ sizing:
   device_query_s: 30
 # How a unit without a measure is probed, where measures are kept and whose are trusted, and when a measure is stale.
 calibration:
-  # Roots read in order and pooled; writes go to the first writable one. An unset SENSELAB_MEASURES_ROOT is no root;
-  # ${cache_root} is senselab's cache root (SENSELAB_CACHE, else its default).
+  # Roots read in order and pooled; writes go to the first writable one. ${cache_root} is senselab's cache root
+  # (SENSELAB_CACHE, else its default); a group that shares measures lists its shared root first and sets trust: group.
   measures_roots:
-  - ${SENSELAB_MEASURES_ROOT}
   - ${cache_root}/2x/measures
   # group reads every file of every root; own only the reader's own files.
-  trust: group
+  trust: own
   # Requests a model state answers before one counts as warm.
   warmup_requests: 2
   # Strata of equal count a probe cuts its candidate jobs into.
@@ -144,7 +119,7 @@ lease:
 faults:
   content_attempts: 2
   infrastructure_replacements: 6
-  resource_replacements: 1
+  resource_replacements: 0
 # A worker's model-load and request timeouts in seconds; null for no bound.
 timeouts:
   load_s:

@@ -186,10 +186,10 @@ def run_explain(args: argparse.Namespace) -> int:
 
 
 def _profile(argument: str | None) -> ExecutionProfile:
-    """Return the profile `argument` names: a packaged profile, or a file holding a whole profile (`profile.json`)."""
+    """Return the profile `argument` names: a packaged profile, a profile YAML file, or a whole profile (`.json`)."""
     if argument is None:
         return ExecutionProfile.load()
-    if Path(argument).is_file():
+    if argument.endswith(".json") and Path(argument).is_file():
         return ExecutionProfile.model_validate_json(Path(argument).read_text(encoding="utf-8"))
     return ExecutionProfile.load(argument)
 

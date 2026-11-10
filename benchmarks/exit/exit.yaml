@@ -1,8 +1,8 @@
 # Phase 3 exit checks. Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, section benchmarks/exit/exit.yaml.
 # The format.
 format: exit-checks@1.0
-# The profiles one plan hash is checked across, each planned on this host.
-plan_profiles: [laptop, orcd]
+# The packaged profiles one plan hash is checked across, each planned on this host; `plan --profile` adds a site profile file.
+plan_profiles: [laptop]
 # The two scenarios: the task class, its params, and the BIDS tree its records come from.
 steps:
   resample:

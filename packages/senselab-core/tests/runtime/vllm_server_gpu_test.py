@@ -1,5 +1,6 @@
 """The `vllm-server` env serving the catalogue's PII model on a GPU, attested per config (ORCD, H100)."""
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -27,9 +28,11 @@ SETTINGS = {
 
 
 @pytest.mark.timeout(3 * STARTUP_TIMEOUT_S)
-def test_vllm_server_attests_the_pii_model_and_a_restart_with_new_config_changes_it() -> None:
+def test_vllm_server_attests_the_pii_model_and_a_restart_with_new_config_changes_it(
+    site_profile: Callable[..., ExecutionProfile],
+) -> None:
     """The server loads the catalogue commit, every reply carries its attestation, and a new config re-attests."""
-    profile = ExecutionProfile.load("orcd")
+    profile = site_profile()
     env = ensure_env(
         Env.server("vllm-server"),
         DATA / "env_locks/vllm-server.txt",

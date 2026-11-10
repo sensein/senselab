@@ -24,7 +24,7 @@ three distinct nodes; the same ``--segment-items`` and lease flags on every mode
 
     export PYTHONPATH=<checkout>/packages/senselab-core/src:<checkout>/packages/senselab/src:<checkout>/packages/senselab-worker/src
     P="<checkout>/.venv/bin/python <checkout>/scripts/probe_queue_cross_node.py"
-    L="--profile orcd --segment-items 64 --stale 150 --fraction 0.25 --delay 60"
+    L="--profile PROFILE_FILE --segment-items 64 --stale 150 --fraction 0.25 --delay 60"
     # once, on any node
     $P put <shared> --items 10000 --crash-after 500 $L
     # on three nodes, one disturbance each

@@ -601,7 +601,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     c.set_defaults(func=_convert_cli)
     r = sub.add_parser("run")
     common(r)
-    r.add_argument("--execution", default="orcd")
+    r.add_argument("--execution", required=True, help="a packaged execution profile, or a profile file")
     r.add_argument("--items", type=Path, required=True, help="the `items` file; its backend params are the run's")
     r.add_argument("--claim-batch-invariance", action="store_true")
     r.add_argument("--sha", required=True)

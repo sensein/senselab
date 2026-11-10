@@ -46,10 +46,15 @@ from senselab_core.runtime.storage import StorageDir, StorePolicy
 from senselab_core.testing.calibration_samples import UNIT, observation
 from syscall_faults_fixture import fail_at
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 POLICY = StorePolicy.load_default()
 UID = os.geteuid()
 STRANGER = UID + 1
-STALE_S = ExecutionProfile.load("orcd").lease.stale_after_s
+STALE_S = ExecutionProfile.load(CLUSTER).lease.stale_after_s
 PROVENANCE = Provenance(
     job="1234", run="run-1", senselab=Build(version="2.0.0", commit="a" * 40), profile="d" * 64, hardware=UNIT.hardware
 )
@@ -554,7 +559,7 @@ def test_an_unset_group_root_variable_is_no_root_and_blank_or_repeated_roots_are
     """An unset variable is left out; the cache-root token is `cache_root()`; blank and repeated roots are refused."""
     monkeypatch.delenv("SENSELAB_MEASURES_ROOT", raising=False)
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
-    profile = ExecutionProfile.load("orcd")
+    profile = ExecutionProfile.load(CLUSTER)
     assert resolve_roots(profile.calibration.measures_roots, cache_root()) == (tmp_path / "cache" / "2x" / "measures",)
     monkeypatch.setenv("SENSELAB_MEASURES_ROOT", str(tmp_path / "group"))
     roots = MeasureRoots.from_profile(

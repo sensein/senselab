@@ -77,7 +77,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     s = sub.add_parser("sample")
     s.add_argument("--suite", type=Path, default=ROOT / "benchmarks" / "suites" / "equivalence.yaml")
     s.add_argument("--benchmark", required=True)
-    s.add_argument("--execution", default="orcd")
+    s.add_argument("--execution", required=True, help="a packaged execution profile, or a profile file")
     s.add_argument("--store", type=Path, required=True)
     s.add_argument("--reuse", default="equivalent")
     s.add_argument("--verify", type=float, default=0.0)

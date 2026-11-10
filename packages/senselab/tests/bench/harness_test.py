@@ -320,7 +320,7 @@ def test_bench_cli_names_each_not_placeable_benchmark_on_stderr(
 
 def _cpu_profile(tmp_path: Path) -> Path:
     path = tmp_path / "cpu.yaml"
-    path.write_text("devices: [cpu]\n")
+    path.write_text(ExecutionProfile.load("laptop", {"devices": ["cpu"]}).model_dump_json())
     return path
 
 

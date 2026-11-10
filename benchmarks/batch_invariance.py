@@ -1,6 +1,6 @@
 """Batch invariance probe: each benchmark's held-out items through `execute` at batch 1 and at batch N, compared.
 
-`uv run python benchmarks/batch_invariance.py SUITE --execution orcd [--override FILE] --out DIR --sha SHA --job JOB`
+`uv run python benchmarks/batch_invariance.py SUITE --execution PROFILE [--override FILE] --out DIR --sha SHA --job JOB`
 
 For each benchmark of the suite (`benchmark-suite@1.0`), its held-out items are keyed and sent as one node's jobs,
 in batches of one twice and in batches of N once, each into a store of its own under `DIR`. N is the largest number

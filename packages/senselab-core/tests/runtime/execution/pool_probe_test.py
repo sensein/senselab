@@ -44,6 +44,11 @@ from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import UnitResolver, Unresolved, mark_entry, measure_roots
 from senselab_core.testing.measures import FixedEstimates, FixedUnit
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 TEXTY = scoring("pool_probe_test.texty").model_copy(update={"inputs": {"text": "Text"}})
 BUCKETED = scoring("pool_probe_test.bucketed").model_copy(update={"inputs": {"text": "Audio"}})
 HOST = HardwareInfo(
@@ -865,7 +870,7 @@ def _slurm_profile(tmp_path: Path) -> ExecutionProfile:
         "pool": {"poll_s": 0.2, "first_poll_s": 0.01, "quantum_items": 10},
         "calibration": {"measures_roots": [str(tmp_path / "measures")], "warmup_requests": 1},
     }
-    return ExecutionProfile.load("orcd", override)
+    return ExecutionProfile.load(CLUSTER, override)
 
 
 @pytest.mark.logic

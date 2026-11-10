@@ -35,6 +35,11 @@ from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.measures import CEILED_SIZING, FixedEstimates, FixedUnit
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 SCORE = scoring("pool_split_test.score")
 CHAIN = SCORE.model_copy(update={"name": "pool_split_test.chain", "inputs": {"value": "sha256"}})
 REGISTRY = registry(SCORE, CHAIN)
@@ -73,7 +78,7 @@ def _profile(quantum: int = 10, cap: int | None = None, first_poll_s: float = 0.
         "sizing": CEILED_SIZING,
         "faults": {"content_attempts": 1, **faults},
     }
-    return ExecutionProfile.load("orcd", override)
+    return ExecutionProfile.load(CLUSTER, override)
 
 
 class Recording:

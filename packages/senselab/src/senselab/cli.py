@@ -11,7 +11,7 @@ from types import ModuleType
 
 from senselab_core.cli import mount_data, mount_runs
 from senselab_core.runtime.fetch import FetchError, default_cache_root
-from senselab_core.runtime.profiles import DEFAULT_PROFILE, ExecutionProfile
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
 
 BENCH_DIR = "benchmarks"
@@ -37,12 +37,7 @@ def _load_harness(directory: Path) -> ModuleType:
 
 
 def _profile(name: str) -> ExecutionProfile:
-    path = Path(name)
-    return (
-        ExecutionProfile.load(DEFAULT_PROFILE, path)
-        if path.suffix in {".yaml", ".yml"}
-        else ExecutionProfile.load(name)
-    )
+    return ExecutionProfile.load(name)
 
 
 def run_bench(args: argparse.Namespace) -> int:
@@ -75,7 +70,7 @@ def _mount_bench(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") 
     commands = bench.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="run a benchmark suite and write its result with provenance")
     run.add_argument("suite", help="a suite name under benchmarks/suites/, or a path to a suite YAML file")
-    run.add_argument("--execution", default="laptop", help="a packaged execution profile name, or a profile YAML file")
+    run.add_argument("--execution", default="laptop", help="a packaged execution profile name, or a profile file")
     run.add_argument(
         "--benchmarks", type=Path, default=None, help="the benchmarks directory (default: found from the cwd)"
     )

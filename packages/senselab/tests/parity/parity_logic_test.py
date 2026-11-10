@@ -370,6 +370,7 @@ def test_run_takes_its_backend_params_from_the_items_file_it_was_made_for(tmp_pa
     items.write_text(json.dumps({**document, "backend_params": {"not_a_crisperwhisper_param": 1}}), "utf-8")
     run = ["run", "--benchmark", "asr", "--backend", "crisperwhisper", "--data-cache", str(tmp_path), "--work"]
     run += [str(tmp_path), "--out", str(tmp_path / "o.json"), "--sha", "a" * 40, "--job", "1", "--items", str(items)]
+    run += ["--execution", "laptop"]
     with pytest.raises(par.ParityError, match="backend 'transformers'; this run is of 'crisperwhisper'"):
         par.main(run)
 

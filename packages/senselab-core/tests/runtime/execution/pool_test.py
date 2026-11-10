@@ -37,6 +37,11 @@ from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from syscall_faults_fixture import await_true, displace_before_proof, pause_replaces
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 SCORE = scoring("pool_test.score")
 HEAR = SCORE.model_copy(update={"name": "pool_test.hear", "inputs": {"audio": "Audio"}})
 REGISTRY = registry(SCORE, HEAR)
@@ -819,7 +824,7 @@ def test_a_resource_fault_never_moves_a_job_to_a_class_the_qos_cap_cannot_start(
         {
             "devices": ["cpu"],
             "resource_classes": classes,
-            "substrate": {**ExecutionProfile.load("orcd").substrate.model_dump(mode="json"), "qos_cpu_cap": 4},
+            "substrate": {**ExecutionProfile.load(CLUSTER).substrate.model_dump(mode="json"), "qos_cpu_cap": 4},
             "pool": {"poll_s": 0.2, "first_poll_s": 0.01},
             "faults": {**CONTENT, "resource_replacements": 1},
         },

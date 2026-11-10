@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +91,50 @@ def real_cache_untouched() -> Iterator[None]:
     assert not written, f"tests wrote {len(written)} file(s) under the real cache root {kept}; give them tmp_path"
 
 
+PROFILE_VARIABLE = "SENSELAB_TEST_PROFILE"
+CLUSTER_FIXTURE = PACKAGES / "senselab-core" / "tests" / "data" / "profiles" / "cluster.yaml"
+
+
+@pytest.fixture(scope="session")
+def _session_env_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("envs")
+
+
+@pytest.fixture
+def profile_loader(
+    _session_env_root: Path,
+) -> Callable[[Mapping[str, Any] | None], Any]:
+    """Return `load(override=None)`, the test profile: `$SENSELAB_TEST_PROFILE` untouched, else the cluster fixture.
+
+    The fixture's env roots are `${SENSELAB_ENV_ROOT}` with no fallback; when that variable is unset they are pointed,
+    by a mapping override, at a session temp directory. The process environment is never changed.
+    """
+    from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - core may not be installed
+
+    def load(override: Mapping[str, Any] | None = None) -> Any:  # noqa: ANN401
+        site = os.environ.get(PROFILE_VARIABLE)
+        if site:
+            return ExecutionProfile.load(Path(site), override)
+        roots = (
+            {}
+            if os.environ.get("SENSELAB_ENV_ROOT")
+            else {"env_roots": {"isolated": str(_session_env_root), "server": str(_session_env_root / "servers")}}
+        )
+        return ExecutionProfile.load(CLUSTER_FIXTURE, {**roots, **(override or {})})
+
+    return load
+
+
+@pytest.fixture
+def site_profile(
+    profile_loader: Callable[[Mapping[str, Any] | None], Any],
+) -> Callable[[Mapping[str, Any] | None], Any]:
+    """`profile_loader` for a model or GPU test, skipped unless `$SENSELAB_TEST_PROFILE` names a site profile."""
+    if not os.environ.get(PROFILE_VARIABLE):
+        pytest.skip(f"set {PROFILE_VARIABLE} to a site profile")
+    return profile_loader
+
+
 def _slack_document(request: pytest.FixtureRequest) -> dict[str, Any]:
     import yaml  # noqa: PLC0415 - the root conftest imports the stdlib and pytest only
 
@@ -135,8 +181,21 @@ def _apply_budgets(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.timeout(budgets[tier]))
 
 
+SITE_TIER_MARKERS = ("model", "large_model", "gpu")
+
+
+def selects_site_tiers(markexpr: str) -> bool:
+    """Whether a `-m` expression names a model or GPU marker positively (`model`, not `not model`)."""
+    positive = re.sub(r"\bnot\s+\w+", " ", markexpr)
+    return any(re.search(rf"\b{marker}\b", positive) for marker in SITE_TIER_MARKERS)
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Fail the session, listing the node ids, when a test under ``packages/`` has zero or several tier marks."""
+    if selects_site_tiers(config.option.markexpr or "") and not os.environ.get(PROFILE_VARIABLE):
+        raise pytest.UsageError(
+            f"-m {config.option.markexpr!r} selects model or GPU tests: set {PROFILE_VARIABLE} to a site profile file"
+        )
     offenders = []
     owned = [item for item in items if PACKAGES in Path(str(item.path)).resolve().parents]
     for item in owned:

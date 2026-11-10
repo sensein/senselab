@@ -963,7 +963,10 @@ def _register_runtime_samples() -> None:
     )
     register_samples(
         ExecutionProfile,
-        lambda: [ExecutionProfile.load("laptop"), ExecutionProfile.load("orcd")],
+        lambda: [
+            ExecutionProfile.load("laptop"),
+            ExecutionProfile.load("laptop", {"name": "offline", "network": "offline"}),
+        ],
         invalid_updates=[
             {"network": "maybe"},
             {"devices": ("tpu",)},

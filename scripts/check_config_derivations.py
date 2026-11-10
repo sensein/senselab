@@ -32,8 +32,9 @@ INLINE_EXEMPT = {
 SECTION_EXEMPT = {
     **INLINE_EXEMPT,
     f"{_CORE}profiles/laptop.yaml": "sectioned by profile and key, under ## laptop",
-    f"{_CORE}profiles/orcd.yaml": "sectioned by profile and key, under ## orcd",
+    f"{_CORE}profiles/slurm.yaml": "sectioned by profile and key, under ## slurm",
     "packages/senselab-core/tests/data/test_slack.yaml": "sectioned under ## test_slack",
+    "packages/senselab-core/tests/data/profiles/cluster.yaml": "a test fixture; invented values, described under ## test_slack",
     f"{_CORE}comparison.yaml": "how each kernel type's fields compare; the thresholds it names are run_config.yaml's",
     f"{_CORE}weights.yaml": "measured digests of weight files, not chosen values",
     f"{_SENSELAB}catalogue.yaml": "generated from pinned hub metadata, not chosen values",

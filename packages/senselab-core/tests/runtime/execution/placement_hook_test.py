@@ -62,6 +62,11 @@ from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import Unresolved
 from senselab_core.testing.measures import CEILED_SIZING, FixedUnit
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 SCORE = scoring("placement_hook_test.score")
 REGISTRY = registry(SCORE)
 PARTITION = "mit_secret_gpu"
@@ -128,7 +133,7 @@ def _profile(partition: str = PARTITION, exclude: Sequence[str] = ()) -> Executi
         "pool": {"quantum_items": 1},
         "sizing": CEILED_SIZING,
     }
-    return ExecutionProfile.load("orcd", override)
+    return ExecutionProfile.load(CLUSTER, override)
 
 
 def _commands() -> SlurmCommands:

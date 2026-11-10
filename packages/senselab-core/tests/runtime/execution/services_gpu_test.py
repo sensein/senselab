@@ -1,5 +1,6 @@
 """One registered vLLM server of the catalogue's PII model consumed by two worker sets (ORCD, H100)."""
 
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,9 +31,11 @@ def _backend(settings: dict[str, object]) -> BackendSpec:
 
 
 @pytest.mark.timeout(4 * STARTUP_TIMEOUT_S)
-def test_two_plans_share_one_pii_server_and_a_new_config_is_another_service(tmp_path: Path) -> None:
+def test_two_plans_share_one_pii_server_and_a_new_config_is_another_service(
+    tmp_path: Path, site_profile: Callable[..., ExecutionProfile]
+) -> None:
     """Two consumers share one started server; restarted with a new config it attests anew, changing the call's key."""
-    profile = ExecutionProfile.load("orcd")
+    profile = site_profile()
     env = ensure_env(
         Env.server("vllm-server"),
         DATA / "env_locks/vllm-server.txt",
