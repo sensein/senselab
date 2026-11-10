@@ -1,7 +1,9 @@
 """`InProcess` splits a request whose jobs all ran out of memory, as the pool does, and writes no sizing record."""
 
 from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import pytest
 from backends import recording_oom_backend_fixture as backend
@@ -11,15 +13,16 @@ from pool_stack_fixture import packaged, registry
 from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.runtime.call import RunConfig, bind_input
 from senselab_core.runtime.datasets import RecordSet
-from senselab_core.runtime.execution import job as job_module
 from senselab_core.runtime.execution.executor import Handle
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.job import Completed, Failed, JobOutcome
 from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.measures import FixedEstimates, FixedUnit
+from senselab_worker.faults import ResourceFault
 
 pytestmark = pytest.mark.logic
 
@@ -94,6 +97,7 @@ def test_a_content_fault_item_beside_a_batched_oom_keeps_its_own_outcome(
 ) -> None:
     """The request runs out as a whole; once split, the item the backend rejects fails as content, the rest succeed."""
     outcomes = _run(tmp_path, profile, _texts(BATCH, at={4: "b04"}))
+    assert backend.BATCHES == [12, 6, 3, 3, 6, 3, 3]
     [bad] = [o for o in outcomes if isinstance(o, Failed)]
     assert (bad.failure.fault, bad.failure.type) == ("content", "ContentFault")
     assert sum(isinstance(o, Completed) for o in outcomes) == BATCH - 1
@@ -112,17 +116,69 @@ def test_a_one_job_resource_fault_is_that_jobs_failure(tmp_path: Path, profile: 
     assert backend.BATCHES == [1]
 
 
+def _raising(monkeypatch: pytest.MonkeyPatch, exc: Exception, *, above: int = 0) -> list[int]:
+    """Make a loaded worker's `run` raise `exc` for a request of more than `above` jobs; return the sizes it got."""
+    sent: list[int] = []
+    real = WorkerSet.checkout
+
+    @contextmanager
+    def checkout(self: WorkerSet, *args: Any, **kwargs: Any) -> Iterator[object]:  # noqa: ANN401 - `checkout`'s own
+        with real(self, *args, **kwargs) as worker:
+
+            class Raising:
+                def run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+                    sent.append(len(items))
+                    if len(items) > above:
+                        raise exc
+                    return worker.run(items, params)
+
+            yield Raising()
+
+    monkeypatch.setattr(WorkerSet, "checkout", checkout)
+    return sent
+
+
 def test_a_request_that_raises_a_resource_fault_is_split_too(
     tmp_path: Path, profile: ExecutionProfile, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A worker that raises out of its request, rather than answering each item, is split by the same rule."""
-    sent = job_module._send
-
-    def send(jobs: Sequence[object], *rest: object) -> list[dict[str, object]]:
-        if len(jobs) > backend.FITS:
-            raise backend.OutOfMemoryError(f"out of memory at a batch of {len(jobs)}")
-        return sent(jobs, *rest)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(job_module, "_send", send)
+    """A worker that raises out of its request, rather than answering each item, is split by the same predicate."""
+    sent = _raising(monkeypatch, backend.OutOfMemoryError("out of memory"), above=backend.FITS)
     outcomes = _run(tmp_path, profile, _texts(BATCH))
-    assert all(isinstance(o, Completed) for o in outcomes) and backend.BATCHES == [3, 3, 3, 3]
+    assert all(isinstance(o, Completed) for o in outcomes) and sent == [12, 6, 3, 3, 6, 3, 3]
+
+
+def test_a_lone_job_that_raises_a_resource_fault_fails_with_it(
+    tmp_path: Path, profile: ExecutionProfile, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A request of one whose worker raised out of memory is sent once and that job fails; nothing is split."""
+    sent = _raising(monkeypatch, backend.OutOfMemoryError("out of memory"))
+    [dead] = _run(tmp_path, profile, _texts(1))
+    assert isinstance(dead, Failed) and (dead.failure.fault, dead.failure.type) == ("resource", "OutOfMemoryError")
+    assert sent == [1]
+
+
+def test_a_busy_start_lease_propagates_from_the_request_that_waited_on_it(
+    tmp_path: Path, profile: ExecutionProfile, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lease wait is a `TimeoutError` of the resource class, but it is raised once and nothing is split."""
+    sent = _raising(monkeypatch, LeaseTimeout("start lease busy"))
+    with pytest.raises(LeaseTimeout):
+        _run(tmp_path, profile, _texts(BATCH))
+    assert sent == [12]
+
+
+def test_a_checkout_that_raises_is_never_split(
+    tmp_path: Path, profile: ExecutionProfile, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lease wait or a resource fault raised by checkout, start or load is not a request running out."""
+    checkouts: list[Exception] = []
+    for exc in (LeaseTimeout("start lease busy"), ResourceFault("the model does not fit at load")):
+
+        def checkout(self: WorkerSet, *args: object, _exc: Exception = exc, **kwargs: object) -> object:  # noqa: ARG001
+            checkouts.append(_exc)
+            raise _exc
+
+        monkeypatch.setattr(WorkerSet, "checkout", checkout)
+        with pytest.raises(type(exc)):
+            _run(tmp_path, profile, _texts(BATCH))
+    assert len(checkouts) == 2

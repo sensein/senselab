@@ -55,6 +55,7 @@ from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, servic
 from senselab_core.runtime.hardware import host_token, numerics_class
 from senselab_core.runtime.keys import Call, Placement, build_key, request_components
 from senselab_core.runtime.launch import launch
+from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.servable import Servable
@@ -111,6 +112,14 @@ class Failed:
 
 JobOutcome = Completed | Failed
 """What one job gave."""
+
+
+def splits(exc: BaseException) -> bool:
+    """Whether `exc`, raised by a request to a loaded worker, is a resource fault that splits the request.
+
+    A lease wait (`LeaseTimeout`) is a `TimeoutError` and so a resource class, but it is nobody's request failing.
+    """
+    return classify(exc) is FaultClass.RESOURCE and not isinstance(exc, LeaseTimeout)
 
 
 def ran_out(outcomes: Sequence[JobOutcome]) -> bool:
@@ -202,6 +211,14 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     return [outcomes[i] for i in range(len(jobs))]
 
 
+class _Raised(Exception):
+    """What `_send` raises for an exception its request to a loaded worker raised, as opposed to checkout or start."""
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__()
+        self.cause = cause
+
+
 @dataclass(frozen=True)
 class _Sending:
     """What sending a request of one batch needs: its placement, env, profile, workers, attestation, store and run."""
@@ -219,15 +236,17 @@ class _Sending:
 def _sent_in_halves(chunk: Sequence[_Pending], sending: _Sending) -> list[JobOutcome]:
     """Return one outcome per item of `chunk`, sent as one request; with `bisect_resource`, one that ran out is split.
 
-    A job alone whose request raised a resource fault is that job's failure.
+    A job alone whose request raised a splittable resource fault (`splits`) is that job's failure. What checkout,
+    start or load raised is never split.
     """
     began = datetime.now(timezone.utc)
     jobs = [p.job for p in chunk]
     try:
         results = _send(jobs, sending.placement, sending.env, sending.profile, sending.workers, sending.expected)
-    except Exception as exc:
-        if not sending.bisect_resource or classify(exc) is not FaultClass.RESOURCE:
-            raise
+    except _Raised as raised:
+        exc = raised.cause
+        if not sending.bisect_resource or not splits(exc):
+            raise exc from None
         if len(chunk) > 1:
             return _halves(chunk, sending)
         key = build_key(chunk[0].job.call, sending.placement, chunk[0].context)
@@ -466,7 +485,10 @@ def _send(  # noqa: PLR0913 - the request's jobs and everything placing it
     items = [{"id": str(i), "inputs": dict(j.values) if host else as_wire(j.values)} for i, j in enumerate(jobs)]
     held = workers.checkout(backend, env, call.model, device=placement.device, profile=profile, expected=expected)
     with held as worker, request_reports.request(tuple(j.ref for j in jobs)):
-        return worker.run(items, params)
+        try:
+            return worker.run(items, params)
+        except Exception as exc:
+            raise _Raised(exc) from exc
 
 
 def _record(  # noqa: PLR0913 - one sent item and where its result goes
