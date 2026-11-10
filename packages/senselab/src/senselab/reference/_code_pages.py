@@ -280,7 +280,8 @@ a site profile: every `<fill: ...>` in it is yours to set, and it refuses to loa
 
 - A group writes its own site profile file: copy `slurm`, fill the values, rename it and give the file as the
   execution profile, `ExecutionProfile.load("my-site.yaml")`.
-- Placement reads no scheduler. A QOS limit on submitted jobs or GPUs is invisible to it. The site's placement hook,
+- Placement reads no scheduler. A QOS limit on submitted jobs or GPUs is invisible to it, and a run's coordinators are
+  jobs too, so they count against a per-user submit limit that no placement request shows. The site's placement hook,
   a `module:callable` named in `substrate.placement_hook`, is where a group accounts for such limits: it receives a
   `PlacementRequest` and answers a `PlacementAnswer`.
 - A group calibrates its own resource with `benchmarks/scale/ladder.py run SUITE --execution PROFILE --measures-root
@@ -326,6 +327,16 @@ EXAMPLE_STEP = "stt"
 """The scenario of the exit checks that the example is: its task, data manifest and number of utterances."""
 EXAMPLE_HASH = "97b8bdc549994632929072d206841a2dc282070ad1bc6235057f3eaa43bbff47"
 """The plan hash recorded for the example by the Phase 3 exit run: `SpeechToText()` over the 1000-utterance tree."""
+EXAMPLE_RUN = {
+    "commit": "ab62fd60",
+    "model": "openai/whisper-large-v3-turbo@41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
+    "items": 1000,
+    "committed": 1000,
+    "interrupted_at": 421,
+}
+"""What the exit run recorded, with the commit it ran at: the default model it planned with, the items, the items
+committed, and the items committed when the interrupted run was stopped. A test fails when the catalogue default or the
+exit scenario no longer equals it, so the page is not shown against a run that is not its own."""
 
 
 def example_page(root: Path | None = None) -> str:
@@ -339,6 +350,7 @@ def example_page(root: Path | None = None) -> str:
     items, name = step["items"], step["manifest"]
     manifest = DataManifest.load(root / "benchmarks" / "manifests" / f"{name}.yaml")
     default = CATALOGUE.default("speech_to_text")
+    run = EXAMPLE_RUN
     return f"""{BADGES["2x"]}
 
 A speech-to-text plan over {items} LibriSpeech test-clean utterances: the dataset as a BIDS tree, the task
@@ -353,8 +365,16 @@ LibriSpeech test-clean, licensed {manifest.license.expression}. {" ".join(manife
 uv run senselab data fetch benchmarks/manifests/{name}.yaml
 ```
 
-The archive lands in the data cache, every hash verified. The exit harness lays the first {items} utterances,
-in archive order, as `sub-<speaker>/ses-01/audio/sub-<speaker>_ses-01_task-read_run-<k>_audio.flac` under a BIDS root.
+The archive lands in the data cache, every hash verified. `benchmarks/scale/bids_tree.py` lays the first {items}
+utterances, in archive order, as `sub-<speaker>/ses-01/audio/sub-<speaker>_ses-01_task-read_run-<k>_audio.flac` under a
+BIDS root. It fetches the archive itself, so this one command does both:
+
+```bash
+uv run python -c "import sys; sys.path.insert(0, 'benchmarks/scale'); import bids_tree, pathlib; \\
+bids_tree.from_librispeech(pathlib.Path('work/data/librispeech-{items}'), \\
+pathlib.Path('benchmarks/manifests/{name}.yaml'), {items})"
+```
+
 A BIDS tree of your own is read the same way.
 
 ## The task over the dataset
@@ -402,7 +422,8 @@ resource class says how many items the result store would serve and how many com
 
 ## Running it
 
-Running needs the `pydra` extra of `senselab-core`. On one GPU worker, {items} of {items} utterances were
-committed. A run interrupted at about a third and resumed (`senselab.resume`) served the committed items from the
+Running needs the `pydra` extra of `senselab-core`. On one GPU worker, {run["committed"]} of {run["items"]}
+utterances were committed (commit `{run["commit"]}`). A run stopped with {run["interrupted_at"]} of {run["items"]}
+committed, a third of the items being the target, and resumed (`senselab.resume`) served the committed items from the
 store and computed only the rest, under the same plan hash. Both are in the [run reference](runs.html).
 """

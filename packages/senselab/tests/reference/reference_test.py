@@ -327,3 +327,28 @@ def test_status_page_lists_the_executors_and_exit_scenarios_of_the_checkout() ->
     assert rows[("`Pool`", "`Slurm`")][2:] == ("`slurm`", "yes")
     assert rows[("`Pool`", "`Local`")][2] == "-"
     assert _render.executor_rows(None)[0][3] == "-"
+
+
+@pytest.mark.contract
+def test_librispeech_example_constants_still_describe_the_run_the_page_shows() -> None:
+    """The recorded run equals the catalogue default and the exit scenario, or the example is stale."""
+    from senselab.reference import _code_pages  # noqa: PLC0415 - beside its test
+    from senselab_core.runtime.config import load_yaml  # noqa: PLC0415 - beside its test
+
+    root = _specs.checkout_root()
+    assert root is not None
+    step = load_yaml(root / "benchmarks" / "exit" / "exit.yaml", "exit checks")["steps"][_code_pages.EXAMPLE_STEP]
+    run = _code_pages.EXAMPLE_RUN
+    default = senselab.describe("speech_to_text")["default_model"]
+    assert default == run["model"]
+    assert step["items"] == run["items"]
+    page = _render_page("librispeech_example")
+    assert _code_pages.EXAMPLE_HASH in page
+    assert f"{run['interrupted_at']} of {run['items']}" in page
+    assert "bids_tree.from_librispeech" in page
+
+
+@pytest.mark.contract
+def test_profiles_page_says_coordinators_count_against_the_submit_limit() -> None:
+    """The site-profile section names the per-user submit limit that coordinators count against."""
+    assert "coordinators are\n  jobs too" in _render_page("profiles")
