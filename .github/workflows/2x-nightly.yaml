@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The refs the limits matrix runs: with `ref`, that branch and the phase's code branch (the highest `2x/phase-<N>`
+  # The refs the limits matrix runs: with `ref`, that branch and the phase's code branch (the highest-numbered phase branch
   # on the remote; a phase branch merges directly, with no PR to carry the `limits` label, so only this job runs its
   # timing bounds before the phase merges); without it, the commit under test.
   plan:
