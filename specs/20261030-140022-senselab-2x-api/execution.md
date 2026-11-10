@@ -102,6 +102,19 @@ dir>/queues --classes <list> [--profile NAME]` runs `serve_pool`.
   them, fails every job of the request that raised it and only those: a half that completed keeps its outcomes and
   is committed. `ProtocolError` is included beyond the ruling's list because the host discards the worker after
   one, exactly as after `WorkerLost`.
+- **In-process bisection (R-256).** `InProcess` splits a request that ran out, by two predicates beside each other in
+  `job.py`: `ran_out` on the outcomes (a request of several jobs each of which answered a resource fault) and `splits`
+  on what the request raised (a resource-class exception raised by the request to an already-loaded worker, around
+  `worker.run`; `LeaseTimeout` never, though it is a `TimeoutError`). What checkout, start or load raised is never
+  split and is raised as before. The Pool's `whole` calls `splits` for its resource class too. The halves are the
+  first and last jobs, each split in turn until the job that does not fit is alone and is `Failed` with the fault;
+  jobs that fit complete, items that failed as content keep their own outcomes, nothing runs twice.
+  The classes that split a request differ: `InProcess` splits only a resource fault (`splits`, `ran_out`); the Pool also
+  splits `WorkerLost`, `WorkerFatal` and `ProtocolError`, which `InProcess.submit` still raises. `execute` splits only
+  when asked (`bisect_resource`, which `InProcess` passes), because a pool worker sends through `execute` and its own
+  bisection writes the `oom` record. The Pool's request-level bookkeeping (`bisect`, per-request reports, `Sent`) is not
+  shared: `InProcess` keeps no sizing record and writes no `oom` record, since its batch comes from estimates only a
+  pool run feeds.
 - **A lost claim stops its request (fix round 1).** When a claim's lease is lost (`Claim.renew` gives up an
   item), the worker releases the claim's other items at once, so an in-process request that cannot be stopped never
   holds their leases past the stale bound (fix round 2); it then cancels the claim's remaining work, abandons the
