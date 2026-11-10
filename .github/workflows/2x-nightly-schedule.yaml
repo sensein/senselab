@@ -1,0 +1,17 @@
+name: 2x-nightly-schedule
+
+# GitHub runs `schedule` only from the default branch. This file is that trigger and nothing else: the matrix and the
+# limits tier are 2x-nightly.yaml on the 2.x branch, which it calls.
+on:
+  schedule:
+  - cron: 17 3 * * *
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nightly:
+    uses: sensein/senselab/.github/workflows/2x-nightly.yaml@2.x
+    with:
+      ref: 2.x
