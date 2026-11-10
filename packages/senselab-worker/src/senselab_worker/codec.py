@@ -27,6 +27,7 @@ from senselab_worker.canonical import (
     npy_header,
     refuse_constant,
     require_depth,
+    require_json_depth,
     require_unicode,
     unique_object,
 )
@@ -186,14 +187,16 @@ def parse_line(line: bytes) -> dict[str, Any]:
     if len(line) > MAX_LINE_BYTES:
         raise ProtocolError(f"wire line exceeds {MAX_LINE_BYTES} bytes")
     try:
+        require_json_depth(line)
+    except ValueError as exc:
+        raise ProtocolError(f"wire line nests deeper than {MAX_DEPTH} containers") from exc
+    try:
         msg = json.loads(
             line.decode("utf-8"),
             object_pairs_hook=unique_object,
             parse_float=finite_float,
             parse_constant=refuse_constant,
         )
-    except RecursionError as exc:
-        raise ProtocolError(f"wire line nests deeper than {MAX_DEPTH} containers") from exc
     except ValueError as exc:
         raise ProtocolError(f"wire line is not JSON: {exc}") from exc
     if type(msg) is not dict:

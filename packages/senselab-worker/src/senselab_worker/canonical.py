@@ -165,6 +165,28 @@ def require_depth(depth: int) -> None:
         raise ValueError(f"nesting deeper than {MAX_DEPTH} containers")
 
 
+_JSON_BRACKETS = re.compile(rb'"(?:[^"\\]|\\.)*"|[\[\]{}]')
+
+
+def require_json_depth(text: bytes) -> None:
+    """Refuse JSON text whose containers nest deeper than `MAX_DEPTH`, before any parser sees it.
+
+    The bound is counted over the brackets outside strings, so it is the same on every Python; no parser's
+    recursion limit is consulted.
+
+    Raises:
+        ValueError: if the text nests deeper than `MAX_DEPTH` containers.
+    """
+    depth = 0
+    for token in _JSON_BRACKETS.finditer(text):
+        char = token.group()
+        if char in (b"[", b"{"):
+            depth += 1
+            require_depth(depth)
+        elif char in (b"]", b"}"):
+            depth -= 1
+
+
 @contextmanager
 def entered(container: object, active: set[int], base: int = 0) -> Iterator[None]:
     """Mark `container` as being encoded for the duration of the block, on the path held in `active`.
@@ -347,6 +369,10 @@ def jcs_loads(data: bytes | str) -> object:
     """
     raw = data.encode("utf-8", "surrogatepass") if isinstance(data, str) else bytes(data)
     try:
+        require_json_depth(raw)
+    except ValueError as err:
+        raise NotCanonicalJSON(f"JSON nests deeper than {MAX_DEPTH} containers") from err
+    try:
         value = json.loads(
             raw.decode("utf-8"),
             parse_int=_parse_int,
@@ -354,8 +380,6 @@ def jcs_loads(data: bytes | str) -> object:
             parse_constant=refuse_constant,
             object_pairs_hook=unique_object,
         )
-    except RecursionError as err:
-        raise NotCanonicalJSON(f"JSON nests deeper than {MAX_DEPTH} containers") from err
     except NotCanonicalJSON:
         raise
     except ValueError as err:

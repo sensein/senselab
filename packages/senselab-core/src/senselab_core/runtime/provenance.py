@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
-from senselab_worker.canonical import jcs_dumps, jcs_loads, require_depth
+from senselab_worker.canonical import jcs_dumps, jcs_loads, require_depth, require_json_depth
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.formats import (
@@ -368,8 +368,9 @@ def _declared_format(data: bytes) -> str | None:
     """
     for candidate in (data, data.partition(b"\n")[0]):
         try:
+            require_json_depth(candidate)
             document = json.loads(candidate)
-        except (ValueError, RecursionError):
+        except ValueError:
             continue
         found = document.get("format") if isinstance(document, dict) else None
         return found if isinstance(found, str) and re.fullmatch(FORMAT_PATTERN, found) else None

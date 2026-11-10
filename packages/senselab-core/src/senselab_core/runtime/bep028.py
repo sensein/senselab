@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
-from senselab_worker.canonical import jcs_dumps, jcs_loads
+from senselab_worker.canonical import jcs_dumps, jcs_loads, require_json_depth
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.formats import LABELS_FORMAT, RETIRED_LABELS_FORMATS, FormatVerdict, check
@@ -74,8 +74,12 @@ def _read_labels(directory: StorageDir) -> dict[str, tuple[str, list[str]]]:
     if data is None:
         return {}
     try:
+        require_json_depth(data)
+    except ValueError:
+        raise ValueError(f"the label map is not {LABELS_FORMAT}") from None
+    try:
         declared = json.loads(data).get("format")
-    except (ValueError, AttributeError, RecursionError):
+    except (ValueError, AttributeError):
         declared = None
     if check(LABELS_FORMAT, declared, RETIRED_LABELS_FORMATS) is FormatVerdict.RETIRED:
         raise LabelMapRetired(str(declared))
