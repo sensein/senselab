@@ -12,16 +12,17 @@ documents of a manifest, or `payloads`, JSON records for the fake stack) and its
 packaged profile its `name` names (`orcd-local.yaml` runs the orcd classes as local workers of one allocation). Each
 point is planned, run on a `Pool` over the profile's substrate into a store of its own, its pool probing into a
 measures root of the point's own (so each unit is probed in the run, not read from another), and measured from its
-events, its files, the samples each pool worker reported and the observations of every request. One
-`scale-result@2.0` document per point is written under `$SENSELAB_CACHE/2x/benchmarks/scale/<suite>/<commit>/`: per
-measures-root unit its probe observations and its `Estimate` (unmeasured, with reasons, where the probe did not
-measure), the per-item seconds (`request_cost`) and the calibration settings it ran under. With `--measures-root PATH`
-every point's pool probes into and reads that one root instead, so a group calibrating its own resource lists `PATH` in
-its profile's `calibration.measures_roots` and a unit measured there is read on an identity match (a unit already in
-`PATH` is not probed again). One line is printed per
-point, then each task's flatness against `budgets.yaml` (`scale-budgets@1.0`). A point whose run directory already
-exists is refused, so no point is measured from reused results, and every entry is planned before any point is
-measured, so a suite with an entry that does not plan is refused, every such entry listed.
+events, its files, the samples each pool worker reported and the observations of every request. One `scale-result@2.0`
+document per point is written under `$SENSELAB_CACHE/2x/benchmarks/scale/<suite>/<commit>/`: per unit the plan
+resolved whether it was probed, its probe observations and its `Estimate` (unmeasured, with reasons, where the probe
+did not measure), the per-item seconds (`request_cost`) and the calibration settings it ran under. With
+`--measures-root PATH` every point's pool probes into and reads that one root instead, so a group calibrating its own
+resource lists `PATH` in its profile's `calibration.measures_roots` and a unit measured there is read on an identity
+match. A unit already in `PATH` is not probed again: its result entry says `probed` false and names no `probe_ids`, so
+a campaign whose figures are evidence starts from an empty `PATH`. One line is printed per point, then each task's
+flatness against `budgets.yaml` (`scale-budgets@1.0`). A point whose run directory already exists is refused, so no
+point reuses a run's results, and every entry is planned before any point is measured, so a suite with an entry that
+does not plan is refused, every such entry listed.
 """
 
 import argparse
@@ -53,7 +54,7 @@ from senselab_core.runtime.execution.substrates import substrate_of, worker_id
 from senselab_core.runtime.execution_settings import CalibrationSettings
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
 from senselab_core.runtime.hardware import host_token, memory_bytes
-from senselab_core.runtime.measures import MeasureRoots
+from senselab_core.runtime.measures import MeasureRoots, MeasureUnit
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.probe import Probe
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -389,9 +390,9 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     Its store is `<out>/<label>@<point>/store`, and its pool probes into the measures root beside it, with the
     suite's per-point wall budget as its probe seconds, so each point probes afresh and reads no other point's
     measure; with `measures_root` it probes into and reads that root instead.
-    Its `units` hold, per unit that root holds, the probe's observations and its `Estimate` (`Probe.estimate`;
-    unmeasured, with reasons, where the probe did not measure). `per_item_s` is `request_cost` over every request
-    the run reported.
+    Its `units` hold, per unit the plan resolved, whether this run probed it, the probes it wrote and their
+    observations, and its `Estimate` (`Probe.estimate`; unmeasured, with reasons, where the probe did not measure).
+    `per_item_s` is `request_cost` over every request the run reported.
 
     Raises:
         FileExistsError: the point's run directory exists, so its results would be reused.
@@ -419,6 +420,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         status = placed.run(pool, store=store).wait()
     finally:
         pool.close()
+    resolved, probed = dict(pool.resolved), {d: u.probe for d, u in pool.probes.items()}
     wall = time.monotonic() - began
     outcomes = _outcomes(run_dir)
     samples = _samples(outcomes)
@@ -451,7 +453,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         "counts": dict(status.counts),
         "wall_s": wall,
         **request_cost(_observations(outcomes), outcomes),
-        "units": _units(roots, profile),
+        "units": _units(roots, profile, resolved, probed),
         "faults": _faults(events, placed.manifest.rows),
         "host": host_token(),
         "backend_params": dict(node.backend_params),
@@ -466,20 +468,31 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     }
 
 
-def _units(roots: MeasureRoots, profile: ExecutionProfile) -> list[dict[str, Any]]:
-    """Return each unit `roots` holds with its probe observations and its `Estimate`, in digest order."""
+def _units(
+    roots: MeasureRoots, profile: ExecutionProfile, resolved: Mapping[str, MeasureUnit], probed: Mapping[str, str]
+) -> list[dict[str, Any]]:
+    """Return each unit this point's plan resolved, in digest order, with how it was measured.
+
+    `resolved` is the units by digest and `probed` the probe id this run gave each unit it probed. A unit carries
+    `probed` (whether this run probed it), `probe_ids` (the probes this run wrote to `roots`, empty when its estimate
+    was read from the root's earlier observations), the observations of those probes and its `Estimate` over every
+    observation the root pools for it.
+    """
     estimate = Probe.estimator(
         profile.calibration, records_of=roots.regime_records, memory_headroom=profile.sizing.memory_headroom
     )
     found = []
-    for unit in roots.units():
-        observed = roots.observations(unit)
+    for digest in sorted(resolved):
+        unit = resolved[digest]
+        wrote = [p for p in roots.probes(unit) if digest in probed and p.probe == probed[digest]]
         found.append(
             {
                 "unit": unit.model_dump(mode="json"),
                 "label": unit.label(),
-                "observations": [o.model_dump(mode="json") for o in observed],
-                "estimate": estimate(unit, observed).model_dump(mode="json"),
+                "probed": digest in probed,
+                "probe_ids": [p.probe for p in wrote],
+                "observations": [o.model_dump(mode="json") for p in wrote for o in p.observations],
+                "estimate": estimate(unit, roots.observations(unit)).model_dump(mode="json"),
             }
         )
     return found

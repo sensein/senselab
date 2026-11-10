@@ -503,6 +503,7 @@ def test_a_unit_no_measures_root_holds_is_probed(tmp_path: Path, clock: ManualCl
     assert pool.measures.get(other) is not None and pool.measures.get(unit) is None
     _submit(pool, placed, values)
     assert len(_probe_queues(pool)) == 1 and pool.probes and pool.queues.queue("cpu").work() == 0
+    assert set(pool.resolved) == {unit.digest()} and set(pool.probes) == {unit.digest()}
 
 
 def _peer_observations(count: int, lengths: Sequence[int]) -> list[Observation]:

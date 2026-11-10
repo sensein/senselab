@@ -337,22 +337,28 @@ def test_two_entries_of_one_task_write_two_results_and_two_stores(
 
 
 @pytest.mark.logic
-def test_a_points_units_hold_their_probe_observations_and_estimate(tmp_path: Path) -> None:
-    """Per unit its measures root holds: the unit, its probe observations and the `Estimate`, measured or not."""
+def test_a_points_units_are_those_its_plan_resolved_with_what_this_run_probed(tmp_path: Path) -> None:
+    """A unit the root already held is listed `probed` false with no probe ids; a probed one carries its own probes."""
     ladder = _module("scale_ladder_units_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
+    held = UNIT.model_copy(update={"backend": "held"})
     thin = UNIT.model_copy(update={"backend": "thin"})
-    _write(tmp_path, UNIT, _line([2.0, 8.0]))
+    _write(tmp_path, held, _line([2.0, 8.0], "old"))
+    _write(tmp_path, UNIT, _line([2.0, 8.0], "new"))
     _write(tmp_path, thin, _line([2.0, 8.0], count=1))
-    units = ladder._units(_roots(tmp_path), PROFILE)
+    roots = _roots(tmp_path)
+    resolved = {u.digest(): u for u in (UNIT, thin)}
+    units = ladder._units(roots, PROFILE, resolved, {UNIT.digest(): "new", thin.digest(): "absent"})
     by_label = {u["label"]: u for u in units}
-    assert set(by_label) == {UNIT.label(), thin.label()} and [u["label"] for u in units] == sorted(by_label)
-    assert (
-        by_label[UNIT.label()]["estimate"]["status"] == "measured" and len(by_label[UNIT.label()]["observations"]) == 6
-    )
-    assert (
-        by_label[thin.label()]["estimate"]["status"] == "unmeasured" and by_label[thin.label()]["estimate"]["reasons"]
-    )
-    assert MeasureUnit.model_validate(by_label[UNIT.label()]["unit"]) == UNIT
+    assert set(by_label) == {UNIT.label(), thin.label()} and held.label() not in by_label
+    mine = by_label[UNIT.label()]
+    assert mine["probed"] is True and mine["probe_ids"] == ["new"] and len(mine["observations"]) == 6
+    assert mine["estimate"]["status"] == "measured" and MeasureUnit.model_validate(mine["unit"]) == UNIT
+    assert by_label[thin.label()]["probed"] is True and by_label[thin.label()]["probe_ids"] == []
+    served = ladder._units(roots, PROFILE, {held.digest(): held}, {})
+    assert [(u["label"], u["probed"], u["probe_ids"], u["observations"]) for u in served] == [
+        (held.label(), False, [], [])
+    ]
+    assert served[0]["estimate"]["status"] == "measured"
     assert json.loads(json.dumps(units, sort_keys=True)) == units
 
 
