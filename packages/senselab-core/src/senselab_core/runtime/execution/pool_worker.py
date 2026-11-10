@@ -388,13 +388,27 @@ class PoolWorker:
         A probe queue the worker serves (`_pinned_probes`) is waited on from `pool.first_poll_s`, doubling to
         `pool.poll_s`, so a probe's next phase costs no full poll; its serve leases are released on return.
         """
+        failed = True
         try:
-            return self._claim_loop()
+            result = self._claim_loop()
+            failed = False
+            return result
         finally:
-            self.store.provenance.write(self.run_dir)
             for lease in self._serving.values():
                 lease.release()
             self._serving.clear()
+            self._write_provenance(raising=not failed)
+
+    def _write_provenance(self, *, raising: bool) -> None:
+        """Replace this worker's provenance document; an `OSError` is raised, or logged where `raising` is False."""
+        try:
+            self.store.provenance.write(self.run_dir)
+        except OSError:
+            if raising:
+                raise
+            logger.exception(
+                "pool worker %s could not write its provenance; the error that ended it propagates", self.name
+            )
 
     def _claim_loop(self) -> int:
         pool = self.profile.pool
@@ -517,12 +531,15 @@ class PoolWorker:
         other items are released at once, the request in flight is abandoned (`WorkerSet.abandon`), nothing more is
         sent, and this returns only after the thread stopped. Once `stop` is set, the request is abandoned too, the
         thread is given `join_s`, and the items whose jobs finished by then are committed. The worker's provenance
-        document in the run's `prov/` is replaced when the claim ends, however it ends.
+        document in the run's `prov/` is replaced when the claim ends, however it ends; a failed write is raised, or
+        logged where an error already ends the claim.
         """
+        failed = True
         try:
             self._run_claim(claim, claim_s)
+            failed = False
         finally:
-            self.store.provenance.write(self.run_dir)
+            self._write_provenance(raising=not failed)
 
     def _run_claim(self, claim: Claim, claim_s: float) -> None:
         spans = _Spans()
