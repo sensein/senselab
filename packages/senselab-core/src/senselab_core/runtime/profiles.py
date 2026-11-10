@@ -1,4 +1,4 @@
-"""The execution profile (`execution-profile@3`) and `resolve_execution`, which places a task call under it.
+"""The execution profile (`execution-profile@4`) and `resolve_execution`, which places a task call under it.
 
 A profile holds stack preferences per task, device preference, env roots, the torch index override, the model-source
 allowlist, the model-cache budget, the retry policy, the network policy, the resource classes, the substrate, the
@@ -14,7 +14,7 @@ import re
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Final, Literal
 
 from pydantic import Field, model_validator
 
@@ -70,14 +70,20 @@ class NoDevice(RuntimeError):
     """The chosen backend runs on no device that the profile lists and the node has."""
 
 
+_DROPPED_KEYS: Final = {
+    "execution-profile@3": "; drop calibration.probe_items and calibration.resolve_s, which are now derived",
+}
+
+
 class ProfileFormatRetired(ValueError):
-    """A profile in a retired format; it is rewritten as `execution-profile@3.0`."""
+    """A profile in a retired format; it is rewritten as `execution-profile@4.0`."""
 
     def __init__(self, found: str) -> None:
-        """Name the declared format."""
+        """Name the declared format, and the keys a newer major dropped from it."""
+        dropped = _DROPPED_KEYS.get(found.split(".", maxsplit=1)[0], "")
         super().__init__(
             f"the profile declares the retired format {found}; it is not read. Rewrite it as"
-            f" {EXECUTION_PROFILE_FORMAT}, whose keys `ExecutionProfile` documents"
+            f" {EXECUTION_PROFILE_FORMAT}, whose keys `ExecutionProfile` documents{dropped}"
         )
         self.found = found
 

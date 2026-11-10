@@ -1,7 +1,7 @@
 # A synthetic cluster profile for the execution tests: Slurm classes, group-trusted measures, env roots under a scratch link.
 # Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, section test_slack (a fixture, not a packaged profile).
 # The profile's format.
-format: execution-profile@3.0
+format: execution-profile@4.0
 # The profile's name.
 name: cluster
 # Per task, its stacks best first; empty lets each task's declared backend order decide.

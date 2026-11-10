@@ -2,7 +2,7 @@
 # Copy it to your own file, fill the values, rename it, and pass the file as `--execution`.
 # Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, by profile and key.
 # The profile's format.
-format: execution-profile@3.0
+format: execution-profile@4.0
 # The profile's name; rename it in your copy.
 name: slurm
 # Per task, its stacks best first; empty lets each task's declared backend order decide.
