@@ -3,7 +3,7 @@ r"""Pick the recordings the reviewer must read again after a replay, and split t
     python -m senselab.audio.workflows.triage.drivers.triage_review_rows rereads REPLAY_MANIFEST \
         --replay-logs LOG_DIR --out ROWS.jsonl
     python -m senselab.audio.workflows.triage.drivers.triage_review_rows split ROWS.jsonl [ROWS.jsonl ...] \
-        --out-dir DIR [--workers N]
+        --out-dir DIR --profile PROFILE [--workers N] [--config C]
 
 ``rereads`` reads the slice logs ``extend_replay_decisions`` wrote under ``LOG_DIR/slices/`` and writes the rows of
 ``REPLAY_MANIFEST`` the reviewer must read, with ``ROWS.counts.json`` beside it counting every review state. By default
@@ -17,7 +17,8 @@ are what ``extend_llm_review`` and ``extend_second_opinion`` take next.
 ``words`` row, which needs the reviewer's model; any other is a ``nowords`` row, which REVIEW and SECOND_OPINION record
 without loading a model, so it can run on CPU. Rows are de-duplicated by stem, first file first. A store that will not
 open goes to ``errors.txt`` and to neither list. It writes ``rows_words.jsonl``, ``rows_nowords.jsonl``,
-``errors.txt`` and ``split.counts.json`` under ``DIR``.
+``errors.txt`` and ``split.counts.json`` under ``DIR``. It takes the run's ``--profile``: reading a transcript reads
+the profile's values, in every worker it starts.
 
 Only stems, paths and counts are written or printed; no transcript text.
 """
@@ -37,8 +38,13 @@ from senselab.audio.workflows.triage.extend import (
     REVIEW_NEEDS_REREAD,
     REVIEW_READ,
     SLICES_SUBDIR,
+    activate_in_worker,
+    add_config_arguments,
+    driver_config,
     read_manifest,
     read_store,
+    worker_arguments,
+    worker_failure,
 )
 
 KEPT_KEYS = ("stem", "enhanced", "source")
@@ -72,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     split.add_argument("rows", type=Path, nargs="+", help="Row JSONL files, each row with stem and enhanced")
     split.add_argument("--out-dir", type=Path, required=True, help="Where the two lists go")
     split.add_argument("--workers", type=int, default=None, help="Processes (default: SLURM_CPUS_PER_TASK, else 4)")
+    add_config_arguments(split)
     return parser
 
 
@@ -149,6 +156,9 @@ def classify(row: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """
     from senselab.audio.workflows.triage.nodes.redact import transcript_texts
 
+    failed = worker_failure()
+    if failed is not None:
+        return row, f"error:{failed}"
     try:
         store = read_store(Path(str(row["enhanced"])).parents[2])
         original, _ = transcript_texts(store)
@@ -157,13 +167,24 @@ def classify(row: dict[str, Any]) -> tuple[dict[str, Any], str]:
     return row, WORDS if original.strip() else NOWORDS
 
 
-def split_rows(paths: Sequence[Path], out_dir: Path, *, workers: int) -> dict[str, Any]:
+def split_rows(
+    paths: Sequence[Path],
+    out_dir: Path,
+    *,
+    workers: int,
+    worker_config: tuple[str | None, str | None] = (None, None),
+) -> dict[str, Any]:
     """Split rows into the words and nowords lists.
+
+    Reading a transcript reads the dataset profile's values, so the profile must be active here and in every worker
+    (a spawned worker starts with none).
 
     Args:
         paths: Row JSONL files.
         out_dir: Where the lists go.
         workers: Processes to read stores with.
+        worker_config: :func:`~senselab.audio.workflows.triage.extend.worker_arguments` of the driver's configuration,
+            activated in each worker.
 
     Returns:
         The counts written to ``split.counts.json``.
@@ -175,8 +196,8 @@ def split_rows(paths: Sequence[Path], out_dir: Path, *, workers: int) -> dict[st
             if row["stem"] not in seen:
                 seen.add(str(row["stem"]))
                 rows.append(row)
-    if workers > 1 and len(rows) > 1:
-        with ProcessPoolExecutor(workers) as pool:
+    if workers > 1 and rows:
+        with ProcessPoolExecutor(workers, initializer=activate_in_worker, initargs=worker_config) as pool:
             results = list(pool.map(classify, rows, chunksize=8))
     else:
         results = [classify(row) for row in rows]
@@ -207,8 +228,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(summary))
             return 0
         workers = args.workers or int(os.environ.get("SLURM_CPUS_PER_TASK", "4"))
-        counts = split_rows(args.rows, args.out_dir, workers=workers)
-    except (OSError, ValueError) as error:
+        config = driver_config(args)
+        counts = split_rows(args.rows, args.out_dir, workers=workers, worker_config=worker_arguments(args, config))
+    except (OSError, ValueError, RuntimeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
     print(json.dumps(counts))

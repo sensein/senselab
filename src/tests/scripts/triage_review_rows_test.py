@@ -68,3 +68,26 @@ def test_split_follows_the_reviewers_words_test(tmp_path: Path, monkeypatch: pyt
     assert [json.loads(line)["stem"] for line in (out / "rows_words.jsonl").read_text().splitlines()] == ["talk"]
     assert [json.loads(line)["stem"] for line in (out / "rows_nowords.jsonl").read_text().splitlines()] == ["quiet"]
     assert (out / "errors.txt").read_text() == "broken\terror:OSError\n"
+
+
+def test_split_hands_its_workers_the_drivers_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``split`` activates the profile it was given and passes it to every worker it starts.
+
+    Reading a transcript reads the profile's values, and a spawned worker starts with none: a dataset's canary chain
+    (2026-11-09) split 74 rows without it, and every row with words failed to read.
+    """
+    from tests.conftest import FIXTURE_PROFILE
+
+    seen: dict[str, Any] = {}
+
+    def split_rows(paths: list[Path], out_dir: Path, *, workers: int, worker_config: Any) -> dict[str, Any]:  # noqa: ANN401
+        seen.update(workers=workers, worker_config=worker_config)
+        return {"error": 0}
+
+    monkeypatch.setattr(rows_driver, "split_rows", split_rows)
+    rows = _write_jsonl(tmp_path / "rows.jsonl", [_row("one", tmp_path)])
+    argv = ["split", str(rows), "--out-dir", str(tmp_path / "out"), "--workers", "2", "--profile", str(FIXTURE_PROFILE)]
+    assert rows_driver.main(argv) == 0
+    override, profile = seen["worker_config"]
+    assert seen["workers"] == 2 and override is None
+    assert profile is not None and Path(profile).resolve() == Path(FIXTURE_PROFILE).resolve()
