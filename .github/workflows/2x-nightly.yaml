@@ -50,19 +50,13 @@ jobs:
           echo "refs=[\"$SHA\"]" >> "$GITHUB_OUTPUT"
         fi
 
-  # Every PR job, from 2.x's own copy of the workflow.
+  # Every PR job, from this commit's copy of the workflow, on `ref` or on this commit. The reference is local: GitHub
+  # validates a referenced workflow when it parses this file, so a cross-branch reference to a copy without these
+  # inputs makes this whole file invalid.
   pr-jobs:
-    if: inputs.ref != ''
-    uses: sensein/senselab/.github/workflows/2x-tests.yaml@2.x
-    with:
-      ref: ${{ inputs.ref }}
-
-  # Every PR job, from this commit's copy of the workflow, on this commit.
-  pr-jobs-here:
-    if: inputs.ref == ''
     uses: ./.github/workflows/2x-tests.yaml
     with:
-      ref: ${{ github.sha }}
+      ref: ${{ inputs.ref || github.sha }}
 
   limits:
     needs: plan
