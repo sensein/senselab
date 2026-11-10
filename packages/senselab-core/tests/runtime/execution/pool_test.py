@@ -16,6 +16,7 @@ import soundfile
 from lease_clock_fixture import ManualClock, newest
 from pool_stack_fixture import packaged, planned, registry, scoring, unresolving
 from senselab_core.cli import main as cli_main
+from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.audio_io import open_audio
 from senselab_core.runtime.call import RunConfig, TaskCall
@@ -27,6 +28,7 @@ from senselab_core.runtime.execution.in_process import InProcess, job_key, node_
 from senselab_core.runtime.execution.job import Failed, JobOutcome
 from senselab_core.runtime.execution.pool import Pool, larger_class, report, split
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet
+from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.run import INPUTS_FILE, RECORD_ATTEMPTS, Run, prepare, record_sources
 from senselab_core.runtime.execution.substrates import QueueReady, WorkerHandle, mark_ready
 from senselab_core.runtime.execution.workers import WorkerSet
@@ -34,6 +36,7 @@ from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.store import ResultStore
 from syscall_faults_fixture import await_true, displace_before_proof, pause_replaces
 
@@ -917,3 +920,90 @@ def test_a_claim_of_the_current_epoch_is_not_a_reuse(tmp_path: Path) -> None:
     """An item put and claimed in the current epoch is reported as executed."""
     refs, _ = _late_claim(tmp_path, lambda: 2)
     assert [r.served for r in refs] == [None]
+
+
+def _reuse_stack(
+    tmp_path: Path, texts: Sequence[str]
+) -> tuple[Plan, dict[InputIdentity, object], ExecutionProfile, FakeWorkers, ResultStore]:
+    """A run of `texts` whose workers own a `ResultStore` apart from every coordinator's, over one results root."""
+    profile = _profile(**CONTENT)
+    placed, values = _planned(profile, texts)
+    worker_store = ResultStore(tmp_path / "store")
+    return placed, values, profile, FakeWorkers(tmp_path / "run", worker_store, placed, values), worker_store
+
+
+def _attempt(  # noqa: PLR0913 - the run's parts, and the parts of it the attempt follows
+    tmp_path: Path,
+    placed: Plan,
+    values: Mapping[InputIdentity, object],
+    profile: ExecutionProfile,
+    workers: FakeWorkers,
+    which: Callable[[PlanFragment], Sequence[PlanFragment]],
+) -> None:
+    """Run the parts `which` takes of the plan's fragment on a pool of the next epoch with its own store."""
+    pool = _pool(tmp_path, ResultStore(tmp_path / "store"), workers, profile)
+    for part in which(node_fragment(placed, pool.admit(placed, values))):
+        list(follow(pool, pool.submit(part)))
+    add_plan_entity(workers.store.provenance, placed.hash)
+    workers.store.provenance.write(tmp_path / "run")
+
+
+def _activities(run_dir: Path) -> tuple[list[Any], list[Any]]:
+    read = ProvStore.read(run_dir)
+    every = read.activities()
+    return [a for a in every if "senselab:Reuse" not in a.types()], [a for a in every if "senselab:Reuse" in a.types()]
+
+
+def _logical(records: Sequence[Any]) -> list[str]:
+    return sorted(json.dumps(kprov.literal_value(r.node()["senselab:logicalKey"]), sort_keys=True) for r in records)
+
+
+@pytest.mark.contract
+def test_a_resume_records_a_reuse_for_each_item_it_settles_from_the_earlier_attempt(tmp_path: Path) -> None:
+    """Interrupted after 2 of 4 items: the resume's union has 2 Reuse (the settled items) and 4 executions in all."""
+    placed, values, profile, workers, _ = _reuse_stack(tmp_path, ["one", "two", "three", "four"])
+    run_dir = tmp_path / "run"
+    try:
+        _attempt(tmp_path, placed, values, profile, workers, lambda f: split(f, 2)[:1])
+        executed, reused = _activities(run_dir)
+        assert len(executed) == 2 and not reused
+        _attempt(tmp_path, placed, values, profile, workers, lambda f: split(f, 2))
+    finally:
+        workers.stop()
+    executed, reused = _activities(run_dir)
+    assert len(executed) == 4 and len(set(_logical(executed))) == 4
+    assert len(reused) == 2 and set(_logical(reused)) <= set(_logical(executed))
+    assert len(ProvStore.read(run_dir).plans()) == 1
+
+
+@pytest.mark.contract
+def test_a_second_resume_of_a_completed_run_records_a_reuse_per_item_and_no_execution(tmp_path: Path) -> None:
+    """Resuming a completed run of 4: 4 more Reuse, 0 more executions, no item served twice in the attempt."""
+    placed, values, profile, workers, _ = _reuse_stack(tmp_path, ["one", "two", "three", "four"])
+    run_dir = tmp_path / "run"
+    try:
+        _attempt(tmp_path, placed, values, profile, workers, lambda f: [f])
+        before = _activities(run_dir)
+        _attempt(tmp_path, placed, values, profile, workers, lambda f: [f])
+    finally:
+        workers.stop()
+    executed, reused = _activities(run_dir)
+    assert len(before[0]) == 4 and not before[1]
+    assert len(executed) == 4 and len(reused) == 4 and _logical(reused) == _logical(executed)
+
+
+@pytest.mark.contract
+def test_the_reuses_survive_a_coordinator_that_never_finishes(tmp_path: Path) -> None:
+    """The coordinator's document holds the reuses once the earlier items are settled, before its run ends."""
+    placed, values, profile, workers, _ = _reuse_stack(tmp_path, ["one", "two"])
+    run_dir = tmp_path / "run"
+    try:
+        _attempt(tmp_path, placed, values, profile, workers, lambda f: [f])
+        pool = _pool(tmp_path, ResultStore(tmp_path / "store"), workers, profile)
+        handle = pool.submit(node_fragment(placed, pool.admit(placed, values)))
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and len(_activities(run_dir)[1]) < 2:
+            pool.poll(handle)
+    finally:
+        workers.stop()
+    assert len(_activities(run_dir)[1]) == 2

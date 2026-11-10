@@ -41,10 +41,11 @@ import weakref
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
-from senselab_core.kernel.identity import InputIdentity, ReusePolicy
+from senselab_core.kernel.identity import InputIdentity, LogicalKey, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.calibration import (
     LengthProfile,
@@ -70,7 +71,7 @@ from senselab_core.runtime.execution.executor import (
     Status,
     WorkersBroken,
 )
-from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, job_units
+from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, fragment_logical_keys, job_units
 from senselab_core.runtime.execution.job import Job
 from senselab_core.runtime.execution.plan_reads import servable_jobs
 from senselab_core.runtime.execution.pool_parts import (
@@ -87,6 +88,7 @@ from senselab_core.runtime.execution.pool_parts import (
 )
 from senselab_core.runtime.execution.probe_machine import ProbeMachine, ProbeQueue, detected_kind
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of
+from senselab_core.runtime.execution.records import add_plan_entity, plan_link, reuse_attributes
 from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
     BrokenClass,
@@ -118,7 +120,7 @@ from senselab_core.runtime.site_placement import (
     Placer,
 )
 from senselab_core.runtime.sizing import ExtrapolationLog, Grant, size
-from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.store import ResultStore, StoredResult
 from senselab_core.runtime.units import (
     UnitReads,
     UnitResolver,
@@ -215,6 +217,8 @@ class Pool:
         self.gaps: list[tuple[JobRef, FaultRecord]] = []
         self._epochs = Epoch(self.run_dir, clock)
         self._plans: dict[str, tuple[Plan, Mapping[InputIdentity, object]]] = {}
+        self._reused: set[str] = set()
+        self._reuses_unwritten = False
         self._admitted: Counter[str] = Counter()
         self._followed: dict[str, Followed] = {}
         self._ids = itertools.count()
@@ -586,6 +590,9 @@ class Pool:
             followed.flights.remove(flight)
             followed.seen = True
             given.extend(self._settle(followed, flight, record))
+        if self._reuses_unwritten:
+            self.store.provenance.write(self.run_dir)
+            self._reuses_unwritten = False
         parts = [Flight(self._queue_name(p), item_digest(p), p) for p in followed.waiting]
         held = followed.held + [
             self._held(f) for f in [*followed.flights, *parts] if f.fragment.placement.env in self.broken
@@ -597,7 +604,7 @@ class Pool:
         return given, followed.done
 
     def close(self) -> None:
-        """Stop the scaler thread, then the workers the substrate started."""
+        """Stop the scaler thread, then the workers the substrate started; write the reuses recorded, if any."""
         with self._lock:
             self._closing = True
             scaler = self._scaler
@@ -607,13 +614,15 @@ class Pool:
         self._close_placements()
         self._machine.close()
         self._fleet.close()
+        if self._reused:
+            self.store.provenance.write(self.run_dir)
 
     def _settle(self, followed: Followed, flight: Flight, record: Mapping[str, object]) -> Iterator[ResultRef]:
         """Yield the results of `flight`'s jobs from its outcome `record`, applying each failure's effect.
 
         A reported result is taken only when it names the job's own key and the store holds its outputs; one whose
         outcome was written by a claim of another epoch, or of none, is given as served under `exact` unless it was
-        served under another policy.
+        served under another policy, and is recorded as a reuse in the store's provenance (`_reuse`).
         """
         fragment = flight.fragment
         jobs = record.get("jobs") if record.get("outcome") == "done" else None
@@ -643,6 +652,8 @@ class Pool:
         reused: bool,  # noqa: FBT001 - whether another epoch's claim wrote the outcome
     ) -> Iterator[ResultRef]:
         fragment = flight.fragment
+        placed, values = self._admitted_plan(fragment)
+        logical = fragment_logical_keys(fragment, placed, values) if reused else []
         for index, (job, key) in enumerate(zip(fragment.jobs, keys, strict=True)):
             ref = given.get(job)
             if ref is not None and ref.key_digest != key:
@@ -654,7 +665,10 @@ class Pool:
                     charged=True,
                 )
             elif ref is not None and ref.failure is None and ref.output_identity is not None:
-                if self.store.outputs_of(key, ref.output_identity) is not None:
+                found = self.store.entry_of(key, ref.output_identity)
+                if found is not None:
+                    if reused:
+                        self._reuse(placed, job, logical[index], found)
                     yield ref.model_copy(update={"served": "exact"}) if reused and ref.served is None else ref
                     continue
                 fault = _gap("MissingOutput", f"the outputs of {job} are not in the result store")
@@ -663,6 +677,19 @@ class Pool:
             else:
                 fault = dead or _gap("MissingResult", f"the outcome of the item gives no result for {job}")
             yield from self._effect(followed, flight, index, key, fault)
+
+    def _reuse(self, placed: Plan, job: JobRef, key: LogicalKey, hit: StoredResult) -> None:
+        """Record in the store's provenance that this attempt reuses `hit` for `job` from an earlier attempt, once."""
+        digest = key.digest()
+        if digest in self._reused:
+            return
+        run = placed.config if placed.config is not None else RunConfig()
+        add_plan_entity(self.store.provenance, placed.hash)
+        self.store.record_reuse(
+            key, hit.context, hit, datetime.now(timezone.utc), reuse_attributes(run, hit), lambda a: plan_link(a, job)
+        )
+        self._reused.add(digest)
+        self._reuses_unwritten = True
 
     def _admitted_plan(self, fragment: PlanFragment) -> tuple[Plan, Mapping[InputIdentity, object]]:
         admitted = self._plans.get(fragment.admission)
