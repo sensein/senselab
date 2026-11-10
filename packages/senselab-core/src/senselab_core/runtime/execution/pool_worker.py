@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeAlias
 
-from senselab_worker.faults import FaultClass, ProtocolError, classify, error_record
+from senselab_worker.faults import ProtocolError, classify, error_record
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.runtime import request_reports
@@ -36,7 +36,7 @@ from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, PlanFragment
 from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, process_workers
-from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
+from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute, ran_out, splits
 from senselab_core.runtime.execution.observing import (
     Presence,
     RequestRecord,
@@ -102,7 +102,7 @@ def whole(exc: BaseException) -> bool:
 
     A worker that failed to start or load (`WorkerLoadFailed`) is an infrastructure fault of its env and is never one.
     """
-    return isinstance(exc, (WorkerLost, WorkerFatal, ProtocolError)) or classify(exc) is FaultClass.RESOURCE
+    return isinstance(exc, (WorkerLost, WorkerFatal, ProtocolError)) or splits(exc)
 
 
 def _ran_out(members: "Sequence[Member]", outcomes: Sequence[JobOutcome], report: RequestReport) -> list[int]:
@@ -111,8 +111,7 @@ def _ran_out(members: "Sequence[Member]", outcomes: Sequence[JobOutcome], report
     at = [i for i, m in enumerate(members) if m.job.ref in named]
     if len(at) < 2 or len(at) != len(named):  # noqa: PLR2004 - a request of one has none to split
         return []
-    ran = all(isinstance(o, Failed) and o.failure.fault == FaultClass.RESOURCE.value for o in (outcomes[i] for i in at))
-    return at if ran else []
+    return at if ran_out([outcomes[i] for i in at]) else []
 
 
 def failure_of(exc: BaseException) -> FaultRecord:

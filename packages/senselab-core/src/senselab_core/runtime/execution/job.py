@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from senselab_worker import WIRE_VERSION
-from senselab_worker.faults import error_record
+from senselab_worker.faults import FaultClass, classify, error_record
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.declare import InconsistentInputs
@@ -55,6 +55,7 @@ from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, servic
 from senselab_core.runtime.hardware import host_token, numerics_class
 from senselab_core.runtime.keys import Call, Placement, build_key, request_components
 from senselab_core.runtime.launch import launch
+from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.servable import Servable
@@ -113,6 +114,21 @@ JobOutcome = Completed | Failed
 """What one job gave."""
 
 
+def splits(exc: BaseException) -> bool:
+    """Whether `exc`, raised by a request to a loaded worker, is a resource fault that splits the request.
+
+    A lease wait (`LeaseTimeout`) is a `TimeoutError` and so a resource class, but it is nobody's request failing.
+    """
+    return classify(exc) is FaultClass.RESOURCE and not isinstance(exc, LeaseTimeout)
+
+
+def ran_out(outcomes: Sequence[JobOutcome]) -> bool:
+    """Whether `outcomes` are those of a request of several jobs that every one ran out: each a resource fault."""
+    return len(outcomes) > 1 and all(
+        isinstance(o, Failed) and o.failure.fault == FaultClass.RESOURCE.value for o in outcomes
+    )
+
+
 @dataclass(frozen=True)
 class _Pending:
     index: int
@@ -129,6 +145,7 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     run: RunConfig,
     profile: ExecutionProfile,
     workers: WorkerSet,
+    bisect_resource: bool = False,
 ) -> list[JobOutcome]:
     """Run `jobs`, all of one call but their inputs, under `placement`, and return one outcome per job, in order.
 
@@ -141,7 +158,10 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     sent in batches of at most `placement.batch_size` items (`form_batches`) through `workers`; each item's outputs
     are stored, and each execution writes one activity associated with its agent (the model's source included),
     naming its job's node and plan.
-    An item the backend fails gives `Failed`.
+    An item the backend fails gives `Failed`. With `bisect_resource`, a request of several jobs each of which
+    gave a resource fault, or which raised one, is sent again as two requests of its first and last jobs, each split
+    in turn, so that the jobs that fit complete and a job that does not fit alone is the one that fails; without it
+    the request's outcomes are returned as they came, for a caller that splits them itself (the pool worker).
 
     Raises:
         ValueError: the jobs are not of one call or of one node; a server backend has no model.
@@ -185,11 +205,69 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     for batch in form_batches([p.job for p in pending], backend, batch_size=placement.batch_size, grid=grid):
         chunk = [by_job[id(j)] for j in batch.jobs]
         sent = replace(placement, **request_components(backend, batch.formation))
-        began = datetime.now(timezone.utc)
-        results = _send([p.job for p in chunk], sent, env, profile, workers, expected)
-        for item, result in zip(chunk, results):
-            outcomes[item.index] = _record(item, result, sent, store, run, profile, began)
+        sending = _Sending(sent, env, profile, workers, expected, store, run, bisect_resource)
+        for item, outcome in zip(chunk, _sent_in_halves(chunk, sending), strict=True):
+            outcomes[item.index] = outcome
     return [outcomes[i] for i in range(len(jobs))]
+
+
+class _Raised(Exception):
+    """What `_send` raises for an exception its request to a loaded worker raised, as opposed to checkout or start."""
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__()
+        self.cause = cause
+
+
+@dataclass(frozen=True)
+class _Sending:
+    """What sending a request of one batch needs: its placement, env, profile, workers, attestation, store and run."""
+
+    placement: Placement
+    env: EnvHandle
+    profile: ExecutionProfile
+    workers: WorkerSet
+    expected: Attestation | None
+    store: ResultStore
+    run: RunConfig
+    bisect_resource: bool
+
+
+def _sent_in_halves(chunk: Sequence[_Pending], sending: _Sending) -> list[JobOutcome]:
+    """Return one outcome per item of `chunk`, sent as one request; with `bisect_resource`, one that ran out is split.
+
+    A job alone whose request raised a splittable resource fault (`splits`) is that job's failure. What checkout,
+    start or load raised is never split.
+    """
+    began = datetime.now(timezone.utc)
+    jobs = [p.job for p in chunk]
+    try:
+        results = _send(
+            jobs,
+            sending.placement,
+            sending.env,
+            sending.profile,
+            sending.workers,
+            sending.expected,
+            sending.bisect_resource,
+        )
+    except _Raised as raised:
+        exc = raised.cause
+        if len(chunk) > 1:
+            return _halves(chunk, sending)
+        key = build_key(chunk[0].job.call, sending.placement, chunk[0].context)
+        return [Failed(chunk[0].job.ref, key.digest(), FaultRecord.of(error_record(exc)))]
+    outcomes = [
+        _record(item, result, sending.placement, sending.store, sending.run, sending.profile, began)
+        for item, result in zip(chunk, results, strict=True)
+    ]
+    return _halves(chunk, sending) if sending.bisect_resource and ran_out(outcomes) else outcomes
+
+
+def _halves(chunk: Sequence[_Pending], sending: _Sending) -> list[JobOutcome]:
+    """Return the outcomes of `chunk` sent as two requests, each through `_sent_in_halves`."""
+    half = len(chunk) // 2
+    return _sent_in_halves(chunk[:half], sending) + _sent_in_halves(chunk[half:], sending)
 
 
 def _one_call(jobs: Sequence[Job]) -> Call:
@@ -401,11 +479,13 @@ def _send(  # noqa: PLR0913 - the request's jobs and everything placing it
     profile: ExecutionProfile,
     workers: WorkerSet,
     expected: Attestation | None,
+    split: bool = False,
 ) -> list[dict[str, Any]]:
     """Send `jobs` as one request to the backend's worker, with the task params and `backend_params` beside them.
 
     A host worker is handed kernel values as they are; an isolated or server one, their wire forms. The request is
-    reported (`request_reports`) tagged with its jobs' refs.
+    reported (`request_reports`) tagged with its jobs' refs. What the worker's request raises propagates as it was
+    raised; with `split`, a splittable resource fault (`splits`) is raised as `_Raised`, for the caller to split.
     """
     backend, call = placement.backend, jobs[0].call
     params = {**call.params.model_dump(mode="json"), "backend_params": placement.backend_params.model_dump(mode="json")}
@@ -413,7 +493,12 @@ def _send(  # noqa: PLR0913 - the request's jobs and everything placing it
     items = [{"id": str(i), "inputs": dict(j.values) if host else as_wire(j.values)} for i, j in enumerate(jobs)]
     held = workers.checkout(backend, env, call.model, device=placement.device, profile=profile, expected=expected)
     with held as worker, request_reports.request(tuple(j.ref for j in jobs)):
-        return worker.run(items, params)
+        try:
+            return worker.run(items, params)
+        except Exception as exc:
+            if split and splits(exc):
+                raise _Raised(exc) from exc
+            raise
 
 
 def _record(  # noqa: PLR0913 - one sent item and where its result goes
