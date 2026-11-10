@@ -973,22 +973,45 @@ chunks), `packages/senselab/src/senselab/data/server_settings/pii_spans_vllm.yam
 - [ ] **Step 1 (CI):** `2x-tests` green at the head of `2x/phase-3`: `detect`, `pre-commit`, `core-only` (with the
   import contracts), `senselab-lean`, `core-limits`, `source-digests`, `pr-models`, `core-env`, `licenses`,
   `worker-floor`, and `core-pydra` under Route A; the nightly green on `2.x`.
-- [ ] **Step 2 (P-10, laptop and ORCD):** `bids_tree.synthetic(n=1000, seed=0)` on both hosts;
+  NOT ticked: `2x-tests` is green on every merge head (push run 42808716059 at e8ae516b; `pr-models` runs on pull
+  requests only and is skipped in every push run), but the nightly workflow never landed (R-113 reopened), so the
+  3.11-3.14 matrix never ran in Phase 3. Carried to Task 22; one full-matrix run at the head is required before the
+  merge into `2.x`. Evidence: [`reviews/phase3-exit-evidence.md`](../reviews/phase3-exit-evidence.md).
+- [x] **Step 2 (P-10, laptop and ORCD):** `bids_tree.synthetic(n=1000, seed=0)` on both hosts;
   `sl.signal.Resample(target_rate=8000).map(sl.Dataset.bids(root))` planned under `laptop` and under `orcd`: one
   `LogicalPlan` hash; a field-level diff of the two plans lists differences only inside `placement`. Run on the laptop
   with `InProcess` and with `Pool` on `local` (2 workers), bounded at 15 min wall and 2 GB resident with load and
-  memory watched; run on ORCD with `Pool` on `slurm`. Equal output identities on both hosts (P3-45).
-- [ ] **Step 3 (P-10 with a model, ORCD):** `bids_tree.from_librispeech(n=1000)`; `SpeechToText().map(...)` planned
+  memory watched; run on ORCD with `Pool` on `slurm`. Outputs agree per item under `runtime.compare` with the packaged
+  run-config thresholds (sample data compares `close: samples`, atol 1e-6, rtol 0; ADR-002 amendment 2026-11-02,
+  P2-95, P3-46). Output identities are hashes, equal only within one numerics class (design §4.8, lines 384-385,
+  ADR-002 rule 2, I-4), so their cross-architecture differences are recorded as a measurement. Amended 2026-11-10:
+  the plan said "Equal output identities on both hosts (P3-45)", which contradicted design §4.8 and ADR-002.
+  Done: ORCD 28565606, one hash `bd57268d...`, placement-only diff, 981 of 1000 identities equal, 19 differ with a
+  measured maximum absolute difference of 3.678e-18 (every sample above 1e-6 bit-equal). Evidence: [`reviews/phase3-exit-evidence.md`](../reviews/phase3-exit-evidence.md).
+- [x] **Step 3 (P-10 with a model, ORCD):** `bids_tree.from_librispeech(n=1000)`; `SpeechToText().map(...)` planned
   under `orcd` and under `laptop` on an ORCD CPU node: one hash; run under `orcd` with `Pool` on `slurm` (H100 class).
-- [ ] **Step 4 (P-5, ORCD):** Step 3's run is interrupted (`scancel` of the coordinator and every worker once a third
+  Done: 28578691, hash `97b8bdc5...`, 1000/1000 in 1329 s on one H100 worker (the group's per-user GPU limit). Evidence: [`reviews/phase3-exit-evidence.md`](../reviews/phase3-exit-evidence.md).
+- [x] **Step 4 (P-5, ORCD):** Step 3's run is interrupted (`scancel` of the coordinator and every worker once a third
   of the items are committed), then `resume(<hash>)`: events and provenance show executions = items not committed
   before the interrupt, reuses = items committed, and no ref resolution.
-- [ ] **Step 5 (ORCD, CPU and GPU H100, head SHA):** the full packages suite, every tier, serial; env builds for every
+  Done on events: start 28580776 (421 committed at the interrupt), resume 28580777 (executions 480 + late hits 97 =
+  items not committed, reuses 520; "committed" means committed in the store). Amended: the interrupt was made by the
+  driver (SIGKILL of the coordinator and `scancel` of every prefixed job), and the provenance clause is checked
+  separately, post hoc, by one CPU job on the surviving store (review I-3). That check found that provenance was
+  absent before c461f2b0 (T-POOL-PROV) and that at c461f2b0 earlier-epoch items lacked a Reuse (T-RESUME-REUSE); the final
+  rerun is pending. Evidence: [`reviews/phase3-exit-evidence.md`](../reviews/phase3-exit-evidence.md).
+- [x] **Step 5 (ORCD, CPU and GPU H100, head SHA):** the full packages suite, every tier, serial; env builds for every
   shipped lock; the Task 12 and 13 cross-node checks.
-- [ ] **Step 6 (P-1, ORCD):** the fresh agent receives only `sl.describe()` output and a dataset path, writes a plan
+  Done: cpu 28578692 (ab62fd60), gpu 28584535 (e8ae516b), cross-node 28564914; every populated tier and the 5 env
+  builds PASS. Amended: the usecase tier is empty (R-265), and CPU ran at ab62fd60, whose product code equals the head's
+  (fd513f0c..e8ae516b changes two test files only). Evidence: [`reviews/phase3-exit-evidence.md`](../reviews/phase3-exit-evidence.md).
+- [x] **Step 6 (P-1, ORCD):** the fresh agent receives only `sl.describe()` output and a dataset path, writes a plan
   call (task, params, dataset), and `sl.plan(...).run()` runs it.
-- [ ] **Step 7:** if the gate failed at Task 0 it is re-evaluated; each pydra task 40–53 is merged into
+  Done: 28582061, the agent chose `diarize` with `pyannote/speaker-diarization-community-1@3533c8cf...`; 20/20 in 218 s. Evidence: [`reviews/phase3-exit-evidence.md`](../reviews/phase3-exit-evidence.md).
+- [x] **Step 7:** if the gate failed at Task 0 it is re-evaluated; each pydra task 40–53 is merged into
   `enh/execution-extensions` or carried by a register row naming its owner and reason. P-39 reconciliation again.
+  Done: the gate did not fail; Task 40 merged (#905); Tasks 41-53 carried by R-238..R-250; the P-39 mark `c4bb902b`
+  equals `origin/alpha`. Evidence: [`reviews/phase3-exit-evidence.md`](../reviews/phase3-exit-evidence.md).
 
 ### Task 22: Phase 3 docs and spec pass
 

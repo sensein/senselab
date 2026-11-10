@@ -479,6 +479,12 @@ Per executor, the wall seconds and resident bytes the coordinator and its worker
 
 1/3, Task 21 Step 4's "a third of the items are committed". The interrupt target is that share of the items rounded up.
 
+### progress_s
+
+60 s, the interval between a run's progress lines. A line a minute is 60 lines an hour of a multi-hour run and a
+visible stall within two minutes. The run's events are read once per line, so the read is not a cost at 1,000 items.
+Not measured; the Step 2 run that ended at its 6 h limit having printed nothing is the reason a value exists at all.
+
 ### test_slack.observations
 
 wall_slack_s 0.04: the seconds a request may take beyond the sleep its test backend was asked for, over four requests of 0.05 to 0.2 s; one request is a thread hand-off and a file write, a few milliseconds, and 0.04 s is over ten times that. first_bound_s 1.0: with a poll of 3 s the first-poll wait must claim an item within a second, a third of the poll, over the 0.1 s the item is put after and the 0.01 s first poll; a worker without the short wait takes the whole 3 s. put_later_s 0.1 and watch_poll_s 0.005: the item is put a tenth of a second after the worker starts, so the worker is waiting, and the test looks for the worker's progress every 5 ms, below the first poll. first_poll_s 0.01, poll_s 0.05, long_poll_s 3: the worker's polls in the tests that need it to finish fast, and the long poll the first poll must beat. presence_refresh_s 100: longer than any test, so a worker reuses its first read of the run's probe queues. Not measured on CI runners.
