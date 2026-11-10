@@ -9,6 +9,7 @@ import platform
 import sys
 import tarfile
 from collections.abc import Iterator, Mapping, Sequence
+from importlib import resources
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal
@@ -320,7 +321,8 @@ def test_bench_cli_names_each_not_placeable_benchmark_on_stderr(
 
 def _cpu_profile(tmp_path: Path) -> Path:
     path = tmp_path / "cpu.yaml"
-    path.write_text("devices: [cpu]\n")
+    laptop = resources.files("senselab_core.runtime").joinpath("data", "profiles", "laptop.yaml").read_text()
+    path.write_text(laptop.replace("devices: [cuda, mps, cpu]", "devices: [cpu]"))
     return path
 
 

@@ -141,9 +141,13 @@ def _submitted(tmp_path: Path) -> list[list[str]]:
     return [c for c in calls if c]
 
 
+ENV_ROOTS = {"isolated": "/tmp/senselab-test-envs", "server": "/tmp/senselab-test-envs/servers"}
+
+
 def _profile(**substrate: Any) -> ExecutionProfile:  # noqa: ANN401 - substrate keys of any type
     kind = substrate.pop("kind", "slurm")
     override = {
+        "env_roots": ENV_ROOTS,
         "devices": ["cpu"],
         "resource_classes": CLASSES,
         "substrate": {"kind": kind, "commands": {"retry_first_s": 0.001}, **substrate},
@@ -288,7 +292,13 @@ def _per_quantum(profile: ExecutionProfile) -> Callable[[str, int], int]:
 
 
 def _override() -> dict[str, Any]:
-    return {"devices": ["cpu"], "resource_classes": CLASSES, "substrate": {"kind": "slurm"}, "sizing": CEILED_SIZING}
+    return {
+        "env_roots": ENV_ROOTS,
+        "devices": ["cpu"],
+        "resource_classes": CLASSES,
+        "substrate": {"kind": "slurm"},
+        "sizing": CEILED_SIZING,
+    }
 
 
 @pytest.mark.logic
