@@ -1,35 +1,77 @@
 name: 2x-nightly
 
-# Lives on the default branch, because GitHub runs `schedule` only from there, and tests the 2.x branch. GitHub CI
-# runs logic, contract and model-free limits only: model, backend-env and GPU tiers and the use cases run on ORCD.
+# The full 3.11-3.14 matrix of 2x-tests.yaml plus the model-free limits tier. GitHub runs `schedule` only from the
+# default branch, so the schedule lives in 2x-nightly-schedule.yaml there, which calls this file at 2.x (`workflow_call`,
+# with `ref`). Without `ref` the run tests the commit it started on:
+#   - a push to a `2x/full-matrix/**` branch, which needs no default-branch copy of this file:
+#       git push origin <phase head sha>:refs/heads/2x/full-matrix/<name>
+#   - a manual dispatch of this file at a branch (once the default branch has it).
+# GitHub CI runs logic, contract and model-free limits only: model, backend-env and GPU tiers and the use cases run on ORCD.
 on:
-  schedule:
-  - cron: 17 3 * * *
+  push:
+    branches: [2x/full-matrix/**]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: 2.x
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: nightly-${{ github.workflow }}-${{ inputs.ref || github.sha }}
   cancel-in-progress: true
 
 jobs:
+  # The refs the limits matrix runs: with `ref`, that branch and the phase's code branch (the highest-numbered phase branch
+  # on the remote; a phase branch merges directly, with no PR to carry the `limits` label, so only this job runs its
+  # timing bounds before the phase merges); without it, the commit under test.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      refs: ${{ steps.refs.outputs.refs }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ inputs.ref }}
+        fetch-depth: 1
+    - name: The refs to run the limits tier on
+      id: refs
+      env:
+        INTEGRATION: ${{ inputs.ref }}
+        SHA: ${{ github.sha }}
+      run: |
+        if [ -n "$INTEGRATION" ]; then
+          echo "refs=$(python3 scripts/limits_scope.py refs "$INTEGRATION")" >> "$GITHUB_OUTPUT"
+        else
+          echo "refs=[\"$SHA\"]" >> "$GITHUB_OUTPUT"
+        fi
+
   # Every PR job, from 2.x's own copy of the workflow.
   pr-jobs:
+    if: inputs.ref != ''
     uses: sensein/senselab/.github/workflows/2x-tests.yaml@2.x
     with:
-      ref: 2.x
+      ref: ${{ inputs.ref }}
 
-  # `2.x`, and the code branch of the current phase (STATE.md, Branches and PRs): a phase branch merges directly, with no
-  # PR to carry the `limits` label, so only this job runs its timing bounds before the phase merges.
+  # Every PR job, from this commit's copy of the workflow, on this commit.
+  pr-jobs-here:
+    if: inputs.ref == ''
+    uses: ./.github/workflows/2x-tests.yaml
+    with:
+      ref: ${{ github.sha }}
+
   limits:
+    needs: plan
     name: limits (model-free, ${{ matrix.ref }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        ref: [2.x, 2x/phase-3]
+        ref: ${{ fromJSON(needs.plan.outputs.refs) }}
     steps:
     - uses: actions/checkout@v5
       with:

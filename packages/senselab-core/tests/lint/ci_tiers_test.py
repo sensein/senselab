@@ -2,9 +2,7 @@
 
 import json
 import math
-import os
 import shlex
-import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -23,13 +21,6 @@ TIMEOUTS = REPO / "packages" / "senselab" / "tests" / "data" / "ci_job_timeouts.
 TIERS = ("logic", "contract", "limits", "usecase", "env")
 EVERY_PR, ON_LABEL, NIGHTLY = "every_pr", "on_label", "nightly"
 LABEL = "limits"
-LIMITS_SCOPE = frozenset(
-    {
-        *(f"packages/senselab-core/src/senselab_core/runtime/{name}.py" for name in ("probe", "calibration")),
-        "packages/senselab-core/tests/runtime/probe_test.py",
-        "packages/senselab-core/tests/data/test_slack.yaml",
-    }
-)
 
 
 def _commands(run: str) -> list[list[str]]:
@@ -225,23 +216,43 @@ def test_the_env_tier_runs_on_every_pr() -> None:
 
 
 @pytest.mark.logic
-def test_the_nightly_workflow_tests_2x_and_a_pr_gaining_a_label_reruns_the_tests() -> None:
-    """The nightly workflow is scheduled and checks out 2.x and the phase branch; the test workflow reruns on label."""
+def test_the_nightly_workflow_runs_on_a_call_a_dispatch_and_a_full_matrix_branch_push() -> None:
+    """The nightly runs when called with a ref, on dispatch and on a `2x/full-matrix/` push; it holds no schedule."""
     nightly = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
     triggers = nightly.get("on", nightly.get(True))
-    assert triggers["schedule"] and all("cron" in entry for entry in triggers["schedule"])
-    called = nightly["jobs"]["pr-jobs"]
-    assert called["uses"].endswith("/.github/workflows/2x-tests.yaml@2.x") and called["with"]["ref"] == "2.x"
+    assert "schedule" not in triggers and "workflow_dispatch" in triggers
+    assert triggers["push"]["branches"] == ["2x/full-matrix/**"]
+    assert triggers["workflow_call"]["inputs"]["ref"]["default"] == "2.x"
+    remote, here = nightly["jobs"]["pr-jobs"], nightly["jobs"]["pr-jobs-here"]
+    assert (
+        remote["uses"].endswith("/.github/workflows/2x-tests.yaml@2.x") and remote["with"]["ref"] == "${{ inputs.ref }}"
+    )
+    assert here["uses"] == "./.github/workflows/2x-tests.yaml" and here["with"]["ref"] == "${{ github.sha }}"
+    assert {remote["if"], here["if"]} == {"inputs.ref != ''", "inputs.ref == ''"}
+
+
+@pytest.mark.logic
+def test_the_nightly_limits_refs_come_from_the_plan_and_no_job_names_a_branch() -> None:
+    """The limits matrix is the plan job's output; a checkout names the input ref or the matrix, no literal."""
+    nightly = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
+    assert nightly["jobs"]["limits"]["strategy"]["matrix"]["ref"] == "${{ fromJSON(needs.plan.outputs.refs) }}"
     checkouts = [
         step for job in nightly["jobs"].values() for step in job.get("steps", []) if "checkout" in step.get("uses", "")
     ]
-    integration, phase = nightly["jobs"]["limits"]["strategy"]["matrix"]["ref"]
-    assert integration == "2.x" and phase.startswith("2x/")
-    assert checkouts and all(step["with"]["ref"] in {"2.x", "${{ matrix.ref }}"} for step in checkouts)
+    assert checkouts and all(step["with"]["ref"] in {"${{ inputs.ref }}", "${{ matrix.ref }}"} for step in checkouts)
+    assert "2x/phase" not in NIGHTLY_WORKFLOW.read_text()
     tests = yaml.safe_load(WORKFLOW.read_text())
     on = tests.get("on", tests.get(True))
     assert "schedule" not in on and "labeled" in on["pull_request"]["types"]
     assert on["workflow_call"]["inputs"]["ref"]
+
+
+@pytest.mark.logic
+def test_the_nightly_group_differs_from_the_group_of_the_workflow_it_calls() -> None:
+    """A called workflow whose concurrency group equals its caller's is cancelled; the two prefixes must differ."""
+    nightly = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())["concurrency"]["group"]
+    called = yaml.safe_load(WORKFLOW.read_text())["concurrency"]["group"]
+    assert nightly.startswith("nightly-") and not called.startswith("nightly-")
 
 
 PUSH_IF = "github.event_name == 'push' && startsWith(github.ref, 'refs/heads/2x/')"
@@ -254,45 +265,13 @@ def _scope(job: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.mark.logic
-def test_core_limits_runs_on_the_label_and_on_a_push_to_a_2x_branch_touching_the_fit() -> None:
-    """The label runs the job on a PR; a push to a `2x/` branch runs it when the push changes the probe's fit."""
+def test_core_limits_runs_on_the_label_and_on_a_push_to_a_2x_branch_and_asks_the_selector() -> None:
+    """The label runs the job on a PR, a push to a `2x/` branch reaches the selector, which gates every later step."""
     job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["core-limits"]
     assert job["if"] == f"{LABEL_IF} || ({PUSH_IF})"
-    assert set(_scope(job)["env"]["PATHS"].split()) == LIMITS_SCOPE
+    assert _scope(job)["run"] == 'python3 scripts/limits_scope.py scope >> "$GITHUB_OUTPUT"'
     later = job["steps"][job["steps"].index(_scope(job)) + 1 :]
     assert later and all(step.get("if") == SCOPED_IF for step in later)
-
-
-def _commit(repo: Path, path: str) -> str:
-    git = ["git", "-C", str(repo), "-c", "user.name=user", "-c", "user.email=user@example.invalid"]
-    (repo / path).parent.mkdir(parents=True, exist_ok=True)
-    (repo / path).write_text(path)
-    subprocess.run([*git, "add", path], check=True)
-    subprocess.run([*git, "commit", "-q", "-m", path], check=True)
-    return subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
-
-
-def _scoped(repo: Path, event: str, before: str, bound: float) -> str:
-    step = _scope(yaml.safe_load(WORKFLOW.read_text())["jobs"]["core-limits"])
-    output = repo.parent / "output"
-    output.write_text("")
-    env = {**os.environ, **step["env"], "BEFORE": before, "GITHUB_EVENT_NAME": event, "GITHUB_OUTPUT": str(output)}
-    subprocess.run(["bash", "-e", "-c", step["run"]], cwd=repo, env=env, check=True, timeout=bound)
-    return output.read_text().strip()
-
-
-@pytest.mark.logic
-def test_the_scope_step_runs_the_tier_only_when_a_push_changes_the_fit(tmp_path: Path, tier_bound: float) -> None:
-    """A push changing only other files skips; one changing a fit source, an unknown base, or a PR runs."""
-    repo = tmp_path / "repo"
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    first = _commit(repo, "README.md")
-    second = _commit(repo, "packages/other.py")
-    assert _scoped(repo, "push", first, tier_bound) == "run=false"
-    _commit(repo, sorted(LIMITS_SCOPE)[0])
-    assert _scoped(repo, "push", second, tier_bound) == "run=true"
-    assert _scoped(repo, "push", "0" * 40, tier_bound) == "run=true"
-    assert _scoped(repo, "pull_request", second, tier_bound) == "run=true"
 
 
 @pytest.mark.logic
