@@ -1,13 +1,11 @@
-"""The scale ladder's trees and the resource tables generated from its results."""
+"""The scale ladder's trees, flatness checks and results."""
 
-import getpass
 import hashlib
 import importlib.util
 import io
 import json
 import os
 import platform
-import socket
 import sys
 import tarfile
 from collections.abc import Sequence
@@ -20,17 +18,16 @@ import soundfile
 from senselab_core.kernel.dataset import ManifestRow
 from senselab_core.kernel.declare import REGISTRY, BackendSpec, Registry
 from senselab_core.runtime import fake_backend
-from senselab_core.runtime.calibration import EstimateSource, HardwareClass, Observation, ProbeRef
+from senselab_core.runtime.calibration import HardwareClass, Observation, ProbeRef
 from senselab_core.runtime.call import Packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
-from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution import pool_parts
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef
 from senselab_core.runtime.execution.queue import probe_queue
-from senselab_core.runtime.measures import Build, MeasureRoots, MeasureUnit, Provenance
+from senselab_core.runtime.measures import Build, MeasureRoots, MeasureSource, MeasureUnit, Provenance
+from senselab_core.runtime.probe import Probe
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.resources import Derivation, MeasureTable, PackagedTable
 from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.storage import StorePolicy
 from senselab_core.testing.calibration_samples import UNIT, observation
@@ -49,7 +46,6 @@ def _module(name: str, path: Path) -> ModuleType:
 
 
 bids_tree = _module("scale_bids_tree_under_test", ROOT / "benchmarks" / "scale" / "bids_tree.py")
-generate = _module("generate_resources_under_test", ROOT / "scripts" / "generate_resources.py")
 
 TREE_DIGEST = "d9fabd59a9907c1ffd7afea617a5327ba9deb56d5be2947e7a80d49a9e63ebb9"
 """The digest of `synthetic(root, 3, 0)`: its relative paths and bytes, the same on every host."""
@@ -156,123 +152,39 @@ def _write(
         assert _roots(path).put_observations(unit, probe, mine, provenance) is not None
 
 
-@pytest.mark.logic
-def test_generator_refuses_an_unmeasured_estimate(tmp_path: Path) -> None:
-    """A declared unit whose estimate is unmeasured refuses the whole run, naming it and why; nothing is written.
-
-    An undeclared unit (the fake stack) is skipped and listed, measured or not.
-    """
-    root, out = tmp_path / "measures", tmp_path / "out"
-    thin = UNIT.model_copy(update={"backend": "thin"})
-    _write(root, UNIT, _line([2.0, 8.0]))
-    _write(root, thin, _line([2.0, 8.0], count=1))
-    with pytest.raises(generate.Refused, match="unmeasured") as refused:
-        generate.generate([root], out, {*DECLARED, (UNIT.task, "thin")}, PROFILE)
-    assert thin.label() in str(refused.value) and "single_below_min_requests" in str(refused.value)
-    assert UNIT.label() not in str(refused.value) and not out.exists()
-    lines = generate.generate([root], out, DECLARED, PROFILE)
-    assert lines[0] == f"{UNIT.task}~thin unit {thin.label()}: not a packaged backend; skipped"
-    assert sorted(p.name for p in out.rglob("*.yaml")) == ["whisper.yaml"]
+merge = _module("merge_measures_under_test", ROOT / "scripts" / "merge_measures.py")
 
 
-@pytest.mark.logic
-def test_generated_rows_carry_probe_ids_not_users(tmp_path: Path) -> None:
-    """A row is the full unit, its estimate with the commit and probe ids, and the jobs; no account, host or uid."""
-    root, out = tmp_path / "measures", tmp_path / "out"
-    _write(root, UNIT, _line([2.0, 8.0], "p1") + _line([3.0, 9.0], "p2"))
-    generate.generate([root], out, DECLARED, PROFILE)
-    path = out / UNIT.task / f"{UNIT.backend}.yaml"
-    table = MeasureTable.model_validate(load_yaml(path, "table"))
-    [row] = table.rows
-    assert row.unit == UNIT
-    assert row.derivation == Derivation(commit=COMMIT, jobs=("1234",), probe_ids=("p1", "p2"))
-    assert row.estimate.source == EstimateSource(probe_ids=("p1", "p2"), observations=12, commit=COMMIT)
-    assert PackagedTable.load(out).get(UNIT) == row.estimate
-    text = path.read_text()
-    for name in (getpass.getuser(), socket.gethostname(), str(tmp_path), str(os.geteuid())):
-        assert name not in text.split() and name not in text
-
-    def keys(value: object) -> set[str]:
-        if isinstance(value, dict):
-            return set(value) | {k for v in value.values() for k in keys(v)}
-        return {k for v in value for k in keys(v)} if isinstance(value, list) else set()
-
-    assert not keys(load_yaml(path, "table")) & {"uid", "user", "username", "hostname", "account", "run"}
-
-
-@pytest.mark.logic
-def test_a_partial_regeneration_keeps_the_rows_of_the_units_it_does_not_regenerate(tmp_path: Path) -> None:
-    """Regenerating one unit of a table replaces its row and leaves the others; a row of another commit is refused."""
-    out = tmp_path / "out"
-    other = UNIT.model_copy(update={"hardware": UNIT.hardware.model_copy(update={"cpus": 4})})
-    first, second = tmp_path / "first", tmp_path / "second"
-    _write(first, UNIT, _line([2.0, 8.0]))
-    _write(second, other, _line([3.0, 9.0], "p2", hardware=other.hardware), PROVENANCE)
-    for unit in (UNIT, other):
-        generate.generate([first if unit is UNIT else second], out, DECLARED, PROFILE)
-    table = PackagedTable.load(out)
-    assert table.get(UNIT) is not None and table.get(other) is not None
-    again = tmp_path / "again"
-    _write(again, UNIT, _line([2.0, 9.0], "p3"))
-    generate.generate([again], out, DECLARED, PROFILE)
-    kept = PackagedTable.load(out)
-    assert kept.get(other) == table.get(other) and kept.get(UNIT) is not None and kept.get(UNIT) != table.get(UNIT)
-    later = tmp_path / "later"
-    _write(
-        later,
-        UNIT,
-        _line([2.0, 8.0], "p4"),
-        PROVENANCE.model_copy(update={"senselab": Build(version="2.0.0", commit="b" * 40)}),
+def _reads(root: Path) -> MeasureSource:
+    roots = _roots(root)
+    return MeasureSource(
+        [roots],
+        estimate=Probe.estimator(
+            CONFIG, records_of=roots.regime_records, memory_headroom=PROFILE.sizing.memory_headroom
+        ),
     )
-    with pytest.raises(generate.Refused, match="does not regenerate"):
-        generate.generate([later], out, DECLARED, PROFILE)
-    assert PackagedTable.load(out).get(UNIT) == kept.get(UNIT)
 
 
 @pytest.mark.logic
-def test_a_ladder_run_read_under_other_calibration_settings_is_refused(tmp_path: Path) -> None:
-    """The estimate is made under the settings the points were probed under: a table-profiled run needs its suite."""
-    run = tmp_path / "run"
-    table = PROFILE.calibration.model_copy(update={"length_strata": 3})
-    for point, ran in (("t~b@100", table), ("t~b@200", PROFILE.calibration)):
-        (run / point / "measures" / "measures@1").mkdir(parents=True)
-        (run / f"{point}.json").write_text(json.dumps({"calibration": ran.model_dump(mode="json")}))
-    (run / "t~b@300" / "measures" / "measures@1").mkdir(parents=True)
-    lines = generate.ladder_mismatches([run], PROFILE)
-    assert [line.split(":")[0] for line in lines] == ["t~b@100", "t~b@300"]
-    assert "length_strata" in lines[0] and "no result" in lines[1]
-    assert generate.ladder_mismatches([run], PROFILE.model_copy(update={"calibration": table}))[:1] == [
-        "t~b@200: probed under other calibration settings (length_strata); give --suite"
-    ]
-    assert generate.ladder_mismatches([run / "t~b@100" / "measures"], PROFILE) == []
-
-
-@pytest.mark.logic
-def test_generator_refuses_rows_it_cannot_derive_or_of_two_commits(tmp_path: Path) -> None:
-    """A probe with no commit or no scheduler job, or units measured at two commits, refuse the run; none is written."""
-    out = tmp_path / "out"
-    other = UNIT.model_copy(update={"backend": "other"})
-    declared = {*DECLARED, (UNIT.task, "other")}
-    cases = {
-        "commit": (PROVENANCE.model_copy(update={"senselab": Build(version="2.0.0")}), "no commit"),
-        "job": (PROVENANCE.model_copy(update={"job": None}), "no scheduler job"),
-    }
-    for name, (provenance, why) in cases.items():
-        root = tmp_path / name
-        _write(root, UNIT, _line([2.0, 8.0]), provenance)
-        with pytest.raises(generate.Refused, match=why):
-            generate.generate([root], out, DECLARED, PROFILE)
-    root = tmp_path / "two"
-    _write(root, UNIT, _line([2.0, 8.0]))
-    _write(
-        root,
-        other,
-        _line([2.0, 8.0]),
-        PROVENANCE.model_copy(update={"senselab": Build(version="2.0.0", commit="b" * 40)}),
-    )
-    with pytest.raises(generate.Refused, match="several commits"):
-        generate.generate([root], out, declared, PROFILE)
-    assert not out.exists()
+def test_merged_ladder_points_are_a_root_the_source_reads_on_an_identity_match(tmp_path: Path, capsys: Any) -> None:  # noqa: ANN401
+    """The script merges a ladder run's points into one root: its unit is measured there, another unit is not."""
+    run, dest = tmp_path / "run", tmp_path / "group"
+    other = UNIT.model_copy(update={"env": UNIT.env.model_copy(update={"wheel_set": "f" * 64})})
+    _write(run / "t~b@100" / "measures", UNIT, _line([2.0, 8.0], "p1"))
+    _write(run / "t~b@1000" / "measures", UNIT, _line([3.0, 9.0], "p2"))
+    oom = {"resource": "host", "batch": 4, "length": 8.0, "cotenancy": 1, "grant_bytes": 1024, "basis": ["p1"]}
+    assert _roots(run / "t~b@100" / "measures").put_record(UNIT, "oom", oom, PROVENANCE) is not None
+    assert merge.main([str(run), "--out", str(dest)]) == 0
+    assert f"unit {UNIT.label()}: 2 probes, 1 records" in capsys.readouterr().out
+    assert [r.kind for r in _roots(dest).records(UNIT)] == ["oom"]
+    source = _reads(dest)
+    found = source.get(UNIT)
+    assert found is not None and found.source.probe_ids == ("p1", "p2")
+    assert source.get(other) is None
+    assert merge.main([str(run), "--out", str(dest)]) == 0
+    assert f"unit {UNIT.label()}: 0 probes, 0 records" in capsys.readouterr().out
+    assert _reads(dest).get(UNIT) == found
+    assert merge.main([str(tmp_path / "empty"), "--out", str(dest)]) == 1
 
 
 @pytest.mark.logic

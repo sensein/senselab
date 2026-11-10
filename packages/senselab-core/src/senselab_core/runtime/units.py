@@ -1,7 +1,7 @@
 """The plan-time `MeasureUnit` resolver: a call's unit from the env record, the hardware index and the placement.
 
-`explain` and the in-process executor resolve a unit here before any worker starts, so a measure the roots or the
-packaged table hold is read at plan time, from the one source `default_measures`. A field that is not knowable yet
+`explain` and the in-process executor resolve a unit here before any worker starts, so a measure the roots
+hold is read at plan time, from the one source `default_measures`. A field that is not knowable yet
 gives `Unresolved`, whose reason names what is true of the state.
 """
 
@@ -69,12 +69,12 @@ def measure_roots(profile: ExecutionProfile) -> MeasureRoots:
 
 
 def default_measures(profile: ExecutionProfile, roots: MeasureRoots | None = None) -> MeasureSource:
-    """Return the source over `roots` (`measure_roots` when None) and the packaged table, estimated by `Probe`."""
+    """Return the source over `roots` (`measure_roots` when None) estimated by `Probe`."""
     held = measure_roots(profile) if roots is None else roots
     estimate = Probe.estimator(
         profile.calibration, records_of=held.regime_records, memory_headroom=profile.sizing.memory_headroom
     )
-    return MeasureSource([held], packaged().measures, estimate=estimate)
+    return MeasureSource([held], estimate=estimate)
 
 
 EnvIdentity = tuple[Env, tuple[tuple[str, str], ...], tuple[str, ...]]

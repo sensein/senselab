@@ -421,9 +421,9 @@ class InProcess:
     Jobs are sent in batches of at most the placement's batch size (`form_batches`). `None` means the packaged
     default: the store under `cache_root()/results`, the `laptop` profile, `RunConfig()` and this process's worker
     set for the profile (`process_workers`). Batches are sized (`size`) from the estimate `measures` gives for the unit
-    `units` resolves for a call and placement; `None` means the roots the profile names, the packaged table and the
+    `units` resolves for a call and placement; `None` means the roots the profile names and the
     resolver over the env record and the hardware index (`UnitResolver`). A unit that does not resolve is unmeasured
-    and runs the safe values, batch 1, unless the packaged resource table holds its model's row.
+    and runs the safe values, batch 1.
     """
 
     def __init__(  # noqa: PLR0913 - the executor's settings, all keyword-only

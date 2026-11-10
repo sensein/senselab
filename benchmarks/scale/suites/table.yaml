@@ -4,7 +4,7 @@ name: table
 seed: 0
 # The long signal's seconds: two hours of audio.
 long_s: 7200
-# The table profile: the calibration settings a point's probe runs under, to generate resource-table@2.0 rows.
+# The table profile: the calibration settings a point's probe runs under, whose measures roots a group shares.
 calibration:
   length_strata: 3
   batched_sizes: 2

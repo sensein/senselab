@@ -438,7 +438,7 @@ class Plan:
         The first lines give the plan hash, the envs to build and the cost, naming what is unmeasured. With the plan's
         profile, each node also gets its unit's digest label (`units`, by default the resolver over the env record
         and the hardware index, `UnitResolver`), then the wall time, GPU hours and peak memory `size` gives it from
-        the estimate `measures` (by default the profile's roots and the packaged table) reads for that unit, never a
+        the estimate `measures` (by default the profile's roots) reads for that unit, never a
         probe, a download or a worker start, over `lengths[node]` or, with `values`, the lengths of the node's jobs.
         Each figure is labelled `measured` with its source or `unmeasured` with the reason the unit or estimate is
         missing, and a flag marks a batch-1 request over the class's memory cap. Each resource class says how many

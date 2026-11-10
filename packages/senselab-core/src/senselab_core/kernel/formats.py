@@ -86,8 +86,6 @@ CATALOGUE_FORMAT = "catalogue@2.0"
 RETIRED_CATALOGUE_FORMATS = frozenset({"catalogue@1"})
 """Catalogue formats 2.x no longer reads, as `<name>@<major>`."""
 
-RESOURCE_TABLE_FORMAT = "resource-table@2.0"
-"""The format of a task and backend's packaged measures, `data/resources/<task>/<backend>.yaml`: units, estimates."""
 
 MEASURES_LAYOUT_TAG = "measures@1"
 """The layout tag of a measures root: the directory `<root>/measures@1/` holds every record kind."""

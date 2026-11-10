@@ -761,18 +761,13 @@ class _Root:
         return self._o
 
 
-class _NoTable:
-    def get(self, unit: Any) -> None:  # noqa: ANN401
-        return None
-
-
 @pytest.mark.contract
 def test_estimator_is_the_callable_measure_source_takes() -> None:
     """`Probe.estimator` has `MeasureSource`'s callable shape and filters observations by the unit's hardware."""
     other = UNIT.hardware.model_copy(update={"cpus": 99})
     pooled = _line(0.2, 0.05) + [_obs(5.0, 500.0, hardware=other)]
     estimate = Probe.estimator(CONFIG, records_of=lambda _: (), memory_headroom=HEADROOM)
-    got = MeasureSource([_Root(pooled)], _NoTable(), estimate=estimate).get(UNIT)
+    got = MeasureSource([_Root(pooled)], estimate=estimate).get(UNIT)
     assert got is not None and got.unit_kind == "audio_s" and got.estimator == "estimate@1"
     assert got.single is not None and got.single.u == pytest.approx(0.05)
 

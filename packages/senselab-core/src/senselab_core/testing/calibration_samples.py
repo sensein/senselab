@@ -29,7 +29,6 @@ from senselab_core.runtime.calibration import (
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings
 from senselab_core.runtime.measures import Build, MeasureEnv, MeasureRecord, MeasureUnit, ProbeFile, Provenance
-from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable
 
 Register = Callable[..., None]
 
@@ -201,7 +200,7 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
     )
     register(
         EstimateSource,
-        lambda: [EstimateSource(), EstimateSource(probe_ids=("p1",), observations=9, commit="a" * 40)],
+        lambda: [EstimateSource(), EstimateSource(probe_ids=("p1",), observations=9)],
         invalid_updates=[{"commit": "abc"}, {"probe_ids": ("",)}],
     )
     register(
@@ -292,7 +291,7 @@ def register_probe_samples(register: Register) -> None:
 
 
 def register_measure_samples(register: Register) -> None:
-    """Register the samples of the measure identity types and the packaged table."""
+    """Register the samples of the measure identity types."""
     register(
         HardwareGrant,
         lambda: [HardwareGrant(device="cuda", cpus=4, gpu=1), HardwareGrant(device="cpu")],
@@ -314,26 +313,4 @@ def register_measure_samples(register: Register) -> None:
         MeasureUnit,
         lambda: [UNIT, UNIT.model_copy(update={"model": None, "formation": "bucket:g1", "hardware": _CPU})],
         invalid_updates=[{"formation": "pooled"}, {"task": ""}, {"chunk_grid": ""}, {"service": ""}],
-    )
-    derivation = Derivation(commit="d" * 40, jobs=("j1",), probe_ids=("p1",))
-    row = MeasureRow(
-        unit=UNIT,
-        estimate=Estimate(
-            status="measured",
-            unit_kind="audio_s",
-            single=_FIT,
-            source=EstimateSource(probe_ids=("p1",), observations=6, commit="d" * 40),
-        ),
-        derivation=derivation,
-    )
-    register(Derivation, lambda: [derivation], invalid_updates=[{"commit": "abc"}, {"jobs": ()}])
-    register(
-        MeasureRow,
-        lambda: [row],
-        invalid_updates=[{"derivation": None}, {"derivation": derivation.model_copy(update={"probe_ids": ("p2",)})}],
-    )
-    register(
-        MeasureTable,
-        lambda: [MeasureTable(task="speech_to_text", backend="whisper", rows=(row,))],
-        invalid_updates=[{"backend": "other"}, {"rows": (row, row)}],
     )

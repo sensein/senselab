@@ -37,8 +37,6 @@ def node_line(node_id: str, task: str, placement: PlanPlacement) -> str:
 
 def _source(estimate: Estimate) -> str:
     found = estimate.source
-    if found.commit is not None:
-        return f"packaged row {found.commit[:12]}"
     return f"{len(found.probe_ids)} probes, {found.observations} observations"
 
 

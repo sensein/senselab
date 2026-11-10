@@ -1,9 +1,9 @@
 """What a measure is of, where its observations are kept, and where a unit's estimate is read from.
 
 A `MeasureUnit` names the task, backend, parameters, model, env, service and hardware a measure holds for; its digest
-is the key every measures root and packaged table is looked up by. `MeasureRoots` is the layered store of
+is the key every measures root is looked up by. `MeasureRoots` is the layered store of
 `measures@1` roots: write-once observation and record files under a trust filter by owner uid, a hardware index, and a
-probe lease. `MeasureSource` reads a unit's `Estimate` from the roots (pooled), then the packaged table.
+probe lease. `MeasureSource` reads a unit's `Estimate` from the roots (pooled); a unit no root holds is unmeasured.
 """
 
 import contextlib
@@ -222,35 +222,25 @@ class Estimates(Protocol):
         """Return the estimate of `unit`, None when it has none."""
 
 
-class PackagedMeasures(Protocol):
-    """The packaged table, read: a unit's estimate on exact identity."""
-
-    def get(self, unit: MeasureUnit) -> Estimate | None:
-        """Return the estimate of the row whose unit is `unit`, None when there is none."""
-
-
 class MeasureSource:
-    """Reads a unit's estimate: the roots' pooled observations estimated once, then the packaged table."""
+    """Reads a unit's estimate: the roots' pooled observations, estimated once."""
 
     def __init__(
         self,
         sources: Sequence[MeasuresRoot],
-        packaged: PackagedMeasures,
         *,
         estimate: Callable[[MeasureUnit, Sequence[Observation]], Estimate],
     ) -> None:
-        """Read `sources` in order, then `packaged`; `estimate` derives an estimate from a root's observations."""
+        """Read `sources` in order; `estimate` derives an estimate from the pooled observations."""
         self._sources = tuple(sources)
-        self._packaged = packaged
         self._estimate = estimate
 
     def get(self, unit: MeasureUnit) -> Estimate | None:
-        """Return the estimate of `unit` over the observations of every root, else the packaged one, else None."""
+        """Return the estimate of `unit` over the observations of every root, None when it is not measured."""
         pooled = [o for root in self._sources for o in root.observations(unit)]
         if pooled and (found := self._estimate(unit, pooled)).status == "measured":
             return found
-        row = self._packaged.get(unit)
-        return row if row is not None and row.status == "measured" else None
+        return None
 
 
 MEASURES_DIR = MEASURES_LAYOUT_TAG

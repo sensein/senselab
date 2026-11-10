@@ -489,6 +489,22 @@ def test_a_second_run_reuses_the_first_runs_measure_without_probing(tmp_path: Pa
     assert len(_drive(second, again, Hand(second, placed, values))) == JOBS
 
 
+@pytest.mark.logic
+def test_a_unit_no_measures_root_holds_is_probed(tmp_path: Path, clock: ManualClock) -> None:
+    """A root holding another env build's measure is no match: the unit is unmeasured and the Pool probes it."""
+    profile = _profile(tmp_path)
+    _seen(profile, SEEN)
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile, clock=clock)
+    unit = _unit(pool, placed, values)
+    other = unit.model_copy(update={"env": unit.env.model_copy(update={"wheel_set": "f" * 64})})
+    provenance = Provenance(job=None, run="peer", senselab=None, profile="d" * 64, hardware=SEEN)
+    assert pool.roots.put_observations(other, "peer", _peer_observations(12, [10, 20]), provenance) is not None
+    assert pool.measures.get(other) is not None and pool.measures.get(unit) is None
+    _submit(pool, placed, values)
+    assert len(_probe_queues(pool)) == 1 and pool.probes and pool.queues.queue("cpu").work() == 0
+
+
 def _peer_observations(count: int, lengths: Sequence[int]) -> list[Observation]:
     found = []
     for i in range(count):

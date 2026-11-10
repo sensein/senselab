@@ -32,9 +32,8 @@ from senselab_core.runtime.fake_backend import EchoParams
 from senselab_core.runtime.keys import Call, Placement, request_size
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.resources import Derivation, MeasureRow, MeasureTable, PackagedTable
 from senselab_core.runtime.store import ResultStore
-from senselab_core.testing.calibration_samples import UNIT
+from senselab_core.testing.calibration_samples import UNIT, observation
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.workers import mit_lock_records
 from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, ResourceFault, error_record
@@ -279,16 +278,16 @@ def test_a_retired_upstream_entry_fails_only_its_element_as_a_gap(tmp_path: Path
     assert sizes == [1]
 
 
-class _Bare:
-    """A measures root that holds nothing."""
+class _Seen:
+    """A measures root that holds one observation."""
 
     def observations(self, unit: MeasureUnit) -> tuple[Observation, ...]:  # noqa: ARG002 - a MeasuresRoot
-        return ()
+        return (observation(),)
 
 
 @pytest.mark.logic
-def test_in_process_runs_a_unit_with_a_packaged_row_in_batches(tmp_path: Path, sizes: list[int]) -> None:
-    """Jobs of a unit with a packaged row are sent in the batch `size` gives, not one to a request."""
+def test_in_process_runs_a_measured_unit_in_batches(tmp_path: Path, sizes: list[int]) -> None:
+    """Jobs of a measured unit are sent in the batch `size` gives, not one to a request."""
     fit = {"r": 0.0, "n": 6, "spread": 0.1, "lo": 1.0, "hi": 1.0}
     estimate = Estimate(
         status="measured",
@@ -301,13 +300,9 @@ def test_in_process_runs_a_unit_with_a_packaged_row_in_batches(tmp_path: Path, s
         batched=(RequestFit(batch=4, u=0.05, **fit),),
         batch=(StratumBatch(lo=1.0, hi=1.0, batch=4),),
         host=MemoryFit(resident=1024, m0=0.0, m1=256.0, n=6),
-        source=EstimateSource(probe_ids=("p9",), observations=12, commit="1" * 40),
+        source=EstimateSource(probe_ids=("p9",), observations=12),
     )
-    row = MeasureRow(
-        unit=UNIT, estimate=estimate, derivation=Derivation(commit="1" * 40, jobs=("1",), probe_ids=("p9",))
-    )
-    packaged_table = PackagedTable([MeasureTable(task=UNIT.task, backend=UNIT.backend, rows=(row,))])
-    source = MeasureSource([_Bare()], packaged_table, estimate=lambda unit, observed: estimate)
+    source = MeasureSource([_Seen()], estimate=lambda unit, observed: estimate)
     use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, REGISTRY, mit_lock_records))
     jobs = []
     for i in range(6):
