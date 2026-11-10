@@ -377,7 +377,7 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3, §4.4. Adds to th
   `oom` records carry their writer's scheduler job id, run, senselab version and commit, profile digest and hardware
   class, and no account name or hostname: the roots are readable by other users (ADR-007, 2026-11-08). The writer is
   the file's owner uid. `calibration.trust` `group` reads all, `own` only files the current uid owns (the run config
-  overrides the profile); a record acts only for readers that admit it. Run provenance and packaged tables name probe
+  overrides the profile); a record acts only for readers that admit it. Run provenance names probe
   ids and counts.
 - **A reader moves only its own files.** A file of an unknown format tag is skipped and logged. A malformed or
   misfiled file is quarantined when the reader's uid owns it, else skipped; never fatal.

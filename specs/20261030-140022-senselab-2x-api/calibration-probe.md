@@ -264,9 +264,8 @@ is caught by drift (§7.3). So shared records need provenance and a reader's cho
   Each is logged once with its owner uid, rendered under the reader's audience rule, and never fails a run. One member
   never makes others lose measures (UX-10, UX-61).
 - **What leaves the store** (UX-43, UX-45, P-28). Result and run provenance, `plan.explain()` and exports name an
-  estimate's source by probe ids and observation counts only, or by the packaged row's commit and probe ids. The store's
-  own listing renders owner uids under the visibility policy. `resource-table@2.0` rows carry commit, scheduler job ids
-  and probe ids, never a user or a host.
+  estimate's source by probe ids and observation counts only. The store's own listing renders owner uids under the
+  visibility policy.
 
 ### 3.6 Invalidation
 
@@ -280,28 +279,39 @@ is caught by drift (§7.3). So shared records need provenance and a reader's cho
    outdates, keeping
    the newest `calibration.observations_kept` for audit, and staging and quarantine older than the policy's ages.
 
-### 3.7 Packaged tables and cluster measures
+### 3.7 Lookup, and how a group calibrates its resource
 
-`resource-table@2.0` replaces `@1.0`. A row is a `MeasureUnit` (all fields of §3.1) with its `Estimate` (§5.2),
-the counts and spreads behind it and its derivation (commit, jobs, probe ids). The generator writes it from
-`Probe.estimate` over a ladder point's observations (§9), never by hand.
+Lookup order for a unit (`MeasureSource.get`):
 
-Lookup order for a unit, the first `measured` estimate wins (`MeasureSource.get`):
+1. the measures roots, in order, identity match, their observations pooled and estimated once, the estimate used when
+   it is `measured`;
+2. otherwise the Pool probes, and the probe's observations are written to the first writable root.
 
-1. the measures roots, in order, identity match, their observations pooled and estimated once;
-2. the packaged table, identity match;
-3. otherwise the Pool probes.
+`default_measures` is `MeasureSource` over the profile's roots; it is the one source `explain`, the in-process executor
+and the Pool read, so the plan and the run size alike. A unit no root holds is unmeasured: `explain` says so and names
+the reason, and a run sizes it by the safe values until its probe has run.
 
-A packaged row is read only on an exact identity match, so it is never applied to another env build, other backend
-params or another card (M10, must-fix 6). Under ruling O-2 a host backend's `env` is the whole host env, so a host row
-matches only the env that generated it.
+Senselab ships no table of measured rows (owner ruling, 2026-11-09). A measure is read only on a unit's whole identity
+(§3.1: card class, backend params, env build, hardware class; M10, must-fix 6), so a row shipped with the package was
+read only on the one configuration that generated it, and every other machine probed anyway while the package carried a
+second lookup path, a generator, a format and a commit-bound provenance for it. Senselab is general purpose and its
+users' resources are not ours to measure; what it provides is the means for a group to measure its own.
 
-The packaged table is `PackagedTable.load(senselab/data/resources)`, handed to the runtime as `Packaged.measures`;
-`default_measures` is `MeasureSource` over the profile's roots and that table, and it is the one source `explain`, the
-in-process executor and the Pool read, so a packaged row sizes the run and the plan alike (T20R-8). A row's
-`estimate.source.commit` and `probe_ids` equal its `derivation`'s (`MeasureRow` validates it): the file states where a
-row was measured once. `data/resources/` holds no rows until T20R-10 generates them; the `@1.0` loader, its seven rows
-and `Catalogue.resource_tables` are deleted.
+**How a group calibrates its resource.** The ladder (§9) is the calibration run: it is a probe run that writes into a
+measures root the group names.
+
+```
+uv run python benchmarks/scale/ladder.py run /path/to/suite.yaml --execution /path/to/profile.yaml \
+    --measures-root /path/to/group/measures
+```
+
+and the group lists `/path/to/group/measures` in `calibration.measures_roots` of its execution profile (or sets
+`SENSELAB_MEASURES_ROOT`). The root is an ordinary `measures@1` root, written by the probe itself, so it keeps what a
+copy cannot: the writer's owner uid (the trust filter, §3.5), the order of `supersede` and `regime` records, and the
+later-minor rule of `measures@1`. Step 1 reads it on identity match like any other root; there is no second lookup
+path, no second format and no tool that copies between roots (a copy was considered and rejected for those reasons).
+A unit absent from it is probed, and its probe is written to the first writable root. Roots pool across senselab
+commits, as they have since `code_version` was removed (T20R-8); no commit is bound to a measure.
 
 ## 4. The Probe protocol (`Probe.plan`, pure)
 
@@ -415,7 +425,7 @@ Estimate
   host:    resident, m0, m1, n | None
   regimes: per co-tenancy k: ρ_k, n             from regime records (§7.3)
   oom:     [(resource, B, L, cotenancy)]         from oom records (§7.4)
-  source:  probe ids and counts | packaged row: commit and probe ids
+  source:  probe ids and counts
   estimator: estimate@1
 ```
 
@@ -675,7 +685,7 @@ Amended 2026-11-08 (T20R-7a review B-1, B-2, I-2, I-3):
 | `_round_measure`, `calibrated` | `Probe.estimate` |
 | `workers_wanted` for an unmeasured queue (`calibration_workers`) | a probing unit wants one worker for its probe queue; a queue with a unit in `Resolving` wants one worker; other units of the queue are sized by their own estimates |
 | `_grow` | `oom` record (§7.4) |
-| `Measures` (cache root by code version) | `MeasureSource` over the measures roots, then the packaged table |
+| `Measures` (cache root by code version) | `MeasureSource` over the measures roots; a unit they do not hold is probed |
 
 ### 7.3 Drift and regimes, from production telemetry
 
@@ -730,7 +740,7 @@ Amended 2026-11-09 (T20R-7b):
   probe disagrees when its single fit and the suspect's differ, at the middle of the probe's measured range, by more
   than `drift_confidence · 1.2533 · hypot(t₁·spread₁/√n₁, t₂·spread₂/√n₂)` (`t` the fit's seconds there); a fit with no
   spread cannot disagree. A `supersede` record `{outdates, confirmed_by}` names the suspect estimate's probe ids; a
-  suspect from a packaged row names none and writes none. The probe's observations are written either way.
+  suspect with no probe ids names none and writes none. The probe's observations are written either way.
 - **Device peak.** A warm request whose `device_peak − device_after` exceeds `m0 + m1·padded_units` of the device fit by
   more than the band (at the spread of its batch and `drift_window`) raises the unit's `m1` to `(peak − after − m0) /
   padded_units` for the rest of the run, held across the estimate's re-reads, and writes one `drift` record. It is not
@@ -881,25 +891,15 @@ Amended 2026-11-09 (T20R-7b):
   everything they reported and counted once, and each is timed from its own start, never by an item's wall, which runs
   from its claim's start when a claim holds several items. With no production job `per_item_s` is None and flatness and
   ceiling read n/a. The ceiling is judged at the largest flatness point the entry ran, always on `per_item_s`.
-- `generate_resources.py ROOT... [--suite SUITE] [--execution PROFILE] [--out DIR]` reads measures roots (a ladder
-  run directory's `<label>@<point>/measures` roots, or a cluster's), runs `Probe.estimate` per unit under the execution
-  profile's calibration settings, and writes each (task, backend)'s `resource-table@2.0`: one row per unit, the full
-  `MeasureUnit`, the estimate with its commit and probe ids, and the derivation (commit, scheduler job ids, probe
-  ids; never user, host or uid). A table that exists keeps the rows of units the run does not regenerate and takes
-  the regenerated ones in their place; it refuses when a kept row is of another commit than the run's, so a table holds
-  rows of one commit. A ladder run directory is read with `--suite` naming the suite whose table profile it ran under:
-  each point's result records the calibration settings it ran under, and the generator refuses a point whose
-  settings differ from the ones it would estimate under, naming the keys. The commit and jobs are read from the
-  provenance of the probe files behind the estimate (`MeasureRoots.probes`); `Build.commit` is the `HEAD` of the
-  checkout the package lives in (`checkout_commit`: the package must lie under `packages/senselab-core/src` of the work
-  tree whose git directory is read, so an installation inside another repository records none), and uncommitted
-  changes are not recorded: measure from a pinned clean clone. It refuses, and writes nothing, when a declared unit's
-  estimate is unmeasured, a probe behind a row carries no commit or no scheduler job, or the rows are of more than one
-  commit; each reason is a line. A unit of a task and backend the packaged registry does not declare (the fake stack)
-  is listed and skipped. A shared cluster root that holds an interrupted probe or probes of a second commit is therefore
-  refused by construction: the cluster use is for a root curated to one commit (a `--commit` filter is not built).
-  Nothing leaves the store but probe ids and counts: no `MeasureRecord.uid` is in a row or in `explain`'s text
-  (T20R-2b N-9).
+- `ladder.py run SUITE --execution PROFILE [--measures-root PATH]`. Without `--measures-root` each point probes into a
+  measures root of its own, so each unit is probed in the run and no point reads another's (the flatness ladders).
+  With it every point's pool probes into and reads that one root, so a unit already measured there is not probed
+  again; this is how a group calibrates its own resource (§3.7). A point's result `units` lists only the units its plan
+  resolved, each with `probed` (whether this run probed it) and the `probe_ids` this run wrote, empty when its estimate
+  was served from the root's earlier observations; its `observations` are those of this run's probes. A campaign whose
+  figures are evidence therefore starts from an empty `--measures-root`. `--execution` has no default: a packaged profile name
+  or a YAML file over one, so no site's profile is assumed. Nothing leaves the store but probe ids and counts: no
+  `MeasureRecord.uid` is in `explain`'s text (T20R-2b N-9).
 
 ## 10. What a run needs, and a site placement hook (owner, 2026-11-08)
 
@@ -1048,7 +1048,7 @@ Dated amendment text is in the ADR files, 2026-11-08:
   `measure-unit@1.0`, `measure-observations@1.1`, `measure-drift@1.0`, `measure-supersede@1.0`, `measure-regime@1.0`,
   `measure-oom@1.1` and `resource-table@2.0`, `worker-ready@1.0` (the ready mark, §8; amended 2026-11-08 after the
   T20R-7a review), and `run-config@2.1` (additive minor: the `calibration` section, whose
-  `trust` a run sets). T20R-1 registers them in `kernel/formats.py`; `resource-table@1.0` is retired by T20R-8.
+  `trust` a run sets). T20R-1 registers them in `kernel/formats.py`; `resource-table@1.0` is retired by T20R-8, and `resource-table@2.0` by T20R-10b (§3.7).
 - **Elsewhere, by the implementing tasks**: `wire-protocol.md` (`done` gains `since_load` and `load_s`, T20R-5);
   `execution.md` §3.2 and §3.6 (T20R-7a, T20R-12); `config-derivations.md` (T20R-1,
   T20R-12); `design.md`'s public API (`placement=`, `placement_hook=`, T20R-12).
@@ -1072,9 +1072,11 @@ Dated amendment text is in the ADR files, 2026-11-08:
 - **O-5, production timings.** Drift evidence only, never pooled into an estimate (§7.3).
 - **Placement (owner, 2026-11-08).** No site scheduling policy in senselab; a site hook outside it answers a
   versioned request, senselab validates the answer and reports refusals (§10).
-- **O-6, provisional values.** `warmup_requests` 2, `single_item_jobs` 4, and `probe_items`' target batch stand until
-  T20R-10 measures them; `substrate.placement_hook_s` (the substrate's start backoff's first step) stands until a real
-  adapter is timed.
+- **O-6, provisional values (amended 2026-11-09, R-252).** `warmup_requests` 2, `single_item_jobs` 4, and `probe_items`'
+  target batch stand as provisional defaults. T20R-10 does not fit them from one cluster's ladder into packaged
+  defaults: each is measured per resource at run time by the probe where feasible, else it is a resource-agnostic
+  default whose rule is stated, and the campaign's figures are evidence. `substrate.placement_hook_s` (the
+  substrate's start backoff's first step) stands until a real adapter is timed.
 
 ## 14. Review items, must-fix items and register rows
 
@@ -1126,9 +1128,9 @@ Nothing in either review is declined.
 | 3. cold/warm from model-load events; exclude failed and bisected requests | `since_load`, `load_s` (§5.3, §8); §5.4 steps 1-2 | T20R-5, T20R-4 |
 | 4. remove or unify `profiles._batch_size` | removed; one `size` for Pool, in-process and `explain` (§6.6) | T20R-6 |
 | 5. drop the ladder's fallback | §9 | T20R-7a |
-| 6. key packaged rows by backend params and env | `MeasureUnit` (§3.1, §3.2), `resource-table@2.0` on exact identity (§3.7) | T20R-2a, T20R-8 |
+| 6. key measured rows by backend params and env | `MeasureUnit` (§3.1, §3.2), read on exact identity from the measures roots (§3.7) | T20R-2a, T20R-8 |
 | 7. fit the per-call fixed cost; a seconds budget | `r`, `a` (§5.4 steps 3-4); `probe_s` over warm probe work (§4.5) | T20R-4, T20R-7a |
-| 8. regenerate with recorded n and spread, two batch sizes, two length strata | table profile, `resource-table@2.0` (§9) | T20R-10 |
+| 8. regenerate with recorded n and spread, two batch sizes, two length strata | table profile, `ladder.py --measures-root` (§3.7, §9) | T20R-10 |
 
 ### 14.3 Register rows
 
@@ -1209,8 +1211,8 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 ### T20R-2a: `MeasureUnit`, `HardwareClass` and `MeasureSource` (additive)
 
 - **Scope.** §3.1, §3.2's normalisation, §3.7: identity with the env fields; `HardwareClass` normalisation (`cuda`,
-  `mps`, `cpu`, `cpus` on every class); `MeasureSource` over its sources, then the `resource-table@2.0` packaged
-  reader, with the estimator **passed in** as a callable, so it does not wait on T20R-4. `Measures` and `Unit` stay
+  `mps`, `cpu`, `cpus` on every class); `MeasureSource` over its sources (its packaged-table reader was deleted by
+  T20R-10b, R-252), with the estimator **passed in** as a callable, so it does not wait on T20R-4. `Measures` and `Unit` stay
   (T20R-7a′ removes them).
 - **Files.** `runtime/measures.py` (new), `runtime/resources.py` (`@2.0` schema and reader added beside `@1.0`).
 - **Interfaces.** `MeasureUnit.of(placement, model, env_fields, hardware) -> MeasureUnit`; `.digest()`;
@@ -1371,7 +1373,7 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 - **ORCD.** One H100 run with two workers per card on a Local substrate (an interactive allocation of one node): a
   regime record is written and no confirming probe runs.
 
-### T20R-8: ladder, generator and `resource-table@2.0`
+### T20R-8: ladder, generator and `resource-table@2.0` (the table and generator amended by T20R-10b)
 
 - **Scope.** §9: table profile in the suite; point results carry observations and `Estimate`; flatness from request
   walls; the table profile overrides no seconds key, the ladder passing its suite's per-point wall budget to
@@ -1383,6 +1385,9 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 - **Tests failing now.** `test_generator_refuses_an_unmeasured_estimate`; `test_a_packaged_row_of_another_env_build_is_not_read`;
   `test_flatness_reads_request_walls_not_end_times`; `test_generated_rows_carry_probe_ids_not_users`.
 - **ORCD.** A CPU ladder smoke at 10² with the table profile, to check the result shape before T20R-10.
+- **Amended 2026-11-09 (T20R-10b).** `resource-table@2.0`, `PackagedTable`, `Packaged.measures`, `runtime/resources.py`,
+  `EstimateSource.commit`, `data/resources/` and `scripts/generate_resources.py` are deleted by the owner's ruling (§3.7); the
+  ladder, `scale-result@2.0` and the flatness checks stay, and `ladder.py --measures-root` is how a group calibrates its resource.
 - **Delivered (2026-11-09).** `plan_cost`, `check_caps`, `MemoryCapExceeded`, `Cost` and `estimate_of` are deleted, with
   `Unit`, `write_row`, `Measures`, `code_version`, `Catalogue.resource_tables` and the unused `sizing.Measure`;
   `placement@3.0` drops `cost`; `Packaged.measures` is the packaged table and `default_measures` its one reader;
@@ -1391,17 +1396,22 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
   derivation); T20R-2b N-9 (above); T20R-7c R-1 to R-4. A run directory's placement of a retired major (`placement@2`) raises
   `PlacementFormatRetired`, naming the run as made by an older build, from resume, the pool and `senselab explain`.
 
-### T20R-10: ORCD measurement and table regeneration
+### T20R-10: ORCD measurement and the group measures root
 
 - **Scope.** The table ladder at one pinned SHA (a fresh clone per campaign): GPU suite on H100 at 10³ (six units),
-  CPU suite at 10⁴ (signal.resample); regenerate the packaged tables; set the provisional keys by their rules
-  (`warmup_requests` from the post-load decay of unshared warm requests, `single_item_jobs` from the fitted `a`,
-  `probe_items`' target batch from the measured memory batches, N4); update `config-derivations.md`; close R-236,
-  R-237, R-229; add R-221's per-stratum evidence.
+  CPU suite at 10⁴ (signal.resample), run with `--measures-root` into a group measures root that starts empty, so every unit is probed in the campaign and
+  its result says so (§3.7, §9); no table is
+  regenerated or shipped, and nothing it measures becomes a packaged default. `warmup_requests`, `single_item_jobs`
+  and `probe_items`' target batch are not fitted from this one resource's ladder: each is measured per resource at
+  run time by the probe where that is feasible, else it is a resource-agnostic default whose rule is stated in
+  `config-derivations.md`. The campaign's figures (the post-load decay of unshared warm requests, the fitted `a`, the
+  measured memory batches, N4) are evidence for those rules and for each group's own check. Update
+  `config-derivations.md`; close R-236, R-237, R-229; add R-221's per-stratum evidence.
 - **Measurements per unit.** n and spread per phase and stratum; `r`, `u`, `a`, `load_s`; `B₁`, `B₂` and their
   per-job times at each stratum's median; `B*`; device `resident`, `m0`, `m1`; the post-load wall of requests 0..10 at
   one stratum; crisperwhisper at batch 1 beside e801bc6c (R-229); the probe's warm work against `probe_s`.
-- **Tests.** None new; the regenerated tables load and every row is `measured`.
+- **Tests.** None new; the group root, read through `MeasureSource` on identity match, holds a `measured` estimate
+  for each of the seven units.
 - **ORCD.** As scoped; typed H100s, submitted by the agent and watched by the controller.
 
 ### T20R-11 (after the Phase 3 exit): host memory per request

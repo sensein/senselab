@@ -15,7 +15,7 @@ three audience paths that share the same pages:
 | **Engineers** | an API or an extension point | reference generated from declarations, adding a task, backend, dataset adapter or substrate, execution on a laptop and on Slurm, contributing (`engineering.md`) |
 
 - **Reference** is generated from the task, backend and profile declarations (design §4.10):
-  schemas, default models, stacks, license records, measured resource tables. It cannot drift
+  schemas, default models, stacks, license records. It cannot drift
   from code.
 - **Tutorials and how-tos** are the use-case pipelines (`testing.md` §4) rendered as pages. They
   are tested by construction.

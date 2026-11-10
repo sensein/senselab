@@ -87,7 +87,7 @@ it is amended here.
   hard-coded in tasks.
 - **Source**: owner, 2026-10-30: "optimization for GPU versus CPU".
 - **Check**: a task declares its resource needs and the knobs it can tune. The values come from an
-  execution profile or from catalogue resource tables, which the scale ladder produces (Phase 3).
+  execution profile or from the measures roots a group's own scale-ladder runs write (Phase 3, R-252).
 
 ### P-8 Inference stacks are interchangeable
 - **Status**: active

@@ -241,8 +241,8 @@ class SpeechToText:
 - **Loading** takes only a `ResolvedModel`. Sources that cannot be pinned resolve with an
   `unresolved_reason` and are labelled `unpinned`.
 - **The catalogue** (from `model_registry.yaml`) is runtime data. Each entry holds the tasks it
-  serves, its backends and stacks, the default ref, its license, and a measured resource table per
-  hardware class. The scale ladder produces those tables (P-7, P-17).
+  serves, its backends and stacks, the default ref, its license. Measured resources are not the catalogue's: a
+  group's measures roots hold them, written by its own scale-ladder runs (P-7, P-17, R-252).
 
 ### 4.4 Backend, stack and environment (P-6, P-7, P-8, P-25)
 
@@ -810,7 +810,7 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   - plan-fragment items, the coordinator (idempotent, with an epoch file; ADR-003), and faults typed at the source (ADR-009);
   - cross-record batching under I-3;
   - a minimal BIDS adapter;
-  - the `benchmarks/scale` ladder and the catalogue resource tables (P-7, P-33).
+  - the `benchmarks/scale` ladder (P-7, P-33; its tables were dropped by R-252).
 - The pydra gate is decided at the start of this phase (section 4.9). Owners of the pydra PRs
   (proposal 0001, nipype/pydra#891): **Phase 2 owns the gate prerequisites**, which must be
   working on the branch before Phase 3 starts: A1, D1, E1, F1, F2, G1, K1, K2 (amended 2026-11-03, P3-1: K2 moved into Phase 3 Task 0; amended 2026-11-02, P2-39: F1

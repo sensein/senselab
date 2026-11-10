@@ -469,6 +469,8 @@ populated), `runtime/call.py` (`RunConfig` with `reuse`), `kernel/formats.py`, t
 
 ### Task 8: Placement, `explain`, licenses and taint, cost, caps; `execution-profile@2.0`
 
+> Superseded in part by R-252 (2026-11-09): its resource-table steps are deleted; see `calibration-probe.md` §3.7.
+
 **Model:** opus implements (planner); fresh sonnet reviews. **Tier:** logic, contract. **Implements:** ADR-004
 (placement), design §4.7 (announce env builds, cost, licenses), §4.13 and I-9 (taint), `execution.md` §3.4, P-7,
 P-23, R-116 (taint), R-199; rulings P3-19, P3-20, P3-21, P3-22, P3-23, P3-50. **Depends on:** Task 7.
@@ -928,6 +930,8 @@ modify `runtime/storage.py` (`probe_capabilities`), `runtime/planner.py` (probe 
 
 ### Task 20: The scale ladder and the catalogue resource tables
 
+> Superseded in part by R-252 (2026-11-09): no resource table or generator is shipped; the ladder writes a group's measures root (`--measures-root`, `calibration-probe.md` §3.7, §9).
+
 **Model:** sonnet implements; opus reviews. **Tier:** benchmark (not pytest) on ORCD; logic for the generator.
 **Implements:** P-33, P-7, design §4.3 (resource tables), §6.4 (packed tier and token arbiter wait on this), R-73,
 R-165; rulings P3-23, P3-44. **Depends on:** Task 18.
@@ -1133,16 +1137,16 @@ them. A ruling that changes an ADR decision takes effect only through the dated 
   an attempt whose id is `revision.run_id()` (from `SENSELAB_RUN_ID`, Slurm or a uuid), with its own placement file.
 - **P3-18** ruling: A single task call or `.map` is planned as a one-node graph with a `map` input edge, so every run
   has a `LogicalPlan`; a single call submits its one fragment straight to `InProcess`.
-- **P3-19** ruling: A cost figure with no measured resource table is `None` and named under `unmeasured`.
+- **P3-19** ruling: A cost figure with no measured resource table is `None` and named under `unmeasured`. Superseded in part by R-252 (2026-11-09): no packaged or catalogue-joined resource table exists; the measures roots a group's own ladder runs write are what a figure is read from.
 - **P3-20** controller ruling (supersedes the planner's): A cached hit without a recorded env license is refused by
   default (owner item 11, P-23); a user policy in `RunConfig.licenses` may allow it (owner item 46, P2-93), and the
   allowance is recorded.
 - **P3-21** ruling: Memory caps are checked from resource tables; a node without a table is admitted and listed as
-  unmeasured, because an OOM is a resource fault that re-places the job (ADR-003).
+  unmeasured, because an OOM is a resource fault that re-places the job (ADR-003). Superseded in part by R-252 (2026-11-09): no packaged or catalogue-joined resource table exists; the measures roots a group's own ladder runs write are what a figure is read from.
 - **P3-22** ruling: One `execution-profile@2.0` bump in Task 8 carries every Phase 3 key, each with a derivation; retry
   budgets are execution policy, because they change which results exist, not their identity.
 - **P3-23** ruling: Resource tables are generated files joined to catalogue entries by `(id, revision)`
-  (`catalogue@2.0`).
+  (`catalogue@2.0`). Superseded in part by R-252 (2026-11-09): no packaged or catalogue-joined resource table exists; the measures roots a group's own ladder runs write are what a figure is read from.
 - **P3-24** ruling: `runtime/in_process.py` (`InProcessWorker`) is renamed `runtime/host_worker.py` (`HostWorker`), so
   `InProcess` names only the executor.
 - **P3-25** ruling: `run_call` is removed (P2-16); its body is `execution.job.execute`; no test asserts its absence.
@@ -1186,7 +1190,7 @@ them. A ruling that changes an ADR decision takes effect only through the dated 
 - **P3-43** ruling: Under Route A the epoch check, release and fault effects stay in senselab's `Pool`, reached through
   the `Executor` calls of `ExecutorWorker`; pydra supplies graph expansion, readiness and descendant failure.
 - **P3-44** ruling: Scale budgets and resource tables are generated from idle-node runs and never fitted at run time; a
-  non-flat scale point is a finding. The ladder takes a suite file, not per-knob flags.
+  non-flat scale point is a finding. The ladder takes a suite file, not per-knob flags. Superseded in part by R-252 (2026-11-09): no packaged or catalogue-joined resource table exists; the measures roots a group's own ladder runs write are what a figure is read from.
 - **P3-45** ruling (owner attention): The laptop half of the P-10 exit runs a model-less task (`resample`) over a
   synthetic, byte-identical 1,000-record BIDS tree, because the local machine runs no models and downloads no data
   (owner items 27, 28); it shows only a profile difference, not a hardware-driven one. The model-backed `.map` runs on

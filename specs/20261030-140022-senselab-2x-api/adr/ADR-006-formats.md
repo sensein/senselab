@@ -689,3 +689,10 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3.2, §8.
   per-item seconds from production request walls. `scale-suite@1.1` adds the optional `calibration` and
   `point_wall_s` keys to `@1.0`; the ladder reads any `@1.x`. A run directory's `placement@2.x` is refused by name
   (`PlacementFormatRetired`, `RETIRED_PLACEMENT_FORMATS`) rather than as an unreadable record.
+
+## Amendment 2026-11-09: `resource-table@2.0` is retired (Phase 3 Task 20R-10b)
+
+- **`resource-table@2.0` is deleted** with `PackagedTable`, `Packaged.measures` and `runtime/resources.py`: senselab ships
+  no measured rows (owner ruling; `calibration-probe.md` §3.7). No table format remains; measures are `measures@1` roots
+  read on a unit's whole identity. `kernel/formats.py` drops `RESOURCE_TABLE_FORMAT`. `EstimateSource` drops its
+  `commit` field, which only a packaged row set; an estimate's source is its probe ids and observation count.
