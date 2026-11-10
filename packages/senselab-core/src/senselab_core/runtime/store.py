@@ -297,7 +297,7 @@ def _decode(value: object, entry: Path, sizes: Mapping[str, int] | None = None) 
     return value
 
 
-def _equivalence_digest(table: Equivalence) -> str:
+def equivalence_digest(table: Equivalence) -> str:
     """Return the `value_digest` of an equivalence table, each class as its sorted members."""
     fields = {backend: {name: sorted(members) for name, members in cls.items()} for backend, cls in table.items()}
     return value_digest("equivalence", {"classes": fields})
@@ -1014,7 +1014,7 @@ class ResultStore:
             "senselab:reusePolicy": hit.policy_used.value,
         }
         if hit.policy_used is ReusePolicy.EQUIVALENT:
-            own["senselab:equivalence"] = _equivalence_digest(self.equivalence)
+            own["senselab:equivalence"] = equivalence_digest(self.equivalence)
         reuse = kprov.activity(
             core_vocabulary(),
             types=["senselab:Reuse"],

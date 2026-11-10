@@ -34,10 +34,11 @@ from senselab_core.runtime.execution.substrates import QueueReady, WorkerHandle,
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import LeaseUnavailable
-from senselab_core.runtime.planner import Plan, plan
+from senselab_core.runtime.planner import Plan, plan, resume
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.store import ResultStore
+from senselab_worker.canonical import jcs_dumps
 from syscall_faults_fixture import await_true, displace_before_proof, pause_replaces
 
 CLUSTER = (
@@ -90,8 +91,9 @@ class FakeWorkers:
     """A `Substrate` whose thread claims each queue it serves, logs each job `claimed` and runs it through `execute`.
 
     `act` decides per fragment: a `FaultRecord` fails every job with it, a `ResultStore` executes into that store,
-    None executes into `store`. `served` holds each fragment claimed, in order. The thread claims only while `ready()`
-    is true, which a test uses to hold it back until the coordinator has acted on what it served.
+    None executes into `store`, whose provenance it writes to the run after each claim, as `PoolWorker` does.
+    `served` holds each fragment claimed, in order. The thread claims only while `ready()` is true, which a test
+    uses to hold it back until the coordinator has acted on what it served.
     """
 
     def __init__(self, run_dir: Path, store: ResultStore, placed: Plan, values: Mapping[InputIdentity, object]) -> None:
@@ -111,18 +113,20 @@ class FakeWorkers:
         """Serve `resource_class` from the worker thread, started on the first call."""
         self.names.add(resource_class)
         mark_ready(self.run_dir, {resource_class: QueueReady(None, {})})
-        if self._thread is None:
+        if self._thread is None or not self._thread.is_alive():
+            self._stop.clear()
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
         return [WorkerHandle(resource_class, f"thread-{resource_class}")]
 
     def live(self) -> list[WorkerHandle]:
         """Return a handle for each queue the thread serves."""
-        return [WorkerHandle(name, f"thread-{name}") for name in sorted(self.names)]
+        alive = self._thread is not None and self._thread.is_alive()
+        return [WorkerHandle(name, f"thread-{name}") for name in sorted(self.names)] if alive else []
 
     def running(self, resource_class: str) -> int:
         """Return 1 for a queue the thread serves."""
-        return int(resource_class in self.names)
+        return int(resource_class in self.names and self._thread is not None and self._thread.is_alive())
 
     def stop(self, handles: Sequence[WorkerHandle] = ()) -> None:  # noqa: ARG002
         """Stop the worker thread."""
@@ -153,6 +157,8 @@ class FakeWorkers:
                 log.record("claimed", job.node, job=job)
             self.served.append(fragment)
             report(claim, digest, self._outcomes(fragment))
+        add_plan_entity(self.store.provenance, self.placed.hash)
+        self.store.provenance.write(self.run_dir)
 
     def _outcomes(self, fragment: PlanFragment) -> list[JobOutcome]:
         act = self.act(fragment)
@@ -922,35 +928,28 @@ def test_a_claim_of_the_current_epoch_is_not_a_reuse(tmp_path: Path) -> None:
     assert [r.served for r in refs] == [None]
 
 
-def _reuse_stack(
-    tmp_path: Path, texts: Sequence[str]
-) -> tuple[Plan, dict[InputIdentity, object], ExecutionProfile, FakeWorkers, ResultStore]:
-    """A run of `texts` whose workers own a `ResultStore` apart from every coordinator's, over one results root."""
-    profile = _profile(**CONTENT)
-    placed, values = _planned(profile, texts)
-    worker_store = ResultStore(tmp_path / "store")
-    return placed, values, profile, FakeWorkers(tmp_path / "run", worker_store, placed, values), worker_store
-
-
-def _attempt(  # noqa: PLR0913 - the run's parts, and the parts of it the attempt follows
-    tmp_path: Path,
+def _coordinator(  # noqa: PLR0913 - the run's parts
     placed: Plan,
-    values: Mapping[InputIdentity, object],
     profile: ExecutionProfile,
     workers: FakeWorkers,
-    which: Callable[[PlanFragment], Sequence[PlanFragment]],
-) -> None:
-    """Run the parts `which` takes of the plan's fragment on a pool of the next epoch with its own store."""
-    pool = _pool(tmp_path, ResultStore(tmp_path / "store"), workers, profile)
-    for part in which(node_fragment(placed, pool.admit(placed, values))):
-        list(follow(pool, pool.submit(part)))
-    add_plan_entity(workers.store.provenance, placed.hash)
-    workers.store.provenance.write(tmp_path / "run")
+    root: Path,
+) -> Pool:
+    """Return a pool over a coordinator store of its own (the workers' is another), bound by `start`."""
+    run_dir = run_dir_of(placed.hash)
+    kwargs: dict[str, Any] = {
+        "queues": QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+        "store": ResultStore(root),
+        "events": EventLog(run_dir, "a0", 1, epoch=0),
+        "profile": profile,
+        "substrate": workers,
+        "epoch": 0,
+        "resolver": unresolving(profile),
+    }
+    return Pool(run_dir, **kwargs)
 
 
 def _activities(run_dir: Path) -> tuple[list[Any], list[Any]]:
-    read = ProvStore.read(run_dir)
-    every = read.activities()
+    every = ProvStore.read(run_dir).activities()
     return [a for a in every if "senselab:Reuse" not in a.types()], [a for a in every if "senselab:Reuse" in a.types()]
 
 
@@ -958,52 +957,132 @@ def _logical(records: Sequence[Any]) -> list[str]:
     return sorted(json.dumps(kprov.literal_value(r.node()["senselab:logicalKey"]), sort_keys=True) for r in records)
 
 
-@pytest.mark.contract
-def test_a_resume_records_a_reuse_for_each_item_it_settles_from_the_earlier_attempt(tmp_path: Path) -> None:
-    """Interrupted after 2 of 4 items: the resume's union has 2 Reuse (the settled items) and 4 executions in all."""
-    placed, values, profile, workers, _ = _reuse_stack(tmp_path, ["one", "two", "three", "four"])
-    run_dir = tmp_path / "run"
+def _resumed(
+    placed: Plan, profile: ExecutionProfile, workers: FakeWorkers, root: Path
+) -> tuple[Pool, list[Any], list[Any]]:
+    """Resume the run on a pool of its own, close the pool and return it with the run's executions and reuses."""
+    pool = _coordinator(placed, profile, workers, root)
     try:
-        _attempt(tmp_path, placed, values, profile, workers, lambda f: split(f, 2)[:1])
-        executed, reused = _activities(run_dir)
-        assert len(executed) == 2 and not reused
-        _attempt(tmp_path, placed, values, profile, workers, lambda f: split(f, 2))
+        assert resume(placed.hash, execution=profile, store=pool.store, executor=pool).wait(60).done
     finally:
-        workers.stop()
-    executed, reused = _activities(run_dir)
-    assert len(executed) == 4 and len(set(_logical(executed))) == 4
-    assert len(reused) == 2 and set(_logical(reused)) <= set(_logical(executed))
-    assert len(ProvStore.read(run_dir).plans()) == 1
+        pool.close()
+    return (pool, *_activities(run_dir_of(placed.hash)))
+
+
+def _stopped(
+    tmp_path: Path, tier_bound: float, k: int, texts: Sequence[str]
+) -> tuple[Plan, ExecutionProfile, FakeWorkers]:
+    """Run `texts` one item to a claim and stop the run once the workers committed `k` items; its workers stay up."""
+    profile = ExecutionProfile.load(
+        "laptop",
+        {
+            "devices": ["cpu"],
+            "resource_classes": CLASSES,
+            "pool": {"poll_s": 0.2, "first_poll_s": 0.01, "quantum_items": 1},
+            "faults": CONTENT,
+        },
+    )
+    placed, values = _planned(profile, texts)
+    run_dir = run_dir_of(placed.hash)
+    workers = FakeWorkers(run_dir, ResultStore(tmp_path / "store"), placed, values)
+    workers.ready = lambda: len(workers.served) < k
+    pool = _coordinator(placed, profile, workers, tmp_path / "store")
+    run = placed.run(pool, store=pool.store)
+    await_true(lambda: len(_activities(run_dir)[0]) == k, tier_bound, profile.pool.poll_s, "the first k items")
+    run.cancel()
+    run.wait(60)
+    pool.close()
+    workers.ready = lambda: True
+    return placed, profile, workers
 
 
 @pytest.mark.contract
-def test_a_second_resume_of_a_completed_run_records_a_reuse_per_item_and_no_execution(tmp_path: Path) -> None:
-    """Resuming a completed run of 4: 4 more Reuse, 0 more executions, no item served twice in the attempt."""
-    placed, values, profile, workers, _ = _reuse_stack(tmp_path, ["one", "two", "three", "four"])
-    run_dir = tmp_path / "run"
+def test_a_resume_records_a_reuse_for_each_item_it_settles_from_the_stopped_attempt(
+    tmp_path: Path, tier_bound: float
+) -> None:
+    """Stopped after 2 of 4 items: the union holds 4 executions and 2 Reuse, with no context and no agent serving."""
+    pytest.importorskip("pydra")
+    placed, profile, workers = _stopped(tmp_path, tier_bound, 2, ["one", "two", "three", "four"])
     try:
-        _attempt(tmp_path, placed, values, profile, workers, lambda f: [f])
-        before = _activities(run_dir)
-        _attempt(tmp_path, placed, values, profile, workers, lambda f: [f])
+        _, executed, reused = _resumed(placed, profile, workers, tmp_path / "store")
     finally:
         workers.stop()
-    executed, reused = _activities(run_dir)
-    assert len(before[0]) == 4 and not before[1]
+    assert len(executed) == 4 and len(set(_logical(executed))) == 4 and len(reused) == 2
+    assert set(_logical(reused)) <= set(_logical(executed))
+    for reuse in reused:
+        node = reuse.node()
+        assert (
+            "senselab:context" not in node
+            and "senselab:storedContext" in node
+            and "prov:qualifiedAssociation" not in node
+        )
+        assert kprov.literal_value(node["senselab:reusePolicy"]) == "exact"
+
+
+@pytest.mark.contract
+def test_a_second_resume_of_a_completed_run_records_a_reuse_per_item_and_no_execution(
+    tmp_path: Path, tier_bound: float
+) -> None:
+    """Resuming a completed run of 4: 4 more Reuse, no more executions."""
+    pytest.importorskip("pydra")
+    placed, profile, workers = _stopped(tmp_path, tier_bound, 4, ["one", "two", "three", "four"])
+    try:
+        _, executed, reused = _resumed(placed, profile, workers, tmp_path / "store")
+    finally:
+        workers.stop()
     assert len(executed) == 4 and len(reused) == 4 and _logical(reused) == _logical(executed)
 
 
 @pytest.mark.contract
-def test_the_reuses_survive_a_coordinator_that_never_finishes(tmp_path: Path) -> None:
-    """The coordinator's document holds the reuses once the earlier items are settled, before its run ends."""
-    placed, values, profile, workers, _ = _reuse_stack(tmp_path, ["one", "two"])
-    run_dir = tmp_path / "run"
+def test_a_reuse_settled_from_an_equivalent_outcome_records_that_policy(tmp_path: Path, tier_bound: float) -> None:
+    """An outcome the earlier attempt served under `equivalent` is settled as an `equivalent` Reuse."""
+    pytest.importorskip("pydra")
+    placed, profile, workers = _stopped(tmp_path, tier_bound, 2, ["one", "two"])
+    run_dir = run_dir_of(placed.hash)
+    marked = 0
+    for path in (p for p in (run_dir / RUN_QUEUES).rglob("outcome/*") if p.is_file()):
+        document = json.loads(path.read_text())
+        if document.get("outcome") == "done":
+            for job in document["jobs"]:
+                job["served"] = "equivalent"
+            path.write_bytes(jcs_dumps(document))
+            marked += 1
+    assert marked == 2
     try:
-        _attempt(tmp_path, placed, values, profile, workers, lambda f: [f])
-        pool = _pool(tmp_path, ResultStore(tmp_path / "store"), workers, profile)
-        handle = pool.submit(node_fragment(placed, pool.admit(placed, values)))
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline and len(_activities(run_dir)[1]) < 2:
-            pool.poll(handle)
+        _, _, reused = _resumed(placed, profile, workers, tmp_path / "store")
     finally:
+        workers.stop()
+    assert len(reused) == 2
+    for reuse in reused:
+        assert kprov.literal_value(reuse.node()["senselab:reusePolicy"]) == "equivalent"
+        assert "senselab:context" not in reuse.node() and "senselab:equivalence" in reuse.node()
+
+
+@pytest.mark.contract
+def test_a_failed_provenance_write_costs_no_settled_result_and_is_retried(tmp_path: Path, tier_bound: float) -> None:
+    """A `prov/` that cannot be written when the earlier items settle leaves their results given; close writes it."""
+    placed, profile, workers = _stopped(tmp_path, tier_bound, 2, ["one", "two"])
+    run_dir = run_dir_of(placed.hash)
+    epoch = Epoch(run_dir).take()
+    pool = Pool(
+        run_dir,
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+        store=ResultStore(tmp_path / "store"),
+        events=EventLog(run_dir, f"a{epoch}", epoch, epoch=epoch),
+        profile=profile,
+        substrate=workers,
+        epoch=epoch,
+        resolver=unresolving(profile),
+    )
+    (run_dir / "prov").chmod(0o500)
+    try:
+        if os.access(run_dir / "prov", os.W_OK):
+            pytest.skip("the directory stays writable (running as root)")
+        refs = list(follow(pool, pool.submit(node_fragment(placed, pool.admit(placed, workers.values)))))
+        assert [r.served for r in refs] == ["exact", "exact"] and len(_activities(run_dir)[1]) == 0
+        (run_dir / "prov").chmod(0o700)
+        pool.close()
+    finally:
+        (run_dir / "prov").chmod(0o700)
         workers.stop()
     assert len(_activities(run_dir)[1]) == 2

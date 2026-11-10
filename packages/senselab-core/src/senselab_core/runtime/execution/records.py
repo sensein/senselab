@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
 from senselab_core.kernel import prov as kprov
-from senselab_core.kernel.identity import ExecutionContext, InputIdentity, LogicalKey, OutputIdentity
+from senselab_core.kernel.identity import ExecutionContext, InputIdentity, LogicalKey, OutputIdentity, ReusePolicy
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.compare import Thresholds, compare
 from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, EvidenceSide
@@ -13,7 +13,14 @@ from senselab_core.runtime.execution.executor import JobRef
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import attempt_id
-from senselab_core.runtime.store import ResultStore, StoredResult, agent_record, context_record, key_record
+from senselab_core.runtime.store import (
+    ResultStore,
+    StoredResult,
+    agent_record,
+    context_record,
+    equivalence_digest,
+    key_record,
+)
 from senselab_core.runtime.vocabulary import core_vocabulary
 
 logger = logging.getLogger("senselab")
@@ -27,6 +34,42 @@ def add_plan_entity(provenance: ProvStore, plan_hash: str) -> None:
 def plan_link(agent: kprov.Record, job: JobRef) -> kprov.Association:
     """Return the association of `job`'s activity with `agent`: its role the job's node, its plan `plan:<hash>`."""
     return kprov.Association(agent.id, node_id=job.node, plan=f"plan:{job.plan_hash}")
+
+
+def record_settled_reuse(  # noqa: PLR0913 - the settled hit, then what its activity records
+    store: ResultStore,
+    key: LogicalKey,
+    hit: StoredResult,
+    started: datetime,
+    policy: ReusePolicy,
+    attributes: Mapping[str, object],
+) -> None:
+    """Add to `store`'s provenance the `senselab:Reuse` of a process that settled `hit` for `key` without running it.
+
+    Unlike `ResultStore.record_reuse`, no execution context or agent of the settling process is recorded: the activity
+    names the stored context (`senselab:storedContext`) and the agent that computed `hit` (`senselab:storedAgent`),
+    and is associated with no agent. `policy` is the policy `hit` was served under; `attributes` are recorded beside.
+    """
+    stored_agent = agent_record(key, hit.context)
+    own: dict[str, object] = {
+        "senselab:storedAgent": stored_agent.id,
+        **attributes,
+        "senselab:logicalKey": key_record(key),
+        "senselab:storedContext": context_record(hit.context),
+        "senselab:reusePolicy": policy.value,
+    }
+    if policy is ReusePolicy.EQUIVALENT:
+        own["senselab:equivalence"] = equivalence_digest(store.equivalence)
+    used = kprov.Usage(hit.output_identity)
+    reuse = kprov.activity(
+        core_vocabulary(),
+        started=started,
+        ended=datetime.now(timezone.utc),
+        used=[used],
+        attributes=own,
+        types=["senselab:Reuse"],
+    )
+    store.provenance.add(kprov.entity(hit.output_identity, core_vocabulary()), stored_agent, reuse)
 
 
 def verify_attributes(run: RunConfig) -> dict[str, object]:
