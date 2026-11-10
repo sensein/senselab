@@ -342,7 +342,7 @@ batch; `Probe.replace_served` swaps a `served` item for the next candidates of i
    are put at once (I4). An entry under an old context, after an env or hardware change, is therefore not servable,
    and its job is a candidate (review B1).
 2. **A probe request that returns `served`** (the predicate's view went stale, or the context was unknown) is
-   discarded by the classifier and replaced by the next candidate of the same stratum, within `probe_items`.
+   discarded by the classifier and replaced by the next candidate of the same stratum, within the derived `probe_items` (§11).
 3. Drop all but one job of each key digest (M4, R-232).
 4. Cut the candidates that have a length into `calibration.length_strata` strata of equal count by input units; a cut
    never splits equal lengths, and bucket edges never move it. On a bucketed formation each batched item draws its jobs
@@ -389,10 +389,12 @@ observation counts is decided by `Probe.estimate` from what the worker reported 
   `poll_s`) while its serve lease is held, so a phase change costs no full poll.
 - If the pinned worker dies, its leases go stale; another worker takes the serve lease and the remaining items. Its
   first requests report a load (§5.3), so warmness needs no special case.
+- With `warmup_requests` 1 and a single candidate the plan is the WARMUP item alone: the probe measures the unit's load
+  and no `r` (`plan_batched` returns `single_unmeasured`), the job's result is kept, and the unit stays unmeasured.
 
 ### 4.5 Budgets (M8)
 
-- `calibration.probe_items` bounds the jobs a probe plans; `B₁` is chosen inside it (§4.3).
+- The jobs a probe plans are bounded by `probe_items(config, pool.quantum_items)` (§11), derived, not a key; `B₁` is chosen inside it (§4.3).
 - The seconds budget (`probe_s`, §11, an argument of `Probe.plan`) bounds **probe work**: the sum of the walls of the probe's warm requests, counted from the
   first warm request. The model load (already `load_share`'s and `timeouts.load_s`'s) and the waits between phases do
   not count, so a model that loads for minutes is still measured (I3). Past it the Pool puts no further probe item;
@@ -656,7 +658,7 @@ Amended 2026-11-08 (T20R-7a review B-1, B-2, I-2, I-3):
   `Probing` or `Confirming`) is checked against its queue exactly as a flight is: an env held on the queue raises
   `QueueHeld`, and a broken class or substrate (`Fleet.broken_for`) raises `WorkersBroken`, each once the results
   landed with it are given. A class whose workers never say hello therefore breaks and is reported (UX-36, UX-37).
-- **Resolving is bounded.** The bound is `calibration.resolve_s` (§11), on the Pool's clock, counted from the first
+- **Resolving is bounded.** The bound is `ExecutionProfile.resolve_s` (§11), on the Pool's clock, counted from the first
   poll at which a worker of the unit's queue is live and not pending. A worker waiting in the scheduler's queue
   starts no clock and breaks nothing (`Fleet` counts failed starts only), so parts of a class whose jobs stay pending
   wait as production items do today: no new hang, and no new coverage. When the bound passes with no resolving
@@ -860,17 +862,16 @@ Amended 2026-11-09 (T20R-7b):
 ## 9. Ladder and generator on the same Probe
 
 - A ladder point runs the Pool with one measures root in the point's output directory. A suite may carry a table
-  profile, a `calibration:` section that overrides `length_strata`, `batched_sizes` and `probe_items` only (`Suite.load`
+  profile, a `calibration:` section that overrides `length_strata` and `batched_sizes` only (`Suite.load`
   refuses any other key, a seconds key among them), so a 10³ GPU point measures B up to the memory batch (R-237) over
   three length strata (R-221); `probe_s` stays the profile's derived property. The suite's `point_wall_s` is the
   per-point wall budget: the ladder passes it to the Pool (`Pool(probe_s=)`), which gives it to `Probe.plan` as its
-  seconds budget. Suites carrying them are `scale-suite@1.1` (the reader takes any `@1.x`).
+  seconds budget. Suites are `scale-suite@2.0` (the reader takes any `@2.x`; `@1` is retired and refused, naming the dropped `probe_items`).
 - **Two kinds of suite.** `suites/table.yaml` (CPU, `signal.resample`, points 10² and 10³) and `suites/gpu-table.yaml`
-  (the Phase 2 backends, 10³) carry the table profile (`length_strata` 3, `batched_sizes` 2, `probe_items` 923,
-  `point_wall_s` 900) and exist to be generated from. `suites/ladder.yaml` and `suites/gpu.yaml` carry none and are
-  the flatness ladders: under the table profile a 10² point's items are all probe items (923 probe jobs), so no
+  (the Phase 2 backends, 10³) carry the table profile (`length_strata` 3, `batched_sizes` 2, `point_wall_s` 900) and exist to be generated from. `suites/ladder.yaml` and `suites/gpu.yaml` carry none and are
+  the flatness ladders: under the table profile a 10² point's items are all probe items (1006 probe jobs), so no
   production request is left to judge flatness by.
-- A point's result (`scale-result@2.0`, replacing `@1.0`) records, per unit its measures root holds, the unit, the
+- A point's result (`scale-result@3.0`, replacing `@2.0`) records the derived `probe_items` the point ran under and, per unit its measures root holds, the unit, the
   probe's observations and its `Estimate`, and nothing else as its measure; the calibration settings it ran under; and
   the per-item figures below. The fallback `or calibrated(samples)` is deleted (must-fix 5): a unit whose probe is
   unmeasured has `estimate.status: unmeasured` with reasons. The result's `measure`, `samples`, `calibration_s`,
@@ -1008,17 +1009,17 @@ too, until a real adapter is timed.
 |---|---|---|---|
 | `measures_roots` | `<cache root>/2x/measures` | `<cache root>/2x/measures` | §3.3: the own root; a group's site profile (a user file) lists its shared root first, written `${VAR}` with no fallback, so the group reuses and the own root is the write fallback for a read-only member |
 | `trust` | `own` | `own` | §3.5; ruling O-3; overridable per run by the run config's `calibration.trust` |
-| `warmup_requests` | 2 *provisional* | 2 | the least w such that, on the table probe, the median of warm requests w+1..w+3 of one stratum lies within the steady band of the requests after them, the maximum over GPU units. Provisional basis: R-230 (CUDA initialised inside the first request) plus one request for shape-dependent kernel selection; R-231's decay was confounded by gathering (R-234) |
+| `warmup_requests` | 1 | 1 | the floor: the first request after a load is cold; `Estimate.warmup_unsettled` is True, False or None (unknown) from the first three warm requests (`since_load` from `warmup_requests`) slower than the baseline `median(later walls) + u·(units − median(later units))` within a probe's planned length stratum (the middle stratum's singles are planned first), beyond the single fit's one-sided spread band `confidence × spread`; `explain` prints it when True |
 | `length_strata` | 2 | 2 | two points fit a line in length (must-fix 8, R-221); the table profile uses 3 to test linearity |
 | `min_requests` | 3 | 3 | the least count whose median tolerates one outlier |
-| `single_item_jobs` | 4 *provisional* | 4 | items of 1 and k jobs separate `a` from the per-job cost; k such that `a` is at least a fifth of a k-job item's wall at the measured CPU fit (R-236: `a` 0.040 s against 0.0366 s per job) |
+| `single_item_jobs` | 2 | 2 | the schema minimum: `a` is measured per whole probe item (`Estimate.item_s`), so two jobs separate it from the per-request cost |
 | `batched_sizes` | 1 | 1 | run time measures `B₁` only; the table profile measures 2 (R-237) |
-| `probe_items` | 200 *provisional* | 50 | a bound, not a checked sum; chosen as the jobs of the minimal protocol at a target batch B: `warmup_requests + length_strata·min_requests·(1 + B) + min_requests·single_item_jobs`. `slurm` B = 30 is a target until T20R-10 re-derives B from the measured memory batches (N4); `laptop` B = 5, one CPU worker; the table profile sizes it for B = 100 |
+| `probe_items` | derived | derived | not a key: `warmup_requests + length_strata·min_requests·(1 + J) + min_requests·single_item_jobs`, J the jobs of one repetition of the batched sizes at B₁ = `pool.quantum_items` (B₁ plus round(√B₁) at `batched_sizes` 2), computed by `probe_items(config, quantum_items)`; the batch is measured per resource from the unit's device fit |
 | `confidence` | 1.645 | 1.645 | one-sided 5 %: the false-batch rate of the batch decision (§5.4 step 6) and the share of items cut past `quantum_s` (§6.2); a wrong batch decision errs to batch 1 |
 | `drift_confidence` | 2.576 | 2.576 | two-sided 1 %: at most one spurious confirming probe per hundred windows of a stable unit |
 | `observations_kept` | 3 | 3 | superseded probes kept for audit: three give a median of medians tolerating one bad probe |
 | `unmeasured_workers` | 1 | 1 | S5: unmeasured work is not scaled; one worker runs it under the safe values |
-| `resolve_s` | 1800 *provisional* | 1800 *provisional* | §7.1 (2026-11-08): the longest a live worker takes from its start to its ready mark, which is dominated by the env builds it does first (§8). Provisional basis: two env builds, each at the build waiter's bound of `lease.stale_after_s` + the lock timeout (300 + 600 s, 1.5 × the slowest measured cold build, 590 s); a queue needing more builds goes `Unmeasured`, which costs efficiency only. T20R-10 replaces it with the measured start-to-mark wall, the maximum over the profile's classes |
+| `resolve_s` | derived | derived | not a key: `ExecutionProfile.resolve_s` = 2 × (`lease.stale_after_s` + the build lock timeout `locks.TIMEOUT_S`) = 1800 s; §7.1: the longest a live worker takes from its start to its ready mark, dominated by the env builds it does first (§8), two at the build waiter's bound. The 600 s lock timeout was fitted to one resource's slowest build (R-254), so this depends on it until that has a rule; a queue needing more builds goes `Unmeasured`, which costs efficiency only |
 
 Three values are derived properties of the profile, not keys, so they cannot drift and no override restates them:
 `probe_s` = `sizing.load_share × sizing.target_wall_s` (0.05 × 1800 = 90 on both profiles: probe work, like loading,
@@ -1028,7 +1029,7 @@ may cost a queue at most a twentieth of its target wall; counts warm probe reque
 `peer_wait_s` are properties of `ExecutionProfile`, which holds `sizing` and `lease`; `drift_window` is a property of
 the `calibration` settings. `Probe.plan` takes its seconds budget as an argument: the pool passes `probe_s`, the
 ladder the suite's per-point wall budget (a suite key), so the table profile overrides `length_strata` 3,
-`batched_sizes` 2 and `probe_items` (B = 100) only.
+`batched_sizes` 2 only.
 
 ## 12. ADR changes
 
@@ -1073,8 +1074,8 @@ Dated amendment text is in the ADR files, 2026-11-08:
 - **O-5, production timings.** Drift evidence only, never pooled into an estimate (§7.3).
 - **Placement (owner, 2026-11-08).** No site scheduling policy in senselab; a site hook outside it answers a
   versioned request, senselab validates the answer and reports refusals (§10).
-- **O-6, provisional values (amended 2026-11-09, R-252).** `warmup_requests` 2, `single_item_jobs` 4, and `probe_items`'
-  target batch stand as provisional defaults. T20R-10 does not fit them from one cluster's ladder into packaged
+- **O-6, the three keys (amended 2026-11-09, R-252, R-253).** `warmup_requests` 1 and `single_item_jobs` 2 are
+  stated floors and `probe_items` is derived (§11). T20R-10 did not fit them from one cluster's ladder into packaged
   defaults: each is measured per resource at run time by the probe where feasible, else it is a resource-agnostic
   default whose rule is stated, and the campaign's figures are evidence. `substrate.placement_hook_s` (the
   substrate's start backoff's first step) stands until a real adapter is timed.
@@ -1388,7 +1389,7 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
 - **ORCD.** A CPU ladder smoke at 10² with the table profile, to check the result shape before T20R-10.
 - **Amended 2026-11-09 (T20R-10b).** `resource-table@2.0`, `PackagedTable`, `Packaged.measures`, `runtime/resources.py`,
   `EstimateSource.commit`, `data/resources/` and `scripts/generate_resources.py` are deleted by the owner's ruling (§3.7); the
-  ladder, `scale-result@2.0` and the flatness checks stay, and `ladder.py --measures-root` is how a group calibrates its resource.
+  ladder, `scale-result@3.0` and the flatness checks stay, and `ladder.py --measures-root` is how a group calibrates its resource.
 - **Delivered (2026-11-09).** `plan_cost`, `check_caps`, `MemoryCapExceeded`, `Cost` and `estimate_of` are deleted, with
   `Unit`, `write_row`, `Measures`, `code_version`, `Catalogue.resource_tables` and the unused `sizing.Measure`;
   `placement@3.0` drops `cost`; `Packaged.measures` is the packaged table and `default_measures` its one reader;

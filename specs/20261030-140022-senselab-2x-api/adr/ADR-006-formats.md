@@ -212,6 +212,8 @@ Phase 2 Task 22f.
 - 2026-10-31: `store@4`, `result@2.0` with the context fingerprint (R-101; H9b).
 - 2026-11-01: provenance reader reads only `provenance@2.0`; generic vocabulary (H-R47, H-R48).
 - 2026-11-01: readers within 2.x; 2.x namespace under the cache root (H-R50).
+- 2026-11-09: `scale-result@3.0` replaces `@2.0` (records the derived `probe_items`; `Estimate.warmup_unsettled`); `scale-suite@2.0` replaces `@1` (drops `calibration.probe_items`); `scale-suite@1` is retired (T20R-10d).
+- 2026-11-09: `execution-profile@4.0` replaces `@3.0` (drops `calibration.probe_items` and `calibration.resolve_s`, both now derived); `execution-profile@3` is retired, refused with `ProfileFormatRetired` naming both keys. Migration: drop `calibration.probe_items` and `calibration.resolve_s`, set `format: execution-profile@4.0` (T20R-10d).
 - 2026-11-01: canonical text restated with its portability reason (D-3); version and tag grammar (D-5);
   provenance sections superseded by ADR-010 (D-4).
 - 2026-11-01: `logical-key@3` → `@4`: a `url` or `local` model is keyed by its weights' digest, not its path or
