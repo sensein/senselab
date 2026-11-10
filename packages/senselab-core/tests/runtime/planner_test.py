@@ -42,6 +42,11 @@ from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.calibration_samples import UNIT, observation
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 TOY = "toyorg/toy"
 PIN = "a" * 40
 MOVED = "c" * 40
@@ -471,16 +476,16 @@ def _chain() -> Graph:
     )
 
 
-ORCD = {"orcd": ExecutionProfile.load("orcd"), "laptop": ExecutionProfile.load("laptop")}
+CLUSTERS = {"cluster": ExecutionProfile.load(CLUSTER), "laptop": ExecutionProfile.load("laptop")}
 
 
 @pytest.mark.logic
 def test_plan_hash_ignores_execution_fields() -> None:
-    """Under the laptop and orcd profiles, on a CPU host and a GPU host, one plan hash: the logical plan's."""
+    """Under the laptop and cluster profiles, on a CPU host and a GPU host, one plan hash: the logical plan's."""
     logical, _ = resolve(_call(), _records("x"), config=RunConfig())
     seen = set()
     for hardware in (NO_GPU, GPU):
-        for profile in ORCD.values():
+        for profile in CLUSTERS.values():
             placed = _plan(_call(), _records("x"), execution=profile, hardware=hardware)
             seen.add((placed.hash, placed.placement.profile_digest))
             assert placed.hash == plan_hash(placed.logical) == plan_hash(logical)
@@ -492,10 +497,10 @@ def test_gpu_only_node_without_gpu_class_fails_naming_node() -> None:
     """A CUDA-only node fails planning, naming the node, where no GPU class runs it; the cluster's H100 class does."""
     with pytest.raises(NoDevice, match="node 'call'"):
         _plan(_call(GPU_ONLY), _records("x"))
-    without = ExecutionProfile.load("orcd", {"devices": ["cpu"]})
+    without = ExecutionProfile.load(CLUSTER, {"devices": ["cpu"]})
     with pytest.raises(NoDevice, match="node 'call'.*resource classes"):
         _plan(_call(GPU_ONLY), _records("x"), execution=without)
-    placed = _plan(_call(GPU_ONLY), _records("x"), execution=ORCD["orcd"]).placement.nodes[CALL_NODE]
+    placed = _plan(_call(GPU_ONLY), _records("x"), execution=CLUSTERS["cluster"]).placement.nodes[CALL_NODE]
     assert (placed.device, placed.resource_class, placed.partition) == ("cuda", "gpu:h100", "${GPU_PARTITION}")
     assert _plan(_call(GPU_ONLY), _records("x"), hardware=GPU).placement.nodes[CALL_NODE].resource_class == "gpu"
 

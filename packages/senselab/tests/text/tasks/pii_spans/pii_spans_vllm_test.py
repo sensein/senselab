@@ -35,6 +35,11 @@ from senselab_core.testing.processes import group_gone
 from senselab_core.testing.workers import RealWorkers
 from senselab_worker.faults import FaultClass
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 LOCK_RECORDS = packaged_lock_records("senselab")
 
 FAKE = Path(__file__).parents[5] / "senselab-core/tests/runtime/fake_vllm_fixture.py"
@@ -250,11 +255,11 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
 @pytest.mark.model
 @pytest.mark.network
 def test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs(tmp_path: Path) -> None:
-    """On `InProcess` under the orcd profile the served pinned model covers a name and a number, attested.
+    """On `InProcess` under a cluster profile the served pinned model covers a name and a number, attested.
 
     Empty, non-BMP and long texts each give spans inside the text or a typed fault.
     """
-    profile = ExecutionProfile.load("orcd", {"stack_preferences": {"pii_spans": ["vllm"]}})
+    profile = ExecutionProfile.load(CLUSTER, {"stack_preferences": {"pii_spans": ["vllm"]}})
     store = ResultStore(tmp_path / "results")
 
     def run(text: str) -> Any:  # noqa: ANN401

@@ -50,6 +50,11 @@ from senselab_core.runtime.units import UnitResolver, Unresolved, decoder_of, de
 from senselab_core.testing.calibration_samples import UNIT, observation
 from senselab_core.testing.interpreter import source_tree_python
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 SCORE = TaskSpec(
     name="units_test.score",
     version="1",
@@ -277,7 +282,7 @@ def test_every_unresolved_reason_is_true_of_its_state(tmp_path: Path) -> None:
     use_packaged(_use(_unreadable))
     assert reason() == "the env of backend 'score' cannot be read: uv is not installed"
     use_packaged(_use())
-    slurm = ExecutionProfile.load("orcd")
+    slurm = ExecutionProfile.load(CLUSTER)
     assert "chosen at submission" in reason(slurm)
     call = node_call(placed, "a", REGISTRY)
     served = Placement(backend=SERVED, backend_params=SERVED.params.model_validate({}), device="cpu")
@@ -358,7 +363,7 @@ def test_jobs_whose_context_is_unknowable_are_undetermined(tmp_path: Path) -> No
         bound,
         store=ResultStore(tmp_path / "cache" / "results"),
         run=RunConfig(),
-        profile=ExecutionProfile.load("orcd"),
+        profile=ExecutionProfile.load(CLUSTER),
     )
     assert counted["cpu"].servable == 0 and counted["cpu"].computed == 0 and counted["cpu"].undetermined == 2
     assert "chosen at submission" in counted["cpu"].why[0]

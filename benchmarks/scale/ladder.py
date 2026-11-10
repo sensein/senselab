@@ -7,22 +7,22 @@ seed, the long signal's seconds and its tasks, and may name a table profile: `ca
 `length_strata`, `batched_sizes` and `probe_items`, and `point_wall_s`, the seconds of warm probe work a point's probe
 may take (`Probe.plan`'s budget, in place of the profile's `probe_s`). Each task names the input port its data binds
 to, its params, model and stack, its data (`synthetic` tones, `librispeech` utterances of a manifest, `gretel`
-documents of a manifest, or `payloads`, JSON records for the fake stack) and its scale points: item counts, or
-`long`, one recording of the long seconds. `PROFILE` is a packaged execution profile, or a YAML file merged over the
-packaged profile its `name` names (`orcd-local.yaml` runs the orcd classes as local workers of one allocation). Each
-point is planned, run on a `Pool` over the profile's substrate into a store of its own, its pool probing into a
+documents of a manifest, or `payloads`, JSON records for the fake stack) and its scale points: item counts, or `long`,
+one recording of the long seconds. `PROFILE` is a packaged execution profile, or a profile file (a whole profile: copy
+`slurm` or `laptop` and edit it; `substrate.kind: local` runs a cluster's classes as local workers of one allocation).
+Each point is planned, run on a `Pool` over the profile's substrate into a store of its own, its pool probing into a
 measures root of the point's own (so each unit is probed in the run, not read from another), and measured from its
 events, its files, the samples each pool worker reported and the observations of every request. One `scale-result@2.0`
-document per point is written under `$SENSELAB_CACHE/2x/benchmarks/scale/<suite>/<commit>/`: per unit the plan
-resolved whether it was probed, its probe observations and its `Estimate` (unmeasured, with reasons, where the probe
-did not measure), the per-item seconds (`request_cost`) and the calibration settings it ran under. With
-`--measures-root PATH` every point's pool probes into and reads that one root instead, so a group calibrating its own
-resource lists `PATH` in its profile's `calibration.measures_roots` and a unit measured there is read on an identity
-match. A unit already in `PATH` is not probed again: its result entry says `probed` false and names no `probe_ids`, so
-a campaign whose figures are evidence starts from an empty `PATH`. One line is printed per point, then each task's
-flatness against `budgets.yaml` (`scale-budgets@1.0`). A point whose run directory already exists is refused, so no
-point reuses a run's results, and every entry is planned before any point is measured, so a suite with an entry that
-does not plan is refused, every such entry listed.
+document per point is written under `$SENSELAB_CACHE/2x/benchmarks/scale/<suite>/<commit>/`: per unit the plan resolved
+whether it was probed, its probe observations and its `Estimate` (unmeasured, with reasons, where the probe did not
+measure), the per-item seconds (`request_cost`) and the calibration settings it ran under. With `--measures-root PATH`
+every point's pool probes into and reads that one root instead, so a group calibrating its own resource lists `PATH` in
+its profile's `calibration.measures_roots` and a unit measured there is read on an identity match. A unit already in
+`PATH` is not probed again: its result entry says `probed` false and names no `probe_ids`, so a campaign whose figures
+are evidence starts from an empty `PATH`. One line is printed per point, then each task's flatness against
+`budgets.yaml` (`scale-budgets@1.0`). A point whose run directory already exists is refused, so no point reuses a run's
+results, and every entry is planned before any point is measured, so a suite with an entry that does not plan is
+refused, every such entry listed.
 """
 
 import argparse
@@ -560,8 +560,6 @@ def flatness(results: Sequence[Mapping[str, Any]], budgets: Mapping[str, Any]) -
 
 
 def _profile(argument: str) -> ExecutionProfile:
-    if Path(argument).is_file():
-        return ExecutionProfile.load(str(load_yaml(Path(argument), "execution profile")["name"]), Path(argument))
     return ExecutionProfile.load(argument)
 
 

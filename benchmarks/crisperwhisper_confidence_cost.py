@@ -2,9 +2,10 @@
 
 `uv run python benchmarks/crisperwhisper_confidence_cost.py --engine ct2|transformers --device cpu|cuda --out FILE`
 decodes `--items` LibriSpeech test-clean utterances (the `--items` smallest sha256 of the member name, fetched through
-the data cache, `$SENSELAB_DATA_CACHE`) in the `orcd` profile's `crisperwhisper` worker, each with `confidence`
-true and false after one warm-up decode. The times are the worker's own (`_diagnostics`): `decode_s` is the library
-decode, `confidence_s` the confidence pass, `engine_build_s` the one-off engine load. Writes `confidence-cost@1`.
+the data cache, `$SENSELAB_DATA_CACHE`) in the `crisperwhisper` worker of `--execution` (a profile, default `laptop`),
+each with `confidence` true and false after one warm-up decode. The times are the worker's own (`_diagnostics`):
+`decode_s` is the library decode, `confidence_s` the confidence pass, `engine_build_s` the one-off engine load. Writes
+`confidence-cost@1`.
 
 `--transcript --engine E --device D --out FILE` writes the transcript and diagnostics of one long-form item
 (`senselab_core.testing.librispeech.long_form`); `--compare A B` judges two such files
@@ -154,7 +155,7 @@ def _archive() -> Path:
     )
 
 
-def long_form_transcript(engine: str, device: str) -> dict[str, Any]:
+def long_form_transcript(engine: str, device: str, execution: str) -> dict[str, Any]:
     """Return the transcript and diagnostics of the long-form item, confidence on."""
     profiles = importlib.import_module("senselab_core.runtime.profiles")
     workers = importlib.import_module("senselab_core.testing.workers")
@@ -163,7 +164,7 @@ def long_form_transcript(engine: str, device: str) -> dict[str, Any]:
     samples = importlib.import_module("senselab_core.testing.librispeech").long_form(_archive())
     item = {"id": "long", "inputs": {"audio": wire(audio_module.Audio.from_array(samples[None, :], RATE))}}
     params = {"language": None, "timestamps": "word", "backend_params": {"engine": engine}, "_diagnostics": True}
-    real = workers.RealWorkers(profiles.ExecutionProfile.load("orcd"), device)
+    real = workers.RealWorkers(profiles.ExecutionProfile.load(execution), device)
     try:
         [result] = real("speech_to_text", "crisperwhisper").run([item], params)
     finally:
@@ -195,7 +196,7 @@ def compare_transcripts(expected: Path, actual: Path) -> dict[str, Any]:
     }
 
 
-def measure(engine: str, device: str, count: int) -> dict[str, Any]:
+def measure(engine: str, device: str, count: int, execution: str) -> dict[str, Any]:
     """Run the measurement on `engine` and `device` and return the `confidence-cost@1` document."""
     hardware = importlib.import_module("senselab_core.runtime.hardware")
     profiles = importlib.import_module("senselab_core.runtime.profiles")
@@ -206,7 +207,7 @@ def measure(engine: str, device: str, count: int) -> dict[str, Any]:
         raise SystemExit("--device cuda on a host with no GPU")
     chosen = select_items(_archive(), count + 1)
     warmup, measured = chosen[0], chosen[1:]
-    real = workers.RealWorkers(profiles.ExecutionProfile.load("orcd"), device)
+    real = workers.RealWorkers(profiles.ExecutionProfile.load(execution), device)
     backend = next(b for b in call.packaged().registry.backends("speech_to_text") if b.name == "crisperwhisper")
     entry = call.packaged().catalogue.backend_entry(backend)
     params: dict[str, Any] = {
@@ -255,6 +256,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--engine", choices=ENGINES)
     parser.add_argument("--device", choices=DEVICES)
     parser.add_argument("--items", type=int, default=50)
+    parser.add_argument("--execution", default="laptop", help="a packaged execution profile, or a profile file")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--summarize", type=Path, help="print the summary of an existing result file and exit")
     parser.add_argument("--transcript", action="store_true", help="write the long-form item's transcript to --out")
@@ -269,12 +271,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     if not (args.engine and args.device and args.out):
         parser.error("--engine, --device and --out are required unless --summarize")
     if args.transcript:
-        document = long_form_transcript(args.engine, args.device)
+        document = long_form_transcript(args.engine, args.device, args.execution)
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(document, indent=2) + "\n")
         print(json.dumps(document["diagnostics"], indent=2))
         return
-    document = measure(args.engine, args.device, args.items)
+    document = measure(args.engine, args.device, args.items, args.execution)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(document, indent=2) + "\n")
     print(json.dumps(document["summary"], indent=2))

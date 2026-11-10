@@ -96,8 +96,6 @@ def load_config(path: Path = CONFIG) -> Config:
     bounds = {name: Bounds(**b) for name, b in raw["bounds"].items()}
     if set(bounds) != set(EXECUTORS):
         raise ValueError(f"{path.name} bounds the executors {sorted(bounds)}, not {sorted(EXECUTORS)}")
-    if len(set(raw["plan_profiles"])) < 2:  # noqa: PLR2004 - a comparison needs two profiles
-        raise ValueError(f"plan_profiles names at least two distinct profiles, got {raw['plan_profiles']}")
     numerator, denominator = raw["interrupt_share"]
     if not 0 < numerator < denominator:
         raise ValueError(f"interrupt_share is a proper fraction, got {numerator}/{denominator}")
@@ -112,10 +110,7 @@ def load_config(path: Path = CONFIG) -> Config:
 
 
 def load_profile(argument: str) -> ExecutionProfile:
-    """Return the packaged execution profile `argument` names, or the YAML file over the one its `name` names."""
-    path = Path(argument)
-    if path.is_file():
-        return ExecutionProfile.load(str(load_yaml(path, "execution profile")["name"]), path)
+    """Return the packaged execution profile `argument` names, or the profile file it is a path to."""
     return ExecutionProfile.load(argument)
 
 
@@ -464,15 +459,19 @@ def write_json(path: Path, document: object) -> None:
     path.write_text(json.dumps(document, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def plan_identity(step: str, work: Path, config: Config) -> tuple[str, list[Difference]]:
-    """Plan `step` under each of the config's profiles on this host; return the one hash and the plans' differences.
+def plan_identity(step: str, work: Path, config: Config, profiles: Sequence[str] = ()) -> tuple[str, list[Difference]]:
+    """Plan `step` under the config's profiles and `profiles` on this host; return the one hash and the differences.
 
     Raises:
+        ValueError: fewer than two distinct profiles are named.
         PlanIdentityError: the hashes differ, or the plans differ outside `placement`.
     """
+    names = list(dict.fromkeys([*config.plan_profiles, *profiles]))
+    if len(names) < 2:  # noqa: PLR2004 - a comparison needs two profiles
+        raise ValueError(f"a plan comparison needs at least two distinct profiles, got {names}")
     isolate(work, f"{step}-plan")
     root = build_tree(config.steps[step], work)
-    plans = [planned(config.steps[step], root, load_profile(name)) for name in config.plan_profiles]
+    plans = [planned(config.steps[step], root, load_profile(name)) for name in names]
     found: list[Difference] = []
     for other in plans[1:]:
         found += compare_plans(plans[0], other)
@@ -510,9 +509,15 @@ def identity_cli(step: str, argv: Sequence[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     planning = commands.add_parser("plan", help="plan under every profile of the config; one hash, placement-only diff")
     planning.add_argument("--work", type=Path, required=True)
+    planning.add_argument(
+        "--profile",
+        action="append",
+        default=[],
+        help="a packaged profile or a profile file planned beside the config's",
+    )
     running = commands.add_parser("run", help="plan and run under a profile and executor; write the identities")
     running.add_argument("--work", type=Path, required=True)
-    running.add_argument("--profile", required=True, help="a packaged execution profile, or a YAML file over one")
+    running.add_argument("--profile", required=True, help="a packaged execution profile, or a profile file")
     running.add_argument("--executor", required=True, choices=EXECUTORS)
     running.add_argument("--out", type=Path, required=True)
     comparing = commands.add_parser("compare", help="compare two identities files")
@@ -522,12 +527,12 @@ def identity_cli(step: str, argv: Sequence[str] | None = None) -> int:
     config = load_config()
     if args.command == "plan":
         try:
-            plan_hash, found = plan_identity(step, args.work, config)
+            plan_hash, found = plan_identity(step, args.work, config, args.profile)
         except PlanIdentityError as error:
             print(error)
             return 1
         print(
-            f"{step}: one plan hash {plan_hash} under {', '.join(config.plan_profiles)}; "
+            f"{step}: one plan hash {plan_hash} under {', '.join([*config.plan_profiles, *args.profile])}; "
             f"{len(found)} differences, all in placement"
         )
         print("\n".join(d.render() for d in found))

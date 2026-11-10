@@ -16,6 +16,11 @@ from senselab_core.runtime.keys import Call, Placement, call_key
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.vllm_server import StaleAttestation
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 pytestmark = [pytest.mark.limits, pytest.mark.gpu, pytest.mark.model, pytest.mark.network]
 
 DATA = Path(__file__).parents[5] / "packages/senselab/src/senselab/data"
@@ -32,7 +37,7 @@ def _backend(settings: dict[str, object]) -> BackendSpec:
 @pytest.mark.timeout(4 * STARTUP_TIMEOUT_S)
 def test_two_plans_share_one_pii_server_and_a_new_config_is_another_service(tmp_path: Path) -> None:
     """Two consumers share one started server; restarted with a new config it attests anew, changing the call's key."""
-    profile = ExecutionProfile.load("orcd")
+    profile = ExecutionProfile.load(CLUSTER)
     env = ensure_env(
         Env.server("vllm-server"),
         DATA / "env_locks/vllm-server.txt",

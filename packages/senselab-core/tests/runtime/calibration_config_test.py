@@ -11,9 +11,15 @@ from senselab_core.runtime.config import expand
 from senselab_core.runtime.execution_settings import CalibrationSettings
 from senselab_core.runtime.profiles import ExecutionProfile, UnknownProfileKey
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 PROFILES = Path(__file__).parents[2] / "src/senselab_core/runtime/data/profiles"
-NAMES = ["laptop", "orcd"]
-TRUST = {"laptop": "own", "orcd": "group"}
+NAMES = ["laptop", "slurm"]
+SOURCES: dict[str, str | Path] = {"laptop": "laptop", "cluster": CLUSTER}
+TRUST = {"laptop": "own", "cluster": "group"}
 
 
 def _calibration(overrides: dict[str, Any]) -> dict[str, Any]:
@@ -21,20 +27,20 @@ def _calibration(overrides: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("name", NAMES)
-def test_packaged_profiles_carry_their_trust_and_roots(name: str) -> None:
-    """Each packaged profile holds its trust default; orcd pools the group root before its own."""
-    c = ExecutionProfile.load(name).calibration
+@pytest.mark.parametrize("name", SOURCES)
+def test_profiles_carry_their_trust_and_roots(name: str) -> None:
+    """The laptop profile trusts its own measures; the cluster fixture pools the group root before its own."""
+    c = ExecutionProfile.load(SOURCES[name]).calibration
     assert c.trust == TRUST[name]
-    assert len(c.measures_roots) == (2 if name == "orcd" else 1)
+    assert len(c.measures_roots) == (2 if name == "cluster" else 1)
 
 
 @pytest.mark.logic
 def test_probe_s_peer_wait_s_and_drift_window_are_derived_from_the_profile() -> None:
     """The three are properties, so a moved `sizing`, `lease` or section key moves them and they are never keys."""
-    profile = ExecutionProfile.load("orcd")
+    profile = ExecutionProfile.load(CLUSTER)
     assert (profile.probe_s, profile.peer_wait_s, profile.calibration.drift_window) == (90, 390, 6)
-    moved = ExecutionProfile.load("orcd", {"sizing": {"target_wall_s": 3600}, "lease": {"stale_after_s": 600}})
+    moved = ExecutionProfile.load(CLUSTER, {"sizing": {"target_wall_s": 3600}, "lease": {"stale_after_s": 600}})
     assert (moved.probe_s, moved.peer_wait_s) == (180, 780)
     table = ExecutionProfile.load("laptop", _calibration({"length_strata": 3}))
     assert table.calibration.drift_window == 9
@@ -53,8 +59,8 @@ def test_probe_items_is_a_bound_not_a_sum(items: int) -> None:
 
 @pytest.mark.logic
 def test_the_group_measures_root_is_the_variable_alone(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The first orcd root has no fallback: an unset variable is no root, never a root of each member's own."""
-    first = ExecutionProfile.load("orcd").calibration.measures_roots[0]
+    """The first cluster root has no fallback: an unset variable is no root, never a root of each member's own."""
+    first = ExecutionProfile.load(CLUSTER).calibration.measures_roots[0]
     assert first == "${SENSELAB_MEASURES_ROOT}"
     monkeypatch.delenv("SENSELAB_MEASURES_ROOT", raising=False)
     with pytest.raises(ValueError, match="not set"):
@@ -95,10 +101,10 @@ def test_an_unknown_calibration_key_suggests_the_closest() -> None:
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize("name", SOURCES)
 def test_run_config_trust_overrides_the_profile(name: str) -> None:
     """The run config's `calibration.trust` replaces the profile's; with none given the profile's stands."""
-    settings = ExecutionProfile.load(name).calibration
+    settings = ExecutionProfile.load(SOURCES[name]).calibration
     assert RunCalibration().apply(settings).trust == TRUST[name]
     for trust in ("own", "group"):
         run = RunCalibration.model_validate({"trust": trust})

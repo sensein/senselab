@@ -51,6 +51,11 @@ from senselab_core.runtime.units import Unresolved
 from senselab_core.testing.measures import CEILED_SIZING, FixedUnit
 from syscall_faults_fixture import refuse_call
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 SCORE = scoring("substrates_test.score")
 REGISTRY = registry(SCORE)
 HASH = "ab" * 32
@@ -145,7 +150,7 @@ def _profile(**substrate: Any) -> ExecutionProfile:  # noqa: ANN401 - substrate 
         "pool": {"quantum_items": 1, "first_poll_s": 0.01, "poll_s": 0.2},
         "sizing": CEILED_SIZING,
     }
-    return ExecutionProfile.load("orcd", override)
+    return ExecutionProfile.load(CLUSTER, override)
 
 
 def _commands(**update: float) -> SlurmCommands:
@@ -267,7 +272,7 @@ def test_scale_bounded_by_qos_cap(tmp_path: Path, cap: int | None, depth: int, e
 @pytest.mark.logic
 def test_scale_counts_workers_alive_and_a_quantum_of_items(tmp_path: Path) -> None:
     """Five items over a quantum of 2 want three workers; one alive, two are started; none once three are alive."""
-    profile = ExecutionProfile.load("orcd", {**_override(), "pool": {"quantum_items": 2, "first_poll_s": 0.01}})
+    profile = ExecutionProfile.load(CLUSTER, {**_override(), "pool": {"quantum_items": 2, "first_poll_s": 0.01}})
     _, pool, recording = _queued(profile, tmp_path, 5)
     recording.starts.clear()
     recording.handles = [WorkerHandle("cpu", "x")]
@@ -438,8 +443,10 @@ def test_a_pool_names_its_slurm_jobs_by_its_attempt(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_a_custom_profile_reaches_its_workers_as_a_file(tmp_path: Path) -> None:
-    """A packaged profile is named; a changed one is written whole under the run's `private/`, to the same digest."""
-    assert profile_argument(ExecutionProfile.load("orcd"), tmp_path) == "orcd"
+    """A packaged profile is named; a changed one, or one from a file, is written whole under the run's `private/`."""
+    assert profile_argument(ExecutionProfile.load("laptop"), tmp_path) == "laptop"
+    from_file = Path(profile_argument(ExecutionProfile.load(CLUSTER), tmp_path))
+    assert ExecutionProfile.model_validate_json(from_file.read_text()).name == "cluster"
     custom = _profile(qos_cpu_cap=12, exclude_nodes=["n1"])
     written = Path(profile_argument(custom, tmp_path))
     loaded = ExecutionProfile.model_validate_json(written.read_text())
@@ -760,7 +767,7 @@ def test_an_empty_service_queue_never_stops_its_running_worker(tmp_path: Path) -
         **CLASSES,
         "svc:pii": {"device": "cpu", "cpus": 1, "partition": "${CPU_PARTITION}", "max_workers": 1},
     }
-    profile = ExecutionProfile.load("orcd", {"devices": ["cpu"], "resource_classes": classes})
+    profile = ExecutionProfile.load(CLUSTER, {"devices": ["cpu"], "resource_classes": classes})
     empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile)
     empty.queue("svc:pii")
     recording = Recording()
@@ -813,8 +820,8 @@ def test_a_placed_class_needing_more_cpus_than_the_qos_cap_is_refused_at_plan(tm
 
 @pytest.mark.logic
 def test_unplaced_classes_do_not_count_against_the_qos_cap(tmp_path: Path) -> None:
-    """The packaged orcd profile loads under a cap of 2, and a CPU plan under a cap of 4 ignores the 8-CPU classes."""
-    assert ExecutionProfile.load("orcd", {"substrate": {"qos_cpu_cap": 2}}).substrate.qos_cpu_cap == 2
+    """The cluster profile loads under a cap of 2, and a CPU plan under a cap of 4 ignores the 8-CPU classes."""
+    assert ExecutionProfile.load(CLUSTER, {"substrate": {"qos_cpu_cap": 2}}).substrate.qos_cpu_cap == 2
     placed, _ = planned(SCORE, _profile(qos_cpu_cap=4), ["one"])
     assert placed.placement.nodes["a"].resource_class == "cpu"
 
@@ -895,7 +902,7 @@ def test_a_default_slurm_run_cancels_its_workers_when_it_ends(tmp_path: Path, ti
     """`Plan.run` over Slurm closes its pool when the run ends (held, the substrate failing): jobs are cancelled."""
     pytest.importorskip("pydra")
     profile = ExecutionProfile.load(
-        "orcd",
+        CLUSTER,
         {**_override(), "pool": {"first_poll_s": 0.01, "poll_s": 0.2}, "faults": {"infrastructure_replacements": 1}},
     )
     placed, _ = planned(SCORE, profile, ["one", "two"])
@@ -972,7 +979,7 @@ def test_a_submission_that_times_out_after_queueing_its_job_leaves_one_job(
     """
     _replace_sbatch(tmp_path, HANGS_AFTER_QUEUEING)
     profile = _profile()
-    commands = ExecutionProfile.load("orcd", slack).substrate.commands
+    commands = ExecutionProfile.load(CLUSTER, slack).substrate.commands
     assert commands is not None
     fleet = _fleet(_slurm(tmp_path, commands=_commands(timeout_s=commands.timeout_s)), profile)
     [handle] = fleet.start("cpu", 1)

@@ -24,6 +24,11 @@ from senselab_core.runtime.planner import plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.testing.workers import mit_lock_records
 
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
+
 ROOT = Path(__file__).resolve().parents[4]
 EXIT = ROOT / "benchmarks" / "exit"
 HASH = "a" * 64
@@ -280,14 +285,30 @@ def test_drive_returns_a_done_status_and_cancels_on_each_bound() -> None:
 def test_executors_fit_their_substrates_and_pool_local_has_the_configured_workers() -> None:
     """In-process and pool-local need a local profile, pool-slurm a slurm one; pool-local sets cpu workers only."""
     config = SimpleNamespace(pool_local_workers=2)
-    laptop, orcd = ExecutionProfile.load("laptop"), ExecutionProfile.load("orcd")
+    laptop, cluster = ExecutionProfile.load("laptop"), ExecutionProfile.load(CLUSTER)
     assert exitlib.profile_for("in-process", laptop, config) is laptop
-    assert exitlib.profile_for("pool-slurm", orcd, config) is orcd
+    assert exitlib.profile_for("pool-slurm", cluster, config) is cluster
     pooled = exitlib.profile_for("pool-local", laptop, config)
     assert pooled.resource_classes["cpu"].max_workers == 2 and pooled.resource_classes["gpu"].max_workers == 1
-    for executor, profile in [("pool-slurm", laptop), ("in-process", orcd), ("pool-local", orcd), ("threads", laptop)]:
+    for executor, profile in [
+        ("pool-slurm", laptop),
+        ("in-process", cluster),
+        ("pool-local", cluster),
+        ("threads", laptop),
+    ]:
         with pytest.raises(ValueError, match=executor):
             exitlib.profile_for(executor, profile, config)
+
+
+@pytest.mark.logic
+def test_a_plan_comparison_needs_a_second_profile_beside_the_packaged_one(tmp_path: Path) -> None:
+    """The config names only packaged profiles, so `plan` refuses to compare until a profile file is given."""
+    config = exitlib.load_config()
+    assert config.plan_profiles == ("laptop",)
+    with pytest.raises(ValueError, match="at least two distinct profiles"):
+        exitlib.plan_identity("resample", tmp_path, config)
+    with pytest.raises(ValueError, match="at least two distinct profiles"):
+        exitlib.plan_identity("resample", tmp_path, config, ["laptop"])
 
 
 @pytest.mark.logic
@@ -300,7 +321,6 @@ def test_the_config_loads_and_refuses_a_bad_share_or_executor_set(tmp_path: Path
     for name, edited, message in [
         ("share", text.replace("[1, 3]", "[3, 3]"), "proper fraction"),
         ("executors", text.replace("  pool-local: *laptop\n", ""), "bounds the executors"),
-        ("profiles", text.replace("[laptop, orcd]", "[orcd, orcd]"), "at least two distinct"),
     ]:
         path = tmp_path / f"{name}.yaml"
         path.write_text(edited, encoding="utf-8")
@@ -422,7 +442,7 @@ def test_start_refuses_a_run_that_is_done_before_its_target(tmp_path: Path, monk
     """A run done with fewer items committed than the target has nothing to interrupt and fails."""
     config = _started(tmp_path, monkeypatch, committed=0)
     with pytest.raises(RuntimeError, match="nothing to interrupt"):
-        interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config, _child(True))
+        interrupt_resume.start(tmp_path, tmp_path / "out.json", str(CLUSTER), config, _child(True))
 
 
 @pytest.mark.logic
@@ -483,7 +503,7 @@ def test_start_names_the_failures_of_a_run_that_ended_short_of_its_target(
             "failed", "call", job=JobRef(plan_hash=HASH, node="call", element=(i,)), key=KEYS[i] * 64, failure=fault
         )
     with pytest.raises(RuntimeError, match=r"3 x '\$\{GPU_PARTITION\}' is not set"):
-        interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config, _child(True))
+        interrupt_resume.start(tmp_path, tmp_path / "out.json", str(CLUSTER), config, _child(True))
 
 
 _WRITER = """
@@ -512,7 +532,7 @@ def test_start_sees_a_separate_process_commit_items_and_interrupts_it_once_the_t
         children.append(subprocess.Popen(argv, start_new_session=True))
         return children[0]
 
-    assert interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config, spawn) == 0
+    assert interrupt_resume.start(tmp_path, tmp_path / "out.json", str(CLUSTER), config, spawn) == 0
     committed = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["committed"]
     assert 1 <= committed <= 3 and children[0].returncode == -signal.SIGKILL
 
@@ -523,7 +543,7 @@ def test_start_interrupts_its_own_run_at_the_target_and_exits_zero(
 ) -> None:
     """The child run is SIGKILLed at the target, the report names the cancelled jobs, and `start` returns 0."""
     config = _started(tmp_path, monkeypatch, committed=1)
-    assert interrupt_resume.start(tmp_path, tmp_path / "out.json", "orcd", config) == 0
+    assert interrupt_resume.start(tmp_path, tmp_path / "out.json", str(CLUSTER), config) == 0
     report = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
     assert report["workers"] == ["77", "78"] and report["committed"] == 1 and report["hash"] == HASH
     assert f"INTERRUPTED hash={HASH} committed=1/3" in capsys.readouterr().out

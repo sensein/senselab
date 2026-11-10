@@ -221,7 +221,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for each in (starting, running, resuming):
         each.add_argument("--work", type=Path, required=True)
         each.add_argument("--out", type=Path, required=each is not running)
-        each.add_argument("--profile", default="orcd", help="a packaged execution profile, or a YAML file over one")
+        each.add_argument("--profile", required=True, help="a packaged execution profile, or a profile file")
     args = parser.parse_args(argv)
     if args.command == "_run":
         return run_child(args.work, args.profile, exitlib.load_config())

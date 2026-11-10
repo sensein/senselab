@@ -3,12 +3,14 @@
 A profile holds stack preferences per task, device preference, env roots, the torch index override, the model-source
 allowlist, the model-cache budget, the retry policy, the network policy, the resource classes, the substrate, the
 pool, calibration, job leases, fault budgets, worker timeouts and service settings. `ExecutionProfile.load` deep-merges
-a user mapping or YAML file over a packaged profile (`laptop`, `orcd`). A profile is recorded with each result through
-`canonical_digest` and never reaches a key.
+a user mapping or YAML file over a packaged profile (`laptop`, `slurm`) or a profile file of the user's own. A profile
+is recorded with each result through `canonical_digest` and never reaches a key.
 """
 
 import difflib
+import os
 import platform
+import re
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
@@ -47,6 +49,8 @@ from senselab_core.runtime.network import Network
 from senselab_core.runtime.retry import RetryPolicy
 
 DEFAULT_PROFILE = "laptop"
+_PROFILE_SUFFIXES = (".yaml", ".yml")
+_UNFILLED = re.compile(r"^<fill: (.+)>$")
 
 
 class UnknownProfileKey(ValueError):
@@ -75,6 +79,19 @@ class ProfileFormatRetired(ValueError):
             f" {EXECUTION_PROFILE_FORMAT}, whose keys `ExecutionProfile` documents"
         )
         self.found = found
+
+
+class UnfilledProfile(ValueError):
+    """A profile that still holds `<fill: ...>` placeholders, which a user's own values replace."""
+
+    def __init__(self, name: str, unfilled: Mapping[str, str]) -> None:
+        """Name the profile and each unfilled key with what goes there."""
+        listed = "; ".join(f"{key} ({what})" for key, what in unfilled.items())
+        super().__init__(
+            f"profile {name!r} has values to fill before it loads: {listed}. Copy the packaged profile to a file of"
+            " your own, replace each `<fill: ...>`, and pass that file, or give the values as an override"
+        )
+        self.name, self.unfilled = name, dict(unfilled)
 
 
 class QosCapTooSmall(ValueError):
@@ -167,22 +184,31 @@ class ExecutionProfile(Formatted):
                 raise QosCapTooSmall(name, grant.cpus, cap, node)
 
     @classmethod
-    def load(cls, name: str = DEFAULT_PROFILE, override: Mapping[str, Any] | Path | None = None) -> "ExecutionProfile":
-        """Return packaged profile `name` with `override` (a mapping or a YAML file) deep-merged over it.
+    def load(
+        cls, source: str | Path = DEFAULT_PROFILE, override: Mapping[str, Any] | Path | None = None
+    ) -> "ExecutionProfile":
+        """Return the profile `source` names with `override` (a mapping or a YAML file) deep-merged over it.
+
+        `source` is a packaged profile name (`laptop`, `slurm`), or a path to a profile file holding a whole profile.
 
         Raises:
-            ProfileFormatRetired: `override` declares a retired format.
+            FileNotFoundError: `source` is neither a packaged profile nor a file.
+            ProfileFormatRetired: the merged mapping declares a retired format.
+            UnfilledProfile: a value is still a `<fill: ...>` placeholder.
             UnknownProfileKey: a key of `override` that the format does not define, naming the closest one.
             LeaseBoundError: two of the lease's beat intervals plus its attribute delay are not below its stale bound.
             ValueError: the merged mapping is invalid.
         """
-        packaged = _read(resources.files("senselab_core.runtime").joinpath("data", "profiles", f"{name}.yaml"))
+        packaged = _read(_profile_source(source))
         extra = override if isinstance(override, Mapping) else _read(override) if override is not None else {}
         merged = merge_over(packaged, extra)
         if check(EXECUTION_PROFILE_FORMAT, merged.get("format"), RETIRED_EXECUTION_PROFILE_FORMATS) is (
             FormatVerdict.RETIRED
         ):
             raise ProfileFormatRetired(str(merged.get("format")))
+        unfilled = _unfilled(merged)
+        if unfilled:
+            raise UnfilledProfile(str(merged.get("name", source)), unfilled)
         _check_keys(merged, cls.model_fields)
         profile = cls.model_validate(merged)
         profile.lease.check_bound()
@@ -224,6 +250,40 @@ class ExecutionProfile(Formatted):
             raise UnlistedSource(
                 f"model {model_id!r} is from {organisation!r}, not in the allowed sources {list(allowed)}"
             )
+
+
+def packaged_profiles() -> tuple[str, ...]:
+    """Return the names of the packaged profiles, sorted."""
+    directory = resources.files("senselab_core.runtime").joinpath("data", "profiles")
+    return tuple(sorted(p.name.removesuffix(".yaml") for p in directory.iterdir() if p.name.endswith(".yaml")))
+
+
+def _profile_source(source: str | Path) -> Any:  # noqa: ANN401 - a Path or a package resource
+    """Return where profile `source` is read from: a path when it looks like one, else a packaged profile."""
+    text = os.fspath(source)
+    if isinstance(source, Path) or os.sep in text or text.endswith(_PROFILE_SUFFIXES):
+        if not Path(text).is_file():
+            raise FileNotFoundError(f"{text}: not a profile file")
+        return Path(text)
+    if text not in packaged_profiles():
+        raise FileNotFoundError(f"{text!r} is neither a packaged profile {list(packaged_profiles())} nor a file path")
+    return resources.files("senselab_core.runtime").joinpath("data", "profiles", f"{text}.yaml")
+
+
+def _unfilled(node: Any, path: str = "") -> dict[str, str]:  # noqa: ANN401 - any YAML node
+    """Return each `<fill: what>` string under `node` by its key path, with `what`."""
+    if isinstance(node, str):
+        found = _UNFILLED.match(node)
+        return {path: found[1]} if found else {}
+    if isinstance(node, Mapping):
+        return {
+            k: v
+            for key, item in node.items()
+            for k, v in _unfilled(item, f"{path}.{key}" if path else str(key)).items()
+        }
+    if isinstance(node, list):
+        return {k: v for i, item in enumerate(node) for k, v in _unfilled(item, f"{path}[{i}]").items()}
+    return {}
 
 
 def _read(source: Any) -> dict[str, Any]:  # noqa: ANN401 - a Path or a package resource

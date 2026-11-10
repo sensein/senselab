@@ -1,6 +1,7 @@
 """The execution profile: packaged profiles, merging, the source allowlist, and `resolve_execution`."""
 
 import platform
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +16,18 @@ from senselab_core.runtime.profiles import (
     NoBackend,
     NoDevice,
     ProfileFormatRetired,
+    UnfilledProfile,
     UnknownProfileKey,
     UnlistedSource,
+    packaged_profiles,
     resolve_execution,
 )
 from senselab_core.testing.contracts import BASE, base_call
+
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
 
 TASK = TaskSpec(
     name="t", version="1", kind="transform", inputs={"payload": "json"}, outputs={"value": "sha256"}, params=TaskParams
@@ -170,16 +178,16 @@ def test_retry_policy_read_from_profile(tmp_path: Path) -> None:
     assert (ExecutionProfile.load().retry.attempts, ExecutionProfile.load().retry.first_backoff_s) == (3, 1.0)
     path = tmp_path / "site.yaml"
     path.write_text("retry:\n  attempts: 6\n")
-    merged = ExecutionProfile.load("orcd", path).retry
+    merged = ExecutionProfile.load(CLUSTER, path).retry
     assert (merged.attempts, merged.first_backoff_s) == (6, 1.0)
     assert not (Path(__file__).parents[2] / "src/senselab_core/runtime/data/retry_policy.yaml").exists()
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("name", ["laptop", "orcd"])
+@pytest.mark.parametrize("name", ["laptop", "slurm"])
 def test_packaged_profile_comments_every_key_and_holds_no_derivations(name: str) -> None:
     """Each packaged profile validates, carries a `#` comment above every top-level key and no `derivations` key."""
-    assert ExecutionProfile.load(name).name == name
+    assert _packaged(name).name == name
     path = Path(__file__).parents[2] / "src/senselab_core/runtime/data/profiles" / f"{name}.yaml"
     lines = path.read_text().splitlines()
     keys = [(i, line.split(":")[0]) for i, line in enumerate(lines) if line[:1].isalpha()]
@@ -187,25 +195,25 @@ def test_packaged_profile_comments_every_key_and_holds_no_derivations(name: str)
     uncommented = [k for i, k in keys if i == 0 or not lines[i - 1].startswith("# ")]
     assert not uncommented, f"keys without a comment line: {uncommented}"
     with pytest.raises(UnknownProfileKey, match="derivations"):
-        ExecutionProfile.load(name, {"derivations": {"network": "prose"}})
+        ExecutionProfile.load(name, {**FILLED.get(name, {}), "derivations": {"network": "prose"}})
 
 
 @pytest.mark.logic
 def test_env_root_expands_home_and_refuses_unset_variable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The orcd roots sit under `~/orcd/scratch` unless `SENSELAB_ENV_ROOT` names one; an unset variable is an error."""
+    """The fixture roots sit in the home directory unless `SENSELAB_ENV_ROOT` names one; unset is an error."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("SCRATCH", raising=False)
     monkeypatch.setenv("SENSELAB_ENV_ROOT", str(tmp_path / "group"))
-    assert ExecutionProfile.load("orcd").env_root("isolated") == tmp_path / "group"
-    assert ExecutionProfile.load("orcd").env_root("server") == tmp_path / "group" / "servers"
+    assert ExecutionProfile.load(CLUSTER).env_root("isolated") == tmp_path / "group"
+    assert ExecutionProfile.load(CLUSTER).env_root("server") == tmp_path / "group" / "servers"
     monkeypatch.delenv("SENSELAB_ENV_ROOT")
-    root = tmp_path / "orcd" / "scratch" / "senselab-2x-venvs"
-    assert ExecutionProfile.load("orcd").env_root("isolated") == root
-    assert ExecutionProfile.load("orcd").env_root("server") == root / "servers"
+    root = tmp_path / "cluster" / "scratch" / "senselab-2x-venvs"
+    assert ExecutionProfile.load(CLUSTER).env_root("isolated") == root
+    assert ExecutionProfile.load(CLUSTER).env_root("server") == root / "servers"
     with pytest.raises(ValueError, match="not set"):
-        ExecutionProfile.load("orcd", {"env_roots": {"isolated": "$SENSELAB_UNSET_ROOT/v"}}).env_root("isolated")
+        ExecutionProfile.load(CLUSTER, {"env_roots": {"isolated": "$SENSELAB_UNSET_ROOT/v"}}).env_root("isolated")
     registry = _registry(_backend("b1", "one", env=Env.isolated("x")))
-    placed = resolve_execution(TASK, _entry(), ExecutionProfile.load("orcd"), NO_GPU, registry, CAT)
+    placed = resolve_execution(TASK, _entry(), ExecutionProfile.load(CLUSTER), NO_GPU, registry, CAT)
     assert "isolated:x" in placed.explain() and str(tmp_path) not in placed.record().model_dump_json()
 
 
@@ -226,8 +234,9 @@ def test_profile1_refused(tmp_path: Path) -> None:
     path = tmp_path / "site.yaml"
     path.write_text("format: execution-profile@1.0\nnetwork: offline\n")
     with pytest.raises(ProfileFormatRetired, match="retired format execution-profile@1.0"):
-        ExecutionProfile.load("orcd", path)
-    assert {ExecutionProfile.load(n).format for n in ("laptop", "orcd")} == {"execution-profile@3.0"}
+        ExecutionProfile.load(CLUSTER, path)
+    assert {ExecutionProfile.load(n).format for n in ("laptop", CLUSTER)} == {"execution-profile@3.0"}
+    assert _packaged("slurm").format == "execution-profile@3.0"
 
 
 @pytest.mark.logic
@@ -237,12 +246,12 @@ def test_resource_class_follows_device_order_and_host() -> None:
     on_gpu = resolve_execution(TASK, _entry(), _profile(), GPU, registry, CAT)
     assert (on_gpu.resource_class, on_gpu.device, on_gpu.partition) == ("gpu", "cuda", None)
     assert resolve_execution(TASK, _entry(), _profile(), NO_GPU, registry, CAT).resource_class == "cpu"
-    orcd = ExecutionProfile.load("orcd")
+    orcd = ExecutionProfile.load(CLUSTER)
     scheduled = resolve_execution(TASK, _entry(), orcd, None, registry, CAT)
     assert (scheduled.resource_class, scheduled.partition) == ("gpu:h100", "${GPU_PARTITION}")
     other_gpu = GPU.__class__(**{**GPU.__dict__, "gpus": (GpuInfo(name="A100", memory_bytes=1, driver="1"),)})
     assert resolve_execution(TASK, _entry(), orcd, other_gpu, registry, CAT).resource_class == "gpu"
-    cpu_only = ExecutionProfile.load("orcd", {"devices": ["cpu"]})
+    cpu_only = ExecutionProfile.load(CLUSTER, {"devices": ["cpu"]})
     assert resolve_execution(TASK, _entry(), cpu_only, other_gpu, registry, CAT).resource_class == "cpu"
 
 
@@ -253,7 +262,7 @@ def test_a_server_backend_takes_a_service_class_first() -> None:
     server = BackendSpec.model_validate(
         {**host.model_dump(), "env": Env.server("e"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
     )
-    orcd = ExecutionProfile.load("orcd")
+    orcd = ExecutionProfile.load(CLUSTER)
     placed = resolve_execution(TASK, _entry(), orcd, None, _registry(server), CAT)
     assert (placed.resource_class, placed.device) == ("svc:h100", "cuda")
     assert resolve_execution(TASK, _entry(), orcd, GPU, _registry(server), CAT).resource_class == "svc:h100"
@@ -272,11 +281,70 @@ def test_resource_class_names_match_their_device() -> None:
         _profile(pool={"quantum": 2})
 
 
+FILLED: dict[str, dict[str, Any]] = {
+    "slurm": {
+        "env_roots": {"isolated": "/scratch/envs", "server": "/scratch/envs/servers"},
+        "resource_classes": {
+            "cpu": {"cpus": 2, "mem_bytes": 2**30, "time_s": 3600, "partition": "part", "max_workers": 2},
+            "gpu": {
+                "cpus": 2,
+                "mem_bytes": 2**30,
+                "time_s": 3600,
+                "partition": "part",
+                "gres": "gpu:1",
+                "max_workers": 1,
+            },
+        },
+    }
+}
+
+
+def _packaged(name: str) -> ExecutionProfile:
+    return ExecutionProfile.load(name, FILLED.get(name, {}))
+
+
 @pytest.mark.logic
-@pytest.mark.parametrize("name", ["laptop", "orcd"])
+def test_senselab_ships_only_generic_profiles() -> None:
+    """The packaged profiles are the local one and the Slurm template; a site's profile is the user's own file."""
+    assert packaged_profiles() == ("laptop", "slurm")
+    with pytest.raises(FileNotFoundError, match="neither a packaged profile"):
+        ExecutionProfile.load("orcd")
+    with pytest.raises(FileNotFoundError, match="not a profile file"):
+        ExecutionProfile.load("missing.yaml")
+
+
+@pytest.mark.logic
+def test_the_slurm_template_refuses_to_load_until_every_placeholder_is_filled() -> None:
+    """Each `<fill: ...>` is named with what goes there; filling them, by override or in a copy, loads it."""
+    with pytest.raises(
+        UnfilledProfile, match=r"resource_classes\.cpu\.partition \(Slurm partition for CPU workers\)"
+    ) as caught:
+        ExecutionProfile.load("slurm")
+    assert {"env_roots.isolated", "resource_classes.gpu.gres"} <= set(caught.value.unfilled)
+    partial = {"resource_classes": {"cpu": FILLED["slurm"]["resource_classes"]["cpu"]}}
+    with pytest.raises(UnfilledProfile) as still:
+        ExecutionProfile.load("slurm", partial)
+    assert all(not key.startswith("resource_classes.cpu") for key in still.value.unfilled)
+    loaded = _packaged("slurm")
+    assert loaded.substrate.kind == "slurm" and loaded.resource_classes["gpu"].gres == "gpu:1"
+
+
+@pytest.mark.logic
+def test_a_profile_file_is_a_whole_profile_and_a_copy_of_the_template_loads_when_filled(tmp_path: Path) -> None:
+    """A path loads that file; a user's filled copy of the template is a site profile, named by its file."""
+    template = resources.files("senselab_core.runtime").joinpath("data", "profiles", "slurm.yaml").read_text()
+    mine = tmp_path / "mysite.yaml"
+    mine.write_text(template.replace("name: slurm", "name: mysite"))
+    with pytest.raises(UnfilledProfile):
+        ExecutionProfile.load(mine)
+    assert ExecutionProfile.load(str(mine), FILLED["slurm"]).name == "mysite"
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("name", ["laptop", "slurm"])
 def test_each_packaged_lease_beats_inside_its_attribute_delay(name: str) -> None:
     """Each packaged profile loads: its beat interval plus its attribute delay stays below its stale bound."""
-    lease = ExecutionProfile.load(name).lease
+    lease = _packaged(name).lease
     assert 2 * lease.renew_fraction * lease.stale_after_s + lease.attribute_delay_s < lease.stale_after_s
 
 
@@ -284,5 +352,5 @@ def test_each_packaged_lease_beats_inside_its_attribute_delay(name: str) -> None
 def test_a_lease_whose_beat_cannot_outrun_the_attribute_delay_is_refused() -> None:
     """2 × 0.33 × 300 + 102 ≥ 300: a lease one beat late could look stale, so load refuses it, naming the values."""
     with pytest.raises(LeaseBoundError, match=r"0\.33.*300.*102"):
-        ExecutionProfile.load("orcd", {"lease": {"attribute_delay_s": 102}})
-    assert ExecutionProfile.load("orcd", {"lease": {"attribute_delay_s": 101}}).lease.attribute_delay_s == 101
+        ExecutionProfile.load(CLUSTER, {"lease": {"attribute_delay_s": 102}})
+    assert ExecutionProfile.load(CLUSTER, {"lease": {"attribute_delay_s": 101}}).lease.attribute_delay_s == 101
