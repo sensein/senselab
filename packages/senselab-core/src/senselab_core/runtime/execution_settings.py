@@ -160,7 +160,7 @@ class CalibrationSettings(Frozen):
         min_requests: Warm requests a stratum needs for a quantity to be measured.
         single_item_jobs: Jobs of the one item per probe that separates the per-item cost from the per-job cost.
         batched_sizes: Batch sizes the batched phase measures.
-        confidence: The one-sided z of the batch decision and of the item cut.
+        confidence: The one-sided z of the batch choice and of the item cut.
         drift_confidence: The two-sided z of the drift test.
         observations_kept: Superseded probes' observation files kept for audit.
         unmeasured_workers: Workers a unit without a measure runs on.

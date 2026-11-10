@@ -97,7 +97,7 @@ calibration:
   single_item_jobs: 2
   # Batch sizes the batched phase measures.
   batched_sizes: 1
-  # The one-sided z of the batch decision and of the item cut.
+  # The one-sided z of the batch choice and of the item cut.
   confidence: 1.645
   # The two-sided z of the drift test.
   drift_confidence: 2.576

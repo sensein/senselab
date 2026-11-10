@@ -88,6 +88,9 @@ everything it does under its run directory, named by the plan hash: its plan, it
 placements. Any process can open that directory with `Run(run_dir)`, read the status, wait for the run and read its
 results, whether or not it started the run.
 
+Running a plan needs the `pydra` extra of `senselab-core`, which compiles the plan to a workflow; without it `Plan.run`
+raises `MissingExtra`. Planning, `explain` and `describe` need no extra.
+
 ## Running
 
 {_api.entry("senselab.run", facade.run)}
@@ -399,7 +402,7 @@ resource class says how many items the result store would serve and how many com
 
 ## Running it
 
-On one GPU worker, {items} of {items} utterances were committed. A run interrupted at about
-a third and resumed (`senselab.resume`) served the committed items from the store and computed only the rest, under
-the same plan hash. Both are in the [run reference](runs.html).
+Running needs the `pydra` extra of `senselab-core`. On one GPU worker, {items} of {items} utterances were
+committed. A run interrupted at about a third and resumed (`senselab.resume`) served the committed items from the
+store and computed only the rest, under the same plan hash. Both are in the [run reference](runs.html).
 """

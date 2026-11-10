@@ -14,7 +14,6 @@ from senselab_core.runtime.profiles import ExecutionProfile
 import senselab
 
 PAGES = ("tasks", "models", "datasets", "status", "plans", "runs", "executors", "profiles", "librispeech_example")
-GENERATED_FROM_DECLARATIONS = ("tasks", "models", "datasets", "status")
 
 
 def _tasks() -> list[str]:
@@ -173,7 +172,7 @@ def test_status_page_reads_the_registry_and_the_checkout_specs() -> None:
 
 
 @pytest.mark.contract
-@pytest.mark.parametrize("page", GENERATED_FROM_DECLARATIONS)
+@pytest.mark.parametrize("page", PAGES)
 def test_pages_use_no_retired_vocabulary_anywhere(page: str) -> None:
     """Pages use no retired triage vocabulary, tables included."""
     text = importlib.import_module(f"senselab.reference.{page}").__doc__ or ""
