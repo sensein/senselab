@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -100,7 +101,7 @@ def _session_env_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture
-def test_profile(
+def profile_loader(
     _session_env_root: Path,
 ) -> Callable[[Mapping[str, Any] | None], Any]:
     """Return `load(override=None)`, the test profile: `$SENSELAB_TEST_PROFILE` untouched, else the cluster fixture.
@@ -125,11 +126,13 @@ def test_profile(
 
 
 @pytest.fixture
-def site_profile(test_profile: Callable[[Mapping[str, Any] | None], Any]) -> Callable[[Mapping[str, Any] | None], Any]:
-    """`test_profile` for a model or GPU test, skipped unless `$SENSELAB_TEST_PROFILE` names a site profile."""
+def site_profile(
+    profile_loader: Callable[[Mapping[str, Any] | None], Any],
+) -> Callable[[Mapping[str, Any] | None], Any]:
+    """`profile_loader` for a model or GPU test, skipped unless `$SENSELAB_TEST_PROFILE` names a site profile."""
     if not os.environ.get(PROFILE_VARIABLE):
         pytest.skip(f"set {PROFILE_VARIABLE} to a site profile")
-    return test_profile
+    return profile_loader
 
 
 def _slack_document(request: pytest.FixtureRequest) -> dict[str, Any]:
@@ -178,8 +181,21 @@ def _apply_budgets(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.timeout(budgets[tier]))
 
 
+SITE_TIER_MARKERS = ("model", "large_model", "gpu")
+
+
+def selects_site_tiers(markexpr: str) -> bool:
+    """Whether a `-m` expression names a model or GPU marker positively (`model`, not `not model`)."""
+    positive = re.sub(r"\bnot\s+\w+", " ", markexpr)
+    return any(re.search(rf"\b{marker}\b", positive) for marker in SITE_TIER_MARKERS)
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Fail the session, listing the node ids, when a test under ``packages/`` has zero or several tier marks."""
+    if selects_site_tiers(config.option.markexpr or "") and not os.environ.get(PROFILE_VARIABLE):
+        raise pytest.UsageError(
+            f"-m {config.option.markexpr!r} selects model or GPU tests: set {PROFILE_VARIABLE} to a site profile file"
+        )
     offenders = []
     owned = [item for item in items if PACKAGES in Path(str(item.path)).resolve().parents]
     for item in owned:

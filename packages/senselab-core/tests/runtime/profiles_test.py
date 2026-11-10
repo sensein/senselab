@@ -1,5 +1,6 @@
 """The execution profile: packaged profiles, merging, the source allowlist, and `resolve_execution`."""
 
+import importlib.util
 import os
 import platform
 from collections.abc import Callable
@@ -373,26 +374,26 @@ def test_a_lease_whose_beat_cannot_outrun_the_attribute_delay_is_refused() -> No
 
 @pytest.mark.logic
 def test_the_test_profile_is_the_site_file_untouched_or_the_fixture_with_a_temp_env_root(
-    test_profile: Callable[..., ExecutionProfile], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    profile_loader: Callable[..., ExecutionProfile], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """`SENSELAB_TEST_PROFILE` is loaded as it is; without it the fixture's roots go to a temp dir, env unchanged."""
     monkeypatch.delenv("SENSELAB_ENV_ROOT", raising=False)
     monkeypatch.delenv("SENSELAB_TEST_PROFILE", raising=False)
     before = dict(os.environ)
-    fixture = test_profile()
+    fixture = profile_loader()
     assert fixture.name == "cluster" and fixture.env_root("isolated").is_dir()
     assert not str(fixture.env_root("isolated")).startswith(str(Path.home()))
     assert fixture.env_root("server") == fixture.env_root("isolated") / "servers"
-    assert test_profile({"retry": {"attempts": 5}}).retry.attempts == 5
+    assert profile_loader({"retry": {"attempts": 5}}).retry.attempts == 5
     assert dict(os.environ) == before
     monkeypatch.setenv("SENSELAB_ENV_ROOT", str(tmp_path / "given"))
-    assert test_profile().env_root("isolated") == tmp_path / "given"
+    assert profile_loader().env_root("isolated") == tmp_path / "given"
     site = tmp_path / "site.yaml"
     site.write_text(
         CLUSTER.read_text().replace("name: cluster", "name: mysite").replace("${SENSELAB_ENV_ROOT}", "/site/envs")
     )
     monkeypatch.setenv("SENSELAB_TEST_PROFILE", str(site))
-    loaded = test_profile()
+    loaded = profile_loader()
     assert loaded.name == "mysite" and loaded.env_root("isolated") == Path("/site/envs")
 
 
@@ -402,3 +403,24 @@ def test_a_site_test_is_skipped_without_a_site_profile(
 ) -> None:
     """With `SENSELAB_TEST_PROFILE` set, `site_profile` is the same loader (the unset case skips at setup)."""
     assert site_profile().name
+
+
+@pytest.mark.logic
+def test_a_run_selecting_model_or_gpu_tests_needs_a_site_profile() -> None:
+    """The marker expression names a model or GPU marker positively, or it does not."""
+    spec = importlib.util.spec_from_file_location("packages_conftest", CLUSTER.parents[4] / "conftest.py")
+    assert spec is not None and spec.loader is not None
+    root = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(root)
+    selects_site_tiers = root.selects_site_tiers
+
+    for chosen in ("model", "limits and model", "gpu", "(env or limits) and model", "large_model"):
+        assert selects_site_tiers(chosen), chosen
+    for other in (
+        "",
+        "logic",
+        "limits and not model",
+        "env and not slow and not model",
+        "(logic or contract) and not model",
+    ):
+        assert not selects_site_tiers(other), other
