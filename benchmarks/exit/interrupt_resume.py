@@ -122,8 +122,12 @@ def start(
     child = spawn(work, profile_argument)
     deadline = None if bounds.wall_s is None else time.monotonic() + bounds.wall_s
     committed = 0
+    began = shown = time.monotonic()
     try:
         while (committed := len(exitlib.committed_jobs(read_events(run_dir)))) < target:
+            if time.monotonic() - shown >= config.progress_s:
+                shown = time.monotonic()
+                print(exitlib.progress_line(committed, items, shown - began), f"(interrupt at {target})", flush=True)
             if child.poll() is not None:
                 raise RuntimeError(
                     f"the run ended (exit {child.returncode}) with {committed} of {items} items committed, short of "
@@ -193,7 +197,7 @@ def resume(plan_hash: str, work: Path, out: Path, profile_argument: str) -> int:
         )
     before = read_events(run_dir)
     resolved = exitlib.resolution_snapshot(cache_root())
-    with senselab.use(execution=profile):
+    with senselab.use(execution=profile), exitlib.Progress(run_dir, None, exitlib.load_config().progress_s):
         results = senselab.resume(plan_hash)
     after = read_events(run_dir)
     items = len(results)

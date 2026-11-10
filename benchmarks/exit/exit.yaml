@@ -26,5 +26,7 @@ bounds:
 pool_local_workers: 2
 # Seconds between samples of the watch over resident bytes and load.
 watch_poll_s: 1
+# Seconds between the progress lines a run prints: the items with a result out of the items.
+progress_s: 60
 # The share of the items committed when the interrupted run is to be cancelled: numerator, denominator.
 interrupt_share: [1, 3]

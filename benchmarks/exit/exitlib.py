@@ -81,6 +81,7 @@ class Config:
     bounds: Mapping[str, Bounds]
     pool_local_workers: int
     watch_poll_s: float
+    progress_s: float
     interrupt_share: tuple[int, int]
 
 
@@ -105,6 +106,7 @@ def load_config(path: Path = CONFIG) -> Config:
         bounds=bounds,
         pool_local_workers=int(raw["pool_local_workers"]),
         watch_poll_s=float(raw["watch_poll_s"]),
+        progress_s=float(raw["progress_s"]),
         interrupt_share=(int(numerator), int(denominator)),
     )
 
@@ -319,6 +321,45 @@ class Watch:
         }
 
 
+def progress_line(committed: int, items: int | None, elapsed_s: float) -> str:
+    """Return the one line that says how many of `items` (when known) have a result after `elapsed_s` seconds."""
+    return f"progress: {committed}{'' if items is None else f'/{items}'} items committed after {elapsed_s:.0f} s"
+
+
+class Progress:
+    """Prints `progress_line` for the run in `run_dir` every `every_s` seconds, and at the end, while its block runs."""
+
+    def __init__(
+        self, run_dir: Path, items: int | None, every_s: float, out: Callable[[str], None] | None = None
+    ) -> None:
+        """Report the results in the events of `run_dir` out of `items`, through `out` (flushed print by default)."""
+        self.run_dir, self.items, self.every_s = run_dir, items, every_s
+        self._out = out if out is not None else lambda line: print(line, flush=True)
+        self._began = time.monotonic()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name="exit-progress", daemon=True)
+
+    def tick(self) -> None:
+        """Print the committed items now."""
+        committed = len(committed_jobs(read_events(self.run_dir))) if self.run_dir.is_dir() else 0
+        self._out(progress_line(committed, self.items, time.monotonic() - self._began))
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.every_s):
+            self.tick()
+
+    def __enter__(self) -> "Progress":
+        """Start reporting."""
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        """Stop reporting after a last line."""
+        self._stop.set()
+        self._thread.join()
+        self.tick()
+
+
 class Waitable(Protocol):
     """What `drive` needs of a run."""
 
@@ -420,7 +461,7 @@ def execute(placed: Plan, executor: str, config: Config) -> Execution:
         raise FileExistsError(f"{run_dir} exists; remove the work directory to run afresh")
     store = ResultStore(cache_root() / RESULTS_DIR)
     bounds, began = config.bounds[executor], time.monotonic()
-    with Watch(bounds, config.watch_poll_s) as watch:
+    with Watch(bounds, config.watch_poll_s) as watch, Progress(run_dir, len(placed.manifest.rows), config.progress_s):
         run, close = launch(placed, executor, store)
         try:
             status = drive(run, watch, bounds, config.watch_poll_s)
