@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
-import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -24,20 +23,13 @@ from tests.audio.workflows.triage.nodes.conftest import word_attributes
 pytestmark = pytest.mark.usefixtures("triage_profile")
 """The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
 RATE = 16000
 DIM = 8
 TALKER_WORDS = ((6.5, 7.0), (7.5, 8.0))
 
 
 def _load(name: str) -> ModuleType:
-    path = _REPO_ROOT / "scripts" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(f"{name}_under_test", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[f"{name}_under_test"] = module
-    spec.loader.exec_module(module)
-    return module
+    return importlib.import_module(f"senselab.audio.workflows.triage.drivers.{name}")
 
 
 cli = _load("extend_cohort")

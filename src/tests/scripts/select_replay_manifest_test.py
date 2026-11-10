@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -13,12 +13,7 @@ import pytest
 pytestmark = pytest.mark.usefixtures("triage_profile")
 """The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "select_replay_manifest.py"
-_spec = importlib.util.spec_from_file_location("select_replay_manifest", SCRIPT)
-assert _spec is not None and _spec.loader is not None
-selector = importlib.util.module_from_spec(_spec)
-sys.modules["select_replay_manifest"] = selector
-_spec.loader.exec_module(selector)
+selector = importlib.import_module("senselab.audio.workflows.triage.drivers.select_replay_manifest")
 
 
 def _table() -> pd.DataFrame:

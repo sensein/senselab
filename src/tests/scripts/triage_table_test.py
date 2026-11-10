@@ -1,6 +1,6 @@
 """The triage.tsv script: decision tables and a run tree in, the TSV and its column dictionary out."""
 
-import importlib.util
+import importlib
 import json
 from pathlib import Path
 from types import ModuleType
@@ -15,16 +15,10 @@ from tests.audio.workflows.triage.triage_table_test import BIDS, HEADER, _tables
 pytestmark = pytest.mark.usefixtures("triage_profile")
 """The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
-SCRIPT = Path(__file__).parents[3] / "scripts" / "triage_table.py"
-
 
 def _script() -> ModuleType:
-    """The script, imported from its path."""
-    spec = importlib.util.spec_from_file_location("triage_table_script", SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    """The ``triage_table`` driver module."""
+    return importlib.import_module("senselab.audio.workflows.triage.drivers.triage_table")
 
 
 def test_the_script_writes_the_table_and_reports_its_counts(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:

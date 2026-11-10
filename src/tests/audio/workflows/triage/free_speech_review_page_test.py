@@ -3,10 +3,9 @@
 Every transcript in this file is invented. No fixture here carries corpus speech.
 """
 
-import importlib.util
+import importlib
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -16,12 +15,7 @@ from senselab.audio.workflows.triage.identity import identity_of
 from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from tests.audio.workflows.triage.conftest import declared_identity_attributes
 
-_SCRIPT = Path(__file__).resolve().parents[5] / "scripts" / "free_speech_review_page.py"
-_SPEC = importlib.util.spec_from_file_location("free_speech_review_page", _SCRIPT)
-assert _SPEC is not None and _SPEC.loader is not None
-page = importlib.util.module_from_spec(_SPEC)
-sys.modules["free_speech_review_page"] = page
-_SPEC.loader.exec_module(page)
+page = importlib.import_module("senselab.audio.workflows.triage.drivers.free_speech_review_page")
 
 
 def _entity(
@@ -2219,8 +2213,6 @@ def test_a_worker_that_could_not_activate_the_profile_reports_it_on_every_row(
 def test_worker_processes_activate_the_drivers_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Review A5: spawned workers start with no profile; the initializer activates the driver's, so they read alike."""
     from tests.conftest import FIXTURE_PROFILE
-
-    monkeypatch.syspath_prepend(str(_SCRIPT.parent))  # a spawned worker imports the page by its module name, as run
 
     _store(tmp_path, _FAMILY_TOKEN, [_word(0, "one"), _verdict("redacted")])
     _store(

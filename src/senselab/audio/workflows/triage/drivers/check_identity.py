@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+r"""Check that a corpus's declared identities hold together, before a run or over its corpus table.
+
+    uv run python scripts/check_identity.py --recordings LIST [--hints DIR] [--session-scope SCOPE] \
+        [--config OVERRIDE.yaml] [--profile DIR] [--out REPORT.json]
+    uv run python scripts/check_identity.py --table RECORDING_VECTORS.parquet [--session-scope SCOPE] \
+        [--config OVERRIDE.yaml] [--profile DIR] [--out REPORT.json]
+
+``--recordings`` checks a corpus before it is run. ``LIST`` names one recording per line: its path, or a JSON
+object carrying ``source`` (the field the extend drivers' manifests carry it in); blank lines and lines starting
+with ``#`` are skipped. Each recording's identity is the one ADMIT would record,
+:func:`~senselab.audio.workflows.triage.identity.identity_of` over the hint ``--hints`` builds.
+``--hints DIR`` names a directory holding a ``hints.py`` exposing ``build_hint(wav)``, as the replay driver takes;
+without it no recording declares an identity or a task. Where that ``hints.py`` also exposes
+``identity_from_name(stem)``, the dataset's own reading of a file name, ``stem_disagrees`` compares it with what was
+declared (``--recordings``) or recorded (``--table``); senselab reads no file name itself. Each hint's task is resolved
+against the task list of ``--profile`` (the dataset profile), as ADMIT resolves it. No store is opened.
+
+``--table`` checks a finished corpus: the ``recording_vectors`` parquet, of which only ``stem``, ``run_dir``,
+``participant``, ``session``, ``task`` and their ``*_from`` columns are read, and ``declared_family`` and
+``declared_task_source`` where the table has them. A row whose ``*_from`` columns are all empty is a run that records
+no identity; one whose ``declared_task_source`` is empty or absent is a run that records no task.
+
+Each hint's task is resolved against the active profile's task list, so ``--recordings`` with ``--hints`` needs
+``--profile``; without one the check stops (exit 2) rather than refusing every recording.
+
+The checks and their levels are in :mod:`senselab.audio.workflows.triage.identity_check`. ``--session-scope``
+says where the corpus's session identifiers are unique: within their participant (the default, as BIDS ``ses-1``) or
+across the corpus. ``--out`` writes the
+full report as JSON, mode 600: it names participants and sessions. A summary of counts per check is printed.
+
+Install:
+    uv sync --all-extras --group dev
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any, Callable
+
+import pyarrow.parquet as pq
+
+from senselab.audio.workflows.triage.dataset_profile import DatasetDataMissing
+from senselab.audio.workflows.triage.extend import (
+    NAME_READER,
+    add_config_arguments,
+    driver_config,
+    load_hints,
+)
+from senselab.audio.workflows.triage.identity import (
+    RECORDING_ID_COLUMN,
+    ROW_PARTICIPANT,
+    ROW_SESSION,
+    ROW_SOURCES,
+    ROW_TARGET_SPEAKER,
+    ROW_TASK,
+    IdentityLabelError,
+    RecordingIdentity,
+    identity_of,
+    row_identity,
+)
+from senselab.audio.workflows.triage.identity_check import (
+    CHECK_LEVELS,
+    REFUSE,
+    SESSION_SCOPE_PARTICIPANT,
+    SESSION_SCOPES,
+    IdentityRecord,
+    IdentityReport,
+    check_identities,
+)
+from senselab.audio.workflows.triage.nodes.common import describe_exception
+from senselab.audio.workflows.triage.run import corpus_path_of
+from senselab.audio.workflows.triage.task_catalogue import resolve_task
+
+SOURCE_KEY = "source"
+"""The manifest field a recording's path is carried in."""
+
+DECLARED_TASK_COLUMN = "declared_family"
+DECLARED_TASK_SOURCE_COLUMN = "declared_task_source"
+TABLE_COLUMNS = ("stem", "run_dir", ROW_PARTICIPANT, ROW_SESSION, ROW_TASK, *ROW_SOURCES.values())
+"""The corpus-table columns the check needs; no other column is read but :data:`TASK_COLUMNS`."""
+
+TASK_COLUMNS = (DECLARED_TASK_COLUMN, DECLARED_TASK_SOURCE_COLUMN)
+"""The declared-task columns, read where the table has them (schema 31 on); a table without them is one whose runs
+record no task."""
+
+SPEAKER_AND_ID_COLUMNS = (ROW_TARGET_SPEAKER, RECORDING_ID_COLUMN)
+"""The target-speaker and recording-id columns, read where the table has them (step 9); a table without them is
+one whose recordings are keyed by their stems."""
+
+PRIVATE_FILE_MODE = 0o600
+SHOWN_PER_CHECK = 5
+"""How many refused findings the summary names per check."""
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI: the corpus to check, before or after its run, and where the report goes.
+
+    Returns:
+        The parser.
+    """
+    parser = argparse.ArgumentParser(
+        description=__doc__.split("\n\n", maxsplit=1)[0] if __doc__ else None,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--recordings", type=Path, default=None, help="Recording list: one path or JSON row per line")
+    source.add_argument("--table", type=Path, default=None, help="A recording_vectors parquet from a finished corpus")
+    parser.add_argument(
+        "--hints",
+        type=Path,
+        default=None,
+        help="Directory holding a hints.py exposing build_hint (and, optionally, identity_from_name)",
+    )
+    parser.add_argument(
+        "--session-scope",
+        choices=SESSION_SCOPES,
+        default=SESSION_SCOPE_PARTICIPANT,
+        help="Where session identifiers are unique: within their participant (default) or across the corpus",
+    )
+    parser.add_argument(
+        "--corpus-root",
+        type=Path,
+        default=None,
+        help="The corpus's root the runs are given: a recording's id is its path under it where its hint declares none",
+    )
+    parser.add_argument("--out", type=Path, default=None, help="Where the JSON report goes")
+    add_config_arguments(parser)
+    return parser
+
+
+def read_recording_list(path: Path) -> list[Path]:
+    """The recordings a list names.
+
+    Args:
+        path: One recording per line: a path, or a JSON object carrying ``source``.
+
+    Returns:
+        Each recording's path, in file order.
+
+    Raises:
+        ValueError: If a JSON line is not an object or carries no ``source``.
+    """
+    recordings: list[Path] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for number, line in enumerate(handle, start=1):
+            text = line.strip()
+            if not text or text.startswith("#"):
+                continue
+            if text.startswith("{"):
+                payload = json.loads(text)
+                if not isinstance(payload, dict) or not payload.get(SOURCE_KEY):
+                    raise ValueError(f"{path}:{number} carries no {SOURCE_KEY}")
+                text = str(payload[SOURCE_KEY])
+            recordings.append(Path(text))
+    return recordings
+
+
+def records_before_run(
+    recordings: list[Path],
+    build_hint: Callable[[Path], Any] | None,
+    read_name: Callable[[str], RecordingIdentity] | None = None,
+    corpus_root: Path | None = None,
+) -> list[IdentityRecord]:
+    """Each recording's identity as ADMIT would declare it.
+
+    Args:
+        recordings: The recordings' paths.
+        build_hint: The hint populator, or None: then no recording declares anything.
+        read_name: The dataset's file-name reader, or None to skip ``stem_disagrees``.
+        corpus_root: The corpus's root, as the runs will be given it: each recording's id where its hint declares
+            none is its path under it (plan step 9b).
+
+    Returns:
+        One record per recording, located at its path; a hint that raises, or a label that cannot name a folder,
+        is the record's ``error``.
+    """
+    records: list[IdentityRecord] = []
+    for wav in recordings:
+        stem = wav.stem
+        parsed = read_name(stem) if read_name is not None else None
+        try:
+            hint = build_hint(wav)[0] if build_hint is not None else None
+            identity = identity_of(hint, stem=stem, corpus_path=corpus_path_of(wav, corpus_root))
+            task = resolve_task(hint)
+        except IdentityLabelError as error:
+            records.append(IdentityRecord(stem, str(wav), None, parsed, str(error)))
+            continue
+        except DatasetDataMissing:
+            raise
+        except (OSError, ValueError, LookupError, TypeError) as error:
+            records.append(IdentityRecord(stem, str(wav), None, parsed, f"hint: {describe_exception(error)}"))
+            continue
+        records.append(IdentityRecord(stem, str(wav), identity, parsed, task=task.name, task_source=task.source))
+    return records
+
+
+def records_after_run(table: Path, read_name: Callable[[str], RecordingIdentity] | None = None) -> list[IdentityRecord]:
+    """Each finished run's recorded identity, from the corpus table.
+
+    Args:
+        table: The ``recording_vectors`` parquet.
+        read_name: The dataset's file-name reader, or None to skip ``stem_disagrees``.
+
+    Returns:
+        One record per row, located at its ``run_dir``; a row recording no identity carries None.
+
+    Raises:
+        ValueError: If the table lacks one of :data:`TABLE_COLUMNS`.
+    """
+    present = set(pq.read_schema(table).names)
+    missing = [column for column in TABLE_COLUMNS if column not in present]
+    if missing:
+        raise ValueError(f"{table} carries no {', '.join(missing)}; rebuild it from a current corpus pass")
+    optional = [c for c in (*TASK_COLUMNS, *SPEAKER_AND_ID_COLUMNS) if c in present]
+    rows = pq.read_table(table, columns=[*TABLE_COLUMNS, *optional]).to_pylist()
+    records: list[IdentityRecord] = []
+    for row in rows:
+        stem = str(row.get("stem") or "")
+        records.append(
+            IdentityRecord(
+                stem,
+                str(row.get("run_dir") or ""),
+                row_identity(row),
+                read_name(stem) if read_name is not None else None,
+                task=row.get(DECLARED_TASK_COLUMN),
+                task_source=row.get(DECLARED_TASK_SOURCE_COLUMN),
+            )
+        )
+    return records
+
+
+def write_report(report: IdentityReport, path: Path, extra: dict[str, Any]) -> None:
+    """Write the report as JSON, readable by its owner only.
+
+    Args:
+        report: The report.
+        path: Where it goes.
+        extra: Fields naming the input, merged in front of the report's own.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PRIVATE_FILE_MODE)
+    os.fchmod(descriptor, PRIVATE_FILE_MODE)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps({**extra, **report.as_dict()}, indent=1) + "\n")
+
+
+def print_summary(report: IdentityReport) -> None:
+    """Print the counts per check, and the first few refused findings.
+
+    Args:
+        report: The report.
+    """
+    print(f"Recordings:    {report.recordings}")
+    print(f"Session scope: {report.session_scope}")
+    involved = report.recordings_involved
+    for check, number in report.counts.items():
+        print(f"  {CHECK_LEVELS[check]:<7} {check:<31} {number:>7} findings  {involved[check]:>7} recordings")
+    for check in CHECK_LEVELS:
+        refused = [finding for finding in report.findings if finding.check == check and finding.level == REFUSE]
+        for finding in refused[:SHOWN_PER_CHECK]:
+            print(f"REFUSED {check} {finding.key}: {', '.join(finding.locations)}", file=sys.stderr)
+        if len(refused) > SHOWN_PER_CHECK:
+            print(f"REFUSED {check}: {len(refused) - SHOWN_PER_CHECK} more in the report", file=sys.stderr)
+    print("Refused" if report.refused else "Passed")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Check the corpus and print what was found.
+
+    Args:
+        argv: The command line, or None to read ``sys.argv``.
+
+    Returns:
+        0 when no finding is refused, 1 when any is, and 2 when the arguments or the input could not be read and
+        nothing was checked.
+    """
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    given = args.recordings if args.recordings is not None else args.table
+    if not given.exists():
+        print(f"ERROR: not found: {given}", file=sys.stderr)
+        return 2
+    try:
+        scope = args.session_scope
+        driver_config(args, require_values=False)
+        build_hint, read_name = load_hints(args.hints) if args.hints is not None else (None, None)
+        if args.hints is not None and read_name is None:
+            print(
+                f"NOTE: {args.hints}/hints.py exposes no {NAME_READER}, so stem_disagrees is not checked",
+                file=sys.stderr,
+            )
+        if args.recordings is not None:
+            records = records_before_run(
+                read_recording_list(args.recordings), build_hint, read_name, corpus_root=args.corpus_root
+            )
+        else:
+            records = records_after_run(args.table, read_name)
+    except (OSError, ValueError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
+
+    report = check_identities(records, session_scope=scope, before_run=args.recordings is not None)
+    if args.out is not None:
+        extra = {
+            "mode": "recordings" if args.recordings is not None else "table",
+            "input": str(given),
+            "hints": str(args.hints) if args.hints is not None else None,
+        }
+        write_report(report, args.out, extra)
+        print(f"Report:        {args.out}")
+    print_summary(report)
+    return 1 if report.refused else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
-import sys
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
@@ -16,17 +14,8 @@ pytestmark = pytest.mark.usefixtures("triage_profile")
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def _module(name: str, path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-script = _module("triage_review_page", ROOT / "scripts" / "triage_review_page.py")
-fixtures = _module("review_page_fixtures", ROOT / "src/tests/audio/workflows/triage/review_page_test.py")
+script = importlib.import_module("senselab.audio.workflows.triage.drivers.triage_review_page")
+fixtures = importlib.import_module("tests.audio.workflows.triage.review_page_test")
 
 
 def test_extract_then_render_writes_a_page_over_the_corpus(tmp_path: Path) -> None:
@@ -344,8 +333,6 @@ def test_without_a_profile_extract_exits_2_naming_it(
 def test_extract_in_worker_processes_reads_the_drivers_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Review A5: a spawned worker activates the profile the driver was given, so its rows are the serial ones."""
     from tests.conftest import FIXTURE_PROFILE
-
-    monkeypatch.syspath_prepend(str(ROOT / "scripts"))  # a spawned worker imports the page by its module name, as run
 
     from senselab.audio.workflows.triage.dataset_profile import deactivate_profile
 

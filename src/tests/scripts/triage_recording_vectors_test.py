@@ -1,6 +1,6 @@
 """The recording-vectors writer script: a merged file keeps the data dictionary its shards carry."""
 
-import importlib.util
+import importlib
 import json
 from pathlib import Path
 from types import ModuleType
@@ -13,16 +13,10 @@ from senselab.audio.workflows.triage import recording_vectors as rv
 pytestmark = pytest.mark.usefixtures("triage_profile")
 """The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
-SCRIPT = Path(__file__).parents[3] / "scripts" / "triage_recording_vectors.py"
-
 
 def _script() -> ModuleType:
-    """The writer script, imported from its path."""
-    spec = importlib.util.spec_from_file_location("triage_recording_vectors", SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    """The ``triage_recording_vectors`` driver module."""
+    return importlib.import_module("senselab.audio.workflows.triage.drivers.triage_recording_vectors")
 
 
 def test_the_merged_file_carries_the_dictionary(tmp_path: Path) -> None:
