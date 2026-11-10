@@ -15,11 +15,14 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from numpy.typing import DTypeLike
 from senselab_worker.canonical import (
+    MAX_DEPTH,
+    NotCanonicalJSON,
     canonical_npy_bytes,
     canonical_scalar,
     canonical_text,
     jcs_dumps,
     jcs_loads,
+    require_json_depth,
 )
 from senselab_worker.digest import IDENTITY_TAGS, identity_digest
 
@@ -838,3 +841,52 @@ def test_a_shared_dag_encodes_as_its_expanded_tree(dag: object) -> None:
     assert jcs_dumps(dag) == jcs_dumps(tree)
     tokens = Tokeniser()
     assert jcs_dumps(tokens(dag)) == jcs_dumps(tokens(tree))
+
+
+def _nested(depth: int, inside: str = "") -> bytes:
+    return ("[" * depth + inside + "]" * depth).encode()
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "text",
+    [
+        b'{"a": "' + b"[" * 200 + b'"}',
+        b'{"a": "\\"' + b"[" * 200 + b'"}',
+        b'{"a": "\\\\", "b": [1]}',
+        b'{"' + b"[{" * 100 + b'": 1}',
+        b'"' + b"]" * 200 + b'"',
+        b'{"a": "\\u005b\\u005b[[[[[[[[[["}',
+        _nested(64),
+    ],
+    ids=[
+        "brackets-in-string",
+        "escaped-quote",
+        "escaped-backslash",
+        "brackets-in-key",
+        "closers-in-string",
+        "uescape",
+        "exactly-64",
+    ],
+)
+def test_require_json_depth_counts_only_brackets_outside_strings(text: bytes) -> None:
+    r"""Brackets inside strings do not count, `\\"` and `\\\\` escapes are honoured, and 64 containers are accepted."""
+    require_json_depth(text)
+
+
+@pytest.mark.logic
+def test_require_json_depth_refuses_65_containers() -> None:
+    """One container past `MAX_DEPTH` is refused, by the scan, `jcs_loads` and nothing else needed."""
+    with pytest.raises(ValueError, match="deeper"):
+        require_json_depth(_nested(MAX_DEPTH + 1))
+    with pytest.raises(NotCanonicalJSON, match="deeper"):
+        jcs_loads(_nested(MAX_DEPTH + 1))
+
+
+@pytest.mark.logic
+def test_require_json_depth_is_linear_on_an_unterminated_escaped_quote_run() -> None:
+    r"""An unterminated run of `\\"` is one string token; it is not rescanned from every quote (hang guard only)."""
+    text = b'["' + b'\\"' * (2**19)
+    require_json_depth(text)
+    with pytest.raises(NotCanonicalJSON):
+        jcs_loads(text)

@@ -396,6 +396,16 @@ def test_a_label_map_nested_past_the_bound_is_refused_whatever_the_parser_can_pa
         LabelMap(run).paths()
 
 
+def test_a_label_map_nested_exactly_to_the_bound_reaches_the_format_check(tmp_path: Path) -> None:
+    """Two containers of the map plus 62 of nesting is 64 deep: read, then refused as retired, not as too deep."""
+    run, _ = _run(tmp_path, "a.wav")
+    depth = MAX_DEPTH - 2
+    body = '{"format": "labels@1.0", "labels": ' + "[" * depth + "]" * depth + "}"
+    (run / PRIVATE_DIR / LABELS_NAME).write_text(body)
+    with pytest.raises(LabelMapRetired):
+        LabelMap(run).paths()
+
+
 def test_the_label_map_lease_outlasts_its_stale_bound_while_it_beats(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

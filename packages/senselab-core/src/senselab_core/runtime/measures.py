@@ -660,7 +660,7 @@ class MeasureRoots:
                 raise ValueError("no format tag")
             with reading(expected, found):
                 return _File(parse(document, info), info.st_uid, info.st_mtime)
-        except (ValueError, KeyError, TypeError, RecursionError, ValidationError) as err:
+        except (ValueError, KeyError, TypeError, ValidationError) as err:
             self._malformed(root, directory, name, info.st_uid, type(err).__name__)
             return None
 

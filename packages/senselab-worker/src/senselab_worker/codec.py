@@ -120,7 +120,7 @@ def dump_line(msg: dict[str, Any], kind: Kind, *, limit: int = MAX_LINE_BYTES) -
     _check_message(msg)
     try:
         line = _json_bytes(msg) + b"\n"
-    except (ValueError, TypeError, RecursionError) as exc:
+    except (ValueError, TypeError) as exc:
         raise ProtocolError(f"{kind} message has no wire form: {type(exc).__name__}: {exc}") from exc
     if len(line) > limit:
         raise LineTooLarge(len(line), limit)

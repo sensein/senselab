@@ -24,6 +24,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
+env:
+  UV_PYTHON_PREFERENCE: only-managed
+
 jobs:
   # A missing package, or a package without its src/, fails this job and every job that needs it.
   detect:
@@ -85,7 +88,7 @@ jobs:
       env:
         PYTHON_VERSION: ${{ matrix.python-version }}
         UV_PROJECT_ENVIRONMENT: .core
-      run: uv sync --locked --no-editable --python "$PYTHON_VERSION" --python-preference only-managed --package senselab-core --group test
+      run: uv sync --locked --no-editable --python "$PYTHON_VERSION" --package senselab-core --group test
     # The keeper's hidden-/proc test runs in an unprivileged user and mount namespace, which Ubuntu's AppArmor
     # restricts by default; SENSELAB_REQUIRE_NAMESPACES=1 makes that test fail rather than skip.
     - name: Allow unprivileged user namespaces
@@ -149,7 +152,7 @@ jobs:
       env:
         PYTHON_VERSION: ${{ matrix.python-version }}
         UV_PROJECT_ENVIRONMENT: .lean
-      run: uv sync --locked --no-editable --python "$PYTHON_VERSION" --python-preference only-managed --package senselab --no-default-groups --group test
+      run: uv sync --locked --no-editable --python "$PYTHON_VERSION" --package senselab --no-default-groups --group test
     - name: Run the senselab tests
       run: .lean/bin/pytest packages/senselab/tests -m "(logic or contract) and not model" -p no:cacheprovider
     - name: Check import contracts

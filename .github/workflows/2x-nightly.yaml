@@ -24,6 +24,9 @@ concurrency:
   group: nightly-${{ github.workflow }}-${{ inputs.ref || github.sha }}
   cancel-in-progress: true
 
+env:
+  UV_PYTHON_PREFERENCE: only-managed
+
 jobs:
   # The refs the limits matrix runs: with `ref`, that branch and the phase's code branch (the highest-numbered phase branch
   # on the remote; a phase branch merges directly, with no PR to carry the `limits` label, so only this job runs its

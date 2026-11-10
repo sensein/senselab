@@ -449,3 +449,15 @@ def test_each_forked_process_writes_its_own_document(tmp_path: Path) -> None:
         children.append(pid)
     assert [os.waitpid(pid, 0)[1] for pid in children] == [0] * 4
     assert [r.id for r in ProvStore.read(run, VOCAB).records()] == ["content:" + f"{i:064x}" for i in range(4)]
+
+
+@pytest.mark.logic
+def test_the_format_sniff_reads_to_the_depth_bound_and_no_further() -> None:
+    """A document 64 deep declares its format; one 65 deep declares none, whatever the parser could parse."""
+    from senselab_core.runtime.provenance import _declared_format
+
+    def document(depth: int) -> bytes:
+        return b'{"format": "provenance@3.0", "a": ' + b"[" * (depth - 1) + b"]" * (depth - 1) + b"}"
+
+    assert _declared_format(document(64)) == "provenance@3.0"
+    assert _declared_format(document(65)) is None

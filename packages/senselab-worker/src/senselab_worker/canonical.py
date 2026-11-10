@@ -165,7 +165,7 @@ def require_depth(depth: int) -> None:
         raise ValueError(f"nesting deeper than {MAX_DEPTH} containers")
 
 
-_JSON_BRACKETS = re.compile(rb'"(?:[^"\\]|\\.)*"|[\[\]{}]')
+_JSON_BRACKETS = re.compile(rb'"(?:[^"\\]|\\[\s\S])*(?:"|\\?\Z)|[\[\]{}]')
 
 
 def require_json_depth(text: bytes) -> None:
