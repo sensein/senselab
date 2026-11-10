@@ -983,6 +983,56 @@ def test_cost_not_linear_in_length_is_not_a_warmup_effect(cost: Any) -> None:  #
     assert _estimate(_stratified(cost)).warmup_unsettled is False
 
 
+def _libri_lengths(rng: random.Random) -> list[float]:
+    return [min(35.0, max(1.0, rng.lognormvariate(math.log(7.0), 0.6))) for _ in range(200)]
+
+
+def _uniform_lengths(rng: random.Random) -> list[float]:
+    return [rng.uniform(1.0, 40.0) for _ in range(200)]
+
+
+def _noisy_requests(plan: ProbePlan, cost: Any, noise: float, early: float, seed: int) -> list[Observation]:  # noqa: ANN401
+    """The plan's warm requests in order, each `cost(units)` times lognormal `noise`, the first three times `early`."""
+    rng = random.Random(seed)
+    jobs = [(item, job) for item in plan.items if item.phase != "BATCHED" for job in item.jobs]
+    return [
+        _obs(
+            job.units,
+            cost(job.units) * math.exp(rng.gauss(0.0, noise)) * (early if since < CONFIG.warmup_requests + 3 else 1.0),
+            stratum=item.stratum or 0,
+            since_load=since,
+        )
+        for since, (item, job) in enumerate(jobs)
+        if since >= CONFIG.warmup_requests and job.units is not None
+    ]
+
+
+@pytest.mark.logic
+def test_the_warmup_diagnostic_rarely_flags_noise_and_finds_a_real_effect() -> None:
+    """Seeded noisy plans: no warm-up effect is flagged in at most 10 %, a 1.3x one is found in at least 90 %.
+
+    Plans of 200 LibriSpeech-like or uniform lengths, with linear, convex or concave cost; the no-effect cases carry
+    2-10 % noise and the 1.3x cases 2-5 %. Counted over fixed seeds, never timed.
+    """
+    costs = (_linear, lambda x: 0.1 + 0.002 * x * x, lambda x: 0.2 + 0.3 * math.sqrt(x))
+    flagged, detected = [], []
+    for lengths, seed in itertools.product((_libri_lengths, _uniform_lengths), range(30)):
+        plan = _plan(_candidates(sorted(lengths(random.Random(seed)))))
+        for n, (cost, noise) in enumerate(itertools.product(costs, (0.02, 0.05, 0.10))):
+            flagged.append(_estimate(_noisy_requests(plan, cost, noise, 1.0, seed * 100 + n)).warmup_unsettled)
+            if noise < 0.1:
+                detected.append(_estimate(_noisy_requests(plan, cost, noise, 1.3, seed * 100 + n)).warmup_unsettled)
+    assert None not in flagged and None not in detected
+    assert sum(f is True for f in flagged) / len(flagged) <= 0.10
+    assert sum(d is True for d in detected) / len(detected) >= 0.90
+
+
+@pytest.mark.logic
+def test_a_faster_start_is_not_a_warmup_effect() -> None:
+    """The diagnostic is one-sided: early requests at a third of the later ones leave it False."""
+    assert _estimate(_stratified(_linear, early=1 / 3)).warmup_unsettled is False
+
+
 @pytest.mark.logic
 def test_the_plan_puts_the_middle_stratums_singles_first() -> None:
     """After the WARMUP items, the first SINGLE items are the middle stratum's, then the others in order."""

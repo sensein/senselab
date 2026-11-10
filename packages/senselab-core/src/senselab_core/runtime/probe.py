@@ -317,19 +317,19 @@ def _request_fit(
 
 
 def _warmup_unsettled(single: RequestFit | None, kept: _Kept, config: CalibrationSettings) -> bool | None:
-    """Whether the first three warm requests differ from the later ones by more than the single fit's band.
+    """Whether the first three warm requests are slower than the later ones by more than the single fit's band.
 
     The comparison is within one probe's planned length stratum (`ProbeRef.stratum`). The early requests are those
     with `since_load` from `warmup_requests` to `warmup_requests + 2`; the later ones follow them and must number
-    `min_requests`. The later requests give the stratum's own level (a line in length through them, else their
-    median), and the early ones' median ratio to it is compared with 1, so a cost that is not linear in length
-    across strata does not register. True when a stratum holding both has that ratio off by more than
-    `confidence × spread`; False when every such stratum is within it; None (unknown) when no stratum holds both,
-    or the fit has no spread or a zero spread.
+    `min_requests`. The baseline is `median(later walls) + u·(units − median(later units))`, with `u` the single
+    fit's slope (0 when unmeasured). True when a stratum holding both has the early requests' median ratio to it
+    above `1 + confidence × spread`; False when every such stratum is within it; None (unknown) when no stratum
+    holds both, or the fit has no spread or a zero spread.
     """
     if single is None or single.spread is None or single.spread <= 0:
         return None
     first = config.warmup_requests
+    slope = single.u or 0.0
     verdicts = []
     groups: dict[tuple[str, int | None], list[Observation]] = {}
     for o in kept.single:
@@ -341,15 +341,11 @@ def _warmup_unsettled(single: RequestFit | None, kept: _Kept, config: Calibratio
         later = [o for o in warm if o not in early]
         if not early or len(later) < config.min_requests:
             continue
-        fit = _theil_sen([(o.units, o.wall_s) for o in later])
         level = _median([o.wall_s for o in later])
-
-        def expected(units: float, fit: tuple[float, float] | None = fit, level: float = level) -> float:
-            return level if fit is None or fit[1] < 0 else fit[0] + fit[1] * units
-
-        ratios = [o.wall_s / expected(o.units) for o in early if expected(o.units) > 0]
+        centre = _median([o.units for o in later])
+        ratios = [o.wall_s / base for o in early if (base := level + slope * (o.units - centre)) > 0]
         if ratios:
-            verdicts.append(abs(_median(ratios) - 1.0) > config.confidence * single.spread)
+            verdicts.append(_median(ratios) - 1.0 > config.confidence * single.spread)
     return any(verdicts) if verdicts else None
 
 

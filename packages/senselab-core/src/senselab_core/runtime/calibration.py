@@ -339,7 +339,7 @@ class Estimate(Frozen):
         regimes: The factor per measured co-tenancy.
         oom: The resource faults in force: every one a probe has not lifted.
         warmup_unsettled: Whether, within a length stratum, the first three warm requests (`since_load` from
-            `warmup_requests`) differ from the later ones by more than the single fit's spread band, so
+            `warmup_requests`) are slower than the later ones by more than the single fit's spread band, so
             `calibration.warmup_requests` was too short for this unit; None when no stratum holds both.
         source: Where it came from.
         estimator: The estimator's format tag.
