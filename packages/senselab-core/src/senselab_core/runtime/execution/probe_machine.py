@@ -304,7 +304,14 @@ class ProbeMachine:
         stored = () if fresh else tuple(self.roots.observations(unit))
         prior = Prior(observations=stored, records=tuple(self.roots.regime_records(unit)))
         return Probe.plan(
-            unit, candidates, prior, self.profile.calibration, unit.formation, self.probe_s, bucket_edges=edges
+            unit,
+            candidates,
+            prior,
+            self.profile.calibration,
+            unit.formation,
+            self.probe_s,
+            quantum_items=self.profile.pool.quantum_items,
+            bucket_edges=edges,
         )
 
     def _take_lease(
@@ -451,8 +458,7 @@ class ProbeMachine:
         late = [
             h
             for h in self._resolving
-            if (since := self._live_since.get(h.queue)) is not None
-            and now - since >= self.profile.calibration.resolve_s
+            if (since := self._live_since.get(h.queue)) is not None and now - since >= self.profile.resolve_s
         ]
         with self.lock:
             self._resolving = [h for h in self._resolving if h not in late]

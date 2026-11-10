@@ -40,21 +40,23 @@ def test_probe_s_peer_wait_s_and_drift_window_are_derived_from_the_profile() -> 
     """The three are properties, so a moved `sizing`, `lease` or section key moves them and they are never keys."""
     profile = ExecutionProfile.load(CLUSTER)
     assert (profile.probe_s, profile.peer_wait_s, profile.calibration.drift_window) == (90, 390, 6)
+    assert profile.resolve_s == 2 * (300 + 600) == 1800
     moved = ExecutionProfile.load(CLUSTER, {"sizing": {"target_wall_s": 3600}, "lease": {"stale_after_s": 600}})
-    assert (moved.probe_s, moved.peer_wait_s) == (180, 780)
+    assert (moved.probe_s, moved.peer_wait_s, moved.resolve_s) == (180, 780, 2400)
     table = ExecutionProfile.load("laptop", _calibration({"length_strata": 3}))
     assert table.calibration.drift_window == 9
-    for key in ("probe_s", "peer_wait_s", "drift_window"):
+    for key in ("probe_s", "peer_wait_s", "drift_window", "resolve_s"):
         assert key not in CalibrationSettings.model_fields
         with pytest.raises(UnknownProfileKey, match=key):
             ExecutionProfile.load("laptop", _calibration({key: 1}))
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("items", [49, 51, 13])
-def test_probe_items_is_a_bound_not_a_sum(items: int) -> None:
-    """`probe_items` is the most jobs a probe plans; no exact protocol sum is checked."""
-    assert ExecutionProfile.load("laptop", _calibration({"probe_items": items})).calibration.probe_items == items
+def test_probe_items_is_not_a_profile_key() -> None:
+    """The probe's job budget is derived from the protocol and the pool's quantum, so a profile cannot set it."""
+    assert "probe_items" not in CalibrationSettings.model_fields
+    with pytest.raises(UnknownProfileKey, match="probe_items"):
+        ExecutionProfile.load("laptop", _calibration({"probe_items": 50}))
 
 
 @pytest.mark.logic
@@ -83,7 +85,6 @@ def test_the_group_measures_root_is_the_variable_alone(monkeypatch: pytest.Monke
         {"drift_confidence": -1},
         {"observations_kept": 0},
         {"unmeasured_workers": 0},
-        {"resolve_s": 0},
         {"measures_roots": []},
     ],
 )

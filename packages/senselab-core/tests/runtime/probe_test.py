@@ -7,9 +7,11 @@ import statistics
 import sys
 from bisect import bisect_right
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
@@ -29,11 +31,12 @@ from senselab_core.runtime.calibration import (
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings
 from senselab_core.runtime.measures import MeasureSource
-from senselab_core.runtime.probe import Probe, Work, _rank_bound, _theil_sen, memory_batch
+from senselab_core.runtime.probe import Probe, Work, _rank_bound, _theil_sen, memory_batch, probe_items
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Grant
 from senselab_core.testing.calibration_samples import UNIT
 
+PROFILES = Path(__file__).parents[2] / "src/senselab_core/runtime/data/profiles"
 CONFIG: CalibrationSettings = ExecutionProfile.load("laptop").calibration
 GRANT = Grant(max_workers=1, memory_bytes=10**10, quantum_items=64, quantum_s=3600)
 PROFILE = ExecutionProfile.load("laptop")
@@ -88,14 +91,17 @@ def _candidates(units: Sequence[float | None], keys: Sequence[int] | None = None
     ]
 
 
-def _plan(
+def _plan(  # noqa: PLR0913 - a plan's inputs, each defaulted
     candidates: Sequence[Candidate],
     prior: Prior = Prior(),
     config: CalibrationSettings = CONFIG,
     formation: str = "mixed",
     edges: Sequence[float] = (),
+    quantum_items: int = PROFILE.pool.quantum_items,
 ) -> ProbePlan:  # noqa: B008
-    return Probe.plan(UNIT, candidates, prior, config, formation, PROBE_S, bucket_edges=edges)
+    return Probe.plan(
+        UNIT, candidates, prior, config, formation, PROBE_S, quantum_items=quantum_items, bucket_edges=edges
+    )
 
 
 def _with_device(m0: float, m1: float, resident: int = 10**9) -> list[Observation]:
@@ -544,18 +550,18 @@ _UNITS = st.lists(st.floats(0.5, 60.0), min_size=0, max_size=60)
 
 
 @pytest.mark.logic
-@given(units=_UNITS, keys=st.data(), probe_items=st.integers(1, 80))
+@given(units=_UNITS, keys=st.data(), quantum=st.integers(1, 40))
 @FAST
 def test_plan_never_chooses_two_jobs_of_one_key_and_stays_within_probe_items(
-    units: list[float], keys: st.DataObject, probe_items: int
+    units: list[float], keys: st.DataObject, quantum: int
 ) -> None:
-    """A key is planned at most once, a job is planned once, and the jobs planned stay within `probe_items`."""
+    """A key is planned at most once, a job is planned once, and the jobs planned stay within the derived budget."""
     ks = keys.draw(st.lists(st.integers(0, max(len(units) // 2, 1)), min_size=len(units), max_size=len(units)))
-    config = CONFIG.model_copy(update={"probe_items": probe_items})
-    plan = _plan(_candidates(units, ks), config=config)
+    plan = _plan(_candidates(units, ks), quantum_items=quantum)
+    budget = probe_items(CONFIG, quantum)
     jobs = [j for item in plan.items for j in item.jobs]
     assert len({j.key for j in jobs}) == len(jobs) == len({(j.fragment, j.index) for j in jobs})
-    assert plan.used_jobs == len(jobs) <= probe_items
+    assert plan.probe_items == budget and plan.used_jobs == len(jobs) <= budget
     left = {j.key for pool in plan.remaining for j in pool}
     assert left.isdisjoint({j.key for j in jobs})
 
@@ -618,7 +624,7 @@ def test_a_partly_covered_plan_plans_only_what_is_missing() -> None:
 def test_too_few_candidates_leave_a_phase_unplanned() -> None:
     """With fewer candidates than a phase needs the phase is not planned and the plan says why."""
     plan = _plan(_candidates([1.0, 2.0]))
-    assert plan.items == ()
+    assert [i for i in plan.items if i.phase == "SINGLE"] == []
     assert {u.reason for u in plan.unplanned} <= {"too_few_candidates"} and plan.unplanned
 
 
@@ -659,21 +665,21 @@ def _with_device_and_time(m1: float) -> list[Observation]:
 @pytest.mark.logic
 @given(
     seconds_left=st.floats(0.0, 500.0),
-    probe_items=st.integers(20, 400),
+    quantum=st.integers(1, 60),
     m1=st.floats(1e3, 1e9),
     sizes=st.sampled_from([1, 2]),
 )
 @FAST
 def test_batched_items_fit_the_seconds_left_at_the_upper_prediction(
-    seconds_left: float, probe_items: int, m1: float, sizes: int
+    seconds_left: float, quantum: int, m1: float, sizes: int
 ) -> None:
-    """Whatever `B₁` is planned, its items' upper-predicted time fits `seconds_left` and its jobs fit `probe_items`."""
-    config = CONFIG.model_copy(update={"probe_items": probe_items, "batched_sizes": sizes})
-    plan = _plan(_candidates([float(i + 1) for i in range(400)]), config=config)
+    """Whatever `B₁` is planned, its items' upper-predicted time fits `seconds_left` and its jobs the derived budget."""
+    config = CONFIG.model_copy(update={"batched_sizes": sizes})
+    plan = _plan(_candidates([float(i + 1) for i in range(400)]), config=config, quantum_items=quantum)
     single = _estimate(_line(0.2, 0.05) + _with_device_and_time(m1))
     assert single.single is not None and single.device is not None
     batched = Probe.plan_batched(plan, single, GRANT, config, seconds_left, memory_headroom=HEADROOM)
-    assert batched.used_jobs <= probe_items
+    assert batched.used_jobs <= plan.probe_items
     fit = single.single
     wall = 0.0
     for item in batched.items:
@@ -886,3 +892,224 @@ def test_fit_work_is_subquadratic(slack_tests: dict[str, Any]) -> None:
     """The slope fit's step count at 10^4 pooled requests is under `tests.probe.fit_ops_ratio` times that at 10^3."""
     ratio = _fit_steps(_pooled(10_000)) / _fit_steps(_pooled(1_000))
     assert ratio < slack_tests["probe"]["fit_ops_ratio"], f"{ratio:.1f}x the operations for 10x the requests"
+
+
+# --- derived probe_items and the warm-up diagnostic -------------------------------------------------------------
+
+
+@pytest.mark.logic
+@given(
+    warm=st.integers(0, 4),
+    strata=st.integers(1, 5),
+    requests=st.integers(1, 6),
+    single=st.integers(2, 8),
+    quantum=st.integers(1, 500),
+)
+@FAST
+def test_probe_items_is_counted_from_the_protocol(
+    warm: int, strata: int, requests: int, single: int, quantum: int
+) -> None:
+    """`probe_items` = warmup + strata × min_requests × (1 + quantum_items) + min_requests × single_item_jobs."""
+    config = CONFIG.model_copy(
+        update={
+            "warmup_requests": warm,
+            "length_strata": strata,
+            "min_requests": requests,
+            "single_item_jobs": single,
+        }
+    )
+    assert probe_items(config, quantum) == warm + strata * requests * (1 + quantum) + requests * single
+
+
+@pytest.mark.logic
+def test_the_plan_carries_the_derived_probe_items_and_stays_within_it() -> None:
+    """A plan's budget is the derived one for the pool's quantum, not a profile key."""
+    plan = _plan(_candidates([float(i + 1) for i in range(400)]))
+    assert plan.probe_items == probe_items(CONFIG, PROFILE.pool.quantum_items)
+    assert plan.used_jobs <= plan.probe_items
+
+
+def _stratified(cost: Any, early: float = 1.0, first: int = 1, later: int = 6) -> list[Observation]:  # noqa: ANN401
+    """Warm singles in strata of lengths 2 and 8: each holds three early requests (times `early`) and `later` more."""
+    out = []
+    for x in (2.0, 8.0):
+        for k in range(3 + later):
+            jitter = 1 + 0.01 * ((k * 7) % 5 - 2)
+            out.append(
+                _obs(x, cost(x) * jitter * (early if k < 3 else 1.0), stratum=int(x > 2.0), since_load=first + k)
+            )
+    return out
+
+
+def _linear(x: float) -> float:
+    return 0.2 + 0.05 * x
+
+
+@pytest.mark.logic
+def test_the_warmup_diagnostic_is_set_by_a_real_warmup_effect_and_unset_without_one() -> None:
+    """Early requests at 3x the later ones, in a stratum holding both, set `warmup_unsettled`; none leaves it False."""
+    assert _estimate(_stratified(_linear, early=3.0)).warmup_unsettled is True
+    assert _estimate(_stratified(_linear)).warmup_unsettled is False
+
+
+def _planned_requests(early: float, cost: Any) -> list[Observation]:  # noqa: ANN401
+    """Observations of `Probe.plan`'s own order for 40 candidates: one warm request per job after the load."""
+    plan = _plan(_candidates([float(i + 1) for i in range(40)]))
+    out, since = [], -1
+    for n, item in enumerate(i for i in plan.items if i.phase != "BATCHED"):
+        for job in item.jobs:
+            since += 1
+            if since >= CONFIG.warmup_requests and job.units is not None:
+                jitter = 1 + 0.01 * ((n + since) * 7 % 5 - 2)
+                slow = early if since < CONFIG.warmup_requests + 3 else 1.0
+                out.append(
+                    _obs(job.units, cost(job.units) * jitter * slow, stratum=item.stratum or 0, since_load=since)
+                )
+    return out
+
+
+@pytest.mark.logic
+def test_the_plans_own_order_lets_the_diagnostic_find_a_warmup_effect() -> None:
+    """The middle stratum is planned first, so it holds the first warm requests and later ones: True with an effect."""
+    assert _estimate(_planned_requests(3.0, _linear)).warmup_unsettled is True
+    assert _estimate(_planned_requests(1.0, _linear)).warmup_unsettled is False
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("cost", [lambda x: 0.1 + 0.002 * x * x, lambda x: 0.2 + 0.3 * math.sqrt(x)])
+def test_cost_not_linear_in_length_is_not_a_warmup_effect(cost: Any) -> None:  # noqa: ANN401
+    """Under the plan's order a convex or concave cost with no warm-up effect is False, never set."""
+    assert _estimate(_planned_requests(1.0, cost)).warmup_unsettled is False
+    assert _estimate(_stratified(cost)).warmup_unsettled is False
+
+
+def _libri_lengths(rng: random.Random) -> list[float]:
+    return [min(35.0, max(1.0, rng.lognormvariate(math.log(7.0), 0.6))) for _ in range(200)]
+
+
+def _uniform_lengths(rng: random.Random) -> list[float]:
+    return [rng.uniform(1.0, 40.0) for _ in range(200)]
+
+
+def _noisy_requests(plan: ProbePlan, cost: Any, noise: float, early: float, seed: int) -> list[Observation]:  # noqa: ANN401
+    """The plan's warm requests in order, each `cost(units)` times lognormal `noise`, the first three times `early`."""
+    rng = random.Random(seed)
+    jobs = [(item, job) for item in plan.items if item.phase != "BATCHED" for job in item.jobs]
+    return [
+        _obs(
+            job.units,
+            cost(job.units) * math.exp(rng.gauss(0.0, noise)) * (early if since < CONFIG.warmup_requests + 3 else 1.0),
+            stratum=item.stratum or 0,
+            since_load=since,
+        )
+        for since, (item, job) in enumerate(jobs)
+        if since >= CONFIG.warmup_requests and job.units is not None
+    ]
+
+
+@pytest.mark.logic
+def test_the_warmup_diagnostic_rarely_flags_noise_and_finds_a_real_effect() -> None:
+    """Seeded noisy plans: no warm-up effect is flagged in at most 10 %, a 1.3x one is found in at least 90 %.
+
+    Plans of 200 LibriSpeech-like or uniform lengths, with linear, convex or concave cost; the no-effect cases carry
+    2-10 % noise and the 1.3x cases 2-5 %. Counted over fixed seeds, never timed.
+    """
+    costs = (_linear, lambda x: 0.1 + 0.002 * x * x, lambda x: 0.2 + 0.3 * math.sqrt(x))
+    flagged, detected = [], []
+    for lengths, seed in itertools.product((_libri_lengths, _uniform_lengths), range(30)):
+        plan = _plan(_candidates(sorted(lengths(random.Random(seed)))))
+        for n, (cost, noise) in enumerate(itertools.product(costs, (0.02, 0.05, 0.10))):
+            flagged.append(_estimate(_noisy_requests(plan, cost, noise, 1.0, seed * 100 + n)).warmup_unsettled)
+            if noise < 0.1:
+                detected.append(_estimate(_noisy_requests(plan, cost, noise, 1.3, seed * 100 + n)).warmup_unsettled)
+    assert None not in flagged and None not in detected
+    assert sum(f is True for f in flagged) / len(flagged) <= 0.10
+    assert sum(d is True for d in detected) / len(detected) >= 0.90
+
+
+@pytest.mark.logic
+def test_a_faster_start_is_not_a_warmup_effect() -> None:
+    """The diagnostic is one-sided: early requests at a third of the later ones leave it False."""
+    assert _estimate(_stratified(_linear, early=1 / 3)).warmup_unsettled is False
+
+
+@pytest.mark.logic
+def test_the_plan_puts_the_middle_stratums_singles_first() -> None:
+    """After the WARMUP items, the first SINGLE items are the middle stratum's, then the others in order."""
+    plan = _plan(_candidates([float(i + 1) for i in range(40)]))
+    singles = [i for i in plan.items if i.phase == "SINGLE"]
+    middle = len(plan.strata) // 2
+    assert singles[0].stratum == middle
+    assert [i.stratum for i in singles] == sorted((i.stratum for i in singles), key=lambda s: s != middle)
+
+
+@pytest.mark.logic
+def test_the_early_window_follows_warmup_requests() -> None:
+    """Under `warmup_requests` 4 the early requests are since_load 4 to 6, and a slow start there is found."""
+    config = CONFIG.model_copy(update={"warmup_requests": 4})
+    slow = _stratified(_linear, early=3.0, first=4)
+    assert Probe.estimate(slow, [], config, hardware=UNIT.hardware, memory_headroom=HEADROOM).warmup_unsettled is True
+
+
+@pytest.mark.logic
+def test_the_warmup_diagnostic_is_unknown_without_a_spread_or_later_requests() -> None:
+    """No observations, no later requests, and a zero spread are unknown (None), not a verdict."""
+    assert _estimate([]).warmup_unsettled is None
+    assert _estimate(_stratified(_linear, early=3.0, later=2)).warmup_unsettled is None
+    flat = [_obs(x, 1.5 if k < 3 else 0.5, since_load=1 + k) for x in (2.0, 8.0) for k in range(9)]
+    fit = _estimate(flat).single
+    assert fit is not None and fit.spread == 0.0
+    assert _estimate(flat).warmup_unsettled is None
+
+
+@pytest.mark.logic
+def test_explain_prints_the_warmup_line_only_when_the_estimate_sets_it() -> None:
+    """`explain`'s sizing block carries the warm-up line for a True flag and none for False or None."""
+    from senselab_core.runtime import explain
+
+    source = Path(explain.__file__).read_text()
+    assert "warmup_unsettled" in source
+    lines = explain.warmup_lines(_estimate(_stratified(_linear, early=3.0)))
+    assert len(lines) == 1 and "warmup_requests" in lines[0]
+    assert explain.warmup_lines(_estimate(_stratified(_linear))) == []
+    assert explain.warmup_lines(_estimate([])) == []
+    assert explain.warmup_lines(None) == []
+
+
+@pytest.mark.logic
+def test_with_batched_sizes_two_the_derived_budget_holds_both_batches_of_a_repetition() -> None:
+    """`probe_items` counts `B₁ + round(√B₁)` per repetition at `batched_sizes` 2, and B₁ alone at 1."""
+    two = CONFIG.model_copy(update={"batched_sizes": 2, "length_strata": 3})
+    one = CONFIG.model_copy(update={"batched_sizes": 1, "length_strata": 3})
+    assert probe_items(one, 100) == 1 + 3 * 3 * 101 + 3 * 2
+    assert probe_items(two, 100) == 1 + 3 * 3 * (1 + 110) + 3 * 2
+    assert probe_items(two, 1) == probe_items(one, 1)
+
+
+@pytest.mark.logic
+def test_a_batch_cut_below_the_budget_records_why() -> None:
+    """When `plan_batched` plans a smaller batch than the device fit allows, the plan names the refusal."""
+    plan = _plan(_candidates([float(i + 1) for i in range(400)]))
+    single = _estimate(_line(0.2, 0.05) + _with_device_and_time(1e3))
+    tight = plan.model_copy(update={"probe_items": plan.used_jobs + 3 * CONFIG.min_requests * 20})
+    cut = Probe.plan_batched(tight, single, GRANT, CONFIG, 10**9, memory_headroom=HEADROOM)
+    assert cut.items and {u.reason for u in cut.unplanned} & {"over_budget", "over_seconds"}
+    roomy = Probe.plan_batched(plan, single, GRANT, CONFIG, 10**9, memory_headroom=HEADROOM)
+    assert roomy.items and not [u for u in roomy.unplanned if u.reason in {"over_budget", "over_seconds"}]
+
+
+@pytest.mark.logic
+def test_a_lone_candidate_plans_its_load_request_and_no_single() -> None:
+    """With one candidate the plan is the WARMUP item alone; the probe measures its load and no `r`."""
+    plan = _plan(_candidates([1.0]))
+    assert [i.phase for i in plan.items] == ["WARMUP"]
+    assert {u.reason for u in plan.unplanned} == {"too_few_candidates"}
+
+
+@pytest.mark.logic
+def test_packaged_profiles_carry_the_floor_rules() -> None:
+    """Every packaged profile: warmup_requests 1, single_item_jobs 2, and no fitted probe_items."""
+    for name in ("laptop", "slurm"):
+        section = yaml.safe_load((PROFILES / f"{name}.yaml").read_text())["calibration"]
+        assert (section["warmup_requests"], section["single_item_jobs"]) == (1, 2) and "probe_items" not in section
+    assert "probe_items" not in CalibrationSettings.model_fields

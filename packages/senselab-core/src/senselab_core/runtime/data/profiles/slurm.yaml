@@ -2,7 +2,7 @@
 # Copy it to your own file, fill the values, rename it, and pass the file as `--execution`.
 # Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, by profile and key.
 # The profile's format.
-format: execution-profile@3.0
+format: execution-profile@4.0
 # The profile's name; rename it in your copy.
 name: slurm
 # Per task, its stacks best first; empty lets each task's declared backend order decide.
@@ -88,17 +88,15 @@ calibration:
   # group reads every file of every root; own only the reader's own files.
   trust: own
   # Requests a model state answers before one counts as warm.
-  warmup_requests: 2
+  warmup_requests: 1
   # Strata of equal count a probe cuts its candidate jobs into.
   length_strata: 2
   # Warm requests a stratum needs for a quantity to be measured.
   min_requests: 3
   # Jobs of the one item per probe that separates the per-item cost from the per-job cost.
-  single_item_jobs: 4
+  single_item_jobs: 2
   # Batch sizes the batched phase measures.
   batched_sizes: 1
-  # The most jobs a probe plans.
-  probe_items: 200
   # The one-sided z of the batch decision and of the item cut.
   confidence: 1.645
   # The two-sided z of the drift test.
@@ -107,8 +105,6 @@ calibration:
   observations_kept: 3
   # Workers a unit without a measure runs on.
   unmeasured_workers: 1
-  # Seconds a unit waits for a ready mark, from its queue's first live worker.
-  resolve_s: 1800
 # Every lease: seconds after which another process breaks it, the share of that between beats, and the
 # storage's attribute delay; load refuses 2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.
 lease:

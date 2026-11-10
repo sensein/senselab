@@ -233,16 +233,25 @@ def test_retry_block_keeps_its_format_identity() -> None:
 
 @pytest.mark.logic
 def test_profile1_refused(tmp_path: Path) -> None:
-    """An `execution-profile@1.0` or `@2.0` override or file is refused as retired, naming the rewrite; 3.0 ships."""
-    for retired in ("execution-profile@1.0", "execution-profile@2.0"):
-        with pytest.raises(ProfileFormatRetired, match="execution-profile@3.0"):
+    """An `execution-profile@1.0`, `@2.0` or `@3.0` override or file is refused as retired, naming the rewrite."""
+    for retired in ("execution-profile@1.0", "execution-profile@2.0", "execution-profile@3.0"):
+        with pytest.raises(ProfileFormatRetired, match="execution-profile@4.0"):
             ExecutionProfile.load("laptop", {"format": retired})
     path = tmp_path / "site.yaml"
     path.write_text("format: execution-profile@1.0\nnetwork: offline\n")
     with pytest.raises(ProfileFormatRetired, match="retired format execution-profile@1.0"):
         ExecutionProfile.load(CLUSTER, path)
-    assert {ExecutionProfile.load(n).format for n in ("laptop", CLUSTER)} == {"execution-profile@3.0"}
-    assert _packaged("slurm").format == "execution-profile@3.0"
+    assert {ExecutionProfile.load(n).format for n in ("laptop", CLUSTER)} == {"execution-profile@4.0"}
+    assert _packaged("slurm").format == "execution-profile@4.0"
+
+
+@pytest.mark.logic
+def test_a_profile3_file_is_refused_naming_the_two_derived_keys(tmp_path: Path) -> None:
+    """A site file copied at `execution-profile@3.0`, with probe_items and resolve_s, is refused naming both."""
+    path = tmp_path / "site.yaml"
+    path.write_text("format: execution-profile@3.0\ncalibration:\n  probe_items: 200\n  resolve_s: 1800\n")
+    with pytest.raises(ProfileFormatRetired, match=r"probe_items and calibration\.resolve_s, which are now derived"):
+        ExecutionProfile.load(CLUSTER, path)
 
 
 @pytest.mark.logic
@@ -323,7 +332,7 @@ def test_senselab_ships_only_generic_profiles() -> None:
 def test_a_partial_file_passed_as_a_profile_says_to_use_an_override(tmp_path: Path) -> None:
     """One clear error, not a list of missing fields, and `load(name, file)` is the layering that works."""
     partial = tmp_path / "partial.yaml"
-    partial.write_text("format: execution-profile@3.0\nretry:\n  attempts: 6\n  first_backoff_s: 1.0\n")
+    partial.write_text("format: execution-profile@4.0\nretry:\n  attempts: 6\n  first_backoff_s: 1.0\n")
     with pytest.raises(IncompleteProfile, match=r"must be complete.*override"):
         ExecutionProfile.load(partial)
     assert ExecutionProfile.load("laptop", partial).retry.attempts == 6

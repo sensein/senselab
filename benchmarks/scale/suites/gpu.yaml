@@ -1,4 +1,4 @@
-format: scale-suite@1.0
+format: scale-suite@2.0
 name: gpu
 # Every Phase 2 backend on one GPU allocation, by its stack.
 # The seed of the synthetic trees; unused by these tasks.

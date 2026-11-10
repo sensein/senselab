@@ -1,4 +1,4 @@
-format: scale-suite@1.0
+format: scale-suite@2.0
 name: fake
 # Run with benchmarks/scale/fake_stack on PYTHONPATH, so the ladder and its pool workers read the fake stack.
 # The seed of the synthetic trees; unused by payloads.

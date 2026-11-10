@@ -1,4 +1,4 @@
-"""The execution profile (`execution-profile@3`) and `resolve_execution`, which places a task call under it.
+"""The execution profile (`execution-profile@4`) and `resolve_execution`, which places a task call under it.
 
 A profile holds stack preferences per task, device preference, env roots, the torch index override, the model-source
 allowlist, the model-cache budget, the retry policy, the network policy, the resource classes, the substrate, the
@@ -14,7 +14,7 @@ import re
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Final, Literal
 
 from pydantic import Field, model_validator
 
@@ -45,6 +45,7 @@ from senselab_core.runtime.execution_settings import (
 )
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.locks import TIMEOUT_S as BUILD_LOCK_TIMEOUT_S
 from senselab_core.runtime.network import Network
 from senselab_core.runtime.retry import RetryPolicy
 
@@ -69,14 +70,20 @@ class NoDevice(RuntimeError):
     """The chosen backend runs on no device that the profile lists and the node has."""
 
 
+_DROPPED_KEYS: Final = {
+    "execution-profile@3": "; drop calibration.probe_items and calibration.resolve_s, which are now derived",
+}
+
+
 class ProfileFormatRetired(ValueError):
-    """A profile in a retired format; it is rewritten as `execution-profile@3.0`."""
+    """A profile in a retired format; it is rewritten as `execution-profile@4.0`."""
 
     def __init__(self, found: str) -> None:
-        """Name the declared format."""
+        """Name the declared format, and the keys a newer major dropped from it."""
+        dropped = _DROPPED_KEYS.get(found.split(".", maxsplit=1)[0], "")
         super().__init__(
             f"the profile declares the retired format {found}; it is not read. Rewrite it as"
-            f" {EXECUTION_PROFILE_FORMAT}, whose keys `ExecutionProfile` documents"
+            f" {EXECUTION_PROFILE_FORMAT}, whose keys `ExecutionProfile` documents{dropped}"
         )
         self.found = found
 
@@ -240,6 +247,11 @@ class ExecutionProfile(Formatted):
     def peer_wait_s(self) -> float:
         """Seconds a coordinator waits for a peer's probe of the same unit: `probe_s + lease.stale_after_s`."""
         return self.probe_s + self.lease.stale_after_s
+
+    @property
+    def resolve_s(self) -> float:
+        """Seconds a unit waits for a worker's ready mark: `2 × (lease.stale_after_s + the build lock timeout)`."""
+        return 2 * (self.lease.stale_after_s + BUILD_LOCK_TIMEOUT_S)
 
     def env_root(self, kind: str) -> Path:
         """Return the root for env `kind` with `${VAR:-fallback}`, then `~` and `$VAR`, expanded.

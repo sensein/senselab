@@ -44,7 +44,22 @@ if TYPE_CHECKING:
 MAD_TO_SIGMA: Final = 1 / statistics.NormalDist().inv_cdf(
     0.75
 )  # invariant: a median absolute deviation to a normal's σ
+EARLY_REQUESTS: Final = 3  # invariant: the warm requests the warm-up diagnostic reads as early
 MEDIAN_SE: Final = math.sqrt(math.pi / 2)  # invariant: the standard error of a median relative to that of a mean
+
+
+def probe_items(config: CalibrationSettings, quantum_items: int) -> int:
+    """Return the most jobs a probe plans, counted from its protocol.
+
+    `warmup_requests + length_strata × min_requests × (1 + J) + min_requests × single_item_jobs`, where `J` is the
+    jobs of one repetition of a stratum's batched sizes at `B₁ = quantum_items`: `B₁`, plus `round(√B₁)` when
+    `batched_sizes` is 2 and that is at least 2 and not `B₁`.
+    """
+    return (
+        config.warmup_requests
+        + config.length_strata * config.min_requests * (1 + _per_set(quantum_items, config)[0])
+        + config.min_requests * config.single_item_jobs
+    )
 
 
 def _median(values: Sequence[float]) -> float:
@@ -301,6 +316,39 @@ def _request_fit(
     return RequestFit(batch=batch, r=centre, u=None, n=len(points), spread=spread, lo=min(xs), hi=max(xs))
 
 
+def _warmup_unsettled(single: RequestFit | None, kept: _Kept, config: CalibrationSettings) -> bool | None:
+    """Whether the first three warm requests are slower than the later ones by more than the single fit's band.
+
+    The comparison is within one probe's planned length stratum (`ProbeRef.stratum`). The early requests are those
+    with `since_load` from `warmup_requests` to `warmup_requests + 2`; the later ones follow them and must number
+    `min_requests`. The baseline is `median(later walls) + u·(units − median(later units))`, with `u` the single
+    fit's slope (0 when unmeasured). True when a stratum holding both has the early requests' median ratio to it
+    above `1 + confidence × spread`; False when every such stratum is within it; None (unknown) when no stratum
+    holds both, or the fit has no spread or a zero spread.
+    """
+    if single is None or single.spread is None or single.spread <= 0:
+        return None
+    first = config.warmup_requests
+    slope = single.u or 0.0
+    verdicts = []
+    groups: dict[tuple[str, int | None], list[Observation]] = {}
+    for o in kept.single:
+        if o.probe is not None:
+            groups.setdefault((o.probe.id, o.probe.stratum), []).append(o)
+    for group in groups.values():
+        warm = [o for o in group if o.since_load is not None and o.since_load >= first]
+        early = [o for o in warm if o.since_load is not None and o.since_load < first + EARLY_REQUESTS]
+        later = [o for o in warm if o not in early]
+        if not early or len(later) < config.min_requests:
+            continue
+        level = _median([o.wall_s for o in later])
+        centre = _median([o.units for o in later])
+        ratios = [o.wall_s / base for o in early if (base := level + slope * (o.units - centre)) > 0]
+        if ratios:
+            verdicts.append(_median(ratios) - 1.0 > config.confidence * single.spread)
+    return any(verdicts) if verdicts else None
+
+
 def _relative_spread(residuals: Sequence[float], predicted: Sequence[float]) -> float | None:
     centre = _median(predicted)
     if centre <= 0:
@@ -477,14 +525,21 @@ def _unplanned(
     )
 
 
-def _single_items(
+def _single_items(  # noqa: PLR0913 - the free pools, the strata wanted, the jobs used, the settings and the budget
     free: list[list[Candidate]],
     wanted: Sequence[int],
     used: int,
     config: CalibrationSettings,
     unplanned: list[Unplanned],
+    budget: int,
 ) -> tuple[list[ProbeItem], int]:
-    """Take the `SINGLE` items of the `wanted` strata from `free` (shortest first); return them and the jobs used."""
+    """Take the `SINGLE` items of the `wanted` strata from `free` (shortest first); return them and the jobs used.
+
+    The items follow the order of `wanted`, so the middle stratum's, planned first, hold the first warm requests and
+    its multi-job requests give that stratum later ones (the warm-up diagnostic compares them).
+
+    The items stay within `budget` jobs.
+    """
     singles: list[ProbeItem] = []
     for index in wanted:
         counts = [(config.min_requests, 1)]
@@ -493,7 +548,7 @@ def _single_items(
         for count, per_item in counts:
             if len(free[index]) < count:
                 unplanned.append(Unplanned(phase="SINGLE", stratum=index, reason="too_few_candidates"))
-            elif used + count > config.probe_items:
+            elif used + count > budget:
                 unplanned.append(Unplanned(phase="SINGLE", stratum=index, reason="over_budget"))
             else:
                 used += count
@@ -680,6 +735,7 @@ class Probe:
             host=host,
             regimes=tuple(sorted(regimes.values(), key=lambda r: r.k)),
             oom=ooms,
+            warmup_unsettled=_warmup_unsettled(single, kept, config),
             source=EstimateSource(
                 probe_ids=tuple(sorted({o.probe.id for o in kept.warm + kept.loads if o.probe is not None})),
                 observations=len(kept.warm) + len(kept.loads),
@@ -714,6 +770,7 @@ class Probe:
         formation: str,
         seconds: float,
         *,
+        quantum_items: int,
         bucket_edges: Sequence[float],
     ) -> ProbePlan:
         """Return the `WARMUP` and `SINGLE` items of a probe over `candidates`, and what a batched phase may use.
@@ -721,7 +778,8 @@ class Probe:
         `candidates` are the held jobs the store would not serve. One job of each key is kept, the rest cut into
         `length_strata` strata of equal count, and each (phase, stratum) `prior` already covers with `min_requests`
         steady observations is left out, a batched stratum an `oom` record of `prior` re-opens excepted. `seconds`
-        is the warm-work budget the plan carries for the Pool. `bucket_edges` are the input-unit edges of a `bucket:`
+        is the warm-work budget the plan carries for the Pool. The plan's job budget is `probe_items(config,
+        quantum_items)`. `bucket_edges` are the input-unit edges of a `bucket:`
         formation's grid (empty for any other): a batched item draws its jobs from one bucket.
 
         Raises:
@@ -729,6 +787,7 @@ class Probe:
         """
         if formation.startswith("bucket:") and not bucket_edges:
             raise ValueError("a bucketed formation plans over its bucket edges; none were given")
+        budget = probe_items(config, quantum_items)
         kept = _select(prior.observations, unit.hardware, config)
         strata, pools = _strata(candidates, config.length_strata)
         plan = ProbePlan(
@@ -739,7 +798,7 @@ class Probe:
             unplanned=(),
             formation=formation,
             seconds=seconds,
-            probe_items=config.probe_items,
+            probe_items=budget,
             used_jobs=0,
             edges=tuple(sorted(bucket_edges)),
         )
@@ -769,7 +828,7 @@ class Probe:
         plan = plan.model_copy(update={"batched": batched})
         free = [list(p) for p in pools]
         warmup = config.warmup_requests
-        if warmup > len(free[0]) or warmup > config.probe_items:
+        if warmup > len(free[0]) or warmup > budget:
             wanted = []
             unplanned.append(Unplanned(phase="WARMUP", stratum=None, reason="too_few_candidates"))
             warmups: list[ProbeItem] = []
@@ -777,7 +836,8 @@ class Probe:
             warmups = [
                 ProbeItem(phase="WARMUP", stratum=0, request_jobs=1, jobs=(free[0].pop(0),)) for _ in range(warmup)
             ]
-        singles, used = _single_items(free, wanted, warmup, config, unplanned)
+        middle_first = sorted(wanted, key=lambda i: i != len(free) // 2)
+        singles, used = _single_items(free, middle_first, warmup, config, unplanned, budget)
         if not singles and not (batched and warmups):
             return plan.model_copy(update={"unplanned": tuple(unplanned)})
         return plan.model_copy(
@@ -827,6 +887,7 @@ class Probe:
         left = plan.probe_items - plan.used_jobs
         item_s = single_estimate.item_s or 0.0
         supplied = fits_jobs = False
+        refused: PlanReason | None = None
         for top in range(max(caps.values(), default=0), 1, -1):
             sizes = {i: _supply(min(c, top), plan.remaining[i], plan.edges, config) for i, c in caps.items()}
             sizes = {i: b for i, b in sizes.items() if b >= 2}  # noqa: PLR2004 - a batch of one is the single phase
@@ -840,7 +901,9 @@ class Probe:
             )
             fits_jobs = fits_jobs or jobs <= left
             if jobs <= left and wall <= seconds_left:
-                return _batched_items(plan, sizes, none, config, jobs)
+                planned = _batched_items(plan, sizes, none, config, jobs)
+                return planned if refused is None else _unplanned(planned, refused)
+            refused = refused or ("over_budget" if jobs > left else "over_seconds")
         if not caps:
             return none
         if max(caps.values()) < 2:  # noqa: PLR2004 - a batch of one is the single phase

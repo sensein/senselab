@@ -40,6 +40,16 @@ def _source(estimate: Estimate) -> str:
     return f"{len(found.probe_ids)} probes, {found.observations} observations"
 
 
+def warmup_lines(estimate: Estimate | None) -> list[str]:
+    """Return the warm-up line of `explain` for an estimate that sets `warmup_unsettled`, else none."""
+    if estimate is None or not estimate.warmup_unsettled:
+        return []
+    return [
+        "  warm-up: the first warm requests of a length stratum differ from its later ones beyond the spread; "
+        "calibration.warmup_requests may be too short for this unit"
+    ]
+
+
 def _labelled(value: float | None, unit: str, source: str | None, why: str) -> str:
     return f"unmeasured ({why})" if value is None or source is None else f"{value:.3g} {unit} (measured: {source})"
 
@@ -122,6 +132,7 @@ def node_sizing(  # noqa: PLR0913 - the node's placement, the profile, the measu
         f"peak {kind} memory {_labelled(batch_peak, 'bytes', source, peak_why)}",
     ]
     lines = [f"  unit {unit_label}" if unit_label else "  unit unresolved", "  sizing: " + "; ".join(figures)]
+    lines += warmup_lines(estimate)
     cap = grant.memory_bytes
     if sized is not None and sized.batch_one_peak is not None and cap is not None and sized.batch_one_peak > cap:
         lines.append(

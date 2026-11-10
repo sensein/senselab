@@ -1,10 +1,10 @@
-"""The scale ladder: each task of a suite run at its scale points and measured per item (`scale-result@2.0`).
+"""The scale ladder: each task of a suite run at its scale points and measured per item (`scale-result@3.0`).
 
 `uv run python benchmarks/scale/ladder.py run SUITE --execution PROFILE [--measures-root PATH]`
 
-A suite (`scale-suite@1.1`, `suites/<name>.yaml`; `suites/fake.yaml` runs with `fake_stack/` on PYTHONPATH) names a
+A suite (`scale-suite@2.0`, `suites/<name>.yaml`; `suites/fake.yaml` runs with `fake_stack/` on PYTHONPATH) names a
 seed, the long signal's seconds and its tasks, and may name a table profile: `calibration:` overrides of
-`length_strata`, `batched_sizes` and `probe_items`, and `point_wall_s`, the seconds of warm probe work a point's probe
+`length_strata` and `batched_sizes`, and `point_wall_s`, the seconds of warm probe work a point's probe
 may take (`Probe.plan`'s budget, in place of the profile's `probe_s`). Each task names the input port its data binds
 to, its params, model and stack, its data (`synthetic` tones, `librispeech` utterances of a manifest, `gretel`
 documents of a manifest, or `payloads`, JSON records for the fake stack) and its scale points: item counts, or `long`,
@@ -12,7 +12,7 @@ one recording of the long seconds. `PROFILE` is a packaged execution profile, or
 `slurm` or `laptop` and edit it; `substrate.kind: local` runs a cluster's classes as local workers of one allocation).
 Each point is planned, run on a `Pool` over the profile's substrate into a store of its own, its pool probing into a
 measures root of the point's own (so each unit is probed in the run, not read from another), and measured from its
-events, its files, the samples each pool worker reported and the observations of every request. One `scale-result@2.0`
+events, its files, the samples each pool worker reported and the observations of every request. One `scale-result@3.0`
 document per point is written under `$SENSELAB_CACHE/2x/benchmarks/scale/<suite>/<commit>/`: per unit the plan resolved
 whether it was probed, its probe observations and its `Estimate` (unmeasured, with reasons, where the probe did not
 measure), the per-item seconds (`request_cost`) and the calibration settings it ran under. With `--measures-root PATH`
@@ -39,7 +39,7 @@ from typing import Any
 
 import soundfile
 from senselab_core.kernel.dataset import ManifestRow
-from senselab_core.kernel.formats import readable
+from senselab_core.kernel.formats import FormatVerdict, check
 from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.runtime.bids import bids_dataset
 from senselab_core.runtime.calibration import Observation
@@ -56,7 +56,7 @@ from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError,
 from senselab_core.runtime.hardware import host_token, memory_bytes
 from senselab_core.runtime.measures import MeasureRoots, MeasureUnit
 from senselab_core.runtime.planner import Plan, plan
-from senselab_core.runtime.probe import Probe
+from senselab_core.runtime.probe import Probe, probe_items
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import NAMESPACE, cache_root
 from senselab_core.runtime.sizing import Sample
@@ -70,15 +70,17 @@ sys.path[:0] = [str(HERE), str(HERE.parent)]
 import bids_tree  # noqa: E402 - beside this script
 from batch_invariance import harness  # noqa: E402 - the suites' adapters
 
-SUITE_FORMAT = "scale-suite@1.1"
-"""The suite format this reads and writes; `@1.1` added `calibration` and `point_wall_s`, and any `@1.x` is read."""
-RESULT_FORMAT = "scale-result@2.0"
+SUITE_FORMAT = "scale-suite@2.0"
+"""The suite format this reads; `@2` dropped `calibration.probe_items`, which is derived, and any `@2.x` is read."""
+RETIRED_SUITE_FORMATS = ("scale-suite@1",)
+"""Suite formats refused with a migration statement."""
+RESULT_FORMAT = "scale-result@3.0"
 BUDGETS_FORMAT = "scale-budgets@1.0"
 LONG = "long"
 FLAT_POINTS = (100, 10_000)
 """The points whose per-item costs the flatness rule compares (P-33)."""
-TABLE_KEYS = frozenset({"length_strata", "batched_sizes", "probe_items"})
-"""The calibration settings a suite's table profile may override: strata, batch sizes and item budget, no seconds."""
+TABLE_KEYS = frozenset({"length_strata", "batched_sizes"})
+"""The calibration settings a suite's table profile may override: strata and batch sizes, no seconds."""
 FAULT_MESSAGE_CHARS = 200
 """The characters of a failed job's message a result keeps: enough to name the failure, not to copy its input."""
 RECORDING = {"synthetic": "Audio", "librispeech": "Audio"}
@@ -101,7 +103,7 @@ class Entry:
 
 @dataclass(frozen=True)
 class Suite:
-    """A `scale-suite@1.1` file: name, seed, long seconds, tasks, table profile and per-point wall budget.
+    """A `scale-suite@2.0` file: name, seed, long seconds, tasks, table profile and per-point wall budget.
 
     `calibration` overrides `TABLE_KEYS` of the execution profile's calibration settings; `point_wall_s` is the seconds
     of warm probe work a point's probe may take, None for the profile's `probe_s`.
@@ -123,7 +125,13 @@ class Suite:
                 `TABLE_KEYS` (a seconds key among them).
         """
         raw = load_yaml(path, "scale suite")
-        if not readable(SUITE_FORMAT, raw.get("format")):
+        verdict = check(SUITE_FORMAT, raw.get("format"), RETIRED_SUITE_FORMATS)
+        if verdict is FormatVerdict.RETIRED:
+            raise ValueError(
+                f"{path.name} is a retired scale-suite@1 file: scale-suite@2 drops calibration.probe_items, which "
+                "is derived from the profile; delete that key and write format: scale-suite@2.0"
+            )
+        if verdict is not FormatVerdict.ACCEPTED:
             raise ValueError(f"{path.name} is not a {SUITE_FORMAT.split('.', maxsplit=1)[0]}.x file")
         tasks = tuple(Entry(**{**t, "points": tuple(t["points"])}) for t in raw["tasks"])
         bad = [p for t in tasks for p in t.points if p != LONG and not (isinstance(p, int) and p >= 1)]
@@ -385,7 +393,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     out: Path,
     measures_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Plan, run and measure `entry` at `point` under `profile`; return its `scale-result@2.0` document.
+    """Plan, run and measure `entry` at `point` under `profile`; return its `scale-result@3.0` document.
 
     Its store is `<out>/<label>@<point>/store`, and its pool probes into the measures root beside it, with the
     suite's per-point wall budget as its probe seconds, so each point probes afresh and reads no other point's
@@ -447,6 +455,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
         "profile_digest": profile.canonical_digest(),
         "probe_s": profile.probe_s if suite.point_wall_s is None else suite.point_wall_s,
         "calibration": profile.calibration.model_dump(mode="json"),
+        "probe_items": probe_items(profile.calibration, profile.pool.quantum_items),
         "sha": commit(),
         "jobs": sorted(workers | {worker_id()}),
         "done": status.done,
