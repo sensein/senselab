@@ -11,7 +11,7 @@ import hashlib
 import json
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -90,17 +90,46 @@ def real_cache_untouched() -> Iterator[None]:
     assert not written, f"tests wrote {len(written)} file(s) under the real cache root {kept}; give them tmp_path"
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _env_root(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
-    """Give `SENSELAB_ENV_ROOT` a session temp directory when unset, so the test profile builds envs nowhere else."""
-    if os.environ.get("SENSELAB_ENV_ROOT"):
-        yield
-        return
-    os.environ["SENSELAB_ENV_ROOT"] = str(tmp_path_factory.mktemp("envs"))
-    try:
-        yield
-    finally:
-        del os.environ["SENSELAB_ENV_ROOT"]
+PROFILE_VARIABLE = "SENSELAB_TEST_PROFILE"
+CLUSTER_FIXTURE = PACKAGES / "senselab-core" / "tests" / "data" / "profiles" / "cluster.yaml"
+
+
+@pytest.fixture(scope="session")
+def _session_env_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("envs")
+
+
+@pytest.fixture
+def test_profile(
+    _session_env_root: Path,
+) -> Callable[[Mapping[str, Any] | None], Any]:
+    """Return `load(override=None)`, the test profile: `$SENSELAB_TEST_PROFILE` untouched, else the cluster fixture.
+
+    The fixture's env roots are `${SENSELAB_ENV_ROOT}` with no fallback; when that variable is unset they are pointed,
+    by a mapping override, at a session temp directory. The process environment is never changed.
+    """
+    from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - core may not be installed
+
+    def load(override: Mapping[str, Any] | None = None) -> Any:  # noqa: ANN401
+        site = os.environ.get(PROFILE_VARIABLE)
+        if site:
+            return ExecutionProfile.load(Path(site), override)
+        roots = (
+            {}
+            if os.environ.get("SENSELAB_ENV_ROOT")
+            else {"env_roots": {"isolated": str(_session_env_root), "server": str(_session_env_root / "servers")}}
+        )
+        return ExecutionProfile.load(CLUSTER_FIXTURE, {**roots, **(override or {})})
+
+    return load
+
+
+@pytest.fixture
+def site_profile(test_profile: Callable[[Mapping[str, Any] | None], Any]) -> Callable[[Mapping[str, Any] | None], Any]:
+    """`test_profile` for a model or GPU test, skipped unless `$SENSELAB_TEST_PROFILE` names a site profile."""
+    if not os.environ.get(PROFILE_VARIABLE):
+        pytest.skip(f"set {PROFILE_VARIABLE} to a site profile")
+    return test_profile
 
 
 def _slack_document(request: pytest.FixtureRequest) -> dict[str, Any]:

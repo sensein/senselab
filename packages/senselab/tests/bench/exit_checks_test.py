@@ -305,9 +305,9 @@ def test_a_plan_comparison_needs_a_second_profile_beside_the_packaged_one(tmp_pa
     """The config names only packaged profiles, so `plan` refuses to compare until a profile file is given."""
     config = exitlib.load_config()
     assert config.plan_profiles == ("laptop",)
-    with pytest.raises(ValueError, match="at least two distinct profiles"):
+    with pytest.raises(exitlib.NeedsSecondProfile, match="at least two distinct profiles"):
         exitlib.plan_identity("resample", tmp_path, config)
-    with pytest.raises(ValueError, match="at least two distinct profiles"):
+    with pytest.raises(exitlib.NeedsSecondProfile, match="at least two distinct profiles"):
         exitlib.plan_identity("resample", tmp_path, config, ["laptop"])
 
 

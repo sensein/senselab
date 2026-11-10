@@ -1,6 +1,8 @@
 """The execution profile: packaged profiles, merging, the source allowlist, and `resolve_execution`."""
 
+import os
 import platform
+from collections.abc import Callable
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -367,3 +369,36 @@ def test_a_lease_whose_beat_cannot_outrun_the_attribute_delay_is_refused() -> No
     with pytest.raises(LeaseBoundError, match=r"0\.33.*300.*102"):
         ExecutionProfile.load(CLUSTER, {"lease": {"attribute_delay_s": 102}})
     assert ExecutionProfile.load(CLUSTER, {"lease": {"attribute_delay_s": 101}}).lease.attribute_delay_s == 101
+
+
+@pytest.mark.logic
+def test_the_test_profile_is_the_site_file_untouched_or_the_fixture_with_a_temp_env_root(
+    test_profile: Callable[..., ExecutionProfile], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`SENSELAB_TEST_PROFILE` is loaded as it is; without it the fixture's roots go to a temp dir, env unchanged."""
+    monkeypatch.delenv("SENSELAB_ENV_ROOT", raising=False)
+    monkeypatch.delenv("SENSELAB_TEST_PROFILE", raising=False)
+    before = dict(os.environ)
+    fixture = test_profile()
+    assert fixture.name == "cluster" and fixture.env_root("isolated").is_dir()
+    assert not str(fixture.env_root("isolated")).startswith(str(Path.home()))
+    assert fixture.env_root("server") == fixture.env_root("isolated") / "servers"
+    assert test_profile({"retry": {"attempts": 5}}).retry.attempts == 5
+    assert dict(os.environ) == before
+    monkeypatch.setenv("SENSELAB_ENV_ROOT", str(tmp_path / "given"))
+    assert test_profile().env_root("isolated") == tmp_path / "given"
+    site = tmp_path / "site.yaml"
+    site.write_text(
+        CLUSTER.read_text().replace("name: cluster", "name: mysite").replace("${SENSELAB_ENV_ROOT}", "/site/envs")
+    )
+    monkeypatch.setenv("SENSELAB_TEST_PROFILE", str(site))
+    loaded = test_profile()
+    assert loaded.name == "mysite" and loaded.env_root("isolated") == Path("/site/envs")
+
+
+@pytest.mark.logic
+def test_a_site_test_is_skipped_without_a_site_profile(
+    site_profile: Callable[..., ExecutionProfile], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With `SENSELAB_TEST_PROFILE` set, `site_profile` is the same loader (the unset case skips at setup)."""
+    assert site_profile().name

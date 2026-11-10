@@ -4,7 +4,7 @@ import json
 import os
 import stat
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -34,12 +34,6 @@ from senselab_core.testing.contracts import contract_cases
 from senselab_core.testing.processes import group_gone
 from senselab_core.testing.workers import RealWorkers
 from senselab_worker.faults import FaultClass
-
-CLUSTER = (
-    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
-    / "senselab-core/tests/data/profiles/cluster.yaml"
-)
-SITE = Path(os.environ.get("SENSELAB_TEST_PROFILE") or CLUSTER)
 
 LOCK_RECORDS = packaged_lock_records("senselab")
 
@@ -255,12 +249,14 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
 @pytest.mark.gpu
 @pytest.mark.model
 @pytest.mark.network
-def test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs(tmp_path: Path) -> None:
-    """On `InProcess` under a cluster profile the served pinned model covers a name and a number, attested.
+def test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs(
+    tmp_path: Path, site_profile: Callable[..., ExecutionProfile]
+) -> None:
+    """On `InProcess` under the site profile the served pinned model covers a name and a number, attested.
 
     Empty, non-BMP and long texts each give spans inside the text or a typed fault.
     """
-    profile = ExecutionProfile.load(SITE, {"stack_preferences": {"pii_spans": ["vllm"]}})
+    profile = site_profile({"stack_preferences": {"pii_spans": ["vllm"]}})
     store = ResultStore(tmp_path / "results")
 
     def run(text: str) -> Any:  # noqa: ANN401

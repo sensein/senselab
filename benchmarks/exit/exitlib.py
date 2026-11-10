@@ -459,16 +459,20 @@ def write_json(path: Path, document: object) -> None:
     path.write_text(json.dumps(document, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 
+class NeedsSecondProfile(ValueError):
+    """A plan comparison with fewer than two distinct profiles."""
+
+
 def plan_identity(step: str, work: Path, config: Config, profiles: Sequence[str] = ()) -> tuple[str, list[Difference]]:
     """Plan `step` under the config's profiles and `profiles` on this host; return the one hash and the differences.
 
     Raises:
-        ValueError: fewer than two distinct profiles are named.
+        NeedsSecondProfile: fewer than two distinct profiles are named.
         PlanIdentityError: the hashes differ, or the plans differ outside `placement`.
     """
     names = list(dict.fromkeys([*config.plan_profiles, *profiles]))
     if len(names) < 2:  # noqa: PLR2004 - a comparison needs two profiles
-        raise ValueError(f"a plan comparison needs at least two distinct profiles, got {names}")
+        raise NeedsSecondProfile(f"a plan comparison needs at least two distinct profiles, got {names}")
     isolate(work, f"{step}-plan")
     root = build_tree(config.steps[step], work)
     plans = [planned(config.steps[step], root, load_profile(name)) for name in names]
@@ -531,7 +535,7 @@ def identity_cli(step: str, argv: Sequence[str] | None = None) -> int:
         except PlanIdentityError as error:
             print(error)
             return 1
-        except (ValueError, FileNotFoundError) as error:
+        except NeedsSecondProfile as error:
             parser.error(f"{error}; name a site profile with `plan --profile FILE`")
         print(
             f"{step}: one plan hash {plan_hash} under {', '.join([*config.plan_profiles, *args.profile])}; "
