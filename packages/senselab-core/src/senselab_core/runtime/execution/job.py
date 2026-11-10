@@ -242,11 +242,17 @@ def _sent_in_halves(chunk: Sequence[_Pending], sending: _Sending) -> list[JobOut
     began = datetime.now(timezone.utc)
     jobs = [p.job for p in chunk]
     try:
-        results = _send(jobs, sending.placement, sending.env, sending.profile, sending.workers, sending.expected)
+        results = _send(
+            jobs,
+            sending.placement,
+            sending.env,
+            sending.profile,
+            sending.workers,
+            sending.expected,
+            sending.bisect_resource,
+        )
     except _Raised as raised:
         exc = raised.cause
-        if not sending.bisect_resource or not splits(exc):
-            raise exc from None
         if len(chunk) > 1:
             return _halves(chunk, sending)
         key = build_key(chunk[0].job.call, sending.placement, chunk[0].context)
@@ -473,11 +479,13 @@ def _send(  # noqa: PLR0913 - the request's jobs and everything placing it
     profile: ExecutionProfile,
     workers: WorkerSet,
     expected: Attestation | None,
+    split: bool = False,
 ) -> list[dict[str, Any]]:
     """Send `jobs` as one request to the backend's worker, with the task params and `backend_params` beside them.
 
     A host worker is handed kernel values as they are; an isolated or server one, their wire forms. The request is
-    reported (`request_reports`) tagged with its jobs' refs.
+    reported (`request_reports`) tagged with its jobs' refs. What the worker's request raises propagates as it was
+    raised; with `split`, a splittable resource fault (`splits`) is raised as `_Raised`, for the caller to split.
     """
     backend, call = placement.backend, jobs[0].call
     params = {**call.params.model_dump(mode="json"), "backend_params": placement.backend_params.model_dump(mode="json")}
@@ -488,7 +496,9 @@ def _send(  # noqa: PLR0913 - the request's jobs and everything placing it
         try:
             return worker.run(items, params)
         except Exception as exc:
-            raise _Raised(exc) from exc
+            if split and splits(exc):
+                raise _Raised(exc) from exc
+            raise
 
 
 def _record(  # noqa: PLR0913 - one sent item and where its result goes

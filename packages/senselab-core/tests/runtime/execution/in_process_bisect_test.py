@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -11,18 +12,20 @@ from pool_backend_oom_test import BATCHED
 from pool_probe_test import TEXTY
 from pool_stack_fixture import packaged, registry
 from senselab_core.kernel.dataset import Record, ValueInput
+from senselab_core.kernel.graph import Graph
+from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.call import RunConfig, bind_input
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.execution.executor import Handle
-from senselab_core.runtime.execution.in_process import InProcess, node_fragment
-from senselab_core.runtime.execution.job import Completed, Failed, JobOutcome
+from senselab_core.runtime.execution.in_process import InProcess, fragment_jobs, node_fragment
+from senselab_core.runtime.execution.job import Completed, Failed, JobOutcome, execute
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.locks import LeaseTimeout
-from senselab_core.runtime.planner import plan
+from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.measures import FixedEstimates, FixedUnit
-from senselab_worker.faults import ResourceFault
+from senselab_worker.faults import ResourceFault, error_record
 
 pytestmark = pytest.mark.logic
 
@@ -43,31 +46,36 @@ def profile(tmp_path: Path) -> Iterator[ExecutionProfile]:
         yield ExecutionProfile.load("laptop", override)
 
 
-def _run(tmp_path: Path, profile: ExecutionProfile, texts: Sequence[str]) -> list[JobOutcome]:
-    """Submit one fragment mapping the text task over `texts` to an `InProcess` that batches at 12; return outcomes."""
+def _planned(profile: ExecutionProfile, texts: Sequence[str]) -> tuple[Plan, dict[InputIdentity, object]]:
+    """Return the plan mapping the text task over one record per text, and its input values."""
     graph = {
         "inputs": {"text": "list[Text]"},
         "nodes": [{"id": "a", "task": TEXTY.name, "task_version": "1"}],
         "edges": [{"source": "input.text", "target": "a.text", "kind": "map"}],
     }
-    from senselab_core.kernel.graph import Graph  # noqa: PLC0415 - as `pool_probe_test._plan`
-
     records = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(texts)]
     placed = plan(Graph.model_validate(graph), RecordSet(records), config=RunConfig(), execution=profile)
-    values = {bind_input("x", "Text", t)[0]: bind_input("x", "Text", t)[1] for t in texts}
-    workers = WorkerSet(1)
+    return placed, {bind_input("x", "Text", t)[0]: bind_input("x", "Text", t)[1] for t in texts}
+
+
+def _run(
+    tmp_path: Path, profile: ExecutionProfile, texts: Sequence[str], workers: WorkerSet | None = None
+) -> list[JobOutcome]:
+    """Submit one fragment mapping the text task over `texts` to an `InProcess` that batches at 12; return outcomes."""
+    placed, values = _planned(profile, texts)
+    held = workers if workers is not None else WorkerSet(1)
     try:
         executor = InProcess(
             store=ResultStore(tmp_path / "store"),
             profile=profile,
-            workers=workers,
+            workers=held,
             measures=FixedEstimates(BATCHED),  # type: ignore[arg-type]
             units=FixedUnit(profile).unit,
         )
         handle = executor.submit(node_fragment(placed, executor.admit(placed, values)))
         return executor.outcomes(Handle(id=handle.id))
     finally:
-        workers.close()
+        held.close()
 
 
 def _texts(n: int, *, at: dict[int, str] | None = None) -> list[str]:
@@ -116,69 +124,104 @@ def test_a_one_job_resource_fault_is_that_jobs_failure(tmp_path: Path, profile: 
     assert backend.BATCHES == [1]
 
 
-def _raising(monkeypatch: pytest.MonkeyPatch, exc: Exception, *, above: int = 0) -> list[int]:
-    """Make a loaded worker's `run` raise `exc` for a request of more than `above` jobs; return the sizes it got."""
-    sent: list[int] = []
-    real = WorkerSet.checkout
+class Raising(WorkerSet):
+    """A worker set whose loaded workers raise `exc` for a request of more than `above` jobs, and count each request."""
+
+    def __init__(self, exc: Exception, *, above: int = 0) -> None:
+        """Raise `exc` above `above` jobs."""
+        super().__init__(1)
+        self.exc, self.above, self.sent = exc, above, []  # type: ignore[var-annotated]
 
     @contextmanager
-    def checkout(self: WorkerSet, *args: Any, **kwargs: Any) -> Iterator[object]:  # noqa: ANN401 - `checkout`'s own
-        with real(self, *args, **kwargs) as worker:
-
-            class Raising:
-                def run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
-                    sent.append(len(items))
-                    if len(items) > above:
-                        raise exc
-                    return worker.run(items, params)
-
-            yield Raising()
-
-    monkeypatch.setattr(WorkerSet, "checkout", checkout)
-    return sent
+    def checkout(self, *args: Any, **kwargs: Any) -> Iterator[Any]:  # noqa: ANN401 - `checkout`'s own arguments
+        """Hold the real worker, wrapped so that its `run` raises."""
+        with super().checkout(*args, **kwargs) as worker:
+            yield _Loaded(worker, self)
 
 
-def test_a_request_that_raises_a_resource_fault_is_split_too(
-    tmp_path: Path, profile: ExecutionProfile, monkeypatch: pytest.MonkeyPatch
-) -> None:
+class _Loaded:
+    def __init__(self, worker: Any, owner: Raising) -> None:  # noqa: ANN401 - the real worker
+        self.worker, self.owner = worker, owner
+
+    def run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+        self.owner.sent.append(len(items))
+        if len(items) > self.owner.above:
+            raise self.owner.exc
+        return self.worker.run(items, params)  # type: ignore[no-any-return]
+
+
+class Unloadable(WorkerSet):
+    """A worker set whose checkout raises `exc`, as a start or load that failed or a start lease that is busy."""
+
+    def __init__(self, exc: Exception) -> None:
+        """Raise `exc` from every checkout."""
+        super().__init__(1)
+        self.exc, self.checkouts = exc, 0
+
+    @contextmanager
+    def checkout(self, *args: Any, **kwargs: Any) -> Iterator[Any]:  # noqa: ANN401, ARG002 - `checkout`'s own
+        """Raise."""
+        self.checkouts += 1
+        raise self.exc
+        yield
+
+
+def test_a_request_that_raises_a_resource_fault_is_split_too(tmp_path: Path, profile: ExecutionProfile) -> None:
     """A worker that raises out of its request, rather than answering each item, is split by the same predicate."""
-    sent = _raising(monkeypatch, backend.OutOfMemoryError("out of memory"), above=backend.FITS)
-    outcomes = _run(tmp_path, profile, _texts(BATCH))
-    assert all(isinstance(o, Completed) for o in outcomes) and sent == [12, 6, 3, 3, 6, 3, 3]
+    workers = Raising(backend.OutOfMemoryError("out of memory"), above=backend.FITS)
+    outcomes = _run(tmp_path, profile, _texts(BATCH), workers)
+    assert all(isinstance(o, Completed) for o in outcomes) and workers.sent == [12, 6, 3, 3, 6, 3, 3]
 
 
-def test_a_lone_job_that_raises_a_resource_fault_fails_with_it(
-    tmp_path: Path, profile: ExecutionProfile, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_lone_job_that_raises_a_resource_fault_fails_with_it(tmp_path: Path, profile: ExecutionProfile) -> None:
     """A request of one whose worker raised out of memory is sent once and that job fails; nothing is split."""
-    sent = _raising(monkeypatch, backend.OutOfMemoryError("out of memory"))
-    [dead] = _run(tmp_path, profile, _texts(1))
+    workers = Raising(backend.OutOfMemoryError("out of memory"))
+    [dead] = _run(tmp_path, profile, _texts(1), workers)
     assert isinstance(dead, Failed) and (dead.failure.fault, dead.failure.type) == ("resource", "OutOfMemoryError")
-    assert sent == [1]
+    assert workers.sent == [1]
 
 
 def test_a_busy_start_lease_propagates_from_the_request_that_waited_on_it(
-    tmp_path: Path, profile: ExecutionProfile, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, profile: ExecutionProfile
 ) -> None:
     """A lease wait is a `TimeoutError` of the resource class, but it is raised once and nothing is split."""
-    sent = _raising(monkeypatch, LeaseTimeout("start lease busy"))
+    workers = Raising(LeaseTimeout("start lease busy"))
     with pytest.raises(LeaseTimeout):
-        _run(tmp_path, profile, _texts(BATCH))
-    assert sent == [12]
+        _run(tmp_path, profile, _texts(BATCH), workers)
+    assert workers.sent == [12]
 
 
-def test_a_checkout_that_raises_is_never_split(
-    tmp_path: Path, profile: ExecutionProfile, monkeypatch: pytest.MonkeyPatch
-) -> None:
+@pytest.mark.parametrize("exc", [LeaseTimeout("start lease busy"), ResourceFault("the model does not fit at load")])
+def test_a_checkout_that_raises_is_never_split(tmp_path: Path, profile: ExecutionProfile, exc: Exception) -> None:
     """A lease wait or a resource fault raised by checkout, start or load is not a request running out."""
-    checkouts: list[Exception] = []
-    for exc in (LeaseTimeout("start lease busy"), ResourceFault("the model does not fit at load")):
+    workers = Unloadable(exc)
+    with pytest.raises(type(exc)):
+        _run(tmp_path, profile, _texts(BATCH), workers)
+    assert workers.checkouts == 1
 
-        def checkout(self: WorkerSet, *args: object, _exc: Exception = exc, **kwargs: object) -> object:  # noqa: ARG001
-            checkouts.append(_exc)
-            raise _exc
 
-        monkeypatch.setattr(WorkerSet, "checkout", checkout)
-        with pytest.raises(type(exc)):
-            _run(tmp_path, profile, _texts(BATCH))
-    assert len(checkouts) == 2
+@pytest.mark.parametrize("split", [True, False], ids=["bisecting", "plain"])
+def test_what_a_request_raises_keeps_its_cause_chain(tmp_path: Path, profile: ExecutionProfile, split: bool) -> None:
+    """An exception that is not split reaches the caller as raised: its cause is the OSError and the record names it."""
+    cause = OSError("pipe closed")
+    failure = ValueError("the request broke")
+    failure.__cause__ = cause
+    placed, values = _planned(profile, _texts(3))
+    workers = Raising(failure)
+    executor = InProcess(store=ResultStore(tmp_path / "store"), profile=profile, workers=workers)
+    jobs, placement = fragment_jobs(node_fragment(placed, executor.admit(placed, values)), placed, values)
+    try:
+        with pytest.raises(ValueError, match="the request broke") as caught:
+            execute(
+                jobs,
+                replace(placement, batch_size=3),
+                store=ResultStore(tmp_path / "store"),
+                run=RunConfig(),
+                profile=profile,
+                workers=workers,
+                bisect_resource=split,
+            )
+    finally:
+        workers.close()
+    assert caught.value is failure and caught.value.__cause__ is cause
+    assert "OSError" in str(error_record(caught.value)["traceback"])
