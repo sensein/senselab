@@ -53,6 +53,8 @@ on. The default run is `-m logic`; contract, limits, use case and env are desele
 | **Env** | `env` | Each locked env builds, imports the worker runtime and round-trips every data type | lock files | GitHub: the model-free release-gate packaging build on every PR (`core-env`, `-m "env and not slow and not model"`), which builds wheels and a venv of the senselab distributions and no backend env. ORCD only: every backend env build, per-lock builds for changed locks, full builds weekly | blocking for that env |
 | **Benchmark** | not pytest | Accuracy and speed on public data, tracked over releases | public benchmark subsets and full sets | CPU smoke (<15 min) on PRs touching a task and nightly (not yet in CI); GPU smoke weekly on ORCD; full per release on ORCD | tracked, not pass/fail; regressions beyond a band open an issue |
 
+**Site profile for model, env and GPU runs (P-42).** Senselab packages no site profile, so a run that selects the `model`, `large_model` or `gpu` marker (`-m "... and model"`) refuses to collect unless `SENSELAB_TEST_PROFILE` names a site profile file (a pytest usage error naming the variable); an ad hoc run that does not select those tiers skips such a test instead. ORCD model, backend-env and GPU runs therefore export `SENSELAB_TEST_PROFILE=<the group's site profile>` and optionally `SENSELAB_ENV_ROOT=<scratch>`; the profile is loaded untouched.
+
 Within limits and use cases, sub-markers `gpu`, `network` and `slow` select hardware and runtime.
 Both tiers are deselected by default, as are contract and env: the PR command is `-m "(logic or contract) and not model"`.
 
@@ -199,7 +201,7 @@ set in §4.
 | every PR | `pre-commit`; logic + contract, model-free, on 3.13 (3.11–3.14 on a PR labelled `full-matrix`) from a locked core-only install (`uv sync --locked`), with import contracts and per-distribution sdist-to-wheel builds (`core-only`); the source-digest check (`source-digests`, `scripts/check_source_digests.py`); the implementer and reviewer models differ (`pr-models`, `scripts/check_pr_models.py`); the model-free release-gate packaging tests (`core-env`); worker logic, env and contract tests on 3.10 (`worker-floor`, the one job that does not install from `uv.lock`: the lock requires Python 3.11 or later, so a locked 3.10 constraints file is a follow). A guard test (`ci_tiers_test.py`) refuses any other unlocked install. Not yet in CI: per-lock env builds, CPU smoke benchmarks (<15 min) when a task is touched |
 | label on a PR (`limits`) | model-free limits only, on 3.13 (`core-limits`); never use cases (H-R54) |
 | nightly (`schedule`, `workflow_dispatch`; `2x-nightly.yaml` on `alpha`) | every PR job against `2.x` with the 3.11–3.14 matrix, and `limits and not model` on 3.13. No use case and no model test: those are ORCD. Not yet in CI: the scale ladder (`benchmarks/scale`, P-33), CPU smoke benchmarks, and 3.15 and the release-tagged-merge trigger of owner item 54 |
-| every pushed SHA on a task or backend change (ORCD) | the model, backend-env and GPU tiers the change touches, and the use cases, submitted from a pinned SHA |
+| every pushed SHA on a task or backend change (ORCD) | the model, backend-env and GPU tiers the change touches, and the use cases, submitted from a pinned SHA; the job exports `SENSELAB_TEST_PROFILE=<the group's site profile file>` and, so env trees persist between jobs, `SENSELAB_ENV_ROOT=<scratch>` |
 | weekly (ORCD) | GPU smoke benchmarks; core CPU benchmark suite; full env builds; use cases |
 | per release (ORCD) | full benchmarks; GPU limits |
 

@@ -252,6 +252,8 @@ it is amended here.
 - **Source**: owner, 2026-11-09: senselab is general purpose; it ships no site execution profile.
 - **Check**: `packaged_profiles()` is `("laptop", "slurm")`; the template refuses to load unfilled; the
   profile tests use the fixture, not a packaged name.
+  A file passed as `--execution` is a whole profile (`IncompleteProfile` otherwise); layering is
+  `load(name, override)`.
 
 ### P-41 Docs communicate senselab and its progress, with examples on public data
 - **Status**: active

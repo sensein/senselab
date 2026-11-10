@@ -184,11 +184,11 @@ index only; with no entry, its figures are "unmeasured: hardware not yet seen".
 `calibration.measures_roots` is a list of roots, read in order and pooled (a run reads the files of every root it can
 read, under the trust filter of §3.5):
 
-- on `orcd`: the group's shared root beside the result store, then the user's own `<cache root>/2x/measures`, written
-  `${cache_root}/2x/measures` in the profile (the token is `revision.cache_root()`); a resolved root must be absolute,
+- in a group's site profile (a user file, P-42): the group's shared root beside the result store, then the user's own
+  `<cache root>/2x/measures`, written `${cache_root}/2x/measures` in the profile (the token is `revision.cache_root()`); a resolved root must be absolute,
   an unset or empty `SENSELAB_MEASURES_ROOT` is no root (logged, never raised), and a blank, repeated or relative root
   is refused at load;
-- on `laptop`: the own root only.
+- in `laptop` and the `slurm` template: the own root only.
 
 Writes and leases go to the **first writable root**. Writability is checked once at run start by the storage probe
 (ADR-003; `mkdir` of a probe directory), before any work, and the plan states where measures will be written
@@ -898,7 +898,8 @@ Amended 2026-11-09 (T20R-7b):
   resolved, each with `probed` (whether this run probed it) and the `probe_ids` this run wrote, empty when its estimate
   was served from the root's earlier observations; its `observations` are those of this run's probes. A campaign whose
   figures are evidence therefore starts from an empty `--measures-root`. `--execution` has no default: a packaged profile name
-  or a YAML file over one, so no site's profile is assumed. Nothing leaves the store but probe ids and counts: no
+  or a path to a whole profile file (a partial file is refused; layering is `load(name, override)` or `--override FILE`),
+  so no site's profile is assumed. Nothing leaves the store but probe ids and counts: no
   `MeasureRecord.uid` is in `explain`'s text (T20R-2b N-9).
 
 ## 10. What a run needs, and a site placement hook (owner, 2026-11-08)
@@ -1003,16 +1004,16 @@ T20R-7a′. Every key gets a section in `config-derivations.md` (T20R-1). Values
 T20R-10's measurement under the stated rule (ruling O-6); `substrate.placement_hook_s` (§10.3, T20R-12) is provisional
 too, until a real adapter is timed.
 
-| key | `orcd` | `laptop` | derivation rule |
+| key | `slurm` | `laptop` | derivation rule |
 |---|---|---|---|
-| `measures_roots` | `${SENSELAB_MEASURES_ROOT}`, the group's shared root (no fallback; unset is no root, logged once per run and never raised), then `<cache root>/2x/measures` | `<cache root>/2x/measures` | §3.3: shared first so the group reuses; own as the write fallback for a read-only member |
-| `trust` | `group` | `own` | §3.5; ruling O-3; overridable per run by the run config's `calibration.trust` |
+| `measures_roots` | `<cache root>/2x/measures` | `<cache root>/2x/measures` | §3.3: the own root; a group's site profile (a user file) lists its shared root first, written `${VAR}` with no fallback, so the group reuses and the own root is the write fallback for a read-only member |
+| `trust` | `own` | `own` | §3.5; ruling O-3; overridable per run by the run config's `calibration.trust` |
 | `warmup_requests` | 2 *provisional* | 2 | the least w such that, on the table probe, the median of warm requests w+1..w+3 of one stratum lies within the steady band of the requests after them, the maximum over GPU units. Provisional basis: R-230 (CUDA initialised inside the first request) plus one request for shape-dependent kernel selection; R-231's decay was confounded by gathering (R-234) |
 | `length_strata` | 2 | 2 | two points fit a line in length (must-fix 8, R-221); the table profile uses 3 to test linearity |
 | `min_requests` | 3 | 3 | the least count whose median tolerates one outlier |
 | `single_item_jobs` | 4 *provisional* | 4 | items of 1 and k jobs separate `a` from the per-job cost; k such that `a` is at least a fifth of a k-job item's wall at the measured CPU fit (R-236: `a` 0.040 s against 0.0366 s per job) |
 | `batched_sizes` | 1 | 1 | run time measures `B₁` only; the table profile measures 2 (R-237) |
-| `probe_items` | 200 *provisional* | 50 | a bound, not a checked sum; chosen as the jobs of the minimal protocol at a target batch B: `warmup_requests + length_strata·min_requests·(1 + B) + min_requests·single_item_jobs`. `orcd` B = 30 is a target until T20R-10 re-derives B from the measured memory batches (N4); `laptop` B = 5, one CPU worker; the table profile sizes it for B = 100 |
+| `probe_items` | 200 *provisional* | 50 | a bound, not a checked sum; chosen as the jobs of the minimal protocol at a target batch B: `warmup_requests + length_strata·min_requests·(1 + B) + min_requests·single_item_jobs`. `slurm` B = 30 is a target until T20R-10 re-derives B from the measured memory batches (N4); `laptop` B = 5, one CPU worker; the table profile sizes it for B = 100 |
 | `confidence` | 1.645 | 1.645 | one-sided 5 %: the false-batch rate of the batch decision (§5.4 step 6) and the share of items cut past `quantum_s` (§6.2); a wrong batch decision errs to batch 1 |
 | `drift_confidence` | 2.576 | 2.576 | two-sided 1 %: at most one spurious confirming probe per hundred windows of a stable unit |
 | `observations_kept` | 3 | 3 | superseded probes kept for audit: three give a median of medians tolerating one bad probe |
@@ -1201,7 +1202,7 @@ multi-node checks are submitted ORCD jobs, never run on login or claude-rc nodes
   properties and no load-time rule checks; one run config reader, validating `thresholds` and `calibration`, so the run
   config's `calibration.trust` override is read (`run-config@2.1`); `Observation`, `Estimate`, `ProbePhase`, `LengthProfile`, `HardwareClass` types (data only); format
   tags registered (§12); `config-derivations.md` sections. `sizing.calibration_*` stay (T20R-7a′ removes them).
-- **Files.** `runtime/execution_settings.py`, `runtime/profiles.py`, `runtime/compare.py` (the run config reader), `runtime/call.py` (run config), `runtime/data/profiles/{laptop,orcd}.yaml`,
+- **Files.** `runtime/execution_settings.py`, `runtime/profiles.py`, `runtime/compare.py` (the run config reader), `runtime/call.py` (run config), `runtime/data/profiles/{laptop,slurm}.yaml`,
   `runtime/calibration.py` (types only), `kernel/formats.py`, `config-derivations.md`.
 - **Tests failing now.** `test_probe_s_peer_wait_s_and_drift_window_are_derived_from_the_profile`;
   `test_one_run_config_reader_validates_thresholds_and_calibration`; `test_the_group_measures_root_is_the_variable_alone`;
