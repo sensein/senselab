@@ -10,7 +10,7 @@ on:
     # `ready_for_review` re-triggers a draft PR marked ready; `edited` re-checks the models named in the body.
     types: [opened, synchronize, reopened, labeled, ready_for_review, edited]
   workflow_dispatch:
-  # The nightly workflow on the default branch (2x-nightly.yaml) calls this file at 2.x with `ref: 2.x`.
+  # 2x-nightly.yaml calls this file with `ref`: at 2.x from the default branch, at the same commit from a branch.
   workflow_call:
     inputs:
       ref:
@@ -155,8 +155,9 @@ jobs:
     - name: Check import contracts
       run: .lean/bin/lint-imports
 
-  # The model-free limits tier on a PR carrying the `limits` label; limits that load a model run on ORCD.
-  # On a PR carrying the `limits` label, and on a push to a `2x/` branch that changes the probe's fit or its timed test.
+  # The model-free limits tier; limits that load a model run on ORCD. It runs on a PR carrying the `limits` label, on
+  # every push to the phase branch (STATE.md), and on a push to another `2x/` branch that changes a limits-marked test,
+  # a module such a test imports, a conftest or the test data (scripts/limits_scope.py derives the set from the tree).
   core-limits:
     needs: detect
     name: core-limits
@@ -172,18 +173,7 @@ jobs:
       id: scope
       env:
         BEFORE: ${{ github.event.before }}
-        PATHS: >-
-          packages/senselab-core/src/senselab_core/runtime/probe.py
-          packages/senselab-core/src/senselab_core/runtime/calibration.py
-          packages/senselab-core/tests/runtime/probe_test.py
-          packages/senselab-core/tests/data/test_slack.yaml
-      # A base the clone lacks (a new branch, a force push) counts as a change.
-      run: |
-        if [ "$GITHUB_EVENT_NAME" = push ] && git diff --quiet "$BEFORE" HEAD -- $PATHS; then
-          echo run=false >> "$GITHUB_OUTPUT"
-        else
-          echo run=true >> "$GITHUB_OUTPUT"
-        fi
+      run: python3 scripts/limits_scope.py scope >> "$GITHUB_OUTPUT"
     - name: Install uv
       if: steps.scope.outputs.run == 'true'
       uses: astral-sh/setup-uv@v5
