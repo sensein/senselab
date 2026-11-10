@@ -6,9 +6,12 @@ r"""Pick the recordings the reviewer must read again after a replay, and split t
         --out-dir DIR [--workers N]
 
 ``rereads`` reads the slice logs ``extend_replay_decisions`` wrote under ``LOG_DIR/slices/`` and writes the rows of
-``REPLAY_MANIFEST`` whose REVIEW reading could not be carried forward (``needs_reread``), with ``ROWS.counts.json``
-beside it counting every review state. Those rows are what ``extend_llm_review`` and ``extend_second_opinion`` take
-next.
+``REPLAY_MANIFEST`` the reviewer must read, with ``ROWS.counts.json`` beside it counting every review state. By default
+those are the rows whose earlier reading could not be carried forward (``needs_reread``): a replay over a corpus that
+was reviewed before. ``--all-unread`` takes every row the replay did not itself read (any state but ``read``, and a
+row the logs do not name): a corpus whose runs were never reviewed, such as one fresh from a run with the reviewer
+off, where every state is ``none``. ``extend_llm_review`` skips a row whose reading already stands. The picked rows
+are what ``extend_llm_review`` and ``extend_second_opinion`` take next.
 
 ``split`` sorts rows by what REVIEW reads, with REVIEW's own test: a recording whose transcript has words is a
 ``words`` row, which needs the reviewer's model; any other is a ``nowords`` row, which REVIEW and SECOND_OPINION record
@@ -30,7 +33,13 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Sequence
 
-from senselab.audio.workflows.triage.extend import REVIEW_NEEDS_REREAD, SLICES_SUBDIR, read_manifest, read_store
+from senselab.audio.workflows.triage.extend import (
+    REVIEW_NEEDS_REREAD,
+    REVIEW_READ,
+    SLICES_SUBDIR,
+    read_manifest,
+    read_store,
+)
 
 KEPT_KEYS = ("stem", "enhanced", "source")
 """The manifest fields a picked row keeps."""
@@ -56,6 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
     rereads.add_argument("manifest", type=Path, help="The manifest the replay ran over")
     rereads.add_argument("--replay-logs", type=Path, required=True, help="The replay's --log-dir")
     rereads.add_argument("--out", type=Path, required=True, help="The rows JSONL to write")
+    rereads.add_argument(
+        "--all-unread", action="store_true", help="Every row the replay did not read, not only needs_reread"
+    )
     split = commands.add_parser("split", help="Split rows into words and nowords")
     split.add_argument("rows", type=Path, nargs="+", help="Row JSONL files, each row with stem and enhanced")
     split.add_argument("--out-dir", type=Path, required=True, help="Where the two lists go")
@@ -92,13 +104,15 @@ def replay_review_states(log_dir: Path) -> dict[str, str]:
     return states
 
 
-def pick_rereads(manifest: Path, log_dir: Path, out: Path) -> dict[str, Any]:
-    """Write the replayed rows whose review must be read again, and the counts of every review state.
+def pick_rereads(manifest: Path, log_dir: Path, out: Path, *, all_unread: bool = False) -> dict[str, Any]:
+    """Write the replayed rows the reviewer must read, and the counts of every review state.
 
     Args:
         manifest: The manifest the replay ran over.
         log_dir: The replay's ``--log-dir``.
         out: The rows JSONL to write; ``<out stem>.counts.json`` goes beside it.
+        all_unread: Pick every row the replay did not read (any state but ``read``, or none logged), not only
+            ``needs_reread``.
 
     Returns:
         The counts written.
@@ -106,13 +120,20 @@ def pick_rereads(manifest: Path, log_dir: Path, out: Path) -> dict[str, Any]:
     states = replay_review_states(log_dir)
     rows = read_manifest(manifest, required=("stem", "enhanced"))
     counts = Counter(states.get(str(row["stem"]), NOT_IN_LOG) for row in rows)
+
+    def wanted(state: str | None) -> bool:
+        return state != REVIEW_READ if all_unread else state == REVIEW_NEEDS_REREAD
+
     picked = [
-        {key: row[key] for key in KEPT_KEYS if key in row}
-        for row in rows
-        if states.get(str(row["stem"])) == REVIEW_NEEDS_REREAD
+        {key: row[key] for key in KEPT_KEYS if key in row} for row in rows if wanted(states.get(str(row["stem"])))
     ]
     _write_rows(out, picked)
-    summary = {"replay_rows": len(rows), REVIEW_NEEDS_REREAD: len(picked), "states": dict(sorted(counts.items()))}
+    summary = {
+        "replay_rows": len(rows),
+        "rule": "all_unread" if all_unread else REVIEW_NEEDS_REREAD,
+        "picked": len(picked),
+        "states": dict(sorted(counts.items())),
+    }
     (out.parent / f"{out.stem}.counts.json").write_text(json.dumps(summary, indent=1) + "\n", encoding="utf-8")
     return summary
 
@@ -182,7 +203,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "rereads":
-            summary = pick_rereads(args.manifest, args.replay_logs, args.out)
+            summary = pick_rereads(args.manifest, args.replay_logs, args.out, all_unread=args.all_unread)
             print(json.dumps(summary))
             return 0
         workers = args.workers or int(os.environ.get("SLURM_CPUS_PER_TASK", "4"))
