@@ -51,6 +51,7 @@ from senselab_core.runtime.execution.observing import (
 from senselab_core.runtime.execution.pool import report, run_plan
 from senselab_core.runtime.execution.pool_parts import placed_backends
 from senselab_core.runtime.execution.queue import Claim, Queue, QueueSet, ServeLease, UnmarkedProbeItem, probe_of
+from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.services import service_registry
 from senselab_core.runtime.execution.substrates import (
     EXIT_UNREACHABLE,
@@ -387,12 +388,27 @@ class PoolWorker:
         A probe queue the worker serves (`_pinned_probes`) is waited on from `pool.first_poll_s`, doubling to
         `pool.poll_s`, so a probe's next phase costs no full poll; its serve leases are released on return.
         """
+        failed = True
         try:
-            return self._claim_loop()
+            result = self._claim_loop()
+            failed = False
+            return result
         finally:
             for lease in self._serving.values():
                 lease.release()
             self._serving.clear()
+            self._write_provenance(raising=not failed)
+
+    def _write_provenance(self, *, raising: bool) -> None:
+        """Replace this worker's provenance document; an `OSError` is raised, or logged where `raising` is False."""
+        try:
+            self.store.provenance.write(self.run_dir)
+        except OSError:
+            if raising:
+                raise
+            logger.exception(
+                "pool worker %s could not write its provenance; the error that ended it propagates", self.name
+            )
 
     def _claim_loop(self) -> int:
         pool = self.profile.pool
@@ -514,8 +530,18 @@ class PoolWorker:
         while this one waits, proving the claim's leases every renewal interval. Once a lease is lost, the claim's
         other items are released at once, the request in flight is abandoned (`WorkerSet.abandon`), nothing more is
         sent, and this returns only after the thread stopped. Once `stop` is set, the request is abandoned too, the
-        thread is given `join_s`, and the items whose jobs finished by then are committed.
+        thread is given `join_s`, and the items whose jobs finished by then are committed. The worker's provenance
+        document in the run's `prov/` is replaced when the claim ends, however it ends; a failed write is raised, or
+        logged where an error already ends the claim.
         """
+        failed = True
+        try:
+            self._run_claim(claim, claim_s)
+            failed = False
+        finally:
+            self._write_provenance(raising=not failed)
+
+    def _run_claim(self, claim: Claim, claim_s: float) -> None:
         spans = _Spans()
         with claim:
             self._log_claimed(claim)
@@ -758,6 +784,7 @@ class PoolWorker:
             if placed.hash != fragment.plan_hash:
                 raise ValueError(f"the run's plan is {placed.hash}; the item is of plan {fragment.plan_hash}")
             self._plans[placed.hash] = (placed, bind_sources(placed))
+            add_plan_entity(self.store.provenance, placed.hash)
         return self._plans[fragment.plan_hash]
 
     def _log_claimed(self, claim: Claim) -> None:
