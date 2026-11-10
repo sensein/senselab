@@ -9,7 +9,6 @@ long_s: 7200
 calibration:
   length_strata: 3
   batched_sizes: 2
-  probe_items: 923
 # Seconds of warm probe work a point's probe may take, Probe.plan's budget in place of the profile's probe_s.
 point_wall_s: 900
 tasks:

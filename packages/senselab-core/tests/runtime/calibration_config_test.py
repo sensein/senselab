@@ -51,10 +51,11 @@ def test_probe_s_peer_wait_s_and_drift_window_are_derived_from_the_profile() -> 
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("items", [49, 51, 13])
-def test_probe_items_is_a_bound_not_a_sum(items: int) -> None:
-    """`probe_items` is the most jobs a probe plans; no exact protocol sum is checked."""
-    assert ExecutionProfile.load("laptop", _calibration({"probe_items": items})).calibration.probe_items == items
+def test_probe_items_is_not_a_profile_key() -> None:
+    """The probe's job budget is derived from the protocol and the pool's quantum, so a profile cannot set it."""
+    assert "probe_items" not in CalibrationSettings.model_fields
+    with pytest.raises(UnknownProfileKey, match="probe_items"):
+        ExecutionProfile.load("laptop", _calibration({"probe_items": 50}))
 
 
 @pytest.mark.logic

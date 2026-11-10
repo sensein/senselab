@@ -122,6 +122,11 @@ def node_sizing(  # noqa: PLR0913 - the node's placement, the profile, the measu
         f"peak {kind} memory {_labelled(batch_peak, 'bytes', source, peak_why)}",
     ]
     lines = [f"  unit {unit_label}" if unit_label else "  unit unresolved", "  sizing: " + "; ".join(figures)]
+    if estimate is not None and estimate.warmup_unsettled:
+        lines.append(
+            "  warm-up: requests 1 to 3 after a load differ from the later median beyond the spread; "
+            "calibration.warmup_requests may be too short for this unit"
+        )
     cap = grant.memory_bytes
     if sized is not None and sized.batch_one_peak is not None and cap is not None and sized.batch_one_peak > cap:
         lines.append(

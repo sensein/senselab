@@ -44,7 +44,20 @@ if TYPE_CHECKING:
 MAD_TO_SIGMA: Final = 1 / statistics.NormalDist().inv_cdf(
     0.75
 )  # invariant: a median absolute deviation to a normal's σ
+EARLY_REQUESTS: Final = 3  # invariant: the last request after a load the warm-up diagnostic reads as early
 MEDIAN_SE: Final = math.sqrt(math.pi / 2)  # invariant: the standard error of a median relative to that of a mean
+
+
+def probe_items(config: CalibrationSettings, quantum_items: int) -> int:
+    """Return the most jobs a probe plans, counted from its protocol.
+
+    `warmup_requests + length_strata × min_requests × (1 + quantum_items) + min_requests × single_item_jobs`.
+    """
+    return (
+        config.warmup_requests
+        + config.length_strata * config.min_requests * (1 + quantum_items)
+        + config.min_requests * config.single_item_jobs
+    )
 
 
 def _median(values: Sequence[float]) -> float:
@@ -301,6 +314,25 @@ def _request_fit(
     return RequestFit(batch=batch, r=centre, u=None, n=len(points), spread=spread, lo=min(xs), hi=max(xs))
 
 
+def _warmup_unsettled(single: RequestFit | None, kept: _Kept, config: CalibrationSettings) -> bool:
+    """Whether requests 1 to 3 after a load differ from the later median by more than the single fit's band.
+
+    Each warm single request is read as a ratio to the fit's prediction at its length; the two groups' median
+    ratios differ by more than `confidence × spread` when the warm-up floor was too short.
+    """
+    if single is None or single.spread is None:
+        return False
+    ratios: dict[bool, list[float]] = {True: [], False: []}
+    for o in kept.single:
+        predicted = single.r + (single.u or 0.0) * o.units
+        if o.since_load is not None and o.since_load >= 1 and predicted > 0:
+            ratios[o.since_load <= EARLY_REQUESTS].append(o.wall_s / predicted)
+    early, later = ratios[True], ratios[False]
+    if not early or len(later) < config.min_requests:
+        return False
+    return abs(_median(early) - _median(later)) > config.confidence * single.spread
+
+
 def _relative_spread(residuals: Sequence[float], predicted: Sequence[float]) -> float | None:
     centre = _median(predicted)
     if centre <= 0:
@@ -477,14 +509,18 @@ def _unplanned(
     )
 
 
-def _single_items(
+def _single_items(  # noqa: PLR0913 - the free pools, the strata wanted, the jobs used, the settings and the budget
     free: list[list[Candidate]],
     wanted: Sequence[int],
     used: int,
     config: CalibrationSettings,
     unplanned: list[Unplanned],
+    budget: int,
 ) -> tuple[list[ProbeItem], int]:
-    """Take the `SINGLE` items of the `wanted` strata from `free` (shortest first); return them and the jobs used."""
+    """Take the `SINGLE` items of the `wanted` strata from `free` (shortest first); return them and the jobs used.
+
+    The items stay within `budget` jobs.
+    """
     singles: list[ProbeItem] = []
     for index in wanted:
         counts = [(config.min_requests, 1)]
@@ -493,7 +529,7 @@ def _single_items(
         for count, per_item in counts:
             if len(free[index]) < count:
                 unplanned.append(Unplanned(phase="SINGLE", stratum=index, reason="too_few_candidates"))
-            elif used + count > config.probe_items:
+            elif used + count > budget:
                 unplanned.append(Unplanned(phase="SINGLE", stratum=index, reason="over_budget"))
             else:
                 used += count
@@ -680,6 +716,7 @@ class Probe:
             host=host,
             regimes=tuple(sorted(regimes.values(), key=lambda r: r.k)),
             oom=ooms,
+            warmup_unsettled=_warmup_unsettled(single, kept, config),
             source=EstimateSource(
                 probe_ids=tuple(sorted({o.probe.id for o in kept.warm + kept.loads if o.probe is not None})),
                 observations=len(kept.warm) + len(kept.loads),
@@ -714,6 +751,7 @@ class Probe:
         formation: str,
         seconds: float,
         *,
+        quantum_items: int,
         bucket_edges: Sequence[float],
     ) -> ProbePlan:
         """Return the `WARMUP` and `SINGLE` items of a probe over `candidates`, and what a batched phase may use.
@@ -721,7 +759,8 @@ class Probe:
         `candidates` are the held jobs the store would not serve. One job of each key is kept, the rest cut into
         `length_strata` strata of equal count, and each (phase, stratum) `prior` already covers with `min_requests`
         steady observations is left out, a batched stratum an `oom` record of `prior` re-opens excepted. `seconds`
-        is the warm-work budget the plan carries for the Pool. `bucket_edges` are the input-unit edges of a `bucket:`
+        is the warm-work budget the plan carries for the Pool. The plan's job budget is `probe_items(config,
+        quantum_items)`. `bucket_edges` are the input-unit edges of a `bucket:`
         formation's grid (empty for any other): a batched item draws its jobs from one bucket.
 
         Raises:
@@ -729,6 +768,7 @@ class Probe:
         """
         if formation.startswith("bucket:") and not bucket_edges:
             raise ValueError("a bucketed formation plans over its bucket edges; none were given")
+        budget = probe_items(config, quantum_items)
         kept = _select(prior.observations, unit.hardware, config)
         strata, pools = _strata(candidates, config.length_strata)
         plan = ProbePlan(
@@ -739,7 +779,7 @@ class Probe:
             unplanned=(),
             formation=formation,
             seconds=seconds,
-            probe_items=config.probe_items,
+            probe_items=budget,
             used_jobs=0,
             edges=tuple(sorted(bucket_edges)),
         )
@@ -769,7 +809,7 @@ class Probe:
         plan = plan.model_copy(update={"batched": batched})
         free = [list(p) for p in pools]
         warmup = config.warmup_requests
-        if warmup > len(free[0]) or warmup > config.probe_items:
+        if warmup > len(free[0]) or warmup > budget:
             wanted = []
             unplanned.append(Unplanned(phase="WARMUP", stratum=None, reason="too_few_candidates"))
             warmups: list[ProbeItem] = []
@@ -777,7 +817,7 @@ class Probe:
             warmups = [
                 ProbeItem(phase="WARMUP", stratum=0, request_jobs=1, jobs=(free[0].pop(0),)) for _ in range(warmup)
             ]
-        singles, used = _single_items(free, wanted, warmup, config, unplanned)
+        singles, used = _single_items(free, wanted, warmup, config, unplanned, budget)
         if not singles and not (batched and warmups):
             return plan.model_copy(update={"unplanned": tuple(unplanned)})
         return plan.model_copy(

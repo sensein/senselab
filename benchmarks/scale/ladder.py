@@ -4,7 +4,7 @@
 
 A suite (`scale-suite@1.1`, `suites/<name>.yaml`; `suites/fake.yaml` runs with `fake_stack/` on PYTHONPATH) names a
 seed, the long signal's seconds and its tasks, and may name a table profile: `calibration:` overrides of
-`length_strata`, `batched_sizes` and `probe_items`, and `point_wall_s`, the seconds of warm probe work a point's probe
+`length_strata` and `batched_sizes`, and `point_wall_s`, the seconds of warm probe work a point's probe
 may take (`Probe.plan`'s budget, in place of the profile's `probe_s`). Each task names the input port its data binds
 to, its params, model and stack, its data (`synthetic` tones, `librispeech` utterances of a manifest, `gretel`
 documents of a manifest, or `payloads`, JSON records for the fake stack) and its scale points: item counts, or `long`,
@@ -77,8 +77,8 @@ BUDGETS_FORMAT = "scale-budgets@1.0"
 LONG = "long"
 FLAT_POINTS = (100, 10_000)
 """The points whose per-item costs the flatness rule compares (P-33)."""
-TABLE_KEYS = frozenset({"length_strata", "batched_sizes", "probe_items"})
-"""The calibration settings a suite's table profile may override: strata, batch sizes and item budget, no seconds."""
+TABLE_KEYS = frozenset({"length_strata", "batched_sizes"})
+"""The calibration settings a suite's table profile may override: strata and batch sizes, no seconds."""
 FAULT_MESSAGE_CHARS = 200
 """The characters of a failed job's message a result keeps: enough to name the failure, not to copy its input."""
 RECORDING = {"synthetic": "Audio", "librispeech": "Audio"}

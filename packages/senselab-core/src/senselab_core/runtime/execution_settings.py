@@ -154,12 +154,12 @@ class CalibrationSettings(Frozen):
     Attributes:
         measures_roots: Roots read in order and pooled; writes go to the first writable one.
         trust: `group` reads every root's files, `own` only the reader's own.
-        warmup_requests: Requests a model state answers before one counts as warm.
+        warmup_requests: Requests a model state answers before one counts as warm (the floor is 1: the first
+            request after a load is cold).
         length_strata: Strata of equal count a probe cuts its candidate jobs into.
         min_requests: Warm requests a stratum needs for a quantity to be measured.
         single_item_jobs: Jobs of the one item per probe that separates the per-item cost from the per-job cost.
         batched_sizes: Batch sizes the batched phase measures.
-        probe_items: Jobs a probe plans at most.
         confidence: The one-sided z of the batch decision and of the item cut.
         drift_confidence: The two-sided z of the drift test.
         observations_kept: Superseded probes' observation files kept for audit.
@@ -174,7 +174,6 @@ class CalibrationSettings(Frozen):
     min_requests: PositiveInt
     single_item_jobs: Annotated[int, Field(ge=2)]
     batched_sizes: Annotated[int, Field(ge=1, le=2)]
-    probe_items: PositiveInt
     confidence: PositiveFloat
     drift_confidence: PositiveFloat
     observations_kept: PositiveInt

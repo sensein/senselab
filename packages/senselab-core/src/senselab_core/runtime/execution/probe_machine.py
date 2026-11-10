@@ -304,7 +304,14 @@ class ProbeMachine:
         stored = () if fresh else tuple(self.roots.observations(unit))
         prior = Prior(observations=stored, records=tuple(self.roots.regime_records(unit)))
         return Probe.plan(
-            unit, candidates, prior, self.profile.calibration, unit.formation, self.probe_s, bucket_edges=edges
+            unit,
+            candidates,
+            prior,
+            self.profile.calibration,
+            unit.formation,
+            self.probe_s,
+            quantum_items=self.profile.pool.quantum_items,
+            bucket_edges=edges,
         )
 
     def _take_lease(
