@@ -32,7 +32,20 @@ def test_rereads_are_the_replayed_rows_marked_needs_reread(tmp_path: Path) -> No
     summary = rows_driver.pick_rereads(manifest, logs, out)
     assert [json.loads(line)["stem"] for line in out.read_text().splitlines()] == ["b"]
     assert summary["states"] == {"needs_reread": 1, "none": 1, "not_in_replay_log": 1, "unrecorded": 1}
+    assert summary["rule"] == "needs_reread" and summary["picked"] == 1
     assert json.loads((tmp_path / "rows_needs_reread.counts.json").read_text()) == summary
+
+
+def test_all_unread_takes_every_row_the_replay_did_not_read(tmp_path: Path) -> None:
+    """A corpus never reviewed: every row but one the replay itself read is picked, unlogged rows included."""
+    manifest = _write_jsonl(tmp_path / "replay.jsonl", [_row(stem, tmp_path) for stem in ("a", "b", "c", "d")])
+    logs = tmp_path / "logs"
+    states = [{"stem": "a", "review": "none"}, {"stem": "b", "review": "read"}, {"stem": "c", "review": "carried"}]
+    _write_jsonl(logs / "slices" / "replay-0.jsonl", states)
+    out = tmp_path / "rows.jsonl"
+    summary = rows_driver.pick_rereads(manifest, logs, out, all_unread=True)
+    assert [json.loads(line)["stem"] for line in out.read_text().splitlines()] == ["a", "c", "d"]
+    assert summary["rule"] == "all_unread" and summary["picked"] == 3
 
 
 def test_split_follows_the_reviewers_words_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
