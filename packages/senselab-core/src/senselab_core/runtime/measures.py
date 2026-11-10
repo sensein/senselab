@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Annotated, Any, Final, Literal, Protocol, Self, TypeVar
 
 from pydantic import AfterValidator, Field, PlainSerializer, ValidationError, model_validator
+from senselab_worker.canonical import require_json_depth
 from senselab_worker.digest import COMMIT_HEX, SHA256_HEX, identity_digest
 from senselab_worker.ownership import UUID_HEX
 
@@ -640,8 +641,9 @@ class MeasureRoots:
             return None
         path = directory.path / name
         try:
+            require_json_depth(raw)
             document = json.loads(raw)
-        except (ValueError, RecursionError):
+        except ValueError:
             document = None
         found = document.get("format") if isinstance(document, dict) else None
         verdict = check(expected, found)
@@ -658,7 +660,7 @@ class MeasureRoots:
                 raise ValueError("no format tag")
             with reading(expected, found):
                 return _File(parse(document, info), info.st_uid, info.st_mtime)
-        except (ValueError, KeyError, TypeError, RecursionError, ValidationError) as err:
+        except (ValueError, KeyError, TypeError, ValidationError) as err:
             self._malformed(root, directory, name, info.st_uid, type(err).__name__)
             return None
 

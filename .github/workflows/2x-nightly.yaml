@@ -24,6 +24,9 @@ concurrency:
   group: nightly-${{ github.workflow }}-${{ inputs.ref || github.sha }}
   cancel-in-progress: true
 
+env:
+  UV_PYTHON_PREFERENCE: only-managed
+
 jobs:
   # The refs the limits matrix runs: with `ref`, that branch and the phase's code branch (the highest-numbered phase branch
   # on the remote; a phase branch merges directly, with no PR to carry the `limits` label, so only this job runs its
@@ -50,19 +53,13 @@ jobs:
           echo "refs=[\"$SHA\"]" >> "$GITHUB_OUTPUT"
         fi
 
-  # Every PR job, from 2.x's own copy of the workflow.
+  # Every PR job, from this commit's copy of the workflow, on `ref` or on this commit. The reference is local: GitHub
+  # validates a referenced workflow when it parses this file, so a cross-branch reference to a copy without these
+  # inputs makes this whole file invalid.
   pr-jobs:
-    if: inputs.ref != ''
-    uses: sensein/senselab/.github/workflows/2x-tests.yaml@2.x
-    with:
-      ref: ${{ inputs.ref }}
-
-  # Every PR job, from this commit's copy of the workflow, on this commit.
-  pr-jobs-here:
-    if: inputs.ref == ''
     uses: ./.github/workflows/2x-tests.yaml
     with:
-      ref: ${{ github.sha }}
+      ref: ${{ inputs.ref || github.sha }}
 
   limits:
     needs: plan

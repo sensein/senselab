@@ -528,6 +528,18 @@ def test_very_deep_lines_are_protocol_errors_not_recursion_errors(depth: int) ->
 
 
 @pytest.mark.logic
+def test_parse_line_accepts_exactly_max_depth_and_refuses_one_more() -> None:
+    """The root is at depth 1: 64 nested objects parse, 65 are refused by the pre-parse scan."""
+
+    def line(depth: int) -> bytes:
+        return b'{"a":' * depth + b"1" + b"}" * depth + b"\n"
+
+    assert parse_line(line(MAX_DEPTH)) is not None
+    with pytest.raises(ProtocolError, match="deeper"):
+        parse_line(line(MAX_DEPTH + 1))
+
+
+@pytest.mark.logic
 def test_to_wire_cycle_is_a_content_error(tmp_path: Path) -> None:
     """A container that contains itself is a typed content error, not a `RecursionError`; a shared child is fine."""
     cyclic_list: list[Any] = [1]

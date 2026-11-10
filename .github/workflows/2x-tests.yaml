@@ -24,6 +24,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
+env:
+  UV_PYTHON_PREFERENCE: only-managed
+
 jobs:
   # A missing package, or a package without its src/, fails this job and every job that needs it.
   detect:

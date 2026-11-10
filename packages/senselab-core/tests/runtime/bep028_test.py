@@ -31,7 +31,7 @@ from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.fetch import DataManifest
 from senselab_core.runtime.provenance import PROV_DIR, MalformedDocument, ProvStore, RunIOError
 from senselab_core.runtime.vocabulary import core_vocabulary
-from senselab_worker.canonical import jcs_dumps, jcs_loads
+from senselab_worker.canonical import MAX_DEPTH, jcs_dumps, jcs_loads
 from syscall_faults_fixture import displace_before_proof
 
 pytestmark = pytest.mark.logic
@@ -382,6 +382,27 @@ def test_a_deeply_nested_label_map_is_refused_typed(tmp_path: Path) -> None:
     body = '{"format": "labels@1.0", "labels": ' + "[" * depth + "]" * depth + "}"
     (run / PRIVATE_DIR / LABELS_NAME).write_text(body)
     with pytest.raises(ValueError, match="labels@2.0"):
+        LabelMap(run).paths()
+
+
+def test_a_label_map_nested_past_the_bound_is_refused_whatever_the_parser_can_parse(tmp_path: Path) -> None:
+    """The bound is the codec's `MAX_DEPTH`, not the parser's recursion limit: 65 levels parse fine and are refused."""
+    run, _ = _run(tmp_path, "a.wav")
+    depth = MAX_DEPTH + 1
+    body = '{"format": "labels@1.0", "labels": ' + "[" * depth + "]" * depth + "}"
+    json.loads(body)
+    (run / PRIVATE_DIR / LABELS_NAME).write_text(body)
+    with pytest.raises(ValueError, match="labels@2.0"):
+        LabelMap(run).paths()
+
+
+def test_a_label_map_nested_exactly_to_the_bound_reaches_the_format_check(tmp_path: Path) -> None:
+    """Two containers of the map plus 62 of nesting is 64 deep: read, then refused as retired, not as too deep."""
+    run, _ = _run(tmp_path, "a.wav")
+    depth = MAX_DEPTH - 2
+    body = '{"format": "labels@1.0", "labels": ' + "[" * depth + "]" * depth + "}"
+    (run / PRIVATE_DIR / LABELS_NAME).write_text(body)
+    with pytest.raises(LabelMapRetired):
         LabelMap(run).paths()
 
 

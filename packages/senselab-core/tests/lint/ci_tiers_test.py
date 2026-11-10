@@ -223,12 +223,47 @@ def test_the_nightly_workflow_runs_on_a_call_a_dispatch_and_a_full_matrix_branch
     assert "schedule" not in triggers and "workflow_dispatch" in triggers
     assert triggers["push"]["branches"] == ["2x/full-matrix/**"]
     assert triggers["workflow_call"]["inputs"]["ref"]["default"] == "2.x"
-    remote, here = nightly["jobs"]["pr-jobs"], nightly["jobs"]["pr-jobs-here"]
-    assert (
-        remote["uses"].endswith("/.github/workflows/2x-tests.yaml@2.x") and remote["with"]["ref"] == "${{ inputs.ref }}"
-    )
-    assert here["uses"] == "./.github/workflows/2x-tests.yaml" and here["with"]["ref"] == "${{ github.sha }}"
-    assert {remote["if"], here["if"]} == {"inputs.ref != ''", "inputs.ref == ''"}
+    called = nightly["jobs"]["pr-jobs"]
+    assert called["uses"] == "./.github/workflows/2x-tests.yaml" and "if" not in called
+    assert called["with"]["ref"] == "${{ inputs.ref || github.sha }}"
+    assert "ref" in _called_inputs()
+
+
+def _cross_ref(uses: str) -> bool:
+    """Whether `uses` names a workflow of this repository at another ref."""
+    return uses.startswith("sensein/senselab/")
+
+
+def _called_inputs() -> dict[str, Any]:
+    """The inputs 2x-tests.yaml declares under `workflow_call`."""
+    tests = yaml.safe_load(WORKFLOW.read_text())
+    return dict((tests.get("on", tests.get(True)))["workflow_call"]["inputs"])
+
+
+@pytest.mark.logic
+def test_every_reusable_workflow_a_job_calls_is_local_and_accepts_what_it_is_passed() -> None:
+    """A called workflow is local and declares every input passed; another ref of this repository is refused.
+
+    GitHub validates a referenced workflow when it parses the caller, and actionlint cannot see a remote one.
+    """
+    for path in sorted((REPO / ".github" / "workflows").glob("*.yaml")):
+        for name, job in (yaml.safe_load(path.read_text()).get("jobs") or {}).items():
+            uses = job.get("uses")
+            if not uses:
+                continue
+            assert not _cross_ref(uses), f"{path.name}:{name} calls {uses}"
+            if uses.startswith("./"):
+                callee = yaml.safe_load((REPO / uses[2:]).read_text())
+                declared = (callee.get("on", callee.get(True)))["workflow_call"].get("inputs", {})
+                assert set(job.get("with", {})) <= set(declared), f"{path.name}:{name} passes inputs {uses} lacks"
+
+
+@pytest.mark.logic
+def test_a_cross_branch_reference_to_a_workflow_of_this_repository_is_found() -> None:
+    """The check's own predicate: a `sensein/senselab/...@ref` reference is not local."""
+    assert _cross_ref("sensein/senselab/.github/workflows/2x-tests.yaml@2.x")
+    assert not _cross_ref("./.github/workflows/2x-tests.yaml")
+    assert not _cross_ref("actions/checkout@v5")
 
 
 @pytest.mark.logic
