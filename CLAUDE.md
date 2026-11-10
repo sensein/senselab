@@ -23,7 +23,9 @@ Guidance for work on **senselab 2.x** in this branch. 1.x guidance lives on `alp
 
 ## Commands
 
-- Setup: `uv sync --locked --all-extras --group dev`. `uv sync` is subtractive, so always pass the full set.
+- Setup: `uv sync --locked --all-extras --group dev --group test --group benchmarks`. `uv sync` is subtractive, so
+  always pass the full set: without `test` a venv lacks pandas and pyld, and without `benchmarks` the scale ladder's
+  pyarrow.
 - Tests: `uv run --no-sync pytest <dirs you changed> -q`, run serially. Never `-n auto`: each worker
   loads the ML stack separately.
 - Lint: `uv run lint-imports` and `uv run pre-commit run --all-files`.

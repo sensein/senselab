@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ from senselab_core.kernel.declare import REGISTRY, Registry
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.fetch import DataManifest
+from senselab_core.runtime.profiles import packaged_profiles
 
 from senselab._api.describe import describe
 from senselab._api.packaged import CATALOGUE
@@ -271,6 +273,42 @@ def _mark(flag: bool) -> str:  # noqa: FBT001
     return "yes" if flag else "-"
 
 
+def exit_checks(root: Path | None) -> Mapping[str, Any]:
+    path = None if root is None else root / "benchmarks" / "exit" / "exit.yaml"
+    return load_yaml(path, "exit checks") if path is not None and path.is_file() else {}
+
+
+def executor_rows(root: Path | None = None) -> list[tuple[str, ...]]:
+    """Return the executors as `(executor, substrate, default under, exit check declared)` rows.
+
+    `default under` names the packaged profiles whose substrate makes `Plan.run` choose it (`default_executor`: a
+    `local` substrate runs `InProcess`, a `slurm` one a `Pool` over `Slurm`). An exit check is declared when the
+    checkout's exit checks bound that executor; whether it passed is the phase table's.
+    """
+    kinds = {
+        name: load_yaml(
+            resources.files("senselab_core.runtime").joinpath("data", "profiles", f"{name}.yaml"), "profile"
+        )["substrate"]["kind"]
+        for name in packaged_profiles()
+    }
+    bounds = set(exit_checks(root).get("bounds", ()))
+
+    def chosen(kind: str) -> str:
+        return ", ".join(f"`{n}`" for n, k in kinds.items() if k == kind) or "-"
+
+    return [
+        ("`InProcess`", "this process", chosen("local"), _mark("in-process" in bounds)),
+        ("`Pool`", "`Local`", "-", _mark("pool-local" in bounds)),
+        ("`Pool`", "`Slurm`", chosen("slurm"), _mark("pool-slurm" in bounds)),
+    ]
+
+
+def scenario_rows(root: Path | None = None) -> list[tuple[str, ...]]:
+    """Return the Phase 3 exit scenarios as `(scenario, task, items, data)` rows, from the checkout's exit checks."""
+    steps = exit_checks(root).get("steps", {})
+    return [(f"`{n}`", f"`{s['task']}`", str(s["items"]), s.get("manifest", s["tree"])) for n, s in steps.items()]
+
+
 def status_page(registry: Registry = REGISTRY, root: Path | None = None) -> str:
     """Return the 2.x status page: tasks, phases and exits, consolidation, ledger marks and open review items.
 
@@ -309,6 +347,8 @@ def status_page(registry: Registry = REGISTRY, root: Path | None = None) -> str:
         [tuple(_specs.scrub(v) for v in list(r.values())[:2]) for r in _specs.moved_in_phase(ledger, 2)],
     )
     open_rows = table(["Owner", "Open items"], _specs.open_by_phase(register).items())
+    executors = table(["Executor", "Substrate", "Default under", "Exit check declared"], executor_rows(root))
+    scenarios = table(["Scenario", "Task", "Items", "Data"], scenario_rows(root))
     return f"""{BADGES["2x"]}
 
 What 2.x has built so far. Generated from the declarations and the spec files of the checkout.
@@ -319,6 +359,18 @@ A task is declared when its declaration is in the registry, implemented when a b
 the ledger lists the 1.x module it came from, and benchmarked when a benchmark suite runs it.
 
 {tasks}
+
+## Plans and executors
+
+A plan runs on an executor. `Plan.run` picks one from the profile's substrate unless it is given one. A check is
+declared when the exit checks of the checkout bound that executor; the phase table says whether the phase has exited.
+
+{executors}
+
+The scenarios of the exit checks plan one task over a BIDS tree, run it on each executor and compare plan hashes and
+output identities across profiles.
+
+{scenarios}
 
 ## Phases
 
