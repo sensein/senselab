@@ -2,16 +2,18 @@
 
 import importlib
 import re
+import wave
 from pathlib import Path
 
 import pytest
 from senselab._api.describe import describe
-from senselab.reference import _render, _specs
+from senselab.reference import _api, _render, _specs
 from senselab_core.kernel.declare import REGISTRY
+from senselab_core.runtime.profiles import ExecutionProfile
 
 import senselab
 
-PAGES = ("tasks", "models", "datasets", "status")
+PAGES = ("tasks", "models", "datasets", "status", "plans", "runs", "executors", "profiles", "librispeech_example")
 
 
 def _tasks() -> list[str]:
@@ -215,3 +217,138 @@ def test_scrub_removes_ids_and_their_parentheses() -> None:
 def test_open_items_count_by_owner_phase() -> None:
     """Open items are counted by owner phase and name no row."""
     assert _specs.open_by_phase(REGISTER) == {"Phase 3": 1, "unassigned": 1}
+
+
+@pytest.mark.logic
+def test_signature_is_one_parameter_a_line_without_self_or_object_reprs() -> None:
+    """A signature drops self, shows long annotations as dots and no memory address."""
+
+    class Clock:
+        pass
+
+    class Thing:
+        def go(
+            self,
+            plan: str,
+            *,
+            clock: object = Clock(),  # noqa: B008
+            values: "Mapping[str, StringConstraints(x)]" = None,  # type: ignore[name-defined]  # noqa: F821
+        ) -> int:
+            return 0
+
+    text = _api.signature(Thing.go)
+    assert text == "(\n    plan: str,\n    *,\n    clock: object = ...,\n    values: ... = None,\n) -> int"
+    assert _api.signature(Thing) == "()"
+
+
+@pytest.mark.logic
+def test_prose_turns_raises_and_attributes_blocks_into_bullets() -> None:
+    """Google-style blocks become bullet lists."""
+    text = "Do it.\n\nRaises:\n    ValueError: it is bad,\n        very.\n    KeyError: absent.\n\nAfter."
+    assert (
+        _api.prose(text)
+        == "Do it.\n\n\n**Raises**\n\n- `ValueError`: it is bad,\n  very.\n- `KeyError`: absent.\n\nAfter."
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("page", PAGES)
+def test_pages_hold_no_memory_address(page: str) -> None:
+    """A generated page names no object by its address, so two builds give one page."""
+    text = importlib.import_module(f"senselab.reference.{page}").__doc__ or ""
+    assert not re.search(r"0x[0-9a-f]{6,}", text)
+
+
+@pytest.mark.contract
+def test_profiles_page_names_every_key_of_the_packaged_profiles() -> None:
+    """Every key of the packaged profiles, as the format reads it, has a row on the profiles page."""
+    from senselab.reference import _code_pages  # noqa: PLC0415 - beside its test
+
+    page = _code_pages.profiles_page()
+    for name in ("laptop", "slurm"):
+        for key in _code_pages.profile_rows(name):
+            assert f"`{key}`" in page
+    loaded = ExecutionProfile.load("laptop").model_dump(mode="json", exclude={"format"})
+    for key in loaded:
+        assert f"`{key}" in page
+
+
+@pytest.mark.contract
+def test_profiles_page_states_the_site_profile_rules() -> None:
+    """The site-profile section says placement reads no scheduler, where QOS limits go and how to calibrate."""
+    page = _render_page("profiles")
+    for phrase in (
+        "generic profiles only",
+        "invisible",
+        "placement hook",
+        "--measures-root",
+        "calibration.measures_roots",
+    ):
+        assert phrase in page
+
+
+def _render_page(name: str) -> str:
+    return importlib.import_module(f"senselab.reference.{name}").__doc__ or ""
+
+
+@pytest.mark.contract
+def test_librispeech_example_code_plans_and_explains(tmp_path: Path) -> None:
+    """The code of the example page plans a task over a BIDS tree and `explain` names the model the page names."""
+    root = tmp_path / "tree"
+    audio = root / "sub-1" / "ses-01" / "audio"
+    audio.mkdir(parents=True)
+    (root / "dataset_description.json").write_text('{"Name": "t", "BIDSVersion": "1.10.0"}\n', encoding="utf-8")
+    for run in (1, 2):
+        with wave.open(str(audio / f"sub-1_ses-01_task-read_run-{run}_audio.wav"), "wb") as out:
+            out.setnchannels(1)
+            out.setsampwidth(2)
+            out.setframerate(16_000)
+            out.writeframes(b"\x00\x01" * 1600 * run)
+    page = _render_page("librispeech_example")
+    assert 'senselab.use(execution="laptop")' in page
+    with senselab.use(execution="laptop"):
+        placed = senselab.plan(senselab.SpeechToText(), senselab.Dataset.bids(root))
+        text = placed.explain()
+    default = senselab.describe("speech_to_text")["default_model"]
+    assert placed.hash in text
+    assert default in text
+    assert default.split("@")[0] in page
+    assert "node call (speech_to_text)" in text
+
+
+@pytest.mark.contract
+def test_status_page_lists_the_executors_and_exit_scenarios_of_the_checkout() -> None:
+    """The status page rows of executors and scenarios are read from the exit checks."""
+    root = _specs.checkout_root()
+    assert root is not None
+    assert [r[0] for r in _render.scenario_rows(root)] == ["`resample`", "`stt`"]
+    rows = {(r[0], r[1]): r for r in _render.executor_rows(root)}
+    assert rows[("`InProcess`", "this process")][2:] == ("`laptop`", "yes")
+    assert rows[("`Pool`", "`Slurm`")][2:] == ("`slurm`", "yes")
+    assert rows[("`Pool`", "`Local`")][2] == "-"
+    assert _render.executor_rows(None)[0][3] == "-"
+
+
+@pytest.mark.contract
+def test_librispeech_example_constants_still_describe_the_run_the_page_shows() -> None:
+    """The recorded run equals the catalogue default and the exit scenario, or the example is stale."""
+    from senselab.reference import _code_pages  # noqa: PLC0415 - beside its test
+    from senselab_core.runtime.config import load_yaml  # noqa: PLC0415 - beside its test
+
+    root = _specs.checkout_root()
+    assert root is not None
+    step = load_yaml(root / "benchmarks" / "exit" / "exit.yaml", "exit checks")["steps"][_code_pages.EXAMPLE_STEP]
+    run = _code_pages.EXAMPLE_RUN
+    default = senselab.describe("speech_to_text")["default_model"]
+    assert default == run["model"]
+    assert step["items"] == run["items"]
+    page = _render_page("librispeech_example")
+    assert _code_pages.EXAMPLE_HASH in page
+    assert f"{run['interrupted_at']} of {run['items']}" in page
+    assert "bids_tree.from_librispeech" in page
+
+
+@pytest.mark.contract
+def test_profiles_page_says_coordinators_count_against_the_submit_limit() -> None:
+    """The site-profile section names the per-user submit limit that coordinators count against."""
+    assert "coordinators are\n  jobs too" in _render_page("profiles")

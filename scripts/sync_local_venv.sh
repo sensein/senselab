@@ -4,7 +4,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
-uv sync --locked --all-extras --group dev
+uv sync --locked --all-extras --group dev --group test --group benchmarks
 venv="$(uv run --no-sync python -c 'import sys; print(sys.prefix)')"
 uv run --no-sync python -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
   uv.lock > "$venv/senselab-lock.sha"

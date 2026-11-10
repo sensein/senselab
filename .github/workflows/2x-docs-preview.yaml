@@ -35,7 +35,9 @@ jobs:
       run: uv sync --locked --python 3.13 --no-default-groups --group docs
     - name: Build docs
       run: |
-        .docs/bin/pdoc senselab_core senselab_worker senselab.reference -o docs -t docs_style/pdoc-theme --docformat google \
+        .docs/bin/pdoc senselab_core senselab_worker senselab.reference \
+          '!senselab.reference._api' '!senselab.reference._code_pages' '!senselab.reference._render' \
+          '!senselab.reference._specs' -o docs -t docs_style/pdoc-theme --docformat google \
           --favicon https://readthedocs.org/favicon.ico
         if grep -rl "Page unavailable:" docs/senselab; then echo 'a reference page has no sources' >&2; exit 1; fi
         touch docs/.nojekyll
