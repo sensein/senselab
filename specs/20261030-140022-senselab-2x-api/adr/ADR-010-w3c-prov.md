@@ -241,3 +241,28 @@ Source: bids-standard/BEP028_BIDSprov, `bep028spec.md` at master 162bea57 (2026-
   (`senselab:Plan` was a core term), so `senselab-vocab` stays at 1.4.
 - **`plan.json` is written once** and holds the logical plan and input manifest only; each attempt's placement is
   `placements/<attempt>.json`, and a run's current placement is that of its latest claimed attempt (ADR-004).
+
+## Amendment 2026-11-10: a reuse across the attempts of one run is a Reuse, whichever writer settles it (Phase 3 Task T-RESUME-REUSE)
+
+- **Resuming a run reuses what the earlier attempt finished.** An item whose outcome on the run's queue was written by
+  an earlier epoch is settled by the resuming coordinator from the store without being sent to a worker; that is a
+  reuse in the sense of this ADR and is recorded as a `senselab:Reuse` activity. The writer is whichever process
+  settles the item: the resuming coordinator, in its own store's provenance document, or a worker that serves it.
+- **A settled reuse has its own shape.** The coordinator ran nothing, so its `senselab:Reuse` carries no
+  `senselab:context` and no agent. It carries `senselab:storedContext` and `senselab:storedAgent` (the context and
+  agent that computed the result), `senselab:logicalKey`, `prov:used` of the result, the verify settings and
+  `senselab:reusePolicy`, the policy the item's outcome was served under in its own attempt (`exact`, or `equivalent`
+  with `senselab:equivalence`). Its `prov:qualifiedAssociation` has `prov:hadRole` (`senselab:nodeId`, the graph node)
+  and `prov:hadPlan` (`plan:<hash>`) and no `prov:agent`, and the activity has no `prov:wasAssociatedWith` (PROV-DM
+  5.3.3: the agent of an association is optional when a plan is given). This amends the 2026-11-02 clause "a reuse
+  records both agents" and the 2026-11-06 clause "every execution and reuse activity of a planned job carries an
+  association with `prov:hadRole` and `prov:hadPlan`" only as far as the agent is absent; the node and the plan are
+  recorded as before. No vocabulary term is added.
+- **The bound.** A writer records at most one `senselab:Reuse` per item per attempt: the coordinator records an item
+  once per graph node however often it reads the outcome. The union may hold a worker's Reuse and the coordinator's for
+  one item when the worker's commit raced a surviving earlier-epoch worker that linked its outcome first (the worker's
+  reuse was recorded before its commit lost); the two differ by time and are not merged.
+- **The coordinator writes its document when it has settled items from an earlier epoch,** after each poll that
+  recorded any and when its pool closes, with the run's plan entity. A failed write in a poll is logged and retried at
+  the next poll and at close, so settled results are never lost to it; `close` raises if its final write fails, unless
+  an error already ends the run.
