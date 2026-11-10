@@ -538,8 +538,9 @@ class _Devices:
 
 
 @pytest.mark.logic
-def test_local_runs_one_cuda_worker_per_visible_device(tmp_path: Path) -> None:
+def test_local_runs_one_cuda_worker_per_visible_device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A cuda class's workers each get a free device as `CUDA_VISIBLE_DEVICES`; no more start than there are devices."""
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)  # a GPU allocation sets it; a cpu worker inherits it
     devices = _Devices(tmp_path / "devices")
     local = Local(
         8, command=[sys.executable, "-c", DEVICE_CHILD, str(tmp_path / "devices")], cuda=["gpu"], devices=["G-0", "G-1"]
