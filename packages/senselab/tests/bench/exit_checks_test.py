@@ -123,6 +123,25 @@ def test_output_identities_are_each_records_result_and_compare_names_the_differe
     ]
 
 
+@pytest.mark.logic
+def test_progress_counts_the_items_with_a_result_and_prints_without_a_run_directory(tmp_path: Path) -> None:
+    """A run not yet begun shows 0, results show as they commit, and an unknown total is left out of the line."""
+    lines: list[str] = []
+    with exitlib.Progress(tmp_path / "absent", 4, 3600, lines.append):
+        pass
+    log = EventLog(tmp_path, "a0", 1)
+    for i in range(3):
+        _record(log, "queued", i, "e")
+        _record(log, "finished", i, str(i), _output(str(i)))
+    exitlib.Progress(tmp_path, 4, 3600, lines.append).tick()
+    exitlib.Progress(tmp_path, None, 3600, lines.append).tick()
+    assert [line.split(" after ")[0] for line in lines] == [
+        "progress: 0/4 items committed",
+        "progress: 3/4 items committed",
+        "progress: 3 items committed",
+    ]
+
+
 def _history(
     tmp_path: Path, committed: list[int], resumed: dict[EventKind, list[int]], keys: list[str]
 ) -> tuple[list[Event], list[Event]]:
