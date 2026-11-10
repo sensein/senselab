@@ -36,7 +36,7 @@ from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, PlanFragment
 from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, process_workers
-from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
+from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute, ran_out
 from senselab_core.runtime.execution.observing import (
     Presence,
     RequestRecord,
@@ -111,8 +111,7 @@ def _ran_out(members: "Sequence[Member]", outcomes: Sequence[JobOutcome], report
     at = [i for i, m in enumerate(members) if m.job.ref in named]
     if len(at) < 2 or len(at) != len(named):  # noqa: PLR2004 - a request of one has none to split
         return []
-    ran = all(isinstance(o, Failed) and o.failure.fault == FaultClass.RESOURCE.value for o in (outcomes[i] for i in at))
-    return at if ran else []
+    return at if ran_out([outcomes[i] for i in at]) else []
 
 
 def failure_of(exc: BaseException) -> FaultRecord:

@@ -515,7 +515,13 @@ class InProcess:
         for batch, run in itertools.groupby(zip(jobs, batches, strict=True), key=lambda pair: pair[1]):
             sent = replace(placement, batch_size=batch)
             outcomes += execute(
-                [j for j, _ in run], sent, store=self.store, run=self.run, profile=self.profile, workers=self.workers
+                [j for j, _ in run],
+                sent,
+                store=self.store,
+                run=self.run,
+                profile=self.profile,
+                workers=self.workers,
+                bisect_resource=True,
             )
         return outcomes
 
