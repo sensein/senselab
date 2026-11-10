@@ -144,16 +144,18 @@ set in §4.
   - each declared stack.
 - It also runs boundary values of each `Params` field (min, max, each enum member).
 - Assertions are on type, shape, ranges, determinism (same identity gives the same result) and
-  agreement across stacks within the measured tolerance profile. Never on exact model scores.
+  agreement across stacks under the run config's thresholds (P2-95; amended 2026-11-10, P3-46). Never on exact model scores.
 - **Identity contracts on real backends:**
   - **perturbation (I-1):** perturb every undeclared source (env vars, other profile keys, cache
     roots); the output must not change;
-  - **batch invariance (I-3):** batch of 1 against mixed-length batches, within the measured
-    tolerance; otherwise the backend must declare itself not batch-invariant;
+  - **batch invariance (I-3):** batch of 1 against mixed-length batches, compared under the run
+    config's thresholds (amended 2026-11-10, P3-46); otherwise the backend must declare itself not batch-invariant;
   - **service attestation (I-8):** restarting a service with a new config changes keys;
   - **cross-context equivalence (P-38):** the limits tier runs each backend in every context of the
-    CI and ORCD matrix (platform, device class, precision). Agreement within tolerance is written
-    to the backend's tolerance profile; this is the data `equivalent` reuse relies on;
+    CI and ORCD matrix (platform, device class, precision). Agreement under the run config's thresholds is
+    recorded as `equivalence-evidence` and regenerated into the packaged equivalence table (`equivalence@4.0`,
+    `runtime/equivalence.py:1-7`); this is the data `equivalent` reuse relies on (amended 2026-11-10, P3-46; the
+    tolerance profiles are retired);
   - **verify sampling:** a run with `verify: k` recomputes k% of cross-context hits. Agreements are
     recorded and disagreements are reported against the equivalence class.
 - **Version-bump check (CI, not a test):** a change to a task's or backend's source digest without a
@@ -171,8 +173,8 @@ set in §4.
 - They double as the 2.x tutorials, so tutorials are tested by construction.
 
 **Parity tests (migration only)**
-- `tests/parity/` compares 1.x and 2.x outputs per ported task, within measured tolerance profiles
-  (`design.md` §6).
+- `tests/parity/` compares 1.x and 2.x outputs per ported task, under the run config's thresholds
+  (`design.md` §6; amended 2026-11-10, P3-46).
 - They are deleted, along with the 1.x code, in Phase 5.
 
 ## 5. Where and how tests run (P-29)
@@ -198,7 +200,7 @@ set in §4.
 
 | When | What |
 |---|---|
-| every PR | `pre-commit`; logic + contract, model-free, on 3.13 (3.11–3.14 on a PR labelled `full-matrix`) from a locked core-only install (`uv sync --locked`), with import contracts and per-distribution sdist-to-wheel builds (`core-only`); the source-digest check (`source-digests`, `scripts/check_source_digests.py`); the implementer and reviewer models differ (`pr-models`, `scripts/check_pr_models.py`); the model-free release-gate packaging tests (`core-env`); worker logic, env and contract tests on 3.10 (`worker-floor`, the one job that does not install from `uv.lock`: the lock requires Python 3.11 or later, so a locked 3.10 constraints file is a follow). A guard test (`ci_tiers_test.py`) refuses any other unlocked install. Not yet in CI: per-lock env builds, CPU smoke benchmarks (<15 min) when a task is touched |
+| every PR | `pre-commit`; logic + contract, model-free, on 3.13 (3.11–3.14 on a PR labelled `full-matrix`) from a locked core-only install (`uv sync --locked`), with import contracts and per-distribution sdist-to-wheel builds (`core-only`); the source-digest check (`source-digests`, `scripts/check_source_digests.py`); the implementer and reviewer models differ (`pr-models`, `scripts/check_pr_models.py`); the model-free release-gate packaging tests (`core-env`); the execution, kernel and lint tests with the `pydra` extra, on 3.13 alone (`core-pydra`); the senselab package's tests from an install without extras (`senselab-lean`); worker logic, env and contract tests on 3.10 (`worker-floor`, the one job that does not install from `uv.lock`: the lock requires Python 3.11 or later, so a locked 3.10 constraints file is a follow). A guard test (`ci_tiers_test.py`) refuses any other unlocked install. Not yet in CI: per-lock env builds, CPU smoke benchmarks (<15 min) when a task is touched |
 | label on a PR (`limits`) | model-free limits only, on 3.13 (`core-limits`); never use cases (H-R54) |
 | nightly (`schedule`, `workflow_dispatch`; `2x-nightly.yaml` on `alpha`) | every PR job against `2.x` with the 3.11–3.14 matrix, and `limits and not model` on 3.13. No use case and no model test: those are ORCD. Not yet in CI: the scale ladder (`benchmarks/scale`, P-33), CPU smoke benchmarks, and 3.15 and the release-tagged-merge trigger of owner item 54 |
 | every pushed SHA on a task or backend change (ORCD) | the model, backend-env and GPU tiers the change touches, and the use cases, submitted from a pinned SHA; the job exports `SENSELAB_TEST_PROFILE=<the group's site profile file>` and, so env trees persist between jobs, `SENSELAB_ENV_ROOT=<scratch>` |
@@ -281,3 +283,26 @@ Owner: "aren't timing tests very brittle since they are dependent on resources t
 - A complexity bound is asserted by counting operations at two sizes, not by timing them.
 - Existing tests that assert walls or rely on sleeps with slack are converted now, in a dedicated task, not left
   until their area is next touched.
+
+## Amendment 2026-11-10 (Phase 3 spec pass, Task 22a)
+
+- **Agreement is the P2-95 comparisons, in every tier** (P3-46). Where §4 said "measured tolerance", "tolerance
+  profile" or "within tolerance" it now says the run config's thresholds: two outputs agree when their hashes are
+  equal, or leaf by leaf when each leaf is `exact` or within `numpy.isclose` of a named threshold
+  (`runtime/compare.py:1-7`; `runtime/data/comparison.yaml:1-8`). The thresholds are configuration values with written
+  derivations and are never fitted from calibration data (ADR-002 amendment 2026-11-02). This supersedes the 2026-11-02
+  amendment above that keys tolerance profiles by task and backend: the profiles, `scripts/generate_tolerance.py` and
+  `runtime.tolerance` are retired (ADR-002 amendment 2026-11-02), and the parity of speaker labels (P2-89) is the
+  `match_labels` rule of the comparison table.
+- **Python 3.13 is the default of every PR job but `worker-floor`, which runs 3.10, and of the pinned interpreter** (`.python-version:1`;
+  `.github/workflows/2x-tests.yaml:57`, `:74`, `:138`). The 3.11 to 3.14 matrix runs only on the nightly and on a PR
+  labelled `full-matrix` (`2x-tests.yaml:74`). This restates §2 and §5 and changes no rule.
+- **`core-pydra` carries the execution tests under Route A.** Running a plan needs the `pydra` extra
+  (`runtime/execution/run.py:941-942`), so the tests that run plans cannot run in `core-only`, which installs
+  `senselab-core` without it (`2x-tests.yaml:88`). `core-pydra (3.13)` installs the extra from `uv.lock` and runs
+  `packages/senselab-core/tests/runtime/execution`, `tests/kernel` and `tests/lint` with
+  `-m "(logic or contract) and not model"` (`2x-tests.yaml:110-127`). It runs on 3.13 only; the matrix does not cover
+  pydra.
+- **Site profile for model, env and GPU runs.** Checked against the code: `SENSELAB_TEST_PROFILE` is
+  `PROFILE_VARIABLE` in `packages/conftest.py:94`; a model or GPU test is skipped without it
+  (`conftest.py:132`). §2 and the cadence row already say so; nothing to add.

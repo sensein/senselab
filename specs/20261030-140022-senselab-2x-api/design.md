@@ -401,8 +401,8 @@ them to a principle.
 |---|---|---|
 | I-1 | **No ambient reads.** Everything a node reads reaches it through a declared, identified input. | perturbation contract: perturb every undeclared source (env vars, other profile keys, cache roots); output unchanged |
 | I-2 | **Context and protocol identity are not in the key.** The execution context is recorded per result. The protocol identity (worker-runtime source hash plus wire version) is checked only at handshake. The worker runtime is an overlay on each env. | env tier: a release that changes only the worker runtime leaves keys unchanged |
-| I-3 | **Batch invariance is declared and certified.** Otherwise batches form from canonical length buckets (bucket in the key) or batch size 1. Nondeterministic backends are labelled. | limits contract: batch of 1 against mixed batches, within a measured tolerance |
-| I-4 | **Cross-context reuse follows the reuse policy.** Equivalence classes come only from measured tolerance profiles and verify sampling. | logic: `equivalent` with no measurement behaves as `exact`; limits: verify sampling records agreement |
+| I-3 | **Batch invariance is declared and certified.** Otherwise batches form from canonical length buckets (bucket in the key) or batch size 1. Nondeterministic backends are labelled. | limits contract: batch of 1 against mixed batches, compared under the run config's thresholds (P2-95; amended 2026-11-10, P3-46) |
+| I-4 | **Cross-context reuse follows the reuse policy.** Equivalence classes come only from the agreements verify sampling records, judged by the P2-95 comparisons under the run config's thresholds (amended 2026-11-10, P3-46; the tolerance profiles are retired, ADR-002 amendment 2026-11-02). | logic: `equivalent` with no measurement behaves as `exact`; limits: verify sampling records agreement |
 | I-5 | **Early cutoff.** Derived inputs are identified by upstream output identity. A composite's identity is its `LogicalPlan` hash. | contract: an upstream change that yields identical output leaves downstream keys unchanged |
 | I-6 | **`Absent` carries a cause class.** Only content-caused absence is cached. | contract: environment-caused absence is never read back from the cache |
 | I-7 | **Shards are closed under the coarsest grouping level.** A group node's key includes a hash of its member manifest and it checks completeness. Chunkable tasks declare a chunk grid and receptive field as identity, and shards align to the grid. | logic: a split group fails planning; misaligned shards are refused |
@@ -427,7 +427,7 @@ them to a principle.
 node with the attested identities. BEP028 export is how runs are published. `reproduce` becomes a
 consumer of this store. Its model and format are W3C PROV, PROV-O in JSON-LD
 ([ADR-010](adr/ADR-010-w3c-prov.md)), implemented in Phase 2; until then the format is
-`provenance@2.0` (ADR-006). Recorded values have a declared type, and the digest is total over it by
+`provenance@2.0` (ADR-006; amended 2026-11-10: the format as built is `provenance@3.0`, `kernel/formats.py:26`). Recorded values have a declared type, and the digest is total over it by
 construction: pipelines record `-inf` dB for silence and nanosecond `mtime_ns` stamps, and evidence is
 often typed `Any`, so totality cannot rest on the suites that happen to run. Any other value raises a
 typed error at the boundary naming the attribute path and the type (H-R29, H-R30).
@@ -436,7 +436,7 @@ typed error at the boundary naming the attribute path and the type (H-R29, H-R30
 
 `execution.md` holds the full design; this is the summary.
 
-- **Executors:** `InProcess` (notebooks, tests) and `Pool` (`work_pool` with plan-fragment items).
+- **Executors:** `InProcess` (notebooks, tests) and `Pool` (queues of plan fragments in the run directory; amended 2026-11-10, `runtime/execution/pool.py:148`, `runtime/execution/executor.py:305`).
 - **Substrates in 2.0:** local processes and Slurm. They start pool workers; they do not run the
   graph.
 - **Coordination:** safety comes from idempotence, so a duplicate coordinator causes only duplicate
@@ -460,6 +460,17 @@ typed error at the boundary naming the attribute path and the type (H-R29, H-R30
   same `Executor` protocol: 2–4k lines, 3–5
   person-weeks, reusing `reproduce/dag.py` and `audio_analysis/contracts.py:991`
   `unrolled_contracts`.
+- **Gate outcome (amended 2026-11-10, Task 21 Step 7; `reviews/phase3-exit-evidence.md`, Step 7).** The gate passed,
+  Route A, at pydra `0c1bbcd9`, and no re-evaluation is due. As built, `Plan.run` always runs the plan through
+  `PydraRunner` (`runtime/execution/run.py:963`, `:974`) and raises `MissingExtra` without the `pydra` extra of
+  `senselab-core` (`run.py:941-942`; `packages/senselab-core/pyproject.toml:14`); `InProcess` and `Pool` are the
+  `Executor`s beneath it (ADR-001 amendment 2026-11-05). senselab pins pydra at `c8541fc5` (`pyproject.toml:101`), the
+  merge of #911; the branch head is `0e3bbbbd` (#912, atomic cache writes), four commits ahead. The pydra PR states were
+  read on 2026-11-10 and not re-queried in the close-out. No ADR-001 change follows from the outcome: its 2026-11-05
+  amendment already states Route A as built.
+- **The rest of the pydra proposals are carried, not delivered (amended 2026-11-10).** A0, A2, B1, B2, C, D2, E2, G2,
+  H0, H, I, J1 and J2 (Phase 3 Tasks 41-53) have no PR. Each is carried by a register row, R-238 to R-250, owned by the
+  senselab pydra track. None blocks a senselab task, because Route A runs jobs on senselab's own queues (P3-52).
 - **Citations.** pydra changes are cited by proposal id (A0…K2), from
   [proposal 0001](https://github.com/nipype/pydra/blob/enh/execution-extensions/proposals/0001-execution-extensions.md).
 - **Why pydra:** `engine-choice.md`.
@@ -801,7 +812,7 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
 - Exit:
   - each two-stack call switches by execution profile alone (P-8);
   - an agent runs each task from `describe` output alone (P-1);
-  - parity holds within measured tolerance profiles (P-17), on CPU and on one CUDA host.
+  - parity holds under the run config's thresholds (P-17, P2-95; amended 2026-11-10, P3-46: "measured tolerance profiles" is retired), on CPU and on one CUDA host.
 
 **Phase 3: plans and executors.**
 - Build:
@@ -815,14 +826,15 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   (proposal 0001, nipype/pydra#891): **Phase 2 owns the gate prerequisites**, which must be
   working on the branch before Phase 3 starts: A1, D1, E1, F1, F2, G1, K1, K2 (amended 2026-11-03, P3-1: K2 moved into Phase 3 Task 0; amended 2026-11-02, P2-39: F1
   depends on A1 in the proposal, so A1 moves from Phase 3 to Phase 2). **Phase 3 owns the
-  rest**: A0, A2, B1, B2, C, D2, E2, G2, H0, H, I, J1, J2. The gate decision is Phase 3's
+  rest**: A0, A2, B1, B2, C, D2, E2, G2, H0, H, I, J1, J2 (amended 2026-11-10: none is delivered in Phase 3; R-238 to R-250 carry them, §4.9). The gate decision is Phase 3's
   first task. The dates are the owner's to set; none is set yet.
 - Exit:
   - a 1,000-record BIDS `.map` runs on a laptop and on ORCD, with plans differing only in
     execution fields (P-10);
   - an interrupted run resumes from its plan hash and recomputes only what is missing (P-5).
 - New integrations follow this phase: vLLM-omni and a vLLM ASR backend. They are accepted against
-  the transformers stack on the same model, within a measured tolerance.
+  the transformers stack on the same model, by the P2-95 comparisons under the run config's thresholds (amended
+  2026-11-10, P3-46; `runtime/compare.py:1-7`, `runtime/data/run_config.yaml`).
 
 **Phase 4: pipelines, datasets, signals.**
 - Build:
@@ -913,7 +925,7 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
 - the run lifecycle and the single call shape (sections 4.2 and 4.7);
 - `fit` producing Profile artifacts (section 4.14);
 - the Phase 2 slice drawn from existing backends;
-- measured parity tolerances; triage measurements ported as tasks, with its decision layer left for the flywheel;
+- parity under the run config's thresholds (P3-46, amended 2026-11-10); triage measurements ported as tasks, with its decision layer left for the flywheel;
 - vLLM-omni and vLLM ASR as the only new integrations;
 - the pydra gate at the start of Phase 3, with its fallback (section 4.9);
 - the license CI gate equal to the run-time default (section 4.13);
@@ -972,3 +984,4 @@ R-n in [`review-register.md`](review-register.md).
 - 2026-11-03: the pydra gate passed at `0c1bbcd9` (Route A, §4.9); K2 was delivered in Phase 3 Task 0, not Phase 2 (P3-1, §4.9, §6.2; `reviews/phase3-gate/evidence.md`).
 - 2026-11-03: a lease is a directory taken by `mkdir`, renewed by beat directories (ADR-003, owner item 58).
 - 2026-11-08: a single unnamed record-bound input binds to the records' single input; the plan's `bind` records it (§ Binding, ADR-006; Phase 3 Task 21b).
+- 2026-11-10: Phase 3 spec pass (Task 22a): the pydra gate outcome as built and the carried proposals (§4.9, §6.2); agreement is the P2-95 comparisons, not a measured tolerance (§4.8 I-3 and I-4, §6.2; P3-46); the pool executors are queues of plan fragments (§4.9).

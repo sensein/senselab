@@ -214,7 +214,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
   it is empty, as a crash between a lease's `mkdir` and its mode change leaves it; one that holds entries cannot be
   claimed and is not broken: the wait ends in `LeaseUnavailable` naming the owner. That is unreachable with the
   packaged modes: every
-  lease is `shared_dir_mode` or `lease.dir_mode` (group-listable), except the label map's, which is
+  lease is `shared_dir_mode` or `lease.dir_mode` (group-listable; `lease.dir_mode` is not yet a key: a constant in source, pending under R-219 (amended 2026-11-10)), except the label map's, which is
   `PRIVATE_DIR_MODE` under a `0o700` directory that no other user can reach. `PRIVATE_DIR_MODE` is an invariant
   in the P-34 form, not config: the label map is readable by its owner only, and no profile may open it.
 - **Take.** After `mkdir <name>.lease/<token>`, the taker lists the lease. Another token beside its own means its
@@ -251,7 +251,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
   removed. Every commit under a lease is preceded by `prove()`, and a holder whose proof fails is lost and does not
   commit. The run manifest and the label map are read-merge-write, so each commit is one atomic replace of the
   merged content (`write_atomically`) made after a successful proof. The manifest's holder re-takes the lease,
-  re-reads and merges, up to `lease.record_attempts` times; the label map's raises `RunIOError`.
+  re-reads and merges, up to `lease.record_attempts` times (not yet a key, see the amendment of 2026-11-10); the label map's raises `RunIOError`.
 - **Callers.** Every lease holder beats under the profile's `lease` section (`envs.lease_stale_after_s` is folded
   into it). On a lost lease, or a failed `prove()` right before publishing, the env build is used but its record
   is not published; the manifest and the label map
@@ -260,7 +260,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
 - **The beat bound is checked at load.** `lease.attribute_delay_s` is data (the NFS default acdirmax, 60 s, in
   the `slurm` template; 0 on local disk) and a floor: `probe_capabilities` measures, from one client, how long a directory's mtime takes to show a new entry, and `check_storage` checks the bound at plan time against the larger of the two. One client cannot see another's stale attribute cache, so the probe only ever raises the floor. `ExecutionProfile.load` refuses a profile where
   `(1 + lease.missed_beats) × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s` with
-  `LeaseBoundError`; the packaged profiles allow one missed beat (`lease.missed_beats` 1). Both packaged profiles load (slurm, once filled: 198 + 60 = 258 < 300).
+  `LeaseBoundError`; the packaged profiles allow one missed beat (`lease.missed_beats` 1; as built the factor is the literal 2, see the amendment of 2026-11-10). Both packaged profiles load (slurm, once filled: 198 + 60 = 258 < 300).
 - **Unsupported roots.** `StorageUnsupported` is raised when `mkdir` fails as an unsupported operation (`ENOTSUP`,
   `EOPNOTSUPP`, `ENOSYS`). `probe_capabilities` measures directory rename, server-clock mtimes, file rename, exclusive `link` and the attribute delay on the root, and `require` raises the same type naming each missing primitive.
 - **Not guaranteed.** On NFS a breaker's `lstat` of a token may be served from its attribute cache for up to
@@ -285,6 +285,7 @@ R-111. It replaces nothing in that amendment; it fixes what that amendment left 
 - 2026-11-07: the lease constants this ADR names are profile keys (`lease.record_attempts`, `lease.dir_mode`, `lease.missed_beats`), per P-34 as amended; `PRIVATE_DIR_MODE` stays an invariant (a security property). The other code constants move into the profile, with derivations in `config-derivations.md`, under the fixed-parameter audit.
 - 2026-11-08: measures roots, layered (shared, then own) under these rules: write-once files, a hardware index, a probe lease per measured unit, a serve lease pinning a probe queue to one worker, bounded peer waits, a read-only root that falls back and never fails, one trust filter over every record kind, and `collect` of the collector's own files (Phase 3 Task 20R).
 - 2026-11-08: the outcome record names the epoch of the claim that wrote it (Phase 3 Task 21R1).
+- 2026-11-10: the lease section as built lags the 2026-11-07 decision: three keys so far; the beat-bound factor, the manifest retry count and the lease directory mode are not yet keys (pending under R-219; Phase 3 Task 22a).
 
 ## Amendment 2026-11-06: queues of plan fragments (Phase 3 Task 13)
 
@@ -402,3 +403,26 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3, §4.4. Adds to th
 - **One writer shape.** Every writer of `outcome/<digest>`, a claim's commit or dead and the queue's own dead record
   for a corrupt item, builds the record the same way and names an epoch.
 - **Unchanged.** First-writer-wins, the staged-then-linked write, the one-outcome-per-item rule and fencing by epoch.
+
+## Amendment 2026-11-10: the lease section as built, a lag under R-219 (Phase 3 Task 22a)
+
+Records where the 2026-11-07 decision stands; it does not reverse it. That amendment made `lease.record_attempts`,
+`lease.dir_mode` and `lease.missed_beats` profile keys under P-34 as amended, and R-219 (open) owns the move. At the
+Phase 3 head the profile's `lease` section has three keys, `stale_after_s`, `renew_fraction` and `attribute_delay_s`
+(`runtime/execution_settings.py:201-212`; `laptop.yaml:93-96`, `slurm.yaml:110-113`); the three below are not yet keys.
+
+- **`lease.missed_beats`: not yet a key.** The beat bound allows one missed beat as the literal 2 in
+  `JobLease.check_bound`, which refuses `2 × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s` with
+  `LeaseBoundError` (`execution_settings.py:214-224`). `check_storage` applies it at plan time with the larger of the
+  profile's `attribute_delay_s`, a floor, and the delay measured on each root (`runtime/planner.py:663-693`). The
+  `slurm` template figures are 2 × 0.33 × 300 + 60 = 258 < 300.
+- **`lease.record_attempts`: not yet a key.** The manifest's holder re-takes the lease and merges up to 3 times, a
+  constant in `runtime/execution/run.py:73` (used at `:848`).
+- **`lease.dir_mode`: not yet a key.** A lease directory is made with a constant mode, `0o2770`
+  (`runtime/locks.py:67`, `:147`). The private mode stays an invariant (`runtime/storage.py`).
+- **Pending, not dropped.** `scripts/data/invariants.yaml` lists the record-attempts and directory-mode constants
+  under `pending` against R-219, which stays open and moves to Task 24.
+- **Services, as built.** The idle exit of a service worker is the profile key `services.idle_exit_s`, 600 s in both
+  packaged profiles (`laptop.yaml:108`, `slurm.yaml:125`; `runtime/execution_settings.py:252-255`), compared with the
+  idle time of each service the worker provides (`runtime/execution/pool_worker.py:426`). The registry entry carries no
+  heartbeat (`runtime/execution/services.py:8`). The 2026-11-07 service amendment stands otherwise.

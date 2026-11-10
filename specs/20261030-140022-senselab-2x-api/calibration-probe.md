@@ -467,7 +467,7 @@ is `None` and the observation is kept (§5.4 step 1 treats it as shared). `Sampl
    any request of a bisected item), its `hardware` is the unit's, and its co-tenancy is the probe regime (device 1,
    host as its own probe ran: the least host co-tenancy among that probe's requests) for the `single`/`batched` fits; other regimes feed `regimes` only (§7.3).
 2. **Warm** iff `since_load ≥ calibration.warmup_requests` (M2). A request with `load_s` set gives `load_s` and
-   nothing else. Cold or reloaded requests never move `r`, `u`, `a` or the batch decision.
+   nothing else. Cold or reloaded requests never move `r`, `u`, `a` or the batch choice.
 3. **Per request, single:** fit `wall_s = r + u·units` over warm batch-1 requests by Theil–Sen (the median of
    pairwise slopes; robust to one outlier per three, no tuning constant). `spread` is the median absolute residual
    over the median prediction, scaled to a standard deviation (× 1.4826, an invariant: MAD to σ under normality).
@@ -1015,7 +1015,7 @@ too, until a real adapter is timed.
 | `single_item_jobs` | 2 | 2 | the schema minimum: `a` is measured per whole probe item (`Estimate.item_s`), so two jobs separate it from the per-request cost |
 | `batched_sizes` | 1 | 1 | run time measures `B₁` only; the table profile measures 2 (R-237) |
 | `probe_items` | derived | derived | not a key: `warmup_requests + length_strata·min_requests·(1 + J) + min_requests·single_item_jobs`, J the jobs of one repetition of the batched sizes at B₁ = `pool.quantum_items` (B₁ plus round(√B₁) at `batched_sizes` 2), computed by `probe_items(config, quantum_items)`; the batch is measured per resource from the unit's device fit |
-| `confidence` | 1.645 | 1.645 | one-sided 5 %: the false-batch rate of the batch decision (§5.4 step 6) and the share of items cut past `quantum_s` (§6.2); a wrong batch decision errs to batch 1 |
+| `confidence` | 1.645 | 1.645 | one-sided 5 %: the false-batch rate of the batch choice (§5.4 step 6) and the share of items cut past `quantum_s` (§6.2); a wrong batch choice errs to batch 1 |
 | `drift_confidence` | 2.576 | 2.576 | two-sided 1 %: at most one spurious confirming probe per hundred windows of a stable unit |
 | `observations_kept` | 3 | 3 | superseded probes kept for audit: three give a median of medians tolerating one bad probe |
 | `unmeasured_workers` | 1 | 1 | S5: unmeasured work is not scaled; one worker runs it under the safe values |

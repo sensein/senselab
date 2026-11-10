@@ -266,3 +266,15 @@ Source: bids-standard/BEP028_BIDSprov, `bep028spec.md` at master 162bea57 (2026-
   recorded any and when its pool closes, with the run's plan entity. A failed write in a poll is logged and retried at
   the next poll and at close, so settled results are never lost to it; `close` raises if its final write fails, unless
   an error already ends the run.
+
+## Amendment 2026-11-10: the Phase 3 head as built, checked (Phase 3 Task 22a)
+
+Adds no rule. It records what the Phase 3 head holds, so the amendments above can be read against it.
+
+- **Formats.** A run's documents are `provenance@3.0` (`kernel/formats.py:26`); the core vocabulary is
+  `senselab-vocab@1.4` (`runtime/data/prov/senselab.jsonld:7`), the version the 2026-11-06 amendment names.
+- **Writers.** Each writer replaces its own `<run>/prov/<writer uuid4 hex>.jsonld` and a reader takes the union by
+  `@id` (`runtime/provenance.py:1-6`); the coordinator and each pool worker are writers (clauses above).
+- **Checked on a run.** The provenance checker passed 11 of 11 on the store retrieved from the interrupted and resumed
+  speech-to-text run, with 435 `senselab:Reuse` activities from the resume and at most one execution per key
+  (`reviews/phase3-exit-evidence.md`, Step 4). That is evidence of the 2026-11-10 amendment above, not a new clause.
