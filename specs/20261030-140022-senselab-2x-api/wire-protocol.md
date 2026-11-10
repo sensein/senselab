@@ -77,6 +77,12 @@ A worker in an isolated env is given inputs as wire forms and answers wire forms
   `WireValueError` (`content`), never later as a `ProtocolError`. Without the offset the band
   between the value's own bound and the line's bound (two levels for outputs, four for inputs)
   passed `to_wire` and then failed the line as infrastructure, or escaped `run()` on the host.
+  *Amendment 2026-11-10 (R-113, the first full matrix run).* The reader also counts depth over the line's
+  bytes before any parser runs (`canonical.require_json_depth`: the brackets outside strings, bound 64,
+  root at depth 1), so the refusal is the same on every Python and no parser recursion limit is consulted;
+  CPython 3.14's `json` no longer raises `RecursionError` at a fixed depth. It is the same `ProtocolError`,
+  the same `fatal` and `EXIT_FATAL`, the message `wire line nests deeper than 64 containers`. The value walk
+  above still bounds what is written. Not a protocol change: no version bump.
 - **Bounded work.** `to_wire` encodes each distinct container and array once and charges every
   further use of it again, against a lower bound on the encoded bytes (one byte per value, a
   string's or key's length plus its quotes, brackets and separators). Once the charge exceeds

@@ -63,6 +63,10 @@ findings are in [`reviews/phase1-reattack/canon.md`](../reviews/phase1-reattack/
   of 64 containers, a memo for shared containers, and a work budget of 64 Mi characters of JCS text, four
   times the wire's 16 MiB line, so any value a worker can return encodes. A shared DAG (`x = [x, x]` 63
   times) was expanded as a tree (XC-5); under the bound it is refused in about 0.2 s.
+  *Amendment 2026-11-10 (R-113).* The bound holds on the read side by a pre-parse scan of the bytes
+  (`require_json_depth`: brackets outside strings, 64 containers, root at depth 1) in `jcs_loads`, the wire
+  reader and the label-map, measures and provenance readers, not by a parser's recursion limit, which is
+  interpreter-dependent (CPython 3.14). Same error classes as before; no format or wire version changes.
 - **`jcs_loads` accepts only what `jcs_dumps` writes** (`jcs_dumps(jcs_loads(b)) == b`): a repeated key,
   `NaN`, an overflowing number or any non-canonical spelling is refused (XC-6).
 - **A kernel value's canonical form (`value@2`)** is `{"type": <name>, "fields": <fields>}`, each field as
