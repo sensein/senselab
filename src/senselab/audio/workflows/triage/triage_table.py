@@ -400,7 +400,10 @@ def manifest_sources(path: Path) -> dict[str, str]:
     """The run manifest's source per run directory name.
 
     Args:
-        path: A JSONL manifest, one ``{"stem": <run directory name>, "source": <audio path>}`` per line.
+        path: A JSONL manifest, one object per line with ``source`` (the audio path) and either ``enhanced`` (the run's
+            ``run/streams/enhanced.flac``, which names the run directory) or ``stem`` as the run directory name. A
+            manifest whose ``stem`` is the recording's stem, as the corpus table and the corpus driver write it,
+            carries ``enhanced``.
 
     Returns:
         ``{run directory name: source path}``.
@@ -413,7 +416,7 @@ def manifest_sources(path: Path) -> dict[str, str]:
         if not line.strip():
             continue
         record = json.loads(line)
-        name = str(record["stem"])
+        name = Path(str(record["enhanced"])).parents[2].name if record.get("enhanced") else str(record["stem"])
         if name in sources:
             raise ValueError(f"manifest names run directory {name} twice")
         sources[name] = str(record["source"])
