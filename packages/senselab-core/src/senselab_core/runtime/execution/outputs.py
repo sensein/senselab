@@ -2,6 +2,8 @@
 
 from collections.abc import Iterable, Mapping
 
+from senselab_worker.faults import ContentFault
+
 from senselab_core.kernel._base import Frozen
 from senselab_core.kernel.declare import TaskSpec, kernel_types
 from senselab_core.kernel.signals import Recording
@@ -13,11 +15,11 @@ Anchors = tuple[tuple[TimeAnchor, TimeAnchor], ...]
 """Pairs of a recording's identity clock anchor and the anchor the caller's recording carries."""
 
 
-class AmbiguousClock(ValueError):
+class AmbiguousClock(ContentFault, ValueError):
     """Two recording inputs of one content carry different anchors: a stored output has no one clock to re-bind to."""
 
 
-class OutputTypeMismatch(ValueError):
+class OutputTypeMismatch(ContentFault, ValueError):
     """A backend's output for a kernel-typed port is not a wire form of the port's declared type."""
 
 

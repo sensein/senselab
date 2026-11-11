@@ -90,6 +90,16 @@ spread across a million items.
   job is re-placed with a smaller batch and the item is not charged.
   - A host-local `flock` token budget per device is the designed next step, adopted when the scale
     ladder shows the need (design §6.4).
+- **A fault's class survives every wrapper (R-287, R-289, R-292, R-257).**
+  - A `WorkerLoadFailed` takes its class and gap from its cause, so a load that ran out of memory is a
+    resource fault and is re-placed on a larger class; it is never split, because a request is split
+    only when it went to a loaded worker (`splits` and the Pool's `whole` agree).
+  - A `FaultRecord` is built by `of` (a wire record), `from_exception` (through `error_record`) or
+    `gap_of(kind, message)`; no call site writes a literal class. The class is `gap_of` and not `gap`
+    because `gap` is a field.
+  - One mapper, `server_fault`, types a server's failure at the client boundary for both server paths:
+    a timeout or connect failure is `ServiceUnavailable` (infrastructure), a 4xx is content, a 503, a 507
+    or a reply naming memory is resource, any other 5xx is infrastructure.
 - **A GPU-only task with no GPU class** in the execution profile fails planning and names the
   node. It never falls back to CPU silently.
 

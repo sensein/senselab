@@ -309,6 +309,24 @@ def test_resource_fault_moves_to_larger_class_uncharged(tmp_path: Path) -> None:
 
 
 @pytest.mark.contract
+def test_a_load_oom_moves_to_the_larger_class_with_one_worker_start_per_claim(tmp_path: Path) -> None:
+    """A backend that runs out of memory at load is re-placed on `cpu:large`, uncharged, one claim per class."""
+    from fault_class_test import host_load_failure  # noqa: PLC0415 - a real checkout's WorkerLoadFailed
+
+    load = FaultRecord.from_exception(host_load_failure(MemoryError("CUDA out of memory")))
+    assert (load.fault, load.charged) == ("resource", False)
+    profile = _profile(content_attempts=1, infrastructure_replacements=6, resource_replacements=1)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one"])
+    workers.act = lambda fragment: load if fragment.placement.resource_class == "cpu" else None
+    try:
+        [ref] = _all(_pool(tmp_path, store, workers, profile), placed, values)
+    finally:
+        workers.stop()
+    assert ref.failure is None
+    assert [(f.placement.resource_class, f.attempt) for f in workers.served] == [("cpu", 1), ("cpu:large", 2)]
+
+
+@pytest.mark.contract
 def test_broken_env_reported_once(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """Two infrastructure faults of one env break it: reported once with its cause, held, no job failed or dead."""
     profile = _profile(content_attempts=2, infrastructure_replacements=2, resource_replacements=0)

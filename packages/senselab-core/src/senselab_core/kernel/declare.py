@@ -22,6 +22,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic.json_schema import GenerateJsonSchema
+from senselab_worker.faults import ContentFault
 
 import senselab_core.kernel.results  # noqa: F401 - importing it defines the result types
 import senselab_core.kernel.time  # noqa: F401 - importing it defines the time types
@@ -58,7 +59,7 @@ class UnknownTask(LookupError):
     """A task name that no declaration in the registry carries."""
 
 
-class InconsistentInputs(ValueError):
+class InconsistentInputs(ContentFault, ValueError):
     """A call's inputs or params contradict a constraint its task declares."""
 
 

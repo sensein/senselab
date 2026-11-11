@@ -17,7 +17,6 @@ import contextvars
 import os
 import re
 import threading
-import traceback
 import typing
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -366,14 +365,8 @@ class _Run:
                 self.log("cancelled" if self.cancel.is_set() else "blocked", node, element)
 
     def fail_batch(self, node: str, elements: list[tuple[int, ...]], error: Exception) -> None:
-        """Log `failed` for each of `elements` with no result: infrastructure, with the error and its notes."""
-        failure = FaultRecord(
-            fault="infrastructure",
-            type=type(error).__name__,
-            message="".join(traceback.format_exception_only(error)),
-            gap=False,
-            charged=False,
-        )
+        """Log `failed` for each of `elements` with no result, with the record of `error` (`from_exception`)."""
+        failure = FaultRecord.from_exception(error)
         for element in elements:
             if (node, element) not in self.ended:
                 self.log("failed", node, element, failure=failure)

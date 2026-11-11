@@ -18,6 +18,7 @@ from planted_objects_fixture import MIRROR_INDEX, identity_leaks
 from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
 from senselab_core.kernel.identity import Attestation, ModelRef, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.executor import FaultRecord
 from senselab_core.runtime.execution.pool_worker import IDLE_POLLS, PoolWorker
 from senselab_core.runtime.execution.queue import RUN_QUEUES
 from senselab_core.runtime.execution.services import ConsumerLease, ServiceEntry, ServiceRegistry, service_registry
@@ -27,7 +28,7 @@ from senselab_core.runtime.keys import Call, Placement, call_key
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
-from senselab_core.runtime.vllm_server import StaleAttestation
+from senselab_core.runtime.vllm_server import ServerRejected, ServiceUnavailable, StaleAttestation, chat, server_fault
 from senselab_core.testing.interpreter import source_tree_python
 
 pytestmark = pytest.mark.logic
@@ -388,18 +389,75 @@ def test_a_reservation_withdraws_a_dead_holders_entry(registry: ServiceRegistry)
         service.close()
 
 
-def test_a_server_dying_mid_request_is_a_stale_attestation(registry: ServiceRegistry, starts: list[StandIn]) -> None:
-    """A connection the server drops is `StaleAttestation`; a request it refuses stays its HTTP error."""
+def test_a_server_dying_mid_request_is_unavailable(registry: ServiceRegistry, starts: list[StandIn]) -> None:
+    """A connection the server drops is `ServiceUnavailable`; a request it refuses is a `ServerRejected`."""
     starts.append(StandIn(IDENTITY))
     service = registry.register(IDENTITY, str(starts[0].url))
     consumer = registry.consume(IDENTITY)
     try:
         starts[0].drop = True
-        with pytest.raises(StaleAttestation, match="did not answer"):
+        with pytest.raises(ServiceUnavailable, match="did not answer"):
             consumer.chat(CHAT, sampling={})
         starts[0].drop, starts[0].status = False, 400
-        with pytest.raises(urllib.error.HTTPError):
+        with pytest.raises(ServerRejected):
             consumer.chat(CHAT, sampling={})
     finally:
         consumer.stop()
         service.close()
+
+
+def _fault_of(call: Callable[[], Any]) -> tuple[FaultRecord, str]:
+    """Return the record and the type of what `call` raises."""
+    with pytest.raises(Exception) as raised:  # noqa: PT011, B017 - whatever the boundary raises, typed
+        call()
+    return FaultRecord.from_exception(raised.value), type(raised.value).__name__
+
+
+@pytest.mark.parametrize(
+    ("status", "fault", "gap"),
+    [
+        (400, "content", False),
+        (404, "content", False),
+        (422, "content", False),
+        (500, "infrastructure", False),
+        (502, "infrastructure", False),
+        (503, "resource", False),
+    ],
+)
+def test_a_server_status_is_typed_the_same_on_both_paths(
+    registry: ServiceRegistry, starts: list[StandIn], status: int, fault: str, gap: bool
+) -> None:
+    """The direct call and the consumer lease give the same record for each status; a typed fault is no gap."""
+    starts.append(StandIn(IDENTITY))
+    service = registry.register(IDENTITY, str(starts[0].url))
+    consumer = registry.consume(IDENTITY)
+    starts[0].status = status
+    try:
+        direct = _fault_of(lambda: chat(str(starts[0].url), IDENTITY.served_model, CHAT, sampling={}))
+        leased = _fault_of(lambda: consumer.chat(CHAT, sampling={}))
+    finally:
+        consumer.stop()
+        service.close()
+    assert direct == leased
+    assert (direct[0].fault, direct[0].gap, direct[0].charged) == (fault, gap, fault == "content")
+
+
+@pytest.mark.parametrize(
+    "error", [TimeoutError("timed out"), ConnectionRefusedError(), ConnectionResetError(), urllib.error.URLError("x")]
+)
+def test_a_transport_error_is_service_unavailable(error: Exception) -> None:
+    """A timeout, a refused connection and a reset are an infrastructure `ServiceUnavailable`, not a resource fault."""
+    mapped = server_fault(error)
+    assert isinstance(mapped, ServiceUnavailable)
+    assert FaultRecord.from_exception(mapped).fault == "infrastructure"
+
+
+def test_a_closed_port_is_service_unavailable_on_the_direct_call(
+    registry: ServiceRegistry, starts: list[StandIn]
+) -> None:
+    """A server that is gone is an infrastructure `ServiceUnavailable`, as the consumer lease gives."""
+    starts.append(StandIn(IDENTITY))
+    url = str(starts[0].url)
+    starts[0].stop()
+    [record, name] = _fault_of(lambda: chat(url, IDENTITY.served_model, CHAT, sampling={}))
+    assert (name, record.fault) == ("ServiceUnavailable", "infrastructure")

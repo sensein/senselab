@@ -471,13 +471,7 @@ class _Reader:
             self.held[wanted] = self.store.outputs_of(*wanted)
         found = self.held[wanted]
         if found is None or port not in found:
-            return FaultRecord(
-                fault="infrastructure",
-                type="MissingOutput",
-                message=f"output {port!r} of {node!r} is not in the result store",
-                gap=True,
-                charged=False,
-            )
+            return FaultRecord.gap_of("MissingOutput", f"output {port!r} of {node!r} is not in the result store")
         return event.key, event.output, found[port]
 
     def collect(self, names: Sequence[str], index: int | None) -> Given:

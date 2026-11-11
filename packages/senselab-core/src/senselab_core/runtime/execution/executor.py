@@ -18,7 +18,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from senselab_worker.faults import FaultClass
+from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, error_record
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, thawed
 from senselab_core.kernel.formats import PLAN_FRAGMENT_FORMAT, FormatTag, Formatted
@@ -94,6 +94,18 @@ FaultName = Annotated[Literal["content", "resource", "infrastructure"], BeforeVa
 """A `FaultClass` by its value; given a `FaultClass`, its value is held."""
 
 
+class CorruptItem(ContentFault):
+    """A queue item that is not the fragment its name digests."""
+
+
+class WrongKey(ContentFault):
+    """An outcome that gives a job a key other than its own."""
+
+
+class MissingItem(InfrastructureFault):
+    """A queue item whose file is missing."""
+
+
 class FaultRecord(Frozen):
     """A job's failure: its fault class, the exception's type and message, whether it is a gap, whether it is charged.
 
@@ -124,8 +136,23 @@ class FaultRecord(Frozen):
         return FaultClass(self.fault)
 
     @classmethod
+    def from_exception(cls, exc: BaseException) -> "FaultRecord":
+        """Return the record of `exc` as a worker classifies it (`error_record`), its notes after its message."""
+        error = error_record(exc)
+        notes = [str(n) for n in getattr(exc, "__notes__", ())]
+        return cls.of({**error, "message": "\n".join([error["message"], *notes])})
+
+    @classmethod
+    def gap_of(cls, kind: str, message: str) -> "FaultRecord":
+        """Return the infrastructure gap `kind` with `message`: a failure no typed fault names, never charged."""
+        return cls.of({"type": kind, "message": message, "fault": FaultClass.INFRASTRUCTURE.value, "gap": True})
+
+    @classmethod
     def of(cls, error: Mapping[str, Any]) -> "FaultRecord":
-        """Return the record of a worker's error object (`error_record`): charged for a content fault, not a gap."""
+        """Return the record of a worker's error object (`error_record`): charged for a content fault, not a gap.
+
+        The one place a `FaultRecord` is built from its parts; every other site calls it, `from_exception` or `gap_of`.
+        """
         gap = bool(error.get("gap", True))
         fault = FaultClass(error["fault"])
         return cls(

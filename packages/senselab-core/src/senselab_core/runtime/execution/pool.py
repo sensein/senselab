@@ -68,6 +68,7 @@ from senselab_core.runtime.execution.executor import (
     ResultRef,
     Status,
     WorkersBroken,
+    WrongKey,
 )
 from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, fragment_logical_keys, job_units
 from senselab_core.runtime.execution.job import Job
@@ -660,12 +661,8 @@ class Pool:
         for index, (job, key) in enumerate(zip(fragment.jobs, (k.digest() for k in logical), strict=True)):
             ref = given.get(job)
             if ref is not None and ref.key_digest != key:
-                fault = FaultRecord(
-                    fault="content",
-                    type="WrongKey",
-                    message=f"the outcome gives {job} the key {ref.key_digest}, not its own {key}",
-                    gap=False,
-                    charged=True,
+                fault = FaultRecord.from_exception(
+                    WrongKey(f"the outcome gives {job} the key {ref.key_digest}, not its own {key}")
                 )
             elif ref is not None and ref.failure is None and ref.output_identity is not None:
                 found = self.store.entry_of(key, ref.output_identity)
@@ -674,11 +671,13 @@ class Pool:
                         self._reuse(placed, job, logical[index], found, ref.served)
                     yield ref.model_copy(update={"served": "exact"}) if reused and ref.served is None else ref
                     continue
-                fault = _gap("MissingOutput", f"the outputs of {job} are not in the result store")
+                fault = FaultRecord.gap_of("MissingOutput", f"the outputs of {job} are not in the result store")
             elif ref is not None and ref.failure is not None:
                 fault = ref.failure
             else:
-                fault = dead or _gap("MissingResult", f"the outcome of the item gives no result for {job}")
+                fault = dead or FaultRecord.gap_of(
+                    "MissingResult", f"the outcome of the item gives no result for {job}"
+                )
             yield from self._effect(followed, flight, index, key, fault)
 
     def _reuse(self, placed: Plan, job: JobRef, key: LogicalKey, hit: StoredResult, served: str | None) -> None:
@@ -920,10 +919,6 @@ def _worker_of(record: Mapping[str, object]) -> str | None:
 def _counts_against_env(fault: FaultRecord) -> bool:
     """Whether `fault` is an infrastructure fault, or a gap of a class that is not resource."""
     return fault.fault == "infrastructure" or (fault.gap and fault.fault != "resource")
-
-
-def _gap(kind: str, message: str) -> FaultRecord:
-    return FaultRecord(fault="infrastructure", type=kind, message=message, gap=True, charged=False)
 
 
 def run_plan(run_dir: Path, profile: ExecutionProfile) -> Plan:

@@ -70,13 +70,20 @@ PASS_THROUGH = (KeyboardInterrupt, SystemExit)
 """Exceptions no total function in the worker turns into a record; they end the process as usual."""
 
 
+_TYPED = (
+    (InfrastructureFault, FaultClass.INFRASTRUCTURE),
+    (ResourceFault, FaultClass.RESOURCE),
+    (ContentFault, FaultClass.CONTENT),
+)
+
+
 def _classify(exc: BaseException) -> tuple[FaultClass, bool]:
-    if isinstance(exc, InfrastructureFault):
-        return FaultClass.INFRASTRUCTURE, False
-    if isinstance(exc, ResourceFault):
-        return FaultClass.RESOURCE, False
-    if isinstance(exc, ContentFault):
-        return FaultClass.CONTENT, False
+    carried: tuple[FaultClass, bool] | None = getattr(exc, "carried_class", None)
+    if carried is not None:
+        return carried
+    for base, fault in _TYPED:
+        if isinstance(exc, base):
+            return fault, False
     if isinstance(exc, _CONTENT):
         return FaultClass.CONTENT, True
     if isinstance(exc, _RESOURCE) or any(c.__name__ == _OOM_CLASS_NAME for c in type(exc).__mro__):
@@ -85,8 +92,17 @@ def _classify(exc: BaseException) -> tuple[FaultClass, bool]:
 
 
 def classify(exc: BaseException) -> FaultClass:
-    """Return the fault class of an exception: by its typed fault base, else by the fallback table."""
+    """Return the fault class of an exception: by its typed fault base, else by the fallback table.
+
+    An exception that wraps another failure's class sets `carried_class` to that failure's `classification`, and its
+    class and gap are that pair, so a fault's class survives the wrapper.
+    """
     return _classify(exc)[0]
+
+
+def classification(exc: BaseException) -> tuple[FaultClass, bool]:
+    """Return the fault class of an exception and whether the fallback table decided it (a gap)."""
+    return _classify(exc)
 
 
 def wire_text(text: str) -> str:

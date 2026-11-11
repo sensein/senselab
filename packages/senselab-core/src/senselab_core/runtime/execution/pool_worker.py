@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeAlias
 
-from senselab_worker.faults import ProtocolError, classify, error_record
+from senselab_worker.faults import ProtocolError, classify
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.runtime import request_reports
@@ -101,7 +101,7 @@ class Abandoned(Exception):
 def whole(exc: BaseException) -> bool:
     """Whether `exc` fails a request of a loaded worker as a whole: it was lost, fatal, broke the protocol, or ran out.
 
-    A worker that failed to start or load (`WorkerLoadFailed`) is an infrastructure fault of its env and is never one.
+    A worker that failed to start or load (`WorkerLoadFailed`) is never one, whatever its class.
     """
     return isinstance(exc, (WorkerLost, WorkerFatal, ProtocolError)) or splits(exc)
 
@@ -117,7 +117,7 @@ def _ran_out(members: "Sequence[Member]", outcomes: Sequence[JobOutcome], report
 
 def failure_of(exc: BaseException) -> FaultRecord:
     """Return the fault record of `exc`, classified as a worker classifies it (`error_record`)."""
-    return FaultRecord.of(error_record(exc))
+    return FaultRecord.from_exception(exc)
 
 
 @dataclass(frozen=True)
