@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from senselab_core.runtime.calibration import Estimate, Observation, ProbeItem, ProbePlan
-from senselab_core.runtime.execution.executor import PlanFragment, QueueHeld
+from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment, QueueHeld
 from senselab_core.runtime.execution.in_process import job_units, result_ref
 from senselab_core.runtime.execution.job import Job, JobOutcome
 from senselab_core.runtime.execution.queue import Claim
@@ -25,8 +25,11 @@ def report(  # noqa: PLR0913 - the claim and item, its outcomes, then what was m
     outcomes: Sequence[JobOutcome],
     sample: Sample | None = None,
     observations: Sequence[Observation] = (),
+    survived: Sequence[FaultRecord] = (),
 ) -> bool:
     """Commit the claimed item `digest` with each job's `ResultRef`, the `sample` measured and its `observations`.
+
+    `survived` are the infrastructure faults of workers lost to a request whose jobs all completed.
 
     Return whether it committed.
     """
@@ -35,6 +38,8 @@ def report(  # noqa: PLR0913 - the claim and item, its outcomes, then what was m
         extra["measure"] = sample.model_dump(mode="json")
     if observations:
         extra["observations"] = [o.model_dump(mode="json") for o in observations]
+    if survived:
+        extra["survived"] = [f.model_dump(mode="json") for f in survived]
     return digest in claim.commit([digest], extra)
 
 

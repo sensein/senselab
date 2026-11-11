@@ -501,7 +501,7 @@ class InProcess:
                 graph input with no value, or its placement names an undeclared backend; and as `execute`.
             InconsistentInputs, AmbiguousClock: as `execute`.
             LicenseRefused, LeaseTimeout, LeaseUnavailable, WorkerLoadFailed, OutputTypeMismatch, WireFormatRetired,
-                WorkerFatal, WorkerLost, ProtocolError: as `execute`.
+                WorkerFatal, ProtocolError: as `execute`.
         """
         jobs, placement = self._jobs(fragment)
         handle = Handle(id=f"fragment-{next(self._ids)}")
@@ -532,7 +532,6 @@ class InProcess:
                 run=self.run,
                 profile=self.profile,
                 workers=self.workers,
-                bisect_resource=True,
             )
         return outcomes
 
@@ -649,7 +648,7 @@ class InProcess:
             LeaseTimeout, LeaseUnavailable: the backend's server start lease is busy or cannot be read.
             WorkerLoadFailed: the backend's worker or server did not start or load (`VllmStartError` and
                 `AttestationMismatch` among its causes).
-            WorkerFatal, WorkerLost, ProtocolError: as the worker reports them.
+            WorkerFatal, ProtocolError: a load failure, as the worker reports it.
             CallFailed: the backend failed the item.
         """
         spec = packaged().registry.spec(call.task)

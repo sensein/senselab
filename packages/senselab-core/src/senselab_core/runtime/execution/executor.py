@@ -96,6 +96,10 @@ FaultName = Annotated[Literal["content", "resource", "infrastructure"], BeforeVa
 """A `FaultClass` by its value; given a `FaultClass`, its value is held."""
 
 
+class ItemCrashedWorker(ContentFault):
+    """A job that was lost on `faults.crashes_charged` fresh workers in a row, each time alone: the item's fault."""
+
+
 class CorruptItem(ContentFault):
     """A queue item that is not the fragment its name digests."""
 

@@ -99,6 +99,8 @@ faults:
   content_attempts: 2
   infrastructure_replacements: 6
   resource_replacements: 0
+  # Fresh workers in a row a job alone must be lost on before the item is charged with the crash.
+  crashes_charged: 2
 # A worker's model-load and request timeouts in seconds; null for no bound.
 timeouts:
   load_s:

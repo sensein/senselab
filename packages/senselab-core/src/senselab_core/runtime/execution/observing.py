@@ -48,9 +48,9 @@ Failure = Literal["bisected", "failed"]
 class Sent:
     """One call of a claim's `send` for `refs`: its wall seconds, the requests it made, and how it failed if it did.
 
-    `failure` is `bisected` where the call raised and was split in halves, `failed` where it raised and was not;
-    a call that raised made no request of its own to report. A request that returned only resource faults is a
-    `bisected` call of its own jobs with its report.
+    `failure` is `bisected` for a request `execute` split in halves, `failed` for one it did not (a lone job's, or a
+    call that raised); a request of a call that raised made no report of its own. A request `execute` split is a
+    `Sent` of its own jobs with its report.
     """
 
     refs: tuple[JobRef, ...]

@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
 from types import TracebackType
-from typing import Any, ClassVar
+from typing import Any
 
 import numpy
 from senselab_worker import WIRE_VERSION, runtime_identity
@@ -140,15 +140,18 @@ class WorkerLost(InfrastructureFault):
 
 
 class WorkerFatal(InfrastructureFault):
-    """The worker reported a fatal error; `error` is its error object."""
+    """The worker reported a fatal error; `error` is its error object.
 
-    def __init__(self, error: dict[str, Any]) -> None:
-        """Wrap the worker's error object."""
+    `from_load` is true for a fatal raised while a worker loaded or reloaded its model, false for one it reported for
+    a request it had loaded for (a line it could not read, an exception outside its handler): a load is not an item,
+    and a request's fatal is a crash.
+    """
+
+    def __init__(self, error: dict[str, Any], *, from_load: bool = True) -> None:
+        """Wrap the worker's error object; `from_load` says whether it was reported for a load."""
         super().__init__(f"worker fatal: {error.get('type')}: {error.get('message')}")
         self.error = error
-
-    from_load: ClassVar[bool] = True
-    """Every `WorkerFatal` is read as a load fault, as is a worker's fatal for an invalid host line mid-request."""
+        self.from_load = from_load
 
     @property
     def carried_class(self) -> tuple[FaultClass, bool]:
@@ -789,7 +792,7 @@ class WorkerClient:
             raise LineTooLarge(len(line), self._max_line_bytes)
         msg = parse_line(line)
         if "fatal" in msg:
-            raise WorkerFatal(_fatal_record(validate_message(msg, "fatal")["error"]))
+            raise WorkerFatal(_fatal_record(validate_message(msg, "fatal")["error"]), from_load="ready" in kinds)
         kind = next((k for k in kinds if k in msg), kinds[-1])
         return validate_message(msg, kind)
 

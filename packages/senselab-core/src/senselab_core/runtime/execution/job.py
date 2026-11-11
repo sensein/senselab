@@ -5,14 +5,16 @@ A key holds the batch formation of the request a job is sent in (`request_compon
 and a sampled cross-context hit is recomputed and compared instead. A failure is never stored.
 """
 
+import enum
 import sysconfig
+import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
 from senselab_worker import WIRE_VERSION
-from senselab_worker.faults import FaultClass, classify
+from senselab_worker.faults import FaultClass, ProtocolError, classify, error_record
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.declare import InconsistentInputs
@@ -31,7 +33,7 @@ from senselab_core.runtime import audio_io, request_reports
 from senselab_core.runtime.call import Result, RunConfig, env_license, host_hardware, packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.batching import BucketGrid, form_batches, keyed_formation, one_node
-from senselab_core.runtime.execution.executor import FaultRecord, JobRef, UpstreamRef
+from senselab_core.runtime.execution.executor import FaultRecord, ItemCrashedWorker, JobRef, UpstreamRef
 from senselab_core.runtime.execution.outputs import (
     AmbiguousClock,
     Anchors,
@@ -58,12 +60,13 @@ from senselab_core.runtime.launch import launch
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.request_reports import Failure, RequestReport
 from senselab_core.runtime.servable import Servable
 from senselab_core.runtime.store import ResultStore, StoredResult
 from senselab_core.runtime.store import output_identity as store_output_identity
 from senselab_core.runtime.vllm_server import attested_fields, server_launch, server_variables
 from senselab_core.runtime.vocabulary import core_vocabulary
-from senselab_core.runtime.worker_client import WorkerFatal
+from senselab_core.runtime.worker_client import WorkerFatal, WorkerLost
 
 
 @dataclass(frozen=True)
@@ -115,14 +118,40 @@ JobOutcome = Completed | Failed
 """What one job gave."""
 
 
-def splits(exc: BaseException) -> bool:
-    """Whether `exc`, raised by a request to a loaded worker, is a resource fault that splits the request.
+class Trigger(enum.Enum):
+    """What splits a request to a loaded worker: it ran out of a resource, or its worker was lost."""
 
-    A lease wait (`LeaseTimeout`) is a `TimeoutError` and so a resource class, but it is nobody's request failing; nor
-    is a worker that failed to start or load, or to reload an evicted state (`WorkerLoadFailed`, `WorkerFatal`),
-    whatever its class: a request is split only when it went to a loaded worker.
+    RESOURCE = "resource"
+    CRASH = "crash"
+
+
+def trigger_of(exc: BaseException) -> Trigger | None:
+    """Return the trigger `exc`, raised by a request to a loaded worker, fires, or None when it fires none.
+
+    A resource-class exception is `RESOURCE`, a `WorkerFatal` the worker typed as a resource fault among them (the
+    worker's verdict wins: the job moves to a larger class, uncharged); `WorkerLost`, `ProtocolError` (the host
+    discards the worker after one) and any other `WorkerFatal` the worker reported for a request (`from_load` false)
+    are `CRASH`. A lease wait (`LeaseTimeout`) is
+    a `TimeoutError` and so a resource class, but it is nobody's request failing; nor is a worker that failed to start,
+    load or reload (`WorkerLoadFailed`, a `WorkerFatal` that is a load): a load is not an item.
     """
-    return classify(exc) is FaultClass.RESOURCE and not isinstance(exc, (LeaseTimeout, WorkerLoadFailed, WorkerFatal))
+    if isinstance(exc, (LeaseTimeout, WorkerLoadFailed)) or (isinstance(exc, WorkerFatal) and exc.from_load):
+        return None
+    if classify(exc) is FaultClass.RESOURCE:
+        return Trigger.RESOURCE
+    return Trigger.CRASH if isinstance(exc, (WorkerLost, WorkerFatal, ProtocolError)) else None
+
+
+class Abandoned(Exception):
+    """The claim whose jobs were running was lost or halted; nothing more is sent for it.
+
+    `kept` holds the outcomes of the jobs that had finished, by index among the jobs of the call that raised it.
+    """
+
+    def __init__(self, kept: Mapping[int, "JobOutcome"] | None = None) -> None:
+        """Hold `kept`, the outcomes finished before the claim was given up."""
+        super().__init__()
+        self.kept = dict(kept or {})
 
 
 def ran_out(outcomes: Sequence[JobOutcome]) -> bool:
@@ -152,8 +181,8 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     run: RunConfig,
     profile: ExecutionProfile,
     workers: WorkerSet,
-    bisect_resource: bool = False,
     emit: Emit | None = None,
+    cancelled: threading.Event | None = None,
 ) -> list[JobOutcome]:
     """Run `jobs`, all of one call but their inputs, under `placement`, and return one outcome per job, in order.
 
@@ -166,13 +195,14 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     sent in batches of at most `placement.batch_size` items (`form_batches`) through `workers`; each item's outputs
     are stored, and each execution writes one activity associated with its agent (the model's source included),
     naming its job's node and plan.
-    An item the backend fails gives `Failed`. With `bisect_resource`, a request of several jobs each of which
-    gave a resource fault, or which raised one, is sent again as two requests of its first and last jobs, each split
-    in turn, so that the jobs that fit complete and a job that does not fit alone is the one that fails; without it
-    the request's outcomes are returned as they came, for a caller that splits them itself (the pool worker).
+    An item the backend fails gives `Failed`. A request of several jobs that fires a trigger (`trigger_of`: it raised
+    a resource fault or a crash of its worker, or each of its jobs answered a resource fault) is sent again as two
+    requests of its first and last jobs, each split in turn, so that the jobs that fit complete and a job that does
+    not fit alone is the one that fails. A job alone whose worker was lost is sent again to a fresh worker; lost
+    `profile.faults.crashes_charged` times in a row, it fails with `ItemCrashedWorker`, charged to the item.
     With `emit`, the outcomes of the jobs failed or served before anything is sent are handed to it at once, and then
-    each request's, as soon as that request's outputs are stored; a request of several jobs that all ran out is not
-    handed over when the caller splits it.
+    each request's, as soon as that request and the halves it was split into are done. With `cancelled`, a set flag
+    is read before each request and after each exception, and ends the call with `Abandoned`.
 
     Raises:
         ValueError: the jobs are not of one call or of one node; a server backend has no model.
@@ -183,7 +213,8 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
         WorkerLoadFailed: the backend's worker or server did not start or load.
         OutputTypeMismatch: an output of a kernel-typed port is not a wire form of its declared type.
         WireFormatRetired: a stored output is in a retired wire format.
-        WorkerFatal, WorkerLost, ProtocolError: as the worker reports them.
+        Abandoned: `cancelled` was set before a request, or while one ran.
+        WorkerFatal, ProtocolError: a load failure, or a failure that is no trigger, as the worker reports them.
     """
     if not jobs:
         return []
@@ -218,21 +249,25 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     for batch in form_batches([p.job for p in pending], backend, batch_size=placement.batch_size, grid=grid):
         chunk = [by_job[id(j)] for j in batch.jobs]
         sent = replace(placement, **request_components(backend, batch.formation))
-        sending = _Sending(sent, env, profile, workers, expected, store, run, bisect_resource)
-        found = _sent_in_halves(chunk, sending)
+        sending = _Sending(sent, env, profile, workers, expected, store, run, cancelled)
+        try:
+            found = _sent_in_halves(chunk, sending)
+        except Abandoned as stopped:
+            raise Abandoned({**outcomes, **{chunk[i].index: o for i, o in stopped.kept.items()}}) from stopped
         for item, outcome in zip(chunk, found, strict=True):
             outcomes[item.index] = outcome
-        if emit is not None and (bisect_resource or not ran_out(found)):
+        _mark_survived(sending, chunk, found)
+        if emit is not None:
             emit([item.index for item in chunk], found)
     return [outcomes[i] for i in range(len(jobs))]
 
 
 class _Raised(Exception):
-    """What `_send` raises for an exception its request to a loaded worker raised, as opposed to checkout or start."""
+    """What `_send` raises for an exception its request to a loaded worker raised that fires a trigger."""
 
-    def __init__(self, cause: Exception) -> None:
+    def __init__(self, cause: Exception, report: RequestReport) -> None:
         super().__init__()
-        self.cause = cause
+        self.cause, self.report = cause, report
 
 
 @dataclass(frozen=True)
@@ -246,44 +281,101 @@ class _Sending:
     expected: Attestation | None
     store: ResultStore
     run: RunConfig
-    bisect_resource: bool
+    cancelled: threading.Event | None
+    lost: list[tuple[RequestReport, tuple[JobRef, ...]]] = field(default_factory=list)
+
+    def stopped(self) -> bool:
+        return self.cancelled is not None and self.cancelled.is_set()
 
 
-def _sent_in_halves(chunk: Sequence[_Pending], sending: _Sending) -> list[JobOutcome]:
-    """Return one outcome per item of `chunk`, sent as one request; with `bisect_resource`, one that ran out is split.
+def _sent_in_halves(chunk: Sequence[_Pending], sending: _Sending, lost: int = 0) -> list[JobOutcome]:
+    """Return one outcome per item of `chunk`, sent as one request; one that fires a trigger is split.
 
-    A job alone whose request raised a splittable resource fault (`splits`) is that job's failure. What checkout,
-    start or load raised is never split.
+    `lost` is how many times in a row a job alone has had its worker lost. A job alone whose request raised a resource
+    fault is that job's failure; one lost `faults.crashes_charged` times is charged to the item, and else it is sent
+    again. What checkout, start or load raised is never split.
+
+    Raises:
+        Abandoned: `sending.cancelled` was set before the request or while it ran; `kept` holds the finished prefix.
     """
+    if sending.stopped():
+        raise Abandoned
     began = datetime.now(timezone.utc)
     jobs = [p.job for p in chunk]
     try:
-        results = _send(
-            jobs,
-            sending.placement,
-            sending.env,
-            sending.profile,
-            sending.workers,
-            sending.expected,
-            sending.bisect_resource,
+        results, report = _send(
+            jobs, sending.placement, sending.env, sending.profile, sending.workers, sending.expected
         )
     except _Raised as raised:
         exc = raised.cause
+        if sending.stopped():
+            raise Abandoned from exc
+        fault = classify(exc)
+        crash = error_record(exc) if trigger_of(exc) is Trigger.CRASH else None
+        failure: Failure = "bisected" if len(chunk) > 1 else "failed"
+        request_reports.mark(raised.report, failure, fault, len(chunk), crash)
+        if crash is not None:
+            sending.lost.append((raised.report, tuple(p.job.ref for p in chunk)))
         if len(chunk) > 1:
             return _halves(chunk, sending)
+        if crash is not None and lost + 1 < sending.profile.faults.crashes_charged:
+            return _sent_in_halves(chunk, sending, lost + 1)
         key = build_key(chunk[0].job.call, sending.placement, chunk[0].context)
-        return [Failed(chunk[0].job.ref, key.digest(), FaultRecord.from_exception(exc))]
+        return [Failed(chunk[0].job.ref, key.digest(), _lone_failure(chunk[0].job.ref, exc, lost + 1, sending))]
     outcomes = [
         _record(item, result, sending.placement, sending.store, sending.run, sending.profile, began)
         for item, result in zip(chunk, results, strict=True)
     ]
-    return _halves(chunk, sending) if sending.bisect_resource and ran_out(outcomes) else outcomes
+    if ran_out(outcomes):
+        request_reports.mark(report, "bisected", FaultClass.RESOURCE, len(chunk))
+        return _halves(chunk, sending)
+    return outcomes
+
+
+def _mark_survived(sending: _Sending, chunk: Sequence[_Pending], found: Sequence[JobOutcome]) -> None:
+    """Mark each worker loss of the chunk's requests as survived when every job the lost request carried completed."""
+    done = {item.job.ref: isinstance(o, Completed) for item, o in zip(chunk, found, strict=True)}
+    for lost, refs in sending.lost:
+        lost.survived = all(done[r] for r in refs)
+
+
+def _lone_failure(ref: JobRef, exc: Exception, lost: int, sending: _Sending) -> FaultRecord:
+    """Return the failure of the job `ref`, alone, whose request raised `exc`, its worker lost `lost` times in a row.
+
+    A job whose worker was lost `faults.crashes_charged` times in a row is charged with `ItemCrashedWorker`, chained
+    to the last loss; any other exception is the job's failure as it was raised.
+    """
+    if trigger_of(exc) is not Trigger.CRASH:
+        return FaultRecord.from_exception(exc)
+    charged = ItemCrashedWorker(f"job {ref} was lost on {lost} fresh workers in a row, each time alone: {exc}")
+    charged.__cause__ = exc
+    return FaultRecord.from_exception(charged)
 
 
 def _halves(chunk: Sequence[_Pending], sending: _Sending) -> list[JobOutcome]:
-    """Return the outcomes of `chunk` sent as two requests, each through `_sent_in_halves`."""
+    """Return the outcomes of `chunk` sent as two requests, each through `_half`."""
     half = len(chunk) // 2
-    return _sent_in_halves(chunk[:half], sending) + _sent_in_halves(chunk[half:], sending)
+    first = _half(chunk[:half], sending)
+    try:
+        second = _half(chunk[half:], sending)
+    except Abandoned as stopped:
+        raise Abandoned({**dict(enumerate(first)), **{half + i: o for i, o in stopped.kept.items()}}) from stopped
+    return first + second
+
+
+def _half(chunk: Sequence[_Pending], sending: _Sending) -> list[JobOutcome]:
+    """Return the outcomes of one half of a split request: what raises other than a lease wait fails that half alone.
+
+    So a half that completed keeps its outcomes, and the half whose worker did not load, or whose request raised what
+    is no trigger, fails with that, as a request that raised it as a whole does for its own jobs.
+    """
+    try:
+        return _sent_in_halves(chunk, sending)
+    except (Abandoned, LeaseTimeout):
+        raise
+    except Exception as exc:  # noqa: BLE001 - every other exception is the failure of this half's jobs
+        failure = FaultRecord.from_exception(exc)
+        return [Failed(p.job.ref, build_key(p.job.call, sending.placement, p.context).digest(), failure) for p in chunk]
 
 
 def _one_call(jobs: Sequence[Job]) -> Call:
@@ -491,25 +583,24 @@ def _send(  # noqa: PLR0913 - the request's jobs and everything placing it
     profile: ExecutionProfile,
     workers: WorkerSet,
     expected: Attestation | None,
-    split: bool = False,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], RequestReport]:
     """Send `jobs` as one request to the backend's worker, with the task params and `backend_params` beside them.
 
     A host worker is handed kernel values as they are; an isolated or server one, their wire forms. The request is
-    reported (`request_reports`) tagged with its jobs' refs. What the worker's request raises propagates as it was
-    raised; with `split`, a splittable resource fault (`splits`) is raised as `_Raised`, for the caller to split.
+    reported (`request_reports`) tagged with its jobs' refs, and its report returned. What the worker's request raises
+    propagates as it was raised; a trigger (`trigger_of`) is raised as `_Raised`, for the caller to split.
     """
     backend, call = placement.backend, jobs[0].call
     params = {**call.params.model_dump(mode="json"), "backend_params": placement.backend_params.model_dump(mode="json")}
     host = backend.env.kind == "host"
     items = [{"id": str(i), "inputs": dict(j.values) if host else as_wire(j.values)} for i, j in enumerate(jobs)]
     held = workers.checkout(backend, env, call.model, device=placement.device, profile=profile, expected=expected)
-    with held as worker, request_reports.request(tuple(j.ref for j in jobs)):
+    with held as worker, request_reports.request(tuple(j.ref for j in jobs)) as report:
         try:
-            return worker.run(items, params)
+            return worker.run(items, params), report
         except Exception as exc:
-            if split and splits(exc):
-                raise _Raised(exc) from exc
+            if trigger_of(exc) is not None:
+                raise _Raised(exc, report) from exc
             raise
 
 

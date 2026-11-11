@@ -200,8 +200,7 @@ def test_a_checkout_that_raises_is_never_split(tmp_path: Path, profile: Executio
     assert workers.checkouts == 1
 
 
-@pytest.mark.parametrize("split", [True, False], ids=["bisecting", "plain"])
-def test_what_a_request_raises_keeps_its_cause_chain(tmp_path: Path, profile: ExecutionProfile, split: bool) -> None:
+def test_what_a_request_raises_keeps_its_cause_chain(tmp_path: Path, profile: ExecutionProfile) -> None:
     """An exception that is not split reaches the caller as raised: its cause is the OSError and the record names it."""
     cause = OSError("pipe closed")
     failure = ValueError("the request broke")
@@ -219,7 +218,6 @@ def test_what_a_request_raises_keeps_its_cause_chain(tmp_path: Path, profile: Ex
                 run=RunConfig(),
                 profile=profile,
                 workers=workers,
-                bisect_resource=split,
             )
     finally:
         workers.close()

@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 from epoch_fixture import prepared
+from faulty_workers_fixture import FOREVER, Unloadable, crashes, put_batched, sender
 from lease_clock_fixture import ManualClock, age
 from pool_stack_fixture import lease_of, packaged, planned, registry, scoring
 from senselab_core.kernel.declare import TaskSpec
@@ -28,9 +29,9 @@ from senselab_core.runtime.execution.in_process import job_key, node_fragment
 from senselab_core.runtime.execution.job import Emit, Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.observing import Sent
 from senselab_core.runtime.execution.pool import run_plan, split
-from senselab_core.runtime.execution.pool_worker import Abandoned, Member, PoolWorker, Send, bisect, serve_pool
+from senselab_core.runtime.execution.pool_worker import Abandoned, Member, PoolWorker, Send, run_members, serve_pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest, settle
-from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
+from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.fake_backend import ECHO, FAKE, EchoParams
 from senselab_core.runtime.keys import Call, Placement
 from senselab_core.runtime.licenses import LicensePolicy, license_record
@@ -306,27 +307,22 @@ def test_an_unreadable_resident_memory_leaves_the_host_memory_unmeasured(tmp_pat
 
 
 @pytest.mark.logic
-def test_failing_batch_bisected(tmp_path: Path) -> None:
-    """One poisoned job of an 8-job item fails alone with `WorkerLost`; the other 7 commit their results."""
+def test_failing_batch_bisected(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
+    """One poisoned job of an 8-job item fails alone, charged to the item; the other 7 commit their results."""
     profile = _profile(quantum_items=8)
     texts = [f"t{i}" for i in range(8)]
     texts[5] = "poison"
     placed, store, pool_dir = _run(tmp_path, profile, texts)
-    _put(placed, pool_dir, range(8))
-    send, sizes = _sender(store, profile), []
-
-    def poisoned(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
-        sizes.append(len(jobs))
-        if any(_text(j) == "poison" for j in jobs):
-            raise WorkerLost("the worker died on its request", returncode=-11)
-        return send(jobs, placement)
-
-    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=poisoned)
-    assert worker.serve() == 0
+    put_batched(placed, pool_dir, profile, 8)
+    workers = crashes({"poison": FOREVER})
+    send = sender(store, profile, workers)
+    clock = lease_clock()
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=send, clock=clock)
+    assert _served(worker, clock) == 0
     refs = [ResultRef.model_validate(j) for o in _outcomes(pool_dir, profile) for j in o["jobs"]]
     failed = [r for r in refs if r.failure is not None]
-    assert len(refs) == 8 and len(failed) == 1 and sizes == [8, 4, 4, 2, 1, 1, 2]
-    assert failed[0].failure is not None and failed[0].failure.type == "WorkerLost"
+    assert len(refs) == 8 and len(failed) == 1 and workers.sent == [8, 4, 4, 2, 1, 1, 1, 2]
+    assert failed[0].failure is not None and failed[0].failure.type == "ItemCrashedWorker"
     poison = node_fragment(placed, Admission(id="x", plan_hash=placed.hash), elements=[(5,)])
     assert failed[0].key_digest == job_key(placed, "a", poison.inputs[0], _placement(poison)).digest()
     assert all(store.outputs_of(r.key_digest, r.output_identity) is not None for r in refs if r.output_identity)
@@ -601,25 +597,21 @@ def test_a_broken_env_costs_one_load_per_claim(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a_load_failure_during_bisection_keeps_the_first_halfs_commits(tmp_path: Path) -> None:
+def test_a_load_failure_during_bisection_keeps_the_first_halfs_commits(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """A request lost as a whole is halved; the first half commits, and the second half, whose load fails, fails."""
     profile = _profile(quantum_items=8)
     placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(8)])
-    _put(placed, pool_dir, range(8))
-    send, sizes = _sender(store, profile), []
-
-    def flaky(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
-        sizes.append(len(jobs))
-        if len(sizes) == 1:
-            raise WorkerLost("the worker died on its request", returncode=-11)
-        if len(sizes) == 3:
-            raise WorkerLoadFailed("WorkerFatal: the replacement worker did not load")
-        return send(jobs, placement)
-
-    assert PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=flaky).serve() == 0
+    put_batched(placed, pool_dir, profile, 8)
+    lost = crashes({"t0": 1})
+    unloadable = Unloadable(lost, at=3)
+    send = sender(store, profile, unloadable)
+    clock = lease_clock()
+    assert _served(PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=send, clock=clock), clock) == 0
     refs = _refs(pool_dir, profile)
     done = [r for r in refs if r.failure is None]
-    assert sizes == [8, 4, 4] and len(done) == 4 and len(refs) == 8
+    assert lost.sent == [8, 4] and unloadable.checkouts == 3 and len(done) == 4 and len(refs) == 8
     assert all(store.outputs_of(r.key_digest, r.output_identity) is not None for r in done if r.output_identity)
     assert {r.failure.type for r in refs if r.failure} == {"WorkerLoadFailed"}
 
@@ -639,33 +631,22 @@ def _failed(member: Member, fault: FaultKind) -> Failed:
 
 
 @pytest.mark.logic
-def test_a_cancel_during_the_halves_keeps_the_calls_other_outcomes_and_records_them_first() -> None:
-    """One call, two requests: the first fits, the second ran out. A cancel as its halves start loses neither.
-
-    The kept request is recorded before the faulted one and its halves, as it ran; `Abandoned` carries the outcomes of
-    the request that fit, so the claim commits what finished.
-    """
+def test_an_abandoned_call_keeps_the_outcomes_it_finished() -> None:
+    """`execute` raises `Abandoned` with the jobs it finished; the claim commits them, as the call was recorded."""
     members = _members(8)
-    cancelled, recorded = threading.Event(), list[Sent]()
 
-    def send(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:  # noqa: ARG001 - a Send
-        for part in (members[:4], members[4:]):
-            with request_reports.request(tuple(m.job.ref for m in part)):
-                request_reports.record(len(part), since_load=3)
-        cancelled.set()
-        return [_failed(m, "content" if i < 4 else "resource") for i, m in enumerate(members)]
+    def send(jobs: Sequence[Job], placement: Placement, cancelled: threading.Event) -> list[JobOutcome]:  # noqa: ARG001
+        raise Abandoned({i: _failed(members[i], "content") for i in range(4)})
 
     with pytest.raises(Abandoned) as stopped:
-        bisect(
+        run_members(
             members,
             Placement(backend=FAKE, backend_params=FAKE.params(), device="cpu"),
             send,
-            cancelled,
-            recorded.append,
+            threading.Event(),
         )
     assert sorted(stopped.value.kept) == [0, 1, 2, 3]
     assert all(isinstance(o, Failed) and o.failure.fault == "content" for o in stopped.value.kept.values())
-    assert [(len(r.refs), r.failure) for r in recorded] == [(4, None), (4, "bisected")]
 
 
 def _reported(recorded: Sequence[Sent], member: Member) -> list[Any]:
@@ -674,25 +655,24 @@ def _reported(recorded: Sequence[Sent], member: Member) -> list[Any]:
 
 
 @pytest.mark.logic
-def test_a_request_that_ran_out_is_recorded_once_beside_a_request_that_emits() -> None:
-    """Request A (items 0, 1) runs out; request B (2, 3) emits. A's report is recorded once, by its bisection."""
+def test_a_request_the_engine_split_is_recorded_once_beside_a_request_that_emits() -> None:
+    """Request A (items 0, 1) was split by `execute`, B (2, 3) emits: A's report is recorded once, as `bisected`."""
     members, handed, recorded = _members(4), [], list[Sent]()
 
     def send(jobs: Sequence[Job], placement: Placement, emit: Emit) -> list[JobOutcome]:  # noqa: ARG001 - a Send
-        if len(jobs) == 4:
-            with request_reports.request(tuple(m.job.ref for m in members[:2])):
-                request_reports.record(2, device=(900, 500))
-            with request_reports.request(tuple(m.job.ref for m in members[2:])):
-                request_reports.record(2)
-            outcomes: list[JobOutcome] = [_failed(m, "resource") for m in members[:2]]
-            outcomes += [_failed(m, "content") for m in members[2:]]
-            emit([2, 3], outcomes[2:])
-            return outcomes
-        with request_reports.request(tuple(j.ref for j in jobs)):
-            request_reports.record(len(jobs))
-        return [_failed(next(m for m in members if m.job.ref == j.ref), "content") for j in jobs]
+        with request_reports.request(tuple(m.job.ref for m in members[:2])) as ran:
+            request_reports.record(2, device=(900, 500))
+        request_reports.mark(ran, "bisected", FaultClass.RESOURCE, 2)
+        for m in members[:2]:
+            with request_reports.request((m.job.ref,)):
+                request_reports.record(1)
+        with request_reports.request(tuple(m.job.ref for m in members[2:])):
+            request_reports.record(2)
+        outcomes: list[JobOutcome] = [_failed(m, "content") for m in members]
+        emit([2, 3], outcomes[2:])
+        return outcomes
 
-    bisect(
+    run_members(
         members,
         Placement(backend=FAKE, backend_params=FAKE.params(), device="cpu"),
         send,
@@ -701,6 +681,7 @@ def test_a_request_that_ran_out_is_recorded_once_beside_a_request_that_emits() -
     )
     assert [len(_reported(recorded, m)) for m in members] == [2, 2, 1, 1]
     assert len([r for sent in recorded for r in sent.reports if r.device == (900, 500)]) == 1
+    assert [sent.failure for sent in recorded if (900, 500) in [r.device for r in sent.reports]] == ["bisected"]
     assert handed[0] == ([2, 3], 2) and {i for found, _ in handed for i in found} == {0, 1, 2, 3}
 
 
@@ -717,7 +698,7 @@ def test_a_call_that_raises_after_an_emit_records_only_what_the_emit_did_not() -
             raise WorkerLost("died on the next request", returncode=-11)
         return [_failed(next(m for m in members if m.job.ref == j.ref), "content") for j in jobs]
 
-    bisect(
+    run_members(
         members,
         Placement(backend=FAKE, backend_params=FAKE.params(), device="cpu"),
         send,
@@ -726,7 +707,7 @@ def test_a_call_that_raises_after_an_emit_records_only_what_the_emit_did_not() -
     )
     first, failed = recorded[0], recorded[1]
     assert first.failure is None and len(first.reports) == 1
-    assert failed.failure == "bisected" and failed.refs == tuple(m.job.ref for m in members[:2])
+    assert failed.failure == "failed" and failed.refs == tuple(m.job.ref for m in members[:2])
 
 
 class _Abandoning(WorkerSet):
