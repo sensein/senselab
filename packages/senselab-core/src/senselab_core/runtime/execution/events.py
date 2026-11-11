@@ -7,7 +7,9 @@ without sharing a file. A run's status, its counts and its faults are computed f
 
 import heapq
 import json
+import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -33,7 +35,11 @@ from senselab_core.runtime.site_placement import (
     PlacementAnswer,
     rendered,
 )
+from senselab_core.runtime.storage import StorageDir
 
+logger = logging.getLogger("senselab")
+EVENT_FILE = re.compile(r"^[0-9a-f]{32}\.jsonl$")
+"""The name of one writer's file."""
 EVENTS_DIR = "events"
 """The directory of a run holding one `<writer>.jsonl` file per writer."""
 
@@ -319,6 +325,46 @@ def status_from(events: Iterable[Event], *, broken_after: int | None = None, epo
     )
 
 
+@dataclass(frozen=True)
+class Quarantined:
+    """A line of an event file that is no `run-event@2` document.
+
+    Attributes:
+        writer: The writer whose file holds it.
+        seq: Its `seq` when the line still carries one, else its line number in the file.
+        line: Its line number in the file, from 0.
+        reason: What the validation said, shortened.
+    """
+
+    writer: str
+    seq: int
+    line: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class EventScan:
+    """The events of a run and the lines quarantined while reading them."""
+
+    events: list[Event]
+    quarantined: tuple[Quarantined, ...]
+
+
+class EventWriteFailed(OSError):
+    """An event could not be appended whole; the writer's file holds only the lines before it.
+
+    Attributes:
+        path: The writer's file.
+        seq: The `seq` of the event that was not written.
+    """
+
+    def __init__(self, path: Path, seq: int, cause: OSError) -> None:
+        """Name the file, the `seq` and the OS error."""
+        super().__init__(cause.errno, f"event {seq} was not appended to {path}: {cause.strerror or cause}")
+        self.path = path
+        self.seq = seq
+
+
 class EventLog:
     """One writer's append-only log of a run: `<run dir>/events/<writer uuid>.jsonl`, written by this writer only.
 
@@ -355,16 +401,20 @@ class EventLog:
         return self.run_dir / EVENTS_DIR / f"{self.writer}.jsonl"
 
     def append(self, event: Event) -> None:
-        """Append `event` as one line of this writer's file, in one write."""
+        """Append `event` as one line of this writer's file: the whole line, or nothing.
+
+        Raises:
+            EventWriteFailed: the line could not be written whole; the file holds only the lines before it.
+        """
         data = (json.dumps(event.model_dump(mode="json"), sort_keys=True, separators=(",", ":")) + "\n").encode()
         with self._lock:
             path = self.path
             path.parent.mkdir(parents=True, exist_ok=True)
-            descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
             try:
-                os.write(descriptor, data)
-            finally:
-                os.close(descriptor)
+                with StorageDir.open_root(path.parent) as directory:
+                    directory.append(path.name, data, grammar=EVENT_FILE)
+            except OSError as err:
+                raise EventWriteFailed(path, event.seq, err) from err
 
     def record(  # noqa: PLR0913 - the fields of an event
         self,
@@ -412,30 +462,49 @@ def runs_root(root: Path | None = None) -> Path:
     return (cache_root() if root is None else Path(root)) / NAMESPACE / "runs"
 
 
-def _lines(path: Path) -> Iterator[Event]:
-    """Yield the events of one writer's file in order; a last line cut short by a crash is skipped."""
-    lines = path.read_text(encoding="utf-8").splitlines()
-    for number, line in enumerate(lines):
-        if not line.strip():
+def _lines(path: Path, quarantined: list[Quarantined]) -> Iterator[Event]:
+    """Yield the events of one writer's file in order; each line that is no `run-event@2` is added to `quarantined`."""
+    for number, raw in enumerate(path.read_bytes().split(b"\n")):
+        if not raw.strip():
             continue
         try:
-            yield Event.model_validate(json.loads(line))
-        except ValueError:
-            if number != len(lines) - 1:
-                raise
+            yield Event.model_validate(json.loads(raw.decode("utf-8")))
+        except ValueError as err:
+            quarantined.append(
+                Quarantined(writer=path.stem, seq=_seq_of(raw, number), line=number, reason=str(err)[:200])
+            )
+
+
+def _seq_of(raw: bytes, line: int) -> int:
+    """Return the `seq` a line that does not validate still carries, else its line number."""
+    try:
+        found = json.loads(raw).get("seq")
+    except (ValueError, AttributeError):
+        return line
+    return found if isinstance(found, int) and not isinstance(found, bool) else line
+
+
+def scan_events(run_dir: Path) -> EventScan:
+    """Return the events of the run in `run_dir` and the lines refused.
+
+    The events are merged by time, each writer's in its file order.
+
+    The merge keeps every writer's own order whatever its clock did, so a clock stepping back reorders nothing in a
+    file; across writers it is only an interleaving, which no status reads. A line that is not a `run-event@2`
+    document, wherever it sits, is quarantined: skipped, and counted by writer and `seq`.
+    """
+    quarantined: list[Quarantined] = []
+    streams = [_lines(path, quarantined) for path in sorted((Path(run_dir) / EVENTS_DIR).glob("*.jsonl"))]
+    events = list(heapq.merge(*streams, key=lambda e: e.t_ns))
+    return EventScan(events=events, quarantined=tuple(quarantined))
 
 
 def read_events(run_dir: Path) -> list[Event]:
-    """Return every event of the run in `run_dir`: each writer's events in its file order, merged by time.
-
-    The merge keeps every writer's own order whatever its clock did, so a clock stepping back reorders nothing in a
-    file; across writers it is only an interleaving, which no status reads.
-
-    Raises:
-        ValueError: a line other than a file's last is not a `run-event@2` document.
-    """
-    streams = [_lines(path) for path in sorted((Path(run_dir) / EVENTS_DIR).glob("*.jsonl"))]
-    return list(heapq.merge(*streams, key=lambda e: e.t_ns))
+    """Return the events of the run in `run_dir` as `scan_events` reads them, logging any line it quarantined."""
+    scan = scan_events(run_dir)
+    if scan.quarantined:
+        logger.warning("%d event lines of %s are unreadable and were skipped", len(scan.quarantined), run_dir)
+    return scan.events
 
 
 def placement_record(

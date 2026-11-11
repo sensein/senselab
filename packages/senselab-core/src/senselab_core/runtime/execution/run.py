@@ -19,7 +19,6 @@ import logging
 import os
 import re
 import threading
-import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,7 +54,7 @@ from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import cache_root, fresh_attempt_id
 from senselab_core.runtime.site_placement import Placer
-from senselab_core.runtime.storage import PRIVATE_DIR, private_dir
+from senselab_core.runtime.storage import PRIVATE_DIR, private_dir, publish, write_atomically
 from senselab_core.runtime.store import ResultStore
 
 PLAN_FILE = "plan.json"
@@ -259,9 +258,7 @@ class ResultSet:
 def _write(path: Path, document: object) -> None:
     """Write `document` as JSON to `path` atomically."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    staging = path.with_name(f".{path.name}.{uuid.uuid4().hex}")
-    staging.write_text(json.dumps(document, sort_keys=True, indent=1, default=_source), encoding="utf-8")
-    os.replace(staging, path)
+    write_atomically(path, json.dumps(document, sort_keys=True, indent=1, default=_source).encode())
 
 
 def _source(value: object) -> str:
@@ -735,16 +732,10 @@ def _claim_ordinal(run_dir: Path, attempt: str) -> int:
     """Return the next free ordinal `n` of the run's attempts, claimed by creating `attempts/<n>` holding `attempt`."""
     directory = run_dir / ATTEMPTS_DIR
     directory.mkdir(parents=True, exist_ok=True)
-    ordinal = 1 + sum(1 for _ in directory.iterdir())
-    while True:
-        try:
-            descriptor = os.open(directory / str(ordinal), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        except FileExistsError:
-            ordinal += 1
-            continue
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(attempt)
-        return ordinal
+    ordinal = 1 + sum(1 for p in directory.iterdir() if p.name.isdigit())
+    while not publish(directory / str(ordinal), attempt.encode()):
+        ordinal += 1
+    return ordinal
 
 
 def _claim_attempt(run_dir: Path, placement: PlanPlacement) -> tuple[str, int]:
@@ -755,14 +746,10 @@ def _claim_attempt(run_dir: Path, placement: PlanPlacement) -> tuple[str, int]:
     base, n = fresh_attempt_id(), 0
     while True:
         attempt = base if n == 0 else f"{base}-{n}"
-        try:
-            descriptor = os.open(directory / f"{attempt}.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        except FileExistsError:
-            n += 1
-            continue
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(placement.model_dump(mode="json"), sort_keys=True, indent=1))
-        return attempt, _claim_ordinal(run_dir, attempt)
+        document = json.dumps(placement.model_dump(mode="json"), sort_keys=True, indent=1).encode()
+        if publish(directory / f"{attempt}.json", document):
+            return attempt, _claim_ordinal(run_dir, attempt)
+        n += 1
 
 
 def _write_once(path: Path, document: Mapping[str, object]) -> None:
@@ -772,16 +759,10 @@ def _write_once(path: Path, document: Mapping[str, object]) -> None:
         ValueError: `path` holds the document of another plan.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    staging = path.with_name(f".{path.name}.{uuid.uuid4().hex}")
-    staging.write_text(json.dumps(document, sort_keys=True, indent=1), encoding="utf-8")
-    try:
-        os.link(staging, path)
-    except FileExistsError:
+    if not publish(path, json.dumps(document, sort_keys=True, indent=1).encode()):
         held = json.loads(path.read_text(encoding="utf-8")).get("plan_hash")
         if held != document["plan_hash"]:
-            raise ValueError(f"{path.parent.name} holds the plan {held}, not {document['plan_hash']}") from None
-    finally:
-        staging.unlink()
+            raise ValueError(f"{path.parent.name} holds the plan {held}, not {document['plan_hash']}")
 
 
 def _durable(source: object) -> object:

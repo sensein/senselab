@@ -11,6 +11,7 @@ from senselab_core.runtime.execution.events import (
     EventLog,
     JobState,
     read_events,
+    scan_events,
     status_from,
     terminal_events,
 )
@@ -236,8 +237,8 @@ def test_a_clock_stepping_back_or_skewed_across_writers_changes_no_status(tmp_pa
 
 
 @pytest.mark.contract
-def test_a_torn_last_line_is_skipped_and_a_corrupt_middle_line_raises(tmp_path: Path) -> None:
-    """A crash mid-write leaves the writer's last line cut short, which is skipped; damage elsewhere is an error."""
+def test_a_torn_last_line_and_a_corrupt_middle_line_are_quarantined(tmp_path: Path) -> None:
+    """A crash mid-write leaves the writer's last line cut short; damage elsewhere is skipped the same way."""
     log = EventLog(tmp_path, "a1", 1, clock=iter([1, 2]).__next__)
     log.record("queued", "a")
     log.record("started", "a")
@@ -246,8 +247,8 @@ def test_a_torn_last_line_is_skipped_and_a_corrupt_middle_line_raises(tmp_path: 
     assert [e.kind for e in read_events(tmp_path)] == ["queued", "started"]
     lines = log.path.read_text().splitlines()
     log.path.write_text("\n".join([lines[0], "not json", lines[1]]) + "\n")
-    with pytest.raises(ValueError):
-        read_events(tmp_path)
+    assert [e.kind for e in read_events(tmp_path)] == ["queued", "started"]
+    assert [(q.writer, q.line) for q in scan_events(tmp_path).quarantined] == [(log.writer, 1)]
 
 
 def _results() -> ResultSet:

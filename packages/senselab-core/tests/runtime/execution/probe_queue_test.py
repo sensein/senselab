@@ -33,6 +33,7 @@ from senselab_core.runtime.execution.substrates import (
 )
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo, device_parties, host_secret, host_token
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.storage import FileOps, using_file_ops
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import identity_digest
 
@@ -157,13 +158,18 @@ def test_host_secret_is_created_once_under_a_race(tmp_path: Path, monkeypatch: p
     """A rival that creates the file between this process's write and its link wins; both read the one value."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     rival: list[str] = []
+    racing: list[bool] = []
 
-    def link(staged: Path, path: Path) -> None:
-        assert staged.read_text() != "", "the staged file is complete when it is linked"
-        rival.append(host_secret(run=lambda _: "", boot_id=_no_boot_id))
-        os.link(staged, path)
+    class Rival(FileOps):
+        def link(self, src: str, dst: str, *, src_dir_fd: int, dst_dir_fd: int) -> None:
+            assert os.read(os.open(src, os.O_RDONLY, dir_fd=src_dir_fd), 64) != b"", "the staged file is complete"
+            if not racing:
+                racing.append(True)
+                rival.append(host_secret(run=lambda _: "", boot_id=_no_boot_id))
+            super().link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
 
-    mine = host_secret(run=lambda _: "", boot_id=_no_boot_id, link=link)
+    with using_file_ops(Rival()):
+        mine = host_secret(run=lambda _: "", boot_id=_no_boot_id)
     files = sorted(p.name for p in tmp_path.iterdir())
     assert rival and mine == rival[0] != "" and files == [f"senselab-host-{os.getuid()}"]
 
@@ -179,12 +185,17 @@ def test_a_stale_empty_secret_file_is_passed_over(tmp_path: Path, monkeypatch: p
     stale.write_bytes(b"")
     inode = stale.stat().st_ino
     rival: list[str] = []
+    racing: list[bool] = []
 
-    def link(staged: Path, path: Path) -> None:
-        rival.append(host_secret(run=lambda _: "", boot_id=_no_boot_id))
-        os.link(staged, path)
+    class Rival(FileOps):
+        def link(self, src: str, dst: str, *, src_dir_fd: int, dst_dir_fd: int) -> None:
+            if not racing:
+                racing.append(True)
+                rival.append(host_secret(run=lambda _: "", boot_id=_no_boot_id))
+            super().link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
 
-    mine = host_secret(run=lambda _: "", boot_id=_no_boot_id, link=link)
+    with using_file_ops(Rival()):
+        mine = host_secret(run=lambda _: "", boot_id=_no_boot_id)
     assert rival and mine == rival[0] != "" and host_secret(run=lambda _: "", boot_id=_no_boot_id) == mine
     assert stale.stat().st_ino == inode and stale.read_bytes() == b""
 

@@ -46,7 +46,7 @@ from senselab_core.runtime.execution_settings import ResourceClass, SlurmCommand
 from senselab_core.runtime.hardware import HardwareInfo, host_token, probe_hardware, process_started, visible_devices
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.site_placement import FIELDS, Placer, rendered, site_names
-from senselab_core.runtime.storage import PRIVATE_DIR, private_dir
+from senselab_core.runtime.storage import PRIVATE_DIR, private_dir, write_atomically
 
 logger = logging.getLogger("senselab")
 
@@ -252,9 +252,7 @@ def mark_ready(run_dir: Path, queues: Mapping[str, QueueReady] | None = None) ->
             for name, ready in (queues or {}).items()
         },
     }
-    staged = directory / f".{worker_id()}.{os.getpid()}"
-    staged.write_bytes(jcs_dumps(document))
-    staged.replace(directory / worker_id())
+    write_atomically(directory / worker_id(), jcs_dumps(document))
 
 
 def read_mark(path: Path) -> ReadyMark | None:
@@ -952,9 +950,7 @@ def profile_argument(profile: ExecutionProfile, run_dir: Path) -> str:
     except (FileNotFoundError, ValueError):
         pass
     path = private_dir(Path(run_dir) / PRIVATE_DIR) / f"{PROFILE_PREFIX}{digest[:16]}.json"
-    staging = path.with_name(f".{path.name}.{os.getpid()}")
-    staging.write_text(profile.model_dump_json(), encoding="utf-8")
-    staging.replace(path)
+    write_atomically(path, profile.model_dump_json().encode())
     return str(path)
 
 
