@@ -225,11 +225,15 @@ class JobLease(Frozen):
 
 
 class FaultBudgets(Frozen):
-    """How many times an item is retried per fault class before it fails, or its env is reported broken."""
+    """How many times an item is retried per fault class before it fails, or its env is reported broken.
+
+    `crashes_charged` is the number of fresh workers in a row a job alone must be lost on to be charged to the item.
+    """
 
     content_attempts: PositiveInt
     infrastructure_replacements: Annotated[int, Field(ge=0)]
     resource_replacements: Annotated[int, Field(ge=0)]
+    crashes_charged: PositiveInt
 
 
 class Timeouts(Frozen):

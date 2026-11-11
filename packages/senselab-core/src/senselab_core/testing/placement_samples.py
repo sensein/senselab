@@ -162,10 +162,14 @@ def _register_settings(register: Register) -> None:
         ),
         FaultBudgets: (
             [
-                FaultBudgets(content_attempts=2, infrastructure_replacements=6, resource_replacements=1),
-                FaultBudgets(content_attempts=1, infrastructure_replacements=0, resource_replacements=0),
+                FaultBudgets(
+                    content_attempts=2, infrastructure_replacements=6, resource_replacements=1, crashes_charged=2
+                ),
+                FaultBudgets(
+                    content_attempts=1, infrastructure_replacements=0, resource_replacements=0, crashes_charged=1
+                ),
             ],
-            [{"content_attempts": 0}, {"resource_replacements": -1}],
+            [{"content_attempts": 0}, {"resource_replacements": -1}, {"crashes_charged": 0}],
         ),
         Timeouts: ([Timeouts(), Timeouts(load_s=60.0, request_s=600.0)], [{"load_s": 0}, {"request_s": -1.0}]),
         SupervisorSettings: (

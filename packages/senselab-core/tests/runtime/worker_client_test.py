@@ -335,7 +335,7 @@ def test_load_failure_is_worker_fatal(array_parent: Path, init: dict[str, Any]) 
     with pytest.raises(WorkerFatal) as info:
         WorkerClient(PYTHON, FAKE, init=init, array_parent=array_parent)
     assert info.value.error["fault"] == "content"
-    assert classify(info.value) is FaultClass.INFRASTRUCTURE
+    assert classify(info.value) is FaultClass.INFRASTRUCTURE and info.value.from_load
 
 
 @pytest.mark.logic
@@ -420,6 +420,7 @@ def test_fatal_during_a_request_is_worker_fatal(array_parent: Path) -> None:
     with pytest.raises(WorkerFatal) as info:
         client.run([{"id": "a", "inputs": {}}], {})
     assert info.value.error == error and classify(info.value) is FaultClass.RESOURCE
+    assert not info.value.from_load  # a loaded worker's request: a crash, not a load
     client.close()
 
 

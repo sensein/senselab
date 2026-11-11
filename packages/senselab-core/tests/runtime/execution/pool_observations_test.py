@@ -8,10 +8,11 @@ from typing import Any
 
 import pytest
 from backends import fake_time_backend_fixture
+from faulty_workers_fixture import FOREVER, Faulty, crashes, put_batched, sender
 from lease_clock_fixture import ManualClock
 from planted_objects_fixture import identity_leaks
 from pool_stack_fixture import packaged, registry, scoring
-from pool_worker_test import OVERRIDE, WORKERS, _outcomes, _profile, _put, _run, _sender, _served, _text
+from pool_worker_test import OVERRIDE, WORKERS, _outcomes, _profile, _put, _run, _sender, _served
 from senselab_core.kernel.declare import Env
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
 from senselab_core.runtime.execution.executor import Admission
@@ -25,7 +26,6 @@ from senselab_core.runtime.execution.substrates import QueueReady, mark_ready
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
-from senselab_core.runtime.worker_client import WorkerLost
 from senselab_worker.fake import OutOfMemoryError
 
 TIMED = scoring("pool_observations_test.timed")
@@ -128,24 +128,18 @@ def test_gathered_items_report_their_own_request_walls(tmp_path: Path, lease_clo
 
 @pytest.mark.logic
 def test_a_bisected_request_is_reported_bisected(tmp_path: Path) -> None:
-    """A call that fails whole and is split is `bisected`, a lone job that fails `failed`, a request that ran `ok`."""
+    """A request that is split is `bisected`, a lone job lost twice `failed` twice, the rest `ok`."""
     profile = _profile(quantum_items=8)
     texts = [f"0.0{i}" for i in range(8)]
     placed, store, pool_dir = _items(profile, tmp_path, texts)
-    _put(placed, pool_dir, range(8))
-    send = _sender(store, profile)
-
-    def poisoned(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
-        if any(_text(j) == "0.05" for j in jobs):
-            raise WorkerLost("the worker died on its request", returncode=-11)
-        return send(jobs, placement)
-
-    _worker(pool_dir, ["cpu"], profile, store, poisoned).serve()
+    put_batched(placed, pool_dir, profile, 8)
+    workers = crashes({"0.05": FOREVER})
+    _worker(pool_dir, ["cpu"], profile, store, sender(store, profile, workers)).serve()
     found = _observations(pool_dir, profile)
-    assert Counter(o.outcome for o in found) == {"bisected": 3, "failed": 1, "ok": 7}
+    assert Counter(o.outcome for o in found) == {"bisected": 3, "failed": 2, "ok": 3}
     assert sorted(o.jobs for o in found if o.outcome == "bisected") == [2, 4, 8]
     assert "resource" not in {o.fault for o in found}
-    assert [o.jobs for o in found if o.outcome == "failed"] == [1]
+    assert [o.jobs for o in found if o.outcome == "failed"] == [1, 1]
     assert all(o.since_load is None for o in found if o.outcome != "ok")
 
 
@@ -155,15 +149,9 @@ def test_a_request_reports_the_class_of_the_fault_it_raised(tmp_path: Path) -> N
     profile = _profile(quantum_items=8)
     texts = [f"0.0{i}" for i in range(8)]
     placed, store, pool_dir = _items(profile, tmp_path, texts)
-    _put(placed, pool_dir, range(8))
-    send = _sender(store, profile)
-
-    def crowded(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
-        if len(jobs) > 2:
-            raise OutOfMemoryError("out of memory")
-        return send(jobs, placement)
-
-    _worker(pool_dir, ["cpu"], profile, store, crowded).serve()
+    put_batched(placed, pool_dir, profile, 8)
+    workers = Faulty(lambda seen: OutOfMemoryError("out of memory") if len(seen) > 2 else None)
+    _worker(pool_dir, ["cpu"], profile, store, sender(store, profile, workers)).serve()
     found = _observations(pool_dir, profile)
     assert {(o.batch, o.outcome, o.fault) for o in found if o.fault is not None} == {
         (8, "bisected", "resource"),

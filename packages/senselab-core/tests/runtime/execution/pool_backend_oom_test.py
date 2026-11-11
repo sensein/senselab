@@ -200,7 +200,8 @@ def test_only_the_request_that_ran_out_is_split_and_the_others_keep_their_report
 ) -> None:
     """Twelve short jobs fit and twelve long ones do not, in one call: the short request is kept as it ran.
 
-    Its observation is `ok` at batch 12, and the oom record names the long request: batch 12 at its length.
+    Its observation is `ok` at batch 12, once, and the oom record names the long request: batch 12 at its length.
+    The requests are numbered in the order they ran.
     """
     lengths = [5] * 12 + [40] * 12
     pool, results = _torch_run(tmp_path, clock, lengths, 100)
@@ -208,7 +209,7 @@ def test_only_the_request_that_ran_out_is_split_and_the_others_keep_their_report
     assert (12, "ok", None) in {(o.batch, o.outcome, o.fault) for o in found}
     assert (12, "bisected", "resource") in {(o.batch, o.outcome, o.fault) for o in found}
     in_order = sorted(found, key=lambda o: o.request_index)
-    assert (in_order[0].batch, in_order[0].outcome) == (12, "ok")
+    assert [(o.batch, o.outcome) for o in in_order].count((12, "ok")) == 1 and in_order[0].request_index == 0
     assert [o.item_wall_s is not None for o in in_order].count(True) == 1 and in_order[-1].item_wall_s is not None
     assert all(r.failure is None for r in results) and len(results) == len(lengths)
     record = _the_oom_record(pool)

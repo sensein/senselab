@@ -179,7 +179,7 @@ def test_no_fault_record_is_built_from_a_literal_class_outside_the_one_construct
 def test_a_reload_that_runs_out_of_memory_is_a_load_never_split(tmp_path: Path) -> None:
     """A state the cache evicted reloads inside a request; its OOM fails the claim as one request, a resource load."""
     from backends import oom_load_backend_fixture as fixture  # noqa: PLC0415 - the module holds what load raises
-    from senselab_core.runtime.execution.pool_worker import Member, bisect  # noqa: PLC0415
+    from senselab_core.runtime.execution.pool_worker import Member, run_members  # noqa: PLC0415
     from senselab_core.runtime.host_worker import HostWorker  # noqa: PLC0415
     from senselab_worker.model_cache import ModelCache  # noqa: PLC0415
 
@@ -204,7 +204,7 @@ def test_a_reload_that_runs_out_of_memory_is_a_load_never_split(tmp_path: Path) 
         )
         for i in range(8)
     ]
-    outcomes = bisect(members, Placement(backend=FAKE, backend_params=FAKE.params(), device="cpu"), send)
+    outcomes = run_members(members, Placement(backend=FAKE, backend_params=FAKE.params(), device="cpu"), send)
     fixture.SUCCEED[:] = [0]
     assert sizes == [8] and len(fixture.LOADS) == 2
     failures = {(o.failure.fault, o.failure.load, o.failure.charged) for o in outcomes if isinstance(o, Failed)}

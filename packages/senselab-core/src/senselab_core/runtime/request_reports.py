@@ -9,8 +9,17 @@ import threading
 from collections.abc import Hashable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Literal
+
+from senselab_worker.faults import FaultClass
 
 from senselab_core.runtime.clock import Clock, SystemClock
+
+Failure = Literal["bisected", "failed"]
+"""How a request failed: `bisected` where its jobs were sent again in halves, `failed` where it was not split."""
+
+FaultKind = Literal["content", "resource", "infrastructure"]
+"""The class of a failed request's fault."""
 
 _LOCAL = threading.local()
 
@@ -26,6 +35,8 @@ class RequestReport:
         since_load: The requests its model state answered before it; None where the worker reports none.
         load_s: The seconds the state's load took, on the request that used the load; else None.
         device: `(peak, allocated after)` device bytes; None where the worker measured none.
+        failure: Set by the bisection engine on a request it split or retried; None for a request that settled its jobs.
+        fault: The class of the fault `failure` names.
     """
 
     tags: tuple[Hashable, ...] = ()
@@ -34,6 +45,8 @@ class RequestReport:
     since_load: int | None = None
     load_s: float | None = None
     device: tuple[int, int] | None = None
+    failure: Failure | None = None
+    fault: FaultKind | None = None
 
 
 def _open() -> list[RequestReport]:
@@ -64,12 +77,13 @@ def record(
 
 
 @contextmanager
-def request(tags: tuple[Hashable, ...]) -> Iterator[None]:
+def request(tags: tuple[Hashable, ...]) -> Iterator[RequestReport]:
     """Open the report of a request carrying the jobs `tags`; kept, with its wall, once the block ends and recorded.
 
     Its wall is read on the clock of the enclosing `collected`, else the system clock.
 
-    A block that raises or records nothing (a request every job of which the store served) keeps no report.
+    A block that raises or records nothing (a request every job of which the store served) keeps no report, unless
+    `mark` keeps it; the report is yielded for that.
     """
     report = RequestReport(tags=tags)
     opened = _open()
@@ -77,11 +91,23 @@ def request(tags: tuple[Hashable, ...]) -> Iterator[None]:
     clock: Clock = getattr(_LOCAL, "clock", None) or SystemClock()
     began = clock.now()
     try:
-        yield
+        yield report
     finally:
         report.wall_s = clock.now() - began
         opened.pop()
     if (found := _collector()) is not None and report.items:
+        found.append(report)
+
+
+def mark(report: RequestReport, failure: Failure, fault: FaultClass, items: int) -> None:
+    """Mark `report` as a request that failed, kept in the enclosing `collected` even if it raised and recorded none.
+
+    `items` is the number of jobs the request carried, taken as its items where it recorded none.
+    """
+    report.failure, report.fault = failure, fault.value
+    found = _collector()
+    if found is not None and not any(r is report for r in found):
+        report.items = report.items or items
         found.append(report)
 
 
