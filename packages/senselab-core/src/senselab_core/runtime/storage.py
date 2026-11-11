@@ -664,7 +664,8 @@ class StorageDir:
 
         `data` is written to a temporary and fsynced, linked at `name`, and the directory is fsynced: a reader
         sees no name before its bytes are on disk, and a kill leaves the name absent or whole. The temporary is
-        removed. With `on_exists="raise"` a file at `name` raises `FileExistsError`; with `"keep"` it is left and
+        removed; an `EEXIST` whose name is a second link to the temporary (a lost reply) counts as this call's.
+        With `on_exists="raise"` a file at `name` raises `FileExistsError`; with `"keep"` it is left and
         False is returned. `mode` is `umask_default_file_mode()` when None.
 
         Raises:
@@ -678,13 +679,24 @@ class StorageDir:
         try:
             self.link(temporary, self, name, grammar=grammar)
         except FileExistsError:
-            if on_exists == "raise":
-                raise
-            return False
+            if not self._linked(temporary, name):
+                if on_exists == "raise":
+                    raise
+                return False
         finally:
             self.remove_owned(temporary, pattern=TEMPORARY_NAME)
         self.fsync()
         return True
+
+    def _linked(self, temporary: str, name: str) -> bool:
+        """Return whether `name` links to `temporary`: a retried `link` whose reply was lost says EEXIST."""
+        staged, found = self.lstat(temporary), self.lstat(name)
+        return (
+            staged is not None
+            and found is not None
+            and staged.st_nlink == 2  # noqa: PLR2004 - the temporary and the name
+            and (staged.st_dev, staged.st_ino) == (found.st_dev, found.st_ino)
+        )
 
     def append(self, name: str, data: bytes, *, grammar: re.Pattern[str], mode: int | None = None) -> None:
         """Append `data` to the file `name`, made if missing, as one whole record by this directory's one writer of it.

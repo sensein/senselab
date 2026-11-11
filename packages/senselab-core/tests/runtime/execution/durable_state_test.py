@@ -87,6 +87,7 @@ class Site:
     final: Callable[[Path], Path]
     read: Callable[[Path], object]
     links: bool
+    setup: Callable[[Path], object] | None = None
 
 
 def _json(path: Path) -> object:
@@ -106,10 +107,12 @@ def _attempt_file(run_dir: Path) -> Path:
     return run_dir / "epoch" / "1" / "attempt.json"
 
 
+def _epoch_take(run_dir: Path) -> None:
+    Epoch(run_dir).take(_lease_section())
+
+
 def _epoch_bind(run_dir: Path) -> None:
-    epoch = Epoch(run_dir)
-    epoch.take(_lease_section())
-    epoch.bind(1, "att-1", 1)
+    Epoch(run_dir).bind(1, "att-1", 1)
 
 
 def _custom_profile() -> ExecutionProfile:
@@ -161,7 +164,7 @@ SITES = [
         _json,
         True,
     ),
-    Site("epoch-attempt", _epoch_bind, _attempt_file, _json, True),
+    Site("epoch-attempt", _epoch_bind, _attempt_file, _json, True, setup=_epoch_take),
     Site("dead", _dead, lambda d: d / "dead" / f"{'c' * 64}.json", _json, True),
     Site(
         "profile",
@@ -184,6 +187,8 @@ SITES = [
 def _run(site: Site, directory: Path, ops: Faulty, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(tempfile, "tempdir", str(directory))
     final = site.final(directory)
+    if site.setup is not None:
+        site.setup(directory)
     with using_file_ops(ops):
         try:
             site.write(directory)
@@ -211,6 +216,10 @@ def test_a_kill_at_any_step_leaves_the_name_absent_or_complete(
     final = _run(site, tmp_path, ops, monkeypatch)
     assert ops.fired, f"{site.name} never reached {step} through StorageDir"
     _assert_complete_or_absent(final, site.read)
+    if site.setup is not None:
+        assert ops.calls.count("link") <= 1, "the fault ran under the setup, not the site"
+        _assert_complete_or_absent(tmp_path / "epoch" / "1" / "lease.json", _json)
+        assert (tmp_path / "epoch" / "1" / "lease.json").exists()
 
 
 @pytest.mark.logic
@@ -223,6 +232,8 @@ def test_a_short_write_is_continued(site: Site, tmp_path: Path, monkeypatch: pyt
             return super().write(fd, data[: max(1, len(data) // 2)])
 
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    if site.setup is not None:
+        site.setup(tmp_path)
     with using_file_ops(Halving()):
         site.write(tmp_path)
     final = site.final(tmp_path)
@@ -346,3 +357,28 @@ def test_every_reader_quarantines_bad_lines_wherever_they_sit(tmp_path: Path) ->
     assert [e.seq for e in read_events(tmp_path)] == [0, 1, 2]
     log.path.write_bytes(good[0].encode() + b"\n\xff\xfe\n")
     assert len(scan_events(tmp_path).quarantined) == 1
+
+
+@pytest.mark.logic
+def test_a_link_whose_reply_was_lost_is_this_callers_claim(tmp_path: Path) -> None:
+    """The link is made but the call says EEXIST (NFS retransmit): the claim is won, and the bytes are this caller's."""
+
+    class LostReply(FileOps):
+        def link(self, src: str, dst: str, *, src_dir_fd: int, dst_dir_fd: int) -> None:
+            super().link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+            raise FileExistsError(errno.EEXIST, "File exists")
+
+    with StorageDir.open_root(tmp_path) as directory, using_file_ops(LostReply()):
+        grammar = re.compile(r"^claim$")
+        assert directory.publish("claim", b"mine", grammar=grammar) is True
+    assert (tmp_path / "claim").read_bytes() == b"mine"
+    assert [p.name for p in tmp_path.iterdir()] == ["claim"]
+
+
+@pytest.mark.logic
+def test_a_name_another_writer_linked_is_still_lost(tmp_path: Path) -> None:
+    """EEXIST over a file that is not this caller's temporary stays a lost claim."""
+    (tmp_path / "claim").write_bytes(b"rival")
+    with StorageDir.open_root(tmp_path) as directory:
+        assert directory.publish("claim", b"mine", grammar=re.compile(r"^claim$")) is False
+    assert (tmp_path / "claim").read_bytes() == b"rival"
