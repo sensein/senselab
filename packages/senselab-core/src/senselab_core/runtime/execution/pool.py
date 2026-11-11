@@ -210,7 +210,7 @@ class Pool:
         self._scaling = False
         self._scale_error: Exception | None = None
         self._fenced: tuple[float, int] | None = None
-        self._live: dict[tuple[JobRef, str], tuple[str, str]] | None = None
+        self._live: dict[tuple[JobRef, str, str], str] | None = None
         self._landed: set[str] = set()
         self._unread = 0
         self._clock = clock
@@ -392,16 +392,14 @@ class Pool:
             else:
                 self._machine.place(Held(followed, name, part))
 
-    def _live_items(
-        self, placed: Plan, values: Mapping[InputIdentity, object]
-    ) -> dict[tuple[JobRef, str], tuple[str, str]]:
-        """Return each job with a live item on a queue, by the job and its key, as `(queue name, item digest)`.
+    def _live_items(self, placed: Plan, values: Mapping[InputIdentity, object]) -> dict[tuple[JobRef, str, str], str]:
+        """Return the digest of the oldest live item holding each job, by the job, its key and the queue.
 
         Read from the run's queues once per epoch, at the first put: an item with a slot and no outcome, its oldest
         first. A probe queue's items are not production items.
         """
         if self._live is None:
-            found: dict[tuple[JobRef, str], tuple[str, str]] = {}
+            found: dict[tuple[JobRef, str, str], str] = {}
             for queue in self.queues.names():
                 if probe_of(queue) is not None:
                     continue
@@ -413,7 +411,7 @@ class Pool:
                     except ValueError:
                         continue
                     for job, key in zip(old.jobs, keys, strict=True):
-                        found.setdefault((job, key), (queue, digest))
+                        found.setdefault((job, key, queue), digest)
             self._live = found
         return self._live
 
@@ -437,9 +435,8 @@ class Pool:
         keys = self._keys(fragment)
         holders: dict[str, list[int]] = {}
         for index, (job, key) in enumerate(zip(fragment.jobs, keys, strict=True)):
-            found = live.get((job, key))
-            if found is not None and found[0] == name:
-                holders.setdefault(found[1], []).append(index)
+            if (digest := live.get((job, key, name))) is not None:
+                holders.setdefault(digest, []).append(index)
         if not holders:
             return fragment
         dumped = Dumped.of(fragment)

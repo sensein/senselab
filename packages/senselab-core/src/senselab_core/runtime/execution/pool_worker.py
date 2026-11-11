@@ -30,7 +30,7 @@ from senselab_worker.faults import ProtocolError, classify
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.runtime import request_reports
-from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
+from senselab_core.runtime.calibration import Cotenancy, FaultKind, HardwareClass, Observation
 from senselab_core.runtime.call import RunConfig, packaged
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.epoch import Epoch, LeaseMismatch, differing, read_section
@@ -158,7 +158,8 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
     failure. Any other exception is the failure of every member of the request that raised it, so a half that
     completed keeps its outcomes. Each call of `send` is given to `record` as a `Sent`, timed by itself on `clock`,
     with the requests it made, each timed on `clock` too. With `handover`, each member's outcome is given to it once
-    it is    final, which is as its request ends when `send` takes an `Emit`, else as the call ends.
+    it is final, which is as its request ends when `send` takes an `Emit`, else as the call ends; a request's `Sent` is
+    recorded before its members are handed over, so each carries its own wall and report.
 
     Raises:
         Abandoned: `cancelled` was set before a request, or while one ran.
@@ -168,11 +169,13 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
         raise Abandoned
     refs = tuple(m.job.ref for m in members)
     began = clock.now()
-    call = send
-    if handover is not None and _emits(send):
-        call = functools.partial(send, emit=_forwarding(members, handover))
+    forward: _Forward | None = None
     try:
         with request_reports.collected(clock) as reported:
+            call = send
+            if handover is not None and _emits(send):
+                forward = _Forward(members, handover, record, reported)
+                call = functools.partial(send, emit=forward)
             outcomes = call([m.job for m in members], placement)
     except Exception as exc:
         wall = clock.now() - began
@@ -181,10 +184,7 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
         if isinstance(exc, LeaseTimeout):
             raise
         split = whole(exc) and len(members) > 1
-        if record is not None:
-            record(
-                Sent(refs, wall, (), "bisected" if split else "failed", None if _loading(exc) else classify(exc).value)
-            )
+        _record_failure(record, forward, (refs, wall), exc, split=split)
         if not split:
             if len(members) == 1:
                 logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)
@@ -193,7 +193,25 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
                 handover(members, failed)
             return failed
         return _halves(members, placement, send, cancelled, record, clock, handover)
-    return _split_requests(members, outcomes, reported, began, (placement, send, cancelled, record, clock, handover))
+    again = (placement, send, cancelled, record, clock, handover, forward)
+    return _split_requests(members, outcomes, reported, began, again)
+
+
+def _record_failure(
+    record: Callable[[Sent], None] | None,
+    forward: "_Forward | None",
+    call: tuple[tuple[JobRef, ...], float],
+    exc: Exception,
+    *,
+    split: bool,
+) -> None:
+    """Record the call that raised `exc` as a `Sent`, less the members and the requests an emit already recorded."""
+    if record is None:
+        return
+    refs, wall = call if forward is None else forward.rest(*call)
+    if refs:
+        kind: FaultKind | None = None if _loading(exc) else classify(exc).value
+        record(Sent(refs, wall, (), "bisected" if split else "failed", kind))
 
 
 def _emits(send: Send) -> bool:
@@ -204,13 +222,38 @@ def _emits(send: Send) -> bool:
         return False
 
 
-def _forwarding(members: Sequence["Member"], handover: Handover) -> Emit:
-    """Return the `Emit` that gives the members at the indices a call of `send` names, of `members`, to `handover`."""
+class _Forward:
+    """The `Emit` of one call of `send`: records the requests made since the last emit, then hands over their members.
 
-    def emit(at: Sequence[int], outcomes: Sequence[JobOutcome]) -> None:
-        handover([members[i] for i in at], outcomes)
+    A request is recorded as its own `Sent` before its members are handed over, so the item it settles is measured by
+    it; the call's own `Sent` then holds only what no emit recorded.
+    """
 
-    return emit
+    def __init__(
+        self,
+        members: Sequence["Member"],
+        handover: Handover,
+        record: Callable[[Sent], None] | None,
+        reported: Sequence[RequestReport],
+    ) -> None:
+        self.members, self.handover, self.record, self.reported = members, handover, record, reported
+        self.seen, self.wall_s = 0, 0.0
+        self.given: set[JobRef] = set()
+
+    def __call__(self, at: Sequence[int], outcomes: Sequence[JobOutcome]) -> None:
+        """Record the requests reported since the last call, then hand over the members at `at`."""
+        chosen = [self.members[i] for i in at]
+        new, self.seen = tuple(self.reported[self.seen :]), len(self.reported)
+        if new and self.record is not None:
+            wall = sum(r.wall_s or 0.0 for r in new)
+            self.wall_s += wall
+            self.record(Sent(tuple(m.job.ref for m in chosen), wall, new, None))
+        self.given.update(m.job.ref for m in chosen)
+        self.handover(chosen, outcomes)
+
+    def rest(self, refs: tuple[JobRef, ...], wall_s: float) -> tuple[tuple[JobRef, ...], float]:
+        """Return the refs of a call not handed over, and its wall less the requests already recorded."""
+        return tuple(r for r in refs if r not in self.given), max(0.0, wall_s - self.wall_s)
 
 
 def _split_requests(
@@ -218,21 +261,32 @@ def _split_requests(
     outcomes: list[JobOutcome],
     reported: Sequence[RequestReport],
     began: float,
-    again: tuple[Placement, Send, threading.Event | None, Callable[[Sent], None] | None, Clock, Handover | None],
+    again: tuple[
+        Placement,
+        Send,
+        threading.Event | None,
+        Callable[[Sent], None] | None,
+        Clock,
+        Handover | None,
+        "_Forward | None",
+    ],
 ) -> list[JobOutcome]:
     """Return `outcomes`, where each request of several jobs that all ran out is replaced by its halves' outcomes.
 
     The requests that did not run out keep their outcomes and reports; each that did is given to `record` as a
     `bisected` resource fault with its own report, and its jobs are sent again in halves.
     """
-    placement, send, cancelled, record, clock, handover = again
+    placement, send, cancelled, record, clock, handover, forward = again
     faulted = [(r, at) for r in reported if (at := _ran_out(members, outcomes, r))]
     gone = {i for _, at in faulted for i in at}
     merged = list(outcomes)
     if record is not None:
-        kept = tuple(r for r in reported if all(r is not f for f, _ in faulted))
+        first = 0 if forward is None else forward.seen
+        kept = tuple(r for r in reported[first:] if all(r is not f for f, _ in faulted))
         refs = tuple(m.job.ref for i, m in enumerate(members) if i not in gone)
         wall = clock.now() - began - sum(f.wall_s or 0.0 for f, _ in faulted)
+        if forward is not None:
+            refs, wall = forward.rest(refs, wall)
         if refs:
             record(Sent(refs, max(0.0, wall), kept, None))
     finished = {i: o for i, o in enumerate(outcomes) if i not in gone}

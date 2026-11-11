@@ -21,10 +21,9 @@ from typing import Any, Final, Protocol
 
 from senselab_core.kernel.dataset import ManifestRow
 from senselab_core.runtime.config import load_yaml
-from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import RESULTS, Event, EventLog, read_events, run_dir_of, terminal_events
 from senselab_core.runtime.execution.pool import Pool
-from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
+from senselab_core.runtime.execution.queue import QueueSet
 from senselab_core.runtime.execution.run import RESULTS_DIR, Run
 from senselab_core.runtime.execution.substrates import (
     LIVE_STATES,
@@ -427,7 +426,7 @@ def launch(placed: Plan, executor: str, store: ResultStore) -> tuple[Run, Callab
     run_dir, profile = run_dir_of(placed.hash), placed.execution
     pool = Pool(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+        queues=QueueSet.for_run(run_dir, profile, own=profile.lease),
         store=store,
         events=EventLog(run_dir, "a0", 1, epoch=0),
         profile=profile,

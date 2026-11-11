@@ -68,7 +68,8 @@ def _queues(root: Path, args: argparse.Namespace) -> QueueSet:
             "renew_fraction": args.fraction,
             "attribute_delay_s": args.delay,
         }
-    return QueueSet(root / "queues", ExecutionProfile.load(args.profile, override=override))
+    profile = ExecutionProfile.load(args.profile, override=override)
+    return QueueSet.for_run(root, profile, own=profile.lease)
 
 
 def _queue(root: Path, args: argparse.Namespace) -> Queue:

@@ -38,6 +38,7 @@ from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Sample
+from senselab_core.runtime.storage import FileOps, using_file_ops
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import WorkerClient, WorkerLost, WorkerOOMKilled
 from senselab_core.testing.interpreter import source_tree_python
@@ -377,7 +378,52 @@ def test_a_requests_items_are_settled_before_the_next_request_runs(tmp_path: Pat
         return first + execute(jobs[2:], placement, store=store, run=run, profile=profile, workers=WORKERS)
 
     PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=two_requests).run_claim(claim)
-    assert settled == [2] and len(_outcomes(pool_dir, profile)) == 4
+    assert settled == [2]
+    found = _outcomes(pool_dir, profile)
+    assert len(found) == 4
+    assert all(Sample.model_validate(o["measure"]).wall_s > 0 and o.get("observations") for o in found)
+
+
+class _Proofs(FileOps):
+    """Counts the proof directories leases make."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def mkdir(self, name: str, mode: int, *, dir_fd: int) -> None:
+        """Count `proof-*` and make the directory."""
+        self.count += name.startswith("proof-")
+        super().mkdir(name, mode, dir_fd=dir_fd)
+
+
+@pytest.mark.logic
+def test_requests_that_emit_inside_one_renewal_interval_prove_each_lease_once_to_settle(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
+    """Four items settled by four emits inside an interval: one proof each, for their settle, and no renewal's."""
+    profile = _profile(quantum_items=4)
+    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(4)])
+    for element in range(4):
+        _put(placed, pool_dir, element)
+    clock = lease_clock()
+    claim = (
+        QueueSet(pool_dir, profile, lease=profile.lease, clock=clock).queue("cpu").claim("w", max_jobs=4, singles=True)
+    )
+    assert claim is not None and len(claim.items) == 4
+
+    def each_alone(jobs: Sequence[Job], placement: Placement, emit: Emit) -> list[JobOutcome]:
+        outcomes: list[JobOutcome] = []
+        for i, job in enumerate(jobs):
+            found = execute([job], placement, store=store, run=RunConfig(), profile=profile, workers=WORKERS)
+            emit([i], found)
+            outcomes += found
+        return outcomes
+
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=each_alone, clock=clock)
+    proofs = _Proofs()
+    with using_file_ops(proofs):
+        worker.run_claim(claim)
+    assert len(_outcomes(pool_dir, profile)) == 4 and proofs.count == 4
 
 
 @pytest.mark.logic

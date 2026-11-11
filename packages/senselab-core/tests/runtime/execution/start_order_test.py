@@ -2,8 +2,9 @@
 
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from runner_test import (  # noqa: F401 - `packaged` is the autouse fixture of the fake stack
@@ -17,7 +18,9 @@ from runner_test import (  # noqa: F401 - `packaged` is the autouse fixture of t
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import EventLog, read_events, run_dir_of
 from senselab_core.runtime.execution.run import Run
+from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.planner import Plan
+from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.storage import FileOps, using_file_ops
 from senselab_core.runtime.store import ResultStore
 
@@ -77,13 +80,44 @@ def _unreadable_queues(run_dir: Path) -> None:
     (run_dir / "queues").chmod(0)
 
 
-STEPS = {
-    "plan-written-once": (_another_plan, None, ValueError, False),
-    "attempt-claimed": (None, b"placement@3", OSError, False),
-    "epoch-lease-published": (None, b"run-lease@1", OSError, True),
-    "queues-reconciled": (_unreadable_queues, None, PermissionError, True),
-    "epoch-bound-to-executor": (None, None, ValueError, True),
-    "epoch-bound": (None, b'{"attempt": ', OSError, True),
+class NoCoordinatorLease(FileOps):
+    """Refuses the `mkdir` of a coordinator lease: the storage will not let another coordinator in."""
+
+    def mkdir(self, name: str, mode: int, *, dir_fd: int) -> None:
+        """Raise `PermissionError` for `coordinator.lease`."""
+        if name == "coordinator.lease":
+            raise PermissionError(13, "permission denied")
+        super().mkdir(name, mode, dir_fd=dir_fd)
+
+
+class Unrecorded(ProvStore):
+    """A provenance store that cannot take the plan's entity."""
+
+    def add(self, *records: object) -> None:
+        """Raise as a provenance store that cannot be written."""
+        if records:
+            raise RuntimeError("the provenance store refuses the plan entity")
+
+
+def _unrecorded(root: Path) -> ResultStore:
+    return ResultStore(root, provenance=Unrecorded())
+
+
+def _refusing(marker: bytes) -> Callable[[], FileOps]:
+    return lambda: Refusing(marker)
+
+
+STEPS: dict[str, dict[str, Any]] = {
+    "plan-written-once": {"prepare": _another_plan, "error": ValueError, "ended": False},
+    "inputs-recorded": {"ops": _refusing(b'"rows"'), "error": OSError, "ended": False},
+    "manifest-written": {"ops": _refusing(b'"store"'), "error": OSError, "ended": False},
+    "attempt-claimed": {"ops": _refusing(b"placement@3"), "error": OSError, "ended": False},
+    "epoch-lease-published": {"ops": _refusing(b"run-lease@1"), "error": OSError, "ended": True},
+    "coordinator-lease-taken": {"ops": NoCoordinatorLease, "error": LeaseUnavailable, "ended": True},
+    "queues-reconciled": {"prepare": _unreadable_queues, "error": PermissionError, "ended": True},
+    "epoch-bound-to-executor": {"executor": Unbindable, "error": ValueError, "ended": True},
+    "plan-entity-added": {"store": _unrecorded, "error": RuntimeError, "ended": True},
+    "epoch-bound": {"ops": _refusing(b'{"attempt": '), "error": OSError, "ended": True},
 }
 
 
@@ -94,19 +128,19 @@ def test_a_start_that_fails_at_a_step_leaves_the_runs_epoch_and_status_as_they_w
     placed, store = _finished(tmp_path)
     run_dir = run_dir_of(placed.hash)
     before = (Epoch(run_dir).current(), Epoch(run_dir).stopped(), Run(run_dir).status().done)
-    prepare, marker, error, ended = STEPS[step]
-    if prepare is not None:
-        prepare(run_dir)
-    executor = Unbindable(store) if step == "epoch-bound-to-executor" else Recording(store)
-    refusing = Refusing(marker) if marker is not None else FileOps()
+    case = STEPS[step]
+    if "prepare" in case:
+        case["prepare"](run_dir)
+    used = case["store"](tmp_path / "store") if "store" in case else store
+    executor = case.get("executor", Recording)(used)
     try:
-        with using_file_ops(refusing), pytest.raises(error):
-            placed.run(executor, store=store).wait(60)
+        with using_file_ops(case.get("ops", FileOps)()), pytest.raises(case["error"]):
+            placed.run(executor, store=used).wait(60)
     finally:
         (run_dir / "queues").chmod(0o770)
     assert before == (1, True, True)
     assert (Epoch(run_dir).current(), Epoch(run_dir).stopped(), Run(run_dir).status().done) == before
-    assert (run_dir / "epoch" / "2" / "ended").exists() == ended
+    assert (run_dir / "epoch" / "2" / "ended").exists() == case["ended"]
 
 
 def test_two_coordinators_taking_epochs_fence_only_the_older_whichever_binds_first(tmp_path: Path) -> None:

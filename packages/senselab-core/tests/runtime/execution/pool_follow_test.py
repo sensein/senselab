@@ -4,13 +4,27 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
-from pool_test import CHARGED, CONTENT, FakeWorkers, _pool, _profile, _stack, stack  # noqa: F401 - `stack` is autouse
+from epoch_fixture import prepared
+from pool_stack_fixture import planned
+from pool_test import (  # noqa: F401 - `stack` is autouse
+    CHARGED,
+    CONTENT,
+    SCORE,
+    FakeWorkers,
+    _pool,
+    _profile,
+    _stack,
+    stack,
+)
 from senselab_core.kernel.identity import InputIdentity
+from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.events import read_events
 from senselab_core.runtime.execution.executor import PlanFragment, follow
 from senselab_core.runtime.execution.in_process import node_fragment
 from senselab_core.runtime.execution.pool import split
-from senselab_core.runtime.execution.queue import item_digest
+from senselab_core.runtime.execution.queue import item_digest, probe_queue
+from senselab_core.runtime.execution.run import stored_policy
+from senselab_core.runtime.licenses import LicensePolicy
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
@@ -81,3 +95,66 @@ def test_two_fragments_following_one_item_are_given_and_charged_once_each(tmp_pa
     assert [sorted(r.job.element for r in each) for each in refs] == [[(0,), (1,)], [(2,), (3,)]]
     assert all(r.failure is None for each in refs for r in each)
     assert len([e for e in read_events(tmp_path / "run") if e.kind == "failed"]) == 4
+
+
+@pytest.mark.contract
+def test_a_job_held_on_two_queues_is_followed_on_the_queue_it_is_placed_on(tmp_path: Path) -> None:
+    """A job live on `cpu` and on `cpu:large` is followed where it is placed now, not on the first queue by name."""
+    profile = _profile(**CONTENT)
+    placed, values, store, workers = _stack(tmp_path, profile, ["a", "b"])
+    workers.ready = lambda: False
+    first = _pool(tmp_path, store, workers, profile)
+    (whole,) = split(node_fragment(placed, first.admit(placed, values)), 2)
+    on_large = whole.model_copy(
+        update={"placement": whole.placement.model_copy(update={"resource_class": "cpu:large"})}
+    )
+    first.queues.queue("cpu").put_all([whole])
+    first.queues.queue("cpu:large").put_all([on_large])
+    second = _pool(tmp_path, store, workers, profile)
+    second.submit(
+        node_fragment(placed, second.admit(placed, values)).model_copy(update={"placement": on_large.placement})
+    )
+    second.close()
+    assert second.queues.queue("cpu:large").depth() == 1 and second.queues.queue("cpu").depth() == 1
+
+
+@pytest.mark.contract
+def test_a_probe_queue_item_and_a_damaged_live_item_hold_no_job(tmp_path: Path) -> None:
+    """A probe item naming the job and a live item that no longer reads are not followed: the job is put again."""
+    profile = _profile(**CONTENT)
+    placed, values, store, workers = _stack(tmp_path, profile, ["a"])
+    workers.ready = lambda: False
+    first = _pool(tmp_path, store, workers, profile)
+    (whole,) = split(node_fragment(placed, first.admit(placed, values)), 1)
+    first.queues.queue(probe_queue("cpu", "p1")).put_probe(whole, "SINGLE", 1)
+    second = _pool(tmp_path, store, workers, profile)
+    second.submit(node_fragment(placed, second.admit(placed, values)))
+    queue = second.queues.queue("cpu")
+    assert queue.depth() == 1
+    ((digest, _),) = queue.live_items()
+    (queue.path / "items" / f"{digest}.json").write_bytes(b"not an item")
+    third = _pool(tmp_path, store, workers, profile)
+    third.submit(node_fragment(placed, third.admit(placed, values)))
+    third.close()
+    assert queue.depth() == 1 and queue.live_items() == []
+
+
+@pytest.mark.contract
+def test_coordinate_runs_under_the_policy_the_run_was_started_under(tmp_path: Path) -> None:
+    """`coordinate` reads the stored policy, `prepare` accepts it as its own, and the plan it runs carries it."""
+    pytest.importorskip("pydra")
+    from senselab_core.runtime.execution.pool import coordinate, run_plan  # noqa: PLC0415 - after the pydra check
+
+    policy = LicensePolicy(frozenset({"mit"}))
+    profile = _profile(**CONTENT)
+    placed, values = planned(SCORE, profile, ["one"], RunConfig(licenses=policy))
+    store, run_dir = ResultStore(tmp_path / "store"), tmp_path / "run"
+    workers = FakeWorkers(run_dir, store, placed, values)
+    prepared(placed, run_dir, store)
+    try:
+        outcome = coordinate(run_dir, substrate=workers, profile=profile, store=store)
+    finally:
+        workers.stop()
+    config = run_plan(run_dir, profile).config
+    assert config is not None and config.licenses == policy == stored_policy(run_dir)
+    assert [r.failure for r in outcome.results["a"]] == [None]
