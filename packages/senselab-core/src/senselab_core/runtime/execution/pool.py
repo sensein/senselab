@@ -15,7 +15,8 @@ fault class has its effect here, with the budgets of the profile's `faults` sect
 - **content**, not a gap: charged; the job is queued again until `content_attempts` charges, then it is dead;
 - **resource**, gap or not: the job is queued
   again on the next larger memory class of its device, uncharged, at most `resource_replacements` times; then, or
-  with no larger class, it is dead;
+  with no larger class, it is dead, unless the fault is a load's (`FaultRecord.load`): that is the environment's and
+  counts against it as infrastructure does;
 - **infrastructure**, or a gap that is not resource: queued again uncharged (a gap is logged); at
   `infrastructure_replacements` failures of one env in this epoch the env is reported once as broken (`BrokenEnv`) and
   held on each queue it is seen on (`Queue.hold`), so its jobs wait for a later epoch and none is failed.
@@ -733,7 +734,13 @@ class Pool:
         if fault.gap:
             self.gaps.append((job, fault))
             logger.warning("classification gap: %s of %s, not charged", fault.type, job)
-        if _counts_against_env(fault):
+        larger = larger_class(self.profile, placement.resource_class)
+        replaced = (
+            fault.fault == "resource"
+            and larger is not None
+            and followed.moved[job.element] < budgets.resource_replacements
+        )
+        if _counts_against_env(fault) and not (fault.load and replaced):
             if self._infrastructure(flight, job, key, fault):
                 self._again(followed, flight, index)
             else:
@@ -742,8 +749,7 @@ class Pool:
             return
         if fault.fault == "resource":
             followed.moved[job.element] += 1
-            larger = larger_class(self.profile, placement.resource_class)
-            if larger is not None and followed.moved[job.element] <= budgets.resource_replacements:
+            if replaced and larger is not None:
                 self._failed(job, key, fault, placement.env)
                 grant = {"resource_class": larger, "partition": self.profile.resource_classes[larger].partition}
                 self._again(followed, flight, index, placement.model_copy(update=grant))
@@ -917,8 +923,8 @@ def _worker_of(record: Mapping[str, object]) -> str | None:
 
 
 def _counts_against_env(fault: FaultRecord) -> bool:
-    """Whether `fault` is an infrastructure fault, or a gap of a class that is not resource."""
-    return fault.fault == "infrastructure" or (fault.gap and fault.fault != "resource")
+    """Whether `fault` is infrastructure, a gap that is not resource, or a fault of a load."""
+    return fault.fault == "infrastructure" or (fault.gap and fault.fault != "resource") or fault.load
 
 
 def run_plan(run_dir: Path, profile: ExecutionProfile) -> Plan:

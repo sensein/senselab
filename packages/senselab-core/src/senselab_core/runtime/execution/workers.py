@@ -11,10 +11,10 @@ import sys
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Protocol, TypeVar
+from typing import Any, ClassVar, Protocol, TypeVar
 
 from senselab_worker.canonical import jcs_dumps
-from senselab_worker.faults import FaultClass, classification
+from senselab_worker.faults import FaultClass, at_load, classification
 from senselab_worker.model_cache import ModelCache, ModelKey
 from senselab_worker.serve import backend_init
 
@@ -35,7 +35,7 @@ from senselab_core.runtime.vllm_server import (
     VllmServer,
     expected_attestation,
 )
-from senselab_core.runtime.worker_client import WorkerClient, WorkerFatal
+from senselab_core.runtime.worker_client import WorkerClient
 
 PRECISION = "default"
 """The precision a job records: the backend's own; no backend declares another yet."""
@@ -68,17 +68,18 @@ class WorkerLoadFailed(Exception):  # noqa: N818 - a fault named for what failed
     """A worker did not start or load its backend; `__cause__` is what it raised.
 
     Its fault class and gap are its cause's (`carried_class`), so a load that ran out of memory is a resource fault,
-    re-placed on a larger class; with no cause it is an infrastructure fault of its env. It is raised by a checkout,
-    never by a request to a loaded worker, so it is never split.
+    re-placed on a larger class; a content fault stated at load is the environment's (`faults.at_load`), and with no
+    cause it is an infrastructure fault of its env. It is raised by a checkout, never by a request to a loaded worker,
+    so it is never split.
     """
 
     @property
     def carried_class(self) -> tuple[FaultClass, bool]:
         """The fault class of the cause and whether the table decided it."""
         cause = self.__cause__
-        if isinstance(cause, WorkerFatal):
-            return FaultClass(cause.error["fault"]), bool(cause.error.get("gap", True))
-        return classification(cause) if cause is not None else (FaultClass.INFRASTRUCTURE, False)
+        return at_load(*classification(cause)) if cause is not None else (FaultClass.INFRASTRUCTURE, False)
+
+    from_load: ClassVar[bool] = True
 
 
 Started = TypeVar("Started")

@@ -419,9 +419,12 @@ def _fault_of(call: Callable[[], Any]) -> tuple[FaultRecord, str]:
         (400, "content", False),
         (404, "content", False),
         (422, "content", False),
+        (408, "infrastructure", False),
+        (429, "infrastructure", False),
         (500, "infrastructure", False),
         (502, "infrastructure", False),
-        (503, "resource", False),
+        (503, "infrastructure", False),
+        (507, "resource", False),
     ],
 )
 def test_a_server_status_is_typed_the_same_on_both_paths(
@@ -440,6 +443,14 @@ def test_a_server_status_is_typed_the_same_on_both_paths(
         service.close()
     assert direct == leased
     assert (direct[0].fault, direct[0].gap, direct[0].charged) == (fault, gap, fault == "content")
+
+
+def test_an_http_reply_naming_memory_is_a_resource_fault_whatever_its_status() -> None:
+    """A 5xx whose reason names memory is a `ServerOutOfMemory`; the same status without it is not."""
+    named = urllib.error.HTTPError("http://x", 500, "CUDA out of memory", None, None)  # type: ignore[arg-type]
+    plain = urllib.error.HTTPError("http://x", 500, "boom", None, None)  # type: ignore[arg-type]
+    assert FaultRecord.from_exception(server_fault(named)).fault == "resource"
+    assert FaultRecord.from_exception(server_fault(plain)).fault == "infrastructure"
 
 
 @pytest.mark.parametrize(

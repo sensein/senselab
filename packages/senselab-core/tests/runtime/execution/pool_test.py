@@ -326,6 +326,47 @@ def test_a_load_oom_moves_to_the_larger_class_with_one_worker_start_per_claim(tm
     assert [(f.placement.resource_class, f.attempt) for f in workers.served] == [("cpu", 1), ("cpu:large", 2)]
 
 
+def _load_oom() -> FaultRecord:
+    from fault_class_test import host_load_failure  # noqa: PLC0415 - a real checkout's WorkerLoadFailed
+
+    return FaultRecord.from_exception(host_load_failure(MemoryError("CUDA out of memory")))
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("shipped", [True, False], ids=["packaged-laptop", "larger-class-spent"])
+def test_a_load_oom_that_cannot_move_larger_holds_the_env_and_kills_no_item(tmp_path: Path, shipped: bool) -> None:
+    """With no larger class or no replacement left, a load OOM counts against the env and holds it; no job is dead.
+
+    `packaged-laptop` is the shipped profile (`resource_replacements: 0`, no larger class); the other has a larger
+    class and one replacement, and its load fails on the larger class too.
+    """
+    load = _load_oom()
+    assert (load.fault, load.load) == ("resource", True)
+    if shipped:
+        profile = ExecutionProfile.load("laptop", {"devices": ["cpu"], "pool": {"poll_s": 0.2, "first_poll_s": 0.01}})
+        assert profile.faults.resource_replacements == 0 and "cpu:large" not in profile.resource_classes
+    else:
+        profile = _profile(content_attempts=2, infrastructure_replacements=3, resource_replacements=1)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one"])
+    workers.act = lambda fragment: load
+    pool = _pool(tmp_path, store, workers, profile)
+    admission = pool.admit(placed, values)
+    handle = pool.submit(node_fragment(placed, admission, elements=[(0,)]))
+    try:
+        with pytest.raises(QueueHeld) as raised:
+            list(follow(pool, handle))
+    finally:
+        workers.stop()
+    assert raised.value.reason == load.message
+    [broken] = pool.broken.values()
+    assert broken.env == "host" and broken.fault.load
+    assert not any((tmp_path / "run").glob("dead/*"))
+    expected = 6 if shipped else 3
+    assert broken.failures == expected
+    if not shipped:
+        assert [f.placement.resource_class for f in workers.served][:2] == ["cpu", "cpu:large"]
+
+
 @pytest.mark.contract
 def test_broken_env_reported_once(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """Two infrastructure faults of one env break it: reported once with its cause, held, no job failed or dead."""

@@ -75,7 +75,7 @@ from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.storage import StorageUnsupported, probe_capabilities
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import mark_entry
-from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerFatal, WorkerLost
+from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerLost
 
 logger = logging.getLogger("senselab")
 
@@ -101,9 +101,10 @@ class Abandoned(Exception):
 def whole(exc: BaseException) -> bool:
     """Whether `exc` fails a request of a loaded worker as a whole: it was lost, fatal, broke the protocol, or ran out.
 
-    A worker that failed to start or load (`WorkerLoadFailed`) is never one, whatever its class.
+    A worker that failed to start, load or reload (`WorkerLoadFailed`, `WorkerFatal`) is never one, whatever its
+    class: a load is not an item.
     """
-    return isinstance(exc, (WorkerLost, WorkerFatal, ProtocolError)) or splits(exc)
+    return isinstance(exc, (WorkerLost, ProtocolError)) or splits(exc)
 
 
 def _ran_out(members: "Sequence[Member]", outcomes: Sequence[JobOutcome], report: RequestReport) -> list[int]:

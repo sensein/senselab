@@ -154,7 +154,9 @@ class ServerFailed(InfrastructureFault):
     """The server failed on a request it accepted (any other HTTP 5xx)."""
 
 
-_RESOURCE_STATUSES = frozenset({HTTPStatus.SERVICE_UNAVAILABLE, HTTPStatus.INSUFFICIENT_STORAGE})
+_TRANSIENT_STATUSES = frozenset(
+    {HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.SERVICE_UNAVAILABLE}
+)
 _MEMORY_WORDS = re.compile(r"out of memory|\boom\b", re.IGNORECASE)
 
 
@@ -162,17 +164,19 @@ def server_fault(exc: Exception) -> Exception:
     """Return the typed fault for what a request to a server raised: the one mapper both server paths use.
 
     - A timeout, a connect failure, a reset or any other transport error: `ServiceUnavailable`.
-    - An HTTP 4xx: `ServerRejected`, a content fault.
-    - An HTTP 503 or 507, or a 5xx whose message names memory: `ServerOutOfMemory`, a resource fault; any other 5xx:
-      `ServerFailed`.
+    - An HTTP 507, or a status whose message names memory: `ServerOutOfMemory`, a resource fault.
+    - An HTTP 408, 429 or 503, which a retry may cure: `ServiceUnavailable`.
+    - Any other 4xx: `ServerRejected`, a content fault; any other 5xx: `ServerFailed`.
     - Anything else is returned as it is.
     """
     if isinstance(exc, urllib.error.HTTPError):
         text = f"HTTP {exc.code}: {exc.reason}"
+        if _MEMORY_WORDS.search(str(exc.reason)) or exc.code == HTTPStatus.INSUFFICIENT_STORAGE:
+            return ServerOutOfMemory(text)
+        if exc.code in _TRANSIENT_STATUSES:
+            return ServiceUnavailable(text)
         if exc.code < HTTPStatus.INTERNAL_SERVER_ERROR:
             return ServerRejected(exc.code, text)
-        if exc.code in _RESOURCE_STATUSES or _MEMORY_WORDS.search(str(exc.reason)):
-            return ServerOutOfMemory(text)
         return ServerFailed(text)
     if isinstance(exc, (OSError, http.client.HTTPException)):
         return ServiceUnavailable(f"the server did not answer: {type(exc).__name__}")
@@ -462,6 +466,7 @@ class VllmServer:
 
         Raises:
             StaleAttestation: The server is not running, or the reply names another model.
+            ServerRejected, ServerOutOfMemory, ServerFailed, ServiceUnavailable: as `server_fault` types the failure.
         """
         attestation = self._live()
         return attest_reply(chat(str(self.url), self.served_name, messages, sampling=sampling), attestation, self.label)
@@ -471,6 +476,7 @@ class VllmServer:
 
         Raises:
             StaleAttestation: The server is not running, or the reply names another model.
+            ServerRejected, ServerOutOfMemory, ServerFailed, ServiceUnavailable: as `server_fault` types the failure.
         """
         attestation = self._live()
         reply = complete(str(self.url), self.served_name, prompt_token_ids, sampling=sampling)

@@ -63,6 +63,7 @@ from senselab_core.runtime.store import ResultStore, StoredResult
 from senselab_core.runtime.store import output_identity as store_output_identity
 from senselab_core.runtime.vllm_server import attested_fields, server_launch, server_variables
 from senselab_core.runtime.vocabulary import core_vocabulary
+from senselab_core.runtime.worker_client import WorkerFatal
 
 
 @dataclass(frozen=True)
@@ -118,10 +119,10 @@ def splits(exc: BaseException) -> bool:
     """Whether `exc`, raised by a request to a loaded worker, is a resource fault that splits the request.
 
     A lease wait (`LeaseTimeout`) is a `TimeoutError` and so a resource class, but it is nobody's request failing; nor
-    is a worker that failed to start or load (`WorkerLoadFailed`), whatever its class: a request is split only when it
-    went to a loaded worker.
+    is a worker that failed to start or load, or to reload an evicted state (`WorkerLoadFailed`, `WorkerFatal`),
+    whatever its class: a request is split only when it went to a loaded worker.
     """
-    return classify(exc) is FaultClass.RESOURCE and not isinstance(exc, (LeaseTimeout, WorkerLoadFailed))
+    return classify(exc) is FaultClass.RESOURCE and not isinstance(exc, (LeaseTimeout, WorkerLoadFailed, WorkerFatal))
 
 
 def ran_out(outcomes: Sequence[JobOutcome]) -> bool:

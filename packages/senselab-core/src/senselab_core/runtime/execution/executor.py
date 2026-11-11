@@ -18,7 +18,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, error_record
+from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, error_record, wire_text
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, thawed
 from senselab_core.kernel.formats import PLAN_FRAGMENT_FORMAT, FormatTag, Formatted
@@ -110,7 +110,8 @@ class FaultRecord(Frozen):
     """A job's failure: its fault class, the exception's type and message, whether it is a gap, whether it is charged.
 
     Only a content fault that is not a gap is charged against the item's retry budget; a resource or infrastructure
-    fault re-places the job, and a gap fault, one the fallback table classified, is never charged.
+    fault re-places the job, and a gap fault, one the fallback table classified, is never charged. `load` is true for a
+    fault stated while a worker started, loaded or reloaded its model: it is the environment's, not an item's.
     """
 
     fault: FaultName
@@ -118,6 +119,7 @@ class FaultRecord(Frozen):
     message: str
     gap: bool
     charged: bool
+    load: bool = False
 
     @field_validator("message")
     @classmethod
@@ -140,7 +142,8 @@ class FaultRecord(Frozen):
         """Return the record of `exc` as a worker classifies it (`error_record`), its notes after its message."""
         error = error_record(exc)
         notes = [str(n) for n in getattr(exc, "__notes__", ())]
-        return cls.of({**error, "message": "\n".join([error["message"], *notes])})
+        message = wire_text("\n".join([error["message"], *notes]))
+        return cls.of({**error, "message": message, "load": bool(getattr(exc, "from_load", False))})
 
     @classmethod
     def gap_of(cls, kind: str, message: str) -> "FaultRecord":
@@ -161,6 +164,7 @@ class FaultRecord(Frozen):
             message=str(error.get("message", "")),
             gap=gap,
             charged=fault is FaultClass.CONTENT and not gap,
+            load=bool(error.get("load", False)),
         )
 
 

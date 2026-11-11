@@ -8,14 +8,15 @@ import pytest
 from pool_stack_fixture import host_env, packaged, registry
 from pool_worker_test import _profile, _put, _refs, _run, _sender
 from senselab_core.kernel.declare import BackendSpec
-from senselab_core.runtime.execution.executor import FaultRecord
-from senselab_core.runtime.execution.job import Job, JobOutcome
+from senselab_core.runtime.execution.executor import FaultRecord, JobRef
+from senselab_core.runtime.execution.job import Failed, Job, JobOutcome
 from senselab_core.runtime.execution.pool_worker import PoolWorker
 from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
-from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.fake_backend import ECHO, FAKE, EchoParams
+from senselab_core.runtime.keys import Call, Placement
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.worker_client import WorkerFatal
-from senselab_worker.faults import ContentFault, InfrastructureFault, ResourceFault, error_record
+from senselab_worker.faults import MAX_TEXT_CHARS, ContentFault, InfrastructureFault, ResourceFault, error_record
 from worker_set_test import _attestation, _model
 
 from pool_worker_test import BROKEN  # isort: skip
@@ -28,7 +29,7 @@ TYPED: dict[str, type[Exception]] = {
     "resource": ResourceFault,
     "infrastructure": InfrastructureFault,
 }
-SRC = next(p for p in Path(__file__).resolve().parents if p.name == "senselab-core") / "src"
+PACKAGES = next(p for p in Path(__file__).resolve().parents if p.name == "packages")
 
 
 def _backend() -> BackendSpec:
@@ -85,8 +86,18 @@ def test_a_load_failure_keeps_its_causes_class_through_every_wrapper(fault: str,
     """Whatever class the backend states at start or load, the wrapper's record carries it, as a typed fault."""
     wrapped = KINDS[kind](TYPED[fault]("stated by the backend"))
     record = FaultRecord.from_exception(wrapped)
-    assert (record.fault, record.gap) == (fault, False)
+    stands = "infrastructure" if fault == "content" else fault
+    assert (record.fault, record.gap, record.load) == (stands, False, True)
     assert record.type == "WorkerLoadFailed" or kind == "client"
+    assert not record.charged
+
+
+@pytest.mark.parametrize("fault", TYPED)
+def test_a_worker_fatal_carries_its_records_class_as_a_load(fault: str) -> None:
+    """`WorkerFatal` is its record's class; a content record is the environment's, since a load is not an item."""
+    fatal = WorkerFatal(error_record(TYPED[fault]("stated")))
+    record = FaultRecord.from_exception(fatal)
+    assert (record.fault, record.load) == ("infrastructure" if fault == "content" else fault, True)
 
 
 def test_a_load_failure_the_table_classified_is_a_gap_of_that_class() -> None:
@@ -105,6 +116,7 @@ def test_a_load_oom_is_a_resource_fault_costing_one_load_and_never_split(tmp_pat
 
     fixture.LOADS.clear()
     fixture.RAISE[:] = [raised]
+    fixture.SUCCEED[:] = [0]
     profile = _profile(quantum_items=8)
     with packaged(registry(BROKEN, worker=OOM_BACKEND, name="broken"), tmp_path / "cache"):
         placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(8)], BROKEN)
@@ -123,13 +135,68 @@ def test_a_load_oom_is_a_resource_fault_costing_one_load_and_never_split(tmp_pat
     }
 
 
+def test_the_message_of_a_record_with_notes_stays_within_the_text_cap() -> None:
+    """The notes `from_exception` appends are cut with the message at `MAX_TEXT_CHARS`."""
+    exc = RuntimeError("m" * MAX_TEXT_CHARS)
+    exc.add_note("n" * 1000)
+    assert len(FaultRecord.from_exception(exc).message) <= MAX_TEXT_CHARS
+
+
 def test_no_fault_record_is_built_from_a_literal_class_outside_the_one_constructor() -> None:
-    """Every `FaultRecord` comes from `of`, `from_exception` or `gap_of`: no `fault=` keyword at a call site."""
+    """Every `FaultRecord` comes from `of`, `from_exception` or `gap_of`: no literal class at a call site.
+
+    A call is a violation when it passes `fault=` to `FaultRecord` (however it is reached) or `cls`, or hands `of` a
+    dict with a literal `"fault"` key; only `executor.py`'s own constructors are exempt.
+    """
     found = []
-    for path in sorted(SRC.rglob("*.py")):
+    for path in sorted(PACKAGES.glob("*/src/**/*.py")):
+        own = path.name == "executor.py" and path.parent.name == "execution"
         for node in ast.walk(ast.parse(path.read_text())):
-            if isinstance(node, ast.Call) and any(k.arg == "fault" for k in node.keywords):
-                name = ast.unparse(node.func)
-                if name in {"FaultRecord", "cls"} and not (path.name == "executor.py" and name == "cls"):
-                    found.append(f"{path.relative_to(SRC)}:{node.lineno}")
+            if not isinstance(node, ast.Call):
+                continue
+            name = ast.unparse(node.func).rpartition(".")[2]
+            keyword = any(k.arg == "fault" for k in node.keywords) and name in {"FaultRecord", "cls"}
+            literal = name == "of" and any(
+                isinstance(key, ast.Constant) and key.value == "fault"
+                for arg in node.args
+                if isinstance(arg, ast.Dict)
+                for key in arg.keys
+            )
+            if (keyword or literal) and not own:
+                found.append(f"{path.relative_to(PACKAGES)}:{node.lineno}")
     assert found == []
+
+
+def test_a_reload_that_runs_out_of_memory_is_a_load_never_split(tmp_path: Path) -> None:
+    """A state the cache evicted reloads inside a request; its OOM fails the claim as one request, a resource load."""
+    from backends import oom_load_backend_fixture as fixture  # noqa: PLC0415 - the module holds what load raises
+    from senselab_core.runtime.execution.pool_worker import Member, bisect  # noqa: PLC0415
+    from senselab_core.runtime.host_worker import HostWorker  # noqa: PLC0415
+    from senselab_worker.model_cache import ModelCache  # noqa: PLC0415
+
+    fixture.LOADS.clear()
+    fixture.SUCCEED[:] = [1]
+    fixture.RAISE[:] = [MemoryError("CUDA out of memory")]
+    cache = ModelCache(2**20)
+    worker = HostWorker(
+        OOM_BACKEND, init={"device": "cpu"}, key=("oom", "a" * 40, "cpu", "fp32"), cache=cache, size_of=lambda _: 1
+    )
+    cache.clear()
+    sizes: list[int] = []
+
+    def send(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:  # noqa: ARG001 - a Send
+        sizes.append(len(jobs))
+        worker.run([{"id": str(i), "inputs": {}} for i in range(len(jobs))], {})
+        raise AssertionError("the reload did not fail")
+
+    members = [
+        Member(
+            "d", i, Job(JobRef(plan_hash="0" * 64, node="n", element=(i,)), Call(ECHO, EchoParams(), {}), {}), f"k{i}"
+        )
+        for i in range(8)
+    ]
+    outcomes = bisect(members, Placement(backend=FAKE, backend_params=FAKE.params(), device="cpu"), send)
+    fixture.SUCCEED[:] = [0]
+    assert sizes == [8] and len(fixture.LOADS) == 2
+    failures = {(o.failure.fault, o.failure.load, o.failure.charged) for o in outcomes if isinstance(o, Failed)}
+    assert failures == {("resource", True, False)}

@@ -100,6 +100,15 @@ def classify(exc: BaseException) -> FaultClass:
     return _classify(exc)[0]
 
 
+def at_load(fault: FaultClass, gap: bool) -> tuple[FaultClass, bool]:
+    """Return the class and gap a fault stated while a model loads has: a content fault is the environment's.
+
+    A load has no item, so it carries no verdict on any item's input: content becomes infrastructure, and a resource
+    or infrastructure class stands.
+    """
+    return (FaultClass.INFRASTRUCTURE if fault is FaultClass.CONTENT else fault), gap
+
+
 def classification(exc: BaseException) -> tuple[FaultClass, bool]:
     """Return the fault class of an exception and whether the fallback table decided it (a gap)."""
     return _classify(exc)

@@ -621,7 +621,7 @@ def test_placement_is_an_event_of_the_one_run_log(tmp_path: Path) -> None:
     written = log.record("placement", None, placement=record)
     log.record("queued", "a")
     [found] = placements(read_events(tmp_path / "run"))
-    assert found == written and found.node is None and found.format == "run-event@2.1"
+    assert found == written and found.node is None and found.format == "run-event@2.2"
     status = status_from(read_events(tmp_path / "run"))
     assert status.counts["queued"] == 1
     assert status_from([written]).last_event_ns is None

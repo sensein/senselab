@@ -91,15 +91,18 @@ spread across a million items.
   - A host-local `flock` token budget per device is the designed next step, adopted when the scale
     ladder shows the need (design §6.4).
 - **A fault's class survives every wrapper (R-287, R-289, R-292, R-257).**
-  - A `WorkerLoadFailed` takes its class and gap from its cause, so a load that ran out of memory is a
-    resource fault and is re-placed on a larger class; it is never split, because a request is split
-    only when it went to a loaded worker (`splits` and the Pool's `whole` agree).
-  - A `FaultRecord` is built by `of` (a wire record), `from_exception` (through `error_record`) or
-    `gap_of(kind, message)`; no call site writes a literal class. The class is `gap_of` and not `gap`
-    because `gap` is a field.
-  - One mapper, `server_fault`, types a server's failure at the client boundary for both server paths:
-    a timeout or connect failure is `ServiceUnavailable` (infrastructure), a 4xx is content, a 503, a 507
-    or a reply naming memory is resource, any other 5xx is infrastructure.
+  - A `WorkerLoadFailed` and a `WorkerFatal` take their class and gap from the record they carry, so a load that ran
+    out of memory is a resource fault and is re-placed on a larger class. Neither is ever split, because a request is
+    split only when it went to a loaded worker; a reload of an evicted state inside a request is a load.
+  - **A load is not an item.** A class stated at load never charges an item: a content fault stated at load is the
+    environment's and counts against it as infrastructure. A resource fault at load that cannot move to a larger
+    class, because none exists or the replacement budget is spent, counts against the environment too and holds it
+    after the usual retries; no item is marked dead. The record says it came from a load (`load`).
+  - A `FaultRecord` is built by `of` (a wire record), `from_exception` (through `error_record`) or `gap_of(kind,
+    message)`, the constructor of a gap; no call site writes a literal class.
+  - One mapper, `server_fault`, types a server's failure at the client boundary for both server paths: a timeout or
+    connect failure, or an HTTP 408, 429 or 503, is `ServiceUnavailable` (infrastructure); another 4xx is content; a 507
+    or a reply naming memory is resource; any other 5xx is infrastructure.
 - **A GPU-only task with no GPU class** in the execution profile fails planning and names the
   node. It never falls back to CPU silently.
 
