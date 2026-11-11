@@ -11,6 +11,10 @@
   is followed, a mutable file is only ever replaced whole by a fresh file renamed over its name, every file
   name written matches a grammar the caller passes, and modes are set only through a
   descriptor (`set_mode`).
+- `StorageDir.publish` makes a write-once file appear whole (staged, fsynced, linked, directory fsynced), and
+  `StorageDir.append` adds one whole record to a log or leaves it as it was. `FileOps` is the seam their system
+  calls go through, so a test can fail any of them (`using_file_ops`). Run state is written through these and
+  `write_atomically` only; `tests/runtime/storage_writes_contract_test.py` refuses any other write under `runtime/`.
 - `StorageDir.dir_now` reads the current time from the filesystem itself, from a fresh probe directory, and writes
   no file.
 - `StorageUnsupported` is a root without a primitive the runtime needs, such as an atomic `mkdir`.
@@ -31,11 +35,11 @@ import stat
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Final, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import Field, StrictBool
 from senselab_worker.ownership import UUID_HEX, remove_owned
@@ -268,6 +272,57 @@ def _owned(name: str, grammar: re.Pattern[str]) -> str:
     if not grammar.fullmatch(path_component(name)):
         raise ValueError(f"{name!r} is not a name this writer owns ({grammar.pattern})")
     return name
+
+
+class FileOps:
+    """The system calls `StorageDir` makes to write: `write`, `fsync`, `link` and `ftruncate`.
+
+    This is the one seam a fault is injected through. A test subclasses it and enters `using_file_ops`; the
+    methods here call the operating system.
+    """
+
+    def write(self, fd: int, data: bytes) -> int:
+        """Write `data` to `fd`; return how many bytes it took."""
+        return os.write(fd, data)
+
+    def fsync(self, fd: int) -> None:
+        """Flush `fd` to stable storage."""
+        os.fsync(fd)
+
+    def link(self, src: str, dst: str, *, src_dir_fd: int, dst_dir_fd: int) -> None:
+        """Hard-link `src` at `dst`, never following a symlink at `src`."""
+        os.link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd, follow_symlinks=False)
+
+    def ftruncate(self, fd: int, length: int) -> None:
+        """Cut `fd` to `length` bytes."""
+        os.ftruncate(fd, length)
+
+
+_FILE_OPS: list[FileOps] = [FileOps()]
+
+
+@contextlib.contextmanager
+def using_file_ops(ops: FileOps) -> Iterator[None]:
+    """Make every `StorageDir` write through `ops` for the block."""
+    _FILE_OPS.append(ops)
+    try:
+        yield
+    finally:
+        _FILE_OPS.pop()
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """Write all of `data` to `fd`, continuing after a short write.
+
+    Raises:
+        OSError: a write failed, or took no bytes (`ENOSPC`).
+    """
+    view = memoryview(data)
+    while view:
+        taken = _FILE_OPS[-1].write(fd, bytes(view))
+        if taken <= 0:
+            raise OSError(errno.ENOSPC, "a write took no bytes")
+        view = view[taken:]
 
 
 class _Naming:
@@ -593,9 +648,74 @@ class StorageDir:
     def write_new(self, name: str, data: bytes, mode: int, *, grammar: re.Pattern[str]) -> None:
         """Create the file `name` holding `data`, fsynced, with `mode` (`open_new`)."""
         with os.fdopen(self.open_new(name, mode, grammar=grammar), "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
+            _write_all(handle.fileno(), data)
+            _FILE_OPS[-1].fsync(handle.fileno())
+
+    def publish(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        grammar: re.Pattern[str],
+        mode: int | None = None,
+        on_exists: Literal["keep", "raise"] = "keep",
+    ) -> bool:
+        """Make `name` hold `data`, complete or absent, and never replace a file already there; return whether it did.
+
+        `data` is written to a temporary and fsynced, linked at `name`, and the directory is fsynced: a reader
+        sees no name before its bytes are on disk, and a kill leaves the name absent or whole. The temporary is
+        removed. With `on_exists="raise"` a file at `name` raises `FileExistsError`; with `"keep"` it is left and
+        False is returned. `mode` is `umask_default_file_mode()` when None.
+
+        Raises:
+            ValueError: `name` does not match `grammar`.
+            FileExistsError: `on_exists` is `"raise"` and `name` exists.
+            OSError: the temporary cannot be written or linked.
+        """
+        _owned(name, grammar)
+        temporary = temporary_name(name)
+        self.write_new(temporary, data, mode if mode is not None else umask_default_file_mode(), grammar=TEMPORARY_NAME)
+        try:
+            self.link(temporary, self, name, grammar=grammar)
+        except FileExistsError:
+            if on_exists == "raise":
+                raise
+            return False
+        finally:
+            self.remove_owned(temporary, pattern=TEMPORARY_NAME)
+        self.fsync()
+        return True
+
+    def append(self, name: str, data: bytes, *, grammar: re.Pattern[str], mode: int | None = None) -> None:
+        """Append `data` to the file `name`, made if missing, as one whole record by this directory's one writer of it.
+
+        A write that takes fewer bytes is continued. If the append cannot finish, the file is cut back to the
+        length it had, so no part of `data` stays, and the error is raised. A file whose last byte is not a newline
+        (a record a kill cut short) is first ended with one, so `data` starts a line of its own.
+
+        Raises:
+            ValueError: `name` does not match `grammar`.
+            OSError: the append failed; the file holds only what it held before.
+        """
+        _owned(name, grammar)
+        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+        with _Naming(self.path / name):
+            fd = os.open(name, flags, mode if mode is not None else 0o644, dir_fd=self.fd)
+        try:
+            size = os.fstat(fd).st_size
+            if size and os.pread(fd, 1, size - 1) != b"\n":
+                data = b"\n" + data
+            try:
+                _write_all(fd, data)
+            except BaseException as err:
+                try:
+                    _FILE_OPS[-1].ftruncate(fd, size)
+                except OSError as cut:
+                    logger.warning("cannot cut %s back to %d after a failed append: %s", self.path / name, size, cut)
+                    err.add_note(f"the file could not be cut back to {size} bytes: {cut}")
+                raise
+        finally:
+            os.close(fd)
 
     def symlink(self, target: str, name: str, *, grammar: re.Pattern[str]) -> None:
         """Create the symlink `name` pointing at `target`."""
@@ -607,7 +727,7 @@ class StorageDir:
         """Hard-link `name` (never followed) at `dst/dst_name`, which must not exist and must match `grammar`."""
         _owned(dst_name, grammar)
         with _Naming(dst.path / dst_name):
-            os.link(path_component(name), dst_name, src_dir_fd=self.fd, dst_dir_fd=dst.fd, follow_symlinks=False)
+            _FILE_OPS[-1].link(path_component(name), dst_name, src_dir_fd=self.fd, dst_dir_fd=dst.fd)
 
     def rename(
         self, name: str, dst: "StorageDir", dst_name: str, *, grammar: re.Pattern[str], replace: bool = False
@@ -663,7 +783,7 @@ class StorageDir:
     def fsync(self) -> None:
         """Sync this directory."""
         with _Naming(self.path):
-            os.fsync(self.fd)
+            _FILE_OPS[-1].fsync(self.fd)
 
     def write_atomically(
         self, name: str, data: bytes, *, grammar: re.Pattern[str], mode: int | None = None
@@ -687,13 +807,13 @@ class StorageDir:
         try:
             with os.fdopen(descriptor, "wb") as handle:
                 set_mode(handle.fileno(), mode if mode is not None else umask_default_file_mode())
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
+                _write_all(handle.fileno(), data)
+                _FILE_OPS[-1].fsync(handle.fileno())
                 written = os.fstat(handle.fileno())
             if self.kind(name) not in (None, "file", "symlink"):
                 self.set_aside(name, None)
             self.rename(temporary, self, name, grammar=grammar, replace=True)
+            self.fsync()
         except BaseException:
             self.remove_owned(temporary, pattern=TEMPORARY_NAME)
             raise
@@ -733,6 +853,20 @@ def write_atomically(target: Path, data: bytes, *, mode: int | None = None) -> N
             if existing is not None and stat.S_ISREG(existing.st_mode):
                 mode = stat.S_IMODE(existing.st_mode)
         directory.write_atomically(target.name, data, grammar=_CALLER_FILE, mode=mode)
+
+
+def publish(
+    target: Path, data: bytes, *, mode: int | None = None, on_exists: Literal["keep", "raise"] = "keep"
+) -> bool:
+    """Publish `data` at the caller's file `target` as `StorageDir.publish` does, beside it; return whether it did.
+
+    Raises:
+        FileExistsError: `on_exists` is `"raise"` and `target` exists.
+        OSError: the temporary cannot be written or linked.
+    """
+    target = Path(target)
+    with StorageDir.open_root(target.parent) as directory:
+        return directory.publish(target.name, data, grammar=_CALLER_FILE, mode=mode, on_exists=on_exists)
 
 
 @runtime_checkable
@@ -958,11 +1092,13 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "ADDRESSED_FORMATS",
     "ASIDE_NAME",
+    "FileOps",
     "StorageDir",
     "WrongKindError",
     "owner_remedy",
     "path_component",
     "private_dir",
+    "publish",
     "probe_capabilities",
     "NAME_MAX",
     "TEMPORARY_NAME",
@@ -982,5 +1118,6 @@ __all__ = [
     "shared_dir_mode",
     "storage_fault",
     "temporary_name",
+    "using_file_ops",
     "write_atomically",
 ]

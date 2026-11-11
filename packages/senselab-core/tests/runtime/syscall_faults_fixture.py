@@ -35,11 +35,11 @@ def fail_at(  # noqa: C901, PLR0913 - one patcher over the five syscalls; the ke
     """Make the next `times` `at` steps on a file whose last path component is `name` raise `err`.
 
     `open` fails the `os.open` itself. `read` and `write` fail the first read or write that reaches the
-    descriptor, through a file object `os.fdopen` returns over it (duplicates included). `fsync` fails
-    `os.fsync` on it. With `creating` True only opens that pass `O_CREAT` count, with False only those
-    that do not. Returns the list each failure appends `name` to.
+    descriptor, through a file object `os.fdopen` returns over it (duplicates included) or through `os.write` on it
+    (`StorageDir`'s writes). `fsync` fails `os.fsync` on it. With `creating` True only opens that pass
+    `O_CREAT` count, with False only those that do not. Returns the list each failure appends `name` to.
     """
-    real_open, real_fdopen, real_fsync = os.open, os.fdopen, os.fsync
+    real_open, real_fdopen, real_fsync, real_write = os.open, os.fdopen, os.fsync, os.write
     inodes: set[tuple[int, int]] = set()
     failed: list[str] = []
 
@@ -100,9 +100,15 @@ def fail_at(  # noqa: C901, PLR0913 - one patcher over the five syscalls; the ke
             fail()
         real_fsync(fd)
 
+    def write(fd: int, data: Any) -> int:  # noqa: ANN401
+        if at == "write" and ours(fd) and due():
+            fail()
+        return real_write(fd, data)
+
     monkeypatch.setattr(os, "open", opened)
     monkeypatch.setattr(os, "fdopen", fdopen)
     monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "write", write)
     return failed
 
 

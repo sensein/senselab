@@ -29,15 +29,12 @@ request that raised a resource fault writes an `oom` record. Each
 class's `placement` event is appended again when its epoch ends, with the work's actuals (`ClassActuals`).
 """
 
-import contextlib
 import itertools
 import json
 import logging
 import math
-import os
 import sys
 import threading
-import uuid
 import weakref
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
@@ -121,6 +118,7 @@ from senselab_core.runtime.site_placement import (
     Placer,
 )
 from senselab_core.runtime.sizing import ExtrapolationLog, Grant, size
+from senselab_core.runtime.storage import publish
 from senselab_core.runtime.store import ResultStore, StoredResult
 from senselab_core.runtime.units import (
     UnitReads,
@@ -823,14 +821,8 @@ class Pool:
         directory = self.run_dir / DEAD_DIR
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{key}.json"
-        staging = directory / f".{key}.{uuid.uuid4().hex}"
         record = {"job": job.model_dump(mode="json"), "key_digest": key, "failure": fault.model_dump(mode="json")}
-        staging.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
-        try:
-            with contextlib.suppress(FileExistsError):
-                os.link(staging, path)
-        finally:
-            staging.unlink()
+        publish(path, json.dumps(record, sort_keys=True).encode())
         held = json.loads(path.read_text(encoding="utf-8"))
         return ResultRef(job=job, key_digest=key, failure=FaultRecord.model_validate(held["failure"]))
 

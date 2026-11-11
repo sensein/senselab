@@ -135,19 +135,6 @@ def _seq(seq: int) -> str:
     return f"{seq:012d}"
 
 
-def _publish(directory: StorageDir, name: str, data: bytes, grammar: re.Pattern[str]) -> bool:
-    """Write `data` at `name` unless something is there; return whether this call wrote it (by hard link)."""
-    temporary = temporary_name(name)
-    directory.write_new(temporary, data, STAGING_FILE_MODE, grammar=TEMPORARY_NAME)
-    try:
-        directory.link(temporary, directory, name, grammar=grammar)
-    except FileExistsError:
-        return False
-    finally:
-        directory.remove_owned(temporary, pattern=TEMPORARY_NAME)
-    return True
-
-
 def _resolve(q: StorageDir, seq: int, n: int, digest: str) -> None:
     """Mark slot `n` of segment `seq` resolved, only when `outcome/<digest>` exists and the slot names `digest`."""
     with q.child("outcome") as outcome:
@@ -413,7 +400,7 @@ class Queue:
             for directory in DIRECTORIES:
                 q.child(directory, create=True, mode=STAGING_DIR_MODE).close()
             if q.lstat("name") is None:
-                _publish(q, "name", name.encode(), NAME_FILE)
+                q.publish("name", name.encode(), grammar=NAME_FILE, mode=STAGING_FILE_MODE)
 
     @contextlib.contextmanager
     def open(self) -> Iterator[StorageDir]:
@@ -452,8 +439,12 @@ class Queue:
         if probe_of(self.name) is None:
             raise ProbeQueueError(f"{self.name!r} is not a probe queue")
         with self.open() as q:
-            _publish(q, "env", jcs_dumps({"backend": backend, "env": dict(env)}), ENV_FILE)
-            _publish(q, "hardware", jcs_dumps(hardware.model_dump(mode="json")), HARDWARE_FILE)
+            q.publish(
+                "env", jcs_dumps({"backend": backend, "env": dict(env)}), grammar=ENV_FILE, mode=STAGING_FILE_MODE
+            )
+            q.publish(
+                "hardware", jcs_dumps(hardware.model_dump(mode="json")), grammar=HARDWARE_FILE, mode=STAGING_FILE_MODE
+            )
 
     def probe_env(self) -> tuple[str, dict[str, object]] | None:
         """Return the backend and env set by `set_probe_unit`; None while none is recorded or it cannot be read."""
@@ -474,7 +465,7 @@ class Queue:
         if probe_of(self.name) is None:
             raise ProbeQueueError(f"{self.name!r} is not a probe queue")
         with self.open() as q:
-            _publish(q, "closed", b"1", CLOSED_FILE)
+            q.publish("closed", b"1", grammar=CLOSED_FILE, mode=STAGING_FILE_MODE)
 
     def probe_closed(self) -> bool:
         """Return whether `close_probe` was called on this queue."""
@@ -500,7 +491,9 @@ class Queue:
             raise ProbeQueueError(f"{self.name!r} is not a probe queue; put production items with `put`")
         digest = item_digest(fragment)
         with self.open() as q, q.child("probe") as probe:
-            _publish(probe, digest, jcs_dumps({"phase": phase, "stratum": stratum}), DIGEST_NAME)
+            probe.publish(
+                digest, jcs_dumps({"phase": phase, "stratum": stratum}), grammar=DIGEST_NAME, mode=STAGING_FILE_MODE
+            )
         self._put_all([fragment])
 
     def probe_mark(self, digest: str) -> tuple[str, int]:
@@ -547,7 +540,12 @@ class Queue:
                     raise TypeError(f"a queue item is a PlanFragment, not {type(fragment).__name__}")
                 digest = item_digest(fragment)
                 if items.lstat(f"{digest}.json") is None:
-                    _publish(items, f"{digest}.json", jcs_dumps(fragment.model_dump(mode="json")), ITEM_NAME)
+                    items.publish(
+                        f"{digest}.json",
+                        jcs_dumps(fragment.model_dump(mode="json")),
+                        grammar=ITEM_NAME,
+                        mode=STAGING_FILE_MODE,
+                    )
                 digests[digest] = len(fragment.jobs)
             return self._index(q, digests)
 

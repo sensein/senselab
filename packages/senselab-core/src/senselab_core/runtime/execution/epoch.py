@@ -17,7 +17,7 @@ from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import Lease, LeaseState
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.storage import StorageDir
+from senselab_core.runtime.storage import StorageDir, publish
 
 EPOCH_DIR = "epoch"
 """The directory of a run's epochs, under its run directory."""
@@ -41,10 +41,7 @@ class StaleCoordinator(RuntimeError):
 
 def _create(path: Path, data: bytes) -> None:
     """Create `path` holding `data` unless something is there."""
-    with contextlib.suppress(FileExistsError):
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(data)
+    publish(path, data)
 
 
 def _bound(lease: JobLease | None) -> bytes:
