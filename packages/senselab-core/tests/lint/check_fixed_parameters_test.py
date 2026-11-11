@@ -39,6 +39,8 @@ def _problems(
         "def f(e):\n    e.wait(2)\n",
         "def f(t):\n    t.join(-1.5)\n",
         "def f(open):\n    open('u', timeout=60)\n",
+        "def f(l):\n    return 2 * l.renew_fraction * l.stale_after_s\n",
+        "def f(l):\n    return l.stale_after_s * 3\n",
     ],
 )
 def test_a_fixed_parameter_fails(source: str) -> None:
@@ -55,6 +57,8 @@ def test_a_fixed_parameter_fails(source: str) -> None:
         "class C:\n    POLL_S = config.poll_s\n",
         "def f(e, s):\n    e.wait(s)\n    e.wait(timeout=0)\n",
         "','.join(['a'])\n",
+        "def f(l):\n    return l.missed_beats * l.renew_fraction * l.stale_after_s\n",
+        "def f(d):\n    return min(d * 2, d.max_s)\n",
     ],
 )
 def test_config_reads_unsuffixed_names_and_zero_waits_pass(source: str) -> None:
@@ -103,4 +107,11 @@ def test_an_entry_without_its_reason_is_refused(tmp_path: Path, section: str, en
 
 def test_the_tree_passes() -> None:
     """Every fixed parameter under packages/*/src is a declared invariant or pending."""
+    assert fp.main() == 0
+
+
+def test_no_fixed_parameter_is_pending() -> None:
+    """Every fixed parameter in package source is config or a declared invariant: `pending` is empty."""
+    _, pending = fp.load_allowed()
+    assert pending == {}
     assert fp.main() == 0

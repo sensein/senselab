@@ -148,7 +148,7 @@ def test_server_backend_starts_over_its_server_not_in_the_env_python(env_python:
         batch_invariant=True,
         worker=fake.WORKER_MODULE,
         load_stub={},
-        server=ServerConfig(settings={}, startup_timeout_s=1.0),
+        server=ServerConfig(settings={}),
     )
     previous = packaged()
     _opened_by([], env_python, server)

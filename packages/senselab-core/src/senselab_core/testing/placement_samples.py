@@ -14,9 +14,12 @@ from senselab_core.runtime.execution_settings import (
     ServiceSettings,
     SizingSettings,
     SlurmCommands,
+    StoreSettings,
     SubstrateSpec,
     SupervisorSettings,
     Timeouts,
+    VllmSettings,
+    WorkerSettings,
 )
 from senselab_core.runtime.site_placement import (
     ClassNeeds,
@@ -30,6 +33,7 @@ from senselab_core.runtime.site_placement import (
     UnmeasuredFigure,
 )
 from senselab_core.runtime.sizing import Basis, Grant, RowSizing, Sample, Sizing
+from senselab_core.testing.leases import packaged_lease
 
 Register = Callable[..., None]
 
@@ -53,6 +57,7 @@ def register_placement_samples(register: Register, license_: License) -> None:
     """Register the samples of every type here through `register` (`values.register_samples`)."""
     _register_kernel(register, license_)
     _register_settings(register)
+    _register_sections(register)
     _register_sizing(register)
     _register_sizings(register)
     _register_site(register)
@@ -102,7 +107,13 @@ def _register_settings(register: Register) -> None:
         ),
         SubstrateSpec: (
             [
-                SubstrateSpec(kind="local", start_backoff_first_s=0.05, start_backoff_max_s=30, placement_hook_s=0.05),
+                SubstrateSpec(
+                    kind="local",
+                    start_backoff_first_s=0.05,
+                    start_backoff_max_s=30,
+                    placement_hook_s=0.05,
+                    stop_grace_s=30,
+                ),
                 SubstrateSpec(
                     kind="slurm",
                     qos_cpu_cap=64,
@@ -111,6 +122,7 @@ def _register_settings(register: Register) -> None:
                     start_backoff_max_s=30,
                     placement_hook="site.hooks:place",
                     placement_hook_s=1,
+                    stop_grace_s=5,
                     commands=SlurmCommands(timeout_s=60, attempts=3, retry_first_s=0.5),
                 ),
             ],
@@ -130,36 +142,6 @@ def _register_settings(register: Register) -> None:
             ],
             [{"timeout_s": 0}, {"attempts": 0}, {"retry_first_s": -1}],
         ),
-        PoolSettings: (
-            [
-                PoolSettings(
-                    quantum_items=100,
-                    quantum_s=300,
-                    poll_s=30,
-                    first_poll_s=0.05,
-                    presence_refresh_s=1,
-                    segment_items=10,
-                    admit_threads=2,
-                ),
-                PoolSettings(
-                    quantum_items=1,
-                    quantum_s=1,
-                    poll_s=0.5,
-                    first_poll_s=0.5,
-                    presence_refresh_s=0.5,
-                    segment_items=1,
-                    admit_threads=1,
-                ),
-            ],
-            [{"poll_s": 0}, {"quantum_items": 0}],
-        ),
-        JobLease: (
-            [
-                JobLease(stale_after_s=300, renew_fraction=0.33, attribute_delay_s=60),
-                JobLease(stale_after_s=0.5, renew_fraction=0.9, attribute_delay_s=0),
-            ],
-            [{"stale_after_s": 0}, {"renew_fraction": 1.0}, {"renew_fraction": 0}, {"attribute_delay_s": -1}],
-        ),
         FaultBudgets: (
             [
                 FaultBudgets(
@@ -171,12 +153,94 @@ def _register_settings(register: Register) -> None:
             ],
             [{"content_attempts": 0}, {"resource_replacements": -1}, {"crashes_charged": 0}],
         ),
-        Timeouts: ([Timeouts(), Timeouts(load_s=60.0, request_s=600.0)], [{"load_s": 0}, {"request_s": -1.0}]),
+        Timeouts: (
+            [Timeouts(fetch_s=60), Timeouts(load_s=60.0, request_s=600.0, fetch_s=0.5)],
+            [{"load_s": 0}, {"request_s": -1.0}, {"fetch_s": 0}],
+        ),
         SupervisorSettings: (
-            [SupervisorSettings(start_time_probe_s=5), SupervisorSettings(start_time_probe_s=0.5)],
-            [{"start_time_probe_s": 0}, {"start_time_probe_s": float("inf")}],
+            [
+                SupervisorSettings(start_time_probe_s=5, reap_poll_s=0.05, exit_bound_s=5),
+                SupervisorSettings(start_time_probe_s=0.5, reap_poll_s=0.5, exit_bound_s=0.5),
+            ],
+            [{"start_time_probe_s": 0}, {"start_time_probe_s": float("inf")}, {"reap_poll_s": 0}, {"exit_bound_s": 0}],
         ),
         ServiceSettings: ([ServiceSettings(idle_exit_s=600), ServiceSettings(idle_exit_s=1.5)], [{"idle_exit_s": 0}]),
+    }
+    for cls, (samples, invalid) in classes.items():
+        register(cls, lambda samples=samples: list(samples), invalid_updates=invalid)
+
+
+def _register_sections(register: Register) -> None:
+    classes: Mapping[type[Frozen], tuple[Sequence[Frozen], Sequence[Mapping[str, object]]]] = {
+        PoolSettings: (
+            [
+                PoolSettings(
+                    quantum_items=100,
+                    quantum_s=300,
+                    poll_s=30,
+                    first_poll_s=0.05,
+                    presence_refresh_s=1,
+                    segment_items=10,
+                    admit_threads=2,
+                    idle_polls=3,
+                    cancel_check_s=0.05,
+                    event_poll_s=0.5,
+                ),
+                PoolSettings(
+                    quantum_items=1,
+                    quantum_s=1,
+                    poll_s=0.5,
+                    first_poll_s=0.5,
+                    presence_refresh_s=0.5,
+                    segment_items=1,
+                    admit_threads=1,
+                    idle_polls=1,
+                    cancel_check_s=0.5,
+                    event_poll_s=0.5,
+                ),
+            ],
+            [{"poll_s": 0}, {"quantum_items": 0}, {"idle_polls": 0}, {"cancel_check_s": 0}, {"event_poll_s": 0}],
+        ),
+        JobLease: (
+            [
+                packaged_lease(300, 0.33, 60),
+                packaged_lease(0.5, 0.9, 0),
+            ],
+            [
+                {"stale_after_s": 0},
+                {"renew_fraction": 1.0},
+                {"renew_fraction": 0},
+                {"attribute_delay_s": -1},
+                {"missed_beats": 0},
+                {"wait_s": 0},
+                {"poll_s": 0},
+                {"remove_attempts": 0},
+                {"record_attempts": 0},
+                {"dir_mode": "rwx"},
+                {"dir_mode": "9770"},
+            ],
+        ),
+        StoreSettings: (
+            [
+                StoreSettings(commit_attempts=3, probe_bound_s=5, probe_poll_s=0.005, clock_tolerance_s=3600),
+                StoreSettings(commit_attempts=1, probe_bound_s=0.5, probe_poll_s=0.5, clock_tolerance_s=1),
+            ],
+            [{"commit_attempts": 0}, {"probe_bound_s": 0}, {"probe_poll_s": 0}, {"clock_tolerance_s": 0}],
+        ),
+        VllmSettings: (
+            [
+                VllmSettings(startup_s=1800, poll_s=0.5, request_s=600, stop_s=60, health_s=5),
+                VllmSettings(startup_s=0.5, poll_s=0.5, request_s=0.5, stop_s=0.5, health_s=0.5),
+            ],
+            [{"startup_s": 0}, {"poll_s": 0}, {"request_s": 0}, {"stop_s": 0}, {"health_s": 0}],
+        ),
+        WorkerSettings: (
+            [
+                WorkerSettings(hello_s=60, leader_probe_s=2, group_poll_max_s=0.05),
+                WorkerSettings(hello_s=0.5, leader_probe_s=0.5, group_poll_max_s=0.5),
+            ],
+            [{"hello_s": 0}, {"leader_probe_s": 0}, {"group_poll_max_s": 0}],
+        ),
     }
     for cls, (samples, invalid) in classes.items():
         register(cls, lambda samples=samples: list(samples), invalid_updates=invalid)

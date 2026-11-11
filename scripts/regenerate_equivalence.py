@@ -1,4 +1,4 @@
-"""Sample verify evidence into a result store, and regenerate `runtime/data/equivalence.yaml` from stores' evidence.
+"""Sample verify evidence into a result store, and regenerate `benchmarks/data/equivalence.yaml` from stores' evidence.
 
 `sample` runs the held-out items of one suite benchmark on `InProcess` under `--reuse` and `--verify`, compared
 under the thresholds of `--config` (a run config merged over the packaged one), against `--store`, and prints how many
@@ -19,7 +19,7 @@ from senselab_core.runtime.equivalence import render
 from senselab_core.runtime.store import ResultStore
 
 ROOT = Path(__file__).resolve().parents[1]
-TABLE = ROOT / "packages" / "senselab-core" / "src" / "senselab_core" / "runtime" / "data" / "equivalence.yaml"
+TABLE = ROOT / "benchmarks" / "data" / "equivalence.yaml"
 HELDOUT = "heldout"
 
 

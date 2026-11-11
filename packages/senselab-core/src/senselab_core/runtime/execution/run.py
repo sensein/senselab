@@ -50,7 +50,7 @@ from senselab_core.runtime.execution.executor import Executor, FaultRecord
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.telemetry import Actuals, Placements
-from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.execution_settings import JobLease, PoolSettings
 from senselab_core.runtime.licenses import LicensePolicy, laxer_than, policy_digest, policy_document, policy_of
 from senselab_core.runtime.locks import Lease, LeaseUnavailable
 from senselab_core.runtime.planner import Plan, check_storage
@@ -73,10 +73,6 @@ RESULTS_DIR = "results"
 """The default result store, `<cache root>/results`."""
 ATTEMPTS_DIR = "attempts"
 POOL_DIRS = ("dead", "prov", RUN_QUEUES, EPOCH_DIR)
-POLL_S = 0.5
-"""Seconds between reads of the event log while `Run.wait` waits for a run another process drives."""
-RECORD_ATTEMPTS = 3
-"""Times the merge of `inputs.json` is taken again after its lease failed its proof."""
 _LIST = re.compile(r"^list\[(.+)\]$")
 
 logger = logging.getLogger("senselab")
@@ -518,11 +514,16 @@ class Run:
         run_dir: Path,
         *,
         store: ResultStore | None = None,
+        pool: PoolSettings | None = None,
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
-        """Open the run in `run_dir`; `wait` and its liveness reads are timed on `clock`."""
+        """Open the run in `run_dir`; `wait` and its liveness reads are timed on `clock`.
+
+        `pool` is the profile's pool section, whose `event_poll_s` paces `wait`; None reads the packaged profile's.
+        """
         self.run_dir = Path(run_dir)
         self._store, self._clock = store, clock
+        self._pool = pool if pool is not None else ExecutionProfile.packaged().pool
         self._thread: threading.Thread | None = None
         self._ended = threading.Event()
         self._cancel = threading.Event()
@@ -561,11 +562,12 @@ class Run:
         """Return the run's current epoch, None where none was taken."""
         return Epoch(self.run_dir).current() or None
 
-    def wait(self, timeout: float | None = None, *, poll: float = POLL_S) -> RunStatus:
+    def wait(self, timeout: float | None = None, *, poll: float | None = None) -> RunStatus:
         """Wait up to `timeout` seconds for the run to be done and return its status.
 
         A run started here is waited on through its thread; any run is then polled, reading the event log every `poll`
-        seconds, until its events say it is done, so a run another process drives can be waited for. While no thread of
+        seconds (`pool.event_poll_s` by default), until its events say it is done, so a run another process drives
+        can be waited for. While no thread of
         this `Run` is alive, a run whose latest coordinator ended or whose lease is past its stale bound
         (`Epoch.stopped`), with no live claim on any of its queues, is not waited for further: its status is returned
         with `interrupted` set.
@@ -573,6 +575,7 @@ class Run:
         Raises:
             BaseException: the error that stopped a run started here, other than its cancellation.
         """
+        poll = self._pool.event_poll_s if poll is None else poll
         deadline = None if timeout is None else self._clock.now() + timeout
         thread = self._thread
         if thread is not None:
@@ -819,7 +822,7 @@ def record_sources(placed: Plan, run_dir: Path) -> None:
     The lease, kept alive under the run's lease (`run_lease`, with the plan's profile's `lease` section among its
     epochs), is proven before the write, so two coordinators
     starting one plan merge one after the other and neither loses a durable source. A merge whose proof failed is
-    made again, up to `RECORD_ATTEMPTS` times.
+    made again, up to `lease.record_attempts` times.
 
     Raises:
         ConflictingSources: as `merged_sources`; nothing is written.
@@ -828,8 +831,8 @@ def record_sources(placed: Plan, run_dir: Path) -> None:
     """
     lease = run_lease(run_dir, own=_lease_of(placed))
     private_dir(run_dir / PRIVATE_DIR)
-    for _ in range(RECORD_ATTEMPTS):
-        held = Lease(run_dir / INPUTS_FILE, stale_after=lease.stale_after_s)
+    for _ in range(lease.record_attempts):
+        held = Lease(run_dir / INPUTS_FILE, settings=lease)
         with held, held.keep_alive(lease.renew_fraction):
             sources = merged_sources(placed, run_dir)
             if held.prove():
@@ -1011,7 +1014,7 @@ def start(
     own = _lease_of(placed)
     lease = checked_lease(run_dir, own, delay)
     runner = PydraRunner(profile=placed.execution, work_dir=run_dir / PYDRA_DIR)
-    run = Run(run_dir, store=store)
+    run = Run(run_dir, store=store, pool=None if placed.execution is None else placed.execution.pool)
     written = provenance if store is None else store.provenance
     epochs = Epoch(run_dir)
     held, epoch, log = _open(run_dir, (placed, executor, written), (attempt, ordinal), (own, lease))

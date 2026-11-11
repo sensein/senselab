@@ -18,14 +18,12 @@ from hypothesis import strategies as st
 from lease_clock_fixture import ManualClock
 from lease_time_fixture import install, on_create
 from planted_objects_fixture import BAD_ATTEMPT_IDS, LEASE, NAME_BOUND_S, UNOPENABLE_NAMES, bounded
-from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.revision import (
     MANIFEST_NAME,
     NAMESPACE,
-    RECORD_ATTEMPTS,
     Resolver,
     RevisionResolutionError,
     choose_attempt_id,
@@ -37,6 +35,7 @@ from senselab_core.runtime.revision import (
     resolve_revision,
 )
 from senselab_core.runtime.storage import NAME_MAX, StorePolicy
+from senselab_core.testing.leases import packaged_lease
 from syscall_faults_fixture import displace_after_take, displace_before_proof, pause_replaces
 
 FIRST_BACKOFF_S = 2.0
@@ -535,11 +534,11 @@ def test_attempt_id_over_name_max_refused(tmp_path: Path) -> None:
 
 @pytest.mark.logic
 def test_a_lease_displaced_on_every_take_is_a_typed_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A holder displaced on each of `RECORD_ATTEMPTS` takes raises `LeaseUnavailable` and writes nothing."""
+    """A holder displaced on each of `lease.record_attempts` takes raises `LeaseUnavailable` and writes nothing."""
     displaced = displace_after_take(monkeypatch, f"{MANIFEST_NAME}.lease")
     with pytest.raises(LeaseUnavailable, match="displaced"):
         record_resolution("org/m", "main", SHA_A, run="r", root=tmp_path)
-    assert len(displaced) == RECORD_ATTEMPTS
+    assert len(displaced) == ExecutionProfile.packaged().lease.record_attempts
     assert read_manifest("r", root=tmp_path) == {}
 
 
@@ -613,7 +612,7 @@ def test_run_manifest_modes_do_not_depend_on_the_umask(tmp_path: Path, umask: st
 
 @pytest.mark.logic
 @pytest.mark.parametrize("plant", ["symlink", "dangling"])
-def test_the_lease_of_a_run_manifest_never_follows_a_planted_symlink(tmp_path: Path, plant: str) -> None:
+def test_the_packaged_lease_a_run_manifest_never_follows_a_planted_symlink(tmp_path: Path, plant: str) -> None:
     """A symlink at a run manifest's lease is neither chmodded nor created through."""
     report = bounded("probe_record_with_plant", str(tmp_path), LEASE, plant)
     assert report["error"] == "" and report["recorded"]
@@ -669,7 +668,7 @@ def test_the_manifest_lease_outlasts_its_stale_bound_while_it_beats(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Before the manifest write the storage clock passes the stale bound; the lease beats, is never broken, writes."""
-    lease = JobLease(stale_after_s=30, renew_fraction=0.01, attribute_delay_s=0)
+    lease = packaged_lease(30, 0.01, 0)
     clock = install(monkeypatch)
     run_dir = manifest_path("r", root=tmp_path).parent
     on_create(monkeypatch, f".{MANIFEST_NAME}.", lambda: clock.outlast(run_dir, lease.stale_after_s))
@@ -686,5 +685,5 @@ def test_a_holder_displaced_just_before_its_commit_does_not_write(
     displaced = displace_before_proof(monkeypatch, f"{MANIFEST_NAME}.lease")
     with pytest.raises(LeaseUnavailable, match="displaced"):
         record_resolution("org/m", "main", SHA_A, run="r", root=tmp_path)
-    assert len(displaced) == RECORD_ATTEMPTS
+    assert len(displaced) == ExecutionProfile.packaged().lease.record_attempts
     assert read_manifest("r", root=tmp_path) == {}

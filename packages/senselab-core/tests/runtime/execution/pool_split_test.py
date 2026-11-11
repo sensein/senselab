@@ -617,7 +617,7 @@ def _run_cancelled(  # noqa: PLR0913 - the plan and its gate, then the cancel an
         while not noticed.is_set():
             assert time.monotonic() < guard, "the runner did not notice the cancel"
             if clock.is_parked(follower):
-                clock.advance(runner.CANCEL_CHECK_S)
+                clock.advance(profile.pool.cancel_check_s)
             noticed.wait(clock.poll_s)
         after = clock.now()
     finally:
@@ -625,7 +625,7 @@ def _run_cancelled(  # noqa: PLR0913 - the plan and its gate, then the cancel an
         thread.join(clock.hang_s)
         gated.release.set()
     assert len(ended) == 1 and isinstance(ended[0], runner.RunCancelled)
-    assert after - before <= runner.CANCEL_CHECK_S + clock.step_s
+    assert after - before <= profile.pool.cancel_check_s + clock.step_s
 
 
 @pytest.mark.contract

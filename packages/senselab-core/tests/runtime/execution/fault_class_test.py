@@ -55,9 +55,7 @@ def _server_load_failure(raised: Exception) -> WorkerLoadFailed:
     def start(*_: object) -> object:
         raise raised
 
-    backend = _backend().model_copy(
-        update={"env": Env.server("s"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
-    )
+    backend = _backend().model_copy(update={"env": Env.server("s"), "server": ServerConfig(settings={})})
     model, profile = _model("b" * 40), ExecutionProfile.load()
     with pytest.raises(WorkerLoadFailed) as caught:
         with WorkerSet(1, start_server=start).checkout(  # type: ignore[arg-type]

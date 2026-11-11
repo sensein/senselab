@@ -687,7 +687,7 @@ def check_storage(
         if probe is not None:
             found = probe(root)
         else:
-            found = _PROBED.get(root) or _PROBED.setdefault(root, probe_capabilities(root))
+            found = _PROBED.get(root) or _PROBED.setdefault(root, probe_capabilities(root, settings=profile.store))
         found.require(root)
         delay = max(delay, found.attribute_delay_s)
     profile.lease.model_copy(update={"attribute_delay_s": delay}).check_bound()

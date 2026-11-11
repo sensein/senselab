@@ -52,7 +52,7 @@ ENVELOPE: dict[str, int] = {"line": 0, "init": 1, "params": 1, "inputs": 3, "out
 ARRAY_KEY = "__array__"
 ARRAY_REF_HEIGHT = 3
 """Containers in an array reference: the `__array__` object, the reference object, its `shape` list."""
-READ_CHUNK_BYTES = 2**20
+READ_CHUNK_BYTES: Final = 2**20  # invariant: the size of one file read; no outcome depends on it
 
 
 class Deadline:

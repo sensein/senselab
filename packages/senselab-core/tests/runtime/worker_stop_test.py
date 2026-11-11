@@ -15,6 +15,7 @@ import pytest
 from lease_clock_fixture import Called, ManualClock
 from lifecycle_probes_fixture import Gate, gate, recorded_pids
 from senselab_core.runtime import worker_client
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.worker_client import (
     ShutdownGraces,
     WorkerClient,
@@ -31,6 +32,8 @@ pytestmark = pytest.mark.usefixtures("no_leaked_processes")
 
 REQUEST_TIMEOUT_S = 8.0
 """A request timeout on the test clock, which a test reaches by advancing it."""
+
+LEADER_PROBE_S = ExecutionProfile.packaged().worker.leader_probe_s
 
 
 STOP_STEP_S = 1.0
@@ -321,7 +324,7 @@ def _probe_fails(monkeypatch: pytest.MonkeyPatch, how: str) -> list[float]:
         if argv[0] != worker_client._PS:
             return real_run(argv, **kwargs)
         timeout = kwargs["timeout"]
-        assert isinstance(timeout, float) and timeout <= worker_client.LEADER_PROBE_TIMEOUT_S
+        assert isinstance(timeout, float) and timeout <= LEADER_PROBE_S
         calls.append(timeout)
         if how == "missing":
             raise FileNotFoundError(2, "No such file or directory", argv[0])
@@ -358,7 +361,7 @@ def test_linux_without_waitid_falls_back(monkeypatch: pytest.MonkeyPatch) -> Non
     exited = threading.Event()
     assert worker_client._exit_seen(os.getpid(), exited) is False
     exited.set()
-    assert worker_client._leader_held(os.getpid(), exited, worker_client.LEADER_PROBE_TIMEOUT_S) is None
+    assert worker_client._leader_held(os.getpid(), exited, LEADER_PROBE_S) is None
     assert len(calls) == 1
 
 
@@ -435,3 +438,41 @@ def test_a_sleep_on_a_clock_that_never_advances_yields_until_the_guard(lease_clo
             clock.sleep(1.0)
     assert time.process_time() - cpu < (time.monotonic() - wall) / 2
     clock.tripped.clear()
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("hello_s", [3.0, 9.0])
+def test_a_worker_that_never_says_hello_is_given_hello_s(
+    array_parent: Path, backends_importable: None, hang_s: float, hello_s: float
+) -> None:
+    """The first wait of a client for its worker is `worker.hello_s`, on the client's clock."""
+    waits: list[float] = []
+
+    class Clock(ManualClock):
+        def wait(self, event: threading.Event, timeout: float) -> bool:
+            waits.append(timeout)
+            return super().wait(event, timeout)
+
+    clock = Clock(poll_s=0.01, hang_s=hang_s, waits="spend")
+    settings = ExecutionProfile.packaged().worker.model_copy(update={"hello_s": hello_s})
+    with pytest.raises(worker_client.ProtocolMismatch, match=r"\(wire, runtime\) = None"):
+        WorkerClient(
+            PYTHON, "backends.silent_import_fixture", init={}, array_parent=array_parent, settings=settings, clock=clock
+        )
+    assert waits[0] == hello_s
+
+
+@pytest.mark.logic
+def test_the_leader_probe_waits_leader_probe_s(
+    array_parent: Path, monkeypatch: pytest.MonkeyPatch, lease_clock: Callable[..., ManualClock], tier_bound: float
+) -> None:
+    """Where `ps` is asked for the leader, it is asked within `worker.leader_probe_s`."""
+    settings = ExecutionProfile.packaged().worker.model_copy(update={"leader_probe_s": 0.7})
+    clock = lease_clock(spends=False)
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=array_parent, settings=settings, clock=clock)
+    os.kill(client.hello["pid"], signal.SIGKILL)
+    assert client.wait_exited(tier_bound)
+    calls = _probe_fails(monkeypatch, "missing")
+    _record_killpg(monkeypatch, clock)
+    client.close()
+    assert calls and set(calls) == {0.7}

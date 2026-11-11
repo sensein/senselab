@@ -1,7 +1,5 @@
 format: server-settings@1.0
 # derivation:
-#   startup_timeout_s: the bound of the H100 server test of the catalogue's 31B model (1800 s); a load that is
-#   not healthy by then is a failed start, not a slow one.
 #   max_model_len: 8192 = a prompt of 6144 tokens (the instruction, the categories and a text of about 4500 words)
 #   plus the 2048 tokens of `engine.MAX_NEW_TOKENS` the answer may take. A longer text is refused by the server
 #   and reaches the caller as that item's typed fault. Not measured: the e801bc6c ladder (job 28262080) records
@@ -20,7 +18,6 @@ format: server-settings@1.0
 #   flashinfer_sampler: false. FlashInfer's top-k/top-p sampler compiles its kernel at start-up with the CUDA
 #   toolkit's nvcc, which the locked env does not put on the path; the H100 start of job 27603492 exited on
 #   "Could not find nvcc". vLLM's own sampler needs no compiler, and the backend requests greedy decoding.
-startup_timeout_s: 1800
 settings:
   max_model_len: 8192
   max_num_seqs: 8

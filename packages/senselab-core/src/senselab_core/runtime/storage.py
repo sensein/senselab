@@ -45,14 +45,16 @@ from pydantic import Field, StrictBool
 from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel._base import Frozen
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import load_yaml
+from senselab_core.runtime.execution_settings import StoreSettings
 from senselab_core.runtime.faults import is_transient
 
 logger = logging.getLogger("senselab")
 
 POLICY_FORMAT = "store-policy@2.0"
-STAGING_FILE_MODE = 0o660
-STAGING_DIR_MODE = 0o2770
+STAGING_FILE_MODE: Final = 0o660  # invariant: a staged file is owner and group read-write so a shared root works
+STAGING_DIR_MODE: Final = 0o2770  # invariant: a staged directory is group-sticky read-write-search, narrowed at commit
 PRIVATE_DIR_MODE: Final = 0o700  # invariant: owner-only access, whatever the site's group policy
 """The mode of a `Staging` directory that only this process's user can write."""
 PRIVATE_DIR = "private"
@@ -983,13 +985,6 @@ def private_dir(path: Path) -> Path:
     return path
 
 
-PROBE_BOUND_S = 5.0
-"""Seconds `probe_capabilities` waits for a directory's mtime to show a change before it judges the clock."""
-PROBE_POLL_S = 0.005
-"""Seconds between the probe's reads of a directory's mtime."""
-_CLOCK_TOLERANCE_S = 3600.0
-
-
 @dataclass(frozen=True)
 class StorageCapabilities:
     """What a root does, as measured: the primitives its leases and queues need, and its attribute delay.
@@ -1031,31 +1026,45 @@ def _refused(call: Callable[[], object], *errnos: int) -> bool:
     return False
 
 
-def _mtime_after_entry(work: Path) -> tuple[bool, float]:
-    """Return whether a new entry moves `work`'s mtime to the present, and the seconds until it showed."""
+def _mtime_after_entry(work: Path, settings: StoreSettings, clock: Clock) -> tuple[bool, float]:
+    """Return whether a new entry moves `work`'s mtime to the present, and the seconds until it showed.
+
+    The wait is bounded by `settings.probe_bound_s` and polled every `settings.probe_poll_s` on `clock`, and the mtime
+    is judged the present within `settings.clock_tolerance_s` of the host's clock.
+    """
     old = time.time() - 86400
     os.utime(work, (old, old))
     before = work.stat().st_mtime_ns
     (work / "entry").write_bytes(b"")
-    began = time.monotonic()
+    began = clock.now()
     while True:
         now = work.stat()
         if now.st_mtime_ns != before:
-            return abs(now.st_mtime - time.time()) < _CLOCK_TOLERANCE_S, time.monotonic() - began
-        if time.monotonic() - began >= PROBE_BOUND_S:
-            return False, PROBE_BOUND_S
-        time.sleep(PROBE_POLL_S)
+            return abs(now.st_mtime - clock.local_now()) < settings.clock_tolerance_s, clock.now() - began
+        if clock.now() - began >= settings.probe_bound_s:
+            return False, settings.probe_bound_s
+        clock.sleep(settings.probe_poll_s)
 
 
-def probe_capabilities(root: Path) -> StorageCapabilities:
+def probe_capabilities(
+    root: Path,
+    *,
+    settings: StoreSettings | None = None,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
+) -> StorageCapabilities:
     """Measure `root` itself: `mkdir`, directory and file rename, `link` and the directory mtime, in a probe directory.
 
-    A root that does not exist yet is judged by its nearest existing ancestor. The probe directory is removed.
+    A root that does not exist yet is judged by its nearest existing ancestor. The probe directory is removed. The
+    mtime wait runs on `clock` under `settings` (the packaged profile's `store` section when None).
 
     Raises:
         StorageUnsupported: `mkdir` is refused as an operation the filesystem does not support.
         OSError: the root cannot be written.
     """
+    if settings is None:
+        from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - profiles import this module
+
+        settings = ExecutionProfile.packaged().store
     base = Path(root)
     while not base.exists():
         base = base.parent
@@ -1087,7 +1096,7 @@ def probe_capabilities(root: Path) -> StorageCapabilities:
             exclusive_link = _refused(lambda: os.link(work / "b", work / "c"), errno.EEXIST)
         except OSError:
             exclusive_link = False
-        server_clock, delay = _mtime_after_entry(work)
+        server_clock, delay = _mtime_after_entry(work, settings, clock)
         return StorageCapabilities(atomic_mkdir, directory_rename, server_clock, replaced, exclusive_link, delay)
     finally:
         shutil.rmtree(work, ignore_errors=True)

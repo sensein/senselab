@@ -211,7 +211,7 @@ class Epoch:
             LeaseTimeout: another coordinator holds epoch `n`.
         """
         directory = self.root / str(n)
-        held = Lease(directory / COORDINATOR, timeout=0, stale_after=lease.stale_after_s, clock=self._clock)
+        held = Lease(directory / COORDINATOR, settings=lease, timeout=0, clock=self._clock)
         try:
             with held, held.keep_alive(lease.renew_fraction) as state:
                 yield state
@@ -238,7 +238,7 @@ class Epoch:
                 bound = combined([])
         else:
             bound = run_lease(self.root.parent)
-        age = Lease(directory / COORDINATOR, stale_after=bound.stale_after_s, clock=self._clock).age()
+        age = Lease(directory / COORDINATOR, settings=bound, clock=self._clock).age()
         if age is None:
             with StorageDir.open_root(self.root) as opened:
                 age = self._clock.storage_now(opened) - directory.stat().st_mtime

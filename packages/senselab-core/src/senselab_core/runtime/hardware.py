@@ -28,7 +28,6 @@ logger = logging.getLogger("senselab")
 
 MIB: Final = 1024 * 1024  # invariant: bytes in a mebibyte
 _KIB: Final = 1024  # invariant: bytes in a kibibyte, the unit of Linux ru_maxrss
-_GPU_QUERY_TIMEOUT_S = 30.0
 _NVIDIA_SMI_FIELDS = "index,uuid,name,memory.total,driver_version"
 _NVIDIA_SMI_FORMAT = "--format=csv,noheader,nounits"
 _NVIDIA_SMI_GPU_QUERY = ["nvidia-smi", f"--query-gpu={_NVIDIA_SMI_FIELDS},compute_cap", _NVIDIA_SMI_FORMAT]
@@ -93,9 +92,16 @@ class HardwareInfo:
     cpu_model: Optional[str] = None
 
 
-def _run(cmd: list[str]) -> str:
-    """Run ``cmd`` and return its stdout; raise on a missing binary, a timeout or a non-zero exit."""
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=_GPU_QUERY_TIMEOUT_S, check=True).stdout
+def _run(cmd: list[str], timeout_s: Optional[float] = None) -> str:
+    """Run ``cmd`` and return its stdout; raise on a missing binary, a timeout or a non-zero exit.
+
+    The wait is bounded by ``timeout_s`` seconds, the packaged profile's ``sizing.device_query_s`` when None.
+    """
+    if timeout_s is None:
+        from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - profiles import this module
+
+        timeout_s = ExecutionProfile.packaged().sizing.device_query_s
+    return _bounded(cmd, timeout_s)
 
 
 def _parse_gpus(output: str, *, with_capability: bool) -> tuple[GpuInfo, ...]:
@@ -208,15 +214,20 @@ def process_cpus(
 
 def probe_hardware(
     *,
-    run: Callable[[list[str]], str] = _run,
+    timeout_s: Optional[float] = None,
+    run: Optional[Callable[[list[str]], str]] = None,
     cpuinfo: Callable[[], str] = _read_cpuinfo,
     cpus: Callable[[], int] = process_cpus,
 ) -> HardwareInfo:
     """Probe CPU, memory, GPUs, Apple chip and platform; never imports ``torch``.
 
     ``run`` executes a command (the ``nvidia-smi`` query, ``sysctl`` on Apple silicon) and returns
-    stdout; ``cpuinfo`` reads ``/proc/cpuinfo``; ``cpus`` counts the process's CPUs; tests inject all three.
+    stdout, by default bounded by ``timeout_s`` seconds (the packaged profile's ``sizing.device_query_s`` when
+    None), raising on a missing binary, a timeout or a non-zero exit; ``cpuinfo`` reads ``/proc/cpuinfo``;
+    ``cpus`` counts the process's CPUs; tests inject all three.
     """
+    if run is None:
+        run = functools.partial(_run, timeout_s=timeout_s)
     system = platform.system()
     machine = platform.machine()
     gpus, gpu_error = _probe_gpus(run)

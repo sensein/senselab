@@ -18,6 +18,7 @@ URLs are fetched, redirects included.
 """
 
 import errno
+import functools
 import json
 import logging
 import os
@@ -253,10 +254,14 @@ def _https_opener() -> urllib.request.OpenerDirector:
     return opener
 
 
-def _urlopen(url: str) -> BinaryIO:
-    """Open `url` over `https`; raise `FetchError` before connecting if its scheme is not allowed."""
+def _urlopen(url: str, timeout_s: float) -> BinaryIO:
+    """Open `url` over `https`, waiting `timeout_s` seconds on the connection.
+
+    Raises:
+        FetchError: the scheme is not allowed, before any connection is made.
+    """
     _require_https(url)
-    return _https_opener().open(url, timeout=60)  # type: ignore[no-any-return]
+    return _https_opener().open(url, timeout=timeout_s)  # type: ignore[no-any-return]
 
 
 def _offline(url: str) -> BinaryIO:
@@ -685,6 +690,7 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
     policy: StorePolicy | None = None,
     retry: RetryPolicy | None = None,
     network: Network = "online",
+    timeout_s: float | None = None,
     clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> dict[str, Path]:
     """Download every file of `manifest` into the cache and return `{file path: path under datasets/.../files/}`.
@@ -693,7 +699,8 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
     `BlobStamp` (size, mtime, inode, ctime) equals the one recorded when its dataset was completed; `"full"`,
     and any other blob, re-hashes it. A download streams to `tmp/<uuid>`, is bounded by the declared
     size, is hashed, and is linked into `blobs/<sha256>` only on a match (first writer wins); a transfer
-    that fails transiently is retried under `retry` (the packaged `laptop` profile's when None), and on a
+    that fails transiently is retried under `retry` (the packaged `laptop` profile's when None), a request waits
+    `timeout_s` seconds (its `timeouts.fetch_s` when None), and on a
     mismatch or failed transfer the next mirror is tried. When every link is in place
     `datasets/<name>@<version>/.complete` records the dataset, the manifest digest and the blob stamps;
     it is rewritten when a stamp has changed, so a repaired blob is trusted again by size. The marker also
@@ -713,7 +720,11 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
     policy = policy if policy is not None else StorePolicy.load_default()
     retry = retry if retry is not None else ExecutionProfile.load().retry
     dir_mode = shared_dir_mode(policy)
-    open_url = opener if opener is not None else _urlopen
+    if opener is not None:
+        open_url = opener
+    else:
+        bound = timeout_s if timeout_s is not None else ExecutionProfile.packaged().timeouts.fetch_s
+        open_url = functools.partial(_urlopen, timeout_s=bound)
     if network == "offline":
         open_url = _offline
     root = Path(cache_root)

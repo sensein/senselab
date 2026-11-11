@@ -16,6 +16,9 @@ def test_a_grant_takes_device_memory_on_a_device_and_host_memory_otherwise() -> 
         presence_refresh_s=30,
         segment_items=512,
         admit_threads=8,
+        idle_polls=3,
+        cancel_check_s=0.05,
+        event_poll_s=0.5,
     )
     capped = ResourceClass(device="cuda", max_workers=4, mem_bytes=2**36, memory_cap_bytes=2**33, time_s=60)
     assert Grant.of(capped, pool, on_device=True).model_dump() == {

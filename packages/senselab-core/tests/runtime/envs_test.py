@@ -37,8 +37,8 @@ from senselab_core.runtime.envs import (
     read_lock_inputs,
 )
 from senselab_core.runtime.execution_settings import JobLease
-from senselab_core.runtime.locks import POLL_S
-from senselab_core.runtime.profiles import Envs
+from senselab_core.runtime.profiles import Envs, ExecutionProfile
+from senselab_core.testing.leases import packaged_lease
 from senselab_worker.digest import identity_digest
 from syscall_faults_fixture import displace_before_proof
 
@@ -49,7 +49,8 @@ CUDA_12_8 = HostCuda((12, 8), "nvidia-smi")
 PROFILE_INDEX = "https://mirror.example/whl/cu126"
 MIRROR = "https://user:secret@mirror.internal/whl/cu128"
 SETTINGS = Envs(server_start_margin_s=1.0)
-LEASE = JobLease(stale_after_s=30.0, renew_fraction=0.01, attribute_delay_s=0)
+POLL_S = ExecutionProfile.packaged().lease.poll_s
+LEASE = packaged_lease(30.0, 0.01, 0)
 
 
 def _lock(
@@ -345,11 +346,11 @@ def test_profile_lease_bound_breaks_an_expired_build_lease(
     """The profile's `lease.stale_after_s` reaches the build lease: older is broken at once, younger is waited out."""
     clock = lease_clock(storage_root=tmp_path)
     _plant_lease(tmp_path, clock, age_s=120.0)
-    old = JobLease(stale_after_s=60.0, renew_fraction=0.33, attribute_delay_s=0)
+    old = packaged_lease(60.0, 0.33, 0)
     _ensure(tmp_path, _lock(tmp_path), lease=old, clock=clock)
     assert clock.slept == [], "an expired lease is broken without a wait"
     lease = _plant_lease(tmp_path, clock, age_s=0.0)
-    young = JobLease(stale_after_s=1.0, renew_fraction=0.33, attribute_delay_s=0)
+    young = packaged_lease(1.0, 0.33, 0)
     _ensure(tmp_path, _lock(tmp_path, body="scipy==1.14.0\n"), lease=young, clock=clock)
     assert young.stale_after_s <= clock.now() < young.stale_after_s + 2 * POLL_S, "held until it aged past its bound"
     assert not lease.exists()

@@ -30,11 +30,12 @@ from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
+from senselab_core.testing.leases import packaged_lease
 
 pytestmark = pytest.mark.logic
 
-SLOW = JobLease(stale_after_s=3600.0, renew_fraction=0.3, attribute_delay_s=0.0)
-FAST = JobLease(stale_after_s=300.0, renew_fraction=0.2, attribute_delay_s=1.0)
+SLOW = packaged_lease(3600.0, 0.3, 0.0)
+FAST = packaged_lease(300.0, 0.2, 1.0)
 AGE_S = 400.0
 TASK = scoring("run_lease_test.score")
 WORKERS = WorkerSet(1)
@@ -95,7 +96,7 @@ def test_the_run_lease_combines_by_the_longest_bound_and_the_shortest_renewal(tm
     _epochs(run_dir, SLOW, FAST)
     found = run_lease(run_dir)
     assert (found.stale_after_s, found.renew_fraction, found.attribute_delay_s) == (3600.0, 0.2, 1.0)
-    longer = JobLease(stale_after_s=7200.0, renew_fraction=0.1, attribute_delay_s=0.0)
+    longer = packaged_lease(7200.0, 0.1, 0.0)
     assert run_lease(run_dir, own=longer).stale_after_s == 7200.0
     queue = QueueSet.for_run(run_dir).queue("cpu")
     queue.put(fragment("x"))

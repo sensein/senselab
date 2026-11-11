@@ -277,12 +277,11 @@ class Env(Frozen):
 class ServerConfig(Frozen):
     """How a server backend's engine runs.
 
-    `settings` are the keys `vllm_server.server_args` reads; `startup_timeout_s` is the seconds the engine has to
-    become healthy.
+    `settings` are the keys `vllm_server.server_args` reads. How long the engine has to become healthy is the
+    profile's `vllm.startup_s`, not a property of the backend.
     """
 
     settings: Params
-    startup_timeout_s: float = Field(gt=0)
 
 
 TunableValue = bool | int | float | str

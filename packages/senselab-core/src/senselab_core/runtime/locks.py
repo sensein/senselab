@@ -45,6 +45,7 @@ from typing import Any, Optional
 from senselab_worker.ownership import UUID_HEX
 
 from senselab_core.runtime.clock import Clock, SystemClock
+from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.storage import StorageDir, WrongKindError, owner_remedy, path_component
 
 logger = logging.getLogger("senselab")
@@ -65,16 +66,6 @@ CLAIM_NAME = re.compile(r"^claim-[0-9a-f]{32}$")
 """A claimed lease with no token, being removed."""
 PROOF_NAME = re.compile(r"^proof-[0-9a-f]{32}$")
 """A directory `Lease.prove` makes and removes in a holder's token directory."""
-LEASE_DIR_MODE = 0o2770
-"""The default mode of a lease directory and of its token directory."""
-TIMEOUT_S = 600.0
-"""The default bound, in seconds, on a wait for a lease."""
-STALE_AFTER_S = 120.0
-"""The default age, in seconds on the storage clock, after which a lease is stale."""
-POLL_S = 0.05
-"""Seconds between two attempts to take a lease."""
-REMOVE_ATTEMPTS = 3
-"""How many times a lease moved aside is removed while a taker that reached it before the move races the removal."""
 GONE_ERRNOS = frozenset({errno.ENOENT, errno.ESTALE})
 """What the storage answers for a lease directory that was moved or removed: gone, or a stale NFS handle to it."""
 CLAIM_LOST_ERRNOS = GONE_ERRNOS | {errno.EINVAL}
@@ -139,9 +130,11 @@ class Lease:
 
     Args:
         path: The resource being guarded (not the lease itself).
-        timeout: Seconds a wait in `__enter__` may take before `LeaseTimeout`; not negative.
-        stale_after: Seconds on the storage clock after which another taker breaks the lease.
-        mode: The mode of the lease directory and of the token directory.
+        settings: The profile's lease section; None reads the packaged profile's.
+        timeout: Seconds a wait in `__enter__` may take before `LeaseTimeout`; not negative; None is `settings.wait_s`.
+        stale_after: Seconds on the storage clock after which another taker breaks the lease; None is
+            `settings.stale_after_s`.
+        mode: The mode of the lease directory and of the token directory; None is `settings.mode`.
         directory: The directory holding `path`, already open; it is duplicated and `path`'s parent is not
             opened again.
         clock: How the lease reads monotonic time and the storage clock, and waits.
@@ -155,9 +148,10 @@ class Lease:
         self,
         path: Path,
         *,
-        timeout: float = TIMEOUT_S,
-        stale_after: float = STALE_AFTER_S,
-        mode: int = LEASE_DIR_MODE,
+        settings: Optional[JobLease] = None,
+        timeout: Optional[float] = None,
+        stale_after: Optional[float] = None,
+        mode: Optional[int] = None,
         directory: Optional[StorageDir] = None,
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
@@ -166,6 +160,12 @@ class Lease:
         Raises:
             ValueError: `timeout` or `stale_after` is negative, or `path`'s name or its lease's is not one component.
         """
+        if settings is None:
+            from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - profiles import this module
+
+            settings = ExecutionProfile.packaged().lease
+        timeout = settings.wait_s if timeout is None else timeout
+        stale_after = settings.stale_after_s if stale_after is None else stale_after
         if timeout < 0 or stale_after < 0:
             raise ValueError(f"a lease's timeout and stale_after are not negative (got {timeout}, {stale_after})")
         self._path = Path(path)
@@ -173,7 +173,8 @@ class Lease:
         self._lease_path = self._path.with_name(self._name)
         self._timeout = timeout
         self._stale_after = stale_after
-        self._mode = mode
+        self._mode = settings.mode if mode is None else mode
+        self._settings = settings
         self._given = directory
         self._time = clock
         self._dir: Optional[StorageDir] = None
@@ -252,7 +253,7 @@ class Lease:
         """Remove the moved lease `aside`, again while a taker that reached it before the move races the removal."""
         directory = self._directory()
         failure: Optional[OSError] = None
-        for _ in range(REMOVE_ATTEMPTS):
+        for _ in range(self._settings.remove_attempts):
             try:
                 directory.remove_owned(aside, pattern=UUID_HEX)
             except OSError as err:
@@ -591,7 +592,7 @@ class Lease:
                         f"held by {self.holder() or 'an unknown holder'}; it is broken once older than "
                         f"{self._stale_after:.1f}s on the storage clock"
                     )
-                self._time.sleep(min(POLL_S, max(0.0, deadline - self._time.now())))
+                self._time.sleep(min(self._settings.poll_s, max(0.0, deadline - self._time.now())))
         except BaseException:
             self._close()
             raise
@@ -639,14 +640,9 @@ __all__ = [
     "GONE_NAME",
     "GONE_PREFIX",
     "PROOF_NAME",
-    "LEASE_DIR_MODE",
     "LEASE_NAME",
     "LEASE_SUFFIX",
-    "POLL_S",
-    "REMOVE_ATTEMPTS",
     "RENEWER_PREFIX",
-    "STALE_AFTER_S",
-    "TIMEOUT_S",
     "BrokenLease",
     "Lease",
     "LeaseState",

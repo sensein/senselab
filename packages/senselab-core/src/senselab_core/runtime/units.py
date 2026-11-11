@@ -64,6 +64,7 @@ def measure_roots(profile: ExecutionProfile) -> MeasureRoots:
         profile.calibration,
         StorePolicy.load_default(),
         stale_after_s=profile.lease.stale_after_s,
+        lease=profile.lease,
         cache=cache_root(),
     )
 

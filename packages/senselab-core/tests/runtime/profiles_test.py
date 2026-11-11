@@ -275,7 +275,7 @@ def test_a_server_backend_takes_a_service_class_first() -> None:
     """A server backend takes a `svc` class before any other; a host backend never does; without one, as usual."""
     host = _backend("b1", "one", devices=("cuda",))
     server = BackendSpec.model_validate(
-        {**host.model_dump(), "env": Env.server("e"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
+        {**host.model_dump(), "env": Env.server("e"), "server": ServerConfig(settings={})}
     )
     cluster = ExecutionProfile.load(CLUSTER)
     placed = resolve_execution(TASK, _entry(), cluster, None, _registry(server), CAT)

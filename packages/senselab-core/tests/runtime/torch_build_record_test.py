@@ -9,16 +9,16 @@ from planted_objects_fixture import MIRROR_INDEX, identity_leaks, store_context,
 from senselab_core.kernel.declare import Env
 from senselab_core.kernel.identity import ExecutionContext
 from senselab_core.runtime.envs import EnvHandle, HostCuda, Uv, ensure_env, torch_build
-from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.measures import MeasureEnv, MeasureRoots, MeasureUnit, Provenance, env_entry
 from senselab_core.runtime.profiles import Envs
 from senselab_core.runtime.storage import StorePolicy
 from senselab_core.runtime.store import STORE_DIR, ResultStore
 from senselab_core.testing.calibration_samples import UNIT, observation
+from senselab_core.testing.leases import packaged_lease
 
 MIRROR = MIRROR_INDEX
 FAKE_UV = Uv((sys.executable, str(Path(__file__).with_name("fake_uv_fixture.py"))))
-LEASE = JobLease(stale_after_s=30.0, renew_fraction=0.01, attribute_delay_s=0)
+LEASE = packaged_lease(30.0, 0.01, 0)
 
 
 def _handle(index: str | None, sha: str = "a" * 64) -> EnvHandle:

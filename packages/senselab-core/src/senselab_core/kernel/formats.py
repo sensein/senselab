@@ -40,7 +40,7 @@ RETIRED_BENCHMARK_RESULT_FORMATS = frozenset({"benchmark-result@1"})
 """Result-document formats 2.x no longer reads, as `<name>@<major>`."""
 
 EQUIVALENCE_FORMAT = "equivalence@4.0"
-"""The format of the measured equivalence classes, `runtime/data/equivalence.yaml`."""
+"""The format of the measured equivalence classes, a group's table file (`load_equivalence`)."""
 EQUIVALENCE_EVIDENCE_FORMAT = "equivalence-evidence@4.0"
 """The format of one verify-sampling comparison, a record in the result store."""
 

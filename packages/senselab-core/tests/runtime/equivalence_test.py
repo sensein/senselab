@@ -9,7 +9,6 @@ from senselab_core.kernel.formats import FieldsOfLaterMinor
 from senselab_core.kernel.identity import ExecutionContext, acceptable, member_key
 from senselab_core.runtime.compare import Difference, Threshold
 from senselab_core.runtime.equivalence import (
-    EQUIVALENCE,
     HEADER,
     EquivalenceEvidence,
     EquivalenceFormatRetired,
@@ -35,18 +34,21 @@ _DIFFERENCE = Difference(
 )
 
 
-@pytest.mark.logic
-def test_packaged_equivalence_is_the_data_file_and_every_class_pairs_contexts() -> None:
-    """`EQUIVALENCE` is the table read from `runtime/data/equivalence.yaml`; each class holds two or more members."""
-    assert EQUIVALENCE == load_equivalence()
-    for classes in EQUIVALENCE.values():
-        assert all(len(members) >= 2 for members in classes.values())
+TABLE = Path(__file__).resolve().parents[4] / "benchmarks" / "data" / "equivalence.yaml"
 
 
 @pytest.mark.logic
-def test_a_store_defaults_to_the_packaged_table(tmp_path: object) -> None:
-    """`ResultStore(equivalence=)` defaults to the table the runtime loaded."""
-    assert ResultStore(tmp_path).equivalence is EQUIVALENCE  # type: ignore[arg-type]
+def test_the_development_table_loads_by_path_and_every_class_pairs_contexts() -> None:
+    """`load_equivalence(path)` reads the development table; each class holds two or more members."""
+    table = load_equivalence(TABLE)
+    assert table and all(len(members) >= 2 for classes in table.values() for members in classes.values())
+
+
+@pytest.mark.logic
+def test_a_store_admits_no_class_unless_given_a_table(tmp_path: Path) -> None:
+    """`ResultStore(equivalence=)` defaults to no classes; the package carries no table to default to."""
+    assert not any(ResultStore(tmp_path).equivalence.values())
+    assert ResultStore(tmp_path, equivalence=load_equivalence(TABLE)).equivalence == load_equivalence(TABLE)
 
 
 def _doc(backends: str, fmt: str = "equivalence@4.0") -> str:

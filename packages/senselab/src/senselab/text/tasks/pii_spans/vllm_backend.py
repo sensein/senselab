@@ -21,7 +21,7 @@ def server_config() -> ServerConfig:
     raw = load_yaml(resources.files("senselab").joinpath("data", "server_settings", SETTINGS_FILE), SETTINGS_FILE)
     if raw.get("format") != SETTINGS_FORMAT:
         raise ValueError(f"{SETTINGS_FILE} is not a {SETTINGS_FORMAT}: {raw.get('format')!r}")
-    return ServerConfig(settings=raw["settings"], startup_timeout_s=raw["startup_timeout_s"])
+    return ServerConfig(settings=raw["settings"])
 
 
 @backend(

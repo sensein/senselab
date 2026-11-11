@@ -41,15 +41,15 @@ from senselab_core.runtime.execution.job import Failed, JobOutcome
 from senselab_core.runtime.execution.pool import Pool, larger_class, report, split
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
-from senselab_core.runtime.execution.run import INPUTS_FILE, RECORD_ATTEMPTS, Run, record_sources
+from senselab_core.runtime.execution.run import INPUTS_FILE, Run, record_sources
 from senselab_core.runtime.execution.substrates import QueueReady, WorkerHandle, mark_ready
 from senselab_core.runtime.execution.workers import WorkerSet
-from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.planner import Plan, plan, resume
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.store import ResultStore
+from senselab_core.testing.leases import packaged_lease
 from senselab_worker.canonical import jcs_dumps
 from syscall_faults_fixture import await_true, displace_before_proof, pause_replaces
 
@@ -585,12 +585,13 @@ def test_two_starters_keep_every_durable_source(tmp_path: Path, monkeypatch: pyt
 
 @pytest.mark.contract
 def test_a_merge_whose_lease_fails_every_proof_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A merge whose `inputs.json` lease is displaced at each proof is tried `RECORD_ATTEMPTS` times."""
+    """A merge whose `inputs.json` lease is displaced at each proof is tried `lease.record_attempts` times."""
     profile = _profile(**CONTENT)
     displaced = displace_before_proof(monkeypatch, f"{Path(INPUTS_FILE).name}.lease")
     with pytest.raises(LeaseUnavailable):
         record_sources(_heard(_wav(tmp_path / "a.wav"), profile), tmp_path / "run")
-    assert len(displaced) == RECORD_ATTEMPTS and not (tmp_path / "run" / INPUTS_FILE).exists()
+    assert len(displaced) == profile.lease.record_attempts
+    assert not (tmp_path / "run" / INPUTS_FILE).exists()
 
 
 CRASH_STALE_S = 1.0
@@ -598,8 +599,8 @@ CRASH = f"""
 import os, sys
 from pathlib import Path
 from senselab_core.runtime.execution.epoch import Epoch
-from senselab_core.runtime.execution_settings import JobLease
-lease = JobLease(stale_after_s={CRASH_STALE_S}, renew_fraction=0.2, attribute_delay_s=0)
+from senselab_core.testing.leases import packaged_lease
+lease = packaged_lease({CRASH_STALE_S}, 0.2, 0)
 epochs = Epoch(Path(sys.argv[1]))
 n = epochs.take(lease)
 epochs.bind(n, "a1", 1)
@@ -879,7 +880,7 @@ def test_an_epoch_taken_but_never_held_ends_a_wait(tmp_path: Path, lease_clock: 
     run_dir = tmp_path / "run"
     log = EventLog(run_dir, "a1", 1, epoch=1)
     job = node_fragment(*_admitted(tmp_path)).jobs[0]
-    lease = JobLease(stale_after_s=0.5, renew_fraction=0.2, attribute_delay_s=0)
+    lease = packaged_lease(0.5, 0.2, 0)
     taken(Epoch(run_dir), lease)
     log.record("queued", job.node, job=job)
     clock = lease_clock(storage_origin=os.stat(run_dir / "epoch" / "1").st_mtime)

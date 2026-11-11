@@ -50,7 +50,7 @@ def test_vllm_server_attests_the_pii_model_and_a_restart_with_new_config_changes
             model,
             settings,
             start_lock_dir=profile.env_root("server") / "locks",
-            startup_timeout_s=STARTUP_TIMEOUT_S,
+            vllm=profile.vllm.model_copy(update={"startup_s": STARTUP_TIMEOUT_S}),
             start_margin_s=profile.envs.server_start_margin_s,
             lease=profile.lease,
             log_dir=profile.env_root("server") / "logs",

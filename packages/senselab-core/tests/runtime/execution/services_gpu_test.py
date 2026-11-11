@@ -26,7 +26,7 @@ SAMPLING = {"max_tokens": 8, "temperature": 0}
 
 
 def _backend(settings: dict[str, object]) -> BackendSpec:
-    config = ServerConfig(settings=settings, startup_timeout_s=STARTUP_TIMEOUT_S)
+    config = ServerConfig(settings=settings)
     return fake.FAKE.model_copy(update={"name": "pii-vllm", "env": Env.server("vllm-server"), "server": config})
 
 

@@ -1,7 +1,8 @@
 """Measured equivalence classes (`equivalence@4.0`) and the verify-sampling evidence they are regenerated from.
 
-The packaged table is `runtime/data/equivalence.yaml`: per backend, classes whose members are a numerics class in
-one env lock (`member_key`). `scripts/regenerate_equivalence.py` writes it from the `equivalence-evidence@4.0`
+A table is a file a group keeps (`benchmarks/data/equivalence.yaml` is the development one), read with
+`load_equivalence(path)`: per backend, classes whose members are a numerics class in one env lock (`member_key`).
+`scripts/regenerate_equivalence.py` writes it from the `equivalence-evidence@4.0`
 records verify sampling leaves in result stores (`classes`, `render`), and prints each class's derivation for
 config-derivations.md.
 """
@@ -9,7 +10,7 @@ config-derivations.md.
 import itertools
 import json
 from collections.abc import Iterable, Mapping
-from importlib import resources
+from pathlib import Path
 from typing import Annotated, Any
 
 from pydantic import StringConstraints
@@ -91,14 +92,23 @@ def parse_equivalence(text: str) -> Equivalence:
     return FrozenMapping(table)
 
 
-def load_equivalence() -> Equivalence:
-    """Return the packaged equivalence table, read-only; pass it, or another measured table, as `equivalence`."""
-    text = resources.files("senselab_core.runtime").joinpath("data", "equivalence.yaml").read_text("utf-8")
-    return parse_equivalence(text)
+def equivalence_digest(table: Equivalence) -> str:
+    """Return the `value_digest` of an equivalence table, each class as its sorted members."""
+    fields = {backend: {name: sorted(members) for name, members in cls.items()} for backend, cls in table.items()}
+    return value_digest("equivalence", {"classes": fields})
 
 
-EQUIVALENCE: Equivalence = load_equivalence()
-"""The packaged measured equivalence classes; the default of `ResultStore(equivalence=)`."""
+def load_equivalence(path: Path) -> Equivalence:
+    """Return the equivalence table in the file `path`, read-only; pass it as `ResultStore(equivalence=)`.
+
+    The package ships none: a group keeps the table it measured on its own resources, and a store given none admits no
+    class. `scripts/regenerate_equivalence.py` writes one.
+
+    Raises:
+        FileNotFoundError: there is no file at `path`.
+        EquivalenceFormatRetired, ValueError: as `parse_equivalence`.
+    """
+    return parse_equivalence(Path(path).read_text("utf-8"))
 
 
 class EvidenceSide(Frozen):

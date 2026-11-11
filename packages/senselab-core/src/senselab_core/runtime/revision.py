@@ -50,8 +50,6 @@ _MANIFEST_TEMPORARY = re.compile(re.escape(f".{MANIFEST_NAME}.") + r"[0-9]+\.[0-
 """The manifest's own temporaries."""
 MANIFEST_LIMIT = 1 << 24
 """The most bytes a run manifest is read to."""
-RECORD_ATTEMPTS = 3
-"""How many times `record_resolution` takes the manifest's lease before a displaced holder gives up."""
 
 
 class RevisionResolutionError(RuntimeError):
@@ -253,7 +251,7 @@ def record_resolution(  # noqa: PLR0913 - the binding and its run, then keyword-
         ValueError: ``run`` (or this run's id) is refused by `run_component`.
         LeaseTimeout: the manifest's lease could not be taken within its timeout.
         LeaseUnavailable: the manifest's lease cannot be taken in the run's directory, what is at its name
-            cannot be moved aside, or it was displaced on each of `RECORD_ATTEMPTS` takes.
+            cannot be moved aside, or it was displaced on each of `settings.record_attempts` takes.
         WrongKindError: an object of the wrong kind at ``2x/``, ``2x/runs/`` or the run's directory cannot be
             moved aside.
     """
@@ -280,16 +278,14 @@ def _record_in(  # noqa: PLR0913 - the two directories, the entry, then the stor
     The commit is one atomic replace of the merged manifest, made only after `Lease.prove` shows the lease is
     still held. A holder whose lease was displaced before its write (or whose temporary the new holder removed)
     takes the lease again and re-reads and merges the manifest, so its entry is kept beside the entries of the
-    holder that displaced it, up to `RECORD_ATTEMPTS` takes.
+    holder that displaced it, up to `settings.record_attempts` takes.
 
     Raises:
-        LeaseUnavailable: the lease was displaced on every one of `RECORD_ATTEMPTS` takes.
+        LeaseUnavailable: the lease was displaced on every one of `settings.record_attempts` takes.
     """
     path = run_dir.path / MANIFEST_NAME
-    for _ in range(RECORD_ATTEMPTS):
-        lease = Lease(
-            path, stale_after=settings.stale_after_s, mode=shared_dir_mode(policy), directory=run_dir, clock=clock
-        )
+    for _ in range(settings.record_attempts):
+        lease = Lease(path, settings=settings, mode=shared_dir_mode(policy), directory=run_dir, clock=clock)
         with lease, lease.keep_alive(settings.renew_fraction) as state:
 
             def owns() -> bool:
@@ -317,7 +313,8 @@ def _record_in(  # noqa: PLR0913 - the two directories, the entry, then the stor
         logger.warning("run manifest %s: lease displaced; re-reading and merging", path)
     raise LeaseUnavailable(
         path.with_name(MANIFEST_NAME + LEASE_SUFFIX),
-        f"the lease on {path} was displaced on each of {RECORD_ATTEMPTS} takes; its stale_after is shorter than a "
+        f"the lease on {path} was displaced on each of {settings.record_attempts} takes; its stale_after is shorter "
+        "than a "
         "manifest write, or another process keeps breaking it",
     )
 

@@ -392,6 +392,7 @@ class Queue:
         self.backoffs = 0
         self._segment_items = profile.pool.segment_items
         self._stale_after = lease.stale_after_s
+        self._settings = lease
         self._renew_fraction = lease.renew_fraction
         self._judged: dict[str, float] = {}
         self._missing: dict[str, float] = {}
@@ -423,7 +424,7 @@ class Queue:
     def serve_lease(self) -> Optional[ServeLease]:
         """Take the lease that pins this queue to one worker, beating until released; None while another's is live."""
         stack = contextlib.ExitStack()
-        lease = Lease(self.path / SERVE_LEASE, timeout=0, stale_after=self._stale_after, clock=self._clock)
+        lease = Lease(self.path / SERVE_LEASE, settings=self._settings, timeout=0, clock=self._clock)
         try:
             stack.enter_context(lease)
         except LeaseTimeout:
@@ -785,9 +786,7 @@ class Queue:
         None too when its env's label is in `skip`.
         """
         stack = contextlib.ExitStack()
-        lease = Lease(
-            claims.path / digest, timeout=0, stale_after=self._stale_after, directory=claims, clock=self._clock
-        )
+        lease = Lease(claims.path / digest, settings=self._settings, timeout=0, directory=claims, clock=self._clock)
         try:
             stack.enter_context(lease)
         except LeaseTimeout:

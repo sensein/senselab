@@ -24,7 +24,6 @@ from senselab_core.runtime.call import Packaged, Result, TaskCall, use_packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.in_process import CallFailed, InProcess
 from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
-from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
@@ -148,9 +147,11 @@ def _server(env: EnvHandle, tmp_path: Path) -> VllmServer:
         model,
         CONFIG.settings,
         start_lock_dir=tmp_path / "other-locks",
-        startup_timeout_s=30,
+        vllm=ExecutionProfile.packaged().vllm.model_copy(update={"startup_s": 30}),
         start_margin_s=1,
-        lease=JobLease(stale_after_s=30, renew_fraction=0.1, attribute_delay_s=0),
+        lease=ExecutionProfile.packaged().lease.model_copy(
+            update={"stale_after_s": 30, "renew_fraction": 0.1, "attribute_delay_s": 0}
+        ),
     )
 
 
@@ -160,7 +161,7 @@ def test_backend_serves_the_catalogue_model_through_a_server_env() -> None:
     spec = next(b for b in REGISTRY.backends("pii_spans") if b.name == "vllm")
     assert (spec.stack, spec.models, spec.devices) == ("vllm", (engine.MODEL_ID,), ("cuda",))
     assert spec.env.kind == "server" and spec.env.name == "vllm-server" and spec.batch_invariant
-    assert spec.server is not None and spec.server.startup_timeout_s == CONFIG.startup_timeout_s
+    assert spec.server is not None and spec.server.settings == CONFIG.settings
     assert server_args(spec.server.settings)
     assert list(ENTRY.backends) == ["transformers", "vllm"] and list(ENTRY.stacks) == ["transformers", "vllm"]
 

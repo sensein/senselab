@@ -103,9 +103,9 @@ def start_vllm(backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profi
         model,
         backend.server.settings,
         start_lock_dir=root / "locks",
-        startup_timeout_s=backend.server.startup_timeout_s,
         start_margin_s=profile.envs.server_start_margin_s,
         lease=profile.lease,
+        vllm=profile.vllm,
         log_dir=root / "logs",
         network=profile.network,
     )
@@ -331,6 +331,7 @@ class WorkerSet:
                     variables=network_variables(profile.network),
                     load_timeout=profile.timeouts.load_s,
                     request_timeout=profile.timeouts.request_s,
+                    settings=profile.worker,
                 )
             )
         budget = profile.model_cache_budget_bytes

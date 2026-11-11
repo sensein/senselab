@@ -1,10 +1,11 @@
 """Process probes for tests, read from `ps` state: whether a process or any process of a group can still run code."""
 
 import subprocess
+from typing import Final
 
 from senselab_core.runtime.clock import Clock, SystemClock
 
-POLL_S = 0.05
+POLL_S: Final = 0.05  # invariant: the poll of a test-harness probe, on its injected clock
 ROW_FIELDS = 2
 """A `ps -A -o pgid=,stat=` row: the group and the state."""
 

@@ -20,7 +20,7 @@ from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
 from senselab_core.kernel.identity import Attestation, ModelRef, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.executor import FaultRecord
-from senselab_core.runtime.execution.pool_worker import IDLE_POLLS, PoolWorker
+from senselab_core.runtime.execution.pool_worker import PoolWorker
 from senselab_core.runtime.execution.queue import RUN_QUEUES
 from senselab_core.runtime.execution.services import ConsumerLease, ServiceEntry, ServiceRegistry, service_registry
 from senselab_core.runtime.execution.workers import WorkerSet, expected_of
@@ -41,9 +41,8 @@ SHA = "a" * 40
 MODEL = ResolvedModel(ref=ModelRef.parse(f"org/m@{SHA}"), identity=SHA)
 IDENTITY = Attestation(engine_version="0.31.0", served_model="org/m", model_identity=SHA, config_digest="c" * 64)
 ENV = EnvHandle(source_tree_python(), platform.python_version(), "1" * 64, "2" * 64, MIRROR_INDEX)
-BACKEND = fake.FAKE.model_copy(
-    update={"name": "served", "env": Env.server("s"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
-)
+BACKEND = fake.FAKE.model_copy(update={"name": "served", "env": Env.server("s"), "server": ServerConfig(settings={})})
+REQUEST_S = 600.0
 PROFILE = ExecutionProfile.load(
     "laptop",
     {
@@ -233,7 +232,7 @@ def test_service_exits_after_idle_consumers(
     consumer = registry.consume(IDENTITY)
     idle_s, poll_s = PROFILE.services.idle_exit_s, PROFILE.pool.poll_s
     held_s = 4 * idle_s
-    assert held_s > IDLE_POLLS * poll_s
+    assert held_s > PROFILE.pool.idle_polls * poll_s
     store = ResultStore(tmp_path / "store")
     worker = PoolWorker(
         tmp_path / "run" / RUN_QUEUES, ["svc:pii"], profile=PROFILE, store=store, workers=provider, clock=clock
@@ -309,9 +308,7 @@ def test_the_key_takes_the_attestation_of_the_service_entry(
     call = Call(task=fake.ECHO, params=fake.EchoParams(), inputs={"payload": "content:" + "a" * 64}, model=MODEL)
     keys = []
     for seqs in (4, 8, 4):
-        backend = BACKEND.model_copy(
-            update={"server": ServerConfig(settings={**SETTINGS, "max_num_seqs": seqs}, startup_timeout_s=1.0)}
-        )
+        backend = BACKEND.model_copy(update={"server": ServerConfig(settings={**SETTINGS, "max_num_seqs": seqs})})
         expected = expected_of(backend, lock, MODEL)
         provider, consumer = _provider(registry, starts, expected), WorkerSet(1, registry=registry)
         try:
@@ -440,7 +437,9 @@ def test_a_server_status_is_typed_the_same_on_both_paths(
     consumer = registry.consume(IDENTITY)
     starts[0].status = status
     try:
-        direct = _fault_of(lambda: chat(str(starts[0].url), IDENTITY.served_model, CHAT, sampling={}))
+        direct = _fault_of(
+            lambda: chat(str(starts[0].url), IDENTITY.served_model, CHAT, sampling={}, timeout_s=REQUEST_S)
+        )
         leased = _fault_of(lambda: consumer.chat(CHAT, sampling={}))
     finally:
         consumer.stop()
@@ -476,7 +475,7 @@ def test_a_closed_port_is_service_unavailable_on_the_direct_call(
     starts.append(StandIn(IDENTITY))
     url = str(starts[0].url)
     starts[0].stop()
-    [record, name] = _fault_of(lambda: chat(url, IDENTITY.served_model, CHAT, sampling={}))
+    [record, name] = _fault_of(lambda: chat(url, IDENTITY.served_model, CHAT, sampling={}, timeout_s=REQUEST_S))
     assert (name, record.fault) == ("ServiceUnavailable", "infrastructure")
 
 

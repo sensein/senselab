@@ -89,7 +89,7 @@ def _backend(
 
 for _task in (SCORE, AUDIO, TEXTY):
     REGISTRY.add_backend(_backend(_task))
-SERVED = _backend(SCORE, "served", Env.server("s"), ServerConfig(settings={}, startup_timeout_s=1.0))
+SERVED = _backend(SCORE, "served", Env.server("s"), ServerConfig(settings={}))
 CATALOGUE = Catalogue.load("format: catalogue@2.0\nentries: []\n")
 HOST = HardwareInfo(
     cpu_count=4, memory_bytes=2**33, gpus=(), apple_silicon=False, platform="linux-x86_64", cpu_model="Test CPU"

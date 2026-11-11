@@ -889,7 +889,7 @@ def test_download_short_of_declared_size_is_refused(tmp_path: Path, lease_clock:
 def test_non_https_refused(tmp_path: Path, url: str) -> None:
     """A non-https URL raises FetchError before any opener is called, through fetch or the default opener."""
     with pytest.raises(FetchError):
-        fetch_module._urlopen(url)
+        fetch_module._urlopen(url, 60)
     calls: list[str] = []
     with pytest.raises(FetchError) as err:
         fetch(_manifest([_file("a", url)]), cache_root=tmp_path, opener=_opener({url: PAYLOAD}, calls))
@@ -1195,3 +1195,21 @@ def test_fetch_retries_transient_by_packaged_policy(tmp_path: Path, lease_clock:
     with pytest.raises(FetchError):
         fetch(_manifest(version="2"), cache_root=tmp_path / "other", opener=refused, clock=clock)
     assert len(calls) == RETRY.attempts and clock.slept == _backoffs()
+
+
+@pytest.mark.logic
+def test_a_fetch_request_waits_timeout_s(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`fetch` opens each URL with `timeout_s`, by default the profile's `timeouts.fetch_s`."""
+    seen: list[float] = []
+    packaged = ExecutionProfile.packaged()
+
+    def refuse(self: urllib.request.OpenerDirector, url: str, data: object = None, timeout: float = 0.0) -> object:
+        seen.append(timeout)
+        raise OSError("stop here")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refuse)
+    once = packaged.retry.model_copy(update={"attempts": 1})
+    for timeout in (None, 7.0):
+        with pytest.raises(FetchError):
+            fetch(_manifest(), cache_root=tmp_path, timeout_s=timeout, retry=once)
+    assert seen == [packaged.timeouts.fetch_s, 7.0]

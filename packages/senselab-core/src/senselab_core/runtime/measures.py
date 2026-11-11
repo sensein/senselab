@@ -54,7 +54,7 @@ from senselab_core.runtime.calibration import (
 )
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import expand
-from senselab_core.runtime.execution_settings import CalibrationSettings, ResourceClass, Trust
+from senselab_core.runtime.execution_settings import CalibrationSettings, JobLease, ResourceClass, Trust
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import Lease
 from senselab_core.runtime.storage import (
@@ -515,14 +515,19 @@ class MeasureRoots:
         uid: int,
         *,
         stale_after_s: float,
+        lease: JobLease | None = None,
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
-        """Hold `roots` in order, the reader's `trust` and `uid`; probe leases go stale after `stale_after_s`."""
+        """Hold `roots` in order, the reader's `trust` and `uid`; probe leases go stale after `stale_after_s`.
+
+        `lease` is the profile's lease section the probe leases are taken under (the packaged profile's when None).
+        """
         self.roots = tuple(roots)
         self.policy = policy
         self.trust = trust
         self.uid = uid
         self.stale_after_s = stale_after_s
+        self._lease = lease
         self._clock = clock
         self._dir_mode = shared_dir_mode(policy)
         self._file_mode = committed_modes(policy)[0]
@@ -532,7 +537,7 @@ class MeasureRoots:
         self._verified: set[tuple[Path, str]] = set()
 
     @classmethod
-    def from_profile(
+    def from_profile(  # noqa: PLR0913 - the calibration and policy, then keyword-only staleness, cache, reader and lease
         cls,
         calibration: CalibrationSettings,
         policy: StorePolicy,
@@ -540,10 +545,18 @@ class MeasureRoots:
         stale_after_s: float,
         cache: Path,
         uid: int | None = None,
+        lease: JobLease | None = None,
     ) -> Self:
         """Return the roots `calibration` names, resolved against `cache`, read as `uid` (default: this process's)."""
         roots = resolve_roots(calibration.measures_roots, cache)
-        return cls(roots, policy, calibration.trust, os.geteuid() if uid is None else uid, stale_after_s=stale_after_s)
+        return cls(
+            roots,
+            policy,
+            calibration.trust,
+            os.geteuid() if uid is None else uid,
+            stale_after_s=stale_after_s,
+            lease=lease,
+        )
 
     def _say(self, key: tuple[Any, ...], message: str, *args: object) -> None:
         if key not in self._said:
@@ -901,7 +914,11 @@ class MeasureRoots:
     def _lease_age(self, unit_dir: StorageDir) -> float | None:
         try:
             return Lease(
-                unit_dir.path / PROBE_LEASE, stale_after=self.stale_after_s, directory=unit_dir, clock=self._clock
+                unit_dir.path / PROBE_LEASE,
+                settings=self._lease,
+                stale_after=self.stale_after_s,
+                directory=unit_dir,
+                clock=self._clock,
             ).age()
         except PermissionError:
             pass
@@ -957,7 +974,14 @@ class MeasureRoots:
                 if (owner := self._lease_owner(unit_dir)) is not None:
                     return PeerProbing() if self._admits(owner) else Unleased("foreign lease")
                 path = unit_dir.path / PROBE_LEASE
-            return Lease(path, timeout=0, stale_after=self.stale_after_s, mode=self._dir_mode, clock=self._clock)
+            return Lease(
+                path,
+                settings=self._lease,
+                timeout=0,
+                stale_after=self.stale_after_s,
+                mode=self._dir_mode,
+                clock=self._clock,
+            )
 
         taken = self._in_first_writable(take)
         return Unleased("no writable root") if taken is None else taken

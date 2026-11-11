@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, ClassVar, TypeVar
 
 import pytest
+from lease_clock_fixture import ManualClock
 from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, Node, fan_out_issues
@@ -664,11 +665,34 @@ def test_the_submitter_is_built_over_a_senselab_store_with_no_readonly_caches(tm
         EventLog(tmp_path / "run", "a1", 1),
         cancel,
         concurrent.futures.ThreadPoolExecutor(1),
-        runner.Follower(executor, cancel, first_s=0.01, max_s=0.1),
+        runner.Follower(executor, cancel, first_s=0.01, max_s=0.1, cancel_check_s=0.05),
     )
     submitter = runner._submitter(run, store, ["cpu"])
     assert type(submitter.store) is runner.SenselabStore
     assert submitter.readonly_caches is None and not hasattr(submitter.store, "readonly_caches")
+
+
+@pytest.mark.logic
+def test_a_follower_checks_cancel_every_cancel_check_s(tmp_path: Path) -> None:
+    """A follower waiting between rounds wakes at `cancel_check_s`, however long its pause."""
+    waits: list[float] = []
+
+    class Clock(ManualClock):
+        def wait(self, event: threading.Event, timeout: float) -> bool:
+            waits.append(timeout)
+            return super().wait(event, timeout)
+
+    clock = Clock(poll_s=0.001, hang_s=5.0, waits="spend")
+    follower = runner.Follower(
+        Recording(ResultStore(tmp_path / "store"), PROFILE),
+        threading.Event(),
+        first_s=1,
+        max_s=1,
+        cancel_check_s=0.25,
+        clock=clock,
+    )
+    follower._nap(1.0)
+    assert waits == [0.25] * 4
 
 
 def _terminal(events: Sequence[Any], node: str) -> list[Any]:

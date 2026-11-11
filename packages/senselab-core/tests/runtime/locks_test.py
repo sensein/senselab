@@ -16,8 +16,11 @@ from typing import Any
 import lease_stress_fixture
 import pytest
 from lease_clock_fixture import ManualClock, age
-from senselab_core.runtime.locks import GONE_PREFIX, POLL_S, RENEWER_PREFIX, Lease, LeaseTimeout, LeaseUnavailable
+from senselab_core.runtime.locks import GONE_PREFIX, RENEWER_PREFIX, Lease, LeaseTimeout, LeaseUnavailable
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.storage import StorageUnsupported
+
+POLL_S = ExecutionProfile.packaged().lease.poll_s
 
 pytestmark = pytest.mark.logic
 

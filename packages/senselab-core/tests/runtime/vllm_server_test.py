@@ -16,9 +16,9 @@ from lease_clock_fixture import ManualClock, age
 from senselab_core.kernel.identity import Attestation, ExecutionContext, ModelRef, ResolvedModel
 from senselab_core.runtime import vllm_server as vs
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.hardware import DeviceMemory
 from senselab_core.runtime.locks import Lease, LeaseTimeout
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.testing.processes import group_gone
 from senselab_worker.digest import identity_digest
 from senselab_worker.faults import ResourceFault
@@ -38,7 +38,9 @@ SETTINGS: dict[str, Any] = {
     "flashinfer_sampler": False,
 }
 FAKE = Path(__file__).with_name("fake_vllm_fixture.py")
-LEASE = JobLease(stale_after_s=30, renew_fraction=0.01, attribute_delay_s=0)
+PROFILE = ExecutionProfile.packaged()
+LEASE = PROFILE.lease.model_copy(update={"stale_after_s": 30, "renew_fraction": 0.01, "attribute_delay_s": 0})
+VLLM = PROFILE.vllm.model_copy(update={"startup_s": 30})
 
 _HOLDER = r"""
 import sys, threading
@@ -52,8 +54,11 @@ from senselab_core.runtime.execution_settings import JobLease
 python, locks, sha, settings = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 env = EnvHandle(python=python, python_version="3.12", lock_sha="l", wheel_set="w", torch_index=None)
 model = ResolvedModel(ref=ModelRef.parse(f"org/model@{sha}"), identity=sha)
-lease = JobLease(stale_after_s=30, renew_fraction=0.1, attribute_delay_s=0)
-kwargs = {"start_lock_dir": Path(locks), "startup_timeout_s": 30, "start_margin_s": 1, "lease": lease}
+from senselab_core.runtime.profiles import ExecutionProfile
+base = ExecutionProfile.packaged()
+lease = base.lease.model_copy(update={"stale_after_s": 30, "renew_fraction": 0.1, "attribute_delay_s": 0})
+vllm = base.vllm.model_copy(update={"startup_s": 30})
+kwargs = {"start_lock_dir": Path(locks), "vllm": vllm, "start_margin_s": 1, "lease": lease}
 with VllmServer(env, model, __import__("json").loads(settings), **kwargs):
     print("up", flush=True)
     threading.Event().wait()
@@ -97,7 +102,7 @@ def _server(
         MODEL,
         settings,
         start_lock_dir=tmp_path / "locks",
-        startup_timeout_s=30,
+        vllm=VLLM,
         start_margin_s=1,
         lease=LEASE,
         **options,
@@ -283,7 +288,7 @@ def test_a_device_short_of_free_memory_is_refused_before_the_launch(env: EnvHand
 def test_url_or_unpinned_model_refused(env: EnvHandle, tmp_path: Path, model: ResolvedModel) -> None:
     """Only a pinned hub or local model is served."""
     with pytest.raises(ValueError, match="pinned|url"):
-        vs.VllmServer(env, model, SETTINGS, start_lock_dir=tmp_path, startup_timeout_s=1, start_margin_s=1, lease=LEASE)
+        vs.VllmServer(env, model, SETTINGS, start_lock_dir=tmp_path, vllm=VLLM, start_margin_s=1, lease=LEASE)
 
 
 @pytest.mark.parametrize("settings", [{k: v for k, v in SETTINGS.items() if k != "max_num_seqs"}, {**SETTINGS, "x": 1}])
@@ -306,7 +311,7 @@ def test_local_model_errors_name_no_path(env: EnvHandle, tmp_path: Path, monkeyp
     model = ResolvedModel(ref=ModelRef.parse(f"local:{weights}"), identity="c" * 64)
     _knob(tmp_path, FAKE_VLLM_ROOT="elsewhere")
     server = vs.VllmServer(
-        env, model, SETTINGS, start_lock_dir=tmp_path / "locks", startup_timeout_s=30, start_margin_s=1, lease=LEASE
+        env, model, SETTINGS, start_lock_dir=tmp_path / "locks", vllm=VLLM, start_margin_s=1, lease=LEASE
     )
     with pytest.raises(vs.VllmStartError) as raised:
         server.__enter__()
@@ -326,7 +331,7 @@ def test_a_local_model_is_attested_under_its_identity_not_its_path(env: EnvHandl
         weights = tmp_path / name / "weights"
         model = ResolvedModel(ref=ModelRef.parse(f"local:{weights}"), identity="c" * 64)
         with vs.VllmServer(
-            env, model, SETTINGS, start_lock_dir=tmp_path / "locks", startup_timeout_s=30, start_margin_s=1, lease=LEASE
+            env, model, SETTINGS, start_lock_dir=tmp_path / "locks", vllm=VLLM, start_margin_s=1, lease=LEASE
         ) as server:
             assert server.attestation is not None and server.attestation.served_model == "c" * 64
             reply = server.chat([{"role": "user", "content": "hi"}], sampling={})

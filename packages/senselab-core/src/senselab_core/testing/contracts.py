@@ -34,7 +34,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import fields, replace
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Final, TypeVar
 
 import numpy
 from pydantic import BaseModel, ValidationError
@@ -63,7 +63,7 @@ KeyBuilder = Callable[[Call, Placement, ExecutionContext], LogicalKey]
 HASH_SEEDS: tuple[str, str] = ("1", "2")
 """The `PYTHONHASHSEED` values `key_independent_of_hash_seed` builds a key under."""
 
-HASH_SEED_TIMEOUT_S = 120
+HASH_SEED_TIMEOUT_S: Final = 120  # invariant: a test-harness bound on one child interpreter
 """How long one `key_independent_of_hash_seed` interpreter may take to import and build a key."""
 
 BASE_MODEL = ResolvedModel(ref=ModelRef.parse("contract/model@main"), identity="0" * 40)
@@ -87,7 +87,7 @@ PLACEMENT_ONLY: tuple[str, ...] = tuple(
 )
 """`Placement` fields that never reach a key."""
 
-WORKER_TIMEOUT_S = 60
+WORKER_TIMEOUT_S: Final = 60  # invariant: a test-harness bound on a stub worker
 """How long `content_fault_isolated` gives a worker to load its stub, and then to answer one request."""
 
 
