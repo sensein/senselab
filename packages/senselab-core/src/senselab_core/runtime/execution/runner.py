@@ -49,7 +49,6 @@ from senselab_core.runtime.execution.executor import (
 )
 from senselab_core.runtime.execution.in_process import fragment_keys, job_checksum, node_fragment, plan_keys
 from senselab_core.runtime.execution.run import PYDRA_DIR
-from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.planner import Plan, check_mapped_outputs
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import attempt_scope
@@ -754,7 +753,6 @@ class PydraRunner:
             ValueError: `senders` is below 1.
         """
         self.profile = profile if profile is not None else ExecutionProfile.load()
-        self.lease: JobLease = self.profile.lease
         self.work_dir, self._clock = work_dir, clock
         self.senders = (
             senders if senders is not None else sum(c.max_workers for c in self.profile.resource_classes.values())

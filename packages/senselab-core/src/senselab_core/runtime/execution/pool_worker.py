@@ -33,7 +33,7 @@ from senselab_core.runtime import request_reports
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
 from senselab_core.runtime.call import RunConfig, packaged
 from senselab_core.runtime.clock import Clock, SystemClock
-from senselab_core.runtime.execution.epoch import Epoch
+from senselab_core.runtime.execution.epoch import Epoch, LeaseMismatch, differing, read_section
 from senselab_core.runtime.execution.events import EventLog, LeaseBreak
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, PlanFragment
 from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, process_workers
@@ -355,7 +355,8 @@ class PoolWorker:
             raise ValueError("a pool worker serves at least one resource class")
         self.run_dir = Path(pool_dir).parent
         self.epochs = Epoch(self.run_dir, clock)
-        self.queues = QueueSet(Path(pool_dir), profile, epoch=self.epochs.current, clock=clock)
+        self.queues = QueueSet.for_run(self.run_dir, profile, own=profile.lease, clock=clock)
+        self._seen_epoch: int | None = None
         self.classes = tuple(classes)
         self.profile, self.store = profile, store
         self.name = name if name is not None else worker_id()
@@ -432,6 +433,7 @@ class PoolWorker:
         """
         failed = True
         try:
+            self._check_lease()
             result = self._claim_loop()
             failed = False
             return result
@@ -440,6 +442,20 @@ class PoolWorker:
                 lease.release()
             self._serving.clear()
             self._write_provenance(raising=not failed)
+
+    def _check_lease(self) -> None:
+        """Read the newest bound epoch's lease section once the epoch has moved; refuse one this worker's differs from.
+
+        Raises:
+            LeaseMismatch: the section is not this worker's profile's, so its beats and the run's judges would disagree.
+        """
+        current = self.epochs.current()
+        if current == self._seen_epoch:
+            return
+        self._seen_epoch = current
+        bound = self.epochs.bound()
+        if bound and (keys := differing(self.profile.lease, run := read_section(self.epochs.root / str(bound[-1])))):
+            raise LeaseMismatch(keys, self.profile.lease, run)
 
     def _write_provenance(self, *, raising: bool) -> None:
         """Replace this worker's provenance document; an `OSError` is raised, or logged where `raising` is False."""
@@ -457,6 +473,7 @@ class PoolWorker:
         current: str | None = None
         spent, began, idle, waited = 0, self._clock.now(), None, 0.0
         while not self.stop.is_set():
+            self._check_lease()
             ended = current is not None and (spent >= pool.quantum_items or self._clock.now() - began >= pool.quantum_s)
             prefer = None if ended else current
             asked = self._clock.now()
@@ -598,7 +615,7 @@ class PoolWorker:
             self._finished, cancelled = finished, threading.Event()
             runner = threading.Thread(target=self._run_groups, args=(groups, finished, cancelled, spans), daemon=True)
             runner.start()
-            interval = self.profile.lease.renew_fraction * self.profile.lease.stale_after_s
+            interval = self.queues.lease.renew_fraction * self.queues.lease.stale_after_s
             running, renewed = True, self._clock.now()
             while running and claim.items and not self.stop.is_set():
                 with contextlib.suppress(queue.Empty):

@@ -45,7 +45,8 @@ HOST = HardwareInfo(cpu_count=2, memory_bytes=2**30, gpus=(GPU,), apple_silicon=
 
 def _queues(root: Path, slack: dict[str, Any]) -> QueueSet:
     lease = {"stale_after_s": slack["stale_after_s"], "renew_fraction": slack["renew_fraction"], "attribute_delay_s": 0}
-    return QueueSet(root, ExecutionProfile.load(override={"lease": lease}))
+    profile = ExecutionProfile.load(override={"lease": lease})
+    return QueueSet(root, profile, lease=profile.lease)
 
 
 @pytest.fixture

@@ -53,7 +53,7 @@ from senselab_core.runtime.calibration import (
 from senselab_core.runtime.call import RunConfig, host_hardware
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.batching import bucket_edges
-from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
+from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator, run_lease
 from senselab_core.runtime.execution.events import (
     BrokenEnv,
     EventLog,
@@ -87,7 +87,7 @@ from senselab_core.runtime.execution.pool_parts import (
     split,
 )
 from senselab_core.runtime.execution.probe_machine import ProbeMachine, ProbeQueue, detected_kind
-from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of
+from senselab_core.runtime.execution.queue import QueueSet, item_digest, probe_of
 from senselab_core.runtime.execution.records import add_plan_entity, record_settled_reuse, reuse_attributes
 from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
@@ -229,7 +229,9 @@ class Pool:
         self.roots = roots if roots is not None else measure_roots(profile)
         self.measures = measures if measures is not None else default_measures(profile, self.roots)
         self.resolver = resolver if resolver is not None else UnitResolver(profile, self.roots)
-        self._machine = ProbeMachine(profile, self.roots, self.measures, self.resolver, clock, _PoolHost(self), probe_s)
+        self._machine = ProbeMachine(
+            profile, self.roots, self.measures, self.resolver, clock, _PoolHost(self), probe_s, queues.lease
+        )
         self._rates: dict[str, dict[str, tuple[float | None, int]]] = {}
 
     @property
@@ -1053,8 +1055,8 @@ def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only prof
     values = bind_sources(placed)
     epoch, attempt, ordinal = prepare(placed, run_dir, store)
     epochs = Epoch(run_dir)
-    with epochs.held(epoch, profile.lease):
-        queues = QueueSet(run_dir / RUN_QUEUES, profile, epoch=epochs.current)
+    with epochs.held(epoch, run_lease(run_dir, own=profile.lease)):
+        queues = QueueSet.for_run(run_dir, profile, own=profile.lease)
         queues.reconcile()
         events = EventLog(run_dir, attempt, ordinal, epoch=epoch)
         pool = Pool(

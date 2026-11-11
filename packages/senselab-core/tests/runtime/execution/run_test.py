@@ -27,7 +27,7 @@ from runner_test import (  # noqa: F401 - `packaged` is the autouse fixture of t
 from senselab_core.cli import main as cli_main
 from senselab_core.runtime.execution.events import placements, read_events
 from senselab_core.runtime.execution.executor import FaultRecord, Handle, PlanFragment
-from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
+from senselab_core.runtime.execution.queue import QueueSet
 from senselab_core.runtime.execution.run import (
     InputChanged,
     InputsUnavailable,
@@ -468,7 +468,7 @@ def test_a_new_attempt_puts_the_runs_unindexed_queue_items_again(
 ) -> None:
     """An item the run's queue holds without a slot (an interrupted put) has a slot once the run starts again."""
     run, executor = _started(tmp_path)
-    queue = QueueSet(run.run_dir / RUN_QUEUES).queue("cpu")
+    queue = QueueSet.for_run(run.run_dir).queue("cpu")
     with monkeypatch.context() as patch:
         refuse_call(patch, "symlink", "slot-", OSError(errno.EIO, "interrupted"))
         with pytest.raises(OSError, match="interrupted"):

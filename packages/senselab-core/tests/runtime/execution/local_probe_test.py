@@ -85,7 +85,7 @@ def _run(tmp_path: Path, profile: ExecutionProfile, name: str, store: ResultStor
     roots = measure_roots(profile)
     pool = Pool(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=Epoch(run_dir).current),
         store=store,
         events=EventLog(run_dir, attempt, ordinal, epoch=epoch),
         profile=profile,

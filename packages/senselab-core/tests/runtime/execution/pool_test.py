@@ -14,7 +14,7 @@ import numpy
 import pytest
 import soundfile
 from lease_clock_fixture import ManualClock, newest
-from pool_stack_fixture import packaged, planned, registry, scoring, unresolving
+from pool_stack_fixture import lease_of, packaged, planned, registry, scoring, unresolving
 from senselab_core.cli import main as cli_main
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.dataset import Record, ValueInput
@@ -102,7 +102,9 @@ class FakeWorkers:
     def __init__(self, run_dir: Path, store: ResultStore, placed: Plan, values: Mapping[InputIdentity, object]) -> None:
         """Serve the queues of `run_dir` for `placed`, its graph inputs `values`."""
         self.epochs = Epoch(run_dir)
-        self.queues = QueueSet(run_dir / RUN_QUEUES, placed.execution, epoch=self.epochs.current)
+        self.queues = QueueSet(
+            run_dir / RUN_QUEUES, placed.execution, lease=lease_of(placed), epoch=self.epochs.current
+        )
         self.run_dir = run_dir
         self.store, self.placed, self.values = store, placed, values
         self.act: Act = lambda fragment: None
@@ -196,7 +198,7 @@ def _pool(  # noqa: PLR0913 - the run, its parts, and the epoch and clock a rest
     epoch = epochs.take() if epoch is None else epoch
     return Pool(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=epochs.current),
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=epochs.current),
         store=store,
         events=EventLog(run_dir, f"a{epoch}", epoch, epoch=epoch),
         profile=profile,
@@ -593,7 +595,9 @@ from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution_settings import JobLease
 lease = JobLease(stale_after_s={CRASH_STALE_S}, renew_fraction=0.2, attribute_delay_s=0)
 epochs = Epoch(Path(sys.argv[1]))
-with epochs.held(epochs.take(lease), lease):
+n = epochs.take(lease)
+epochs.bind(n, "a1", 1)
+with epochs.held(n, lease):
     os._exit(9)
 """
 
@@ -905,7 +909,7 @@ def test_plan_run_with_a_pool_binds_it_to_the_runs_own_epoch(tmp_path: Path) -> 
     workers = FakeWorkers(run_dir, store, placed, values)
     pool = Pool(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=Epoch(run_dir).current),
         store=store,
         events=EventLog(run_dir, "a0", 1, epoch=0),
         profile=profile,
@@ -953,7 +957,7 @@ def test_a_default_queue_set_honours_only_the_current_epochs_holds(tmp_path: Pat
     epochs = Epoch(run_dir)
     epochs.take()
     epochs.take()
-    queue = QueueSet(run_dir / RUN_QUEUES, profile).queue("cpu")
+    queue = QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease).queue("cpu")
     queue.put(node_fragment(placed, Admission(id="a", plan_hash=placed.hash)))
     queue.hold(1, "host")
     assert queue.held("host") is None
@@ -1055,7 +1059,11 @@ def _late_claim(tmp_path: Path, claimed_in: Callable[[], int]) -> tuple[list[Res
     first = _pool(tmp_path, store, workers, profile)
     fragment = node_fragment(placed, first.admit(placed, values))
     first.submit(fragment)
-    held = QueueSet(tmp_path / "run" / RUN_QUEUES, profile, epoch=claimed_in).queue("cpu").claim("late")
+    held = (
+        QueueSet(tmp_path / "run" / RUN_QUEUES, profile, lease=profile.lease, epoch=claimed_in)
+        .queue("cpu")
+        .claim("late")
+    )
     assert held is not None
     second = _pool(tmp_path, store, workers, profile)
     second.admit(placed, values)
@@ -1097,7 +1105,7 @@ def _coordinator(  # noqa: PLR0913 - the run's parts
     """Return a pool over a coordinator store of its own (the workers' is another), bound by `start`."""
     run_dir = run_dir_of(placed.hash)
     kwargs: dict[str, Any] = {
-        "queues": QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+        "queues": QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=Epoch(run_dir).current),
         "store": ResultStore(root),
         "events": EventLog(run_dir, "a0", 1, epoch=0),
         "profile": profile,
@@ -1263,7 +1271,7 @@ def test_a_failed_provenance_write_costs_no_settled_result_and_is_retried(tmp_pa
     epoch = Epoch(run_dir).take()
     pool = Pool(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=Epoch(run_dir).current),
         store=ResultStore(tmp_path / "store"),
         events=EventLog(run_dir, f"a{epoch}", epoch, epoch=epoch),
         profile=profile,

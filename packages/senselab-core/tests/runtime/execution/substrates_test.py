@@ -233,7 +233,7 @@ def _queued(  # noqa: PLR0913 - the plan's shape, then where it is queued
     def pool_over(workers: Any) -> Pool:  # noqa: ANN401
         return Pool(
             run_dir,
-            queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+            queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=Epoch(run_dir).current),
             store=ResultStore(tmp_path / "store"),
             events=EventLog(run_dir, "a1", epoch, epoch=epoch),
             profile=profile,
@@ -439,7 +439,7 @@ def test_a_pool_names_its_slurm_jobs_by_its_attempt(tmp_path: Path) -> None:
     slurm = Slurm(profile.resource_classes, None, command=["x"], plan_hash=HASH, run_dir=run_dir, commands=_commands())
     pool = Pool(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile),
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease),
         store=ResultStore(tmp_path / "store"),
         events=EventLog(run_dir, "a0", 1, epoch=0),
         profile=profile,
@@ -763,7 +763,7 @@ def test_pending_surplus_is_cancelled_first_and_running_ones_only_when_drained(
     clock.advance_to(10.0)
     scale(pool.queues, recording, profile, workers=_per_quantum(profile), surplus_since=since, clock=clock)
     assert {h.id for h in recording.stops} == {"p1", "p2"} and [h.id for h in recording.handles] == ["r1"]
-    empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile)
+    empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile, lease=profile.lease)
     empty.queue("cpu")
     recording.handles = [WorkerHandle("cpu", "r1"), WorkerHandle("cpu", "p3", True)]
     recording.stops.clear()
@@ -779,7 +779,7 @@ def test_an_empty_service_queue_never_stops_its_running_worker(tmp_path: Path) -
         "svc:pii": {"device": "cpu", "cpus": 1, "partition": "${CPU_PARTITION}", "max_workers": 1},
     }
     profile = ExecutionProfile.load(CLUSTER, {"devices": ["cpu"], "resource_classes": classes})
-    empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile)
+    empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile, lease=profile.lease)
     empty.queue("svc:pii")
     recording = Recording()
     recording.handles = [WorkerHandle("svc:pii", "r1"), WorkerHandle("svc:pii", "p1", True)]

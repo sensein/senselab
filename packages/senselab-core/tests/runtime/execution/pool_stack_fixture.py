@@ -15,6 +15,7 @@ from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_pack
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -26,6 +27,12 @@ from senselab_core.testing.measures import FixedUnit
 def unresolving(profile: ExecutionProfile) -> FixedUnit:
     """Return a resolver whose every unit is unresolved for a final cause, so every unit runs the safe values."""
     return FixedUnit(profile, Unresolved("the host names no hardware class"))
+
+
+def lease_of(placed: Plan) -> JobLease:
+    """Return the lease section of the profile `placed` was placed under."""
+    assert placed.execution is not None
+    return placed.execution.lease
 
 
 BACKEND = "backends.sizes_backend_fixture"

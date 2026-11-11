@@ -18,7 +18,8 @@ FAULT = FaultRecord(fault="content", type="ContentFault", message="bad", gap=Fal
 
 
 def _queue(root: str, override: dict[str, Any]) -> Queue:
-    return QueueSet(Path(root), ExecutionProfile.load(override=override)).queue("cpu")
+    profile = ExecutionProfile.load(override=override)
+    return QueueSet(Path(root), profile, lease=profile.lease).queue("cpu")
 
 
 def fragment(admission: str) -> PlanFragment:

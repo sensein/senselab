@@ -174,7 +174,7 @@ def _pool(  # noqa: PLR0913 - the run's places, its clock and the seams a test r
     given: dict[str, object] = {"roots": roots, "resolver": UnitResolver(profile, roots, hardware=HOST), **seams}
     return Pool(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=epochs.current),
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=epochs.current),
         store=ResultStore(tmp_path / store),
         events=EventLog(run_dir, f"a{epoch}", epoch, epoch=epoch),
         profile=profile,

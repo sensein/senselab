@@ -100,7 +100,7 @@ def test_gathered_items_report_their_own_request_walls(tmp_path: Path, lease_clo
     with packaged(registry(TIMED, worker=FAKE_TIME), tmp_path / "cache"):
         placed, store, pool_dir = _items(profile, tmp_path, texts)
         _put(placed, pool_dir, 0)
-        QueueSet(pool_dir, profile).queue("cpu").put_all(_one_job_items(placed, range(1, 5)))
+        QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu").put_all(_one_job_items(placed, range(1, 5)))
         worker = PoolWorker(
             pool_dir,
             ["cpu"],
@@ -182,7 +182,9 @@ def test_a_request_names_the_one_class_all_its_items_failed_with(tmp_path: Path)
         for pair in ((0, 1), (2, 3)):
             fragment = node_fragment(placed, admission, elements=[(e,) for e in pair])
             paired = fragment.placement.model_copy(update={"batch_size": 2})
-            QueueSet(pool_dir, profile).queue("cpu").put(fragment.model_copy(update={"placement": paired}))
+            QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu").put(
+                fragment.model_copy(update={"placement": paired})
+            )
         _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile)).serve()
     found = _observations(pool_dir, profile)
     assert sorted((o.batch, o.outcome, str(o.fault)) for o in found) == [
@@ -202,7 +204,9 @@ def test_a_request_names_no_class_when_its_items_failed_with_two(tmp_path: Path)
         admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
         fragment = node_fragment(placed, admission, elements=[(e,) for e in range(2)])
         whole = fragment.placement.model_copy(update={"batch_size": 2})
-        QueueSet(pool_dir, profile).queue("cpu").put(fragment.model_copy(update={"placement": whole}))
+        QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu").put(
+            fragment.model_copy(update={"placement": whole})
+        )
         _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile)).serve()
     found = _observations(pool_dir, profile)
     assert [(o.batch, o.outcome, str(o.fault)) for o in found] == [(2, "failed", "None")]
@@ -297,7 +301,7 @@ def _probe_items(
         quantum_items=4, poll_s=obs["poll_s"], first_poll_s=obs["first_poll_s"], presence_refresh_s=obs["poll_s"]
     )
     placed, store, pool_dir = _items(profile, tmp_path, [f"0.00{i}" for i in range(count + 1)])
-    queue = QueueSet(pool_dir, profile).queue(probe_queue("cpu", "p1"))
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue(probe_queue("cpu", "p1"))
     queue.set_probe_unit(HARDWARE, *_unit_env(pool_dir, profile, store))
     for item in _one_job_items(placed, range(count)):
         queue.put_probe(item, "SINGLE", 1)
@@ -365,7 +369,7 @@ def test_a_worker_lists_probe_queues_once_per_refresh(
         clock=clock,
     )
     assert worker._next(None, 4) is None  # noqa: SLF001 - the claim step, with nothing queued yet
-    later = QueueSet(pool_dir, profile).queue(probe_queue("cpu", "p1"))
+    later = QueueSet(pool_dir, profile, lease=profile.lease).queue(probe_queue("cpu", "p1"))
     later.set_probe_unit(HARDWARE, *_unit_env(pool_dir, profile, store))
     later.put_probe(_one_job_items(placed, range(1))[0], "SINGLE", 0)
     assert worker._next(None, 4) is None  # noqa: SLF001 - listed within the refresh: not seen
@@ -429,7 +433,7 @@ def test_only_a_worker_of_the_recorded_class_takes_a_probe_queues_lease(tmp_path
     )
     elsewhere.serve()
     assert elsewhere.served == []
-    unrecorded = QueueSet(pool_dir, profile).queue(probe_queue("cpu", "p2"))
+    unrecorded = QueueSet(pool_dir, profile, lease=profile.lease).queue(probe_queue("cpu", "p2"))
     unrecorded.put_probe(_one_job_items(placed, range(2, 3))[0], "SINGLE", 0)
     assert queue.probe_hardware() == HARDWARE and unrecorded.probe_hardware() is None
     matching = _worker(pool_dir, ["cpu"], profile, store, _sender(store, profile))
@@ -458,7 +462,7 @@ def test_a_worker_whose_env_differs_from_the_units_takes_no_lease(tmp_path: Path
     """The class is the unit's but the env's `wheel_set` is not: no lease, nothing claimed; the same env serves it."""
     placed, store, pool_dir, profile, queue = _probe_items(tmp_path, 2, obs)
     key, entry = _unit_env(pool_dir, profile, store)
-    other = QueueSet(pool_dir, profile).queue(probe_queue("cpu", "p2"))
+    other = QueueSet(pool_dir, profile, lease=profile.lease).queue(probe_queue("cpu", "p2"))
     other.set_probe_unit(HARDWARE, key, {**entry, "wheel_set": "9" * 64})
     for item in _one_job_items(placed, range(2, 3)):
         other.put_probe(item, "SINGLE", 0)

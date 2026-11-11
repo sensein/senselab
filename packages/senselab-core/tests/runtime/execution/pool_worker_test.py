@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 from lease_clock_fixture import ManualClock, age
-from pool_stack_fixture import packaged, planned, registry, scoring
+from pool_stack_fixture import lease_of, packaged, planned, registry, scoring
 from senselab_core.kernel.declare import TaskSpec
 from senselab_core.runtime import request_reports
 from senselab_core.runtime.calibration import FaultKind
@@ -85,7 +85,7 @@ def _put(placed: Plan, pool_dir: Path, element: int | range, queue: str = "cpu",
     fragment = node_fragment(placed, admission, elements=elements)
     update: dict[str, object] = {"resource_class": queue, **({"why": why} if why else {})}
     fragment = fragment.model_copy(update={"placement": fragment.placement.model_copy(update=update)})
-    QueueSet(pool_dir, placed.execution).queue(queue).put(fragment)
+    QueueSet(pool_dir, placed.execution, lease=lease_of(placed)).queue(queue).put(fragment)
     return item_digest(fragment)
 
 
@@ -97,7 +97,7 @@ def _sender(store: ResultStore, profile: ExecutionProfile) -> Send:
 
 
 def _outcomes(pool_dir: Path, profile: ExecutionProfile, queue: str = "cpu") -> list[dict[str, Any]]:
-    directory = QueueSet(pool_dir, profile).queue(queue).path / "outcome"
+    directory = QueueSet(pool_dir, profile, lease=profile.lease).queue(queue).path / "outcome"
     return [json.loads(p.read_bytes()) for p in sorted(directory.iterdir()) if not p.name.startswith(".")]
 
 
@@ -127,7 +127,7 @@ def test_worker_yields_after_quantum_to_older_queue(tmp_path: Path) -> None:
     _put(placed, pool_dir, 0, "cpu:b")
     for element in range(1, 5):
         _put(placed, pool_dir, element)
-    other = QueueSet(pool_dir, profile).queue("cpu:b").claim("other")
+    other = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu:b").claim("other")
     assert other is not None
     send = _sender(store, profile)
 
@@ -147,7 +147,7 @@ def test_a_worker_gathers_one_job_items_once_warm(tmp_path: Path, lease_clock: C
     profile = _profile(quantum_items=4)
     placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(11)])
     admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
-    queue = QueueSet(pool_dir, profile).queue("cpu")
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu")
     for element in range(3):
         _put(placed, pool_dir, element)
     queue.put_all(split(node_fragment(placed, admission, elements=[(i,) for i in range(3, 11)]), 4))
@@ -335,7 +335,7 @@ def test_a_requests_items_are_settled_before_the_next_request_runs(tmp_path: Pat
     placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(4)])
     for element in range(4):
         _put(placed, pool_dir, element)
-    claim = QueueSet(pool_dir, profile).queue("cpu").claim("w", max_jobs=4, singles=True)
+    claim = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu").claim("w", max_jobs=4, singles=True)
     assert claim is not None and len(claim.items) == 4
     settled: list[int] = []
 
@@ -357,7 +357,7 @@ def test_a_claim_that_broke_a_stale_lease_logs_reclaimed_before_its_claimed(tmp_
     profile = _profile()
     placed, store, pool_dir = _run(tmp_path, profile, ["a", "b"])
     digests = [_put(placed, pool_dir, element) for element in (0, 1)]
-    queue = QueueSet(pool_dir, profile).queue("cpu")
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu")
     dead = queue.path / "claims" / f"{digests[0]}.lease" / uuid.uuid4().hex
     dead.mkdir(parents=True)
     for path in (dead, dead.parent):
@@ -380,7 +380,7 @@ def test_an_item_with_an_outcome_and_an_unmarked_slot_is_resolved_and_never_clai
     profile = _profile()
     placed, store, pool_dir = _run(tmp_path, profile, ["a"])
     digest = _put(placed, pool_dir, 0)
-    queue = QueueSet(pool_dir, profile).queue("cpu")
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu")
     held = queue.claim("dead")
     assert held is not None
     with queue.open() as q:
@@ -397,7 +397,7 @@ def test_claim_renewed_during_long_item(tmp_path: Path, lease_clock: Callable[..
     placed, store, pool_dir = _run(tmp_path, profile, ["slow"])
     _put(placed, pool_dir, 0)
     send, stolen, clock = _sender(store, profile), [], lease_clock()
-    claims = QueueSet(pool_dir, profile, clock=clock).queue("cpu")
+    claims = QueueSet(pool_dir, profile, lease=profile.lease, clock=clock).queue("cpu")
     beat_s = profile.lease.renew_fraction * profile.lease.stale_after_s
 
     def slow(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
@@ -464,7 +464,7 @@ def test_sigterm_releases_claims(tmp_path: Path, tier_bound: float) -> None:
         child.wait()
     [outcome] = _outcomes(pool_dir, profile)
     assert outcome["outcome"] == "done"
-    queue = QueueSet(pool_dir, profile).queue("cpu")
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu")
     assert not queue.claimed_any()
     again = queue.claim("next", max_items=2)
     assert again is not None and len(again.items) == 1
@@ -610,7 +610,7 @@ def test_a_lost_claim_abandons_its_request(tmp_path: Path, tier_bound: float) ->
     placed, store, pool_dir = _run(tmp_path, profile, ["one", "two"])
     _put(placed, pool_dir, 0)
     _put(placed, pool_dir, 1, why="second")
-    queue = QueueSet(pool_dir, profile).queue("cpu")
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu")
     workers, sends, thief, seen = _Abandoning(), [], [], []
 
     def stolen(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
@@ -652,7 +652,7 @@ def test_halt_commits_finished_groups_and_releases_the_rest(tmp_path: Path, tier
     finally:
         release.set()
     [outcome] = _outcomes(pool_dir, profile)
-    queue = QueueSet(pool_dir, profile).queue("cpu")
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu")
     again = queue.claim("next", max_items=2)
     assert outcome["outcome"] == "done" and again is not None and len(again.items) == 1
     again.release()
@@ -668,7 +668,7 @@ def test_a_lost_claim_releases_its_other_items_before_its_request_ends(
     lost = _put(placed, pool_dir, 0)
     kept = _put(placed, pool_dir, 1, why="second")
     clock = lease_clock()
-    queue = QueueSet(pool_dir, profile, clock=clock).queue("cpu")
+    queue = QueueSet(pool_dir, profile, lease=profile.lease, clock=clock).queue("cpu")
     taken: list[Claim] = []
     seen: list[str] = []
     beat_s = profile.lease.renew_fraction * profile.lease.stale_after_s

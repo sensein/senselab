@@ -58,7 +58,9 @@ class Run:
         for element in range(len(texts) if serve_items else 0):
             fragment = node_fragment(self.placed, admission, elements=[(element,)])
             placement = fragment.placement.model_copy(update={"resource_class": "cpu", "why": f"item {element}"})
-            QueueSet(self.pool_dir, PROFILE).queue("cpu").put(fragment.model_copy(update={"placement": placement}))
+            QueueSet(self.pool_dir, PROFILE, lease=PROFILE.lease).queue("cpu").put(
+                fragment.model_copy(update={"placement": placement})
+            )
 
     def serve(self, store: ResultStore, before: Callable[[int], None] | None = None) -> None:
         """Serve the queue with a worker of `store`; `before(n)` runs as the n-th item (from 0) is about to execute."""
@@ -153,13 +155,13 @@ class _FailingWait(SystemClock):
 
 def _held_probe_lease(run: Run, worker: PoolWorker) -> None:
     """Give `worker` a serve lease on a probe queue, as a worker serving one holds it."""
-    lease = QueueSet(run.pool_dir, PROFILE).queue(probe_queue("cpu", "p1")).serve_lease()
+    lease = QueueSet(run.pool_dir, PROFILE, lease=PROFILE.lease).queue(probe_queue("cpu", "p1")).serve_lease()
     assert lease is not None
     worker._serving["cpu" + probe_queue("", "p1")] = lease  # noqa: SLF001 - what serving a probe queue holds
 
 
 def _lease_released(run: Run) -> bool:
-    lease = QueueSet(run.pool_dir, PROFILE).queue(probe_queue("cpu", "p1")).serve_lease()
+    lease = QueueSet(run.pool_dir, PROFILE, lease=PROFILE.lease).queue(probe_queue("cpu", "p1")).serve_lease()
     if lease is not None:
         lease.release()
     return lease is not None

@@ -33,7 +33,7 @@ from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.kernel.signals import StaleSource
 from senselab_core.runtime.call import InputUnreadable, RunConfig, bind_input
 from senselab_core.runtime.clock import Clock, SystemClock
-from senselab_core.runtime.execution.epoch import EPOCH_DIR, Epoch
+from senselab_core.runtime.execution.epoch import EPOCH_DIR, Epoch, run_lease
 from senselab_core.runtime.execution.events import (
     Event,
     EventLog,
@@ -587,7 +587,7 @@ class Run:
         """Return whether the latest coordinator stopped (`Epoch.stopped`) and no worker holds a live claim."""
         return (
             Epoch(self.run_dir, self._clock).stopped()
-            and not QueueSet(self.run_dir / RUN_QUEUES, clock=self._clock).claimed_any()
+            and not QueueSet.for_run(self.run_dir, clock=self._clock).claimed_any()
         )
 
     @property
@@ -672,7 +672,7 @@ def default_executor(placed: Plan, executor: Executor | None, store: ResultStore
     run_dir = run_dir_of(placed.hash)
     return Pool(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+        queues=QueueSet.for_run(run_dir, profile, own=profile.lease),
         store=store,
         events=EventLog(run_dir, "a0", 1, epoch=0),
         profile=profile,
@@ -809,7 +809,8 @@ def merged_sources(placed: Plan, run_dir: Path) -> dict[str, Any]:
 def record_sources(placed: Plan, run_dir: Path) -> None:
     """Merge the input sources of `placed` into `run_dir`'s `inputs.json` (`merged_sources`) under its lease.
 
-    The lease, kept alive under the plan's profile's `lease` section, is proven before the write, so two coordinators
+    The lease, kept alive under the run's lease (`run_lease`, with the plan's profile's `lease` section among its
+    epochs), is proven before the write, so two coordinators
     starting one plan merge one after the other and neither loses a durable source. A merge whose proof failed is
     made again, up to `RECORD_ATTEMPTS` times.
 
@@ -818,7 +819,7 @@ def record_sources(placed: Plan, run_dir: Path) -> None:
         LeaseUnavailable: the merge's lease was lost on every attempt.
         LeaseTimeout: another holder kept the lease for its whole timeout.
     """
-    lease = _lease_of(placed)
+    lease = run_lease(run_dir, own=_lease_of(placed))
     private_dir(run_dir / PRIVATE_DIR)
     for _ in range(RECORD_ATTEMPTS):
         held = Lease(run_dir / INPUTS_FILE, stale_after=lease.stale_after_s)
@@ -928,9 +929,9 @@ def start(
     epoch, attempt, ordinal = prepare(placed, run_dir, store)
     epochs = Epoch(run_dir)
     held = contextlib.ExitStack()
-    held.enter_context(epochs.held(epoch, _lease_of(placed)))
+    held.enter_context(epochs.held(epoch, run_lease(run_dir, own=_lease_of(placed))))
     try:
-        QueueSet(run_dir / RUN_QUEUES, placed.execution, epoch=epochs.current).reconcile()
+        QueueSet.for_run(run_dir, placed.execution, own=_lease_of(placed)).reconcile()
         run = Run(run_dir, store=store)
         log = EventLog(run_dir, attempt, ordinal, epoch=epoch)
         executor.bind_epoch(epoch, log)

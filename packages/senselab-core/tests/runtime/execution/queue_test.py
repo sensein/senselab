@@ -30,6 +30,11 @@ POLL_S = RACE["stale_after_s"] * RACE["renew_fraction"]
 OVERRIDE = {"pool": {"segment_items": 3}, "lease": RACE}
 
 
+def _set(root: Path, override: dict[str, Any] | None = None, **kwargs: Any) -> QueueSet:  # noqa: ANN401 - QueueSet's own keywords
+    profile = ExecutionProfile.load(override=override)
+    return QueueSet(root, profile, lease=profile.lease, **kwargs)
+
+
 def _fragments(n: int, prefix: str = "a") -> list[PlanFragment]:
     return [fragment(f"{prefix}-{i}") for i in range(n)]
 
@@ -42,7 +47,7 @@ def _queue(root: Path, segment_items: int = 3, lease: dict[str, float] | None = 
     override: dict[str, Any] = {"pool": {"segment_items": segment_items}}
     if lease is not None:
         override["lease"] = lease
-    return QueueSet(root, ExecutionProfile.load(override=override)).queue("cpu")
+    return _set(root, override).queue("cpu")
 
 
 def _drain(queue: Queue, worker: str = "w") -> list[str]:
@@ -123,7 +128,7 @@ def test_a_stale_lookup_never_lets_a_retired_segment_number_be_made_again(
 
 def test_put_is_idempotent_and_names_the_queue_by_label(tmp_path: Path) -> None:
     """Two puts of one fragment write one item and one slot; a queue for a resident model lives under its label."""
-    queues = QueueSet(tmp_path, ExecutionProfile.load())
+    queues = _set(tmp_path)
     model = queues.queue("gpu:h100#model-1")
     assert model.path == tmp_path / identity_digest(LABEL_TAG, "gpu:h100#model-1")
     assert (model.path / "name").read_text() == "gpu:h100#model-1"
@@ -238,7 +243,7 @@ def test_a_stalled_putter_keeps_its_item_indexed(tmp_path: Path, pool: Pool, tie
 
 def test_an_outcome_record_carries_the_epoch_of_the_claim_and_of_the_queue(tmp_path: Path) -> None:
     """A committed record names the epoch its claim was taken in; the queue's own dead record names the queue's."""
-    queue = QueueSet(tmp_path, ExecutionProfile.load(), epoch=lambda: 4).queue("cpu")
+    queue = _set(tmp_path, epoch=lambda: 4).queue("cpu")
     done, corrupt = _fragments(2)
     queue.put_all([done, corrupt])
     (queue.path / "items" / f"{_digest(corrupt)}.json").write_bytes(b"{}")
@@ -310,7 +315,7 @@ def test_a_lost_reply_on_the_outcome_link_is_this_claims_commit(
 
 def test_an_interrupted_put_is_repaired_by_reconcile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A put that wrote its item and failed before its slot leaves the item unindexed until `reconcile` puts it."""
-    queues = QueueSet(tmp_path, ExecutionProfile.load(override={"pool": {"segment_items": 3}}))
+    queues = _set(tmp_path, {"pool": {"segment_items": 3}})
     queue = queues.queue("cpu")
     (each,) = _fragments(1)
     with monkeypatch.context() as patch:
@@ -318,7 +323,7 @@ def test_an_interrupted_put_is_repaired_by_reconcile(tmp_path: Path, monkeypatch
         with pytest.raises(OSError, match="interrupted"):
             queue.put(each)
     assert queue.depth() == 0 and queue.claim("w", 1) is None
-    assert QueueSet(tmp_path).reconcile() == 1 and QueueSet(tmp_path).reconcile() == 0
+    assert _set(tmp_path).reconcile() == 1 and _set(tmp_path).reconcile() == 0
     claim = queue.claim("w", 1)
     assert claim is not None and claim.items == (_digest(each),)
     claim.commit()

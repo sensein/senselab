@@ -513,7 +513,7 @@ def _pool(tmp_path: Path, placed: Plan, clock: ManualClock, substrate: _Holding)
     profile, run_dir = placed.execution, tmp_path / "run"
     epoch = Epoch(run_dir).take()
     values = {bind_input("x", "json", t)[0]: t for t in "abc"}
-    queues = QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current)
+    queues = QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=Epoch(run_dir).current)
 
     def over(workers: Any) -> Pool:  # noqa: ANN401 - a substrate
         return Pool(
