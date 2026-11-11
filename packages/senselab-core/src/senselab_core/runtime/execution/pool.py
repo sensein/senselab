@@ -543,6 +543,7 @@ class Pool:
                 rounds = (weakref.ref(self), self._scale_wake, self.profile.pool.poll_s, self._clock)
                 self._scaler = threading.Thread(target=_scale_rounds, args=rounds, name="senselab-scaler", daemon=True)
                 self._scaler.start()
+                weakref.finalize(self, self._scale_wake.set)
         self._scale_wake.set()
 
     def _open(self) -> bool:

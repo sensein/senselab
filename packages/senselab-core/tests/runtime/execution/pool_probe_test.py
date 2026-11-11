@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from epoch_fixture import prepared, taken
 from lease_clock_fixture import ManualClock
-from pool_stack_fixture import host_env, scoring
+from pool_stack_fixture import host_env, opened, scoring
 from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import Registry
 from senselab_core.kernel.identity import InputIdentity
@@ -116,11 +116,12 @@ def _env(wheel_set: str, registry: Registry) -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """A registry of one text task, its env built, the cache under `tmp_path`."""
-    from pool_stack_fixture import registry  # noqa: PLC0415 - one name in this module's namespace
+    from pool_stack_fixture import close_pools, registry  # noqa: PLC0415 - names in this module's namespace
 
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
     with _env("4" * 64, registry(TEXTY)):
         yield
+    close_pools()
     WORKERS.close()
 
 
@@ -172,16 +173,18 @@ def _pool(  # noqa: PLR0913 - the run's places, its clock and the seams a test r
     epoch = taken(epochs)
     roots = measure_roots(profile)
     given: dict[str, object] = {"roots": roots, "resolver": UnitResolver(profile, roots, hardware=HOST), **seams}
-    return Pool(
-        run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=epochs.current),
-        store=ResultStore(tmp_path / store),
-        events=EventLog(run_dir, f"a{epoch}", epoch, epoch=epoch),
-        profile=profile,
-        substrate=substrate if substrate is not None else Idle(),
-        epoch=epoch,
-        clock=clock,
-        **given,  # type: ignore[arg-type]
+    return opened(
+        Pool(
+            run_dir,
+            queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=epochs.current),
+            store=ResultStore(tmp_path / store),
+            events=EventLog(run_dir, f"a{epoch}", epoch, epoch=epoch),
+            profile=profile,
+            substrate=substrate if substrate is not None else Idle(),
+            epoch=epoch,
+            clock=clock,
+            **given,  # type: ignore[arg-type]
+        )
     )
 
 

@@ -1,8 +1,11 @@
 """Shared fixtures for the runtime tests."""
 
+import gc
 import importlib
 import os
 import subprocess
+import threading
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
@@ -48,13 +51,15 @@ def backends_importable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def lease_clock(slack_tests: dict[str, Any], tier_bound: float) -> Callable[..., ManualClock]:
-    """Build a `ManualClock`: polls and step from the test slack file, hang bound a fraction of the tier's."""
+    """Build a `ManualClock`: polls and step from the test slack file, hang bound a fraction of the tier's.
+
+    A test whose own work is short passes `hang_s` to bound a lost wake in seconds.
+    """
     section = slack_tests["lease_clock"]
 
     def make(**kwargs: Any) -> ManualClock:  # noqa: ANN401 - `ManualClock`'s own keyword arguments
-        return ManualClock(
-            poll_s=section["poll_s"], step_s=section["step_s"], hang_s=section["hang_fraction"] * tier_bound, **kwargs
-        )
+        bounds = {"hang_s": section["hang_fraction"] * tier_bound, **kwargs}
+        return ManualClock(poll_s=section["poll_s"], step_s=section["step_s"], **bounds)
 
     return make
 
@@ -93,3 +98,22 @@ def array_parent(tmp_path: Path) -> Iterator[Path]:
     path.mkdir()
     yield path
     assert list(path.iterdir()) == []
+
+
+def _senselab_threads() -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if t.name.startswith("senselab-") and t.is_alive()]
+
+
+@pytest.fixture(autouse=True)
+def no_leaked_senselab_threads(slack_tests: dict[str, Any]) -> Iterator[None]:
+    """Fail a test that leaves a `senselab-*` thread running: an object that owns a thread must be closed.
+
+    A thread whose owner was collected is given `stop_test.hang_s` real seconds to see its wake.
+    """
+    before = set(_senselab_threads())
+    yield
+    deadline = time.monotonic() + slack_tests["stop_test"]["hang_s"]
+    while (leaked := [t for t in _senselab_threads() if t not in before]) and time.monotonic() < deadline:
+        gc.collect()
+        leaked[0].join(slack_tests["fake_worker"]["poll_s"])
+    assert [t.name for t in leaked] == []

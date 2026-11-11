@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from epoch_fixture import prepared, taken
 from lease_clock_fixture import ManualClock
-from pool_stack_fixture import packaged, planned, registry, scoring
+from pool_stack_fixture import close_pools, opened, packaged, planned, registry, scoring
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.epoch import Epoch
@@ -132,6 +132,7 @@ def stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("GPU_PARTITION", "gpuq")
     with packaged(REGISTRY, tmp_path / "cache"):
         yield
+    close_pools()
 
 
 def _submitted(tmp_path: Path) -> list[list[str]]:
@@ -232,16 +233,18 @@ def _queued(  # noqa: PLR0913 - the plan's shape, then where it is queued
     epoch = taken(Epoch(run_dir))
 
     def pool_over(workers: Any) -> Pool:  # noqa: ANN401
-        return Pool(
-            run_dir,
-            queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=Epoch(run_dir).current),
-            store=ResultStore(tmp_path / "store"),
-            events=EventLog(run_dir, "a1", epoch, epoch=epoch),
-            profile=profile,
-            substrate=workers,
-            epoch=epoch,
-            clock=clock,
-            resolver=FixedUnit(profile, Unresolved("a final cause")),
+        return opened(
+            Pool(
+                run_dir,
+                queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=Epoch(run_dir).current),
+                store=ResultStore(tmp_path / "store"),
+                events=EventLog(run_dir, "a1", epoch, epoch=epoch),
+                profile=profile,
+                substrate=workers,
+                epoch=epoch,
+                clock=clock,
+                resolver=FixedUnit(profile, Unresolved("a final cause")),
+            )
         )
 
     pool = pool_over(recording)

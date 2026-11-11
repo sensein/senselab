@@ -15,7 +15,7 @@ import pytest
 import soundfile
 from epoch_fixture import prepared, taken
 from lease_clock_fixture import ManualClock, newest
-from pool_stack_fixture import lease_of, packaged, planned, registry, scoring, unresolving
+from pool_stack_fixture import close_pools, lease_of, opened, packaged, planned, registry, scoring, unresolving
 from senselab_core.cli import main as cli_main
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.dataset import Record, ValueInput
@@ -90,6 +90,7 @@ def stack(tmp_path: Path) -> Iterator[None]:
     """This module's registry, every env this interpreter under an MIT lock; the cache under `tmp_path`."""
     with packaged(REGISTRY, tmp_path / "cache"):
         yield
+    close_pools()
     WORKERS.close()
 
 
@@ -207,7 +208,7 @@ def _pool(  # noqa: PLR0913 - the run, its parts, and the epoch and clock a rest
     run_dir = tmp_path / "run"
     epochs = Epoch(run_dir)
     epoch = taken(epochs) if epoch is None else epoch
-    return Pool(
+    pool = Pool(
         run_dir,
         queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=epochs.current),
         store=store,
@@ -218,6 +219,7 @@ def _pool(  # noqa: PLR0913 - the run, its parts, and the epoch and clock a rest
         clock=clock,
         resolver=unresolving(profile),
     )
+    return opened(pool)
 
 
 def _all(pool: Pool, placed: Plan, values: Mapping[InputIdentity, object]) -> list[ResultRef]:

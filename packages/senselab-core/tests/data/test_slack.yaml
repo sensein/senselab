@@ -43,3 +43,7 @@ tests:
   # budget against its headroom) allow for rounding in sums of at most a hundred jobs.
   sizing:
     relative_tolerance: 1.0e-9
+  # A bounded-stop test's real-time hang guard: seconds after which a wait nobody ends fails, so a lost wake is a
+  # failure within seconds and not at the tier's budget.
+  stop_test:
+    hang_s: 5

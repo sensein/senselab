@@ -33,6 +33,7 @@ from senselab_core.runtime.hardware import device_set, host_token
 from senselab_core.runtime.locks import LEASE_SUFFIX, Lease, LeaseState, LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.storage import write_atomically
+from senselab_core.runtime.teardown import run_all
 from senselab_core.runtime.vllm_server import Attested, StaleAttestation, attest_reply, chat, complete
 
 logger = logging.getLogger("senselab")
@@ -216,10 +217,15 @@ class ServiceLease:
         return self.registry.clock.now() - self._consumed
 
     def close(self) -> None:
-        """Remove the entry while the lease still holds it, then release the lease; safe to call twice."""
+        """Remove the entry while the lease still holds it, then release the lease; safe to call twice.
+
+        The release runs even when the removal raises; the first error is raised after both.
+        """
+        run_all(self._withdraw, self._stack.close)
+
+    def _withdraw(self) -> None:
         if self._lease.owns() and self._lease.prove():
             (self.registry.root / f"{self.registry.name(self.identity)}.json").unlink(missing_ok=True)
-        self._stack.close()
 
 
 class ConsumerLease:
