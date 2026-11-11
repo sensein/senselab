@@ -61,3 +61,12 @@ corpus run could not be debugged except by reading worker stderr.
 - `status_from(events)` derives every metric of a run (counts by state, faults by class, broken envs) from the events
   alone (a run's `done` and `cancelled` included, and `last_event_ns` for one whose process died; no status file
   exists to race on); `senselab status <run>` and `senselab explain <run> <node|key>` read the run directory and nothing else.
+
+## Amendment 2026-11-11: `reclaimed`, `quarantined` and the format (Phase 3 Task 24, T24-2)
+
+- The event kinds gain `reclaimed`: a claim that broke a stale lease, one per job before its `claimed`, carrying the
+  age and the dead holder's tokens, with no change of state. The format becomes `run-event@2.3`, an additive minor; a
+  reader of an earlier minor quarantines `reclaimed` lines. `RunStatus.reclaimed` counts them, and `senselab status`
+  prints the count, which is cumulative over the run's epochs.
+- `RunStatus.quarantined` counts the event lines a reader could not decode; `senselab status` prints it when it is not
+  zero, and a line already reported by a process is not logged again.

@@ -112,3 +112,16 @@ UX-50) governs; this amendment brings the decision in line.
   residual, and a site that shares runs over such ACLs restricts the parent.
 - A stored fault message renders this host's name to `<host>`. IP address literals in a fault message are not
   rendered; they are out of this amendment.
+
+## Amendment 2026-11-11: the run's license policy (Phase 3 Task 24, T24-2)
+
+- The license policy is run state: `licenses.json` (`run-licenses@1`), written once at the run's first start, with its
+  digest written beside each attempt's
+  placement (`private/placements/<attempt>.licenses`; the placement document is unchanged). It is part of no identity. `resume`, `coordinate`, the pool workers and
+  `plan(...).run()` on an existing run read it back; a resume given no policy runs under it.
+- A policy `Q` is at least as strict as the stored `P` when the absent policy is read as `(allow = every id, refuse =
+  none, allow_unlicensed_hits = false)` and: every id `Q` allows and does not refuse, `P` allows and does not refuse;
+  and `Q` allows unlicensed hits only if `P` does. A resume may tighten a policy and never loosen it; a laxer one is
+  refused (`LaxerLicensePolicy`) naming the field and the ids. To loosen it, plan the run in a fresh run directory.
+- Local trust: run state is the owner's to edit. The digest attributes a policy to each attempt and detects damage; it
+  does not resist an edit in place, to `plan.json` or to `licenses.json`.

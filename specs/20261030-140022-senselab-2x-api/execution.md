@@ -524,16 +524,19 @@ are recorded here (R-200).
   `Run.status` and `Run.results` read under the run's current epoch: a job with no event of it yet is queued. `logs_claims` is a member of the `Executor` protocol (`InProcess`
   False, `Pool` True); when it is set the runner logs no `started` as it sends a fragment: the worker's `claimed` is
   the start.
-- **The epoch precedes the attempt (Task 14 fix round).** `prepare` takes the epoch, then claims the attempt ordinal,
-  and records the attempt in `epoch/<n>/attempt.json` (`Epoch.bind`, read by `Epoch.attempt`, which is also how a
-  pool worker finds the attempt and ordinal to log `claimed` under). Every event carries its attempt's `epoch`, and a
+- **The attempt precedes the epoch, and the epoch is current once bound (Task 24, T24-2; replaces the Task 14 fix round).**
+  `prepare` writes the plan, sources, manifest and license policy and claims the attempt ordinal; the coordinator then
+  takes `epoch/<n>` and holds its lease (`Epoch.opening`, `Epoch.held`), reconciles and binds the executor, and
+  records the attempt in `epoch/<n>/attempt.json` last (`Epoch.bind`, read by `Epoch.attempt`, which is also how a
+  pool worker finds the attempt and ordinal to log `claimed` under). `Epoch.current()` is the highest epoch with an
+  `attempt.json`, so an epoch that failed earlier fences no one and changes no status; it is marked `ended`. Every event carries its attempt's `epoch`, and a
   job's latest attempt is ranked by (epoch, ordinal), so a stale coordinator that claimed a higher ordinal cannot
   override the live epoch's results; its failures and blocks never decide a job's state, though a result it gave
   stands as an earlier result. The runner treats `StaleCoordinator` and `QueueHeld` as interruptions: no
   `fail_batch` and no `blocked` or `cancelled` for unsent jobs, which a later epoch runs.
 - **Epochs and the Pool (Task 14, ADR-003).** `runtime/execution/epoch.py`: `Epoch(run_dir).take()` makes
-  `epoch/<n>` by `mkdir` (a number taken by another coordinator is skipped), writing the lease bound to
-  `epoch/<n>/lease.json` at once, and `current()` is the highest. A coordinator (`start`, or `senselab coordinate
+  `epoch/<n>` by `mkdir` from the highest directory (a number taken by another coordinator is skipped), writing the
+  coordinator's whole `lease` section to `epoch/<n>/lease.json` at once; `current()` is the highest bound epoch. A coordinator (`start`, or `senselab coordinate
   <run>`) holds `epoch/<n>/coordinator.lease`, kept alive under the profile's `lease` section, and marks
   `epoch/<n>/ended` when it stops. `Run.wait` reports `interrupted` only while no thread of that `Run` is alive, the
   latest epoch ended or its lease (or, never held, its directory) is older than its bound (`Epoch.stopped`), and no
@@ -541,8 +544,9 @@ are recorded here (R-200).
   and every poll of `results` raise `StaleCoordinator` once a newer epoch exists. `start` (and `Plan.run`) hands its
   own epoch and attempt log to the executor through the protocol's `bind_epoch`, so a `Pool` built beforehand
   coordinates as that epoch and is never stale for the first coordinator. `results` polls from `pool.first_poll_s`,
-  doubling up to `pool.poll_s`. A coordinator holds its epoch's lease from right after `prepare` (before
-  `reconcile`, the prov write and, in `start`, the thread launch), so a slow start never reads as a stale one. A
+  doubling up to `pool.poll_s`. A coordinator holds its epoch's lease from right after it takes the epoch (before
+  `reconcile`, the prov write and, in `start`, the thread launch), and binds the epoch as the first statement of the run
+  thread, so a slow start never reads as a stale one. A
   `QueueSet` built without `epoch=` reads `Epoch(root.parent).current`, the run its queues belong to, so a hold an
   older epoch made after passing the fence is never honoured by any claimer. The Pool's expected key is computed
   under the fragment's own placement (`job_key(..., placement)`), the request actually sent. Correctness does not rest on the fence: a stale

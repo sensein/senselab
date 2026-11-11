@@ -426,3 +426,31 @@ Phase 3 head the profile's `lease` section has three keys, `stale_after_s`, `ren
   packaged profiles (`laptop.yaml:108`, `slurm.yaml:125`; `runtime/execution_settings.py:252-255`), compared with the
   idle time of each service the worker provides (`runtime/execution/pool_worker.py:426`). The registry entry carries no
   heartbeat (`runtime/execution/services.py:8`). The 2026-11-07 service amendment stands otherwise.
+
+## Amendment 2026-11-11: the run's lease, the ready epoch and the live item (Phase 3 Task 24, T24-2)
+
+- **An epoch is current once it is bound.** The current epoch is the highest `n` whose `epoch/<n>/attempt.json`
+  exists. A coordinator makes `epoch/<n>` and `lease.json` and takes its lease, sets up, and publishes `attempt.json`
+  last. On any exit before that it writes `ended`. An epoch that never became current fences no coordinator and
+  changes no status. `Epoch.take` numbers from the highest directory, so two coordinators never share a number. When no
+  epoch is bound, an external waiter judges the highest directory by its `ended` mark, else its age.
+- **`lease.json` holds the coordinator's whole `lease` section** (`run-lease@1`), read with the section's own model;
+  a missing or unknown key makes the run unreadable (`RunLeaseUnreadable`): a run directory written by another build is
+  not resumed. The run's lease is the composite of every bound epoch's section and the starting coordinator's own: the
+  longest `stale_after_s` and `attribute_delay_s`, the smallest `renew_fraction`, every other key from the newest.
+  Every judge of a run-scoped lease (claims, serve leases, the coordinator lease, `inputs.json`, liveness, probe
+  abandonment) and every holder of one uses it (`QueueSet.for_run`). A coordinator whose composite fails the beat
+  bound, with the attribute delay measured on the run's storage, takes no epoch. A worker whose profile's section is not
+  the newest bound epoch's refuses to start (`LeaseMismatch`), and one that sees a newer epoch with another section
+  stops before its next claim. A worker of an older epoch judges by its own bound until that next turn, so for at most one
+  turn it can break a lease an epoch with a longer bound still beats.
+- **Replaces** "A run re-puts every unfinished fragment on start and resume" (2026-11-06) with: a run re-puts every
+  unfinished job on start and resume, except a job a live item already holds on the queue the job is now placed on, under
+  the same key. The coordinator follows that item with the jobs of its own fragment, so each job is given and charged
+  once and an item's observations land once. A job whose live item is on another queue is put again; that duplicate is
+  the fresh placement of ADR-004, bounded by the old items, and accepted.
+- **Settle after the request.** A worker settles each item's outcome after the request that stored it, not after its
+  claim's group; the renewal proofs run once per renewal interval, not per emit. At most one request's items, and one
+  multi-job item still waiting on its other requests, lie between "stored" and "settled". A request's report goes with its outcomes, so every item keeps its own wall and
+  observations. A holder killed between staging and linking leaves its temporary in `outcome/`; it names no outcome,
+  so the item is claimed again, and a later settle removes only its own temporary.
