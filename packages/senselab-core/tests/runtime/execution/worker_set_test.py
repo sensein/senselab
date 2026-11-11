@@ -270,7 +270,7 @@ def test_a_server_that_fails_to_start_is_a_load_failure() -> None:
 
 @pytest.mark.logic
 def test_a_server_short_of_device_memory_is_a_resource_fault() -> None:
-    """A server that fails to start for lack of device memory reaches a checkout as itself, a resource fault."""
+    """A server that fails to start for lack of device memory is the cause of a resource `WorkerLoadFailed`."""
 
     def start(*_: Any) -> Any:  # noqa: ANN401 - a ServerStart
         raise VllmOutOfMemory("vllm serve exited with 1 before it was healthy: ValueError: Free memory on device")
@@ -279,9 +279,11 @@ def test_a_server_short_of_device_memory_is_a_resource_fault() -> None:
         update={"env": Env.server("s"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
     )
     model = _model("e" * 40)
-    with pytest.raises(VllmOutOfMemory) as raised:
+    with pytest.raises(WorkerLoadFailed) as raised:
         with WorkerSet(1, start_server=start).checkout(
             backend, ENV, model, device="cpu", profile=PROFILE, expected=_attestation(model)
         ):
             pass
-    assert raised.value.kind == "memory" and classify(raised.value) is FaultClass.RESOURCE
+    cause = raised.value.__cause__
+    assert isinstance(cause, VllmOutOfMemory) and cause.kind == "memory"
+    assert classify(raised.value) is FaultClass.RESOURCE

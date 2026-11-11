@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy
 from senselab_worker import WIRE_VERSION, runtime_identity
@@ -45,6 +45,7 @@ from senselab_worker.faults import (
     ProtocolError,
     ResourceFault,
     ValueTooLarge,
+    at_load,
     error_record,
     wire_text,
 )
@@ -145,6 +146,14 @@ class WorkerFatal(InfrastructureFault):
         """Wrap the worker's error object."""
         super().__init__(f"worker fatal: {error.get('type')}: {error.get('message')}")
         self.error = error
+
+    from_load: ClassVar[bool] = True
+    """Every `WorkerFatal` is read as a load fault, as is a worker's fatal for an invalid host line mid-request."""
+
+    @property
+    def carried_class(self) -> tuple[FaultClass, bool]:
+        """The class and gap of the worker's error object, as `at_load` has them."""
+        return at_load(FaultClass(self.error["fault"]), bool(self.error.get("gap", True)))
 
 
 class WorkerTimeout(ResourceFault, TimeoutError):

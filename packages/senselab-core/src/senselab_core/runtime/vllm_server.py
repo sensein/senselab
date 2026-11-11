@@ -33,7 +33,7 @@ from types import TracebackType
 from typing import IO, Any
 
 from senselab_worker.digest import identity_digest
-from senselab_worker.faults import ResourceFault
+from senselab_worker.faults import ContentFault, InfrastructureFault, ResourceFault
 
 from senselab_core.kernel.identity import Attestation, ResolvedModel
 from senselab_core.runtime.clock import Clock, SystemClock
@@ -131,6 +131,59 @@ class AttestationMismatch(RuntimeError):
 
 class StaleAttestation(RuntimeError):
     """A reply the attested server did not give: the server is no longer running, or another model answered."""
+
+
+class ServiceUnavailable(InfrastructureFault):
+    """The server could not be reached, or did not answer: a refused or reset connection, or a timeout."""
+
+
+class ServerRejected(ContentFault):
+    """The server refused the request as malformed or as not servable (an HTTP 4xx): a fault of the request."""
+
+    def __init__(self, status: int, message: str) -> None:
+        """Carry the HTTP `status` and the server's `message`."""
+        super().__init__(message)
+        self.status = status
+
+
+class ServerOutOfMemory(ResourceFault):
+    """The server lacked a resource to answer: an HTTP 503 or 507, or a reply naming memory."""
+
+
+class ServerFailed(InfrastructureFault):
+    """The server failed on a request it accepted (any other HTTP 5xx)."""
+
+
+_TRANSIENT_STATUSES = frozenset(
+    {HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.SERVICE_UNAVAILABLE}
+)
+_MEMORY_WORDS = re.compile(r"out of memory|\boom\b", re.IGNORECASE)
+
+
+def _status_fault(exc: urllib.error.HTTPError) -> Exception:
+    text = f"HTTP {exc.code}: {exc.reason}"
+    if exc.code < HTTPStatus.INTERNAL_SERVER_ERROR:
+        return ServiceUnavailable(text) if exc.code in _TRANSIENT_STATUSES else ServerRejected(exc.code, text)
+    if exc.code == HTTPStatus.INSUFFICIENT_STORAGE or _MEMORY_WORDS.search(str(exc.reason)):
+        return ServerOutOfMemory(text)
+    return ServiceUnavailable(text) if exc.code in _TRANSIENT_STATUSES else ServerFailed(text)
+
+
+def server_fault(exc: Exception) -> Exception:
+    """Return the typed fault for what a request to a server raised: the one mapper both server paths use.
+
+    - A timeout, a connect failure, a reset or any other transport error: `ServiceUnavailable`.
+    - An HTTP 408 or 429, which a retry may cure: `ServiceUnavailable`; any other 4xx: `ServerRejected`, a content
+      fault, whatever its message says.
+    - An HTTP 507, or a 5xx whose message names memory: `ServerOutOfMemory`, a resource fault.
+    - An HTTP 503: `ServiceUnavailable`; any other 5xx: `ServerFailed`.
+    - Anything else is returned as it is.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        return _status_fault(exc)
+    if isinstance(exc, (OSError, http.client.HTTPException)):
+        return ServiceUnavailable(f"the server did not answer: {type(exc).__name__}")
+    return exc
 
 
 @dataclass(frozen=True)
@@ -416,6 +469,7 @@ class VllmServer:
 
         Raises:
             StaleAttestation: The server is not running, or the reply names another model.
+            ServerRejected, ServerOutOfMemory, ServerFailed, ServiceUnavailable: as `server_fault` types the failure.
         """
         attestation = self._live()
         return attest_reply(chat(str(self.url), self.served_name, messages, sampling=sampling), attestation, self.label)
@@ -425,6 +479,7 @@ class VllmServer:
 
         Raises:
             StaleAttestation: The server is not running, or the reply names another model.
+            ServerRejected, ServerOutOfMemory, ServerFailed, ServiceUnavailable: as `server_fault` types the failure.
         """
         attestation = self._live()
         reply = complete(str(self.url), self.served_name, prompt_token_ids, sampling=sampling)
@@ -629,7 +684,8 @@ def _error_message(raw: bytes) -> str:
 def _post_json(url: str, body: Mapping[str, Any], timeout_s: float) -> Any:  # noqa: ANN401 - a JSON value
     """POST `body` without any proxy and parse the JSON reply; nothing is logged.
 
-    A refused request re-raises its ``HTTPError`` with the server's short error message after the reason.
+    A failure is raised as its typed fault (`server_fault`); a refused request carries the server's short error
+    message after the reason.
     """
     request = urllib.request.Request(  # noqa: S310 - a loopback http URL
         url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST"
@@ -640,7 +696,9 @@ def _post_json(url: str, body: Mapping[str, Any], timeout_s: float) -> Any:  # n
     except urllib.error.HTTPError as exc:
         message = _error_message(exc.read())
         reason = f"{exc.reason}: {message}" if message else str(exc.reason)
-        raise urllib.error.HTTPError(exc.url, exc.code, reason, exc.headers, None) from None
+        raise server_fault(urllib.error.HTTPError(exc.url, exc.code, reason, exc.headers, None)) from None
+    except (OSError, http.client.HTTPException) as exc:
+        raise server_fault(exc) from exc
 
 
 def chat(
@@ -662,7 +720,8 @@ def chat(
 
     Raises:
         ValueError: `sampling` sets ``model``, ``messages`` or ``stream``.
-        urllib.error.HTTPError: The server refused the request; the message carries its short error message.
+        ServerRejected, ServerOutOfMemory, ServerFailed, ServiceUnavailable: as `server_fault` types them; the message
+            of an HTTP failure carries the server's short error message.
     """
     _refuse_reserved(sampling, ("model", "messages", "stream"))
     body = {"model": model, "messages": list(messages), **sampling, "stream": False}
@@ -689,7 +748,8 @@ def complete(
     Raises:
         ValueError: The prompt is empty or holds anything but non-negative ints, or `sampling` sets ``model``,
             ``prompt`` or ``stream``.
-        urllib.error.HTTPError: The server refused the request; the message carries its short error message.
+        ServerRejected, ServerOutOfMemory, ServerFailed, ServiceUnavailable: as `server_fault` types them; the message
+            of an HTTP failure carries the server's short error message.
     """
     ids = list(prompt_token_ids)
     if not ids or not all(isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in ids):

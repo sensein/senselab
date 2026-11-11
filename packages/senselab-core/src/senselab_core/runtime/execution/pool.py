@@ -15,7 +15,8 @@ fault class has its effect here, with the budgets of the profile's `faults` sect
 - **content**, not a gap: charged; the job is queued again until `content_attempts` charges, then it is dead;
 - **resource**, gap or not: the job is queued
   again on the next larger memory class of its device, uncharged, at most `resource_replacements` times; then, or
-  with no larger class, it is dead;
+  with no larger class, it is dead, unless the fault is a load's (`FaultRecord.load`): that is the environment's and
+  counts against it as infrastructure does;
 - **infrastructure**, or a gap that is not resource: queued again uncharged (a gap is logged); at
   `infrastructure_replacements` failures of one env in this epoch the env is reported once as broken (`BrokenEnv`) and
   held on each queue it is seen on (`Queue.hold`), so its jobs wait for a later epoch and none is failed.
@@ -68,6 +69,7 @@ from senselab_core.runtime.execution.executor import (
     ResultRef,
     Status,
     WorkersBroken,
+    WrongKey,
 )
 from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, fragment_logical_keys, job_units
 from senselab_core.runtime.execution.job import Job
@@ -660,12 +662,8 @@ class Pool:
         for index, (job, key) in enumerate(zip(fragment.jobs, (k.digest() for k in logical), strict=True)):
             ref = given.get(job)
             if ref is not None and ref.key_digest != key:
-                fault = FaultRecord(
-                    fault="content",
-                    type="WrongKey",
-                    message=f"the outcome gives {job} the key {ref.key_digest}, not its own {key}",
-                    gap=False,
-                    charged=True,
+                fault = FaultRecord.from_exception(
+                    WrongKey(f"the outcome gives {job} the key {ref.key_digest}, not its own {key}")
                 )
             elif ref is not None and ref.failure is None and ref.output_identity is not None:
                 found = self.store.entry_of(key, ref.output_identity)
@@ -674,11 +672,13 @@ class Pool:
                         self._reuse(placed, job, logical[index], found, ref.served)
                     yield ref.model_copy(update={"served": "exact"}) if reused and ref.served is None else ref
                     continue
-                fault = _gap("MissingOutput", f"the outputs of {job} are not in the result store")
+                fault = FaultRecord.gap_of("MissingOutput", f"the outputs of {job} are not in the result store")
             elif ref is not None and ref.failure is not None:
                 fault = ref.failure
             else:
-                fault = dead or _gap("MissingResult", f"the outcome of the item gives no result for {job}")
+                fault = dead or FaultRecord.gap_of(
+                    "MissingResult", f"the outcome of the item gives no result for {job}"
+                )
             yield from self._effect(followed, flight, index, key, fault)
 
     def _reuse(self, placed: Plan, job: JobRef, key: LogicalKey, hit: StoredResult, served: str | None) -> None:
@@ -734,7 +734,13 @@ class Pool:
         if fault.gap:
             self.gaps.append((job, fault))
             logger.warning("classification gap: %s of %s, not charged", fault.type, job)
-        if _counts_against_env(fault):
+        larger = larger_class(self.profile, placement.resource_class)
+        replaced = (
+            fault.fault == "resource"
+            and larger is not None
+            and followed.moved[job.element] < budgets.resource_replacements
+        )
+        if fault.counts_against_env and not (fault.load and replaced):
             if self._infrastructure(flight, job, key, fault):
                 self._again(followed, flight, index)
             else:
@@ -743,9 +749,8 @@ class Pool:
             return
         if fault.fault == "resource":
             followed.moved[job.element] += 1
-            larger = larger_class(self.profile, placement.resource_class)
-            if larger is not None and followed.moved[job.element] <= budgets.resource_replacements:
-                self._failed(job, key, fault, placement.env)
+            if replaced and larger is not None:
+                self._failed(job, key, fault, placement.env, replaced=True)
                 grant = {"resource_class": larger, "partition": self.profile.resource_classes[larger].partition}
                 self._again(followed, flight, index, placement.model_copy(update=grant))
                 return
@@ -766,7 +771,8 @@ class Pool:
             and e.epoch == self.epoch
             and e.env == env
             and e.failure is not None
-            and _counts_against_env(e.failure)
+            and not e.replaced
+            and e.failure.counts_against_env
         ]
 
     def _held(self, flight: Flight) -> QueueHeld:
@@ -797,8 +803,8 @@ class Pool:
             )
         return False
 
-    def _failed(self, job: JobRef, key: str, fault: FaultRecord, env: str) -> None:
-        self.events.record("failed", job.node, job=job, key=key, failure=fault, env=env)
+    def _failed(self, job: JobRef, key: str, fault: FaultRecord, env: str, *, replaced: bool = False) -> None:
+        self.events.record("failed", job.node, job=job, key=key, failure=fault, env=env, replaced=replaced)
 
     def _again(self, followed: Followed, flight: Flight, index: int, placement: NodePlacement | None = None) -> None:
         """Queue job `index` of `flight` again alone, as the next attempt, on `placement` (its own when None)."""
@@ -915,15 +921,6 @@ def _worker_of(record: Mapping[str, object]) -> str | None:
     measure = record.get("measure")
     worker = measure.get("job") if isinstance(measure, Mapping) else None
     return worker if isinstance(worker, str) and worker else None
-
-
-def _counts_against_env(fault: FaultRecord) -> bool:
-    """Whether `fault` is an infrastructure fault, or a gap of a class that is not resource."""
-    return fault.fault == "infrastructure" or (fault.gap and fault.fault != "resource")
-
-
-def _gap(kind: str, message: str) -> FaultRecord:
-    return FaultRecord(fault="infrastructure", type=kind, message=message, gap=True, charged=False)
 
 
 def run_plan(run_dir: Path, profile: ExecutionProfile) -> Plan:

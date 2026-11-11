@@ -14,11 +14,13 @@ from pydantic import (
     BeforeValidator,
     Field,
     PlainSerializer,
+    SerializerFunctionWrapHandler,
     StringConstraints,
     field_validator,
+    model_serializer,
     model_validator,
 )
-from senselab_worker.faults import FaultClass
+from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, error_record, wire_text
 
 from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, thawed
 from senselab_core.kernel.formats import PLAN_FRAGMENT_FORMAT, FormatTag, Formatted
@@ -94,11 +96,24 @@ FaultName = Annotated[Literal["content", "resource", "infrastructure"], BeforeVa
 """A `FaultClass` by its value; given a `FaultClass`, its value is held."""
 
 
+class CorruptItem(ContentFault):
+    """A queue item that is not the fragment its name digests."""
+
+
+class WrongKey(ContentFault):
+    """An outcome that gives a job a key other than its own."""
+
+
+class MissingItem(InfrastructureFault):
+    """A queue item whose file is missing."""
+
+
 class FaultRecord(Frozen):
     """A job's failure: its fault class, the exception's type and message, whether it is a gap, whether it is charged.
 
     Only a content fault that is not a gap is charged against the item's retry budget; a resource or infrastructure
-    fault re-places the job, and a gap fault, one the fallback table classified, is never charged.
+    fault re-places the job, and a gap fault, one the fallback table classified, is never charged. `load` is true for a
+    fault stated while a worker started, loaded or reloaded its model: it is the environment's, not an item's.
     """
 
     fault: FaultName
@@ -106,6 +121,15 @@ class FaultRecord(Frozen):
     message: str
     gap: bool
     charged: bool
+    load: bool = False
+
+    @model_serializer(mode="wrap")
+    def _omit_a_false_load(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Serialise `load` only when it is true, so a record that is no load's reads as it did before the field."""
+        data: dict[str, Any] = handler(self)
+        if not data.get("load"):
+            data.pop("load", None)
+        return data
 
     @field_validator("message")
     @classmethod
@@ -119,13 +143,34 @@ class FaultRecord(Frozen):
         return self
 
     @property
+    def counts_against_env(self) -> bool:
+        """Whether the failure is its environment's: infrastructure, a gap that is not resource, or a load's fault."""
+        return self.fault == "infrastructure" or (self.gap and self.fault != "resource") or self.load
+
+    @property
     def fault_class(self) -> FaultClass:
         """The fault class, as a `FaultClass`."""
         return FaultClass(self.fault)
 
     @classmethod
+    def from_exception(cls, exc: BaseException) -> "FaultRecord":
+        """Return the record of `exc` as a worker classifies it (`error_record`), its notes after its message."""
+        error = error_record(exc)
+        notes = [str(n) for n in getattr(exc, "__notes__", ())]
+        message = wire_text("\n".join([error["message"], *notes]))
+        return cls.of({**error, "message": message, "load": bool(getattr(exc, "from_load", False))})
+
+    @classmethod
+    def gap_of(cls, kind: str, message: str) -> "FaultRecord":
+        """Return the infrastructure gap `kind` with `message`: a failure no typed fault names, never charged."""
+        return cls.of({"type": kind, "message": message, "fault": FaultClass.INFRASTRUCTURE.value, "gap": True})
+
+    @classmethod
     def of(cls, error: Mapping[str, Any]) -> "FaultRecord":
-        """Return the record of a worker's error object (`error_record`): charged for a content fault, not a gap."""
+        """Return the record of a worker's error object (`error_record`): charged for a content fault, not a gap.
+
+        The one place a `FaultRecord` is built from its parts; every other site calls it, `from_exception` or `gap_of`.
+        """
         gap = bool(error.get("gap", True))
         fault = FaultClass(error["fault"])
         return cls(
@@ -134,6 +179,7 @@ class FaultRecord(Frozen):
             message=str(error.get("message", "")),
             gap=gap,
             charged=fault is FaultClass.CONTENT and not gap,
+            load=bool(error.get("load", False)),
         )
 
 

@@ -50,7 +50,7 @@ from senselab_worker.digest import identity_digest
 from senselab_core.runtime.calibration import HardwareClass
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.epoch import Epoch
-from senselab_core.runtime.execution.executor import FaultRecord, PlanFragment
+from senselab_core.runtime.execution.executor import CorruptItem, FaultRecord, MissingItem, PlanFragment
 from senselab_core.runtime.locks import Lease, LeaseState, LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.storage import (
@@ -816,9 +816,7 @@ class Queue:
         with q.child("items") as items:
             data = items.read_regular(f"{digest}.json")
         if data is None:
-            fault = FaultRecord(
-                fault="infrastructure", type="MissingItem", message=f"queue item {digest}", gap=False, charged=False
-            )
+            fault = FaultRecord.from_exception(MissingItem(f"queue item {digest}"))
             logger.warning("queue %s: item %s is missing; it stays ready", self.name, digest)
             self.faults.append((digest, fault))
             self._missing[digest] = self._clock.now()
@@ -829,7 +827,7 @@ class Queue:
                 raise ValueError("not the item its name digests")
             return PlanFragment.model_validate(document)
         except ValueError as err:
-            fault = FaultRecord(fault="content", type="CorruptItem", message=str(err), gap=False, charged=True)
+            fault = FaultRecord.from_exception(CorruptItem(str(err)))
             logger.warning("queue %s: item %s cannot be read (%s); its outcome is dead", self.name, digest, err)
             record = _outcome_record("dead", "queue", self._current(), fault=fault.model_dump(mode="json"))
             if settle(lease, q, digest, record) is not None:

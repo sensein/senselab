@@ -151,9 +151,9 @@ def observations(  # noqa: PLR0913 - an item's requests, then what they ran on a
     claim by ref. A request that raised has no `since_load`; any other is `ok` unless its class is a service class
     (`served`) or one of the item's jobs in it failed. The last request carries `item_wall_s`. A probe's phase and
     stratum are `mark`. A failed request's `fault` is the class of the exception it raised, else the one class every
-    one of its jobs failed with.
+    one of its jobs failed with; a failure of a load (`FaultRecord.load`) is no batch's fault and gives none.
     """
-    failed = {o.ref: o.failure.fault for o in outcomes if isinstance(o, Failed)}
+    failed = {o.ref: None if o.failure.load else o.failure.fault for o in outcomes if isinstance(o, Failed)}
     heard = [r for r in records if r.since_load is not None or r.failure is not None]
     found: list[Observation] = []
     for index, record in enumerate(heard):

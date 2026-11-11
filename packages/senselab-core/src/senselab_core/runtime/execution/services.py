@@ -14,11 +14,9 @@ A consumer (`ConsumerLease`) sends each request to the entry's endpoint and chec
 """
 
 import contextlib
-import http.client
 import logging
 import math
 import re
-import urllib.error
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -269,12 +267,7 @@ class ConsumerLease:
 
     def _request(self, send: Callable[[str], Any]) -> Attested:
         entry = self._entry()
-        try:
-            body = send(entry.endpoint)
-        except urllib.error.HTTPError:
-            raise
-        except (OSError, http.client.HTTPException) as exc:
-            raise StaleAttestation(f"the service of {self.label} did not answer: {type(exc).__name__}") from exc
+        body = send(entry.endpoint)
         if self._entry().endpoint != entry.endpoint:
             raise StaleAttestation(f"the service of {self.label} was replaced while it answered")
         return attest_reply(body, self.identity, self.label)
@@ -283,9 +276,8 @@ class ConsumerLease:
         """`chat` with the service's model; the reply carries the service's attestation.
 
         Raises:
-            StaleAttestation: the entry is not live, was replaced, the server did not answer, or the reply names
-                another model.
-            urllib.error.HTTPError: the server refused the request.
+            StaleAttestation: the entry is not live, was replaced, or the reply names another model.
+            ServerRejected, ServerOutOfMemory, ServerFailed, ServiceUnavailable: the request failed (`server_fault`).
         """
         return self._request(lambda url: chat(url, self.identity.served_model, messages, sampling=sampling))
 
@@ -293,9 +285,8 @@ class ConsumerLease:
         """`complete` with the service's model; the reply carries the service's attestation.
 
         Raises:
-            StaleAttestation: the entry is not live, was replaced, the server did not answer, or the reply names
-                another model.
-            urllib.error.HTTPError: the server refused the request.
+            StaleAttestation: the entry is not live, was replaced, or the reply names another model.
+            ServerRejected, ServerOutOfMemory, ServerFailed, ServiceUnavailable: the request failed (`server_fault`).
         """
         return self._request(lambda url: complete(url, self.identity.served_model, prompt_token_ids, sampling=sampling))
 

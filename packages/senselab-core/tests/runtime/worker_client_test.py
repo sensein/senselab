@@ -414,12 +414,12 @@ def test_malformed_responses_are_protocol_errors(array_parent: Path, reply: list
 
 @pytest.mark.logic
 def test_fatal_during_a_request_is_worker_fatal(array_parent: Path) -> None:
-    """A `fatal` line in place of a response raises `WorkerFatal`, whatever fault it names."""
+    """A `fatal` line in place of a response raises `WorkerFatal`, which carries the class its record names."""
     error = {"type": "MemoryError", "message": "m", "fault": "resource", "traceback": "", "gap": False}
     client = _scripted(array_parent, {"error": error, "fatal": True})
     with pytest.raises(WorkerFatal) as info:
         client.run([{"id": "a", "inputs": {}}], {})
-    assert info.value.error == error and classify(info.value) is FaultClass.INFRASTRUCTURE
+    assert info.value.error == error and classify(info.value) is FaultClass.RESOURCE
     client.close()
 
 

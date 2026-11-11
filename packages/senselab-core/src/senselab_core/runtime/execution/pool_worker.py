@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeAlias
 
-from senselab_worker.faults import ProtocolError, classify, error_record
+from senselab_worker.faults import ProtocolError, classify
 
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy
 from senselab_core.runtime import request_reports
@@ -75,7 +75,7 @@ from senselab_core.runtime.sizing import Sample
 from senselab_core.runtime.storage import StorageUnsupported, probe_capabilities
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import mark_entry
-from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerFatal, WorkerLost
+from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerLost
 
 logger = logging.getLogger("senselab")
 
@@ -101,9 +101,10 @@ class Abandoned(Exception):
 def whole(exc: BaseException) -> bool:
     """Whether `exc` fails a request of a loaded worker as a whole: it was lost, fatal, broke the protocol, or ran out.
 
-    A worker that failed to start or load (`WorkerLoadFailed`) is an infrastructure fault of its env and is never one.
+    A worker that failed to start, load or reload (`WorkerLoadFailed`, `WorkerFatal`) is never one, whatever its
+    class: a load is not an item.
     """
-    return isinstance(exc, (WorkerLost, WorkerFatal, ProtocolError)) or splits(exc)
+    return isinstance(exc, (WorkerLost, ProtocolError)) or splits(exc)
 
 
 def _ran_out(members: "Sequence[Member]", outcomes: Sequence[JobOutcome], report: RequestReport) -> list[int]:
@@ -115,9 +116,14 @@ def _ran_out(members: "Sequence[Member]", outcomes: Sequence[JobOutcome], report
     return at if ran_out([outcomes[i] for i in at]) else []
 
 
+def _loading(exc: BaseException) -> bool:
+    """Whether `exc` was raised while a worker started, loaded or reloaded its model: no batch size cures it."""
+    return bool(getattr(exc, "from_load", False))
+
+
 def failure_of(exc: BaseException) -> FaultRecord:
     """Return the fault record of `exc`, classified as a worker classifies it (`error_record`)."""
-    return FaultRecord.of(error_record(exc))
+    return FaultRecord.from_exception(exc)
 
 
 @dataclass(frozen=True)
@@ -165,7 +171,9 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
             raise
         split = whole(exc) and len(members) > 1
         if record is not None:
-            record(Sent(refs, wall, (), "bisected" if split else "failed", classify(exc).value))
+            record(
+                Sent(refs, wall, (), "bisected" if split else "failed", None if _loading(exc) else classify(exc).value)
+            )
         if not split:
             if len(members) == 1:
                 logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)

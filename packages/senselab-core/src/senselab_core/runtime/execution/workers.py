@@ -11,10 +11,10 @@ import sys
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Protocol, TypeVar
+from typing import Any, ClassVar, Protocol, TypeVar
 
 from senselab_worker.canonical import jcs_dumps
-from senselab_worker.faults import InfrastructureFault, ResourceFault
+from senselab_worker.faults import FaultClass, at_load, classification
 from senselab_worker.model_cache import ModelCache, ModelKey
 from senselab_worker.serve import backend_init
 
@@ -64,8 +64,22 @@ class Server(Protocol):
         """Stop the server."""
 
 
-class WorkerLoadFailed(InfrastructureFault):
-    """A worker did not start or load its backend: an infrastructure fault of its env; `__cause__` is what it raised."""
+class WorkerLoadFailed(Exception):  # noqa: N818 - a fault named for what failed, as its callers know it
+    """A worker did not start or load its backend; `__cause__` is what it raised.
+
+    Its fault class and gap are its cause's (`carried_class`), so a load that ran out of memory is a resource fault,
+    re-placed on a larger class; a content fault stated at load is the environment's (`faults.at_load`), and with no
+    cause it is an infrastructure fault of its env. It is raised by a checkout, never by a request to a loaded worker,
+    so it is never split.
+    """
+
+    @property
+    def carried_class(self) -> tuple[FaultClass, bool]:
+        """The fault class of the cause and whether the table decided it."""
+        cause = self.__cause__
+        return at_load(*classification(cause)) if cause is not None else (FaultClass.INFRASTRUCTURE, False)
+
+    from_load: ClassVar[bool] = True
 
 
 Started = TypeVar("Started")
@@ -230,9 +244,8 @@ class WorkerSet:
         Raises:
             ValueError: a server backend without `expected`; a host backend declaring `models` without `state_bytes`.
             LeaseTimeout, LeaseUnavailable: a server's start lease is busy or cannot be read.
-            ResourceFault: a worker or a server lacked a resource to start or load (`VllmOutOfMemory` among them).
-            WorkerLoadFailed: a worker or a server failed to start or load, whatever else it raised
-                (`VllmStartError` and `AttestationMismatch` from a server start among them).
+            WorkerLoadFailed: a worker or a server failed to start or load, whatever it raised, as its cause
+                (`VllmOutOfMemory`, a resource fault, `VllmStartError` and `AttestationMismatch` among them).
         """
         init = worker_init(device, model)
         if backend.env.kind == "server":
@@ -518,12 +531,11 @@ def _loaded(start: Callable[[], Started]) -> Started:
 
     Raises:
         LeaseTimeout, LeaseUnavailable: a start lease is busy or cannot be read, as raised.
-        ResourceFault: the start or load lacked a resource, as raised.
-        WorkerLoadFailed: whatever else the start or load raised, as its cause.
+        WorkerLoadFailed: whatever else the start or load raised, as its cause; it has the cause's fault class.
     """
     try:
         return start()
-    except (LeaseTimeout, LeaseUnavailable, ResourceFault):
+    except (LeaseTimeout, LeaseUnavailable):
         raise
     except Exception as exc:
         failed = WorkerLoadFailed(f"{type(exc).__name__}: {exc}")

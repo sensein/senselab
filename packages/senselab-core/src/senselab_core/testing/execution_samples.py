@@ -2,6 +2,8 @@
 
 from collections.abc import Callable
 
+from senselab_worker.faults import ContentFault
+
 from senselab_core.kernel.identity import Attestation, gather_identity
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.execution.batching import BucketGrid
@@ -48,8 +50,8 @@ def register_execution_samples(register: Register) -> None:
     jobs = (JobRef(plan_hash=_PLAN, node="n", element=(0,)), JobRef(plan_hash=_PLAN, node="n", element=(1,)))
     register(JobRef, lambda: list(jobs), invalid_updates=[{"plan_hash": "x"}, {"element": (-1,)}, {"node": "a.b"}])
     faults = (
-        FaultRecord(fault="content", type="ContentFault", message="bad input", gap=False, charged=True),
-        FaultRecord(fault="infrastructure", type="RuntimeError", message="", gap=True, charged=False),
+        FaultRecord.from_exception(ContentFault("bad input")),
+        FaultRecord.from_exception(RuntimeError()),
     )
     register(
         FaultRecord,

@@ -34,6 +34,7 @@ from senselab_core.runtime.execution.executor import Admission, Handle, PlanFrag
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.licenses import license_record
+from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.planner import Plan, UnmappedOutput, plan
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -41,6 +42,7 @@ from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import UnitOf
 from senselab_core.testing.calibration_samples import UNIT, observation
 from senselab_core.testing.interpreter import source_tree_python
+from senselab_worker.faults import ResourceFault
 
 T = TypeVar("T")
 
@@ -423,6 +425,43 @@ class Refusing(Recording):
         if fragment.node == "b":
             raise LookupError("b is refused")
         return super().submit(fragment)
+
+
+class Faulting(Recording):
+    """A `Recording` executor whose `submit` raises `error` for node `b`."""
+
+    error: Exception = RuntimeError("unclassified")
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Raise `error` for node `b`; submit any other fragment."""
+        if fragment.node == "b":
+            raise self.error
+        return super().submit(fragment)
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    ("error", "fault", "gap"),
+    [
+        (RuntimeError("unclassified"), "infrastructure", True),
+        (ResourceFault("out of memory"), "resource", False),
+        (LeaseTimeout("busy"), "resource", True),
+    ],
+    ids=["unclassified", "typed-resource", "lease"],
+)
+def test_a_batch_the_executor_raised_for_is_failed_with_the_errors_own_class(
+    tmp_path: Path, error: Exception, fault: str, gap: bool
+) -> None:
+    """`fail_batch` records what `error_record` gives: the typed class, and a gap for an unclassified exception."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "two")])
+    executor = Faulting(ResultStore(tmp_path / "store"))
+    executor.error = error
+    with pytest.raises(type(error)):
+        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
+            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1)
+        )
+    failures = [e.failure for e in read_events(tmp_path / "events") if e.kind == "failed" and e.node == "b"]
+    assert failures and {(f.fault, f.gap, f.charged) for f in failures if f} == {(fault, gap, False)}
 
 
 @pytest.mark.contract

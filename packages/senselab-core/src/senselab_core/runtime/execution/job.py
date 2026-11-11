@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from senselab_worker import WIRE_VERSION
-from senselab_worker.faults import FaultClass, classify, error_record
+from senselab_worker.faults import FaultClass, classify
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.declare import InconsistentInputs
@@ -51,7 +51,7 @@ from senselab_core.runtime.execution.records import (
     verify,
 )
 from senselab_core.runtime.execution.records import verify_attributes as verify_settings
-from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, service_of
+from senselab_core.runtime.execution.workers import PRECISION, WorkerLoadFailed, WorkerSet, service_of
 from senselab_core.runtime.hardware import host_token, numerics_class
 from senselab_core.runtime.keys import Call, Placement, build_key, request_components
 from senselab_core.runtime.launch import launch
@@ -63,6 +63,7 @@ from senselab_core.runtime.store import ResultStore, StoredResult
 from senselab_core.runtime.store import output_identity as store_output_identity
 from senselab_core.runtime.vllm_server import attested_fields, server_launch, server_variables
 from senselab_core.runtime.vocabulary import core_vocabulary
+from senselab_core.runtime.worker_client import WorkerFatal
 
 
 @dataclass(frozen=True)
@@ -117,9 +118,11 @@ JobOutcome = Completed | Failed
 def splits(exc: BaseException) -> bool:
     """Whether `exc`, raised by a request to a loaded worker, is a resource fault that splits the request.
 
-    A lease wait (`LeaseTimeout`) is a `TimeoutError` and so a resource class, but it is nobody's request failing.
+    A lease wait (`LeaseTimeout`) is a `TimeoutError` and so a resource class, but it is nobody's request failing; nor
+    is a worker that failed to start or load, or to reload an evicted state (`WorkerLoadFailed`, `WorkerFatal`),
+    whatever its class: a request is split only when it went to a loaded worker.
     """
-    return classify(exc) is FaultClass.RESOURCE and not isinstance(exc, LeaseTimeout)
+    return classify(exc) is FaultClass.RESOURCE and not isinstance(exc, (LeaseTimeout, WorkerLoadFailed, WorkerFatal))
 
 
 def ran_out(outcomes: Sequence[JobOutcome]) -> bool:
@@ -190,7 +193,7 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
         picked, unrecorded = keyed_formation(job, backend, grid)
         keyed = replace(placement, **request_components(backend, picked))
         context = job_context(keyed, env, expected, profile, job, code_license)
-        gap = None if unrecorded is None else _upstream_gap(type(unrecorded).__name__, str(unrecorded))
+        gap = None if unrecorded is None else FaultRecord.gap_of(type(unrecorded).__name__, str(unrecorded))
         stale = unread or gap or _stale(job)
         key = build_key(job.call, keyed, context)
         if stale is not None:
@@ -256,7 +259,7 @@ def _sent_in_halves(chunk: Sequence[_Pending], sending: _Sending) -> list[JobOut
         if len(chunk) > 1:
             return _halves(chunk, sending)
         key = build_key(chunk[0].job.call, sending.placement, chunk[0].context)
-        return [Failed(chunk[0].job.ref, key.digest(), FaultRecord.of(error_record(exc)))]
+        return [Failed(chunk[0].job.ref, key.digest(), FaultRecord.from_exception(exc))]
     outcomes = [
         _record(item, result, sending.placement, sending.store, sending.run, sending.profile, began)
         for item, result in zip(chunk, results, strict=True)
@@ -305,10 +308,6 @@ def _code_license(run: RunConfig, placement: Placement, call: Call) -> License |
     return code
 
 
-def _upstream_gap(kind: str, message: str) -> FaultRecord:
-    return FaultRecord(fault="infrastructure", type=kind, message=message, gap=True, charged=False)
-
-
 def _resolved(job: Job, store: ResultStore) -> tuple[Job, FaultRecord | None]:
     """Return `job` with each upstream input read from `store` and its constraints checked, or the job's failure.
 
@@ -327,7 +326,7 @@ def _resolved(job: Job, store: ResultStore) -> tuple[Job, FaultRecord | None]:
             for ref in up.refs:
                 outputs = store.outputs_of(ref.key_digest, ref.outputs)
                 if outputs is None:
-                    return job, _upstream_gap(
+                    return job, FaultRecord.gap_of(
                         "UpstreamMissing", f"input {port!r} reads {ref.outputs}, which the store does not hold"
                     )
                 if ref.port not in outputs:
@@ -337,14 +336,14 @@ def _resolved(job: Job, store: ResultStore) -> tuple[Job, FaultRecord | None]:
                 except WireFormatRetired as exc:
                     if not job.upstream:
                         raise
-                    return job, _upstream_gap("WireFormatRetired", f"input {port!r} reads {ref.outputs}: {exc}")
+                    return job, FaultRecord.gap_of("WireFormatRetired", f"input {port!r} reads {ref.outputs}: {exc}")
             values[port] = read if up.gathered else read[0]
         job.call.task.check_inputs(values)
         anchors = anchors_of(values.values())
     except (OutputTypeMismatch, InconsistentInputs, AmbiguousClock) as exc:
         if not job.upstream:
             raise
-        return job, FaultRecord(fault="content", type=type(exc).__name__, message=str(exc), gap=False, charged=True)
+        return job, FaultRecord.from_exception(exc)
     return replace(job, values=values, anchors=anchors), None
 
 
@@ -358,9 +357,9 @@ def _stale(job: Job) -> FaultRecord | None:
             try:
                 audio_io.check(stamp, source)
             except StaleSource as exc:
-                return FaultRecord.of(error_record(exc))
+                return FaultRecord.from_exception(exc)
             except OSError as exc:
-                return FaultRecord.of(error_record(StaleSource(f"{source} cannot be read: {exc.strerror or exc}")))
+                return FaultRecord.from_exception(StaleSource(f"{source} cannot be read: {exc.strerror or exc}"))
     return None
 
 

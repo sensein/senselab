@@ -309,6 +309,96 @@ def test_resource_fault_moves_to_larger_class_uncharged(tmp_path: Path) -> None:
 
 
 @pytest.mark.contract
+def test_a_load_oom_moves_to_the_larger_class_with_one_worker_start_per_claim(tmp_path: Path) -> None:
+    """A backend that runs out of memory at load is re-placed on `cpu:large`, uncharged, one claim per class."""
+    from fault_class_test import host_load_failure  # noqa: PLC0415 - a real checkout's WorkerLoadFailed
+
+    load = FaultRecord.from_exception(host_load_failure(MemoryError("CUDA out of memory")))
+    assert (load.fault, load.charged) == ("resource", False)
+    profile = _profile(content_attempts=1, infrastructure_replacements=6, resource_replacements=1)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one"])
+    workers.act = lambda fragment: load if fragment.placement.resource_class == "cpu" else None
+    try:
+        [ref] = _all(_pool(tmp_path, store, workers, profile), placed, values)
+    finally:
+        workers.stop()
+    assert ref.failure is None
+    assert [(f.placement.resource_class, f.attempt) for f in workers.served] == [("cpu", 1), ("cpu:large", 2)]
+
+
+def _load_oom() -> FaultRecord:
+    from fault_class_test import host_load_failure  # noqa: PLC0415 - a real checkout's WorkerLoadFailed
+
+    return FaultRecord.from_exception(host_load_failure(MemoryError("CUDA out of memory")))
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("shipped", [True, False], ids=["packaged-laptop", "larger-class-spent"])
+def test_a_load_oom_that_cannot_move_larger_holds_the_env_and_kills_no_item(tmp_path: Path, shipped: bool) -> None:
+    """With no larger class or no replacement left, a load OOM counts against the env and holds it; no job is dead.
+
+    `packaged-laptop` is the shipped profile (`resource_replacements: 0`, no larger class); the other has a larger
+    class and one replacement, and its load fails on the larger class too.
+    """
+    load = _load_oom()
+    assert (load.fault, load.load) == ("resource", True)
+    if shipped:
+        profile = ExecutionProfile.load("laptop", {"devices": ["cpu"], "pool": {"poll_s": 0.2, "first_poll_s": 0.01}})
+        assert profile.faults.resource_replacements == 0 and "cpu:large" not in profile.resource_classes
+    else:
+        profile = _profile(content_attempts=2, infrastructure_replacements=3, resource_replacements=1)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one"])
+    workers.act = lambda fragment: load
+    pool = _pool(tmp_path, store, workers, profile)
+    admission = pool.admit(placed, values)
+    handle = pool.submit(node_fragment(placed, admission, elements=[(0,)]))
+    try:
+        with pytest.raises(QueueHeld) as raised:
+            list(follow(pool, handle))
+    finally:
+        workers.stop()
+    assert raised.value.reason == load.message
+    [broken] = pool.broken.values()
+    assert broken.env == "host" and broken.fault.load
+    assert not any((tmp_path / "run").glob("dead/*"))
+    expected = 6 if shipped else 3
+    assert broken.failures == expected
+    held = status_from(read_events(tmp_path / "run"), broken_after=expected)
+    assert [b.env for b in held.broken] == ["host"]
+    if not shipped:
+        assert [f.placement.resource_class for f in workers.served][:2] == ["cpu", "cpu:large"]
+
+
+@pytest.mark.contract
+def test_a_load_oom_replaced_on_a_larger_class_does_not_spend_the_envs_budget(tmp_path: Path) -> None:
+    """Eight jobs fail at load on `cpu` and run on `cpu:large`; one later transient fault does not hold the env."""
+    load = _load_oom()
+    profile = _profile(content_attempts=2, infrastructure_replacements=3, resource_replacements=1)
+    placed, values, store, workers = _stack(tmp_path, profile, [f"t{i}" for i in range(8)])
+    lost: list[PlanFragment] = []
+
+    def act(fragment: PlanFragment) -> FaultRecord | None:
+        if fragment.placement.resource_class == "cpu":
+            return load
+        if not lost:
+            lost.append(fragment)
+            return LOST
+        return None
+
+    workers.act = act
+    pool = _pool(tmp_path, store, workers, profile)
+    try:
+        refs = _all(pool, placed, values)
+    finally:
+        workers.stop()
+    assert len(refs) == 8 and all(r.failure is None for r in refs)
+    assert not pool.broken and len(lost) == 1
+    events = read_events(tmp_path / "run")
+    assert sum(e.replaced for e in events) == 8
+    assert not status_from(events, broken_after=3).broken
+
+
+@pytest.mark.contract
 def test_broken_env_reported_once(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """Two infrastructure faults of one env break it: reported once with its cause, held, no job failed or dead."""
     profile = _profile(content_attempts=2, infrastructure_replacements=2, resource_replacements=0)
