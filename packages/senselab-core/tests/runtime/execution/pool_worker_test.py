@@ -668,6 +668,67 @@ def test_a_cancel_during_the_halves_keeps_the_calls_other_outcomes_and_records_t
     assert [(len(r.refs), r.failure) for r in recorded] == [(4, None), (4, "bisected")]
 
 
+def _reported(recorded: Sequence[Sent], member: Member) -> list[Any]:
+    """Return the request reports the recorded calls hold for `member`'s job."""
+    return [r for sent in recorded for r in sent.reports if member.job.ref in r.tags]
+
+
+@pytest.mark.logic
+def test_a_request_that_ran_out_is_recorded_once_beside_a_request_that_emits() -> None:
+    """Request A (items 0, 1) runs out; request B (2, 3) emits. A's report is recorded once, by its bisection."""
+    members, handed, recorded = _members(4), [], list[Sent]()
+
+    def send(jobs: Sequence[Job], placement: Placement, emit: Emit) -> list[JobOutcome]:  # noqa: ARG001 - a Send
+        if len(jobs) == 4:
+            with request_reports.request(tuple(m.job.ref for m in members[:2])):
+                request_reports.record(2, device=(900, 500))
+            with request_reports.request(tuple(m.job.ref for m in members[2:])):
+                request_reports.record(2)
+            outcomes: list[JobOutcome] = [_failed(m, "resource") for m in members[:2]]
+            outcomes += [_failed(m, "content") for m in members[2:]]
+            emit([2, 3], outcomes[2:])
+            return outcomes
+        with request_reports.request(tuple(j.ref for j in jobs)):
+            request_reports.record(len(jobs))
+        return [_failed(next(m for m in members if m.job.ref == j.ref), "content") for j in jobs]
+
+    bisect(
+        members,
+        Placement(backend=FAKE, backend_params=FAKE.params(), device="cpu"),
+        send,
+        record=recorded.append,
+        handover=lambda found, outs: handed.append(([m.index for m in found], len(outs))),
+    )
+    assert [len(_reported(recorded, m)) for m in members] == [2, 2, 1, 1]
+    assert len([r for sent in recorded for r in sent.reports if r.device == (900, 500)]) == 1
+    assert handed[0] == ([2, 3], 2) and {i for found, _ in handed for i in found} == {0, 1, 2, 3}
+
+
+@pytest.mark.logic
+def test_a_call_that_raises_after_an_emit_records_only_what_the_emit_did_not() -> None:
+    """Items 2 and 3 were emitted and recorded; the call's failure is recorded for items 0 and 1 alone."""
+    members, recorded = _members(4), list[Sent]()
+
+    def send(jobs: Sequence[Job], placement: Placement, emit: Emit) -> list[JobOutcome]:  # noqa: ARG001 - a Send
+        if len(jobs) == 4:
+            with request_reports.request(tuple(m.job.ref for m in members[2:])):
+                request_reports.record(2)
+            emit([2, 3], [_failed(m, "content") for m in members[2:]])
+            raise WorkerLost("died on the next request", returncode=-11)
+        return [_failed(next(m for m in members if m.job.ref == j.ref), "content") for j in jobs]
+
+    bisect(
+        members,
+        Placement(backend=FAKE, backend_params=FAKE.params(), device="cpu"),
+        send,
+        record=recorded.append,
+        handover=lambda found, outs: None,
+    )
+    first, failed = recorded[0], recorded[1]
+    assert first.failure is None and len(first.reports) == 1
+    assert failed.failure == "bisected" and failed.refs == tuple(m.job.ref for m in members[:2])
+
+
 class _Abandoning(WorkerSet):
     """A worker set that records `abandon` instead of closing worker processes."""
 

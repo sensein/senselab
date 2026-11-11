@@ -222,6 +222,12 @@ def _emits(send: Send) -> bool:
         return False
 
 
+def _carried(report: RequestReport, refs: set[JobRef]) -> bool:
+    """Whether `report` is of a request that carried one of `refs`; a report tagged with nothing is every job's."""
+    tags = {t for t in report.tags if isinstance(t, JobRef)}
+    return not tags or bool(tags & refs)
+
+
 class _Forward:
     """The `Emit` of one call of `send`: records the requests made since the last emit, then hands over their members.
 
@@ -237,19 +243,26 @@ class _Forward:
         reported: Sequence[RequestReport],
     ) -> None:
         self.members, self.handover, self.record, self.reported = members, handover, record, reported
-        self.seen, self.wall_s = 0, 0.0
+        self.taken: set[int] = set()
+        self.wall_s = 0.0
         self.given: set[JobRef] = set()
 
     def __call__(self, at: Sequence[int], outcomes: Sequence[JobOutcome]) -> None:
         """Record the requests reported since the last call, then hand over the members at `at`."""
         chosen = [self.members[i] for i in at]
-        new, self.seen = tuple(self.reported[self.seen :]), len(self.reported)
+        refs = {m.job.ref for m in chosen}
+        new = tuple(r for r in self.reported if id(r) not in self.taken and _carried(r, refs))
+        self.taken.update(id(r) for r in new)
         if new and self.record is not None:
             wall = sum(r.wall_s or 0.0 for r in new)
             self.wall_s += wall
             self.record(Sent(tuple(m.job.ref for m in chosen), wall, new, None))
         self.given.update(m.job.ref for m in chosen)
         self.handover(chosen, outcomes)
+
+    def unrecorded(self, reports: Sequence[RequestReport]) -> tuple[RequestReport, ...]:
+        """Return the `reports` no emit has recorded."""
+        return tuple(r for r in reports if id(r) not in self.taken)
 
     def rest(self, refs: tuple[JobRef, ...], wall_s: float) -> tuple[tuple[JobRef, ...], float]:
         """Return the refs of a call not handed over, and its wall less the requests already recorded."""
@@ -281,8 +294,8 @@ def _split_requests(
     gone = {i for _, at in faulted for i in at}
     merged = list(outcomes)
     if record is not None:
-        first = 0 if forward is None else forward.seen
-        kept = tuple(r for r in reported[first:] if all(r is not f for f, _ in faulted))
+        left = reported if forward is None else forward.unrecorded(reported)
+        kept = tuple(r for r in left if all(r is not f for f, _ in faulted))
         refs = tuple(m.job.ref for i, m in enumerate(members) if i not in gone)
         wall = clock.now() - began - sum(f.wall_s or 0.0 for f, _ in faulted)
         if forward is not None:
