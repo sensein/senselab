@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from epoch_fixture import prepared, taken
 from lease_clock_fixture import ManualClock
 from pool_stack_fixture import packaged, planned, registry, scoring
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
@@ -24,7 +25,7 @@ from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.pool import Pool, ScalerFailed
 from senselab_core.runtime.execution.pool_worker import serve_pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
-from senselab_core.runtime.execution.run import Run, _close_owned, default_executor, prepare
+from senselab_core.runtime.execution.run import Run, _close_owned, default_executor
 from senselab_core.runtime.execution.substrates import (
     EXIT_UNREACHABLE,
     ExternalWorkers,
@@ -228,7 +229,7 @@ def _queued(  # noqa: PLR0913 - the plan's shape, then where it is queued
         placed = replace(placed, logical=placed.logical.model_copy(update={"models": models}))
     run_dir = tmp_path / "run"
     recording = substrate if substrate is not None else Recording()
-    epoch = Epoch(run_dir).take()
+    epoch = taken(Epoch(run_dir))
 
     def pool_over(workers: Any) -> Pool:  # noqa: ANN401
         return Pool(
@@ -601,7 +602,7 @@ def test_local_pool_runs_toy_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     )
     placed, _ = planned(SCORE, profile, [f"t{i}" for i in range(6)])
     run_dir, store = tmp_path / "run", ResultStore(tmp_path / "store")
-    prepare(placed, run_dir, store)
+    prepared(placed, run_dir, store)
     profile_file = tmp_path / "profile.json"
     profile_file.write_text(profile.model_dump_json())
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(sys.path))

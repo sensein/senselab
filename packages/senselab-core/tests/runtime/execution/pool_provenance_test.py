@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
 import pytest
+from epoch_fixture import prepared
 from pool_stack_fixture import packaged, planned, registry, scoring
 from senselab_core.kernel import prov as kprov
 from senselab_core.runtime.call import RunConfig
@@ -16,7 +17,6 @@ from senselab_core.runtime.execution.in_process import node_fragment
 from senselab_core.runtime.execution.job import Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool_worker import PoolWorker
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, probe_queue
-from senselab_core.runtime.execution.run import prepare
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -52,7 +52,7 @@ class Run:
         self.placed, _ = planned(TASK, PROFILE, texts)
         self.root = tmp_path / "store"
         self.run_dir = tmp_path / name
-        prepare(self.placed, self.run_dir, ResultStore(self.root))
+        prepared(self.placed, self.run_dir, ResultStore(self.root))
         self.pool_dir = self.run_dir / RUN_QUEUES
         admission = Admission(id=f"run-{self.placed.hash}", plan_hash=self.placed.hash)
         for element in range(len(texts) if serve_items else 0):

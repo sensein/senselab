@@ -53,7 +53,7 @@ from senselab_core.runtime.calibration import (
 from senselab_core.runtime.call import RunConfig, host_hardware
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.batching import bucket_edges
-from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator, run_lease
+from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import (
     BrokenEnv,
     EventLog,
@@ -1032,8 +1032,9 @@ def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only prof
 ) -> "RunOutcome":
     """Coordinate the run in `run_dir` on a `Pool`: take the next epoch, hold its lease, and run the plan's jobs.
 
-    The plan and its latest placement are read from the run directory, its inputs bound again (`bind_sources`), and a
-    new epoch and its attempt prepared (`prepare`); the run's queues are reconciled and every job is sent through the
+    The plan and its latest placement are read from the run directory, its inputs bound again (`bind_sources`), an
+    attempt claimed and a new epoch taken (`prepare`, `Epoch.opening`) and made current just before the plan runs;
+    the run's queues are reconciled and every job is sent through the
     pool, whose workers `substrate` starts. `profile` defaults to the packaged one; `store` to the one `manifest.json`
     names. `overrides` and `hook` are the explicit placement values and the site's hook (`plan`'s `placement`
     and `placement_hook`).
@@ -1044,18 +1045,19 @@ def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only prof
         QueueHeld: an env broke and was held.
         InputChanged, InputsUnavailable, ConflictingSources: as `start`.
     """
-    from senselab_core.runtime.execution.run import PYDRA_DIR, bind_sources, prepare  # noqa: PLC0415
+    from senselab_core.runtime.execution.run import PYDRA_DIR, bind_sources, checked_lease, prepare  # noqa: PLC0415
     from senselab_core.runtime.execution.runner import PydraRunner  # noqa: PLC0415 - needs pydra
 
     run_dir = Path(run_dir)
     profile = profile if profile is not None else ExecutionProfile.load()
     placed = replace(run_plan(run_dir, profile), overrides=overrides or {}, hook=hook)
     store = store if store is not None else run_store(run_dir)
-    check_storage(profile, store.root)
+    delay = check_storage(profile, store.root)
     values = bind_sources(placed)
-    epoch, attempt, ordinal = prepare(placed, run_dir, store)
+    attempt, ordinal = prepare(placed, run_dir, store)
+    lease = checked_lease(run_dir, profile.lease, delay)
     epochs = Epoch(run_dir)
-    with epochs.held(epoch, run_lease(run_dir, own=profile.lease)):
+    with epochs.opening(profile.lease) as epoch, epochs.held(epoch, lease):
         queues = QueueSet.for_run(run_dir, profile, own=profile.lease)
         queues.reconcile()
         events = EventLog(run_dir, attempt, ordinal, epoch=epoch)
@@ -1063,6 +1065,7 @@ def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only prof
             run_dir, queues=queues, store=store, events=events, profile=profile, substrate=substrate, epoch=epoch
         )
         try:
+            epochs.bind(epoch, attempt, ordinal)
             return PydraRunner(profile=profile, work_dir=run_dir / PYDRA_DIR).run_plan(
                 placed, pool, values=values, events=events
             )

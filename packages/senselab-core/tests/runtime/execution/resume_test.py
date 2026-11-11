@@ -283,9 +283,9 @@ def _gated_resume(placed: Plan, store: ResultStore, profile: ExecutionProfile) -
     """Resume `placed` under `profile` on a gated executor; return once its jobs are queued and the first is sent."""
     gated = Gated(store, profile)
     resumed = resume(placed.hash, execution=profile, store=store, executor=gated)
-    epoch = Epoch(resumed.run_dir).current()
-    assert (resumed.run_dir / "epoch" / str(epoch) / "coordinator.lease").is_dir()
     assert gated.entered.wait(30)
+    epoch = Epoch(resumed.run_dir).current()
+    assert epoch == 2 and (resumed.run_dir / "epoch" / str(epoch) / "coordinator.lease").is_dir()
     return resumed, gated
 
 

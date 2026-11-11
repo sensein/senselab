@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from epoch_fixture import prepared
 from lease_clock_fixture import ManualClock, age
 from pool_stack_fixture import lease_of, packaged, planned, registry, scoring
 from senselab_core.kernel.declare import TaskSpec
@@ -27,7 +28,6 @@ from senselab_core.runtime.execution.observing import Sent
 from senselab_core.runtime.execution.pool import split
 from senselab_core.runtime.execution.pool_worker import Abandoned, Member, PoolWorker, Send, bisect, serve_pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest, settle
-from senselab_core.runtime.execution.run import prepare
 from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
 from senselab_core.runtime.fake_backend import ECHO, FAKE, EchoParams
 from senselab_core.runtime.keys import Call, Placement
@@ -74,7 +74,7 @@ def _run(
     """Prepare a run of `task`, one job per text, in `tmp_path/run`; return its plan, its store and its queues."""
     placed, _ = planned(task, profile, texts)
     store = ResultStore(tmp_path / "store")
-    prepare(placed, tmp_path / "run", store)
+    prepared(placed, tmp_path / "run", store)
     return placed, store, tmp_path / "run" / RUN_QUEUES
 
 

@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from epoch_fixture import prepared
 from pool_probe_test import HOST, JOBS, _env, _plan, _registry, _unit, stack  # noqa: F401 - the autouse stack
 from senselab_core.runtime.call import Packaged, packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
@@ -20,7 +21,6 @@ from senselab_core.runtime.execution.executor import follow
 from senselab_core.runtime.execution.in_process import node_fragment
 from senselab_core.runtime.execution.pool import Pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
-from senselab_core.runtime.execution.run import prepare
 from senselab_core.runtime.execution.substrates import substrate_of
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
@@ -81,7 +81,7 @@ def _run(tmp_path: Path, profile: ExecutionProfile, name: str, store: ResultStor
     """Run the 60-text plan to its end on real workers as run `name`; return the pool, closed, and its results."""
     placed, values = _plan(profile, range(1, JOBS + 1))
     run_dir = tmp_path / name
-    epoch, attempt, ordinal = prepare(placed, run_dir, store)
+    epoch, attempt, ordinal = prepared(placed, run_dir, store)
     roots = measure_roots(profile)
     pool = Pool(
         run_dir,

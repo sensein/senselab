@@ -831,11 +831,10 @@ def record_sources(placed: Plan, run_dir: Path) -> None:
     raise LeaseUnavailable(run_dir / INPUTS_FILE, f"the lease on {run_dir / INPUTS_FILE} was lost on every merge")
 
 
-def prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[int, str, int]:
-    """Write the plan once, record its input sources (`record_sources`) and the manifest, then take an epoch.
+def prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[str, int]:
+    """Write the plan once, record its input sources (`record_sources`) and the manifest, then claim an attempt.
 
-    The epoch (`Epoch.take`, under the plan's profile's `lease` bound) is taken before the attempt's ordinal is
-    claimed, and the attempt is recorded in it (`Epoch.bind`). Returns the epoch, the attempt id and its ordinal.
+    Nothing here is visible to a reader of the run's epochs or status. Returns the attempt id and its ordinal.
 
     Raises:
         ValueError: `run_dir` holds another plan.
@@ -847,11 +846,21 @@ def prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[int
     for name in POOL_DIRS:
         (run_dir / name).mkdir(exist_ok=True)
     _write(run_dir / MANIFEST_FILE, {"plan_hash": placed.hash, "store": None if store is None else str(store.root)})
-    epochs = Epoch(run_dir)
-    epoch = epochs.take(_lease_of(placed))
-    attempt, ordinal = _claim_attempt(run_dir, placed.placement)
-    epochs.bind(epoch, attempt, ordinal)
-    return epoch, attempt, ordinal
+    return _claim_attempt(run_dir, placed.placement)
+
+
+def checked_lease(run_dir: Path, own: JobLease, attribute_delay_s: float) -> JobLease:
+    """Return the run's lease with `own` among its epochs, refused unless its beats stay below its stale bound.
+
+    `attribute_delay_s` is the delay measured on the run's storage (`check_storage`).
+
+    Raises:
+        LeaseBoundError: the composite's bound fails with the larger of its delay and the one measured.
+        RunLeaseUnreadable: a bound epoch's lease section is unreadable.
+    """
+    found = run_lease(run_dir, own)
+    found.model_copy(update={"attribute_delay_s": max(found.attribute_delay_s, attribute_delay_s)}).check_bound()
+    return found
 
 
 def _lease_of(placed: Plan) -> JobLease:
@@ -866,10 +875,38 @@ def _plan_document(placed: Plan) -> dict[str, object]:
     }
 
 
-def _check_store(placed: Plan, store: ResultStore | None) -> None:
-    """Refuse a run whose result store lacks a primitive leases need (`check_storage`)."""
-    if store is not None:
-        check_storage(placed.execution if placed.execution is not None else ExecutionProfile.load(), store.root)
+def _check_store(placed: Plan, store: ResultStore | None) -> float:
+    """Refuse a run whose result store lacks a primitive leases need (`check_storage`); return its attribute delay."""
+    profile = placed.execution if placed.execution is not None else ExecutionProfile.load()
+    return profile.lease.attribute_delay_s if store is None else check_storage(profile, store.root)
+
+
+def _open(
+    run_dir: Path,
+    given: tuple[Plan, Executor, ProvStore],
+    attempt: tuple[str, int],
+    leases: tuple[JobLease, JobLease],
+) -> tuple[contextlib.ExitStack, int, EventLog]:
+    """Take the next epoch (not yet current), hold its coordinator lease, reconcile the queues and bind the executor.
+
+    `given` is the plan, the executor and the provenance store the plan's entity is added to; `leases` are the plan's
+    own lease section and the run's. Return what releases the epoch, the epoch and its event log; on a failure
+    the epoch is released, marked ended, and the error raised.
+    """
+    placed, executor, written = given
+    own, lease = leases
+    epochs, held = Epoch(run_dir), contextlib.ExitStack()
+    try:
+        epoch = held.enter_context(epochs.opening(own))
+        held.enter_context(epochs.held(epoch, lease))
+        QueueSet.for_run(run_dir, placed.execution, own=own).reconcile()
+        log = EventLog(run_dir, *attempt, epoch=epoch)
+        executor.bind_epoch(epoch, log)
+        add_plan_entity(written, placed.hash)
+    except BaseException:
+        held.close()
+        raise
+    return held, epoch, log
 
 
 def _close_owned(executor: Executor, owned: bool, run: "Run", failed: bool) -> None:
@@ -903,8 +940,9 @@ def start(
     (`bind_sources`) before anything is written: from their paths or JSON values, or from the values the plan holds in
     memory; `values` gives them already bound. The sources are merged into `inputs.json` under its lease
     (`record_sources`), also before anything else is written. Every item in the run's `queues/` with neither a slot nor
-    an outcome is put again (`QueueSet.reconcile`). The run takes the next epoch before its attempt (`prepare`), holds
-    its coordinator lease from then until the run ends, and hands the epoch to the executor (`bind_epoch`).
+    an outcome is put again (`QueueSet.reconcile`). The run claims its attempt (`prepare`), then takes the next epoch,
+    holds its coordinator lease until the run ends and hands the epoch to the executor (`bind_epoch`); the epoch is
+    current only once its thread binds it (`Epoch.bind`), the last step before the plan runs.
 
     Raises:
         ValueError: as `admit`.
@@ -912,6 +950,8 @@ def start(
         InputsUnavailable: an input held in memory is not held by `placed` (a plan read from disk).
         ConflictingSources: a source the run records reads other content than the plan's.
         LeaseUnavailable, LeaseTimeout: as `record_sources`.
+        LeaseBoundError: the run's lease with this plan's section among its epochs fails the beat bound.
+        RunLeaseUnreadable: a bound epoch's lease section is unreadable.
         MissingExtra: pydra is not installed.
     """
     if importlib.util.find_spec("pydra") is None:
@@ -923,30 +963,25 @@ def start(
         store = ResultStore(cache_root() / RESULTS_DIR, provenance=provenance)
     owned = executor is None
     executor = default_executor(placed, executor, store)
-    _check_store(placed, store)
+    delay = _check_store(placed, store)
     values = bind_sources(placed) if values is None else values
     run_dir = run_dir_of(placed.hash)
-    epoch, attempt, ordinal = prepare(placed, run_dir, store)
+    attempt, ordinal = prepare(placed, run_dir, store)
+    own = _lease_of(placed)
+    lease = checked_lease(run_dir, own, delay)
+    runner = PydraRunner(profile=placed.execution, work_dir=run_dir / PYDRA_DIR)
+    run = Run(run_dir, store=store)
+    written = provenance if store is None else store.provenance
     epochs = Epoch(run_dir)
-    held = contextlib.ExitStack()
-    held.enter_context(epochs.held(epoch, run_lease(run_dir, own=_lease_of(placed))))
-    try:
-        QueueSet.for_run(run_dir, placed.execution, own=_lease_of(placed)).reconcile()
-        run = Run(run_dir, store=store)
-        log = EventLog(run_dir, attempt, ordinal, epoch=epoch)
-        executor.bind_epoch(epoch, log)
-        close_placements = _record_placements(placed, executor, values, log, epoch)
-        runner = PydraRunner(profile=placed.execution, work_dir=run_dir / PYDRA_DIR)
-        written = provenance if store is None else store.provenance
-        add_plan_entity(written, placed.hash)
-    except BaseException:
-        held.close()
-        raise
+    held, epoch, log = _open(run_dir, (placed, executor, written), (attempt, ordinal), (own, lease))
 
     def body() -> None:
         failed = False
+        close_placements: Callable[[], None] = lambda: None  # noqa: E731 - replaced once the epoch is bound
         with held:
             try:
+                epochs.bind(epoch, attempt, ordinal)
+                close_placements = _record_placements(placed, executor, values, log, epoch)
                 runner.run_plan(placed, executor, values=values, events=log, cancel=run.cancelled)
             except BaseException as err:  # noqa: BLE001 - held for `wait`
                 if not isinstance(err, RunCancelled):

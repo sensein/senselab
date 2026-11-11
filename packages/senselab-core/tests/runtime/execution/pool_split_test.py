@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+from epoch_fixture import taken
 from lease_clock_fixture import ManualClock
 from pool_stack_fixture import lease_of, packaged, planned, registry, scoring
 from senselab_core.kernel.dataset import Record, ValueInput
@@ -125,7 +126,7 @@ def _pool(
 ) -> Pool:
     run_dir = tmp_path / "run"
     epochs = Epoch(run_dir)
-    epoch = epochs.take()
+    epoch = taken(epochs)
     return kind(
         run_dir,
         queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=epochs.current),

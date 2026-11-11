@@ -1,9 +1,9 @@
 """A run's coordinator epochs: `epoch/<n>`, each taken by one `mkdir`, held under a beating lease (ADR-003).
 
 `epoch/<n>/` holds `lease.json` (its coordinator's whole `lease` section, `run-lease@1`, written as it is taken),
-`attempt.json` (the attempt id and ordinal the coordinator claimed under it), `coordinator.lease` (the `Lease` its
-coordinator keeps alive) and, once that coordinator ends, `ended`. The highest `n` is the current epoch;
-a coordinator of an older one releases no further work.
+`attempt.json` (the attempt id and ordinal the coordinator claimed under it, written last), `coordinator.lease` (the
+`Lease` its coordinator keeps alive) and, once that coordinator ends, `ended`. The highest `n` with an
+`attempt.json` is the current epoch; a coordinator of an older one releases no further work.
 """
 
 import contextlib
@@ -149,14 +149,11 @@ class Epoch:
         return max((int(n) for n in os.listdir(self.root) if EPOCH_NAME.fullmatch(n)), default=0)
 
     def current(self) -> int:
-        """Return the highest epoch taken, 0 when none was."""
-        return self._taken()
+        """Return the highest bound epoch (one with an `attempt.json`), 0 when none is."""
+        return max(self.bound(), default=0)
 
-    def take(self, lease: JobLease | None = None) -> int:
-        """Take the next epoch by `mkdir epoch/<n>`, record `lease`'s bound in it, and return `n`.
-
-        A number another coordinator made is skipped. `lease` is the packaged profile's `lease` section when None.
-        """
+    def _make(self) -> int:
+        """Make the next epoch directory by `mkdir`, skipping a number another coordinator made, and return `n`."""
         self.root.mkdir(parents=True, exist_ok=True)
         n = self._taken() + 1
         while True:
@@ -165,11 +162,37 @@ class Epoch:
             except FileExistsError:
                 n += 1
                 continue
-            _create(self.root / str(n) / BOUND_FILE, _document(lease))
             return n
 
+    def take(self, lease: JobLease | None = None) -> int:
+        """Take the next epoch by `mkdir epoch/<n>`, record `lease` in it, and return `n`.
+
+        `lease` is the packaged profile's `lease` section when None. The epoch is current only once `bind` is called.
+        """
+        n = self._make()
+        _create(self.root / str(n) / BOUND_FILE, _document(lease))
+        return n
+
+    @contextlib.contextmanager
+    def opening(self, lease: JobLease | None = None) -> Iterator[int]:
+        """Take the next epoch, recording `lease` in it, and yield it; on exit mark it ended unless it was bound.
+
+        Until `bind`, the epoch is current to no reader: it fences no coordinator and changes no status.
+        """
+        n = self._make()
+        try:
+            _create(self.root / str(n) / BOUND_FILE, _document(lease))
+            yield n
+        finally:
+            if not (self.root / str(n) / ATTEMPT_FILE).exists():
+                with contextlib.suppress(OSError):
+                    _create(self.root / str(n) / ENDED, b"")
+
     def bind(self, n: int, attempt: str, ordinal: int) -> None:
-        """Record that epoch `n`'s coordinator claimed attempt `attempt`, the `ordinal`-th; written once."""
+        """Make epoch `n` current: record the attempt, the `ordinal`-th, its coordinator claimed; written once.
+
+        The last step of a coordinator's setup, so a coordinator that did not become ready was never current.
+        """
         _create(self.root / str(n) / ATTEMPT_FILE, json.dumps({"attempt": attempt, "ordinal": ordinal}).encode())
 
     def attempt(self, n: int) -> tuple[str, int] | None:

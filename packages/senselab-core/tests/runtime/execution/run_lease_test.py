@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
+from epoch_fixture import prepared
 from pool_stack_fixture import packaged, planned, registry, scoring
 from queue_race_fixture import fragment
 from senselab_core.runtime.call import RunConfig
@@ -23,7 +24,7 @@ from senselab_core.runtime.execution.in_process import node_fragment
 from senselab_core.runtime.execution.job import Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool_worker import PoolWorker
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Queue, QueueSet
-from senselab_core.runtime.execution.run import Run, prepare
+from senselab_core.runtime.execution.run import Run
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.keys import Placement
@@ -129,7 +130,7 @@ def _worker(
 ) -> tuple[PoolWorker, Path, Queue]:
     placed, _ = planned(TASK, profile, ["a", "b"])
     store = ResultStore(tmp_path / "store")
-    prepare(placed, tmp_path / "run", store)
+    prepared(placed, tmp_path / "run", store)
     pool_dir = tmp_path / "run" / RUN_QUEUES
     admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
     queue = QueueSet.for_run(tmp_path / "run", profile).queue("cpu")
@@ -156,7 +157,7 @@ def test_a_worker_whose_lease_section_is_not_the_runs_refuses_to_start(tmp_path:
     """The run was bound at 3600 s; a worker under the 300 s profile raises `LeaseMismatch` naming the key."""
     profile = ExecutionProfile.load("laptop", {"devices": ["cpu"]})
     placed, _ = planned(TASK, profile, ["a"])
-    prepare(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
+    prepared(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
     section = tmp_path / "run" / "epoch" / "1" / "lease.json"
     document = json.loads(section.read_text())
     document["lease"]["stale_after_s"] = 3600.0

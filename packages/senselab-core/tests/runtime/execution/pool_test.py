@@ -13,6 +13,7 @@ from typing import Any
 import numpy
 import pytest
 import soundfile
+from epoch_fixture import prepared, taken
 from lease_clock_fixture import ManualClock, newest
 from pool_stack_fixture import lease_of, packaged, planned, registry, scoring, unresolving
 from senselab_core.cli import main as cli_main
@@ -32,7 +33,7 @@ from senselab_core.runtime.execution.job import Failed, JobOutcome
 from senselab_core.runtime.execution.pool import Pool, larger_class, report, split
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest
 from senselab_core.runtime.execution.records import add_plan_entity
-from senselab_core.runtime.execution.run import INPUTS_FILE, RECORD_ATTEMPTS, Run, prepare, record_sources
+from senselab_core.runtime.execution.run import INPUTS_FILE, RECORD_ATTEMPTS, Run, record_sources
 from senselab_core.runtime.execution.substrates import QueueReady, WorkerHandle, mark_ready
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.execution_settings import JobLease
@@ -195,7 +196,7 @@ def _pool(  # noqa: PLR0913 - the run, its parts, and the epoch and clock a rest
     """Return a pool of the next epoch over `tmp_path/run` (of `epoch`, as a restart within it, when given)."""
     run_dir = tmp_path / "run"
     epochs = Epoch(run_dir)
-    epoch = epochs.take() if epoch is None else epoch
+    epoch = taken(epochs) if epoch is None else epoch
     return Pool(
         run_dir,
         queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=epochs.current),
@@ -312,7 +313,7 @@ def test_stale_coordinator_stops_after_new_epoch(tmp_path: Path) -> None:
     profile = _profile(**CONTENT)
     placed, values, store, workers = _stack(tmp_path, profile, ["one"])
     stale = _pool(tmp_path, store, workers, profile)
-    assert Epoch(tmp_path / "run").take() == stale.epoch + 1
+    assert taken(Epoch(tmp_path / "run")) == stale.epoch + 1
     with pytest.raises(StaleCoordinator) as raised:
         stale.submit(node_fragment(placed, stale.admit(placed, values)))
     assert (raised.value.mine, raised.value.current) == (1, 2)
@@ -642,7 +643,7 @@ def test_coordinate_runs_a_plan_on_the_pool_as_the_next_epoch(tmp_path: Path) ->
     profile = _profile(**CONTENT)
     placed, values, store, workers = _stack(tmp_path, profile, ["one", "fail", "two"])
     run_dir = tmp_path / "run"
-    assert prepare(placed, run_dir, store)[0] == 1
+    assert prepared(placed, run_dir, store)[0] == 1
     try:
         outcome = coordinate(run_dir, substrate=workers, profile=profile, store=store)
     finally:
@@ -704,7 +705,7 @@ def test_a_stale_coordinator_writes_no_dead_record(tmp_path: Path, lease_clock: 
     claim = stale.queues.queue("cpu").claim("w")
     assert claim is not None
     workers._serve(claim)  # noqa: SLF001 - one item served by hand, before the newer epoch
-    Epoch(tmp_path / "run").take()
+    taken(Epoch(tmp_path / "run"))
     with pytest.raises(StaleCoordinator):
         stale.poll(handle)
     assert not (tmp_path / "run" / "dead").exists()
@@ -835,7 +836,7 @@ def test_prepare_takes_the_epoch_before_the_attempt_and_records_it(tmp_path: Pat
     profile = _profile(**CONTENT)
     placed, _ = _planned(profile, ["one"])
     run_dir, store = tmp_path / "run", ResultStore(tmp_path / "store")
-    first, second = prepare(placed, run_dir, store), prepare(placed, run_dir, store)
+    first, second = prepared(placed, run_dir, store), prepared(placed, run_dir, store)
     assert (first[0], first[2], second[0], second[2]) == (1, 1, 2, 2)
     assert Epoch(run_dir).attempt(2) == second[1:] and json.loads((run_dir / "epoch" / "2" / "lease.json").read_text())
 
@@ -874,7 +875,7 @@ def test_an_epoch_taken_but_never_held_ends_a_wait(tmp_path: Path, lease_clock: 
     log = EventLog(run_dir, "a1", 1, epoch=1)
     job = node_fragment(*_admitted(tmp_path)).jobs[0]
     lease = JobLease(stale_after_s=0.5, renew_fraction=0.2, attribute_delay_s=0)
-    Epoch(run_dir).take(lease)
+    taken(Epoch(run_dir), lease)
     log.record("queued", job.node, job=job)
     clock = lease_clock(storage_origin=os.stat(run_dir / "epoch" / "1").st_mtime)
     poll = 0.05
@@ -891,7 +892,7 @@ def test_a_stale_pool_stops_the_runner_without_failing_or_blocking_a_job(tmp_pat
     profile = _profile(**CONTENT)
     placed, values, store, _ = _stack(tmp_path, profile, ["one", "two"])
     stale = _pool(tmp_path, store, _Idle(), profile)
-    Epoch(tmp_path / "run").take()
+    taken(Epoch(tmp_path / "run"))
     with pytest.raises(StaleCoordinator):
         PydraRunner(profile=profile, work_dir=tmp_path / "pydra").run_plan(
             placed, stale, values=values, events=stale.events
@@ -937,7 +938,7 @@ def test_a_held_env_leaves_its_jobs_queued_and_the_wait_interrupted(tmp_path: Pa
     cpu = workers.queues.queue("cpu")
     workers.ready = lambda: not workers.served or cpu.held("host") is not None
     run_dir = tmp_path / "run"
-    prepare(placed, run_dir, store)
+    prepared(placed, run_dir, store)
     try:
         with pytest.raises(QueueHeld):
             coordinate(run_dir, substrate=workers, profile=profile, store=store)
@@ -955,8 +956,8 @@ def test_a_default_queue_set_honours_only_the_current_epochs_holds(tmp_path: Pat
     placed, _ = _planned(profile, ["one"])
     run_dir = tmp_path / "run"
     epochs = Epoch(run_dir)
-    epochs.take()
-    epochs.take()
+    taken(epochs)
+    taken(epochs)
     queue = QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease).queue("cpu")
     queue.put(node_fragment(placed, Admission(id="a", plan_hash=placed.hash)))
     queue.hold(1, "host")
@@ -1022,7 +1023,7 @@ def test_a_resumed_run_logs_prior_outcomes_as_exact_reuse(tmp_path: Path) -> Non
     profile = _profile(**CONTENT)
     placed, values, store, workers = _stack(tmp_path, profile, ["one", "two", "three"])
     run_dir = tmp_path / "run"
-    assert prepare(placed, run_dir, store)[0] == 1
+    assert prepared(placed, run_dir, store)[0] == 1
     try:
         coordinate(run_dir, substrate=workers, profile=profile, store=store)
         coordinate(run_dir, substrate=workers, profile=profile, store=store)
@@ -1268,7 +1269,7 @@ def test_a_failed_provenance_write_costs_no_settled_result_and_is_retried(tmp_pa
     pytest.importorskip("pydra")
     placed, profile, workers = _stopped(tmp_path, tier_bound, 2, ["one", "two"])
     run_dir = run_dir_of(placed.hash)
-    epoch = Epoch(run_dir).take()
+    epoch = taken(Epoch(run_dir))
     pool = Pool(
         run_dir,
         queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=Epoch(run_dir).current),
