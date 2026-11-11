@@ -7,7 +7,8 @@ Every boundary is wrapped to count its calls on the main thread; at the `occurre
 runs a request in `deaf` mode (SIGTERM ignored, so the group needs SIGKILL) past its timeout; `close` closes
 the idle client. A case of kind `count` injects nothing and reports the calls each boundary got, from which
 the schedule is generated. The client runs on a `ManualClock` that a driver thread advances only while the
-client is parked, only on the `timeout` path, only once the worker has gone deaf and only until SIGKILL is sent:
+thread stopping the client (the main thread, or the one a `close_other_thread` case started) is parked, only on
+the `timeout` path, only once the worker has gone deaf and only until SIGKILL is sent:
 every other wait ends with a real event, so the number of calls each boundary gets does not depend on how fast
 the host reaps a process. A case's `elapsed` is clock time and its bound is derived from the default graces. One
 JSON line per case reports what surfaced, the state at that moment, the order of the signals sent to the group
@@ -217,10 +218,14 @@ def _open_when_entered(server: Gate, gate_open: threading.Event) -> None:
 
 
 def _drive(clock: ManualClock, injector: _Injector, may: Callable[[], bool], done: threading.Event) -> None:
-    """Until `done`, advance `clock` by `STEP_S` each time the main thread is parked on it and `may` allows."""
+    """Until `done`, advance `clock` by `STEP_S` each time a thread of the case is parked on it and `may` allows.
+
+    The threads are the main thread and the injector's other thread, which may take the stop from the main one.
+    """
     main = threading.main_thread()
     while not done.is_set():
-        if clock.is_parked(main) and not injector.on_parked() and may():
+        threads = (main,) if injector.other is None else (main, injector.other)
+        if any(map(clock.is_parked, threads)) and not injector.on_parked() and may():
             clock.advance(STEP_S)
         else:
             done.wait(clock.poll_s)
