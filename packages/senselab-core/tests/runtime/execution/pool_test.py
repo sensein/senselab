@@ -68,6 +68,7 @@ CLASSES = {
 }
 WORKERS = WorkerSet(4)
 CONTENT = {"content_attempts": 2, "infrastructure_replacements": 6, "resource_replacements": 1}
+LOST = FaultRecord(fault="infrastructure", type="WorkerLost", message="lost", gap=False, charged=False)
 GAP = FaultRecord(fault="infrastructure", type="RuntimeError", message="unclassified", gap=True, charged=False)
 CHARGED = FaultRecord(fault="content", type="ValueError", message="bad input", gap=False, charged=True)
 LOST = FaultRecord(fault="infrastructure", type="WorkerLost", message="gone", gap=False, charged=False)
@@ -118,6 +119,7 @@ class FakeWorkers:
         self.store, self.placed, self.values = store, placed, values
         self.act: Act = lambda fragment: None
         self.served: list[PlanFragment] = []
+        self.survived: list[FaultRecord] = []
         self.ready: Callable[[], bool] = lambda: True
         self.names: set[str] = set()
         self._stop = threading.Event()
@@ -170,7 +172,7 @@ class FakeWorkers:
             for job in fragment.jobs:
                 log.record("claimed", job.node, job=job)
             self.served.append(fragment)
-            report(claim, digest, self._outcomes(fragment))
+            report(claim, digest, self._outcomes(fragment), survived=self.survived)
         add_plan_entity(self.store.provenance, self.placed.hash)
         self.store.provenance.write(self.run_dir)
 
@@ -309,6 +311,29 @@ def test_gap_fault_never_dead(tmp_path: Path) -> None:
     assert [g.type for _, g in pool.gaps] == ["RuntimeError", "RuntimeError"] and not pool.broken
     assert not any((tmp_path / "run").glob("dead/*"))
     assert _kinds(tmp_path / "run") == ["failed", "queued", "failed", "queued"]
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(("budget", "broken"), [(2, False), (1, True)], ids=["within-budget", "budget-spent"])
+def test_a_crash_the_item_survived_counts_against_its_env(tmp_path: Path, budget: int, broken: bool) -> None:
+    """A worker lost to a request whose jobs all completed is an uncharged `failed` event of the env, as it was.
+
+    The job still completes; once the env's `infrastructure_replacements` are spent the env is broken and held.
+    """
+    profile = _profile(content_attempts=1, infrastructure_replacements=budget, resource_replacements=0)
+    placed, values, store, workers = _stack(tmp_path, profile, ["one"])
+    workers.survived = [LOST]
+    pool = _pool(tmp_path, store, workers, profile)
+    try:
+        [ref] = _all(pool, placed, values)
+    finally:
+        workers.stop()
+    assert ref.failure is None
+    failed = [e for e in read_events(tmp_path / "run") if e.kind == "failed"]
+    assert [(e.failure.type, e.failure.charged, e.replaced) for e in failed if e.failure] == [
+        ("WorkerLost", False, False)
+    ]
+    assert bool(pool.broken) is broken and not any((tmp_path / "run").glob("dead/*"))
 
 
 @pytest.mark.contract

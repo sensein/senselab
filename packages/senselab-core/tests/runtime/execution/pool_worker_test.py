@@ -307,7 +307,7 @@ def test_an_unreadable_resident_memory_leaves_the_host_memory_unmeasured(tmp_pat
 
 
 @pytest.mark.logic
-def test_failing_batch_bisected(tmp_path: Path) -> None:
+def test_failing_batch_bisected(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """One poisoned job of an 8-job item fails alone, charged to the item; the other 7 commit their results."""
     profile = _profile(quantum_items=8)
     texts = [f"t{i}" for i in range(8)]
@@ -316,8 +316,9 @@ def test_failing_batch_bisected(tmp_path: Path) -> None:
     put_batched(placed, pool_dir, profile, 8)
     workers = crashes({"poison": FOREVER})
     send = sender(store, profile, workers)
-    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=send)
-    assert worker.serve() == 0
+    clock = lease_clock()
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=send, clock=clock)
+    assert _served(worker, clock) == 0
     refs = [ResultRef.model_validate(j) for o in _outcomes(pool_dir, profile) for j in o["jobs"]]
     failed = [r for r in refs if r.failure is not None]
     assert len(refs) == 8 and len(failed) == 1 and workers.sent == [8, 4, 4, 2, 1, 1, 1, 2]
@@ -596,7 +597,9 @@ def test_a_broken_env_costs_one_load_per_claim(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a_load_failure_during_bisection_keeps_the_first_halfs_commits(tmp_path: Path) -> None:
+def test_a_load_failure_during_bisection_keeps_the_first_halfs_commits(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """A request lost as a whole is halved; the first half commits, and the second half, whose load fails, fails."""
     profile = _profile(quantum_items=8)
     placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(8)])
@@ -604,7 +607,8 @@ def test_a_load_failure_during_bisection_keeps_the_first_halfs_commits(tmp_path:
     lost = crashes({"t0": 1})
     unloadable = Unloadable(lost, at=3)
     send = sender(store, profile, unloadable)
-    assert PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=send).serve() == 0
+    clock = lease_clock()
+    assert _served(PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=send, clock=clock), clock) == 0
     refs = _refs(pool_dir, profile)
     done = [r for r in refs if r.failure is None]
     assert lost.sent == [8, 4] and unloadable.checkouts == 3 and len(done) == 4 and len(refs) == 8

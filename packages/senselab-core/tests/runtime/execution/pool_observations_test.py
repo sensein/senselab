@@ -52,8 +52,13 @@ def _observations(pool_dir: Path, profile: ExecutionProfile, queue: str = "cpu")
     ]
 
 
-def _worker(
-    pool_dir: Path, queues: Sequence[str], profile: ExecutionProfile, store: ResultStore, send: Send
+def _worker(  # noqa: PLR0913 - the queues and what the worker serves them with, then its clock
+    pool_dir: Path,
+    queues: Sequence[str],
+    profile: ExecutionProfile,
+    store: ResultStore,
+    send: Send,
+    clock: ManualClock | None = None,
 ) -> PoolWorker:
     return PoolWorker(
         pool_dir,
@@ -64,6 +69,7 @@ def _worker(
         device_memory=lambda: None,
         hardware=lambda _: HARDWARE,
         cotenancy=lambda _: SHARED,
+        **({} if clock is None else {"clock": clock}),
     )
 
 
@@ -127,14 +133,15 @@ def test_gathered_items_report_their_own_request_walls(tmp_path: Path, lease_clo
 
 
 @pytest.mark.logic
-def test_a_bisected_request_is_reported_bisected(tmp_path: Path) -> None:
+def test_a_bisected_request_is_reported_bisected(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A request that is split is `bisected`, a lone job lost twice `failed` twice, the rest `ok`."""
     profile = _profile(quantum_items=8)
     texts = [f"0.0{i}" for i in range(8)]
     placed, store, pool_dir = _items(profile, tmp_path, texts)
     put_batched(placed, pool_dir, profile, 8)
     workers = crashes({"0.05": FOREVER})
-    _worker(pool_dir, ["cpu"], profile, store, sender(store, profile, workers)).serve()
+    clock = lease_clock()
+    _served(_worker(pool_dir, ["cpu"], profile, store, sender(store, profile, workers), clock), clock)
     found = _observations(pool_dir, profile)
     assert Counter(o.outcome for o in found) == {"bisected": 3, "failed": 2, "ok": 3}
     assert sorted(o.jobs for o in found if o.outcome == "bisected") == [2, 4, 8]
@@ -144,14 +151,17 @@ def test_a_bisected_request_is_reported_bisected(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_a_request_reports_the_class_of_the_fault_it_raised(tmp_path: Path) -> None:
+def test_a_request_reports_the_class_of_the_fault_it_raised(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """Requests of over two jobs run out of memory and split; each says `resource`, the ones that ran say nothing."""
     profile = _profile(quantum_items=8)
     texts = [f"0.0{i}" for i in range(8)]
     placed, store, pool_dir = _items(profile, tmp_path, texts)
     put_batched(placed, pool_dir, profile, 8)
     workers = Faulty(lambda seen: OutOfMemoryError("out of memory") if len(seen) > 2 else None)
-    _worker(pool_dir, ["cpu"], profile, store, sender(store, profile, workers)).serve()
+    clock = lease_clock()
+    _served(_worker(pool_dir, ["cpu"], profile, store, sender(store, profile, workers), clock), clock)
     found = _observations(pool_dir, profile)
     assert {(o.batch, o.outcome, o.fault) for o in found if o.fault is not None} == {
         (8, "bisected", "resource"),

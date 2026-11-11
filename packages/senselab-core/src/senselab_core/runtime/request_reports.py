@@ -9,7 +9,7 @@ import threading
 from collections.abc import Hashable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from senselab_worker.faults import FaultClass
 
@@ -37,6 +37,8 @@ class RequestReport:
         device: `(peak, allocated after)` device bytes; None where the worker measured none.
         failure: Set by the bisection engine on a request it split or retried; None for a request that settled its jobs.
         fault: The class of the fault `failure` names.
+        crash: The error record of the loss, set on a request whose worker was lost.
+        survived: Set once the jobs of a lost request all completed: the loss was the host's, not an item's.
     """
 
     tags: tuple[Hashable, ...] = ()
@@ -47,6 +49,8 @@ class RequestReport:
     device: tuple[int, int] | None = None
     failure: Failure | None = None
     fault: FaultKind | None = None
+    crash: dict[str, Any] | None = None
+    survived: bool = False
 
 
 def _open() -> list[RequestReport]:
@@ -99,12 +103,15 @@ def request(tags: tuple[Hashable, ...]) -> Iterator[RequestReport]:
         found.append(report)
 
 
-def mark(report: RequestReport, failure: Failure, fault: FaultClass, items: int) -> None:
+def mark(
+    report: RequestReport, failure: Failure, fault: FaultClass, items: int, crash: dict[str, Any] | None = None
+) -> None:
     """Mark `report` as a request that failed, kept in the enclosing `collected` even if it raised and recorded none.
 
-    `items` is the number of jobs the request carried, taken as its items where it recorded none.
+    `items` is the number of jobs the request carried, taken as its items where it recorded none; `crash` is the
+    error record of a worker lost.
     """
-    report.failure, report.fault = failure, fault.value
+    report.failure, report.fault, report.crash = failure, fault.value, crash
     found = _collector()
     if found is not None and not any(r is report for r in found):
         report.items = report.items or items

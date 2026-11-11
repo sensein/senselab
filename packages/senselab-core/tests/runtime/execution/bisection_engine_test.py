@@ -7,7 +7,7 @@ timed.
 
 import ast
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -16,15 +16,18 @@ import pytest
 from epoch_fixture import prepared
 from faulty_workers_fixture import FOREVER, crashes, put_batched, sender
 from in_process_bisect_test import BATCH, _planned, _run, _texts
+from lease_clock_fixture import ManualClock
 from pool_probe_test import TEXTY
 from pool_stack_fixture import packaged, registry
 from pool_worker_test import _outcomes
+from pool_worker_test import _served as _clocked
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.executor import ItemCrashedWorker, ResultRef
 from senselab_core.runtime.execution.in_process import InProcess, fragment_jobs, node_fragment
 from senselab_core.runtime.execution.job import Abandoned, Completed, Failed, JobOutcome, execute
 from senselab_core.runtime.execution.pool_worker import PoolWorker
 from senselab_core.runtime.execution.queue import RUN_QUEUES
+from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import WorkerFatal, WorkerLost
@@ -141,7 +144,13 @@ def test_a_cancel_is_the_claim_stopping_not_a_crash_to_retry(tmp_path: Path) -> 
     assert workers.sent == [BATCH] and workers.starts == 1
 
 
-def _served(tmp_path: Path, workers: Any, texts: Sequence[str], **faults: int) -> list[ResultRef]:  # noqa: ANN401
+def _served(  # noqa: PLR0913 - the run's directory, clock and workers, then its texts and fault budgets
+    tmp_path: Path,
+    clock: ManualClock,
+    workers: WorkerSet,
+    texts: Sequence[str],
+    **faults: int,
+) -> list[dict[str, Any]]:
     """Serve one claim of every text, one request of them all, through a pool worker over `workers`; return the refs."""
     profile = _profile(tmp_path, **faults)
     placed, _ = _planned(profile, texts)
@@ -150,14 +159,21 @@ def _served(tmp_path: Path, workers: Any, texts: Sequence[str], **faults: int) -
     pool_dir = tmp_path / "run" / RUN_QUEUES
     put_batched(placed, pool_dir, profile, len(texts))
     send = sender(store, profile, workers)
-    assert PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=send).serve() == 0
-    return [ResultRef.model_validate(j) for o in _outcomes(pool_dir, profile) for j in o["jobs"]]
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=send, clock=clock)
+    assert _clocked(worker, clock) == 0
+    return _outcomes(pool_dir, profile)
 
 
-def test_the_pool_charges_the_item_too_and_commits_the_others(tmp_path: Path) -> None:
+def _refs(outcomes: Sequence[dict[str, Any]]) -> list[ResultRef]:
+    return [ResultRef.model_validate(j) for o in outcomes for j in o["jobs"]]
+
+
+def test_the_pool_charges_the_item_too_and_commits_the_others(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """The pool worker, through the same engine: the poisoned job is charged, the other eleven are committed."""
     workers = crashes({"p07": FOREVER})
-    refs = _served(tmp_path, workers, _texts(BATCH, at={7: "p07"}))
+    refs = _refs(_served(tmp_path, lease_clock(), workers, _texts(BATCH, at={7: "p07"})))
     failed = [r for r in refs if r.failure is not None]
     assert len(refs) == BATCH and len(failed) == 1
     assert failed[0].failure is not None and failed[0].failure.type == ItemCrashedWorker.__name__
@@ -165,20 +181,42 @@ def test_the_pool_charges_the_item_too_and_commits_the_others(tmp_path: Path) ->
     assert workers.starts == len(workers.failed) + 1
 
 
-def test_the_pool_and_in_process_agree_over_the_same_crash(tmp_path: Path) -> None:
+def test_the_pool_and_in_process_agree_over_the_same_crash(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
     """Identical outcomes and identical requests for the same poisoned job: one engine, not two."""
     inproc, pooled = crashes({"p07": FOREVER}), crashes({"p07": FOREVER})
     texts = _texts(BATCH, at={7: "p07"})
     outcomes = _run(tmp_path / "a", _profile(tmp_path / "a"), texts, inproc)
-    refs = _served(tmp_path / "b", pooled, texts)
+    refs = _refs(_served(tmp_path / "b", lease_clock(), pooled, texts))
     assert [isinstance(o, Failed) for o in outcomes] == [r.failure is not None for r in refs]
     assert inproc.sent == pooled.sent and inproc.starts == pooled.starts
 
 
-def test_a_crash_another_item_survives_is_infrastructure_in_the_pool(tmp_path: Path) -> None:
-    """A crash lost once and survived is no failure: all twelve commit, nothing is charged or retried."""
-    refs = _served(tmp_path, crashes({"p03": 1}), _texts(BATCH, at={3: "p03"}))
-    assert len(refs) == BATCH and all(r.failure is None for r in refs)
+def test_a_crash_another_item_survives_is_infrastructure_in_the_pool(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
+    """A crash lost once and survived is no job's failure: all twelve commit, and the item reports the loss as infra."""
+    [outcome] = _served(tmp_path, lease_clock(), crashes({"p03": 1}), _texts(BATCH, at={3: "p03"}))
+    assert all(r.failure is None for r in _refs([outcome])) and len(outcome["jobs"]) == BATCH
+    [lost] = outcome["survived"]
+    assert (lost["fault"], lost["type"], lost["charged"]) == ("infrastructure", "WorkerLost", False)
+
+
+def test_a_charged_item_reports_no_survived_loss(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
+    """The losses a poisoned item caused are its own: none is reported against the env."""
+    [outcome] = _served(tmp_path, lease_clock(), crashes({"p07": FOREVER}), _texts(BATCH, at={7: "p07"}))
+    assert "survived" not in outcome
+
+
+def test_a_request_fatal_typed_resource_is_a_resource_fault_never_charged(tmp_path: Path) -> None:
+    """The worker's verdict wins: the lone job fails `resource` once, to be moved to a larger class, not retried."""
+    record = {"type": "MemoryError", "message": "out of memory", "fault": "resource"}
+    workers = crashes({"p05": FOREVER}, lambda: WorkerFatal(record, from_load=False))
+    outcomes = _run(tmp_path, _profile(tmp_path), _texts(BATCH, at={5: "p05"}), workers)
+    [dead] = _failed(outcomes)
+    assert (dead.failure.fault, dead.failure.charged) == ("resource", False)
+    assert dead.failure.type != "ItemCrashedWorker" and workers.failed.count(1) == 1
 
 
 def test_bisect_resource_is_gone() -> None:

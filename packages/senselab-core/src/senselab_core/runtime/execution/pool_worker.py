@@ -297,14 +297,20 @@ class _Spans:
     """What each item of a claim ran in, by digest: its wall seconds and the requests its jobs were in.
 
     An item's wall is its jobs' share of each request they were in, each timed by itself, and of the time a call of
-    `send` took beyond its requests. Its requests are those the calls made.
+    `send` took beyond its requests. Its requests are those the calls made. `lost` holds the workers lost to a request
+    whose jobs all completed, which the item reports as survived losses.
     """
 
     walls: dict[str, float] = field(default_factory=dict)
     requests: dict[str, list[RequestRecord]] = field(default_factory=dict)
+    lost: dict[str, list[FaultRecord]] = field(default_factory=dict)
 
     def add(self, sent: Sent, owners: Mapping[JobRef, str]) -> None:
         """Take one call of `send`: charge each job's item its share of each request and of the rest of the call."""
+        for request in sent.reports:
+            tagged = [owners[t] for t in request.tags if isinstance(t, JobRef) and t in owners]
+            if request.survived and request.crash is not None and tagged:
+                self.lost.setdefault(tagged[0], []).append(FaultRecord.of(request.crash))
         records = records_of(sent)
         rest = max(0.0, sent.wall_s - sum(r.wall_s for r in records)) / len(sent.refs)
         for ref in sent.refs:
@@ -643,7 +649,9 @@ class PoolWorker:
                 with contextlib.suppress(queue.Empty):
                     batch = finished.get(timeout=interval)
                     running = batch is not None
-                    self._commit(claim, batch or [], outcomes, pending, (sample, observe))
+                    self._commit(
+                        claim, batch or [], outcomes, pending, (sample, observe, lambda d: spans.lost.get(d, []))
+                    )
                 if self._clock.now() - renewed >= interval:
                     renewed = self._clock.now()
                     if not claim.renew():
@@ -656,7 +664,13 @@ class PoolWorker:
                         break
             self._stop_runner(runner, cancelled)
             while not finished.empty():
-                self._commit(claim, finished.get_nowait() or [], outcomes, pending, (sample, observe))
+                self._commit(
+                    claim,
+                    finished.get_nowait() or [],
+                    outcomes,
+                    pending,
+                    (sample, observe, lambda d: spans.lost.get(d, [])),
+                )
         self._warm.add(claim.queue.name)
 
     def _sampler(
@@ -780,11 +794,15 @@ class PoolWorker:
         batch: list[tuple[Member, JobOutcome | None]],
         outcomes: dict[str, dict[int, JobOutcome]],
         pending: dict[str, int],
-        measure: tuple[Callable[[str], Sample], Callable[[str, Sequence[JobOutcome]], list[Observation]]],
+        measure: tuple[
+            Callable[[str], Sample],
+            Callable[[str, Sequence[JobOutcome]], list[Observation]],
+            Callable[[str], Sequence[FaultRecord]],
+        ],
     ) -> None:
         """Record `batch`'s outcomes; commit each item still held whose every job has one, with what `measure` gives.
 
-        `measure` is the item's `Sample` and its `Observation`s, given its outcomes.
+        `measure` is the item's `Sample`, its `Observation`s given its outcomes, and the worker losses it survived.
 
         An item with a job whose outcome is None (a busy start lease) is released, unreported.
         """
@@ -796,8 +814,8 @@ class PoolWorker:
         for digest in {m.digest for m, _ in batch} - busy:
             if len(outcomes[digest]) == pending[digest] and digest in claim.items:
                 done = [outcomes[digest][i] for i in range(pending[digest])]
-                sample, observe = measure
-                report(claim, digest, done, sample(digest), observe(digest, done))
+                sample, observe, lost = measure
+                report(claim, digest, done, sample(digest), observe(digest, done), lost(digest))
 
     def _run_groups(
         self, groups: list[_Group], finished: Finished, cancelled: threading.Event, spans: "_Spans"

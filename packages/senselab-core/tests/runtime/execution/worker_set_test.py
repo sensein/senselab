@@ -15,8 +15,9 @@ from senselab_core.runtime.execution.workers import PRECISION, WorkerLoadFailed,
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.vllm_server import VllmOutOfMemory, VllmStartError
-from senselab_core.runtime.worker_client import WorkerClient
+from senselab_core.runtime.worker_client import WorkerClient, WorkerLost
 from senselab_core.testing.interpreter import source_tree_python
+from senselab_worker.fake import FakeFaults
 from senselab_worker.faults import FaultClass, classify
 
 ENV = EnvHandle(source_tree_python(), platform.python_version(), "1" * 64, "2" * 64, None)
@@ -85,6 +86,27 @@ def test_evicted_worker_process_is_closed() -> None:
         with workers.checkout(isolated, ENV, second, device="cpu", profile=PROFILE) as new:
             assert isinstance(new, WorkerClient)
         assert not old.alive and new.alive and workers.pooled() == [new]
+    finally:
+        workers.close()
+
+
+@pytest.mark.contract
+def test_a_client_that_failed_a_request_is_replaced_by_the_next_checkout() -> None:
+    """A worker lost on a request is not alive, and the next checkout hands out another process, as a retry needs."""
+    workers = WorkerSet(1)
+    isolated = fake.FAKE.model_copy(update={"name": "fake-isolated", "env": Env.isolated("fake")})
+    model = _model("c" * 40)
+    items = [{"id": "a", "inputs": {}}]
+    try:
+        with workers.checkout(isolated, ENV, model, device="cpu", profile=PROFILE) as first:
+            assert isinstance(first, WorkerClient)
+            with pytest.raises(WorkerLost):
+                first.run(items, fake.fault_param(FakeFaults(crash_after=0)))
+            assert not first.alive
+        with workers.checkout(isolated, ENV, model, device="cpu", profile=PROFILE) as second:
+            assert isinstance(second, WorkerClient) and second is not first and second.alive
+            assert second.hello["pid"] != first.hello["pid"]
+            assert second.run(items, {})[0]["id"] == "a"
     finally:
         workers.close()
 

@@ -712,11 +712,27 @@ class Pool:
                 self._actuals.landed(class_of(flight.queue), seen)
             self._machine.settled(flight.digest, seen)
             self._machine.oom(flight.digest, seen, _worker_of(record))
+            if not reused:
+                self._survived(flight, record)
         try:
             yield from self._results(followed, flight, record, seen, given, dead, logical, reused)
         finally:
             if first:
                 self._machine.forget(flight.digest)
+
+    def _survived(self, flight: Flight, record: Mapping[str, object]) -> None:
+        """Count each worker loss the item survived as an infrastructure failure of its env, uncharged to any job.
+
+        The first job and its key stand for the item. Once the env's budget is spent it is held, as for a failed job.
+        """
+        lost = record.get("survived")
+        if not isinstance(lost, list) or not flight.fragment.jobs:
+            return
+        job = flight.fragment.jobs[0]
+        key = self._keys(flight.fragment)[0]
+        for found in lost:
+            if not self._infrastructure(flight, job, key, FaultRecord.model_validate(found)):
+                return
 
     def _results(  # noqa: PLR0913 - the item and its outcome, then what `_settle` read of it
         self,

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from senselab_worker import WIRE_VERSION
-from senselab_worker.faults import FaultClass, ProtocolError, classify
+from senselab_worker.faults import FaultClass, ProtocolError, classify, error_record
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.declare import InconsistentInputs
@@ -60,7 +60,7 @@ from senselab_core.runtime.launch import launch
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.request_reports import RequestReport
+from senselab_core.runtime.request_reports import Failure, RequestReport
 from senselab_core.runtime.servable import Servable
 from senselab_core.runtime.store import ResultStore, StoredResult
 from senselab_core.runtime.store import output_identity as store_output_identity
@@ -128,16 +128,18 @@ class Trigger(enum.Enum):
 def trigger_of(exc: BaseException) -> Trigger | None:
     """Return the trigger `exc`, raised by a request to a loaded worker, fires, or None when it fires none.
 
-    A resource-class exception is `RESOURCE`; `WorkerLost`, `ProtocolError` (the host discards the worker after one) and
-    a `WorkerFatal` the worker reported for a request (`from_load` false) are `CRASH`. A lease wait (`LeaseTimeout`) is
+    A resource-class exception is `RESOURCE`, a `WorkerFatal` the worker typed as a resource fault among them (the
+    worker's verdict wins: the job moves to a larger class, uncharged); `WorkerLost`, `ProtocolError` (the host
+    discards the worker after one) and any other `WorkerFatal` the worker reported for a request (`from_load` false)
+    are `CRASH`. A lease wait (`LeaseTimeout`) is
     a `TimeoutError` and so a resource class, but it is nobody's request failing; nor is a worker that failed to start,
     load or reload (`WorkerLoadFailed`, a `WorkerFatal` that is a load): a load is not an item.
     """
     if isinstance(exc, (LeaseTimeout, WorkerLoadFailed)) or (isinstance(exc, WorkerFatal) and exc.from_load):
         return None
-    if isinstance(exc, (WorkerLost, WorkerFatal, ProtocolError)):
-        return Trigger.CRASH
-    return Trigger.RESOURCE if classify(exc) is FaultClass.RESOURCE else None
+    if classify(exc) is FaultClass.RESOURCE:
+        return Trigger.RESOURCE
+    return Trigger.CRASH if isinstance(exc, (WorkerLost, WorkerFatal, ProtocolError)) else None
 
 
 class Abandoned(Exception):
@@ -254,6 +256,7 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
             raise Abandoned({**outcomes, **{chunk[i].index: o for i, o in stopped.kept.items()}}) from stopped
         for item, outcome in zip(chunk, found, strict=True):
             outcomes[item.index] = outcome
+        _mark_survived(sending, chunk, found)
         if emit is not None:
             emit([item.index for item in chunk], found)
     return [outcomes[i] for i in range(len(jobs))]
@@ -279,6 +282,7 @@ class _Sending:
     store: ResultStore
     run: RunConfig
     cancelled: threading.Event | None
+    lost: list[tuple[RequestReport, tuple[JobRef, ...]]] = field(default_factory=list)
 
     def stopped(self) -> bool:
         return self.cancelled is not None and self.cancelled.is_set()
@@ -307,13 +311,15 @@ def _sent_in_halves(chunk: Sequence[_Pending], sending: _Sending, lost: int = 0)
         if sending.stopped():
             raise Abandoned from exc
         fault = classify(exc)
+        crash = error_record(exc) if trigger_of(exc) is Trigger.CRASH else None
+        failure: Failure = "bisected" if len(chunk) > 1 else "failed"
+        request_reports.mark(raised.report, failure, fault, len(chunk), crash)
+        if crash is not None:
+            sending.lost.append((raised.report, tuple(p.job.ref for p in chunk)))
         if len(chunk) > 1:
-            request_reports.mark(raised.report, "bisected", fault, len(chunk))
             return _halves(chunk, sending)
-        if trigger_of(exc) is Trigger.CRASH and lost + 1 < sending.profile.faults.crashes_charged:
-            request_reports.mark(raised.report, "failed", fault, 1)
+        if crash is not None and lost + 1 < sending.profile.faults.crashes_charged:
             return _sent_in_halves(chunk, sending, lost + 1)
-        request_reports.mark(raised.report, "failed", fault, 1)
         key = build_key(chunk[0].job.call, sending.placement, chunk[0].context)
         return [Failed(chunk[0].job.ref, key.digest(), _lone_failure(chunk[0].job.ref, exc, lost + 1, sending))]
     outcomes = [
@@ -324,6 +330,13 @@ def _sent_in_halves(chunk: Sequence[_Pending], sending: _Sending, lost: int = 0)
         request_reports.mark(report, "bisected", FaultClass.RESOURCE, len(chunk))
         return _halves(chunk, sending)
     return outcomes
+
+
+def _mark_survived(sending: _Sending, chunk: Sequence[_Pending], found: Sequence[JobOutcome]) -> None:
+    """Mark each worker loss of the chunk's requests as survived when every job the lost request carried completed."""
+    done = {item.job.ref: isinstance(o, Completed) for item, o in zip(chunk, found, strict=True)}
+    for lost, refs in sending.lost:
+        lost.survived = all(done[r] for r in refs)
 
 
 def _lone_failure(ref: JobRef, exc: Exception, lost: int, sending: _Sending) -> FaultRecord:
