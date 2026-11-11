@@ -64,7 +64,7 @@ Not measured until Task 16, which measures the store root's attribute delay that
 
 ### laptop.faults
 
-content_attempts 2: the 1.x work pool's DEFAULT_MAX_ATTEMPTS, an item failing for its content twice goes to dead/. infrastructure_replacements 6: the 1.x work pool's DEFAULT_MAX_INTERRUPTS, releases and reaps allowed before an env is reported broken. resource_replacements 0: one per larger memory class the profile lists, and a laptop lists none, so a resource fault fails at once.
+content_attempts 2: the 1.x work pool's DEFAULT_MAX_ATTEMPTS, an item failing for its content twice goes to dead/. infrastructure_replacements 6: the 1.x work pool's DEFAULT_MAX_INTERRUPTS, releases and reaps allowed before an env is reported broken. resource_replacements 0: one per larger memory class the profile lists, and a laptop lists none, so a resource fault fails at once. crashes_charged 2: a protocol rule, not a measurement. One loss of a worker may be the host's (a node fault, a kill from outside), so a first loss of a lone job is retried; a second loss of the same job, alone, on a worker started after the first, cannot be the host's by that argument, so it is charged to the item (`ItemCrashedWorker`, content). Two is the least count that separates the host from the item. Composed with the split: a poisoned item in a request of n jobs loses a worker at each of the ⌈log2 n⌉ levels of the split and then `crashes_charged` times alone, and the pool retries a charged item `content_attempts` times, so at most `content_attempts × (⌈log2 n⌉ + crashes_charged)` workers are lost to one item; a profile on a host known to kill workers raises it, and 1 charges on the first loss.
 
 ### laptop.timeouts
 
@@ -142,7 +142,7 @@ Not measured until Task 16, which measures the store root's attribute delay that
 
 ### slurm.faults
 
-content_attempts 2: the 1.x work pool's DEFAULT_MAX_ATTEMPTS, an item failing for its content twice goes to dead/. infrastructure_replacements 6: the 1.x work pool's DEFAULT_MAX_INTERRUPTS, releases and reaps allowed before an env is reported broken. resource_replacements 0: one per larger memory class the profile lists, and the template lists none, so a resource fault fails at once; a user who adds a larger class raises it by one for each.
+content_attempts 2: the 1.x work pool's DEFAULT_MAX_ATTEMPTS, an item failing for its content twice goes to dead/. infrastructure_replacements 6: the 1.x work pool's DEFAULT_MAX_INTERRUPTS, releases and reaps allowed before an env is reported broken. resource_replacements 0: one per larger memory class the profile lists, and the template lists none, so a resource fault fails at once; a user who adds a larger class raises it by one for each. crashes_charged 2: as for the laptop, a protocol rule: one loss of a worker may be the host's, a second of the same job alone on a fresh worker is the item's.
 
 ### slurm.timeouts
 

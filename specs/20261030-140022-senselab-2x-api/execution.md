@@ -95,27 +95,31 @@ dir>/queues --classes <list> [--profile NAME]` runs `serve_pool`.
   load failure is never reported as `invalid_call`. It is never bisected: the jobs of the request get it once, and the
   `Pool` counts it toward the env's infrastructure budget and holds the env. A broken env costs one worker start
   per claim, not 2n-1.
-- **Bisection (P3-36).** Only a request to a loaded worker that fails as a whole is bisected: `WorkerLost`,
-  `WorkerFatal`, `ProtocolError`, or any exception whose class is `resource` (`WorkerTimeout`, `WorkerOOMKilled`,
-  `ValueTooLarge`, a `MemoryError` in the host). The jobs are split in halves, each sent again, until the failing
-  job is alone; it is reported `Failed` with that failure under its own key (`job_key`), and the `Pool` applies the
-  effect. A failure of one item inside a request is reported as it is. Any other exception, a load failure among
-  them, fails every job of the request that raised it and only those: a half that completed keeps its outcomes and
-  is committed. `ProtocolError` is included beyond the ruling's list because the host discards the worker after
-  one, exactly as after `WorkerLost`.
-- **In-process bisection (R-256).** `InProcess` splits a request that ran out, by two predicates beside each other in
-  `job.py`: `ran_out` on the outcomes (a request of several jobs each of which answered a resource fault) and `splits`
-  on what the request raised (a resource-class exception raised by the request to an already-loaded worker, around
-  `worker.run`; `LeaseTimeout` never, though it is a `TimeoutError`). What checkout, start or load raised is never
-  split and is raised as before. The Pool's `whole` calls `splits` for its resource class too. The halves are the
-  first and last jobs, each split in turn until the job that does not fit is alone and is `Failed` with the fault;
-  jobs that fit complete, items that failed as content keep their own outcomes, nothing runs twice.
-  The classes that split a request differ: `InProcess` splits only a resource fault (`splits`, `ran_out`); the Pool also
-  splits `WorkerLost`, `WorkerFatal` and `ProtocolError`, which `InProcess.submit` still raises. `execute` splits only
-  when asked (`bisect_resource`, which `InProcess` passes), because a pool worker sends through `execute` and its own
-  bisection writes the `oom` record. The Pool's request-level bookkeeping (`bisect`, per-request reports, `Sent`) is not
-  shared: `InProcess` keeps no sizing record and writes no `oom` record, since its batch comes from estimates only a
-  pool run feeds.
+- **Bisection (P3-36; one engine, 2026-11-11, R-288).** `execute` is the one place a request is split, for `InProcess`
+  and the Pool alike (ADR-009, amendment 2026-11-11); `bisect_resource` and the Pool's own split are gone. Only a request
+  to a loaded worker is split, and two triggers split it (`trigger_of`, `job.py`): a *resource* trigger, an exception of
+  class `resource` (`WorkerTimeout`, `WorkerOOMKilled`, `ValueTooLarge`, a `MemoryError` in the host; `LeaseTimeout`
+  never, though it is a `TimeoutError`) or `ran_out`, a request of several jobs that each answered a resource fault; and
+  a *crash* trigger, `WorkerLost`, `ProtocolError` (the host discards the worker after one, as after `WorkerLost`) or a
+  `WorkerFatal` raised by a request (`from_load` false) that the worker did not type `resource`; one it typed `resource`
+  is a resource trigger. A load (`WorkerLoadFailed`, a `WorkerFatal` with `from_load`)
+  is never split or retried: it is the env's.
+  The jobs are split in halves, each sent again, until the failing job is alone. A lone job that ran out is `Failed`
+  with the fault under its own key (`job_key`). A lone job whose worker was lost is sent again to a fresh worker, and
+  once it has been lost `faults.crashes_charged` times in a row it is `Failed` with `ItemCrashedWorker`, a content
+  fault charged to the item; a job that completes on a fresh worker is not charged and is no failure, but each loss it
+  survived is reported in the item's outcome record (`survived`) and recorded by the `Pool` as an uncharged `failed` event
+  counted toward the env's `infrastructure_replacements`. A failure of one item inside a request is reported as it is. Any other exception fails the jobs of the request
+  that raised it and only those: a half that completed keeps its outcomes and is committed. Each request the engine
+  split, and each lone request it retried, is a `RequestReport` marked `bisected` or `failed` with its fault class, which
+  the Pool records as `Sent`; nothing that ran twice is stored twice.
+  The cancel flag a claim gives `execute` is read before each request and after each exception, so the `WorkerLost`
+  that `WorkerSet.abandon` causes ends the claim and is neither split nor retried; `execute` raises `Abandoned` with the
+  outcomes already final.
+  Task 24-3 left a mid-request `WorkerFatal` unsplit in the Pool, since a reload failure raised the same type; the
+  type now tells a load from a request, so a request's fatal is a crash and a reload's stays a load.
+  `InProcess` no longer raises on `WorkerLost`, `WorkerFatal` or `ProtocolError`: it splits and charges as the Pool
+  does. It keeps no sizing record and writes no `oom` record, since its batch comes from estimates only a pool run feeds.
 - **A lost claim stops its request (fix round 1).** When a claim's lease is lost (`Claim.renew` gives up an
   item), the worker releases the claim's other items at once, so an in-process request that cannot be stopped never
   holds their leases past the stale bound (fix round 2); it then cancels the claim's remaining work, abandons the
@@ -247,7 +251,7 @@ yielded to the runner, read back from `dead/<key digest>.json`.
 |---|---|---|
 | content (not a gap) | `content_attempts` | charged; queued again until the item has that many charges, then dead |
 | resource (not a gap) | `resource_replacements` | uncharged; moved to the class with the least memory above the current one, on the same device and GPU type; at most that many moves, then (or with no larger class) dead |
-| infrastructure, or any gap | `infrastructure_replacements` | uncharged; queued again on the same class; once one env has that many failures in the current epoch (counted from that epoch's `failed` events on disk, so a coordinator restarted within the epoch keeps the count, and a new epoch starts afresh) it is reported once as `BrokenEnv` and held on each queue it is seen on (`held-<epoch>-<env label>`), only its own items: claimers skip items of a held env and other envs on the class keep running. `QueueHeld` stops the run; no item is failed (a held job is logged `queued` again), so a later epoch runs them |
+| infrastructure, or any gap | `infrastructure_replacements` (a lone job lost `crashes_charged` times on fresh workers is a content fault, `ItemCrashedWorker`, charged to the item, and holds no env) | uncharged; queued again on the same class; once one env has that many failures in the current epoch (counted from that epoch's `failed` events on disk, so a coordinator restarted within the epoch keeps the count, and a new epoch starts afresh) it is reported once as `BrokenEnv` and held on each queue it is seen on (`held-<epoch>-<env label>`), only its own items: claimers skip items of a held env and other envs on the class keep running. `QueueHeld` stops the run; no item is failed (a held job is logged `queued` again), so a later epoch runs them |
 
 A worker's reported result is yielded only when it names the job's own logical key (`job_key`; any other key is a
 content fault `WrongKey` of that job, never a yield) and the store holds its outputs; one it does not hold is a
