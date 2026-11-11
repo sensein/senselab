@@ -271,6 +271,22 @@ current one.
   job is re-placed with a smaller batch and the item is not charged.
   - A host-local `flock` token budget per device is the designed next step, adopted when the scale
     ladder shows the need (design §6.4).
+- **A fault's class survives every wrapper (R-287, R-289, R-292, R-257).**
+  - A `WorkerLoadFailed` and a `WorkerFatal` take their class and gap from the record they carry, so a load that ran
+    out of memory is a resource fault and is re-placed on a larger class. Neither is ever split, because a request is
+    split only when it went to a loaded worker; a reload of an evicted state inside a request is a load.
+  - **A load is not an item.** A class stated at load never charges an item: a content fault stated at load is the
+    environment's and counts against it as infrastructure. A resource fault at load that cannot move to a larger
+    class, because none exists or the replacement budget is spent, counts against the environment too and holds it
+    after the usual retries; no item is marked dead. The record says it came from a load (`load`).
+    A load's failure is no batch's fault: it writes no `oom` record. A load fault re-placed on a larger class is
+    marked `replaced` on its `failed` event and is not counted against the environment. The Pool and `senselab status`
+    count an environment's failures by one rule (`FaultRecord.counts_against_env`).
+  - A `FaultRecord` is built by `of` (a wire record), `from_exception` (through `error_record`) or `gap_of(kind,
+    message)`, the constructor of a gap; no call site writes a literal class.
+  - One mapper, `server_fault`, types a server's failure at the client boundary for both server paths: a timeout or
+    connect failure, or an HTTP 408, 429 or 503, is `ServiceUnavailable` (infrastructure); another 4xx is content; a 507
+    or a 5xx naming memory is resource; any other 5xx is infrastructure.
 - **A GPU-only task with no GPU class** in the execution profile fails planning and names the
   node. It never falls back to CPU silently.
 
@@ -320,7 +336,7 @@ current one.
     before any submission. A hook that raises, answers with another type or outlasts its bound is
     `PlacementHookFailed`: the class keeps its explicit and profile values and the event says so.
     A hook path that does not import is `PlacementHookFailed` at start, not a fallback.
-  - **Events.** A `placement` event is a run-scoped kind of `run-event@2.1`, appended to the epoch's
+  - **Events.** A `placement` event is a run-scoped kind of `run-event@2.2`, appended to the epoch's
     `EventLog` (no node), one per class per epoch: the class's needs, the answer, the hook's path (and
     whether it is importable) and distribution version, the verdict (`no-hook`, `accepted`, `refused`,
     `failed`), the values used with the layer that set each, and the `--exclude` list submitted.

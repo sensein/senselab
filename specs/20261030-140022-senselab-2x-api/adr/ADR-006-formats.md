@@ -702,3 +702,14 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3.2, §8.
   no measured rows (owner ruling; `calibration-probe.md` §3.7). No table format remains; measures are `measures@1` roots
   read on a unit's whole identity. `kernel/formats.py` drops `RESOURCE_TABLE_FORMAT`. `EstimateSource` drops its
   `commit` field, which only a packaged row set; an estimate's source is its probe ids and observation count.
+
+## Amendment 2026-11-10: `run-event@2.2` and a fault record's `load` (Phase 3 Task 24-3)
+
+- **`run-event@2.2`** (additive minor): a `failed` event gains `replaced: bool` (default false), true where the job was
+  queued again on a larger resource class, so its fault is not counted against the environment; and the `failure`
+  record gains `load: bool` (default false), true for a fault stated while a worker started, loaded or reloaded its
+  model (`execution.md` §3.4: a load is not an item). A reader of `@2.1` drops both fields; `@2.1` and `@2.0`
+  documents still read.
+- **`load` is serialised only when true.** The same fault record also sits in the queue outcome records and in
+  `dead/<key>.json`, which carry no format tag and are read strictly, so a record that is no load's is written as it
+  was before the field.

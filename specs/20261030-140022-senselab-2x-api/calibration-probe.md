@@ -961,7 +961,7 @@ override file, then the hook's answer (§10.3). The plan records the value it us
 - **A hook that cannot be imported** (a malformed or unresolvable `module:callable`) is `PlacementHookFailed` when
   the run starts, not a fallback: a misconfigured hook fails loudly. A callable given as an object that no import
   can resolve (a lambda, a nested function) is recorded with `importable: false`.
-- **Recorded.** One `placement` event per class per epoch, a run-scoped kind of `run-event@2.1` in the epoch's event
+- **Recorded.** One `placement` event per class per epoch, a run-scoped kind of `run-event@2.2` in the epoch's event
   log, holds the request, the answer, the callable's path and the version of its distribution
   (`importlib.metadata`), the validation verdict, the values used with the layer of each, and the `--exclude` list
   submitted. The request is built per epoch from the input values the pool bound. Its request
@@ -972,7 +972,7 @@ override file, then the hook's answer (§10.3). The plan records the value it us
 
   Amended 2026-11-09 (T20R-7b). The log is append-only, so the closing record is the class's `placement` event written
   again at the epoch's end (a change of epoch, or `Pool.close`), its `PlacementRecord` carrying `closing:
-  {wall_s, gpu_hours, device_peak_bytes}` (`run-event@2.1`, an additive minor). `request` is the request the class
+  {wall_s, gpu_hours, device_peak_bytes}` (`run-event@2.2`, an additive minor). `request` is the request the class
   was placed against: the hook's, else the plan's request built when the class was first placed. `wall_s` runs from
   the class's first put to its last outcome on the pool's clock; `gpu_hours` is the lifetimes of its workers (a
   worker lives from the first listing that shows it started to the first that omits it) on a `cuda` class, None on

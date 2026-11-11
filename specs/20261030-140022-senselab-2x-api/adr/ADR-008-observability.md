@@ -27,14 +27,14 @@ corpus run could not be debugged except by reading worker stderr.
 
 ## Amendment 2026-11-09: placement is an event of the one log (Phase 3 Task 20R-12)
 
-- A run has one event log. Each class's placement in an epoch is a run-scoped `placement` event of `run-event@2.1`
+- A run has one event log. Each class's placement in an epoch is a run-scoped `placement` event of `run-event@2.2`
   (ADR-006), appended through the epoch's `EventLog` by the pool; status, `explain` and reports read it there. The
   closing actuals record of T20R-7b is appended the same way.
 
 ## Amendment 2026-11-10: the events and commands as built (Phase 3 Task 22a)
 
 - **Event kinds.** The log's kinds are `queued`, `claimed`, `started`, `finished`, `failed`, `yielded`, `cache_hit`,
-  `verify`, `blocked`, `cancelled` and `placement` (`runtime/execution/events.py:40-52`); the format is `run-event@2.1`
+  `verify`, `blocked`, `cancelled` and `placement` (`runtime/execution/events.py:40-52`); the format is `run-event@2.2`
   (`kernel/formats.py:72`, ADR-006). A job's state is `queued`, `running`, `done`, `failed`, `blocked` or
   `cancelled` (`events.py:56`). The amendment of 2026-11-09 above added `placement`; `blocked` and `cancelled` are the other two
   the Decision list above lacks.
