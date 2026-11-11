@@ -312,12 +312,14 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
         "abandoned": case["path"].startswith("init") and not built,
         "client_open": client.alive,
         "at_outcome": _state(client, pid_file),
+        "tripped": [],
     }
     if injector.other is not None:
         injector.other.join(case_bound(case))
         report["other_thread_done"] = not injector.other.is_alive()
     client.close()
     report["after_close"] = _state(client, pid_file)
+    report["tripped"] = list(clock.tripped)
     done.set()
     os.killpg = killpg
     signal.signal(signal.SIGINT, signal.default_int_handler)
@@ -370,7 +372,7 @@ def counted(tmp_path: Path) -> dict[str, dict[str, int]]:
 
 
 def violations(report: dict[str, Any]) -> list[str]:
-    """What a case's report breaks: reach, typed outcome, bound, no live group under a closed client, clean ends.
+    """What a case's report breaks: reach, typed outcome, bound, no group under a closed client, clean ends, no trip.
 
     A constructor that raised hands the caller nothing to close, so its state must already be clean.
     """
@@ -392,6 +394,8 @@ def violations(report: dict[str, Any]) -> list[str]:
         found.append("close() on the other thread did not return")
     if report["after_close"] != CLEAN:
         found.append(f"after close: {report['after_close']}")
+    if report["tripped"]:
+        found.append(f"the clock's hang guard fired: {report['tripped']}")
     return found
 
 

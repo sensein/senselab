@@ -29,6 +29,7 @@ from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import group_alive
 from senselab_worker.fake import FAULT_KEY
 from shutdown_schedule_fixture import (
+    CLEAN,
     KINDS,
     counted,
     run_schedule,
@@ -45,6 +46,27 @@ def _check(tmp_path: Path, kind: str, occurrences: range) -> list[dict[str, Any]
     failed = {f"{r['path']} {r['boundary']}#{r['occurrence']}": v for r in reports if (v := violations(r))}
     assert failed == {}
     return reports
+
+
+@pytest.mark.logic
+def test_a_case_whose_clock_tripped_its_guard_is_a_violation() -> None:
+    """A clean report passes; the same report with a guard trip the stop path swallowed fails."""
+    report: dict[str, Any] = {
+        "fired": True,
+        "path": "close",
+        "kind": "sigint",
+        "outcome": None,
+        "elapsed": 0.0,
+        "bound": 1.0,
+        "at_outcome": CLEAN,
+        "client_open": False,
+        "abandoned": False,
+        "after_close": CLEAN,
+        "tripped": [],
+    }
+    report["outcome"] = next(iter(shutdown_schedule_fixture.TYPED["close"] - {None}), None)
+    assert violations(report) == []
+    assert any("guard" in v for v in violations({**report, "tripped": ["a wait outlived 30s"]}))
 
 
 RAISING_KINDS = ("sigint", "handler_raises_base", "handler_raises_exception")
