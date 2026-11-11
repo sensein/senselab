@@ -67,6 +67,7 @@ from senselab_core.runtime.execution.telemetry import (
     peak_beyond,
     predicted,
 )
+from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import Lease, LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.measures import (
@@ -164,11 +165,14 @@ class ProbeMachine:
         clock: Clock,
         host: Host,
         probe_s: float | None = None,
+        lease: JobLease | None = None,
     ) -> None:
         """Run units under `profile`, reading `roots`, `measures`, `resolver`; timed by `clock`, acting by `host`.
 
-        A probe's warm requests may take `probe_s` seconds: the profile's `probe_s` when None.
+        A probe's warm requests may take `probe_s` seconds: the profile's `probe_s` when None. A probe whose items
+        wait past the stale bound of `lease` (the profile's when None) is abandoned.
         """
+        self._lease = lease if lease is not None else profile.lease
         self.profile, self.roots, self.measures, self.resolver = profile, roots, measures, resolver
         self.probe_s = profile.probe_s if probe_s is None else probe_s
         self._clock, self.host = clock, host
@@ -262,6 +266,9 @@ class ProbeMachine:
                 self.host.produce(Release(held, state.estimate, unit), jobs, placement)
             return
         estimate = self.measures.get(unit)
+        if held.following:
+            self.host.produce(Release(held, estimate, unit), jobs, placement)
+            return
         plan = None if covers(estimate, jobs) else self._plan_probe(unit, held, jobs, placement)
         if plan is None or not worth(plan, estimate):
             ended = State(
@@ -525,7 +532,7 @@ class ProbeMachine:
         self._read_outcomes(state, replace=True)
         spent = self._warm_s(run.observations)
         if run.awaiting and spent < self.probe_s:
-            if self._clock.now() - run.last >= self.profile.lease.stale_after_s:
+            if self._clock.now() - run.last >= self._lease.stale_after_s:
                 self._conclude(state, None, abandon=True)
             return
         if run.stage == "single" and not run.awaiting and spent < self.probe_s:

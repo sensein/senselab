@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+from epoch_fixture import prepared
 from lease_clock_fixture import ManualClock
 from pool_probe_test import JOBS, SEEN, TEXTY, _plan, _pool
 from pool_stack_fixture import packaged, registry
@@ -29,7 +30,6 @@ from senselab_core.runtime.execution.in_process import node_fragment
 from senselab_core.runtime.execution.pool import Pool
 from senselab_core.runtime.execution.pool_worker import PoolWorker
 from senselab_core.runtime.execution.queue import RUN_QUEUES
-from senselab_core.runtime.execution.run import prepare
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.calibration_samples import UNIT
@@ -72,7 +72,7 @@ def _crowded(tmp_path: Path, env: Env | None, worker: str = CROWDED) -> Iterator
 def _served(tmp_path: Path, profile: ExecutionProfile, clock: ManualClock, lengths: Sequence[int]) -> Pool:
     """Run one fragment over `lengths` through the pool and one real worker beside three peers; return the pool."""
     placed, values = _plan(profile, lengths)
-    prepare(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
+    prepared(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
     pool = _pool(tmp_path, profile, clock=clock, measures=FixedEstimates(ESTIMATE), resolver=FixedUnit(profile))
     handle = pool.submit(node_fragment(placed, pool.admit(placed, values))).id
     worker = PoolWorker(
@@ -140,7 +140,7 @@ def _torch_run(
     with packaged(registry(TEXTY, worker=TORCH, env=None), tmp_path / "cache"):
         profile = ExecutionProfile.load("laptop", override)
         placed, values = _plan(profile, lengths)
-        prepare(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
+        prepared(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
         pool = _pool(tmp_path, profile, clock=clock, measures=FixedEstimates(BATCHED), resolver=FixedUnit(profile))
         handle = pool.submit(node_fragment(placed, pool.admit(placed, values))).id
         worker = PoolWorker(
@@ -225,7 +225,7 @@ def test_a_load_oom_is_no_batchs_fault_and_writes_no_oom_record(tmp_path: Path, 
     fixture.RAISE[:] = [MemoryError("CUDA out of memory")]
     with _crowded(tmp_path, None, "backends.oom_load_backend_fixture") as profile:
         placed, values = _plan(profile, [3, 12, 25, 60, 90, 7, 33, 41])
-        prepare(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
+        prepared(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
         pool = _pool(tmp_path, profile, clock=clock, measures=FixedEstimates(ESTIMATE), resolver=FixedUnit(profile))
         handle = pool.submit(node_fragment(placed, pool.admit(placed, values))).id
         worker = PoolWorker(

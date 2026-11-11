@@ -54,9 +54,12 @@ EventKind = Literal[
     "verify",
     "blocked",
     "cancelled",
+    "reclaimed",
     "placement",
 ]
-"""What happened to a job, or `placement`, which is of the run and names no node."""
+"""What happened to a job, or `placement`, which is of the run and names no node.
+
+`reclaimed` changes no state: a claim of the job's item broke a stale lease first."""
 JobState = Literal["queued", "running", "done", "failed", "blocked", "cancelled"]
 """Where a job is, from its events."""
 STATES: tuple[JobState, ...] = ("queued", "running", "done", "failed", "blocked", "cancelled")
@@ -96,6 +99,13 @@ class ClassActuals(Frozen):
     device_peak_bytes: Annotated[int, Field(ge=0)] | None = None
 
 
+class LeaseBreak(Frozen):
+    """The stale lease a `reclaimed` claim broke: the storage-clock seconds it was judged by and its holders' tokens."""
+
+    age_s: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+    tokens: tuple[NonEmptyStr, ...] = ()
+
+
 class PlacementRecord(Frozen):
     """How one resource class was placed in one epoch: the payload of a `placement` event.
 
@@ -125,8 +135,8 @@ class Event(Formatted):
     it, `seq` its position in that file, `placement_digest` the digest of the node's placement, `fault` the class of a
     failure, `failure` the record of it, `reuse` the policy that served a `cache_hit` (its value), `env` the env the job
     ran in, `replaced` whether a failed job was queued again on a larger resource class (its fault is then not counted
-    against the env), `output` the output identity of a `finished` or `cache_hit` job and `t_ns` the wall-clock
-    nanoseconds of the event.
+    against the env), `output` the output identity of a `finished` or `cache_hit` job, `lease` the stale lease a
+    `reclaimed` claim broke and `t_ns` the wall-clock nanoseconds of the event.
     """
 
     format: FormatTag = RUN_EVENT_FORMAT
@@ -148,6 +158,7 @@ class Event(Formatted):
     output: OutputIdentity | None = None
     placement: PlacementRecord | None = None
     replaced: bool = False
+    lease: LeaseBreak | None = None
     t_ns: Annotated[int, Field(ge=0)]
 
     @model_validator(mode="after")
@@ -166,6 +177,7 @@ class Event(Formatted):
                         self.output,
                         self.reuse,
                         self.env,
+                        self.lease,
                     )
                 )
                 or self.placement_digest is not None
@@ -184,6 +196,8 @@ class Event(Formatted):
             raise ValueError("only a failed event carries a fault, and whether the job was placed on a larger class")
         if self.reuse is not None and self.kind != "cache_hit":
             raise ValueError("only a cache_hit event carries a reuse policy")
+        if (self.kind == "reclaimed") != (self.lease is not None):
+            raise ValueError("a reclaimed event carries the lease it broke, and no other event does")
         return self
 
 
@@ -202,6 +216,8 @@ class RunStatus:
     Derived from events alone (`status_from`). `done` is True once every job seen has a terminal event, and
     `cancelled` once any job was cancelled, so a cancelled run is never plain done. `last_event_ns` is the time of the
     newest event. `interrupted` is set by `Run.wait` alone, when the run is not done and its coordinator stopped.
+    `reclaimed` counts the claims that broke a stale lease first (`reclaimed` events); `quarantined` the event lines a
+    reader could not decode (`EventScan`), so a job whose terminal event was one reads as not done for that reason.
     """
 
     counts: Mapping[JobState, int]
@@ -212,6 +228,8 @@ class RunStatus:
     last_event_ns: int | None = None
     interrupted: bool = False
     nodes: Mapping[str, Mapping[JobState, int]] = field(default_factory=dict)
+    reclaimed: int = 0
+    quarantined: int = 0
 
 
 def _latest(events: Sequence[Event]) -> list[Event]:
@@ -280,7 +298,9 @@ def terminal_events(events: Iterable[Event], *, epoch: int | None = None) -> dic
     return {job: event for job, event in found.items() if event is not None}
 
 
-def status_from(events: Iterable[Event], *, broken_after: int | None = None, epoch: int | None = None) -> RunStatus:
+def status_from(
+    events: Iterable[Event], *, broken_after: int | None = None, epoch: int | None = None, quarantined: int = 0
+) -> RunStatus:
     """Return the status of a run from its `events`, each writer's in file order (`read_events`).
 
     A job's state is the terminal event of its latest attempt (highest `epoch`, then `ordinal`) with precedence
@@ -290,7 +310,7 @@ def status_from(events: Iterable[Event], *, broken_after: int | None = None, epo
     every `failed` event by its class; an env with `broken_after` infrastructure failures (the packaged profile's
     `infrastructure_replacements` when None) is `broken`. Cancelled and blocked jobs are not faults. With `epoch`
     (the run's current one), a job with no event of
-    that epoch is queued.
+    that epoch is queued. `quarantined` is the number of lines the reader refused, carried into the status.
     """
     if broken_after is None:
         from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - read only when needed
@@ -329,6 +349,8 @@ def status_from(events: Iterable[Event], *, broken_after: int | None = None, epo
         cancelled=tally["cancelled"] > 0,
         last_event_ns=max((e.t_ns for e in seen), default=None),
         nodes={n: {s: c[s] for s in STATES} for n, c in sorted(per_node.items())},
+        reclaimed=sum(1 for e in seen if e.kind == "reclaimed"),
+        quarantined=quarantined,
     )
 
 
@@ -437,6 +459,7 @@ class EventLog:
         output: str | None = None,
         placement: PlacementRecord | None = None,
         replaced: bool = False,
+        lease: LeaseBreak | None = None,
     ) -> Event:
         """Append the event of `kind` for `node` (None for a `placement`), stamped now with the next `seq`."""
         with self._lock:
@@ -460,6 +483,7 @@ class EventLog:
             output=output,
             placement=placement,
             replaced=replaced,
+            lease=lease,
             t_ns=self.clock(),
         )
         self.append(event)
@@ -508,11 +532,22 @@ def scan_events(run_dir: Path) -> EventScan:
     return EventScan(events=events, quarantined=tuple(quarantined))
 
 
+_REPORTED: set[tuple[Path, str, int]] = set()
+_REPORTED_LOCK = threading.Lock()
+
+
 def read_events(run_dir: Path) -> list[Event]:
-    """Return the events of the run in `run_dir` as `scan_events` reads them, logging any line it quarantined."""
+    """Return the events of the run in `run_dir` as `scan_events` reads them.
+
+    A quarantined line is logged once per process, by run, writer and line, so a torn tail a kill left is not
+    reported again at each read.
+    """
     scan = scan_events(run_dir)
-    if scan.quarantined:
-        logger.warning("%d event lines of %s are unreadable and were skipped", len(scan.quarantined), run_dir)
+    with _REPORTED_LOCK:
+        fresh = [q for q in scan.quarantined if (Path(run_dir), q.writer, q.line) not in _REPORTED]
+        _REPORTED.update((Path(run_dir), q.writer, q.line) for q in fresh)
+    if fresh:
+        logger.warning("%d event lines of %s are unreadable and were skipped", len(fresh), run_dir)
     return scan.events
 
 

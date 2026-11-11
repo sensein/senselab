@@ -12,6 +12,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import pytest
+from epoch_fixture import prepared, taken
 from lease_clock_fixture import ManualClock
 from pool_stack_fixture import host_env, scoring
 from senselab_core.kernel.dataset import Record, ValueInput
@@ -31,7 +32,6 @@ from senselab_core.runtime.execution.observing import request_units
 from senselab_core.runtime.execution.pool import Pool, report
 from senselab_core.runtime.execution.pool_parts import placed_backends
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of, probe_queue
-from senselab_core.runtime.execution.run import prepare
 from senselab_core.runtime.execution.substrates import QueueReady, Substrate, WorkerHandle, backend_key, mark_ready
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.hardware import HardwareInfo
@@ -169,12 +169,12 @@ def _pool(  # noqa: PLR0913 - the run's places, its clock and the seams a test r
 ) -> Pool:
     run_dir = tmp_path / run
     epochs = Epoch(run_dir)
-    epoch = epochs.take()
+    epoch = taken(epochs)
     roots = measure_roots(profile)
     given: dict[str, object] = {"roots": roots, "resolver": UnitResolver(profile, roots, hardware=HOST), **seams}
     return Pool(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=epochs.current),
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=epochs.current),
         store=ResultStore(tmp_path / store),
         events=EventLog(run_dir, f"a{epoch}", epoch, epoch=epoch),
         profile=profile,
@@ -908,7 +908,7 @@ def test_a_worker_builds_an_unbuilt_env_before_its_mark_and_the_unit_probes(tmp_
         Packaged(packaged().catalogue, _counting(built), packaged().registry, packaged().lock_records, env_read=unbuilt)
     )
     try:
-        prepare(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
+        prepared(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
         pool = _pool(
             tmp_path,
             profile,
@@ -996,7 +996,7 @@ def test_a_ready_mark_carries_no_identifier(tmp_path: Path, clock: ManualClock) 
         Packaged(packaged().catalogue, opener, packaged().registry, packaged().lock_records, env_read=opener)
     )
     try:
-        prepare(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
+        prepared(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
         pool = _pool(tmp_path, profile, clock=clock)
         _submit(pool, placed, values)
         worker = PoolWorker(

@@ -21,6 +21,7 @@ from senselab_core.kernel.signals import StaleSource
 from senselab_core.runtime import planner
 from senselab_core.runtime.audio_io import open_audio
 from senselab_core.runtime.call import Packaged, RunConfig, TaskCall, use_packaged
+from senselab_core.runtime.call import packaged as packaged_now
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.envs import EnvHandle
@@ -28,9 +29,23 @@ from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import Event, EventLog, read_events, run_dir_of
 from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status
 from senselab_core.runtime.execution.in_process import InProcess
-from senselab_core.runtime.execution.run import ConflictingSources, InputChanged, NotRun, Output, Run, load_plan
+from senselab_core.runtime.execution.run import (
+    ConflictingSources,
+    InputChanged,
+    NotRun,
+    Output,
+    Run,
+    load_plan,
+    stored_policy,
+)
 from senselab_core.runtime.execution.workers import WorkerSet
-from senselab_core.runtime.licenses import license_record
+from senselab_core.runtime.licenses import (
+    LaxerLicensePolicy,
+    LicensePolicy,
+    LicenseRefused,
+    license_record,
+    policy_digest,
+)
 from senselab_core.runtime.planner import NoRun, Plan, plan, resume
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
@@ -136,7 +151,7 @@ def _graph(task: TaskSpec = SCORE, port: str = "text", model: str | None = None)
 
 def _plan(n: int, **kw: Any) -> Plan:  # noqa: ANN401 - `plan` keywords
     rows = from_records({"id": f"r{i}", "inputs": {"text": f"t{i}"}} for i in range(n))
-    placed = plan(kw.pop("graph", _graph()), rows, config=RunConfig(), execution=PROFILE, **kw)
+    placed = plan(kw.pop("graph", _graph()), rows, config=kw.pop("config", RunConfig()), execution=PROFILE, **kw)
     nodes = {k: v.model_copy(update={"batch_size": 1}) for k, v in placed.placement.nodes.items()}
     return dataclasses.replace(placed, placement=placed.placement.model_copy(update={"nodes": nodes}))
 
@@ -283,9 +298,9 @@ def _gated_resume(placed: Plan, store: ResultStore, profile: ExecutionProfile) -
     """Resume `placed` under `profile` on a gated executor; return once its jobs are queued and the first is sent."""
     gated = Gated(store, profile)
     resumed = resume(placed.hash, execution=profile, store=store, executor=gated)
-    epoch = Epoch(resumed.run_dir).current()
-    assert (resumed.run_dir / "epoch" / str(epoch) / "coordinator.lease").is_dir()
     assert gated.entered.wait(30)
+    epoch = Epoch(resumed.run_dir).current()
+    assert epoch == 2 and (resumed.run_dir / "epoch" / str(epoch) / "coordinator.lease").is_dir()
     return resumed, gated
 
 
@@ -483,4 +498,83 @@ def test_conflicting_durable_sources_are_refused_before_any_write(tmp_path: Path
     with pytest.raises(ConflictingSources) as raised:
         placed.run(_executor(store), store=store)
     assert raised.value.conflicts == (("call", "audio"),)
+    assert _tree(run.run_dir) == before
+
+
+STORED = LicensePolicy(frozenset({"mit", "bsd-3-clause"}), frozenset({"bsd-3-clause"}))
+
+
+def _licensed(tmp_path: Path, policy: LicensePolicy | None = STORED, n: int = 2) -> tuple[Plan, ResultStore, Run]:
+    store = ResultStore(tmp_path / "store")
+    placed = _plan(n, config=RunConfig(licenses=policy))
+    return placed, store, _ran(placed, store)
+
+
+@pytest.mark.contract
+def test_a_resume_without_a_config_runs_under_the_policy_the_run_was_planned_under(tmp_path: Path) -> None:
+    """The run was planned allowing MIT; its backend's env is now GPL-licensed: resuming with no config refuses it."""
+    placed, store, _ = _licensed(tmp_path, LicensePolicy(allow=frozenset({"mit"})))
+    gpl = license_record("GPL-3.0-only", source="lock", verified={"date": "2026-11-11", "how": "pep639"}, gated=False)
+    current = packaged_now()
+    previous = use_packaged(dataclasses.replace(current, lock_records=lambda _: {"pkg": gpl}))
+    try:
+        with pytest.raises(LicenseRefused):
+            resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
+    finally:
+        use_packaged(previous)
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    ("given", "field", "ids"),
+    [
+        (None, "allow", ()),
+        (LicensePolicy(frozenset({"mit", "bsd-3-clause"})), "refuse", ("bsd-3-clause",)),
+        (
+            LicensePolicy(frozenset({"mit", "bsd-3-clause", "apache-2.0"}), frozenset({"bsd-3-clause"})),
+            "allow",
+            ("apache-2.0",),
+        ),
+        (LicensePolicy(None, frozenset({"bsd-3-clause"})), "allow", ()),
+        (LicensePolicy(STORED.allow, STORED.refuse, True), "allow_unlicensed_hits", ()),
+    ],
+    ids=["absent", "refuse-removed", "allow-added", "allow-unbounded", "unlicensed-hits"],
+)
+def test_a_resume_given_a_laxer_policy_is_refused_before_anything_is_written(
+    tmp_path: Path, given: LicensePolicy | None, field: str, ids: tuple[str, ...]
+) -> None:
+    """Each way of loosening the policy the run was planned under raises `LaxerLicensePolicy` and starts no attempt."""
+    placed, store, run = _licensed(tmp_path)
+    before = _tree(run.run_dir)
+    with pytest.raises(LaxerLicensePolicy) as raised:
+        resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store), config=RunConfig(licenses=given))
+    assert (raised.value.field, raised.value.ids) == (field, ids) and _tree(run.run_dir) == before
+
+
+@pytest.mark.contract
+def test_a_stricter_policy_is_used_for_the_attempt_and_the_stored_one_stays(tmp_path: Path) -> None:
+    """A resume allowing fewer ids runs; `licenses.json` is unchanged; each attempt records the stored digest."""
+    placed, store, run = _licensed(tmp_path, LicensePolicy(frozenset({"mit", "apache-2.0"})))
+    written = (run.run_dir / "licenses.json").read_bytes()
+    stricter = RunConfig(licenses=LicensePolicy(frozenset({"mit"})))
+    resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store), config=stricter)
+    assert resumed.wait(60).done and (run.run_dir / "licenses.json").read_bytes() == written
+    stored = stored_policy(run.run_dir)
+    assert stored == LicensePolicy(frozenset({"mit", "apache-2.0"}))
+    digests = {p.read_text() for p in (run.run_dir / "private" / "placements").glob("*.licenses")}
+    assert (
+        digests == {policy_digest(stored)}
+        and len(list((run.run_dir / "private" / "placements").glob("*.licenses"))) == 2
+    )
+
+
+@pytest.mark.contract
+def test_running_a_plan_again_under_a_laxer_policy_is_refused_at_the_start(tmp_path: Path) -> None:
+    """The policy is no part of the plan hash, so a second `run()` of it is the same run, and cannot loosen it."""
+    placed, store, run = _licensed(tmp_path)
+    laxer = _plan(2, config=RunConfig(licenses=None))
+    assert laxer.hash == placed.hash
+    before = _tree(run.run_dir)
+    with pytest.raises(LaxerLicensePolicy):
+        laxer.run(_executor(store), store=store)
     assert _tree(run.run_dir) == before

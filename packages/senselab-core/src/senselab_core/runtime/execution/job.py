@@ -132,6 +132,10 @@ def ran_out(outcomes: Sequence[JobOutcome]) -> bool:
     )
 
 
+Emit = Callable[[Sequence[int], Sequence[JobOutcome]], None]
+"""Hands the outcomes of the jobs at these indices of a call of `execute` to its caller, once each is final."""
+
+
 @dataclass(frozen=True)
 class _Pending:
     index: int
@@ -149,6 +153,7 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     profile: ExecutionProfile,
     workers: WorkerSet,
     bisect_resource: bool = False,
+    emit: Emit | None = None,
 ) -> list[JobOutcome]:
     """Run `jobs`, all of one call but their inputs, under `placement`, and return one outcome per job, in order.
 
@@ -165,6 +170,9 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
     gave a resource fault, or which raised one, is sent again as two requests of its first and last jobs, each split
     in turn, so that the jobs that fit complete and a job that does not fit alone is the one that fails; without it
     the request's outcomes are returned as they came, for a caller that splits them itself (the pool worker).
+    With `emit`, the outcomes of the jobs failed or served before anything is sent are handed to it at once, and then
+    each request's, as soon as that request's outputs are stored; a request of several jobs that all ran out is not
+    handed over when the caller splits it.
 
     Raises:
         ValueError: the jobs are not of one call or of one node; a server backend has no model.
@@ -204,13 +212,18 @@ def execute(  # noqa: PLR0913 - the jobs and their placement, then keyword-only 
             outcomes[index] = Completed(job.ref, served)
         else:
             pending.append(_Pending(index, job, context, hit))
+    if emit is not None and outcomes:
+        emit(list(outcomes), list(outcomes.values()))
     by_job = {id(p.job): p for p in pending}
     for batch in form_batches([p.job for p in pending], backend, batch_size=placement.batch_size, grid=grid):
         chunk = [by_job[id(j)] for j in batch.jobs]
         sent = replace(placement, **request_components(backend, batch.formation))
         sending = _Sending(sent, env, profile, workers, expected, store, run, bisect_resource)
-        for item, outcome in zip(chunk, _sent_in_halves(chunk, sending), strict=True):
+        found = _sent_in_halves(chunk, sending)
+        for item, outcome in zip(chunk, found, strict=True):
             outcomes[item.index] = outcome
+        if emit is not None and (bisect_resource or not ran_out(found)):
+            emit([item.index for item in chunk], found)
     return [outcomes[i] for i in range(len(jobs))]
 
 

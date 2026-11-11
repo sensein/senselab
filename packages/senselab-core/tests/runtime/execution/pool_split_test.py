@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+from epoch_fixture import taken
 from lease_clock_fixture import ManualClock
-from pool_stack_fixture import packaged, planned, registry, scoring
+from pool_stack_fixture import lease_of, packaged, planned, registry, scoring
 from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import BackendSpec, Registry
 from senselab_core.kernel.graph import Edge, Graph, Node
@@ -125,10 +126,10 @@ def _pool(
 ) -> Pool:
     run_dir = tmp_path / "run"
     epochs = Epoch(run_dir)
-    epoch = epochs.take()
+    epoch = taken(epochs)
     return kind(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=epochs.current),
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=epochs.current),
         store=ResultStore(tmp_path / "store"),
         events=EventLog(run_dir, f"a{epoch}", epoch, epoch=epoch),
         profile=profile,
@@ -197,6 +198,19 @@ def test_workers_wanted_counts_quanta_of_jobs_whatever_the_items(tmp_path: Path)
     assert pool.queues.queue("cpu").depth() == 200 and pool.workers_wanted("cpu", 200) == 20
 
 
+@pytest.mark.logic
+def test_a_resume_whose_every_item_is_live_scales_beyond_one_worker(tmp_path: Path) -> None:
+    """Epoch 2 follows 200 one-job items epoch 1 queued: its jobs size the scaler as its own puts would."""
+    profile = _profile()
+    placed, values, first, fragment = _submitted(tmp_path, profile, 200)
+    first.queues.queue("cpu").put_all(split(fragment, 1))
+    first.close()
+    second = _pool(tmp_path, profile)
+    second.submit(node_fragment(placed, second.admit(placed, values)))
+    second.close()
+    assert second.queues.queue("cpu").depth() == 200 and second.workers_wanted("cpu", 200) == 20
+
+
 @pytest.mark.parametrize(("cap", "expected"), [(None, 20), (16, 4)], ids=["class-max", "qos-cap"])
 @pytest.mark.logic
 def test_scale_wants_a_worker_per_quantum_of_jobs(tmp_path: Path, cap: int | None, expected: int) -> None:
@@ -216,7 +230,9 @@ def test_two_workers_claim_different_items_and_every_job_is_committed_once(tmp_p
     """Two claimers bounded by a quantum of jobs each hold one item at once; the items' outcomes cover each job once."""
     placed, _, pool, fragment = _submitted(tmp_path, _profile(), 200)
     pool.submit(fragment)
-    queues = [QueueSet(tmp_path / "run" / RUN_QUEUES, _profile()).queue("cpu") for _ in range(2)]
+    queues = [
+        QueueSet(tmp_path / "run" / RUN_QUEUES, _profile(), lease=_profile().lease).queue("cpu") for _ in range(2)
+    ]
     committed: list[ResultRef] = []
     served: dict[str, list[str]] = {"w0": [], "w1": []}
     lock = threading.Lock()
@@ -247,8 +263,16 @@ def test_two_claims_held_at_once_take_different_items(tmp_path: Path) -> None:
     """While one claim holds an item, a second claimer bounded by a quantum of jobs takes the next one."""
     _, _, pool, fragment = _submitted(tmp_path, _profile(), 200)
     pool.submit(fragment)
-    first = QueueSet(tmp_path / "run" / RUN_QUEUES, _profile()).queue("cpu").claim("a", max_items=10, max_jobs=10)
-    second = QueueSet(tmp_path / "run" / RUN_QUEUES, _profile()).queue("cpu").claim("b", max_items=10, max_jobs=10)
+    first = (
+        QueueSet(tmp_path / "run" / RUN_QUEUES, _profile(), lease=_profile().lease)
+        .queue("cpu")
+        .claim("a", max_items=10, max_jobs=10)
+    )
+    second = (
+        QueueSet(tmp_path / "run" / RUN_QUEUES, _profile(), lease=_profile().lease)
+        .queue("cpu")
+        .claim("b", max_items=10, max_jobs=10)
+    )
     assert first is not None and second is not None
     with first, second:
         assert len(first.items) == len(second.items) == 1 and set(first.items).isdisjoint(second.items)
@@ -372,12 +396,15 @@ def test_work_counts_from_the_slots_and_reads_an_item_only_without_a_count(
         return real_open(name, flags, *args, **kwargs)
 
     monkeypatch.setattr(os, "open", counting)
-    assert QueueSet(tmp_path / "run" / RUN_QUEUES, _profile()).queue("cpu").work() == 200
+    assert QueueSet(tmp_path / "run" / RUN_QUEUES, _profile(), lease=_profile().lease).queue("cpu").work() == 200
     assert not [n for n in opened if n.endswith(".json")]
     missing.unlink()
     for n in range(3):
         (segment / f"jobs-{n}-10").unlink()
-    assert QueueSet(tmp_path / "run" / RUN_QUEUES, _profile()).queue("cpu").work() == 200 - 30 + 1 + 1 + 10
+    assert (
+        QueueSet(tmp_path / "run" / RUN_QUEUES, _profile(), lease=_profile().lease).queue("cpu").work()
+        == 200 - 30 + 1 + 1 + 10
+    )
     assert readable.name in opened and unreadable.name in opened
 
 
@@ -460,7 +487,7 @@ class Gated(Recording):
 
     def serve(self, pool: Pool, placed: Plan, values: Mapping[InputIdentity, object], done: threading.Event) -> None:
         """Execute each item of the `cpu` queue until `done`: `hold`'s items only once the gate opens."""
-        queue = QueueSet(pool.run_dir / RUN_QUEUES, placed.execution).queue("cpu")
+        queue = QueueSet(pool.run_dir / RUN_QUEUES, placed.execution, lease=lease_of(placed)).queue("cpu")
         while not done.is_set():
             if self.queued_at is not None and queue.depth() >= self.queued_at[1]:
                 self.queued_at[0].set()
@@ -638,7 +665,7 @@ def test_a_cancel_stops_following_the_pool_at_once_and_leaves_its_items_queued(
     profile, clock = _profile(first_poll_s=0.2), lease_clock()
     gated = Gated(want=10**6, poll_s=fake_poll_s, queued_at=(threading.Event(), 20))
     placed, values = planned(SCORE, profile, [f"t{i}" for i in range(200)])
-    queue = QueueSet(tmp_path / "run" / RUN_QUEUES, profile).queue("cpu")
+    queue = QueueSet(tmp_path / "run" / RUN_QUEUES, profile, lease=profile.lease).queue("cpu")
     _run_cancelled(tmp_path, profile, placed, values, gated, clock)
     assert queue.depth() == 20 and queue.work() == 200
 
@@ -662,7 +689,7 @@ def test_a_slow_substrate_never_delays_a_cancel(
     profile, clock = _profile(first_poll_s=0.2), lease_clock()
     gated = Gated(want=10**6, poll_s=fake_poll_s, stall=True, queued_at=(threading.Event(), 20))
     placed, values = planned(SCORE, profile, [f"t{i}" for i in range(200)])
-    queue = QueueSet(tmp_path / "run" / RUN_QUEUES, profile).queue("cpu")
+    queue = QueueSet(tmp_path / "run" / RUN_QUEUES, profile, lease=profile.lease).queue("cpu")
     _run_cancelled(tmp_path, profile, placed, values, gated, clock)
     assert gated.at_end == 0 and queue.work() == 200
 

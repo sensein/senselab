@@ -1,5 +1,6 @@
 """Pool workers: quanta across classes, bisection of whole-request failures, renewal, SIGTERM and OOM kills."""
 
+import dataclasses
 import json
 import os
 import shutil
@@ -7,36 +8,42 @@ import signal
 import subprocess
 import sys
 import threading
+import uuid
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
+from epoch_fixture import prepared
 from lease_clock_fixture import ManualClock, age
-from pool_stack_fixture import packaged, planned, registry, scoring
+from pool_stack_fixture import lease_of, packaged, planned, registry, scoring
 from senselab_core.kernel.declare import TaskSpec
 from senselab_core.runtime import request_reports
 from senselab_core.runtime.calibration import FaultKind
-from senselab_core.runtime.call import RunConfig
+from senselab_core.runtime.call import RunConfig, use_packaged
+from senselab_core.runtime.call import packaged as current_stack
+from senselab_core.runtime.execution.events import read_events, status_from
 from senselab_core.runtime.execution.executor import Admission, FaultRecord, JobRef, PlanFragment, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
-from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
+from senselab_core.runtime.execution.job import Emit, Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.observing import Sent
-from senselab_core.runtime.execution.pool import split
+from senselab_core.runtime.execution.pool import run_plan, split
 from senselab_core.runtime.execution.pool_worker import Abandoned, Member, PoolWorker, Send, bisect, serve_pool
-from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest
-from senselab_core.runtime.execution.run import prepare
+from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest, settle
 from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
 from senselab_core.runtime.fake_backend import ECHO, FAKE, EchoParams
 from senselab_core.runtime.keys import Call, Placement
+from senselab_core.runtime.licenses import LicensePolicy, license_record
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Sample
+from senselab_core.runtime.storage import FileOps, using_file_ops
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import WorkerClient, WorkerLost, WorkerOOMKilled
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_worker.faults import FaultClass, classify, error_record
+from syscall_faults_fixture import await_true
 
 TASK = scoring("pool_worker_test.score")
 BROKEN = scoring("pool_worker_test.broken")
@@ -66,12 +73,16 @@ def _profile(**pool: object) -> ExecutionProfile:
 
 
 def _run(
-    tmp_path: Path, profile: ExecutionProfile, texts: Sequence[str], task: TaskSpec = TASK
+    tmp_path: Path,
+    profile: ExecutionProfile,
+    texts: Sequence[str],
+    task: TaskSpec = TASK,
+    config: RunConfig | None = None,
 ) -> tuple[Plan, ResultStore, Path]:
     """Prepare a run of `task`, one job per text, in `tmp_path/run`; return its plan, its store and its queues."""
-    placed, _ = planned(task, profile, texts)
+    placed, _ = planned(task, profile, texts, config)
     store = ResultStore(tmp_path / "store")
-    prepare(placed, tmp_path / "run", store)
+    prepared(placed, tmp_path / "run", store)
     return placed, store, tmp_path / "run" / RUN_QUEUES
 
 
@@ -82,7 +93,7 @@ def _put(placed: Plan, pool_dir: Path, element: int | range, queue: str = "cpu",
     fragment = node_fragment(placed, admission, elements=elements)
     update: dict[str, object] = {"resource_class": queue, **({"why": why} if why else {})}
     fragment = fragment.model_copy(update={"placement": fragment.placement.model_copy(update=update)})
-    QueueSet(pool_dir, placed.execution).queue(queue).put(fragment)
+    QueueSet(pool_dir, placed.execution, lease=lease_of(placed)).queue(queue).put(fragment)
     return item_digest(fragment)
 
 
@@ -94,7 +105,7 @@ def _sender(store: ResultStore, profile: ExecutionProfile) -> Send:
 
 
 def _outcomes(pool_dir: Path, profile: ExecutionProfile, queue: str = "cpu") -> list[dict[str, Any]]:
-    directory = QueueSet(pool_dir, profile).queue(queue).path / "outcome"
+    directory = QueueSet(pool_dir, profile, lease=profile.lease).queue(queue).path / "outcome"
     return [json.loads(p.read_bytes()) for p in sorted(directory.iterdir()) if not p.name.startswith(".")]
 
 
@@ -124,7 +135,7 @@ def test_worker_yields_after_quantum_to_older_queue(tmp_path: Path) -> None:
     _put(placed, pool_dir, 0, "cpu:b")
     for element in range(1, 5):
         _put(placed, pool_dir, element)
-    other = QueueSet(pool_dir, profile).queue("cpu:b").claim("other")
+    other = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu:b").claim("other")
     assert other is not None
     send = _sender(store, profile)
 
@@ -144,7 +155,7 @@ def test_a_worker_gathers_one_job_items_once_warm(tmp_path: Path, lease_clock: C
     profile = _profile(quantum_items=4)
     placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(11)])
     admission = Admission(id=f"run-{placed.hash}", plan_hash=placed.hash)
-    queue = QueueSet(pool_dir, profile).queue("cpu")
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu")
     for element in range(3):
         _put(placed, pool_dir, element)
     queue.put_all(split(node_fragment(placed, admission, elements=[(i,) for i in range(3, 11)]), 4))
@@ -326,13 +337,142 @@ def _placement(fragment: PlanFragment) -> Any:  # noqa: ANN401 - the fragment's 
 
 
 @pytest.mark.logic
+def test_a_worker_runs_its_items_under_the_license_policy_the_run_was_planned_under(tmp_path: Path) -> None:
+    """The run allowed MIT only; the env's lock now says GPL: the worker's job fails `LicenseRefused`, not runs."""
+    profile = _profile()
+    placed, store, pool_dir = _run(
+        tmp_path, profile, ["a"], config=RunConfig(licenses=LicensePolicy(frozenset({"mit"})))
+    )
+    _put(placed, pool_dir, 0)
+    config = run_plan(tmp_path / "run", profile).config
+    assert config is not None and config.licenses == LicensePolicy(frozenset({"mit"}))
+    gpl = license_record("GPL-3.0-only", source="lock", verified={"date": "2026-11-11", "how": "pep639"}, gated=False)
+    previous = use_packaged(dataclasses.replace(current_stack(), lock_records=lambda _: {"p": gpl}))
+    try:
+        worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, workers=WORKERS)
+        assert worker.serve() == 0
+    finally:
+        use_packaged(previous)
+    [outcome] = _outcomes(pool_dir, profile)
+    [ref] = [ResultRef.model_validate(j) for j in outcome["jobs"]]
+    assert ref.failure is not None and ref.failure.type == "LicenseRefused"
+
+
+@pytest.mark.logic
+def test_a_requests_items_are_settled_before_the_next_request_runs(tmp_path: Path, tier_bound: float) -> None:
+    """Four one-job items sent as two requests of two: request 1's items have outcomes when request 2 begins."""
+    profile = _profile(quantum_items=4)
+    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(4)])
+    for element in range(4):
+        _put(placed, pool_dir, element)
+    claim = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu").claim("w", max_jobs=4, singles=True)
+    assert claim is not None and len(claim.items) == 4
+    settled: list[int] = []
+
+    def two_requests(jobs: Sequence[Job], placement: Placement, emit: Emit) -> list[JobOutcome]:
+        run = RunConfig()
+        first = execute(jobs[:2], placement, store=store, run=run, profile=profile, workers=WORKERS)
+        emit([0, 1], first)
+        await_true(lambda: len(_outcomes(pool_dir, profile)) == 2, tier_bound, 0.01, "request 1's items settled")
+        settled.append(len(_outcomes(pool_dir, profile)))
+        return first + execute(jobs[2:], placement, store=store, run=run, profile=profile, workers=WORKERS)
+
+    PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=two_requests).run_claim(claim)
+    assert settled == [2]
+    found = _outcomes(pool_dir, profile)
+    assert len(found) == 4
+    assert all(Sample.model_validate(o["measure"]).wall_s > 0 and o.get("observations") for o in found)
+
+
+class _Proofs(FileOps):
+    """Counts the proof directories leases make."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def mkdir(self, name: str, mode: int, *, dir_fd: int) -> None:
+        """Count `proof-*` and make the directory."""
+        self.count += name.startswith("proof-")
+        super().mkdir(name, mode, dir_fd=dir_fd)
+
+
+@pytest.mark.logic
+def test_requests_that_emit_inside_one_renewal_interval_prove_each_lease_once_to_settle(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock]
+) -> None:
+    """Four items settled by four emits inside an interval: one proof each, for their settle, and no renewal's."""
+    profile = _profile(quantum_items=4)
+    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(4)])
+    for element in range(4):
+        _put(placed, pool_dir, element)
+    clock = lease_clock()
+    claim = (
+        QueueSet(pool_dir, profile, lease=profile.lease, clock=clock).queue("cpu").claim("w", max_jobs=4, singles=True)
+    )
+    assert claim is not None and len(claim.items) == 4
+
+    def each_alone(jobs: Sequence[Job], placement: Placement, emit: Emit) -> list[JobOutcome]:
+        outcomes: list[JobOutcome] = []
+        for i, job in enumerate(jobs):
+            found = execute([job], placement, store=store, run=RunConfig(), profile=profile, workers=WORKERS)
+            emit([i], found)
+            outcomes += found
+        return outcomes
+
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=each_alone, clock=clock)
+    proofs = _Proofs()
+    with using_file_ops(proofs):
+        worker.run_claim(claim)
+    assert len(_outcomes(pool_dir, profile)) == 4 and proofs.count == 4
+
+
+@pytest.mark.logic
+def test_a_claim_that_broke_a_stale_lease_logs_reclaimed_before_its_claimed(tmp_path: Path) -> None:
+    """A dead holder's item logs `reclaimed` (age, token) then `claimed` per job; the other item only `claimed`."""
+    profile = _profile()
+    placed, store, pool_dir = _run(tmp_path, profile, ["a", "b"])
+    digests = [_put(placed, pool_dir, element) for element in (0, 1)]
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu")
+    dead = queue.path / "claims" / f"{digests[0]}.lease" / uuid.uuid4().hex
+    dead.mkdir(parents=True)
+    for path in (dead, dead.parent):
+        os.utime(path, (10**9, 10**9))
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=_sender(store, profile))
+    assert worker.serve() == 0
+    events = [e for e in read_events(tmp_path / "run") if e.kind in ("claimed", "reclaimed")]
+    assert [(e.kind, e.job.element) for e in events if e.job] == [
+        ("reclaimed", (0,)),
+        ("claimed", (0,)),
+        ("claimed", (1,)),
+    ]
+    assert events[0].lease is not None and events[0].lease.tokens == (dead.name,)
+    assert events[0].lease.age_s > profile.lease.stale_after_s and status_from(events).reclaimed == 1
+
+
+@pytest.mark.logic
+def test_an_item_with_an_outcome_and_an_unmarked_slot_is_resolved_and_never_claimed(tmp_path: Path) -> None:
+    """A holder died after linking its outcome, before marking the slot: the next claim marks it, takes nothing."""
+    profile = _profile()
+    placed, store, pool_dir = _run(tmp_path, profile, ["a"])
+    digest = _put(placed, pool_dir, 0)
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu")
+    held = queue.claim("dead")
+    assert held is not None
+    with queue.open() as q:
+        record = {"outcome": "done", "worker": "dead", "epoch": 1, "finish": "f", "jobs": []}
+        assert settle(held._held[digest].lease, q, digest, record) is True  # noqa: SLF001 - the row under test
+    held.release()
+    assert queue.depth() == 1 and queue.claim("next") is None and queue.depth() == 0
+
+
+@pytest.mark.logic
 def test_claim_renewed_during_long_item(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """An item running past twice the lease's stale bound stays claimed by its worker, which commits it."""
     profile = _profile()
     placed, store, pool_dir = _run(tmp_path, profile, ["slow"])
     _put(placed, pool_dir, 0)
     send, stolen, clock = _sender(store, profile), [], lease_clock()
-    claims = QueueSet(pool_dir, profile, clock=clock).queue("cpu")
+    claims = QueueSet(pool_dir, profile, lease=profile.lease, clock=clock).queue("cpu")
     beat_s = profile.lease.renew_fraction * profile.lease.stale_after_s
 
     def slow(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
@@ -354,7 +494,8 @@ CHILD = """
 import json, sys, threading
 from pathlib import Path
 from pool_stack_fixture import packaged, registry, scoring
-from senselab_core.runtime.call import RunConfig
+from senselab_core.runtime.call import RunConfig, use_packaged
+from senselab_core.runtime.call import packaged as current_stack
 from senselab_core.runtime.execution.job import execute
 from senselab_core.runtime.execution.pool_worker import serve_pool
 from senselab_core.runtime.execution.workers import WorkerSet
@@ -399,7 +540,7 @@ def test_sigterm_releases_claims(tmp_path: Path, tier_bound: float) -> None:
         child.wait()
     [outcome] = _outcomes(pool_dir, profile)
     assert outcome["outcome"] == "done"
-    queue = QueueSet(pool_dir, profile).queue("cpu")
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu")
     assert not queue.claimed_any()
     again = queue.claim("next", max_items=2)
     assert again is not None and len(again.items) == 1
@@ -527,6 +668,67 @@ def test_a_cancel_during_the_halves_keeps_the_calls_other_outcomes_and_records_t
     assert [(len(r.refs), r.failure) for r in recorded] == [(4, None), (4, "bisected")]
 
 
+def _reported(recorded: Sequence[Sent], member: Member) -> list[Any]:
+    """Return the request reports the recorded calls hold for `member`'s job."""
+    return [r for sent in recorded for r in sent.reports if member.job.ref in r.tags]
+
+
+@pytest.mark.logic
+def test_a_request_that_ran_out_is_recorded_once_beside_a_request_that_emits() -> None:
+    """Request A (items 0, 1) runs out; request B (2, 3) emits. A's report is recorded once, by its bisection."""
+    members, handed, recorded = _members(4), [], list[Sent]()
+
+    def send(jobs: Sequence[Job], placement: Placement, emit: Emit) -> list[JobOutcome]:  # noqa: ARG001 - a Send
+        if len(jobs) == 4:
+            with request_reports.request(tuple(m.job.ref for m in members[:2])):
+                request_reports.record(2, device=(900, 500))
+            with request_reports.request(tuple(m.job.ref for m in members[2:])):
+                request_reports.record(2)
+            outcomes: list[JobOutcome] = [_failed(m, "resource") for m in members[:2]]
+            outcomes += [_failed(m, "content") for m in members[2:]]
+            emit([2, 3], outcomes[2:])
+            return outcomes
+        with request_reports.request(tuple(j.ref for j in jobs)):
+            request_reports.record(len(jobs))
+        return [_failed(next(m for m in members if m.job.ref == j.ref), "content") for j in jobs]
+
+    bisect(
+        members,
+        Placement(backend=FAKE, backend_params=FAKE.params(), device="cpu"),
+        send,
+        record=recorded.append,
+        handover=lambda found, outs: handed.append(([m.index for m in found], len(outs))),
+    )
+    assert [len(_reported(recorded, m)) for m in members] == [2, 2, 1, 1]
+    assert len([r for sent in recorded for r in sent.reports if r.device == (900, 500)]) == 1
+    assert handed[0] == ([2, 3], 2) and {i for found, _ in handed for i in found} == {0, 1, 2, 3}
+
+
+@pytest.mark.logic
+def test_a_call_that_raises_after_an_emit_records_only_what_the_emit_did_not() -> None:
+    """Items 2 and 3 were emitted and recorded; the call's failure is recorded for items 0 and 1 alone."""
+    members, recorded = _members(4), list[Sent]()
+
+    def send(jobs: Sequence[Job], placement: Placement, emit: Emit) -> list[JobOutcome]:  # noqa: ARG001 - a Send
+        if len(jobs) == 4:
+            with request_reports.request(tuple(m.job.ref for m in members[2:])):
+                request_reports.record(2)
+            emit([2, 3], [_failed(m, "content") for m in members[2:]])
+            raise WorkerLost("died on the next request", returncode=-11)
+        return [_failed(next(m for m in members if m.job.ref == j.ref), "content") for j in jobs]
+
+    bisect(
+        members,
+        Placement(backend=FAKE, backend_params=FAKE.params(), device="cpu"),
+        send,
+        record=recorded.append,
+        handover=lambda found, outs: None,
+    )
+    first, failed = recorded[0], recorded[1]
+    assert first.failure is None and len(first.reports) == 1
+    assert failed.failure == "bisected" and failed.refs == tuple(m.job.ref for m in members[:2])
+
+
 class _Abandoning(WorkerSet):
     """A worker set that records `abandon` instead of closing worker processes."""
 
@@ -545,7 +747,7 @@ def test_a_lost_claim_abandons_its_request(tmp_path: Path, tier_bound: float) ->
     placed, store, pool_dir = _run(tmp_path, profile, ["one", "two"])
     _put(placed, pool_dir, 0)
     _put(placed, pool_dir, 1, why="second")
-    queue = QueueSet(pool_dir, profile).queue("cpu")
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu")
     workers, sends, thief, seen = _Abandoning(), [], [], []
 
     def stolen(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
@@ -587,7 +789,7 @@ def test_halt_commits_finished_groups_and_releases_the_rest(tmp_path: Path, tier
     finally:
         release.set()
     [outcome] = _outcomes(pool_dir, profile)
-    queue = QueueSet(pool_dir, profile).queue("cpu")
+    queue = QueueSet(pool_dir, profile, lease=profile.lease).queue("cpu")
     again = queue.claim("next", max_items=2)
     assert outcome["outcome"] == "done" and again is not None and len(again.items) == 1
     again.release()
@@ -603,7 +805,7 @@ def test_a_lost_claim_releases_its_other_items_before_its_request_ends(
     lost = _put(placed, pool_dir, 0)
     kept = _put(placed, pool_dir, 1, why="second")
     clock = lease_clock()
-    queue = QueueSet(pool_dir, profile, clock=clock).queue("cpu")
+    queue = QueueSet(pool_dir, profile, lease=profile.lease, clock=clock).queue("cpu")
     taken: list[Claim] = []
     seen: list[str] = []
     beat_s = profile.lease.renew_fraction * profile.lease.stale_after_s

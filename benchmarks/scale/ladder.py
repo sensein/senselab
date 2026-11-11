@@ -46,7 +46,6 @@ from senselab_core.runtime.calibration import Observation
 from senselab_core.runtime.call import packaged
 from senselab_core.runtime.config import ConfigError, load_yaml
 from senselab_core.runtime.datasets import from_records
-from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import Event, EventLog, read_events, run_dir_of
 from senselab_core.runtime.execution.pool import Pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, probe_of
@@ -414,7 +413,7 @@ def measure_point(  # noqa: PLR0913 - the entry and its point, the suite, the pr
     roots = point_roots(profile, measures_root or out / f"{label}@{point}" / "measures")
     pool = Pool(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+        queues=QueueSet.for_run(run_dir, profile, own=profile.lease),
         store=store,
         events=EventLog(run_dir, "a0", 1, epoch=0),
         profile=profile,

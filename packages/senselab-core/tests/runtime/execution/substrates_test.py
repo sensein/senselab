@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from epoch_fixture import prepared, taken
 from lease_clock_fixture import ManualClock
 from pool_stack_fixture import packaged, planned, registry, scoring
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
@@ -24,7 +25,7 @@ from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.pool import Pool, ScalerFailed
 from senselab_core.runtime.execution.pool_worker import serve_pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
-from senselab_core.runtime.execution.run import Run, _close_owned, default_executor, prepare
+from senselab_core.runtime.execution.run import Run, _close_owned, default_executor
 from senselab_core.runtime.execution.substrates import (
     EXIT_UNREACHABLE,
     ExternalWorkers,
@@ -228,12 +229,12 @@ def _queued(  # noqa: PLR0913 - the plan's shape, then where it is queued
         placed = replace(placed, logical=placed.logical.model_copy(update={"models": models}))
     run_dir = tmp_path / "run"
     recording = substrate if substrate is not None else Recording()
-    epoch = Epoch(run_dir).take()
+    epoch = taken(Epoch(run_dir))
 
     def pool_over(workers: Any) -> Pool:  # noqa: ANN401
         return Pool(
             run_dir,
-            queues=QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current),
+            queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=Epoch(run_dir).current),
             store=ResultStore(tmp_path / "store"),
             events=EventLog(run_dir, "a1", epoch, epoch=epoch),
             profile=profile,
@@ -439,7 +440,7 @@ def test_a_pool_names_its_slurm_jobs_by_its_attempt(tmp_path: Path) -> None:
     slurm = Slurm(profile.resource_classes, None, command=["x"], plan_hash=HASH, run_dir=run_dir, commands=_commands())
     pool = Pool(
         run_dir,
-        queues=QueueSet(run_dir / RUN_QUEUES, profile),
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease),
         store=ResultStore(tmp_path / "store"),
         events=EventLog(run_dir, "a0", 1, epoch=0),
         profile=profile,
@@ -601,7 +602,7 @@ def test_local_pool_runs_toy_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     )
     placed, _ = planned(SCORE, profile, [f"t{i}" for i in range(6)])
     run_dir, store = tmp_path / "run", ResultStore(tmp_path / "store")
-    prepare(placed, run_dir, store)
+    prepared(placed, run_dir, store)
     profile_file = tmp_path / "profile.json"
     profile_file.write_text(profile.model_dump_json())
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(sys.path))
@@ -763,7 +764,7 @@ def test_pending_surplus_is_cancelled_first_and_running_ones_only_when_drained(
     clock.advance_to(10.0)
     scale(pool.queues, recording, profile, workers=_per_quantum(profile), surplus_since=since, clock=clock)
     assert {h.id for h in recording.stops} == {"p1", "p2"} and [h.id for h in recording.handles] == ["r1"]
-    empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile)
+    empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile, lease=profile.lease)
     empty.queue("cpu")
     recording.handles = [WorkerHandle("cpu", "r1"), WorkerHandle("cpu", "p3", True)]
     recording.stops.clear()
@@ -779,7 +780,7 @@ def test_an_empty_service_queue_never_stops_its_running_worker(tmp_path: Path) -
         "svc:pii": {"device": "cpu", "cpus": 1, "partition": "${CPU_PARTITION}", "max_workers": 1},
     }
     profile = ExecutionProfile.load(CLUSTER, {"devices": ["cpu"], "resource_classes": classes})
-    empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile)
+    empty = QueueSet(tmp_path / "empty" / RUN_QUEUES, profile, lease=profile.lease)
     empty.queue("svc:pii")
     recording = Recording()
     recording.handles = [WorkerHandle("svc:pii", "r1"), WorkerHandle("svc:pii", "p1", True)]

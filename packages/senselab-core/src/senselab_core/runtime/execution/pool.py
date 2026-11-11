@@ -57,7 +57,7 @@ from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import (
     BrokenEnv,
     EventLog,
-    read_events,
+    scan_events,
 )
 from senselab_core.runtime.execution.executor import (
     Admission,
@@ -87,7 +87,7 @@ from senselab_core.runtime.execution.pool_parts import (
     split,
 )
 from senselab_core.runtime.execution.probe_machine import ProbeMachine, ProbeQueue, detected_kind
-from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_of
+from senselab_core.runtime.execution.queue import QueueSet, item_digest, probe_of
 from senselab_core.runtime.execution.records import add_plan_entity, record_settled_reuse, reuse_attributes
 from senselab_core.runtime.execution.substrates import (
     WORKERS_DIR,
@@ -210,6 +210,9 @@ class Pool:
         self._scaling = False
         self._scale_error: Exception | None = None
         self._fenced: tuple[float, int] | None = None
+        self._live: dict[tuple[JobRef, str, str], str] | None = None
+        self._landed: set[str] = set()
+        self._unread = 0
         self._clock = clock
         self._extrapolated = ExtrapolationLog()
         self._bound = False
@@ -227,7 +230,9 @@ class Pool:
         self.roots = roots if roots is not None else measure_roots(profile)
         self.measures = measures if measures is not None else default_measures(profile, self.roots)
         self.resolver = resolver if resolver is not None else UnitResolver(profile, self.roots)
-        self._machine = ProbeMachine(profile, self.roots, self.measures, self.resolver, clock, _PoolHost(self), probe_s)
+        self._machine = ProbeMachine(
+            profile, self.roots, self.measures, self.resolver, clock, _PoolHost(self), probe_s, queues.lease
+        )
         self._rates: dict[str, dict[str, tuple[float | None, int]]] = {}
 
     @property
@@ -262,6 +267,7 @@ class Pool:
             self.substrate.attempt, self.substrate.epoch = events.attempt, epoch
         if self._placer is not None:
             self._placer.record = self._ledger.record
+        self._live, self._landed, self._unread = None, set(), 0
         self._fleet.reset()
         self.broken_workers.clear()
         self._relogged.clear()
@@ -361,6 +367,10 @@ class Pool:
             followed.flights.append(Flight(name, item_digest(fragment), fragment))
             return
         placed, values = self._admitted_plan(fragment)
+        rest = self._follow(name, fragment, followed, placed, values)
+        if rest is None:
+            return
+        fragment = rest
         jobs, placement = fragment_jobs(fragment, placed, values)
         flags = servable_jobs(
             jobs,
@@ -381,6 +391,60 @@ class Pool:
                 self._put_served(followed, name, part, placement)
             else:
                 self._machine.place(Held(followed, name, part))
+
+    def _live_items(self, placed: Plan, values: Mapping[InputIdentity, object]) -> dict[tuple[JobRef, str, str], str]:
+        """Return the digest of the oldest live item holding each job, by the job, its key and the queue.
+
+        Read from the run's queues once per epoch, at the first put: an item with a slot and no outcome, its oldest
+        first. A probe queue's items are not production items.
+        """
+        if self._live is None:
+            found: dict[tuple[JobRef, str, str], str] = {}
+            for queue in self.queues.names():
+                if probe_of(queue) is not None:
+                    continue
+                for digest, old in self.queues.queue(queue).live_items():
+                    if old.admission not in self._plans:
+                        continue
+                    try:
+                        keys = fragment_keys(old, placed, values)
+                    except ValueError:
+                        continue
+                    for job, key in zip(old.jobs, keys, strict=True):
+                        found.setdefault((job, key, queue), digest)
+            self._live = found
+        return self._live
+
+    def _follow(
+        self,
+        name: str,
+        fragment: PlanFragment,
+        followed: Followed,
+        placed: Plan,
+        values: Mapping[InputIdentity, object],
+    ) -> PlanFragment | None:
+        """Follow the live item on queue `name` that holds a job of `fragment`; return the fragment of the others.
+
+        A job whose live item is on another queue, or under another key, is not followed: it is put again. A followed
+        item is read through a flight of the jobs of `fragment` it holds, so each job is given and charged once.
+        None when every job is followed.
+        """
+        live = self._live_items(placed, values)
+        if not live:
+            return fragment
+        keys = self._keys(fragment)
+        holders: dict[str, list[int]] = {}
+        for index, (job, key) in enumerate(zip(fragment.jobs, keys, strict=True)):
+            if (digest := live.get((job, key, name))) is not None:
+                holders.setdefault(digest, []).append(index)
+        if not holders:
+            return fragment
+        dumped = Dumped.of(fragment)
+        picks = sorted(i for each in holders.values() for i in each)
+        followed.flights.extend(Flight(name, digest, dumped.part(each)) for digest, each in holders.items())
+        self._machine.place(Held(followed, name, dumped.part(picks), tuple(holders)))
+        left = sorted(set(range(len(fragment.jobs))) - set(picks))
+        return dumped.part(left) if left else None
 
     def _put_served(self, followed: Followed, name: str, part: PlanFragment, placement: Placement) -> None:
         """Put the jobs the store serves, `quantum_items` to an item, whole requests together."""
@@ -416,18 +480,21 @@ class Pool:
         label = None if release.unit is None else release.unit.label()
         if label is not None:
             self._extrapolated.note(label, sized)
-        self._check_held(held.queue, held.part.placement.env)
-        dumped, items = Dumped.of(held.part), []
-        for start, stop in sized.cuts:
-            for batch, group in itertools.groupby(
-                range(start, stop), key=lambda i: sized.batch_at(lengths[i], len(jobs))
-            ):
-                moved = held.part.placement.model_copy(update={"batch_size": batch})
-                items.append(dumped.part(list(group), placement=moved.model_dump(mode="json")))
-        self.queues.queue(held.queue).put_all(items)
+        digests = list(held.following)
+        if not held.following:
+            self._check_held(held.queue, held.part.placement.env)
+            dumped, items = Dumped.of(held.part), []
+            for start, stop in sized.cuts:
+                for batch, group in itertools.groupby(
+                    range(start, stop), key=lambda i: sized.batch_at(lengths[i], len(jobs))
+                ):
+                    moved = held.part.placement.model_copy(update={"batch_size": batch})
+                    items.append(dumped.part(list(group), placement=moved.model_dump(mode="json")))
+            self.queues.queue(held.queue).put_all(items)
+            held.followed.flights.extend(Flight(held.queue, item_digest(i), i) for i in items)
+            digests = [item_digest(i) for i in items]
         held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
-        held.followed.flights.extend(Flight(held.queue, item_digest(i), i) for i in items)
-        self._machine.note(release, [item_digest(i) for i in items])
+        self._machine.note(release, digests)
         with self._lock:
             known = sized.measured.time and all(p is not None for p in sized.predicted_s)
             per_job = sum(p or 0.0 for p in sized.predicted_s) / len(jobs) if known else None
@@ -637,14 +704,19 @@ class Pool:
         logical = fragment_logical_keys(fragment, *self._admitted_plan(fragment))
         reused = record.get("epoch") != self.epoch
         seen = _observed(record)
-        if not reused:
-            self._actuals.landed(class_of(flight.queue), seen)
-        self._machine.settled(flight.digest, seen)
-        self._machine.oom(flight.digest, seen, _worker_of(record))
+        with self._lock:
+            first = flight.digest not in self._landed
+            self._landed.add(flight.digest)
+        if first:
+            if not reused:
+                self._actuals.landed(class_of(flight.queue), seen)
+            self._machine.settled(flight.digest, seen)
+            self._machine.oom(flight.digest, seen, _worker_of(record))
         try:
             yield from self._results(followed, flight, record, seen, given, dead, logical, reused)
         finally:
-            self._machine.forget(flight.digest)
+            if first:
+                self._machine.forget(flight.digest)
 
     def _results(  # noqa: PLR0913 - the item and its outcome, then what `_settle` read of it
         self,
@@ -763,10 +835,20 @@ class Pool:
         yield self._dead(job, key, fault)
 
     def _env_failures(self, env: str) -> list[FaultRecord]:
-        """Return the failures of `env` that count against it, as this epoch's events on disk record, in order."""
+        """Return the failures of `env` that count against it, as this epoch's events on disk record, in order.
+
+        An event line of this epoch's writers that could not be read has no env to charge: the count may be low by
+        that many, which is logged once.
+        """
+        scan = scan_events(self.run_dir)
+        mine = {e.writer for e in scan.events if e.epoch == self.epoch}
+        lost = sum(1 for q in scan.quarantined if q.writer in mine)
+        if lost > self._unread:
+            logger.warning("the failures counted against env %s may be low: %d event lines are unreadable", env, lost)
+            self._unread = lost
         return [
             e.failure
-            for e in read_events(self.run_dir)
+            for e in scan.events
             if e.kind == "failed"
             and e.epoch == self.epoch
             and e.env == env
@@ -924,18 +1006,19 @@ def _worker_of(record: Mapping[str, object]) -> str | None:
 
 
 def run_plan(run_dir: Path, profile: ExecutionProfile) -> Plan:
-    """Return the plan of the run in `run_dir` under its latest placement, with `profile` and the plan's reuse policy.
+    """Return the plan of the run in `run_dir` under its latest placement, `profile` and its policies.
 
     Raises:
         ValueError: the plan was placed under another profile than `profile`.
         FileNotFoundError: the run has no plan, or no claimed attempt.
     """
-    from senselab_core.runtime.execution.run import load_plan  # noqa: PLC0415
+    from senselab_core.runtime.execution.run import load_plan, stored_policy  # noqa: PLC0415
 
     stored = load_plan(run_dir)
     if stored.placement.profile_digest != profile.canonical_digest():
         raise ValueError(f"plan {stored.hash} was placed under another execution profile; name the one it was")
-    return replace(stored, execution=profile, config=RunConfig(reuse=ReusePolicy(stored.logical.reuse)))
+    config = RunConfig(reuse=ReusePolicy(stored.logical.reuse), licenses=stored_policy(run_dir))
+    return replace(stored, execution=profile, config=config)
 
 
 def run_store(run_dir: Path) -> ResultStore:
@@ -958,8 +1041,9 @@ def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only prof
 ) -> "RunOutcome":
     """Coordinate the run in `run_dir` on a `Pool`: take the next epoch, hold its lease, and run the plan's jobs.
 
-    The plan and its latest placement are read from the run directory, its inputs bound again (`bind_sources`), and a
-    new epoch and its attempt prepared (`prepare`); the run's queues are reconciled and every job is sent through the
+    The plan and its latest placement are read from the run directory, its inputs bound again (`bind_sources`), an
+    attempt claimed and a new epoch taken (`prepare`, `Epoch.opening`) and made current just before the plan runs;
+    the run's queues are reconciled and every job is sent through the
     pool, whose workers `substrate` starts. `profile` defaults to the packaged one; `store` to the one `manifest.json`
     names. `overrides` and `hook` are the explicit placement values and the site's hook (`plan`'s `placement`
     and `placement_hook`).
@@ -970,25 +1054,27 @@ def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only prof
         QueueHeld: an env broke and was held.
         InputChanged, InputsUnavailable, ConflictingSources: as `start`.
     """
-    from senselab_core.runtime.execution.run import PYDRA_DIR, bind_sources, prepare  # noqa: PLC0415
+    from senselab_core.runtime.execution.run import PYDRA_DIR, bind_sources, checked_lease, prepare  # noqa: PLC0415
     from senselab_core.runtime.execution.runner import PydraRunner  # noqa: PLC0415 - needs pydra
 
     run_dir = Path(run_dir)
     profile = profile if profile is not None else ExecutionProfile.load()
     placed = replace(run_plan(run_dir, profile), overrides=overrides or {}, hook=hook)
     store = store if store is not None else run_store(run_dir)
-    check_storage(profile, store.root)
+    delay = check_storage(profile, store.root)
     values = bind_sources(placed)
-    epoch, attempt, ordinal = prepare(placed, run_dir, store)
+    attempt, ordinal = prepare(placed, run_dir, store)
+    lease = checked_lease(run_dir, profile.lease, delay)
     epochs = Epoch(run_dir)
-    with epochs.held(epoch, profile.lease):
-        queues = QueueSet(run_dir / RUN_QUEUES, profile, epoch=epochs.current)
+    with epochs.opening(profile.lease) as epoch, epochs.held(epoch, lease):
+        queues = QueueSet.for_run(run_dir, profile, own=profile.lease)
         queues.reconcile()
         events = EventLog(run_dir, attempt, ordinal, epoch=epoch)
         pool = Pool(
             run_dir, queues=queues, store=store, events=events, profile=profile, substrate=substrate, epoch=epoch
         )
         try:
+            epochs.bind(epoch, attempt, ordinal)
             return PydraRunner(profile=profile, work_dir=run_dir / PYDRA_DIR).run_plan(
                 placed, pool, values=values, events=events
             )

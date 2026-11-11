@@ -5,18 +5,20 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from senselab_core.cli import main as cli_main
 from senselab_core.kernel.dataset import Record
 from senselab_core.runtime.execution.events import (
     Event,
     EventLog,
     JobState,
+    LeaseBreak,
     read_events,
     scan_events,
     status_from,
     terminal_events,
 )
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef
-from senselab_core.runtime.execution.run import MissingExtra, NotRun, Output, ResultSet
+from senselab_core.runtime.execution.run import MissingExtra, NotRun, Output, ResultSet, Run
 
 PLAN = "ab" * 32
 CONTENT = FaultRecord(fault="content", type="ContentFault", message="bad input", gap=False, charged=True)
@@ -68,6 +70,26 @@ def test_status_derived_from_events_only() -> None:
     assert (broken.env, broken.failures, broken.fault) == ("venv:x", 2, INFRA)
     assert status_from(events, broken_after=3).broken == ()
     assert end.nodes["a"] == end.counts and status_from([]).done is False and status_from([]).last_event_ns is None
+
+
+@pytest.mark.logic
+def test_a_reclaimed_event_round_trips_changes_no_state_and_is_counted() -> None:
+    """`reclaimed` carries the lease it broke, leaves job states alone, and a 2.2 line reads."""
+    broke = LeaseBreak(age_s=412.5, tokens=("ab" * 16,))
+    events = [
+        _event("queued", (0,), t_ns=1, seq=0),
+        _event("reclaimed", (0,), t_ns=2, seq=1, lease=broke),
+        _event("claimed", (0,), t_ns=3, seq=2),
+    ]
+    assert Event.model_validate_json(events[1].model_dump_json()) == events[1]
+    status = status_from(events)
+    assert status.counts["running"] == 1 and status.reclaimed == 1 and status_from(events[::2]).reclaimed == 0
+    older = {k: v for k, v in events[0].model_dump(mode="json").items() if k != "lease"} | {"format": "run-event@2.2"}
+    assert Event.model_validate(older).kind == "queued"
+    with pytest.raises(ValueError, match="reclaimed"):
+        _event("reclaimed", (0,))
+    with pytest.raises(ValueError, match="reclaimed"):
+        _event("claimed", (0,), lease=broke)
 
 
 @pytest.mark.logic
@@ -249,6 +271,25 @@ def test_a_torn_last_line_and_a_corrupt_middle_line_are_quarantined(tmp_path: Pa
     log.path.write_text("\n".join([lines[0], "not json", lines[1]]) + "\n")
     assert [e.kind for e in read_events(tmp_path)] == ["queued", "started"]
     assert [(q.writer, q.line) for q in scan_events(tmp_path).quarantined] == [(log.writer, 1)]
+
+
+@pytest.mark.contract
+def test_a_torn_line_is_counted_in_the_status_and_reported_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A line cut short by a kill shows as `quarantined` in the status and the CLI; a second read does not log it."""
+    log = EventLog(tmp_path, "a1", 1, clock=iter([1, 2]).__next__)
+    log.record("queued", "a")
+    log.record("started", "a")
+    with log.path.open("a") as handle:
+        handle.write('{"format":"run-event@2.3","kind":"fini')
+    with caplog.at_level("WARNING", logger="senselab"):
+        read_events(tmp_path)
+        read_events(tmp_path)
+    assert len([r for r in caplog.records if "unreadable" in r.getMessage()]) == 1
+    assert Run(tmp_path).status().quarantined == 1 and status_from([]).quarantined == 0
+    assert cli_main(["status", str(tmp_path)]) == 0
+    assert "quarantined event lines: 1" in capsys.readouterr().out
 
 
 def _results() -> ResultSet:

@@ -275,7 +275,7 @@ def _owned(name: str, grammar: re.Pattern[str]) -> str:
 
 
 class FileOps:
-    """The system calls `StorageDir` makes to write: `write`, `fsync`, `link` and `ftruncate`.
+    """The system calls `StorageDir` makes to write: `write`, `fsync`, `link`, `ftruncate` and `mkdir`.
 
     This is the one seam a fault is injected through. A test subclasses it and enters `using_file_ops`; the
     methods here call the operating system.
@@ -296,6 +296,10 @@ class FileOps:
     def ftruncate(self, fd: int, length: int) -> None:
         """Cut `fd` to `length` bytes."""
         os.ftruncate(fd, length)
+
+    def mkdir(self, name: str, mode: int, *, dir_fd: int) -> None:
+        """Make the directory `name` in the directory `dir_fd` with `mode`."""
+        os.mkdir(name, mode, dir_fd=dir_fd)
 
 
 _FILE_OPS: list[FileOps] = [FileOps()]
@@ -460,7 +464,7 @@ class StorageDir:
                         raise
                     raise self.wrong_kind(name, "directory") from None
                 try:
-                    os.mkdir(name, 0o700 if mode is not None else 0o777, dir_fd=self.fd)
+                    _FILE_OPS[-1].mkdir(name, 0o700 if mode is not None else 0o777, dir_fd=self.fd)
                 except FileExistsError:
                     continue
                 made = StorageDir(path, os.open(name, _DIR_FLAGS, dir_fd=self.fd))
@@ -626,7 +630,7 @@ class StorageDir:
         _owned(name, grammar)
         try:
             with _Naming(self.path / name):
-                os.mkdir(name, 0o700 if mode is not None else 0o777, dir_fd=self.fd)
+                _FILE_OPS[-1].mkdir(name, 0o700 if mode is not None else 0o777, dir_fd=self.fd)
         except FileExistsError:
             if not exist_ok or self.kind(name) != "directory":
                 raise

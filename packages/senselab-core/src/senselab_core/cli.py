@@ -120,6 +120,10 @@ def run_status(args: argparse.Namespace) -> int:
     print(f"run {run.manifest().get('plan_hash', run.run_dir.name)}: {state}; last event {status.last_event_ns}")
     print("jobs: " + ", ".join(f"{k} {v}" for k, v in status.counts.items()))
     print("faults: " + (", ".join(f"{k} {v}" for k, v in sorted(status.faults.items())) or "none"))
+    if status.reclaimed:
+        print(f"reclaimed claims: {status.reclaimed}")
+    if status.quarantined:
+        print(f"quarantined event lines: {status.quarantined}")
     for broken in status.broken:
         print(f"broken env {broken.env}: {broken.failures} failures; {broken.fault.type}: {broken.fault.message}")
     for node, counts in status.nodes.items():

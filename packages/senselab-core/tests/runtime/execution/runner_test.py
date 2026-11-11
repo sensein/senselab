@@ -554,7 +554,7 @@ def test_the_pinned_pydra_takes_no_lease_settings() -> None:
     """The profile's job lease is held, not passed: the pinned pydra has no `LeaseSettings`; this fails once it does."""
     store = pytest.importorskip("pydra.engine.store")
     assert not hasattr(store, "LeaseSettings")
-    assert runner.PydraRunner(profile=PROFILE).lease == PROFILE.lease
+    assert not hasattr(runner.PydraRunner(profile=PROFILE), "lease")
 
 
 class Cancelling(Recording):

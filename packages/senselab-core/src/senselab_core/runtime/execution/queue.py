@@ -1,6 +1,6 @@
 """Queues of plan fragments in a shared directory: items by identity, slots in segments, oldest-first claims (ADR-003).
 
-`QueueSet(root)` holds one queue per name: a resource class, with `#<model identity>` for a resident model
+`QueueSet.for_run(run_dir)` holds one queue per name: a resource class, with `#<model identity>` for a resident model
 (`gpu:h100#<id>`). A queue is the directory `<root>/<identity_digest("label@1", name)>`, holding:
 
 - `name`: the queue's name, written once.
@@ -49,9 +49,10 @@ from senselab_worker.digest import identity_digest
 
 from senselab_core.runtime.calibration import HardwareClass
 from senselab_core.runtime.clock import Clock, SystemClock
-from senselab_core.runtime.execution.epoch import Epoch
+from senselab_core.runtime.execution.epoch import Epoch, run_lease
 from senselab_core.runtime.execution.executor import CorruptItem, FaultRecord, MissingItem, PlanFragment
-from senselab_core.runtime.locks import Lease, LeaseState, LeaseTimeout
+from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.locks import BrokenLease, Lease, LeaseState, LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.storage import (
     STAGING_DIR_MODE,
@@ -217,7 +218,7 @@ class _Bound:
 
 
 class _Held:
-    """One item a claim holds: its digest, slot, fragment, lease and the stack that releases it."""
+    """One item a claim holds: digest, slot, fragment, lease, the stale leases it broke and its release stack."""
 
     def __init__(  # noqa: PLR0913 - the parts of one held item
         self,
@@ -227,9 +228,10 @@ class _Held:
         lease: Lease,
         state: LeaseState,
         stack: contextlib.ExitStack,
+        broke: tuple[BrokenLease, ...],
     ) -> None:
         self.digest, self.slot, self.fragment = digest, slot, fragment
-        self.lease, self.state, self.stack = lease, state, stack
+        self.lease, self.state, self.stack, self.broke = lease, state, stack, broke
 
 
 class Claim:
@@ -262,9 +264,10 @@ class Claim:
         """Return the `(segment, slot)` a held item was claimed from."""
         return self._held[digest].slot
 
-    def broke(self, digest: str) -> int:
-        """Return how many stale claims on a held item its lease broke when it was taken."""
-        return len(self._held[digest].lease.broke)
+    @property
+    def broke(self) -> dict[str, tuple[BrokenLease, ...]]:
+        """The stale leases each held item's lease broke when it was taken, by digest; none for an item with none."""
+        return {d: h.broke for d, h in self._held.items() if h.broke}
 
     def _chosen(self, items: Optional[Iterable[str]]) -> list[_Held]:
         if items is None:
@@ -368,11 +371,13 @@ class Queue:
         root: Path,
         name: str,
         profile: ExecutionProfile,
+        lease: JobLease,
         epoch: Optional[Callable[[], int]] = None,
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Open, creating it if missing, the queue `name` under `root`; use `QueueSet.queue`.
 
+        `profile` sizes the segments; `lease` is the bound every lease of the queue is judged and beaten by.
         `epoch` gives the current coordinator epoch, below which a hold does not count; every hold counts when None.
         Every lease, the storage clock and the claim backoffs are read on `clock`.
 
@@ -386,8 +391,8 @@ class Queue:
         self.faults: list[tuple[str, FaultRecord]] = []
         self.backoffs = 0
         self._segment_items = profile.pool.segment_items
-        self._stale_after = profile.lease.stale_after_s
-        self._renew_fraction = profile.lease.renew_fraction
+        self._stale_after = lease.stale_after_s
+        self._renew_fraction = lease.renew_fraction
         self._judged: dict[str, float] = {}
         self._missing: dict[str, float] = {}
         self._targets: dict[tuple[int, int], str] = {}
@@ -805,7 +810,7 @@ class Queue:
         except BaseException:
             stack.close()
             raise
-        return _Held(digest, slot, fragment, lease, state, stack)
+        return _Held(digest, slot, fragment, lease, state, stack, tuple(lease.broke))
 
     def _fragment(self, q: StorageDir, lease: Lease, slot: tuple[int, int], digest: str) -> Optional[PlanFragment]:
         """Return the fragment of `digest`, held under `lease`; None when it is missing or is not that fragment.
@@ -832,6 +837,43 @@ class Queue:
             record = _outcome_record("dead", "queue", self._current(), fault=fault.model_dump(mode="json"))
             if settle(lease, q, digest, record) is not None:
                 _resolve(q, *slot, digest)
+            return None
+
+    def live_items(self) -> list[tuple[str, PlanFragment]]:
+        """Return the digest and fragment of each item with a slot and no outcome, in queue order.
+
+        An item that cannot be read is left out. It reads every live item, so it costs O(live items).
+        """
+        found: dict[str, PlanFragment] = {}
+        with (
+            self.open() as q,
+            q.child("segments") as segments,
+            q.child("items") as items,
+            q.child("outcome") as outcome,
+        ):
+            for name in sorted(n for n in segments.listdir() if SEQ_NAME.fullmatch(n)):
+                with contextlib.suppress(FileNotFoundError), segments.child(name) as segment:
+                    if segment.lstat(RETIRED_MARK) is not None:
+                        continue
+                    slots, resolved, _ = _slots(segment)
+                    for n in slots:
+                        digest = None if n in resolved else self._target(segment, int(name), n)
+                        if digest is None or digest in found or outcome.lstat(digest) is not None:
+                            continue
+                        if (fragment := self._item(items, digest)) is not None:
+                            found[digest] = fragment
+        return list(found.items())
+
+    @staticmethod
+    def _item(items: StorageDir, digest: str) -> Optional[PlanFragment]:
+        """Return the fragment item `digest` holds, None when it is missing or is not that fragment."""
+        data = items.read_regular(f"{digest}.json")
+        try:
+            document = jcs_loads(data) if data is not None else None
+            if document is None or identity_digest(ITEM_TAG, document) != digest:
+                return None
+            return PlanFragment.model_validate(document)
+        except ValueError:
             return None
 
     def depth(self) -> int:
@@ -914,8 +956,8 @@ class QueueSet:
 
     Args:
         root: The directory holding the queues; made if missing.
-        profile: The execution profile whose `pool` and `lease` sections size segments and pace claims; the default
-            profile when None.
+        profile: The execution profile whose `pool` section sizes segments; the default profile when None.
+        lease: The bound every lease of every queue is judged and beaten by; use `for_run` for a run's queues.
     """
 
     def __init__(
@@ -923,6 +965,7 @@ class QueueSet:
         root: Path,
         profile: Optional[ExecutionProfile] = None,
         *,
+        lease: JobLease,
         epoch: Optional[Callable[[], int]] = None,
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
@@ -933,15 +976,39 @@ class QueueSet:
         """
         self.root = Path(root)
         self.profile = profile if profile is not None else ExecutionProfile.load()
+        self.lease = lease
         self.epoch = epoch if epoch is not None else Epoch(self.root.parent).current
         self._clock = clock
         self._queues: dict[str, Queue] = {}
         self._labels: dict[str, str] = {}
 
+    @classmethod
+    def for_run(
+        cls,
+        run_dir: Path,
+        profile: Optional[ExecutionProfile] = None,
+        *,
+        own: Optional[JobLease] = None,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
+    ) -> "QueueSet":
+        """Return the queues of the run in `run_dir`, judged by its lease (`run_lease`, with `own` among its epochs).
+
+        Raises:
+            RunLeaseUnreadable: a bound epoch's lease section is unreadable.
+        """
+        run_dir = Path(run_dir)
+        return cls(
+            run_dir / RUN_QUEUES,
+            profile,
+            lease=run_lease(run_dir, own),
+            epoch=Epoch(run_dir, clock).current,
+            clock=clock,
+        )
+
     def queue(self, name: str) -> Queue:
         """Return the queue `name`, made if missing."""
         if name not in self._queues:
-            self._queues[name] = Queue(self.root, name, self.profile, self.epoch, self._clock)
+            self._queues[name] = Queue(self.root, name, self.profile, self.lease, self.epoch, self._clock)
         return self._queues[name]
 
     def names(self) -> list[str]:

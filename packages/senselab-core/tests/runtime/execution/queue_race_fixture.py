@@ -18,7 +18,8 @@ FAULT = FaultRecord(fault="content", type="ContentFault", message="bad", gap=Fal
 
 
 def _queue(root: str, override: dict[str, Any]) -> Queue:
-    return QueueSet(Path(root), ExecutionProfile.load(override=override)).queue("cpu")
+    profile = ExecutionProfile.load(override=override)
+    return QueueSet(Path(root), profile, lease=profile.lease).queue("cpu")
 
 
 def fragment(admission: str) -> PlanFragment:
@@ -52,7 +53,7 @@ def claim_and_finish(
     claim = _queue(root, override).claim(f"w{os.getpid()}", 1)
     if claim is None:
         return {"claimed": False, "finished": [], "outcomes": {}, "broke": 0}
-    broke = sum(claim.broke(d) for d in claim.items)
+    broke = sum(len(found) for found in claim.broke.values())
     finished = claim.commit() if kind == "done" else claim.dead(FAULT)
     return {"claimed": True, "finished": list(finished), "outcomes": claim.outcomes, "broke": broke}
 

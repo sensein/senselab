@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
 import pytest
+from epoch_fixture import prepared
 from pool_stack_fixture import packaged, planned, registry, scoring
 from senselab_core.kernel import prov as kprov
 from senselab_core.runtime.call import RunConfig
@@ -16,7 +17,6 @@ from senselab_core.runtime.execution.in_process import node_fragment
 from senselab_core.runtime.execution.job import Job, JobOutcome, execute
 from senselab_core.runtime.execution.pool_worker import PoolWorker
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, probe_queue
-from senselab_core.runtime.execution.run import prepare
 from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -52,13 +52,15 @@ class Run:
         self.placed, _ = planned(TASK, PROFILE, texts)
         self.root = tmp_path / "store"
         self.run_dir = tmp_path / name
-        prepare(self.placed, self.run_dir, ResultStore(self.root))
+        prepared(self.placed, self.run_dir, ResultStore(self.root))
         self.pool_dir = self.run_dir / RUN_QUEUES
         admission = Admission(id=f"run-{self.placed.hash}", plan_hash=self.placed.hash)
         for element in range(len(texts) if serve_items else 0):
             fragment = node_fragment(self.placed, admission, elements=[(element,)])
             placement = fragment.placement.model_copy(update={"resource_class": "cpu", "why": f"item {element}"})
-            QueueSet(self.pool_dir, PROFILE).queue("cpu").put(fragment.model_copy(update={"placement": placement}))
+            QueueSet(self.pool_dir, PROFILE, lease=PROFILE.lease).queue("cpu").put(
+                fragment.model_copy(update={"placement": placement})
+            )
 
     def serve(self, store: ResultStore, before: Callable[[int], None] | None = None) -> None:
         """Serve the queue with a worker of `store`; `before(n)` runs as the n-th item (from 0) is about to execute."""
@@ -153,13 +155,13 @@ class _FailingWait(SystemClock):
 
 def _held_probe_lease(run: Run, worker: PoolWorker) -> None:
     """Give `worker` a serve lease on a probe queue, as a worker serving one holds it."""
-    lease = QueueSet(run.pool_dir, PROFILE).queue(probe_queue("cpu", "p1")).serve_lease()
+    lease = QueueSet(run.pool_dir, PROFILE, lease=PROFILE.lease).queue(probe_queue("cpu", "p1")).serve_lease()
     assert lease is not None
     worker._serving["cpu" + probe_queue("", "p1")] = lease  # noqa: SLF001 - what serving a probe queue holds
 
 
 def _lease_released(run: Run) -> bool:
-    lease = QueueSet(run.pool_dir, PROFILE).queue(probe_queue("cpu", "p1")).serve_lease()
+    lease = QueueSet(run.pool_dir, PROFILE, lease=PROFILE.lease).queue(probe_queue("cpu", "p1")).serve_lease()
     if lease is not None:
         lease.release()
     return lease is not None

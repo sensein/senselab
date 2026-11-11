@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from epoch_fixture import prepared, taken
 from lease_clock_fixture import Called, ManualClock
 from pool_stack_fixture import packaged, registry, scoring
 from senselab_core.cli import main
@@ -32,7 +33,7 @@ from senselab_core.runtime.execution.events import (
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.pool import Pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
-from senselab_core.runtime.execution.run import _record_placements, prepare
+from senselab_core.runtime.execution.run import _record_placements
 from senselab_core.runtime.execution.substrates import (
     ExternalWorkers,
     Fleet,
@@ -443,7 +444,7 @@ def test_the_request_is_produced_without_computing(tmp_path: Path, capsys: pytes
     assert PlacementRequest.model_validate(json.loads(json.dumps(document))) == request
     assert not run_dir_of(placed.hash).exists() and _calls(tmp_path) == []
     store = ResultStore(tmp_path / "store")
-    prepare(placed, run_dir_of(placed.hash), store)
+    prepared(placed, run_dir_of(placed.hash), store)
     profile_file = tmp_path / "profile.json"
     profile_file.write_text(_profile().model_dump_json())
     assert main(["plan", placed.hash, "--json", "--profile", str(profile_file)]) == 0
@@ -511,9 +512,9 @@ def test_a_site_refusal_holds_its_class_alone(tmp_path: Path, clock: ManualClock
 def _pool(tmp_path: Path, placed: Plan, clock: ManualClock, substrate: _Holding) -> Pool:
     assert placed.execution is not None
     profile, run_dir = placed.execution, tmp_path / "run"
-    epoch = Epoch(run_dir).take()
+    epoch = taken(Epoch(run_dir))
     values = {bind_input("x", "json", t)[0]: t for t in "abc"}
-    queues = QueueSet(run_dir / RUN_QUEUES, profile, epoch=Epoch(run_dir).current)
+    queues = QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=Epoch(run_dir).current)
 
     def over(workers: Any) -> Pool:  # noqa: ANN401 - a substrate
         return Pool(
@@ -621,7 +622,7 @@ def test_placement_is_an_event_of_the_one_run_log(tmp_path: Path) -> None:
     written = log.record("placement", None, placement=record)
     log.record("queued", "a")
     [found] = placements(read_events(tmp_path / "run"))
-    assert found == written and found.node is None and found.format == "run-event@2.2"
+    assert found == written and found.node is None and found.format == "run-event@2.3"
     status = status_from(read_events(tmp_path / "run"))
     assert status.counts["queued"] == 1
     assert status_from([written]).last_event_ns is None

@@ -161,11 +161,16 @@ class ProbedUnit:
 
 @dataclass
 class Held:
-    """Computed jobs of one fragment waiting on a unit: its owner, its queue and the part."""
+    """Computed jobs of one fragment waiting on a unit: its owner, its queue and the part.
+
+    `following` holds the digests of the live items whose jobs these already are: the unit sizes them for the scaler
+    and the drift reader, and nothing is put.
+    """
 
     followed: Followed
     queue: str
     part: PlanFragment
+    following: tuple[str, ...] = ()
 
 
 @dataclass
