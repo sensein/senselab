@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import threading
+import uuid
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -18,13 +19,14 @@ from senselab_core.kernel.declare import TaskSpec
 from senselab_core.runtime import request_reports
 from senselab_core.runtime.calibration import FaultKind
 from senselab_core.runtime.call import RunConfig
+from senselab_core.runtime.execution.events import read_events, status_from
 from senselab_core.runtime.execution.executor import Admission, FaultRecord, JobRef, PlanFragment, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
-from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute
+from senselab_core.runtime.execution.job import Emit, Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.observing import Sent
 from senselab_core.runtime.execution.pool import split
 from senselab_core.runtime.execution.pool_worker import Abandoned, Member, PoolWorker, Send, bisect, serve_pool
-from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest
+from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest, settle
 from senselab_core.runtime.execution.run import prepare
 from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
 from senselab_core.runtime.fake_backend import ECHO, FAKE, EchoParams
@@ -37,6 +39,7 @@ from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.worker_client import WorkerClient, WorkerLost, WorkerOOMKilled
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_worker.faults import FaultClass, classify, error_record
+from syscall_faults_fixture import await_true
 
 TASK = scoring("pool_worker_test.score")
 BROKEN = scoring("pool_worker_test.broken")
@@ -323,6 +326,68 @@ def test_failing_batch_bisected(tmp_path: Path) -> None:
 
 def _placement(fragment: PlanFragment) -> Any:  # noqa: ANN401 - the fragment's placement on queue `cpu`
     return fragment.placement.model_copy(update={"resource_class": "cpu"})
+
+
+@pytest.mark.logic
+def test_a_requests_items_are_settled_before_the_next_request_runs(tmp_path: Path, tier_bound: float) -> None:
+    """Four one-job items sent as two requests of two: request 1's items have outcomes when request 2 begins."""
+    profile = _profile(quantum_items=4)
+    placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(4)])
+    for element in range(4):
+        _put(placed, pool_dir, element)
+    claim = QueueSet(pool_dir, profile).queue("cpu").claim("w", max_jobs=4, singles=True)
+    assert claim is not None and len(claim.items) == 4
+    settled: list[int] = []
+
+    def two_requests(jobs: Sequence[Job], placement: Placement, emit: Emit) -> list[JobOutcome]:
+        run = RunConfig()
+        first = execute(jobs[:2], placement, store=store, run=run, profile=profile, workers=WORKERS)
+        emit([0, 1], first)
+        await_true(lambda: len(_outcomes(pool_dir, profile)) == 2, tier_bound, 0.01, "request 1's items settled")
+        settled.append(len(_outcomes(pool_dir, profile)))
+        return first + execute(jobs[2:], placement, store=store, run=run, profile=profile, workers=WORKERS)
+
+    PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=two_requests).run_claim(claim)
+    assert settled == [2] and len(_outcomes(pool_dir, profile)) == 4
+
+
+@pytest.mark.logic
+def test_a_claim_that_broke_a_stale_lease_logs_reclaimed_before_its_claimed(tmp_path: Path) -> None:
+    """A dead holder's item logs `reclaimed` (age, token) then `claimed` per job; the other item only `claimed`."""
+    profile = _profile()
+    placed, store, pool_dir = _run(tmp_path, profile, ["a", "b"])
+    digests = [_put(placed, pool_dir, element) for element in (0, 1)]
+    queue = QueueSet(pool_dir, profile).queue("cpu")
+    dead = queue.path / "claims" / f"{digests[0]}.lease" / uuid.uuid4().hex
+    dead.mkdir(parents=True)
+    for path in (dead, dead.parent):
+        os.utime(path, (10**9, 10**9))
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=_sender(store, profile))
+    assert worker.serve() == 0
+    events = [e for e in read_events(tmp_path / "run") if e.kind in ("claimed", "reclaimed")]
+    assert [(e.kind, e.job.element) for e in events if e.job] == [
+        ("reclaimed", (0,)),
+        ("claimed", (0,)),
+        ("claimed", (1,)),
+    ]
+    assert events[0].lease is not None and events[0].lease.tokens == (dead.name,)
+    assert events[0].lease.age_s > profile.lease.stale_after_s and status_from(events).reclaimed == 1
+
+
+@pytest.mark.logic
+def test_an_item_with_an_outcome_and_an_unmarked_slot_is_resolved_and_never_claimed(tmp_path: Path) -> None:
+    """A holder died after linking its outcome, before marking the slot: the next claim marks it, takes nothing."""
+    profile = _profile()
+    placed, store, pool_dir = _run(tmp_path, profile, ["a"])
+    digest = _put(placed, pool_dir, 0)
+    queue = QueueSet(pool_dir, profile).queue("cpu")
+    held = queue.claim("dead")
+    assert held is not None
+    with queue.open() as q:
+        record = {"outcome": "done", "worker": "dead", "epoch": 1, "finish": "f", "jobs": []}
+        assert settle(held._held[digest].lease, q, digest, record) is True  # noqa: SLF001 - the row under test
+    held.release()
+    assert queue.depth() == 1 and queue.claim("next") is None and queue.depth() == 0
 
 
 @pytest.mark.logic

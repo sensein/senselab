@@ -160,7 +160,13 @@ def test_expired_claim_reclaimed(tmp_path: Path) -> None:
     assert queue.oldest_age_s() is not None
 
     claim = queue.claim("w", 1)
-    assert claim is not None and claim.items == (_digest(fragments[0]),) and claim.broke(claim.items[0]) == 1
+    assert claim is not None and claim.items == (_digest(fragments[0]),)
+    [broken] = claim.broke[claim.items[0]]
+    assert (
+        broken.tokens == (dead_token.name,)
+        and broken.age_s > RACE["stale_after_s"]
+        and claim.broke.keys() == {claim.items[0]}
+    )
     other = _queue(tmp_path).claim("v", 2)
     assert other is not None and other.items == (_digest(fragments[1]),)
     (held,) = claim.items

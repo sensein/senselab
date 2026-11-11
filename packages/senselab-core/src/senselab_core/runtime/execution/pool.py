@@ -210,6 +210,8 @@ class Pool:
         self._scaling = False
         self._scale_error: Exception | None = None
         self._fenced: tuple[float, int] | None = None
+        self._live: dict[tuple[JobRef, str], tuple[str, str]] | None = None
+        self._landed: set[str] = set()
         self._clock = clock
         self._extrapolated = ExtrapolationLog()
         self._bound = False
@@ -262,6 +264,7 @@ class Pool:
             self.substrate.attempt, self.substrate.epoch = events.attempt, epoch
         if self._placer is not None:
             self._placer.record = self._ledger.record
+        self._live, self._landed = None, set()
         self._fleet.reset()
         self.broken_workers.clear()
         self._relogged.clear()
@@ -361,6 +364,10 @@ class Pool:
             followed.flights.append(Flight(name, item_digest(fragment), fragment))
             return
         placed, values = self._admitted_plan(fragment)
+        rest = self._follow(name, fragment, followed, placed, values)
+        if rest is None:
+            return
+        fragment = rest
         jobs, placement = fragment_jobs(fragment, placed, values)
         flags = servable_jobs(
             jobs,
@@ -381,6 +388,63 @@ class Pool:
                 self._put_served(followed, name, part, placement)
             else:
                 self._machine.place(Held(followed, name, part))
+
+    def _live_items(
+        self, placed: Plan, values: Mapping[InputIdentity, object]
+    ) -> dict[tuple[JobRef, str], tuple[str, str]]:
+        """Return each job with a live item on a queue, by the job and its key, as `(queue name, item digest)`.
+
+        Read from the run's queues once per epoch, at the first put: an item with a slot and no outcome, its oldest
+        first. A probe queue's items are not production items.
+        """
+        if self._live is None:
+            found: dict[tuple[JobRef, str], tuple[str, str]] = {}
+            for queue in self.queues.names():
+                if probe_of(queue) is not None:
+                    continue
+                for digest, old in self.queues.queue(queue).live_items():
+                    if old.admission not in self._plans:
+                        continue
+                    try:
+                        keys = fragment_keys(old, placed, values)
+                    except ValueError:
+                        continue
+                    for job, key in zip(old.jobs, keys, strict=True):
+                        found.setdefault((job, key), (queue, digest))
+            self._live = found
+        return self._live
+
+    def _follow(
+        self,
+        name: str,
+        fragment: PlanFragment,
+        followed: Followed,
+        placed: Plan,
+        values: Mapping[InputIdentity, object],
+    ) -> PlanFragment | None:
+        """Follow the live item on queue `name` that holds a job of `fragment`; return the fragment of the others.
+
+        A job whose live item is on another queue, or under another key, is not followed: it is put again. A followed
+        item is read through a flight of the jobs of `fragment` it holds, so each job is given and charged once.
+        None when every job is followed.
+        """
+        live = self._live_items(placed, values)
+        if not live:
+            return fragment
+        keys = self._keys(fragment)
+        holders: dict[str, list[int]] = {}
+        for index, (job, key) in enumerate(zip(fragment.jobs, keys, strict=True)):
+            found = live.get((job, key))
+            if found is not None and found[0] == name:
+                holders.setdefault(found[1], []).append(index)
+        if not holders:
+            return fragment
+        dumped = Dumped.of(fragment)
+        picks = sorted(i for each in holders.values() for i in each)
+        followed.flights.extend(Flight(name, digest, dumped.part(each)) for digest, each in holders.items())
+        self._machine.place(Held(followed, name, dumped.part(picks), tuple(holders)))
+        left = sorted(set(range(len(fragment.jobs))) - set(picks))
+        return dumped.part(left) if left else None
 
     def _put_served(self, followed: Followed, name: str, part: PlanFragment, placement: Placement) -> None:
         """Put the jobs the store serves, `quantum_items` to an item, whole requests together."""
@@ -416,18 +480,21 @@ class Pool:
         label = None if release.unit is None else release.unit.label()
         if label is not None:
             self._extrapolated.note(label, sized)
-        self._check_held(held.queue, held.part.placement.env)
-        dumped, items = Dumped.of(held.part), []
-        for start, stop in sized.cuts:
-            for batch, group in itertools.groupby(
-                range(start, stop), key=lambda i: sized.batch_at(lengths[i], len(jobs))
-            ):
-                moved = held.part.placement.model_copy(update={"batch_size": batch})
-                items.append(dumped.part(list(group), placement=moved.model_dump(mode="json")))
-        self.queues.queue(held.queue).put_all(items)
+        digests = list(held.following)
+        if not held.following:
+            self._check_held(held.queue, held.part.placement.env)
+            dumped, items = Dumped.of(held.part), []
+            for start, stop in sized.cuts:
+                for batch, group in itertools.groupby(
+                    range(start, stop), key=lambda i: sized.batch_at(lengths[i], len(jobs))
+                ):
+                    moved = held.part.placement.model_copy(update={"batch_size": batch})
+                    items.append(dumped.part(list(group), placement=moved.model_dump(mode="json")))
+            self.queues.queue(held.queue).put_all(items)
+            held.followed.flights.extend(Flight(held.queue, item_digest(i), i) for i in items)
+            digests = [item_digest(i) for i in items]
         held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
-        held.followed.flights.extend(Flight(held.queue, item_digest(i), i) for i in items)
-        self._machine.note(release, [item_digest(i) for i in items])
+        self._machine.note(release, digests)
         with self._lock:
             known = sized.measured.time and all(p is not None for p in sized.predicted_s)
             per_job = sum(p or 0.0 for p in sized.predicted_s) / len(jobs) if known else None
@@ -637,14 +704,19 @@ class Pool:
         logical = fragment_logical_keys(fragment, *self._admitted_plan(fragment))
         reused = record.get("epoch") != self.epoch
         seen = _observed(record)
-        if not reused:
-            self._actuals.landed(class_of(flight.queue), seen)
-        self._machine.settled(flight.digest, seen)
-        self._machine.oom(flight.digest, seen, _worker_of(record))
+        with self._lock:
+            first = flight.digest not in self._landed
+            self._landed.add(flight.digest)
+        if first:
+            if not reused:
+                self._actuals.landed(class_of(flight.queue), seen)
+            self._machine.settled(flight.digest, seen)
+            self._machine.oom(flight.digest, seen, _worker_of(record))
         try:
             yield from self._results(followed, flight, record, seen, given, dead, logical, reused)
         finally:
-            self._machine.forget(flight.digest)
+            if first:
+                self._machine.forget(flight.digest)
 
     def _results(  # noqa: PLR0913 - the item and its outcome, then what `_settle` read of it
         self,

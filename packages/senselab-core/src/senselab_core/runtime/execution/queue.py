@@ -51,7 +51,7 @@ from senselab_core.runtime.calibration import HardwareClass
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.executor import CorruptItem, FaultRecord, MissingItem, PlanFragment
-from senselab_core.runtime.locks import Lease, LeaseState, LeaseTimeout
+from senselab_core.runtime.locks import BrokenLease, Lease, LeaseState, LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.storage import (
     STAGING_DIR_MODE,
@@ -217,7 +217,7 @@ class _Bound:
 
 
 class _Held:
-    """One item a claim holds: its digest, slot, fragment, lease and the stack that releases it."""
+    """One item a claim holds: digest, slot, fragment, lease, the stale leases it broke and its release stack."""
 
     def __init__(  # noqa: PLR0913 - the parts of one held item
         self,
@@ -227,9 +227,10 @@ class _Held:
         lease: Lease,
         state: LeaseState,
         stack: contextlib.ExitStack,
+        broke: tuple[BrokenLease, ...],
     ) -> None:
         self.digest, self.slot, self.fragment = digest, slot, fragment
-        self.lease, self.state, self.stack = lease, state, stack
+        self.lease, self.state, self.stack, self.broke = lease, state, stack, broke
 
 
 class Claim:
@@ -262,9 +263,10 @@ class Claim:
         """Return the `(segment, slot)` a held item was claimed from."""
         return self._held[digest].slot
 
-    def broke(self, digest: str) -> int:
-        """Return how many stale claims on a held item its lease broke when it was taken."""
-        return len(self._held[digest].lease.broke)
+    @property
+    def broke(self) -> dict[str, tuple[BrokenLease, ...]]:
+        """The stale leases each held item's lease broke when it was taken, by digest; none for an item with none."""
+        return {d: h.broke for d, h in self._held.items() if h.broke}
 
     def _chosen(self, items: Optional[Iterable[str]]) -> list[_Held]:
         if items is None:
@@ -805,7 +807,7 @@ class Queue:
         except BaseException:
             stack.close()
             raise
-        return _Held(digest, slot, fragment, lease, state, stack)
+        return _Held(digest, slot, fragment, lease, state, stack, tuple(lease.broke))
 
     def _fragment(self, q: StorageDir, lease: Lease, slot: tuple[int, int], digest: str) -> Optional[PlanFragment]:
         """Return the fragment of `digest`, held under `lease`; None when it is missing or is not that fragment.
@@ -832,6 +834,43 @@ class Queue:
             record = _outcome_record("dead", "queue", self._current(), fault=fault.model_dump(mode="json"))
             if settle(lease, q, digest, record) is not None:
                 _resolve(q, *slot, digest)
+            return None
+
+    def live_items(self) -> list[tuple[str, PlanFragment]]:
+        """Return the digest and fragment of each item with a slot and no outcome, in queue order.
+
+        An item that cannot be read is left out. It reads every live item, so it costs O(live items).
+        """
+        found: dict[str, PlanFragment] = {}
+        with (
+            self.open() as q,
+            q.child("segments") as segments,
+            q.child("items") as items,
+            q.child("outcome") as outcome,
+        ):
+            for name in sorted(n for n in segments.listdir() if SEQ_NAME.fullmatch(n)):
+                with contextlib.suppress(FileNotFoundError), segments.child(name) as segment:
+                    if segment.lstat(RETIRED_MARK) is not None:
+                        continue
+                    slots, resolved, _ = _slots(segment)
+                    for n in slots:
+                        digest = None if n in resolved else self._target(segment, int(name), n)
+                        if digest is None or digest in found or outcome.lstat(digest) is not None:
+                            continue
+                        if (fragment := self._item(items, digest)) is not None:
+                            found[digest] = fragment
+        return list(found.items())
+
+    @staticmethod
+    def _item(items: StorageDir, digest: str) -> Optional[PlanFragment]:
+        """Return the fragment item `digest` holds, None when it is missing or is not that fragment."""
+        data = items.read_regular(f"{digest}.json")
+        try:
+            document = jcs_loads(data) if data is not None else None
+            if document is None or identity_digest(ITEM_TAG, document) != digest:
+                return None
+            return PlanFragment.model_validate(document)
+        except ValueError:
             return None
 
     def depth(self) -> int:

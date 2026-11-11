@@ -122,7 +122,7 @@ def test_a_waiter_takes_the_lease_once_it_is_released_and_breaks_nothing(
     assert held.wait(JOIN_S)
     clock = lease_clock(on_sleep=release_after_two)
     with Lease(resource, timeout=5, clock=clock) as waiter:
-        assert waiter.owns() and waiter.broke == [] and waiter.set_aside == []
+        assert waiter.owns() and [b.path for b in waiter.broke] == [] and waiter.set_aside == []
     assert clock.slept == [POLL_S] * 2
     _join([holder])
 
@@ -235,7 +235,7 @@ def test_dead_holder_lease_broken_after_bound(tmp_path: Path, lease_clock: Calla
     assert [p.name for p in _lease_dir(resource).iterdir()] == [dead]
     clock.advance(2)
     with Lease(resource, timeout=0, stale_after=60, clock=clock) as breaker:
-        assert breaker.broke == [_lease_dir(resource)] and breaker.owns()
+        assert [b.path for b in breaker.broke] == [_lease_dir(resource)] and breaker.owns()
     assert list(tmp_path.iterdir()) == []
 
 
@@ -271,7 +271,7 @@ def test_staleness_is_read_on_the_storage_clock_not_the_local_one(
         monkeypatch.setattr(time, "time", real_time)
         age(tmp_path, 3600)
         with Lease(resource, timeout=0, stale_after=60) as breaker:
-            assert breaker.broke == [_lease_dir(resource)]
+            assert [b.path for b in breaker.broke] == [_lease_dir(resource)]
 
 
 def test_a_lease_older_than_stale_after_is_broken_and_taken(tmp_path: Path) -> None:
@@ -279,7 +279,7 @@ def test_a_lease_older_than_stale_after_is_broken_and_taken(tmp_path: Path) -> N
     resource = tmp_path / "thing"
     _plant_lease(resource)
     with Lease(resource, timeout=1, stale_after=60) as lease:
-        assert lease.owns() and lease.broke == [_lease_dir(resource)]
+        assert lease.owns() and [b.path for b in lease.broke] == [_lease_dir(resource)]
     assert list(tmp_path.iterdir()) == []
 
 
@@ -289,7 +289,7 @@ def test_an_empty_lease_a_taker_left_is_judged_by_its_own_stamp(tmp_path: Path) 
     lease_dir.mkdir()
     os.utime(lease_dir, (OLD, OLD))
     with Lease(tmp_path / "thing", timeout=1, stale_after=60) as lease:
-        assert lease.owns() and lease.broke == [lease_dir]
+        assert lease.owns() and [b.path for b in lease.broke] == [lease_dir]
 
 
 def test_a_lease_a_claimant_died_in_is_claimed_and_broken_when_stale(tmp_path: Path) -> None:
@@ -300,7 +300,7 @@ def test_a_lease_a_claimant_died_in_is_claimed_and_broken_when_stale(tmp_path: P
     for path in (claimed, lease_dir):
         os.utime(path, (OLD, OLD))
     with Lease(tmp_path / "thing", timeout=1, stale_after=60) as lease:
-        assert lease.owns() and lease.broke == [lease_dir]
+        assert lease.owns() and [b.path for b in lease.broke] == [lease_dir]
     assert list(tmp_path.iterdir()) == []
 
 
@@ -347,7 +347,7 @@ def test_a_fresh_taker_after_a_crash_is_never_displaced_by_a_late_breaker(
         late.__enter__()
     monkeypatch.setattr(os, "lstat", real_lstat)
     monkeypatch.setattr(os, "listdir", real_listdir)
-    assert winner.broke == [lease_dir] and late.broke == [] and winner.owns()
+    assert [b.path for b in winner.broke] == [lease_dir] and [b.path for b in late.broke] == [] and winner.owns()
     winner.__exit__(None, None, None)
     assert list(tmp_path.iterdir()) == []
 
@@ -543,7 +543,7 @@ def test_an_empty_lease_this_user_cannot_list_is_removed_and_taken(tmp_path: Pat
     os.chmod(lease_dir, 0o000)
     try:
         with Lease(tmp_path / "thing", timeout=1, stale_after=60) as lease:
-            assert lease.owns() and lease.broke == [lease_dir]
+            assert lease.owns() and [b.path for b in lease.broke] == [lease_dir]
     finally:
         for path in tmp_path.iterdir():
             os.chmod(path, 0o700)
@@ -667,7 +667,11 @@ def test_a_breaker_never_renames_a_lease_other_than_the_one_it_judged(
     late = Lease(resource, timeout=0, stale_after=60)
     with pytest.raises(LeaseTimeout):
         late.__enter__()
-    assert winner.broke == [_lease_dir(resource)] and late.broke == [] and winner.owns()
+    assert (
+        [b.path for b in winner.broke] == [_lease_dir(resource)]
+        and [b.path for b in late.broke] == []
+        and winner.owns()
+    )
     winner.__exit__(None, None, None)
     assert list(tmp_path.iterdir()) == []
 
@@ -801,8 +805,8 @@ def test_a_judge_listing_during_a_claim_ages_the_lease_fresh(tmp_path: Path, mon
     monkeypatch.setattr(os, "lstat", lstat)
     monkeypatch.setattr(os, "rename", rename)
     with Lease(resource, timeout=1, stale_after=60) as claimant:
-        assert claimant.broke == [_lease_dir(resource)] and claimant.owns()
-    assert outcome == ["refused"] and judge.broke == []
+        assert [b.path for b in claimant.broke] == [_lease_dir(resource)] and claimant.owns()
+    assert outcome == ["refused"] and [b.path for b in judge.broke] == []
     assert list(tmp_path.iterdir()) == []
 
 
@@ -858,7 +862,7 @@ def test_a_take_that_reads_estale_after_its_mkdir_withdraws_and_takes_again(
 
     monkeypatch.setattr(os, "mkdir", mkdir)
     with Lease(tmp_path / "thing", timeout=5, stale_after=60) as lease:
-        assert lease.owns() and raised and lease.broke == []
+        assert lease.owns() and raised and [b.path for b in lease.broke] == []
 
 
 # -- how long a wait runs, on a clock the test advances --
@@ -873,7 +877,7 @@ def test_a_dead_holders_lease_is_broken_at_the_first_poll_past_its_stale_bound(
     stale_after = 10.5 * POLL_S
     clock = lease_clock(storage_origin=OLD)
     with Lease(resource, timeout=10, stale_after=stale_after, clock=clock) as taker:
-        assert taker.broke == [_lease_dir(resource)]
+        assert [b.path for b in taker.broke] == [_lease_dir(resource)]
     assert stale_after < clock.now() <= stale_after + POLL_S
     assert clock.slept == [POLL_S] * (int(stale_after // POLL_S) + 1)
 

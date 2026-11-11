@@ -262,6 +262,9 @@ class ProbeMachine:
                 self.host.produce(Release(held, state.estimate, unit), jobs, placement)
             return
         estimate = self.measures.get(unit)
+        if held.following:
+            self.host.produce(Release(held, estimate, unit), jobs, placement)
+            return
         plan = None if covers(estimate, jobs) else self._plan_probe(unit, held, jobs, placement)
         if plan is None or not worth(plan, estimate):
             ended = State(

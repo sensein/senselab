@@ -197,6 +197,19 @@ def test_workers_wanted_counts_quanta_of_jobs_whatever_the_items(tmp_path: Path)
     assert pool.queues.queue("cpu").depth() == 200 and pool.workers_wanted("cpu", 200) == 20
 
 
+@pytest.mark.logic
+def test_a_resume_whose_every_item_is_live_scales_beyond_one_worker(tmp_path: Path) -> None:
+    """Epoch 2 follows 200 one-job items epoch 1 queued: its jobs size the scaler as its own puts would."""
+    profile = _profile()
+    placed, values, first, fragment = _submitted(tmp_path, profile, 200)
+    first.queues.queue("cpu").put_all(split(fragment, 1))
+    first.close()
+    second = _pool(tmp_path, profile)
+    second.submit(node_fragment(placed, second.admit(placed, values)))
+    second.close()
+    assert second.queues.queue("cpu").depth() == 200 and second.workers_wanted("cpu", 200) == 20
+
+
 @pytest.mark.parametrize(("cap", "expected"), [(None, 20), (16, 4)], ids=["class-max", "qos-cap"])
 @pytest.mark.logic
 def test_scale_wants_a_worker_per_quantum_of_jobs(tmp_path: Path, cap: int | None, expected: int) -> None:

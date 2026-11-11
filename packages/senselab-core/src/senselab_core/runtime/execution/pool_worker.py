@@ -15,6 +15,7 @@ service it holds has been live for `services.idle_exit_s`, the jobs it runs itse
 
 import contextlib
 import functools
+import inspect
 import logging
 import queue
 import signal
@@ -33,10 +34,10 @@ from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observat
 from senselab_core.runtime.call import RunConfig, packaged
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.epoch import Epoch
-from senselab_core.runtime.execution.events import EventLog
+from senselab_core.runtime.execution.events import EventLog, LeaseBreak
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef, PlanFragment
 from senselab_core.runtime.execution.in_process import fragment_jobs, fragment_keys, process_workers
-from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, execute, ran_out, splits
+from senselab_core.runtime.execution.job import Emit, Failed, Job, JobOutcome, execute, ran_out, splits
 from senselab_core.runtime.execution.observing import (
     Presence,
     RequestRecord,
@@ -82,8 +83,13 @@ logger = logging.getLogger("senselab")
 IDLE_POLLS = 3
 """The polls of `pool.poll_s` with nothing to claim after which a pool worker exits."""
 
-Send = Callable[[Sequence[Job], Placement], list[JobOutcome]]
-"""Run jobs of one call under a placement and return one outcome per job, in order (`execute`)."""
+Send = Callable[..., list[JobOutcome]]
+"""Run jobs of one call under a placement and return one outcome per job, in order (`execute`).
+
+A `send` with an `emit` parameter is given an `Emit` and calls it as each request's outcomes are final."""
+
+Handover = Callable[[Sequence["Member"], Sequence[JobOutcome]], None]
+"""Gives the outcomes of these members to the claim's committer, each member once."""
 
 
 class Abandoned(Exception):
@@ -143,6 +149,7 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
     cancelled: threading.Event | None = None,
     record: Callable[[Sent], None] | None = None,
     clock: Clock = SystemClock(),  # noqa: B008 - stateless
+    handover: Handover | None = None,
 ) -> list[JobOutcome]:
     """Return one outcome per member, sent as one request; one that fails as a whole is split in halves.
 
@@ -150,7 +157,8 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
     the call's other requests keep their outcomes and reports. A member alone whose request fails as a whole gets that
     failure. Any other exception is the failure of every member of the request that raised it, so a half that
     completed keeps its outcomes. Each call of `send` is given to `record` as a `Sent`, timed by itself on `clock`,
-    with the requests it made, each timed on `clock` too.
+    with the requests it made, each timed on `clock` too. With `handover`, each member's outcome is given to it once
+    it is    final, which is as its request ends when `send` takes an `Emit`, else as the call ends.
 
     Raises:
         Abandoned: `cancelled` was set before a request, or while one ran.
@@ -160,9 +168,12 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
         raise Abandoned
     refs = tuple(m.job.ref for m in members)
     began = clock.now()
+    call = send
+    if handover is not None and _emits(send):
+        call = functools.partial(send, emit=_forwarding(members, handover))
     try:
         with request_reports.collected(clock) as reported:
-            outcomes = send([m.job for m in members], placement)
+            outcomes = call([m.job for m in members], placement)
     except Exception as exc:
         wall = clock.now() - began
         if cancelled is not None and cancelled.is_set():
@@ -177,9 +188,29 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
         if not split:
             if len(members) == 1:
                 logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)
-            return [Failed(m.job.ref, m.key, failure_of(exc)) for m in members]
-        return _halves(members, placement, send, cancelled, record, clock)
-    return _split_requests(members, outcomes, reported, began, (placement, send, cancelled, record, clock))
+            failed: list[JobOutcome] = [Failed(m.job.ref, m.key, failure_of(exc)) for m in members]
+            if handover is not None:
+                handover(members, failed)
+            return failed
+        return _halves(members, placement, send, cancelled, record, clock, handover)
+    return _split_requests(members, outcomes, reported, began, (placement, send, cancelled, record, clock, handover))
+
+
+def _emits(send: Send) -> bool:
+    """Whether `send` takes an `Emit`."""
+    try:
+        return "emit" in inspect.signature(send).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _forwarding(members: Sequence["Member"], handover: Handover) -> Emit:
+    """Return the `Emit` that gives the members at the indices a call of `send` names, of `members`, to `handover`."""
+
+    def emit(at: Sequence[int], outcomes: Sequence[JobOutcome]) -> None:
+        handover([members[i] for i in at], outcomes)
+
+    return emit
 
 
 def _split_requests(
@@ -187,14 +218,14 @@ def _split_requests(
     outcomes: list[JobOutcome],
     reported: Sequence[RequestReport],
     began: float,
-    again: tuple[Placement, Send, threading.Event | None, Callable[[Sent], None] | None, Clock],
+    again: tuple[Placement, Send, threading.Event | None, Callable[[Sent], None] | None, Clock, Handover | None],
 ) -> list[JobOutcome]:
     """Return `outcomes`, where each request of several jobs that all ran out is replaced by its halves' outcomes.
 
     The requests that did not run out keep their outcomes and reports; each that did is given to `record` as a
     `bisected` resource fault with its own report, and its jobs are sent again in halves.
     """
-    placement, send, cancelled, record, clock = again
+    placement, send, cancelled, record, clock, handover = again
     faulted = [(r, at) for r in reported if (at := _ran_out(members, outcomes, r))]
     gone = {i for _, at in faulted for i in at}
     merged = list(outcomes)
@@ -205,12 +236,14 @@ def _split_requests(
         if refs:
             record(Sent(refs, max(0.0, wall), kept, None))
     finished = {i: o for i, o in enumerate(outcomes) if i not in gone}
+    if handover is not None and finished:
+        handover([members[i] for i in finished], list(finished.values()))
     for ran, at in faulted:
         sub = [members[i] for i in at]
         if record is not None:
             record(Sent(tuple(m.job.ref for m in sub), ran.wall_s or 0.0, (ran,), "bisected", "resource"))
         try:
-            halves = _halves(sub, placement, send, cancelled, record, clock)
+            halves = _halves(sub, placement, send, cancelled, record, clock, handover)
         except Abandoned as stopped:
             raise Abandoned({**finished, **{at[i]: o for i, o in stopped.kept.items()}}) from stopped
         for i, outcome in zip(at, halves, strict=True):
@@ -225,12 +258,13 @@ def _halves(  # noqa: PLR0913 - `bisect`'s own arguments
     cancelled: threading.Event | None,
     record: Callable[[Sent], None] | None,
     clock: Clock,
+    handover: Handover | None = None,
 ) -> list[JobOutcome]:
     """Return the outcomes of `members` sent as two requests, each half through `bisect`."""
     half = len(members) // 2
-    first = bisect(members[:half], placement, send, cancelled, record, clock)
+    first = bisect(members[:half], placement, send, cancelled, record, clock, handover)
     try:
-        second = bisect(members[half:], placement, send, cancelled, record, clock)
+        second = bisect(members[half:], placement, send, cancelled, record, clock, handover)
     except Abandoned as stopped:
         raise Abandoned({**dict(enumerate(first)), **{half + i: o for i, o in stopped.kept.items()}}) from stopped
     return first + second
@@ -565,18 +599,22 @@ class PoolWorker:
             runner = threading.Thread(target=self._run_groups, args=(groups, finished, cancelled, spans), daemon=True)
             runner.start()
             interval = self.profile.lease.renew_fraction * self.profile.lease.stale_after_s
-            running = True
+            running, renewed = True, self._clock.now()
             while running and claim.items and not self.stop.is_set():
                 with contextlib.suppress(queue.Empty):
                     batch = finished.get(timeout=interval)
                     running = batch is not None
                     self._commit(claim, batch or [], outcomes, pending, (sample, observe))
-                if not claim.renew():
-                    logger.warning(
-                        "pool worker %s lost a claim on queue %s; its request is abandoned", self.name, claim.queue.name
-                    )
-                    claim.release()
-                    break
+                if self._clock.now() - renewed >= interval:
+                    renewed = self._clock.now()
+                    if not claim.renew():
+                        logger.warning(
+                            "pool worker %s lost a claim on queue %s; its request is abandoned",
+                            self.name,
+                            claim.queue.name,
+                        )
+                        claim.release()
+                        break
             self._stop_runner(runner, cancelled)
             while not finished.empty():
                 self._commit(claim, finished.get_nowait() or [], outcomes, pending, (sample, observe))
@@ -727,8 +765,17 @@ class PoolWorker:
     ) -> None:
         """Run each group until `cancelled`, putting its members' outcomes on `finished`; then put None.
 
-        Each call of a group's send is given in `spans`, with the requests it made, before the outcomes are put.
+        Each call of a group's send is given in `spans`, with the requests it made, before the outcomes are put. A
+        member's outcome is put once, as its request ends when the send emits (`Emit`), else when the group ends.
         """
+        given: set[tuple[str, int]] = set()
+
+        def hand(members: Sequence[Member], outcomes: Sequence[JobOutcome | None]) -> None:
+            fresh = [(m, o) for m, o in zip(members, outcomes, strict=True) if (m.digest, m.index) not in given]
+            given.update((m.digest, m.index) for m, _ in fresh)
+            if fresh:
+                finished.put(fresh)
+
         try:
             for group in groups:
                 send = self._send or functools.partial(self._execute, run=group.run)
@@ -742,24 +789,29 @@ class PoolWorker:
                             cancelled,
                             lambda sent: spans.add(sent, owners),
                             self._clock,
+                            hand,
                         )
                     )
                 except LeaseTimeout as busy:
                     logger.info("pool worker %s gives its items back: %s", self.name, busy)
                     outcomes = [None] * len(group.members)
                 except Abandoned as stopped:
-                    if stopped.kept:
-                        finished.put([(group.members[i], o) for i, o in sorted(stopped.kept.items())])
+                    hand(
+                        [group.members[i] for i in sorted(stopped.kept)],
+                        [stopped.kept[i] for i in sorted(stopped.kept)],
+                    )
                     raise
-                finished.put(list(zip(group.members, outcomes, strict=True)))
+                hand(group.members, outcomes)
         except Abandoned:
             logger.info("pool worker %s abandoned the rest of its claim", self.name)
         finally:
             finished.put(None)
 
-    def _execute(self, jobs: Sequence[Job], placement: Placement, *, run: RunConfig) -> list[JobOutcome]:
+    def _execute(
+        self, jobs: Sequence[Job], placement: Placement, *, run: RunConfig, emit: Emit | None = None
+    ) -> list[JobOutcome]:
         workers = self._workers if self._workers is not None else process_workers(self.profile)
-        return execute(jobs, placement, store=self.store, run=run, profile=self.profile, workers=workers)
+        return execute(jobs, placement, store=self.store, run=run, profile=self.profile, workers=workers, emit=emit)
 
     def _groups(self, claim: Claim) -> tuple[list[_Group], dict[str, FaultRecord]]:
         """Return the claim's jobs grouped by plan, node and placement, and each item that cannot be built."""
@@ -802,8 +854,12 @@ class PoolWorker:
         if attempt is None:
             return
         log = EventLog(self.run_dir, *attempt, epoch=epoch)
-        for fragment in claim.fragments:
+        for digest, fragment in zip(claim.items, claim.fragments, strict=True):
+            broke = claim.broke.get(digest)
+            lease = None if not broke else LeaseBreak(age_s=broke[-1].age_s, tokens=broke[-1].tokens)
             for job in fragment.jobs:
+                if lease is not None:
+                    log.record("reclaimed", job.node, job=job, lease=lease)
                 log.record("claimed", job.node, job=job)
 
 

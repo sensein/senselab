@@ -38,6 +38,7 @@ import stat
 import threading
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -99,6 +100,18 @@ class LeaseUnavailable(RuntimeError):
         self.path = path
 
 
+@dataclass(frozen=True)
+class BrokenLease:
+    """A stale lease a taker broke: its path, the storage-clock seconds it was judged by and its holders' tokens.
+
+    `tokens` is empty for a lease that held none.
+    """
+
+    path: Path
+    age_s: float
+    tokens: tuple[str, ...]
+
+
 class LeaseState:
     """What a lease's renewer reports while `Lease.keep_alive` runs.
 
@@ -134,7 +147,7 @@ class Lease:
         clock: How the lease reads monotonic time and the storage clock, and waits.
 
     Attributes:
-        broke: The paths of the stale leases this lease broke before it was taken.
+        broke: The stale leases this lease broke before it was taken (`BrokenLease`).
         set_aside: The paths this lease moved aside: objects of the wrong kind at its name.
     """
 
@@ -167,7 +180,7 @@ class Lease:
         self._held: Optional[str] = None
         self._probe: Optional[tuple[float, float]] = None
         self._renewer: Optional[tuple[threading.Thread, threading.Event, float]] = None
-        self.broke: list[Path] = []
+        self.broke: list[BrokenLease] = []
         self.set_aside: list[Path] = []
 
     @property
@@ -353,7 +366,7 @@ class Lease:
                 return
             judged = seen[0]
             if self._break(judged, seen[2]):
-                self.broke.append(self._lease_path)
+                self.broke.append(BrokenLease(self._lease_path, now - seen[1], tuple(sorted(judged))))
                 logger.warning(
                     "lease %s: broke a stale lease %.1fs old (> %.1fs), held by %s",
                     self._lease_path,
@@ -634,6 +647,7 @@ __all__ = [
     "RENEWER_PREFIX",
     "STALE_AFTER_S",
     "TIMEOUT_S",
+    "BrokenLease",
     "Lease",
     "LeaseState",
     "LeaseTimeout",
