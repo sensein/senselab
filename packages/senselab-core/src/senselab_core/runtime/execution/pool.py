@@ -57,7 +57,7 @@ from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import (
     BrokenEnv,
     EventLog,
-    read_events,
+    scan_events,
 )
 from senselab_core.runtime.execution.executor import (
     Admission,
@@ -212,6 +212,7 @@ class Pool:
         self._fenced: tuple[float, int] | None = None
         self._live: dict[tuple[JobRef, str], tuple[str, str]] | None = None
         self._landed: set[str] = set()
+        self._unread = 0
         self._clock = clock
         self._extrapolated = ExtrapolationLog()
         self._bound = False
@@ -266,7 +267,7 @@ class Pool:
             self.substrate.attempt, self.substrate.epoch = events.attempt, epoch
         if self._placer is not None:
             self._placer.record = self._ledger.record
-        self._live, self._landed = None, set()
+        self._live, self._landed, self._unread = None, set(), 0
         self._fleet.reset()
         self.broken_workers.clear()
         self._relogged.clear()
@@ -837,10 +838,20 @@ class Pool:
         yield self._dead(job, key, fault)
 
     def _env_failures(self, env: str) -> list[FaultRecord]:
-        """Return the failures of `env` that count against it, as this epoch's events on disk record, in order."""
+        """Return the failures of `env` that count against it, as this epoch's events on disk record, in order.
+
+        An event line of this epoch's writers that could not be read has no env to charge: the count may be low by
+        that many, which is logged once.
+        """
+        scan = scan_events(self.run_dir)
+        mine = {e.writer for e in scan.events if e.epoch == self.epoch}
+        lost = sum(1 for q in scan.quarantined if q.writer in mine)
+        if lost > self._unread:
+            logger.warning("the failures counted against env %s may be low: %d event lines are unreadable", env, lost)
+            self._unread = lost
         return [
             e.failure
-            for e in read_events(self.run_dir)
+            for e in scan.events
             if e.kind == "failed"
             and e.epoch == self.epoch
             and e.env == env

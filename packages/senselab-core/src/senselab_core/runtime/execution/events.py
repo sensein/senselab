@@ -216,7 +216,8 @@ class RunStatus:
     Derived from events alone (`status_from`). `done` is True once every job seen has a terminal event, and
     `cancelled` once any job was cancelled, so a cancelled run is never plain done. `last_event_ns` is the time of the
     newest event. `interrupted` is set by `Run.wait` alone, when the run is not done and its coordinator stopped.
-    `reclaimed` counts the claims that broke a stale lease first (`reclaimed` events).
+    `reclaimed` counts the claims that broke a stale lease first (`reclaimed` events); `quarantined` the event lines a
+    reader could not decode (`EventScan`), so a job whose terminal event was one reads as not done for that reason.
     """
 
     counts: Mapping[JobState, int]
@@ -228,6 +229,7 @@ class RunStatus:
     interrupted: bool = False
     nodes: Mapping[str, Mapping[JobState, int]] = field(default_factory=dict)
     reclaimed: int = 0
+    quarantined: int = 0
 
 
 def _latest(events: Sequence[Event]) -> list[Event]:
@@ -296,7 +298,9 @@ def terminal_events(events: Iterable[Event], *, epoch: int | None = None) -> dic
     return {job: event for job, event in found.items() if event is not None}
 
 
-def status_from(events: Iterable[Event], *, broken_after: int | None = None, epoch: int | None = None) -> RunStatus:
+def status_from(
+    events: Iterable[Event], *, broken_after: int | None = None, epoch: int | None = None, quarantined: int = 0
+) -> RunStatus:
     """Return the status of a run from its `events`, each writer's in file order (`read_events`).
 
     A job's state is the terminal event of its latest attempt (highest `epoch`, then `ordinal`) with precedence
@@ -306,7 +310,7 @@ def status_from(events: Iterable[Event], *, broken_after: int | None = None, epo
     every `failed` event by its class; an env with `broken_after` infrastructure failures (the packaged profile's
     `infrastructure_replacements` when None) is `broken`. Cancelled and blocked jobs are not faults. With `epoch`
     (the run's current one), a job with no event of
-    that epoch is queued.
+    that epoch is queued. `quarantined` is the number of lines the reader refused, carried into the status.
     """
     if broken_after is None:
         from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - read only when needed
@@ -346,6 +350,7 @@ def status_from(events: Iterable[Event], *, broken_after: int | None = None, epo
         last_event_ns=max((e.t_ns for e in seen), default=None),
         nodes={n: {s: c[s] for s in STATES} for n, c in sorted(per_node.items())},
         reclaimed=sum(1 for e in seen if e.kind == "reclaimed"),
+        quarantined=quarantined,
     )
 
 
@@ -527,11 +532,22 @@ def scan_events(run_dir: Path) -> EventScan:
     return EventScan(events=events, quarantined=tuple(quarantined))
 
 
+_REPORTED: set[tuple[Path, str, int]] = set()
+_REPORTED_LOCK = threading.Lock()
+
+
 def read_events(run_dir: Path) -> list[Event]:
-    """Return the events of the run in `run_dir` as `scan_events` reads them, logging any line it quarantined."""
+    """Return the events of the run in `run_dir` as `scan_events` reads them.
+
+    A quarantined line is logged once per process, by run, writer and line, so a torn tail a kill left is not
+    reported again at each read.
+    """
     scan = scan_events(run_dir)
-    if scan.quarantined:
-        logger.warning("%d event lines of %s are unreadable and were skipped", len(scan.quarantined), run_dir)
+    with _REPORTED_LOCK:
+        fresh = [q for q in scan.quarantined if (Path(run_dir), q.writer, q.line) not in _REPORTED]
+        _REPORTED.update((Path(run_dir), q.writer, q.line) for q in fresh)
+    if fresh:
+        logger.warning("%d event lines of %s are unreadable and were skipped", len(fresh), run_dir)
     return scan.events
 
 

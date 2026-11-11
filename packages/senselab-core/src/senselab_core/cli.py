@@ -122,6 +122,8 @@ def run_status(args: argparse.Namespace) -> int:
     print("faults: " + (", ".join(f"{k} {v}" for k, v in sorted(status.faults.items())) or "none"))
     if status.reclaimed:
         print(f"reclaimed claims: {status.reclaimed}")
+    if status.quarantined:
+        print(f"quarantined event lines: {status.quarantined}")
     for broken in status.broken:
         print(f"broken env {broken.env}: {broken.failures} failures; {broken.fault.type}: {broken.fault.message}")
     for node, counts in status.nodes.items():

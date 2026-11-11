@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from senselab_core.cli import main as cli_main
 from senselab_core.kernel.dataset import Record
 from senselab_core.runtime.execution.events import (
     Event,
@@ -17,7 +18,7 @@ from senselab_core.runtime.execution.events import (
     terminal_events,
 )
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef
-from senselab_core.runtime.execution.run import MissingExtra, NotRun, Output, ResultSet
+from senselab_core.runtime.execution.run import MissingExtra, NotRun, Output, ResultSet, Run
 
 PLAN = "ab" * 32
 CONTENT = FaultRecord(fault="content", type="ContentFault", message="bad input", gap=False, charged=True)
@@ -270,6 +271,25 @@ def test_a_torn_last_line_and_a_corrupt_middle_line_are_quarantined(tmp_path: Pa
     log.path.write_text("\n".join([lines[0], "not json", lines[1]]) + "\n")
     assert [e.kind for e in read_events(tmp_path)] == ["queued", "started"]
     assert [(q.writer, q.line) for q in scan_events(tmp_path).quarantined] == [(log.writer, 1)]
+
+
+@pytest.mark.contract
+def test_a_torn_line_is_counted_in_the_status_and_reported_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A line cut short by a kill shows as `quarantined` in the status and the CLI; a second read does not log it."""
+    log = EventLog(tmp_path, "a1", 1, clock=iter([1, 2]).__next__)
+    log.record("queued", "a")
+    log.record("started", "a")
+    with log.path.open("a") as handle:
+        handle.write('{"format":"run-event@2.3","kind":"fini')
+    with caplog.at_level("WARNING", logger="senselab"):
+        read_events(tmp_path)
+        read_events(tmp_path)
+    assert len([r for r in caplog.records if "unreadable" in r.getMessage()]) == 1
+    assert Run(tmp_path).status().quarantined == 1 and status_from([]).quarantined == 0
+    assert cli_main(["status", str(tmp_path)]) == 0
+    assert "quarantined event lines: 1" in capsys.readouterr().out
 
 
 def _results() -> ResultSet:

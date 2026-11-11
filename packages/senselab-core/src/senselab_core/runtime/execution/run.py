@@ -42,6 +42,7 @@ from senselab_core.runtime.execution.events import (
     RunStatus,
     read_events,
     run_dir_of,
+    scan_events,
     status_from,
     terminal_events,
 )
@@ -551,9 +552,10 @@ class Run:
         return read_events(self.run_dir)
 
     def status(self) -> RunStatus:
-        """Return the status derived from the events, under the run's current epoch (read first)."""
+        """Return the status derived from the events under the run's current epoch, and the lines refused."""
         epoch = self._epoch()
-        return status_from(self.events(), epoch=epoch)
+        scan = scan_events(self.run_dir)
+        return status_from(scan.events, epoch=epoch, quarantined=len(scan.quarantined))
 
     def _epoch(self) -> int | None:
         """Return the run's current epoch, None where none was taken."""
