@@ -5,6 +5,7 @@ A server is this set's own, or, with a registry, a registered service it consume
 
 import collections
 import contextlib
+import functools
 import gc
 import importlib
 import sys
@@ -29,6 +30,7 @@ from senselab_core.runtime.host_worker import HostWorker
 from senselab_core.runtime.locks import LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.network import network_variables
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.teardown import run_all
 from senselab_core.runtime.vllm_server import (
     AttestationMismatch,
     StaleAttestation,
@@ -438,12 +440,10 @@ class WorkerSet:
         return server
 
     def _retire(self, key: tuple[str, str, str], server: Server) -> None:
-        """Withdraw the registration of `server` if this set provides it, then stop it."""
+        """Stop `server`, then withdraw its registration if this set provides it, even when the stop raised."""
         with self._lock:
             provided = self._provided.pop(key, None)
-        if provided is not None:
-            provided.close()
-        server.stop()
+        run_all(server.stop, provided.close if provided is not None else _nothing)
 
     def provided(self) -> list[ServiceLease]:
         """Return the registrations of the servers this set started and provides."""
@@ -502,11 +502,14 @@ class WorkerSet:
             workers, servers = list(self._pool.values()), list(self._servers.items())
             self._pool.clear()
             self._servers.clear()
-        for worker in workers:
-            if isinstance(worker, WorkerClient):
-                worker.close()
-        for key, server in servers:
-            self._retire(key, server)
+        run_all(
+            *(w.close for w in workers if isinstance(w, WorkerClient)),
+            *(functools.partial(self._retire, key, server) for key, server in servers),
+        )
+
+
+def _nothing() -> None:
+    """A teardown step with nothing to do."""
 
 
 def host_model_key(backend: BackendSpec, env: EnvHandle, model: ResolvedModel | None, device: str) -> ModelKey:

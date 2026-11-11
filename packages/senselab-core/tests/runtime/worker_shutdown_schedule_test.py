@@ -29,6 +29,7 @@ from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import group_alive
 from senselab_worker.fake import FAULT_KEY
 from shutdown_schedule_fixture import (
+    CLEAN,
     KINDS,
     counted,
     run_schedule,
@@ -45,6 +46,27 @@ def _check(tmp_path: Path, kind: str, occurrences: range) -> list[dict[str, Any]
     failed = {f"{r['path']} {r['boundary']}#{r['occurrence']}": v for r in reports if (v := violations(r))}
     assert failed == {}
     return reports
+
+
+@pytest.mark.logic
+def test_a_case_whose_clock_tripped_its_guard_is_a_violation() -> None:
+    """A clean report passes; the same report with a guard trip the stop path swallowed fails."""
+    report: dict[str, Any] = {
+        "fired": True,
+        "path": "close",
+        "kind": "sigint",
+        "outcome": None,
+        "elapsed": 0.0,
+        "bound": 1.0,
+        "at_outcome": CLEAN,
+        "client_open": False,
+        "abandoned": False,
+        "after_close": CLEAN,
+        "tripped": [],
+    }
+    report["outcome"] = next(iter(shutdown_schedule_fixture.TYPED["close"] - {None}), None)
+    assert violations(report) == []
+    assert any("guard" in v for v in violations({**report, "tripped": ["a wait outlived 30s"]}))
 
 
 RAISING_KINDS = ("sigint", "handler_raises_base", "handler_raises_exception")
@@ -395,4 +417,14 @@ def test_an_exception_in_the_kill_fallback_still_reaps_the_leader(tmp_path: Path
     [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])
     assert report["fired"] and report["calls"]["module:_signal_group"] >= 3
     assert report["at_outcome"]["reaped"] and not report["at_outcome"]["group_alive"]
+    assert shutdown_schedule_fixture.violations(report) == []
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("boundary", ["client:_fail", "client:_shutdown", "client:_steps", "client:_acquire_shutdown"])
+def test_a_close_on_another_thread_that_takes_the_timed_out_stop_is_driven(tmp_path: Path, boundary: str) -> None:
+    """`close()` on another thread before the timed-out run takes the stop lock: that thread's waits are driven."""
+    case = {"path": "timeout", "boundary": boundary, "kind": "close_other_thread", "occurrence": 1}
+    [report] = shutdown_schedule_fixture.run_schedule(tmp_path, [case])
+    assert report["signals"][:2] == ["SIGTERM", "SIGCONT"] and "SIGKILL" in report["signals"]
     assert shutdown_schedule_fixture.violations(report) == []

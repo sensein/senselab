@@ -13,7 +13,7 @@ import pytest
 from epoch_fixture import prepared
 from lease_clock_fixture import ManualClock
 from pool_probe_test import JOBS, SEEN, TEXTY, _plan, _pool
-from pool_stack_fixture import packaged, registry
+from pool_stack_fixture import close_pools, packaged, registry
 from pool_worker_test import WORKERS, _sender
 from senselab_core.kernel.declare import Env
 from senselab_core.runtime.calibration import (
@@ -67,6 +67,13 @@ def _crowded(tmp_path: Path, env: Env | None, worker: str = CROWDED) -> Iterator
     with packaged(registry(TEXTY, worker=worker, env=env), tmp_path / "cache"):
         yield ExecutionProfile.load("laptop", override)
     WORKERS.close()
+
+
+@pytest.fixture(autouse=True)
+def pools_closed() -> Iterator[None]:
+    """Close the pools the test made through `_pool`."""
+    yield
+    close_pools()
 
 
 def _served(tmp_path: Path, profile: ExecutionProfile, clock: ManualClock, lengths: Sequence[int]) -> Pool:

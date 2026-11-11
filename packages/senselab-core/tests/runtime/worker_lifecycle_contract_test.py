@@ -4,6 +4,7 @@ import os
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy
 import pytest
@@ -121,6 +122,12 @@ def _shutdown_leaves_nothing(
     name = client.array_dir.name
     left = {name, f"{name}/{ARRAY_LIKE}", f"{name}/{ARRAY_LIKE}/scratch.bin"} if made else set()
     assert listing(parent) == before | left
+
+
+@pytest.fixture
+def hang_s(slack_tests: dict[str, Any]) -> float:
+    """The real seconds a lost wake may last in these stop-path tests."""
+    return float(slack_tests["stop_test"]["hang_s"])
 
 
 @pytest.mark.contract

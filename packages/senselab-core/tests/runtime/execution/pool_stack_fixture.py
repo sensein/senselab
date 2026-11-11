@@ -15,6 +15,7 @@ from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_pack
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.pool import Pool
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.planner import Plan, plan
@@ -117,3 +118,21 @@ def planned(
     rows = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(texts)]
     placed = plan(graph, RecordSet(rows), config=config or RunConfig(), execution=profile)
     return placed, {bind_input("x", "json", t)[0]: t for t in texts}
+
+
+_POOLS: list[Pool] = []
+"""The pools `opened` returned in the running test; `close_pools` closes them."""
+
+
+def opened(pool: Pool) -> Pool:
+    """Return `pool`, to be closed by `close_pools` once the test ends."""
+    _POOLS.append(pool)
+    return pool
+
+
+def close_pools() -> None:
+    """Close every pool `opened` returned, so no `senselab-scaler` thread outlives the test."""
+    pools, _POOLS[:] = list(_POOLS), []
+    for pool in pools:
+        with contextlib.suppress(Exception):
+            pool.close()

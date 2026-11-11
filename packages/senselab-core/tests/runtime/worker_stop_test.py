@@ -1,10 +1,12 @@
 """A worker that times out or is closed is stopped in order, each grace read on the test clock."""
 
+import contextlib
 import os
 import signal
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -41,6 +43,12 @@ UNREACHED_S = 2.0**20
 
 GRACES = ShutdownGraces(stop=UNREACHED_S, kill=UNREACHED_S)
 """Graces that are never reached: a group signalled is waited for until it is gone."""
+
+
+REACHABLE = ShutdownGraces(
+    stop=2 * STOP_STEP_S, term=STOP_STEP_S, kill=2 * STOP_STEP_S, join=STOP_STEP_S, exit_code_wait=STOP_STEP_S
+)
+"""Graces the test clock reaches: each is passed by `drive` advancing `STOP_STEP_S` a few times."""
 
 
 def _waiting(clock: ManualClock, call: Called) -> None:
@@ -88,12 +96,31 @@ def _escalation(sent: list[tuple[float, int, int]]) -> list[tuple[float, signal.
     return [(when, signal.Signals(sig)) for when, _, sig in sent if sig != 0]
 
 
+@pytest.fixture
+def hang_s(slack_tests: dict[str, Any]) -> float:
+    """The real seconds a lost wake may last in these stop-path tests."""
+    return float(slack_tests["stop_test"]["hang_s"])
+
+
 @pytest.mark.logic
-def test_timeout_is_resource_fault(array_parent: Path, lease_clock: Callable[..., ManualClock]) -> None:
-    """A load or request past its timeout is `WorkerTimeout`, a typed resource fault, and the worker is killed."""
-    clock = lease_clock(spends="park")
+def test_timeout_is_resource_fault(
+    array_parent: Path, lease_clock: Callable[..., ManualClock], slack_tests: dict[str, Any]
+) -> None:
+    """A load or request past its timeout is `WorkerTimeout`, a typed resource fault, and the worker is killed.
+
+    The first client's graces are reachable on its clock, which the test drives. A lost wake in either half fails
+    within `stop_test.hang_s` real seconds, not at the tier's budget.
+    """
+    hang_s = slack_tests["stop_test"]["hang_s"]
+    clock = lease_clock(spends="park", hang_s=hang_s)
     client = WorkerClient(
-        PYTHON, FAKE, init={}, array_parent=array_parent, request_timeout=REQUEST_TIMEOUT_S, graces=GRACES, clock=clock
+        PYTHON,
+        FAKE,
+        init={},
+        array_parent=array_parent,
+        request_timeout=REQUEST_TIMEOUT_S,
+        graces=REACHABLE,
+        clock=clock,
     )
     call = Called(lambda: client.run([{"id": "a", "inputs": {}}], {FAULT_KEY: {"latency_s": 60}}), hang_s=clock.hang_s)
     error = _timed_out(clock, call)
@@ -103,7 +130,13 @@ def test_timeout_is_resource_fault(array_parent: Path, lease_clock: Callable[...
     client.close()
     with pytest.raises(WorkerTimeout):
         WorkerClient(
-            PYTHON, FAKE, init={}, array_parent=array_parent, load_timeout=0.0, clock=lease_clock(spends=False)
+            PYTHON,
+            FAKE,
+            init={},
+            array_parent=array_parent,
+            load_timeout=0.0,
+            graces=REACHABLE,
+            clock=lease_clock(spends=False, hang_s=hang_s),
         )
 
 
@@ -362,3 +395,43 @@ def test_a_timed_out_worker_is_stopped_without_asking_ps(  # noqa: PLR0913 - the
         _timed_out(clock, call)
     client.close()
     assert calls == [] and not group_alive(pgid) and not any(map(alive, recorded_pids(pid_file)))
+
+
+GUARD_S = 0.2
+"""The hang guard of the test that the guard fires: short, since that test waits it out in real time."""
+
+
+@pytest.mark.logic
+def test_a_wait_nobody_ends_fails_within_the_hang_guard(lease_clock: Callable[..., ManualClock]) -> None:
+    """A wait on a clock nobody advances is a failure after the hang guard's real seconds, in the waiting thread."""
+    clock = lease_clock(spends="park", hang_s=GUARD_S)
+    parked = Called(lambda: clock.wait(threading.Event(), UNREACHED_S), hang_s=GUARD_S * 10)
+    with pytest.raises(AssertionError, match="nobody advanced"):
+        parked.result()
+    clock.tripped.clear()
+
+
+@pytest.mark.logic
+def test_a_trip_swallowed_by_the_code_under_test_is_recorded(lease_clock: Callable[..., ManualClock]) -> None:
+    """A guard trip that product code catches stays on `tripped`, which the fixture fails the test on."""
+    clock = lease_clock(spends="park", hang_s=GUARD_S)
+
+    def swallowing() -> None:
+        with contextlib.suppress(Exception):
+            clock.wait(threading.Event(), UNREACHED_S)
+
+    Called(swallowing, hang_s=GUARD_S * 10).result()
+    assert len(clock.tripped) == 1
+    clock.tripped.clear()
+
+
+@pytest.mark.logic
+def test_a_sleep_on_a_clock_that_never_advances_yields_until_the_guard(lease_clock: Callable[..., ManualClock]) -> None:
+    """`sleep` on a `spends=False` clock waits for the guard without spinning a core."""
+    clock = lease_clock(spends=False, hang_s=GUARD_S)
+    cpu, wall = time.process_time(), time.monotonic()
+    with pytest.raises(AssertionError, match="never advances"):
+        while True:
+            clock.sleep(1.0)
+    assert time.process_time() - cpu < (time.monotonic() - wall) / 2
+    clock.tripped.clear()

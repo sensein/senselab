@@ -1,5 +1,6 @@
 """Services: a registry entry under a renewed lease, consumer leases deciding idle exit, and per-reply attestation."""
 
+import errno
 import json
 import platform
 import threading
@@ -28,8 +29,11 @@ from senselab_core.runtime.keys import Call, Placement, call_key
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.teardown import run_all
 from senselab_core.runtime.vllm_server import ServerRejected, ServiceUnavailable, StaleAttestation, chat, server_fault
+from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
+from syscall_faults_fixture import refuse_call
 
 pytestmark = pytest.mark.logic
 
@@ -474,3 +478,183 @@ def test_a_closed_port_is_service_unavailable_on_the_direct_call(
     starts[0].stop()
     [record, name] = _fault_of(lambda: chat(url, IDENTITY.served_model, CHAT, sampling={}))
     assert (name, record.fault) == ("ServiceUnavailable", "infrastructure")
+
+
+FAULT = OSError(errno.EIO, "storage fault")
+"""The storage fault a teardown step meets: `EIO`, which is not one of the errors that mean a resource is gone."""
+
+
+def _scaler_threads() -> list[str]:
+    return [t.name for t in threading.enumerate() if t.name.startswith("senselab-")]
+
+
+def _nothing_left(registry: ServiceRegistry, before: list[str]) -> None:
+    """The service is unregistered, its lease free for another holder, and no `senselab-*` thread outlived it."""
+    assert registry.lookup(IDENTITY) is None
+    registry.reserve(IDENTITY).close()
+    assert _scaler_threads() == before
+
+
+@pytest.mark.parametrize(
+    ("function", "prefix"),
+    [("mkdir", "proof-"), ("unlink", "svc-")],
+    ids=["proof", "withdraw"],
+)
+def test_a_fault_while_withdrawing_the_entry_still_releases_the_lease(
+    registry: ServiceRegistry, monkeypatch: pytest.MonkeyPatch, function: str, prefix: str
+) -> None:
+    """`close` meets a storage fault at the lease proof or at the entry's removal: the lease is still released."""
+    before = _scaler_threads()
+    service = registry.register(IDENTITY, "http://127.0.0.1:1")
+    with monkeypatch.context() as patch:
+        refused = refuse_call(patch, function, prefix, FAULT)
+        with pytest.raises(OSError, match="storage fault"):
+            service.close()
+    assert refused
+    _nothing_left(registry, before)
+    service.close()
+
+
+def test_every_teardown_step_runs_and_the_first_error_is_raised(registry: ServiceRegistry) -> None:
+    """Every step runs, the first error is raised, and a later error is attached to it, not lost."""
+    ran: list[str] = []
+
+    def failing(name: str) -> Callable[[], None]:
+        def step() -> None:
+            ran.append(name)
+            raise OSError(errno.EIO, name)
+
+        return step
+
+    with pytest.raises(OSError, match="first") as raised:
+        run_all(failing("first"), lambda: ran.append("middle"), failing("last"))
+    assert ran == ["first", "middle", "last"]
+    assert any("last" in note for note in raised.value.__notes__)
+
+
+def test_an_interrupt_in_one_teardown_step_still_runs_the_rest() -> None:
+    """A `KeyboardInterrupt` in the first step does not skip the later ones, and it is the error raised."""
+    ran: list[str] = []
+
+    def interrupted() -> None:
+        ran.append("first")
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt) as raised:
+        run_all(interrupted, lambda: ran.append("second"), lambda: 1 / 0)
+    assert ran == ["first", "second"] and any("ZeroDivisionError" in n for n in raised.value.__notes__)
+
+
+def test_a_fault_releasing_the_lease_is_raised_after_the_renewer_ended(
+    registry: ServiceRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EIO at the release of the registration lease: `close` raises, and the lease's renewer thread has ended."""
+    service = registry.register(IDENTITY, "http://127.0.0.1:1")
+    with monkeypatch.context() as patch:
+        refused = refuse_call(patch, "rename", "gone-", FAULT)
+        with pytest.raises(OSError, match="storage fault"):
+            service.close()
+    assert refused
+    assert [t.name for t in threading.enumerate() if t.name.startswith("lease-renewer")] == []
+
+
+def test_a_pooled_worker_that_fails_to_close_does_not_skip_the_servers(registry: ServiceRegistry) -> None:
+    """`WorkerSet.close` with a pooled client whose close raises: the provided server still stops and is withdrawn."""
+    calls: list[str] = []
+    workers, [server] = _provided(registry, calls, fails=(False,))
+    broken = _BrokenClient()
+    workers._pool[("k", "b", "m")] = broken  # noqa: SLF001 - a pooled worker that fails to close
+    with pytest.raises(OSError, match="storage fault"):
+        workers.close()
+    assert broken.closed and server.url is None and registry.lookup(server.identity) is None
+
+
+class Recording(StandIn):
+    """A stand-in server that records whether its entry was still registered when `stop` ran, and may fail."""
+
+    def __init__(self, identity: Attestation, registry: ServiceRegistry, calls: list[str], fails: bool = False) -> None:
+        """Listen as `identity`; `calls` records each stop, which raises when `fails`."""
+        super().__init__(identity)
+        self._registry, self._calls, self._fails = registry, calls, fails
+
+    def stop(self) -> None:
+        """Record the stop and whether the entry still stood; stop listening, then raise when it is to fail."""
+        self._calls.append(f"stop:{self.label}:registered={self._registry.lookup(self.identity) is not None}")
+        super().stop()
+        if self._fails:
+            raise FAULT
+
+
+class _BrokenClient(WorkerClient):
+    """A pooled worker process whose `close` raises a storage fault."""
+
+    def __init__(self) -> None:
+        """Hold no process."""
+        self.closed = False
+
+    def close(self) -> None:
+        """Record the call and raise."""
+        self.closed = True
+        raise FAULT
+
+
+def _provided(
+    registry: ServiceRegistry, calls: list[str], *, fails: tuple[bool, ...]
+) -> tuple[WorkerSet, list[Recording]]:
+    """A providing set with one server per entry of `fails`, each of its own identity."""
+    servers: list[Recording] = []
+    identities = [
+        IDENTITY.model_copy(update={"served_model": f"org/m{i}", "model_identity": f"{i}" * 40})
+        for i in range(len(fails))
+    ]
+
+    def start(backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profile: ExecutionProfile) -> Recording:  # noqa: ARG001 - a ServerStart
+        identity = identities[len(servers)]
+        servers.append(Recording(identity, registry, calls, fails[len(servers)]))
+        return servers[-1]
+
+    workers = WorkerSet(1, start_server=start, registry=registry, provide=True)
+    for identity in identities:
+        model = ResolvedModel(
+            ref=ModelRef.parse(f"{identity.served_model}@{identity.model_identity}"), identity=identity.model_identity
+        )
+        workers.server(BACKEND, ENV, model, PROFILE, identity)
+    return workers, servers
+
+
+def test_a_server_is_stopped_before_its_registration_is_withdrawn(registry: ServiceRegistry) -> None:
+    """The process stops while its entry still stands; only then is the entry withdrawn."""
+    calls: list[str] = []
+    workers, [server] = _provided(registry, calls, fails=(False,))
+    workers.close()
+    assert calls == [f"stop:{server.label}:registered=True"]
+    assert registry.lookup(server.identity) is None and workers.provided() == []
+
+
+def test_a_server_that_fails_to_stop_is_still_withdrawn_and_later_servers_still_stop(
+    registry: ServiceRegistry,
+) -> None:
+    """`close` over three servers, the first failing to stop: all three stop, none stays registered, the error rises."""
+    calls: list[str] = []
+    workers, servers = _provided(registry, calls, fails=(True, False, False))
+    with pytest.raises(OSError, match="storage fault"):
+        workers.close()
+    assert len(calls) == 3
+    assert all(registry.lookup(s.identity) is None and s.url is None for s in servers)
+    assert workers.provided() == []
+
+
+def test_a_fault_withdrawing_one_registration_does_not_leave_a_later_server_running(
+    registry: ServiceRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A storage fault in each registration's proof: every server is stopped and no lease is held afterwards."""
+    calls: list[str] = []
+    workers, servers = _provided(registry, calls, fails=(False, False))
+    with monkeypatch.context() as patch:
+        refuse_call(patch, "mkdir", "proof-", FAULT)
+        with pytest.raises(OSError, match="storage fault"):
+            workers.close()
+    assert [s.url for s in servers] == [None, None]
+    for server in servers:
+        assert registry.lookup(server.identity) is None
+        registry.reserve(server.identity).close()

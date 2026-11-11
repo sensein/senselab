@@ -1,8 +1,11 @@
 """Shared fixtures for the runtime tests."""
 
+import gc
 import importlib
 import os
 import subprocess
+import threading
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
@@ -47,16 +50,30 @@ def backends_importable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def lease_clock(slack_tests: dict[str, Any], tier_bound: float) -> Callable[..., ManualClock]:
-    """Build a `ManualClock`: polls and step from the test slack file, hang bound a fraction of the tier's."""
+def hang_s(tier_bound: float, slack_tests: dict[str, Any]) -> float:
+    """The real seconds a wait nobody ends may last in this module's tests: a fraction of the tier's bound.
+
+    A module whose tests stop workers overrides it with `stop_test.hang_s`.
+    """
+    return float(slack_tests["lease_clock"]["hang_fraction"] * tier_bound)
+
+
+@pytest.fixture
+def lease_clock(slack_tests: dict[str, Any], hang_s: float) -> Iterator[Callable[..., ManualClock]]:
+    """Build a `ManualClock`: polls and step from the test slack file, hang bound `hang_s` unless given.
+
+    The test fails at teardown if any clock it built tripped its guard, whoever caught the error.
+    """
     section = slack_tests["lease_clock"]
+    built: list[ManualClock] = []
 
     def make(**kwargs: Any) -> ManualClock:  # noqa: ANN401 - `ManualClock`'s own keyword arguments
-        return ManualClock(
-            poll_s=section["poll_s"], step_s=section["step_s"], hang_s=section["hang_fraction"] * tier_bound, **kwargs
-        )
+        clock = ManualClock(poll_s=section["poll_s"], step_s=section["step_s"], **{"hang_s": hang_s, **kwargs})
+        built.append(clock)
+        return clock
 
-    return make
+    yield make
+    assert [t for c in built for t in c.tripped] == [], "a hang guard fired"
 
 
 @pytest.fixture
@@ -93,3 +110,22 @@ def array_parent(tmp_path: Path) -> Iterator[Path]:
     path.mkdir()
     yield path
     assert list(path.iterdir()) == []
+
+
+def _senselab_threads() -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if t.name.startswith("senselab-") and t.is_alive()]
+
+
+@pytest.fixture(autouse=True)
+def no_leaked_senselab_threads(slack_tests: dict[str, Any]) -> Iterator[None]:
+    """Fail a test that leaves a `senselab-*` thread running: an object that owns a thread must be closed.
+
+    A thread whose owner was collected is given `stop_test.hang_s` real seconds to see its wake.
+    """
+    before = set(_senselab_threads())
+    yield
+    deadline = time.monotonic() + slack_tests["stop_test"]["hang_s"]
+    while (leaked := [t for t in _senselab_threads() if t not in before]) and time.monotonic() < deadline:
+        gc.collect()
+        leaked[0].join(slack_tests["fake_worker"]["poll_s"])
+    assert [t.name for t in leaked] == []
