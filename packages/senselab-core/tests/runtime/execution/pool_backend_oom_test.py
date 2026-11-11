@@ -3,6 +3,7 @@
 Each item's error record names the fault and the request's observation says `resource`; nothing raises on the host.
 """
 
+import contextlib
 import json
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -54,7 +55,7 @@ ESTIMATE = Estimate(
 
 
 @contextmanager
-def _crowded(tmp_path: Path, env: Env | None) -> Iterator[ExecutionProfile]:
+def _crowded(tmp_path: Path, env: Env | None, worker: str = CROWDED) -> Iterator[ExecutionProfile]:
     """Serve the text task by the crowding backend in `env`; yield a profile granting each cpu worker memory."""
     override = {
         "devices": ["cpu"],
@@ -63,7 +64,7 @@ def _crowded(tmp_path: Path, env: Env | None) -> Iterator[ExecutionProfile]:
         "calibration": {"measures_roots": [str(tmp_path / "measures")], "warmup_requests": 1},
         "env_roots": {"isolated": str(tmp_path / "envs"), "server": str(tmp_path / "envs")},
     }
-    with packaged(registry(TEXTY, worker=CROWDED, env=env), tmp_path / "cache"):
+    with packaged(registry(TEXTY, worker=worker, env=env), tmp_path / "cache"):
         yield ExecutionProfile.load("laptop", override)
     WORKERS.close()
 
@@ -212,3 +213,35 @@ def test_only_the_request_that_ran_out_is_split_and_the_others_keep_their_report
     assert all(r.failure is None for r in results) and len(results) == len(lengths)
     record = _the_oom_record(pool)
     assert (record.batch, record.length) == (12, 40.0)
+
+
+def test_a_load_oom_is_no_batchs_fault_and_writes_no_oom_record(tmp_path: Path, clock: ManualClock) -> None:
+    """A model that runs out of memory at load fails its claim, but no batch size cures it: no `oom` record is filed."""
+    from backends import oom_load_backend_fixture as fixture  # noqa: PLC0415 - the module holds what load raises
+    from senselab_core.runtime.execution.executor import QueueHeld  # noqa: PLC0415
+
+    fixture.LOADS.clear()
+    fixture.SUCCEED[:] = [0]
+    fixture.RAISE[:] = [MemoryError("CUDA out of memory")]
+    with _crowded(tmp_path, None, "backends.oom_load_backend_fixture") as profile:
+        placed, values = _plan(profile, [3, 12, 25, 60, 90, 7, 33, 41])
+        prepare(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
+        pool = _pool(tmp_path, profile, clock=clock, measures=FixedEstimates(ESTIMATE), resolver=FixedUnit(profile))
+        handle = pool.submit(node_fragment(placed, pool.admit(placed, values))).id
+        worker = PoolWorker(
+            tmp_path / "run" / RUN_QUEUES,
+            ["cpu"],
+            profile=profile,
+            store=pool.store,
+            send=_sender(pool.store, profile),
+            hardware=lambda _: SEEN,
+            device_memory=lambda: None,
+            cotenancy=lambda _: PEERS,
+        )
+        worker.serve()
+        with contextlib.suppress(QueueHeld):
+            for _ in range(JOBS):
+                pool.poll(Handle(id=handle))
+    assert fixture.LOADS
+    assert [r for r in pool.roots.records(UNIT) if r.kind == "oom"] == []
+    assert {o.fault for o in _observed(pool)} == {None}

@@ -148,6 +148,7 @@ class WorkerFatal(InfrastructureFault):
         self.error = error
 
     from_load: ClassVar[bool] = True
+    """Every `WorkerFatal` is read as a load fault, as is a worker's fatal for an invalid host line mid-request."""
 
     @property
     def carried_class(self) -> tuple[FaultClass, bool]:

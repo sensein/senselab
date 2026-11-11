@@ -98,6 +98,9 @@ spread across a million items.
     environment's and counts against it as infrastructure. A resource fault at load that cannot move to a larger
     class, because none exists or the replacement budget is spent, counts against the environment too and holds it
     after the usual retries; no item is marked dead. The record says it came from a load (`load`).
+    A load's failure is no batch's fault: it writes no `oom` record. A load fault re-placed on a larger class is
+    marked `replaced` on its `failed` event and is not counted against the environment. The Pool and `senselab status`
+    count an environment's failures by one rule (`FaultRecord.counts_against_env`).
   - A `FaultRecord` is built by `of` (a wire record), `from_exception` (through `error_record`) or `gap_of(kind,
     message)`, the constructor of a gap; no call site writes a literal class.
   - One mapper, `server_fault`, types a server's failure at the client boundary for both server paths: a timeout or

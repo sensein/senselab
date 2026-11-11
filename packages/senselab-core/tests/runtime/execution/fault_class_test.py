@@ -135,6 +135,15 @@ def test_a_load_oom_is_a_resource_fault_costing_one_load_and_never_split(tmp_pat
     }
 
 
+def test_a_load_is_serialised_only_when_true() -> None:
+    """A record that is no load's has no `load` key, so a reader of the earlier record shape still reads it."""
+    assert "load" not in FaultRecord.gap_of("X", "m").model_dump(mode="json")
+    assert "load" not in FaultRecord.from_exception(ContentFault("m")).model_dump_json()
+    loaded = FaultRecord.from_exception(_fatal_load_failure(MemoryError("m")))
+    assert loaded.model_dump(mode="json")["load"] is True
+    assert FaultRecord.model_validate(loaded.model_dump(mode="json")) == loaded
+
+
 def test_the_message_of_a_record_with_notes_stays_within_the_text_cap() -> None:
     """The notes `from_exception` appends are cut with the message at `MAX_TEXT_CHARS`."""
     exc = RuntimeError("m" * MAX_TEXT_CHARS)

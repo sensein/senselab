@@ -14,8 +14,10 @@ from pydantic import (
     BeforeValidator,
     Field,
     PlainSerializer,
+    SerializerFunctionWrapHandler,
     StringConstraints,
     field_validator,
+    model_serializer,
     model_validator,
 )
 from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, error_record, wire_text
@@ -121,6 +123,14 @@ class FaultRecord(Frozen):
     charged: bool
     load: bool = False
 
+    @model_serializer(mode="wrap")
+    def _omit_a_false_load(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Serialise `load` only when it is true, so a record that is no load's reads as it did before the field."""
+        data: dict[str, Any] = handler(self)
+        if not data.get("load"):
+            data.pop("load", None)
+        return data
+
     @field_validator("message")
     @classmethod
     def _render_message(cls, v: str) -> str:
@@ -131,6 +141,11 @@ class FaultRecord(Frozen):
         if self.charged and (self.gap or self.fault != FaultClass.CONTENT.value):
             raise ValueError("only a content fault that is not a gap is charged")
         return self
+
+    @property
+    def counts_against_env(self) -> bool:
+        """Whether the failure is its environment's: infrastructure, a gap that is not resource, or a load's fault."""
+        return self.fault == "infrastructure" or (self.gap and self.fault != "resource") or self.load
 
     @property
     def fault_class(self) -> FaultClass:

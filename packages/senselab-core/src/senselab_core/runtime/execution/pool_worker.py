@@ -116,6 +116,11 @@ def _ran_out(members: "Sequence[Member]", outcomes: Sequence[JobOutcome], report
     return at if ran_out([outcomes[i] for i in at]) else []
 
 
+def _loading(exc: BaseException) -> bool:
+    """Whether `exc` was raised while a worker started, loaded or reloaded its model: no batch size cures it."""
+    return bool(getattr(exc, "from_load", False))
+
+
 def failure_of(exc: BaseException) -> FaultRecord:
     """Return the fault record of `exc`, classified as a worker classifies it (`error_record`)."""
     return FaultRecord.from_exception(exc)
@@ -166,7 +171,9 @@ def bisect(  # noqa: PLR0913 - the members and their placement, the request seam
             raise
         split = whole(exc) and len(members) > 1
         if record is not None:
-            record(Sent(refs, wall, (), "bisected" if split else "failed", classify(exc).value))
+            record(
+                Sent(refs, wall, (), "bisected" if split else "failed", None if _loading(exc) else classify(exc).value)
+            )
         if not split:
             if len(members) == 1:
                 logger.warning("job %s fails its request alone: %s", members[0].job.ref, type(exc).__name__)

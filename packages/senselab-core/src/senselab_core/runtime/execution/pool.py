@@ -740,7 +740,7 @@ class Pool:
             and larger is not None
             and followed.moved[job.element] < budgets.resource_replacements
         )
-        if _counts_against_env(fault) and not (fault.load and replaced):
+        if fault.counts_against_env and not (fault.load and replaced):
             if self._infrastructure(flight, job, key, fault):
                 self._again(followed, flight, index)
             else:
@@ -750,7 +750,7 @@ class Pool:
         if fault.fault == "resource":
             followed.moved[job.element] += 1
             if replaced and larger is not None:
-                self._failed(job, key, fault, placement.env)
+                self._failed(job, key, fault, placement.env, replaced=True)
                 grant = {"resource_class": larger, "partition": self.profile.resource_classes[larger].partition}
                 self._again(followed, flight, index, placement.model_copy(update=grant))
                 return
@@ -771,7 +771,8 @@ class Pool:
             and e.epoch == self.epoch
             and e.env == env
             and e.failure is not None
-            and _counts_against_env(e.failure)
+            and not e.replaced
+            and e.failure.counts_against_env
         ]
 
     def _held(self, flight: Flight) -> QueueHeld:
@@ -802,8 +803,8 @@ class Pool:
             )
         return False
 
-    def _failed(self, job: JobRef, key: str, fault: FaultRecord, env: str) -> None:
-        self.events.record("failed", job.node, job=job, key=key, failure=fault, env=env)
+    def _failed(self, job: JobRef, key: str, fault: FaultRecord, env: str, *, replaced: bool = False) -> None:
+        self.events.record("failed", job.node, job=job, key=key, failure=fault, env=env, replaced=replaced)
 
     def _again(self, followed: Followed, flight: Flight, index: int, placement: NodePlacement | None = None) -> None:
         """Queue job `index` of `flight` again alone, as the next attempt, on `placement` (its own when None)."""
@@ -920,11 +921,6 @@ def _worker_of(record: Mapping[str, object]) -> str | None:
     measure = record.get("measure")
     worker = measure.get("job") if isinstance(measure, Mapping) else None
     return worker if isinstance(worker, str) and worker else None
-
-
-def _counts_against_env(fault: FaultRecord) -> bool:
-    """Whether `fault` is infrastructure, a gap that is not resource, or a fault of a load."""
-    return fault.fault == "infrastructure" or (fault.gap and fault.fault != "resource") or fault.load
 
 
 def run_plan(run_dir: Path, profile: ExecutionProfile) -> Plan:

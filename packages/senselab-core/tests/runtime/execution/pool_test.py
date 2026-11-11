@@ -363,8 +363,39 @@ def test_a_load_oom_that_cannot_move_larger_holds_the_env_and_kills_no_item(tmp_
     assert not any((tmp_path / "run").glob("dead/*"))
     expected = 6 if shipped else 3
     assert broken.failures == expected
+    held = status_from(read_events(tmp_path / "run"), broken_after=expected)
+    assert [b.env for b in held.broken] == ["host"]
     if not shipped:
         assert [f.placement.resource_class for f in workers.served][:2] == ["cpu", "cpu:large"]
+
+
+@pytest.mark.contract
+def test_a_load_oom_replaced_on_a_larger_class_does_not_spend_the_envs_budget(tmp_path: Path) -> None:
+    """Eight jobs fail at load on `cpu` and run on `cpu:large`; one later transient fault does not hold the env."""
+    load = _load_oom()
+    profile = _profile(content_attempts=2, infrastructure_replacements=3, resource_replacements=1)
+    placed, values, store, workers = _stack(tmp_path, profile, [f"t{i}" for i in range(8)])
+    lost: list[PlanFragment] = []
+
+    def act(fragment: PlanFragment) -> FaultRecord | None:
+        if fragment.placement.resource_class == "cpu":
+            return load
+        if not lost:
+            lost.append(fragment)
+            return LOST
+        return None
+
+    workers.act = act
+    pool = _pool(tmp_path, store, workers, profile)
+    try:
+        refs = _all(pool, placed, values)
+    finally:
+        workers.stop()
+    assert len(refs) == 8 and all(r.failure is None for r in refs)
+    assert not pool.broken and len(lost) == 1
+    events = read_events(tmp_path / "run")
+    assert sum(e.replaced for e in events) == 8
+    assert not status_from(events, broken_after=3).broken
 
 
 @pytest.mark.contract

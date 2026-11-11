@@ -451,6 +451,8 @@ def test_an_http_reply_naming_memory_is_a_resource_fault_whatever_its_status() -
     plain = urllib.error.HTTPError("http://x", 500, "boom", None, None)  # type: ignore[arg-type]
     assert FaultRecord.from_exception(server_fault(named)).fault == "resource"
     assert FaultRecord.from_exception(server_fault(plain)).fault == "infrastructure"
+    refused = urllib.error.HTTPError("http://x", 400, "prompt says oom: out of memory", None, None)  # type: ignore[arg-type]
+    assert FaultRecord.from_exception(server_fault(refused)).fault == "content"
 
 
 @pytest.mark.parametrize(

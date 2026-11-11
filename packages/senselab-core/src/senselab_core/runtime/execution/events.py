@@ -124,8 +124,9 @@ class Event(Formatted):
     claimed), `epoch` the coordinator epoch the attempt belongs to (0 for none), `writer` the writer whose file holds
     it, `seq` its position in that file, `placement_digest` the digest of the node's placement, `fault` the class of a
     failure, `failure` the record of it, `reuse` the policy that served a `cache_hit` (its value), `env` the env the job
-    ran in, `output` the output identity of a `finished` or `cache_hit` job and `t_ns` the wall-clock nanoseconds of the
-    event.
+    ran in, `replaced` whether a failed job was queued again on a larger resource class (its fault is then not counted
+    against the env), `output` the output identity of a `finished` or `cache_hit` job and `t_ns` the wall-clock
+    nanoseconds of the event.
     """
 
     format: FormatTag = RUN_EVENT_FORMAT
@@ -146,6 +147,7 @@ class Event(Formatted):
     env: NonEmptyStr | None = None
     output: OutputIdentity | None = None
     placement: PlacementRecord | None = None
+    replaced: bool = False
     t_ns: Annotated[int, Field(ge=0)]
 
     @model_validator(mode="after")
@@ -178,8 +180,8 @@ class Event(Formatted):
             raise ValueError("an event's fault is the class of its failure")
         if self.kind == "failed" and self.failure is None:
             raise ValueError("a failed event carries its failure")
-        if self.kind != "failed" and (self.fault is not None or self.failure is not None):
-            raise ValueError("only a failed event carries a fault")
+        if self.kind != "failed" and (self.fault is not None or self.failure is not None or self.replaced):
+            raise ValueError("only a failed event carries a fault, and whether the job was placed on a larger class")
         if self.reuse is not None and self.kind != "cache_hit":
             raise ValueError("only a cache_hit event carries a reuse policy")
         return self
@@ -302,7 +304,12 @@ def status_from(events: Iterable[Event], *, broken_after: int | None = None, epo
     for event in seen:
         if event.kind == "failed" and event.fault is not None:
             faults[event.fault] += 1
-            if event.fault == "infrastructure" and event.env is not None and event.failure is not None:
+            if (
+                event.env is not None
+                and event.failure is not None
+                and event.failure.counts_against_env
+                and not event.replaced
+            ):
                 failures[event.env] += 1
                 latest[event.env] = event.failure
     tally: Counter[str] = Counter()
@@ -429,6 +436,7 @@ class EventLog:
         env: str | None = None,
         output: str | None = None,
         placement: PlacementRecord | None = None,
+        replaced: bool = False,
     ) -> Event:
         """Append the event of `kind` for `node` (None for a `placement`), stamped now with the next `seq`."""
         with self._lock:
@@ -451,6 +459,7 @@ class EventLog:
             env=env,
             output=output,
             placement=placement,
+            replaced=replaced,
             t_ns=self.clock(),
         )
         self.append(event)
