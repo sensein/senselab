@@ -998,18 +998,19 @@ def _worker_of(record: Mapping[str, object]) -> str | None:
 
 
 def run_plan(run_dir: Path, profile: ExecutionProfile) -> Plan:
-    """Return the plan of the run in `run_dir` under its latest placement, with `profile` and the plan's reuse policy.
+    """Return the plan of the run in `run_dir` under its latest placement, `profile` and its policies.
 
     Raises:
         ValueError: the plan was placed under another profile than `profile`.
         FileNotFoundError: the run has no plan, or no claimed attempt.
     """
-    from senselab_core.runtime.execution.run import load_plan  # noqa: PLC0415
+    from senselab_core.runtime.execution.run import load_plan, stored_policy  # noqa: PLC0415
 
     stored = load_plan(run_dir)
     if stored.placement.profile_digest != profile.canonical_digest():
         raise ValueError(f"plan {stored.hash} was placed under another execution profile; name the one it was")
-    return replace(stored, execution=profile, config=RunConfig(reuse=ReusePolicy(stored.logical.reuse)))
+    config = RunConfig(reuse=ReusePolicy(stored.logical.reuse), licenses=stored_policy(run_dir))
+    return replace(stored, execution=profile, config=config)
 
 
 def run_store(run_dir: Path) -> ResultStore:

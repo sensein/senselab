@@ -4,7 +4,8 @@
 table `data/spdx_licenses.yaml`; `license_record` builds a `License` whose flags are those; `check_license` refuses
 a record whose flags contradict its expression; `backend_license` derives a backend's code license from its env
 lock's package records, which `lock_records_from` reads from an `env-licenses` document. `LicensePolicy` is a
-run's own allowed and refused license ids.
+run's own allowed and refused license ids; `policy_document` and `policy_of` write and read it as the run's
+`licenses.json`, and `laxer_than` says in which field one policy allows what another refuses.
 """
 
 import re
@@ -13,6 +14,8 @@ from dataclasses import dataclass
 from functools import cache
 from importlib import resources
 from typing import Any, Literal, NamedTuple
+
+from senselab_worker.digest import identity_digest
 
 from senselab_core.kernel.declare import BackendSpec
 from senselab_core.kernel.license import License, require_license
@@ -297,3 +300,103 @@ class LicensePolicy:
         """Raise `LicenseRefused` when the policy refuses `record`, the license of `subject`."""
         if (reason := self.refusal(subject, record)) is not None:
             raise LicenseRefused(reason)
+
+
+LICENSES_FORMAT = "run-licenses@1"
+"""The format and identity tag of a run's `licenses.json`."""
+
+
+class LaxerLicensePolicy(ValueError):
+    """A run was given a license policy that allows what the policy it was planned under refuses.
+
+    Attributes:
+        field: The field of the policy that is laxer: `allow`, `refuse` or `allow_unlicensed_hits`.
+        ids: The license ids the given policy allows that the stored one refuses, empty when the field names no id.
+    """
+
+    def __init__(self, field: str, ids: tuple[str, ...]) -> None:
+        """Name the field and ids."""
+        named = f" ({', '.join(ids)})" if ids else ""
+        super().__init__(
+            f"the license policy given is laxer than the run's in {field}{named}; a run's policy can be tightened, "
+            "never loosened: plan the run again in a fresh run directory to loosen it"
+        )
+        self.field, self.ids = field, ids
+
+
+def policy_document(policy: LicensePolicy | None) -> dict[str, Any]:
+    """Return `licenses.json` for `policy`: ids lower-cased and sorted, the absent policy as null."""
+    body = None
+    if policy is not None:
+        allow = None if policy.allow is None else sorted({i.lower() for i in policy.allow})
+        body = {
+            "allow": allow,
+            "refuse": sorted({i.lower() for i in policy.refuse}),
+            "allow_unlicensed_hits": policy.allow_unlicensed_hits,
+        }
+    return {"format": LICENSES_FORMAT, "policy": body}
+
+
+def policy_digest(policy: LicensePolicy | None) -> str:
+    """Return the identity digest of `policy`'s document."""
+    return identity_digest(LICENSES_FORMAT, policy_document(policy))
+
+
+def policy_of(document: object) -> LicensePolicy | None:
+    """Return the policy a `licenses.json` document holds.
+
+    Raises:
+        ValueError: it is not a `run-licenses@1` document.
+    """
+    if not isinstance(document, dict) or document.get("format") != LICENSES_FORMAT or "policy" not in document:
+        raise ValueError(f"not a {LICENSES_FORMAT} document")
+    found = document["policy"]
+    if found is None:
+        return None
+    try:
+        allow, refuse, hits = found["allow"], found["refuse"], found["allow_unlicensed_hits"]
+    except (KeyError, TypeError) as err:
+        raise ValueError(f"a {LICENSES_FORMAT} policy has allow, refuse and allow_unlicensed_hits") from err
+    return LicensePolicy(
+        allow=None if allow is None else frozenset(allow),
+        refuse=frozenset(refuse),
+        allow_unlicensed_hits=bool(hits),
+    )
+
+
+def _normal(policy: LicensePolicy | None) -> tuple[frozenset[str] | None, frozenset[str], bool]:
+    """Return `policy` as `(allow, refuse, allow_unlicensed_hits)`; the absent one allows all, no unlicensed hit."""
+    if policy is None:
+        return None, frozenset(), False
+    allow = None if policy.allow is None else frozenset(i.lower() for i in policy.allow)
+    return allow, frozenset(i.lower() for i in policy.refuse), policy.allow_unlicensed_hits
+
+
+def laxer_than(given: LicensePolicy | None, stored: LicensePolicy | None) -> LaxerLicensePolicy | None:
+    """Return the error naming how `given` allows what `stored` refuses, None when it is at least as strict.
+
+    A policy accepts the ids it allows (every id when `allow` is None) that it does not refuse, and serves an
+    unlicensed stored result only with `allow_unlicensed_hits`; the absent policy is `(every id, none refused, no
+    unlicensed hit)`. `given` is at least as strict when it accepts no id `stored` does not and serves no hit
+    `stored` does not.
+    """
+    q, p = _normal(given), _normal(stored)
+    if (found := _loosened(q[0], q[1], p[0], p[1])) is not None:
+        return LaxerLicensePolicy(*found)
+    return LaxerLicensePolicy("allow_unlicensed_hits", ()) if q[2] and not p[2] else None
+
+
+def _loosened(
+    q_allow: frozenset[str] | None, q_refuse: frozenset[str], p_allow: frozenset[str] | None, p_refuse: frozenset[str]
+) -> tuple[str, tuple[str, ...]] | None:
+    """Return the field and ids by which `(q_allow, q_refuse)` accepts an id `(p_allow, p_refuse)` does not, if any."""
+    if p_allow is not None and q_allow is None:
+        return "allow", ()
+    if p_allow is None:
+        bad = p_refuse - q_refuse if q_allow is None else (q_allow - q_refuse) & p_refuse
+        return ("refuse", tuple(sorted(bad))) if bad else None
+    assert q_allow is not None
+    bad = (q_allow - q_refuse) - (p_allow - p_refuse)
+    if unlisted := bad - p_allow:
+        return "allow", tuple(sorted(unlisted))
+    return ("refuse", tuple(sorted(bad))) if bad else None

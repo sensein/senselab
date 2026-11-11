@@ -105,9 +105,9 @@ def packaged(found: Registry, cache: Path) -> Iterator[None]:
 
 
 def planned(
-    task: TaskSpec, profile: ExecutionProfile, texts: Sequence[str]
+    task: TaskSpec, profile: ExecutionProfile, texts: Sequence[str], config: RunConfig | None = None
 ) -> tuple[Plan, dict[InputIdentity, object]]:
-    """Return the plan mapping `task` over one record per text, placed under `profile`, and its input values."""
+    """Return the plan mapping `task` over one record per text, placed under `profile` and `config`, and its values."""
     graph = Graph(
         inputs={"text": "list[json]"},
         nodes=(Node(id="a", task=task.name, task_version="1"),),
@@ -115,5 +115,5 @@ def planned(
         outputs={"value": "a.value"},
     )
     rows = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(texts)]
-    placed = plan(graph, RecordSet(rows), config=RunConfig(), execution=profile)
+    placed = plan(graph, RecordSet(rows), config=config or RunConfig(), execution=profile)
     return placed, {bind_input("x", "json", t)[0]: t for t in texts}

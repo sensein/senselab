@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from senselab_worker.canonical import jcs_dumps
+
 from senselab_core.kernel.dataset import InputManifest, Record
 from senselab_core.kernel.formats import PLACEMENT_FORMAT, RETIRED_PLACEMENT_FORMATS, FormatVerdict, check
 from senselab_core.kernel.graph import Graph, mapped_nodes, order, split
@@ -48,6 +50,7 @@ from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.telemetry import Actuals, Placements
 from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.licenses import LicensePolicy, laxer_than, policy_digest, policy_document, policy_of
 from senselab_core.runtime.locks import Lease, LeaseUnavailable
 from senselab_core.runtime.planner import Plan, check_storage
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -63,6 +66,8 @@ MANIFEST_FILE = f"{PRIVATE_DIR}/manifest.json"
 PLACEMENTS_DIR = f"{PRIVATE_DIR}/placements"
 PYDRA_DIR = f"{PRIVATE_DIR}/pydra"
 """The pydra runner's job and error pickles, which hold the store path and tracebacks."""
+LICENSES_FILE = "licenses.json"
+"""The run's license policy, written once at its first start (`run-licenses@1`)."""
 RESULTS_DIR = "results"
 """The default result store, `<cache root>/results`."""
 ATTEMPTS_DIR = "attempts"
@@ -832,7 +837,9 @@ def record_sources(placed: Plan, run_dir: Path) -> None:
 
 
 def prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[str, int]:
-    """Write the plan once, record its input sources (`record_sources`) and the manifest, then claim an attempt.
+    """Write the run's plan, input sources, manifest and license policy once, then claim an attempt.
+
+    The digest of the stored policy is written beside the attempt's placement (`<attempt>.licenses`).
 
     Nothing here is visible to a reader of the run's epochs or status. Returns the attempt id and its ordinal.
 
@@ -840,13 +847,45 @@ def prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[str
         ValueError: `run_dir` holds another plan.
         ConflictingSources, LeaseUnavailable, LeaseTimeout: as `record_sources`; a source conflicts only with a
             recorded run, whose plan is already written, so nothing is written.
+        LaxerLicensePolicy: the plan's policy allows what the run's stored policy refuses.
     """
     _write_once(run_dir / PLAN_FILE, _plan_document(placed))
     record_sources(placed, run_dir)
     for name in POOL_DIRS:
         (run_dir / name).mkdir(exist_ok=True)
     _write(run_dir / MANIFEST_FILE, {"plan_hash": placed.hash, "store": None if store is None else str(store.root)})
-    return _claim_attempt(run_dir, placed.placement)
+    digest = record_policy(run_dir, None if placed.config is None else placed.config.licenses)
+    attempt, ordinal = _claim_attempt(run_dir, placed.placement)
+    publish(run_dir / PLACEMENTS_DIR / f"{attempt}.licenses", digest.encode())
+    return attempt, ordinal
+
+
+def stored_policy(run_dir: Path) -> LicensePolicy | None:
+    """Return the license policy the run in `run_dir` was started under, None when it has none or none was written.
+
+    Raises:
+        ValueError: `licenses.json` is not a `run-licenses@1` document.
+    """
+    try:
+        return policy_of(json.loads((Path(run_dir) / LICENSES_FILE).read_text(encoding="utf-8")))
+    except FileNotFoundError:
+        return None
+
+
+def record_policy(run_dir: Path, given: LicensePolicy | None) -> str:
+    """Write `given` as the run's license policy unless one is written, and refuse one laxer than the stored.
+
+    A policy at least as strict as the stored one is used for the attempt and does not replace it. Returns the digest
+    of the stored policy.
+
+    Raises:
+        LaxerLicensePolicy: `given` allows what the stored policy refuses.
+    """
+    publish(Path(run_dir) / LICENSES_FILE, jcs_dumps(policy_document(given)))
+    stored = stored_policy(run_dir)
+    if (laxer := laxer_than(given, stored)) is not None:
+        raise laxer
+    return policy_digest(stored)
 
 
 def checked_lease(run_dir: Path, own: JobLease, attribute_delay_s: float) -> JobLease:

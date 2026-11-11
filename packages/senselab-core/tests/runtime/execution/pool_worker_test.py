@@ -1,5 +1,6 @@
 """Pool workers: quanta across classes, bisection of whole-request failures, renewal, SIGTERM and OOM kills."""
 
+import dataclasses
 import json
 import os
 import shutil
@@ -19,18 +20,20 @@ from pool_stack_fixture import lease_of, packaged, planned, registry, scoring
 from senselab_core.kernel.declare import TaskSpec
 from senselab_core.runtime import request_reports
 from senselab_core.runtime.calibration import FaultKind
-from senselab_core.runtime.call import RunConfig
+from senselab_core.runtime.call import RunConfig, use_packaged
+from senselab_core.runtime.call import packaged as current_stack
 from senselab_core.runtime.execution.events import read_events, status_from
 from senselab_core.runtime.execution.executor import Admission, FaultRecord, JobRef, PlanFragment, ResultRef
 from senselab_core.runtime.execution.in_process import job_key, node_fragment
 from senselab_core.runtime.execution.job import Emit, Failed, Job, JobOutcome, execute
 from senselab_core.runtime.execution.observing import Sent
-from senselab_core.runtime.execution.pool import split
+from senselab_core.runtime.execution.pool import run_plan, split
 from senselab_core.runtime.execution.pool_worker import Abandoned, Member, PoolWorker, Send, bisect, serve_pool
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet, item_digest, settle
 from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
 from senselab_core.runtime.fake_backend import ECHO, FAKE, EchoParams
 from senselab_core.runtime.keys import Call, Placement
+from senselab_core.runtime.licenses import LicensePolicy, license_record
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -69,10 +72,14 @@ def _profile(**pool: object) -> ExecutionProfile:
 
 
 def _run(
-    tmp_path: Path, profile: ExecutionProfile, texts: Sequence[str], task: TaskSpec = TASK
+    tmp_path: Path,
+    profile: ExecutionProfile,
+    texts: Sequence[str],
+    task: TaskSpec = TASK,
+    config: RunConfig | None = None,
 ) -> tuple[Plan, ResultStore, Path]:
     """Prepare a run of `task`, one job per text, in `tmp_path/run`; return its plan, its store and its queues."""
-    placed, _ = planned(task, profile, texts)
+    placed, _ = planned(task, profile, texts, config)
     store = ResultStore(tmp_path / "store")
     prepared(placed, tmp_path / "run", store)
     return placed, store, tmp_path / "run" / RUN_QUEUES
@@ -329,6 +336,28 @@ def _placement(fragment: PlanFragment) -> Any:  # noqa: ANN401 - the fragment's 
 
 
 @pytest.mark.logic
+def test_a_worker_runs_its_items_under_the_license_policy_the_run_was_planned_under(tmp_path: Path) -> None:
+    """The run allowed MIT only; the env's lock now says GPL: the worker's job fails `LicenseRefused`, not runs."""
+    profile = _profile()
+    placed, store, pool_dir = _run(
+        tmp_path, profile, ["a"], config=RunConfig(licenses=LicensePolicy(frozenset({"mit"})))
+    )
+    _put(placed, pool_dir, 0)
+    config = run_plan(tmp_path / "run", profile).config
+    assert config is not None and config.licenses == LicensePolicy(frozenset({"mit"}))
+    gpl = license_record("GPL-3.0-only", source="lock", verified={"date": "2026-11-11", "how": "pep639"}, gated=False)
+    previous = use_packaged(dataclasses.replace(current_stack(), lock_records=lambda _: {"p": gpl}))
+    try:
+        worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, workers=WORKERS)
+        assert worker.serve() == 0
+    finally:
+        use_packaged(previous)
+    [outcome] = _outcomes(pool_dir, profile)
+    [ref] = [ResultRef.model_validate(j) for j in outcome["jobs"]]
+    assert ref.failure is not None and ref.failure.type == "LicenseRefused"
+
+
+@pytest.mark.logic
 def test_a_requests_items_are_settled_before_the_next_request_runs(tmp_path: Path, tier_bound: float) -> None:
     """Four one-job items sent as two requests of two: request 1's items have outcomes when request 2 begins."""
     profile = _profile(quantum_items=4)
@@ -419,7 +448,8 @@ CHILD = """
 import json, sys, threading
 from pathlib import Path
 from pool_stack_fixture import packaged, registry, scoring
-from senselab_core.runtime.call import RunConfig
+from senselab_core.runtime.call import RunConfig, use_packaged
+from senselab_core.runtime.call import packaged as current_stack
 from senselab_core.runtime.execution.job import execute
 from senselab_core.runtime.execution.pool_worker import serve_pool
 from senselab_core.runtime.execution.workers import WorkerSet

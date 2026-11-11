@@ -45,6 +45,7 @@ from senselab_core.runtime.explain import (
 )
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
+from senselab_core.runtime.licenses import laxer_than
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.placement import check_licenses, node_licenses, place_nodes
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -764,20 +765,28 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
     `placements/<attempt>.json`. The plan hash is unchanged; a node placed on another backend has another key and is
     computed again, and a job the store holds is served from it. `store` is where results are read and written: by
     default the one `manifest.json` names. `executor` defaults as in `Plan.run`.
-    `config` defaults to `RunConfig()` under the plan's reuse policy; given with an executor, it is that executor's
-    run config. `placement` and `placement_hook` are as in `plan`: a run a site refused continues from the store with
+    `config` defaults to `RunConfig()` under the plan's reuse policy and the license policy the run was started under;
+    given with an executor, it is that executor's run config, and its license policy may not be laxer than the run's.
+    `placement` and `placement_hook` are as in `plan`: a run a site refused continues from the store with
     corrected values.
 
     Raises:
         NoRun: no run of `plan_hash` is on disk.
         ValueError: `plan.json` is not the plan `plan_hash` names, or `config` reuses under another policy.
+        LaxerLicensePolicy: `config`'s license policy allows what the run's refuses.
         InputChanged: an input changed since the plan was made; it names every record, and nothing is written.
         InputsUnavailable: an input was held in memory by the process that planned the run.
         UnlistedSource, BackendParamsMismatch, NoBackend, NoDevice, LicenseRefused, LicenseConflict: as `place`.
         MissingExtra: as `Plan.run`.
     """
     from senselab_core.runtime.execution.events import run_dir_of  # noqa: PLC0415 - execution imports the planner
-    from senselab_core.runtime.execution.run import Run, bind_sources, load_plan, start  # noqa: PLC0415 - as above
+    from senselab_core.runtime.execution.run import (  # noqa: PLC0415 - as above
+        Run,
+        bind_sources,
+        load_plan,
+        start,
+        stored_policy,
+    )
     from senselab_core.runtime.store import ResultStore  # noqa: PLC0415 - as above
 
     run_dir = run_dir_of(plan_hash)
@@ -789,10 +798,12 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
         raise ValueError(f"the run directory of plan {plan_hash} holds another plan")
     if stored.manifest.digest() != stored.logical.manifest_digest:
         raise ValueError(f"the input manifest of plan {plan_hash} is not the one its plan holds")
-    reuse = ReusePolicy(stored.logical.reuse)
-    config = config if config is not None else RunConfig(reuse=reuse)
+    reuse, licensed = ReusePolicy(stored.logical.reuse), stored_policy(run_dir)
+    config = config if config is not None else RunConfig(reuse=reuse, licenses=licensed)
     if config.reuse is not reuse:
         raise ValueError(f"plan {plan_hash} reuses under {reuse.value}, not {config.reuse.value}")
+    if (laxer := laxer_than(config.licenses, licensed)) is not None:
+        raise laxer
     profile = ExecutionProfile.load(execution) if isinstance(execution, str) else execution or ExecutionProfile.load()
     overrides = load_overrides(placement)
     placed_at = place(stored.logical, profile, hardware or host_hardware(), config, overrides)

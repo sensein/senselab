@@ -7,7 +7,7 @@ from senselab_worker.faults import ContentFault
 from senselab_core.kernel.identity import Attestation, gather_identity
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.runtime.execution.batching import BucketGrid
-from senselab_core.runtime.execution.events import BrokenEnv, Event, PlacementRecord
+from senselab_core.runtime.execution.events import BrokenEnv, Event, LeaseBreak, PlacementRecord
 from senselab_core.runtime.execution.executor import (
     Admission,
     FaultRecord,
@@ -179,6 +179,17 @@ def register_event_samples(register: Register, jobs: tuple[JobRef, ...], faults:
                 t_ns=4,
             ),
             Event(kind="verify", node="n", attempt="a", ordinal=1, writer="w", seq=4, t_ns=5),
+            Event(
+                kind="reclaimed",
+                node="n",
+                job=jobs[0],
+                lease=LeaseBreak(age_s=412.5, tokens=("ab" * 16,)),
+                attempt="a",
+                ordinal=1,
+                writer="w",
+                seq=8,
+                t_ns=9,
+            ),
             Event(kind="blocked", node="n", job=jobs[0], attempt="a", ordinal=1, writer="w", seq=5, t_ns=6),
             Event(kind="cancelled", node="n", job=jobs[1], attempt="a", ordinal=1, writer="w", seq=6, t_ns=7),
             Event(
@@ -206,6 +217,16 @@ def register_event_samples(register: Register, jobs: tuple[JobRef, ...], faults:
             {"key": "k"},
             {"placement_digest": "x"},
         ],
+    )
+    register_state_samples(register, broken)
+
+
+def register_state_samples(register: Register, broken: FaultRecord) -> None:
+    """Register the samples of the lease break, the broken envs and the service entries, which name `broken`."""
+    register(
+        LeaseBreak,
+        lambda: [LeaseBreak(age_s=0.0), LeaseBreak(age_s=12.5, tokens=("cd" * 16, "ef" * 16))],
+        invalid_updates=[{"age_s": -1.0}, {"tokens": ("",)}],
     )
     register(
         BrokenEnv,
