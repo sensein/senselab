@@ -15,6 +15,7 @@ from pool_stack_fixture import packaged, registry, scoring
 from pool_worker_test import OVERRIDE, WORKERS, _outcomes, _profile, _put, _run, _sender, _served
 from senselab_core.kernel.declare import Env
 from senselab_core.runtime.calibration import Cotenancy, HardwareClass, Observation
+from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.executor import Admission
 from senselab_core.runtime.execution.in_process import node_fragment
 from senselab_core.runtime.execution.job import Job, JobOutcome
@@ -58,7 +59,7 @@ def _worker(  # noqa: PLR0913 - the queues and what the worker serves them with,
     profile: ExecutionProfile,
     store: ResultStore,
     send: Send,
-    clock: ManualClock | None = None,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless, as `PoolWorker`'s own default
 ) -> PoolWorker:
     return PoolWorker(
         pool_dir,
@@ -69,7 +70,7 @@ def _worker(  # noqa: PLR0913 - the queues and what the worker serves them with,
         device_memory=lambda: None,
         hardware=lambda _: HARDWARE,
         cotenancy=lambda _: SHARED,
-        **({} if clock is None else {"clock": clock}),
+        clock=clock,
     )
 
 
