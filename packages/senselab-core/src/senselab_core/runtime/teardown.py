@@ -9,13 +9,13 @@ def run_all(*steps: Callable[[], object]) -> None:
     Later errors are attached to the first as notes, so none is lost.
 
     Raises:
-        Exception: the first error a step raised.
+        BaseException: the first error a step raised, an interrupt included.
     """
-    errors: list[Exception] = []
+    errors: list[BaseException] = []
     for step in steps:
         try:
             step()
-        except Exception as err:  # noqa: BLE001 - every later step must still run
+        except BaseException as err:  # noqa: BLE001 - every later step runs, an interrupt included
             errors.append(err)
     if errors:
         first, *later = errors

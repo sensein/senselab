@@ -43,6 +43,8 @@ class ManualClock:
 
     Attributes:
         slept: The duration of each `sleep`.
+        tripped: The message of each hang guard that fired, recorded before it raises, so a trip that code under test
+            catches still shows; the `lease_clock` fixture fails the test on any.
     """
 
     def __init__(  # noqa: PLR0913 - the clock's real bounds, then its keyword-only variants
@@ -72,6 +74,13 @@ class ManualClock:
         self.poll_s, self.hang_s = poll_s, hang_s
         self._guard = time.monotonic() + hang_s
         self.slept: list[float] = []
+        self.tripped: list[str] = []
+
+    def _within(self, bound: float, message: str) -> None:
+        """Return while the real time is before `bound`; else record `message` in `tripped` and raise it."""
+        if time.monotonic() >= bound:
+            self.tripped.append(message)
+            raise AssertionError(message)
 
     def now(self) -> float:
         """Return the monotonic time."""
@@ -119,8 +128,9 @@ class ManualClock:
         elif self._spends:
             self.advance(seconds)
         else:
-            assert time.monotonic() < self._guard, f"a wait under a clock that never advances outlived {self.hang_s}s"
-            time.sleep(0)
+            self._within(self._guard, f"a wait under a clock that never advances outlived {self.hang_s}s")
+            with self._cond:
+                self._cond.wait(self.poll_s)
 
     def wait(self, event: threading.Event, timeout: float) -> bool:
         """Return True once `event` is set, False once the clock is `timeout` past now; park until one happens."""
@@ -149,7 +159,7 @@ class ManualClock:
                     return found
                 if self.now() >= deadline:
                     return None
-                assert time.monotonic() < guard, f"a wait on a clock nobody advanced outlived {self.hang_s}s"
+                self._within(guard, f"a wait on a clock nobody advanced outlived {self.hang_s}s")
                 self._parked[thread] = self._version
                 self._cond.notify_all()
             look(self.poll_s)
@@ -159,7 +169,7 @@ class ManualClock:
         deadline = time.monotonic() + self.hang_s
         with self._cond:
             while not self._settled(parked):
-                assert time.monotonic() < deadline, "a thread did not park after the clock advanced"
+                self._within(deadline, "a thread did not park after the clock advanced")
                 self._cond.wait(self.poll_s)
 
     def parked(self, thread: threading.Thread) -> bool:
@@ -167,7 +177,7 @@ class ManualClock:
         deadline = time.monotonic() + self.hang_s
         with self._cond:
             while thread.is_alive() and self._parked.get(thread) != self._version:
-                assert time.monotonic() < deadline, "the thread did not park after the clock advanced"
+                self._within(deadline, "the thread did not park after the clock advanced")
                 self._cond.wait(self.poll_s)
             return thread.is_alive()
 
@@ -183,7 +193,7 @@ class ManualClock:
         """
         deadline = time.monotonic() + self.hang_s
         while not predicate():
-            assert time.monotonic() < deadline, f"not within {self.hang_s}s: {what}"
+            self._within(deadline, f"not within {self.hang_s}s: {what}")
             self.advance(self.step_s if step is None else step)
             self.settle(0)
 
@@ -195,7 +205,7 @@ class ManualClock:
         """
         deadline = time.monotonic() + self.hang_s
         while self.parked(thread):
-            assert time.monotonic() < deadline, f"the driven thread outlived {self.hang_s}s"
+            self._within(deadline, f"the driven thread outlived {self.hang_s}s")
             self.advance(step)
 
     def _settled(self, parked: int) -> bool:

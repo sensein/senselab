@@ -50,18 +50,30 @@ def backends_importable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def lease_clock(slack_tests: dict[str, Any], tier_bound: float) -> Callable[..., ManualClock]:
-    """Build a `ManualClock`: polls and step from the test slack file, hang bound a fraction of the tier's.
+def hang_s(tier_bound: float, slack_tests: dict[str, Any]) -> float:
+    """The real seconds a wait nobody ends may last in this module's tests: a fraction of the tier's bound.
 
-    A test whose own work is short passes `hang_s` to bound a lost wake in seconds.
+    A module whose tests stop workers overrides it with `stop_test.hang_s`.
+    """
+    return float(slack_tests["lease_clock"]["hang_fraction"] * tier_bound)
+
+
+@pytest.fixture
+def lease_clock(slack_tests: dict[str, Any], hang_s: float) -> Iterator[Callable[..., ManualClock]]:
+    """Build a `ManualClock`: polls and step from the test slack file, hang bound `hang_s` unless given.
+
+    The test fails at teardown if any clock it built tripped its guard, whoever caught the error.
     """
     section = slack_tests["lease_clock"]
+    built: list[ManualClock] = []
 
     def make(**kwargs: Any) -> ManualClock:  # noqa: ANN401 - `ManualClock`'s own keyword arguments
-        bounds = {"hang_s": section["hang_fraction"] * tier_bound, **kwargs}
-        return ManualClock(poll_s=section["poll_s"], step_s=section["step_s"], **bounds)
+        clock = ManualClock(poll_s=section["poll_s"], step_s=section["step_s"], **{"hang_s": hang_s, **kwargs})
+        built.append(clock)
+        return clock
 
-    return make
+    yield make
+    assert [t for c in built for t in c.tripped] == [], "a hang guard fired"
 
 
 @pytest.fixture

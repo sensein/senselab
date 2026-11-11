@@ -31,6 +31,7 @@ from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.teardown import run_all
 from senselab_core.runtime.vllm_server import ServerRejected, ServiceUnavailable, StaleAttestation, chat, server_fault
+from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
 from syscall_faults_fixture import refuse_call
 
@@ -531,6 +532,43 @@ def test_every_teardown_step_runs_and_the_first_error_is_raised(registry: Servic
     assert any("last" in note for note in raised.value.__notes__)
 
 
+def test_an_interrupt_in_one_teardown_step_still_runs_the_rest() -> None:
+    """A `KeyboardInterrupt` in the first step does not skip the later ones, and it is the error raised."""
+    ran: list[str] = []
+
+    def interrupted() -> None:
+        ran.append("first")
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt) as raised:
+        run_all(interrupted, lambda: ran.append("second"), lambda: 1 / 0)
+    assert ran == ["first", "second"] and any("ZeroDivisionError" in n for n in raised.value.__notes__)
+
+
+def test_a_fault_releasing_the_lease_is_raised_after_the_renewer_ended(
+    registry: ServiceRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EIO at the release of the registration lease: `close` raises, and the lease's renewer thread has ended."""
+    service = registry.register(IDENTITY, "http://127.0.0.1:1")
+    with monkeypatch.context() as patch:
+        refused = refuse_call(patch, "rename", "gone-", FAULT)
+        with pytest.raises(OSError, match="storage fault"):
+            service.close()
+    assert refused
+    assert [t.name for t in threading.enumerate() if t.name.startswith("lease-renewer")] == []
+
+
+def test_a_pooled_worker_that_fails_to_close_does_not_skip_the_servers(registry: ServiceRegistry) -> None:
+    """`WorkerSet.close` with a pooled client whose close raises: the provided server still stops and is withdrawn."""
+    calls: list[str] = []
+    workers, [server] = _provided(registry, calls, fails=(False,))
+    broken = _BrokenClient()
+    workers._pool[("k", "b", "m")] = broken  # noqa: SLF001 - a pooled worker that fails to close
+    with pytest.raises(OSError, match="storage fault"):
+        workers.close()
+    assert broken.closed and server.url is None and registry.lookup(server.identity) is None
+
+
 class Recording(StandIn):
     """A stand-in server that records whether its entry was still registered when `stop` ran, and may fail."""
 
@@ -545,6 +583,19 @@ class Recording(StandIn):
         super().stop()
         if self._fails:
             raise FAULT
+
+
+class _BrokenClient(WorkerClient):
+    """A pooled worker process whose `close` raises a storage fault."""
+
+    def __init__(self) -> None:
+        """Hold no process."""
+        self.closed = False
+
+    def close(self) -> None:
+        """Record the call and raise."""
+        self.closed = True
+        raise FAULT
 
 
 def _provided(

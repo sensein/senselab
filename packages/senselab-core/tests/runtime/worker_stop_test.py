@@ -1,10 +1,12 @@
 """A worker that times out or is closed is stopped in order, each grace read on the test clock."""
 
+import contextlib
 import os
 import signal
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -92,6 +94,12 @@ def _hung_forking_client(  # noqa: PLR0913 - the clock, where the worker reports
 def _escalation(sent: list[tuple[float, int, int]]) -> list[tuple[float, signal.Signals]]:
     """The signals a stop sent a group, with the clock's time at each, not counting the liveness probes."""
     return [(when, signal.Signals(sig)) for when, _, sig in sent if sig != 0]
+
+
+@pytest.fixture
+def hang_s(slack_tests: dict[str, Any]) -> float:
+    """The real seconds a lost wake may last in these stop-path tests."""
+    return float(slack_tests["stop_test"]["hang_s"])
 
 
 @pytest.mark.logic
@@ -400,3 +408,30 @@ def test_a_wait_nobody_ends_fails_within_the_hang_guard(lease_clock: Callable[..
     parked = Called(lambda: clock.wait(threading.Event(), UNREACHED_S), hang_s=GUARD_S * 10)
     with pytest.raises(AssertionError, match="nobody advanced"):
         parked.result()
+    clock.tripped.clear()
+
+
+@pytest.mark.logic
+def test_a_trip_swallowed_by_the_code_under_test_is_recorded(lease_clock: Callable[..., ManualClock]) -> None:
+    """A guard trip that product code catches stays on `tripped`, which the fixture fails the test on."""
+    clock = lease_clock(spends="park", hang_s=GUARD_S)
+
+    def swallowing() -> None:
+        with contextlib.suppress(Exception):
+            clock.wait(threading.Event(), UNREACHED_S)
+
+    Called(swallowing, hang_s=GUARD_S * 10).result()
+    assert len(clock.tripped) == 1
+    clock.tripped.clear()
+
+
+@pytest.mark.logic
+def test_a_sleep_on_a_clock_that_never_advances_yields_until_the_guard(lease_clock: Callable[..., ManualClock]) -> None:
+    """`sleep` on a `spends=False` clock waits for the guard without spinning a core."""
+    clock = lease_clock(spends=False, hang_s=GUARD_S)
+    cpu, wall = time.process_time(), time.monotonic()
+    with pytest.raises(AssertionError, match="never advances"):
+        while True:
+            clock.sleep(1.0)
+    assert time.process_time() - cpu < (time.monotonic() - wall) / 2
+    clock.tripped.clear()
