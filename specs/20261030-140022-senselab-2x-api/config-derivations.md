@@ -180,6 +180,8 @@ sizing.relative_tolerance 1.0e-9: the relative slack the sizing-invariants test 
 
 lease_clock.poll_s 0.0005: the real seconds a test thread parked on an injected `ManualClock` waits between looks at its event. It sets no bound and asserts no time: the clock advances only when a test advances it, and this poll is how a parked thread notices. Small enough that a test of a few hundred lease steps finishes in well under a second; large enough that a parked thread does not spin a core. The hang guard that turns a never-released lease into a failure is `tier_bound`, not this value (testing.md, time in tests).
 
+stop_test.hang_s 5: the real seconds after which a wait nobody ends fails in the stop-path test modules (`worker_stop_test`, `worker_lifecycle_contract_test`, which override the `hang_s` fixture with it) and the scaler-thread leak check. Every guard that fires is recorded on the clock and fails its test at teardown, whoever caught the error. It sets no outcome: the injected clock decides every grace, and this bound only turns a lost wake into a failure within seconds. The work it bounds is one interpreter start, a signal and a reap; a 25-run probe of that path never took more than 0.08 s (R-275), so 5 s is over 60 times it, and a lost wake costs seconds, not half of the logic tier's 900 s budget. Not measured on CI runners.
+
 ## pyproject.toml
 
 The root `[tool.ruff.lint]` limits, which `packages/ruff.toml` extends. A site over one carries a `noqa` with its reason;
