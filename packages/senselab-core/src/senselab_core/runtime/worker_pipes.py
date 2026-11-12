@@ -1,5 +1,6 @@
 """The pipes of a worker process: its stdout and stderr split into lines by a thread, and the lines read in order."""
 
+import contextlib
 import os
 import queue
 import selectors
@@ -7,7 +8,7 @@ import socket
 import threading
 import time
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Final
 
 from senselab_worker.codec import Deadline
@@ -27,13 +28,65 @@ def _close_fds(*fds: int) -> None:
             pass
 
 
-def _release_pipe(pipe: list[tuple[int, int]]) -> None:
-    """Close the pipe in `pipe` unless another caller has already taken it; each pipe is closed once."""
+def _close_once(box: list[tuple[int, ...]]) -> None:
+    """Close the descriptors in `box` unless another caller has already taken them; they are closed once."""
     try:
-        r, w = pipe.pop()
+        fds = box.pop()
     except IndexError:
         return
-    _close_fds(r, w)
+    _close_fds(*fds)
+
+
+class SharedFds:
+    """Descriptors that threads and signal handlers use without a lock, closed by the last user after `release`.
+
+    A call brackets its use in `enter` and `leave`, and uses the descriptors only when `enter` returned a token. After
+    `release`, the last call to leave closes them, once, so no call ever uses a number that was reused elsewhere.
+    """
+
+    def __init__(self, *fds: int) -> None:
+        """Own `fds`; they are also closed when this object is collected."""
+        self.fds = fds
+        self.released = False
+        self._box = [fds]
+        self._users: set[object] = set()
+        closer = weakref.finalize(self, _close_once, self._box)
+        setattr(closer, "atexit", False)  # noqa: B010 - mypy's weakref stub has no `atexit` slot
+
+    def enter(self) -> object | None:
+        """Start a use; return its token, or None once released, when the descriptors must not be used."""
+        token = object()
+        self._users.add(token)
+        if self.released:
+            self.leave(token)
+            return None
+        return token
+
+    def leave(self, token: object) -> None:
+        """End the use `token`."""
+        self._users.discard(token)
+        self._close_if_unused()
+
+    def release(self) -> None:
+        """Give the descriptors up; the last use in flight, or this call, closes them. Safe to call twice."""
+        self.released = True
+        self._close_if_unused()
+
+    def write(self, data: bytes) -> None:
+        """Write `data` to the first descriptor unless released, ignoring a full or closed peer."""
+        token = self.enter()
+        if token is None:
+            return
+        try:
+            os.write(self.fds[0], data)
+        except OSError:
+            pass
+        finally:
+            self.leave(token)
+
+    def _close_if_unused(self) -> None:
+        if self.released and not self._users:
+            _close_once(self._box)
 
 
 class WakeEvent(threading.Event):
@@ -41,33 +94,16 @@ class WakeEvent(threading.Event):
 
     The main thread can be interrupted inside any `threading.Event`, which holds its condition's lock there, and a
     handler that then waited on or set the same event would block for good. A `WakeEvent` waits in a selector.
-    `close` wakes every waiter; a closed event keeps its flag and no longer blocks. Its pipe is closed when the last
-    call that may still read or write it returns, so no thread ever uses a descriptor number reused elsewhere.
+    `close` wakes every waiter; a closed event keeps its flag and no longer blocks. Its pipe is a `SharedFds`.
     """
 
     def __init__(self) -> None:
         """Start clear."""
         self._flag = False
-        self._closed = False
         self._r, self._w = os.pipe()
         os.set_blocking(self._r, False)
         os.set_blocking(self._w, False)
-        self._pipe = [(self._r, self._w)]
-        self._users: set[object] = set()
-        self._closer = weakref.finalize(self, _release_pipe, self._pipe)
-        setattr(self._closer, "atexit", False)  # noqa: B010 - mypy's weakref stub has no `atexit` slot
-
-    def _enter(self) -> object:
-        """Count a call that may use the pipe; it may use it only while `_closed` is false after this returns."""
-        token = object()
-        self._users.add(token)
-        return token
-
-    def _leave(self, token: object) -> None:
-        """End the call `token`; the last call to end after `close` closes the pipe."""
-        self._users.discard(token)
-        if self._closed and not self._users:
-            _release_pipe(self._pipe)
+        self._pipe = SharedFds(self._w, self._r)
 
     def is_set(self) -> bool:
         """Whether the flag is set."""
@@ -76,28 +112,17 @@ class WakeEvent(threading.Event):
     def set(self) -> None:
         """Set the flag and wake every waiter."""
         self._flag = True
-        token = self._enter()
-        try:
-            if not self._closed:
-                self._wake()
-        finally:
-            self._leave(token)
-
-    def _wake(self) -> None:
-        try:
-            os.write(self._w, WAKE_BYTE)
-        except OSError:
-            pass  # a full pipe is already readable
+        self._pipe.write(WAKE_BYTE)
 
     def clear(self) -> None:
         """Clear the flag."""
         self._flag = False
-        token = self._enter()
-        try:
-            if not self._closed:
+        token = self._pipe.enter()
+        if token is not None:
+            try:
                 self._drain()
-        finally:
-            self._leave(token)
+            finally:
+                self._pipe.leave(token)
 
     def _drain(self) -> None:
         try:
@@ -108,29 +133,42 @@ class WakeEvent(threading.Event):
 
     def close(self) -> None:
         """Wake every waiter and give up the pipe; safe to call twice."""
-        token = self._enter()
+        token = self._pipe.enter()
+        if token is not None:
+            try:
+                self._pipe.release()  # before the wake, so a waiter it wakes sees it; this call still holds the pipe
+                os.write(self._w, WAKE_BYTE)
+            except OSError:
+                pass
+            finally:
+                self._pipe.leave(token)
+
+    @contextlib.contextmanager
+    def held(self) -> Iterator[int]:
+        """The read end, kept open for the block, to wait on in a selector; -1 once closed. Not for signal handlers."""
+        token = self._pipe.enter()
         try:
-            if not self._closed:
-                self._closed = True  # before the wake, so a waiter it wakes sees it; this call still holds the pipe
-                self._wake()
+            yield -1 if token is None else self._r
         finally:
-            self._leave(token)
+            if token is not None:
+                self._pipe.leave(token)
 
     def wait(self, timeout: float | None = None) -> bool:
         """Wait up to `timeout` seconds (forever when None) for the flag; return whether it is set."""
         end = None if timeout is None else time.monotonic() + timeout
-        token = self._enter()
+        token = self._pipe.enter()
         try:
-            while not self._flag and not self._closed:
+            while token is not None and not self._flag and not self._pipe.released:
                 left = None if end is None else end - time.monotonic()
                 if left is not None and left <= 0:
                     break
                 with selectors.DefaultSelector() as sel:
                     sel.register(self._r, selectors.EVENT_READ)
-                    if sel.select(left) and not self._flag and not self._closed:
+                    if sel.select(left) and not self._flag and not self._pipe.released:
                         self._drain()  # a byte left by a `set` that a `clear` then undid
         finally:
-            self._leave(token)
+            if token is not None:
+                self._pipe.leave(token)
         return self._flag
 
 
@@ -251,8 +289,9 @@ class Lines:
         self._queue: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
         self._ready = threading.Event() if ready is None else ready
         self._waiting = False
-        relay_r, self._relay_w = socket.socketpair()
-        self._relay_w.setblocking(False)
+        relay_r, relay_w = socket.socketpair()
+        relay_w.setblocking(False)
+        self._relay = SharedFds(relay_w.detach())
         threading.Thread(
             target=_relay_wakes, args=(relay_r, self._ready, on_hint), name="senselab-lines-relay", daemon=True
         ).start()
@@ -268,14 +307,11 @@ class Lines:
         self._send(HINT_BYTE)
 
     def _send(self, byte: bytes) -> None:
-        try:
-            self._relay_w.send(byte)
-        except OSError:
-            pass  # a full socket already has a wake pending; a closed one has no reader
+        self._relay.write(byte)  # a full socket already has a wake pending
 
     def close(self) -> None:
-        """End the relay thread; safe to call twice."""
-        self._relay_w.close()
+        """End the relay thread once no write is in flight; safe to call twice."""
+        self._relay.release()
 
     def get(self, deadline: Deadline) -> bytes | None:
         """Return the next line, waiting until `deadline`; raise `queue.Empty` if none came.

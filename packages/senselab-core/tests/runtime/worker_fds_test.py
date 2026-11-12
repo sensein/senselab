@@ -109,11 +109,69 @@ for r, w in probes:
 print(written, raised, sorted(numbers & open_fds()))
 """
 
+_HELD_WRITE = """
+from senselab_core.runtime.worker_client import WorkerLost
+from senselab_core.runtime.worker_pipes import Lines
 
-def _run(body: str, arrays: Path) -> str:
+WRITE = sys.argv[2]  # the write to hold: the client's own wake pipe, or the line queue's relay
+probes, done = [], []
+
+def within(frame, name, cls):
+    while frame is not None:
+        if frame.f_code.co_name == name and isinstance(frame.f_locals.get("self"), cls):
+            return True
+        frame = frame.f_back
+    return False
+
+def hook(frame, event, arg):
+    if event != "c_call" or done or getattr(arg, "__name__", "") not in ("write", "send"):
+        return
+    if not within(frame, *HOLD):
+        return
+    done.append(True)  # this thread is held here, its descriptor read, while another thread releases the client
+    closer = threading.Thread(target=box[0].close)
+    closer.start()
+    closer.join(30)
+    assert not closer.is_alive()
+    assert box[0]._released
+    probes.extend(os.pipe() for _ in range(16))
+
+class Probed(WorkerClient):
+    def _handshake(self, *args, **kwargs):
+        box.append(self)
+        sys.setprofile(hook)
+        try:
+            if WRITE == "client":
+                self.close()  # as a handler on the constructing thread does: mark closed and wake
+            else:
+                self._lines.request_hint()  # as a handler's second signal does
+        finally:
+            sys.setprofile(None)
+        return super()._handshake(*args, **kwargs)
+
+box, outcome = [], None
+HOLD = ("close", WorkerClient) if WRITE == "client" else ("request_hint", Lines)
+try:
+    Probed(source_tree_python(), "senselab_worker.fake", init={}, array_parent=Path(sys.argv[1]))
+except WorkerLost:
+    outcome = "WorkerLost"
+written = []
+for r, w in probes:
+    os.set_blocking(r, False)
+    try:
+        written.append(os.read(r, 16))
+    except BlockingIOError:
+        pass
+    os.close(r)
+    os.close(w)
+print(len(done), outcome, written)
+"""
+
+
+def _run(body: str, arrays: Path, *args: str) -> str:
     arrays.mkdir()
     proc = subprocess.run(
-        [sys.executable, "-c", _HEAD + body, str(arrays)],
+        [sys.executable, "-c", _HEAD + body, str(arrays), *args],
         capture_output=True,
         text=True,
         timeout=60,
@@ -147,3 +205,16 @@ def test_setters_still_running_when_the_readers_did_not_stop_write_into_no_later
     Once they have returned, the events' descriptors are closed.
     """
     assert _run(_STRAGGLERS, tmp_path / "arrays") == "[] [] []"
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("write", ["client", "lines"])
+def test_a_write_held_while_another_thread_releases_the_client_lands_in_no_later_descriptor(
+    tmp_path: Path, write: str
+) -> None:
+    """A wake to the client's pipe or the line queue's relay, held while another thread releases the client, is lost.
+
+    It is held after its descriptor is read, and lands in no pipe opened after the release.
+    """
+    out = _run(_HELD_WRITE, tmp_path / "arrays", write)
+    assert out == "1 WorkerLost []", out

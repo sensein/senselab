@@ -461,7 +461,7 @@ class WorkerClient:
         self._stopped = self._released = False
         self._init_names: set[str] = set()
         self.hello: dict[str, Any] = {}
-        self._wake_r, self._wake_w = os.pipe()
+        self._wake = WakeEvent()
         try:
             self._array_dir = Path(tempfile.mkdtemp(prefix="senselab-arrays-", dir=array_parent)).absolute()
         except BaseException:
@@ -593,10 +593,7 @@ class WorkerClient:
             self._closed_while_starting = self._closed_while_starting or self._constructing is not None
             self._closed = True
             self._lines.put(None)
-            try:
-                os.write(self._wake_w, b"x")
-            except OSError:
-                pass
+            self._wake.set()
             return
         self._shutdown(graceful=self._run_owner is None)
 
@@ -646,13 +643,8 @@ class WorkerClient:
 
     def _close_wake(self) -> None:
         self._lines.close()
-        for event in (self._exited, self._reaped, self._run_idle, *(pump.ended for pump in self._pumps)):
+        for event in (self._wake, self._exited, self._reaped, self._run_idle, *(pump.ended for pump in self._pumps)):
             event.close()
-        for name in ("_wake_r", "_wake_w"):
-            fd = getattr(self, name)
-            setattr(self, name, -1)
-            if fd >= 0:
-                os.close(fd)
 
     def _run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         if self._closed:
@@ -756,9 +748,9 @@ class WorkerClient:
         assert self._proc is not None and self._proc.stdin is not None
         stdin = self._proc.stdin
         view = memoryview(line)
-        with selectors.DefaultSelector() as sel:
-            if self._wake_r >= 0:
-                sel.register(self._wake_r, selectors.EVENT_READ)
+        with self._wake.held() as wake, selectors.DefaultSelector() as sel:
+            if wake >= 0:
+                sel.register(wake, selectors.EVENT_READ)
             watched = False
             while view:
                 with self._channel_lock:
@@ -791,11 +783,7 @@ class WorkerClient:
                 self._proc.stdin.close()
             except OSError:
                 pass
-        if not self._released:
-            try:
-                os.write(self._wake_w, b"x")
-            except OSError:
-                pass
+        self._wake.set()
 
     def _receive(self, deadline: Deadline, what: str, *kinds: Kind) -> dict[str, Any]:
         """Return the next line as a message of one of `kinds`, the first that has its key; a `fatal` raises."""
