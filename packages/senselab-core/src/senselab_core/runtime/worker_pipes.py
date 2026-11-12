@@ -2,9 +2,12 @@
 
 import os
 import queue
+import select
 import selectors
 import socket
 import threading
+import time
+import weakref
 from collections.abc import Callable
 from typing import Final
 
@@ -15,6 +18,67 @@ from senselab_core.runtime.clock import Clock
 HINT_BYTE: Final = b"h"
 WAKE_BYTE: Final = b"x"
 READ_BYTES: Final = 2**16  # invariant: the size of one pipe read; lines are reassembled whatever it is
+
+
+def _close_fds(*fds: int) -> None:
+    for fd in fds:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+class WakeEvent(threading.Event):
+    """A `threading.Event` that takes no lock: a flag and a pipe, so a signal handler can `set` and `wait` on it.
+
+    The main thread can be interrupted inside any `threading.Event`, which holds its condition's lock there, and a
+    handler that then waited on or set the same event would block for good. A `WakeEvent` waits in `select`.
+    """
+
+    def __init__(self) -> None:
+        """Start clear."""
+        self._flag = False
+        self._r, self._w = os.pipe()
+        os.set_blocking(self._r, False)
+        os.set_blocking(self._w, False)
+        closer = weakref.finalize(self, _close_fds, self._r, self._w)
+        setattr(closer, "atexit", False)
+
+    def is_set(self) -> bool:
+        """Whether the flag is set."""
+        return self._flag
+
+    def set(self) -> None:
+        """Set the flag and wake every waiter."""
+        self._flag = True
+        try:
+            os.write(self._w, b"x")
+        except OSError:
+            pass  # a full pipe is already readable
+
+    def clear(self) -> None:
+        """Clear the flag."""
+        self._flag = False
+        self._drain()
+
+    def _drain(self) -> None:
+        try:
+            while os.read(self._r, READ_BYTES):
+                pass
+        except OSError:
+            pass
+
+    def wait(self, timeout: float | None = None) -> bool:
+        """Wait up to `timeout` seconds (forever when None) for the flag; return whether it is set."""
+        end = None if timeout is None else time.monotonic() + timeout
+        while not self._flag:
+            left = None if end is None else end - time.monotonic()
+            if left is not None and left <= 0:
+                break
+            if select.select([self._r], [], [], left)[0]:
+                if not self._flag:
+                    self._drain()  # a byte left by a `set` that a `clear` then undid
+        return self._flag
 
 
 class Pump:
@@ -33,7 +97,7 @@ class Pump:
         self._wake_r, self._wake_w = os.pipe()
         self._lock = threading.Lock()
         self._closed = False
-        self.ended = threading.Event()
+        self.ended = WakeEvent()
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 

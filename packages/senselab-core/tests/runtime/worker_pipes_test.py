@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 import pytest
 from lease_clock_fixture import Called, ManualClock
-from senselab_core.runtime.worker_pipes import Lines
+from senselab_core.runtime.worker_pipes import Lines, WakeEvent
 from senselab_worker.codec import Deadline
 
 LINE = b"reply\n"
@@ -98,3 +98,14 @@ def test_a_put_from_a_signal_handler_wakes_a_reader_waiting_in_get() -> None:
     )
     assert proc.returncode == 0, proc.stderr[-2000:]
     assert proc.stdout.strip() == "woken"
+
+
+@pytest.mark.contract
+def test_a_wake_event_is_a_threading_event_that_sets_clears_and_times_out() -> None:
+    """`WakeEvent` waits until set from another thread, returns False at its timeout and is clear after `clear`."""
+    event = WakeEvent()
+    assert isinstance(event, threading.Event) and not event.is_set() and event.wait(0.0) is False
+    threading.Timer(0.05, event.set).start()
+    assert event.wait(30.0) is True and event.is_set() and event.wait(0.0) is True
+    event.clear()
+    assert not event.is_set() and event.wait(0.01) is False

@@ -31,6 +31,7 @@ from senselab_worker.fake import FAULT_KEY
 from shutdown_schedule_fixture import (
     CLEAN,
     KINDS,
+    PATHS,
     counted,
     run_schedule,
     schedule,
@@ -45,6 +46,9 @@ def _check(tmp_path: Path, kind: str, occurrences: range) -> list[dict[str, Any]
     reports = run_schedule(tmp_path, todo)
     failed = {f"{r['path']} {r['boundary']}#{r['occurrence']}": v for r in reports if (v := violations(r))}
     assert failed == {}
+    if kind == "sigterm_in_wait":
+        silent = [path for path in PATHS if not any(r["delivered"] for r in reports if r["path"] == path)]
+        assert silent == [], f"no sigterm_in_wait case delivered its signal on {silent}"
     return reports
 
 

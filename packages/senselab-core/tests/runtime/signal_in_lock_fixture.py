@@ -16,16 +16,22 @@ THREADING = threading.__file__
 
 
 def deliver_in(
-    signum: int, where: Callable[[FrameType], bool], files: tuple[str, ...] = (THREADING,)
+    signum: int,
+    where: Callable[[FrameType], bool],
+    files: tuple[str, ...] = (THREADING,),
+    at: Callable[[FrameType], bool] | None = None,
 ) -> dict[str, bool]:
-    """Trace this thread; deliver `signum` once inside the first frame of one of `files` that `where` accepts."""
+    """Trace this thread; deliver `signum` once inside the first frame of one of `files` that `where` accepts.
+
+    The signal is raised on the frame's second line, or, with `at`, on its first line for which `at(frame)` holds.
+    """
     state = {"fired": False}
     lines: dict[FrameType, int] = {}
 
     def local(frame: FrameType, event: str, _arg: Any) -> Any:  # noqa: ANN401 - the trace-function protocol
         if event == "line" and not state["fired"]:
             lines[frame] = lines.get(frame, 0) + 1
-            if lines[frame] == 2:
+            if (lines[frame] == 2) if at is None else at(frame):
                 state["fired"] = True
                 signal.raise_signal(signum)
         return local

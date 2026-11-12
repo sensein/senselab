@@ -34,13 +34,13 @@ import numpy
 from bounded_probe_fixture import limit_file_size
 from lease_clock_fixture import ManualClock
 from lifecycle_probes_fixture import Gate, gate, recorded_pids
-from senselab_core.runtime import worker_client
+from senselab_core.runtime import worker_client, worker_pipes
 from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerClient, WorkerLost
 from senselab_core.runtime.worker_pipes import Pump
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import alive, group_alive
 from senselab_worker.fake import FAULT_KEY
-from signal_in_lock_fixture import deliver_in
+from signal_in_lock_fixture import THREADING, deliver_in
 
 PYTHON = source_tree_python()
 
@@ -153,6 +153,8 @@ class _Injector:
         self.stop_requested = False
         self.delivered: dict[str, bool] | None = None
         self.backend_entered: Callable[[], bool] = lambda: True
+        self.since_park: list[tuple[str, int]] = []
+        self.deliverable: set[tuple[str, int]] = set()
 
     def nested_close(self, client: WorkerClient) -> None:
         """Close from inside the stop, and record how many shutdown locks that close tried to take."""
@@ -173,6 +175,8 @@ class _Injector:
         def hooked(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
             if threading.current_thread() is threading.main_thread():
                 self.calls[boundary] += 1
+                if self.backend_entered():
+                    self.since_park.append((boundary, self.calls[boundary]))
                 if boundary == self.case["boundary"] and self.calls[boundary] == self.case["occurrence"]:
                     self.fired = True
                     self.inject()
@@ -191,7 +195,7 @@ class _Injector:
         elif kind == "sigterm":
             signal.raise_signal(signal.SIGTERM)
         elif kind == "sigterm_in_wait" and self.backend_entered():
-            self.delivered = deliver_in(signal.SIGTERM, _in_clock_wait)
+            self.delivered = deliver_in(signal.SIGTERM, _in_clock_wait, (THREADING, worker_pipes.__file__))
         elif kind.startswith("handler_"):
             signal.raise_signal(signal.SIGUSR1)
         elif kind == "close_same_thread":
@@ -295,6 +299,15 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
     if case["path"] == "timeout":
         injector.backend_entered = gate_open.is_set
     killpg = os.killpg
+    real_park = clock._park  # noqa: SLF001 - the harness sees which boundary calls a clock wait follows
+
+    def park(timeout: float, look: Callable[[float], Any]) -> Any:  # noqa: ANN401
+        if threading.current_thread() is threading.main_thread():
+            injector.deliverable.update(injector.since_park)
+            injector.since_park.clear()
+        return real_park(timeout, look)
+
+    clock._park = park  # type: ignore[method-assign]  # noqa: SLF001
 
     def record_killpg(pgid: int, sig: int) -> None:
         if sig != 0:
@@ -337,6 +350,7 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
         **case,
         "fired": injector.fired,
         "delivered": injector.delivered is not None and injector.delivered["fired"],
+        "deliverable": sorted(injector.deliverable),
         "calls": injector.calls,
         "outcome": outcome,
         "elapsed": elapsed,
@@ -369,6 +383,7 @@ def schedule(counts: dict[str, dict[str, int]], occurrences: range) -> list[dict
         for boundary in BOUNDARIES
         for n in occurrences
         if n <= min(counts[path][boundary], POLLED.get(boundary, n))
+        and (kind != "sigterm_in_wait" or (boundary, n) in counts.deliverable[path])  # type: ignore[attr-defined]
     ]
 
 
@@ -395,14 +410,32 @@ def run_schedule(tmp_path: Path, todo: list[dict[str, Any]]) -> list[dict[str, A
     return reports
 
 
-def counted(tmp_path: Path) -> dict[str, dict[str, int]]:
-    """Per path, the calls each boundary gets when nothing is injected: the fewer of two runs, by boundary."""
+class Counts(dict[str, dict[str, int]]):
+    """Per path, the calls each boundary gets, and in `deliverable` the (boundary, call) pairs a clock wait follows."""
+
+    deliverable: dict[str, set[tuple[str, int]]]
+
+
+def counted(tmp_path: Path) -> Counts:
+    """Per path, the calls each boundary gets when nothing is injected: the fewer of two runs, by boundary.
+
+    A (boundary, call) is deliverable when both runs saw a clock wait on the main thread after it.
+    """
     todo = [{"path": path, "boundary": "", "occurrence": 0, "kind": "count"} for path in PATHS for _ in range(2)]
-    calls: dict[str, dict[str, int]] = {}
+    calls = Counts()
+    calls.deliverable = {}
     for report in run_schedule(tmp_path, todo):
         seen = calls.setdefault(report["path"], report["calls"])
         calls[report["path"]] = {b: min(n, report["calls"][b]) for b, n in seen.items()}
+        pairs = {(b, n) for b, n in report["deliverable"]}
+        calls.deliverable[report["path"]] = calls.deliverable.get(report["path"], pairs) & pairs
     return calls
+
+
+def _undelivered(report: dict[str, Any]) -> list[str]:
+    if report["kind"] == "sigterm_in_wait" and not report["delivered"]:
+        return ["the SIGTERM was never delivered inside a clock wait"]
+    return []
 
 
 def violations(report: dict[str, Any]) -> list[str]:
@@ -414,10 +447,9 @@ def violations(report: dict[str, Any]) -> list[str]:
     if not report["fired"]:
         found.append("the boundary was never reached")
     allowed = TYPED[report["path"]] | {RAISES.get(report["kind"])}
-    if report["kind"] == "handler_raises_exception" or (
-        report["kind"] == "sigterm_in_wait" and not report["delivered"]
-    ):
+    if report["kind"] == "handler_raises_exception":
         allowed |= {None}
+    found += _undelivered(report)
     if report["outcome"] not in allowed:
         found.append(f"untyped outcome {report['outcome']}")
     if report["elapsed"] >= report["bound"]:

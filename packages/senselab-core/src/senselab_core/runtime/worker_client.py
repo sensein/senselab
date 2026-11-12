@@ -58,7 +58,7 @@ from senselab_core.runtime.execution_settings import WorkerSettings
 from senselab_core.runtime.hardware import cgroup_memory_events, oom_kills
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.worker_pipes import Lines, Pump
+from senselab_core.runtime.worker_pipes import Lines, Pump, WakeEvent
 
 LAUNCHER = "senselab_worker.launch"
 DEFERRED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
@@ -446,11 +446,11 @@ class WorkerClient:
         self._lines = Lines(clock, on_hint=lambda: logger.warning(ESCALATE_HINT))
         self._proc: subprocess.Popen[bytes] | None = None
         self._pumps: list[Pump] = []
-        self._reaped = threading.Event()
-        self._exited = threading.Event()
+        self._reaped = WakeEvent()
+        self._exited = WakeEvent()
         self._run_lock = threading.Lock()
         self._run_owner: int | None = None
-        self._run_idle = threading.Event()
+        self._run_idle = WakeEvent()
         self._run_idle.set()
         self._channel_lock = threading.Lock()
         self._shutdown_lock = threading.Lock()
@@ -467,6 +467,7 @@ class WorkerClient:
             self._stopped = self._released = True
             raise
         self._closed = False
+        self._run_owner = threading.get_ident()
         try:
             wire_init = to_wire(
                 {"array_dir": str(self._array_dir), **init},
@@ -481,18 +482,24 @@ class WorkerClient:
             self._send(dump_line({"init": wire_init}, "init", limit=self._max_line_bytes), deadline)
             self._receive(deadline, "loading the backend", "ready")
         except BaseException as exc:
-            raised = exc
-            if self._closed_by_caller and isinstance(exc, Exception) and not isinstance(exc, WorkerLost):
-                raised = WorkerLost("the client was closed while it was starting")
-            try:
-                self._fail(raised)
-            finally:
-                if not (self._stopped and self._released):
-                    self._shutdown(graceful=False)
-            raised = self._typed(raised)
+            raised = self._abort_start(exc)
             if raised is exc:
                 raise
             raise raised from exc
+        finally:
+            self._run_owner = None
+
+    def _abort_start(self, exc: BaseException) -> BaseException:
+        """Stop the worker a constructor failed to start with `exc`; return what the constructor raises."""
+        raised = exc
+        if self._closed_by_caller and isinstance(exc, Exception) and not isinstance(exc, WorkerLost):
+            raised = WorkerLost("the client was closed while it was starting")
+        try:
+            self._fail(raised)
+        finally:
+            if not (self._stopped and self._released):
+                self._shutdown(graceful=False)
+        return self._typed(raised)
 
     @property
     def array_dir(self) -> Path:
