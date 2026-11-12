@@ -713,3 +713,10 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3.2, §8.
 - **`load` is serialised only when true.** The same fault record also sits in the queue outcome records and in
   `dead/<key>.json`, which carry no format tag and are read strictly, so a record that is no load's is written as it
   was before the field.
+- 2026-11-11 (Phase 3 Task 24-6): `execution-profile@5.0` replaces `@4.0` (the profile gains required keys: `lease.{missed_beats,
+  wait_s,poll_s,remove_attempts,record_attempts,dir_mode}`, `pool.{idle_polls,cancel_check_s,event_poll_s}`,
+  `substrate.stop_grace_s`, `supervisor.{reap_poll_s,exit_bound_s}`, `timeouts.fetch_s` and the `store`, `vllm` and
+  `worker` sections); `execution-profile@4` is retired, refused with `ProfileFormatRetired` naming both tags and the
+  keys to add. `run-lease@2` replaces `@1` (`lease.json` carries those `lease` keys); `run-lease@1` is refused with
+  `RunLeaseUnreadable` naming both. `server-settings@2.0` replaces `@1.0` (drops `startup_timeout_s`, now
+  `vllm.startup_s`); `server-settings@1.0` is refused naming both. No reader of an old tag.

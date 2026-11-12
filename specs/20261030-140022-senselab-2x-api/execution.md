@@ -80,7 +80,7 @@ dir>/queues --classes <list> [--profile NAME]` runs `serve_pool`.
   singles=True)`); on a queue it has not run yet, one item alone, so the model load falls on one item. It stays on that class until it has claimed
   `quantum_items` jobs or `quantum_s` seconds have passed (the ceilings), then takes the class with the oldest work
   again, which may be the same one. Each item's outcome carries the worker's `Sample` of it (wall, jobs, input
-  seconds, baseline and peak memory, cold or warm), from which a calibration round's measure is read. Items of a held env are not claimable. It exits once nothing has been claimable for `pool.idle_polls` polls of `pool.poll_s` (amended 2026-11-10: `pool.idle_polls` is not yet a key: a constant in source, pending under R-219 (amended 2026-11-10)).
+  seconds, baseline and peak memory, cold or warm), from which a calibration round's measure is read. Items of a held env are not claimable. It exits once nothing has been claimable for `pool.idle_polls` polls of `pool.poll_s`.
 - **Renewal.** Claim leases beat from their own renewers (Task 12); the worker also proves them (`Claim.renew`)
   every renewal interval (`lease.renew_fraction × lease.stale_after_s`) while it waits for a claim's outcomes,
   which run on a thread. An item whose lease was lost is not reported; another claimer takes it.
@@ -594,7 +594,7 @@ are recorded here (R-200).
   flight. `Executor.results` is gone; `follow(executor, handle)` is the blocking loop over `poll`. An executor that
   splits fragments (`splits_fragments`, the Pool) is sent one fragment per ready set, which keeps the follower's
   handles few; `split` dumps a fragment once and slices it, so it is linear in jobs. A cancel ends every followed
-  handle within `pool.cancel_check_s` (amended 2026-11-10: not yet a key: a constant in source, pending under R-219 (amended 2026-11-10)) and leaves its items queued. The Pool owns one scaler thread: it ticks every
+  handle within `pool.cancel_check_s` and leaves its items queued. The Pool owns one scaler thread: it ticks every
   `pool.poll_s` while a fragment is followed, a submit or retry wakes it, `close` stops it, and it is the only caller
   of `scale`, so a slow `sbatch` never delays settling or a cancel and concurrent submits cannot over-start. `poll`
   reads the epoch fence at most once per `first_poll_s`. The sender threads are explicit: the profile's summed
@@ -605,7 +605,7 @@ are recorded here (R-200).
   the outcome record carries `jobs`, one `ResultRef` per job. A queue `dead` outcome (a corrupt item) is a content
   fault of each of its jobs. A held queue (`Queue.hold`) gives no claim.
 - **`inputs.json` under a lease (R-211).** `record_sources` merges and writes `inputs.json` under a lease on it,
-  proven before the write and retried up to `lease.record_attempts` times (amended 2026-11-10: not yet a key: a constant in source, pending under R-219 (amended 2026-11-10)), so two coordinators starting one plan both keep
+  proven before the write and retried up to `lease.record_attempts` times, so two coordinators starting one plan both keep
   every durable source.
 - **Queues (Task 13, ADR-003).** `runtime/execution/queue.py` holds one queue per resource class, with `#<model
   identity>` for a resident model, in a directory named by `identity_digest("label@1", name)`. An item is a plan
@@ -635,9 +635,3 @@ are recorded here (R-200).
   item's jobs through `execute` and a `WorkerSet` (`runtime/execution/pool_worker.py:1-4`): `serve_pool` builds one only
   for service classes (`:839-844`), and otherwise the worker takes the process's own set for the profile (`:753`). A
   backend that needs an isolated env is therefore reached by the worker protocol, as a call from `InProcess` is.
-- **Names in this document that are not yet profile keys.** `pool.idle_polls`, `pool.cancel_check_s` and
-  `lease.record_attempts` are the target keys of R-219. At the Phase 3 head each is a constant in package source,
-  worth 3, 0.05 s and 3 (`runtime/execution/pool_worker.py:82`, `runtime/execution/runner.py:67`,
-  `runtime/execution/run.py:73`). The `pool` section of both packaged profiles holds `quantum_items`, `quantum_s`,
-  `poll_s`, `first_poll_s`, `presence_refresh_s`, `segment_items` and `admit_threads` (`laptop.yaml`, `slurm.yaml`,
-  section `pool`). Each constant is listed pending in `scripts/data/invariants.yaml` against R-219, which stays open.

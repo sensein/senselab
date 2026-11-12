@@ -316,3 +316,12 @@ Owner ruling, 2026-11-08. A URL is a location, never a record value. `ExecutionC
 derived by one function (`torch_build(index_url)`, the index URL's last path segment when it is a build tag, else
 `other`), which the measures and a worker's ready mark use too. The index URL stays in the process environment and the
 operator log. The context fingerprint is `context@5`; stored contexts are `execution-context@4.0` under `store@6/`.
+
+## Amendment 2026-11-11: the equivalence table is a group's file (Phase 3 Task 24-6)
+
+`runtime/data/equivalence.yaml` is no longer package data. The table holds classes measured on one group's resources
+(sm_90 for the packaged one), so a default of it would be a site's figures shipped to every site. The runtime reads no
+table by default: `ResultStore(equivalence=)` takes none, and a store with none admits no class under `equivalent`.
+`load_equivalence(path)` reads a table a caller names, in the unchanged `equivalence@4.0`. The development table is
+`benchmarks/data/equivalence.yaml`, written by `scripts/regenerate_equivalence.py`. The wheel carries no table and no
+site profile.
