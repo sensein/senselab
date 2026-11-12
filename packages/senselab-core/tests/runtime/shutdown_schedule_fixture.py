@@ -35,7 +35,7 @@ from bounded_probe_fixture import limit_file_size
 from lease_clock_fixture import ManualClock
 from lifecycle_probes_fixture import Gate, gate, recorded_pids
 from senselab_core.runtime import worker_client, worker_pipes
-from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerClient, WorkerLost
+from senselab_core.runtime.worker_client import DEFAULT_GRACES, ShutdownGraces, WorkerClient, WorkerLost
 from senselab_core.runtime.worker_pipes import Pump
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import alive, group_alive
@@ -480,8 +480,13 @@ def _substituted(boundary: str, wrapper: Callable[[Callable[..., Any]], Callable
 
 
 def close_while_encoding(parent: str, wait_s: float) -> list[str]:
-    """In this child: `close()` on another thread while `run` encodes its inputs; return what `run` raised."""
-    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=Path(parent))
+    """In this child: `close()` on another thread while `run` encodes its inputs; return what `run` raised.
+
+    The closer then waits for the run to end, and must return once it has, within `wait_s`; its graces are far
+    longer, so a closer left waiting out its bound fails.
+    """
+    graces = ShutdownGraces(stop=30 * wait_s)
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=Path(parent), graces=graces)
     closer = threading.Thread(target=client.close, daemon=True)
 
     def encoding(real: Callable[..., Any]) -> Callable[..., Any]:
@@ -508,8 +513,9 @@ def close_while_encoding(parent: str, wait_s: float) -> list[str]:
         runner = threading.Thread(target=call, daemon=True)
         runner.start()
         runner.join(wait_s + client.graces.bound)
-        closer.join(client.graces.bound)
-    assert not runner.is_alive() and not closer.is_alive()
+        closer.join(wait_s)
+    assert not runner.is_alive(), "run did not return"
+    assert not closer.is_alive(), "close did not return once the run had ended"
     return outcome
 
 

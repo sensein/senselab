@@ -27,22 +27,47 @@ def _close_fds(*fds: int) -> None:
             pass
 
 
+def _release_pipe(pipe: list[tuple[int, int]]) -> None:
+    """Close the pipe in `pipe` unless another caller has already taken it; each pipe is closed once."""
+    try:
+        r, w = pipe.pop()
+    except IndexError:
+        return
+    _close_fds(r, w)
+
+
 class WakeEvent(threading.Event):
     """A `threading.Event` that takes no lock: a flag and a pipe, so a signal handler can `set` and `wait` on it.
 
     The main thread can be interrupted inside any `threading.Event`, which holds its condition's lock there, and a
     handler that then waited on or set the same event would block for good. A `WakeEvent` waits in a selector.
-    `close` releases the pipe; a closed event keeps its flag and no longer blocks.
+    `close` wakes every waiter; a closed event keeps its flag and no longer blocks. Its pipe is closed when the last
+    call that may still read or write it returns, so no thread ever uses a descriptor number reused elsewhere.
     """
 
     def __init__(self) -> None:
         """Start clear."""
         self._flag = False
+        self._closed = False
         self._r, self._w = os.pipe()
         os.set_blocking(self._r, False)
         os.set_blocking(self._w, False)
-        self._closer = weakref.finalize(self, _close_fds, self._r, self._w)
+        self._pipe = [(self._r, self._w)]
+        self._users: set[object] = set()
+        self._closer = weakref.finalize(self, _release_pipe, self._pipe)
         setattr(self._closer, "atexit", False)  # noqa: B010 - mypy's weakref stub has no `atexit` slot
+
+    def _enter(self) -> object:
+        """Count a call that may use the pipe; it may use it only while `_closed` is false after this returns."""
+        token = object()
+        self._users.add(token)
+        return token
+
+    def _leave(self, token: object) -> None:
+        """End the call `token`; the last call to end after `close` closes the pipe."""
+        self._users.discard(token)
+        if self._closed and not self._users:
+            _release_pipe(self._pipe)
 
     def is_set(self) -> bool:
         """Whether the flag is set."""
@@ -51,43 +76,61 @@ class WakeEvent(threading.Event):
     def set(self) -> None:
         """Set the flag and wake every waiter."""
         self._flag = True
-        fd = self._w
-        if fd >= 0:
-            try:
-                os.write(fd, b"x")
-            except OSError:
-                pass  # a full pipe is already readable
+        token = self._enter()
+        try:
+            if not self._closed:
+                self._wake()
+        finally:
+            self._leave(token)
+
+    def _wake(self) -> None:
+        try:
+            os.write(self._w, WAKE_BYTE)
+        except OSError:
+            pass  # a full pipe is already readable
 
     def clear(self) -> None:
         """Clear the flag."""
         self._flag = False
-        self._drain()
+        token = self._enter()
+        try:
+            if not self._closed:
+                self._drain()
+        finally:
+            self._leave(token)
 
     def _drain(self) -> None:
-        fd = self._r
         try:
-            while fd >= 0 and os.read(fd, READ_BYTES):
+            while os.read(self._r, READ_BYTES):
                 pass
         except OSError:
             pass
 
     def close(self) -> None:
-        """Release the pipe; safe to call twice."""
-        r, w, self._r, self._w = self._r, self._w, -1, -1
-        self._closer.detach()  # else its collection would close descriptor numbers a later object holds
-        _close_fds(*(fd for fd in (r, w) if fd >= 0))
+        """Wake every waiter and give up the pipe; safe to call twice."""
+        token = self._enter()
+        try:
+            if not self._closed:
+                self._closed = True  # before the wake, so a waiter it wakes sees it; this call still holds the pipe
+                self._wake()
+        finally:
+            self._leave(token)
 
     def wait(self, timeout: float | None = None) -> bool:
         """Wait up to `timeout` seconds (forever when None) for the flag; return whether it is set."""
         end = None if timeout is None else time.monotonic() + timeout
-        while not self._flag and self._r >= 0:
-            left = None if end is None else end - time.monotonic()
-            if left is not None and left <= 0:
-                break
-            with selectors.DefaultSelector() as sel:
-                sel.register(self._r, selectors.EVENT_READ)
-                if sel.select(left) and not self._flag:
-                    self._drain()  # a byte left by a `set` that a `clear` then undid
+        token = self._enter()
+        try:
+            while not self._flag and not self._closed:
+                left = None if end is None else end - time.monotonic()
+                if left is not None and left <= 0:
+                    break
+                with selectors.DefaultSelector() as sel:
+                    sel.register(self._r, selectors.EVENT_READ)
+                    if sel.select(left) and not self._flag and not self._closed:
+                        self._drain()  # a byte left by a `set` that a `clear` then undid
+        finally:
+            self._leave(token)
         return self._flag
 
 

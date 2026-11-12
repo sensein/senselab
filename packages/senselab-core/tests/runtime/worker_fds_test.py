@@ -47,14 +47,66 @@ print("ok")
 
 _CLOSED = """
 new_client().close()  # the process-wide supervisor opens its own descriptors on first use
-before = open_fds()
+before, threads = open_fds(), set(threading.enumerate())
 client = new_client()
 client.run([{"id": "a", "inputs": {}}], {})
 client.close()
-for thread in threading.enumerate():
-    if thread.name == "senselab-lines-relay":
-        thread.join(30)
+for thread in set(threading.enumerate()) - threads:
+    thread.join(30)  # a descriptor a thread may still write is released when that thread is done with it
 print(sorted(open_fds() - before))
+"""
+
+_STRAGGLERS = """
+from senselab_core.runtime.clock import SystemClock
+
+watched, held, resume, all_held, raised = [], [], threading.Event(), threading.Event(), []
+SETTERS = 3  # the reaper on `_exited`, each pump on its `ended`
+
+def hook(frame, event, arg):
+    if event == "c_call" and arg is os.write and threading.current_thread() is not threading.main_thread():
+        while frame is not None and frame.f_code.co_name != "set":
+            frame = frame.f_back
+        if frame is not None and any(frame.f_locals.get("self") is e for e in watched):
+            held.append(threading.current_thread())
+            if len(held) == SETTERS:
+                all_held.set()
+            resume.wait(60)
+
+class Armed(SystemClock):
+    armed = False
+    def wait(self, event, timeout):
+        if not self.armed:
+            return super().wait(event, timeout)
+        assert all_held.wait(60), held
+        return event.is_set()  # every later wait is spent at once: the pipe readers do not stop in time
+
+threading.excepthook = lambda args: raised.append(args.exc_value)
+threading.setprofile(hook)
+clock = Armed()
+client = WorkerClient(
+    source_tree_python(), "senselab_worker.fake", init={}, array_parent=Path(sys.argv[1]), clock=clock
+)
+events = [client._exited, client._reaped, *(pump.ended for pump in client._pumps)]
+numbers = {fd for e in events for fd in (e._r, e._w)}
+watched.extend([client._exited, *(pump.ended for pump in client._pumps)])
+clock.armed = True
+client.close()  # the setters are held with their flags set and their descriptors read
+assert len(held) == SETTERS and not client._reaped.is_set(), (held, client._reaped.is_set())
+probes = [os.pipe() for _ in range(16)]
+resume.set()
+for thread in held:
+    thread.join(30)
+    assert not thread.is_alive()
+written = []
+for r, w in probes:
+    os.set_blocking(r, False)
+    try:
+        written.append(os.read(r, 16))
+    except BlockingIOError:
+        pass
+    os.close(r)
+    os.close(w)
+print(written, raised, sorted(numbers & open_fds()))
 """
 
 
@@ -86,3 +138,12 @@ def test_a_client_waits_and_closes_with_more_than_1024_descriptors_open(tmp_path
 def test_a_closed_client_leaves_no_descriptor_open(tmp_path: Path) -> None:
     """After a request and `close()`, the process holds the descriptors it held before the client."""
     assert _run(_CLOSED, tmp_path / "arrays") == "[]"
+
+
+@pytest.mark.contract
+def test_setters_still_running_when_the_readers_did_not_stop_write_into_no_later_descriptor(tmp_path: Path) -> None:
+    """Setters held mid-`set` while `close` gives up on the pipe readers write into no pipe opened after `close`.
+
+    Once they have returned, the events' descriptors are closed.
+    """
+    assert _run(_STRAGGLERS, tmp_path / "arrays") == "[] [] []"

@@ -5,6 +5,7 @@ import queue
 import subprocess
 import sys
 import threading
+import types
 from collections.abc import Callable
 
 import pytest
@@ -109,3 +110,104 @@ def test_a_wake_event_is_a_threading_event_that_sets_clears_and_times_out() -> N
     assert event.wait(30.0) is True and event.is_set() and event.wait(0.0) is True
     event.clear()
     assert not event.is_set() and event.wait(0.01) is False
+
+
+def _open_fds() -> set[int]:
+    found = set()
+    for name in os.listdir("/dev/fd"):
+        try:
+            os.fstat(int(name))
+        except OSError:
+            continue  # the descriptor of the listing itself
+        found.add(int(name))
+    return found
+
+
+def _paused_at(call: str, caller: str) -> tuple[Callable[..., None], threading.Event, threading.Event]:
+    """A profile hook that holds its thread at its first C call named `call` made within a function named `caller`."""
+    paused, resume = threading.Event(), threading.Event()
+
+    def within(frame: types.FrameType | None) -> bool:
+        while frame is not None and frame.f_code.co_name != caller:
+            frame = frame.f_back
+        return frame is not None
+
+    def hook(frame: types.FrameType, event: str, arg: object) -> None:
+        if event == "c_call" and getattr(arg, "__name__", "") == call and within(frame):
+            if not paused.is_set():
+                paused.set()
+                resume.wait(DEADLINE_S)
+
+    return hook, paused, resume
+
+
+def _profiled(hook: Callable[..., None], body: Callable[[], object], out: list[object]) -> threading.Thread:
+    def target() -> None:
+        sys.setprofile(hook)
+        try:
+            out.append(body())
+        finally:
+            sys.setprofile(None)
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    return thread
+
+
+@pytest.mark.contract
+def test_a_close_while_a_setter_holds_its_descriptor_never_lets_it_write_into_a_reused_one() -> None:
+    """A setter held between reading the write end and writing it, then closed under, writes into no later pipe.
+
+    Once the setter has returned the event holds no descriptor.
+    """
+    before = _open_fds()
+    event = WakeEvent()
+    hook, paused, resume = _paused_at("write", "set")
+    setter = _profiled(hook, event.set, [])
+    assert paused.wait(DEADLINE_S) and event.is_set()
+    event.close()
+    probes = [os.pipe() for _ in range(4)]  # the lowest free numbers: the event's, if it released them
+    resume.set()
+    setter.join(DEADLINE_S)
+    assert not setter.is_alive()
+    for r, w in probes:
+        os.set_blocking(r, False)
+        with pytest.raises(BlockingIOError):
+            os.read(r, 1)
+        os.close(r)
+        os.close(w)
+    assert _open_fds() == before
+
+
+@pytest.mark.contract
+def test_a_wait_in_flight_when_the_event_is_closed_returns_at_once() -> None:
+    """A waiter held at its selector's wait while another thread closes the event returns the flag, not its timeout.
+
+    Once the waiter has returned the event holds no descriptor.
+    """
+    before = _open_fds()
+    event = WakeEvent()
+    hook, paused, resume = _paused_at("control" if sys.platform == "darwin" else "poll", "select")
+    out: list[object] = []
+    waiter = _profiled(hook, lambda: event.wait(10 * DEADLINE_S), out)
+    assert paused.wait(DEADLINE_S)
+    event.close()
+    resume.set()
+    waiter.join(DEADLINE_S)
+    assert not waiter.is_alive() and out == [False]
+    assert _open_fds() == before
+
+
+@pytest.mark.contract
+def test_a_closed_wake_event_keeps_its_flag_and_never_blocks() -> None:
+    """After `close`, `set`, `clear` and `wait` work on the flag alone and the event holds no descriptor."""
+    before = _open_fds()
+    event = WakeEvent()
+    event.close()
+    event.close()
+    assert event.wait(None) is False
+    event.set()
+    assert event.is_set() and event.wait(None) is True
+    event.clear()
+    assert not event.is_set() and event.wait(DEADLINE_S) is False
+    assert _open_fds() == before
