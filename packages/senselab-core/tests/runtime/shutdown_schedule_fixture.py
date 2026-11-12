@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import FrameType
 from typing import Any, Callable, Iterator
 
 import numpy
@@ -39,6 +40,7 @@ from senselab_core.runtime.worker_pipes import Pump
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import alive, group_alive
 from senselab_worker.fake import FAULT_KEY
+from signal_in_lock_fixture import deliver_in
 
 PYTHON = source_tree_python()
 
@@ -61,12 +63,14 @@ RAISES = {
     "handler_raises_base": "SystemExit",
     "handler_raises_exception": "RuntimeError",
 }
-KINDS = (*RAISES, "handler_close", "close_same_thread", "close_other_thread")
+KINDS = (*RAISES, "sigterm_in_wait", "handler_close", "close_same_thread", "close_other_thread")
 """`sigint` raises SIGINT; `double_sigint` raises it twice; `sigterm` raises SIGTERM, whose handler records the
-request and exits, and the unwound frame closes the client; `handler_close`, `handler_raises_base` and
-`handler_raises_exception` raise SIGUSR1, whose handler closes the client, raises `SystemExit` or raises
-`RuntimeError`; `close_same_thread` calls `close()`
-where the boundary is reached; `close_other_thread` starts `close()` on another thread."""
+request and exits, and the unwound frame closes the client; `sigterm_in_wait` delivers SIGTERM inside the next
+`Event.wait` after the boundary, while that wait holds the event's lock, to a handler that closes the client and
+returns (nothing is delivered when no wait follows, or on the timeout path before the backend is in its request);
+`handler_close`, `handler_raises_base` and `handler_raises_exception` raise SIGUSR1, whose handler closes the
+client, raises `SystemExit` or raises `RuntimeError`; `close_same_thread` calls `close()` where the boundary is
+reached; `close_other_thread` starts `close()` on another thread."""
 BOUNDARIES = (
     "module:to_wire",
     "module:_leader_held",
@@ -126,6 +130,16 @@ def case_bound(case: dict[str, Any]) -> float:
     return timeout + GRACES.exit_code_wait + 2 * GRACES.bound
 
 
+def _in_clock_wait(frame: FrameType) -> bool:
+    """Whether `frame` is an `Event.wait` that a `ManualClock` park called."""
+    caller = frame.f_back
+    return (
+        frame.f_code.co_name == "wait"
+        and isinstance(frame.f_locals.get("self"), threading.Event)
+        and any(f.f_code.co_name == "_park" for f in (caller, caller.f_back if caller else None) if f is not None)
+    )
+
+
 class _Injector:
     def __init__(self, case: dict[str, Any]) -> None:
         self.case = case
@@ -137,6 +151,8 @@ class _Injector:
         self.events: list[str] = []
         self.nested_acquires: int | None = None
         self.stop_requested = False
+        self.delivered: dict[str, bool] | None = None
+        self.backend_entered: Callable[[], bool] = lambda: True
 
     def nested_close(self, client: WorkerClient) -> None:
         """Close from inside the stop, and record how many shutdown locks that close tried to take."""
@@ -174,6 +190,8 @@ class _Injector:
             self.second_sigint = True
         elif kind == "sigterm":
             signal.raise_signal(signal.SIGTERM)
+        elif kind == "sigterm_in_wait" and self.backend_entered():
+            self.delivered = deliver_in(signal.SIGTERM, _in_clock_wait)
         elif kind.startswith("handler_"):
             signal.raise_signal(signal.SIGUSR1)
         elif kind == "close_same_thread":
@@ -188,6 +206,9 @@ def _handlers(kind: str, injector: _Injector) -> None:
     clients = injector.clients
 
     def on_term(signum: int, frame: object) -> None:
+        if kind == "sigterm_in_wait":
+            clients[0].close()
+            return
         injector.stop_requested = True
         raise SystemExit(128 + signum)
 
@@ -258,6 +279,7 @@ def _perform(
         if injector.stop_requested:
             injector.clients[0].close()
     finally:
+        sys.settrace(None)
         for boundary, real in reals.items():
             setattr(*_owner(boundary), real)
     return outcome, built, clock.now() - started
@@ -270,6 +292,8 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
     clock = ManualClock(poll_s=CLOCK_POLL_S, hang_s=CASE_BOUND_S / 2, spends=False)
     gate_open = threading.Event()
     done = threading.Event()
+    if case["path"] == "timeout":
+        injector.backend_entered = gate_open.is_set
     killpg = os.killpg
 
     def record_killpg(pgid: int, sig: int) -> None:
@@ -312,6 +336,7 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
     report = {
         **case,
         "fired": injector.fired,
+        "delivered": injector.delivered is not None and injector.delivered["fired"],
         "calls": injector.calls,
         "outcome": outcome,
         "elapsed": elapsed,
@@ -389,7 +414,9 @@ def violations(report: dict[str, Any]) -> list[str]:
     if not report["fired"]:
         found.append("the boundary was never reached")
     allowed = TYPED[report["path"]] | {RAISES.get(report["kind"])}
-    if report["kind"] == "handler_raises_exception":
+    if report["kind"] == "handler_raises_exception" or (
+        report["kind"] == "sigterm_in_wait" and not report["delivered"]
+    ):
         allowed |= {None}
     if report["outcome"] not in allowed:
         found.append(f"untyped outcome {report['outcome']}")

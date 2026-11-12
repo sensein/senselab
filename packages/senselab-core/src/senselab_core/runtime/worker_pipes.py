@@ -3,6 +3,7 @@
 import os
 import queue
 import selectors
+import socket
 import threading
 from collections.abc import Callable
 from typing import Final
@@ -11,6 +12,8 @@ from senselab_worker.codec import Deadline
 
 from senselab_core.runtime.clock import Clock
 
+HINT_BYTE: Final = b"h"
+WAKE_BYTE: Final = b"x"
 READ_BYTES: Final = 2**16  # invariant: the size of one pipe read; lines are reassembled whatever it is
 
 
@@ -96,19 +99,65 @@ class Pump:
             start = 0
 
 
-class Lines:
-    """The lines the stdout pump produced, taken by one reader at a time, each wait read on `clock`."""
+def _relay_wakes(source: socket.socket, ready: threading.Event, on_hint: Callable[[], None] | None) -> None:
+    """Set `ready` for each batch of bytes `source` delivers, and call `on_hint` for each hint byte in it."""
+    try:
+        while data := source.recv(READ_BYTES):
+            if on_hint is not None:
+                for _ in range(data.count(HINT_BYTE)):
+                    on_hint()
+            ready.set()
+    except OSError:
+        pass
+    finally:
+        source.close()
 
-    def __init__(self, clock: Clock, ready: threading.Event | None = None) -> None:
-        """Start empty; `ready` is the event a `put` sets and a waiting `get` clears (a new one when None)."""
+
+class Lines:
+    """The lines the stdout pump produced, taken by one reader at a time, each wait read on `clock`.
+
+    `put` and `request_hint` take no lock, so they are safe from a signal handler and never wait on a lock the reader
+    holds: `put` adds to a `SimpleQueue` and, while a reader waits, writes a byte to a socket pair; a relay thread of
+    this object reads it, sets the wake event the reader waits on and calls `on_hint` for a hint. `close` ends the
+    relay thread without waiting for it.
+    """
+
+    def __init__(
+        self, clock: Clock, ready: threading.Event | None = None, *, on_hint: Callable[[], None] | None = None
+    ) -> None:
+        """Start empty; `ready` is the event a reader waits on (a new one when None).
+
+        `on_hint` is what the relay thread calls for each `request_hint`.
+        """
         self._clock = clock
         self._queue: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
         self._ready = threading.Event() if ready is None else ready
+        self._waiting = False
+        relay_r, self._relay_w = socket.socketpair()
+        self._relay_w.setblocking(False)
+        threading.Thread(
+            target=_relay_wakes, args=(relay_r, self._ready, on_hint), name="senselab-lines-relay", daemon=True
+        ).start()
 
     def put(self, line: bytes | None) -> None:
         """Add a line; `None` is the end of the stream."""
         self._queue.put(line)
-        self._ready.set()
+        if self._waiting:  # else the reader's next look finds the line
+            self._send(WAKE_BYTE)
+
+    def request_hint(self) -> None:
+        """Have the relay thread call `on_hint`."""
+        self._send(HINT_BYTE)
+
+    def _send(self, byte: bytes) -> None:
+        try:
+            self._relay_w.send(byte)
+        except OSError:
+            pass  # a full socket already has a wake pending; a closed one has no reader
+
+    def close(self) -> None:
+        """End the relay thread; safe to call twice."""
+        self._relay_w.close()
 
     def get(self, deadline: Deadline) -> bytes | None:
         """Return the next line, waiting until `deadline`; raise `queue.Empty` if none came.
@@ -116,13 +165,17 @@ class Lines:
         The wake flag is cleared before each look and never between the last look and the wait, so a line put after
         a look sets it again.
         """
-        while True:
-            self._ready.clear()
-            try:
-                return self._queue.get_nowait()
-            except queue.Empty:
-                pass
-            remaining = deadline.remaining()
-            if remaining is not None and remaining <= 0:
-                raise queue.Empty
-            self._clock.wait(self._ready, threading.TIMEOUT_MAX if remaining is None else remaining)
+        try:
+            while True:
+                self._waiting = True
+                self._ready.clear()
+                try:
+                    return self._queue.get_nowait()
+                except queue.Empty:
+                    pass
+                remaining = deadline.remaining()
+                if remaining is not None and remaining <= 0:
+                    raise queue.Empty
+                self._clock.wait(self._ready, threading.TIMEOUT_MAX if remaining is None else remaining)
+        finally:
+            self._waiting = False

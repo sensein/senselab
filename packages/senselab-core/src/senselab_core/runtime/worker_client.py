@@ -309,18 +309,17 @@ def _members_gone(  # noqa: PLR0913 - the group, its exit, the bound, the livene
 
 ESCALATE_HINT = "stopping the worker; press Ctrl-C again to kill it now"
 _HINTED = [False]
-"""Set once this process has logged `ESCALATE_HINT`; the hint is logged once per process. A plain cell, since an
-`Event` takes a lock that the frame a signal interrupted may hold."""
+"""Set once this process has requested `ESCALATE_HINT`; the hint is logged once per process."""
 
 
 @contextlib.contextmanager
-def _signals_deferred(*, escalate: bool) -> Iterator[None]:
+def _signals_deferred(*, escalate: bool, request_hint: Callable[[], None] | None = None) -> Iterator[None]:
     """On the main thread, hold `DEFERRED_SIGNALS` for the body, then restore their handlers and raise each held one.
 
     With `escalate`, the first SIGINT is held, a second raises `KeyboardInterrupt` at once, and the first SIGINT
-    held in this process logs `ESCALATE_HINT`. A signal whose handler was not installed from Python cannot be
-    restored, so it is not held. Held signals are not raised again when a wakeup fd is set, since its writer
-    already saw them.
+    held in this process calls `request_hint`, which must take no lock (`Lines.request_hint`). A signal whose
+    handler was not installed from Python cannot be restored, so it is not held. Held signals are not raised again
+    when a wakeup fd is set, since its writer already saw them.
     """
     if threading.current_thread() is not threading.main_thread():
         yield
@@ -333,9 +332,9 @@ def _signals_deferred(*, escalate: bool) -> Iterator[None]:
             if signal.SIGINT in held:
                 held[:] = [s for s in held if s != signal.SIGINT]
                 raise KeyboardInterrupt
-            if not _HINTED[0]:
+            if request_hint is not None and not _HINTED[0]:
                 _HINTED[0] = True
-                logger.warning(ESCALATE_HINT)
+                request_hint()
         held.append(signum)
 
     try:
@@ -444,7 +443,7 @@ class WorkerClient:
         self._oom_baseline = oom_kills(self._memory_events)
         self._graces, self._clock = graces, clock
         self._stderr: collections.deque[str] = collections.deque(maxlen=STDERR_TAIL_LINES)
-        self._lines = Lines(clock)
+        self._lines = Lines(clock, on_hint=lambda: logger.warning(ESCALATE_HINT))
         self._proc: subprocess.Popen[bytes] | None = None
         self._pumps: list[Pump] = []
         self._reaped = threading.Event()
@@ -464,8 +463,7 @@ class WorkerClient:
         try:
             self._array_dir = Path(tempfile.mkdtemp(prefix="senselab-arrays-", dir=array_parent)).absolute()
         except BaseException:
-            os.close(self._wake_r)
-            os.close(self._wake_w)
+            self._close_wake()
             self._stopped = self._released = True
             raise
         self._closed = False
@@ -635,6 +633,7 @@ class WorkerClient:
         self._close_wake()
 
     def _close_wake(self) -> None:
+        self._lines.close()
         for name in ("_wake_r", "_wake_w"):
             fd = getattr(self, name)
             setattr(self, name, -1)
@@ -910,7 +909,7 @@ class WorkerClient:
             self._shutting_down.add(me)
             self._closed = True
             try:
-                with _signals_deferred(escalate=True):
+                with _signals_deferred(escalate=True, request_hint=self._lines.request_hint):
                     self._steps(graceful=graceful, me=me)
             except BaseException:
                 with _signals_deferred(escalate=False):

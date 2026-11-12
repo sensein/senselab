@@ -15,8 +15,10 @@ from typing import Any
 THREADING = threading.__file__
 
 
-def deliver_in(signum: int, where: Callable[[FrameType], bool]) -> dict[str, bool]:
-    """Trace this thread; deliver `signum` once inside the first `threading.py` frame `where` accepts."""
+def deliver_in(
+    signum: int, where: Callable[[FrameType], bool], files: tuple[str, ...] = (THREADING,)
+) -> dict[str, bool]:
+    """Trace this thread; deliver `signum` once inside the first frame of one of `files` that `where` accepts."""
     state = {"fired": False}
     lines: dict[FrameType, int] = {}
 
@@ -29,7 +31,7 @@ def deliver_in(signum: int, where: Callable[[FrameType], bool]) -> dict[str, boo
         return local
 
     def trace(frame: FrameType, event: str, _arg: Any) -> Any:  # noqa: ANN401 - the trace-function protocol
-        if event == "call" and not state["fired"] and frame.f_code.co_filename == THREADING and where(frame):
+        if event == "call" and not state["fired"] and frame.f_code.co_filename in files and where(frame):
             return local
         return None
 

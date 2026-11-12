@@ -465,7 +465,7 @@ class PoolWorker:
             if requests.get():
                 self.halt()
 
-        thread = threading.Thread(target=serve_requests, name="pool-halt", daemon=True)
+        thread = threading.Thread(target=serve_requests, name="senselab-pool-halt", daemon=True)
         thread.start()
         try:
             yield lambda: requests.put(True)
