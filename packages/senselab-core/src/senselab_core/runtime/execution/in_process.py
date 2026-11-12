@@ -558,7 +558,9 @@ class InProcess:
         return Grant.seen(
             resource,
             self.profile.pool,
-            host_hardware() if resource.device == "cuda" or resource.mem_bytes is None else None,
+            host_hardware(self.profile.sizing.device_query_s)
+            if resource.device == "cuda" or resource.mem_bytes is None
+            else None,
         )
 
     def _node_decoder(self, placed: Plan, node: str) -> str | None | Unresolved:

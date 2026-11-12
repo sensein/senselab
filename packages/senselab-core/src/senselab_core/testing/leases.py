@@ -9,13 +9,15 @@ def packaged_lease(
 ) -> JobLease:
     """Return the packaged profile's `lease` with the given stale bound, renewal share and attribute delay.
 
-    `keys` replace any other key of the section, such as `wait_s` or `missed_beats`.
+    `keys` replace any other key of the section, such as `wait_s` or `missed_beats`; `wait_s` is at least the stale
+    bound plus the attribute delay unless given.
     """
-    return ExecutionProfile.packaged().lease.model_copy(
-        update={
-            "stale_after_s": stale_after_s,
-            "renew_fraction": renew_fraction,
-            "attribute_delay_s": attribute_delay_s,
-            **keys,
-        }
-    )
+    base = ExecutionProfile.packaged().lease
+    update: dict[str, float | int | str] = {
+        "stale_after_s": stale_after_s,
+        "renew_fraction": renew_fraction,
+        "attribute_delay_s": attribute_delay_s,
+        "wait_s": max(base.wait_s, stale_after_s + attribute_delay_s),
+        **keys,
+    }
+    return JobLease.model_validate({**base.model_dump(), **update})

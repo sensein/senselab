@@ -202,7 +202,7 @@ class CalibrationSettings(Frozen):
 
 
 class LeaseBoundError(ValueError):
-    """`missed_beats` renewal intervals plus the storage's attribute delay do not stay below a lease's stale bound."""
+    """`1 + missed_beats` renewal intervals plus the storage's attribute delay do not stay below a stale bound."""
 
 
 class JobLease(Frozen):
@@ -212,9 +212,10 @@ class JobLease(Frozen):
         stale_after_s: Seconds on the storage clock after which another process breaks the lease.
         renew_fraction: The share of `stale_after_s` between two beats.
         attribute_delay_s: Seconds a client of the storage may show a directory's stale mtime.
-        missed_beats: Renewal intervals a beating lease's mtime may be seen unrefreshed without being stale; 2 allows
-            one missed beat.
-        wait_s: Seconds a wait for a lease may take by default.
+        missed_beats: Beats a live holder may miss without its lease being broken, at least 1; the bound allows
+            `1 + missed_beats` renewal intervals between two beats.
+        wait_s: Seconds a wait for a lease may take by default; at least `stale_after_s + attribute_delay_s`, the time a
+            taker needs to break a dead holder's lease.
         poll_s: Seconds between two attempts to take a lease.
         remove_attempts: Times a lease moved aside is removed while a taker that reached it before the move races
             the removal.
@@ -233,6 +234,16 @@ class JobLease(Frozen):
     record_attempts: PositiveInt
     dir_mode: Annotated[str, StringConstraints(pattern=r"^[0-7]{3,4}$")]
 
+    @model_validator(mode="after")
+    def _check_wait(self) -> "JobLease":
+        if self.wait_s < self.stale_after_s + self.attribute_delay_s:
+            raise ValueError(
+                f"lease.wait_s {self.wait_s} is below lease.stale_after_s {self.stale_after_s} + "
+                f"lease.attribute_delay_s {self.attribute_delay_s}: a taker would give up before it could break a "
+                "dead holder's lease"
+            )
+        return self
+
     @property
     def mode(self) -> int:
         """`dir_mode` as the integer mode bits."""
@@ -241,14 +252,16 @@ class JobLease(Frozen):
     def check_bound(self) -> None:
         """Raise `LeaseBoundError` unless the bound holds.
 
-        The bound is `missed_beats × renew_fraction × stale_after_s + attribute_delay_s < stale_after_s`.
+        The bound is `(1 + missed_beats) × renew_fraction × stale_after_s + attribute_delay_s < stale_after_s`.
         """
-        if self.missed_beats * self.renew_fraction * self.stale_after_s + self.attribute_delay_s >= self.stale_after_s:
+        if (
+            1 + self.missed_beats
+        ) * self.renew_fraction * self.stale_after_s + self.attribute_delay_s >= self.stale_after_s:
             raise LeaseBoundError(
-                f"{self.missed_beats} × lease.renew_fraction {self.renew_fraction} × lease.stale_after_s "
+                f"(1 + {self.missed_beats}) × lease.renew_fraction {self.renew_fraction} × lease.stale_after_s "
                 f"{self.stale_after_s} + lease.attribute_delay_s {self.attribute_delay_s} is not below "
                 f"lease.stale_after_s {self.stale_after_s}: a beating lease that missed "
-                f"{self.missed_beats - 1} beat(s) could be seen as stale and broken"
+                f"{self.missed_beats} beat(s) could be seen as stale and broken"
             )
 
 

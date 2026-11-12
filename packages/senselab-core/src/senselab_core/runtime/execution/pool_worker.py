@@ -442,7 +442,7 @@ class PoolWorker:
             return {"unbuilt": "build-failed"}
         device = self.profile.resource_classes[class_of(queue)].device
         try:
-            return mark_entry(self.profile, backend, handle, host_report(), device)
+            return mark_entry(self.profile, backend, handle, host_report(self.profile.sizing.device_query_s), device)
         except ValueError:
             return {"unbuilt": "unreadable"}
 

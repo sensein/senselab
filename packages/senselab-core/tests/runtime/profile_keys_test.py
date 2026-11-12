@@ -75,11 +75,14 @@ def test_the_package_ships_no_equivalence_table_and_no_site_profile() -> None:
 
 @pytest.mark.logic
 def test_the_beat_bound_follows_missed_beats() -> None:
-    """`missed_beats × renew_fraction × stale_after_s + attribute_delay_s < stale_after_s` is the bound that loads."""
+    """The beat bound is `(1 + missed_beats) × renew_fraction × stale_after_s + attribute_delay_s < stale_after_s`."""
     lease = packaged_lease(300, 0.33, 60)
     lease.check_bound()
-    with pytest.raises(LeaseBoundError, match="3 × lease.renew_fraction"):
+    assert lease.missed_beats == 1
+    with pytest.raises(LeaseBoundError, match=r"\(1 \+ 3\) × lease.renew_fraction"):
         lease.model_copy(update={"missed_beats": 3}).check_bound()
+    with pytest.raises(ValidationError):
+        JobLease.model_validate({**lease.model_dump(), "missed_beats": 0})
 
 
 @pytest.mark.logic
@@ -87,7 +90,7 @@ def test_a_wait_for_a_lease_is_bounded_by_wait_s_and_polled_every_poll_s(
     tmp_path: Path, lease_clock: Callable[..., ManualClock]
 ) -> None:
     """A second taker polls every `poll_s` and gives up after `wait_s`, on the injected clock."""
-    settings = PROFILE.lease.model_copy(update={"wait_s": 3.0, "poll_s": 0.5})
+    settings = packaged_lease(1.0, 0.2, wait_s=3.0, poll_s=0.5)
     resource = tmp_path / "thing"
     clock = lease_clock()
     with Lease(resource, settings=settings, timeout=0, clock=clock):
@@ -386,3 +389,12 @@ def test_profile_sections_are_frozen() -> None:
     with pytest.raises(ValidationError):
         PROFILE.lease.wait_s = 1.0  # type: ignore[misc]
     assert isinstance(PROFILE.lease, JobLease) and isinstance(Mapping, type)
+
+
+@pytest.mark.logic
+def test_a_lease_wait_shorter_than_a_dead_holders_break_is_refused() -> None:
+    """`wait_s` must outlast `stale_after_s + attribute_delay_s`, the time to break a dead holder's lease."""
+    document = {**PROFILE.lease.model_dump(), "attribute_delay_s": 60.0}
+    JobLease.model_validate({**document, "wait_s": 360.0})
+    with pytest.raises(ValidationError, match="wait_s"):
+        JobLease.model_validate({**document, "wait_s": 359.0})

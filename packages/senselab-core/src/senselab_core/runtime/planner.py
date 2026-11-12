@@ -639,7 +639,9 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
     return Plan(
         logical=found.logical,
         manifest=found.manifest,
-        placement=place(found.logical, profile, hardware or host_hardware(), config, overrides),
+        placement=place(
+            found.logical, profile, hardware or host_hardware(profile.sizing.device_query_s), config, overrides
+        ),
         hash=plan_hash(found.logical),
         execution=profile,
         config=config,
@@ -806,7 +808,9 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
         raise laxer
     profile = ExecutionProfile.load(execution) if isinstance(execution, str) else execution or ExecutionProfile.load()
     overrides = load_overrides(placement)
-    placed_at = place(stored.logical, profile, hardware or host_hardware(), config, overrides)
+    placed_at = place(
+        stored.logical, profile, hardware or host_hardware(profile.sizing.device_query_s), config, overrides
+    )
     values = bind_sources(stored)
     placed = replace(
         stored, placement=placed_at, execution=profile, config=config, overrides=overrides, hook=placement_hook

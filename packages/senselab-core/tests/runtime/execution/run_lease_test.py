@@ -17,6 +17,7 @@ from senselab_core.runtime.execution.epoch import (
     Epoch,
     LeaseMismatch,
     RunLeaseUnreadable,
+    combined,
     run_lease,
 )
 from senselab_core.runtime.execution.executor import Admission
@@ -171,12 +172,12 @@ def test_a_worker_whose_lease_section_is_not_the_runs_refuses_to_start(tmp_path:
     prepared(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
     section = tmp_path / "run" / "epoch" / "1" / "lease.json"
     document = json.loads(section.read_text())
-    document["lease"]["stale_after_s"] = 3600.0
+    document["lease"].update({"stale_after_s": 3600.0, "wait_s": 7200.0})
     section.write_text(json.dumps(document))
     worker = PoolWorker(tmp_path / "run" / RUN_QUEUES, ["cpu"], profile=profile, store=ResultStore(tmp_path / "store"))
     with pytest.raises(LeaseMismatch) as raised:
         worker.serve()
-    assert raised.value.keys == ("stale_after_s",)
+    assert raised.value.keys == ("stale_after_s", "wait_s")
 
 
 def test_a_worker_stops_claiming_when_a_newer_epoch_binds_another_section(tmp_path: Path) -> None:
@@ -205,3 +206,19 @@ def test_no_queue_set_is_built_outside_for_run() -> None:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "QueueSet":
                 found.append(f"{path.name}:{node.lineno}")
     assert found == []
+
+
+def test_a_resume_under_a_shorter_profile_keeps_the_longest_wait(tmp_path: Path) -> None:
+    """The run's lease takes the longest `wait_s` of its epochs, and never less than its stale bound plus delay."""
+    run_dir = tmp_path / "run"
+    long = packaged_lease(1200.0, 0.2, 60.0, wait_s=2400.0)
+    short = packaged_lease(300.0, 0.2, 60.0, wait_s=600.0)
+    _epochs(run_dir, long)
+    found = run_lease(run_dir, own=short)
+    assert found.stale_after_s == 1200.0 and found.wait_s == 2400.0
+    assert (
+        combined(
+            [packaged_lease(1200.0, 0.2, 0.0, wait_s=1200.0), packaged_lease(300.0, 0.2, 60.0, wait_s=400.0)]
+        ).wait_s
+        == 1260.0
+    )

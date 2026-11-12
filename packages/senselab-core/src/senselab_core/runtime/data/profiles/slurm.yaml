@@ -110,14 +110,14 @@ calibration:
   # Workers a unit without a measure runs on.
   unmeasured_workers: 1
 # Every lease: seconds after which another process breaks it, the share of that between beats, the storage's attribute delay,
-# the beat intervals the bound allows (2: one missed beat), the default wait, the poll between takes, the attempts to remove a
+# the beats a live holder may miss (1), the default wait, the poll between takes, the attempts to remove a
 # moved lease and to re-take it after a displacement, and the octal directory mode; load refuses
-# missed_beats × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.
+# (1 + missed_beats) × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.
 lease:
   stale_after_s: 300
   renew_fraction: 0.33
   attribute_delay_s: 60
-  missed_beats: 2
+  missed_beats: 1
   wait_s: 600
   poll_s: 0.05
   remove_attempts: 3

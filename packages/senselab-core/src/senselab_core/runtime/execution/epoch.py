@@ -96,17 +96,22 @@ def read_section(directory: Path) -> JobLease:
 
 
 def combined(sections: Sequence[JobLease]) -> JobLease:
-    """Return the lease every judge of a run uses: the longest bounds, the shortest renewal, the rest the newest's.
+    """Return the lease every judge of a run uses.
+
+    It has the longest bounds and wait, the shortest renewal and the rest of the newest's.
 
     `sections` run oldest first; the last is the newest. With none, the packaged profile's section.
     """
     if not sections:
         return ExecutionProfile.load().lease
+    stale_after_s = max(s.stale_after_s for s in sections)
+    attribute_delay_s = max(s.attribute_delay_s for s in sections)
     return sections[-1].model_copy(
         update={
-            "stale_after_s": max(s.stale_after_s for s in sections),
-            "attribute_delay_s": max(s.attribute_delay_s for s in sections),
+            "stale_after_s": stale_after_s,
+            "attribute_delay_s": attribute_delay_s,
             "renew_fraction": min(s.renew_fraction for s in sections),
+            "wait_s": max(*(s.wait_s for s in sections), stale_after_s + attribute_delay_s),
         }
     )
 

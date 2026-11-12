@@ -131,7 +131,11 @@ class UnitResolver:
     @property
     def hardware(self) -> HardwareInfo:
         """The hardware the resolver reads: the given, else this host's probe (once per process)."""
-        return self._hardware_info if self._hardware_info is not None else host_hardware()
+        return (
+            self._hardware_info
+            if self._hardware_info is not None
+            else host_hardware(self.profile.sizing.device_query_s)
+        )
 
     def unit(
         self,

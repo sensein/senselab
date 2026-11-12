@@ -345,7 +345,14 @@ def placement_of(task: str, model: ModelRef | None, execution: ExecutionProfile)
     """
     spec = packaged().registry.spec(task)
     _, entry = _resolve_model(spec, model, execution, packaged().catalogue)
-    placement = resolve_execution(spec, entry, execution, host_hardware(), packaged().registry, packaged().catalogue)
+    placement = resolve_execution(
+        spec,
+        entry,
+        execution,
+        host_hardware(execution.sizing.device_query_s),
+        packaged().registry,
+        packaged().catalogue,
+    )
     return replace(placement, **request_components(placement.backend))
 
 
@@ -460,6 +467,6 @@ def bind_input(port: str, port_type: str, value: object) -> tuple[InputIdentity,
 
 
 @functools.cache
-def host_hardware() -> HardwareInfo:
-    """Return this host's hardware, probed once per process."""
-    return probe_hardware()
+def host_hardware(timeout_s: float | None = None) -> HardwareInfo:
+    """Return this host's hardware, probed once per process and bound, within `timeout_s` (`sizing.device_query_s`)."""
+    return probe_hardware(timeout_s=timeout_s)

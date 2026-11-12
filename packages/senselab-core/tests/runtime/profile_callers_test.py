@@ -1,18 +1,25 @@
 """A caller's profile reaches the components that read it: its `store` section and its fetch timeout are obeyed."""
 
+import contextlib
 import json
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 from lease_clock_fixture import ManualClock
+from senselab_core.runtime.call import host_hardware
 from senselab_core.runtime.execution.in_process import InProcess, default_store
+from senselab_core.runtime.execution.observing import hardware_of
 from senselab_core.runtime.execution.pool import run_store
 from senselab_core.runtime.execution.pool_worker import check_reachable
 from senselab_core.runtime.execution.run import MANIFEST_FILE, Run, results_store
 from senselab_core.runtime.execution.substrates import StoreUnreachable
+from senselab_core.runtime.execution.workers import process_cache
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.units import UnitResolver
 
 PACKAGED = ExecutionProfile.packaged()
 STORE = PACKAGED.store.model_copy(update={"commit_attempts": 7, "clock_tolerance_s": 1e13})
@@ -61,3 +68,24 @@ def test_reachability_is_probed_under_the_profiles_store_section(
     with pytest.raises(StoreUnreachable):
         check_reachable(tmp_path / "run", store, PACKAGED.store, clock=skewed)
     check_reachable(tmp_path / "run", store, STORE, clock=skewed)
+
+
+@pytest.mark.logic
+def test_every_reader_of_the_host_hardware_probes_within_the_profiles_device_query_s(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The model-cache budget, the worker's hardware class and the unit resolver use `sizing.device_query_s`."""
+    seen: list[float] = []
+
+    def run(cmd: list[str], **kwargs: Any) -> Any:  # noqa: ANN401
+        seen.append(kwargs["timeout"])
+        raise FileNotFoundError(cmd[0])
+
+    profile = PACKAGED.model_copy(update={"sizing": PACKAGED.sizing.model_copy(update={"device_query_s": 17.25})})
+    monkeypatch.setattr(subprocess, "run", run)
+    process_cache(None, profile.sizing.device_query_s)
+    with contextlib.suppress(ValueError):  # a host that shows no CPU model refuses the grant, after the probe
+        hardware_of(profile, "cpu")
+    assert UnitResolver(profile).hardware is not None
+    assert host_hardware(profile.sizing.device_query_s) is host_hardware(17.25)
+    assert seen and set(seen) == {17.25}

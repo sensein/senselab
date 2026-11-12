@@ -494,7 +494,7 @@ def job_context(  # noqa: PLR0913 - every input a context records
     return ExecutionContext(
         **env_fields(placement, env, expected, network_variables(profile.network)),
         platform=sysconfig.get_platform(),
-        numerics=numerics_class(host_hardware(), placement.device, PRECISION),
+        numerics=numerics_class(host_hardware(profile.sizing.device_query_s), placement.device, PRECISION),
         decoder=job_decoder(job),
         host=host_token(),
         protocol=f"wire@{WIRE_VERSION}",

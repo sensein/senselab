@@ -41,8 +41,10 @@ def test_probe_s_peer_wait_s_and_drift_window_are_derived_from_the_profile() -> 
     profile = ExecutionProfile.load(CLUSTER)
     assert (profile.probe_s, profile.peer_wait_s, profile.calibration.drift_window) == (90, 390, 6)
     assert profile.resolve_s == 2 * (300 + 600) == 1800
-    moved = ExecutionProfile.load(CLUSTER, {"sizing": {"target_wall_s": 3600}, "lease": {"stale_after_s": 600}})
-    assert (moved.probe_s, moved.peer_wait_s, moved.resolve_s) == (180, 780, 2400)
+    moved = ExecutionProfile.load(
+        CLUSTER, {"sizing": {"target_wall_s": 3600}, "lease": {"stale_after_s": 600, "wait_s": 1200}}
+    )
+    assert (moved.probe_s, moved.peer_wait_s, moved.resolve_s) == (180, 780, 3600)
     table = ExecutionProfile.load("laptop", _calibration({"length_strata": 3}))
     assert table.calibration.drift_window == 9
     for key in ("probe_s", "peer_wait_s", "drift_window", "resolve_s"):

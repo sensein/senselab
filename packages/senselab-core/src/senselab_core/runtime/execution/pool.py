@@ -461,7 +461,11 @@ class Pool:
         """Return the grant of `queue`'s resource class: the device pair on a `cuda` class, the host's otherwise."""
         resource = self.profile.resource_classes[class_of(queue)]
         devices = len(self.substrate.devices) if isinstance(self.substrate, Local) else None
-        seen = host_hardware() if resource.device == "cuda" or resource.mem_bytes is None else None
+        seen = (
+            host_hardware(self.profile.sizing.device_query_s)
+            if resource.device == "cuda" or resource.mem_bytes is None
+            else None
+        )
         return Grant.seen(resource, self.profile.pool, seen, devices=devices)
 
     def _produce(self, release: Release, jobs: Sequence[Job], placement: Placement) -> None:
