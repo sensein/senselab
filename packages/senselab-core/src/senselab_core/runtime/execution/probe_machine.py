@@ -8,6 +8,7 @@ with the estimate supersedes it.
 """
 
 import contextlib
+import dataclasses
 import importlib.metadata
 import logging
 import math
@@ -69,7 +70,7 @@ from senselab_core.runtime.execution.telemetry import (
     predicted,
 )
 from senselab_core.runtime.execution_settings import JobLease
-from senselab_core.runtime.fit import Unplaceable, choose
+from senselab_core.runtime.fit import Unplaceable, choose, code_of, current_unfit, moved_why
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import Lease, LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.measures import (
@@ -648,11 +649,14 @@ class ProbeMachine:
             for digest in digests:
                 self._origins[digest] = Origin(release.unit, release.estimate, release.held.queue, None)
 
-    def follow(self, parent: str, digest: str) -> None:
-        """Note retry item `digest` under the unit of production item `parent`, whose outcome is being read."""
+    def follow(self, parent: str, digest: str, queue: str | None = None) -> None:
+        """Note retry item `digest` under the unit of production item `parent`, whose outcome is being read.
+
+        A retry re-placed on another class is on that class's `queue`, so its own faults are read against its grant.
+        """
         origin = self._origins.get(parent)
         if origin is not None and origin.probe is None:
-            self._origins[digest] = origin
+            self._origins[digest] = origin if queue is None else dataclasses.replace(origin, queue=queue)
 
     def forget(self, digest: str) -> None:
         """Forget item `digest`: its outcome has been read."""
@@ -808,7 +812,7 @@ class ProbeMachine:
             start,
             fit=None if estimate is None else estimate.device if grant.on_device else estimate.host,
             resource="device" if grant.on_device else "host",
-            unfit=self.roots.unfit_records(unit),
+            unfit=current_unfit(self.roots, unit),
             grant_of=lambda name: self.host.grant(name).memory_bytes,
         )
         if choice.to == start:
@@ -822,7 +826,11 @@ class ProbeMachine:
     def _move(self, held: Held, to: str) -> None:
         """Place `held`'s jobs afresh on resource class `to`, on the queue of the same model."""
         queue = to + held.queue[len(class_of(held.queue)) :]
-        grant = {"resource_class": to, "partition": self.profile.resource_classes[to].partition}
+        grant = {
+            "resource_class": to,
+            "partition": self.profile.resource_classes[to].partition,
+            "why": moved_why(held.part.placement.why, class_of(held.queue)),
+        }
         placement = held.part.placement.model_copy(update=grant)
         part = Dumped.of(held.part).part(range(len(held.part.jobs)), placement=placement.model_dump(mode="json"))
         held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
@@ -847,10 +855,17 @@ class ProbeMachine:
         with self._machine:
             if any(
                 r.resource == resource and r.grant_bytes >= grant.memory_bytes
-                for r in self.roots.unfit_records(origin.unit)
+                for r in current_unfit(self.roots, origin.unit)
             ):
                 return
-            record = UnfitRecord(resource=resource, grant_bytes=grant.memory_bytes, worker=worker)
+            code = code_of(origin.unit)
+            record = UnfitRecord(
+                resource=resource,
+                grant_bytes=grant.memory_bytes,
+                source=code.source,
+                overlay=code.overlay,
+                worker=worker,
+            )
             self.roots.put_record(origin.unit, "unfit", record, self._provenance(origin.unit.hardware))
 
     def oom(self, digest: str, observations: Sequence[Observation], worker: str | None) -> None:

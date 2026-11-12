@@ -5,6 +5,7 @@ builds the input manifest, so the plan and its hash are the same on every host. 
 logical plan under an execution profile on this host (`runtime.placement`), giving a `Plan`.
 """
 
+import functools
 import json
 import os
 import re
@@ -45,7 +46,7 @@ from senselab_core.runtime.explain import (
     undetermined_lines,
     waits,
 )
-from senselab_core.runtime.fit import Choice, Unplaceable, choose
+from senselab_core.runtime.fit import Choice, Unplaceable, choose, current_unfit, moved_why
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
 from senselab_core.runtime.licenses import laxer_than
@@ -615,7 +616,7 @@ class Plan:
 
         profile = self.execution
         assert profile is not None
-        read_unfit = unfit if unfit is not None else reading.roots.unfit_records
+        read_unfit = unfit if unfit is not None else functools.partial(current_unfit, reading.roots)
         found: dict[str, Choice] = {}
         for node_id, placed in self.placement.nodes.items():
             unit, estimate = estimates[node_id]
@@ -654,7 +655,7 @@ class Plan:
                 update={
                     "resource_class": choice.to,
                     "partition": current[choice.to].partition,
-                    "why": f"{placed.why}; moved from {placed.resource_class}: {choice.tried[0].line()}",
+                    "why": moved_why(placed.why, placed.resource_class),
                 }
             )
         return self.placement.model_copy(update={"nodes": nodes})

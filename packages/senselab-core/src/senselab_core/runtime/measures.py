@@ -796,6 +796,24 @@ class MeasureRoots:
                     found.append(UnfitRecord.model_validate(record.record))
         return tuple(found)
 
+    def remove_unfit(self, unit: MeasureUnit) -> int:
+        """Remove the `unfit` records of `unit` this process's user owns, in every root; return how many.
+
+        A root this reader cannot write, or a record another user owns, is left as it is.
+        """
+        removed = 0
+
+        def visit(root: Path, unit_dir: StorageDir) -> None:
+            nonlocal removed
+            with self._guard(root, "written"), unit_dir.child("unfit") as directory:
+                for name in directory.listdir():
+                    info = directory.lstat(name)
+                    if _JSON_NAME.fullmatch(name) and info and info.st_uid == self.uid:
+                        removed += directory.remove_owned(name, pattern=_JSON_NAME)
+
+        self._each_unit(self._digest(unit), visit)
+        return removed
+
     def probes(self, unit: MeasureUnit) -> tuple[ProbeFile, ...]:
         """Return the probe files of `unit` that still pool, oldest first.
 

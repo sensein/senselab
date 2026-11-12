@@ -21,6 +21,7 @@ from senselab_core.testing.calibration_samples import UNIT, observation
 pytestmark = pytest.mark.logic
 
 _GB = 10**9
+CODE = "c" * 64
 
 
 def _estimate(resident: int, m0: float = 0.0) -> Estimate:
@@ -77,7 +78,7 @@ def test_an_oversized_unit_is_placed_on_the_larger_class() -> None:
     big = _estimate(950_000_000, 1000.0)
     fitted = placed.fit(**_read(placed, big))
     node = fitted.placement.nodes[CALL_NODE]
-    assert node.resource_class == "cpu:large" and "moved from cpu" in node.why and "resident 950000000" in node.why
+    assert node.resource_class == "cpu:large" and "moved from cpu" in node.why and "950000000" not in node.why
     assert fitted.hash == placed.hash
     assert placed.fit(**_read(placed, _estimate(100_000_000))).placement == placed.placement
 
@@ -108,15 +109,15 @@ def test_explain_shows_the_move_with_the_class_tried() -> None:
 def test_an_unfit_record_skips_the_class_it_names_and_every_smaller_one() -> None:
     """A load that ran out of memory in a grant makes that grant and any below it unfit, whatever was measured."""
     placed = _planned(_profile())
-    record = UnfitRecord(resource="host", grant_bytes=_GB)
+    record = UnfitRecord(resource="host", grant_bytes=_GB, source=CODE, overlay=CODE)
     fitted = placed.fit(**_read(placed, _estimate(10_000_000), [record]))
     assert fitted.placement.nodes[CALL_NODE].resource_class == "cpu:large"
-    assert "a load ran out of memory in a grant of 1000000000" in fitted.placement.nodes[CALL_NODE].why
-    both = UnfitRecord(resource="host", grant_bytes=8 * _GB)
+    assert "a load ran out of memory in a grant of 1000000000" in placed.explain(**_read(placed, None, [record]))
+    both = UnfitRecord(resource="host", grant_bytes=8 * _GB, source=CODE, overlay=CODE)
     with pytest.raises(Unplaceable) as raised:
         placed.fit(**_read(placed, None, [both]))
     assert [t.verdict for t in raised.value.tried] == ["unfit", "unfit"]
-    other = UnfitRecord(resource="device", grant_bytes=8 * _GB)
+    other = UnfitRecord(resource="device", grant_bytes=8 * _GB, source=CODE, overlay=CODE)
     assert placed.fit(**_read(placed, None, [other])).placement == placed.placement
 
 
@@ -136,3 +137,21 @@ def test_judge_is_the_one_rule() -> None:
     profile = _profile()
     chosen = choose(profile, "cpu", fit=fit, resource="host", unfit=(), grant_of={"cpu": 50, "cpu:large": 500}.get)
     assert chosen.to == "cpu:large" and [t.verdict for t in chosen.tried] == ["too small", "fits"]
+
+
+def test_measured_figures_stay_out_of_the_placement_and_the_item_digest() -> None:
+    """Two fits whose resident memory differs by a little place a node alike and cut the same item."""
+    from senselab_core.runtime.execution.executor import Admission  # noqa: PLC0415 - one use
+    from senselab_core.runtime.execution.in_process import node_fragment  # noqa: PLC0415 - one use
+    from senselab_core.runtime.execution.queue import item_digest  # noqa: PLC0415 - one use
+
+    placed = _planned(_profile())
+    digests = []
+    for resident in (950_000_000, 960_000_000):
+        fitted = placed.fit(**_read(placed, _estimate(resident)))
+        node = fitted.placement.nodes[CALL_NODE]
+        assert node.resource_class == "cpu:large" and "moved from cpu" in node.why and str(resident) not in node.why
+        digests.append(item_digest(node_fragment(fitted, Admission(id="run", plan_hash=fitted.hash))))
+    assert digests[0] == digests[1]
+    text = placed.explain(**_read(placed, _estimate(960_000_000)))
+    assert "resident 960000000" in text

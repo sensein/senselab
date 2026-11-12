@@ -202,10 +202,10 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
     register(
         UnfitRecord,
         lambda: [
-            UnfitRecord(resource="device", grant_bytes=2**36),
-            UnfitRecord(resource="host", grant_bytes=1, worker="w"),
+            UnfitRecord(resource="device", grant_bytes=2**36, source="a" * 64, overlay="a" * 64),
+            UnfitRecord(resource="host", grant_bytes=1, source="b" * 64, overlay="b" * 64, worker="w"),
         ],
-        invalid_updates=[{"resource": "disk"}, {"grant_bytes": 0}, {"worker": ""}],
+        invalid_updates=[{"resource": "disk"}, {"grant_bytes": 0}, {"worker": ""}, {"source": "x"}, {"overlay": "x"}],
     )
     register(
         EstimateSource,

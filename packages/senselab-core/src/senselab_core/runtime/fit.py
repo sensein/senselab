@@ -6,12 +6,23 @@ when a load of the unit ran out of memory in a grant at least as large (`UnfitRe
 the classes above it (`larger_class`) and returns the first that fits, with what it found of each class.
 """
 
+import functools
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal
 
+import senselab_worker
+from senselab_worker.digest import file_digest, identity_digest
+from senselab_worker.faults import ResourceFault
+
+from senselab_core.kernel.declare import UnknownTask
 from senselab_core.runtime.calibration import MemoryFit, UnfitRecord
+from senselab_core.runtime.envs import overlay_digest
 from senselab_core.runtime.profiles import ExecutionProfile
+
+if TYPE_CHECKING:
+    from senselab_core.runtime.measures import MeasureRoots, MeasureUnit
 
 Verdict = Literal["fits", "too small", "unfit", "grant unknown"]
 
@@ -70,8 +81,10 @@ class ClassTried:
         return f"class {self.resource_class} states no memory to judge"
 
 
-class Unplaceable(RuntimeError):  # noqa: N818 - named for what the plan is, as its callers know it
+class Unplaceable(RuntimeError, ResourceFault):  # noqa: N818 - named for what the plan is, as its callers know it
     """A unit that fits no class the profile has at or above its own: the plan cannot run.
+
+    A plan outcome, not a fault of the environment: its record is a resource fault, never counted against an env.
 
     Attributes:
         subject: What was placed: a node id or a unit label.
@@ -83,6 +96,53 @@ class Unplaceable(RuntimeError):  # noqa: N818 - named for what the plan is, as 
         super().__init__(f"{subject} fits no resource class: " + "; ".join(t.line() for t in tried))
         self.subject = subject
         self.tried = tuple(tried)
+
+
+def moved_why(why: str, start: str) -> str:
+    """Return a placement's reason once its node has moved up from class `start`; no measured figure is in it."""
+    return f"{why}; moved from {start}"
+
+
+@dataclass(frozen=True)
+class Code:
+    """The code a load runs under: the digest of the senselab source and of its backend's worker overlay."""
+
+    source: str
+    overlay: str
+
+
+@functools.cache
+def source_digest() -> str:
+    """Return the digest of the senselab-core and senselab-worker source files: the code a load ran under."""
+    listed = []
+    for package in (Path(__file__).parents[1], Path(senselab_worker.__file__).parent):
+        for path in sorted(package.rglob("*.py")):
+            listed.append([f"{package.name}/{path.relative_to(package).as_posix()}", file_digest("file@1", path)])
+    return identity_digest("core-runtime@1", listed)
+
+
+def code_of(unit: "MeasureUnit") -> Code:
+    """Return the code a load of `unit` runs under: the senselab source and its backend's worker overlay.
+
+    A fix to either gives another `Code`, so an `unfit` record of the code it fixes no longer binds the unit.
+    """
+    from senselab_core.runtime.call import packaged  # noqa: PLC0415 - call imports the runtime that imports this
+
+    sources: dict[str, Path] = {}
+    try:
+        declared = packaged().registry.backends(unit.task)
+    except UnknownTask:
+        declared = []
+    for backend in declared:
+        if backend.name == unit.backend:
+            sources = {module: Path(file) for module, file in backend.worker_sources.items()}
+    return Code(source_digest(), overlay_digest(sources))
+
+
+def current_unfit(roots: "MeasureRoots", unit: "MeasureUnit") -> tuple[UnfitRecord, ...]:
+    """Return the `unfit` records of `unit` written under the code it runs under now."""
+    code = code_of(unit)
+    return tuple(r for r in roots.unfit_records(unit) if (r.source, r.overlay) == (code.source, code.overlay))
 
 
 @dataclass(frozen=True)
@@ -136,4 +196,16 @@ def choose(  # noqa: PLR0913 - the profile and the class, what the unit measured
     return Choice(None, tuple(tried))
 
 
-__all__ = ["Choice", "ClassTried", "Unplaceable", "choose", "judge", "larger_class"]
+__all__ = [
+    "Choice",
+    "ClassTried",
+    "Unplaceable",
+    "choose",
+    "Code",
+    "code_of",
+    "current_unfit",
+    "judge",
+    "larger_class",
+    "moved_why",
+    "source_digest",
+]

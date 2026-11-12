@@ -27,7 +27,7 @@ from senselab_core.runtime.execution.pool_parts import Followed, Held, Release
 from senselab_core.runtime.execution.probe_machine import ProbeMachine
 from senselab_core.runtime.execution.queue import probe_of
 from senselab_core.runtime.execution.substrates import class_of
-from senselab_core.runtime.fit import Unplaceable
+from senselab_core.runtime.fit import Unplaceable, code_of
 from senselab_core.runtime.measures import MeasureUnit
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import Grant
@@ -37,6 +37,10 @@ pytestmark = pytest.mark.logic
 
 SMALL = RESIDENT  # a grant whose headroom share (0.9) is below the seeded resident memory
 LARGE = 4 * RESIDENT
+
+
+def _code(unit: MeasureUnit) -> dict[str, str]:
+    return {"source": code_of(unit).source, "overlay": code_of(unit).overlay}
 
 
 class GrantedHost(DeviceHost):
@@ -150,7 +154,10 @@ def test_an_unfit_record_in_a_larger_grant_leaves_no_class_to_place_on(tmp_path:
     """A load that ran out of memory in the larger grant too leaves the unit unplaceable."""
     machine, host, held, unit = _fitting(tmp_path, clock, small=2 * RESIDENT)
     assert machine.roots.put_record(
-        unit, "unfit", UnfitRecord(resource="device", grant_bytes=LARGE), _provenance(machine.profile)
+        unit,
+        "unfit",
+        UnfitRecord(resource="device", grant_bytes=LARGE, **_code(unit)),
+        _provenance(machine.profile),
     )
     with pytest.raises(Unplaceable) as raised:
         machine.place(held)
@@ -162,7 +169,10 @@ def test_an_unmeasured_unit_recorded_unfit_is_not_probed_on_that_class(tmp_path:
     """A unit with no measure and an `unfit` record for its class is placed above it before any probe item is put."""
     machine, host, held, unit = _fitting(tmp_path, clock, small=2 * RESIDENT, seed=False)
     assert machine.roots.put_record(
-        unit, "unfit", UnfitRecord(resource="device", grant_bytes=2 * RESIDENT), _provenance(machine.profile)
+        unit,
+        "unfit",
+        UnfitRecord(resource="device", grant_bytes=2 * RESIDENT, **_code(unit)),
+        _provenance(machine.profile),
     )
     machine.place(held)
     probing = [n for n in host.queues if probe_of(n)]
@@ -206,3 +216,39 @@ def test_every_release_goes_through_the_one_fit_gate() -> None:
         and node.func.value.attr == "host"
     ]
     assert {name for name, _ in sites} == {"_release"}, sites
+
+
+def test_a_record_of_other_code_does_not_bind_the_unit(tmp_path: Path, clock: ManualClock) -> None:
+    """The record carries the senselab source and worker-overlay digest of the code that failed: others ignore it."""
+    machine, host, held, unit = _fitting(tmp_path, clock, small=2 * RESIDENT)
+    stale = UnfitRecord(resource="device", grant_bytes=LARGE, source="0" * 64, overlay="0" * 64)
+    assert machine.roots.put_record(unit, "unfit", stale, _provenance(machine.profile))
+    assert (stale.source, stale.overlay) != (code_of(unit).source, code_of(unit).overlay)
+    machine.place(held)
+    [release] = host.released
+    assert release.held.queue == "cpu"
+
+
+def test_a_written_record_carries_the_code_digest_and_a_group_can_clear_it(
+    tmp_path: Path, clock: ManualClock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`senselab unfit` lists a unit's records and `--clear` removes them, so a fixed loader is tried again."""
+    from senselab_core.cli import main as cli_main  # noqa: PLC0415 - one use
+
+    machine, host, held, unit = _fitting(tmp_path, clock, small=2 * RESIDENT)
+    machine.place(held)
+    [release] = host.released
+    machine.note(release, ["item"])
+    machine.unfit("item", None)
+    [record] = machine.roots.unfit_records(unit)
+    assert {"source": record.source, "overlay": record.overlay} == _code(unit)
+    profile = tmp_path / "profile.json"
+    profile.write_text(machine.profile.model_dump_json())
+    assert cli_main(["unfit", "--profile", str(profile)]) == 0
+    listed = capsys.readouterr().out
+    assert unit.label() in listed and str(2 * RESIDENT) in listed
+    assert cli_main(["unfit", unit.label(), "--clear", "--profile", str(profile)]) == 0
+    assert "removed 1" in capsys.readouterr().out
+    assert machine.roots.unfit_records(unit) == ()
+    assert cli_main(["unfit", "--clear", "--profile", str(profile)]) == 1
+    assert "names no unit" in capsys.readouterr().err

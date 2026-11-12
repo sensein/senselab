@@ -381,7 +381,7 @@ def _stem(
     if parsed.torch_pins:
         host_cuda = host_cuda or detect_host_cuda()
         index = pick_torch_index(host_cuda, override=settings.torch_index, max_cuda=parsed.max_cuda)
-    overlay = _overlay_digest(workers or {})
+    overlay = overlay_digest(workers or {})
     stem = f"{env.name}-{index.tag}-{overlay[:16]}" if index else f"{env.name}-{overlay[:16]}"
     return stem, index, host_cuda
 
@@ -543,7 +543,8 @@ def _wheel_set(site: Path) -> str:
     return identity_digest(WHEEL_SET_TAG, [list(pair) for pair in installed])
 
 
-def _overlay_digest(workers: Mapping[str, Path]) -> str:
+def overlay_digest(workers: Mapping[str, Path]) -> str:
+    """Return the digest of the worker runtime and of each of `workers`, as an env's build is named by it."""
     modules = [[module, file_digest("file@1", source)] for module, source in sorted(workers.items())]
     return identity_digest(OVERLAY_DIGEST_TAG, [senselab_worker.runtime_identity(), modules])
 

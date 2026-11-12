@@ -918,8 +918,7 @@ class Pool:
             update["placement"] = placement.model_dump(mode="json")
         retry = jobs_of(flight.fragment, [index], **update)
         self._put(retry, followed, retry=True)
-        if placement is None:
-            self._machine.follow(flight.digest, item_digest(retry))
+        self._machine.follow(flight.digest, item_digest(retry), None if placement is None else self._queue_name(retry))
         self._wake_scaler()
         job, placed = retry.jobs[0], retry.placement
         key = self._keys(retry)[0]
@@ -1078,7 +1077,10 @@ def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only prof
     names. `overrides` and `hook` are the explicit placement values and the site's hook (`plan`'s `placement`
     and `placement_hook`).
 
+    A node whose unit does not fit its class runs on the smallest class it fits (`Plan.fit`), as `start` places it.
+
     Raises:
+        Unplaceable: a node's unit fits no class from its own up; no attempt is claimed.
         ValueError: the plan was placed under another profile than `profile`.
         StaleCoordinator: a newer coordinator took an epoch while this one ran.
         QueueHeld: an env broke and was held.
@@ -1089,7 +1091,7 @@ def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only prof
 
     run_dir = Path(run_dir)
     profile = profile if profile is not None else ExecutionProfile.load()
-    placed = replace(run_plan(run_dir, profile), overrides=overrides or {}, hook=hook)
+    placed = replace(run_plan(run_dir, profile), overrides=overrides or {}, hook=hook).fit()
     store = store if store is not None else run_store(run_dir, profile)
     delay = check_storage(profile, store.root)
     values = bind_sources(placed)
