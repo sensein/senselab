@@ -10,17 +10,19 @@ from pathlib import Path
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.runtime.execution.epoch import StaleCoordinator
-from senselab_core.runtime.execution.events import Event, placements, runs_root
-from senselab_core.runtime.execution.executor import QueueHeld
+from senselab_core.runtime.execution.events import UNPLACEABLE, Event, placements, runs_root
+from senselab_core.runtime.execution.executor import FaultRecord, QueueHeld
 from senselab_core.runtime.execution.pool import coordinate, run_plan, run_store
 from senselab_core.runtime.execution.pool_worker import serve_pool
 from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run, latest_placement, read_placement
 from senselab_core.runtime.execution.substrates import ExternalWorkers, substrate_of
 from senselab_core.runtime.explain import node_line
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
+from senselab_core.runtime.fit import Unplaceable
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.site_placement import PlacementHookFailed, load_overrides
+from senselab_core.runtime.units import measure_roots
 
 
 def mount_data(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -135,6 +137,8 @@ def run_status(args: argparse.Namespace) -> int:
         print(f"reclaimed claims: {status.reclaimed}")
     if status.quarantined:
         print(f"quarantined event lines: {status.quarantined}")
+    for message in status.unplaceable:
+        print(f"unplaceable: {' '.join(message.split())}")
     for broken in status.broken:
         print(f"broken env {broken.env}: {broken.failures} failures; {broken.fault.type}: {broken.fault.message}")
     for node, counts in status.nodes.items():
@@ -158,6 +162,12 @@ def _placement(run_dir: Path, events: list[Event]) -> PlanPlacement:
         if path.is_file():
             return read_placement(path)
     return latest_placement(run_dir)
+
+
+def _failure_text(failure: FaultRecord) -> str:
+    """Return a failure's lines for `explain`: an unplaceable plan's own headline first, then its class and tail."""
+    head = f"unplaceable: {' '.join(failure.message.split())}\n" if failure.type == UNPLACEABLE else ""
+    return f"{head}fault {failure.fault}: {failure.type}\n{_tail(failure.message)}"
 
 
 def run_explain(args: argparse.Namespace) -> int:
@@ -192,8 +202,7 @@ def run_explain(args: argparse.Namespace) -> int:
             print(_event_line(event))
         for event in (e for e in shown if e.failure is not None):
             assert event.failure is not None
-            print(f"fault {event.failure.fault}: {event.failure.type}")
-            print(_tail(event.failure.message))
+            print(_failure_text(event.failure))
         for event in (e for e in shown if e.kind in ("blocked", "cancelled")):
             why = "an upstream job failed" if event.kind == "blocked" else "the run was cancelled before it was sent"
             print(f"{event.kind} {event.node}{list(event.job.element) if event.job else ''}: {why}")
@@ -234,8 +243,14 @@ def run_plan_request(args: argparse.Namespace) -> int:
     return 0
 
 
+UNPLACEABLE_EXIT = 3
+"""The exit status of a command whose plan fits no resource class: not 1 (an error) and not 2 (a usage error)."""
+
+
 def run_coordinate(args: argparse.Namespace) -> int:
     """Run a parsed ``coordinate``: take the run's next epoch and send its jobs to its queues, for pool workers.
+
+    A plan whose unit fits no resource class prints the unit, each class tried and the numbers, and exits 3.
 
     The profile's substrate starts the workers unless ``--external`` says they are started on their own.
     """
@@ -252,6 +267,9 @@ def run_coordinate(args: argparse.Namespace) -> int:
             overrides=load_overrides(args.placement),
             hook=args.placement_hook,
         )
+    except Unplaceable as err:
+        print(f"senselab: unplaceable: {' '.join(str(err).split())}", file=sys.stderr)
+        return UNPLACEABLE_EXIT
     except (OSError, ValueError, StaleCoordinator, QueueHeld, PlacementHookFailed) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
         return 1
@@ -282,6 +300,46 @@ def _placement_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def run_unfit(args: argparse.Namespace) -> int:
+    """Run a parsed ``unfit``: list the units recorded as not fitting a class, or ``--clear`` one unit's records.
+
+    A unit is named by the digest label ``explain`` prints, or any prefix of its digest; ``--clear`` needs the prefix
+    to name one unit. A record binds the code that
+    wrote it, so a fixed loader needs no clearing; this is for a record of a load a busy card, not the unit, failed.
+    """
+    try:
+        profile = _profile(args.profile)
+        roots = measure_roots(profile)
+        found = [
+            (unit, records)
+            for unit in roots.units()
+            if unit.digest().startswith(args.unit or "") and (records := roots.unfit_records(unit))
+        ]
+        if args.clear and not args.unit:
+            print("senselab: error: --clear names no unit; give the unit's digest label", file=sys.stderr)
+            return 1
+        if args.clear and len(found) > 1:
+            listed = ", ".join(u.label() for u, _ in found)
+            print(
+                f"senselab: error: {args.unit!r} matches {len(found)} units ({listed}); give more of the label",
+                file=sys.stderr,
+            )
+            return 1
+        for unit, records in found:
+            if args.clear:
+                print(f"unit {unit.label()}: removed {roots.remove_unfit(unit)} record(s)")
+                continue
+            for record in records:
+                print(
+                    f"unit {unit.label()} ({unit.task} {unit.backend}): a load ran out of {record.resource} memory in "
+                    f"a grant of {record.grant_bytes} bytes"
+                )
+    except (OSError, ValueError) as err:
+        print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
     """Add the ``status``, ``explain``, ``coordinate`` and ``execute`` commands to a parser's subparsers."""
     status = groups.add_parser("status", help="the jobs, faults and broken envs of a run")
@@ -309,6 +367,13 @@ def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
         "--external", action="store_true", help="start no workers: they are started on their own (execute --pool)"
     )
     coordinating.set_defaults(run=run_coordinate)
+    unfit = groups.add_parser("unfit", help="the units recorded as not fitting a resource class; --clear removes one's")
+    unfit.add_argument(
+        "unit", nargs="?", default=None, help="a unit's digest label (or digest prefix); all when omitted"
+    )
+    unfit.add_argument("--clear", action="store_true", help="remove the named unit's records")
+    unfit.add_argument("--profile", default=None, help="the execution profile whose measures roots are read")
+    unfit.set_defaults(run=run_unfit)
     executing = groups.add_parser("execute", help="serve a run's queues as one pool worker")
     executing.add_argument("--pool", required=True, help="the run's queues directory, <run dir>/queues")
     executing.add_argument("--classes", required=True, help="the resource classes to serve, comma-separated")

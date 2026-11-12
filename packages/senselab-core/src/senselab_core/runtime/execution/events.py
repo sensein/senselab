@@ -209,6 +209,10 @@ class BrokenEnv(Frozen):
     failures: Annotated[int, Field(ge=1)]
 
 
+UNPLACEABLE = "Unplaceable"
+"""The `type` of the failure record of a plan that fits no resource class (`fit.Unplaceable`)."""
+
+
 @dataclass(frozen=True)
 class RunStatus:
     """Where a run is: its jobs by state, its failures by fault class, its broken envs and whether it is over.
@@ -218,6 +222,8 @@ class RunStatus:
     newest event. `interrupted` is set by `Run.wait` alone, when the run is not done and its coordinator stopped.
     `reclaimed` counts the claims that broke a stale lease first (`reclaimed` events); `quarantined` the event lines a
     reader could not decode (`EventScan`), so a job whose terminal event was one reads as not done for that reason.
+    `unplaceable` holds each distinct message of a plan that fits no class (`Unplaceable`): an outcome of the plan,
+    never counted against an env.
     """
 
     counts: Mapping[JobState, int]
@@ -230,6 +236,7 @@ class RunStatus:
     nodes: Mapping[str, Mapping[JobState, int]] = field(default_factory=dict)
     reclaimed: int = 0
     quarantined: int = 0
+    unplaceable: tuple[str, ...] = ()
 
 
 def _latest(events: Sequence[Event]) -> list[Event]:
@@ -351,6 +358,9 @@ def status_from(
         nodes={n: {s: c[s] for s in STATES} for n, c in sorted(per_node.items())},
         reclaimed=sum(1 for e in seen if e.kind == "reclaimed"),
         quarantined=quarantined,
+        unplaceable=tuple(
+            sorted({e.failure.message for e in seen if e.failure is not None and e.failure.type == UNPLACEABLE})
+        ),
     )
 
 

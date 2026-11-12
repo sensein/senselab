@@ -38,12 +38,13 @@ from senselab_core.runtime.execution.executor import (
 )
 from senselab_core.runtime.execution.in_process import InProcess, job_key, node_fragment
 from senselab_core.runtime.execution.job import Failed, JobOutcome
-from senselab_core.runtime.execution.pool import Pool, larger_class, report, split
+from senselab_core.runtime.execution.pool import Pool, report, split
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.run import INPUTS_FILE, Run, record_sources
 from senselab_core.runtime.execution.substrates import QueueReady, WorkerHandle, mark_ready
 from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.fit import larger_class
 from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.planner import Plan, plan, resume
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -68,7 +69,6 @@ CLASSES = {
 }
 WORKERS = WorkerSet(4)
 CONTENT = {"content_attempts": 2, "infrastructure_replacements": 6, "resource_replacements": 1}
-LOST = FaultRecord(fault="infrastructure", type="WorkerLost", message="lost", gap=False, charged=False)
 GAP = FaultRecord(fault="infrastructure", type="RuntimeError", message="unclassified", gap=True, charged=False)
 CHARGED = FaultRecord(fault="content", type="ValueError", message="bad input", gap=False, charged=True)
 LOST = FaultRecord(fault="infrastructure", type="WorkerLost", message="gone", gap=False, charged=False)

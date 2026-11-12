@@ -283,6 +283,21 @@ class OomRecord(Frozen):
     worker: NonEmptyStr | None = None
 
 
+class UnfitRecord(Frozen):
+    """A unit's load that ran out of memory in a grant of `grant_bytes`: the unit does not fit a class with no more.
+
+    `resource` is the memory that ran out. `source` and `overlay` are the digests of the senselab source and of the
+    worker overlay the load ran under (`fit.code_of`): a record binds only the code that wrote it. `worker` is the
+    `worker_id()` of the worker that failed to load, None when its outcome names none.
+    """
+
+    resource: Literal["device", "host"]
+    grant_bytes: Positive
+    source: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    overlay: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    worker: NonEmptyStr | None = None
+
+
 class DriftRecord(Frozen):
     """Production evidence that an estimate is suspect: a window of wall ratios, or one device peak above its band.
 

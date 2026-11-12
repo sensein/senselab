@@ -8,6 +8,7 @@ from senselab_core.kernel.license import LicenseSet
 from senselab_core.kernel.placement import NodePlacement, PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.runtime.calibration import Estimate, LengthProfile
+from senselab_core.runtime.fit import Choice
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.measures import resolve_roots
 from senselab_core.runtime.placement import HOUR_S
@@ -64,6 +65,24 @@ class NodeSized:
     why: str
 
 
+def class_grant(profile: ExecutionProfile, name: str, hardware: HardwareInfo | None) -> Grant:
+    """Return the grant a worker of class `name` has under `profile` on `hardware` (None: not seen)."""
+    resource = profile.resource_classes[name]
+    cuda = resource.device == "cuda"
+    devices = len(hardware.gpus) if hardware is not None and cuda and profile.substrate.kind == "local" else None
+    return Grant.seen(resource, profile.pool, hardware, devices=devices)
+
+
+def fit_lines(choice: Choice) -> list[str]:
+    """Return the line `explain` gives a node whose fit was judged: each class tried, and where the node goes."""
+    tried = "; ".join(t.line() for t in choice.tried)
+    if choice.to is None:
+        return [f"  fit: unplaceable: {tried}"]
+    if len(choice.tried) == 1:
+        return [f"  fit: {tried}"]
+    return [f"  fit: {tried}; placed on class {choice.to}"]
+
+
 def sized_node(  # noqa: PLR0913 - the node's placement, the profile, the measures read, and what is known of it
     placed: NodePlacement,
     profile: ExecutionProfile,
@@ -76,10 +95,7 @@ def sized_node(  # noqa: PLR0913 - the node's placement, the profile, the measur
     why_no_lengths: str | None = None,
 ) -> NodeSized:
     """Return the grant and `size`'s sizing of a node, purely; `sized` is None without an estimate or its lengths."""
-    resource = profile.resource_classes[placed.resource_class]
-    cuda = resource.device == "cuda"
-    devices = len(hardware.gpus) if hardware is not None and cuda and profile.substrate.kind == "local" else None
-    grant = Grant.seen(resource, profile.pool, hardware, devices=devices)
+    grant = class_grant(profile, placed.resource_class, hardware)
     if estimate is None:
         return NodeSized(estimate, grant, None, why_no_estimate)
     if work is None:

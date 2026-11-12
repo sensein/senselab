@@ -82,7 +82,6 @@ from senselab_core.runtime.execution.pool_parts import (
     ProbedUnit,
     Release,
     jobs_of,
-    larger_class,
     report,
     split,
 )
@@ -105,6 +104,7 @@ from senselab_core.runtime.execution.substrates import (
 )
 from senselab_core.runtime.execution.telemetry import Actuals, Placements
 from senselab_core.runtime.execution_settings import ResourceClass
+from senselab_core.runtime.fit import larger_class
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.measures import (
     Estimates,
@@ -717,6 +717,8 @@ class Pool:
                 self._actuals.landed(class_of(flight.queue), seen)
             self._machine.settled(flight.digest, seen)
             self._machine.oom(flight.digest, seen, _worker_of(record))
+            if _load_oom(record):
+                self._machine.unfit(flight.digest, _worker_of(record))
             if not reused:
                 self._survived(flight, record)
         try:
@@ -916,8 +918,7 @@ class Pool:
             update["placement"] = placement.model_dump(mode="json")
         retry = jobs_of(flight.fragment, [index], **update)
         self._put(retry, followed, retry=True)
-        if placement is None:
-            self._machine.follow(flight.digest, item_digest(retry))
+        self._machine.follow(flight.digest, item_digest(retry), None if placement is None else self._queue_name(retry))
         self._wake_scaler()
         job, placed = retry.jobs[0], retry.placement
         key = self._keys(retry)[0]
@@ -1019,6 +1020,15 @@ def _observed(record: Mapping[str, object]) -> list[Observation]:
     return [Observation.model_validate(o) for o in reported] if isinstance(reported, list) else []
 
 
+def _load_oom(record: Mapping[str, object]) -> bool:
+    """Whether an item's outcome `record` holds a load that ran out of memory: a job's failure, or the item's own."""
+    jobs, fault = record.get("jobs"), record.get("fault")
+    faults = [j.get("failure") for j in jobs if isinstance(j, Mapping)] if isinstance(jobs, list) else []
+    return any(
+        isinstance(f, Mapping) and f.get("fault") == "resource" and f.get("load") is True for f in [*faults, fault]
+    )
+
+
 def _worker_of(record: Mapping[str, object]) -> str | None:
     """Return the `worker_id()` of the worker an item's outcome `record` names, None when it names none."""
     measure = record.get("measure")
@@ -1067,7 +1077,10 @@ def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only prof
     names. `overrides` and `hook` are the explicit placement values and the site's hook (`plan`'s `placement`
     and `placement_hook`).
 
+    A node whose unit does not fit its class runs on the smallest class it fits (`Plan.fit`), as `start` places it.
+
     Raises:
+        Unplaceable: a node's unit fits no class from its own up; no attempt is claimed.
         ValueError: the plan was placed under another profile than `profile`.
         StaleCoordinator: a newer coordinator took an epoch while this one ran.
         QueueHeld: an env broke and was held.
@@ -1078,7 +1091,7 @@ def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only prof
 
     run_dir = Path(run_dir)
     profile = profile if profile is not None else ExecutionProfile.load()
-    placed = replace(run_plan(run_dir, profile), overrides=overrides or {}, hook=hook)
+    placed = replace(run_plan(run_dir, profile), overrides=overrides or {}, hook=hook).fit()
     store = store if store is not None else run_store(run_dir, profile)
     delay = check_storage(profile, store.root)
     values = bind_sources(placed)
@@ -1106,7 +1119,6 @@ __all__ = [
     "Pool",
     "ScalerFailed",
     "coordinate",
-    "larger_class",
     "report",
     "run_plan",
     "run_store",

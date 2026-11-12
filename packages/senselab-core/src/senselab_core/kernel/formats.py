@@ -110,6 +110,8 @@ MEASURE_REGIME_FORMAT = "measure-regime@1.0"
 """The format of a co-tenancy factor of an estimate."""
 MEASURE_OOM_FORMAT = "measure-oom@1.1"
 """The format of a resource fault at a batch and length."""
+MEASURE_UNFIT_FORMAT = "measure-unfit@1.0"
+"""The format of a unit's load that ran out of memory in a grant: the unit does not fit that class."""
 
 RUN_CONFIG_FORMAT = "run-config@2.1"
 """The format of a run config, `runtime/data/run_config.yaml` or a user's: comparison thresholds and calibration."""

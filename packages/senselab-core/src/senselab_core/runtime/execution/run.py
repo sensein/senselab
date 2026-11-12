@@ -997,7 +997,10 @@ def start(
     holds its coordinator lease until the run ends and hands the epoch to the executor (`bind_epoch`); the epoch is
     current only once its thread binds it (`Epoch.bind`), the last step before the plan runs.
 
+    A node whose unit does not fit its class runs on the smallest class it fits (`Plan.fit`).
+
     Raises:
+        Unplaceable: a node's unit fits no class from its own up; nothing is written.
         ValueError: as `admit`.
         InputChanged: an input changed since the plan was made.
         InputsUnavailable: an input held in memory is not held by `placed` (a plan read from disk).
@@ -1011,6 +1014,7 @@ def start(
         raise MissingExtra("pydra")
     from senselab_core.runtime.execution.runner import PydraRunner, RunCancelled  # noqa: PLC0415 - needs pydra
 
+    placed = placed.fit()
     provenance = ProvStore()
     if executor is None and store is None:
         store = results_store(placed.execution, None, provenance)

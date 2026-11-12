@@ -171,6 +171,7 @@ PAYLOADS: dict[str, dict[str, object]] = {
     "supersede": {"outdates": ["p1"], "confirmed_by": "p2"},
     "regime": {"k": 2, "rho": 1.5, "n": 3},
     "oom": {"resource": "device", "batch": 2, "length": 10.0, "cotenancy": 1, "grant_bytes": 10**9, "basis": ["p1"]},
+    "unfit": {"resource": "device", "grant_bytes": 10**9, "source": "a" * 64, "overlay": "b" * 64},
 }
 
 
