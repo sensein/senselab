@@ -28,7 +28,7 @@ from senselab_core.kernel._base import NonEmptyStr
 from senselab_core.kernel.formats import SERVICE_ENTRY_FORMAT, FormatTag, Formatted
 from senselab_core.kernel.identity import Attestation
 from senselab_core.runtime.clock import Clock, SystemClock
-from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.execution_settings import JobLease, VllmSettings
 from senselab_core.runtime.hardware import device_set, host_token
 from senselab_core.runtime.locks import LEASE_SUFFIX, Lease, LeaseState, LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -57,13 +57,23 @@ class ServiceRegistry:
     Args:
         root: The registry directory, made on first use.
         lease: The profile's `lease`: every registration and consumer lease beats under it.
+        vllm: The profile's `vllm` section, whose `request_s` bounds a consumer's request; the packaged profile's
+            when None.
         clock: The clock every lease and every consumed-since reading is timed on.
     """
 
-    def __init__(self, root: Path, *, lease: JobLease, clock: Clock = SystemClock()) -> None:  # noqa: B008 - stateless
+    def __init__(
+        self,
+        root: Path,
+        *,
+        lease: JobLease,
+        vllm: VllmSettings | None = None,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
+    ) -> None:
         """Use `root` under `lease`; nothing is made until a lease is taken."""
         self.root = Path(root)
         self.lease, self.clock = lease, clock
+        self.vllm = vllm if vllm is not None else ExecutionProfile.packaged().vllm
 
     @staticmethod
     def name(identity: Attestation) -> str:
@@ -71,7 +81,7 @@ class ServiceRegistry:
         return f"svc-{identity.canonical_digest()}"
 
     def _lease(self, resource: Path, timeout: float) -> Lease:
-        return Lease(resource, timeout=timeout, stale_after=self.lease.stale_after_s, clock=self.clock)
+        return Lease(resource, settings=self.lease, timeout=timeout, clock=self.clock)
 
     def _kept(self, resource: Path) -> tuple[Lease, contextlib.ExitStack, LeaseState]:
         """Take the lease over `resource` at once and keep it alive; return it, what releases it, and its state.
@@ -244,6 +254,7 @@ class ConsumerLease:
         """Hold the consumer lease released by `stack`."""
         self.registry, self.identity, self.label = registry, identity, identity.served_model
         self._stack, self._state, self._stopped = stack, state, False
+        self._request_s = registry.vllm.request_s
 
     @property
     def attestation(self) -> Attestation | None:
@@ -285,7 +296,9 @@ class ConsumerLease:
             StaleAttestation: the entry is not live, was replaced, or the reply names another model.
             ServerRejected, ServerOutOfMemory, ServerFailed, ServiceUnavailable: the request failed (`server_fault`).
         """
-        return self._request(lambda url: chat(url, self.identity.served_model, messages, sampling=sampling))
+        return self._request(
+            lambda url: chat(url, self.identity.served_model, messages, sampling=sampling, timeout_s=self._request_s)
+        )
 
     def complete(self, prompt_token_ids: Sequence[int], *, sampling: Mapping[str, Any]) -> Attested:
         """`complete` with the service's model; the reply carries the service's attestation.
@@ -294,7 +307,11 @@ class ConsumerLease:
             StaleAttestation: the entry is not live, was replaced, or the reply names another model.
             ServerRejected, ServerOutOfMemory, ServerFailed, ServiceUnavailable: the request failed (`server_fault`).
         """
-        return self._request(lambda url: complete(url, self.identity.served_model, prompt_token_ids, sampling=sampling))
+        return self._request(
+            lambda url: complete(
+                url, self.identity.served_model, prompt_token_ids, sampling=sampling, timeout_s=self._request_s
+            )
+        )
 
     def stop(self) -> None:
         """Release the consumer lease; safe to call twice."""
@@ -313,7 +330,7 @@ def service_registry(
     servers of each card are registered, and consumed, apart. Its leases are timed on `clock`.
     """
     root = profile.env_root("server") / "services" / host_token() / device_set(environ=environ)
-    return ServiceRegistry(root, lease=profile.lease, clock=clock)
+    return ServiceRegistry(root, lease=profile.lease, vllm=profile.vllm, clock=clock)
 
 
 __all__ = [

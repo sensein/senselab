@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 import pytest
+import yaml
 from bounded_probe_fixture import MIB, FiniteSource, run_bounded
 from hypothesis import event, given, settings
 from hypothesis import strategies as st
@@ -889,7 +890,7 @@ def test_download_short_of_declared_size_is_refused(tmp_path: Path, lease_clock:
 def test_non_https_refused(tmp_path: Path, url: str) -> None:
     """A non-https URL raises FetchError before any opener is called, through fetch or the default opener."""
     with pytest.raises(FetchError):
-        fetch_module._urlopen(url)
+        fetch_module._urlopen(url, 60)
     calls: list[str] = []
     with pytest.raises(FetchError) as err:
         fetch(_manifest([_file("a", url)]), cache_root=tmp_path, opener=_opener({url: PAYLOAD}, calls))
@@ -1195,3 +1196,44 @@ def test_fetch_retries_transient_by_packaged_policy(tmp_path: Path, lease_clock:
     with pytest.raises(FetchError):
         fetch(_manifest(version="2"), cache_root=tmp_path / "other", opener=refused, clock=clock)
     assert len(calls) == RETRY.attempts and clock.slept == _backoffs()
+
+
+@pytest.mark.logic
+def test_a_fetch_request_waits_timeout_s(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`fetch` opens each URL with `timeout_s`, by default the profile's `timeouts.fetch_s`."""
+    seen: list[float] = []
+    packaged = ExecutionProfile.packaged()
+
+    def refuse(self: urllib.request.OpenerDirector, url: str, data: object = None, timeout: float = 0.0) -> object:
+        seen.append(timeout)
+        raise OSError("stop here")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refuse)
+    once = packaged.retry.model_copy(update={"attempts": 1})
+    for timeout in (None, 7.0):
+        with pytest.raises(FetchError):
+            fetch(_manifest(), cache_root=tmp_path, timeout_s=timeout, retry=once)
+    assert seen == [packaged.timeouts.fetch_s, 7.0]
+
+
+@pytest.mark.logic
+def test_data_fetch_waits_the_profiles_fetch_s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`senselab data fetch --profile FILE` opens each URL within that profile's `timeouts.fetch_s`."""
+    document = ExecutionProfile.packaged().model_dump(mode="json")
+    document["timeouts"]["fetch_s"] = 7.0
+    document["retry"]["attempts"] = 1
+    profile = tmp_path / "site.yaml"
+    profile.write_text(yaml.safe_dump(document))
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text(yaml.safe_dump(_manifest().model_dump(mode="json")))
+    seen: list[float] = []
+
+    def refuse(self: urllib.request.OpenerDirector, url: str, data: object = None, timeout: float = 0.0) -> object:
+        seen.append(timeout)
+        raise OSError("stop here")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refuse)
+    assert (
+        cli_main(["data", "fetch", str(manifest), "--cache", str(tmp_path / "cache"), "--profile", str(profile)]) == 1
+    )
+    assert seen == [7.0]

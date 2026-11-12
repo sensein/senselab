@@ -5,12 +5,13 @@ import queue
 import selectors
 import threading
 from collections.abc import Callable
+from typing import Final
 
 from senselab_worker.codec import Deadline
 
 from senselab_core.runtime.clock import Clock
 
-READ_BYTES = 2**16
+READ_BYTES: Final = 2**16  # invariant: the size of one pipe read; lines are reassembled whatever it is
 
 
 class Pump:

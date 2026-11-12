@@ -64,10 +64,10 @@ from senselab_worker.canonical import (
 from senselab_worker.digest import SHA256_HEX, identity_digest
 
 from senselab_core.kernel import prov as kprov
-from senselab_core.kernel._base import value_digest
 from senselab_core.kernel.formats import FieldsOfLaterMinor, FormatVerdict, check, require_writable, validated
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
+    NO_EQUIVALENCE,
     Equivalence,
     ExecutionContext,
     LogicalKey,
@@ -76,8 +76,9 @@ from senselab_core.kernel.identity import (
     acceptable,
 )
 from senselab_core.runtime.clock import Clock, SystemClock
-from senselab_core.runtime.equivalence import EQUIVALENCE, EquivalenceEvidence, read_evidence
+from senselab_core.runtime.equivalence import EquivalenceEvidence, equivalence_digest, read_evidence
 from senselab_core.runtime.equivalence import split as split_class
+from senselab_core.runtime.execution_settings import StoreSettings
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.servable import Servable, StoredContext, Verdict, always_serve, choose, servable
 from senselab_core.runtime.storage import (
@@ -112,8 +113,6 @@ RETIRED_STORE_FORMATS = frozenset({"result@1", "execution-context@1", "execution
 STORE_MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-store-formats"
 """Where the statement on retired store formats is: they are not read; recomputing under this version migrates."""
 ARRAY_TAG = ARRAY_TOKEN
-COMMIT_ATTEMPTS = 3
-"""How many times `put` stages and renames before giving up on a target that keeps turning out corrupt."""
 
 _POLICY_ORDER = (ReusePolicy.EXACT, ReusePolicy.EQUIVALENT, ReusePolicy.TOLERANT)
 _PREFIX = re.compile(r"[0-9a-f]{2}")
@@ -295,12 +294,6 @@ def _decode(value: object, entry: Path, sizes: Mapping[str, int] | None = None) 
     if isinstance(value, list):
         return [_decode(v, entry, sizes) for v in value]
     return value
-
-
-def equivalence_digest(table: Equivalence) -> str:
-    """Return the `value_digest` of an equivalence table, each class as its sorted members."""
-    fields = {backend: {name: sorted(members) for name, members in cls.items()} for backend, cls in table.items()}
-    return value_digest("equivalence", {"classes": fields})
 
 
 def key_record(key: LogicalKey) -> object:
@@ -633,20 +626,25 @@ class ResultStore:
         root: The store root.
         provenance: Where the store adds its records; the store owns a fresh one when None.
         policy: Modes and retention ages; `StorePolicy.load_default()` when None.
-        equivalence: The measured equivalence classes `equivalent` reuse admits (`acceptable`).
+        equivalence: The measured classes `equivalent` reuse admits (none by default; `load_equivalence(path)`).
+        settings: The profile's `store` section; the packaged profile's when None.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - the root and provenance, then keyword-only policy, table, settings and clock
         self,
         root: Path,
         provenance: ProvStore | None = None,
         *,
         policy: StorePolicy | None = None,
-        equivalence: Equivalence = EQUIVALENCE,
+        equivalence: Equivalence = NO_EQUIVALENCE,
+        settings: StoreSettings | None = None,
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Open a store at `root`; nothing is created until the first `put`. `clock` ages what `collect` removes."""
+        from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - profiles import this module
+
         self.root = Path(root)
+        self.settings = settings or ExecutionProfile.packaged().store
         self.provenance = provenance if provenance is not None else ProvStore()
         self.policy = policy if policy is not None else StorePolicy.load_default()
         self._equivalence = equivalence
@@ -950,7 +948,7 @@ class ResultStore:
                 `jcs_dumps` refuses, or an array dtype `canonical_npy_bytes` refuses.
             StoreUnavailable: the store could not be read or written (`StorageFull` when out of space).
             WrongKindError: an object of the wrong kind in the store could not be moved aside.
-            RuntimeError: if the target is still corrupt after `COMMIT_ATTEMPTS` commits.
+            RuntimeError: if the target is still corrupt after `settings.commit_attempts` commits.
         """
         payload = _serialise(outputs)
         d = key.digest()
@@ -974,7 +972,7 @@ class ResultStore:
     ) -> OutputIdentity:
         d, f = key.digest(), context.fingerprint()
         entry = parent.path / f
-        for _ in range(COMMIT_ATTEMPTS):
+        for _ in range(self.settings.commit_attempts):
             try:
                 existing = _committed_identity(entry, digest=d, fingerprint=f, arrays=payload[1])
             except CorruptEntryError:
@@ -987,7 +985,7 @@ class ResultStore:
             if _commit(key, context, parent, f, staging_root, payload, self.policy):
                 self.provenance.add(_result_entity(payload[2]))
                 return payload[2]
-        raise RuntimeError(f"{entry} was still corrupt after {COMMIT_ATTEMPTS} commits")
+        raise RuntimeError(f"{entry} was still corrupt after {self.settings.commit_attempts} commits")
 
     def record_reuse(  # noqa: PLR0913 - the served hit, then what its activity records
         self,

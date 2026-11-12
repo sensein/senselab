@@ -62,8 +62,6 @@ REF = "ref"
 """The one output of every compiled node: the job's `ResultRef` as JSON (the row index, for the records node)."""
 NO_TELEMETRY = "NO_ET"
 """The environment variable whose presence stops pydra's version check from fetching anything."""
-CANCEL_CHECK_S = 0.05
-"""Seconds between a waiting follower's checks of the run's cancel event."""
 
 
 class ElementFailed(RuntimeError):
@@ -621,17 +619,22 @@ class Follower:
     to `max_s`; a new handle or `cancel` ends the wait. The thread runs in the context the follower was made in.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - the executor and cancel, then keyword-only waits and the clock
         self,
         executor: Executor,
         cancel: threading.Event,
         *,
         first_s: float,
         max_s: float,
+        cancel_check_s: float,
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
-        """Follow the handles of `executor`, stopping at `cancel`; the waits between rounds run on `clock`."""
+        """Follow the handles of `executor`, stopping at `cancel`; the waits between rounds run on `clock`.
+
+        A waiting follower checks `cancel` every `cancel_check_s` seconds.
+        """
         self.executor, self.cancel, self.first_s, self.max_s, self._clock = executor, cancel, first_s, max_s, clock
+        self.cancel_check_s = cancel_check_s
         self._open: dict[str, tuple[Handle, Callable[[ResultRef], object], Callable[[Exception | None], object]]] = {}
         self._lock = threading.Lock()
         self._wake = threading.Event()
@@ -699,7 +702,7 @@ class Follower:
         """Wait up to `seconds`, ending early on a new handle, on `close`, or once `cancel` is set."""
         deadline = self._clock.now() + seconds
         while not self._wake.is_set() and not self.cancel.is_set() and (left := deadline - self._clock.now()) > 0:
-            self._clock.wait(self._wake, min(left, CANCEL_CHECK_S))
+            self._clock.wait(self._wake, min(left, self.cancel_check_s))
 
     def close(self) -> None:
         """Stop following; open handles are left as they are."""
@@ -807,7 +810,14 @@ class PydraRunner:
         cancel = cancel if cancel is not None else threading.Event()
         pool = self.profile.pool
         senders = ThreadPoolExecutor(self.senders, thread_name_prefix="senselab-send")
-        follower = Follower(executor, cancel, first_s=pool.first_poll_s, max_s=pool.poll_s, clock=self._clock)
+        follower = Follower(
+            executor,
+            cancel,
+            first_s=pool.first_poll_s,
+            max_s=pool.poll_s,
+            cancel_check_s=pool.cancel_check_s,
+            clock=self._clock,
+        )
         run = _Run(placed, admission, values, executor, store, events, cancel, senders, follower)
         keys = plan_keys(placed, values)
         for node, element in run.expected():

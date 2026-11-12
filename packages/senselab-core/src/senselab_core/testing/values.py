@@ -788,10 +788,10 @@ def _register_kernel_samples() -> None:
     register_samples(
         ServerConfig,
         lambda: [
-            ServerConfig(settings={"max_model_len": 4096, "limit_mm_per_prompt": {"image": 0}}, startup_timeout_s=60),
-            ServerConfig(settings={}, startup_timeout_s=0.5),
+            ServerConfig(settings={"max_model_len": 4096, "limit_mm_per_prompt": {"image": 0}}),
+            ServerConfig(settings={}),
         ],
-        invalid_updates=[{"startup_timeout_s": 0}, {"settings": 1}],
+        invalid_updates=[{"settings": 1}],
     )
     backend = {"task": "t", "version": "1", "stack": "fake", "worker": "w", "load_stub": {}}
     register_samples(
@@ -815,12 +815,12 @@ def _register_kernel_samples() -> None:
                 env=Env.server("e"),
                 devices=("cuda",),
                 batch_invariant=True,
-                server=ServerConfig(settings={"max_num_seqs": 2}, startup_timeout_s=60),
+                server=ServerConfig(settings={"max_num_seqs": 2}),
             ),
         ],
         invalid_updates=[
             {"devices": ()},
-            {"server": {"settings": {}, "startup_timeout_s": 0}},
+            {"server": {"settings": 1}},
             {"output_affecting": ("bogus",)},
             {"env": "host"},
             {"tunables": {"d": ()}},
@@ -970,7 +970,7 @@ def _register_runtime_samples() -> None:
         invalid_updates=[
             {"network": "maybe"},
             {"devices": ("tpu",)},
-            {"format": "execution-profile@5.0"},
+            {"format": "execution-profile@6.0"},
             {"resource_classes": {"gpu:h100": ResourceClass(device="cpu", max_workers=1)}},
         ],
     )

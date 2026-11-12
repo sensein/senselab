@@ -8,7 +8,8 @@ from the class with the oldest work. While a claim runs, its leases are proven e
 lease was lost is not reported. A request that fires a trigger is split in halves by `execute` until the failing job is
 alone, which is reported with that failure (`ItemCrashedWorker` for a job whose worker was lost repeatedly); an item
 that fails inside a request is reported as it failed.
-The worker exits once its queues have had nothing to claim for `IDLE_POLLS` polls of `pool.poll_s`, or on SIGTERM, after
+The worker exits once its queues have had nothing to claim for `pool.idle_polls` polls of `pool.poll_s`, or on
+SIGTERM, after
 committing the items that finished and releasing the rest. A worker of `svc:<id>` classes registers each server it
 starts (`services`); once it holds one, its queues being empty decide nothing: it exits when no consumer lease of any
 service it holds has been live for `services.idle_exit_s`, the jobs it runs itself counting as consumption.
@@ -65,7 +66,7 @@ from senselab_core.runtime.execution.substrates import (
 )
 from senselab_core.runtime.execution.supervisor import Supervisor
 from senselab_core.runtime.execution.workers import WorkerSet
-from senselab_core.runtime.execution_settings import is_service_class
+from senselab_core.runtime.execution_settings import StoreSettings, is_service_class
 from senselab_core.runtime.hardware import device_memory_bytes, memory_bytes, process_tree
 from senselab_core.runtime.keys import Placement, request_size
 from senselab_core.runtime.locks import LeaseTimeout
@@ -80,9 +81,6 @@ from senselab_core.runtime.units import mark_entry
 from senselab_core.runtime.worker_client import DEFAULT_GRACES
 
 logger = logging.getLogger("senselab")
-
-IDLE_POLLS = 3
-"""The polls of `pool.poll_s` with nothing to claim after which a pool worker exits."""
 
 Send = Callable[..., list[JobOutcome]]
 """Run jobs of one call under a placement and return one outcome per job, in order (`execute`).
@@ -444,7 +442,7 @@ class PoolWorker:
             return {"unbuilt": "build-failed"}
         device = self.profile.resource_classes[class_of(queue)].device
         try:
-            return mark_entry(self.profile, backend, handle, host_report(), device)
+            return mark_entry(self.profile, backend, handle, host_report(self.profile.sizing.device_query_s), device)
         except ValueError:
             return {"unbuilt": "unreadable"}
 
@@ -454,7 +452,7 @@ class PoolWorker:
         self._finished.put([])
 
     def serve(self) -> int:
-        """Claim and run items until the queues stay empty for `IDLE_POLLS` polls or `stop` is set; return 0.
+        """Claim and run items until the queues stay empty for `pool.idle_polls` polls or `stop` is set; return 0.
 
         A probe queue the worker serves (`_pinned_probes`) is waited on from `pool.first_poll_s`, doubling to
         `pool.poll_s`, so a probe's next phase costs no full poll; its serve leases are released on return.
@@ -514,7 +512,7 @@ class PoolWorker:
                         break
                     self._clock.wait(self.stop, pool.poll_s)
                     continue
-                left = IDLE_POLLS * pool.poll_s - (self._clock.now() - idle)
+                left = pool.idle_polls * pool.poll_s - (self._clock.now() - idle)
                 if left <= 0:
                     break
                 pause = pool.poll_s
@@ -935,15 +933,20 @@ class PoolWorker:
                 log.record("claimed", job.node, job=job)
 
 
-def check_reachable(run_dir: Path, store: ResultStore) -> None:
-    """Probe the run directory and the result store from this host.
+def check_reachable(
+    run_dir: Path,
+    store: ResultStore,
+    settings: StoreSettings,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
+) -> None:
+    """Probe the run directory and the result store from this host, under the profile's `store` section `settings`.
 
     Raises:
         StoreUnreachable: either root cannot be read and written here, or lacks a primitive the leases need.
     """
     for root in (run_dir, store.root):
         try:
-            probe_capabilities(root).require(root)
+            probe_capabilities(root, settings=settings, clock=clock).require(root)
         except (OSError, StorageUnsupported) as err:
             raise StoreUnreachable(f"{root} is not reachable from this host: {err}") from err
 
@@ -970,7 +973,7 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
     thread SIGTERM halts the worker (`PoolWorker.halt`); the previous handler is restored after.
     """
     try:
-        check_reachable(Path(pool_dir).parent, store)
+        check_reachable(Path(pool_dir).parent, store, profile.store)
     except StoreUnreachable as err:
         logger.error("pool worker cannot start: %s", err)
         return EXIT_UNREACHABLE
@@ -995,4 +998,4 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
             signal.signal(signal.SIGTERM, previous)
 
 
-__all__ = ["IDLE_POLLS", "Abandoned", "Member", "PoolWorker", "Send", "failure_of", "run_members", "serve_pool"]
+__all__ = ["Abandoned", "Member", "PoolWorker", "Send", "failure_of", "run_members", "serve_pool"]

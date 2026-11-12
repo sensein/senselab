@@ -103,9 +103,9 @@ def start_vllm(backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profi
         model,
         backend.server.settings,
         start_lock_dir=root / "locks",
-        startup_timeout_s=backend.server.startup_timeout_s,
         start_margin_s=profile.envs.server_start_margin_s,
         lease=profile.lease,
+        vllm=profile.vllm,
         log_dir=root / "logs",
         network=profile.network,
     )
@@ -161,11 +161,16 @@ def _attested(server: Server) -> dict[str, Any]:
     return {} if attestation is None else attestation.model_dump(mode="json")
 
 
-def process_cache(budget: int | None) -> ModelCache:
-    """Return this process's model cache of `budget` bytes, made on first use; None measures it (`measured_budget`)."""
+def process_cache(budget: int | None, device_query_s: float | None = None) -> ModelCache:
+    """Return this process's model cache of `budget` bytes, made on first use; None measures it (`measured_budget`).
+
+    The measure reads the devices within `device_query_s` seconds (`sizing.device_query_s`).
+    """
     with _CACHES_LOCK:
         if budget not in _CACHES:
-            _CACHES[budget] = ModelCache(budget if budget is not None else measured_budget(probe_hardware()))
+            _CACHES[budget] = ModelCache(
+                budget if budget is not None else measured_budget(probe_hardware(timeout_s=device_query_s))
+            )
         return _CACHES[budget]
 
 
@@ -331,6 +336,7 @@ class WorkerSet:
                     variables=network_variables(profile.network),
                     load_timeout=profile.timeouts.load_s,
                     request_timeout=profile.timeouts.request_s,
+                    settings=profile.worker,
                 )
             )
         budget = profile.model_cache_budget_bytes
@@ -338,7 +344,11 @@ class WorkerSet:
         size_of = _size_of(backend)
         return _loaded(
             lambda: HostWorker(
-                backend.worker, init=backend_init(init), key=key, cache=process_cache(budget), size_of=size_of
+                backend.worker,
+                init=backend_init(init),
+                key=key,
+                cache=process_cache(budget, profile.sizing.device_query_s),
+                size_of=size_of,
             )
         )
 

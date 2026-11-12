@@ -83,6 +83,7 @@ class SubstrateSpec(Frozen):
         start_backoff_max_s: Most seconds that wait doubles to.
         placement_hook: The `module:callable` of the site's placement hook; None for none.
         placement_hook_s: Seconds the hook may take per call, past which it has failed.
+        stop_grace_s: Seconds a local worker is given after SIGTERM before it is killed.
         commands: How each Slurm command is run; required for `slurm`.
     """
 
@@ -93,6 +94,7 @@ class SubstrateSpec(Frozen):
     start_backoff_max_s: PositiveSeconds
     placement_hook: Annotated[str, StringConstraints(pattern=r"^[\w.]+:[\w.]+$")] | None = None
     placement_hook_s: PositiveSeconds
+    stop_grace_s: PositiveSeconds
     commands: SlurmCommands | None = None
 
     @model_validator(mode="after")
@@ -111,7 +113,9 @@ class PoolSettings(Frozen):
     jobs or seconds. `poll_s` is a worker's empty-queue poll and the longest wait between a coordinator's reads of an
     outcome, which start at `first_poll_s` and double. `presence_refresh_s` is the longest a worker reuses what it read
     of the workers on its host, the processes on its device and the probe queues of its run. `admit_threads` bounds the
-    threads that ask the result store which jobs it would serve, for a plan's counts.
+    threads that ask the result store which jobs it would serve, for a plan's counts. A worker exits once its queues
+    stayed empty for `idle_polls` polls of `poll_s`; a following coordinator checks its cancel event every
+    `cancel_check_s`; `Run.wait` reads the event log of a run another process drives every `event_poll_s`.
     """
 
     quantum_items: PositiveInt
@@ -121,6 +125,9 @@ class PoolSettings(Frozen):
     presence_refresh_s: PositiveSeconds
     segment_items: PositiveInt
     admit_threads: PositiveInt
+    idle_polls: PositiveInt
+    cancel_check_s: PositiveSeconds
+    event_poll_s: PositiveSeconds
 
 
 class SizingSettings(Frozen):
@@ -195,32 +202,66 @@ class CalibrationSettings(Frozen):
 
 
 class LeaseBoundError(ValueError):
-    """Two renewal intervals plus the storage's attribute delay do not stay below a lease's stale bound."""
+    """`1 + missed_beats` renewal intervals plus the storage's attribute delay do not stay below a stale bound."""
 
 
 class JobLease(Frozen):
-    """How every lease is kept (`Lease.keep_alive`).
+    """How every lease is kept and taken (`Lease`, `Lease.keep_alive`).
 
     Attributes:
         stale_after_s: Seconds on the storage clock after which another process breaks the lease.
         renew_fraction: The share of `stale_after_s` between two beats.
         attribute_delay_s: Seconds a client of the storage may show a directory's stale mtime.
+        missed_beats: Beats a live holder may miss without its lease being broken, at least 1; the bound allows
+            `1 + missed_beats` renewal intervals between two beats.
+        wait_s: Seconds a wait for a lease may take by default; at least `stale_after_s + attribute_delay_s`, the time a
+            taker needs to break a dead holder's lease.
+        poll_s: Seconds between two attempts to take a lease.
+        remove_attempts: Times a lease moved aside is removed while a taker that reached it before the move races
+            the removal.
+        record_attempts: Times a holder displaced before its write takes the lease again and merges, for a run's
+            `inputs.json` and a run manifest.
+        dir_mode: The octal mode of a lease directory and its token directory, such as `2770`.
     """
 
     stale_after_s: PositiveSeconds
     renew_fraction: Annotated[float, Field(gt=0, lt=1)]
     attribute_delay_s: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+    missed_beats: PositiveInt
+    wait_s: PositiveSeconds
+    poll_s: PositiveSeconds
+    remove_attempts: PositiveInt
+    record_attempts: PositiveInt
+    dir_mode: Annotated[str, StringConstraints(pattern=r"^[0-7]{3,4}$")]
+
+    @model_validator(mode="after")
+    def _check_wait(self) -> "JobLease":
+        if self.wait_s < self.stale_after_s + self.attribute_delay_s:
+            raise ValueError(
+                f"lease.wait_s {self.wait_s} is below lease.stale_after_s {self.stale_after_s} + "
+                f"lease.attribute_delay_s {self.attribute_delay_s}: a taker would give up before it could break a "
+                "dead holder's lease"
+            )
+        return self
+
+    @property
+    def mode(self) -> int:
+        """`dir_mode` as the integer mode bits."""
+        return int(self.dir_mode, 8)
 
     def check_bound(self) -> None:
-        """Raise `LeaseBoundError` unless `2 × renew_fraction × stale_after_s + attribute_delay_s < stale_after_s`.
+        """Raise `LeaseBoundError` unless the bound holds.
 
-        The factor 2 allows one missed beat.
+        The bound is `(1 + missed_beats) × renew_fraction × stale_after_s + attribute_delay_s < stale_after_s`.
         """
-        if 2 * self.renew_fraction * self.stale_after_s + self.attribute_delay_s >= self.stale_after_s:
+        if (
+            1 + self.missed_beats
+        ) * self.renew_fraction * self.stale_after_s + self.attribute_delay_s >= self.stale_after_s:
             raise LeaseBoundError(
-                f"2 × lease.renew_fraction {self.renew_fraction} × lease.stale_after_s {self.stale_after_s} + "
-                f"lease.attribute_delay_s {self.attribute_delay_s} is not below lease.stale_after_s "
-                f"{self.stale_after_s}: a beating lease that missed one beat could be seen as stale and broken"
+                f"(1 + {self.missed_beats}) × lease.renew_fraction {self.renew_fraction} × lease.stale_after_s "
+                f"{self.stale_after_s} + lease.attribute_delay_s {self.attribute_delay_s} is not below "
+                f"lease.stale_after_s {self.stale_after_s}: a beating lease that missed "
+                f"{self.missed_beats} beat(s) could be seen as stale and broken"
             )
 
 
@@ -237,10 +278,17 @@ class FaultBudgets(Frozen):
 
 
 class Timeouts(Frozen):
-    """Seconds a worker may take to load its model and to answer one request; None for no bound."""
+    """Seconds a worker may take to load its model and to answer one request (None for no bound), and to fetch.
+
+    Attributes:
+        load_s: A worker's model-load bound; None for none.
+        request_s: A worker's per-request bound; None for none.
+        fetch_s: Seconds one network request to fetch a file or read an index may take before it fails.
+    """
 
     load_s: PositiveSeconds | None = None
     request_s: PositiveSeconds | None = None
+    fetch_s: PositiveSeconds
 
 
 class SupervisorSettings(Frozen):
@@ -248,12 +296,65 @@ class SupervisorSettings(Frozen):
 
     Attributes:
         start_time_probe_s: Seconds `ps -o lstart=` may take off Linux; past it the start time is unknown.
+        reap_poll_s: Seconds between the reaper's passes over the orphans.
+        exit_bound_s: Seconds leaving a supervisor waits for its killed orphans, leaders and keeper to be reaped.
     """
 
     start_time_probe_s: PositiveSeconds
+    reap_poll_s: PositiveSeconds
+    exit_bound_s: PositiveSeconds
 
 
 class ServiceSettings(Frozen):
     """How long a service stays up after its last consumer lease lapsed."""
 
     idle_exit_s: PositiveSeconds
+
+
+class StoreSettings(Frozen):
+    """How a result store commits and how a storage root's clock is probed.
+
+    Attributes:
+        commit_attempts: Times `put` stages and renames before giving up on a target that keeps turning out corrupt.
+        probe_bound_s: Seconds the capability probe waits for a directory's mtime to show a change before it judges
+            the clock.
+        probe_poll_s: Seconds between the probe's reads of a directory's mtime.
+        clock_tolerance_s: Seconds the storage clock may differ from the host's before the root is judged skewed.
+    """
+
+    commit_attempts: PositiveInt
+    probe_bound_s: PositiveSeconds
+    probe_poll_s: PositiveSeconds
+    clock_tolerance_s: PositiveSeconds
+
+
+class VllmSettings(Frozen):
+    """How a `vllm serve` process is started, polled, asked and stopped.
+
+    Attributes:
+        startup_s: Seconds the engine has to become healthy once the start lease is held.
+        poll_s: Seconds between reads of the server's health while it starts.
+        request_s: Seconds one request to the server may take.
+        stop_s: Seconds the server is given to exit after SIGTERM before it is killed.
+        health_s: Seconds one read of the server's `/health` may take.
+    """
+
+    startup_s: PositiveSeconds
+    poll_s: PositiveSeconds
+    request_s: PositiveSeconds
+    stop_s: PositiveSeconds
+    health_s: PositiveSeconds
+
+
+class WorkerSettings(Frozen):
+    """How a worker client starts and watches its worker subprocess.
+
+    Attributes:
+        hello_s: Seconds a started worker has to send its hello line.
+        leader_probe_s: Seconds a probe of whether a worker's process group leader is held may take.
+        group_poll_max_s: The longest wait, in seconds, between two reads of a stopping process group.
+    """
+
+    hello_s: PositiveSeconds
+    leader_probe_s: PositiveSeconds
+    group_poll_max_s: PositiveSeconds

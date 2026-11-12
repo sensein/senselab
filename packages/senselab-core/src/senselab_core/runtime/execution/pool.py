@@ -461,7 +461,11 @@ class Pool:
         """Return the grant of `queue`'s resource class: the device pair on a `cuda` class, the host's otherwise."""
         resource = self.profile.resource_classes[class_of(queue)]
         devices = len(self.substrate.devices) if isinstance(self.substrate, Local) else None
-        seen = host_hardware() if resource.device == "cuda" or resource.mem_bytes is None else None
+        seen = (
+            host_hardware(self.profile.sizing.device_query_s)
+            if resource.device == "cuda" or resource.mem_bytes is None
+            else None
+        )
         return Grant.seen(resource, self.profile.pool, seen, devices=devices)
 
     def _produce(self, release: Release, jobs: Sequence[Job], placement: Placement) -> None:
@@ -1038,13 +1042,11 @@ def run_plan(run_dir: Path, profile: ExecutionProfile) -> Plan:
     return replace(stored, execution=profile, config=config)
 
 
-def run_store(run_dir: Path) -> ResultStore:
-    """Return the result store the run in `run_dir` names in `manifest.json`, else the cache's."""
-    from senselab_core.runtime.execution.run import RESULTS_DIR, Run  # noqa: PLC0415
-    from senselab_core.runtime.revision import cache_root  # noqa: PLC0415
+def run_store(run_dir: Path, profile: ExecutionProfile | None = None) -> ResultStore:
+    """Return the result store the run in `run_dir` names in `manifest.json`, else the cache's, under `profile`."""
+    from senselab_core.runtime.execution.run import Run, results_store  # noqa: PLC0415
 
-    named = Run(run_dir).manifest().get("store")
-    return ResultStore(Path(named) if isinstance(named, str) else cache_root() / RESULTS_DIR)
+    return results_store(profile, Run(run_dir).manifest().get("store"))
 
 
 def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only profile, store and placement
@@ -1077,7 +1079,7 @@ def coordinate(  # noqa: PLR0913 - the run and substrate, then keyword-only prof
     run_dir = Path(run_dir)
     profile = profile if profile is not None else ExecutionProfile.load()
     placed = replace(run_plan(run_dir, profile), overrides=overrides or {}, hook=hook)
-    store = store if store is not None else run_store(run_dir)
+    store = store if store is not None else run_store(run_dir, profile)
     delay = check_storage(profile, store.root)
     values = bind_sources(placed)
     attempt, ordinal = prepare(placed, run_dir, store)

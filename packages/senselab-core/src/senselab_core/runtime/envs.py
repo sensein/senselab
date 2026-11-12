@@ -43,7 +43,7 @@ from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.hardware import _run
-from senselab_core.runtime.locks import TIMEOUT_S, Lease
+from senselab_core.runtime.locks import Lease
 from senselab_core.runtime.network import Network, require_online
 from senselab_core.runtime.profiles import Envs
 from senselab_core.runtime.storage import write_atomically
@@ -317,11 +317,12 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         root: The directory the profile's `env_roots` gives for `env.kind`; unused for a host env.
         settings: The profile's `envs`: `torch_index` replaces the probed index when set.
         lease: The profile's `lease`: the build's lease beats under it, and a waiter waits `stale_after_s` plus
-            `locks.TIMEOUT_S`.
+            `lease.wait_s`.
         requirements: The backend's requirements; required for a host env, which is refused unless `lock` covers each.
         workers: The backend's worker modules, dotted name to source file; each is copied into the env's
             site-packages as that module, beside the worker runtime, when the env is built.
         uv: The `uv` command; `Uv.find()` when None.
+        timeout_s: Seconds one request to a PyTorch index may take; the packaged profile's `timeouts.fetch_s` when None.
         host_cuda: The host's CUDA; probed with `detect_host_cuda` when None and the lock pins torch.
         network: The profile's `network`; an `offline` profile uses a built env and builds none.
         clock: How the build lease reads time and waits.
@@ -359,7 +360,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     current = _read_record(root, stem)
     if current is not None and (current.lock_sha, current.torch_index) == wanted:
         return _handle(root, current, parsed.path)
-    held = Lease(root / stem, stale_after=lease.stale_after_s, timeout=lease.stale_after_s + TIMEOUT_S, clock=clock)
+    held = Lease(root / stem, settings=lease, timeout=lease.stale_after_s + lease.wait_s, clock=clock)
     with held, held.keep_alive(lease.renew_fraction) as state:
         current = _read_record(root, stem)
         if current is None or (current.lock_sha, current.torch_index) != wanted:
@@ -788,17 +789,24 @@ def _top_cuda_tag(max_cuda: tuple[int, int] | None) -> str:
     return next((tag for tag, version in CUDA_INDEXES.items() if version <= ceiling), "cpu")
 
 
-def _wheel_on_index(package: str, version: str, tag: str, python: str, platform_parts: tuple[str, ...]) -> bool:
+def _wheel_on_index(  # noqa: PLR0913 - the pinned package, its target and the request bound
+    package: str, version: str, tag: str, python: str, platform_parts: tuple[str, ...], timeout_s: float
+) -> bool:
     url = f"{PYTORCH_INDEX_BASE}/{tag}/{package}/"
-    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 - fixed https URL
+    with urllib.request.urlopen(url, timeout=timeout_s) as response:  # noqa: S310 - fixed https URL
         wheels = re.findall(r">([^<>]+\.whl)<", response.read().decode())
     cp = "cp" + python.replace(".", "")
     prefixes = (f"{package}-{version}-", f"{package}-{version}%2B", f"{package}-{version}+")
     return any(w.startswith(prefixes) and f"-{cp}-" in w and all(p in w for p in platform_parts) for w in wheels)
 
 
-def compile_lock(
-    inputs: LockInputs, *, check_torch_index: bool = True, max_steps: int = 12, uv: Uv | None = None
+def compile_lock(  # noqa: PLR0913 - the inputs, then keyword-only checks, bounds and seams
+    inputs: LockInputs,
+    *,
+    check_torch_index: bool = True,
+    max_steps: int = 12,
+    uv: Uv | None = None,
+    timeout_s: float | None = None,
 ) -> str:
     """Return a lock's full text: `uv pip compile --universal --generate-hashes` under a header.
 
@@ -813,12 +821,17 @@ def compile_lock(
         check_torch_index: Whether to check the PyTorch indexes (needs network).
         max_steps: How many times `torch` may be bounded down.
         uv: The `uv` command; `Uv.find()` when None.
+        timeout_s: Seconds one request to a PyTorch index may take; the packaged profile's `timeouts.fetch_s` when None.
 
     Raises:
         EnvLockError: no torch within the requirements is served on every index.
         RuntimeError: `uv pip compile` failed; the message carries uv's stderr.
     """
     uv = uv or Uv.find()
+    if timeout_s is None:
+        from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - profiles import this module
+
+        timeout_s = ExecutionProfile.packaged().timeouts.fetch_s
     python, name = inputs.python, inputs.name
     tag = _top_cuda_tag(inputs.max_cuda)
     targets = [(tag, _LINUX_X86_64), ("cpu", _LINUX_X86_64), ("cpu", _MACOS_ARM64)]
@@ -839,7 +852,7 @@ def compile_lock(
                 f"{pin} on {t}/{plat}"
                 for pin in pins
                 for t, plat in targets
-                if not _wheel_on_index(pin.partition("==")[0], pin.partition("==")[2], t, python, plat)
+                if not _wheel_on_index(pin.partition("==")[0], pin.partition("==")[2], t, python, plat, timeout_s)
             ]
             if not missing:
                 break

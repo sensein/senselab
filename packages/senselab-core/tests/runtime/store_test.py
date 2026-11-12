@@ -37,7 +37,7 @@ from planted_objects_fixture import (
 from senselab_core.kernel import prov
 from senselab_core.kernel.identity import LogicalKey, ReusePolicy, member_key
 from senselab_core.runtime import store as store_module
-from senselab_core.runtime.equivalence import EQUIVALENCE
+from senselab_core.runtime.equivalence import equivalence_digest
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import MANIFEST_NAME, NAMESPACE, record_resolution
 from senselab_core.runtime.storage import StorageFull, StorePolicy, StoreUnavailable
@@ -162,8 +162,8 @@ def test_equivalence_class_admits_under_equivalent(tmp_path: Path) -> None:
     got = s.get(k, mac, ReusePolicy.EQUIVALENT)
     assert got is not None and got.policy_used is ReusePolicy.EQUIVALENT
     (reuse,) = _reuses(s)
-    assert reuse["senselab:equivalence"] == store_module.equivalence_digest(table)
-    assert reuse["senselab:equivalence"] != store_module.equivalence_digest(EQUIVALENCE)
+    assert reuse["senselab:equivalence"] == equivalence_digest(table)
+    assert reuse["senselab:equivalence"] != equivalence_digest({})
     with pytest.raises(AttributeError):
         s.equivalence = {}  # type: ignore[misc]
     assert s.get(k, mac, ReusePolicy.EXACT) is None

@@ -56,8 +56,6 @@ CLIENTS = frozenset({SBATCH, SQUEUE, SCANCEL})
 """The only Slurm clients `Slurm` runs; it refuses any other (`UndeclaredClient`)."""
 LIVE_STATES = "PENDING,CONFIGURING,RUNNING,COMPLETING"
 """The job states `Slurm.live` counts."""
-STOP_GRACE_S = 30.0
-"""Seconds a local worker is given after SIGTERM before it is killed."""
 PROFILE_PREFIX = "profile-"
 """A run's own profile is written as `<PROFILE_PREFIX><digest prefix>.json` where a worker cannot load it by name."""
 WORKERS_DIR = "workers"
@@ -365,9 +363,18 @@ class Local:
     """
 
     def __init__(
-        self, max_workers: int, *, command: Sequence[str], cuda: Collection[str] = (), devices: Sequence[str] = ()
+        self,
+        max_workers: int,
+        *,
+        command: Sequence[str],
+        cuda: Collection[str] = (),
+        devices: Sequence[str] = (),
+        stop_grace_s: float | None = None,
     ) -> None:
         """Run at most `max_workers` workers, each `command` plus `--classes <queue>`; `cuda` classes on `devices`.
+
+        A stopped worker is given `stop_grace_s` seconds after SIGTERM before it is killed (the packaged profile's
+        `substrate.stop_grace_s` when None).
 
         Raises:
             ValueError: `max_workers` is below 1.
@@ -378,6 +385,7 @@ class Local:
         self.command = list(command)
         self.cuda = frozenset(cuda)
         self.devices = tuple(devices)
+        self.stop_grace_s = ExecutionProfile.packaged().substrate.stop_grace_s if stop_grace_s is None else stop_grace_s
         self._procs: dict[str, _Process] = {}
         self._lock = threading.Lock()
 
@@ -427,7 +435,7 @@ class Local:
         return sum(1 for h in self.live() if h.queue == resource_class)
 
     def stop(self, handles: Sequence[WorkerHandle]) -> None:
-        """SIGTERM each worker of `handles`, which commits what finished; kill one that outlasts `STOP_GRACE_S`."""
+        """SIGTERM each worker of `handles`, which commits what finished; kill one that outlasts `stop_grace_s`."""
         with self._lock:
             found = [self._procs.pop(h.id) for h in handles if h.id in self._procs]
         for held in found:
@@ -435,7 +443,7 @@ class Local:
                 held.proc.terminate()
         for held in found:
             try:
-                held.proc.wait(STOP_GRACE_S)
+                held.proc.wait(self.stop_grace_s)
             except subprocess.TimeoutExpired:
                 held.proc.kill()
                 held.proc.wait()
@@ -975,7 +983,8 @@ def substrate_of(
             sum(c.max_workers for c in classes.values()),
             command=command,
             cuda=[name for name, c in classes.items() if c.device == "cuda"],
-            devices=visible_devices(hardware or probe_hardware()),
+            devices=visible_devices(hardware or probe_hardware(timeout_s=profile.sizing.device_query_s)),
+            stop_grace_s=spec.stop_grace_s,
         )
     if spec.commands is None:
         raise ValueError("a slurm substrate needs its commands settings")

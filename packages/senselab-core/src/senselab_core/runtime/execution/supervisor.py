@@ -49,10 +49,6 @@ logger = logging.getLogger(__name__)
 
 PR_SET_CHILD_SUBREAPER = 36
 PR_GET_CHILD_SUBREAPER = 37
-REAP_POLL_S = 0.05
-"""Seconds between the reaper's passes over the orphans."""
-EXIT_BOUND_S = 5.0
-"""Seconds leaving a supervisor waits for its killed orphans, leaders and keeper to be reaped."""
 REAPED_KEPT = 256
 """How many reaped orphans' exit statuses the table keeps, the oldest dropped first."""
 
@@ -340,7 +336,7 @@ class Keeper:
                     _kill(pid, signal.SIGKILL)
                     os.waitpid(pid, 0)
                     return
-                self._clock.sleep(REAP_POLL_S)
+                self._clock.sleep(self.settings.reap_poll_s)
 
     def _start(self) -> IO[bytes]:
         read, write = os.pipe()
@@ -379,18 +375,21 @@ class Supervisor:
         *,
         subreaper: bool | None = None,
         children: Callable[[], set[int]] = own_children,
-        poll_s: float = REAP_POLL_S,
+        poll_s: float | None = None,
         settings: SupervisorSettings | None = None,
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Supervise; once entered, as a subreaper where `subreaper` (by default where `subreaper_supported`).
 
-        `children` lists this process's children; `poll_s` is the reaper's interval; `settings` bound the start-time
+        `children` lists this process's children; `poll_s` is the reaper's interval (`settings.reap_poll_s` when
+        None); `settings` bound the start-time
         reads (`packaged_settings()` when None); the exit bound and the reaper's waits run on `clock`.
         """
         self._want_subreaper = subreaper_supported() if subreaper is None else subreaper
         self._children = children
-        self._poll_s, self._clock = poll_s, clock
+        self._keeper = Keeper(settings, clock)
+        self._poll_s = self._keeper.settings.reap_poll_s if poll_s is None else poll_s
+        self._clock = clock
         self._lock = threading.RLock()
         self._groups: dict[int, subprocess.Popen[bytes]] = {}
         self._launched: dict[int, subprocess.Popen[bytes]] = {}
@@ -399,7 +398,6 @@ class Supervisor:
         self._foreign: set[int] = set()
         self._foreign_groups: set[int] = set()
         self._own_pgid = os.getpgid(0)
-        self._keeper = Keeper(settings, clock)
         self._entered = False
         self._adopting = False
         self._previous_flag = 0
@@ -442,7 +440,7 @@ class Supervisor:
         if self._reaper is not None:
             self._reaper.join()
             self._reaper = None
-        deadline = self._clock.now() + EXIT_BOUND_S
+        deadline = self._clock.now() + self._keeper.settings.exit_bound_s
         with self._lock:
             for pgid, proc in self._groups.items():
                 if proc.returncode is None:
@@ -614,10 +612,8 @@ def current() -> Supervisor:
 
 
 __all__ = [
-    "EXIT_BOUND_S",
     "KEEPER",
     "REAPED_KEPT",
-    "REAP_POLL_S",
     "Keeper",
     "Orphan",
     "Supervisor",

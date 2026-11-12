@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, Final
 
 import numpy
 from senselab_worker import WIRE_VERSION, runtime_identity
@@ -54,17 +54,17 @@ from senselab_worker.ownership import ARRAY_FILE, remove_owned
 from senselab_core.runtime import request_reports
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.execution.supervisor import Supervisor, current
+from senselab_core.runtime.execution_settings import WorkerSettings
 from senselab_core.runtime.hardware import cgroup_memory_events, oom_kills
 from senselab_core.runtime.launch import launch
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.worker_pipes import Lines, Pump
 
 LAUNCHER = "senselab_worker.launch"
-HELLO_TIMEOUT_S = 60.0
 DEFERRED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 STDERR_TAIL_LINES = 100
-_STDERR_LINE_BYTES = 64 * 2**10
-_GROUP_POLL_MAX_S = 0.05
-_LOGGED_LINE_BYTES = 200
+_STDERR_LINE_BYTES: Final = 64 * 2**10  # invariant: the longest stderr line kept in a failure's tail, a diagnostic cut
+_LOGGED_LINE_BYTES: Final = 200  # invariant: the longest worker line quoted in a log message, a diagnostic cut
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +177,6 @@ class ConcurrentUse(InfrastructureFault):
 
 
 _PS = "/bin/ps"
-LEADER_PROBE_TIMEOUT_S = 2.0
 
 
 def _wait_exit(pid: int, *, block: bool = True) -> bool:
@@ -221,8 +220,11 @@ def _exit_seen(pid: int, exited: threading.Event) -> bool:
     return exited.is_set()
 
 
-def _wait_for_exit(pid: int, exited: threading.Event, timeout: float, clock: Clock) -> bool:
-    """Wait up to `timeout` seconds on `clock` for `_exit_seen`; return whether the exit was observed."""
+def _wait_for_exit(pid: int, exited: threading.Event, timeout: float, clock: Clock, poll_max_s: float) -> bool:
+    """Wait up to `timeout` seconds on `clock` for `_exit_seen`; return whether the exit was observed.
+
+    The polls double up to `poll_max_s` seconds apart.
+    """
     deadline = Deadline(timeout, clock.now)
     delay = 0.001
     while not _exit_seen(pid, exited):
@@ -230,7 +232,7 @@ def _wait_for_exit(pid: int, exited: threading.Event, timeout: float, clock: Clo
         if remaining <= 0:
             return False
         clock.wait(exited, min(delay, remaining))
-        delay = min(delay * 2, _GROUP_POLL_MAX_S)
+        delay = min(delay * 2, poll_max_s)
     return True
 
 
@@ -282,10 +284,13 @@ def _signal_group(pgid: int, sig: signal.Signals, *, leader_exited: bool) -> Non
             logger.warning("signal %s to worker process group %d failed: %s", sig.name, pgid, exc)
 
 
-def _members_gone(
-    pgid: int, exited: threading.Event, deadline: Deadline, live: Callable[[int], bool], clock: Clock
+def _members_gone(  # noqa: PLR0913 - the group, its exit, the bound, the liveness test, the clock and the poll
+    pgid: int, exited: threading.Event, deadline: Deadline, live: Callable[[int], bool], clock: Clock, poll_max_s: float
 ) -> bool:
-    """Wait on `clock` until the leader has exited and group `pgid` has no member `live` names, or `deadline`."""
+    """Wait on `clock` until the leader has exited and group `pgid` has no member `live` names, or `deadline`.
+
+    The polls double up to `poll_max_s` seconds.
+    """
     delay = 0.001
     while True:
         seen = _exit_seen(pgid, exited)
@@ -299,7 +304,7 @@ def _members_gone(
             clock.wait(exited, pause)
         else:
             clock.sleep(pause)
-        delay = min(delay * 2, _GROUP_POLL_MAX_S)
+        delay = min(delay * 2, poll_max_s)
 
 
 ESCALATE_HINT = "stopping the worker; press Ctrl-C again to kill it now"
@@ -399,6 +404,7 @@ class WorkerClient:
         expect_runtime: str | None = None,
         load_timeout: float | None = None,
         request_timeout: float | None = None,
+        settings: WorkerSettings | None = None,
         graces: ShutdownGraces = DEFAULT_GRACES,
         max_line_bytes: int = MAX_LINE_BYTES,
         variables: Mapping[str, str] | None = None,
@@ -412,7 +418,8 @@ class WorkerClient:
         a longer reply is `LineTooLarge`, a `ProtocolError`.
         `variables` are set on the worker process over the launch's allowlist (`launch`). The worker is launched
         through `supervisor` (`current()` when None), which also judges whether its group is live. Every timeout and
-        grace is read and waited on `clock`.
+        grace is read and waited on `clock`. `settings` is the profile's `worker` section: the hello wait, the probe of
+        the group leader and the longest group poll (the packaged profile's when None).
 
         Raises:
             ValueError: if `init` uses the reserved key `array_dir` or has no wire form, or `max_line_bytes` is
@@ -420,7 +427,7 @@ class WorkerClient:
             TypeError: if `graces` is not a `ShutdownGraces`.
             ProtocolMismatch: if the worker's first message is not a hello, its wire or runtime differ
                 from the host's (`expect_runtime` overrides the host's runtime identity), or no hello
-                arrives within `HELLO_TIMEOUT_S`.
+                arrives within `settings.hello_s`.
             WorkerLost: if the worker exits or closes its output before it is ready.
             WorkerFatal: if loading fails.
             WorkerTimeout: if sending `init` and loading exceed `load_timeout`.
@@ -430,6 +437,7 @@ class WorkerClient:
         self._owner_pid = os.getpid()
         _check_arguments(init, graces, max_line_bytes)
         self._max_line_bytes, self._request_timeout = max_line_bytes, request_timeout
+        self._settings = settings if settings is not None else ExecutionProfile.packaged().worker
         self._supervisor = supervisor if supervisor is not None else current()
         self._memory_events = memory_events if memory_events is not None else cgroup_memory_events()
         self._oom_baseline = oom_kills(self._memory_events)
@@ -697,7 +705,7 @@ class WorkerClient:
         threading.Thread(target=_reap, args=(proc.pid, self._exited, stdout, self._reaped), daemon=True).start()
 
     def _handshake(self, expected_runtime: str) -> dict[str, Any]:
-        deadline = Deadline(HELLO_TIMEOUT_S, self._clock.now)
+        deadline = Deadline(self._settings.hello_s, self._clock.now)
         hello: dict[str, Any] | None = None
         while True:
             try:
@@ -951,7 +959,9 @@ class WorkerClient:
         proc = self._proc
         if proc is None or proc.returncode is not None:
             return
-        if not _exit_seen(proc.pid, self._exited) or _leader_held(proc.pid, self._exited, LEADER_PROBE_TIMEOUT_S):
+        if not _exit_seen(proc.pid, self._exited) or _leader_held(
+            proc.pid, self._exited, self._settings.leader_probe_s
+        ):
             self._sigkill_group(proc.pid)
 
     def _sigkill_group(self, pgid: int) -> None:
@@ -977,22 +987,25 @@ class WorkerClient:
         _signal_group(pgid, signal.SIGTERM, leader_exited=_exit_seen(pgid, exited))
         _signal_group(pgid, signal.SIGCONT, leader_exited=_exit_seen(pgid, exited))
         live = self._supervisor.group_live
-        if not _members_gone(pgid, exited, stop, live, self._clock):
+        poll_max_s = self._settings.group_poll_max_s
+        if not _members_gone(pgid, exited, stop, live, self._clock, poll_max_s):
             self._sigkill_group(pgid)
-            if not _members_gone(pgid, exited, Deadline(self._graces.kill, self._clock.now), live, self._clock):
+            if not _members_gone(
+                pgid, exited, Deadline(self._graces.kill, self._clock.now), live, self._clock, poll_max_s
+            ):
                 logger.error("worker process group %d still has members after SIGKILL", pgid)
 
     def _stop_group(self, proc: subprocess.Popen[bytes], stop: Deadline) -> None:
         """Signal the unreaped leader's group until it is gone within `stop`, then reap the leader if it exited."""
         pgid = proc.pid
-        held = _leader_held(pgid, self._exited, LEADER_PROBE_TIMEOUT_S)
+        held = _leader_held(pgid, self._exited, self._settings.leader_probe_s)
         if held:
             try:
                 self._signal_group_until_gone(pgid, stop)
             except Exception:
                 logger.exception("stopping worker process group %d failed; sending SIGKILL", pgid)
                 self._sigkill_group(pgid)
-                _wait_for_exit(pgid, self._exited, self._graces.kill, self._clock)
+                _wait_for_exit(pgid, self._exited, self._graces.kill, self._clock, self._settings.group_poll_max_s)
         elif held is None:
             logger.warning(
                 "worker %d: cannot tell whether it is still unreaped; its process group is not signalled", pgid
@@ -1016,7 +1029,13 @@ class WorkerClient:
             self._write_stop()
         self._retire_channel()
         if graceful:
-            _wait_for_exit(pgid, self._exited, max((stop.remaining() or 0.0) - self._graces.term, 0.0), self._clock)
+            _wait_for_exit(
+                pgid,
+                self._exited,
+                max((stop.remaining() or 0.0) - self._graces.term, 0.0),
+                self._clock,
+                self._settings.group_poll_max_s,
+            )
         if proc.returncode is None:
             self._stop_group(proc, stop)
         join = Deadline(0.0 if sys.is_finalizing() else self._graces.join, self._clock.now)

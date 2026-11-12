@@ -140,9 +140,7 @@ class LabelMap:
         with (
             StorageDir.open_root(self._run, create=True) as run,
             run.walk(PRIVATE_DIR, create=True, mode=PRIVATE_DIR_MODE, aside=None) as private,
-            Lease(
-                private.path / LABELS_NAME, stale_after=settings.stale_after_s, mode=PRIVATE_DIR_MODE, directory=private
-            ) as lease,
+            Lease(private.path / LABELS_NAME, settings=settings, mode=PRIVATE_DIR_MODE, directory=private) as lease,
             lease.keep_alive(settings.renew_fraction) as state,
         ):
             labels = _read_labels(private)

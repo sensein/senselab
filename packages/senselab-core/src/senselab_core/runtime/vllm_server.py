@@ -39,11 +39,12 @@ from senselab_core.kernel.identity import Attestation, ResolvedModel
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.supervisor import current
-from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.execution_settings import JobLease, VllmSettings
 from senselab_core.runtime.hardware import DeviceMemory, device_free_memory, device_set, host_token
 from senselab_core.runtime.launch import Launch, launch
-from senselab_core.runtime.locks import TIMEOUT_S, Lease, LeaseUnavailable
+from senselab_core.runtime.locks import Lease, LeaseUnavailable
 from senselab_core.runtime.network import Network, network_variables
+from senselab_core.runtime.profiles import ExecutionProfile
 
 logger = logging.getLogger("senselab")
 
@@ -53,9 +54,6 @@ HOST = "127.0.0.1"
 ENGINE = "vllm"
 CONFIG_TAG = "vllm-config@1"
 """The `identity_digest` tag of a server's configuration: its ordered server arguments, then its engine variables."""
-
-REQUEST_TIMEOUT_S = 600.0
-"""Default seconds a client waits for a reply."""
 
 URL_SCHEMES = ("http", "https", "data", "file")
 """Schemes an image or video part may name directly; anything else is read as a local path."""
@@ -89,11 +87,6 @@ SWITCHES = (("enable_prefix_caching", "--enable-prefix-caching", "--no-enable-pr
 ENGINE_VARIABLES = (("flashinfer_sampler", "VLLM_USE_FLASHINFER_SAMPLER"),)
 """The settings passed as boolean environment variables of the server process, ``1`` or ``0``."""
 
-POLL_S = 0.5
-"""Seconds between health probes during start-up."""
-
-STOP_TIMEOUT_S = 60.0
-"""Seconds a server has to exit after SIGTERM before its group is killed."""
 
 _NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -301,9 +294,9 @@ def _probe(url: str, key: str, timeout_s: float = 60.0) -> Any:  # noqa: ANN401 
         raise VllmStartError("version", f"probe {url} failed: {exc}") from exc
 
 
-def _healthy(url: str) -> bool:
+def _healthy(url: str, timeout_s: float) -> bool:
     try:
-        with _NO_PROXY.open(f"{url}/health", timeout=5) as response:
+        with _NO_PROXY.open(f"{url}/health", timeout=timeout_s) as response:
             return bool(response.status == HTTPStatus.OK)
     except (OSError, http.client.HTTPException):
         return False
@@ -356,9 +349,9 @@ class VllmServer:
         settings: Mapping[str, Any],
         *,
         start_lock_dir: Path,
-        startup_timeout_s: float,
         start_margin_s: float,
         lease: JobLease,
+        vllm: VllmSettings | None = None,
         devices: Sequence[int | str] | None = None,
         log_dir: Path | None = None,
         network: Network = "online",
@@ -372,10 +365,11 @@ class VllmServer:
             model: The model to serve, pinned to a hub commit or a local weights digest.
             settings: The server settings `server_args` reads.
             start_lock_dir: Where the start lease lives.
-            startup_timeout_s: Seconds the server has to become healthy once the lease is held.
             start_margin_s: The profile's `envs.server_start_margin_s`; a waiter for the start lease waits
-                `startup_timeout_s` plus this plus the lease's stale bound and `locks.TIMEOUT_S`.
+                `vllm.startup_s` plus this plus the lease's stale bound and `lease.wait_s`.
             lease: The profile's `lease`, under which the start lease beats.
+            vllm: The profile's `vllm` section: the start-up wait, the health poll and read, and the stop grace; the
+                packaged profile's when None.
             devices: The server's visible devices; when None the inherited environment is left alone and the lease
                 is named by the inherited ``CUDA_VISIBLE_DEVICES`` (``all`` if unset).
             log_dir: Where the server's output goes, one mode-600 file per server; the owner's stderr when None.
@@ -397,7 +391,7 @@ class VllmServer:
         self.executable = Path(env.python).parent / "vllm"
         self.devices = None if devices is None else [str(device) for device in devices]
         self.start_lock_dir = Path(start_lock_dir)
-        self.startup_timeout_s = float(startup_timeout_s)
+        self.vllm = vllm if vllm is not None else ExecutionProfile.packaged().vllm
         self.start_margin_s = float(start_margin_s)
         self.lease = lease
         self.log_dir = log_dir
@@ -432,8 +426,8 @@ class VllmServer:
         self.start_lock_dir.mkdir(parents=True, exist_ok=True)
         try:
             stale_after = self.lease.stale_after_s
-            wait = self.startup_timeout_s + self.start_margin_s + stale_after + TIMEOUT_S
-            held = Lease(self.lock_path, stale_after=stale_after, timeout=wait, clock=self._clock)
+            wait = self.vllm.startup_s + self.start_margin_s + stale_after + self.lease.wait_s
+            held = Lease(self.lock_path, settings=self.lease, timeout=wait, clock=self._clock)
             with held, held.keep_alive(self.lease.renew_fraction) as state:
                 if state.lost or not held.prove():
                     raise LeaseUnavailable(held.path, f"the start lease {held.path} was lost before the server started")
@@ -472,7 +466,11 @@ class VllmServer:
             ServerRejected, ServerOutOfMemory, ServerFailed, ServiceUnavailable: as `server_fault` types the failure.
         """
         attestation = self._live()
-        return attest_reply(chat(str(self.url), self.served_name, messages, sampling=sampling), attestation, self.label)
+        return attest_reply(
+            chat(str(self.url), self.served_name, messages, sampling=sampling, timeout_s=self.vllm.request_s),
+            attestation,
+            self.label,
+        )
 
     def complete(self, prompt_token_ids: Sequence[int], *, sampling: Mapping[str, Any]) -> Attested:
         """`complete` with this server's model; the reply carries this server's attestation.
@@ -482,7 +480,9 @@ class VllmServer:
             ServerRejected, ServerOutOfMemory, ServerFailed, ServiceUnavailable: as `server_fault` types the failure.
         """
         attestation = self._live()
-        reply = complete(str(self.url), self.served_name, prompt_token_ids, sampling=sampling)
+        reply = complete(
+            str(self.url), self.served_name, prompt_token_ids, sampling=sampling, timeout_s=self.vllm.request_s
+        )
         return attest_reply(reply, attestation, self.label)
 
     def _live(self) -> Attestation:
@@ -517,14 +517,14 @@ class VllmServer:
 
     def _await_health(self) -> None:
         assert self._server is not None and self.url is not None
-        deadline = self._clock.now() + self.startup_timeout_s
-        while not _healthy(self.url):
+        deadline = self._clock.now() + self.vllm.startup_s
+        while not _healthy(self.url, self.vllm.health_s):
             code = self._server.poll()
             if code is not None:
                 raise self._start_error("exited", f"vllm serve exited with {code} before it was healthy")
             if self._clock.now() > deadline:
-                raise self._start_error("timeout", f"vllm serve was not healthy within {self.startup_timeout_s:g}s")
-            self._clock.sleep(POLL_S)
+                raise self._start_error("timeout", f"vllm serve was not healthy within {self.vllm.startup_s:g}s")
+            self._clock.sleep(self.vllm.poll_s)
 
     def _check_memory(self) -> None:
         """Refuse to launch on a device whose free memory is below `gpu_memory_utilization` of its total.
@@ -576,7 +576,7 @@ class VllmServer:
         if server is not None:
             _killpg(server.pid, signal.SIGTERM)
             try:
-                server.wait(timeout=STOP_TIMEOUT_S)
+                server.wait(timeout=self.vllm.stop_s)
             except subprocess.TimeoutExpired:
                 pass
             _killpg(server.pid, signal.SIGKILL)
@@ -707,7 +707,7 @@ def chat(
     messages: Sequence[Mapping[str, Any]],
     *,
     sampling: Mapping[str, Any],
-    timeout_s: float = REQUEST_TIMEOUT_S,
+    timeout_s: float,
 ) -> Any:  # noqa: ANN401 - a JSON value
     """``POST /v1/chat/completions``, not streamed, and return the parsed reply.
 
@@ -716,7 +716,7 @@ def chat(
         model: The served model name.
         messages: Chat messages; a message's ``content`` is a string or a list of `content_part` parts.
         sampling: Further request fields (``temperature``, ``max_tokens``, ``seed``, ...).
-        timeout_s: Seconds to wait for the reply.
+        timeout_s: Seconds to wait for the reply (the profile's `vllm.request_s`).
 
     Raises:
         ValueError: `sampling` sets ``model``, ``messages`` or ``stream``.
@@ -734,7 +734,7 @@ def complete(
     prompt_token_ids: Sequence[int],
     *,
     sampling: Mapping[str, Any],
-    timeout_s: float = REQUEST_TIMEOUT_S,
+    timeout_s: float,
 ) -> Any:  # noqa: ANN401 - a JSON value
     """``POST /v1/completions`` with the prompt as token ids, not streamed, and return the parsed reply.
 
@@ -743,7 +743,7 @@ def complete(
         model: The served model name.
         prompt_token_ids: The prompt, already tokenised (for example by the model's chat template).
         sampling: Further request fields (``max_tokens``, ``temperature``, ``stop_token_ids``, ...).
-        timeout_s: Seconds to wait for the reply.
+        timeout_s: Seconds to wait for the reply (the profile's `vllm.request_s`).
 
     Raises:
         ValueError: The prompt is empty or holds anything but non-negative ints, or `sampling` sets ``model``,

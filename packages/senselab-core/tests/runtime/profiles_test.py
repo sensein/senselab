@@ -233,16 +233,17 @@ def test_retry_block_keeps_its_format_identity() -> None:
 
 @pytest.mark.logic
 def test_profile1_refused(tmp_path: Path) -> None:
-    """An `execution-profile@1.0`, `@2.0` or `@3.0` override or file is refused as retired, naming the rewrite."""
-    for retired in ("execution-profile@1.0", "execution-profile@2.0", "execution-profile@3.0"):
-        with pytest.raises(ProfileFormatRetired, match="execution-profile@4.0"):
+    """An `execution-profile@1.0` to `@4.0` override or file is refused as retired, naming both tags."""
+    for old in ("1", "2", "3", "4"):
+        retired = f"execution-profile@{old}.0"
+        with pytest.raises(ProfileFormatRetired, match=rf"retired format {retired}.*execution-profile@5\.0"):
             ExecutionProfile.load("laptop", {"format": retired})
     path = tmp_path / "site.yaml"
     path.write_text("format: execution-profile@1.0\nnetwork: offline\n")
     with pytest.raises(ProfileFormatRetired, match="retired format execution-profile@1.0"):
         ExecutionProfile.load(CLUSTER, path)
-    assert {ExecutionProfile.load(n).format for n in ("laptop", CLUSTER)} == {"execution-profile@4.0"}
-    assert _packaged("slurm").format == "execution-profile@4.0"
+    assert {ExecutionProfile.load(n).format for n in ("laptop", CLUSTER)} == {"execution-profile@5.0"}
+    assert _packaged("slurm").format == "execution-profile@5.0"
 
 
 @pytest.mark.logic
@@ -275,7 +276,7 @@ def test_a_server_backend_takes_a_service_class_first() -> None:
     """A server backend takes a `svc` class before any other; a host backend never does; without one, as usual."""
     host = _backend("b1", "one", devices=("cuda",))
     server = BackendSpec.model_validate(
-        {**host.model_dump(), "env": Env.server("e"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
+        {**host.model_dump(), "env": Env.server("e"), "server": ServerConfig(settings={})}
     )
     cluster = ExecutionProfile.load(CLUSTER)
     placed = resolve_execution(TASK, _entry(), cluster, None, _registry(server), CAT)
@@ -332,7 +333,7 @@ def test_senselab_ships_only_generic_profiles() -> None:
 def test_a_partial_file_passed_as_a_profile_says_to_use_an_override(tmp_path: Path) -> None:
     """One clear error, not a list of missing fields, and `load(name, file)` is the layering that works."""
     partial = tmp_path / "partial.yaml"
-    partial.write_text("format: execution-profile@4.0\nretry:\n  attempts: 6\n  first_backoff_s: 1.0\n")
+    partial.write_text("format: execution-profile@5.0\nretry:\n  attempts: 6\n  first_backoff_s: 1.0\n")
     with pytest.raises(IncompleteProfile, match=r"must be complete.*override"):
         ExecutionProfile.load(partial)
     assert ExecutionProfile.load("laptop", partial).retry.attempts == 6

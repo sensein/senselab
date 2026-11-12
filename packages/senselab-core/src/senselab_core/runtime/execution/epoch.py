@@ -1,6 +1,6 @@
 """A run's coordinator epochs: `epoch/<n>`, each taken by one `mkdir`, held under a beating lease (ADR-003).
 
-`epoch/<n>/` holds `lease.json` (its coordinator's whole `lease` section, `run-lease@1`, written as it is taken),
+`epoch/<n>/` holds `lease.json` (its coordinator's whole `lease` section, `run-lease@2`, written as it is taken),
 `attempt.json` (the attempt id and ordinal the coordinator claimed under it, written last), `coordinator.lease` (the
 `Lease` its coordinator keeps alive) and, once that coordinator ends, `ended`. The highest `n` with an
 `attempt.json` is the current epoch; a coordinator of an older one releases no further work.
@@ -27,7 +27,7 @@ BOUND_FILE = "lease.json"
 ATTEMPT_FILE = "attempt.json"
 COORDINATOR = "coordinator"
 ENDED = "ended"
-LEASE_FORMAT = "run-lease@1"
+LEASE_FORMAT = "run-lease@2"
 """The format of an epoch's `lease.json`: `{"format": ..., "lease": <the coordinator's lease section>}`."""
 
 
@@ -81,30 +81,37 @@ def read_section(directory: Path) -> JobLease:
     """Return the lease section `directory/lease.json` holds.
 
     Raises:
-        RunLeaseUnreadable: it is missing, is no `run-lease@1` document, or lacks a key `JobLease` requires.
+        RunLeaseUnreadable: it is missing, is no `run-lease@2` document, or lacks a key `JobLease` requires.
     """
     path = directory / BOUND_FILE
     try:
         found = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(found, dict) or found.get("format") != LEASE_FORMAT:
-            raise ValueError(f"its format is not {LEASE_FORMAT}")
+            raise ValueError(
+                f"its format is {found.get('format') if isinstance(found, dict) else None!r}, not {LEASE_FORMAT}"
+            )
         return JobLease.model_validate(found["lease"])
     except (OSError, ValueError, KeyError) as err:
         raise RunLeaseUnreadable(path, err) from err
 
 
 def combined(sections: Sequence[JobLease]) -> JobLease:
-    """Return the lease every judge of a run uses: the longest bounds, the shortest renewal, the rest the newest's.
+    """Return the lease every judge of a run uses.
+
+    It has the longest bounds and wait, the shortest renewal and the rest of the newest's.
 
     `sections` run oldest first; the last is the newest. With none, the packaged profile's section.
     """
     if not sections:
         return ExecutionProfile.load().lease
+    stale_after_s = max(s.stale_after_s for s in sections)
+    attribute_delay_s = max(s.attribute_delay_s for s in sections)
     return sections[-1].model_copy(
         update={
-            "stale_after_s": max(s.stale_after_s for s in sections),
-            "attribute_delay_s": max(s.attribute_delay_s for s in sections),
+            "stale_after_s": stale_after_s,
+            "attribute_delay_s": attribute_delay_s,
             "renew_fraction": min(s.renew_fraction for s in sections),
+            "wait_s": max(*(s.wait_s for s in sections), stale_after_s + attribute_delay_s),
         }
     )
 
@@ -211,7 +218,7 @@ class Epoch:
             LeaseTimeout: another coordinator holds epoch `n`.
         """
         directory = self.root / str(n)
-        held = Lease(directory / COORDINATOR, timeout=0, stale_after=lease.stale_after_s, clock=self._clock)
+        held = Lease(directory / COORDINATOR, settings=lease, timeout=0, clock=self._clock)
         try:
             with held, held.keep_alive(lease.renew_fraction) as state:
                 yield state
@@ -238,7 +245,7 @@ class Epoch:
                 bound = combined([])
         else:
             bound = run_lease(self.root.parent)
-        age = Lease(directory / COORDINATOR, stale_after=bound.stale_after_s, clock=self._clock).age()
+        age = Lease(directory / COORDINATOR, settings=bound, clock=self._clock).age()
         if age is None:
             with StorageDir.open_root(self.root) as opened:
                 age = self._clock.storage_now(opened) - directory.stat().st_mtime

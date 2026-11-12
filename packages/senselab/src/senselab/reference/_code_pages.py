@@ -266,7 +266,7 @@ def profiles_page() -> str:
     ]
     return f"""{BADGES["2x"]}
 
-An execution profile (`execution-profile@4`) says where and how a plan runs: devices, resource classes, the substrate
+An execution profile (`execution-profile@5`) says where and how a plan runs: devices, resource classes, the substrate
 that starts workers, the pool, calibration, leases and fault budgets. It is recorded with each result and never
 reaches a key, so a plan has one hash under every profile. The packaged profiles are
 {", ".join(f"`{p}`" for p in packaged_profiles())}. `ExecutionProfile.load(name_or_path)` reads one; a mapping or file

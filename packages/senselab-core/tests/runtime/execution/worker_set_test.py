@@ -151,7 +151,7 @@ def test_server_start_lock_per_env_and_model() -> None:
         return _Server(_attestation(model))
 
     backend = fake.FAKE.model_copy(
-        update={"name": "served", "env": Env.server("s"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
+        update={"name": "served", "env": Env.server("s"), "server": ServerConfig(settings={})}
     )
     workers = WorkerSet(1, start_server=start)
     failures: list[BaseException] = []
@@ -261,9 +261,7 @@ def test_a_busy_server_start_lease_is_not_a_load_failure() -> None:
     def start(*_: Any) -> Any:  # noqa: ANN401 - a ServerStart
         raise LeaseTimeout("another holder is starting this server")
 
-    backend = _host("served").model_copy(
-        update={"env": Env.server("s"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
-    )
+    backend = _host("served").model_copy(update={"env": Env.server("s"), "server": ServerConfig(settings={})})
     model = _model("c" * 40)
     with pytest.raises(LeaseTimeout):
         with WorkerSet(1, start_server=start).checkout(
@@ -279,9 +277,7 @@ def test_a_server_that_fails_to_start_is_a_load_failure() -> None:
     def start(*_: Any) -> Any:  # noqa: ANN401 - a ServerStart
         raise VllmStartError("timeout", "the server did not come up")
 
-    backend = _host("served").model_copy(
-        update={"env": Env.server("s"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
-    )
+    backend = _host("served").model_copy(update={"env": Env.server("s"), "server": ServerConfig(settings={})})
     model = _model("b" * 40)
     workers = WorkerSet(1, start_server=start)
     with pytest.raises(WorkerLoadFailed, match="VllmStartError") as raised:
@@ -297,9 +293,7 @@ def test_a_server_short_of_device_memory_is_a_resource_fault() -> None:
     def start(*_: Any) -> Any:  # noqa: ANN401 - a ServerStart
         raise VllmOutOfMemory("vllm serve exited with 1 before it was healthy: ValueError: Free memory on device")
 
-    backend = _host("served").model_copy(
-        update={"env": Env.server("s"), "server": ServerConfig(settings={}, startup_timeout_s=1.0)}
-    )
+    backend = _host("served").model_copy(update={"env": Env.server("s"), "server": ServerConfig(settings={})})
     model = _model("e" * 40)
     with pytest.raises(WorkerLoadFailed) as raised:
         with WorkerSet(1, start_server=start).checkout(

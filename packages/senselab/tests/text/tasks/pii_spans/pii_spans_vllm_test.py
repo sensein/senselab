@@ -24,7 +24,6 @@ from senselab_core.runtime.call import Packaged, Result, TaskCall, use_packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.in_process import CallFailed, InProcess
 from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
-from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
@@ -148,9 +147,11 @@ def _server(env: EnvHandle, tmp_path: Path) -> VllmServer:
         model,
         CONFIG.settings,
         start_lock_dir=tmp_path / "other-locks",
-        startup_timeout_s=30,
+        vllm=ExecutionProfile.packaged().vllm.model_copy(update={"startup_s": 30}),
         start_margin_s=1,
-        lease=JobLease(stale_after_s=30, renew_fraction=0.1, attribute_delay_s=0),
+        lease=ExecutionProfile.packaged().lease.model_copy(
+            update={"stale_after_s": 30, "renew_fraction": 0.1, "attribute_delay_s": 0}
+        ),
     )
 
 
@@ -160,7 +161,7 @@ def test_backend_serves_the_catalogue_model_through_a_server_env() -> None:
     spec = next(b for b in REGISTRY.backends("pii_spans") if b.name == "vllm")
     assert (spec.stack, spec.models, spec.devices) == ("vllm", (engine.MODEL_ID,), ("cuda",))
     assert spec.env.kind == "server" and spec.env.name == "vllm-server" and spec.batch_invariant
-    assert spec.server is not None and spec.server.startup_timeout_s == CONFIG.startup_timeout_s
+    assert spec.server is not None and spec.server.settings == CONFIG.settings
     assert server_args(spec.server.settings)
     assert list(ENTRY.backends) == ["transformers", "vllm"] and list(ENTRY.stacks) == ["transformers", "vllm"]
 
@@ -340,3 +341,13 @@ def test_a_store_hit_starts_no_server_and_a_mismatching_attestation_refuses(
     with pytest.raises(WorkerLoadFailed, match="9.9.9") as refused:
         _run(_call_of("Call 555-0199."), execution=profile, store=store)
     assert isinstance(refused.value.__cause__, AttestationMismatch)
+
+
+@pytest.mark.logic
+def test_server_settings_at_the_old_tag_are_refused_naming_both_tags(tmp_path: Path) -> None:
+    """A settings file tagged `server-settings@1.0` is refused with the tag it has and the one this build reads."""
+    old = tmp_path / "old.yaml"
+    old.write_text("format: server-settings@1.0\nstartup_timeout_s: 1800\nsettings: {}\n")
+    with pytest.raises(ValueError, match=r"server-settings@1\.0.*server-settings@2\.0"):
+        vllm_backend.server_config(old)
+    assert CONFIG.settings

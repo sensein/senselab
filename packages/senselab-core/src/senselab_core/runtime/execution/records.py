@@ -8,7 +8,7 @@ from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.identity import ExecutionContext, InputIdentity, LogicalKey, OutputIdentity, ReusePolicy
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.compare import Thresholds, compare
-from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, EvidenceSide
+from senselab_core.runtime.equivalence import SAMPLING, EquivalenceEvidence, EvidenceSide, equivalence_digest
 from senselab_core.runtime.execution.executor import JobRef
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
@@ -18,7 +18,6 @@ from senselab_core.runtime.store import (
     StoredResult,
     agent_record,
     context_record,
-    equivalence_digest,
     key_record,
 )
 from senselab_core.runtime.vocabulary import core_vocabulary

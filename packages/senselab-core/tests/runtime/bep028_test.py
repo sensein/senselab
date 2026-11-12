@@ -27,10 +27,10 @@ from senselab_core.runtime.bep028 import (
     file_entity,
     layout_name,
 )
-from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.fetch import DataManifest
 from senselab_core.runtime.provenance import PROV_DIR, MalformedDocument, ProvStore, RunIOError
 from senselab_core.runtime.vocabulary import core_vocabulary
+from senselab_core.testing.leases import packaged_lease
 from senselab_worker.canonical import MAX_DEPTH, jcs_dumps, jcs_loads
 from syscall_faults_fixture import displace_before_proof
 
@@ -410,7 +410,7 @@ def test_the_label_map_lease_outlasts_its_stale_bound_while_it_beats(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Before the map is written the storage clock passes the stale bound; the lease beats, is never broken, writes."""
-    lease = JobLease(stale_after_s=30, renew_fraction=0.01, attribute_delay_s=0)
+    lease = packaged_lease(30, 0.01, 0)
     clock = install(monkeypatch)
     on_create(monkeypatch, f".{LABELS_NAME}.", lambda: clock.outlast(tmp_path / "private", lease.stale_after_s))
     assert LabelMap(tmp_path, lease=lease).assign([("content:" + "1" * 64, "a.wav")]) == ["file-1"]

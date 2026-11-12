@@ -17,6 +17,7 @@ from senselab_core.runtime.execution.epoch import (
     Epoch,
     LeaseMismatch,
     RunLeaseUnreadable,
+    combined,
     run_lease,
 )
 from senselab_core.runtime.execution.executor import Admission
@@ -30,11 +31,12 @@ from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
+from senselab_core.testing.leases import packaged_lease
 
 pytestmark = pytest.mark.logic
 
-SLOW = JobLease(stale_after_s=3600.0, renew_fraction=0.3, attribute_delay_s=0.0)
-FAST = JobLease(stale_after_s=300.0, renew_fraction=0.2, attribute_delay_s=1.0)
+SLOW = packaged_lease(3600.0, 0.3, 0.0)
+FAST = packaged_lease(300.0, 0.2, 1.0)
 AGE_S = 400.0
 TASK = scoring("run_lease_test.score")
 WORKERS = WorkerSet(1)
@@ -95,7 +97,7 @@ def test_the_run_lease_combines_by_the_longest_bound_and_the_shortest_renewal(tm
     _epochs(run_dir, SLOW, FAST)
     found = run_lease(run_dir)
     assert (found.stale_after_s, found.renew_fraction, found.attribute_delay_s) == (3600.0, 0.2, 1.0)
-    longer = JobLease(stale_after_s=7200.0, renew_fraction=0.1, attribute_delay_s=0.0)
+    longer = packaged_lease(7200.0, 0.1, 0.0)
     assert run_lease(run_dir, own=longer).stale_after_s == 7200.0
     queue = QueueSet.for_run(run_dir).queue("cpu")
     queue.put(fragment("x"))
@@ -120,9 +122,19 @@ def test_a_lease_section_of_another_build_is_refused(tmp_path: Path) -> None:
     path.write_text(json.dumps({"stale_after_s": 300.0, "attribute_delay_s": 0.0}))
     with pytest.raises(RunLeaseUnreadable, match="lease.json"):
         run_lease(run_dir)
-    path.write_text(json.dumps({"format": "run-lease@1", "lease": {"stale_after_s": 300.0}}))
+    path.write_text(json.dumps({"format": "run-lease@2", "lease": {"stale_after_s": 300.0}}))
     with pytest.raises(RunLeaseUnreadable):
         QueueSet.for_run(run_dir)
+
+
+def test_a_run_lease_at_the_old_tag_is_refused_naming_both_tags(tmp_path: Path) -> None:
+    """A `lease.json` written as `run-lease@1` is refused with the tag it has and the one this build reads."""
+    run_dir = tmp_path / "run"
+    _epochs(run_dir, SLOW)
+    path = run_dir / "epoch" / "1" / "lease.json"
+    path.write_text(json.dumps({"format": "run-lease@1", "lease": SLOW.model_dump(mode="json")}))
+    with pytest.raises(RunLeaseUnreadable, match=r"run-lease@1.*run-lease@2"):
+        run_lease(run_dir)
 
 
 def _worker(
@@ -160,12 +172,12 @@ def test_a_worker_whose_lease_section_is_not_the_runs_refuses_to_start(tmp_path:
     prepared(placed, tmp_path / "run", ResultStore(tmp_path / "store"))
     section = tmp_path / "run" / "epoch" / "1" / "lease.json"
     document = json.loads(section.read_text())
-    document["lease"]["stale_after_s"] = 3600.0
+    document["lease"].update({"stale_after_s": 3600.0, "wait_s": 7200.0})
     section.write_text(json.dumps(document))
     worker = PoolWorker(tmp_path / "run" / RUN_QUEUES, ["cpu"], profile=profile, store=ResultStore(tmp_path / "store"))
     with pytest.raises(LeaseMismatch) as raised:
         worker.serve()
-    assert raised.value.keys == ("stale_after_s",)
+    assert raised.value.keys == ("stale_after_s", "wait_s")
 
 
 def test_a_worker_stops_claiming_when_a_newer_epoch_binds_another_section(tmp_path: Path) -> None:
@@ -194,3 +206,19 @@ def test_no_queue_set_is_built_outside_for_run() -> None:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "QueueSet":
                 found.append(f"{path.name}:{node.lineno}")
     assert found == []
+
+
+def test_a_resume_under_a_shorter_profile_keeps_the_longest_wait(tmp_path: Path) -> None:
+    """The run's lease takes the longest `wait_s` of its epochs, and never less than its stale bound plus delay."""
+    run_dir = tmp_path / "run"
+    long = packaged_lease(1200.0, 0.2, 60.0, wait_s=2400.0)
+    short = packaged_lease(300.0, 0.2, 60.0, wait_s=600.0)
+    _epochs(run_dir, long)
+    found = run_lease(run_dir, own=short)
+    assert found.stale_after_s == 1200.0 and found.wait_s == 2400.0
+    assert (
+        combined(
+            [packaged_lease(1200.0, 0.2, 0.0, wait_s=1200.0), packaged_lease(300.0, 0.2, 60.0, wait_s=400.0)]
+        ).wait_s
+        == 1260.0
+    )

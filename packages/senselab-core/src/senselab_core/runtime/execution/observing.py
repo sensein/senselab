@@ -192,9 +192,9 @@ def observations(  # noqa: PLR0913 - an item's requests, then what they ran on a
 
 
 @functools.cache
-def host_report() -> HardwareInfo:
-    """Return this host's hardware, probed once."""
-    return probe_hardware()
+def host_report(timeout_s: float | None = None) -> HardwareInfo:
+    """Return this host's hardware, probed once per bound, within `timeout_s` (`sizing.device_query_s`)."""
+    return probe_hardware(timeout_s=timeout_s)
 
 
 def hardware_of(profile: ExecutionProfile, resource_class: str) -> HardwareClass:
@@ -209,10 +209,10 @@ def hardware_of(profile: ExecutionProfile, resource_class: str) -> HardwareClass
     if grant is not None:
         given = HardwareGrant(device=grant.device, cpus=grant.cpus)
     elif is_service_class(resource_class):
-        given = HardwareGrant(device="cuda" if visible_gpus(host_report()) else "cpu")
+        given = HardwareGrant(device="cuda" if visible_gpus(host_report(profile.sizing.device_query_s)) else "cpu")
     else:
         raise ValueError(f"{resource_class!r} is not a resource class of the profile")
-    return HardwareClass.from_report(host_report(), given)
+    return HardwareClass.from_report(host_report(profile.sizing.device_query_s), given)
 
 
 class Presence:
@@ -230,14 +230,15 @@ class Presence:
         *,
         refresh_s: float | None = None,
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
-        report: Callable[[], HardwareInfo] = host_report,
+        report: Callable[[], HardwareInfo] | None = None,
         run: Callable[[list[str], float], str] | None = None,
     ) -> None:
         """Read for the run in `run_dir`; `refresh_s` is the profile's `pool.presence_refresh_s` when None."""
         self._profile = profile
         self._peers = Peers(run_dir)
         self._refresh_s = profile.pool.presence_refresh_s if refresh_s is None else refresh_s
-        self._clock, self._report, self._run = clock, report, run
+        self._clock, self._run = clock, run
+        self._report = report if report is not None else lambda: host_report(profile.sizing.device_query_s)
         self._read: dict[str, tuple[float, Cotenancy]] = {}
 
     @property

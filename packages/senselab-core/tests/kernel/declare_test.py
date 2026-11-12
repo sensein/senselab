@@ -208,7 +208,7 @@ def test_backend_params_validated_per_backend() -> None:
 @pytest.mark.logic
 def test_server_backend_declares_its_engine_configuration_and_no_worker_sources() -> None:
     """`server` is declared by an `Env.server` backend and by no other, and a server backend places no sources."""
-    server = ServerConfig(settings={"max_model_len": 1}, startup_timeout_s=5)
+    server = ServerConfig(settings={"max_model_len": 1})
     assert _backend(env=Env.server("e"), server=server).server == server
     with pytest.raises(ValidationError, match="declares `server`"):
         _backend(env=Env.server("e"))
@@ -222,7 +222,7 @@ def test_server_backend_declares_its_engine_configuration_and_no_worker_sources(
             worker="senselab_worker.fake",
         )
     with pytest.raises(ValidationError):
-        ServerConfig(settings={}, startup_timeout_s=0)
+        ServerConfig(settings=1)
 
 
 @pytest.mark.logic

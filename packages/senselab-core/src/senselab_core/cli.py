@@ -36,6 +36,9 @@ def mount_data(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
         help="cache directory (default: $SENSELAB_DATA_CACHE or ~/.cache/senselab/data)",
     )
     fetch_cmd.add_argument(
+        "--profile", default=None, help="the execution profile whose retry policy and fetch timeout apply"
+    )
+    fetch_cmd.add_argument(
         "--verify", action="store_true", help="re-hash every cached file instead of checking its size"
     )
     data.set_defaults(run=run_data)
@@ -45,7 +48,15 @@ def run_data(args: argparse.Namespace) -> int:
     """Run a parsed ``data fetch``; return the exit code (0 on success, 1 on a reported error)."""
     try:
         manifest = DataManifest.load(args.manifest)
-        paths = fetch(manifest, cache_root=args.cache or default_cache_root(), verify="full" if args.verify else "size")
+        profile = _profile(args.profile)
+        paths = fetch(
+            manifest,
+            cache_root=args.cache or default_cache_root(),
+            verify="full" if args.verify else "size",
+            retry=profile.retry,
+            network=profile.network,
+            timeout_s=profile.timeouts.fetch_s,
+        )
     except (ManifestError, FetchError) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
         return 1
@@ -256,7 +267,7 @@ def run_execute(args: argparse.Namespace) -> int:
     classes = [c for c in args.classes.split(",") if c]
     try:
         profile = _profile(args.profile)
-        return serve_pool(pool, classes, profile=profile, store=run_store(pool.parent))
+        return serve_pool(pool, classes, profile=profile, store=run_store(pool.parent, profile))
     except (OSError, ValueError) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
         return 1

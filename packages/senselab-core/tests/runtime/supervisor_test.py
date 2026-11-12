@@ -19,7 +19,6 @@ from senselab_core.runtime.execution.supervisor import (
     read_start_time,
     subreaper_supported,
 )
-from senselab_core.runtime.execution_settings import SupervisorSettings
 from senselab_core.runtime.worker_client import WorkerClient
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import alive, group_alive, group_gone
@@ -236,7 +235,7 @@ def test_a_start_time_the_keeper_cannot_read_never_kills(
     fault: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """With `ps` missing, failing or hung at the end, the keeper kills neither a recorded pid nor a recorded group."""
-    settings = SupervisorSettings(start_time_probe_s=packaged_settings().start_time_probe_s)
+    settings = packaged_settings().model_copy()
     pid = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
     group = subprocess.Popen([sys.executable, "-c", SLEEPER], start_new_session=True)
     starts = {p.pid: read_start_time(p.pid, settings.start_time_probe_s) for p in (pid, group)}

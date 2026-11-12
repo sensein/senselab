@@ -516,7 +516,7 @@ class Plan:
         resolver = UnitResolver(profile, roots, hardware)
         return _Reading(
             source,
-            store if store is not None else default_store(),
+            store if store is not None else default_store(profile),
             bound,
             unbound,
             resolver,
@@ -639,7 +639,9 @@ def plan(  # noqa: PLR0913 - the target and records, then keyword-only run input
     return Plan(
         logical=found.logical,
         manifest=found.manifest,
-        placement=place(found.logical, profile, hardware or host_hardware(), config, overrides),
+        placement=place(
+            found.logical, profile, hardware or host_hardware(profile.sizing.device_query_s), config, overrides
+        ),
         hash=plan_hash(found.logical),
         execution=profile,
         config=config,
@@ -687,7 +689,7 @@ def check_storage(
         if probe is not None:
             found = probe(root)
         else:
-            found = _PROBED.get(root) or _PROBED.setdefault(root, probe_capabilities(root))
+            found = _PROBED.get(root) or _PROBED.setdefault(root, probe_capabilities(root, settings=profile.store))
         found.require(root)
         delay = max(delay, found.attribute_delay_s)
     profile.lease.model_copy(update={"attribute_delay_s": delay}).check_bound()
@@ -806,12 +808,14 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
         raise laxer
     profile = ExecutionProfile.load(execution) if isinstance(execution, str) else execution or ExecutionProfile.load()
     overrides = load_overrides(placement)
-    placed_at = place(stored.logical, profile, hardware or host_hardware(), config, overrides)
+    placed_at = place(
+        stored.logical, profile, hardware or host_hardware(profile.sizing.device_query_s), config, overrides
+    )
     values = bind_sources(stored)
     placed = replace(
         stored, placement=placed_at, execution=profile, config=config, overrides=overrides, hook=placement_hook
     )
     if store is None:
         named = Run(run_dir).manifest().get("store")
-        store = ResultStore(Path(named)) if isinstance(named, str) else None
+        store = ResultStore(Path(named), settings=profile.store) if isinstance(named, str) else None
     return start(placed, executor, store=store, values=values)

@@ -5,7 +5,9 @@ Two forms are refused under ``packages/*/src``:
 - a module-level numeric assignment (in the module body or under its ``if``/``try``/``with`` blocks, not in a class
   or function) whose name ends in one of ``SUFFIXES``;
 - a numeric literal other than ``0`` (no wait) passed to ``sleep(...)``, ``wait(...)``, ``join(...)`` or as
-  ``timeout=``.
+  ``timeout=``;
+- a numeric literal other than ``0`` and ``1`` multiplying an expression that names a lease bound
+  (``renew_fraction``, ``stale_after``, ``stale_after_s``): a beat factor is ``lease.missed_beats``.
 
 An invariant is declared ``NAME: Final = ...  # invariant: <why it cannot vary>`` and listed under ``invariants`` in
 ``scripts/data/invariants.yaml`` with its reason. An entry under ``pending`` names the register entry that moves it to
@@ -35,6 +37,7 @@ ALLOWED_FORMAT = "invariants@1.0"
 SOURCE = re.compile(r"^packages/[^/]+/src/.+\.py$")
 SUFFIXES = ("_S", "_MS", "_BYTES", "_ATTEMPTS", "_RETRIES", "_WORKERS", "_ITEMS", "_POLLS", "_BUDGET", "_MODE")
 CALLS = ("sleep", "wait", "join")
+BEAT_NAMES = frozenset({"renew_fraction", "stale_after", "stale_after_s"})
 DECLARED = re.compile(r"#\s*invariant:\s*\S")
 
 
@@ -93,6 +96,7 @@ def sites(path: str, source: str) -> list[tuple[Site, bool]]:
             target, value = stmt.target, stmt.value
         if isinstance(target, ast.Name) and target.id.endswith(SUFFIXES) and value is not None and _numeric(value):
             found.append(Site(path, stmt.lineno, target.id))
+    found += [Site(path, n.lineno, "beat factor") for n in ast.walk(tree) if _beat_factor(n)]
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -100,6 +104,24 @@ def sites(path: str, source: str) -> list[tuple[Site, bool]]:
             found.append(Site(path, node.lineno, f"{_callee(node)}()"))
         found += [Site(path, node.lineno, "timeout=") for k in node.keywords if k.arg == "timeout" and _waits(k.value)]
     return [(s, bool(DECLARED.search(lines[s.line - 1]))) for s in found]
+
+
+def _names(node: ast.AST) -> set[str]:
+    """The identifiers and attribute names in the expression `node`."""
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)} | {
+        n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)
+    }
+
+
+def _beat_factor(node: ast.AST) -> bool:
+    """Whether `node` multiplies a lease bound by a numeric literal other than 0 and 1."""
+    if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult)):
+        return False
+    for literal, other in ((node.left, node.right), (node.right, node.left)):
+        if _numeric(literal) and not (isinstance(literal, ast.Constant) and literal.value in (0, 1)):
+            if _names(other) & BEAT_NAMES:
+                return True
+    return False
 
 
 Key = tuple[str, str]

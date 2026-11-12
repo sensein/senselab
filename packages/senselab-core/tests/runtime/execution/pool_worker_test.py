@@ -129,6 +129,20 @@ def _served(worker: PoolWorker, clock: ManualClock) -> int:
 
 
 @pytest.mark.logic
+@pytest.mark.parametrize("polls", [2, 5])
+def test_a_worker_exits_after_idle_polls_empty_polls(
+    tmp_path: Path, lease_clock: Callable[..., ManualClock], polls: int
+) -> None:
+    """With nothing to claim a worker waits `pool.idle_polls` polls of `pool.poll_s` on its clock, then exits."""
+    profile = _profile(idle_polls=polls)
+    _, store, pool_dir = _run(tmp_path, profile, ["a"])
+    clock = lease_clock()
+    worker = PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=_sender(store, profile), clock=clock)
+    assert _served(worker, clock) == 0
+    assert clock.now() == pytest.approx(polls * profile.pool.poll_s)
+
+
+@pytest.mark.logic
 def test_worker_yields_after_quantum_to_older_queue(tmp_path: Path) -> None:
     """After a quantum of 2 items on `cpu`, the worker claims the older item waiting on `cpu:b`, then goes back."""
     profile = _profile()

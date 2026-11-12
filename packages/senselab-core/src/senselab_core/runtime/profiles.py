@@ -1,4 +1,4 @@
-"""The execution profile (`execution-profile@4`) and `resolve_execution`, which places a task call under it.
+"""The execution profile (`execution-profile@5`) and `resolve_execution`, which places a task call under it.
 
 A profile holds stack preferences per task, device preference, env roots, the torch index override, the model-source
 allowlist, the model-cache budget, the retry policy, the network policy, the resource classes, the substrate, the
@@ -8,6 +8,7 @@ is recorded with each result through `canonical_digest` and never reaches a key.
 """
 
 import difflib
+import functools
 import os
 import platform
 import re
@@ -38,18 +39,21 @@ from senselab_core.runtime.execution_settings import (
     ResourceClass,
     ServiceSettings,
     SizingSettings,
+    StoreSettings,
     SubstrateSpec,
     SupervisorSettings,
     Timeouts,
+    VllmSettings,
+    WorkerSettings,
     is_service_class,
 )
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import Placement
-from senselab_core.runtime.locks import TIMEOUT_S as BUILD_LOCK_TIMEOUT_S
 from senselab_core.runtime.network import Network
 from senselab_core.runtime.retry import RetryPolicy
 
 DEFAULT_PROFILE = "laptop"
+ENV_BUILDS_BEFORE_READY: Final = 2  # invariant: the env builds a worker waits on before its ready mark
 _PROFILE_SUFFIXES = (".yaml", ".yml")
 _UNFILLED = re.compile(r"^<fill: (.+)>$")
 
@@ -72,11 +76,16 @@ class NoDevice(RuntimeError):
 
 _DROPPED_KEYS: Final = {
     "execution-profile@3": "; drop calibration.probe_items and calibration.resolve_s, which are now derived",
+    "execution-profile@4": (
+        "; add the keys it lacks: lease.{missed_beats,wait_s,poll_s,remove_attempts,record_attempts,dir_mode},"
+        " pool.{idle_polls,cancel_check_s,event_poll_s}, substrate.stop_grace_s, supervisor.{reap_poll_s,exit_bound_s},"
+        " timeouts.fetch_s and the store, vllm and worker sections"
+    ),
 }
 
 
 class ProfileFormatRetired(ValueError):
-    """A profile in a retired format; it is rewritten as `execution-profile@4.0`."""
+    """A profile in a retired format; it is rewritten as `execution-profile@5.0`."""
 
     def __init__(self, found: str) -> None:
         """Name the declared format, and the keys a newer major dropped from it."""
@@ -161,7 +170,10 @@ class ExecutionProfile(Formatted):
         faults: The retry budget of each fault class.
         timeouts: A worker's load and request timeouts.
         services: When an idle service exits.
-        supervisor: How a supervisor reads a launched process's start time.
+        supervisor: How a supervisor reads a launched process's start time, and reaps.
+        store: How a result store commits and how a storage root's clock is probed.
+        vllm: How a `vllm serve` process is started, polled, asked and stopped.
+        worker: How a worker client starts and watches its worker subprocess.
     """
 
     format: FormatTag = EXECUTION_PROFILE_FORMAT
@@ -184,6 +196,9 @@ class ExecutionProfile(Formatted):
     timeouts: Timeouts
     services: ServiceSettings
     supervisor: SupervisorSettings
+    store: StoreSettings
+    vllm: VllmSettings
+    worker: WorkerSettings
 
     @model_validator(mode="after")
     def _check_classes(self) -> "ExecutionProfile":
@@ -202,6 +217,12 @@ class ExecutionProfile(Formatted):
             grant = self.resource_classes.get(name)
             if cap is not None and grant is not None and grant.cpus is not None and grant.cpus > cap:
                 raise QosCapTooSmall(name, grant.cpus, cap, node)
+
+    @classmethod
+    @functools.cache
+    def packaged(cls) -> "ExecutionProfile":
+        """Return the packaged `laptop` profile, read once: what a component that was given no profile section uses."""
+        return cls.load()
 
     @classmethod
     def load(
@@ -250,8 +271,8 @@ class ExecutionProfile(Formatted):
 
     @property
     def resolve_s(self) -> float:
-        """Seconds a unit waits for a worker's ready mark: `2 × (lease.stale_after_s + the build lock timeout)`."""
-        return 2 * (self.lease.stale_after_s + BUILD_LOCK_TIMEOUT_S)
+        """Seconds a unit waits for a worker's ready mark: `ENV_BUILDS_BEFORE_READY × (stale_after_s + wait_s)`."""
+        return ENV_BUILDS_BEFORE_READY * (self.lease.stale_after_s + self.lease.wait_s)
 
     def env_root(self, kind: str) -> Path:
         """Return the root for env `kind` with `${VAR:-fallback}`, then `~` and `$VAR`, expanded.

@@ -12,6 +12,7 @@ from backends.subdir_backend_fixture import ARRAY_LIKE
 from lease_clock_fixture import Called, ManualClock
 from lifecycle_probes_fixture import gate, listing, recorded_pids
 from senselab_core.runtime import worker_client
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.worker_client import ShutdownGraces, WorkerClient, WorkerLost
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import alive, group_alive
@@ -32,6 +33,8 @@ UNREACHED_S = 2.0**20
 GRACES = ShutdownGraces(stop=UNREACHED_S, kill=UNREACHED_S)
 """Graces no test reaches: a group signalled is waited for until it is gone."""
 ITEMS = [{"id": "a", "inputs": {"x": numpy.arange(16, dtype="<f4")}}, {"id": "b", "inputs": {}}]
+
+LEADER_PROBE_S = ExecutionProfile.packaged().worker.leader_probe_s
 
 
 def _close_during_run(client: WorkerClient, g: object, hang_s: float) -> list[BaseException]:
@@ -62,7 +65,7 @@ def _signals_only_while_the_leader_is_held(monkeypatch: pytest.MonkeyPatch) -> l
             probe_exit_state = threading.Event()
             probe_exit_state.set()
             try:
-                held = worker_client._leader_held(pgid, probe_exit_state, worker_client.LEADER_PROBE_TIMEOUT_S)
+                held = worker_client._leader_held(pgid, probe_exit_state, LEADER_PROBE_S)
             except Exception:  # noqa: BLE001 - a probe failure must not stop the client's kill
                 held = None
             if held is False:

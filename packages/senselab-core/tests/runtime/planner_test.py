@@ -2,6 +2,7 @@
 
 import dataclasses
 import inspect
+import subprocess
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -763,3 +764,21 @@ def test_a_gpu_node_with_a_host_only_estimate_prints_device_memory_unmeasured() 
     work = {CALL_NODE: LengthProfile(units=(60.0,))}
     text = _gpu_plan().explain(measures=source, units=lambda node: UNIT, lengths=work, hardware=GPU)
     assert "peak device memory unmeasured (memory unmeasured)" in text
+
+
+@pytest.mark.logic
+def test_a_plan_probes_this_host_within_the_profiles_device_query_s(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no `hardware` given, `plan` runs `nvidia-smi` within the execution profile's `sizing.device_query_s`."""
+    seen: list[float] = []
+    real = subprocess.run
+
+    def run(cmd: list[str], **kwargs: Any) -> Any:  # noqa: ANN401
+        if cmd[0] != "nvidia-smi":
+            return real(cmd, **kwargs)
+        seen.append(kwargs["timeout"])
+        raise FileNotFoundError(cmd[0])
+
+    profile = ExecutionProfile.load("laptop", {"sizing": {"device_query_s": 13.5}})
+    monkeypatch.setattr(subprocess, "run", run)
+    plan(_call(), _records("x"), execution=profile)
+    assert seen and set(seen) == {13.5}
