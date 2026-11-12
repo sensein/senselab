@@ -847,3 +847,40 @@ def test_a_busy_start_lease_gives_the_item_back_and_charges_nothing(tmp_path: Pa
     assert worker.serve() == 0
     refs = _refs(pool_dir, profile)
     assert sends == [1, 1] and len(worker.served) == 2 and [r.failure for r in refs] == [None]
+
+
+IDLE_CHILD = """
+import json, signal, sys, threading
+from pathlib import Path
+from pool_stack_fixture import packaged, registry, scoring
+from signal_in_lock_fixture import deliver_in
+from senselab_core.runtime.execution.pool_worker import serve_pool
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.store import ResultStore
+
+pool_dir, cache, override = Path(sys.argv[1]), Path(sys.argv[2]), json.loads(sys.argv[3])
+profile, store = ExecutionProfile.load("laptop", override), ResultStore(Path(sys.argv[4]))
+state = deliver_in(signal.SIGTERM, lambda f: f.f_code.co_name == "wait" and f.f_locals.get("timeout") == 300.0)
+with packaged(registry(scoring("pool_worker_test.score")), cache):
+    code = serve_pool(pool_dir, ["cpu"], profile=profile, store=store)
+sys.settrace(None)
+print("fired" if state["fired"] else "not-fired", flush=True)
+sys.exit(code)
+"""
+
+
+@pytest.mark.logic
+def test_sigterm_landing_inside_the_stop_events_lock_stops_the_worker(tmp_path: Path, tier_bound: float) -> None:
+    """A SIGTERM delivered while the claim loop is inside `Event.wait` on `stop`, holding its lock, still stops it."""
+    override = {**OVERRIDE, "pool": {**OVERRIDE["pool"], "poll_s": 300.0}}
+    profile = ExecutionProfile.load("laptop", override)
+    _, _, pool_dir = _run(tmp_path, profile, ["x"])
+    args = [str(pool_dir), str(tmp_path / "cache"), json.dumps(override), str(tmp_path / "store")]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+    child = subprocess.Popen([sys.executable, "-c", IDLE_CHILD, *args], env=env, stdout=subprocess.PIPE, text=True)
+    try:
+        assert child.wait(timeout=tier_bound) == 0
+        assert child.stdout is not None and child.stdout.read() == "fired\n"
+    finally:
+        child.kill()
+        child.wait()

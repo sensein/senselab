@@ -308,8 +308,9 @@ def _members_gone(  # noqa: PLR0913 - the group, its exit, the bound, the livene
 
 
 ESCALATE_HINT = "stopping the worker; press Ctrl-C again to kill it now"
-_HINTED = threading.Event()
-"""Set once this process has logged `ESCALATE_HINT`; the hint is logged once per process."""
+_HINTED = [False]
+"""Set once this process has logged `ESCALATE_HINT`; the hint is logged once per process. A plain cell, since an
+`Event` takes a lock that the frame a signal interrupted may hold."""
 
 
 @contextlib.contextmanager
@@ -332,8 +333,8 @@ def _signals_deferred(*, escalate: bool) -> Iterator[None]:
             if signal.SIGINT in held:
                 held[:] = [s for s in held if s != signal.SIGINT]
                 raise KeyboardInterrupt
-            if not _HINTED.is_set():
-                _HINTED.set()
+            if not _HINTED[0]:
+                _HINTED[0] = True
                 logger.warning(ESCALATE_HINT)
         held.append(signum)
 

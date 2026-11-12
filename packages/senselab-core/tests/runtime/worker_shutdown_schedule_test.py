@@ -351,6 +351,39 @@ def test_ctrl_c_held_once_with_a_hint_and_escalated_by_a_second() -> None:
     assert proc.stdout.strip() == "interrupted"
 
 
+_SIGINT_INSIDE_THE_HINT = """
+import logging, signal, sys
+from signal_in_lock_fixture import deliver_in
+from senselab_core.runtime.worker_client import _signals_deferred
+logging.getLogger().addHandler(logging.NullHandler())
+deliver_in(signal.SIGINT, lambda frame: frame.f_code.co_name in {"set", "wait", "is_set"})
+try:
+    with _signals_deferred(escalate=True):
+        signal.raise_signal(signal.SIGINT)
+except KeyboardInterrupt:
+    print("interrupted")
+else:
+    print("held")
+sys.settrace(None)
+"""
+
+
+@pytest.mark.logic
+def test_a_sigint_landing_while_the_hint_is_recorded_does_not_deadlock() -> None:
+    """A SIGINT delivered inside any `threading` lock the hold handler takes is held or escalated, never waited on."""
+    proc = subprocess.run(
+        [sys.executable, "-c", _SIGINT_INSIDE_THE_HINT],
+        capture_output=True,
+        text=True,
+        timeout=WAIT_S,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+        preexec_fn=limit_file_size,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert proc.stdout.strip() in {"interrupted", "held"}
+
+
 _THREE_SHUTDOWNS = """
 import logging, signal
 from senselab_core.runtime.worker_client import _signals_deferred

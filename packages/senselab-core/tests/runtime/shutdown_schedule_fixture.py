@@ -62,9 +62,10 @@ RAISES = {
     "handler_raises_exception": "RuntimeError",
 }
 KINDS = (*RAISES, "handler_close", "close_same_thread", "close_other_thread")
-"""`sigint` raises SIGINT; `double_sigint` raises it twice; `sigterm` raises SIGTERM, whose handler closes the
-client and exits; `handler_close`, `handler_raises_base` and `handler_raises_exception` raise SIGUSR1, whose
-handler closes the client, raises `SystemExit` or raises `RuntimeError`; `close_same_thread` calls `close()`
+"""`sigint` raises SIGINT; `double_sigint` raises it twice; `sigterm` raises SIGTERM, whose handler records the
+request and exits, and the unwound frame closes the client; `handler_close`, `handler_raises_base` and
+`handler_raises_exception` raise SIGUSR1, whose handler closes the client, raises `SystemExit` or raises
+`RuntimeError`; `close_same_thread` calls `close()`
 where the boundary is reached; `close_other_thread` starts `close()` on another thread."""
 BOUNDARIES = (
     "module:to_wire",
@@ -135,6 +136,7 @@ class _Injector:
         self.second_sigint = False
         self.events: list[str] = []
         self.nested_acquires: int | None = None
+        self.stop_requested = False
 
     def nested_close(self, client: WorkerClient) -> None:
         """Close from inside the stop, and record how many shutdown locks that close tried to take."""
@@ -186,7 +188,7 @@ def _handlers(kind: str, injector: _Injector) -> None:
     clients = injector.clients
 
     def on_term(signum: int, frame: object) -> None:
-        clients[0].close()
+        injector.stop_requested = True
         raise SystemExit(128 + signum)
 
     def on_usr1(signum: int, frame: object) -> None:
@@ -253,6 +255,8 @@ def _perform(
             injector.clients[0].close()
     except BaseException as exc:  # noqa: BLE001 - the case reports whatever surfaced
         outcome = type(exc).__name__
+        if injector.stop_requested:
+            injector.clients[0].close()
     finally:
         for boundary, real in reals.items():
             setattr(*_owner(boundary), real)
