@@ -252,3 +252,30 @@ def test_a_written_record_carries_the_code_digest_and_a_group_can_clear_it(
     assert machine.roots.unfit_records(unit) == ()
     assert cli_main(["unfit", "--clear", "--profile", str(profile)]) == 1
     assert "names no unit" in capsys.readouterr().err
+
+
+def test_clearing_needs_one_unit_and_an_ambiguous_prefix_is_refused(
+    tmp_path: Path, clock: ManualClock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A prefix that names several units clears none and lists them; a unique one clears its own."""
+    from senselab_core.cli import main as cli_main  # noqa: PLC0415 - one use
+
+    machine, host, held, unit = _fitting(tmp_path, clock, small=2 * RESIDENT)
+    other = next(
+        o
+        for o in (unit.model_copy(update={"backend": f"elsewhere{n}"}) for n in range(500))
+        if o.digest()[0] == unit.digest()[0]
+    )
+    provenance = _provenance(machine.profile)
+    for each in (unit, other):
+        record = UnfitRecord(resource="device", grant_bytes=RESIDENT, **_code(each))
+        assert machine.roots.put_record(each, "unfit", record, provenance)
+    ambiguous = unit.digest()[0]
+    profile = tmp_path / "profile.json"
+    profile.write_text(machine.profile.model_dump_json())
+    assert cli_main(["unfit", ambiguous, "--clear", "--profile", str(profile)]) == 1
+    err = capsys.readouterr().err
+    assert "match" in err and unit.label() in err and other.label() in err
+    assert machine.roots.unfit_records(unit) and machine.roots.unfit_records(other)
+    assert cli_main(["unfit", unit.label(), "--clear", "--profile", str(profile)]) == 0
+    assert machine.roots.unfit_records(unit) == () and machine.roots.unfit_records(other)

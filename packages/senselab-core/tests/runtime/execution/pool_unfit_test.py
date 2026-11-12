@@ -48,6 +48,17 @@ class LoadsFailOn(Worker):
         return [Failed(j.ref, k, LOAD_OOM) for j, k in zip(jobs, keys, strict=True)], []
 
 
+class LoadsFailEverywhere(LoadsFailOn):
+    """A `LoadsFailOn` whose probe items fail at load too: the unit is never measured."""
+
+    def _run(self, name: str, digest: str, item: PlanFragment, *, probe: bool) -> tuple[list[JobOutcome], list[object]]:  # type: ignore[override]
+        if item.placement.resource_class not in self.fails:
+            return super()._run(name, digest, item, probe=probe)  # type: ignore[return-value]
+        jobs, _ = fragment_jobs(item, self.placed, self.values)
+        keys = fragment_keys(item, self.placed, self.values)
+        return [Failed(j.ref, k, LOAD_OOM) for j, k in zip(jobs, keys, strict=True)], []
+
+
 def _profile(tmp_path: Path) -> ExecutionProfile:
     classes = {
         "cpu": {"device": "cpu", "mem_bytes": SMALL, "max_workers": 2},
@@ -113,6 +124,31 @@ def test_a_load_that_fails_on_every_class_records_each_and_the_replan_is_unplace
     hand.fails = ("cpu", "cpu:big")
     with pytest.raises(QueueHeld):
         _drive(pool, second, hand, rounds=200)
+    assert sorted((r.resource, r.grant_bytes) for r in pool.roots.unfit_records(unit)) == [
+        ("host", SMALL),
+        ("host", LARGE),
+    ]
+    again = _pool(tmp_path, profile, run="run2", store="store2", clock=clock)
+    with pytest.raises(Unplaceable) as raised:
+        _more(again, profile, "z")
+    assert [t.verdict for t in raised.value.tried] == ["unfit", "unfit"]
+
+
+def test_an_unmeasured_unit_whose_probe_load_fails_on_every_class_records_each(
+    tmp_path: Path, clock: ManualClock
+) -> None:
+    """The probe item's re-placed retry keeps its origin too: two records, and the replan is `Unplaceable`."""
+    profile = _profile(tmp_path)
+    for resource in profile.resource_classes.values():
+        assert measure_roots(profile).note_seen(resource, SEEN) is not None
+    placed, values = _plan(profile, range(1, JOBS + 1))
+    pool = _pool(tmp_path, profile, clock=clock)
+    _, handle = _submit(pool, placed, values)
+    unit = _unit(pool, placed, values)
+    hand = LoadsFailEverywhere(pool, placed, values)
+    hand.fails = ("cpu", "cpu:big")
+    with pytest.raises(QueueHeld):
+        _drive(pool, handle, hand, rounds=200)
     assert sorted((r.resource, r.grant_bytes) for r in pool.roots.unfit_records(unit)) == [
         ("host", SMALL),
         ("host", LARGE),

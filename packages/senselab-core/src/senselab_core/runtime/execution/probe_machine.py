@@ -652,11 +652,16 @@ class ProbeMachine:
     def follow(self, parent: str, digest: str, queue: str | None = None) -> None:
         """Note retry item `digest` under the unit of production item `parent`, whose outcome is being read.
 
-        A retry re-placed on another class is on that class's `queue`, so its own faults are read against its grant.
+        A retry re-placed on another class is on that class's `queue`, so its own faults are read against its grant; a
+        probe item's retry is a production item of that unit with no estimate.
         """
         origin = self._origins.get(parent)
-        if origin is not None and origin.probe is None:
+        if origin is None:
+            return
+        if origin.probe is None:
             self._origins[digest] = origin if queue is None else dataclasses.replace(origin, queue=queue)
+        elif queue is not None:
+            self._origins[digest] = Origin(origin.unit, None, queue, None)
 
     def forget(self, digest: str) -> None:
         """Forget item `digest`: its outcome has been read."""

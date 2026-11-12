@@ -303,7 +303,8 @@ def _placement_arguments(parser: argparse.ArgumentParser) -> None:
 def run_unfit(args: argparse.Namespace) -> int:
     """Run a parsed ``unfit``: list the units recorded as not fitting a class, or ``--clear`` one unit's records.
 
-    A unit is named by the digest label ``explain`` prints, or any prefix of its digest. A record binds the code that
+    A unit is named by the digest label ``explain`` prints, or any prefix of its digest; ``--clear`` needs the prefix
+    to name one unit. A record binds the code that
     wrote it, so a fixed loader needs no clearing; this is for a record of a load a busy card, not the unit, failed.
     """
     try:
@@ -316,6 +317,13 @@ def run_unfit(args: argparse.Namespace) -> int:
         ]
         if args.clear and not args.unit:
             print("senselab: error: --clear names no unit; give the unit's digest label", file=sys.stderr)
+            return 1
+        if args.clear and len(found) > 1:
+            listed = ", ".join(u.label() for u, _ in found)
+            print(
+                f"senselab: error: {args.unit!r} matches {len(found)} units ({listed}); give more of the label",
+                file=sys.stderr,
+            )
             return 1
         for unit, records in found:
             if args.clear:
