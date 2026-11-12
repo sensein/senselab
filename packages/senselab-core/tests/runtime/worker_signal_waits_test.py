@@ -94,3 +94,51 @@ def test_a_sigterm_handler_closing_the_client_inside_a_wait_finishes_and_leaves_
     assert proc.returncode == 0, proc.stderr[-3000:]
     assert proc.stdout.split()[0] == "delivered", proc.stdout + proc.stderr[-1000:]
     assert list(arrays.iterdir()) == []
+
+
+_CLOSE_DURING_CONSTRUCTION = (
+    _HEAD
+    + """
+stops, box = [], []
+
+class Probed(WorkerClient):
+    def _write_stop(self):
+        stops.append(threading.current_thread().name)
+        super()._write_stop()
+
+    def _handshake(self, *args, **kwargs):
+        box.append(self)
+        closer = threading.Thread(target=self.close, name="closer")
+        closer.start()
+        closer.join(30)
+        assert not closer.is_alive()
+        return super()._handshake(*args, **kwargs)
+
+try:
+    Probed(source_tree_python(), "senselab_worker.fake", init={}, array_parent=parent)
+except WorkerLost:
+    outcome = "WorkerLost"
+else:
+    outcome = "constructed"
+proc = box[0]._proc
+print(outcome, stops, proc.returncode is not None, box[0]._array_dir.exists(), flush=True)
+"""
+)
+
+
+@pytest.mark.contract
+def test_a_close_from_another_thread_during_construction_is_graceful_and_leaves_nothing(tmp_path: Path) -> None:
+    """The stop line is written, the worker is reaped and the array directory is removed, as before."""
+    arrays = tmp_path / "arrays"
+    arrays.mkdir()
+    proc = subprocess.run(
+        [sys.executable, "-c", _CLOSE_DURING_CONSTRUCTION, str(arrays)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    assert proc.stdout.split() == ["WorkerLost", "['closer']", "True", "False"], proc.stdout
+    assert list(arrays.iterdir()) == []

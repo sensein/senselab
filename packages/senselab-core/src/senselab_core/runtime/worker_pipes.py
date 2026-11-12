@@ -2,7 +2,6 @@
 
 import os
 import queue
-import select
 import selectors
 import socket
 import threading
@@ -32,7 +31,8 @@ class WakeEvent(threading.Event):
     """A `threading.Event` that takes no lock: a flag and a pipe, so a signal handler can `set` and `wait` on it.
 
     The main thread can be interrupted inside any `threading.Event`, which holds its condition's lock there, and a
-    handler that then waited on or set the same event would block for good. A `WakeEvent` waits in `select`.
+    handler that then waited on or set the same event would block for good. A `WakeEvent` waits in a selector.
+    `close` releases the pipe; a closed event keeps its flag and no longer blocks.
     """
 
     def __init__(self) -> None:
@@ -41,8 +41,8 @@ class WakeEvent(threading.Event):
         self._r, self._w = os.pipe()
         os.set_blocking(self._r, False)
         os.set_blocking(self._w, False)
-        closer = weakref.finalize(self, _close_fds, self._r, self._w)
-        setattr(closer, "atexit", False)
+        self._closer = weakref.finalize(self, _close_fds, self._r, self._w)
+        setattr(self._closer, "atexit", False)  # noqa: B010 - mypy's weakref stub has no `atexit` slot
 
     def is_set(self) -> bool:
         """Whether the flag is set."""
@@ -51,10 +51,12 @@ class WakeEvent(threading.Event):
     def set(self) -> None:
         """Set the flag and wake every waiter."""
         self._flag = True
-        try:
-            os.write(self._w, b"x")
-        except OSError:
-            pass  # a full pipe is already readable
+        fd = self._w
+        if fd >= 0:
+            try:
+                os.write(fd, b"x")
+            except OSError:
+                pass  # a full pipe is already readable
 
     def clear(self) -> None:
         """Clear the flag."""
@@ -62,21 +64,29 @@ class WakeEvent(threading.Event):
         self._drain()
 
     def _drain(self) -> None:
+        fd = self._r
         try:
-            while os.read(self._r, READ_BYTES):
+            while fd >= 0 and os.read(fd, READ_BYTES):
                 pass
         except OSError:
             pass
 
+    def close(self) -> None:
+        """Release the pipe; safe to call twice."""
+        r, w, self._r, self._w = self._r, self._w, -1, -1
+        self._closer.detach()  # else its collection would close descriptor numbers a later object holds
+        _close_fds(*(fd for fd in (r, w) if fd >= 0))
+
     def wait(self, timeout: float | None = None) -> bool:
         """Wait up to `timeout` seconds (forever when None) for the flag; return whether it is set."""
         end = None if timeout is None else time.monotonic() + timeout
-        while not self._flag:
+        while not self._flag and self._r >= 0:
             left = None if end is None else end - time.monotonic()
             if left is not None and left <= 0:
                 break
-            if select.select([self._r], [], [], left)[0]:
-                if not self._flag:
+            with selectors.DefaultSelector() as sel:
+                sel.register(self._r, selectors.EVENT_READ)
+                if sel.select(left) and not self._flag:
                     self._drain()  # a byte left by a `set` that a `clear` then undid
         return self._flag
 
@@ -117,6 +127,7 @@ class Pump:
                 self._closed = True
                 os.close(self._wake_r)
                 os.close(self._wake_w)
+                self.ended.close()
 
     def _run(self) -> None:
         buf = bytearray()

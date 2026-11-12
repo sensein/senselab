@@ -47,7 +47,12 @@ def _check(tmp_path: Path, kind: str, occurrences: range) -> list[dict[str, Any]
     failed = {f"{r['path']} {r['boundary']}#{r['occurrence']}": v for r in reports if (v := violations(r))}
     assert failed == {}
     if kind == "sigterm_in_wait":
-        silent = [path for path in PATHS if not any(r["delivered"] for r in reports if r["path"] == path)]
+        scheduled = {case["path"] for case in todo}
+        assert scheduled, "no sigterm_in_wait case can deliver"
+        assert occurrences.start > 1 or scheduled == set(PATHS), (
+            f"no deliverable first call on {set(PATHS) - scheduled}"
+        )
+        silent = [path for path in scheduled if not any(r["delivered"] for r in reports if r["path"] == path)]
         assert silent == [], f"no sigterm_in_wait case delivered its signal on {silent}"
     return reports
 

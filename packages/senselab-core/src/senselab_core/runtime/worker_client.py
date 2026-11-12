@@ -450,6 +450,8 @@ class WorkerClient:
         self._exited = WakeEvent()
         self._run_lock = threading.Lock()
         self._run_owner: int | None = None
+        self._constructing: int | None = None
+        self._closed_while_starting = False
         self._run_idle = WakeEvent()
         self._run_idle.set()
         self._channel_lock = threading.Lock()
@@ -467,7 +469,7 @@ class WorkerClient:
             self._stopped = self._released = True
             raise
         self._closed = False
-        self._run_owner = threading.get_ident()
+        self._constructing = threading.get_ident()
         try:
             wire_init = to_wire(
                 {"array_dir": str(self._array_dir), **init},
@@ -481,13 +483,15 @@ class WorkerClient:
             deadline = Deadline(load_timeout, clock.now)
             self._send(dump_line({"init": wire_init}, "init", limit=self._max_line_bytes), deadline)
             self._receive(deadline, "loading the backend", "ready")
+            if self._closed_while_starting:
+                raise WorkerLost("the client was closed while it was starting")
         except BaseException as exc:
             raised = self._abort_start(exc)
             if raised is exc:
                 raise
             raise raised from exc
         finally:
-            self._run_owner = None
+            self._constructing = None
 
     def _abort_start(self, exc: BaseException) -> BaseException:
         """Stop the worker a constructor failed to start with `exc`; return what the constructor raises."""
@@ -585,7 +589,8 @@ class WorkerClient:
             return
         if not self._closed:
             self._closed_by_caller = True
-        if self._run_owner == threading.get_ident():
+        if threading.get_ident() in (self._run_owner, self._constructing):
+            self._closed_while_starting = self._closed_while_starting or self._constructing is not None
             self._closed = True
             self._lines.put(None)
             try:
@@ -641,6 +646,8 @@ class WorkerClient:
 
     def _close_wake(self) -> None:
         self._lines.close()
+        for event in (self._exited, self._reaped, self._run_idle, *(pump.ended for pump in self._pumps)):
+            event.close()
         for name in ("_wake_r", "_wake_w"):
             fd = getattr(self, name)
             setattr(self, name, -1)
