@@ -33,6 +33,7 @@ from senselab_core.kernel.formats import (
     MEASURE_OOM_FORMAT,
     MEASURE_REGIME_FORMAT,
     MEASURE_SUPERSEDE_FORMAT,
+    MEASURE_UNFIT_FORMAT,
     MEASURE_UNIT_FORMAT,
     MEASURE_UNIT_TAG,
     MEASURES_LAYOUT_TAG,
@@ -51,6 +52,7 @@ from senselab_core.runtime.calibration import (
     RegimeFactor,
     RegimeRecord,
     SupersedeRecord,
+    UnfitRecord,
 )
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import expand
@@ -255,16 +257,23 @@ RECORD_FORMATS: Mapping[str, str] = FrozenMapping(
         "supersede": MEASURE_SUPERSEDE_FORMAT,
         "regime": MEASURE_REGIME_FORMAT,
         "oom": MEASURE_OOM_FORMAT,
+        "unfit": MEASURE_UNFIT_FORMAT,
     }
 )
 """The record kinds below a unit, each with the format its files carry."""
 RECORD_MODELS: Mapping[str, type[Frozen]] = FrozenMapping(
-    {"drift": DriftRecord, "supersede": SupersedeRecord, "regime": RegimeFactor, "oom": OomRecord}
+    {
+        "drift": DriftRecord,
+        "supersede": SupersedeRecord,
+        "regime": RegimeFactor,
+        "oom": OomRecord,
+        "unfit": UnfitRecord,
+    }
 )
 """The type of each record kind's payload: `put_record` validates it on write."""
 ESTIMATE_RECORDS = ("regime", "oom")
 """The kinds `regime_records` reads back typed: the ones an estimate is derived from."""
-RecordKind = Literal["drift", "supersede", "regime", "oom"]
+RecordKind = Literal["drift", "supersede", "regime", "oom", "unfit"]
 _JSON_NAME = re.compile(r".+\.json")
 
 
@@ -346,7 +355,7 @@ class Provenance(Frozen):
 
 
 class MeasureRecord(Frozen):
-    """A trusted `drift`, `supersede`, `regime` or `oom` file as `MeasureRoots.records` reads it.
+    """A trusted `drift`, `supersede`, `regime`, `oom` or `unfit` file as `MeasureRoots.records` reads it.
 
     Attributes:
         kind: The record kind.
@@ -769,12 +778,23 @@ class MeasureRoots:
         return frozenset(i for r in self._records(digest) if r.kind == "supersede" for i in r.record["outdates"])
 
     def records(self, unit: MeasureUnit) -> tuple[MeasureRecord, ...]:
-        """Return the `drift`, `supersede`, `regime` and `oom` records of `unit` the trust admits, oldest first."""
+        """Return the `drift`, `supersede`, `regime`, `oom` and `unfit` records of `unit` the trust admits, by age."""
         return tuple(self._records(self._digest(unit)))
 
     def regime_records(self, unit: MeasureUnit) -> tuple[RegimeRecord, ...]:
         """Return the typed `regime` and `oom` records of `unit` the trust admits, oldest first."""
         return tuple(_typed(r) for r in self.records(unit) if r.kind in ESTIMATE_RECORDS)
+
+    def unfit_records(self, unit: MeasureUnit) -> tuple[UnfitRecord, ...]:
+        """Return the `unfit` records of `unit` the trust admits, oldest first."""
+        written = RECORD_FORMATS["unfit"]
+        found = []
+        for record in self.records(unit):
+            if record.kind == "unfit":
+                read = record.read_under()
+                with reading(written, written if read is None else read.tag):
+                    found.append(UnfitRecord.model_validate(record.record))
+        return tuple(found)
 
     def probes(self, unit: MeasureUnit) -> tuple[ProbeFile, ...]:
         """Return the probe files of `unit` that still pool, oldest first.

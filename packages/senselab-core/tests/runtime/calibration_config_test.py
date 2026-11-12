@@ -148,6 +148,7 @@ def test_measures_and_placement_formats_are_registered() -> None:
         formats.MEASURE_SUPERSEDE_FORMAT,
         formats.MEASURE_REGIME_FORMAT,
         formats.MEASURE_OOM_FORMAT,
+        formats.MEASURE_UNFIT_FORMAT,
     ]
     assert len(set(tags)) == len(tags)
     for tag in tags:

@@ -82,7 +82,6 @@ from senselab_core.runtime.execution.pool_parts import (
     ProbedUnit,
     Release,
     jobs_of,
-    larger_class,
     report,
     split,
 )
@@ -105,6 +104,7 @@ from senselab_core.runtime.execution.substrates import (
 )
 from senselab_core.runtime.execution.telemetry import Actuals, Placements
 from senselab_core.runtime.execution_settings import ResourceClass
+from senselab_core.runtime.fit import larger_class
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.measures import (
     Estimates,
@@ -717,6 +717,8 @@ class Pool:
                 self._actuals.landed(class_of(flight.queue), seen)
             self._machine.settled(flight.digest, seen)
             self._machine.oom(flight.digest, seen, _worker_of(record))
+            if _load_oom(record):
+                self._machine.unfit(flight.digest, _worker_of(record))
             if not reused:
                 self._survived(flight, record)
         try:
@@ -1019,6 +1021,15 @@ def _observed(record: Mapping[str, object]) -> list[Observation]:
     return [Observation.model_validate(o) for o in reported] if isinstance(reported, list) else []
 
 
+def _load_oom(record: Mapping[str, object]) -> bool:
+    """Whether an item's outcome `record` holds a load that ran out of memory: a job's failure, or the item's own."""
+    jobs, fault = record.get("jobs"), record.get("fault")
+    faults = [j.get("failure") for j in jobs if isinstance(j, Mapping)] if isinstance(jobs, list) else []
+    return any(
+        isinstance(f, Mapping) and f.get("fault") == "resource" and f.get("load") is True for f in [*faults, fault]
+    )
+
+
 def _worker_of(record: Mapping[str, object]) -> str | None:
     """Return the `worker_id()` of the worker an item's outcome `record` names, None when it names none."""
     measure = record.get("measure")
@@ -1106,7 +1117,6 @@ __all__ = [
     "Pool",
     "ScalerFailed",
     "coordinate",
-    "larger_class",
     "report",
     "run_plan",
     "run_store",

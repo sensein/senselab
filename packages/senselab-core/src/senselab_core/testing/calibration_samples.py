@@ -25,6 +25,7 @@ from senselab_core.runtime.calibration import (
     Stratum,
     StratumBatch,
     SupersedeRecord,
+    UnfitRecord,
     Unplanned,
 )
 from senselab_core.runtime.execution_settings import CalibrationSettings
@@ -197,6 +198,14 @@ def register_calibration_samples(register: Register, packaged: CalibrationSettin
         OomRecord,
         lambda: [OomRecord(resource="device", batch=16, length=30.0, cotenancy=1, grant_bytes=2**36, basis=("p1",))],
         invalid_updates=[{"resource": "disk"}, {"batch": 0}, {"grant_bytes": 0}],
+    )
+    register(
+        UnfitRecord,
+        lambda: [
+            UnfitRecord(resource="device", grant_bytes=2**36),
+            UnfitRecord(resource="host", grant_bytes=1, worker="w"),
+        ],
+        invalid_updates=[{"resource": "disk"}, {"grant_bytes": 0}, {"worker": ""}],
     )
     register(
         EstimateSource,

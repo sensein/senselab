@@ -20,7 +20,7 @@ from senselab_core.kernel.graph import Edge, Graph, GraphIssue, Node, validate
 from senselab_core.kernel.identity import InputIdentity, ModelRef, ResolvedModel, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement, PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan, plan_hash
-from senselab_core.runtime.calibration import Estimate, LengthProfile
+from senselab_core.runtime.calibration import Estimate, LengthProfile, UnfitRecord
 from senselab_core.runtime.call import (
     ITEM_ID,
     RunConfig,
@@ -35,14 +35,17 @@ from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import record_bind, sourced_manifest
 from senselab_core.runtime.explain import (
     NodeSized,
+    class_grant,
     class_needs,
     explain,
+    fit_lines,
     item_lines,
     node_sizing,
     sized_node,
     undetermined_lines,
     waits,
 )
+from senselab_core.runtime.fit import Choice, Unplaceable, choose
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
 from senselab_core.runtime.licenses import laxer_than
@@ -373,6 +376,17 @@ class _Reading:
     unbound: str
     resolver: Any
     resolve: "Callable[[str], MeasureUnit | Unresolved]"
+    roots: Any
+
+
+@dataclass(frozen=True)
+class _UnitReads:
+    """What a node's unit is read through: the measures source, the roots, the resolver and the unit of a node."""
+
+    source: MeasureSource
+    roots: Any
+    resolver: Any
+    resolve: "Callable[[str], MeasureUnit | Unresolved]"
 
 
 @dataclass(frozen=True)
@@ -433,6 +447,7 @@ class Plan:
         hardware: HardwareInfo | None = None,
         store: "ResultStore | None" = None,
         values: Mapping[InputIdentity, object] | None = None,
+        unfit: "Callable[[MeasureUnit], Sequence[UnfitRecord]] | None" = None,
     ) -> str:
         """Return, per node, the backend, stack, env, device, batch, resource class, partition, licenses and reason.
 
@@ -446,7 +461,9 @@ class Plan:
         jobs the `store` (by default the one a run uses, `default_store`) would serve and how many compute
         (`ResultStore.admits`); `values` default to the plan's inputs bound from their sources. Inputs that cannot be
         bound leave the counts undetermined and the lengths unknown, with the binding error's reason. The last lines
-        name where measures are written and the waits on another run.
+        name where measures are written and the waits on another run. A node whose unit does not fit its class
+        (`fit`) is shown on the class it moves to, with each class tried and its numbers, or as unplaceable;
+        `unfit` reads a unit's `unfit` records (by default the profile's roots).
 
         Raises:
             As `count_items`.
@@ -457,10 +474,14 @@ class Plan:
         from senselab_core.runtime.execution import plan_reads  # noqa: PLC0415 - plan_reads imports this module
 
         reading = self._reading(profile, measures, units, hardware, values, store)
+        estimates = self._estimates(reading)
+        choices = self._choices(reading, estimates, unfit, hardware)
+        moved = self._moved(choices)
         sizing = {}
-        for node_id, read in self._read_nodes(reading, lengths).items():
-            sizing[node_id] = node_sizing(
-                read.placed,
+        for node_id, read in self._read_nodes(reading, lengths, estimates).items():
+            sizing[node_id] = [*fit_lines(choices[node_id])] if node_id in choices else []
+            sizing[node_id] += node_sizing(
+                moved.nodes[node_id],
                 profile,
                 read.estimate,
                 read.work,
@@ -479,7 +500,7 @@ class Plan:
                 plan_reads.count_items(self, bound, store=found, run=run, profile=profile, envs=resolver.envs)
             )
         )
-        return explain(self.hash, self.logical, self.placement, sizing=sizing, footer=[*counted, *waits(profile)])
+        return explain(self.hash, self.logical, moved, sizing=sizing, footer=[*counted, *waits(profile)])
 
     def _reading(  # noqa: PLR0913 - what a plan is read against
         self,
@@ -491,7 +512,6 @@ class Plan:
         store: "ResultStore | None",
     ) -> "_Reading":
         """Return what `explain` and `placement_request` read a plan against: measures, inputs, store and units."""
-        from senselab_core.runtime.execution import plan_reads  # noqa: PLC0415 - plan_reads imports this module
         from senselab_core.runtime.execution.in_process import default_store  # noqa: PLC0415 - as above
         from senselab_core.runtime.execution.run import (  # noqa: PLC0415 - run imports this module
             InputChanged,
@@ -499,6 +519,33 @@ class Plan:
             SourcesUnrecorded,
             bind_sources,
         )
+
+        unit_reads = self._unit_reads(profile, measures, units, hardware)
+        bound, unbound = values, ""
+        if bound is None:
+            try:
+                bound = bind_sources(self)
+            except (InputChanged, InputsUnavailable, SourcesUnrecorded) as err:
+                unbound = str(err)
+        return _Reading(
+            unit_reads.source,
+            store if store is not None else default_store(profile),
+            bound,
+            unbound,
+            unit_reads.resolver,
+            unit_reads.resolve,
+            unit_reads.roots,
+        )
+
+    def _unit_reads(
+        self,
+        profile: ExecutionProfile,
+        measures: MeasureSource | None,
+        units: "Callable[[str], MeasureUnit | Unresolved] | None",
+        hardware: HardwareInfo | None,
+    ) -> "_UnitReads":
+        """Return the measures, roots and unit resolvers a plan's nodes are read through."""
+        from senselab_core.runtime.execution import plan_reads  # noqa: PLC0415 - plan_reads imports this module
         from senselab_core.runtime.units import (  # noqa: PLC0415 - units imports the executor, which imports this module
             UnitResolver,
             default_measures,
@@ -507,31 +554,38 @@ class Plan:
 
         roots = measure_roots(profile)
         source = measures if measures is not None else default_measures(profile, roots)
-        bound, unbound = values, ""
-        if bound is None:
-            try:
-                bound = bind_sources(self)
-            except (InputChanged, InputsUnavailable, SourcesUnrecorded) as err:
-                unbound = str(err)
         resolver = UnitResolver(profile, roots, hardware)
-        return _Reading(
-            source,
-            store if store is not None else default_store(profile),
-            bound,
-            unbound,
-            resolver,
-            units or plan_reads.unit_of_node(self, resolver),
-        )
+        return _UnitReads(source, roots, resolver, units or plan_reads.unit_of_node(self, resolver))
 
-    def _read_nodes(self, reading: "_Reading", lengths: Mapping[str, LengthProfile] | None) -> "dict[str, _NodeRead]":
-        """Return each node's unit, estimate, lengths and bucket edges, read, never probed."""
+    def _estimates(
+        self, reading: "_Reading | _UnitReads"
+    ) -> "dict[str, tuple[MeasureUnit | Unresolved, Estimate | None]]":
+        """Return each node's unit and the estimate its measures give, read once, never probed."""
+        from senselab_core.runtime.units import Unresolved  # noqa: PLC0415 - units imports the executor
+
+        found: dict[str, tuple[MeasureUnit | Unresolved, Estimate | None]] = {}
+        for node_id in self.placement.nodes:
+            unit = reading.resolve(node_id)
+            found[node_id] = (unit, None if isinstance(unit, Unresolved) else reading.source.get(unit))
+        return found
+
+    def _read_nodes(
+        self,
+        reading: "_Reading",
+        lengths: Mapping[str, LengthProfile] | None,
+        estimates: "Mapping[str, tuple[MeasureUnit | Unresolved, Estimate | None]] | None" = None,
+    ) -> "dict[str, _NodeRead]":
+        """Return each node's unit, estimate, lengths and bucket edges, read, never probed.
+
+        `estimates` are what `_estimates` read, when the caller has them.
+        """
         from senselab_core.runtime.execution import plan_reads  # noqa: PLC0415 - plan_reads imports this module
         from senselab_core.runtime.units import Unresolved  # noqa: PLC0415 - units imports the executor
 
+        read = self._estimates(reading) if estimates is None else estimates
         found = {}
         for node_id, placed in self.placement.nodes.items():
-            unit = reading.resolve(node_id)
-            estimate = None if isinstance(unit, Unresolved) else reading.source.get(unit)
+            unit, estimate = read[node_id]
             work = (lengths or {}).get(node_id)
             if work is None and estimate is not None:
                 work = plan_reads.node_work(self, node_id, reading.bound, estimate)
@@ -544,6 +598,95 @@ class Plan:
                 () if estimate is None else plan_reads.node_edges(self, node_id, estimate),
             )
         return found
+
+    def _choices(  # noqa: PLR0913 - what the nodes were read through and as, the records and the hardware
+        self,
+        reading: "_Reading | _UnitReads",
+        estimates: "Mapping[str, tuple[MeasureUnit | Unresolved, Estimate | None]]",
+        unfit: "Callable[[MeasureUnit], Sequence[UnfitRecord]] | None",
+        hardware: HardwareInfo | None,
+    ) -> dict[str, Choice]:
+        """Return the class each node whose unit has a measure or an `unfit` record goes to, judged by `choose`.
+
+        A node whose unit is unresolved, unmeasured and without a record is not judged. The records and the
+        estimate are those of the unit as placed; a larger class is judged by its grant against them.
+        """
+        from senselab_core.runtime.units import Unresolved  # noqa: PLC0415 - units imports the executor
+
+        profile = self.execution
+        assert profile is not None
+        read_unfit = unfit if unfit is not None else reading.roots.unfit_records
+        found: dict[str, Choice] = {}
+        for node_id, placed in self.placement.nodes.items():
+            unit, estimate = estimates[node_id]
+            if isinstance(unit, Unresolved):
+                continue
+            records = read_unfit(unit)
+            if estimate is None and not records:
+                continue
+            seen = hardware if hardware is not None else reading.resolver.hardware
+            device = class_grant(profile, placed.resource_class, seen).on_device
+
+            def grant_of(name: str, seen: HardwareInfo = seen) -> int | None:
+                return class_grant(profile, name, seen).memory_bytes
+
+            found[node_id] = choose(
+                profile,
+                placed.resource_class,
+                fit=None if estimate is None else estimate.device if device else estimate.host,
+                resource="device" if device else "host",
+                unfit=records,
+                grant_of=grant_of,
+            )
+        return found
+
+    def _moved(self, choices: Mapping[str, Choice]) -> PlanPlacement:
+        """Return the placement with each node of `choices` on the class it goes to; an unplaceable node stays."""
+        profile = self.execution
+        assert profile is not None
+        current = current_values(profile.resource_classes, self.overrides)
+        nodes = dict(self.placement.nodes)
+        for node_id, choice in choices.items():
+            placed = nodes[node_id]
+            if choice.to is None or choice.to == placed.resource_class:
+                continue
+            nodes[node_id] = placed.model_copy(
+                update={
+                    "resource_class": choice.to,
+                    "partition": current[choice.to].partition,
+                    "why": f"{placed.why}; moved from {placed.resource_class}: {choice.tried[0].line()}",
+                }
+            )
+        return self.placement.model_copy(update={"nodes": nodes})
+
+    def fit(  # noqa: PLR0913 - what a plan is read against, as `explain`
+        self,
+        *,
+        measures: MeasureSource | None = None,
+        units: "Callable[[str], MeasureUnit | Unresolved] | None" = None,
+        unfit: "Callable[[MeasureUnit], Sequence[UnfitRecord]] | None" = None,
+        hardware: HardwareInfo | None = None,
+    ) -> "Plan":
+        """Return this plan with each node on the smallest class its unit fits, from the class it was placed on up.
+
+        A class is skipped when the unit's measured resident memory plus `m0` exceeds `sizing.memory_headroom` of its
+        grant, or a load of the unit ran out of memory in a grant at least as large (`UnfitRecord`). It is read as
+        `explain` reads: from the measures that exist, never a probe or a worker start; a node with no measure and no
+        record stays where it is. The plan hash is unchanged.
+
+        Raises:
+            Unplaceable: a node's unit fits no class from its own up; it names the node, each class tried and the
+                numbers.
+        """
+        profile = self.execution
+        if profile is None:
+            return self
+        reads = self._unit_reads(profile, measures, units, hardware)
+        choices = self._choices(reads, self._estimates(reads), unfit, hardware)
+        for node_id, choice in choices.items():
+            if choice.to is None:
+                raise Unplaceable(f"node {node_id!r}", choice.tried)
+        return replace(self, placement=self._moved(choices))
 
     def placement_request(  # noqa: PLR0913 - what a plan is read against, as `explain`
         self,

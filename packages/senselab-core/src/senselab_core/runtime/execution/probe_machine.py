@@ -28,6 +28,7 @@ from senselab_core.runtime.calibration import (
     ProbeItem,
     ProbePlan,
     RegimeFactor,
+    UnfitRecord,
     UnitKind,
 )
 from senselab_core.runtime.clock import Clock
@@ -68,6 +69,7 @@ from senselab_core.runtime.execution.telemetry import (
     predicted,
 )
 from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.fit import Unplaceable, choose
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.locks import Lease, LeaseTimeout, LeaseUnavailable
 from senselab_core.runtime.measures import (
@@ -193,6 +195,7 @@ class ProbeMachine:
         self._marks: dict[str, QueueReady] = {}
         self._origins: dict[str, Origin] = {}
         self._oomed: set[str] = set()
+        self._unfitted: set[str] = set()
         self._shortest: dict[tuple[object, ...], float] = {}
         self._drift = Drift(profile.calibration.drift_window, profile.calibration.drift_confidence)
 
@@ -246,7 +249,7 @@ class ProbeMachine:
                 self._resolving.append(held)
             self.host.wake()
         elif isinstance(unit, Unresolved):
-            self.host.produce(Release(held, None, None), jobs, placement)
+            self._release(Release(held, None, None), jobs, placement)
         else:
             self._lookup(unit, held, jobs, placement)
 
@@ -263,11 +266,13 @@ class ProbeMachine:
                 held.followed.waiting.append(held.part)
                 state.held.append(held)
             else:
-                self.host.produce(Release(held, state.estimate, unit), jobs, placement)
+                self._release(Release(held, state.estimate, unit), jobs, placement)
             return
         estimate = self.measures.get(unit)
+        if self._gate(unit, held, estimate):
+            return
         if held.following:
-            self.host.produce(Release(held, estimate, unit), jobs, placement)
+            self._release(Release(held, estimate, unit), jobs, placement)
             return
         plan = None if covers(estimate, jobs) else self._plan_probe(unit, held, jobs, placement)
         if plan is None or not worth(plan, estimate):
@@ -281,7 +286,7 @@ class ProbeMachine:
             )
             with self.lock:
                 self._states[digest] = ended
-            self.host.produce(Release(held, estimate, unit), jobs, placement)
+            self._release(Release(held, estimate, unit), jobs, placement)
             return
         taken = self._take_lease(unit, digest)
         if taken == "peer":
@@ -413,7 +418,7 @@ class ProbeMachine:
             release = self._releasing[0]
             placed, values = self.host.plan_of(release.held.part)
             jobs, placement = fragment_jobs(release.held.part, placed, values)
-            self.host.produce(release, jobs, placement)
+            self._release(release, jobs, placement)
             self._releasing.pop(0)
 
     def _release_stragglers(self) -> None:
@@ -480,7 +485,7 @@ class ProbeMachine:
                 )
             placed, values = self.host.plan_of(held.part)
             jobs, placement = fragment_jobs(held.part, placed, values)
-            self.host.produce(Release(held, None, None), jobs, placement)
+            self._release(Release(held, None, None), jobs, placement)
 
     def _peer_tick(self, state: State) -> None:
         """Return a waiting unit to `New` once its peer's lease is gone or `peer_wait_s` passed; else keep waiting."""
@@ -653,6 +658,7 @@ class ProbeMachine:
         """Forget item `digest`: its outcome has been read."""
         self._origins.pop(digest, None)
         self._oomed.discard(digest)
+        self._unfitted.discard(digest)
 
     def settled(self, digest: str, observations: Sequence[Observation]) -> None:
         """Read the `observations` of production item `digest` against the estimate that sized it (§7.3)."""
@@ -752,7 +758,7 @@ class ProbeMachine:
         if plan is None or taken is None or taken == "peer":
             with self.lock:
                 state.state, state.suspect = "measured", None
-            self.host.produce(Release(held, state.estimate, state.unit), jobs, placement)
+            self._release(Release(held, state.estimate, state.unit), jobs, placement)
             while state.held:
                 self._start_confirming(state)
             return
@@ -771,6 +777,81 @@ class ProbeMachine:
             record = {"outdates": list(suspect.source.probe_ids), "confirmed_by": state.run.id if state.run else ""}
             self.roots.put_record(state.unit, "supersede", record, self._provenance(state.unit.hardware))
         return _floored(self.measures.get(state.unit) or suspect, state.m1_floor)
+
+    def _release(self, release: Release, jobs: Sequence[Job], placement: Placement) -> None:
+        """Put `release` through the fit gate, then to the host.
+
+        Every release the machine makes passes here, so no path (an unresolved unit, an abandoned probe, an unmeasured
+        one) lets go of a unit unjudged.
+
+        Raises:
+            Unplaceable: the unit fits no class from its own up.
+        """
+        if release.unit is None or not self._gate(release.unit, release.held, release.estimate):
+            self.host.produce(release, jobs, placement)
+
+    def _gate(self, unit: MeasureUnit, held: Held, estimate: Estimate | None) -> bool:
+        """Judge `unit` against `held`'s class by `estimate` and the unit's `unfit` records; return whether it moved.
+
+        A unit that does not fit is placed afresh on the class that does. A part whose jobs are already in a live item
+        stays where it is.
+
+        Raises:
+            Unplaceable: the unit fits no class from its own up.
+        """
+        if held.following:
+            return False
+        start = class_of(held.queue)
+        grant = self.host.grant(held.queue)
+        choice = choose(
+            self.profile,
+            start,
+            fit=None if estimate is None else estimate.device if grant.on_device else estimate.host,
+            resource="device" if grant.on_device else "host",
+            unfit=self.roots.unfit_records(unit),
+            grant_of=lambda name: self.host.grant(name).memory_bytes,
+        )
+        if choice.to == start:
+            return False
+        if choice.to is None:
+            raise Unplaceable(f"unit {unit.label()}", choice.tried)
+        logger.info("unit %s moves from %s to %s: %s", unit.label(), start, choice.to, choice.tried[0].line())
+        self._move(held, choice.to)
+        return True
+
+    def _move(self, held: Held, to: str) -> None:
+        """Place `held`'s jobs afresh on resource class `to`, on the queue of the same model."""
+        queue = to + held.queue[len(class_of(held.queue)) :]
+        grant = {"resource_class": to, "partition": self.profile.resource_classes[to].partition}
+        placement = held.part.placement.model_copy(update=grant)
+        part = Dumped.of(held.part).part(range(len(held.part.jobs)), placement=placement.model_dump(mode="json"))
+        held.followed.waiting = [p for p in held.followed.waiting if p is not held.part]
+        self._place(Held(held.followed, queue, part))
+
+    def unfit(self, digest: str, worker: str | None) -> None:
+        """Write the `unfit` record of item `digest`, whose load ran out of memory in its class's grant.
+
+        It is a fact about the unit and the grant, whatever batch the load was for: a probe item and a production
+        item are the same. The unit's later placements skip every class with no more memory (`choose`). One record
+        stands for a grant: a load that fails again in a grant already recorded adds none.
+        """
+        origin = self._origins.get(digest)
+        if origin is None or digest in self._unfitted:
+            return
+        self._unfitted.add(digest)
+        grant = self.host.grant(origin.queue)
+        if grant.memory_bytes is None:
+            logger.warning("no unfit record of %s: its grant states no memory", origin.unit.label())
+            return
+        resource = "device" if grant.on_device else "host"
+        with self._machine:
+            if any(
+                r.resource == resource and r.grant_bytes >= grant.memory_bytes
+                for r in self.roots.unfit_records(origin.unit)
+            ):
+                return
+            record = UnfitRecord(resource=resource, grant_bytes=grant.memory_bytes, worker=worker)
+            self.roots.put_record(origin.unit, "unfit", record, self._provenance(origin.unit.hardware))
 
     def oom(self, digest: str, observations: Sequence[Observation], worker: str | None) -> None:
         """Write the `oom` record of item `digest` from its requests that failed with a resource fault (§7.4).

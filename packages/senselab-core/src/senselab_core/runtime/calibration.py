@@ -283,6 +283,18 @@ class OomRecord(Frozen):
     worker: NonEmptyStr | None = None
 
 
+class UnfitRecord(Frozen):
+    """A unit's load that ran out of memory in a grant of `grant_bytes`: the unit does not fit a class with no more.
+
+    `resource` is the memory that ran out. `worker` is the `worker_id()` of the worker that failed to load, None when
+    its outcome names none.
+    """
+
+    resource: Literal["device", "host"]
+    grant_bytes: Positive
+    worker: NonEmptyStr | None = None
+
+
 class DriftRecord(Frozen):
     """Production evidence that an estimate is suspect: a window of wall ratios, or one device peak above its band.
 
