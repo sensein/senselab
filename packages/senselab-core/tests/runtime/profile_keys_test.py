@@ -69,7 +69,7 @@ def test_the_package_ships_no_equivalence_table_and_no_site_profile() -> None:
     package = Path(senselab_core.__file__).parent
     assert [p for p in package.rglob("*") if "equivalence" in p.name and p.suffix in {".yaml", ".yml"}] == []
     assert sorted(p.name for p in PACKAGED.iterdir() if p.suffix == ".yaml") == ["laptop.yaml", "slurm.yaml"]
-    forbidden = tomllib.loads((package.parents[1] / "pyproject.toml").read_text())
+    forbidden = tomllib.loads((Path(__file__).resolve().parents[2] / "pyproject.toml").read_text())
     assert "benchmarks" not in str(forbidden.get("tool", {}).get("hatch", {}).get("build", {}))
 
 
