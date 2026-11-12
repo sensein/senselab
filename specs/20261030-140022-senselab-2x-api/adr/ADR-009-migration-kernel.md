@@ -144,6 +144,27 @@ not be retried without end.
 - **What did not change:** the fault taxonomy (ADR-009 Decision, the 2026-10-31 typed faults) and the rule that no
   failure is stored.
 
+## Amendment 2026-11-12: placement fits a unit to its class (Task 24-7)
+
+Owner ruling of 2026-11-10: the probe should catch a load that cannot fit, instead of the run discovering it as an
+out-of-memory crash.
+
+- **Recorded.** A load-time resource fault writes a durable `unfit` fact for (unit, resource class) beside the unit's
+  other measure records (`measure-unfit@1.0`, ADR-006), bound to the code that failed. Every class whose load fails
+  writes its own.
+- **Judged.** Placement skips a class that is recorded unfit for the unit, or too small for it
+  (`resident + m0 > sizing.memory_headroom × grant`, both from the probe's measures), and moves the unit to the next
+  larger class of its device and GPU type. If none fits, the plan stops as `Unplaceable`, a plan outcome that no
+  environment is charged for; `status` and `explain` name the unit, each class tried and the numbers
+  (`calibration-probe.md` §7.5). `start()` and `coordinate()` both apply it.
+- **Fallback.** A load OOM that placement did not predict still holds the environment (Amendment 2026-11-11 and
+  `execution.md` §3.4), re-places the job on a larger class, and now records the unfit fact, so the next plan and the
+  next release never try the same class again.
+- **Gaps closed.** No release of a unit's jobs is unjudged (one gate, `ProbeMachine._release`); a probe's load fault is
+  recorded rather than ignored at batch below 2; resident memory is compared with the grant.
+- **The residual.** An unresolved unit, or one released on a late hello, has no digest to record under and stays
+  unjudged; its load OOM is held as an environment fault, as before. Accepted by the controller on 2026-11-12 per run-without-stalls, pending the owner's confirmation; if refused, a follow-up gates the late-hello path.
+
 ## Amendment log
 
 - 2026-10-30: the worker runtime is the base of the dependency direction, not a kernel dependent.
@@ -154,3 +175,4 @@ not be retried without end.
 - 2026-11-01: the kernel does no I/O; decoding, stamping and the equivalence table load in the runtime (F3, F4, H-R57).
 - 2026-11-01: worker placement. A backend of an isolated or server env declares `worker_sources`: each module of its worker, by dotted name, to its source file, the `worker` module among them. `ensure_env` copies each file into the env's site-packages at its dotted path (namespace packages, no `__init__`), beside the `senselab_worker` overlay, and replaces a copy whose bytes differ from the source; the wheel set is unchanged. `WorkerClient` launches `-m senselab_worker.launch <worker>` unchanged. A placed module imports only stdlib, numpy, `senselab_worker`, a library of its env's lock, or another placed module; never `senselab_core`, never any other `senselab` module. A contract test over every backend with `worker_sources` pins this.
 - 2026-11-11: one bisection engine in `execute`, used by `InProcess` and the Pool; a lone job lost `faults.crashes_charged` times on fresh workers is charged to the item as `ItemCrashedWorker`; a load is still not an item (R-288, T24-4).
+- 2026-11-12: placement fits a unit to its class: an unfit or too-small class is skipped, none left is `Unplaceable`, a load OOM records the fact (T24-7).

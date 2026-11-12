@@ -720,3 +720,13 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3.2, §8.
   keys to add. `run-lease@2` replaces `@1` (`lease.json` carries those `lease` keys); `run-lease@1` is refused with
   `RunLeaseUnreadable` naming both. `server-settings@2.0` replaces `@1.0` (drops `startup_timeout_s`, now
   `vllm.startup_s`); `server-settings@1.0` is refused naming both. No reader of an old tag.
+
+## Amendment 2026-11-12: `measure-unfit@1.0` (Phase 3 Task 24-7)
+
+- **`measure-unfit@1.0`** (new record kind below a measure unit, `unfit/<record id>.json`): `{resource: device | host,
+  grant_bytes, source, overlay, worker}`, a load of the unit that ran out of memory in a grant of `grant_bytes`, under
+  the code `source` and `overlay` name (`calibration-probe.md` §7.5). Registered in `kernel/formats.py` and in the record kinds `put_record`
+  writes and `MeasureRoots.unfit_records` reads; its reader accepts later minors of its major. No existing record
+  changes, so `measure-oom@1.1`, `measure-regime@1.0`, `measure-drift@1.0` and `measure-supersede@1.0` are unchanged;
+  no profile key is added, so `execution-profile@5.0` is unchanged. `source` uses the registered identity tag
+  `core-runtime@1`, the digest of the package's `*.py` files the retired resource-table directory was named by; `overlay` is the existing `env-overlay@1` digest. No tag is added.

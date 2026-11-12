@@ -211,6 +211,7 @@ Layout of each root (`measures@1`):
     supersede/<record id>.json                measure-supersede@1.0: a confirming probe disagreed; earlier obs stop pooling
     regime/<record id>.json                   measure-regime@1.0: a co-tenancy factor (§7.3)
     oom/<record id>.json                      measure-oom@1.1: a resource fault (§7.4)
+    unfit/<record id>.json                    measure-unfit@1.0: a load that ran out of memory in a grant (§7.5)
     probe.lease/                              the ADR-003 lease held while a coordinator probes u
   tmp/<uuid>/                                 staging
   quarantine/<uuid>                           misfiled or malformed files, moved aside
@@ -811,6 +812,68 @@ Amended 2026-11-09 (T20R-7b):
 - **`since_load` across processes.** A second consumer of a warm server in another process is not covered: the server
   does not report its count, and a `served` request is no evidence for any estimate or drift, so nothing reads it.
 
+Amended 2026-11-12 (T24-7): a load is not a batch. A request that failed while its worker started, loaded or reloaded
+its model (`FaultRecord.load`) carries no fault in its `Observation`, so it writes no `oom` record, and a fault at B = 1
+that this section marks "infeasible under this grant" is not read from a load. The load's fact is the `unfit` record
+of §7.5.
+
+### 7.5 Fit: a unit that does not fit its class (T24-7)
+
+A unit's footprint beside its model is a fact the grant either holds or does not, whatever batch is asked for. Two
+things record it, and one rule reads both.
+
+- **Measured.** `estimate.device` (a device grant) or `estimate.host` gives `resident` and `m0`. A class is *too small*
+  for the unit when `resident + m0 > sizing.memory_headroom × grant`: no batch of any size fits beside the model.
+  `memory_batch` returning 1 there is the safe value for a unit that does fit; it is not a placement. A class is
+  judged only when it states its memory (a `cuda` class its `memory_cap_bytes`, or a GPU the coordinator sees).
+- **Recorded.** A load that ran out of memory (a `resource` fault with `load` true) writes an `unfit` record
+  `{resource: device | host, grant_bytes, source, overlay, worker}` under the unit, whether the load was a probe item's, a
+  production item's or a retry re-placed on a larger class: each class that fails writes its own record, against its
+  own grant. A class is *unfit* for the unit when a record of the same `resource` names a grant at least as large as
+  the class's. One record stands for a grant: a load that fails again in a grant already recorded adds none.
+- **What a record binds.** A record is a fact about the unit, so it carries no basis and no probe lifts it. It binds
+  the unit (its digest: task and backend versions, params, model revision, env lock, wheel set, platform, numerics,
+  hardware class) and the code that failed: `source` is `identity_digest("core-runtime@1", ...)` over the digest of
+  every `.py` file of senselab-core and senselab-worker, and `overlay` the digest of the backend's worker overlay
+  (`envs.overlay_digest`: the worker runtime and each `worker_sources` module). A change to any of these is another unit or other code, and the record
+  no longer binds it; a record is read only under the code it was written by (`fit.current_unfit`).
+- **Clearing one.** A record of a load that failed for a reason that was not the unit's (a card another tenant held) is
+  removed with `senselab unfit <unit> --clear`, which needs the label or prefix to name exactly one unit (several matches are listed and nothing is removed) and removes that unit's records this user owns; `senselab unfit`
+  alone lists every unit with a record. A unit is named by the digest label `explain` prints. No probe lifts a record.
+- **The rule.** `choose` walks the class a node is placed on and the classes above it (`larger_class`: the least memory
+  above it on the same device and GPU type, never a class the substrate's `qos_cpu_cap` forbids) and takes the first
+  that is neither too small nor unfit. A class that states no memory is not judged and is taken. A unit with no measure
+  and no record is not judged.
+- **Where it is applied.** (1) `Plan.fit`, from `start()`, `coordinate()` and `explain`: each node moves to the class
+  `choose` gives; a unit that fits none stops the plan as `Unplaceable` before an attempt is claimed or anything is
+  written. The placement's `why` says only that the node moved from a class, never a measured figure: `why` is part of
+  the item digest, and a figure re-measured by a later probe must not re-key the items. `explain` prints, per node, each
+  class tried with its verdict and the figures (resident, m0, the headroom share of the grant, the grant a load
+  failed in) and the class it is placed on or `unplaceable`. On a slurm substrate a unit is `Pending` until a worker's
+  first hello, so the plan-level fit judges nothing there. (2) The probe machine's one release gate: every release of
+  a unit's jobs, and the start of a probe, is judged against the unit's class, so a unit with an `unfit` record is not
+  probed or released on that class and goes above it, or the run stops as `Unplaceable`. A part whose jobs are already
+  in a live item stays where it is. (3) The runtime fallback also records: a load OOM no placement predicted writes
+  the `unfit` record, holds the environment as `execution.md` §3.4 says, and re-places the job on `larger_class`; the
+  re-placed retry keeps its origin under the larger class's queue, so its own load OOM is recorded against that grant.
+  The next plan and the next release avoid every class recorded.
+- **Unplaceable is a plan outcome.** `Unplaceable` is a resource fault of the plan, not of an environment: its failure
+  record (`type` `Unplaceable`, `fault` `resource`, not a gap, not a load) never counts against an env, so it never
+  breaks one. `senselab status` prints an `unplaceable:` line naming the unit, each class tried and the figures;
+  `senselab explain <node>` prints the same line before the fault; `senselab coordinate` prints it to stderr and exits
+  3, with no traceback.
+- **Unprobed releases.** A unit can be released with no estimate on five paths (a part not worth probing or unplannable;
+  an unresolved unit or a late hello; a probe abandoned or with no estimate; a servable job; an item claimed by a worker
+  that has run no queue). All but the unresolved unit's reach a worker through the one release gate above, and an item
+  of one that fails its load writes the `unfit` record, so the exposure of an unprobed unit is its first load, once per
+  grant. A servable job loads no model.
+- **The residual, stated plainly.** A unit that is unresolved, and a unit released on a late hello, has no digest, so no
+  record can be keyed and the release gate cannot judge it. It is released unjudged; its load OOM is held as a load
+  fault of the environment (`execution.md` §3.4, T24-3) and is visible there, and no `unfit` record is written. This
+  is an exception, not part of the rule, accepted by the controller on 2026-11-12 per run-without-stalls, pending the
+  owner's confirmation; if refused, a follow-up gates the late-hello path.
+
+
 ## 8. Worker changes
 
 - `PoolWorker._next`: a probe queue whose serve lease this worker holds, or can take, comes first; its items are
@@ -1048,7 +1111,7 @@ Dated amendment text is in the ADR files, 2026-11-08:
   measured or labelled unmeasured.
 - **ADR-006**: the format list gains `placement-request@1.0`, `placement-answer@1.0`, `measures@1`,
   `measure-unit@1.0`, `measure-observations@1.1`, `measure-drift@1.0`, `measure-supersede@1.0`, `measure-regime@1.0`,
-  `measure-oom@1.1` and `resource-table@2.0`, `worker-ready@1.0` (the ready mark, §8; amended 2026-11-08 after the
+  `measure-oom@1.1`, `measure-unfit@1.0` and `resource-table@2.0`, `worker-ready@1.0` (the ready mark, §8; amended 2026-11-08 after the
   T20R-7a review), and `run-config@2.1` (additive minor: the `calibration` section, whose
   `trust` a run sets). T20R-1 registers them in `kernel/formats.py`; `resource-table@1.0` is retired by T20R-8, and `resource-table@2.0` by T20R-10b (§3.7).
 - **Elsewhere, by the implementing tasks**: `wire-protocol.md` (`done` gains `since_load` and `load_s`, T20R-5);
