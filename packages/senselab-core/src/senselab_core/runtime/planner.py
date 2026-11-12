@@ -516,7 +516,7 @@ class Plan:
         resolver = UnitResolver(profile, roots, hardware)
         return _Reading(
             source,
-            store if store is not None else default_store(),
+            store if store is not None else default_store(profile),
             bound,
             unbound,
             resolver,
@@ -813,5 +813,5 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
     )
     if store is None:
         named = Run(run_dir).manifest().get("store")
-        store = ResultStore(Path(named)) if isinstance(named, str) else None
+        store = ResultStore(Path(named), settings=profile.store) if isinstance(named, str) else None
     return start(placed, executor, store=store, values=values)

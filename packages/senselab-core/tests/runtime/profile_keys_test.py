@@ -141,7 +141,7 @@ def test_run_wait_polls_every_event_poll_s(tmp_path: Path, lease_clock: Callable
     """`Run.wait` reads the event log every `pool.event_poll_s` of the pool section it was given."""
     pool = PROFILE.pool.model_copy(update={"event_poll_s": 2.0})
     clock = lease_clock()
-    assert not Run(tmp_path, pool=pool, clock=clock).wait(7.0).done
+    assert not Run(tmp_path, profile=PROFILE.model_copy(update={"pool": pool}), clock=clock).wait(7.0).done
     assert clock.slept == [2.0, 2.0, 2.0, 1.0]
 
 

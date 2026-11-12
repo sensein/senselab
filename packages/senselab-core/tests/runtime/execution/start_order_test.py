@@ -112,7 +112,7 @@ STEPS: dict[str, dict[str, Any]] = {
     "inputs-recorded": {"ops": _refusing(b'"rows"'), "error": OSError, "ended": False},
     "manifest-written": {"ops": _refusing(b'"store"'), "error": OSError, "ended": False},
     "attempt-claimed": {"ops": _refusing(b"placement@3"), "error": OSError, "ended": False},
-    "epoch-lease-published": {"ops": _refusing(b"run-lease@1"), "error": OSError, "ended": True},
+    "epoch-lease-published": {"ops": _refusing(b"run-lease@2"), "error": OSError, "ended": True},
     "coordinator-lease-taken": {"ops": NoCoordinatorLease, "error": LeaseUnavailable, "ended": True},
     "queues-reconciled": {"prepare": _unreadable_queues, "error": PermissionError, "ended": True},
     "epoch-bound-to-executor": {"executor": Unbindable, "error": ValueError, "ended": True},

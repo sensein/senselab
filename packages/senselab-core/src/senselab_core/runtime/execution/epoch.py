@@ -1,6 +1,6 @@
 """A run's coordinator epochs: `epoch/<n>`, each taken by one `mkdir`, held under a beating lease (ADR-003).
 
-`epoch/<n>/` holds `lease.json` (its coordinator's whole `lease` section, `run-lease@1`, written as it is taken),
+`epoch/<n>/` holds `lease.json` (its coordinator's whole `lease` section, `run-lease@2`, written as it is taken),
 `attempt.json` (the attempt id and ordinal the coordinator claimed under it, written last), `coordinator.lease` (the
 `Lease` its coordinator keeps alive) and, once that coordinator ends, `ended`. The highest `n` with an
 `attempt.json` is the current epoch; a coordinator of an older one releases no further work.
@@ -27,7 +27,7 @@ BOUND_FILE = "lease.json"
 ATTEMPT_FILE = "attempt.json"
 COORDINATOR = "coordinator"
 ENDED = "ended"
-LEASE_FORMAT = "run-lease@1"
+LEASE_FORMAT = "run-lease@2"
 """The format of an epoch's `lease.json`: `{"format": ..., "lease": <the coordinator's lease section>}`."""
 
 
@@ -81,13 +81,15 @@ def read_section(directory: Path) -> JobLease:
     """Return the lease section `directory/lease.json` holds.
 
     Raises:
-        RunLeaseUnreadable: it is missing, is no `run-lease@1` document, or lacks a key `JobLease` requires.
+        RunLeaseUnreadable: it is missing, is no `run-lease@2` document, or lacks a key `JobLease` requires.
     """
     path = directory / BOUND_FILE
     try:
         found = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(found, dict) or found.get("format") != LEASE_FORMAT:
-            raise ValueError(f"its format is not {LEASE_FORMAT}")
+            raise ValueError(
+                f"its format is {found.get('format') if isinstance(found, dict) else None!r}, not {LEASE_FORMAT}"
+            )
         return JobLease.model_validate(found["lease"])
     except (OSError, ValueError, KeyError) as err:
         raise RunLeaseUnreadable(path, err) from err

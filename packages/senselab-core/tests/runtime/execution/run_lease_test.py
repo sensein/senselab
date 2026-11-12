@@ -121,9 +121,19 @@ def test_a_lease_section_of_another_build_is_refused(tmp_path: Path) -> None:
     path.write_text(json.dumps({"stale_after_s": 300.0, "attribute_delay_s": 0.0}))
     with pytest.raises(RunLeaseUnreadable, match="lease.json"):
         run_lease(run_dir)
-    path.write_text(json.dumps({"format": "run-lease@1", "lease": {"stale_after_s": 300.0}}))
+    path.write_text(json.dumps({"format": "run-lease@2", "lease": {"stale_after_s": 300.0}}))
     with pytest.raises(RunLeaseUnreadable):
         QueueSet.for_run(run_dir)
+
+
+def test_a_run_lease_at_the_old_tag_is_refused_naming_both_tags(tmp_path: Path) -> None:
+    """A `lease.json` written as `run-lease@1` is refused with the tag it has and the one this build reads."""
+    run_dir = tmp_path / "run"
+    _epochs(run_dir, SLOW)
+    path = run_dir / "epoch" / "1" / "lease.json"
+    path.write_text(json.dumps({"format": "run-lease@1", "lease": SLOW.model_dump(mode="json")}))
+    with pytest.raises(RunLeaseUnreadable, match=r"run-lease@1.*run-lease@2"):
+        run_lease(run_dir)
 
 
 def _worker(

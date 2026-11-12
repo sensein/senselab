@@ -1,4 +1,4 @@
-format: server-settings@1.0
+format: server-settings@2.0
 # derivation:
 #   max_model_len: 8192 = a prompt of 6144 tokens (the instruction, the categories and a text of about 4500 words)
 #   plus the 2048 tokens of `engine.MAX_NEW_TOKENS` the answer may take. A longer text is refused by the server

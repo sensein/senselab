@@ -341,3 +341,13 @@ def test_a_store_hit_starts_no_server_and_a_mismatching_attestation_refuses(
     with pytest.raises(WorkerLoadFailed, match="9.9.9") as refused:
         _run(_call_of("Call 555-0199."), execution=profile, store=store)
     assert isinstance(refused.value.__cause__, AttestationMismatch)
+
+
+@pytest.mark.logic
+def test_server_settings_at_the_old_tag_are_refused_naming_both_tags(tmp_path: Path) -> None:
+    """A settings file tagged `server-settings@1.0` is refused with the tag it has and the one this build reads."""
+    old = tmp_path / "old.yaml"
+    old.write_text("format: server-settings@1.0\nstartup_timeout_s: 1800\nsettings: {}\n")
+    with pytest.raises(ValueError, match=r"server-settings@1\.0.*server-settings@2\.0"):
+        vllm_backend.server_config(old)
+    assert CONFIG.settings

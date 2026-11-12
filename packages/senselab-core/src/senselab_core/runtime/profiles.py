@@ -1,4 +1,4 @@
-"""The execution profile (`execution-profile@4`) and `resolve_execution`, which places a task call under it.
+"""The execution profile (`execution-profile@5`) and `resolve_execution`, which places a task call under it.
 
 A profile holds stack preferences per task, device preference, env roots, the torch index override, the model-source
 allowlist, the model-cache budget, the retry policy, the network policy, the resource classes, the substrate, the
@@ -76,11 +76,16 @@ class NoDevice(RuntimeError):
 
 _DROPPED_KEYS: Final = {
     "execution-profile@3": "; drop calibration.probe_items and calibration.resolve_s, which are now derived",
+    "execution-profile@4": (
+        "; add the keys it lacks: lease.{missed_beats,wait_s,poll_s,remove_attempts,record_attempts,dir_mode},"
+        " pool.{idle_polls,cancel_check_s,event_poll_s}, substrate.stop_grace_s, supervisor.{reap_poll_s,exit_bound_s},"
+        " timeouts.fetch_s and the store, vllm and worker sections"
+    ),
 }
 
 
 class ProfileFormatRetired(ValueError):
-    """A profile in a retired format; it is rewritten as `execution-profile@4.0`."""
+    """A profile in a retired format; it is rewritten as `execution-profile@5.0`."""
 
     def __init__(self, found: str) -> None:
         """Name the declared format, and the keys a newer major dropped from it."""

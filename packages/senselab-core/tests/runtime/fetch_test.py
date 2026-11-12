@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 import pytest
+import yaml
 from bounded_probe_fixture import MIB, FiniteSource, run_bounded
 from hypothesis import event, given, settings
 from hypothesis import strategies as st
@@ -1213,3 +1214,26 @@ def test_a_fetch_request_waits_timeout_s(monkeypatch: pytest.MonkeyPatch, tmp_pa
         with pytest.raises(FetchError):
             fetch(_manifest(), cache_root=tmp_path, timeout_s=timeout, retry=once)
     assert seen == [packaged.timeouts.fetch_s, 7.0]
+
+
+@pytest.mark.logic
+def test_data_fetch_waits_the_profiles_fetch_s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`senselab data fetch --profile FILE` opens each URL within that profile's `timeouts.fetch_s`."""
+    document = ExecutionProfile.packaged().model_dump(mode="json")
+    document["timeouts"]["fetch_s"] = 7.0
+    document["retry"]["attempts"] = 1
+    profile = tmp_path / "site.yaml"
+    profile.write_text(yaml.safe_dump(document))
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text(yaml.safe_dump(_manifest().model_dump(mode="json")))
+    seen: list[float] = []
+
+    def refuse(self: urllib.request.OpenerDirector, url: str, data: object = None, timeout: float = 0.0) -> object:
+        seen.append(timeout)
+        raise OSError("stop here")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refuse)
+    assert (
+        cli_main(["data", "fetch", str(manifest), "--cache", str(tmp_path / "cache"), "--profile", str(profile)]) == 1
+    )
+    assert seen == [7.0]

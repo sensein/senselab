@@ -50,7 +50,7 @@ from senselab_core.runtime.execution.executor import Executor, FaultRecord
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.telemetry import Actuals, Placements
-from senselab_core.runtime.execution_settings import JobLease, PoolSettings
+from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.licenses import LicensePolicy, laxer_than, policy_digest, policy_document, policy_of
 from senselab_core.runtime.locks import Lease, LeaseUnavailable
 from senselab_core.runtime.planner import Plan, check_storage
@@ -514,16 +514,18 @@ class Run:
         run_dir: Path,
         *,
         store: ResultStore | None = None,
-        pool: PoolSettings | None = None,
+        profile: ExecutionProfile | None = None,
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Open the run in `run_dir`; `wait` and its liveness reads are timed on `clock`.
 
-        `pool` is the profile's pool section, whose `event_poll_s` paces `wait`; None reads the packaged profile's.
+        `profile` is the one the run is under: its `pool.event_poll_s` paces `wait` and its `store` section opens the
+        results store; None reads the packaged profile's.
         """
         self.run_dir = Path(run_dir)
         self._store, self._clock = store, clock
-        self._pool = pool if pool is not None else ExecutionProfile.packaged().pool
+        self._profile = profile if profile is not None else ExecutionProfile.packaged()
+        self._pool = self._profile.pool
         self._thread: threading.Thread | None = None
         self._ended = threading.Event()
         self._cancel = threading.Event()
@@ -650,8 +652,15 @@ class Run:
     def _results_store(self) -> ResultStore:
         if self._store is not None:
             return self._store
-        named = self.manifest().get("store")
-        return ResultStore(Path(named) if isinstance(named, str) else cache_root() / RESULTS_DIR)
+        return results_store(self._profile, self.manifest().get("store"))
+
+
+def results_store(
+    profile: ExecutionProfile | None, named: object = None, provenance: ProvStore | None = None
+) -> ResultStore:
+    """Return the result store at `named` (a manifest's `store`), else the cache's, under `profile`'s `store`."""
+    root = Path(named) if isinstance(named, str) else cache_root() / RESULTS_DIR
+    return ResultStore(root, provenance, settings=None if profile is None else profile.store)
 
 
 def default_executor(placed: Plan, executor: Executor | None, store: ResultStore | None) -> Executor:
@@ -1004,7 +1013,7 @@ def start(
 
     provenance = ProvStore()
     if executor is None and store is None:
-        store = ResultStore(cache_root() / RESULTS_DIR, provenance=provenance)
+        store = results_store(placed.execution, None, provenance)
     owned = executor is None
     executor = default_executor(placed, executor, store)
     delay = _check_store(placed, store)
@@ -1014,7 +1023,7 @@ def start(
     own = _lease_of(placed)
     lease = checked_lease(run_dir, own, delay)
     runner = PydraRunner(profile=placed.execution, work_dir=run_dir / PYDRA_DIR)
-    run = Run(run_dir, store=store, pool=None if placed.execution is None else placed.execution.pool)
+    run = Run(run_dir, store=store, profile=placed.execution)
     written = provenance if store is None else store.provenance
     epochs = Epoch(run_dir)
     held, epoch, log = _open(run_dir, (placed, executor, written), (attempt, ordinal), (own, lease))

@@ -419,9 +419,10 @@ def job_units(job: Job, kind: UnitKind) -> float | None:
     return None if length is None else length / NS_PER_S if kind == "audio_s" else float(length)
 
 
-def default_store() -> ResultStore:
-    """Return the result store a run uses when none is given: `cache_root()/results`."""
-    return ResultStore(cache_root() / "results")
+def default_store(profile: ExecutionProfile | None = None) -> ResultStore:
+    """Return the result store a run uses when none is given: `cache_root()/results`, under `profile`'s `store`."""
+    settings = None if profile is None else profile.store
+    return ResultStore(cache_root() / "results", settings=settings)
 
 
 class InProcess:
@@ -450,7 +451,7 @@ class InProcess:
         """Run fragments under `profile` and `run`, storing in `store`, on `workers`, sized from `measures`."""
         self.profile = profile if profile is not None else ExecutionProfile.load()
         self.run = run if run is not None else RunConfig()
-        self.store = store if store is not None else default_store()
+        self.store = store if store is not None else default_store(self.profile)
         self.workers = workers if workers is not None else process_workers(self.profile)
         roots = measure_roots(self.profile)
         self.measures = measures if measures is not None else default_measures(self.profile, roots)

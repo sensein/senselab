@@ -1,6 +1,7 @@
 """Backend `vllm` of `pii_spans`: the catalogue's model served by `VllmServer` in the `vllm-server` env."""
 
 from importlib import resources
+from pathlib import Path
 
 from senselab_core.kernel.declare import Env, ServerConfig, backend
 from senselab_core.runtime.config import load_yaml
@@ -9,18 +10,21 @@ from senselab.text.tasks.pii_spans.engine import MODEL_ID
 from senselab.text.tasks.pii_spans.vllm import WORKER_MODULE
 
 SETTINGS_FILE = "pii_spans_vllm.yaml"
-SETTINGS_FORMAT = "server-settings@1.0"
+SETTINGS_FORMAT = "server-settings@2.0"
 
 
-def server_config() -> ServerConfig:
-    """Return the packaged server configuration.
+def server_config(source: Path | None = None) -> ServerConfig:
+    """Return the server configuration in `source`, by default the packaged one.
 
     Raises:
-        ValueError: if the file is not a `server-settings@1.0`.
+        ValueError: if the file is not a `server-settings@2.0`; the message names the tag it has.
     """
-    raw = load_yaml(resources.files("senselab").joinpath("data", "server_settings", SETTINGS_FILE), SETTINGS_FILE)
+    where = (
+        source if source is not None else resources.files("senselab").joinpath("data", "server_settings", SETTINGS_FILE)
+    )
+    raw = load_yaml(where, SETTINGS_FILE)
     if raw.get("format") != SETTINGS_FORMAT:
-        raise ValueError(f"{SETTINGS_FILE} is not a {SETTINGS_FORMAT}: {raw.get('format')!r}")
+        raise ValueError(f"{SETTINGS_FILE} is tagged {raw.get('format')!r}, not the {SETTINGS_FORMAT} this build reads")
     return ServerConfig(settings=raw["settings"])
 
 

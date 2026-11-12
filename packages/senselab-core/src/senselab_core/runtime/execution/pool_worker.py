@@ -66,7 +66,7 @@ from senselab_core.runtime.execution.substrates import (
 )
 from senselab_core.runtime.execution.supervisor import Supervisor
 from senselab_core.runtime.execution.workers import WorkerSet
-from senselab_core.runtime.execution_settings import is_service_class
+from senselab_core.runtime.execution_settings import StoreSettings, is_service_class
 from senselab_core.runtime.hardware import device_memory_bytes, memory_bytes, process_tree
 from senselab_core.runtime.keys import Placement, request_size
 from senselab_core.runtime.locks import LeaseTimeout
@@ -933,15 +933,20 @@ class PoolWorker:
                 log.record("claimed", job.node, job=job)
 
 
-def check_reachable(run_dir: Path, store: ResultStore) -> None:
-    """Probe the run directory and the result store from this host.
+def check_reachable(
+    run_dir: Path,
+    store: ResultStore,
+    settings: StoreSettings,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
+) -> None:
+    """Probe the run directory and the result store from this host, under the profile's `store` section `settings`.
 
     Raises:
         StoreUnreachable: either root cannot be read and written here, or lacks a primitive the leases need.
     """
     for root in (run_dir, store.root):
         try:
-            probe_capabilities(root).require(root)
+            probe_capabilities(root, settings=settings, clock=clock).require(root)
         except (OSError, StorageUnsupported) as err:
             raise StoreUnreachable(f"{root} is not reachable from this host: {err}") from err
 
@@ -968,7 +973,7 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
     thread SIGTERM halts the worker (`PoolWorker.halt`); the previous handler is restored after.
     """
     try:
-        check_reachable(Path(pool_dir).parent, store)
+        check_reachable(Path(pool_dir).parent, store, profile.store)
     except StoreUnreachable as err:
         logger.error("pool worker cannot start: %s", err)
         return EXIT_UNREACHABLE
