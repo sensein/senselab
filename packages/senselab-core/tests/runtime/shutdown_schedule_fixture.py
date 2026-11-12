@@ -27,18 +27,20 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import FrameType
 from typing import Any, Callable, Iterator
 
 import numpy
 from bounded_probe_fixture import limit_file_size
 from lease_clock_fixture import ManualClock
 from lifecycle_probes_fixture import Gate, gate, recorded_pids
-from senselab_core.runtime import worker_client
-from senselab_core.runtime.worker_client import DEFAULT_GRACES, WorkerClient, WorkerLost
+from senselab_core.runtime import worker_client, worker_pipes
+from senselab_core.runtime.worker_client import DEFAULT_GRACES, ShutdownGraces, WorkerClient, WorkerLost
 from senselab_core.runtime.worker_pipes import Pump
 from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.processes import alive, group_alive
 from senselab_worker.fake import FAULT_KEY
+from signal_in_lock_fixture import THREADING, deliver_in
 
 PYTHON = source_tree_python()
 
@@ -61,11 +63,14 @@ RAISES = {
     "handler_raises_base": "SystemExit",
     "handler_raises_exception": "RuntimeError",
 }
-KINDS = (*RAISES, "handler_close", "close_same_thread", "close_other_thread")
-"""`sigint` raises SIGINT; `double_sigint` raises it twice; `sigterm` raises SIGTERM, whose handler closes the
-client and exits; `handler_close`, `handler_raises_base` and `handler_raises_exception` raise SIGUSR1, whose
-handler closes the client, raises `SystemExit` or raises `RuntimeError`; `close_same_thread` calls `close()`
-where the boundary is reached; `close_other_thread` starts `close()` on another thread."""
+KINDS = (*RAISES, "sigterm_in_wait", "handler_close", "close_same_thread", "close_other_thread")
+"""`sigint` raises SIGINT; `double_sigint` raises it twice; `sigterm` raises SIGTERM, whose handler records the
+request and exits, and the unwound frame closes the client; `sigterm_in_wait` delivers SIGTERM inside the next
+`Event.wait` after the boundary, while that wait holds the event's lock, to a handler that closes the client and
+returns (nothing is delivered when no wait follows, or on the timeout path before the backend is in its request);
+`handler_close`, `handler_raises_base` and `handler_raises_exception` raise SIGUSR1, whose handler closes the
+client, raises `SystemExit` or raises `RuntimeError`; `close_same_thread` calls `close()` where the boundary is
+reached; `close_other_thread` starts `close()` on another thread."""
 BOUNDARIES = (
     "module:to_wire",
     "module:_leader_held",
@@ -125,6 +130,16 @@ def case_bound(case: dict[str, Any]) -> float:
     return timeout + GRACES.exit_code_wait + 2 * GRACES.bound
 
 
+def _in_clock_wait(frame: FrameType) -> bool:
+    """Whether `frame` is an `Event.wait` that a `ManualClock` park called."""
+    caller = frame.f_back
+    return (
+        frame.f_code.co_name == "wait"
+        and isinstance(frame.f_locals.get("self"), threading.Event)
+        and any(f.f_code.co_name == "_park" for f in (caller, caller.f_back if caller else None) if f is not None)
+    )
+
+
 class _Injector:
     def __init__(self, case: dict[str, Any]) -> None:
         self.case = case
@@ -135,6 +150,11 @@ class _Injector:
         self.second_sigint = False
         self.events: list[str] = []
         self.nested_acquires: int | None = None
+        self.stop_requested = False
+        self.delivered: dict[str, bool] | None = None
+        self.backend_entered: Callable[[], bool] = lambda: True
+        self.since_park: list[tuple[str, int]] = []
+        self.deliverable: set[tuple[str, int]] = set()
 
     def nested_close(self, client: WorkerClient) -> None:
         """Close from inside the stop, and record how many shutdown locks that close tried to take."""
@@ -155,6 +175,8 @@ class _Injector:
         def hooked(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
             if threading.current_thread() is threading.main_thread():
                 self.calls[boundary] += 1
+                if self.backend_entered():
+                    self.since_park.append((boundary, self.calls[boundary]))
                 if boundary == self.case["boundary"] and self.calls[boundary] == self.case["occurrence"]:
                     self.fired = True
                     self.inject()
@@ -172,6 +194,8 @@ class _Injector:
             self.second_sigint = True
         elif kind == "sigterm":
             signal.raise_signal(signal.SIGTERM)
+        elif kind == "sigterm_in_wait" and self.backend_entered():
+            self.delivered = deliver_in(signal.SIGTERM, _in_clock_wait, (THREADING, worker_pipes.__file__))
         elif kind.startswith("handler_"):
             signal.raise_signal(signal.SIGUSR1)
         elif kind == "close_same_thread":
@@ -186,7 +210,10 @@ def _handlers(kind: str, injector: _Injector) -> None:
     clients = injector.clients
 
     def on_term(signum: int, frame: object) -> None:
-        clients[0].close()
+        if kind == "sigterm_in_wait":
+            clients[0].close()
+            return
+        injector.stop_requested = True
         raise SystemExit(128 + signum)
 
     def on_usr1(signum: int, frame: object) -> None:
@@ -253,7 +280,10 @@ def _perform(
             injector.clients[0].close()
     except BaseException as exc:  # noqa: BLE001 - the case reports whatever surfaced
         outcome = type(exc).__name__
+        if injector.stop_requested:
+            injector.clients[0].close()
     finally:
+        sys.settrace(None)
         for boundary, real in reals.items():
             setattr(*_owner(boundary), real)
     return outcome, built, clock.now() - started
@@ -266,7 +296,18 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
     clock = ManualClock(poll_s=CLOCK_POLL_S, hang_s=CASE_BOUND_S / 2, spends=False)
     gate_open = threading.Event()
     done = threading.Event()
+    if case["path"] == "timeout":
+        injector.backend_entered = gate_open.is_set
     killpg = os.killpg
+    real_park = clock._park  # noqa: SLF001 - the harness sees which boundary calls a clock wait follows
+
+    def park(timeout: float, look: Callable[[float], Any]) -> Any:  # noqa: ANN401
+        if threading.current_thread() is threading.main_thread():
+            injector.deliverable.update(injector.since_park)
+            injector.since_park.clear()
+        return real_park(timeout, look)
+
+    clock._park = park  # type: ignore[method-assign]  # noqa: SLF001
 
     def record_killpg(pgid: int, sig: int) -> None:
         if sig != 0:
@@ -308,6 +349,8 @@ def run_case(case: dict[str, Any], parent: Path, index: int) -> dict[str, Any]:
     report = {
         **case,
         "fired": injector.fired,
+        "delivered": injector.delivered is not None and injector.delivered["fired"],
+        "deliverable": sorted(injector.deliverable),
         "calls": injector.calls,
         "outcome": outcome,
         "elapsed": elapsed,
@@ -340,6 +383,7 @@ def schedule(counts: dict[str, dict[str, int]], occurrences: range) -> list[dict
         for boundary in BOUNDARIES
         for n in occurrences
         if n <= min(counts[path][boundary], POLLED.get(boundary, n))
+        and (kind != "sigterm_in_wait" or (boundary, n) in counts.deliverable[path])  # type: ignore[attr-defined]
     ]
 
 
@@ -366,14 +410,32 @@ def run_schedule(tmp_path: Path, todo: list[dict[str, Any]]) -> list[dict[str, A
     return reports
 
 
-def counted(tmp_path: Path) -> dict[str, dict[str, int]]:
-    """Per path, the calls each boundary gets when nothing is injected: the fewer of two runs, by boundary."""
+class Counts(dict[str, dict[str, int]]):
+    """Per path, the calls each boundary gets, and in `deliverable` the (boundary, call) pairs a clock wait follows."""
+
+    deliverable: dict[str, set[tuple[str, int]]]
+
+
+def counted(tmp_path: Path) -> Counts:
+    """Per path, the calls each boundary gets when nothing is injected: the fewer of two runs, by boundary.
+
+    A (boundary, call) is deliverable when both runs saw a clock wait on the main thread after it.
+    """
     todo = [{"path": path, "boundary": "", "occurrence": 0, "kind": "count"} for path in PATHS for _ in range(2)]
-    calls: dict[str, dict[str, int]] = {}
+    calls = Counts()
+    calls.deliverable = {}
     for report in run_schedule(tmp_path, todo):
         seen = calls.setdefault(report["path"], report["calls"])
         calls[report["path"]] = {b: min(n, report["calls"][b]) for b, n in seen.items()}
+        pairs = {(b, n) for b, n in report["deliverable"]}
+        calls.deliverable[report["path"]] = calls.deliverable.get(report["path"], pairs) & pairs
     return calls
+
+
+def _undelivered(report: dict[str, Any]) -> list[str]:
+    if report["kind"] == "sigterm_in_wait" and not report["delivered"]:
+        return ["the SIGTERM was never delivered inside a clock wait"]
+    return []
 
 
 def violations(report: dict[str, Any]) -> list[str]:
@@ -387,6 +449,7 @@ def violations(report: dict[str, Any]) -> list[str]:
     allowed = TYPED[report["path"]] | {RAISES.get(report["kind"])}
     if report["kind"] == "handler_raises_exception":
         allowed |= {None}
+    found += _undelivered(report)
     if report["outcome"] not in allowed:
         found.append(f"untyped outcome {report['outcome']}")
     if report["elapsed"] >= report["bound"]:
@@ -417,8 +480,13 @@ def _substituted(boundary: str, wrapper: Callable[[Callable[..., Any]], Callable
 
 
 def close_while_encoding(parent: str, wait_s: float) -> list[str]:
-    """In this child: `close()` on another thread while `run` encodes its inputs; return what `run` raised."""
-    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=Path(parent))
+    """In this child: `close()` on another thread while `run` encodes its inputs; return what `run` raised.
+
+    The closer then waits for the run to end, and must return once it has, within `wait_s`; its graces are far
+    longer, so a closer left waiting out its bound fails.
+    """
+    graces = ShutdownGraces(stop=30 * wait_s)
+    client = WorkerClient(PYTHON, FAKE, init={}, array_parent=Path(parent), graces=graces)
     closer = threading.Thread(target=client.close, daemon=True)
 
     def encoding(real: Callable[..., Any]) -> Callable[..., Any]:
@@ -445,8 +513,9 @@ def close_while_encoding(parent: str, wait_s: float) -> list[str]:
         runner = threading.Thread(target=call, daemon=True)
         runner.start()
         runner.join(wait_s + client.graces.bound)
-        closer.join(client.graces.bound)
-    assert not runner.is_alive() and not closer.is_alive()
+        closer.join(wait_s)
+    assert not runner.is_alive(), "run did not return"
+    assert not closer.is_alive(), "close did not return once the run had ended"
     return outcome
 
 

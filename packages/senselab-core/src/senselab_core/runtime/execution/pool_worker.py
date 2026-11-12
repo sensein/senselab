@@ -23,7 +23,7 @@ import queue
 import signal
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -447,9 +447,31 @@ class PoolWorker:
             return {"unbuilt": "unreadable"}
 
     def halt(self) -> None:
-        """Set `stop` and wake the wait for a running claim's outcomes; safe in a signal handler."""
+        """Set `stop` and wake the wait for a running claim's outcomes; not for a signal handler (see `halting_on`)."""
         self.stop.set()
         self._finished.put([])
+
+    @contextlib.contextmanager
+    def halting_on(self) -> Iterator[Callable[[], None]]:
+        """Yield `request`, which a signal handler calls to have `halt` run on a thread of this context's own.
+
+        `request` only puts on a `SimpleQueue`, which is reentrant, so it takes no lock that the frame a signal
+        interrupted may hold; `stop.set()` takes the lock of the Event the claim loop waits on, so it is not run in
+        the handler. Leaving the context ends the thread.
+        """
+        requests: queue.SimpleQueue[bool] = queue.SimpleQueue()
+
+        def serve_requests() -> None:
+            if requests.get():
+                self.halt()
+
+        thread = threading.Thread(target=serve_requests, name="senselab-pool-halt", daemon=True)
+        thread.start()
+        try:
+            yield lambda: requests.put(True)
+        finally:
+            requests.put(False)
+            thread.join()
 
     def serve(self) -> int:
         """Claim and run items until the queues stay empty for `pool.idle_polls` polls or `stop` is set; return 0.
@@ -990,12 +1012,13 @@ def serve_pool(  # noqa: PLR0913 - the queues and classes, then keyword-only par
         if threading.current_thread() is not threading.main_thread():
             mark_ready(Path(pool_dir).parent, worker.ready())
             return worker.serve()
-        previous = signal.signal(signal.SIGTERM, lambda *_: worker.halt())
-        try:
-            mark_ready(Path(pool_dir).parent, worker.ready())
-            return worker.serve()
-        finally:
-            signal.signal(signal.SIGTERM, previous)
+        with worker.halting_on() as request:
+            previous = signal.signal(signal.SIGTERM, lambda *_: request())
+            try:
+                mark_ready(Path(pool_dir).parent, worker.ready())
+                return worker.serve()
+            finally:
+                signal.signal(signal.SIGTERM, previous)
 
 
 __all__ = ["Abandoned", "Member", "PoolWorker", "Send", "failure_of", "run_members", "serve_pool"]

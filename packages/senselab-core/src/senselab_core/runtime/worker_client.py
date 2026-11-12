@@ -58,7 +58,7 @@ from senselab_core.runtime.execution_settings import WorkerSettings
 from senselab_core.runtime.hardware import cgroup_memory_events, oom_kills
 from senselab_core.runtime.launch import launch
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.worker_pipes import Lines, Pump
+from senselab_core.runtime.worker_pipes import Lines, Pump, WakeEvent
 
 LAUNCHER = "senselab_worker.launch"
 DEFERRED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
@@ -308,18 +308,18 @@ def _members_gone(  # noqa: PLR0913 - the group, its exit, the bound, the livene
 
 
 ESCALATE_HINT = "stopping the worker; press Ctrl-C again to kill it now"
-_HINTED = threading.Event()
-"""Set once this process has logged `ESCALATE_HINT`; the hint is logged once per process."""
+_HINTED = [False]
+"""Set once this process has requested `ESCALATE_HINT`; the hint is logged once per process."""
 
 
 @contextlib.contextmanager
-def _signals_deferred(*, escalate: bool) -> Iterator[None]:
+def _signals_deferred(*, escalate: bool, request_hint: Callable[[], None] | None = None) -> Iterator[None]:
     """On the main thread, hold `DEFERRED_SIGNALS` for the body, then restore their handlers and raise each held one.
 
     With `escalate`, the first SIGINT is held, a second raises `KeyboardInterrupt` at once, and the first SIGINT
-    held in this process logs `ESCALATE_HINT`. A signal whose handler was not installed from Python cannot be
-    restored, so it is not held. Held signals are not raised again when a wakeup fd is set, since its writer
-    already saw them.
+    held in this process calls `request_hint`, which must take no lock (`Lines.request_hint`). A signal whose
+    handler was not installed from Python cannot be restored, so it is not held. Held signals are not raised again
+    when a wakeup fd is set, since its writer already saw them.
     """
     if threading.current_thread() is not threading.main_thread():
         yield
@@ -332,9 +332,9 @@ def _signals_deferred(*, escalate: bool) -> Iterator[None]:
             if signal.SIGINT in held:
                 held[:] = [s for s in held if s != signal.SIGINT]
                 raise KeyboardInterrupt
-            if not _HINTED.is_set():
-                _HINTED.set()
-                logger.warning(ESCALATE_HINT)
+            if request_hint is not None and not _HINTED[0]:
+                _HINTED[0] = True
+                request_hint()
         held.append(signum)
 
     try:
@@ -443,14 +443,16 @@ class WorkerClient:
         self._oom_baseline = oom_kills(self._memory_events)
         self._graces, self._clock = graces, clock
         self._stderr: collections.deque[str] = collections.deque(maxlen=STDERR_TAIL_LINES)
-        self._lines = Lines(clock)
+        self._lines = Lines(clock, on_hint=lambda: logger.warning(ESCALATE_HINT))
         self._proc: subprocess.Popen[bytes] | None = None
         self._pumps: list[Pump] = []
-        self._reaped = threading.Event()
-        self._exited = threading.Event()
+        self._reaped = WakeEvent()
+        self._exited = WakeEvent()
         self._run_lock = threading.Lock()
         self._run_owner: int | None = None
-        self._run_idle = threading.Event()
+        self._constructing: int | None = None
+        self._closed_while_starting = False
+        self._run_idle = WakeEvent()
         self._run_idle.set()
         self._channel_lock = threading.Lock()
         self._shutdown_lock = threading.Lock()
@@ -459,15 +461,15 @@ class WorkerClient:
         self._stopped = self._released = False
         self._init_names: set[str] = set()
         self.hello: dict[str, Any] = {}
-        self._wake_r, self._wake_w = os.pipe()
+        self._wake = WakeEvent()
         try:
             self._array_dir = Path(tempfile.mkdtemp(prefix="senselab-arrays-", dir=array_parent)).absolute()
         except BaseException:
-            os.close(self._wake_r)
-            os.close(self._wake_w)
+            self._close_wake()
             self._stopped = self._released = True
             raise
         self._closed = False
+        self._constructing = threading.get_ident()
         try:
             wire_init = to_wire(
                 {"array_dir": str(self._array_dir), **init},
@@ -481,19 +483,27 @@ class WorkerClient:
             deadline = Deadline(load_timeout, clock.now)
             self._send(dump_line({"init": wire_init}, "init", limit=self._max_line_bytes), deadline)
             self._receive(deadline, "loading the backend", "ready")
+            if self._closed_while_starting:
+                raise WorkerLost("the client was closed while it was starting")
         except BaseException as exc:
-            raised = exc
-            if self._closed_by_caller and isinstance(exc, Exception) and not isinstance(exc, WorkerLost):
-                raised = WorkerLost("the client was closed while it was starting")
-            try:
-                self._fail(raised)
-            finally:
-                if not (self._stopped and self._released):
-                    self._shutdown(graceful=False)
-            raised = self._typed(raised)
+            raised = self._abort_start(exc)
             if raised is exc:
                 raise
             raise raised from exc
+        finally:
+            self._constructing = None
+
+    def _abort_start(self, exc: BaseException) -> BaseException:
+        """Stop the worker a constructor failed to start with `exc`; return what the constructor raises."""
+        raised = exc
+        if self._closed_by_caller and isinstance(exc, Exception) and not isinstance(exc, WorkerLost):
+            raised = WorkerLost("the client was closed while it was starting")
+        try:
+            self._fail(raised)
+        finally:
+            if not (self._stopped and self._released):
+                self._shutdown(graceful=False)
+        return self._typed(raised)
 
     @property
     def array_dir(self) -> Path:
@@ -579,13 +589,11 @@ class WorkerClient:
             return
         if not self._closed:
             self._closed_by_caller = True
-        if self._run_owner == threading.get_ident():
+        if threading.get_ident() in (self._run_owner, self._constructing):
+            self._closed_while_starting = self._closed_while_starting or self._constructing is not None
             self._closed = True
             self._lines.put(None)
-            try:
-                os.write(self._wake_w, b"x")
-            except OSError:
-                pass
+            self._wake.set()
             return
         self._shutdown(graceful=self._run_owner is None)
 
@@ -634,11 +642,9 @@ class WorkerClient:
         self._close_wake()
 
     def _close_wake(self) -> None:
-        for name in ("_wake_r", "_wake_w"):
-            fd = getattr(self, name)
-            setattr(self, name, -1)
-            if fd >= 0:
-                os.close(fd)
+        self._lines.close()
+        for event in (self._wake, self._exited, self._reaped, self._run_idle, *(pump.ended for pump in self._pumps)):
+            event.close()
 
     def _run(self, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
         if self._closed:
@@ -742,9 +748,9 @@ class WorkerClient:
         assert self._proc is not None and self._proc.stdin is not None
         stdin = self._proc.stdin
         view = memoryview(line)
-        with selectors.DefaultSelector() as sel:
-            if self._wake_r >= 0:
-                sel.register(self._wake_r, selectors.EVENT_READ)
+        with self._wake.held() as wake, selectors.DefaultSelector() as sel:
+            if wake >= 0:
+                sel.register(wake, selectors.EVENT_READ)
             watched = False
             while view:
                 with self._channel_lock:
@@ -777,11 +783,7 @@ class WorkerClient:
                 self._proc.stdin.close()
             except OSError:
                 pass
-        if not self._released:
-            try:
-                os.write(self._wake_w, b"x")
-            except OSError:
-                pass
+        self._wake.set()
 
     def _receive(self, deadline: Deadline, what: str, *kinds: Kind) -> dict[str, Any]:
         """Return the next line as a message of one of `kinds`, the first that has its key; a `fatal` raises."""
@@ -909,7 +911,7 @@ class WorkerClient:
             self._shutting_down.add(me)
             self._closed = True
             try:
-                with _signals_deferred(escalate=True):
+                with _signals_deferred(escalate=True, request_hint=self._lines.request_hint):
                     self._steps(graceful=graceful, me=me)
             except BaseException:
                 with _signals_deferred(escalate=False):

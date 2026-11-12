@@ -31,6 +31,7 @@ from senselab_worker.fake import FAULT_KEY
 from shutdown_schedule_fixture import (
     CLEAN,
     KINDS,
+    PATHS,
     counted,
     run_schedule,
     schedule,
@@ -45,6 +46,14 @@ def _check(tmp_path: Path, kind: str, occurrences: range) -> list[dict[str, Any]
     reports = run_schedule(tmp_path, todo)
     failed = {f"{r['path']} {r['boundary']}#{r['occurrence']}": v for r in reports if (v := violations(r))}
     assert failed == {}
+    if kind == "sigterm_in_wait":
+        scheduled = {case["path"] for case in todo}
+        assert scheduled, "no sigterm_in_wait case can deliver"
+        assert occurrences.start > 1 or scheduled == set(PATHS), (
+            f"no deliverable first call on {set(PATHS) - scheduled}"
+        )
+        silent = [path for path in scheduled if not any(r["delivered"] for r in reports if r["path"] == path)]
+        assert silent == [], f"no sigterm_in_wait case delivered its signal on {silent}"
     return reports
 
 
@@ -317,21 +326,30 @@ def test_collecting_a_client_whose_shutdown_was_cut_short_finishes_it(
 
 
 _HELD_THEN_ESCALATED = """
-import logging, signal
+import logging, signal, threading
+from senselab_core.runtime.clock import SystemClock
 from senselab_core.runtime.worker_client import ESCALATE_HINT, _signals_deferred
+from senselab_core.runtime.worker_pipes import Lines
 messages = []
 class Keep(logging.Handler):
     def emit(self, record):
         messages.append(record.getMessage())
 logging.getLogger().addHandler(Keep())
 logging.getLogger().setLevel(logging.WARNING)
+hinted = threading.Event()
+def log_hint():
+    logging.getLogger("hint").warning(ESCALATE_HINT)
+    hinted.set()
+lines = Lines(SystemClock(), on_hint=log_hint)
 try:
-    with _signals_deferred(escalate=True):
+    with _signals_deferred(escalate=True, request_hint=lines.request_hint):
         signal.raise_signal(signal.SIGINT)
-        assert messages.count(ESCALATE_HINT) == 1, messages
         signal.raise_signal(signal.SIGINT)
         raise SystemExit("the second SIGINT did not interrupt")
 except KeyboardInterrupt:
+    assert hinted.wait(10)
+    lines.close()
+    assert messages.count(ESCALATE_HINT) == 1, messages
     print("interrupted")
 """
 
@@ -351,16 +369,71 @@ def test_ctrl_c_held_once_with_a_hint_and_escalated_by_a_second() -> None:
     assert proc.stdout.strip() == "interrupted"
 
 
+_SIGINT_INSIDE_A_LOGGING_SINK = """
+import logging, logging.handlers, queue, signal, sys, threading
+from signal_in_lock_fixture import deliver_in
+from senselab_core.runtime.clock import SystemClock
+from senselab_core.runtime.worker_client import ESCALATE_HINT, _signals_deferred
+from senselab_core.runtime.worker_pipes import Lines
+records = queue.Queue()
+logging.getLogger().addHandler(logging.handlers.QueueHandler(records))
+logging.getLogger().setLevel(logging.WARNING)
+state = deliver_in(signal.SIGINT, lambda f: f.f_code.co_name == "put", (queue.__file__,))
+hinted = threading.Event()
+def log_hint():
+    logging.getLogger("hint").warning(ESCALATE_HINT)
+    hinted.set()
+lines = Lines(SystemClock(), on_hint=log_hint)
+try:
+    with _signals_deferred(escalate=True, request_hint=lines.request_hint):
+        logging.getLogger("work").warning("shutdown step")
+except KeyboardInterrupt:
+    pass
+sys.settrace(None)
+assert hinted.wait(10)
+lines.close()
+messages = []
+while not records.empty():
+    messages.append(records.get_nowait().getMessage())
+print(state["fired"], messages.count(ESCALATE_HINT), flush=True)
+"""
+
+
+@pytest.mark.logic
+def test_a_sigint_landing_inside_the_logging_sinks_lock_logs_the_hint_on_another_frame() -> None:
+    """A SIGINT inside `Queue.put` of a `QueueHandler`, mutex held, is held and its hint is still logged once."""
+    proc = subprocess.run(
+        [sys.executable, "-c", _SIGINT_INSIDE_A_LOGGING_SINK],
+        capture_output=True,
+        text=True,
+        timeout=WAIT_S,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+        preexec_fn=limit_file_size,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert proc.stdout.strip() == "True 1"
+
+
 _THREE_SHUTDOWNS = """
-import logging, signal
-from senselab_core.runtime.worker_client import _signals_deferred
+import logging, signal, threading
+from senselab_core.runtime.clock import SystemClock
+from senselab_core.runtime.worker_client import ESCALATE_HINT, _signals_deferred
+from senselab_core.runtime.worker_pipes import Lines
 logging.basicConfig(level=logging.WARNING)
+hinted = threading.Event()
+def log_hint():
+    logging.getLogger("hint").warning(ESCALATE_HINT)
+    hinted.set()
+lines = Lines(SystemClock(), on_hint=log_hint)
 for _ in range(3):
     try:
-        with _signals_deferred(escalate=True):
+        with _signals_deferred(escalate=True, request_hint=lines.request_hint):
             signal.raise_signal(signal.SIGINT)
     except KeyboardInterrupt:
         pass
+assert hinted.wait(10)
+lines.close()
 """
 
 
