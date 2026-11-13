@@ -5,11 +5,14 @@ import os
 import threading
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from epoch_fixture import prepared
+from lease_clock_fixture import ManualClock
 from pool_stack_fixture import packaged, planned, registry, scoring
 from senselab_core.kernel import prov as kprov
+from senselab_core.kernel.identity import LogicalKey
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.clock import SystemClock
 from senselab_core.runtime.execution.executor import Admission
@@ -199,3 +202,73 @@ def test_a_failed_provenance_write_does_not_replace_the_claim_loops_error(unwrit
     with pytest.raises(RuntimeError, match="the claim loop failed"):
         worker.serve()
     assert _lease_released(run)
+
+
+class _KilledAtRunEnd(ProvStore):
+    """A worker's provenance whose process its coordinator kills once every item of the run has an outcome.
+
+    The kill comes at once, as at the end of a run: a write made from then on never lands, and the worker is halted.
+    """
+
+    def __init__(self, run: Run, digests: Sequence[str]) -> None:
+        """Watch the `cpu` queue of `run` for the outcomes of `digests`."""
+        super().__init__()
+        self.queue = QueueSet(run.pool_dir, PROFILE, lease=PROFILE.lease).queue("cpu")
+        self.digests = list(digests)
+        self.worker: PoolWorker | None = None
+        self.killed = False
+
+    def write(self, run: str | Path) -> None:
+        """Write the document unless every item has an outcome; then drop it and halt the worker."""
+        if self.killed or all(self.queue.outcome(d) is not None for d in self.digests):
+            self.killed = True
+            if self.worker is not None:
+                self.worker.halt()
+            return
+        super().write(run)
+
+
+def _items(run: Run) -> list[str]:
+    queue = QueueSet(run.pool_dir, PROFILE, lease=PROFILE.lease).queue("cpu")
+    return [digest for digest, _ in queue.live_items()]
+
+
+def _committed_keys(run: Run, digests: Sequence[str]) -> list[str]:
+    queue = QueueSet(run.pool_dir, PROFILE, lease=PROFILE.lease).queue("cpu")
+    jobs = [j for d in digests if (record := queue.outcome(d)) is not None for j in cast(list[Any], record["jobs"])]
+    return sorted(str(j["key_digest"]) for j in jobs)
+
+
+def _activity_keys(read: ProvStore) -> list[str]:
+    return sorted(
+        LogicalKey.model_validate(kprov.literal_value(a.node()["senselab:logicalKey"])).digest()
+        for a in read.activities()
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("stored", [False, True], ids=["executed", "served"])
+def test_a_worker_killed_at_run_end_leaves_an_activity_for_every_committed_item(
+    tmp_path: Path, clock: ManualClock, stored: bool
+) -> None:
+    """The coordinator stops the worker as the last outcome lands: each committed key has one execution or Reuse.
+
+    The run's items are executed, or (`stored`) served from results an earlier run left in the store.
+    """
+    texts = [f"t{i}" for i in range(4)]
+    if stored:
+        earlier = Run(tmp_path, "earlier", texts)
+        earlier.serve(earlier.worker_store())
+    run = Run(tmp_path, "run", texts)
+    digests = _items(run)
+    provenance = _KilledAtRunEnd(run, digests)
+    store = ResultStore(run.root, provenance)
+
+    def send(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
+        return execute(jobs, placement, store=store, run=RunConfig(), profile=PROFILE, workers=WORKERS)
+
+    provenance.worker = PoolWorker(run.pool_dir, ["cpu"], profile=PROFILE, store=store, send=send, clock=clock)
+    assert provenance.worker.serve() == 0
+    committed = _committed_keys(run, digests)
+    assert provenance.killed and len(committed) == len(texts)
+    assert _activity_keys(ProvStore.read(run.run_dir)) == committed

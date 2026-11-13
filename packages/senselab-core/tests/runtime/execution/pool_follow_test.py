@@ -14,6 +14,7 @@ from pool_test import (  # noqa: F401 - `stack` is autouse
     SCORE,
     FakeWorkers,
     _coordinator,
+    _late_claim,
     _planned,
     _pool,
     _profile,
@@ -32,6 +33,7 @@ from senselab_core.runtime.execution.run import Output, stored_policy
 from senselab_core.runtime.licenses import LicensePolicy
 from senselab_core.runtime.planner import Plan, resume
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.store import ResultStore
 
 
@@ -227,3 +229,11 @@ def test_a_resume_after_a_killed_coordinator_starts_a_worker_and_commits_every_l
     assert status.done, f"the resume did not end within {hang_s} s: {status.counts}"
     assert workers.names == {"cpu"} and {item_digest(f) for f in workers.served} == old
     assert all(isinstance(o, Output) for _, o in resumed.results()) and planted.exists()
+
+
+@pytest.mark.contract
+def test_a_late_commit_settled_as_a_reuse_is_on_disk_when_it_is_given(tmp_path: Path) -> None:
+    """The coordinator's Reuse of an earlier epoch's late commit is written before `poll` gives the result."""
+    refs, _ = _late_claim(tmp_path, lambda: 1)
+    [reuse] = [a for a in ProvStore.read(tmp_path / "run").activities() if "senselab:Reuse" in a.types()]
+    assert [r.served for r in refs] == ["exact"] and "prov:wasAssociatedWith" not in reuse.node()

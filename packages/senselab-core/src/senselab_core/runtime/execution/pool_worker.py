@@ -638,8 +638,8 @@ class PoolWorker:
         other items are released at once, the request in flight is abandoned (`WorkerSet.abandon`), nothing more is
         sent, and this returns only after the thread stopped. Once `stop` is set, the request is abandoned too, the
         thread is given `join_s`, and the items whose jobs finished by then are committed. The worker's provenance
-        document in the run's `prov/` is replaced when the claim ends, however it ends; a failed write is raised, or
-        logged where an error already ends the claim.
+        document in the run's `prov/` is replaced before each commit and when the claim ends, however it ends; a
+        failed write is raised, or logged where an error already ends the claim.
         """
         failed = True
         try:
@@ -823,6 +823,8 @@ class PoolWorker:
         """Record `batch`'s outcomes; commit each item still held whose every job has one, with what `measure` gives.
 
         `measure` is the item's `Sample`, its `Observation`s given its outcomes, and the worker losses it survived.
+        The worker's provenance document is replaced before the first commit, so every committed job's execution or
+        Reuse is on disk before its outcome is; a failed write is raised and nothing is committed.
 
         An item with a job whose outcome is None (a busy start lease) is released, unreported.
         """
@@ -831,11 +833,13 @@ class PoolWorker:
         for member, outcome in batch:
             if outcome is not None:
                 outcomes[member.digest][member.index] = outcome
-        for digest in {m.digest for m, _ in batch} - busy:
-            if len(outcomes[digest]) == pending[digest] and digest in claim.items:
-                done = [outcomes[digest][i] for i in range(pending[digest])]
-                sample, observe, lost = measure
-                report(claim, digest, done, sample(digest), observe(digest, done), lost(digest))
+        ready = [d for d in {m.digest for m, _ in batch} - busy if len(outcomes[d]) == pending[d] and d in claim.items]
+        if ready:
+            self._write_provenance(raising=True)
+        for digest in ready:
+            done = [outcomes[digest][i] for i in range(pending[digest])]
+            sample, observe, lost = measure
+            report(claim, digest, done, sample(digest), observe(digest, done), lost(digest))
 
     def _run_groups(
         self, groups: list[_Group], finished: Finished, cancelled: threading.Event, spans: "_Spans"
