@@ -278,3 +278,35 @@ Adds no rule. It records what the Phase 3 head holds, so the amendments above ca
 - **Checked on a run.** The provenance checker passed 11 of 11 on the store retrieved from the interrupted and resumed
   speech-to-text run, with 435 `senselab:Reuse` activities from the resume and at most one execution per key
   (`reviews/phase3-exit-evidence.md`, Step 4). That is evidence of the 2026-11-10 amendment above, not a new clause.
+
+## Amendment 2026-11-13: a worker's provenance precedes its commit, one document per claim (Phase 3 Task T24-10)
+
+- **The defect.** A pool worker committed an item and wrote its document only when the claim ended. At the end of a
+  run the coordinator sees the last outcome, finishes and stops its workers at once. On the Task 21 Step 4 resume at
+  a065218b, worker 28922289 committed its last item (two jobs it served from the store) at 01:53:52.68. It was
+  SIGTERMed at 01:53:53.16, and the write that would have held those two `senselab:Reuse` activities never ran, so the
+  run held 334 Reuse for 336 reused items (`task-T24-10-report.md`). The cause was ordinary teardown, not a crash.
+- **Provenance precedes the commit.** Before a worker publishes an outcome that holds results, it replaces its claim's
+  document in the run's `prov/` through the durable atomic write (temporary fsynced, renamed, directory fsynced). The
+  document holds every activity of that item's jobs: the execution, or the `senselab:Reuse` of a result it served or
+  took after losing a store race. A `dead` outcome for an item whose jobs cannot be built holds no activity and needs
+  no write. A failed write is raised; nothing is committed, the call still running is cancelled and abandoned, and the
+  items are then released and claimed again. This covers every outcome a worker writes, whichever epoch's claim holds
+  the item, a late commit of an earlier epoch's claim included.
+- **One document per claim.** Each claim of a pool worker is a writer of its own, with its own uuid4 writer id. Its
+  document holds the claim's activities, the records they name and the run's `senselab:Plan` entity, so each write is
+  O(`pool.quantum_items`), not O(the items the worker has committed). This amends the 2026-11-01 clause "a writer is one
+  process" for pool workers; any other process is still one writer. The reader is unchanged: it already takes the
+  union of every `<uuid4 hex>.jsonld` in `prov/`. A run's `prov/` holds one document per claim.
+- **What a kill can still lose.** It loses only uncommitted work: the activities of jobs whose item has no outcome
+  yet, whose results may already stand in the store and are served as a Reuse on a later attempt. A committed outcome
+  always has its execution or Reuse on disk. This replaces the clause above ("loses at most the claim it is running or
+  has just committed"): the claim just committed is no longer at risk.
+- **The coordinator is unchanged.** It writes its settled Reuse after each poll that recorded any and before that poll
+  gives the results. As the 2026-11-10 amendment rules, a failed write is logged and retried, and the results are
+  still given.
+- **Cost, measured.** This is a `PoolWorker` over trivial one-job items on one laptop (`task-T24-10-report.md`). At
+  a065218b (one document per worker, written at each claim end) it took 1.64 s for 100 items and 7.80 s for 300. With
+  a whole-document write before every commit (cbdb332a) it took 6.25 s and 47.0 s: 0.8 s per write at the Step 4 size
+  of 1001 activities and 2.46 MB, so quadratic in items. With one document per claim it takes 1.57 s and 4.32 s, in
+  14 and 39 documents. A per-commit delta document is not needed at this scale.
