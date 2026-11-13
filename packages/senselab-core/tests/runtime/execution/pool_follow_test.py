@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
-from epoch_fixture import KILLED_HOLDERS, left_by_a_killed_coordinator, prepared
+from epoch_fixture import KILLED_HOLDERS, KILLED_LOCKS, left_by_a_killed_coordinator, prepared, waited_past_queued
 from lease_clock_fixture import ManualClock
 from pool_stack_fixture import planned, unresolving
 from pool_test import (  # noqa: F401 - `stack` is autouse
@@ -165,15 +165,20 @@ def test_coordinate_runs_under_the_policy_the_run_was_started_under(tmp_path: Pa
     assert [r.failure for r in outcome.results["a"]] == [None]
 
 
+STALL_S = 10.0
+"""Real seconds a resume may log nothing but `queued` before the test calls it stuck; a failure bound only."""
+
+
 @pytest.mark.contract
+@pytest.mark.parametrize("lock", KILLED_LOCKS)
 @pytest.mark.parametrize("holder", sorted(KILLED_HOLDERS))
 def test_a_resume_after_a_killed_coordinator_starts_a_worker_and_commits_every_live_item(
-    tmp_path: Path, clock: ManualClock, hang_s: float, holder: str
+    tmp_path: Path, clock: ManualClock, hang_s: float, holder: str, lock: str
 ) -> None:
     """Epoch 1 put every item and was killed with no worker alive; epoch 2 starts one and follows each item to the end.
 
-    The killed coordinator's lock names a holder that cannot be proven dead; the resume neither waits on it nor puts
-    any job again.
+    The killed coordinator's pydra lock (its run-long lease, or a save it was in) names a holder that cannot be proven
+    dead; the resume neither waits on it nor puts any job again.
     """
     pytest.importorskip("pydra")
     profile = ExecutionProfile.load(
@@ -200,7 +205,7 @@ def test_a_resume_after_a_killed_coordinator_starts_a_worker_and_commits_every_l
         first.close()
     old = {digest for digest, _ in queue.live_items()}
     assert len(old) == 4 and not killed.live()
-    left_by_a_killed_coordinator(run_dir, holder)
+    planted = left_by_a_killed_coordinator(run_dir, holder, lock)
     workers = FakeWorkers(run_dir, ResultStore(tmp_path / "store"), placed, values)
     second = Pool(
         run_dir,
@@ -215,10 +220,10 @@ def test_a_resume_after_a_killed_coordinator_starts_a_worker_and_commits_every_l
     )
     try:
         resumed = resume(placed.hash, execution=profile, store=second.store, executor=second)
-        status = resumed.wait(hang_s)
+        status = waited_past_queued(resumed, STALL_S, hang_s)
     finally:
         second.close()
         workers.stop()
     assert status.done, f"the resume did not end within {hang_s} s: {status.counts}"
     assert workers.names == {"cpu"} and {item_digest(f) for f in workers.served} == old
-    assert all(isinstance(o, Output) for _, o in resumed.results())
+    assert all(isinstance(o, Output) for _, o in resumed.results()) and not planted.exists()

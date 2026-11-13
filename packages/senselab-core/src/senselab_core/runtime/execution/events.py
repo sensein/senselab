@@ -223,7 +223,8 @@ class RunStatus:
     `reclaimed` counts the claims that broke a stale lease first (`reclaimed` events); `quarantined` the event lines a
     reader could not decode (`EventScan`), so a job whose terminal event was one reads as not done for that reason.
     `unplaceable` holds each distinct message of a plan that fits no class (`Unplaceable`): an outcome of the plan,
-    never counted against an env.
+    never counted against an env. `superseded` is set by `Run.status` alone, for an attempt whose epoch a newer one
+    replaced: its counts are of its own epoch and earlier, never the newer attempt's.
     """
 
     counts: Mapping[JobState, int]
@@ -237,6 +238,7 @@ class RunStatus:
     reclaimed: int = 0
     quarantined: int = 0
     unplaceable: tuple[str, ...] = ()
+    superseded: bool = False
 
 
 def _latest(events: Sequence[Event]) -> list[Event]:

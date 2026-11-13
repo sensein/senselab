@@ -15,7 +15,7 @@ from typing import Any, ClassVar, cast
 import numpy
 import pytest
 import soundfile
-from epoch_fixture import left_by_a_killed_coordinator
+from epoch_fixture import KILLED_HOLDERS, KILLED_LOCKS, left_by_a_killed_coordinator, waited_past_queued
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.signals import StaleSource
@@ -26,7 +26,7 @@ from senselab_core.runtime.call import packaged as packaged_now
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.epoch import Epoch
+from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import Event, EventLog, read_events, run_dir_of
 from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status
 from senselab_core.runtime.execution.in_process import InProcess
@@ -53,6 +53,7 @@ from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import Resolver
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.interpreter import source_tree_python
+from syscall_faults_fixture import await_true
 
 pytest.importorskip("pydra")
 pytestmark = pytest.mark.contract
@@ -196,16 +197,70 @@ def test_resume_executes_only_missing(tmp_path: Path) -> None:
         resume("0" * 64)
 
 
-def test_a_resume_on_another_host_runs_past_the_lock_its_killed_coordinator_left(tmp_path: Path, hang_s: float) -> None:
-    """The lock file pydra's workflow lease leaves when its coordinator is killed on another host stops no resume."""
+class HeldBack(InProcess):
+    """An `InProcess` executor on its own worker set: it runs `k` fragments, then holds each later one at `gate`."""
+
+    def __init__(self, store: ResultStore, k: int) -> None:
+        """Run `k` fragments over `store` under `PROFILE` on a fresh worker set."""
+        super().__init__(store=store, profile=PROFILE, run=RunConfig(), workers=WorkerSet(4))
+        self.left, self.ran, self.gate, self.guard = k, 0, threading.Event(), threading.Lock()
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Submit at once while fragments are left; later ones wait for `gate` first."""
+        with self.guard:
+            self.left -= 1
+            go = self.left >= 0
+        if not go:
+            self.gate.wait()
+        handle = super().submit(fragment)
+        with self.guard:
+            self.ran += 1
+        return handle
+
+
+def test_an_older_attempt_of_one_plan_on_this_host_stops_once_a_newer_one_is_current(
+    tmp_path: Path, hang_s: float
+) -> None:
+    """Two in-process attempts of one plan: the older one releases no batch after the newer binds, and says why."""
+    store = ResultStore(tmp_path / "store")
+    placed = _plan(4)
+    older = HeldBack(store, 2)
+    first = placed.run(older, store=store)
+    await_true(lambda: older.ran == 2, hang_s, 0.01, "the older attempt's first two fragments")
+    loaded = len(older.workers.pooled())
+    second = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
+    try:
+        assert second.wait(hang_s).done
+        older.gate.set()
+        status = first.wait(hang_s)
+        after = len(older.workers.pooled())
+    finally:
+        older.gate.set()
+        older.workers.close()
+    assert status.superseded and isinstance(first.error, StaleCoordinator)
+    assert status.counts["done"] == 2 and not second.status().superseded
+    assert older.ran == 2 and after == loaded > 0
+    assert _kinds(_latest(second)) == ["cache_hit", "cache_hit", "finished", "finished"]
+    assert all(isinstance(o, Output) for _, o in second.results())
+
+
+@pytest.mark.parametrize("lock", KILLED_LOCKS)
+@pytest.mark.parametrize("holder", sorted(KILLED_HOLDERS))
+def test_a_resume_runs_past_the_lock_its_killed_coordinator_left(
+    tmp_path: Path, hang_s: float, holder: str, lock: str
+) -> None:
+    """A pydra lock a killed coordinator leaves, naming a holder that cannot be proven dead, stops no resume.
+
+    The lock is its run-long lease or a save it was in the middle of.
+    """
     store = ResultStore(tmp_path / "store")
     placed = _plan(4)
     stopped = placed.run(Stopping(store, 2), store=store)
     with pytest.raises(RuntimeError, match="planted stop"):
         stopped.wait(60)
-    left_by_a_killed_coordinator(stopped.run_dir, "another host")
+    left_by_a_killed_coordinator(stopped.run_dir, holder, lock)
     resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
-    assert resumed.wait(hang_s).done
+    assert waited_past_queued(resumed, 10.0, hang_s).done
     assert _kinds(_latest(resumed)) == ["cache_hit", "cache_hit", "finished", "finished"]
 
 

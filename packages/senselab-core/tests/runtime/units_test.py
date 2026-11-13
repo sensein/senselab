@@ -34,6 +34,7 @@ from senselab_core.runtime.call import (
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.in_process import InProcess, fragment_jobs, node_call, node_fragment
 from senselab_core.runtime.execution.job import Job
 from senselab_core.runtime.execution.plan_reads import count_items, plan_decoder, unit_of_node
@@ -396,7 +397,7 @@ def test_the_extrapolation_log_starts_afresh_with_each_run(tmp_path: Path, caplo
         executor.sizing(jobs, placement)
         executor.sizing(jobs, placement)
         assert [UNIT.label() in r.getMessage() for r in caplog.records] == [True]
-        executor.bind_epoch(2, None)  # type: ignore[arg-type]
+        executor.bind_epoch(2, EventLog(tmp_path / "run", "a2", 2, epoch=2))
         executor.sizing(jobs, placement)
     assert len(caplog.records) == 2
 

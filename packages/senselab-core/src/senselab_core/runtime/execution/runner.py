@@ -9,12 +9,15 @@ batch size (`node_fragment`), or as one fragment to an executor that splits frag
 element, so pydra fails only that element's descendants. A fragment is submitted and returns at once; one `Follower`
 thread per run polls every open fragment and settles each element as its result lands.
 `SenselabStore` holds the run's completion records; no result is pickled. Its job leases take no lock file: the
-run's coordinator epoch is the one exclusion of a run (ADR-003), so nothing a killed coordinator leaves stops a resume.
+run's coordinator epoch is the one exclusion of a run (ADR-003). pydra still takes a `SoftFileLock` around each
+pickle it writes (`<job dir>_save.lock`); a run removes those its older coordinators left before it submits
+(`clear_stale_locks`), so no lock a killed coordinator leaves stops a resume.
 """
 
 import asyncio
 import contextlib
 import contextvars
+import logging
 import os
 import re
 import threading
@@ -59,6 +62,8 @@ RECORDS = "records"
 """The pydra node split over the manifest's rows; every mapped node reads its row from it."""
 RECORD_FIELD = "row"
 """The records node's input, a row index; `records.row` is the split every gather combines over."""
+logger = logging.getLogger("senselab")
+
 REF = "ref"
 """The one output of every compiled node: the job's `ResultRef` as JSON (the row index, for the records node)."""
 NO_TELEMETRY = "NO_ET"
@@ -150,7 +155,7 @@ class SenselabStore:
             yield self.cache_root / checksum / slot, result.context
 
     def lockfile(self, checksum: str, context: Mapping[str, Any]) -> Path:
-        """Return the lock file of the job `checksum` in `context`."""
+        """Return the name pydra's `ResultStore` gives the lock of job `checksum` in `context`; nothing writes it."""
         return self.cache_root / f"{checksum}-{context_key(context)}.lock"
 
     def acquire(self, checksum: str, context: Mapping[str, Any]) -> Lease:
@@ -798,7 +803,8 @@ class PydraRunner:
         sharing its key with another job of the run is that job's reuse, or its failure (`_Run.serve_shared`). Each
         job's `queued`, `started` and `finished` or `failed` event is appended to `events`. Once `cancel` is set no
         further fragment is sent: running fragments finish and the run raises `RunCancelled`. While it runs,
-        `attempt_id()` is the attempt of `events`.
+        `attempt_id()` is the attempt of `events`. The caller holds the run's newest epoch, so the pydra locks under the
+        work directory are its fenced predecessors' and are removed first (`clear_stale_locks`).
 
         Raises:
             ValueError: as `compile_plan`, or as `executor.admit`.
@@ -822,6 +828,7 @@ class PydraRunner:
         if self.work_dir is None:
             private_dir(run_dir_of(placed.hash) / PRIVATE_DIR)
         root = private_dir(self.work_dir if self.work_dir is not None else run_dir_of(placed.hash) / PYDRA_DIR)
+        clear_stale_locks(root)
         store = store if store is not None else SenselabStore(root)
         admission = executor.admit(placed, values)
         cancel = cancel if cancel is not None else threading.Event()
@@ -849,6 +856,20 @@ class PydraRunner:
             executor.release(admission)
             run.close()
         return _outcome(placed, run)
+
+
+def clear_stale_locks(root: Path) -> list[Path]:
+    """Remove the pydra lock files under a run's pydra root `root` and return them; each removal is logged.
+
+    They are `<root>/**/*_save.lock`, taken by pydra's `save` for one pickle write, and `<root>/*.lock`, the run-long
+    lease pydra took before `SenselabStore` stopped writing it. Only the run's coordinators write under `root`; the
+    caller holds the newest epoch, so any holder is a coordinator of an older epoch, which releases no further job.
+    """
+    found = sorted({*root.glob("**/*_save.lock"), *root.glob("*.lock")})
+    for path in found:
+        path.unlink(missing_ok=True)
+        logger.warning("removed %s, a pydra lock an earlier coordinator of the run left", path)
+    return found
 
 
 def _submit_plan(run: _Run, store: SenselabStore, classes: Sequence[str]) -> None:

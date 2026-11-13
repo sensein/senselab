@@ -24,6 +24,7 @@ from senselab_core.runtime.execution.batching import (
     job_text_chars,
     recording_span_ns,
 )
+from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import EventLog
 from senselab_core.runtime.execution.executor import (
     Admission,
@@ -435,7 +436,8 @@ class InProcess:
     set for the profile (`process_workers`). Batches are sized (`size`) from the estimate `measures` gives for the unit
     `units` resolves for a call and placement; `None` means the roots the profile names and the
     resolver over the env record and the hardware index (`UnitResolver`). A unit that does not resolve is unmeasured
-    and runs the safe values, batch 1.
+    and runs the safe values, batch 1. Bound to a run's epoch (`bind_epoch`), it releases no batch once a newer epoch
+    is current: `submit` raises `StaleCoordinator`, as the `Pool` does.
     """
 
     def __init__(  # noqa: PLR0913 - the executor's settings, all keyword-only
@@ -457,6 +459,7 @@ class InProcess:
         self.measures = measures if measures is not None else default_measures(self.profile, roots)
         self.units = units if units is not None else UnitResolver(self.profile, roots).unit
         self._extrapolated = ExtrapolationLog()
+        self._fenced: tuple[Epoch, int] | None = None
         self._lock = threading.Lock()
         self._admissions: dict[str, tuple[Plan, dict[InputIdentity, object]]] = {}
         self._outcomes: dict[str, list[JobOutcome]] = {}
@@ -467,8 +470,16 @@ class InProcess:
     splits_fragments: ClassVar[bool] = False
 
     def bind_epoch(self, epoch: int, events: EventLog) -> None:
-        """Start a run's extrapolation log afresh: an in-process run has no queue for an older coordinator to write."""
+        """Coordinate as `epoch` of the run `events` logs: fenced by its newer epochs, its extrapolation log afresh."""
         self._extrapolated = ExtrapolationLog()
+        self._fenced = (Epoch(events.run_dir), epoch)
+
+    def _fence(self) -> None:
+        """Raise `StaleCoordinator` once an epoch newer than the one this executor is bound to is current."""
+        if self._fenced is not None:
+            epochs, mine = self._fenced
+            if (current := epochs.current()) > mine:
+                raise StaleCoordinator(mine, current)
 
     def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:
         """Hold `placed` and the values of the graph-input identities its fragments name, until `release`.
@@ -503,7 +514,9 @@ class InProcess:
             InconsistentInputs, AmbiguousClock: as `execute`.
             LicenseRefused, LeaseTimeout, LeaseUnavailable, WorkerLoadFailed, OutputTypeMismatch, WireFormatRetired,
                 WorkerFatal, ProtocolError: as `execute`.
+            StaleCoordinator: a newer epoch than the bound one is current, before this fragment or one of its batches.
         """
+        self._fence()
         jobs, placement = self._jobs(fragment)
         handle = Handle(id=f"fragment-{next(self._ids)}")
         with self._lock:
@@ -525,6 +538,7 @@ class InProcess:
         batches = [sized.batch_at(length, len(jobs)) for length in lengths]
         outcomes: list[JobOutcome] = []
         for batch, run in itertools.groupby(zip(jobs, batches, strict=True), key=lambda pair: pair[1]):
+            self._fence()
             sent = replace(placement, batch_size=batch)
             outcomes += execute(
                 [j for j, _ in run],
