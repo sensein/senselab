@@ -637,10 +637,13 @@ class PoolWorker:
         while this one waits, proving the claim's leases every renewal interval. Once a lease is lost, the claim's
         other items are released at once, the request in flight is abandoned (`WorkerSet.abandon`), nothing more is
         sent, and this returns only after the thread stopped. Once `stop` is set, the request is abandoned too, the
-        thread is given `join_s`, and the items whose jobs finished by then are committed. The worker's provenance
-        document in the run's `prov/` is replaced when the claim ends, however it ends; a failed write is raised, or
-        logged where an error already ends the claim.
+        thread is given `join_s`, and the items whose jobs finished by then are committed. Each claim is a writer of
+        its own (`ProvStore.restart`): its document in the run's `prov/` holds the claim's activities and the run's
+        plan, and is replaced before each commit and when the claim ends, however it ends; a failed write is raised,
+        or logged where an error already ends the claim. A raise stops the request in flight before the claim's items
+        are released.
         """
+        self.store.provenance.restart()
         failed = True
         try:
             self._run_claim(claim, claim_s)
@@ -665,24 +668,26 @@ class PoolWorker:
             runner.start()
             interval = self.queues.lease.renew_fraction * self.queues.lease.stale_after_s
             running, renewed = True, self._clock.now()
-            while running and claim.items and not self.stop.is_set():
-                with contextlib.suppress(queue.Empty):
-                    batch = finished.get(timeout=interval)
-                    running = batch is not None
-                    self._commit(
-                        claim, batch or [], outcomes, pending, (sample, observe, lambda d: spans.lost.get(d, []))
-                    )
-                if self._clock.now() - renewed >= interval:
-                    renewed = self._clock.now()
-                    if not claim.renew():
-                        logger.warning(
-                            "pool worker %s lost a claim on queue %s; its request is abandoned",
-                            self.name,
-                            claim.queue.name,
+            try:
+                while running and claim.items and not self.stop.is_set():
+                    with contextlib.suppress(queue.Empty):
+                        batch = finished.get(timeout=interval)
+                        running = batch is not None
+                        self._commit(
+                            claim, batch or [], outcomes, pending, (sample, observe, lambda d: spans.lost.get(d, []))
                         )
-                        claim.release()
-                        break
-            self._stop_runner(runner, cancelled)
+                    if self._clock.now() - renewed >= interval:
+                        renewed = self._clock.now()
+                        if not claim.renew():
+                            logger.warning(
+                                "pool worker %s lost a claim on queue %s; its request is abandoned",
+                                self.name,
+                                claim.queue.name,
+                            )
+                            claim.release()
+                            break
+            finally:
+                self._stop_runner(runner, cancelled)
             while not finished.empty():
                 self._commit(
                     claim,
@@ -823,6 +828,9 @@ class PoolWorker:
         """Record `batch`'s outcomes; commit each item still held whose every job has one, with what `measure` gives.
 
         `measure` is the item's `Sample`, its `Observation`s given its outcomes, and the worker losses it survived.
+        The claim's provenance document is replaced before the first of them is committed, so the execution or Reuse
+        of every job of a committed item is on disk before its outcome is (an item given `dead` because its jobs
+        cannot be built has none); a failed write is raised and nothing is committed.
 
         An item with a job whose outcome is None (a busy start lease) is released, unreported.
         """
@@ -831,11 +839,13 @@ class PoolWorker:
         for member, outcome in batch:
             if outcome is not None:
                 outcomes[member.digest][member.index] = outcome
-        for digest in {m.digest for m, _ in batch} - busy:
-            if len(outcomes[digest]) == pending[digest] and digest in claim.items:
-                done = [outcomes[digest][i] for i in range(pending[digest])]
-                sample, observe, lost = measure
-                report(claim, digest, done, sample(digest), observe(digest, done), lost(digest))
+        ready = [d for d in {m.digest for m, _ in batch} - busy if len(outcomes[d]) == pending[d] and d in claim.items]
+        if ready:
+            self._write_provenance(raising=True)
+        for digest in ready:
+            done = [outcomes[digest][i] for i in range(pending[digest])]
+            sample, observe, lost = measure
+            report(claim, digest, done, sample(digest), observe(digest, done), lost(digest))
 
     def _run_groups(
         self, groups: list[_Group], finished: Finished, cancelled: threading.Event, spans: "_Spans"
@@ -936,7 +946,7 @@ class PoolWorker:
             if placed.hash != fragment.plan_hash:
                 raise ValueError(f"the run's plan is {placed.hash}; the item is of plan {fragment.plan_hash}")
             self._plans[placed.hash] = (placed, bind_sources(placed))
-            add_plan_entity(self.store.provenance, placed.hash)
+        add_plan_entity(self.store.provenance, fragment.plan_hash)
         return self._plans[fragment.plan_hash]
 
     def _log_claimed(self, claim: Claim) -> None:
