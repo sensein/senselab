@@ -129,19 +129,13 @@ def plan(
     return plan_runtime(_target(target), dataset, **plan_kwargs)
 
 
-def _waited(started: Run) -> None:
-    """Wait for `started`; raise the `StaleCoordinator` that stopped it when a newer attempt superseded it."""
-    if started.wait().superseded and started.error is not None:
-        raise started.error
-
-
 def run(
     target: Graph | TaskCall | ConfiguredTask, dataset: DatasetProtocol | None = None, **plan_kwargs: Unpack[PlanKwargs]
 ) -> ResultSet:
     """Plan `target` over `dataset` (`plan`), run it on the session's executor, wait and return its results."""
     current = session()
     started = plan(target, dataset, **plan_kwargs).run(current.executor, store=current.store)
-    _waited(started)
+    started.wait()
     return started.results()
 
 
@@ -174,7 +168,7 @@ def resume(
         placement=placement,
         placement_hook=placement_hook,
     )
-    _waited(started)
+    started.wait()
     return started.results()
 
 

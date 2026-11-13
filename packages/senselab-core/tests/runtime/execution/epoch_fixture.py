@@ -45,20 +45,20 @@ KILLED_LOCKS = ("lease", "save")
 
 
 def left_by_a_killed_coordinator(run_dir: Path, holder: str, lock: str = "lease") -> Path:
-    """Write the pydra lock `lock` of the run's workflow job naming `KILLED_HOLDERS[holder]`, and return it.
+    """Write the pydra lock `lock` of the run's one workflow job naming `KILLED_HOLDERS[holder]`, and return it.
 
-    `lease` is the run-long lease's `<checksum>-<context>.lock`; `save` is `<checksum>/<context>_save.lock` with the
-    job's pickle cut short, as a kill in the middle of `save` leaves them.
+    The lock goes beside the job directory pydra made, wherever under the run's pydra root that is: `lease` is the
+    run-long lease's `<checksum>-<context>.lock`, `save` is `<checksum>/<context>_save.lock` with the job's pickle
+    cut short, as a kill in the middle of `save` leaves them.
     """
-    root = run_dir / PYDRA_DIR
-    [job] = [d for d in root.iterdir() if d.is_dir() and d.name != "pkl_files"]
+    [job] = [d for d in (run_dir / PYDRA_DIR).rglob("plan-*") if d.is_dir()]
     [context] = [d for d in job.iterdir() if d.is_dir()]
     if lock == "save":
         pickled = context / "_job.pklz"
         pickled.write_bytes(pickled.read_bytes()[:16])
         path = job / f"{context.name}_save.lock"
     else:
-        path = root / f"{job.name}-{context.name}.lock"
+        path = job.parent / f"{job.name}-{context.name}.lock"
     path.write_text(KILLED_HOLDERS[holder])
     return path
 
@@ -66,8 +66,9 @@ def left_by_a_killed_coordinator(run_dir: Path, holder: str, lock: str = "lease"
 def waited_past_queued(run: Run, stall_s: float, hang_s: float) -> RunStatus:
     """Return `run`'s status once it is done or `hang_s` passed; fail after `stall_s` on a run stuck before a submit.
 
-    Stuck: its own epoch has logged nothing but `queued` and `placement` by then.
+    Stuck: its own epoch (`Run.epoch`, which `start` sets) has logged nothing but `queued` and `placement` by then.
     """
+    assert run.epoch is not None, "a run `start` made"
     deadline = time.monotonic() + stall_s
     while time.monotonic() < deadline:
         status = run.wait(stall_s / 10)

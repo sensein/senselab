@@ -15,7 +15,7 @@ from typing import Any, ClassVar, cast
 import numpy
 import pytest
 import soundfile
-from epoch_fixture import KILLED_HOLDERS, KILLED_LOCKS, left_by_a_killed_coordinator, waited_past_queued
+from epoch_fixture import KILLED_HOLDERS, KILLED_LOCKS, left_by_a_killed_coordinator, taken, waited_past_queued
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.signals import StaleSource
@@ -31,6 +31,7 @@ from senselab_core.runtime.execution.events import Event, EventLog, read_events,
 from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status
 from senselab_core.runtime.execution.in_process import InProcess
 from senselab_core.runtime.execution.run import (
+    PYDRA_DIR,
     ConflictingSources,
     InputChanged,
     NotRun,
@@ -221,27 +222,50 @@ class HeldBack(InProcess):
 def test_an_older_attempt_of_one_plan_on_this_host_stops_once_a_newer_one_is_current(
     tmp_path: Path, hang_s: float
 ) -> None:
-    """Two in-process attempts of one plan: the older one releases no batch after the newer binds, and says why."""
+    """Two in-process attempts of one plan run at once; the older stops once the newer binds.
+
+    The older, not yet fenced while the newer runs, releases no batch after the newer binds and raises
+    `StaleCoordinator`; each has a pydra directory of its own.
+    """
     store = ResultStore(tmp_path / "store")
     placed = _plan(4)
     older = HeldBack(store, 2)
     first = placed.run(older, store=store)
     await_true(lambda: older.ran == 2, hang_s, 0.01, "the older attempt's first two fragments")
-    loaded = len(older.workers.pooled())
+    [pickled] = (first.run_dir / PYDRA_DIR).rglob("_job.pklz")
+    inode, loaded = pickled.stat().st_ino, len(older.workers.pooled())
     second = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
     try:
         assert second.wait(hang_s).done
+        assert pickled.stat().st_ino == inode and len(list((first.run_dir / PYDRA_DIR).rglob("_job.pklz"))) == 2
         older.gate.set()
-        status = first.wait(hang_s)
+        with pytest.raises(StaleCoordinator):
+            first.wait(hang_s)
         after = len(older.workers.pooled())
     finally:
         older.gate.set()
         older.workers.close()
-    assert status.superseded and isinstance(first.error, StaleCoordinator)
-    assert status.counts["done"] == 2 and not second.status().superseded
+    status = first.status()
+    assert status.superseded and status.counts["done"] == 2 and not second.status().superseded
     assert older.ran == 2 and after == loaded > 0
     assert _kinds(_latest(second)) == ["cache_hit", "cache_hit", "finished", "finished"]
     assert all(isinstance(o, Output) for _, o in second.results())
+
+
+def test_an_attempt_that_ended_and_was_then_superseded_gives_no_results(tmp_path: Path) -> None:
+    """An attempt that finished cleanly, then superseded, reads as done under its own epoch and gives no results.
+
+    Its results raise `StaleCoordinator` rather than read the newer attempt's events as its own.
+    """
+    store = ResultStore(tmp_path / "store")
+    run = _ran(_plan(2), store)
+    assert all(isinstance(o, Output) for _, o in run.results())
+    newer = taken(Epoch(run.run_dir))
+    status = run.wait(0)
+    assert status.done and status.superseded and run.status().counts["done"] == 2
+    with pytest.raises(StaleCoordinator) as raised:
+        run.results()
+    assert (raised.value.mine, raised.value.current) == (run.epoch, newer)
 
 
 @pytest.mark.parametrize("lock", KILLED_LOCKS)

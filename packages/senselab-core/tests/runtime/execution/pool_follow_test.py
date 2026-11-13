@@ -226,4 +226,4 @@ def test_a_resume_after_a_killed_coordinator_starts_a_worker_and_commits_every_l
         workers.stop()
     assert status.done, f"the resume did not end within {hang_s} s: {status.counts}"
     assert workers.names == {"cpu"} and {item_digest(f) for f in workers.served} == old
-    assert all(isinstance(o, Output) for _, o in resumed.results()) and not planted.exists()
+    assert all(isinstance(o, Output) for _, o in resumed.results()) and planted.exists()

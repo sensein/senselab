@@ -579,8 +579,7 @@ class Run:
 
         A run started here is waited on through its thread; any run is then polled, reading the event log every `poll`
         seconds (`pool.event_poll_s` by default), until its events say it is done, so a run another process drives
-        can be waited for. An attempt a newer epoch superseded is not waited for further, and the `StaleCoordinator`
-        that stopped it is not raised: its status is returned with `superseded` set. While no thread of
+        can be waited for. An attempt a newer epoch stopped raises its `StaleCoordinator`. While no thread of
         this `Run` is alive, a run whose latest coordinator ended or whose lease is past its stale bound
         (`Epoch.stopped`), with no live claim on any of its queues, is not waited for further: its status is returned
         with `interrupted` set.
@@ -596,10 +595,10 @@ class Run:
                 self._ended.wait()
             else:
                 self._clock.wait(self._ended, timeout)
-            if not thread.is_alive() and self._error is not None and not isinstance(self._error, StaleCoordinator):
+            if not thread.is_alive() and self._error is not None:
                 raise self._error
         status = self.status()
-        while not status.done and not status.superseded and (deadline is None or self._clock.now() < deadline):
+        while not status.done and (deadline is None or self._clock.now() < deadline):
             if (thread is None or not thread.is_alive()) and self._stopped():
                 return dataclasses.replace(self.status(), interrupted=True)
             self._clock.sleep(poll if deadline is None else max(0.0, min(poll, deadline - self._clock.now())))
@@ -617,11 +616,6 @@ class Run:
     def cancelled(self) -> threading.Event:
         """The event `cancel` sets, which the runner reads."""
         return self._cancel
-
-    @property
-    def error(self) -> BaseException | None:
-        """The first error that stopped a run started here, None while it has none."""
-        return self._error
 
     def fail(self, error: BaseException) -> None:
         """Hold `error`, the first one that stopped the run, for `wait` to raise."""
@@ -645,15 +639,19 @@ class Run:
     def results(self) -> ResultSet:
         """Return what each record gave, read from the result store as each is asked for.
 
-        The events are read now, under the run's current epoch; a record whose job failed, was blocked or cancelled
-        gives that, and an earlier attempt's result is served only under the key the current attempt gives its job.
+        The events are read now, under the run's epoch (`status`); a record whose job failed, was blocked or cancelled
+        gives that, and an earlier attempt's result is served only under the key the attempt gives its job.
 
         Raises:
             FileNotFoundError: the run has no `plan.json`.
+            StaleCoordinator: a newer epoch than this attempt's is current.
         """
         placed = self.plan
         graph = placed.logical.graph
-        epoch = self._epoch()
+        current = self._epoch()
+        epoch = self.epoch if self.epoch is not None else current
+        if epoch is not None and current is not None and current > epoch:
+            raise StaleCoordinator(epoch, current)
         reader = _Reader(graph, self.events(), self._results_store(), epoch)
         per_record = [n for n in order(graph) if n in reader.mapped]
         outputs = sorted(graph.outputs)
