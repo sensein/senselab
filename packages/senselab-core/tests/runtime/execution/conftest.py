@@ -31,18 +31,12 @@ def fake_poll_s(slack_tests: dict[str, Any]) -> float:
 
 
 UNCHECKED = {
-    "pool_backend_oom_test::test_a_torch_style_oom_bisects_the_request_that_ran_out_and_does_not_hold_the_env": (
-        "its jobs repeat one input, so one key is executed once per job"
-    ),
-    "pool_backend_oom_test::test_only_the_request_that_ran_out_is_split_and_the_others_keep_their_reports": (
-        "its jobs repeat one input, so one key is executed once per job"
-    ),
     "pool_probe_test::test_a_worker_builds_an_unbuilt_env_before_its_mark_and_the_unit_probes": (
         "a hand commits the probe items"
     ),
     "run_test::test_a_failed_provenance_write_fails_the_run": "its provenance write is planted to fail",
     "provenance_check_test::test_a_committed_key_whose_activity_was_never_written_is_named": "it removes a document",
-    "provenance_check_test::test_a_key_executed_twice_is_named": "it adds a second execution",
+    "provenance_check_test::test_a_writer_records_at_most_one_reuse_per_item_per_attempt": "it adds a second Reuse",
     "provenance_check_test::test_a_failed_job_and_a_dead_item_are_not_committed_keys": "it rewrites outcomes",
     "provenance_check_test::test_status_check_provenance_exits_zero_for_a_complete_run_and_one_otherwise": (
         "it removes a document"

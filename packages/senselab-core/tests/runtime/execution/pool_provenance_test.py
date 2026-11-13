@@ -34,25 +34,29 @@ def stack(tmp_path: Path) -> Iterator[None]:
 
 
 @pytest.mark.contract
-def test_a_worker_with_its_own_store_leaves_one_execution_per_item_and_a_reuse_on_rerun(tmp_path: Path) -> None:
+def test_a_worker_with_its_own_store_leaves_one_execution_per_item_and_a_reuse_on_rerun(
+    tmp_path: Path, clock: ManualClock
+) -> None:
     """N items served by a worker whose store is not the coordinator's: N keyed executions; the rerun, N reuses."""
     texts = [f"t{i}" for i in range(4)]
     first = Run(tmp_path, "first", texts)
-    first.serve(first.worker_store())
+    first.serve(first.worker_store(), clock)
     read = ProvStore.read(first.run_dir)
     executions = executions_in(read)
     assert len(read.plans()) == 1 and len(executions) == 4 and not reuses_in(read)
     assert len(set(keys_of(executions))) == 4
 
     again = Run(tmp_path, "again", texts)
-    again.serve(again.worker_store())
+    again.serve(again.worker_store(), clock)
     rerun = ProvStore.read(again.run_dir)
     assert len(rerun.plans()) == 1 and len(reuses_in(rerun)) == 4 and not executions_in(rerun)
     assert keys_of(reuses_in(rerun)) == keys_of(executions)
 
 
 @pytest.mark.contract
-def test_a_worker_killed_after_k_written_claims_leaves_those_executions_on_disk(tmp_path: Path) -> None:
+def test_a_worker_killed_after_k_written_claims_leaves_those_executions_on_disk(
+    tmp_path: Path, clock: ManualClock
+) -> None:
     """A kill leaves the disk as an item starts: the first claim's execution is there by the time the next runs."""
     run = Run(tmp_path, "run", [f"t{i}" for i in range(5)])
     on_disk: dict[int, int] = {}
@@ -60,13 +64,15 @@ def test_a_worker_killed_after_k_written_claims_leaves_those_executions_on_disk(
     def killed_before(n: int) -> None:
         on_disk[n] = len(executions_in(ProvStore.read(run.run_dir))) if (run.run_dir / PROV_DIR).exists() else 0
 
-    run.serve(run.worker_store(), before=killed_before)
+    run.serve(run.worker_store(), clock, before=killed_before)
     assert on_disk[0] == 0 and on_disk[1] == 1 and all(on_disk[n] >= 1 for n in range(1, 5))
     assert len(executions_in(ProvStore.read(run.run_dir))) == 5 and len(ProvStore.read(run.run_dir).plans()) == 1
 
 
 @pytest.mark.contract
-def test_two_workers_write_a_document_per_claim_whose_union_is_every_item_once(tmp_path: Path) -> None:
+def test_two_workers_write_a_document_per_claim_whose_union_is_every_item_once(
+    tmp_path: Path, clock: ManualClock
+) -> None:
     """Two workers with their own stores serve one run: a writer document per claim, each item's execution once."""
     run = Run(tmp_path, "run", [f"t{i}" for i in range(5)])
     stores = [run.worker_store(), run.worker_store()]
@@ -80,7 +86,7 @@ def test_two_workers_write_a_document_per_claim_whose_union_is_every_item_once(t
 
     workers.append(PoolWorker(run.pool_dir, ["cpu"], profile=PROFILE, store=stores[0], send=send))
     assert workers[0].serve() == 0
-    run.serve(stores[1])
+    run.serve(stores[1], clock)
     documents = {p.name for p in (run.run_dir / PROV_DIR).iterdir()}
     assert {f"{s.provenance.writer}.jsonld" for s in stores} <= documents and len(documents) >= len(stores)
     union = ProvStore.read(run.run_dir)
@@ -197,7 +203,7 @@ def test_a_worker_killed_at_run_end_leaves_an_activity_for_every_committed_item(
     texts = [f"t{i}" for i in range(4)]
     if stored:
         earlier = Run(tmp_path, "earlier", texts)
-        earlier.serve(earlier.worker_store())
+        earlier.serve(earlier.worker_store(), clock)
     run = Run(tmp_path, "run", texts)
     digests = _items(run)
     provenance = _KilledAtRunEnd(run, digests)

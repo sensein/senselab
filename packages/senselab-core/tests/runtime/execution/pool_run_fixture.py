@@ -1,10 +1,12 @@
 """A run of `TASK` items served by real `PoolWorker`s over one run directory: the pool provenance tests' scaffold."""
 
 import json
+import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from epoch_fixture import prepared
+from lease_clock_fixture import ManualClock
 from pool_stack_fixture import planned, scoring
 from senselab_core.kernel import prov as kprov
 from senselab_core.runtime.call import RunConfig
@@ -71,8 +73,8 @@ class Run:
                 fragment.model_copy(update={"placement": placement})
             )
 
-    def serve(self, store: ResultStore, before: Callable[[int], None] | None = None) -> None:
-        """Serve the queue with a worker of `store`; `before(n)` runs as the n-th item (from 0) is about to execute."""
+    def serve(self, store: ResultStore, clock: ManualClock, before: Callable[[int], None] | None = None) -> None:
+        """Serve the queue with a worker of `store` on `clock`; `before(n)` runs as item n starts."""
         seen: list[int] = []
 
         def send(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
@@ -81,7 +83,12 @@ class Run:
             seen.append(len(jobs))
             return execute(jobs, placement, store=store, run=RunConfig(), profile=self.profile, workers=WORKERS)
 
-        assert PoolWorker(self.pool_dir, ["cpu"], profile=self.profile, store=store, send=send).serve() == 0
+        worker = PoolWorker(self.pool_dir, ["cpu"], profile=self.profile, store=store, send=send, clock=clock)
+        ended: list[int] = []
+        thread = threading.Thread(target=lambda: ended.append(worker.serve()), daemon=True)
+        thread.start()
+        clock.drive(thread, self.profile.pool.poll_s)
+        assert ended == [0]
 
     def worker_store(self) -> ResultStore:
         """Return a store over the run's results with its own provenance, as a worker process builds."""
