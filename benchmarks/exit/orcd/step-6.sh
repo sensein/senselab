@@ -37,7 +37,7 @@ if [ "$PHASE" = prepare ]; then
   exit $?
 fi
 [ -f "$STATE/call.json" ] || { echo "no $STATE/call.json: save the agent's answer there" >&2; exit 2; }
-orcd_watched "$OUT/run.log" senselab- uv run --no-sync python benchmarks/exit/agent_plan.py run --call "$STATE/call.json" \
+orcd_watched "$OUT/run.log" "runs:$WORK/data/cache/agent-*-pool-slurm/2x/runs/*" uv run --no-sync python benchmarks/exit/agent_plan.py run --call "$STATE/call.json" \
   --work "$WORK/data" --profile "$PROFILE" --executor pool-slurm --out "$OUT/agent-result.json"
 STATUS=$?
 orcd_driver agent-ran --out "$WORK/verdict.json" --result "$OUT/agent-result.json" --status "$STATUS"

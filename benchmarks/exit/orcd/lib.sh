@@ -75,14 +75,22 @@ orcd_driver() {
   uv run --no-sync python "$WORK/checkout/benchmarks/exit/orcd_driver.py" "$@"
 }
 
-# orcd_watched LOG PREFIX COMMAND...: run COMMAND with its output teed to LOG under the no-progress watchdog
+# orcd_watched LOG SELECTOR COMMAND...: run COMMAND with its output teed to LOG under the no-progress watchdog
 # (benchmarks/exit/stall.py). It is stopped, and the script exits 3 with a failing verdict, once the committed count of
-# its last `progress:` line has not changed for STALL_S seconds (default 1800) while no Slurm job named PREFIX* is queued
-# or running. A `squeue` that fails is not read as "no job". Otherwise it returns COMMAND's status.
+# its last `progress:` line has not changed for STALL_S seconds (default 1800) while none of the run's Slurm jobs is
+# queued or running. A `squeue` that fails is not read as "no job". SELECTOR names the run's jobs: `prefix:P` (jobs named
+# P*, when the run's hash is known) or `runs:GLOB` (the run directories COMMAND creates; from the moment one exists
+# the watchdog counts only the jobs `exitlib.slurm_prefix` gives it, another run's jobs under the same login do not
+# count; until then any `senselab-` job does). Otherwise it returns COMMAND's status.
 orcd_watched() {
-  local log="$1" prefix="$2" rc=0
+  local log="$1" selector="$2" rc=0 where=()
   shift 2
-  orcd_driver watch --log "$log" --prefix "$prefix" --stall-s "${STALL_S:-1800}" --verdict "$WORK/verdict.json" -- "$@" || rc=$?
+  case "$selector" in
+    prefix:*) where=(--prefix "${selector#prefix:}") ;;
+    runs:*) where=(--runs-glob "${selector#runs:}" --profile "$PROFILE") ;;
+    *) echo "orcd_watched: selector is prefix:P or runs:GLOB" >&2; exit 2 ;;
+  esac
+  orcd_driver watch --log "$log" "${where[@]}" --stall-s "${STALL_S:-1800}" --verdict "$WORK/verdict.json" -- "$@" || rc=$?
   if [ "$rc" = 3 ] && grep -q '"no progress' "$WORK/verdict.json" 2>/dev/null; then exit 3; fi
   return "$rc"
 }

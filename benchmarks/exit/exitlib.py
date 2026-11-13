@@ -129,9 +129,12 @@ def build_tree(step: Step, work: Path) -> Path:
     if (root / "dataset_description.json").is_file():
         return root
     if step.tree == "synthetic" and step.seed is not None:
-        return bids_tree.synthetic(root, step.items, step.seed)
+        laid: Path = bids_tree.synthetic(root, step.items, step.seed)
+        return laid
     if step.tree == "librispeech" and step.manifest is not None:
-        return bids_tree.from_librispeech(root, ROOT / "benchmarks" / "manifests" / f"{step.manifest}.yaml", step.items)
+        manifest = ROOT / "benchmarks" / "manifests" / f"{step.manifest}.yaml"
+        fetched: Path = bids_tree.from_librispeech(root, manifest, step.items)
+        return fetched
     raise ValueError(f"tree {step.tree!r} with manifest {step.manifest!r} is not one this harness lays")
 
 

@@ -36,7 +36,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-import yaml
+from senselab_core.runtime.config import dump_yaml, load_yaml
 
 CHECKOUT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(CHECKOUT / "benchmarks" / "exit"), str(CHECKOUT / "benchmarks" / "scale")]
@@ -91,7 +91,7 @@ def slurm_limit_s(partition: str) -> float | None:
 
 def cmd_profile(args: argparse.Namespace) -> int:
     """Copy the site profile to `--out`; refuse a checked class whose time_s passes its partition's limit."""
-    document = yaml.safe_load(args.src.read_text(encoding="utf-8"))
+    document = load_yaml(args.src, "site profile")
     classes = document["resource_classes"]
     chosen = set(args.classes.split(",")) if args.classes else set(classes)
     refused = []
@@ -111,7 +111,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
     if refused:
         print("REFUSED: " + "; ".join(refused) + "; set WORKER_TIME_S to a value the partition allows", file=sys.stderr)
         return 2
-    args.out.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    args.out.write_text(dump_yaml(document), encoding="utf-8")
     return 0
 
 
@@ -414,9 +414,9 @@ def cmd_r253(args: argparse.Namespace) -> int:
     import ladder  # noqa: PLC0415
     from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415
 
-    site = yaml.safe_load(args.profile.read_text(encoding="utf-8"))
-    laptop = yaml.safe_load(
-        (CHECKOUT / "packages/senselab-core/src/senselab_core/runtime/data/profiles/laptop.yaml").read_text()
+    site = load_yaml(args.profile, "site profile")
+    laptop = load_yaml(
+        CHECKOUT / "packages/senselab-core/src/senselab_core/runtime/data/profiles/laptop.yaml", "laptop"
     )
     check = Checks()
     pooled: list[tuple[int, float]] = []
@@ -433,10 +433,10 @@ def cmd_r253(args: argparse.Namespace) -> int:
         document["calibration"]["single_item_jobs"] = single
         document["resource_classes"]["cpu"]["max_workers"] = args.workers
         path = args.work / f"profile-{label}.yaml"
-        path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+        path.write_text(dump_yaml(document), encoding="utf-8")
         suite = args.work / f"suite-{label}.yaml"
         suite.write_text(
-            yaml.safe_dump(
+            dump_yaml(
                 {
                     "format": "scale-suite@2.0",
                     "name": f"r253-{label}",
@@ -625,15 +625,26 @@ def cmd_agent_ran(args: argparse.Namespace) -> int:
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
-    """Run the command after `--` under the no-progress watchdog; exit with its status, or 3 and a failing verdict."""
+    """Run the command after `--` under the no-progress watchdog; exit with its status, or 3 and a failing verdict.
+
+    With `--runs-glob` (the run directories the command creates) and `--profile`, the watchdog counts only the Slurm
+    jobs of those runs, from the moment a run directory exists; until then, and without it, any job of `--prefix`.
+    """
     import stall  # noqa: PLC0415 - found through the checkout
 
     argv = args.argv_rest[1:] if args.argv_rest[:1] == ["--"] else args.argv_rest
     if not argv:
         print("watch needs a command after --", file=sys.stderr)
         return 2
+    prefixes = stall.run_prefixes(args.runs_glob, args.profile) if args.runs_glob else None
     done = stall.watched(
-        argv, args.log, stall_s=args.stall_s, poll_s=args.poll_s, prefix=args.prefix, timeout_s=args.timeout_s
+        argv,
+        args.log,
+        stall_s=args.stall_s,
+        poll_s=args.poll_s,
+        prefix=args.prefix,
+        timeout_s=args.timeout_s,
+        prefixes=prefixes,
     )
     if done.stalled is not None:
         stall.write_stall_verdict(args.verdict, done.stalled)
@@ -653,7 +664,7 @@ def cmd_prefix(args: argparse.Namespace) -> int:
 
 def cmd_get(args: argparse.Namespace) -> int:
     """Print the value at the dotted `--key` of a JSON or YAML file; exit 1 when it is absent."""
-    value: Any = yaml.safe_load(args.file.read_text(encoding="utf-8"))
+    value: Any = load_yaml(args.file, "document")
     for part in args.key.split("."):
         if not isinstance(value, dict) or part not in value:
             print(f"{args.file} has no {args.key}", file=sys.stderr)
@@ -759,6 +770,8 @@ def build_parser() -> argparse.ArgumentParser:
         ("--log", path),
         ("--verdict", path),
         ("--prefix", {"default": "senselab-"}),
+        ("--runs-glob", {}),
+        ("--profile", {"type": Path}),
         ("--stall-s", {"type": float, "default": 1800.0}),
         ("--poll-s", {"type": float, "default": 60.0}),
         ("--timeout-s", {"type": float, "default": 60.0}),

@@ -25,7 +25,7 @@ mkdir -p "$W"
 set +e
 uv run --no-sync python benchmarks/exit/stt_identity.py plan --work "$W" --profile "$PROFILE" 2>&1 | tee "$OUT/plan.log"
 PLAN=${PIPESTATUS[0]}
-orcd_watched "$OUT/run.log" senselab- uv run --no-sync python benchmarks/exit/stt_identity.py run --work "$W" \
+orcd_watched "$OUT/run.log" "runs:$W/cache/stt-*-pool-slurm/2x/runs/*" uv run --no-sync python benchmarks/exit/stt_identity.py run --work "$W" \
   --profile "$PROFILE" --executor pool-slurm --out "$OUT/orcd-pool.json"
 RUN=$?
 orcd_driver identity --out "$WORK/verdict.json" --plan-log "$OUT/plan.log" --plan-status "$PLAN" \

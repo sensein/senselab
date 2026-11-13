@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -17,15 +18,23 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import numpy
 import pytest
 from exit_fake_stack_fixture import fake_stack  # noqa: F401 - a fixture of every test here
 from senselab_core.kernel.declare import TaskSpec
+from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity
+from senselab_core.kernel.wire import WIRE_FORMATS, wire_form
+from senselab_core.runtime.audio_io import READER
 from senselab_core.runtime.call import TaskCall
+from senselab_core.runtime.compare import RunConfigFile
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.envs import read_lock_inputs
 from senselab_core.runtime.execution.events import read_events, run_dir_of
+from senselab_core.runtime.execution.run import RESULTS_DIR
 from senselab_core.runtime.planner import plan
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.store import ResultStore
+from senselab_core.testing.values import samples_of
 
 ROOT = Path(__file__).resolve().parents[4]
 EXIT = ROOT / "benchmarks" / "exit"
@@ -223,6 +232,28 @@ def test_the_watch_command_writes_the_verdict_and_exits_three(tmp_path: Path, mo
     assert _drive("watch", "--log", str(tmp_path / "x.log"), "--verdict", str(tmp_path / "x.json")) == 2
 
 
+@pytest.mark.logic
+def test_another_runs_jobs_do_not_hide_a_stall(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Watched by run directory: only another run's `senselab-` jobs in the queue is a stall; the run's own is not."""
+    runs = tmp_path / "cache" / "ns" / "runs"
+    (runs / ("d" * 64)).mkdir(parents=True)
+    own = exitlib.slurm_prefix(exitlib.load_profile(str(CLUSTER)), runs / ("d" * 64), "d" * 64)
+    other = "senselab-ffffffffffff-00000000-"
+    listing = {"jobs": f"99|RUNNING|x|{other}0-tok-e1\n"}
+    monkeypatch.setattr(exitlib, "squeue", lambda argv, timeout_s: listing["jobs"])
+    common = ["watch", "--log", str(tmp_path / "w.log"), "--verdict", str(tmp_path / "v.json")]
+    common += ["--runs-glob", str(runs / "*"), "--profile", str(CLUSTER), "--stall-s", "0.4", "--poll-s", "0.05", "--"]
+    assert _drive(*common, *_command(_SILENT)) == stall.EXIT_STALLED
+    assert own in _verdict(tmp_path / "v.json")["failed"][0]
+    listing["jobs"] = f"98|PENDING|x|{own}0-tok-e1\n"
+    (tmp_path / "v.json").unlink()
+    assert _drive(*common, *_command(_BRIEF)) == 0 and not (tmp_path / "v.json").exists()
+    for each in runs.iterdir():  # before the run directory exists any `senselab-` job counts, as it did
+        shutil.rmtree(each)
+    listing["jobs"] = f"99|RUNNING|x|{other}0-tok-e1\n"
+    assert _drive(*common, *_command(_BRIEF)) == 0
+
+
 # --- the join helper and the reuse diagnostic -------------------------------------------------------------------
 
 
@@ -413,13 +444,72 @@ def test_identity_checks_the_run_against_its_plan_and_the_laptops_outputs(
     ]
     args += ["--run-status", "0", "--items", str(ITEMS), "--expect-hash", fake_run.hash, "--require-class", "gpu:h100"]
     assert _drive(*args, "--laptop", str(laptop)) == 0
-    first = next(iter(identities))
-    laptop.write_text(json.dumps({**document, "identities": {**identities, first: "output:" + "f" * 64}}))
-    cache = Path(os.environ["SENSELAB_CACHE"])
-    assert _drive(*args, "--laptop", str(laptop), "--laptop-cache", str(cache), "--cache", str(cache)) == 1
-    assert "not in the laptop's store" in _verdict(out)["failed"][0] or _verdict(out)["failed"]
     plan_log.write_text("no hash here\n")
     assert _drive(*args) == 1
+
+
+def _series(scale: float) -> dict[str, object]:
+    """The output of one resampled record: a regular group, its samples scaled by `scale`."""
+    group = wire_form(samples_of(WIRE_FORMATS["regular-group@3.0"])[0], READER)
+    return {"series": {**group, "data": numpy.asarray(group["data"]) * scale}}
+
+
+KEY = LogicalKey(
+    task="resample", task_version="1", backend="b", backend_version="1", params={}, backend_params={},
+    model=ModelIdentity(id="o/m", identity="0" * 40), inputs={"series": "content:" + "a" * 64},
+)  # fmt: skip
+CONTEXT = ExecutionContext(
+    env_lock="lock", platform="linux", wheel_set="w", numerics={}, decoder=None, driver={}, host="h", protocol="p",
+    model_source="local", env_license=None,
+)  # fmt: skip
+
+
+def _compare_step2(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, run_scale: float) -> list[str]:
+    """Return what `_array_differences` reports for a laptop output against one scaled by `run_scale`.
+
+    Both outputs are committed to real result stores, one for the laptop and one for this run; r1 has equal identities.
+    """
+    stores = {name: ResultStore(tmp_path / name / "cache" / RESULTS_DIR) for name in ("laptop", "run")}
+    identity = {
+        "laptop": stores["laptop"].put(KEY, _series(1.0), CONTEXT),
+        "run": stores["run"].put(KEY, _series(run_scale), CONTEXT),
+    }
+    monkeypatch.setattr(orcd_driver, "_keyed_outputs", lambda cache, plan_hash: {"r0": (KEY.digest(), identity["run"])})
+    laptop = {"step": "resample", "hash": "h", "identities": {"r0": identity["laptop"], "r1": "output:c"}}
+    run = {"step": "resample", "hash": "h", "identities": {"r0": identity["run"], "r1": "output:c"}}
+    cache = {name: tmp_path / name / "cache" for name in stores}
+    return orcd_driver._array_differences(laptop, run, cache["laptop"], cache["run"])  # type: ignore[no-any-return]  # noqa: SLF001
+
+
+@pytest.mark.contract
+def test_step_2_accepts_arrays_that_agree_under_the_samples_threshold(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A record whose identity differs by a rounding step (below atol 1e-6 of `samples`) agrees; r1 is equal unread."""
+    assert _compare_step2(monkeypatch, tmp_path, 1.0 + 1e-8) == []
+
+
+@pytest.mark.contract
+def test_step_2_names_the_record_whose_arrays_differ_beyond_the_samples_threshold(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Samples off by a part in a thousand fail, naming the record, the leaf, the amount and the threshold."""
+    lines = _compare_step2(monkeypatch, tmp_path, 1.001)
+    assert len(lines) == 1 and lines[0].startswith("r0: series.data differs by ")
+    assert lines[0].endswith(" under samples")
+    assert RunConfigFile.load().thresholds.by_name["samples"].atol == 1e-6  # the packaged bound the driver reads
+
+
+@pytest.mark.contract
+def test_step_2_reports_an_identity_the_laptops_store_lacks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A laptop identity absent from its result store is named, not passed over."""
+    run_store = ResultStore(tmp_path / "run" / "cache" / RESULTS_DIR)
+    identity = run_store.put(KEY, _series(1.0), CONTEXT)
+    monkeypatch.setattr(orcd_driver, "_keyed_outputs", lambda cache, plan_hash: {"r0": (KEY.digest(), identity)})
+    run = {"step": "resample", "hash": "h", "identities": {"r0": identity}}
+    laptop = {**run, "identities": {"r0": "output:" + "e" * 64}}
+    found = orcd_driver._array_differences(laptop, run, tmp_path / "laptop" / "cache", tmp_path / "run" / "cache")  # noqa: SLF001
+    assert found == [f"r0: outputs not in the laptop's store under key {KEY.digest()}"]
 
 
 @pytest.mark.logic

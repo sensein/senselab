@@ -6,6 +6,7 @@ has not changed for `stall_s` seconds and no Slurm job of the run is queued or r
 an empty queue: it is no evidence, and the command is left to run.
 """
 
+import glob
 import json
 import os
 import re
@@ -38,14 +39,36 @@ def last_committed(log: Path) -> int | None:
     return int(found[-1]) if found else None
 
 
-def has_live_jobs(
-    prefix: str, timeout_s: float, run: Callable[[list[str], float], str] = exitlib.squeue
-) -> bool | None:
+def has_live_jobs(prefix: str, timeout_s: float, run: Callable[[list[str], float], str] | None = None) -> bool | None:
     """Return whether this user has a live Slurm job named `prefix*`, None when `squeue` could not be read."""
     try:
-        return bool(exitlib.slurm_job_ids(prefix, timeout_s, run))
+        return bool(exitlib.slurm_job_ids(prefix, timeout_s, run or exitlib.squeue))
     except (subprocess.SubprocessError, OSError):
         return None
+
+
+def run_prefixes(runs_glob: str, profile: Path) -> Callable[[], list[str]]:
+    """Return a function giving the Slurm job-name prefix of each run directory matching `runs_glob`, as it stands.
+
+    A run directory is named by its plan hash. The prefix is `exitlib.slurm_prefix`, the one the run's own jobs carry,
+    so another run's jobs under the same login are not this run's.
+    """
+    loaded = exitlib.load_profile(str(profile))
+
+    def prefixes() -> list[str]:
+        return [
+            exitlib.slurm_prefix(loaded, Path(r), Path(r).name)
+            for r in sorted(glob.glob(runs_glob))
+            if Path(r).is_dir()
+        ]
+
+    return prefixes
+
+
+def _any_live(prefixes: Sequence[str], timeout_s: float, live: Callable[[str, float], bool | None]) -> bool | None:
+    """Return True when a job of any prefix is live, else None when any listing failed, else False."""
+    answers = [live(prefix, timeout_s) for prefix in prefixes]
+    return True if True in answers else (None if None in answers else False)
 
 
 @dataclass
@@ -67,7 +90,7 @@ class Stall:
             return None
         return (
             f"committed unchanged at {'none' if self.committed is None else self.committed} for {idle:.0f} s "
-            f"and no job named {self.prefix}* in squeue"
+            f"and no job named {self.prefix} in squeue"
         )
 
 
@@ -113,6 +136,7 @@ def watched(  # noqa: PLR0913 - the command, its log, the rule, then the three c
     prefix: str,
     timeout_s: float,
     live: Callable[[str, float], bool | None] | None = None,
+    prefixes: Callable[[], list[str]] | None = None,
     clock: Callable[[], float] = time.monotonic,
     grace_s: float = 30.0,
 ) -> Watched:
@@ -122,11 +146,15 @@ def watched(  # noqa: PLR0913 - the command, its log, the rule, then the three c
     )
     pump = threading.Thread(target=_pump, args=(process, log), name="stall-pump", daemon=True)
     pump.start()
-    rule = Stall(stall_s, prefix, clock())
+    rule = Stall(stall_s, f"{prefix}*", clock())
     stalled = None
     while process.poll() is None and stalled is None:
         time.sleep(poll_s)
-        stalled = rule.observe(clock(), last_committed(log), lambda: (live or has_live_jobs)(prefix, timeout_s))
+        current = (prefixes() if prefixes else []) or [prefix]
+        rule.prefix = " or ".join(f"{p}*" for p in current)
+        stalled = rule.observe(
+            clock(), last_committed(log), lambda: _any_live(current, timeout_s, live or has_live_jobs)
+        )
     if stalled is not None:
         print(f"WATCHDOG: {stalled}; stopping the command", file=sys.stderr, flush=True)
         _stop(process, grace_s)

@@ -37,7 +37,7 @@ if [ "$PHASE" = start ]; then
   [ ! -e "$STATE" ] || { echo "$STATE exists; set FRESH=1 to remove it" >&2; exit 2; }
   mkdir -p "$STATE"
   set +e
-  orcd_watched "$OUT/start.log" senselab- uv run --no-sync python benchmarks/exit/interrupt_resume.py start \
+  orcd_watched "$OUT/start.log" "runs:$STATE/cache/stt/2x/runs/*" uv run --no-sync python benchmarks/exit/interrupt_resume.py start \
     --work "$STATE" --profile "$PROFILE" --out "$STATE/start.json"
   STATUS=$?
   cp "$STATE/start.json" "$OUT/" 2>/dev/null
@@ -50,7 +50,7 @@ PREFIX=$(orcd_driver prefix --work "$STATE" --profile "$PROFILE" --hash "$HASH")
 [ -n "$PREFIX" ] || { echo "could not compute the run's Slurm job prefix" >&2; exit 2; }
 set +e
 : > "$OUT/resume.log"
-orcd_watched "$OUT/resume.log" "$PREFIX" uv run --no-sync python benchmarks/exit/interrupt_resume.py resume "$HASH" \
+orcd_watched "$OUT/resume.log" "prefix:$PREFIX" uv run --no-sync python benchmarks/exit/interrupt_resume.py resume "$HASH" \
   --work "$STATE" --profile "$PROFILE" --out "$OUT/resume.json"
 STATUS=$?
 cp "$STATE/start.json" "$OUT/" 2>/dev/null
