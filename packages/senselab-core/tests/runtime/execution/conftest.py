@@ -37,7 +37,6 @@ UNCHECKED = {
     "run_test::test_a_failed_provenance_write_fails_the_run": "its provenance write is planted to fail",
     "provenance_check_test::test_a_committed_key_whose_activity_was_never_written_is_named": "it removes a document",
     "provenance_check_test::test_a_writer_records_at_most_one_reuse_per_item_per_attempt": "it adds a second Reuse",
-    "provenance_check_test::test_a_failed_job_and_a_dead_item_are_not_committed_keys": "it rewrites outcomes",
     "provenance_check_test::test_status_check_provenance_exits_zero_for_a_complete_run_and_one_otherwise": (
         "it removes a document"
     ),

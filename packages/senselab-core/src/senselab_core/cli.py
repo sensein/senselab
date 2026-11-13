@@ -361,7 +361,10 @@ def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
     status.add_argument(
         "--check-provenance",
         action="store_true",
-        help="also check each committed key has an execution or a Reuse and none has two executions; exit 1 if not",
+        help=(
+            "also check ADR-010: each committed key has an execution or a Reuse, and no writer records more Reuse "
+            "of a key than the run has jobs with it; exit 1 if not"
+        ),
     )
     status.set_defaults(run=run_status)
     planning = groups.add_parser("plan", help="what each resource class of a run needs, as placement-request@1.0")
