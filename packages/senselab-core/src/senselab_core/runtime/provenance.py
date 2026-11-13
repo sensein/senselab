@@ -171,6 +171,11 @@ class ProvStore:
             self._writer = (os.getpid(), uuid.uuid4().hex)
         return self._writer[1]
 
+    def restart(self) -> None:
+        """Forget every record held and take a new writer id, so the next `write` makes a document of its own."""
+        self._writer = (os.getpid(), uuid.uuid4().hex)
+        self._records = {}
+
     def add(self, *records: kprov.Record) -> None:
         """Hold each record and the files it names; a record already held under its `@id` is kept once.
 
