@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -252,6 +253,61 @@ def test_another_runs_jobs_do_not_hide_a_stall(tmp_path: Path, monkeypatch: pyte
         shutil.rmtree(each)
     listing["jobs"] = f"99|RUNNING|x|{other}0-tok-e1\n"
     assert _drive(*common, *_command(_BRIEF)) == 0
+
+
+@pytest.mark.logic
+def test_a_failed_prefix_computation_is_logged_and_retried_and_the_watch_goes_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`slurm_prefix` raises OSError once: the watch logs it, counts any `senselab-` job, then stalls on its own."""
+    runs = tmp_path / "cache" / "ns" / "runs"
+    (runs / ("d" * 64)).mkdir(parents=True)
+    real = exitlib.slurm_prefix
+    calls: list[int] = []
+
+    def flaky(profile: Any, run_dir: Path, plan_hash: str) -> str:  # noqa: ANN401 - the profile
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("stale file handle")
+        return str(real(profile, run_dir, plan_hash))
+
+    monkeypatch.setattr(exitlib, "slurm_prefix", flaky)
+    other = "99|RUNNING|x|senselab-ffffffffffff-00000000-0-t-e1\n"
+    monkeypatch.setattr(exitlib, "squeue", lambda argv, timeout_s: other)
+    common = ["watch", "--log", str(tmp_path / "w.log"), "--verdict", str(tmp_path / "v.json")]
+    common += ["--runs-glob", str(runs / "*"), "--profile", str(CLUSTER), "--stall-s", "0.4", "--poll-s", "0.05", "--"]
+    assert _drive(*common, *_command(_SILENT)) == stall.EXIT_STALLED
+    assert len(calls) == 2  # computed again after the failure, then kept
+    assert "stale file handle" in capsys.readouterr().err
+    assert "senselab-dddddddddddd" in _verdict(tmp_path / "v.json")["failed"][0]
+
+
+@pytest.mark.logic
+def test_an_unexpected_error_in_the_watch_loop_stops_the_child_then_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loop raises: the child's group is stopped first, so no coordinator is left running unwatched."""
+    pid_file = tmp_path / "pid"
+    code = "import os, pathlib, sys, time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)"
+
+    def failing(log: Path) -> int | None:
+        while not pid_file.exists() or not pid_file.read_text():
+            time.sleep(0.01)  # the child is up before the loop fails
+        raise RuntimeError("the log could not be read")
+
+    monkeypatch.setattr(stall, "last_committed", failing)
+    with pytest.raises(RuntimeError, match="could not be read"):
+        stall.watched(
+            [sys.executable, "-c", code, str(pid_file)],
+            tmp_path / "w.log",
+            stall_s=60.0,
+            poll_s=0.05,
+            prefix="senselab-",
+            timeout_s=1.0,
+            grace_s=5.0,
+        )
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
 
 
 # --- the join helper and the reuse diagnostic -------------------------------------------------------------------

@@ -51,16 +51,23 @@ def run_prefixes(runs_glob: str, profile: Path) -> Callable[[], list[str]]:
     """Return a function giving the Slurm job-name prefix of each run directory matching `runs_glob`, as it stands.
 
     A run directory is named by its plan hash. The prefix is `exitlib.slurm_prefix`, the one the run's own jobs carry,
-    so another run's jobs under the same login are not this run's.
+    so another run's jobs under the same login are not this run's. Each is computed once, when its directory first
+    appears (the computation writes a profile file into the run directory), and kept; one that fails is logged and
+    tried again on the next call, and does not drop the others.
     """
     loaded = exitlib.load_profile(str(profile))
+    known: dict[str, str] = {}
 
     def prefixes() -> list[str]:
-        return [
-            exitlib.slurm_prefix(loaded, Path(r), Path(r).name)
-            for r in sorted(glob.glob(runs_glob))
-            if Path(r).is_dir()
-        ]
+        for found in sorted(glob.glob(runs_glob)):
+            run = Path(found)
+            if found in known or not run.is_dir():
+                continue
+            try:
+                known[found] = exitlib.slurm_prefix(loaded, run, run.name)
+            except Exception as error:  # noqa: BLE001 - the watchdog must outlive any one failed computation
+                print(f"WATCHDOG: no prefix for {found} yet: {error!r}", file=sys.stderr, flush=True)
+        return list(known.values())
 
     return prefixes
 
@@ -148,16 +155,19 @@ def watched(  # noqa: PLR0913 - the command, its log, the rule, then the three c
     pump.start()
     rule = Stall(stall_s, f"{prefix}*", clock())
     stalled = None
-    while process.poll() is None and stalled is None:
-        time.sleep(poll_s)
-        current = (prefixes() if prefixes else []) or [prefix]
-        rule.prefix = " or ".join(f"{p}*" for p in current)
-        stalled = rule.observe(
-            clock(), last_committed(log), lambda: _any_live(current, timeout_s, live or has_live_jobs)
-        )
-    if stalled is not None:
-        print(f"WATCHDOG: {stalled}; stopping the command", file=sys.stderr, flush=True)
-        _stop(process, grace_s)
+    try:
+        while process.poll() is None and stalled is None:
+            time.sleep(poll_s)
+            current = (prefixes() if prefixes else []) or [prefix]
+            rule.prefix = " or ".join(f"{p}*" for p in current)
+            stalled = rule.observe(
+                clock(), last_committed(log), lambda: _any_live(current, timeout_s, live or has_live_jobs)
+            )
+    finally:
+        if stalled is not None:
+            print(f"WATCHDOG: {stalled}; stopping the command", file=sys.stderr, flush=True)
+        if process.poll() is None:
+            _stop(process, grace_s)
     status = process.wait()
     pump.join()
     return Watched(EXIT_STALLED if stalled is not None else status, stalled)
