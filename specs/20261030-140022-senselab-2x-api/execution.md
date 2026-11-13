@@ -538,6 +538,17 @@ are recorded here (R-200).
   override the live epoch's results; its failures and blocks never decide a job's state, though a result it gave
   stands as an earlier result. The runner treats `StaleCoordinator` and `QueueHeld` as interruptions: no
   `fail_batch` and no `blocked` or `cancelled` for unsent jobs, which a later epoch runs.
+- **The epoch is the one exclusion of a run, for every executor (Task 24, T24-9; R-302).** No pydra lock excludes
+  coordinators: `SenselabStore` takes job leases that write no lock file, and each attempt's pydra files are under a
+  root of its own, `<run>/private/pydra/<attempt>/`, so two attempts never share a job directory or the lock pydra's
+  `save` takes beside it, and a lock a killed coordinator left is never on a later attempt's path. Both executors are
+  fenced: the `Pool` as below, and `InProcess`, bound by `bind_epoch` to the run's epoch, checks `Epoch.current()`
+  before each fragment and each batch and raises `StaleCoordinator` once a newer epoch is current, so an older attempt
+  releases no batch after a newer one binds; models it already loaded stay loaded until its worker set closes. A
+  `Run` that `start` made knows its attempt's epoch (`Run.epoch`). Once a newer epoch is current, `Run.status` reads
+  only the events of its own epoch and earlier and sets `RunStatus.superseded`; `Run.wait` raises the
+  `StaleCoordinator` that stopped the attempt, and `Run.results` raises `StaleCoordinator`, also for an attempt that
+  ended cleanly before it was superseded, instead of reading the newer attempt's events as its own.
 - **Epochs and the Pool (Task 14, ADR-003).** `runtime/execution/epoch.py`: `Epoch(run_dir).take()` makes
   `epoch/<n>` by `mkdir` from the highest directory (a number taken by another coordinator is skipped), writing the
   coordinator's whole `lease` section to `epoch/<n>/lease.json` at once; `current()` is the highest bound epoch. A coordinator (`start`, or `senselab coordinate
@@ -545,7 +556,7 @@ are recorded here (R-200).
   `epoch/<n>/ended` when it stops. `Run.wait` reports `interrupted` only while no thread of that `Run` is alive, the
   latest epoch ended or its lease (or, never held, its directory) is older than its bound (`Epoch.stopped`), and no
   claim on any of the run's queues is live; a running run is never reported interrupted. `Pool.submit`, every retry
-  and every poll of `results` raise `StaleCoordinator` once a newer epoch exists. `start` (and `Plan.run`) hands its
+  and every poll of `results` raise `StaleCoordinator` once a newer epoch exists, as `InProcess.submit` does. `start` (and `Plan.run`) hands its
   own epoch and attempt log to the executor through the protocol's `bind_epoch`, so a `Pool` built beforehand
   coordinates as that epoch and is never stale for the first coordinator. `results` polls from `pool.first_poll_s`,
   doubling up to `pool.poll_s`. A coordinator holds its epoch's lease from right after it takes the epoch (before
