@@ -8,7 +8,8 @@ rows. Each node's checksum is the job's senselab key digest (`job_checksum`), so
 batch size (`node_fragment`), or as one fragment to an executor that splits fragments, and raises on a failed
 element, so pydra fails only that element's descendants. A fragment is submitted and returns at once; one `Follower`
 thread per run polls every open fragment and settles each element as its result lands.
-`SenselabStore` holds the run's completion records; no result is pickled.
+`SenselabStore` holds the run's completion records; no result is pickled. Its job leases take no lock file: the
+run's coordinator epoch is the one exclusion of a run (ADR-003), so nothing a killed coordinator leaves stops a resume.
 """
 
 import asyncio
@@ -96,12 +97,28 @@ class RunOutcome:
         return not failed and not any(self.blocked.values())
 
 
+class _EpochLease(Lease):  # type: ignore[misc]
+    """pydra's lease of a job, held without a lock file: the run's coordinator epoch excludes other coordinators."""
+
+    def __enter__(self) -> "_EpochLease":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    async def __aenter__(self) -> "_EpochLease":
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+
 class SenselabStore:
     """pydra's `ResultStore` over one run: completion records in memory by checksum and context slot, never pickled.
 
     A job's results live in senselab's store, which the executor serves under the run's reuse policy; this store
     holds what pydra reads to resolve a downstream input and to mark a job done, and `lookup` returns a record of its
-    own context's slot only. `cache_root` holds only the leases and the workflow job's own files.
+    own context's slot only. `cache_root` holds only the workflow job's own files; a lease writes nothing there.
     """
 
     def __init__(self, cache_root: Path) -> None:
@@ -137,8 +154,8 @@ class SenselabStore:
         return self.cache_root / f"{checksum}-{context_key(context)}.lock"
 
     def acquire(self, checksum: str, context: Mapping[str, Any]) -> Lease:
-        """Return the lease of the job `checksum` in `context`."""
-        return Lease(checksum, self.cache_dir(checksum, context), self.lockfile(checksum, context))
+        """Return the lease of the job `checksum` in `context`: one that takes no lock (`_EpochLease`)."""
+        return _EpochLease(checksum, self.cache_dir(checksum, context), self.lockfile(checksum, context))
 
     def commit(self, lease: Lease, result: Result, job: object = None) -> None:  # noqa: ARG002
         """Record `result` as the job's held under `lease`."""

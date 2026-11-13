@@ -4,13 +4,17 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
-from epoch_fixture import prepared
-from pool_stack_fixture import planned
+from epoch_fixture import KILLED_HOLDERS, left_by_a_killed_coordinator, prepared
+from lease_clock_fixture import ManualClock
+from pool_stack_fixture import planned, unresolving
 from pool_test import (  # noqa: F401 - `stack` is autouse
     CHARGED,
+    CLASSES,
     CONTENT,
     SCORE,
     FakeWorkers,
+    _coordinator,
+    _planned,
     _pool,
     _profile,
     _stack,
@@ -18,14 +22,15 @@ from pool_test import (  # noqa: F401 - `stack` is autouse
 )
 from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.call import RunConfig
-from senselab_core.runtime.execution.events import read_events
+from senselab_core.runtime.execution.epoch import Epoch
+from senselab_core.runtime.execution.events import EventLog, read_events, run_dir_of
 from senselab_core.runtime.execution.executor import PlanFragment, follow
 from senselab_core.runtime.execution.in_process import node_fragment
-from senselab_core.runtime.execution.pool import split
-from senselab_core.runtime.execution.queue import item_digest, probe_queue
-from senselab_core.runtime.execution.run import stored_policy
+from senselab_core.runtime.execution.pool import Pool, split
+from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet, item_digest, probe_queue
+from senselab_core.runtime.execution.run import Output, stored_policy
 from senselab_core.runtime.licenses import LicensePolicy
-from senselab_core.runtime.planner import Plan
+from senselab_core.runtime.planner import Plan, resume
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.store import ResultStore
 
@@ -158,3 +163,62 @@ def test_coordinate_runs_under_the_policy_the_run_was_started_under(tmp_path: Pa
     config = run_plan(run_dir, profile).config
     assert config is not None and config.licenses == policy == stored_policy(run_dir)
     assert [r.failure for r in outcome.results["a"]] == [None]
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("holder", sorted(KILLED_HOLDERS))
+def test_a_resume_after_a_killed_coordinator_starts_a_worker_and_commits_every_live_item(
+    tmp_path: Path, clock: ManualClock, hang_s: float, holder: str
+) -> None:
+    """Epoch 1 put every item and was killed with no worker alive; epoch 2 starts one and follows each item to the end.
+
+    The killed coordinator's lock names a holder that cannot be proven dead; the resume neither waits on it nor puts
+    any job again.
+    """
+    pytest.importorskip("pydra")
+    profile = ExecutionProfile.load(
+        "laptop",
+        {
+            "devices": ["cpu"],
+            "resource_classes": CLASSES,
+            "pool": {"poll_s": 0.2, "quantum_items": 1},
+            "faults": CONTENT,
+        },
+    )
+    placed, values = _planned(profile, ["one", "two", "three", "four"])
+    run_dir = run_dir_of(placed.hash)
+    killed = FakeWorkers(run_dir, ResultStore(tmp_path / "store"), placed, values)
+    killed.ready = lambda: False
+    first = _coordinator(placed, profile, killed, tmp_path / "store")
+    try:
+        started = placed.run(first, store=first.store)
+        queue = first.queues.queue("cpu")
+        clock.until(lambda: queue.depth() == len(placed.manifest.rows), "epoch 1 put every item", step=0.0)
+        started.cancel()
+        started.wait(hang_s)
+    finally:
+        first.close()
+    old = {digest for digest, _ in queue.live_items()}
+    assert len(old) == 4 and not killed.live()
+    left_by_a_killed_coordinator(run_dir, holder)
+    workers = FakeWorkers(run_dir, ResultStore(tmp_path / "store"), placed, values)
+    second = Pool(
+        run_dir,
+        queues=QueueSet(run_dir / RUN_QUEUES, profile, lease=profile.lease, epoch=Epoch(run_dir).current),
+        store=ResultStore(tmp_path / "store"),
+        events=EventLog(run_dir, "a0", 1, epoch=0),
+        profile=profile,
+        substrate=workers,
+        epoch=0,
+        clock=clock,
+        resolver=unresolving(profile),
+    )
+    try:
+        resumed = resume(placed.hash, execution=profile, store=second.store, executor=second)
+        status = resumed.wait(hang_s)
+    finally:
+        second.close()
+        workers.stop()
+    assert status.done, f"the resume did not end within {hang_s} s: {status.counts}"
+    assert workers.names == {"cpu"} and {item_digest(f) for f in workers.served} == old
+    assert all(isinstance(o, Output) for _, o in resumed.results())

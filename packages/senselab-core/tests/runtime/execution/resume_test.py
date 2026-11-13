@@ -15,6 +15,7 @@ from typing import Any, ClassVar, cast
 import numpy
 import pytest
 import soundfile
+from epoch_fixture import left_by_a_killed_coordinator
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.signals import StaleSource
@@ -193,6 +194,19 @@ def test_resume_executes_only_missing(tmp_path: Path) -> None:
     assert sorted(p.name for p in (resumed.run_dir / "attempts").iterdir()) == ["1", "2"]
     with pytest.raises(NoRun, match="0" * 64):
         resume("0" * 64)
+
+
+def test_a_resume_on_another_host_runs_past_the_lock_its_killed_coordinator_left(tmp_path: Path, hang_s: float) -> None:
+    """The lock file pydra's workflow lease leaves when its coordinator is killed on another host stops no resume."""
+    store = ResultStore(tmp_path / "store")
+    placed = _plan(4)
+    stopped = placed.run(Stopping(store, 2), store=store)
+    with pytest.raises(RuntimeError, match="planted stop"):
+        stopped.wait(60)
+    left_by_a_killed_coordinator(stopped.run_dir, "another host")
+    resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
+    assert resumed.wait(hang_s).done
+    assert _kinds(_latest(resumed)) == ["cache_hit", "cache_hit", "finished", "finished"]
 
 
 @pytest.mark.contract
