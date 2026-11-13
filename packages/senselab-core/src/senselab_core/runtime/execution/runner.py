@@ -8,7 +8,10 @@ rows. Each node's checksum is the job's senselab key digest (`job_checksum`), so
 batch size (`node_fragment`), or as one fragment to an executor that splits fragments, and raises on a failed
 element, so pydra fails only that element's descendants. A fragment is submitted and returns at once; one `Follower`
 thread per run polls every open fragment and settles each element as its result lands.
-`SenselabStore` holds the run's completion records; no result is pickled.
+`SenselabStore` holds the run's completion records; no result is pickled. Its job leases take no lock file: the
+run's coordinator epoch is the one exclusion of a run (ADR-003). Each attempt has a pydra root of its own,
+`<work dir>/<attempt>`, so no two coordinators share a job directory or the lock pydra's `save` takes there, and
+nothing a killed coordinator leaves is on a later attempt's path.
 """
 
 import asyncio
@@ -96,12 +99,28 @@ class RunOutcome:
         return not failed and not any(self.blocked.values())
 
 
+class _EpochLease(Lease):  # type: ignore[misc]
+    """pydra's lease of a job, held without a lock file: the run's coordinator epoch excludes other coordinators."""
+
+    def __enter__(self) -> "_EpochLease":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    async def __aenter__(self) -> "_EpochLease":
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+
 class SenselabStore:
     """pydra's `ResultStore` over one run: completion records in memory by checksum and context slot, never pickled.
 
     A job's results live in senselab's store, which the executor serves under the run's reuse policy; this store
     holds what pydra reads to resolve a downstream input and to mark a job done, and `lookup` returns a record of its
-    own context's slot only. `cache_root` holds only the leases and the workflow job's own files.
+    own context's slot only. `cache_root` holds only the workflow job's own files; a lease writes nothing there.
     """
 
     def __init__(self, cache_root: Path) -> None:
@@ -133,12 +152,12 @@ class SenselabStore:
             yield self.cache_root / checksum / slot, result.context
 
     def lockfile(self, checksum: str, context: Mapping[str, Any]) -> Path:
-        """Return the lock file of the job `checksum` in `context`."""
+        """Return the name pydra's `ResultStore` gives the lock of job `checksum` in `context`; nothing writes it."""
         return self.cache_root / f"{checksum}-{context_key(context)}.lock"
 
     def acquire(self, checksum: str, context: Mapping[str, Any]) -> Lease:
-        """Return the lease of the job `checksum` in `context`."""
-        return Lease(checksum, self.cache_dir(checksum, context), self.lockfile(checksum, context))
+        """Return the lease of the job `checksum` in `context`: one that takes no lock (`_EpochLease`)."""
+        return _EpochLease(checksum, self.cache_dir(checksum, context), self.lockfile(checksum, context))
 
     def commit(self, lease: Lease, result: Result, job: object = None) -> None:  # noqa: ARG002
         """Record `result` as the job's held under `lease`."""
@@ -781,7 +800,7 @@ class PydraRunner:
         sharing its key with another job of the run is that job's reuse, or its failure (`_Run.serve_shared`). Each
         job's `queued`, `started` and `finished` or `failed` event is appended to `events`. Once `cancel` is set no
         further fragment is sent: running fragments finish and the run raises `RunCancelled`. While it runs,
-        `attempt_id()` is the attempt of `events`.
+        `attempt_id()` is the attempt of `events`. pydra's files are under `<work dir>/<attempt of events>`.
 
         Raises:
             ValueError: as `compile_plan`, or as `executor.admit`.
@@ -804,7 +823,8 @@ class PydraRunner:
     ) -> RunOutcome:
         if self.work_dir is None:
             private_dir(run_dir_of(placed.hash) / PRIVATE_DIR)
-        root = private_dir(self.work_dir if self.work_dir is not None else run_dir_of(placed.hash) / PYDRA_DIR)
+        base = private_dir(self.work_dir if self.work_dir is not None else run_dir_of(placed.hash) / PYDRA_DIR)
+        root = private_dir(base / events.attempt)
         store = store if store is not None else SenselabStore(root)
         admission = executor.admit(placed, values)
         cancel = cancel if cancel is not None else threading.Event()

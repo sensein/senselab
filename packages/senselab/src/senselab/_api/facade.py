@@ -155,6 +155,7 @@ def resume(
     Raises:
         NoRun, ValueError, InputChanged, InputsUnavailable: as `resume`; a run whose inputs were
             held in memory raises `InputsUnavailable`.
+        StaleCoordinator: a newer attempt of the run superseded this one.
     """
     plan_hash = target if isinstance(target, str) else target.run_dir.name if isinstance(target, Run) else target.hash
     current = session()

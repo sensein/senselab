@@ -174,7 +174,7 @@ def _claimer(root: str, args: argparse.Namespace, index: int) -> None:
                 continue
             (digest,) = claim.items
             claims += 1
-            record(event="claim", item=digest, slot=list(claim.slot(digest)), broke=claim.broke(digest))
+            record(event="claim", item=digest, slot=list(claim.slot(digest)), broke=len(claim.broke.get(digest, ())))
             if index == 0 and claims == args.crash_after:
                 record(event="disturb", item=digest, kind=args.crash_at)
                 if args.crash_at == "hold":

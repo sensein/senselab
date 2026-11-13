@@ -35,7 +35,7 @@ from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.kernel.signals import StaleSource
 from senselab_core.runtime.call import InputUnreadable, RunConfig, bind_input
 from senselab_core.runtime.clock import Clock, SystemClock
-from senselab_core.runtime.execution.epoch import EPOCH_DIR, Epoch, run_lease
+from senselab_core.runtime.execution.epoch import EPOCH_DIR, Epoch, StaleCoordinator, run_lease
 from senselab_core.runtime.execution.events import (
     Event,
     EventLog,
@@ -507,6 +507,7 @@ class Run:
 
     A run `start` made runs in a background thread; one opened over a directory (`Run(run_dir)`) reads what is on
     disk, written by any process. `store` is where the results are read from, by default the one the manifest names.
+    `epoch` is the epoch of the attempt `start` made, None for a run opened over a directory.
     """
 
     def __init__(
@@ -527,6 +528,7 @@ class Run:
         self._profile = profile if profile is not None else ExecutionProfile.packaged()
         self._pool = self._profile.pool
         self._thread: threading.Thread | None = None
+        self.epoch: int | None = None
         self._ended = threading.Event()
         self._cancel = threading.Event()
         self._error: BaseException | None = None
@@ -555,10 +557,18 @@ class Run:
         return read_events(self.run_dir)
 
     def status(self) -> RunStatus:
-        """Return the status derived from the events under the run's current epoch, and the lines refused."""
-        epoch = self._epoch()
+        """Return the status derived from the events under the run's epoch, and the lines refused.
+
+        The run's epoch is the one its attempt holds (`epoch`), else the current one. Once a newer epoch is current,
+        the status is of the events of the attempt's epoch and earlier, with `superseded` set.
+        """
+        current = self._epoch()
+        mine = self.epoch if self.epoch is not None else current
         scan = scan_events(self.run_dir)
-        return status_from(scan.events, epoch=epoch, quarantined=len(scan.quarantined))
+        superseded = mine is not None and current is not None and current > mine
+        events = [e for e in scan.events if mine is None or e.epoch <= mine] if superseded else scan.events
+        status = status_from(events, epoch=mine, quarantined=len(scan.quarantined))
+        return dataclasses.replace(status, superseded=True) if superseded else status
 
     def _epoch(self) -> int | None:
         """Return the run's current epoch, None where none was taken."""
@@ -569,7 +579,7 @@ class Run:
 
         A run started here is waited on through its thread; any run is then polled, reading the event log every `poll`
         seconds (`pool.event_poll_s` by default), until its events say it is done, so a run another process drives
-        can be waited for. While no thread of
+        can be waited for. An attempt a newer epoch stopped raises its `StaleCoordinator`. While no thread of
         this `Run` is alive, a run whose latest coordinator ended or whose lease is past its stale bound
         (`Epoch.stopped`), with no live claim on any of its queues, is not waited for further: its status is returned
         with `interrupted` set.
@@ -629,15 +639,19 @@ class Run:
     def results(self) -> ResultSet:
         """Return what each record gave, read from the result store as each is asked for.
 
-        The events are read now, under the run's current epoch; a record whose job failed, was blocked or cancelled
-        gives that, and an earlier attempt's result is served only under the key the current attempt gives its job.
+        The events are read now, under the run's epoch (`status`); a record whose job failed, was blocked or cancelled
+        gives that, and an earlier attempt's result is served only under the key the attempt gives its job.
 
         Raises:
             FileNotFoundError: the run has no `plan.json`.
+            StaleCoordinator: a newer epoch than this attempt's is current.
         """
         placed = self.plan
         graph = placed.logical.graph
-        epoch = self._epoch()
+        current = self._epoch()
+        epoch = self.epoch if self.epoch is not None else current
+        if epoch is not None and current is not None and current > epoch:
+            raise StaleCoordinator(epoch, current)
         reader = _Reader(graph, self.events(), self._results_store(), epoch)
         per_record = [n for n in order(graph) if n in reader.mapped]
         outputs = sorted(graph.outputs)
@@ -1031,6 +1045,7 @@ def start(
     written = provenance if store is None else store.provenance
     epochs = Epoch(run_dir)
     held, epoch, log = _open(run_dir, (placed, executor, written), (attempt, ordinal), (own, lease))
+    run.epoch = epoch
 
     def body() -> None:
         failed = False
