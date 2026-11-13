@@ -43,7 +43,7 @@ corpus run could not be debugged except by reading worker stderr.
   the word occurs in `packages/senselab-core/src`. What a
   run records of a class's use is the actuals of its closing `placement` event: `wall_s`, `gpu_hours` and
   `device_peak_bytes`, each None where nothing measured it (`events.py:80-92`).
-- **Commands.** The run-directory commands are `senselab status <run>`, `senselab explain <run> <node|key>`,
+- **Commands.** The run-directory commands are `senselab status <run> [--check-provenance]` (the flag runs `check_provenance`, ADR-010 amendment 2026-11-13, prints the counts and each problem, and exits 1 when the run's provenance is incomplete), `senselab explain <run> <node|key>`,
   `senselab plan <run>` (the run's needs as `placement-request@1.0`), `senselab coordinate <run>` and `senselab execute
   --pool <dir> --classes <list>` (`senselab_core/cli.py:270-306`). `<run>` is a run directory or a plan hash or its unique
   prefix. The in-Python reading of a plan is `Plan.explain` (`runtime/planner.py:426`), which reads no run and starts

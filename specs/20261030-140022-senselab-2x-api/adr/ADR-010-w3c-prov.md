@@ -258,8 +258,8 @@ Source: bids-standard/BEP028_BIDSprov, `bep028spec.md` at master 162bea57 (2026-
   records both agents" and the 2026-11-06 clause "every execution and reuse activity of a planned job carries an
   association with `prov:hadRole` and `prov:hadPlan`" only as far as the agent is absent; the node and the plan are
   recorded as before. No vocabulary term is added.
-- **The bound.** A writer records at most one `senselab:Reuse` per item per attempt: the coordinator records an item
-  once per graph node however often it reads the outcome. The union may hold a worker's Reuse and the coordinator's for
+- **The bound.** A writer records at most one `senselab:Reuse` per job of an item per attempt: the coordinator records a
+  job once per graph node however often it reads the outcome. The union may hold a worker's Reuse and the coordinator's for
   one item when the worker's commit raced a surviving earlier-epoch worker that linked its outcome first (the worker's
   reuse was recorded before its commit lost); the two differ by time and are not merged.
 - **The coordinator writes its document when it has settled items from an earlier epoch,** after each poll that
@@ -310,3 +310,21 @@ Adds no rule. It records what the Phase 3 head holds, so the amendments above ca
   a whole-document write before every commit (cbdb332a) it took 6.25 s and 47.0 s: 0.8 s per write at the Step 4 size
   of 1001 activities and 2.46 MB, so quadratic in items. With one document per claim it takes 1.57 s and 4.32 s, in
   14 and 39 documents. A per-commit delta document is not needed at this scale.
+
+## Amendment 2026-11-13: the completeness check is a runtime function (Phase 3 Task T24-11)
+
+- **The check.** `check_provenance(run_dir, committed=None, reuses=None)` in `senselab_core.runtime.execution.provenance_check`
+  reads a run directory and returns a `ProvenanceReport` (`.require()` raises `ProvenanceIncomplete`). Tests, `senselab
+  status --check-provenance` and the cluster drivers call this one function; a driver keeps no copy of its rules.
+  `committed_keys(run_dir)` names what must be accounted for: the key of every job in a `done` outcome of the run's queues
+  (a failed job and a `dead` item hold none, a staged temporary of an interrupted commit is no outcome) and of every
+  `finished` or `cache_hit` event.
+- **Two rules, both already in this ADR.** (1) Every committed item has at least one execution or one `senselab:Reuse`
+  (the T24-10 amendment: provenance precedes the commit). (2) A writer records at most one `senselab:Reuse` per job of an
+  item per attempt (the T-RESUME-REUSE bound, as amended above). The function checks each writer's document: it holds no
+  more Reuse of one `senselab:logicalKey` at one graph node than the run has committed jobs with that key and node.
+- **What it does not check.** Several executions of one key are allowed, one per execution context and one per job of
+  equal inputs in one item, so they never fail it. With `reuses`, the run's Reuse activities must number `reuses`, the
+  Reuse the resumes counted; the caller supplies the figure.
+- **Where it runs.** The execution tests run it after every test on every run directory the test left; a test that plants
+  a run by hand is named, with its reason, in an allowlist next to the check.
