@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from epoch_fixture import KILLED_HOLDERS, KILLED_LOCKS, left_by_a_killed_coordinator, prepared, waited_past_queued
+from host_fixture import HostShape
 from lease_clock_fixture import ManualClock
 from pool_stack_fixture import planned, unresolving
 from pool_test import (  # noqa: F401 - `stack` is autouse
@@ -174,8 +175,8 @@ STALL_S = 10.0
 @pytest.mark.contract
 @pytest.mark.parametrize("lock", KILLED_LOCKS)
 @pytest.mark.parametrize("holder", sorted(KILLED_HOLDERS))
-def test_a_resume_after_a_killed_coordinator_starts_a_worker_and_commits_every_live_item(
-    tmp_path: Path, clock: ManualClock, hang_s: float, holder: str, lock: str
+def test_a_resume_after_a_killed_coordinator_starts_a_worker_and_commits_every_live_item(  # noqa: PLR0913 - a test's fixtures
+    tmp_path: Path, clock: ManualClock, hang_s: float, holder: str, lock: str, host_shape: HostShape
 ) -> None:
     """Epoch 1 put every item and was killed with no worker alive; epoch 2 starts one and follows each item to the end.
 
@@ -221,8 +222,9 @@ def test_a_resume_after_a_killed_coordinator_starts_a_worker_and_commits_every_l
         resolver=unresolving(profile),
     )
     try:
-        resumed = resume(placed.hash, execution=profile, store=second.store, executor=second)
-        status = waited_past_queued(resumed, STALL_S, hang_s)
+        with host_shape.moved():
+            resumed = resume(placed.hash, execution=profile, store=second.store, executor=second)
+            status = waited_past_queued(resumed, STALL_S, hang_s)
     finally:
         second.close()
         workers.stop()

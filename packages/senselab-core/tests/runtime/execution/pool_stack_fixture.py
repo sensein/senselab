@@ -120,6 +120,21 @@ def planned(
     return placed, {bind_input("x", "json", t)[0]: t for t in texts}
 
 
+def planned_nodes(
+    task: TaskSpec, profile: ExecutionProfile, texts: Sequence[str], nodes: Sequence[str]
+) -> tuple[Plan, dict[InputIdentity, object]]:
+    """Return the plan running `task` over each text at each of `nodes`, every node reading the one input."""
+    graph = Graph(
+        inputs={"text": "list[json]"},
+        nodes=tuple(Node(id=n, task=task.name, task_version="1") for n in nodes),
+        edges=tuple(Edge(source="input.text", target=f"{n}.text", kind="map") for n in nodes),
+        outputs={f"v{n}": f"{n}.value" for n in nodes},
+    )
+    rows = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(texts)]
+    placed = plan(graph, RecordSet(rows), config=RunConfig(), execution=profile)
+    return placed, {bind_input("x", "json", t)[0]: t for t in texts}
+
+
 _POOLS: list[Pool] = []
 """The pools `opened` returned in the running test; `close_pools` closes them."""
 

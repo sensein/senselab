@@ -16,6 +16,7 @@ import numpy
 import pytest
 import soundfile
 from epoch_fixture import KILLED_HOLDERS, KILLED_LOCKS, left_by_a_killed_coordinator, taken, waited_past_queued
+from host_fixture import HostShape
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.signals import StaleSource
@@ -30,6 +31,7 @@ from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import Event, EventLog, read_events, run_dir_of
 from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status
 from senselab_core.runtime.execution.in_process import InProcess
+from senselab_core.runtime.execution.provenance_check import check_provenance
 from senselab_core.runtime.execution.run import (
     PYDRA_DIR,
     ConflictingSources,
@@ -181,19 +183,24 @@ def _placement(run: Run) -> dict[str, Any]:
     return found
 
 
-def test_resume_executes_only_missing(tmp_path: Path) -> None:
-    """Stopped after 2 of 4 jobs, the resumed attempt reuses those 2 and executes the other 2, under one hash."""
+def test_resume_executes_only_missing(tmp_path: Path, host_shape: HostShape) -> None:
+    """Stopped after 2 of 4 jobs, the resumed attempt reuses those 2 and executes the other 2, under one hash.
+
+    The resume runs as a new process, or as one of another host.
+    """
     store = ResultStore(tmp_path / "store")
     placed = _plan(4)
     stopped = placed.run(Stopping(store, 2), store=store)
     with pytest.raises(RuntimeError, match="planted stop"):
         stopped.wait(60)
     assert _kinds(_latest(stopped)) == ["failed", "failed", "finished", "finished"]
-    resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
-    assert resumed.wait(60).done and resumed.run_dir == stopped.run_dir
+    with host_shape.moved():
+        resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
+        assert resumed.wait(60).done and resumed.run_dir == stopped.run_dir
     assert _kinds(_latest(resumed)) == ["cache_hit", "cache_hit", "finished", "finished"]
     assert all(isinstance(o, Output) for _, o in resumed.results())
     assert sorted(p.name for p in (resumed.run_dir / "attempts").iterdir()) == ["1", "2"]
+    check_provenance(resumed.run_dir, reuses=2).require()
     with pytest.raises(NoRun, match="0" * 64):
         resume("0" * 64)
 
@@ -271,7 +278,7 @@ def test_an_attempt_that_ended_and_was_then_superseded_gives_no_results(tmp_path
 @pytest.mark.parametrize("lock", KILLED_LOCKS)
 @pytest.mark.parametrize("holder", sorted(KILLED_HOLDERS))
 def test_a_resume_runs_past_the_lock_its_killed_coordinator_left(
-    tmp_path: Path, hang_s: float, holder: str, lock: str
+    tmp_path: Path, hang_s: float, holder: str, lock: str, host_shape: HostShape
 ) -> None:
     """A pydra lock a killed coordinator leaves, naming a holder that cannot be proven dead, stops no resume.
 
@@ -283,21 +290,27 @@ def test_a_resume_runs_past_the_lock_its_killed_coordinator_left(
     with pytest.raises(RuntimeError, match="planted stop"):
         stopped.wait(60)
     left_by_a_killed_coordinator(stopped.run_dir, holder, lock)
-    resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
-    assert waited_past_queued(resumed, 10.0, hang_s).done
+    with host_shape.moved():
+        resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
+        assert waited_past_queued(resumed, 10.0, hang_s).done
     assert _kinds(_latest(resumed)) == ["cache_hit", "cache_hit", "finished", "finished"]
+    check_provenance(resumed.run_dir, reuses=2).require()
 
 
 @pytest.mark.contract
-def test_an_in_process_resume_records_a_reuse_for_each_item_it_settles_from_the_stopped_attempt(tmp_path: Path) -> None:
+def test_an_in_process_resume_records_a_reuse_for_each_item_it_settles_from_the_stopped_attempt(
+    tmp_path: Path, host_shape: HostShape
+) -> None:
     """InProcess shares the run's store: the resume's 2 reused items are 2 Reuse, and 4 executions stand in all."""
     store = ResultStore(tmp_path / "store")
     placed = _plan(4)
     stopped = placed.run(Stopping(store, 2), store=store)
     with pytest.raises(RuntimeError, match="planted stop"):
         stopped.wait(60)
-    resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
-    assert resumed.wait(60).done
+    with host_shape.moved():
+        resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
+        assert resumed.wait(60).done
+    check_provenance(resumed.run_dir, reuses=2).require()
     read = ProvStore.read(resumed.run_dir)
     reused = [a for a in read.activities() if "senselab:Reuse" in a.types()]
     assert len(reused) == 2 and len(read.activities()) == 6
