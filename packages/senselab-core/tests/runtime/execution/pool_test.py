@@ -14,17 +14,26 @@ import numpy
 import pytest
 import soundfile
 from epoch_fixture import prepared, taken
+from host_fixture import HostShape
 from lease_clock_fixture import ManualClock, newest
-from pool_stack_fixture import close_pools, lease_of, opened, packaged, planned, registry, scoring, unresolving
+from pool_run_fixture import activities_of, keys_of
+from pool_stack_fixture import (
+    close_pools,
+    lease_of,
+    opened,
+    packaged,
+    planned,
+    planned_nodes,
+    registry,
+    scoring,
+    unresolving,
+)
 from senselab_core.cli import main as cli_main
 from senselab_core.kernel import prov as kprov
-from senselab_core.kernel.dataset import Record, ValueInput
-from senselab_core.kernel.graph import Edge, Graph, Node
 from senselab_core.kernel.identity import InputIdentity
 from senselab_core.runtime.audio_io import open_audio
-from senselab_core.runtime.call import RunConfig, TaskCall, bind_input
+from senselab_core.runtime.call import RunConfig, TaskCall
 from senselab_core.runtime.clock import Clock, SystemClock
-from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.execution.epoch import Epoch, StaleCoordinator
 from senselab_core.runtime.execution.events import EventLog, read_events, run_dir_of, status_from
 from senselab_core.runtime.execution.executor import (
@@ -39,6 +48,7 @@ from senselab_core.runtime.execution.executor import (
 from senselab_core.runtime.execution.in_process import InProcess, job_key, node_fragment
 from senselab_core.runtime.execution.job import Failed, JobOutcome
 from senselab_core.runtime.execution.pool import Pool, report, split
+from senselab_core.runtime.execution.provenance_check import check_provenance
 from senselab_core.runtime.execution.queue import RUN_QUEUES, Claim, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.run import INPUTS_FILE, Run, record_sources
@@ -48,7 +58,6 @@ from senselab_core.runtime.fit import larger_class
 from senselab_core.runtime.locks import LeaseUnavailable
 from senselab_core.runtime.planner import Plan, plan, resume
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.leases import packaged_lease
 from senselab_worker.canonical import jcs_dumps
@@ -1123,40 +1132,26 @@ def _coordinator(  # noqa: PLR0913 - the run's parts
     return Pool(run_dir, **kwargs)
 
 
-def _activities(run_dir: Path) -> tuple[list[Any], list[Any]]:
-    every = ProvStore.read(run_dir).activities()
-    return [a for a in every if "senselab:Reuse" not in a.types()], [a for a in every if "senselab:Reuse" in a.types()]
-
-
-def _logical(records: Sequence[Any]) -> list[str]:
-    return sorted(json.dumps(kprov.literal_value(r.node()["senselab:logicalKey"]), sort_keys=True) for r in records)
-
-
-def _resumed(
-    placed: Plan, profile: ExecutionProfile, workers: FakeWorkers, root: Path
+def _resumed(  # noqa: PLR0913 - the run's parts, then how the resume runs and the Reuse it should leave
+    placed: Plan,
+    profile: ExecutionProfile,
+    workers: FakeWorkers,
+    root: Path,
+    shape: HostShape,
+    reuses: int | None = None,
 ) -> tuple[Pool, list[Any], list[Any]]:
-    """Resume the run on a pool of its own, close the pool and return it with the run's executions and reuses."""
+    """Resume the run as `shape` on a pool of its own; return it with the run's executions and reuses.
+
+    The run's provenance is checked for completeness, and with `reuses` its Reuse counted against the test's.
+    """
     pool = _coordinator(placed, profile, workers, root)
     try:
-        assert resume(placed.hash, execution=profile, store=pool.store, executor=pool).wait(60).done
+        with shape.moved():
+            assert resume(placed.hash, execution=profile, store=pool.store, executor=pool).wait(60).done
     finally:
         pool.close()
-    return (pool, *_activities(run_dir_of(placed.hash)))
-
-
-def _planned_nodes(
-    profile: ExecutionProfile, texts: Sequence[str], nodes: Sequence[str]
-) -> tuple[Plan, dict[InputIdentity, object]]:
-    """Return the plan running `SCORE` over each text at each of `nodes`, every node reading the one input."""
-    graph = Graph(
-        inputs={"text": "list[json]"},
-        nodes=tuple(Node(id=n, task=SCORE.name, task_version="1") for n in nodes),
-        edges=tuple(Edge(source="input.text", target=f"{n}.text", kind="map") for n in nodes),
-        outputs={f"v{n}": f"{n}.value" for n in nodes},
-    )
-    rows = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(texts)]
-    placed = plan(graph, RecordSet(rows), config=RunConfig(), execution=profile)
-    return placed, {bind_input("x", "json", t)[0]: t for t in texts}
+    check_provenance(run_dir_of(placed.hash), reuses=reuses).require()
+    return (pool, *activities_of(run_dir_of(placed.hash)))
 
 
 def _stopped(
@@ -1172,7 +1167,7 @@ def _stopped(
             "faults": CONTENT,
         },
     )
-    placed, values = _planned(profile, texts) if nodes == ("a",) else _planned_nodes(profile, texts, nodes)
+    placed, values = _planned(profile, texts) if nodes == ("a",) else planned_nodes(SCORE, profile, texts, nodes)
     run_dir = run_dir_of(placed.hash)
     workers = FakeWorkers(run_dir, ResultStore(tmp_path / "store"), placed, values)
     workers.ready = lambda: len(workers.served) < k
@@ -1180,7 +1175,7 @@ def _stopped(
     try:
         run = placed.run(pool, store=pool.store)
         await_true(
-            lambda: sum(map(len, _activities(run_dir))) >= k, tier_bound, profile.pool.poll_s, "the first k items"
+            lambda: sum(map(len, activities_of(run_dir))) >= k, tier_bound, profile.pool.poll_s, "the first k items"
         )
         run.cancel()
         run.wait(60)
@@ -1194,17 +1189,17 @@ def _stopped(
 
 @pytest.mark.contract
 def test_a_resume_records_a_reuse_for_each_item_it_settles_from_the_stopped_attempt(
-    tmp_path: Path, tier_bound: float
+    tmp_path: Path, tier_bound: float, host_shape: HostShape
 ) -> None:
     """Stopped after 2 of 4 items: the union holds 4 executions and 2 Reuse, with no context and no agent serving."""
     pytest.importorskip("pydra")
     placed, profile, workers = _stopped(tmp_path, tier_bound, 2, ["one", "two", "three", "four"])
     try:
-        _, executed, reused = _resumed(placed, profile, workers, tmp_path / "store")
+        _, executed, reused = _resumed(placed, profile, workers, tmp_path / "store", host_shape, 2)
     finally:
         workers.stop()
-    assert len(executed) == 4 and len(set(_logical(executed))) == 4 and len(reused) == 2
-    assert set(_logical(reused)) <= set(_logical(executed))
+    assert len(executed) == 4 and len(set(keys_of(executed))) == 4 and len(reused) == 2
+    assert set(keys_of(reused)) <= set(keys_of(executed))
     for reuse in reused:
         node = reuse.node()
         assert "senselab:context" not in node and "senselab:storedContext" in node
@@ -1217,26 +1212,28 @@ def test_a_resume_records_a_reuse_for_each_item_it_settles_from_the_stopped_atte
 
 @pytest.mark.contract
 def test_a_second_resume_of_a_completed_run_records_a_reuse_per_item_and_no_execution(
-    tmp_path: Path, tier_bound: float
+    tmp_path: Path, tier_bound: float, host_shape: HostShape
 ) -> None:
     """Resuming a completed run of 4: 4 more Reuse, no more executions."""
     pytest.importorskip("pydra")
     placed, profile, workers = _stopped(tmp_path, tier_bound, 4, ["one", "two", "three", "four"])
     try:
-        _, executed, reused = _resumed(placed, profile, workers, tmp_path / "store")
+        _, executed, reused = _resumed(placed, profile, workers, tmp_path / "store", host_shape, 4)
     finally:
         workers.stop()
-    assert len(executed) == 4 and len(reused) == 4 and _logical(reused) == _logical(executed)
+    assert len(executed) == 4 and len(reused) == 4 and keys_of(reused) == keys_of(executed)
 
 
 @pytest.mark.contract
-def test_two_nodes_running_one_call_on_one_input_settle_one_reuse_each(tmp_path: Path, tier_bound: float) -> None:
+def test_two_nodes_running_one_call_on_one_input_settle_one_reuse_each(
+    tmp_path: Path, tier_bound: float, host_shape: HostShape
+) -> None:
     """Nodes `a` and `b` apply one task to the same texts: the resume settles one Reuse per node and item."""
     pytest.importorskip("pydra")
     placed, profile, workers = _stopped(tmp_path, tier_bound, 4, ["one", "two"], nodes=("a", "b"))
-    before = len(_activities(run_dir_of(placed.hash))[1])
+    before = len(activities_of(run_dir_of(placed.hash))[1])
     try:
-        _, _, reused = _resumed(placed, profile, workers, tmp_path / "store")
+        _, _, reused = _resumed(placed, profile, workers, tmp_path / "store", host_shape)
     finally:
         workers.stop()
     settled = [r for r in reused if "senselab:context" not in r.node()]
@@ -1245,7 +1242,9 @@ def test_two_nodes_running_one_call_on_one_input_settle_one_reuse_each(tmp_path:
 
 
 @pytest.mark.contract
-def test_a_reuse_settled_from_an_equivalent_outcome_records_that_policy(tmp_path: Path, tier_bound: float) -> None:
+def test_a_reuse_settled_from_an_equivalent_outcome_records_that_policy(
+    tmp_path: Path, tier_bound: float, host_shape: HostShape
+) -> None:
     """An outcome the earlier attempt served under `equivalent` is settled as an `equivalent` Reuse."""
     pytest.importorskip("pydra")
     placed, profile, workers = _stopped(tmp_path, tier_bound, 2, ["one", "two"])
@@ -1260,7 +1259,7 @@ def test_a_reuse_settled_from_an_equivalent_outcome_records_that_policy(tmp_path
             marked += 1
     assert marked == 2
     try:
-        _, _, reused = _resumed(placed, profile, workers, tmp_path / "store")
+        _, _, reused = _resumed(placed, profile, workers, tmp_path / "store", host_shape)
     finally:
         workers.stop()
     assert len(reused) == 2
@@ -1291,10 +1290,10 @@ def test_a_failed_provenance_write_costs_no_settled_result_and_is_retried(tmp_pa
         if os.access(run_dir / "prov", os.W_OK):
             pytest.skip("the directory stays writable (running as root)")
         refs = list(follow(pool, pool.submit(node_fragment(placed, pool.admit(placed, workers.values)))))
-        assert [r.served for r in refs] == ["exact", "exact"] and len(_activities(run_dir)[1]) == 0
+        assert [r.served for r in refs] == ["exact", "exact"] and len(activities_of(run_dir)[1]) == 0
         (run_dir / "prov").chmod(0o700)
         pool.close()
     finally:
         (run_dir / "prov").chmod(0o700)
         workers.stop()
-    assert len(_activities(run_dir)[1]) == 2
+    assert len(activities_of(run_dir)[1]) == 2

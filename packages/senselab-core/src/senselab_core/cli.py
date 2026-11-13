@@ -14,6 +14,7 @@ from senselab_core.runtime.execution.events import UNPLACEABLE, Event, placement
 from senselab_core.runtime.execution.executor import FaultRecord, QueueHeld
 from senselab_core.runtime.execution.pool import coordinate, run_plan, run_store
 from senselab_core.runtime.execution.pool_worker import serve_pool
+from senselab_core.runtime.execution.provenance_check import check_provenance
 from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run, latest_placement, read_placement
 from senselab_core.runtime.execution.substrates import ExternalWorkers, substrate_of
 from senselab_core.runtime.explain import node_line
@@ -145,6 +146,15 @@ def run_status(args: argparse.Namespace) -> int:
         print(f"node {node}: " + ", ".join(f"{k} {v}" for k, v in counts.items() if v))
     for line in _placement_lines(run.events()):
         print(line)
+    if args.check_provenance:
+        report = check_provenance(run.run_dir)
+        print(
+            f"provenance: {report.committed} committed keys, {report.executions} executions, {report.reuses} reuses: "
+            + ("complete" if report.complete else "INCOMPLETE")
+        )
+        for problem in report.problems:
+            print(f"provenance: {problem}")
+        return 0 if report.complete else 1
     return 0
 
 
@@ -347,6 +357,11 @@ def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
         "run_ref",
         metavar="run",
         help="a run directory, or a plan hash (or its unique prefix) under $SENSELAB_CACHE/2x/runs",
+    )
+    status.add_argument(
+        "--check-provenance",
+        action="store_true",
+        help="also check each committed key has an execution or a Reuse and none has two executions; exit 1 if not",
     )
     status.set_defaults(run=run_status)
     planning = groups.add_parser("plan", help="what each resource class of a run needs, as placement-request@1.0")
