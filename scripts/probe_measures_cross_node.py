@@ -43,6 +43,7 @@ import socket
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from senselab_core.kernel.identity import ModelIdentity
 from senselab_core.runtime.locks import Lease, LeaseTimeout
@@ -134,7 +135,7 @@ class _CommitRendezvous:
             finally:
                 rendezvous.windows[kind] = (staged, _now(rendezvous.events))
 
-        StorageDir.link = link  # type: ignore[method-assign]
+        StorageDir.link = link  # type: ignore[assignment, method-assign]
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -231,7 +232,7 @@ def _spans_overlap(spans: list[tuple[float, float]]) -> bool:
     return max(s for s, _ in spans) <= min(e for _, e in spans)
 
 
-def _check_writes(shared: Path, events: list[dict], writers: int, probes: int) -> dict[str, object]:
+def _check_writes(shared: Path, events: list[dict[str, Any]], writers: int, probes: int) -> dict[str, Any]:
     wrote = [e for e in events if e["event"] == "wrote" and e["role"] != "readonly"]
     reads = [e for e in events if e["event"] == "read"]
     rounds = [[(e["start_t"], e["end_t"]) for e in wrote if e["round"] == n] for n in range(probes)]
@@ -268,7 +269,7 @@ def verdict(shared: Path, events_dir: Path, args: argparse.Namespace) -> bool:
     overlaps = sum(later[0] < earlier[1] for earlier, later in zip(spans, spans[1:]))
     early = [t for t in took if kill is not None and t < kill]
     lost = [e for e in events if e.get("lost")]
-    fallback: dict = next((e for e in events if e["role"] == "readonly" and e["event"] == "wrote"), {})
+    fallback: dict[str, Any] = next((e for e in events if e["role"] == "readonly" and e["event"] == "wrote"), {})
     writes = _check_writes(shared, events, args.writers, args.probes)
     seen_hosts = sorted({e["host"] for e in events})
     units_expected = args.probes + 1

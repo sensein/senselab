@@ -166,7 +166,7 @@ def library_name(path: str) -> str:
 
 def bundled_libraries(dist: metadata.Distribution) -> dict[str, str]:
     """The native libraries the wheel carries, as ``name -> file``: shared libraries that are not extension modules."""
-    found = {}
+    found: dict[str, str] = {}
     for f in dist.files or []:
         text = str(f)
         if _SHARED.search(text) and not _EXTENSION.search(text):
@@ -297,7 +297,7 @@ def env_records(findings: list[Finding], today: str) -> dict[str, dict[str, Any]
 
 def write_env_records(path: Path, env: str, records: dict[str, dict[str, Any]]) -> None:
     """Replace env `env`'s entries in the ``env-licenses`` file at `path`, keeping the other envs."""
-    raw = yaml.safe_load(path.read_text()) if path.exists() else {"format": ENV_LICENSES_FORMAT, "envs": {}}
+    raw: dict[str, Any] = yaml.safe_load(path.read_text()) if path.exists() else {"format": ENV_LICENSES_FORMAT, "envs": {}}
     raw["envs"][env] = records
     path.write_text(yaml.safe_dump(raw, sort_keys=True, width=120))
 

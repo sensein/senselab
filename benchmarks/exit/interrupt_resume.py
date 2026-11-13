@@ -230,6 +230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "_run":
         return run_child(args.work, args.profile, exitlib.load_config())
     if args.command == "start":
+        signal.signal(signal.SIGTERM, lambda _signum, _frame: sys.exit(128 + signal.SIGTERM))  # the watchdog's stop
         return start(args.work, args.out, args.profile, exitlib.load_config())
     return resume(args.plan_hash, args.work, args.out, args.profile)
 

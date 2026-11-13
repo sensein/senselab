@@ -1,4 +1,4 @@
-"""The provenance completeness check of a run: `check_provenance`, `committed_keys` and `ProvenanceReport`.
+"""The provenance completeness check of a run: `check_provenance`, `committed_keys`, `activity_key`, `ProvenanceReport`.
 
 ADR-010 states two rules, and the function checks exactly them. Every committed item has at least one execution or
 one `senselab:Reuse`. A writer records at most one `senselab:Reuse` per item per attempt: a writer's document holds no
@@ -103,7 +103,8 @@ def _reuse_items(data: bytes) -> list[tuple[str, str]]:
     return found
 
 
-def _key_of(record: kprov.Record) -> str:
+def activity_key(record: kprov.Record) -> str:
+    """Return the key digest of the activity `record`: the form the events and the outcomes name a key in."""
     return LogicalKey.model_validate(kprov.literal_value(record.node()["senselab:logicalKey"])).digest()
 
 
@@ -127,10 +128,10 @@ def check_provenance(
     found = ProvStore.from_documents(documents).activities() if documents else []
     executions = [a for a in found if "senselab:Reuse" not in a.types()]
     reused = [a for a in found if "senselab:Reuse" in a.types()]
-    served = {_key_of(a) for a in reused}
+    served = {activity_key(a) for a in reused}
     problems += [
         f"key {k[:12]} has no execution and no Reuse"
-        for k in sorted(wanted - {_key_of(a) for a in executions} - served)
+        for k in sorted(wanted - {activity_key(a) for a in executions} - served)
     ]
     jobs = _jobs_per_item(run_dir)
     for name, data in documents.items():

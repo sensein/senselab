@@ -96,7 +96,7 @@ def sites(path: str, source: str) -> list[tuple[Site, bool]]:
             target, value = stmt.target, stmt.value
         if isinstance(target, ast.Name) and target.id.endswith(SUFFIXES) and value is not None and _numeric(value):
             found.append(Site(path, stmt.lineno, target.id))
-    found += [Site(path, n.lineno, "beat factor") for n in ast.walk(tree) if _beat_factor(n)]
+    found += [Site(path, n.lineno, "beat factor") for n in ast.walk(tree) if isinstance(n, ast.BinOp) and _beat_factor(n)]
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
