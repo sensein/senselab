@@ -2893,6 +2893,28 @@ class TestWhatAPiiFailureMayCarry:
         assert scan.attributes["gliner_model"] == "nvidia/gliner-pii"
         assert scan.attributes["gliner_revision"] == pinned
 
+    def test_the_record_is_the_commit_the_backend_reports_not_the_setting(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A backend reporting another commit than the configured one: the record names what it reported."""
+        configured, reported = "a" * 40, "b" * 40
+        config = _override(tmp_path, f"pii:\n  gliner:\n    revision: {configured}\n")
+
+        def _fake(inputs: Any, **kw: Any) -> list[PiiScan]:  # noqa: ANN401
+            assert kw["gliner_revision"] == configured
+            texts = [inputs] if isinstance(inputs, str) else list(inputs)
+            return [
+                PiiScan(spans=[], detectors_used=default_detectors(), failures={}, gliner_revision=reported)
+                for _ in texts
+            ]
+
+        monkeypatch.setattr(speech_module, "scan_for_pii", _fake)
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        scan = find_measurement(store, "pii_scan")
+        assert scan is not None and scan.attributes["gliner_revision"] == reported
+
     def test_a_scan_whose_detector_did_not_load_records_no_commit(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

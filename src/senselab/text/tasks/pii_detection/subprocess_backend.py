@@ -671,7 +671,10 @@ def detect_pii_via_subprocess(
           always be empty for every ASR model.
         - ``"gliner_revision"`` — the 40-hex commit the worker loaded GLiNER
           from, read back off the snapshot directory it opened. ``None``
-          when GLiNER was not requested or did not load.
+          when GLiNER was not requested or did not load. A worker that
+          reports a commit other than the one asked for is refused: GLiNER
+          is recorded in ``failures`` (``RevisionMismatch: ...``), its
+          findings are dropped and this is ``None``.
         - ``"cache"`` — ``{asr_model: {key, hit, origin}}``: each transcript's result-cache key,
           whether its spans were reused rather than scanned, and where a reused result was first
           computed. Only a complete scan (every requested detector ran, none failed) is stored.
@@ -817,6 +820,19 @@ def detect_pii_via_subprocess(
         failures = dict(output.get("failures", {}))
         detectors_used = list(output.get("detectors_used", []))
         loaded_revision = output.get("gliner_revision")
+        if uses_gliner and loaded_revision is not None and loaded_revision != gliner_revision:
+            refusal = (
+                f"RevisionMismatch: the worker loaded {gliner_model}@{loaded_revision}, "
+                f"not the configured {gliner_revision}"
+            )
+            logger.error(f"PII / gliner: {refusal}; its findings are dropped and the detector is recorded as failed.")
+            failures[DETECTOR_GLINER] = refusal
+            detectors_used = [name for name in detectors_used if name != DETECTOR_GLINER]
+            run_spans = {
+                asr_model: [span for span in spans if not str(span.get("source", "")).startswith(f"{DETECTOR_GLINER}/")]
+                for asr_model, spans in run_spans.items()
+            }
+            loaded_revision = None
         spans_by_asr.update(run_spans)
         # Only a complete scan is reusable: a detector that failed to load leaves a result that a
         # retry could improve, so it is recomputed next time rather than served as current.

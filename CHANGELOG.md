@@ -13,7 +13,7 @@
 
 #### 🚀 Enhancement
 
-- PII detection pins its GLiNER detector: `detect_pii`, `scan_for_pii` and `detect_pii_via_subprocess` take `gliner_revision`, and with none load `nvidia/gliner-pii` at commit `bd23e8ef4425fd04e34c5204ab49ffaa706eae79` instead of resolving `main` (any other model still resolves `main`). `PiiScan.gliner_revision` reports the commit loaded. Triage reads the pin from `pii.gliner` and records it on every `pii_scan`.
+- PII detection pins its GLiNER detector: `detect_pii`, `scan_for_pii` and `detect_pii_via_subprocess` take `gliner_revision`, and with none load `nvidia/gliner-pii` at commit `bd23e8ef4425fd04e34c5204ab49ffaa706eae79` instead of resolving `main` (any other model still resolves `main`). `PiiScan.gliner_revision` reports the commit loaded; a worker that reports a commit other than the one asked for is refused, and GLiNER is recorded as a failed detector (`RevisionMismatch`). Triage reads the pin from `pii.gliner` and records it on every `pii_scan`.
 
 ---
 
