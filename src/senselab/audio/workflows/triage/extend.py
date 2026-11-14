@@ -57,6 +57,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     deactivate_profile,
     recorded_digest_matches,
     require_dataset_values,
+    run_data,
 )
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.hint_record import (
@@ -345,43 +346,47 @@ def driver_config(args: argparse.Namespace, *, require_values: bool = True, stag
     return config
 
 
-WorkerConfig = tuple[str | None, str | None, str | None]
-""":func:`activate_in_worker`'s arguments: ``(config override, profile directory, profile digest)``."""
+WorkerConfig = tuple[str | None, str | None, str | None, str | None]
+""":func:`activate_in_worker`'s arguments: ``(config override, profile directory, profile digest, config hash)``."""
 
 
 def worker_arguments(args: argparse.Namespace, config: TriageConfig) -> WorkerConfig:
     """What a worker process needs to read the driver's configuration again: :func:`activate_in_worker`'s arguments.
 
-    A spawned worker starts with no profile active, so a pool's initializer activates the one the driver did, named
-    explicitly: its directory and its digest.
+    A spawned worker starts with no profile active and no run ``data`` section, so a pool's initializer loads the
+    driver's configuration again, named explicitly: its override (which carries the run's ``data`` section), its
+    profile's directory and digest, and its ``config_hash``.
 
     Args:
         args: The parsed :func:`add_config_arguments` options.
         config: The configuration :func:`driver_config` returned.
 
     Returns:
-        ``(config override, profile directory, profile digest)``, each None where the driver had none.
+        :func:`config_for_workers` of the driver's override and configuration.
     """
-    return config_for_workers(None if args.config is None else str(args.config), config.profile)
+    return config_for_workers(args.config, config)
 
 
-def config_for_workers(override: str | Path | None, profile: DatasetProfile | None) -> WorkerConfig:
-    """:func:`activate_in_worker`'s arguments for a configuration override and the parent's profile.
+def config_for_workers(override: str | Path | None, config: TriageConfig) -> WorkerConfig:
+    """:func:`activate_in_worker`'s arguments for the parent's configuration and the override it was loaded with.
 
-    Every process pool that runs triage work passes these as its initializer's arguments, so each worker activates
-    the parent's profile rather than none.
+    Every process pool that runs triage work passes these as its initializer's arguments, so each worker loads the
+    parent's configuration, its profile and its run ``data`` section, and checks that it got the same one.
 
     Args:
-        override: The parent's config override, or None.
-        profile: The parent's profile (its configuration's ``profile``), or None.
+        override: The config override the parent loaded ``config`` with, or None.
+        config: The parent's configuration.
 
     Returns:
-        ``(config override, profile directory, profile digest)``, each None where the parent had none.
+        ``(config override, profile directory, profile digest, config hash)``; the override and the profile's fields
+        are None where the parent had none.
     """
+    profile = config.profile
     return (
         None if override is None else str(override),
         None if profile is None else str(profile.root),
         None if profile is None else profile.digest,
+        config.config_hash,
     )
 
 
@@ -389,30 +394,49 @@ def pool_initargs(given: WorkerConfig | None = None) -> WorkerConfig:
     """The arguments a process pool hands :func:`activate_in_worker`.
 
     Args:
-        given: The driver's :func:`worker_arguments`; None hands each worker the profile active in this process, with
-            no config override.
+        given: The driver's :func:`worker_arguments`, or :func:`config_for_workers`; None hands each worker the
+            profile active in this process, with no config override and no configuration hash to compare.
 
     Returns:
-        ``given``, or :func:`config_for_workers` of this process's active profile.
+        ``given``, or the active profile's directory and digest.
+
+    Raises:
+        ValueError: If ``given`` is None and this process's configuration carries a run ``data`` section
+            (:func:`~senselab.audio.workflows.triage.dataset_profile.run_data`), which the active profile alone
+            does not hand over: pass :func:`config_for_workers` of the override and configuration instead.
     """
-    return given if given is not None else config_for_workers(None, active_profile())
+    if given is not None:
+        return given
+    held = run_data()
+    if held:
+        raise ValueError(
+            f"this process's configuration carries a run data section ({', '.join(sorted(held))}) that the active "
+            "profile alone does not hand a worker; pass config_for_workers(override, config) (or the driver's "
+            "worker_arguments) to the pool instead"
+        )
+    profile = active_profile()
+    return (None, None if profile is None else str(profile.root), None if profile is None else profile.digest, None)
 
 
 _WORKER_FAILURE: str | None = None
 
 
-def activate_in_worker(override: str | None, profile: str | None, digest: str | None = None) -> None:
-    """A pool initializer: activate in this worker the parent's profile and run data, as the parent did.
+def activate_in_worker(
+    override: str | None, profile: str | None, digest: str | None = None, config_hash: str | None = None
+) -> None:
+    """A pool initializer: load in this worker the parent's configuration, activating its profile and run data.
 
-    The worker loads exactly the profile it is handed (none where ``profile`` is None, whatever the process
-    inherited), and refuses one whose digest is not the parent's: its files changed after the parent loaded them.
-    It never raises (a pool whose initializer raises starts a new worker for ever); a failure is held for
+    The worker loads the override and the profile it is handed (no profile where ``profile`` is None, whatever the
+    process inherited), which sets the run's ``data`` section from the override, and refuses a profile whose digest
+    is not the parent's, or a configuration whose hash is not: the files changed after the parent loaded them. It
+    never raises (a pool whose initializer raises starts a new worker for ever); a failure is held for
     :func:`worker_failure`, which every task the worker runs reports.
 
     Args:
         override: The parent's config override, or None.
         profile: The profile directory the parent activated, or None.
-        digest: The parent's profile digest; None skips the comparison.
+        digest: The parent's profile digest; None skips that comparison.
+        config_hash: The parent's ``config_hash``; None skips that comparison.
     """
     global _WORKER_FAILURE
     try:
@@ -422,8 +446,13 @@ def activate_in_worker(override: str | None, profile: str | None, digest: str | 
         if digest is not None and (config.profile is None or config.profile.digest != digest):
             got = None if config.profile is None else config.profile.digest
             raise RuntimeError(f"the profile at {profile} has digest {got}, not the parent's {digest}")
+        if config_hash is not None and config.config_hash != config_hash:
+            raise RuntimeError(
+                f"the configuration (override {override}, profile {profile}) has hash {config.config_hash}, not the "
+                f"parent's {config_hash}"
+            )
     except Exception as error:  # noqa: BLE001 -- held, and every task this worker runs reports it
-        _WORKER_FAILURE = f"the worker could not activate the parent's profile: {type(error).__name__}: {error}"
+        _WORKER_FAILURE = f"the worker could not load the parent's configuration: {type(error).__name__}: {error}"
 
 
 def worker_failure() -> str | None:
