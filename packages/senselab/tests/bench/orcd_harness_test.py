@@ -421,6 +421,19 @@ def test_prov_fails_when_a_committed_key_has_neither_an_execution_nor_a_reuse(
 
 
 @pytest.mark.contract
+def test_prov_expects_resume_executions_from_the_resumes_own_committed_count(fake_run: FakeRun, tmp_path: Path) -> None:
+    """An item committed between the interrupt snapshot and the resume's start is not a resume execution."""
+    out = tmp_path / "verdict.json"
+    args = ["prov", "--out", str(out), "--run-dir", str(fake_run.run_dir), "--hash", fake_run.hash]
+    start = fake_run.start_json(committed=ITEMS - 1)
+    assert (
+        _drive(*args, "--quantum-items", "3", "--start-json", str(start), "--resume-json", str(fake_run.resume_json()))
+        == 0
+    )
+    assert _verdict(out)["failed"] == []
+
+
+@pytest.mark.contract
 def test_prov_bounds_the_keys_a_kill_lost_by_one_claim_per_cancelled_worker(fake_run: FakeRun, tmp_path: Path) -> None:
     """Keys without an execution activity are at most quantum_items x cancelled workers (the three here), not twice."""
     boundary = reuse_diag.boundary_of(read_events(fake_run.run_dir))

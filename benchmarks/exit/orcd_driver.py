@@ -509,7 +509,7 @@ def cmd_prov(args: argparse.Namespace) -> int:  # noqa: PLR0915 - one verdict, o
     activities that started after it. A Reuse is the coordinator's when it has the settled shape (no `senselab:context`
     and no `prov:wasAssociatedWith`: the coordinator settles an earlier epoch's outcome without running it), a worker's
     otherwise; the split is told per activity, since a worker document may hold only store hits. Resume-phase
-    executions are the items neither committed at the interrupt nor late hits; `reuses` are the Reuse activities the
+    executions are the items neither committed at the resume nor late hits; `reuses` are the Reuse activities the
     resume counted. The accounting's `executions` counts `finished` events, which is not the number of executions, so
     it is not compared. A kill loses the activities of the claim in flight, so the keys without an execution activity
     number at most `quantum_items` for each cancelled worker.
@@ -565,9 +565,9 @@ def cmd_prov(args: argparse.Namespace) -> int:  # noqa: PLR0915 - one verdict, o
         len(lost) <= lost_allowed,
         f"{len(lost)}",
     )
-    expected = items - committed - resumed["late"]
+    expected = items - resumed["committed"] - resumed["late"]
     check(
-        f"resume-phase executions = items - committed - late start executions = {expected}",
+        f"resume-phase executions = items - committed at the resume - late start executions = {expected}",
         len(resume_exec) == expected,
         f"{len(resume_exec)}",
     )
