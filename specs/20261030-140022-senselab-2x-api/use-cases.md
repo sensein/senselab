@@ -311,8 +311,8 @@ Metadata every reader must normalise into the core type:
   - accelerometer + PPG → motion-corrected pulse;
   - video → respiration (rPPG);
   - audio + actigraphy → speaking-while-moving.
-- **Measure/decide split holds.** QC tasks emit SQI tracks and gap intervals. Non-wear or
-  "unusable epoch" verdicts are decision tasks with a fitted profile.
+- **QC tasks** emit SQI tracks and gap intervals. Non-wear or "unusable epoch" labels are tasks
+  that take a fitted profile.
 - **Licences.** Add LicenseRef entries for Oxford Academic Use, audEERING, OpenFace/OpenPose
   academic, USC research and HAI-DEF. Many physio defaults can be permissive (NeuroKit2, MNE, YASA,
   SKDH, GGIR via R, ECG-FM, MOMENT), so a `commercial_use: required` policy remains satisfiable for

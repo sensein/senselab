@@ -27,6 +27,29 @@ Architect review §9 (R-45): the Plan mixed what is computed (identity) with whe
 - Batch formation and chunk grid enter identity only when a backend declares them output-affecting
   (ADR-002); otherwise they are placement.
 
+- **Amended 2026-11-07 (batch formation, Phase 3 Task 18).** Batches form across the records of one node and one
+  placement (`form_batches`). Each job's formation is its own: `mixed` for a batch-invariant backend, never keyed;
+  `bucket:<grid id>:<index>` from its own input length on the packaged grid (`batching@1.0`) for a backend that
+  declares `batch_formation` output-affecting, keyed; `single`, one job per request, otherwise and for a job with no
+  recording input. The key never depends on batch-mates (I-3); results may vary with padding within a bucket, which
+  the Task 18 probe measures. A job's length is measured from its held inputs and, for an upstream input, from the
+  span its upstream result recorded (`ResultRef.lengths_ns`, carried as `UpstreamRef.length_ns`), so keying reads no
+  stored value. Before a run `plan_keys` keys a bucketed node fed by graph inputs; one fed by an upstream recording,
+  and every node below it, stays unkeyed until that upstream runs, so status loses stale-result detection there.
+  pydra's checksum is the key with the bucket index left out; events carry the job's true key.
+
+- **Amended 2026-11-08 (sizing at run time and placement input, Phase 3 Task 20R; design
+  [`calibration-probe.md`](../calibration-probe.md) §6, §10).** The placement carries no plan-time batch:
+  `profiles._batch_size` is removed and a placement records batch 1. The batch per length bucket, the cuts of a
+  fragment into items (at the upper prediction over the run's own input lengths) and the worker count are chosen by one
+  pure function, `size(estimate, grant, config, lengths)`, which the Pool and the in-process executor call at run time
+  and `explain()` calls at plan time with the stored estimate, never probing, so the plan's wall time, GPU hours and
+  peak memory are each measured or labelled unmeasured. That is the cost estimate this ADR gives the placement. What a
+  run needs per resource class is emitted as `placement-request@1.0`; placement values (`partition`, `time_s`,
+  `max_workers`, `exclude`) are layered profile, then a per-run override, then the answer of a site hook named by the
+  profile or the run (`placement-answer@1.0`), validated against the request. senselab holds no site scheduling
+  policy. None of it reaches a key; a bucketed backend's batch never spans two buckets.
+
 ## Alternatives rejected
 - **A single hashed plan.** A hardware change becomes a new run, and resuming across sites is
   impossible.
