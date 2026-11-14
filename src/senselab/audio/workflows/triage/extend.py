@@ -1486,9 +1486,9 @@ def check_replay_inputs(
     hint is given; a run recording no identity whose hint declares none (plan step 6a), or whose hint declares one
     that cannot be built; a changed hint, unless ``allow_hint_change``; a replay whose hint names another participant
     or session than the run records (:class:`IdentityChangeRefused`), unless ``allow_identity_change`` (a run that
-    records no identity yet, a field the hint does not declare, and a changed task, are not refused). A re-fold
-    (``allow_hint_change`` False) is refused too where the store records no hint to compare its hint with (replay
-    the run first), and where the run's decisions were taken under another profile (unless
+    records no identity yet, a field the run records empty or the hint does not declare, and a changed task, are not
+    refused). A re-fold (``allow_hint_change`` False) is refused too where the store records no hint to compare its
+    hint with (replay the run first), and where the run's decisions were taken under another profile (unless
     ``allow_profile_change``) or another set of stages off (:func:`decided_under`), since VERDICT would re-score the
     old reports. Anything else is accepted and recorded on :class:`ReplayInputs`.
 
@@ -1571,7 +1571,9 @@ def check_replay_inputs(
         change = {
             name: {"from": getattr(recorded, name), "to": getattr(declared, name)}
             for name in IDENTITY_GUARDED_FIELDS
-            if getattr(declared, name) is not None and getattr(declared, name) != getattr(recorded, name)
+            if getattr(recorded, name) is not None
+            and getattr(declared, name) is not None
+            and getattr(declared, name) != getattr(recorded, name)
         }
         if change:
             moved = ", ".join(f"{name} {each['from']!r} -> {each['to']!r}" for name, each in change.items())

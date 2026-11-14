@@ -1107,6 +1107,25 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         _seed_run(root, hint=self.HINT)
         assert _checked(root, hint=self.HINT, hint_given=True, allow_hint_change=False).changed == []
 
+    def test_an_empty_recorded_participant_takes_the_hints(self, tmp_path: Path) -> None:
+        """A participant the run records empty is a first record when the hint declares one, not a change (Q1)."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=hint_for(session="s1", task="voluntary-cough"))
+        before = recorded_identity(read_store(root))
+        assert before is not None and before.participant is None
+        store = self._replayed(root, self.HINT, hint_given=True)
+        recorded = recorded_identity(store)
+        assert recorded is not None and (recorded.participant, recorded.session) == ("p01", "s1")
+        assert "participant" in recorded.sources
+
+    def test_a_recorded_participant_still_refuses_beside_an_empty_session(self, tmp_path: Path) -> None:
+        """Only a recorded value that the hint changes is refused; the empty session it fills is not named."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=hint_for("p01", task="voluntary-cough"))
+        with pytest.raises(IdentityChangeRefused) as refused:
+            _checked(root, hint=hint_for("p02", "s1", "voluntary-cough"), hint_given=True)
+        assert refused.value.change == {"participant": {"from": "p01", "to": "p02"}}
+
     def test_the_driver_row_names_the_refused_change(self, tmp_path: Path) -> None:
         """The row is refused, names the change, and the store is left as it was."""
         root = tmp_path / "rec-0001_20260920-030808"
