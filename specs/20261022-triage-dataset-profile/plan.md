@@ -10,8 +10,13 @@ profile's files are read instead of them; by the end there is nothing left to ta
 `design/triage-dataset-profile`:
 - Each step is its own PR against that branch, reviewed by the triage owner. A step starts only after the
   one before it has been reviewed.
-- The branch's own PR (#607) merges into `alpha` once, when every step is in. A published alpha therefore
-  holds either none of the refactor or all of it.
+- The stack reaches `alpha` in **two published alphas** (decided 2026-11-14, Satra's review C1). Senselab can
+  drop its B2AI copy (step 7, #639) only after b2aiprep holds its own (#365), and #365 can only pin a published
+  alpha that has the profile machinery:
+  1. #607 … #638, with the full-review fixes moved below step 7, merge into `alpha`; **alpha A** is published.
+  2. b2aiprep pins alpha A, checks its features (1.3 against 1.4), and merges #365.
+  3. #639 and #642 merge into `alpha`; **alpha B** is published.
+  4. b2aiprep pins alpha B and merges #371.
 - `alpha` is merged into the branch regularly, with a merge rather than a rebase, so the step PRs keep
   their history while triage keeps changing on `alpha`.
 
@@ -103,9 +108,14 @@ leaves senselab in this step, so the mechanism is tested as it will be used.
   - policy switches that only add review keep their values.
 - **Loaders:** they cache per active profile (`profile_cache`). The detector catalogue is built on first use, not
   at import.
-- **Config:** the profile is activated only after the merged config validates. A config loaded without a profile
-  while one is active uses that profile, so the hash always names the files read.
-- **Hash:** unchanged without a profile. With one, it adds the profile's name, version and digest.
+- **Config:** the profile is activated only after the merged config validates. A config is loaded either with a
+  named profile or with `profile=ACTIVE`; loading without one while a profile is active is refused, so the hash
+  always names the files read. Worker processes are handed the parent's profile explicitly. (Until 2026-11-14 a
+  config loaded without a profile silently took the active one; Satra's review replaced that, decision 4.)
+- **Hash:** unchanged without a profile. With one, it adds the profile's name, version and digest. The digest is
+  over each YAML file's parsed values, so a comment edit does not change it; non-YAML files are hashed by their
+  bytes. A digest recorded under the earlier raw-byte rule is still accepted while it matches the current files
+  (2026-11-14, decision 3).
 - **Tests:** they run with the B2AI profile active (fixture `b2ai_triage_profile` in `src/tests/conftest.py`).
   The no-profile behaviour is tested with `without_triage_profile`.
 - **`scripts/triage_audio.py --profile`.** The `extend_*` drivers get it in step 3.
@@ -198,7 +208,8 @@ follows it. What changed is recorded. Replay refuses only where a change is almo
    version and digest (step 2). No separate hash of the identity rule is needed.
 3. **Replay checks the record first**, before anything is retired, in this order:
    1. **Store missing:** refuse.
-   2. **Audio digest differs** from ADMIT's: refuse. It is a different recording.
+   2. **Audio digest differs** from ADMIT's: refuse. It is a different recording. The digest is always computed;
+      equal size and modification time are not taken as a match (2026-11-14, #613-1).
    3. **Profile name differs**, or the run had a profile and the replay has none: refuse, unless
       `--allow-profile-change`.
    4. **Profile version or contents, or config, differ:** accept and record them on the marker. Re-deciding after a
@@ -213,8 +224,11 @@ follows it. What changed is recorded. Replay refuses only where a change is almo
       explicit `--no-hint` is given. The B2AI corpus runs used a hint, so silence would drop the expected speech.
    8. **Expected speech changed, or prompts appear where there were none:** redo the stimulus alignment from the
       stored consensus words. A hint change never needs a fresh run.
-   9. **Participant or session changed:** list the affected participants on the marker and in the log, so
-      `extend_cohort.py apply --participants` and the session floor rerun only those.
+   9. **Participant or session changed:** refuse, unless `--allow-identity-change` (2026-11-14, decision 2, which
+      replaces "accept"). A store with no recorded identity gets its first one and a task change is accepted, as in
+      check 5. With the flag, list the affected participants on the marker and in the log, so
+      `extend_cohort.py apply --participants` and the session floor rerun only those; the driver reports the count
+      of refused stores per slice.
 
    **Old stores:**
    - Stores written before `c0fe77f0b` (2026-09-08) have no audio digest, so check 2 is skipped.
@@ -1025,7 +1039,9 @@ become settings with today's values as senselab's defaults:
 - `asr.recognizers`: the list of speech recognizers, each with a name, model, revision, how it times words and its
   options; the consensus transcript is already built over however many there are, so one recognizer or three work;
 - `ast.model` and `ast.revision`: the AudioSet sound-event classifier (a checkpoint with the same label set);
-- `residual.enhancer`: the enhancement model the background residual is taken against.
+- `residual.enhancer`: the enhancement model the background residual is taken against;
+- the PII detector revision (`nvidia/gliner-pii`), added 2026-11-14 (decision 6): it was loaded from `main`. The
+  revision used is written into each `pii_scan` record, and it is part of `config_hash`.
 YAMNet, HeAR, the phonetic posteriorgram and SQUIM stay fixed: senselab has one implementation of each, so another
 model is a new component, not a setting (deferred with the modular design).
 
@@ -1104,6 +1120,25 @@ the first time, the same in both trees. The profile digest changes (the carrier 
 The 62,550 stored runs used the 2026-09-04 tree's names; the next `redcap2bids` renames 43 (`high-to-low` to
 `glides-high-to-low`), so the patch rerun is a fresh run on the new tree, with the extend passes including
 `extend_task_squim` (#614), not a replay.
+
+## Satra's review (2026-11-14): decisions
+
+Satra reviewed the whole stack on 2026-11-14 (summary on #607). The findings were checked against the code and the
+handoffs before anything changed; the owner decided:
+
+1. **Merge order:** two published alphas (see the top of this plan), with the full-review fixes moved below step 7
+   so alpha A carries them.
+2. **Replay and identity:** a replay refuses a participant or session change unless `--allow-identity-change`
+   (replay check 9; it was "accept").
+3. **Profile digest:** over parsed YAML values, so comments can be corrected freely; earlier raw-byte digests are
+   still accepted while they match (step 2, "Hash").
+4. **Profile adoption:** explicit (`profile=ACTIVE`); a load without a profile while one is active is refused, and
+   workers are handed the parent's profile (step 2, "Config").
+5. **Reviewer repeatability:** record the host, GPU and software of each reviewer answer, and measure disagreement on
+   a few hundred recordings across two machines before deciding on repeats. If repeats are used: any run flagging a
+   recording sends it to review, and it is clean only if every run agrees. Never a majority vote.
+6. **PII detector:** pinned by revision in the config, recorded in each `pii_scan` record and in `config_hash`
+   (step 11c).
 
 ## After this plan
 

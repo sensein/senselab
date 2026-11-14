@@ -91,9 +91,10 @@ A profile supplies files, not code, except for the optional `hints.py` and the h
    file the profile supplies, and falls back to the package for any file the profile does not supply.
 3. **One hash over everything that decides.** Today `config_hash` covers the merged YAML only
    (`config.py:201`). The packaged data files are pinned only by the senselab commit, but files supplied
-   from outside are not. The hash must cover the merged config plus the bytes of every profile file that
-   was loaded, or two runs with different rules would record the same hash. The run records the
-   profile's name and version beside it.
+   from outside are not. The hash must cover the merged config plus every profile file that was loaded,
+   or two runs with different rules would record the same hash. YAML files are hashed by their parsed
+   values, so correcting a comment changes nothing; other files by their bytes (2026-11-14: originally
+   "the bytes of every profile file"). The run records the profile's name and version beside it.
 4. **Identity from the declaration.** One function returns participant, session, task family and task
    index from the hint or the manifest row, with BIDS file-name parsing as the fallback. The B2AI
    `build_hint` writes `task_token`, so the regex stops being the source.
