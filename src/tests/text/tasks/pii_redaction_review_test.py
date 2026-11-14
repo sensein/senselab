@@ -37,13 +37,15 @@ SHA = "b" * 40
 # request pops the head: "ok" answers, "raise" raises, "hang" never answers, "exit" dies silently,
 # "fail_load" makes the load itself raise, which is the no-GPU-reachable shape. The queue is on disk
 # and popped destructively so that a *replacement* worker takes the next directive rather than
-# repeating the one that killed its predecessor.
+# repeating the one that killed its predecessor. Where `device` exists, the ready reply carries its JSON as
+# the worker's device report, as the shipped worker's probe would.
 _FAKE_WORKER = r"""
-import json, sys, time
+import json, os, sys, time
 
 MARKER = "%(marker)s"
 LOG = "%(log)s"
 SCRIPT = "%(script)s"
+DEVICE = "%(device)s"
 _replies = sys.stdout
 sys.stdout = sys.stderr
 
@@ -75,7 +77,11 @@ def main():
         pop()
         raise RuntimeError("no device found")
     print("loading shards 1/9", file=sys.stderr)
-    emit({"ready": True, "revision": init.get("revision"), "load_s": 0.01})
+    ready = {"ready": True, "revision": init.get("revision"), "load_s": 0.01}
+    if os.path.exists(DEVICE):
+        with open(DEVICE) as handle:
+            ready["device"] = json.loads(handle.read())
+    emit(ready)
     while True:
         line = sys.stdin.readline()
         if not line:
@@ -121,17 +127,20 @@ class Harness:
     Attributes:
         log: The file each spawn appends its load payload to.
         script: The file holding the per-request directives.
+        device: The file holding the device report the worker sends when ready; none is sent while it is absent.
     """
 
-    def __init__(self, log: Path, script: Path) -> None:
-        """Bind the two files the fake worker reads and writes.
+    def __init__(self, log: Path, script: Path, device: Path) -> None:
+        """Bind the files the fake worker reads and writes.
 
         Args:
             log: Where spawns are recorded.
             script: Where the directives live.
+            device: Where the device report lives.
         """
         self.log = log
         self.script = script
+        self.device = device
 
     @property
     def loads(self) -> list[dict[str, Any]]:
@@ -153,12 +162,12 @@ class Harness:
 def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Harness]:
     """A review backend whose worker is the fake script, with no worker left running afterwards."""
     shutdown_review_worker()
-    log, script = tmp_path / "spawns.jsonl", tmp_path / "script.json"
+    log, script, device = tmp_path / "spawns.jsonl", tmp_path / "script.json", tmp_path / "device.json"
     script.write_text("[]")
     monkeypatch.setattr(
         redaction_review,
         "_REVIEW_WORKER_SCRIPT",
-        _FAKE_WORKER % {"marker": redaction_review._WORKER_MARKER, "log": log, "script": script},
+        _FAKE_WORKER % {"marker": redaction_review._WORKER_MARKER, "log": log, "script": script, "device": device},
     )
     monkeypatch.setattr(redaction_review, "ensure_venv", lambda *a, **k: tmp_path / "venv")
     monkeypatch.setattr(redaction_review, "venv_python", lambda *a, **k: sys.executable)
@@ -166,7 +175,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Harness
     monkeypatch.setattr(redaction_review, "hf_subprocess_env", lambda *a, **k: {"PATH": "/usr/bin:/bin"})
     monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: SHA)
     try:
-        yield Harness(log, script)
+        yield Harness(log, script, device)
     finally:
         shutdown_review_worker()
 
@@ -222,73 +231,95 @@ class TestTheWeightsAreLoadedOncePerProcess:
         assert result.peak_reserved_mib == 0 and result.resident_mib == 0
 
 
-def _host_runner(smi: tuple[int, str], torch_version: str | None) -> Any:  # noqa: ANN401 — a host Runner
-    """A stand-in for the host probe's subprocess runner: canned ``nvidia-smi`` rows and a venv torch version."""
+def _smi(answer: tuple[int, str]) -> Any:  # noqa: ANN401 — a host Runner
+    """A stand-in for the host probe's subprocess runner that answers ``nvidia-smi`` and refuses anything else."""
 
     def run(argv: Any) -> tuple[int, str]:  # noqa: ANN401
-        if argv[0] == "nvidia-smi":
-            return smi
-        return 0, json.dumps({"python": "3.12.11", "torch": torch_version, "torch_cuda": None})
+        assert argv[0] == "nvidia-smi", f"the reviewer runtime ran {argv[0]!r}; it needs only nvidia-smi"
+        return answer
 
     return run
+
+
+_DEVICE = {"gpus": ["NVIDIA H100 80GB HBM3"], "torch": "2.8.0+cu128", "cuda_visible_devices": "2"}
 
 
 class TestEachAnswerRecordsWhereItRan:
     """Satra review 2026-11-14, decision 5: the machine and software behind every answer are on its record."""
 
-    @pytest.fixture(autouse=True)
-    def _venv_python(self, tmp_path: Path) -> None:
-        (tmp_path / "venv" / "bin").mkdir(parents=True)
-        (tmp_path / "venv" / "bin" / "python").write_text("")
-
-    def test_the_answer_records_the_host_the_gpus_and_the_software(
+    def test_the_answer_records_the_device_the_worker_saw_and_the_node_beside_it(
         self, harness: Harness, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Host, every GPU's name, the driver, the venv's torch and (no vLLM here) None; the amortised round too."""
+        """The worker's own devices, torch and mask; the node's GPUs and driver apart; the amortised round too."""
         import socket
 
         from senselab.utils.reproduce import host
 
         monkeypatch.setenv("SLURM_JOB_ID", "4242")
-        smi = (0, "NVIDIA A100-SXM4-80GB, 570.86.15\nNVIDIA A100-SXM4-80GB, 570.86.15\n")
-        monkeypatch.setattr(host, "_run", _host_runner(smi, "2.8.0+cu128"))
+        calls: list[Any] = []
+        smi = _smi((0, "NVIDIA A100-SXM4-80GB, 570.86.15\nNVIDIA H100 80GB HBM3, 570.86.15\n"))
+        monkeypatch.setattr(host, "_run", lambda argv: calls.append(argv) or smi(argv))
+        harness.device.write_text(json.dumps(_DEVICE))
         first = review_transcript("one", model_id="stub/model", policy=POLICY)
         second = review_transcript("two", model_id="stub/model", policy=POLICY)
         assert first.available, first.failure
         assert first.runtime == {
             "host": socket.gethostname(),
-            "gpus": ["NVIDIA A100-SXM4-80GB", "NVIDIA A100-SXM4-80GB"],
-            "nvidia_driver": "570.86.15",
+            "gpus": ["NVIDIA H100 80GB HBM3"],
             "torch": "2.8.0+cu128",
+            "cuda_visible_devices": "2",
+            "node_gpus": ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"],
+            "nvidia_driver": "570.86.15",
             "vllm": None,
             "slurm_job_id": "4242",
         }
         assert set(first.runtime) == set(redaction_review.RUNTIME_KEYS)
+        assert len(calls) == 1, "one nvidia-smi query per worker start"
         assert second.runtime == first.runtime, "a reused worker answers on the same machine"
         assert redaction_review.review_payload(first)["runtime"] == first.runtime
         assert (first.model_id, first.revision) == ("stub/model", SHA), "the model and its commit stay beside it"
 
-    def test_a_host_without_a_gpu_records_none(self, harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No nvidia-smi: no GPUs and no driver, and the answer still stands."""
+    def test_a_worker_on_no_gpu_records_none(self, harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A CPU worker and a node without nvidia-smi: no devices, no driver, and the answer still stands."""
         from senselab.utils.reproduce import host
 
-        monkeypatch.setattr(host, "_run", _host_runner((127, ""), None))
+        monkeypatch.setattr(host, "_run", _smi((127, "")))
+        harness.device.write_text(json.dumps({"gpus": None, "torch": "2.8.0+cpu", "cuda_visible_devices": None}))
         result = review_transcript("one", model_id="stub/model", policy=POLICY)
         assert result.available
-        assert result.runtime["gpus"] == [] and result.runtime["nvidia_driver"] is None
-        assert result.runtime["torch"] is None
+        assert result.runtime["gpus"] is None and result.runtime["cuda_visible_devices"] is None
+        assert result.runtime["node_gpus"] == [] and result.runtime["nvidia_driver"] is None
+        assert result.runtime["torch"] == "2.8.0+cpu"
+
+    def test_a_worker_that_reports_no_device_records_none(
+        self, harness: Harness, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A worker whose ready reply carries no device report: the device fields are None, never guessed."""
+        from senselab.utils.reproduce import host
+
+        monkeypatch.setattr(host, "_run", _smi((0, "NVIDIA A100-SXM4-80GB, 570.86.15\n")))
+        result = review_transcript("one", model_id="stub/model", policy=POLICY)
+        assert result.available
+        assert (result.runtime["gpus"], result.runtime["torch"], result.runtime["cuda_visible_devices"]) == (
+            None,
+            None,
+            None,
+        )
+        assert result.runtime["node_gpus"] == ["NVIDIA A100-SXM4-80GB"]
 
     def test_a_failing_probe_never_fails_the_review(self, harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Provenance describes the answer; a probe that raises leaves every value None rather than no answer."""
+        """Provenance describes the answer; an inventory that raises leaves its values empty rather than no answer."""
         from senselab.utils.reproduce import host
 
-        def _boom(*_a: object, **_k: object) -> dict[str, Any]:
+        def _boom(*_a: object, **_k: object) -> Any:  # noqa: ANN401
             raise OSError("no /proc")
 
-        monkeypatch.setattr(host, "host_record", _boom)
+        monkeypatch.setattr(host, "gpu_inventory", _boom)
+        harness.device.write_text(json.dumps(_DEVICE))
         result = review_transcript("one", model_id="stub/model", policy=POLICY)
         assert result.available
-        assert result.runtime == {**dict.fromkeys(redaction_review.RUNTIME_KEYS), "gpus": []}
+        assert result.runtime["node_gpus"] == [] and result.runtime["nvidia_driver"] is None
+        assert result.runtime["gpus"] == _DEVICE["gpus"], "the worker's own report stands"
 
     def test_an_answer_that_never_came_records_no_machine(self, harness: Harness) -> None:
         """A worker that did not start answered nothing, so nothing says where it ran."""

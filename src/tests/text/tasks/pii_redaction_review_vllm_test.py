@@ -225,21 +225,29 @@ class TestTheWorkerAgainstAMockedServer:
     def test_the_answer_records_the_vllm_version_and_the_machine(
         self, mocked_vllm: dict[str, Any], monkeypatch: pytest.MonkeyPatch, policy: rr.ReviewPolicy
     ) -> None:
-        """The vLLM engine's answer names the vLLM that served it, the venv's torch and the GPUs it ran on."""
+        """The answer names the vLLM that served it, and the worker process's own torch, devices and mask.
+
+        The worker is the shipped script on this interpreter, so its torch is this one; with no device visible it
+        names none. The node's inventory is recorded apart.
+        """
+        import torch
+
         from senselab.utils.reproduce import host
 
         def _run(argv: Any) -> tuple[int, str]:  # noqa: ANN401
-            if argv[0] == "nvidia-smi":
-                return 0, "NVIDIA H100 80GB HBM3, 570.86.15\n"
-            return 0, json.dumps({"python": "3.12.11", "torch": "2.9.0+cu128", "torch_cuda": "12.8"})
+            assert argv[0] == "nvidia-smi"
+            return 0, "NVIDIA H100 80GB HBM3, 570.86.15\n"
 
         monkeypatch.setattr(host, "_run", _run)
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
         engine = rv.engine_identity("vllm", _settings())
         result = rr.review_transcript("hello", policy=policy, context={"item_set": True}, engine=engine)
         assert result.available, result.failure
         assert result.runtime["vllm"] == "0.31.0" == engine["version"]
-        assert result.runtime["torch"] == "2.9.0+cu128"
-        assert result.runtime["gpus"] == ["NVIDIA H100 80GB HBM3"] and result.runtime["nvidia_driver"] == "570.86.15"
+        assert result.runtime["torch"] == torch.__version__, "the worker's own torch, not the host's probe of a venv"
+        assert result.runtime["gpus"] is None and result.runtime["cuda_visible_devices"] == ""
+        assert result.runtime["node_gpus"] == ["NVIDIA H100 80GB HBM3"]
+        assert result.runtime["nvidia_driver"] == "570.86.15"
         assert rr.review_payload(result)["runtime"] == result.runtime
 
     def test_an_over_long_request_fails_alone_and_the_server_stops_with_the_worker(

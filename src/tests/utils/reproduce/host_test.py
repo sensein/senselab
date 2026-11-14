@@ -149,3 +149,94 @@ def test_no_venv_probes_only_the_host() -> None:
     record = host_record(None, runner=runner)
     assert (record["python"], record["torch"], record["torch_cuda"]) == (None, None, None)
     assert [c[0] for c in calls] == ["nvidia-smi"]
+
+
+_FAKE_TORCH = """
+__version__ = "{version}"
+
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return {available}
+
+    @staticmethod
+    def device_count():
+        return {count}
+
+    @staticmethod
+    def get_device_name(index):
+        return ["NVIDIA H100 80GB HBM3", "NVIDIA A100-SXM4-80GB"][index]
+"""
+
+
+def _probe_in_a_worker(tmp_path: Path, torch_source: str | None, visible: str | None) -> dict[str, object]:
+    """Run the worker device probe in a fresh interpreter with no site-packages, seeing only the given ``torch``.
+
+    Args:
+        tmp_path: Where the stand-in ``torch`` package goes.
+        torch_source: The stand-in's ``__init__.py``; None leaves torch unimportable.
+        visible: The worker's ``CUDA_VISIBLE_DEVICES``; None leaves it unset.
+
+    Returns:
+        What ``senselab_worker_device()`` returned there.
+    """
+    import os
+    import subprocess
+    import sys
+
+    root = tmp_path / "site"
+    if torch_source is not None:
+        (root / "torch").mkdir(parents=True)
+        (root / "torch" / "__init__.py").write_text(torch_source)
+    env = {key: value for key, value in os.environ.items() if key not in ("PYTHONPATH", "CUDA_VISIBLE_DEVICES")}
+    if visible is not None:
+        env["CUDA_VISIBLE_DEVICES"] = visible
+    code = (
+        f"import json, sys\nsys.path.insert(0, {str(root)!r})\n"
+        + host.WORKER_DEVICE_PROBE
+        + "\nprint(json.dumps(senselab_worker_device()))\n"
+    )
+    done = subprocess.run([sys.executable, "-S", "-c", code], capture_output=True, text=True, env=env, check=True)
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+class TestTheWorkerNamesTheDevicesItSees:
+    """Satra review 2026-11-14: the GPU on a reviewer's answer is the device its worker process saw."""
+
+    def test_a_cuda_worker_names_every_visible_device_its_torch_and_its_mask(self, tmp_path: Path) -> None:
+        """``torch.cuda.get_device_name`` per visible device, the process's own torch, and CUDA_VISIBLE_DEVICES."""
+        source = _FAKE_TORCH.format(version="2.9.0+cu128", available=True, count=2)
+        assert _probe_in_a_worker(tmp_path, source, "3,5") == {
+            "gpus": ["NVIDIA H100 80GB HBM3", "NVIDIA A100-SXM4-80GB"],
+            "torch": "2.9.0+cu128",
+            "cuda_visible_devices": "3,5",
+        }
+
+    def test_a_cpu_worker_names_no_device(self, tmp_path: Path) -> None:
+        """No CUDA: no devices, and torch still named."""
+        source = _FAKE_TORCH.format(version="2.9.0+cpu", available=False, count=0)
+        assert _probe_in_a_worker(tmp_path, source, None) == {
+            "gpus": None,
+            "torch": "2.9.0+cpu",
+            "cuda_visible_devices": None,
+        }
+
+    def test_a_worker_without_torch_reports_none(self, tmp_path: Path) -> None:
+        """Torch absent: every device field None, and the probe does not raise."""
+        assert _probe_in_a_worker(tmp_path, None, "") == {"gpus": None, "torch": None, "cuda_visible_devices": ""}
+
+    def test_a_cuda_query_that_raises_names_no_device(self, tmp_path: Path) -> None:
+        """A CUDA runtime that fails on the query leaves the devices unnamed rather than failing the worker."""
+        source = _FAKE_TORCH.format(version="2.9.0+cu128", available=True, count=3)
+        assert _probe_in_a_worker(tmp_path, source, None)["gpus"] is None
+
+    def test_a_report_is_read_back_with_anything_malformed_as_none(self) -> None:
+        """The host side takes the three keys and nothing else, and a missing or odd report is None throughout."""
+        empty = dict.fromkeys(host.WORKER_DEVICE_KEYS)
+        assert host.worker_device(None) == empty
+        assert host.worker_device("garbage") == empty
+        assert host.worker_device({"gpus": "H100", "torch": 2, "cuda_visible_devices": 0, "extra": 1}) == empty
+        reported = {"gpus": ["NVIDIA L40S"], "torch": "2.8.0", "cuda_visible_devices": "0"}
+        assert host.worker_device(reported) == reported
+        assert set(host.worker_device(reported)) == set(host.WORKER_DEVICE_KEYS)

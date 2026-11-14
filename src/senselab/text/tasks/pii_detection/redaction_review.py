@@ -53,6 +53,7 @@ import yaml
 
 from senselab.text.tasks.pii_detection.redaction_policy import Lexicon, country_runs, date_positions, state_positions
 from senselab.utils.dependencies import hf_subprocess_env
+from senselab.utils.reproduce.host import WORKER_DEVICE_PROBE
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
 
 logger = logging.getLogger("senselab")
@@ -870,45 +871,54 @@ class ReviewResult:
     runtime: dict[str, Any] = field(default_factory=dict)
 
 
-RUNTIME_KEYS = ("host", "gpus", "nvidia_driver", "torch", "vllm", "slurm_job_id")
+RUNTIME_KEYS = ("host", "gpus", "torch", "cuda_visible_devices", "node_gpus", "nvidia_driver", "vllm", "slurm_job_id")
 """What :func:`reviewer_runtime` records about the machine and software behind an answer."""
 
 
-def reviewer_runtime(venv_dir: str | Path, engine: Mapping[str, Any]) -> dict[str, Any]:
+def reviewer_runtime(engine: Mapping[str, Any], device: object) -> dict[str, Any]:
     """Where and on what software a reviewer worker answers, recorded beside each answer and never in its key.
 
     Two runs of one checkpoint on one engine can answer differently on different machines (Satra review
-    2026-11-14, decision 5), so each answer carries the host, the GPUs and driver it ran on and the torch and vLLM
-    it ran under. None of it shapes the request, so none of it is in the reading's cache key, and a cached reading
-    keeps the record of the machine that produced it. The probe is the host record's
-    (:func:`~senselab.utils.reproduce.host.host_record`): ``nvidia-smi`` for the GPUs and driver, the venv's own
-    interpreter for torch.
+    2026-11-14, decision 5), so each answer carries what the worker process itself reported
+    (:data:`~senselab.utils.reproduce.host.WORKER_DEVICE_PROBE`): the name of every CUDA device it could see, its own
+    torch and its ``CUDA_VISIBLE_DEVICES``. Beside that, from this host: its name, every GPU ``nvidia-smi`` lists on
+    the node and the driver, the vLLM version the server reported, and the batch job id. None of it shapes the
+    request, so none of it is in the reading's cache key, and a cached reading keeps the record of the machine that
+    produced it.
 
     Args:
-        venv_dir: The worker's venv, whose torch is the one that ran.
         engine: The engine identity the worker reported; its ``version`` is the vLLM version on that engine.
+        device: The worker's device report, as it sent it; None where it sent none.
 
     Returns:
-        The keys in :data:`RUNTIME_KEYS`. A value that cannot be determined is None (``gpus`` empty); a probe
-        that fails leaves every value so rather than failing the review.
+        The keys in :data:`RUNTIME_KEYS`. ``gpus`` (the worker's devices) is None where the worker saw no CUDA
+        device or reported none; ``node_gpus`` (the node's inventory) is empty where ``nvidia-smi`` is absent. A
+        value that cannot be determined is None, and a probe that fails leaves its values so rather than failing the
+        review.
     """
+    import os
+    import socket
+
     from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_VLLM
-    from senselab.utils.reproduce.host import gpu_inventory, host_record
+    from senselab.utils.reproduce.host import gpu_inventory, worker_device
 
     vllm = engine.get("version") if engine.get("name") == ENGINE_VLLM else None
     try:
-        record = host_record(venv_dir)
-        gpus, driver = gpu_inventory()
+        node_gpus, driver = gpu_inventory()
     except Exception as exc:  # noqa: BLE001 — provenance never fails the review it describes
-        logger.warning(f"reviewer runtime: the host probe failed ({type(exc).__name__}: {exc})")
-        return {**dict.fromkeys(RUNTIME_KEYS), "gpus": [], "vllm": vllm}
+        logger.warning(f"reviewer runtime: the GPU inventory failed ({type(exc).__name__}: {exc})")
+        node_gpus, driver = [], None
+    try:
+        host: str | None = socket.gethostname()
+    except OSError:
+        host = None
     return {
-        "host": record["hostname"],
-        "gpus": gpus,
+        "host": host,
+        **worker_device(device),
+        "node_gpus": node_gpus,
         "nvidia_driver": driver,
-        "torch": record["torch"],
         "vllm": vllm,
-        "slurm_job_id": record["slurm_job_id"],
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
     }
 
 
@@ -920,7 +930,9 @@ def reviewer_runtime(venv_dir: str | Path, engine: Mapping[str, Any]) -> dict[st
 #     "model_path": str | None,   # staged snapshot dir, named by the commit it holds
 #     "revision": str | None,     # resolved commit SHA, never a mutable ref
 #   }
-# Load reply (stdout):        {"ready": True, "revision": str | None, "load_s": float}
+# Load reply (stdout):        {"ready": True, "revision": str | None, "load_s": float,
+#                              "device": {"gpus": [str] | None, "torch": str | None,
+#                                         "cuda_visible_devices": str | None}}
 #
 # Review request (stdin):     {"text": str, "prompt": str, "max_new_tokens": int}
 # Review reply (stdout):      {"completion": str, "generate_s": float, "output_tokens": int,
@@ -955,6 +967,10 @@ def emit(payload):
     _replies.write(MARKER + json.dumps(payload) + "\n")
     _replies.flush()
 
+"""
+    + WORKER_DEVICE_PROBE
+    + r"""
+
 
 def load(args):
     import torch
@@ -979,7 +995,14 @@ def load(args):
 def main():
     started = time.monotonic()
     torch, tokenizer, model, loaded_revision = load(json.loads(sys.stdin.readline()))
-    emit({"ready": True, "revision": loaded_revision, "load_s": round(time.monotonic() - started, 3)})
+    emit(
+        {
+            "ready": True,
+            "revision": loaded_revision,
+            "load_s": round(time.monotonic() - started, 3),
+            "device": senselab_worker_device(),
+        }
+    )
     while True:
         line = sys.stdin.readline()
         if not line:
@@ -1027,8 +1050,7 @@ except Exception as exc:
     emit({"error": {"type": type(exc).__name__, "message": str(exc)}})
     sys.exit(1)
 """
-    % _WORKER_MARKER
-)
+) % _WORKER_MARKER
 
 
 def _staged_snapshot(repo_id: str, revision: str) -> Optional[str]:
@@ -1717,7 +1739,7 @@ class _ReviewWorker:
         reply = self._await(timeout_s)
         self.revision = reply.get("revision") or self.revision
         self.load_s = round(time.monotonic() - began, 3)
-        self.runtime = reviewer_runtime(venv_dir, self.engine)
+        self.runtime = reviewer_runtime(self.engine, reply.get("device"))
 
     @property
     def alive(self) -> bool:

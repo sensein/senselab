@@ -114,6 +114,54 @@ def gpu_inventory(*, runner: Runner | None = None) -> tuple[list[str], str | Non
     return [row[0] for row in rows if row[0]], (rows[0][1] or None) if rows else None
 
 
+WORKER_DEVICE_KEYS = ("gpus", "torch", "cuda_visible_devices")
+"""What :data:`WORKER_DEVICE_PROBE` reports about the process it runs in."""
+
+WORKER_DEVICE_PROBE = r"""
+def senselab_worker_device():
+    import os
+
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    try:
+        import torch
+    except Exception:
+        return {"gpus": None, "torch": None, "cuda_visible_devices": visible}
+    gpus = None
+    try:
+        if torch.cuda.is_available():
+            gpus = [str(torch.cuda.get_device_name(index)) for index in range(torch.cuda.device_count())]
+    except Exception:
+        gpus = None
+    return {"gpus": gpus, "torch": str(torch.__version__), "cuda_visible_devices": visible}
+"""
+"""Source of ``senselab_worker_device()``, for a worker script to define and call in its own process.
+
+It returns the keys in :data:`WORKER_DEVICE_KEYS`: the name of every CUDA device that process can see
+(``torch.cuda.get_device_name``), the process's own ``torch.__version__`` and its ``CUDA_VISIBLE_DEVICES``.
+``gpus`` is None where CUDA is unavailable and ``torch`` is None where torch does not import. The source holds no
+percent sign, so it can be pasted into a worker script that is itself ``%``-formatted.
+"""
+
+
+def worker_device(reported: object) -> dict[str, Any]:
+    """A worker's :data:`WORKER_DEVICE_PROBE` report, with anything malformed or missing read as None.
+
+    Args:
+        reported: What the worker sent; None where it sent nothing.
+
+    Returns:
+        A dict with exactly the keys in :data:`WORKER_DEVICE_KEYS`.
+    """
+    given: dict[str, Any] = reported if isinstance(reported, dict) else {}
+    gpus = given.get("gpus")
+    torch_version, visible = given.get("torch"), given.get("cuda_visible_devices")
+    return {
+        "gpus": [str(name) for name in gpus] if isinstance(gpus, list) else None,
+        "torch": torch_version if isinstance(torch_version, str) else None,
+        "cuda_visible_devices": visible if isinstance(visible, str) else None,
+    }
+
+
 def _probe(venv: Path, runner: Runner) -> dict[str, Any]:
     empty: dict[str, Any] = {"python": None, "torch": None, "torch_cuda": None}
     python = venv / "bin" / "python"
