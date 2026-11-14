@@ -1,13 +1,13 @@
 # slice_pool: a worker pool over a stage's slices
 
 Owner-approved 2026-10-11 for the r36 round of the r18d triage campaign on ORCD. This directory is a copy of the
-run-tree tool (`/orcd/scratch/bcs/002/satra/r18d_20261010/pool/`) and of the r36 chain built on it. It is not
+run-tree tool (`${ORCD_GROUP_SCRATCH}/r18d_20261010/pool/`) and of the r36 chain built on it. It is not
 package code.
 
 ## Problem
 
 Every sliced stage submitted one array task per slice (128-task arrays). A multi-partition array counts against
-the MaxSubmitPU of every partition it lists (pi_satra 256, ou_bcs_low 256, ou_bcs_normal 256, mit_preemptable
+the MaxSubmitPU of every partition it lists (${CPU_PARTITION} 256, ou_bcs_low 256, ou_bcs_normal 256, mit_preemptable
 448, mit_normal 448, ou_bcs_high 4). Submitting a chain up front therefore capped out at about 256 tasks, and
 a slice whose task died stayed missing until someone resubmitted that index by hand.
 

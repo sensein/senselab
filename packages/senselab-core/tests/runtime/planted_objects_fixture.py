@@ -14,7 +14,7 @@ import os
 import re
 import stat
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -64,41 +64,71 @@ def _opener(url: str) -> io.BytesIO:
     return io.BytesIO(PAYLOAD)
 
 
-def _key() -> Any:  # noqa: ANN401
+def store_key(task: str = "asr", **inputs: str) -> Any:  # noqa: ANN401
+    """Return the store tests' key of `task` over `inputs`, port to 64-hex content digest (`audio` by default)."""
     from senselab_core.kernel.identity import LogicalKey, ModelIdentity
 
     return LogicalKey(
-        task="asr",
+        task=task,
         task_version="1",
         backend="hf",
         backend_version="1",
         model=ModelIdentity(id="org/asr", identity="0" * 40),
         params={"beam": 1},
-        inputs={"audio": "content:" + "a" * 64},
+        backend_params={},
+        inputs={port: "content:" + digest for port, digest in (inputs or {"audio": "a" * 64}).items()},
     )
 
 
-def _ctx(platform: str = "linux") -> Any:  # noqa: ANN401
+def store_context(platform: str = "linux", host: str = "node1", device: str = "cpu") -> Any:  # noqa: ANN401
+    """Return the store tests' execution context on `platform`, `host` and `device`."""
     from senselab_core.kernel.identity import ExecutionContext
 
     return ExecutionContext(
         env_lock="lock",
         platform=platform,
         wheel_set="wheels",
-        numerics={"device": "cpu", "precision": "fp32"},
+        numerics={"device": device, "precision": "fp32"},
         decoder=None,
         driver={},
-        host="node1",
+        host=host,
         protocol="p1",
         model_source="hf",
+        env_license=None,
     )
+
+
+def entry_dir(root: Path, k: Any, c: Any) -> Path:  # noqa: ANN401
+    """Return the store entry of key `k` in context `c` under `root`."""
+    from senselab_core.runtime.store import STORE_DIR
+
+    d = str(k.digest())
+    return root / STORE_DIR / d[:2] / d / str(c.fingerprint())
+
+
+def unseal(entry: Path) -> Path:
+    """Make a committed entry writable, as an operator with the owner's rights could."""
+    entry.chmod(0o770)
+    for member in entry.iterdir():
+        member.chmod(0o660)
+    return entry
+
+
+def rewrite_json(path: Path, change: Callable[[dict[str, Any]], None]) -> None:
+    """Apply `change` to a store member's JSON record and write it back canonical."""
+    from senselab_worker.canonical import jcs_dumps
+
+    unseal(path.parent)
+    record = json.loads(path.read_bytes())
+    change(record)
+    path.write_bytes(jcs_dumps(record))
 
 
 def _entry(root: Path, platform: str = "linux") -> Path:
     from senselab_core.runtime.store import STORE_DIR
 
-    d = _key().digest()
-    entry: Path = root / STORE_DIR / d[:2] / d / _ctx(platform).fingerprint()
+    d = store_key().digest()
+    entry: Path = root / STORE_DIR / d[:2] / d / store_context(platform).fingerprint()
     return entry
 
 
@@ -206,7 +236,7 @@ def probe_file_at_a_store_directory(scratch: str, level: str, sealed: str) -> di
     from senselab_core.runtime.store import ResultStore
 
     root = Path(scratch) / "root"
-    store, k, c = ResultStore(root), _key(), _ctx()
+    store, k, c = ResultStore(root), store_key(), store_context()
     store.put(k, {"y": 1}, c)
     entry = _entry(root)
     target = {"store": entry.parents[2], "prefix": entry.parents[1], "digest": entry.parent}[level]
@@ -262,9 +292,9 @@ def probe_swapped_entry_members(scratch: str, swapped: str, policy: str) -> dict
     from senselab_core.runtime.store import ResultStore
 
     root = Path(scratch) / "root"
-    store, k = ResultStore(root), _key()
+    store, k = ResultStore(root), store_key()
     for platform in ("linux", "macos"):
-        store.put(k, _outputs_of(platform), _ctx(platform))
+        store.put(k, _outputs_of(platform), store_context(platform))
     linux, macos = _entry(root, "linux"), _entry(root, "macos")
     _unseal(linux)
     _unseal(macos)
@@ -286,7 +316,7 @@ def probe_swapped_entry_members(scratch: str, swapped: str, policy: str) -> dict
         os.chmod(entry, 0o550)
     served = {}
     for platform in ("linux", "macos"):
-        hit = store.get(k, _ctx(platform), policy)
+        hit = store.get(k, store_context(platform), policy)
         served[platform] = None if hit is None else [hit.context.platform, _plain(hit.outputs)]
     return {"served": served, "expected": {p: _plain(_outputs_of(p)) for p in ("linux", "macos")}}
 
@@ -297,19 +327,19 @@ def swap_subsets() -> Iterator[str]:
         yield "+".join(name for i, name in enumerate(SWAPPABLE) if mask >> i & 1)
 
 
-# -- put trusts an entry whose array is corrupt --
+# -- a re-put over an entry whose array is damaged --
 
 ARRAY_CORRUPTIONS = ("npy_bytes", "npy_truncated", "npy_missing", "npy_directory", "npy_symlink")
 
 
 def probe_corrupt_array(scratch: str, corruption: str) -> dict[str, Any]:
-    """Corrupt a committed entry's array, put the same outputs, and get at once."""
+    """Corrupt a committed entry's array, then twice put the same outputs and get at once; report each get."""
     import numpy
     from senselab_core.kernel.identity import ReusePolicy
     from senselab_core.runtime.store import ResultStore
 
     root = Path(scratch) / "root"
-    store, k, c = ResultStore(root), _key(), _ctx()
+    store, k, c = ResultStore(root), store_key(), store_context()
     outputs: dict[str, object] = {"a": numpy.arange(4, dtype="<f8")}
     identity = store.put(k, outputs, c)
     entry = _entry(root)
@@ -326,18 +356,21 @@ def probe_corrupt_array(scratch: str, corruption: str) -> dict[str, Any]:
     elif corruption == "npy_symlink":
         (Path(scratch) / "elsewhere.npy").write_bytes(data)
         os.symlink(Path(scratch) / "elsewhere.npy", npy)
-    again = store.put(k, outputs, c)
-    hit = store.get(k, c, ReusePolicy.EXACT)
-    return {"same_identity": again == identity, "served": None if hit is None else _plain(hit.outputs)}
+    served = []
+    for _ in range(2):
+        again = store.put(k, outputs, c)
+        hit = store.get(k, c, ReusePolicy.EXACT)
+        served.append(None if hit is None else _plain(hit.outputs))
+    return {"same_identity": again == identity, "served": served}
 
 
-# -- run manifests: umask, run id, leftover temporaries --
+# -- run manifests: umask, attempt id, leftover temporaries --
 
-BAD_RUN_IDS = ("../../escaped", "..", ".", "", "a/b", "a\\b", "a\x00b", "/abs")
+BAD_ATTEMPT_IDS = ("../../escaped", "..", ".", "", "a/b", "a\\b", "a\x00b", "/abs")
 
 
-def probe_run_id(scratch: str, run: str) -> dict[str, Any]:
-    """Record a resolution under run id `run`; report the error and every file written outside `runs/`."""
+def probe_attempt_id(scratch: str, run: str) -> dict[str, Any]:
+    """Record a resolution under attempt id `run`; report the error and every file written outside `runs/`."""
     from senselab_core.runtime import revision
 
     cache = Path(scratch) / "cache"
@@ -353,13 +386,13 @@ def probe_run_id(scratch: str, run: str) -> dict[str, Any]:
     return {"error": error, "outside": outside}
 
 
-def probe_environment_run_id(scratch: str, run: str) -> str:
-    """Return the error `run_id()` raises when SENSELAB_RUN_ID is `run`."""
+def probe_environment_attempt_id(scratch: str, run: str) -> str:
+    """Return the error `attempt_id()` raises when SENSELAB_RUN_ID is `run`."""
     from senselab_core.runtime import revision
 
     os.environ["SENSELAB_CACHE"] = str(Path(scratch) / "cache")
     os.environ["SENSELAB_RUN_ID"] = run
-    return _outcome(revision.run_id)[0]
+    return _outcome(revision.attempt_id)[0]
 
 
 def probe_run_manifest_modes(scratch: str, umask: str) -> dict[str, Any]:
@@ -409,9 +442,9 @@ def _setup(op: str, root: Path) -> None:
     from senselab_core.runtime.store import ResultStore
 
     if op in ("get", "collect"):
-        ResultStore(root).put(_key(), _outputs_of("linux"), _ctx())
+        ResultStore(root).put(store_key(), _outputs_of("linux"), store_context())
     if op == "get":
-        ResultStore(root).put(_key(), _outputs_of("macos"), _ctx("macos"))
+        ResultStore(root).put(store_key(), _outputs_of("macos"), store_context("macos"))
         damaged = _entry(root, "macos")
         _unseal(damaged)
         (damaged / "context.json").write_bytes(b"{}")
@@ -424,6 +457,7 @@ def _setup(op: str, root: Path) -> None:
 
 def _run(op: str, root: Path) -> bool:
     """Run `op` against `root`; return whether its result is right."""
+    from lease_clock_fixture import ManualClock
     from senselab_core.kernel.identity import ReusePolicy
     from senselab_core.runtime import revision
     from senselab_core.runtime.fetch import fetch
@@ -431,14 +465,16 @@ def _run(op: str, root: Path) -> bool:
 
     if op == "put":
         store = ResultStore(root)
-        store.put(_key(), _outputs_of("linux"), _ctx())
-        hit = store.get(_key(), _ctx(), ReusePolicy.EXACT)
+        store.put(store_key(), _outputs_of("linux"), store_context())
+        hit = store.get(store_key(), store_context(), ReusePolicy.EXACT)
         return hit is not None and _plain(hit.outputs) == _plain(_outputs_of("linux"))
     if op == "get":
-        hit = ResultStore(root).get(_key(), _ctx(), ReusePolicy.EXACT)
+        hit = ResultStore(root).get(store_key(), store_context(), ReusePolicy.EXACT)
         return hit is None or _plain(hit.outputs) == _plain(_outputs_of("linux"))
     if op == "collect":
-        ResultStore(root).collect(now=time.time() + 10**9)
+        # a zero poll and hang bound make any wait fail: the clock is never waited on
+        far = ManualClock(poll_s=0.0, hang_s=0.0, storage_origin=time.time() + 10**9)
+        ResultStore(root, clock=far).collect()
         return True
     if op == "fetch":
         paths = fetch(_manifest(["a/voice.wav"]), cache_root=root, opener=_opener)
@@ -528,14 +564,6 @@ def probe_primitive(  # noqa: C901, PLR0915 - the table of probed primitives, on
                 os.link(victim / "f", root / "hard_link")
                 top.write_atomically("hard_link", b"overwritten", grammar=ANY, mode=0o640)
                 return top.kind("hard_link")
-            if operation == "fs_now_symlink":
-                os.symlink(victim / "f", root / ".clock")
-                top.fs_now()
-                return top.kind(".clock")
-            if operation == "fs_now_hard_link":
-                os.link(victim / "f", root / ".clock")
-                top.fs_now()
-                return top.kind(".clock")
             if operation == "read_regular":
                 return top.read_regular("file_link")
             if operation == "outside_grammar":
@@ -580,8 +608,6 @@ def probe_primitive(  # noqa: C901, PLR0915 - the table of probed primitives, on
 ANY = re.compile(r".+")
 PRIMITIVE = {
     "write_atomically_hard_link": "",
-    "fs_now_symlink": "",
-    "fs_now_hard_link": "",
     "read_regular": "WrongKindError",
     "outside_grammar": "ValueError",
     "child": "WrongKindError",
@@ -635,7 +661,7 @@ def _at(name: Any, dir_fd: int | None) -> Path:  # noqa: ANN401
 
 
 def _recording() -> list[Path]:
-    """Record in this child the path of every name created through `os` (open, link, symlink, rename); return it.
+    """Record in this child every name created through `os` (open, link, symlink, rename, a lease's mkdir); return it.
 
     `shutil` is imported first: it decides at import whether `os.open` takes `dir_fd`.
     """
@@ -643,7 +669,7 @@ def _recording() -> list[Path]:
 
     written: list[Path] = []
     real_open, real_link, real_symlink = os.open, os.link, os.symlink
-    real_rename, real_replace = os.rename, os.replace
+    real_rename, real_replace, real_mkdir = os.rename, os.replace, os.mkdir
 
     def opened(path: Any, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:  # noqa: ANN401
         if flags & os.O_CREAT:
@@ -665,7 +691,13 @@ def _recording() -> list[Path]:
 
         return moved
 
+    def made(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if os.fsdecode(path).endswith(".lease"):
+            written.append(_at(path, dir_fd))
+        real_mkdir(path, mode, dir_fd=dir_fd)
+
     os.open = opened
+    os.mkdir = made
     os.link = linked
     os.symlink = symlinked
     os.rename = moving(real_rename)
@@ -674,12 +706,20 @@ def _recording() -> list[Path]:
 
 
 def _ephemeral(rel: Path) -> bool:
+    """Whether `rel` is a name no reader looks for: staging and temporaries, and any entry inside a lease directory.
+
+    An object planted inside a lease makes a fresh lease at its name, which is waited on for `stale_after` like any
+    live lease; planting at the lease's own name is what tests the lease.
+    """
     from senselab_core.runtime.fetch import LINK_STAGING_NAME
+    from senselab_core.runtime.locks import LEASE_NAME
     from senselab_core.runtime.storage import TEMPORARY_NAME
     from senselab_worker.ownership import UUID_HEX
 
-    return any(UUID_HEX.fullmatch(p) for p in rel.parts) or bool(
-        TEMPORARY_NAME.fullmatch(rel.name) or LINK_STAGING_NAME.fullmatch(rel.name)
+    return (
+        any(UUID_HEX.fullmatch(p) for p in rel.parts)
+        or any(LEASE_NAME.fullmatch(p) for p in rel.parts[:-1])
+        or bool(TEMPORARY_NAME.fullmatch(rel.name) or LINK_STAGING_NAME.fullmatch(rel.name))
     )
 
 
@@ -692,8 +732,7 @@ def _names(op: str, scratch: Path, written: list[Path]) -> list[str]:
     real_root = root.resolve()
     rels = {Path(os.path.realpath(p.parent)).relative_to(real_root) / p.name for p in written}
     final = {Path(c).relative_to(root) / n for c, _, files in os.walk(root) for n in files}
-    clocks = {r.with_name(".clock") for r in rels if r.name.endswith(".lease")}
-    return sorted(str(r) for r in rels | final | clocks if not _ephemeral(r))
+    return sorted(str(r) for r in rels | final if not _ephemeral(r))
 
 
 def _plant(target: Path, plant: str, victim: Path) -> None:
@@ -848,27 +887,45 @@ def probe_swap_after_link(scratch: str) -> dict[str, Any]:
     }
 
 
-def probe_clock_hard_link(scratch: str, op: str) -> dict[str, Any]:
-    """Hard-link a victim at the root's `.clock`, then collect on the store clock, or fetch; report the victim."""
-    base = Path(scratch)
-    root, victim = base / "root", base / "victim"
-    victim.mkdir()
-    (victim / "f").write_bytes(VICTIM_BYTES)
-    os.chmod(victim / "f", 0o600)
-    os.utime(victim / "f", (OLD, OLD))
-    _setup("collect" if op == "collect" else "fetch", root)
-    root.mkdir(parents=True, exist_ok=True)
-    if os.path.lexists(root / ".clock"):
-        os.unlink(root / ".clock")
-    os.link(victim / "f", root / ".clock")
-    before = _snapshot(victim)
-    if op == "collect":
-        from senselab_core.runtime.store import ResultStore
-
-        error, _ = _outcome(lambda: ResultStore(root).collect())
-    else:
-        error, _ = _outcome(lambda: _run(op, root))
-    return {"error": error, "victim_unchanged": _snapshot(victim) == before}
-
-
 UNOPENABLE_NAMES = (LEASE, "resolutions@2.json")
+
+
+def real_names() -> set[str]:
+    """The names this machine goes by: host (three spellings and their first labels) and account."""
+    import getpass
+    import os
+    import platform
+    import socket
+
+    full = {socket.gethostname(), platform.node(), os.uname().nodename}
+    return {n for n in {*full, *(h.split(".")[0] for h in full), getpass.getuser()} if n}
+
+
+MIRROR_INDEX = "https://user:secret@mirror.internal/whl/cu128"
+"""The credentialed torch index every fake env of the runner tests is installed from."""
+MIRROR_NEEDLES = (MIRROR_INDEX, "user:secret", "mirror.internal")
+
+
+def identities_in(data: bytes, base: Path, needles: Sequence[str] = ()) -> list[str]:
+    """Return each real name `data` holds as a whole token, and each home, `base`, mirror or `needles` string."""
+    import re
+
+    paths = {str(Path.home()), str(base), str(base.resolve()), *needles, *MIRROR_NEEDLES}
+    names = [n for n in sorted(real_names()) if re.search(rb"(?<![\w-])" + re.escape(n.encode()) + rb"(?![\w-])", data)]
+    return names + [p for p in sorted(paths) if p.encode() in data]
+
+
+def identity_leaks(root: Path, base: Path, needles: Sequence[str] = ()) -> list[tuple[str, str]]:
+    """Return `(file, what)` for every file under `root` whose path or bytes hold a real name or a path of `base`.
+
+    `base` is the directory every test root sits under, so any absolute path of this machine is a needle; nothing is
+    stripped from the bytes. `root/private` is exempt, and must be mode 0700.
+    """
+    private = root / "private"
+    if private.is_dir():
+        assert private.stat().st_mode & 0o777 == 0o700, f"{private} is not owner-only"
+    found = []
+    for path in sorted(p for p in root.rglob("*") if p.is_file() and private not in p.parents):
+        relative = str(path.relative_to(root))
+        found += [(relative, n) for n in identities_in(relative.encode() + b"\0" + path.read_bytes(), base, needles)]
+    return found

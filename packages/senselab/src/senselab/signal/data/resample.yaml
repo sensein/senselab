@@ -1,0 +1,9 @@
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under this file's path.
+# Kaiser design target A, in dB below the pass band.
+stopband_attenuation_db: 80.0
+# Transition width as a fraction of the lower Nyquist frequency.
+transition_fraction: 0.1
+# Most (channels x outputs x taps) values one gather holds.
+max_block_elements: 4194304
+# Factor by which the realised ripple may exceed the Kaiser target.
+ripple_margin: 1.2

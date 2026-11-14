@@ -1,12 +1,26 @@
-"""Result types: per-item annotations and embeddings, columnar intervals and events."""
+"""Result types: annotations, embeddings, intervals, events, transcripts, text spans, trials and metrics."""
 
-from typing import Annotated
+from collections.abc import Iterator
+from typing import Annotated, ClassVar
 
 import numpy
-from pydantic import BeforeValidator, Field, model_validator
+from pydantic import BeforeValidator, Field, Strict, model_validator
 
-from senselab_core.kernel._base import FiniteFloat, LabelArray, NonEmptyStr, NsArray, as_numeric_array, require_finite
+from senselab_core.kernel._base import (
+    ArrayForm,
+    FiniteFloat,
+    Frozen,
+    LabelArray,
+    NonEmptyStr,
+    NsArray,
+    as_int64_array,
+    as_label_array,
+    as_numeric_array,
+    require_finite,
+)
 from senselab_core.kernel.formats import FormatTag, Formatted
+from senselab_core.kernel.identity import TextIdentity
+from senselab_core.kernel.signals import Text
 from senselab_core.kernel.time import Span
 
 
@@ -15,6 +29,24 @@ def _finite_vector(v: object) -> numpy.ndarray:
     if a.size == 0:
         raise ValueError("an embedding is a non-empty vector of finite values")
     return require_finite(a, "an embedding")
+
+
+def _finite_column(v: object) -> numpy.ndarray:
+    return require_finite(as_numeric_array(v, 1), "a score column")
+
+
+def _finite_matrix(v: object) -> numpy.ndarray:
+    a = as_numeric_array(v, 2)
+    if a.shape[1] == 0:
+        raise ValueError("embedding rows are non-empty")
+    return require_finite(a, "embeddings")
+
+
+def _bool_column(v: object) -> numpy.ndarray:
+    a = as_label_array(v)
+    if a.dtype.kind != "b":
+        raise ValueError(f"labels must be a 1-D bool array, got {a.dtype}")
+    return a
 
 
 def _check_lengths(**columns: numpy.ndarray | None) -> None:
@@ -52,7 +84,11 @@ class Embedding(Formatted):
 
     format: FormatTag = "embedding@1.0"
 
-    vector: Annotated[numpy.ndarray, BeforeValidator(_finite_vector)]
+    vector: Annotated[
+        numpy.ndarray,
+        BeforeValidator(_finite_vector),
+        ArrayForm(("number",), 1, None, "The embedding's finite components."),
+    ]
     space: NonEmptyStr
 
 
@@ -60,6 +96,7 @@ class Intervals(Formatted):
     """Columnar labelled spans `[start_ns[i], end_ns[i])` on `clock_id`."""
 
     format: FormatTag = "intervals@1.0"
+    clock_fields: ClassVar[tuple[str, ...]] = ("start_ns", "end_ns")
 
     start_ns: NsArray
     end_ns: NsArray
@@ -78,13 +115,178 @@ class Events(Formatted):
     """Columnar labelled instants `time_ns[i]` on `clock_id`, with an optional numeric `value` per event."""
 
     format: FormatTag = "events@1.0"
+    clock_fields: ClassVar[tuple[str, ...]] = ("time_ns",)
 
     time_ns: NsArray
     label: LabelArray
-    value: Annotated[numpy.ndarray, BeforeValidator(lambda v: as_numeric_array(v, 1))] | None
+    value: (
+        Annotated[
+            numpy.ndarray,
+            BeforeValidator(lambda v: as_numeric_array(v, 1)),
+            ArrayForm(("number",), 1, None, "One numeric value per row."),
+        ]
+        | None
+    )
     clock_id: NonEmptyStr
 
     @model_validator(mode="after")
     def _check_columns(self) -> "Events":
         _check_lengths(time_ns=self.time_ns, label=self.label, value=self.value)
+        return self
+
+
+Probability = Annotated[FiniteFloat, Field(ge=0, le=1)]
+"""A finite float in `[0, 1]`."""
+
+OffsetArray = Annotated[
+    numpy.ndarray,
+    BeforeValidator(lambda v: as_int64_array(v, "character offsets")),
+    ArrayForm(("integer",), 1, "characters", "Code-point offsets into the canonical text."),
+]
+"""1-D frozen int64 character offsets."""
+
+
+class TranscriptNode(Frozen):
+    """A stretch of a transcript: its `text`, its `span` if timed, an optional `confidence`, and its `children`.
+
+    `children` are the stretches it divides into (a segment into words), in order.
+    """
+
+    text: str
+    span: Span | None = None
+    confidence: Probability | None = None
+    children: tuple["TranscriptNode", ...] = ()
+
+    def nodes(self) -> Iterator["TranscriptNode"]:
+        """Yield this node and every node below it, depth first, in order."""
+        yield self
+        for child in self.children:
+            yield from child.nodes()
+
+
+class Transcript(Formatted):
+    """A tree of transcript nodes: `segments`, in order, each dividing into words, over a recorded `extent`.
+
+    Every span lies inside `extent`, on its clock; a transcript with no span may declare no extent.
+    """
+
+    format: FormatTag = "transcript@2.0"
+
+    segments: tuple[TranscriptNode, ...]
+    extent: Span | None = None
+
+    @model_validator(mode="after")
+    def _spans_within_extent(self) -> "Transcript":
+        spans = [n.span for s in self.segments for n in s.nodes() if n.span is not None]
+        if spans and self.extent is None:
+            raise ValueError("a transcript with timed spans declares its extent")
+        for span in spans:
+            if self.extent is not None and span.clock_id != self.extent.clock_id:
+                raise ValueError(f"a span on clock {span.clock_id!r} in a transcript on clock {self.extent.clock_id!r}")
+            if (
+                self.extent is not None
+                and not self.extent.start_ns <= span.start_ns <= span.end_ns <= self.extent.end_ns
+            ):
+                raise ValueError(
+                    f"a span [{span.start_ns}, {span.end_ns}) lies outside the declared extent "
+                    f"[{self.extent.start_ns}, {self.extent.end_ns})"
+                )
+        return self
+
+
+class TextSpans(Formatted):
+    """Columnar labelled character spans `[start[i], end[i])` over the text whose content identity is `text`.
+
+    Offsets count code points of the text's canonical content, of `length` code points, with
+    `0 <= start <= end <= length`; `score` is an optional finite score per span.
+    """
+
+    format: FormatTag = "text-spans@1.0"
+
+    text: TextIdentity
+    length: Annotated[int, Strict(), Field(ge=0, description="Length of the text in code points.")]
+    start: OffsetArray
+    end: OffsetArray
+    label: LabelArray
+    score: (
+        Annotated[
+            numpy.ndarray,
+            BeforeValidator(_finite_column),
+            ArrayForm(("number",), 1, None, "One finite score per span."),
+        ]
+        | None
+    ) = None
+
+    @model_validator(mode="after")
+    def _check_columns(self) -> "TextSpans":
+        _check_lengths(start=self.start, end=self.end, label=self.label, score=self.score)
+        if numpy.any(self.start < 0) or numpy.any(self.end < self.start) or numpy.any(self.end > self.length):
+            raise ValueError(f"a span lies outside [0, {self.length}] or ends before it starts")
+        return self
+
+    @classmethod
+    def over(cls, text: Text, *, start: object, end: object, label: object, score: object = None) -> "TextSpans":
+        """Return the spans over `text`, naming its identity and length."""
+        return cls.model_validate(
+            {"text": text.identity, "length": len(text.content), "start": start, "end": end, "label": label}
+            | ({} if score is None else {"score": score})
+        )
+
+
+class Trials(Formatted):
+    """Pairs of embeddings in `space`: row i of `first` against row i of `second`, `same[i]` true for one source."""
+
+    format: FormatTag = "trials@1.0"
+
+    first: Annotated[
+        numpy.ndarray,
+        BeforeValidator(_finite_matrix),
+        ArrayForm(("number",), 2, None, "Rows are trials, columns embedding dimensions, in `space`."),
+    ]
+    second: Annotated[
+        numpy.ndarray,
+        BeforeValidator(_finite_matrix),
+        ArrayForm(("number",), 2, None, "Rows are trials, columns embedding dimensions, in `space`."),
+    ]
+    same: Annotated[
+        numpy.ndarray,
+        BeforeValidator(_bool_column),
+        ArrayForm(("boolean",), 1, None, "True where the pair is one source."),
+    ]
+    space: NonEmptyStr
+
+    @model_validator(mode="after")
+    def _check_pairs(self) -> "Trials":
+        if self.first.shape != self.second.shape or self.same.shape != self.first.shape[:1]:
+            raise ValueError(f"pairs of {self.first.shape} and {self.second.shape} with {self.same.shape} labels")
+        return self
+
+
+class Metric(Formatted):
+    """The value of metric `name`, in `unit`, computed over `items` items.
+
+    A ratio metric carries the `numerator` and `denominator` of its `value`, so that the aggregate over several
+    results is the ratio of their sums; a metric that is not a ratio of sums carries neither. A zero denominator
+    (with a zero numerator) is a result with nothing to score; `empty_value` is what the metric declares such a
+    result, and the value of an aggregate whose summed denominator is 0 (None: undefined).
+    """
+
+    format: FormatTag = "metric@2.0"
+
+    name: NonEmptyStr
+    value: FiniteFloat
+    unit: NonEmptyStr
+    items: Annotated[int, Strict(), Field(ge=1)]
+    numerator: FiniteFloat | None = None
+    denominator: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    empty_value: FiniteFloat | None = None
+
+    @model_validator(mode="after")
+    def _ratio_parts_come_together(self) -> "Metric":
+        if (self.numerator is None) != (self.denominator is None):
+            raise ValueError("a metric carries both its numerator and its denominator, or neither")
+        if self.denominator == 0 and self.numerator != 0:
+            raise ValueError("a metric of denominator 0 has numerator 0")
+        if self.empty_value is not None and self.denominator is None:
+            raise ValueError("a metric declares an empty value only with its numerator and denominator")
         return self

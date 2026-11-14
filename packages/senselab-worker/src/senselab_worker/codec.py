@@ -13,7 +13,7 @@ import stat
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Final, Literal
 
 import numpy
 
@@ -27,6 +27,7 @@ from senselab_worker.canonical import (
     npy_header,
     refuse_constant,
     require_depth,
+    require_json_depth,
     require_unicode,
     unique_object,
 )
@@ -41,7 +42,7 @@ from senselab_worker.faults import (
 )
 from senselab_worker.ownership import ARRAY_TEMP_NAME, remove_owned
 
-MAX_LINE_BYTES = 16 * 2**20
+MAX_LINE_BYTES: Final = 16 * 2**20  # invariant: the wire protocol line limit, bound to its format tag
 MAX_ID_CHARS = 1024
 Kind = Literal["hello", "init", "ready", "request", "result", "done", "fatal", "stop"]
 Slot = Literal["line", "init", "params", "inputs", "outputs"]
@@ -51,24 +52,24 @@ ENVELOPE: dict[str, int] = {"line": 0, "init": 1, "params": 1, "inputs": 3, "out
 ARRAY_KEY = "__array__"
 ARRAY_REF_HEIGHT = 3
 """Containers in an array reference: the `__array__` object, the reference object, its `shape` list."""
-READ_CHUNK_BYTES = 2**20
+READ_CHUNK_BYTES: Final = 2**20  # invariant: the size of one file read; no outcome depends on it
 
 
 class Deadline:
     """A point in monotonic time by which a sequence of steps must finish; `None` seconds never expires."""
 
-    def __init__(self, seconds: float | None) -> None:
-        """Start the clock: the deadline falls `seconds` from now."""
-        self._seconds = seconds
-        self._end = None if seconds is None else time.monotonic() + max(seconds, 0.0)
+    def __init__(self, seconds: float | None, now: Callable[[], float] = time.monotonic) -> None:
+        """Start the clock: the deadline falls `seconds` from now, as `now` reads it."""
+        self._seconds, self._now = seconds, now
+        self._end = None if seconds is None else now() + max(seconds, 0.0)
 
     def remaining(self) -> float | None:
         """Return the seconds left, at least 0, or `None` if the deadline never expires."""
-        return None if self._end is None else max(self._end - time.monotonic(), 0.0)
+        return None if self._end is None else max(self._end - self._now(), 0.0)
 
     def expired(self) -> bool:
         """Return whether no time is left."""
-        return self._end is not None and time.monotonic() >= self._end
+        return self._end is not None and self._now() >= self._end
 
     def check(self, what: str) -> None:
         """Raise `TimeoutError` naming `what` if the deadline has passed."""
@@ -119,7 +120,7 @@ def dump_line(msg: dict[str, Any], kind: Kind, *, limit: int = MAX_LINE_BYTES) -
     _check_message(msg)
     try:
         line = _json_bytes(msg) + b"\n"
-    except (ValueError, TypeError, RecursionError) as exc:
+    except (ValueError, TypeError) as exc:
         raise ProtocolError(f"{kind} message has no wire form: {type(exc).__name__}: {exc}") from exc
     if len(line) > limit:
         raise LineTooLarge(len(line), limit)
@@ -186,14 +187,16 @@ def parse_line(line: bytes) -> dict[str, Any]:
     if len(line) > MAX_LINE_BYTES:
         raise ProtocolError(f"wire line exceeds {MAX_LINE_BYTES} bytes")
     try:
+        require_json_depth(line)
+    except ValueError as exc:
+        raise ProtocolError(f"wire line nests deeper than {MAX_DEPTH} containers") from exc
+    try:
         msg = json.loads(
             line.decode("utf-8"),
             object_pairs_hook=unique_object,
             parse_float=finite_float,
             parse_constant=refuse_constant,
         )
-    except RecursionError as exc:
-        raise ProtocolError(f"wire line nests deeper than {MAX_DEPTH} containers") from exc
     except ValueError as exc:
         raise ProtocolError(f"wire line is not JSON: {exc}") from exc
     if type(msg) is not dict:
@@ -399,10 +402,24 @@ def _verified_npy(data: bytearray, sha: str) -> numpy.ndarray:
     return a
 
 
+_REF_KEYS = frozenset({"path", "sha256", "dtype", "shape"})
+
+
+def _checked_ref(ref: object) -> dict[str, Any]:
+    """Return `ref` if it is an array reference with exactly `_REF_KEYS` and a list of `int` as its shape."""
+    if not isinstance(ref, dict):
+        raise TypeError(f"array reference is a {type(ref).__name__}, not an object")
+    if ref.keys() != _REF_KEYS:
+        raise ValueError(f"array reference keys are {sorted(ref)}, not {sorted(_REF_KEYS)}")
+    shape = ref["shape"]
+    if type(shape) is not list or any(type(n) is not int for n in shape):
+        raise TypeError(f"array reference shape is not a list of int: {shape!r}")
+    return ref
+
+
 def _read_array(ref: object, root: Path, deadline: Deadline, arrays: dict[str, numpy.ndarray]) -> numpy.ndarray:
     try:
-        if not isinstance(ref, dict):
-            raise TypeError(f"array reference is a {type(ref).__name__}, not an object")
+        ref = _checked_ref(ref)
         sha = ref["sha256"]
         if not (isinstance(sha, str) and SHA256_HEX.fullmatch(sha)):
             raise ValueError(f"sha256 is not 64 lowercase hex digits: {sha!r}")
@@ -415,12 +432,13 @@ def _read_array(ref: object, root: Path, deadline: Deadline, arrays: dict[str, n
         else:
             a = arrays[sha] = _verified_npy(_read_file(root / f"{sha}.npy", deadline), sha)
         if a.dtype.str != ref["dtype"] or list(a.shape) != ref["shape"]:
-            raise ValueError(f"array is {a.dtype.str} {list(a.shape)}, reference says {ref['dtype']} {ref['shape']}")
+            raise ValueError(f"array is {a.dtype.str} {list(a.shape)}, reference says {ref['dtype']!r} {ref['shape']}")
     except TimeoutError:
         raise
     except OSError as exc:
         what = exc.strerror or str(exc)
-        raise ArrayReadError(exc.errno, f"bad array reference: {type(exc).__name__}: {what}: {exc.filename}") from exc
+        where = "" if exc.filename is None else f": {exc.filename}"
+        raise ArrayReadError(exc.errno, f"bad array reference: {type(exc).__name__}: {what}{where}") from exc
     except Exception as exc:
         raise ArrayIntegrityError(f"bad array reference: {type(exc).__name__}: {exc}") from exc
     return a
@@ -510,7 +528,8 @@ def _request(msg: dict[str, Any]) -> None:
     _object(msg, "params", "request")
 
 
-_FAULTS = frozenset(f.value for f in FaultClass)
+FAULTS: frozenset[str] = frozenset(f.value for f in FaultClass)
+"""The `fault` values an error record may carry."""
 
 
 def _result(msg: dict[str, Any]) -> None:
@@ -524,7 +543,7 @@ def _result(msg: dict[str, Any]) -> None:
     error = _object(msg, "error", "result")
     for key in ("type", "message", "traceback"):
         _typed(error, key, "result", (str,))
-    if _get(error, "fault", "result") not in _FAULTS:
+    if _get(error, "fault", "result") not in FAULTS:
         raise _fail("result", f"unknown fault class {error['fault']!r}")
     _typed(error, "gap", "result", (bool,))
 
@@ -533,6 +552,15 @@ def _done(msg: dict[str, Any]) -> None:
     _identifier(msg, "id", "done")
     if _typed(msg, "done", "done", (int,)) < 0:
         raise _fail("done", "'done' is negative")
+    for key in ("device_peak_bytes", "device_allocated_bytes"):
+        if key in msg and _typed(msg, key, "done", (int,)) < 0:
+            raise _fail("done", f"{key!r} is negative")
+    if ("device_peak_bytes" in msg) != ("device_allocated_bytes" in msg):
+        raise _fail("done", "'device_peak_bytes' and 'device_allocated_bytes' come together")
+    if "since_load" in msg and _typed(msg, "since_load", "done", (int,)) < 0:
+        raise _fail("done", "'since_load' is negative")
+    if "load_s" in msg and (_typed(msg, "load_s", "done", (int, float)) < 0 or msg.get("since_load") != 0):
+        raise _fail("done", "'load_s' is a non-negative time, given only with 'since_load' 0")
 
 
 def _fatal(msg: dict[str, Any]) -> None:

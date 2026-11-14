@@ -1,8 +1,8 @@
 import numpy as np, soundfile as sf, warnings
 warnings.filterwarnings("ignore")
 from scipy.signal import resample_poly
-T="/Users/satra/.claude/jobs/295c3f8a/tmp/"
-y,sr=sf.read("/Users/satra/Downloads/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
+T="${AGENT_SCRATCH}/"
+y,sr=sf.read("${LOCAL_INPUT}/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
 mix=resample_poly(y.mean(axis=1),16000,sr).astype(np.float64); fs=16000
 s0,_=sf.read(T+"lab_src0.wav",dtype="float64"); s1,_=sf.read(T+"lab_src1.wav",dtype="float64")
 n=min(len(mix),len(s0),len(s1)); mix,s0,s1=mix[:n],s0[:n],s1[:n]

@@ -5,6 +5,7 @@ import errno
 import inspect
 import os
 import socket
+import ssl
 import urllib.error
 from collections.abc import Callable
 from email.message import Message
@@ -15,9 +16,8 @@ import httpx
 import numpy
 import pytest
 import senselab_core.runtime.retry as retry_module
-import yaml
-from huggingface_hub import utils as hub_utils
-from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
+from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
+from lease_clock_fixture import ManualClock
 from senselab_core.runtime.faults import is_transient
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import storage_fault
@@ -60,15 +60,14 @@ def test_an_http_status_decides_for_every_client(
 
 @pytest.mark.logic
 @pytest.mark.parametrize(("status", "transient"), [(429, True), (500, True), (503, True), (404, False), (401, False)])
-def test_each_clients_own_error_carries_its_status(hub_client: ModuleType, status: int, transient: bool) -> None:
-    """The Hub's error as `hf_raise_for_status` and httpx's as `raise_for_status` raise them, classify alike."""
-    client = hub_client
+def test_each_clients_own_error_carries_its_status(
+    hub_client: ModuleType, hub_error: Callable[..., Exception], status: int, transient: bool
+) -> None:
+    """The Hub's error and its HTTP client's own `raise_for_status` error classify alike, by status alone."""
     url = "https://huggingface.co/api/models/org/m/revision/main"
-    with pytest.raises(HfHubHTTPError) as hub:
-        vars(hub_utils)["hf_raise_for_status"](client.Response(status, request=client.Request("GET", url)))
-    with pytest.raises(httpx.HTTPStatusError) as plain:
-        httpx.Response(status, request=httpx.Request("GET", url)).raise_for_status()
-    assert is_transient(hub.value) is transient
+    with pytest.raises(hub_client.HTTPStatusError) as plain:
+        hub_client.Response(status, request=hub_client.Request("GET", url)).raise_for_status()
+    assert is_transient(hub_error(status)) is transient
     assert is_transient(plain.value) is transient
 
 
@@ -138,9 +137,48 @@ def test_only_a_temporary_name_resolution_failure_is_transient() -> None:
 
 
 @pytest.mark.logic
-def test_retry_surfaces_a_permanent_os_error_on_the_first_attempt() -> None:
+def test_cause_cycle_terminates() -> None:
+    """A cause chain or a `URLError` reason that loops back is walked once and is permanent."""
+    a, b = OSError("a"), OSError("b")
+    a.__cause__, b.__cause__ = b, a
+    assert is_transient(a) is False
+    looped = urllib.error.URLError("x")
+    looped.reason = looped
+    assert is_transient(looped) is False
+    wrapped = OSError("no errno")
+    wrapped.__cause__ = urllib.error.URLError(wrapped)
+    assert is_transient(wrapped) is False
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("exc", "transient"),
+    [
+        (ssl.SSLEOFError(8, "EOF in violation of protocol"), True),
+        (ssl.SSLZeroReturnError(6, "TLS connection closed"), True),
+        (ssl.SSLSyscallError(5, "syscall"), True),
+        (ssl.SSLWantReadError(2, "want read"), True),
+        (ssl.SSLError(errno.EIO, "SSL code that equals EIO"), False),
+        (ssl.SSLError(errno.EINTR, "SSL code that equals EINTR"), False),
+        (ssl.SSLCertVerificationError(1, "certificate verify failed"), False),
+    ],
+    ids=repr,
+)
+def test_ssl_error_classified_by_type(exc: ssl.SSLError, transient: bool) -> None:
+    """An `SSLError` carries an SSL code where an errno would be: its class decides, never the errno table."""
+    assert is_transient(exc) is transient
+    assert is_transient(urllib.error.URLError(exc)) is transient
+
+
+@pytest.fixture
+def clock(lease_clock: Callable[..., ManualClock]) -> ManualClock:
+    """A clock whose sleeps are recorded and advance it."""
+    return lease_clock()
+
+
+@pytest.mark.logic
+def test_retry_surfaces_a_permanent_os_error_on_the_first_attempt(clock: ManualClock) -> None:
     """A `FileNotFoundError` inside a retried call raises at once, with no backoff."""
-    slept: list[float] = []
     calls = {"n": 0}
 
     def _missing() -> str:
@@ -148,14 +186,13 @@ def test_retry_surfaces_a_permanent_os_error_on_the_first_attempt() -> None:
         raise FileNotFoundError(errno.ENOENT, "no such file", "/models/w.bin")
 
     with pytest.raises(FileNotFoundError):
-        retry_on_transient_error(_missing, POLICY, sleep=slept.append)
-    assert calls["n"] == 1 and slept == []
+        retry_on_transient_error(_missing, POLICY, clock=clock)
+    assert calls["n"] == 1 and clock.slept == []
 
 
 @pytest.mark.logic
-def test_retry_stops_on_a_404_and_backs_off_on_a_429(hub_error: Callable[..., Exception]) -> None:
+def test_retry_stops_on_a_404_and_backs_off_on_a_429(hub_error: Callable[..., Exception], clock: ManualClock) -> None:
     """A 404 raises on the first attempt; a 429 is retried after the policy's first backoff."""
-    slept: list[float] = []
     calls = {"n": 0}
 
     def _not_found() -> str:
@@ -163,7 +200,7 @@ def test_retry_stops_on_a_404_and_backs_off_on_a_429(hub_error: Callable[..., Ex
         raise hub_error(404, RepositoryNotFoundError)
 
     with pytest.raises(RepositoryNotFoundError):
-        retry_on_transient_error(_not_found, POLICY, sleep=slept.append)
+        retry_on_transient_error(_not_found, POLICY, clock=clock)
     assert calls["n"] == 1
 
     calls["n"] = 0
@@ -174,15 +211,16 @@ def test_retry_stops_on_a_404_and_backs_off_on_a_429(hub_error: Callable[..., Ex
             raise hub_error(429)
         return "ok"
 
-    assert retry_on_transient_error(_throttled_once, POLICY, sleep=slept.append) == "ok"
-    assert calls["n"] == 2 and slept == [1.0]
+    assert retry_on_transient_error(_throttled_once, POLICY, clock=clock) == "ok"
+    assert calls["n"] == 2 and clock.slept == [1.0]
 
 
 @pytest.mark.logic
-def test_the_retry_policy_is_the_argument_and_no_environment_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_retry_policy_is_the_argument_and_no_environment_variable(
+    monkeypatch: pytest.MonkeyPatch, clock: ManualClock
+) -> None:
     """The attempts and the doubling backoff come from the policy passed; `SENSELAB_HF_MAX_RETRIES` is not read."""
     monkeypatch.setenv("SENSELAB_HF_MAX_RETRIES", "1")
-    slept: list[float] = []
     calls = {"n": 0}
 
     def _down() -> str:
@@ -190,19 +228,9 @@ def test_the_retry_policy_is_the_argument_and_no_environment_variable(monkeypatc
         raise ConnectionResetError(errno.ECONNRESET, "reset")
 
     with pytest.raises(ConnectionResetError):
-        retry_on_transient_error(_down, RetryPolicy(attempts=4, first_backoff_s=0.5), sleep=slept.append)
-    assert calls["n"] == 4 and slept == [0.5, 1.0, 2.0]
+        retry_on_transient_error(_down, RetryPolicy(attempts=4, first_backoff_s=0.5), clock=clock)
+    assert calls["n"] == 4 and clock.slept == [0.5, 1.0, 2.0]
     assert "max_retries" not in inspect.signature(retry_on_transient_error).parameters
-
-
-@pytest.mark.logic
-def test_the_packaged_retry_policy_carries_a_derivation_per_value() -> None:
-    """`RetryPolicy.load_default` reads `data/retry_policy.yaml`, whose every value has a derivation."""
-    path = Path(inspect.getfile(retry_module)).parent / "data" / "retry_policy.yaml"
-    raw = yaml.safe_load(path.read_text("utf-8"))
-    assert raw.pop("format") == "retry-policy@1.0"
-    assert all(entry["derivation"].strip() for entry in raw.values())
-    assert RetryPolicy.load_default() == RetryPolicy(**{name: entry["value"] for name, entry in raw.items()})
 
 
 @pytest.mark.logic

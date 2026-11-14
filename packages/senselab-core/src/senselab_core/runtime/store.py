@@ -2,12 +2,14 @@
 
 Layout under `root`:
 
-- `store@4/<d[:2]>/<d>/<f>/`, where `d` is `LogicalKey.digest()` and `f` is
+- `store@6/<d[:2]>/<d>/<f>/`, where `d` is `LogicalKey.digest()` and `f` is
   `ExecutionContext.fingerprint()`, holding:
   - `result.json`: JCS JSON with `format: "result@2.0"`, the key, its digest, the context fingerprint,
     the encoded outputs and their output identity;
-  - `context.json`: JCS JSON with `format: "execution-context@2.0"` and the context's fields;
+  - `context.json`: JCS JSON with `format: "execution-context@4.0"` and the context's fields;
   - `<sha256>.npy`: each array output in canonical `.npy`, named by the sha256 of its bytes.
+- `equivalence-evidence@4/<d>.json`: one verify-sampling comparison (`EquivalenceEvidence`), JSON named by
+  `d`, its canonical digest.
 - `tmp/<uuid>/`: a writer's staging directory, committed by renaming it onto the entry.
 - `quarantine/<uuid>`: entries that failed verification, and objects of the wrong kind found at a path
   the store owns, moved aside by rename.
@@ -22,8 +24,11 @@ Every directory below `root` is reached through `StorageDir`, so no symlink belo
 A symlink or a non-directory where a directory of the store belongs is moved into the quarantine and the
 directory is made again; one that cannot be moved raises `WrongKindError`, naming it and its owner.
 
-Only a completed read that fails verification moves an entry. An `OSError` while reading or
-writing is raised as `StoreUnavailable` (`StorageFull` for `ENOSPC` and `EDQUOT`) and changes nothing.
+Only a completed read that fails verification moves an entry. A member's format is judged by `formats.check`: a
+retired context raises `StoreFormatRetired`, another version's format (a later major, or a later minor's context
+fields) `StoreFormatUnknown`, and neither moves the entry; a malformed member, or a retired result, is corruption.
+An `OSError` while reading or writing is raised as `StoreUnavailable` (`StorageFull` for `ENOSPC` and `EDQUOT`)
+and changes nothing.
 
 Outputs are a mapping of JSON values (what `canonical_scalar` accepts, in exact `list`, `tuple` and
 `str`-keyed `dict` containers) and plain numpy arrays, nested to any depth. In the encoded form each
@@ -32,17 +37,18 @@ The output identity is `"output:" + identity_digest("output@3", encoded form)`.
 """
 
 import errno
+import functools
 import io
 import logging
 import os
 import re
 import stat
-import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import numpy
 from pydantic import ValidationError
@@ -57,9 +63,11 @@ from senselab_worker.canonical import (
 )
 from senselab_worker.digest import SHA256_HEX, identity_digest
 
-from senselab_core.kernel._base import value_digest
+from senselab_core.kernel import prov as kprov
+from senselab_core.kernel.formats import FieldsOfLaterMinor, FormatVerdict, check, require_writable, validated
 from senselab_core.kernel.identity import (
     DEFAULT_REUSE_POLICY,
+    NO_EQUIVALENCE,
     Equivalence,
     ExecutionContext,
     LogicalKey,
@@ -67,8 +75,12 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
     acceptable,
 )
-from senselab_core.runtime.equivalence import EQUIVALENCE
-from senselab_core.runtime.provenance import CHECKSUM_KEY, ProvStore
+from senselab_core.runtime.clock import Clock, SystemClock
+from senselab_core.runtime.equivalence import EquivalenceEvidence, equivalence_digest, read_evidence
+from senselab_core.runtime.equivalence import split as split_class
+from senselab_core.runtime.execution_settings import StoreSettings
+from senselab_core.runtime.provenance import ProvStore
+from senselab_core.runtime.servable import Servable, StoredContext, Verdict, always_serve, choose, servable
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
     STAGING_DIR_MODE,
@@ -82,17 +94,25 @@ from senselab_core.runtime.storage import (
     shared_dir_mode,
     storage_fault,
 )
+from senselab_core.runtime.vocabulary import core_vocabulary
+
+if TYPE_CHECKING:
+    from senselab_core.runtime.call import RunConfig
 
 logger = logging.getLogger("senselab")
 
-STORE_DIR = "store@4"
+STORE_DIR = "store@6"
 STAGING_DIR = "tmp"
+EVIDENCE_DIR = "equivalence-evidence@4"
+EVIDENCE_NAME = re.compile(r"[0-9a-f]{64}\.json")
 QUARANTINE_DIR = "quarantine"
 RESULT_FORMAT = "result@2.0"
-CONTEXT_FORMAT = "execution-context@2.0"
+CONTEXT_FORMAT = "execution-context@4.0"
+RETIRED_STORE_FORMATS = frozenset({"result@1", "execution-context@1", "execution-context@2"})
+"""Store member formats 2.x no longer reads, as `<name>@<major>`."""
+STORE_MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-store-formats"
+"""Where the statement on retired store formats is: they are not read; recomputing under this version migrates."""
 ARRAY_TAG = ARRAY_TOKEN
-COMMIT_ATTEMPTS = 3
-"""How many times `put` stages and renames before giving up on a target that keeps turning out corrupt."""
 
 _POLICY_ORDER = (ReusePolicy.EXACT, ReusePolicy.EQUIVALENT, ReusePolicy.TOLERANT)
 _PREFIX = re.compile(r"[0-9a-f]{2}")
@@ -109,6 +129,35 @@ class CorruptEntryError(ValueError):
 
 class MisfiledEntryError(CorruptEntryError):
     """A store entry whose stored key or context does not match the address it was read from."""
+
+
+class StoreFormatRetired(ValueError):
+    """A store member in a retired format (`RETIRED_STORE_FORMATS`); the entry is left in place.
+
+    Attributes:
+        found: The format tag the member declares.
+    """
+
+    def __init__(self, path: Path, found: str) -> None:
+        """Name the member, its format and the migration statement."""
+        super().__init__(
+            f"{path} declares the retired format {found}; it is not read, and migrating it is removing the entry and"
+            f" recomputing it under this version. See {STORE_MIGRATION_STATEMENT}"
+        )
+        self.found = found
+
+
+class StoreFormatUnknown(ValueError):
+    """A store member in a format this version does not read, written by another version; the entry is left in place.
+
+    Attributes:
+        found: The format tag the member declares.
+    """
+
+    def __init__(self, path: Path, found: str, reason: str) -> None:
+        """Name the member, its format and why this version cannot read it."""
+        super().__init__(f"{path} declares {found}, which this version does not read: {reason}")
+        self.found = found
 
 
 @dataclass(frozen=True)
@@ -184,19 +233,23 @@ def _require_directory(entry: Path) -> None:
         raise CorruptEntryError(f"corrupt store entry {entry}: not a directory")
 
 
+def _open_entry(entry: Path) -> StorageDir:
+    """Open the entry directory `entry` unfollowed; a gone entry, or anything but a directory, is corrupt."""
+    try:
+        return StorageDir.open_unfollowed(entry)
+    except OSError as err:
+        if err.errno not in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+            raise
+        raise CorruptEntryError(f"corrupt store entry {entry}: it is gone or not a directory") from err
+
+
 def _read_member(entry: Path, name: str) -> bytes:
     """Return the bytes of the regular file `entry/name`, read through the entry's descriptor.
 
     The member is neither followed nor waited on; anything but a regular file there, or a gone entry,
     makes the entry corrupt.
     """
-    try:
-        directory = StorageDir.open_unfollowed(entry)
-    except OSError as err:
-        if err.errno not in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
-            raise
-        raise CorruptEntryError(f"corrupt store entry {entry}: it is gone or not a directory") from err
-    with directory:
+    with _open_entry(entry) as directory:
         try:
             data = directory.read_regular(name)
         except WrongKindError as err:
@@ -206,54 +259,99 @@ def _read_member(entry: Path, name: str) -> bytes:
     return data
 
 
-def _decode(value: object, entry: Path, *, load: bool = True) -> object:
-    """Return `value` with each array reference verified against its file and, with `load`, read as that array."""
+def _present(entry: Path, name: str, size: int | None) -> None:
+    """Require `entry/name` to be a regular file, of `size` bytes when `size` is given, without reading it."""
+    with _open_entry(entry) as directory:
+        st = directory.lstat(name)
+    if st is None or not stat.S_ISREG(st.st_mode):
+        raise CorruptEntryError(f"corrupt store entry {entry}: {name} is missing or not a regular file")
+    if size is not None and st.st_size != size:
+        raise CorruptEntryError(f"corrupt store entry {entry}: {name} holds {st.st_size} bytes, not {size}")
+
+
+def _decode(value: object, entry: Path, sizes: Mapping[str, int] | None = None) -> object:
+    """Return `value` with each array reference verified against its file and read as that array.
+
+    With `sizes` (the byte counts of arrays the caller holds, by sha256), each reference is instead kept
+    as it is and only its recorded file checked, by `_present`: a regular file, of the held size if any.
+    """
     if isinstance(value, dict):
         if set(value) == {ARRAY_TAG}:
             sha = value[ARRAY_TAG]
             if not isinstance(sha, str) or not SHA256_HEX.fullmatch(sha):
                 raise CorruptEntryError(f"corrupt store entry {entry}: array reference {sha!r} is not a sha256")
+            if sizes is not None:
+                _present(entry, f"{sha}.npy", sizes.get(sha))
+                return value
             data = _read_member(entry, f"{sha}.npy")
             if _raw_digest.bytes_digest("npy@1", data) != sha:
                 raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy does not hash to its name")
-            if not load:
-                return value
             try:
                 return numpy.load(io.BytesIO(data), allow_pickle=False)
             except OSError as err:
                 raise CorruptEntryError(f"corrupt store entry {entry}: {sha}.npy is not an array: {err}") from err
-        return {k: _decode(v, entry, load=load) for k, v in value.items()}
+        return {k: _decode(v, entry, sizes) for k, v in value.items()}
     if isinstance(value, list):
-        return [_decode(v, entry, load=load) for v in value]
+        return [_decode(v, entry, sizes) for v in value]
     return value
 
 
-def _equivalence_digest(table: Equivalence) -> str:
-    """Return the `value_digest` of an equivalence table, its classes as sets."""
-    fields = {backend: {name: set(members) for name, members in classes.items()} for backend, classes in table.items()}
-    return value_digest("equivalence", {"classes": fields})
+def key_record(key: LogicalKey) -> object:
+    """Return `key`'s fields as the JSON value a store entry and a reuse activity record."""
+    return jcs_loads(jcs_dumps(key.model_dump()))
 
 
-def _write_synced(directory: StorageDir, name: str, data: bytes, mode: int) -> None:
-    directory.write_new(name, data, mode, grammar=MEMBER_NAME)
+def context_record(context: ExecutionContext) -> dict[str, object]:
+    """Return `context` as an `execution-context@4.0` record: its format tag and its fields."""
+    return {"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}
 
 
-def _read_object(entry: Path, name: str, fmt: str) -> dict[str, Any]:
+def agent_record(key: LogicalKey, context: ExecutionContext) -> kprov.Record:
+    """Return the software agent that computes `key` in `context`.
+
+    It carries `senselab:envLock`, so an env at another lock is another agent, `senselab:license`, the env's code
+    license when the context records one, and, for a call with a model,
+    `senselab:modelSource`: `hf:<id>@<commit>` for a hub model, else `url` or `local`.
+    """
+    attributes: dict[str, object] = {"senselab:envLock": context.env_lock}
+    if context.env_license is not None:
+        attributes["senselab:license"] = context.env_license.model_dump(mode="json")
+    if key.model is not None and context.model_source is not None:
+        hub = context.model_source == "hf"
+        attributes["senselab:modelSource"] = f"hf:{key.model.id}@{key.model.identity}" if hub else context.model_source
+    return kprov.agent(core_vocabulary(), types=["senselab:SoftwareAgent"], attributes=attributes)
+
+
+def _result_entity(identity: OutputIdentity) -> kprov.Record:
+    """Return the PROV entity of a stored result, addressed by its output identity."""
+    return kprov.entity(identity, core_vocabulary())
+
+
+def _read_object(entry: Path, name: str, fmt: str) -> tuple[dict[str, Any], str]:
+    """Return the member's record and its format."""
     path = entry / name
     record = jcs_loads(_read_member(entry, name))
     if not isinstance(record, dict):
         raise CorruptEntryError(f"corrupt store entry: {path} is not a JSON object")
-    if record.pop("format", None) != fmt:
+    found = record.pop("format", None)
+    verdict = check(fmt, found, RETIRED_STORE_FORMATS)
+    if verdict is FormatVerdict.RETIRED:
+        raise StoreFormatRetired(path, found)
+    if verdict is FormatVerdict.UNKNOWN:
+        raise StoreFormatUnknown(path, found, f"this version reads {fmt} and its minors")
+    if verdict is FormatVerdict.MALFORMED:
         raise CorruptEntryError(f"corrupt store entry: {path} is not {fmt}")
-    return record
+    return record, found
 
 
 def _guarded(entry: Path, read: Callable[[], T]) -> T:
     """Run `read`; a failed verification is `CorruptEntryError`, an `OSError` is a storage fault."""
     try:
         return read()
-    except CorruptEntryError:
+    except (CorruptEntryError, StoreFormatRetired, StoreFormatUnknown):
         raise
+    except FieldsOfLaterMinor as err:
+        raise StoreFormatUnknown(entry, err.read.tag, str(err)) from err
     except OSError as err:
         raise storage_fault(err, entry) from err
     except (ValueError, KeyError, TypeError, ValidationError) as err:
@@ -262,7 +360,8 @@ def _guarded(entry: Path, read: Callable[[], T]) -> T:
 
 def _stored_context(entry: Path) -> ExecutionContext:
     _require_directory(entry)
-    return ExecutionContext.model_validate(_read_object(entry, "context.json", CONTEXT_FORMAT))
+    record, found = _read_object(entry, "context.json", CONTEXT_FORMAT)
+    return validated(ExecutionContext, record, CONTEXT_FORMAT, found)
 
 
 def _stored_address(
@@ -272,12 +371,14 @@ def _stored_address(
 
     The key in `result.json` must digest to its recorded `key_digest`, and the context in `context.json`
     (or `context`, when the caller has already read it from this entry) must fingerprint to the
-    `context_fingerprint` recorded in `result.json`.
+    `context_fingerprint` recorded in `result.json`; a retired `result.json` beside a current context is corrupt.
     """
-    if context is None:
-        context = _stored_context(entry)
-    record = _read_object(entry, "result.json", RESULT_FORMAT)
-    digest = LogicalKey.model_validate(record["key"]).digest()
+    context = _stored_context(entry) if context is None else context
+    try:
+        record, found = _read_object(entry, "result.json", RESULT_FORMAT)
+    except StoreFormatRetired as err:
+        raise CorruptEntryError(f"corrupt store entry {entry}: a retired result beside a current context") from err
+    digest = validated(LogicalKey, record["key"], RESULT_FORMAT, found).digest()
     if record["key_digest"] != digest:
         raise MisfiledEntryError(f"stored key digest {record['key_digest']!r} is not the digest of the stored key")
     fingerprint = context.fingerprint()
@@ -320,14 +421,14 @@ def _read_result(
     digest: str,
     fingerprint: str,
     context: ExecutionContext | None = None,
-    load: bool = True,
+    sizes: Mapping[str, int] | None = None,
 ) -> tuple[str, dict[str, object], ExecutionContext]:
     """Return the output identity, decoded outputs and context of the entry at `entry`.
 
     The entry must be bound (`_stored_address`) to key digest `digest` and context fingerprint
     `fingerprint`, its outputs must hash to their output identity, and every array file must hash to its name.
-    `context` is the entry's context when the caller has already read it. Without `load`, array references
-    are verified and returned as references, not read as arrays.
+    `context` is the entry's context when the caller has already read it. With `sizes`, array references are
+    checked by `_present` and returned as references, not read (`_decode`).
 
     Raises:
         CorruptEntryError: the entry is gone or fails verification; `MisfiledEntryError` when it
@@ -341,7 +442,7 @@ def _read_result(
         tree, identity = record["outputs"], record["output_identity"]
         if not isinstance(identity, str) or _tree_identity(tree) != identity:
             raise CorruptEntryError(f"corrupt store entry {entry}: outputs do not hash to their output identity")
-        outputs = _decode(tree, entry, load=load)
+        outputs = _decode(tree, entry, sizes)
         if not isinstance(outputs, dict):
             raise CorruptEntryError(f"corrupt store entry {entry}: outputs are not an object")
         return identity, outputs, stored
@@ -349,8 +450,12 @@ def _read_result(
     return _guarded(entry, read)
 
 
-def _is_fingerprint(name: str) -> bool:
-    return SHA256_HEX.fullmatch(name) is not None
+def _fingerprints(base_dir: StorageDir) -> list[str]:
+    """Return the fingerprints of the entries under a key's directory, sorted."""
+    try:
+        return sorted(n for n in base_dir.listdir() if SHA256_HEX.fullmatch(n))
+    except OSError as err:
+        raise storage_fault(err, base_dir.path) from err
 
 
 class _StoreEntryFormat:
@@ -375,8 +480,11 @@ class _StoreEntryFormat:
 STORE_ENTRY = _StoreEntryFormat()
 
 
-def _committed_identity(entry: Path, *, digest: str, fingerprint: str) -> str | None:
-    """Return the output identity of the entry at `entry`, None if nothing is there; every file is verified.
+def _committed_identity(entry: Path, *, digest: str, fingerprint: str, arrays: Mapping[str, bytes]) -> str | None:
+    """Return the output identity of the entry at `entry`, None if nothing is there.
+
+    Its JSON members are verified and bound to the address; each array it records is checked by the digest
+    recorded as its name, not read: a regular file, of the size of the caller's array of that digest if any.
 
     Raises:
         CorruptEntryError: something is at `entry` that is not a valid entry for this address.
@@ -388,7 +496,8 @@ def _committed_identity(entry: Path, *, digest: str, fingerprint: str) -> str | 
         return None
     except OSError as err:
         raise storage_fault(err, entry) from err
-    return _read_result(entry, digest=digest, fingerprint=fingerprint, load=False)[0]
+    sizes = {sha: len(data) for sha, data in arrays.items()}
+    return _read_result(entry, digest=digest, fingerprint=fingerprint, sizes=sizes)[0]
 
 
 def _commit(  # noqa: PLR0913 - what the entry holds, where it is staged and placed, and the policy
@@ -413,22 +522,22 @@ def _commit(  # noqa: PLR0913 - what the entry holds, where it is staged and pla
     try:
         with stage as staging:
             for sha, data in arrays.items():
-                _write_synced(staging, f"{sha}.npy", data, file_mode)
-            _write_synced(
-                staging,
+                staging.write_new(f"{sha}.npy", data, file_mode, grammar=MEMBER_NAME)
+            staging.write_new(
                 "context.json",
-                jcs_dumps({"format": CONTEXT_FORMAT, **context.model_dump(mode="json")}),
+                jcs_dumps(context_record(context)),
                 file_mode,
+                grammar=MEMBER_NAME,
             )
             result = {
                 "format": RESULT_FORMAT,
-                "key": jcs_loads(jcs_dumps(key.model_dump())),
+                "key": key_record(key),
                 "key_digest": key.digest(),
                 "context_fingerprint": context.fingerprint(),
                 "output_identity": identity,
                 "outputs": tree,
             }
-            _write_synced(staging, "result.json", jcs_dumps(result), file_mode)
+            staging.write_new("result.json", jcs_dumps(result), file_mode, grammar=MEMBER_NAME)
             staging.fsync()
             try:
                 staging_root.rename(stage.name, parent, name, grammar=FINGERPRINT_NAME)
@@ -504,38 +613,110 @@ class ResultStore:
     which `put` runs at most once per `policy.collect_interval_s`, removes quarantined entries and
     staging directories older than the policy's ages. An entry found valid but writable is re-sealed.
 
+    Provenance: a `put` adds the result entity, `output:<hex>`; a `get` hit adds a `senselab:Reuse` activity that
+    used it (or, with `record=False`, leaves that to `record_reuse`), carrying the key, the current and stored
+    contexts, the admitting policy, the agent that computed the result and, under `equivalent`, the equivalence
+    table's `value_digest`, associated with the current context's agent. The store writes no execution activity.
+
+    Splits: a disagreeing `EquivalenceEvidence` takes its two members out of the class holding both
+    (`equivalence.split`). It is persisted as the evidence record, and every store over the same root applies
+    the recorded disagreements to its table when it first reads the table.
+
     Args:
         root: The store root.
-        provenance: Where `put`, quarantines and relaxed-policy `get` hits record activities; the
-            store owns a fresh one when None.
+        provenance: Where the store adds its records; the store owns a fresh one when None.
         policy: Modes and retention ages; `StorePolicy.load_default()` when None.
-        equivalence: The measured equivalence classes `equivalent` reuse admits (`acceptable`); a hit it
-            admits records the table's `value_digest` as `equivalence` in its `store.reuse` activity.
+        equivalence: The measured classes `equivalent` reuse admits (none by default; `load_equivalence(path)`).
+        settings: The profile's `store` section; the packaged profile's when None.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - the root and provenance, then keyword-only policy, table, settings and clock
         self,
         root: Path,
         provenance: ProvStore | None = None,
         *,
         policy: StorePolicy | None = None,
-        equivalence: Equivalence = EQUIVALENCE,
+        equivalence: Equivalence = NO_EQUIVALENCE,
+        settings: StoreSettings | None = None,
+        clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
-        """Open a store at `root`; nothing is created until the first `put`."""
+        """Open a store at `root`; nothing is created until the first `put`. `clock` ages what `collect` removes."""
+        from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - profiles import this module
+
         self.root = Path(root)
-        self.provenance = provenance if provenance is not None else ProvStore(run_id=f"store-{uuid.uuid4().hex}")
+        self.settings = settings or ExecutionProfile.packaged().store
+        self.provenance = provenance if provenance is not None else ProvStore()
         self.policy = policy if policy is not None else StorePolicy.load_default()
         self._equivalence = equivalence
+        self._splits_read = False
+        self._clock = clock
         self._last_collect: float | None = None
 
     @property
     def equivalence(self) -> Equivalence:
-        """The measured equivalence classes this store's `equivalent` reuse admits."""
+        """The classes this store's `equivalent` reuse admits: those given, split by the store's disagreements.
+
+        Raises:
+            CorruptEntryError, StoreUnavailable: as `evidence`, when the table has a class to split.
+        """
+        if not self._splits_read:
+            if any(self._equivalence.values()):
+                for e in self.evidence():
+                    self._split(e)
+            self._splits_read = True
         return self._equivalence
 
-    def _entry(self, key: LogicalKey) -> Path:
-        d = key.digest()
-        return self.root / STORE_DIR / d[:2] / d
+    def _split(self, evidence: EquivalenceEvidence) -> None:
+        if not evidence.agree:
+            a, b = evidence.stored.member(), evidence.current.member()
+            self._equivalence = split_class(self._equivalence, evidence.backend, a, b)
+
+    def add_evidence(self, evidence: EquivalenceEvidence) -> None:
+        """Record `evidence` under its digest, written atomically, and split this store's table if it disagrees.
+
+        Recording it again changes nothing.
+
+        Raises:
+            StoreUnavailable: the store could not be written.
+            WrongKindError: an object of the wrong kind on the way cannot be moved aside.
+            FieldsOfLaterMinor: `evidence` was read under a later minor and lost fields.
+        """
+        require_writable(evidence)
+        data = jcs_dumps(evidence.model_dump(mode="json"))
+        try:
+            with self._open_root(create=True) as root, self._ensure(root, EVIDENCE_DIR) as directory:
+                directory.write_atomically(
+                    f"{evidence.canonical_digest()}.json",
+                    data,
+                    grammar=EVIDENCE_NAME,
+                    mode=committed_modes(self.policy)[0],
+                )
+        except OSError as err:
+            raise storage_fault(err, self.root) from err
+        self._split(evidence)
+
+    def evidence(self) -> list[EquivalenceEvidence]:
+        """Return every verify-sampling record in the store, by digest.
+
+        Raises:
+            CorruptEntryError: a record is not the evidence its name is the digest of.
+            StoreUnavailable: the store could not be read.
+        """
+        try:
+            with self._open_root(create=False) as root, root.walk(EVIDENCE_DIR) as directory:
+                out = []
+                for name in sorted(n for n in directory.listdir() if EVIDENCE_NAME.fullmatch(n)):
+                    try:
+                        out.append(read_evidence(name, directory.read_regular(name) or b""))
+                    except ValueError as err:
+                        raise CorruptEntryError(
+                            f"evidence record {name[:12]}... is not the record its name digests"
+                        ) from err
+                return out
+        except FileNotFoundError:
+            return []
+        except OSError as err:
+            raise storage_fault(err, self.root) from err
 
     def _open_root(self, *, create: bool) -> StorageDir:
         return StorageDir.open_root(self.root, create=create, mode=shared_dir_mode(self.policy))
@@ -585,8 +766,8 @@ class ResultStore:
         a fingerprint, so `get` ignores it, and its owner must remove it. The re-verification uses
         the address the entry was read at (`digest`, `fingerprint`). A copy that verifies, or cannot
         be read, is renamed back without replacing anything: if a new entry took the address
-        meanwhile the copy stays aside. Nothing is done if `entry` is already gone. A provenance
-        activity records where it went, the outcome and the reason.
+        meanwhile the copy stays aside. Nothing is done if `entry` is already gone. A warning logs where it
+        went, the outcome, the verdict and the reason.
 
         Raises:
             StoreUnavailable: `entry` cannot be moved at all; the message names its owner and the remedy.
@@ -653,18 +834,6 @@ class ResultStore:
             if into is not None:
                 into.close()
         logger.warning("store entry %s %s (%s): %s", entry, outcome, verdict, reason)
-        self.provenance.activity(
-            node="store.quarantine",
-            step=None,
-            parameters={
-                "key": digest,
-                "context": fingerprint,
-                "moved_to": str(moved.relative_to(self.root)),
-                "verdict": verdict,
-                "outcome": outcome,
-                "reason": reason,
-            },
-        )
 
     def _aside(self, root: StorageDir, parent: StorageDir, name: str, is_dir: bool) -> StorageDir | None:
         """Return the quarantine if `name` can be moved there, None to set it aside beside itself."""
@@ -715,8 +884,8 @@ class ResultStore:
             logger.warning("cannot quarantine store entry %s, skipping it: %s", entry, err)
 
     def _collect_due(self) -> None:
-        """Run `collect` if this store has not collected within `policy.collect_interval_s` (monotonic)."""
-        now = time.monotonic()
+        """Run `collect` if this store has not collected within `policy.collect_interval_s` (monotonic on the clock)."""
+        now = self._clock.now()
         if self._last_collect is None or now - self._last_collect >= self.policy.collect_interval_s:
             self._last_collect = now
             self.collect()
@@ -731,14 +900,13 @@ class ResultStore:
         if info is not None and info.st_mode & 0o222:
             _seal(parent, name, committed_modes(self.policy)[1])
 
-    def collect(self, now: float | None = None) -> int:
+    def collect(self) -> int:
         """Remove quarantined entries and staging directories older than the policy's ages; return how many.
 
-        Objects set aside in place (`<uuid>` under the root, `store@4/`, a prefix or a key, beside what
-        they displaced) count as quarantined. Ages are measured from each object's mtime to `now`, which
-        defaults to the storage's own clock (`StorageDir.fs_now` on `root`). Only uuid-named children are
-        removed, through `remove_owned`; no directory below `root` is reached through a symlink. A failure
-        to read the clock, list or remove is logged and skips that item.
+        Objects set aside in place (`<uuid>` under the root, `store@6/`, a prefix or a key, beside what they
+        displaced) count as quarantined. Ages are measured from each object's mtime to the clock's storage time on
+        `root`. Only uuid-named children are removed, through `remove_owned`; no directory below `root` is reached
+        through a symlink. A failure to read the clock, list or remove is logged and skips that item.
         """
         try:
             root = self._open_root(create=False)
@@ -747,12 +915,11 @@ class ResultStore:
                 logger.warning("cannot open store %s; not collecting: %s", self.root, err)
             return 0
         with root:
-            if now is None:
-                try:
-                    now = root.fs_now()
-                except (OSError, WrongKindError) as err:
-                    logger.warning("cannot read the clock of store %s; not collecting: %s", self.root, err)
-                    return 0
+            try:
+                now = self._clock.storage_now(root)
+            except (OSError, WrongKindError) as err:
+                logger.warning("cannot read the clock of store %s; not collecting: %s", self.root, err)
+                return 0
             aside = now - self.policy.quarantine_retention_s
             removed = root.remove_older(aside)
             for parts, cutoff in (((QUARANTINE_DIR,), aside), ((STAGING_DIR,), now - self.policy.staging_stale_s)):
@@ -768,10 +935,12 @@ class ResultStore:
         Outputs are stored as JCS canonicalises them: `1.0` is stored as `1`, strings are
         NFC-normalised and tuples become lists, and the output identity is taken over that form.
         If a valid entry for `key` and `context` is already committed, nothing is written and that
-        entry's identity is returned, which may differ from the identity of `outputs`; every file of
-        it, arrays included, is verified first. Anything else at the entry's path is quarantined and
-        replaced, as is anything of the wrong kind at a directory of the store on the way to it.
-        Either way one provenance activity is appended.
+        entry's identity is returned, which may differ from the identity of `outputs`. Its JSON members
+        are verified first, and each array it records must be a regular file named by its digest, of the
+        size of this put's array of that digest if there is one; arrays are not read (a `get` reads and
+        hashes them). Anything else at the entry's path is quarantined and replaced, as is anything of the
+        wrong kind at a directory of the store on the way to it.
+        Either way the result entity is added to provenance.
 
         Raises:
             TypeError: on an output that is neither a JSON value nor a numpy array.
@@ -779,7 +948,7 @@ class ResultStore:
                 `jcs_dumps` refuses, or an array dtype `canonical_npy_bytes` refuses.
             StoreUnavailable: the store could not be read or written (`StorageFull` when out of space).
             WrongKindError: an object of the wrong kind in the store could not be moved aside.
-            RuntimeError: if the target is still corrupt after `COMMIT_ATTEMPTS` commits.
+            RuntimeError: if the target is still corrupt after `settings.commit_attempts` commits.
         """
         payload = _serialise(outputs)
         d = key.digest()
@@ -803,91 +972,142 @@ class ResultStore:
     ) -> OutputIdentity:
         d, f = key.digest(), context.fingerprint()
         entry = parent.path / f
-        for _ in range(COMMIT_ATTEMPTS):
+        for _ in range(self.settings.commit_attempts):
             try:
-                existing = _committed_identity(entry, digest=d, fingerprint=f)
+                existing = _committed_identity(entry, digest=d, fingerprint=f, arrays=payload[1])
             except CorruptEntryError:
                 self._quarantine(entry, digest=d, fingerprint=f)
                 existing = None
             if existing is not None:
                 self._reseal(parent, f)
-                self._record_put(key, context, existing, outcome="existing")
+                self.provenance.add(_result_entity(existing))
                 return existing
             if _commit(key, context, parent, f, staging_root, payload, self.policy):
-                self._record_put(key, context, payload[2], outcome="committed")
+                self.provenance.add(_result_entity(payload[2]))
                 return payload[2]
-        raise RuntimeError(f"{entry} was still corrupt after {COMMIT_ATTEMPTS} commits")
+        raise RuntimeError(f"{entry} was still corrupt after {self.settings.commit_attempts} commits")
 
-    def _record_put(self, key: LogicalKey, context: ExecutionContext, identity: str, *, outcome: str) -> None:
-        digest = key.digest()
-        prov = self.provenance
-        activity = prov.activity(
-            node=key.task,
-            step=key.backend,
-            parameters={
-                "key": digest,
-                "logical_key": jcs_loads(jcs_dumps(key.model_dump())),
-                "context": {**context.model_dump(mode="json"), "fingerprint": context.fingerprint()},
-                "outcome": outcome,
-            },
-        )
-        for name, input_identity in sorted(key.inputs.items()):
-            prov.used(
-                activity,
-                prov.entity(prov_type="artifact", extent=None, attributes={"input": name, "identity": input_identity}),
-            )
-        prov.was_generated_by(self._result_entity(identity, digest), activity)
-
-    def _result_entity(self, identity: OutputIdentity, digest: str) -> str:
-        """Record a result: `checksum_sha256` is the hex of its tagged `output@3` digest, not a file hash."""
-        return self.provenance.entity(
-            prov_type="artifact",
-            extent=None,
-            attributes={CHECKSUM_KEY: identity.removeprefix("output:"), "output_identity": identity, "key": digest},
-        )
-
-    def _record_reuse(
-        self, key: LogicalKey, stored: ExecutionContext, current: ExecutionContext, hit: StoredResult
+    def record_reuse(  # noqa: PLR0913 - the served hit, then what its activity records
+        self,
+        key: LogicalKey,
+        current: ExecutionContext,
+        hit: StoredResult,
+        started: datetime,
+        attributes: Mapping[str, object] | None = None,
+        association: Callable[[kprov.Record], kprov.Association] | None = None,
     ) -> None:
-        digest = key.digest()
-        activity = self.provenance.activity(
-            node="store.reuse",
-            step=key.task,
-            parameters={
-                "key": digest,
-                "stored_context": stored.fingerprint(),
-                "current_context": current.fingerprint(),
-                "policy_used": hit.policy_used.value,
-                **(
-                    {"equivalence": _equivalence_digest(self._equivalence)}
-                    if hit.policy_used is ReusePolicy.EQUIVALENT
-                    else {}
-                ),
-            },
+        """Add the `senselab:Reuse` activity of serving `hit` for `key` in `current`, `attributes` beside its own.
+
+        The activity is associated with the agent of `current` and names the agent that computed `hit`
+        (`senselab:storedAgent`), so a result served across env locks records both. `association` gives the
+        association with that agent within a plan (its node and plan); by default it names the agent alone.
+        """
+        agent, stored_agent = agent_record(key, current), agent_record(key, hit.context)
+        own: dict[str, object] = {
+            "senselab:storedAgent": stored_agent.id,
+            **(attributes or {}),
+            "senselab:logicalKey": key_record(key),
+            "senselab:context": context_record(current),
+            "senselab:storedContext": context_record(hit.context),
+            "senselab:reusePolicy": hit.policy_used.value,
+        }
+        if hit.policy_used is ReusePolicy.EQUIVALENT:
+            own["senselab:equivalence"] = equivalence_digest(self.equivalence)
+        reuse = kprov.activity(
+            core_vocabulary(),
+            types=["senselab:Reuse"],
+            attributes=own,
+            used=[kprov.Usage(hit.output_identity)],
+            associations=[kprov.Association(agent.id) if association is None else association(agent)],
+            started=started,
+            ended=datetime.now(timezone.utc),
         )
-        self.provenance.used(activity, self._result_entity(hit.output_identity, digest))
+        self.provenance.add(_result_entity(hit.output_identity), agent, stored_agent, reuse)
 
     def get(
-        self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy | str = DEFAULT_REUSE_POLICY
+        self,
+        key: LogicalKey,
+        context: ExecutionContext,
+        policy: ReusePolicy | str = DEFAULT_REUSE_POLICY,
+        *,
+        record: bool = True,
     ) -> StoredResult | None:
         """Return a committed result for `key` whose context `policy` admits for `context`, or None.
 
-        `policy` is `DEFAULT_REUSE_POLICY` when the caller names none.
-
-        Candidates are tried narrowest admitting policy first, the current fingerprint first among
-        `exact`, then by fingerprint. A candidate that fails verification is quarantined (or, if the
-        store cannot be written, skipped) and the next one tried. A hit admitted under a policy other
-        than `exact` appends a reuse activity to provenance.
+        With `record`, a hit adds its reuse activity; without, a caller that serves the hit calls `record_reuse`.
+        `policy` is `DEFAULT_REUSE_POLICY` when the caller names none. Candidates are tried narrowest admitting
+        policy first, the current fingerprint first among `exact`, then by fingerprint. A candidate that fails
+        verification is quarantined (or, if the store cannot be written, skipped) and the next one tried.
 
         Raises:
             ValueError: if `policy` is not a `ReusePolicy` value.
             StoreUnavailable: a candidate could not be read; nothing was quarantined.
+            StoreFormatRetired: a candidate is in a retired format and no other candidate is served; it is left.
 
         An object of the wrong kind at a directory of the store on the way to `key` is quarantined and the
         key reads as absent.
         """
-        policy = ReusePolicy(policy)
+        started = datetime.now(timezone.utc)
+        hit, _ = self._fetch(key, context, ReusePolicy(policy), always_serve)
+        if hit is not None and record:
+            self.record_reuse(key, context, hit, started)
+        return hit
+
+    def fetch(
+        self, key: LogicalKey, context: ExecutionContext, run: "RunConfig"
+    ) -> tuple[StoredResult | None, Servable | None]:
+        """Return the result `admits` selects for `run` and what `run` does with it; `(None, None)` when none."""
+        return self._fetch(key, context, run.reuse, functools.partial(servable, run, key.digest(), context))
+
+    def admits(
+        self, key_digest: str, context: ExecutionContext, run: "RunConfig", *, backend: str
+    ) -> StoredContext | None:
+        """Return the entry under `key_digest` that `run` would serve for `context`, or None.
+
+        `fetch` selects the same entry. Each entry's `context.json`, the exact entry's included, is read for its format,
+        its license and the reuse rules; no result member is, so a corrupt one is admitted until a read finds it.
+        Raises what `get` raises.
+        """
+        retired: list[StoreFormatRetired] = []
+        verdict = functools.partial(servable, run, key_digest, context)
+        got = self._within(
+            key_digest, lambda b: choose(self._ranked(b, context, run.reuse, backend, retired), verdict, ())
+        )
+        if got is None:
+            if retired:
+                raise retired[0]
+            return None
+        return got[0] if got[1] is Servable.SERVE else None
+
+    def _fetch(
+        self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy, verdict: Verdict
+    ) -> tuple[StoredResult | None, Servable | None]:
         d = key.digest()
+        retired: list[StoreFormatRetired] = []
+
+        def attempt(base_dir: StorageDir) -> tuple[StoredResult | None, Servable | None]:
+            base, skipped = base_dir.path, set[str]()
+            ranked = self._ranked(base_dir, context, policy, key.backend, retired)
+            while got := choose(ranked, verdict, skipped):
+                entry, said = got
+                name = entry.fingerprint
+                if said is Servable.REFUSE:
+                    return None, said
+                one = functools.partial(_read_result, base / name, digest=d, fingerprint=name, context=entry.context)
+                if (read := self._readable(base, d, name, one, retired)) is None:
+                    skipped.add(name)
+                    continue
+                self._reseal(base_dir, name)
+                return StoredResult(read[1], read[0], read[2], entry.policy_used), said
+            return None, None
+
+        out = self._within(d, attempt) or (None, None)
+        if out[1] is None and retired:
+            raise retired[0]
+        return out
+
+    def _within(self, d: str, use: Callable[[StorageDir], T]) -> T | None:
+        """Return `use(base)` for the directory of key digest `d`, or None when the key reads as absent."""
         try:
             root = self._open_root(create=False)
         except FileNotFoundError:
@@ -903,46 +1123,76 @@ class ResultStore:
                 logger.warning("cannot set aside %s, so key %s... is not served: %s", err.path, d[:12], err)
                 return None
             except OSError as err:
-                raise storage_fault(err, self._entry(key)) from err
+                raise storage_fault(err, self.root / STORE_DIR / d[:2] / d) from err
             with base:
-                return self._get_in(key, context, policy, base)
+                return use(base)
 
-    def _get_in(
-        self, key: LogicalKey, context: ExecutionContext, policy: ReusePolicy, base_dir: StorageDir
-    ) -> StoredResult | None:
-        d, base = key.digest(), base_dir.path
-        try:
-            names = sorted(n for n in base_dir.listdir() if _is_fingerprint(n))
-        except OSError as err:
-            raise storage_fault(err, base) from err
+    def outputs_of(self, key_digest: str, identity: OutputIdentity) -> dict[str, object] | None:
+        """Return the outputs of `entry_of(key_digest, identity)`, or None; raises what it raises."""
+        found = self.entry_of(key_digest, identity)
+        return None if found is None else found.outputs
+
+    def entry_of(self, key_digest: str, identity: OutputIdentity) -> StoredResult | None:
+        """Return the stored result of output identity `identity` under the key of digest `key_digest`, or None.
+
+        Every committed context of the key is read, as `get` reads it, until one holds those outputs; the policy is
+        `exact` and no reuse is recorded.
+
+        Raises:
+            StoreUnavailable: an entry could not be read.
+        """
+
+        def find(base_dir: StorageDir) -> StoredResult | None:
+            base = base_dir.path
+            for name in _fingerprints(base_dir):
+                one = functools.partial(_read_result, base / name, digest=key_digest, fingerprint=name)
+                if (read := self._readable(base, key_digest, name, one, [])) is not None and read[0] == identity:
+                    return StoredResult(read[1], read[0], read[2], ReusePolicy.EXACT)
+            return None
+
+        return self._within(key_digest, find)
+
+    def _ranked(
+        self,
+        base_dir: StorageDir,
+        context: ExecutionContext,
+        policy: ReusePolicy,
+        backend: str,
+        retired: list[StoreFormatRetired],
+    ) -> list[StoredContext]:
+        """Return the key's entries `policy` admits, narrowest policy first, the current fingerprint first."""
+        base, d = base_dir.path, base_dir.path.name
         allowed = _POLICY_ORDER[: _POLICY_ORDER.index(policy) + 1]
         current = context.fingerprint()
-        candidates: list[tuple[int, bool, str, ExecutionContext]] = []
-        for name in names:
-            try:
-                stored = _read_context(base / name, name)
-            except CorruptEntryError:
-                self._set_aside(base / name, digest=d, fingerprint=name)
+        ranked: list[tuple[int, bool, str, ExecutionContext]] = []
+        for name in _fingerprints(base_dir):
+            stored = self._readable(base, d, name, functools.partial(_read_context, base / name, name), retired)
+            if stored is None:
                 continue
             rank = next(
                 (
                     i
                     for i, p in enumerate(allowed)
-                    if acceptable(stored, context, p, backend=key.backend, equivalence=self._equivalence)
+                    if acceptable(stored, context, p, backend=backend, equivalence=self.equivalence)
                 ),
                 None,
             )
             if rank is not None:
-                candidates.append((rank, name != current, name, stored))
-        for rank, _, name, read_context in sorted(candidates, key=lambda c: c[:3]):
-            try:
-                identity, outputs, stored = _read_result(base / name, digest=d, fingerprint=name, context=read_context)
-            except CorruptEntryError:
-                self._set_aside(base / name, digest=d, fingerprint=name)
-                continue
-            self._reseal(base_dir, name)
-            hit = StoredResult(outputs=outputs, output_identity=identity, context=stored, policy_used=allowed[rank])
-            if hit.policy_used is not ReusePolicy.EXACT:
-                self._record_reuse(key, stored, context, hit)
-            return hit
+                ranked.append((rank, name != current, name, stored))
+        return [
+            StoredContext(name, stored, allowed[rank]) for rank, _, name, stored in sorted(ranked, key=lambda c: c[:3])
+        ]
+
+    def _readable(
+        self, base: Path, d: str, name: str, read: Callable[[], T], retired: list[StoreFormatRetired]
+    ) -> T | None:
+        """Return `read()`, or None for another version's entry, a retired one (kept) or a corrupt one (set aside)."""
+        try:
+            return read()
+        except StoreFormatRetired as err:
+            retired.append(err)
+        except StoreFormatUnknown as err:
+            logger.info("store entry %s is another version's and is not served: %s", base / name, err)
+        except CorruptEntryError:
+            self._set_aside(base / name, digest=d, fingerprint=name)
         return None

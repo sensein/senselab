@@ -1,6 +1,7 @@
 """The 2.x pull-request template carries the per-commit checklist of the engineering standards, word for word."""
 
-import re
+import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -8,24 +9,45 @@ import pytest
 pytestmark = pytest.mark.logic
 
 REPO = Path(__file__).resolve().parents[4]
-TEMPLATE = REPO / ".github" / "PULL_REQUEST_TEMPLATE" / "2x.md"
-STANDARDS = REPO / "specs" / "20261030-140022-senselab-2x-api" / "engineering.md"
+_spec = importlib.util.spec_from_file_location("check_pr_template", REPO / "scripts" / "check_pr_template.py")
+assert _spec and _spec.loader
+tpl = importlib.util.module_from_spec(_spec)
+sys.modules["check_pr_template"] = tpl
+_spec.loader.exec_module(tpl)
+
+STANDARDS = "# E\n\n## Per-commit checklist\n\nIntro.\n\n- [ ] One (P-1).\n- [ ] Two,\n  wrapped (P-2).\n\n## Next\n"
+TEMPLATE = (
+    "## Models\n- a\n\n## Per-commit checklist\n- [ ] One (P-1).\n- [ ] Two, wrapped (P-2).\n\n## Gates\n- [ ] g\n"
+)
 
 
-def _items(text: str) -> list[str]:
-    """The checklist items of `text`, each continuation line joined, in order."""
-    return [" ".join(item.split()) for item in re.findall(r"^- \[ \] (.+(?:\n  .+)*)", text, re.MULTILINE)]
+def test_the_tree_template_matches_engineering_md() -> None:
+    """The tracked template's checklist equals engineering.md's, and it has at least the nine original items."""
+    assert tpl.main([]) == 0
+    assert len(tpl.checklist()) >= 9
 
 
-def _per_commit(text: str) -> str:
-    return text.split("## Per-commit checklist", 1)[1].split("\n## ", 1)[0]
+@pytest.mark.parametrize(
+    ("template", "standards"),
+    [
+        (TEMPLATE.replace("One (P-1)", "One (P-9)"), STANDARDS),
+        (TEMPLATE, STANDARDS.replace("wrapped (P-2)", "wrapped (P-3)")),
+        (TEMPLATE.replace("- [ ] One (P-1).\n", ""), STANDARDS),
+        (TEMPLATE, STANDARDS.replace("- [ ] One (P-1).\n", "- [ ] One (P-1).\n- [ ] Three (P-3).\n")),
+    ],
+)
+def test_editing_one_line_of_either_file_fails(template: str, standards: str) -> None:
+    """A changed, dropped or added line in the template or in engineering.md is reported."""
+    assert not tpl.problems(TEMPLATE, STANDARDS)
+    assert tpl.problems(template, standards)
 
 
-def test_the_template_carries_every_per_commit_item() -> None:
-    """Each item of the standards' per-commit checklist appears in the template, in the same order."""
-    expected = _items(_per_commit(STANDARDS.read_text()))
-    assert len(expected) >= 9
-    assert _items(_per_commit(TEMPLATE.read_text())) == expected
+def test_write_regenerates_the_checklist_and_nothing_else() -> None:
+    """Regenerating replaces the checklist items verbatim and keeps the other sections."""
+    stale = TEMPLATE.replace("- [ ] Two, wrapped (P-2).\n", "- [ ] Old (P-0).\n")
+    fresh = tpl.regenerate(stale, STANDARDS)
+    assert not tpl.problems(fresh, STANDARDS)
+    assert fresh.startswith("## Models\n- a\n") and fresh.endswith("## Gates\n- [ ] g\n")
 
 
 def test_the_default_template_stays_the_one_for_1x() -> None:

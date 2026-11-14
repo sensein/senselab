@@ -1,6 +1,6 @@
 """Before/after the frame-fill removal, recomputed from the ten already-run 20260908 stores.
 
-The ten stores at ``~/Downloads/triage_10subj_20260908/out/`` were produced by the *old*
+The ten stores at ``${LOCAL_INPUT}/triage_10subj_20260908/out/`` were produced by the *old*
 ``span_yamnet_input`` (periodic fill for a span under YAMNet's 0.96 s native frame). "Before" reads
 their ``span_yamnet`` measurements exactly as stored. "After" recomputes each filled span's score
 under the new rule -- the overlap-weighted mean of the whole-file YAMNet windows covering it, via
@@ -44,7 +44,7 @@ AIRWAY_LABELS = {"Breathing", "Cough", "Gasp", "Snort", "Wheeze", "Sneeze", "Sig
 CONSOLIDATION_FLOOR = 0.2
 RASTER_TOP_K = 4
 
-ROOT = Path("~/Downloads/triage_10subj_20260908/out").expanduser()
+ROOT = Path("${LOCAL_INPUT}/triage_10subj_20260908/out").expanduser()
 
 
 def load_whole_file_windows(run_dir: Path) -> list[dict[str, Any]]:

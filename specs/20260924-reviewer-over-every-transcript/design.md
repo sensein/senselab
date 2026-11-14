@@ -8,7 +8,7 @@ No transcript text and no detected string appears in this file.
 
 ## The population, measured
 
-From `~/Downloads/recording_vectors_20260924/recording_vectors.parquet`, 62,548 rows, counting
+From `${LOCAL_INPUT}/recording_vectors_20260924/recording_vectors.parquet`, 62,548 rows, counting
 `release` against `release_ground`:
 
 | release | ground | recordings | lexical speech | detectors read it |

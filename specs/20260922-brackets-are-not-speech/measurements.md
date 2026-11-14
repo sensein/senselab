@@ -1,9 +1,9 @@
 # What the bracket artefact costs, measured
 
-Corpus: the replayed run at `/orcd/scratch/bcs/002/satra/triage_replay_20260922/out/`, read-only.
+Corpus: the replayed run at `${ORCD_GROUP_SCRATCH}/triage_replay_20260922/out/`, read-only.
 Each recording's `run/store.jsonl` was read with `ProvStore.read_jsonl` and reduced with the
 graph's own liveness rule — `live_entities`, which is `wasInvalidatedBy`-aware — so every count
-below is over the **live** generation only. Job `23526646` on `pi_satra`, 32 workers, no read
+below is over the **live** generation only. Job `23526646` on `${CPU_PARTITION}`, 32 workers, no read
 errors on any store.
 
 Reproduce with `measure-corpus.py <out.jsonl> <workers>` (one row per recording, run under the

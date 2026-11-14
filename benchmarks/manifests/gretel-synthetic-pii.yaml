@@ -1,0 +1,20 @@
+format: data-manifest@2.0
+name: gretel-synthetic-pii
+version: 7b844d16
+license:
+  expression: Apache-2.0
+  commercial_use: !!str yes
+  copyleft: none
+  attribution: true
+  gated: false
+  source: https://huggingface.co/datasets/gretelai/synthetic_pii_finance_multilingual
+  verified: {date: '2026-11-01', how: hf-card}
+terms: >-
+  README read 2026-11-01 at commit 7b844d16738527a04264f50214cb426a4cea0897: "All data in this generated dataset is
+  Apache 2.0 licensed and can be used for any purpose that is not harmful." The documents are synthetic; the spans
+  were labelled by a NER library and spot-checked, so some labels are wrong. Per-item outputs may be published.
+files:
+- path: test-00000-of-00001.parquet
+  url: https://huggingface.co/datasets/gretelai/synthetic_pii_finance_multilingual/resolve/7b844d16738527a04264f50214cb426a4cea0897/data/test-00000-of-00001.parquet
+  sha256: 014e1057978f030fce4f4cad7c93b9e3377fd0ded713d2bf4c7de00e3e3c8c72
+  size: 5422540

@@ -55,7 +55,7 @@ under ND/NC/DUA terms.
 
 | Task | Benchmark | Size | Metric | Licence / access | Smoke |
 |---|---|---|---|---|---|
-| PII detection | gretelai/synthetic_pii_finance_multilingual ([HF](https://huggingface.co/datasets/gretelai/synthetic_pii_finance_multilingual)) | 29 PII types, 7 languages | span-level precision/recall/F1 (exact + partial), per-type recall | Apache-2.0 tag (README not read) | 200 docs |
+| PII detection | gretelai/synthetic_pii_finance_multilingual ([HF](https://huggingface.co/datasets/gretelai/synthetic_pii_finance_multilingual)) | 29 PII types, 7 languages | span-level precision/recall/F1 (exact + partial), per-type recall | Apache-2.0, README read 2026-11-01 at commit 7b844d16: "All data in this generated dataset is Apache 2.0 licensed and can be used for any purpose that is not harmful." Synthetic documents; spans labelled by a NER library and spot-checked, so some labels are wrong. Per-item outputs publishable (verified). Smoke: first 200 docs of `data/test` by item-id digest | 200 docs |
 | PII detection | ai4privacy pii-masking-300k ([HF](https://huggingface.co/datasets/ai4privacy/pii-masking-300k)) | 225k rows, 6 languages | same | **custom `license.md`, could not be read (404)**. Treat as restricted until read. | — |
 | PII (clinical) | n2c2 2014 de-identification ([n2c2](https://n2c2.dbmi.hms.harvard.edu/data-sets)) | 288 patients, 2-5 records each | token- and entity-level F1, PHI recall | DUA, per-person portal access | — |
 | Sentiment | TweetEval sentiment ([card](https://huggingface.co/datasets/cardiffnlp/tweet_eval)) | test 12,284 | macro-recall (official), macro-F1 | sentiment subset CC BY 3.0 + Twitter ToS; other subsets differ | 500 tweets |
@@ -225,3 +225,17 @@ CC0 / ODbL sets.
 ## Reviewer note (2026-10-30)
 
 Spot-checked against the sources: ESC-50 is CC BY-NC 3.0, but its ESC-10 subset is CC BY 3.0, so it is a permissive option for the open smoke suite; PTB-XL is CC BY 4.0; VoxConverse is CC BY 4.0, with video copyright kept by the original owners.
+
+## Amendment 2026-11-03: parity references and segment confidence
+
+- A 1.x reference is produced under the benchmark's own task and backend params, read from the items file that `run` also reads; a param 1.x cannot take stops the run. Each speaker-embedding item is encoded alone, because 1.x zero-pads a batch to its longest item.
+- Segment confidence is the mean, over a window's final emitted ids, of each chosen token's log-softmax over raw logits, excluding special ids. CrisperWhisper excludes the library's set (every `<|..|>` token including timestamps, the `[verbatim_N]`/`[intended_N]` tags and the prompt markers); the `transformers` backend and 1.x exclude the HF tokenizer's `all_special_ids`, which does not mark timestamp tokens special. The two definitions agree when no timestamp tokens are decoded.
+
+## Amendment 2026-11-02: a benchmark whose backend cannot be placed is reported, not run (P2-88)
+
+- The harness resolves each benchmark's backend against the run's device (the backend's declared devices and the
+  execution profile's placement, P2-13). A benchmark whose backend cannot be placed there is reported as not
+  placeable, with the device and the reason, and is not run.
+- Not placeable is its own outcome, neither pass nor fail. It counts against no band and opens no regression.
+  An example is a large language model backend on a CPU-only node: running it exhausts memory and says nothing
+  about the backend.

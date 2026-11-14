@@ -11,8 +11,9 @@ import pytest
 from senselab_worker import WIRE_VERSION, runtime_identity
 from senselab_worker.canonical import MAX_DEPTH
 from senselab_worker.codec import ARRAY_REF_HEIGHT, ENVELOPE, MAX_LINE_BYTES, to_wire, validate_message
-from senselab_worker.faults import ContentFault
-from senselab_worker.serve import EXIT_FATAL, serve
+from senselab_worker.faults import ContentFault, ProtocolError
+from senselab_worker.model_cache import ModelCache
+from senselab_worker.serve import EXIT_FATAL, cached_load, serve
 
 Handle = Callable[[object, list[dict[str, Any]], dict[str, Any]], list[dict[str, Any]]]
 
@@ -43,6 +44,10 @@ def _line(msg: dict[str, Any], array_dir: Path) -> bytes:
     return json.dumps(to_wire(msg, array_dir=array_dir, at="line")).encode() + b"\n"
 
 
+def _without_report(done: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in done.items() if k not in ("since_load", "load_s")}
+
+
 def _replies(out: list[dict[str, Any]], request_id: str = "req-1") -> list[dict[str, Any]]:
     """The lines answering one request: one per item, then `done`, each valid for its kind."""
     start = next(i for i, m in enumerate(out) if m.get("id") == request_id)
@@ -50,7 +55,7 @@ def _replies(out: list[dict[str, Any]], request_id: str = "req-1") -> list[dict[
     for m in out[start:end]:
         validate_message(m, "result")
     validate_message(out[end], "done")
-    assert out[end] == {"id": request_id, "done": end - start}
+    assert _without_report(out[end]) == {"id": request_id, "done": end - start}
     return out[start:end]
 
 
@@ -70,16 +75,55 @@ def test_session_hello_ready_response_stop(tmp_path: Path) -> None:
     """A full session answers hello, ready and one response per request, then exits 0 on stop."""
     code, out = _session(tmp_path, [_init(tmp_path), _request("a", "b"), {"stop": True}, _request("c")])
     hello, ready, *response = out
-    assert code == 0 and WIRE_VERSION == 2
+    assert code == 0 and WIRE_VERSION == 3
     validate_message(hello, "hello")
     validate_message(ready, "ready")
     assert hello["hello"]["wire"] == WIRE_VERSION and hello["hello"]["runtime"] == runtime_identity()
     assert ready["ready"]["load_s"] >= 0
-    assert response == [
+    assert [_without_report(m) for m in response] == [
         {"id": "req-1", "item": "a", "outputs": {"seen": ["k"], "state": "loaded"}},
         {"id": "req-1", "item": "b", "outputs": {"seen": ["k"], "state": "loaded"}},
         {"id": "req-1", "done": 2},
     ]
+
+
+@pytest.mark.logic
+def test_worker_loads_through_model_cache(tmp_path: Path) -> None:
+    """An init naming a model, device and dtype loads once per process cache under that key; others load directly."""
+    loads: list[dict[str, Any]] = []
+
+    def load(init: dict[str, Any]) -> object:
+        loads.append(init)
+        return "weights"
+
+    cache, model = ModelCache(1), {"source": "hf", "id": "org/m", "identity": "a" * 40}
+    through = cached_load(load, "pkg.backend", cache)
+    for _ in range(2):
+        code, out = _session(
+            tmp_path, [_init(tmp_path, model=model, device="cpu", dtype="default"), _request("a")], load=through
+        )
+        assert code == 0 and _replies(out)[0]["outputs"]["state"] == "weights"
+    assert len(loads) == 1 and cache.keys() == [("pkg.backend", "a" * 40, "cpu", "default")]
+    assert "dtype" not in loads[0] and loads[0]["model"] == model
+    _session(tmp_path, [_init(tmp_path, device="cpu", dtype="default")], load=through)
+    assert len(loads) == 2 and loads[1].keys() == {"array_dir", "device"}
+    code, out = _session(
+        tmp_path, [_init(tmp_path, model={**model, "identity": "main"}, device="cpu", dtype="x")], load=through
+    )
+    assert len(loads) == 2 and code == EXIT_FATAL and "never a ref" in out[-1]["error"]["message"]
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "named",
+    [{"model": "stub"}, {"model": {"identity": 7}, "device": "cpu", "dtype": "d"}, {"model": {"identity": "a" * 40}}],
+)
+def test_a_partial_or_malformed_model_init_is_refused_at_load(tmp_path: Path, named: dict[str, Any]) -> None:
+    """An init naming a model without a string identity, device and dtype is a fatal `ProtocolError`, never loaded."""
+    loads: list[dict[str, Any]] = []
+    through = cached_load(loads.append, "pkg.backend", ModelCache(1))
+    code, out = _session(tmp_path, [_init(tmp_path, **named)], load=through)
+    assert code == EXIT_FATAL and out[-1]["error"]["type"] == "ProtocolError" and loads == []
 
 
 @pytest.mark.logic
@@ -377,7 +421,7 @@ def test_bad_array_in_init_is_fatal(tmp_path: Path) -> None:
 def test_empty_request_gets_only_done(tmp_path: Path) -> None:
     """A request with no items is answered by `done` alone."""
     _, out = _session(tmp_path, [_init(tmp_path), {"id": "r", "items": [], "params": {}}])
-    assert out[2:] == [{"id": "r", "done": 0}]
+    assert [_without_report(m) for m in out[2:]] == [{"id": "r", "done": 0}]
 
 
 def _sized(n_bytes: int) -> dict[str, Any]:
@@ -512,3 +556,45 @@ def test_exponentially_shared_output_fails_only_its_item(tmp_path: Path) -> None
     dag, mate = _replies(out)
     assert code == 0 and mate["outputs"] == {"ok": 1}
     assert (dag["error"]["type"], dag["error"]["fault"], dag["error"]["gap"]) == ("ResponseTooLarge", "resource", False)
+
+
+@pytest.mark.logic
+def test_done_carries_the_requests_device_peak_when_measured(tmp_path: Path) -> None:
+    """A meter's `(peak, allocated after)` rides on `done`; without one (no CUDA in use) `done` has neither."""
+    measured: list[int] = []
+
+    def meter(call: Callable[[], Any]) -> tuple[Any, tuple[int, int] | None]:
+        measured.append(1)
+        return call(), (2048, 1024)
+
+    rx = io.BytesIO(
+        _line(_init(tmp_path), tmp_path)
+        + _line({"id": "r", "items": [{"id": "a", "inputs": {}}], "params": {}}, tmp_path)
+    )
+    tx = io.BytesIO()
+    assert serve(_load, _echo, rx, tx, meter) == 0
+    done = validate_message(json.loads(tx.getvalue().splitlines()[-1]), "done")
+    assert _without_report(done) == {"id": "r", "done": 1, "device_peak_bytes": 2048, "device_allocated_bytes": 1024}
+    assert measured == [1]
+    _, out = _session(tmp_path, [_init(tmp_path), {"id": "r", "items": [{"id": "a", "inputs": {}}], "params": {}}])
+    assert _without_report(out[-1]) == {"id": "r", "done": 1}
+
+
+@pytest.mark.logic
+def test_done_reports_the_requests_the_state_answered_and_the_load_on_the_first(tmp_path: Path) -> None:
+    """The first request after a load reports `since_load` 0 and the load's seconds; later ones the count alone."""
+    request = {"id": "r", "items": [{"id": "a", "inputs": {}}], "params": {}}
+    _, out = _session(tmp_path, [_init(tmp_path), request, {**request, "id": "s"}, {**request, "id": "t"}])
+    dones = [validate_message(m, "done") for m in out if "done" in m]
+    assert [d["since_load"] for d in dones] == [0, 1, 2]
+    assert isinstance(dones[0]["load_s"], float) and all("load_s" not in d for d in dones[1:])
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    "bad", [{"since_load": -1}, {"since_load": 1, "load_s": 0.1}, {"load_s": 0.1}, {"since_load": 0, "load_s": -1}]
+)
+def test_a_done_naming_a_load_wrongly_is_refused(bad: dict[str, Any]) -> None:
+    """A negative count, or a load time on a request that did not load, is a protocol error."""
+    with pytest.raises(ProtocolError):
+        validate_message({"id": "r", "done": 0, **bad}, "done")

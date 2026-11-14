@@ -1,6 +1,6 @@
 import numpy as np, warnings, json
 warnings.filterwarnings("ignore")
-d=np.load("/Users/satra/.claude/jobs/295c3f8a/tmp/stage1.npz")
+d=np.load("${AGENT_SCRATCH}/stage1.npz")
 x=d["x"]; fs=int(d["fs"]); dur=float(d["dur"])
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.health_acoustics import detect_health_acoustic_events
@@ -20,5 +20,5 @@ for j,per in enumerate(res):
     if not per: continue
     sc={k:v for dd in per[0]["label_scores"] for k,v in dd.items()}
     for i,lab in enumerate(HEAR_EVENT_LABELS): R[i,j]=sc.get(lab,np.nan)
-np.savez("/Users/satra/.claude/jobs/295c3f8a/tmp/hear.npz",R=R,centres=centres,labels=np.array(HEAR_EVENT_LABELS))
+np.savez("${AGENT_SCRATCH}/hear.npz",R=R,centres=centres,labels=np.array(HEAR_EVENT_LABELS))
 print("hear raster",R.shape,"max per class:",dict(zip(HEAR_EVENT_LABELS,R.max(axis=1).round(3))),flush=True)

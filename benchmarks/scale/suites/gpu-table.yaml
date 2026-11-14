@@ -1,0 +1,20 @@
+format: scale-suite@2.0
+name: gpu-table
+# Every Phase 2 backend on one GPU allocation at 10^3 items under the table profile, whose measures roots a group shares.
+# The seed of the synthetic trees; unused by these tasks.
+seed: 0
+# The long signal's seconds: two hours of audio.
+long_s: 7200
+# The table profile, as in table.yaml: a 10^3 point measures batches up to the memory batch over three length strata.
+calibration:
+  length_strata: 3
+  batched_sizes: 2
+# Seconds of warm probe work a point's probe may take, Probe.plan's budget in place of the profile's probe_s.
+point_wall_s: 900
+tasks:
+- {task: speech_to_text, stack: transformers, port: audio, data: librispeech, manifest: librispeech-test-clean, params: {timestamps: none}, points: [1000]}
+- {task: speech_to_text, stack: crisperwhisper, model: nyralabs/CrisperWhisper2.0_turbo, port: audio, data: librispeech, manifest: librispeech-test-clean, params: {timestamps: none}, points: [1000]}
+- {task: speaker_embeddings, stack: speechbrain, port: audio, data: librispeech, manifest: librispeech-test-clean, points: [1000]}
+- {task: diarize, stack: pyannote, port: audio, data: librispeech, manifest: librispeech-test-clean, points: [1000]}
+- {task: pii_spans, stack: vllm, port: text, data: gretel, manifest: gretel-synthetic-pii, points: [1000]}
+- {task: pii_spans, stack: transformers, port: text, data: gretel, manifest: gretel-synthetic-pii, points: [1000]}

@@ -29,8 +29,10 @@ TRUSTED = frozenset(
         "github.run_id",
         "github.sha",
         "github.event.pull_request.number",
+        "github.event.pull_request.head.sha",
         "github.event.pull_request.draft",
         "github.event.issue.number",
+        "inputs.ref",
         "github.event.release.prerelease",
         "runner.os",
         "runner.arch",
@@ -371,6 +373,7 @@ def test_matrix_values_are_trusted_only_when_the_matrix_is_clean(matrix: str, ba
     "expression",
     [
         "github.event.pull_request.number",
+        "github.event.pull_request.head.sha",
         "secrets.HF_TOKEN",
         "github.event_name == 'pull_request'",
         "!github.event.release.prerelease",

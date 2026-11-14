@@ -3,7 +3,18 @@
 import numpy
 import pytest
 from pydantic import ValidationError
-from senselab_core.kernel.results import Annotation, Embedding, Events, Intervals
+from senselab_core.kernel.results import (
+    Annotation,
+    Embedding,
+    Events,
+    Intervals,
+    Metric,
+    TextSpans,
+    Transcript,
+    TranscriptNode,
+    Trials,
+)
+from senselab_core.kernel.signals import PlainText
 from senselab_core.kernel.time import Span
 
 SPAN = Span(start_ns=0, end_ns=1_000, clock_id="c")
@@ -84,3 +95,105 @@ def test_events_are_columnar_instants() -> None:
             Events(time_ns=numpy.array([1, 2]), label=numpy.array(["x", "y"]), value=value, clock_id="c")
     with pytest.raises(ValidationError):
         Events(time_ns=numpy.array([1, 2]), label=numpy.array(["x"]), value=None, clock_id="c")
+
+
+def _word(text: str, start: object, end: object, clock: str = "c", confidence: float | None = None) -> TranscriptNode:
+    return TranscriptNode.model_validate(
+        {"text": text, "span": {"start_ns": start, "end_ns": end, "clock_id": clock}, "confidence": confidence}
+    )
+
+
+@pytest.mark.logic
+def test_transcript_word_spans_are_ns() -> None:
+    """Word spans are integer nanoseconds on one clock; confidence is optional and lies in [0, 1]."""
+    words = (_word("hello", 0, 400_000_000, confidence=0.9), _word("there", numpy.int64(500_000_000), 900_000_000))
+    t = Transcript(
+        segments=(TranscriptNode(text="hello there", children=words),),
+        extent=Span(start_ns=0, end_ns=900_000_000, clock_id="c"),
+    )
+    leaf = t.segments[0].children[1]
+    assert leaf.span is not None and type(leaf.span.start_ns) is int and leaf.confidence is None
+    assert t.format == "transcript@2.0"
+    for start in (0.5, "0", True):
+        with pytest.raises(ValidationError):
+            _word("x", start, 10)
+    with pytest.raises(ValidationError):
+        _word("x", 0, 10, confidence=1.5)
+    with pytest.raises(ValidationError, match="clock"):
+        Transcript(
+            segments=(TranscriptNode(text="a b", children=(_word("a", 0, 1), _word("b", 1, 2, "d"))),),
+            extent=Span(start_ns=0, end_ns=2, clock_id="c"),
+        )
+    assert Transcript(segments=(TranscriptNode(text="untimed"),)).segments[0].span is None
+
+
+@pytest.mark.logic
+def test_transcript_span_past_extent_refused() -> None:
+    """A span outside the declared extent, either bound, is refused, as is a timed transcript with no extent."""
+    words = (_word("hello", 100, 400_000_000), _word("there", 500_000_000, 900_000_000))
+    node = TranscriptNode(text="hello there", children=words)
+
+    def over(start: int, end: int) -> Transcript:
+        return Transcript(segments=(node,), extent=Span(start_ns=start, end_ns=end, clock_id="c"))
+
+    assert over(100, 900_000_000).extent is not None
+    with pytest.raises(ValidationError, match="outside the declared extent"):
+        over(100, 899_999_999)
+    with pytest.raises(ValidationError, match="outside the declared extent"):
+        over(101, 900_000_000)
+    with pytest.raises(ValidationError, match="declares its extent"):
+        Transcript(segments=(node,))
+    assert Transcript(segments=()).extent is None
+
+
+@pytest.mark.logic
+def test_text_spans_within_text_bounds() -> None:
+    """Character spans lie in `[0, length]` of the text they name, and their columns agree in length."""
+    text = PlainText(content="call 555 0100")
+    spans = TextSpans.over(text, start=[5], end=[13], label=["phone"], score=[0.8])
+    assert (spans.text, spans.length, spans.format) == (text.identity, 13, "text-spans@1.0")
+    assert text.content[spans.start[0] : spans.end[0]] == "555 0100"
+    for start, end in (([5], [14]), ([-1], [3]), ([4], [3])):
+        with pytest.raises(ValidationError):
+            TextSpans.over(text, start=start, end=end, label=["phone"])
+    with pytest.raises(ValidationError, match="length"):
+        TextSpans.over(text, start=[0, 1], end=[1], label=["a"])
+    none = numpy.array([], int)
+    assert TextSpans.over(text, start=none, end=none, label=numpy.array([], str)).score is None
+
+
+@pytest.mark.logic
+def test_trials_pair_embeddings_with_a_label() -> None:
+    """Trials pair row i of `first` with row i of `second`, labelled same or different, in one space."""
+    a = numpy.array([[1.0, 0.0], [0.0, 1.0]])
+    trials = Trials(first=a, second=a[::-1], same=[True, False], space="m")
+    assert trials.same.dtype == numpy.bool_ and trials.format == "trials@1.0"
+    for bad in ({"second": a[:1]}, {"same": [1, 0]}, {"same": [True]}, {"first": numpy.full((2, 2), numpy.nan)}):
+        with pytest.raises(ValidationError):
+            Trials.model_validate({"first": a, "second": a, "same": [True, False], "space": "m", **bad})
+
+
+@pytest.mark.logic
+def test_metric_names_value_unit_and_items() -> None:
+    """A metric is a finite value with its unit over at least one item."""
+    m = Metric(name="wer", value=0.125, unit="1", items=8)
+    assert (m.name, m.value, m.unit, m.items, m.format) == ("wer", 0.125, "1", 8, "metric@2.0")
+    for bad in ({"value": float("inf")}, {"items": 0}, {"items": 1.0}, {"unit": ""}):
+        with pytest.raises(ValidationError):
+            Metric.model_validate({"name": "wer", "value": 0.1, "unit": "1", "items": 1, **bad})
+
+
+@pytest.mark.logic
+def test_metric_ratio_parts_come_together() -> None:
+    """A metric carries its numerator and denominator both or neither; a zero denominator has a zero numerator."""
+    m = Metric(name="wer", value=0.5, unit="1", items=2, numerator=1, denominator=2)
+    assert (m.numerator, m.denominator) == (1.0, 2.0)
+    assert Metric(name="f", value=1.0, unit="1", items=1, numerator=0, denominator=0).denominator == 0.0
+    for bad in (
+        {"numerator": 1.0},
+        {"denominator": 2.0},
+        {"numerator": 1.0, "denominator": 0.0},
+        {"numerator": 0.0, "denominator": -1.0},
+    ):
+        with pytest.raises(ValidationError):
+            Metric.model_validate({"name": "wer", "value": 0.5, "unit": "1", "items": 2, **bad})

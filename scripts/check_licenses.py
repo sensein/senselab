@@ -7,9 +7,15 @@ manual record. A package not installed here (a platform-only dependency) has onl
 libraries a wheel bundles are found in its ``RECORD`` and each needs a record of its own, declared under that package. The policy, with the
 named license sets, the set each distribution allows and ``on_missing``, is ``scripts/data/license_policy.yaml``.
 
+Env locks (``--lock NAME``, ``--host``) are read the same way over the pinned packages of a lock in
+``data/env_locks/``, or of the root lock for ``--host``. A package's metadata comes from ``--site`` (the
+site-packages of a built env) or, without it, from the PyPI JSON of its pinned version. ``--write`` merges the records
+into ``data/env_licenses.yaml``.
+
 Usage::
 
     uv run python scripts/check_licenses.py [--json PATH]
+    uv run python scripts/check_licenses.py (--lock NAME | --host) [--site DIR] [--write]
 """
 
 from __future__ import annotations
@@ -19,22 +25,31 @@ import json
 import re
 import sys
 import tomllib
+import urllib.error
+import urllib.request
+from datetime import date
+from email.message import Message
 from importlib import metadata
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 import yaml
+from senselab_core.runtime.envs import lock_pins
+from senselab_core.runtime.licenses import allows, ids_of, parse_expression
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = Path(__file__).resolve().parent / "data" / "license_policy.yaml"
 LOCK = ROOT / "uv.lock"
-POLICY_FORMAT = "license-policy@1.2"
+ENV_LOCKS = ROOT / "packages/senselab/src/senselab/data/env_locks"
+ENV_LICENSES = ROOT / "packages/senselab/src/senselab/data/env_licenses.yaml"
+ENV_LICENSES_FORMAT = "env-licenses@1.0"
+INSTALLER = "env-lock"
+POLICY_FORMAT = "license-policy@2.0"
 DISTRIBUTIONS = ("senselab", "senselab-core", "senselab-worker")
 ON_MISSING = ("raise", "warn")
 
 _SHARED = re.compile(r"\.(?:so(?:\.\d+)*|dylib|dll)$")
 _EXTENSION = re.compile(r"\.(?:cpython-\d+\w*-[\w-]+|abi3|pypy\d+-\w+)\.(?:so|dylib)$|\.pyd$")
-_TOKEN = re.compile(r"\(|\)|[^\s()]+")
 
 
 class Record(NamedTuple):
@@ -78,8 +93,8 @@ def load_policy(path: Path = POLICY) -> Policy:
         raise ValueError(f"{path}: on_missing must be one of {ON_MISSING}")
     sets = {}
     for name, entry in raw["sets"].items():
-        if not str(entry.get("derivation", "")).strip() or not entry.get("ids"):
-            raise ValueError(f"{path}: set {name} needs ids and a derivation")
+        if not entry.get("ids"):
+            raise ValueError(f"{path}: set {name} needs ids")
         sets[name] = frozenset(i.lower() for i in entry["ids"])
     distributions = {}
     bundled_allow = {}
@@ -113,70 +128,6 @@ def locked_closure(lock: Path = LOCK, roots: tuple[str, ...] = DISTRIBUTIONS) ->
             needed_by.setdefault(name, set()).add(root)
             stack += [d["name"] for d in packages[name].get("dependencies", [])]
     return needed_by
-
-
-def parse_expression(text: str) -> Any:
-    """Parse an SPDX expression into nested tuples: ``("or", a, b)``, ``("and", a, b)`` or an id string."""
-    tokens = _TOKEN.findall(text)
-    pos = 0
-
-    def peek() -> str | None:
-        return tokens[pos] if pos < len(tokens) else None
-
-    def take() -> str:
-        nonlocal pos
-        if pos >= len(tokens):
-            raise ValueError(f"expression ends early: {text!r}")
-        pos += 1
-        return tokens[pos - 1]
-
-    def atom() -> Any:
-        if peek() == "(":
-            take()
-            inner = either()
-            if peek() != ")":
-                raise ValueError(f"unbalanced parentheses in {text!r}")
-            take()
-            return inner
-        if peek() is None or peek() in (")", "AND", "OR", "WITH"):
-            raise ValueError(f"expected a license id in {text!r}")
-        name = take()
-        if peek() == "WITH":
-            take()
-            name = f"{name} WITH {take()}"
-        return name
-
-    def both() -> Any:
-        node = atom()
-        while peek() == "AND":
-            take()
-            node = ("and", node, atom())
-        return node
-
-    def either() -> Any:
-        node = both()
-        while peek() == "OR":
-            take()
-            node = ("or", node, both())
-        return node
-
-    tree = either()
-    if peek() is not None:
-        raise ValueError(f"trailing text in {text!r}")
-    return tree
-
-
-def ids_of(tree: Any) -> list[str]:
-    """Every license id in a parsed expression."""
-    return [tree] if isinstance(tree, str) else [i for part in tree[1:] for i in ids_of(part)]
-
-
-def allows(tree: Any, allowed: frozenset[str]) -> bool:
-    """Whether the expression is satisfied by the `allowed` ids: ``AND`` needs both sides, ``OR`` either."""
-    if isinstance(tree, str):
-        return tree.lower() in allowed
-    left, right = allows(tree[1], allowed), allows(tree[2], allowed)
-    return (left and right) if tree[0] == "and" else (left or right)
 
 
 def _known(policy: Policy) -> frozenset[str]:
@@ -215,7 +166,7 @@ def library_name(path: str) -> str:
 
 def bundled_libraries(dist: metadata.Distribution) -> dict[str, str]:
     """The native libraries the wheel carries, as ``name -> file``: shared libraries that are not extension modules."""
-    found = {}
+    found: dict[str, str] = {}
     for f in dist.files or []:
         text = str(f)
         if _SHARED.search(text) and not _EXTENSION.search(text):
@@ -234,7 +185,7 @@ class Finding(NamedTuple):
     problem: str
 
 
-def _judge(
+def _judge(  # noqa: PLR0913 - the subject, its record and users, the policy, and the version and bundling
     subject: str, record: Record | None, needed_by: set[str], policy: Policy, version: str = "", bundled: bool = False
 ) -> Finding:
     users = tuple(sorted(needed_by))
@@ -278,14 +229,105 @@ def table(findings: list[Finding]) -> str:
     return "\n".join("  ".join(c.ljust(w) for c, w in zip(r, widths, strict=True)).rstrip() for r in rows)
 
 
+class PypiDist:
+    """The slice of `metadata.Distribution` the reader needs, built from a PyPI release's JSON."""
+
+    def __init__(self, info: dict[str, Any]) -> None:
+        """Map the release's ``license_expression``, ``license`` and ``classifiers`` to the core-metadata fields."""
+        self.metadata = Message()
+        self.metadata["Name"] = info["name"]
+        for key, value in (("License-Expression", info.get("license_expression")), ("License", info.get("license"))):
+            if value:
+                self.metadata[key] = value
+        for classifier in info.get("classifiers") or []:
+            self.metadata["Classifier"] = classifier
+        self.version = info["version"]
+        self.files = None
+
+
+def fetch_pypi(name: str, version: str) -> PypiDist | None:
+    """The metadata of `name` at `version` from PyPI, or ``None`` when the release is not there."""
+    try:
+        with urllib.request.urlopen(f"https://pypi.org/pypi/{name}/{version}/json", timeout=30) as response:  # noqa: S310
+            return PypiDist(json.load(response)["info"])
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def host_pins(lock: Path = LOCK) -> dict[str, str]:
+    """The ``name -> version`` pins of the runtime closure of senselab in `uv.lock`, the repository's own packages apart."""
+    packages = {_norm(p["name"]): p for p in tomllib.loads(lock.read_text())["package"]}
+    closure = locked_closure(lock, DISTRIBUTIONS[:1])
+    return {_norm(n): packages[_norm(n)].get("version", "") for n in closure if n not in DISTRIBUTIONS}
+
+
+def pinned_dists(
+    pins: dict[str, str],
+    installed: dict[str, metadata.Distribution],
+    fetch: Callable[[str, str], Any] = fetch_pypi,
+) -> dict[str, Any]:
+    """The metadata of each pin: the installed distribution when its version matches, else `fetch(name, version)`."""
+    out = {}
+    for name, version in sorted(pins.items()):
+        dist = installed.get(name)
+        dist = dist if dist is not None and dist.version == version else fetch(name, version)
+        if dist is not None:
+            out[name] = dist
+    return out
+
+
+def env_records(findings: list[Finding], today: str) -> dict[str, dict[str, Any]]:
+    """The ``env-licenses`` entries of the package findings that hold a record, in name order."""
+    out = {}
+    for f in findings:
+        if " bundles " in f.subject or not f.expression:
+            continue
+        how, _, when = f.how.partition(" ")
+        pep639 = how == "pep639"
+        out[_norm(f.subject)] = {
+            "version": f.version,
+            "expression": f.expression,
+            "source": f"{f.subject} {f.version} {'License-Expression' if pep639 else how}",
+            "verified": {"date": when or today, "how": how},
+        }
+    return out
+
+
+def write_env_records(path: Path, env: str, records: dict[str, dict[str, Any]]) -> None:
+    """Replace env `env`'s entries in the ``env-licenses`` file at `path`, keeping the other envs."""
+    raw: dict[str, Any] = yaml.safe_load(path.read_text()) if path.exists() else {"format": ENV_LICENSES_FORMAT, "envs": {}}
+    raw["envs"][env] = records
+    path.write_text(yaml.safe_dump(raw, sort_keys=True, width=120))
+
+
 def main(argv: list[str]) -> int:
-    """Check the locked runtime closure of the three distributions; return the exit status."""
+    """Check the locked runtime closure of the three distributions, or one env lock; return the exit status."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--json", type=Path, help="also write the findings here")
+    which = parser.add_mutually_exclusive_group()
+    which.add_argument("--lock", metavar="NAME", help="check the pins of data/env_locks/NAME.txt")
+    which.add_argument("--host", action="store_true", help="check the pins of the root lock's senselab closure")
+    parser.add_argument("--site", type=Path, help="read metadata from this site-packages instead of PyPI")
+    parser.add_argument("--write", action="store_true", help="merge the records into data/env_licenses.yaml")
     args = parser.parse_args(argv)
     policy = load_policy()
-    installed = {_norm(d.metadata["Name"]): d for d in metadata.distributions() if d.metadata["Name"]}
-    findings = check(locked_closure(), policy, installed)
+    if args.lock or args.host:
+        pins = lock_pins((ENV_LOCKS / f"{args.lock}.txt").read_text()) if args.lock else host_pins()
+        scan = (
+            metadata.distributions(path=[str(args.site)])
+            if args.site
+            else (metadata.distributions() if args.host else [])
+        )
+        installed = {_norm(d.metadata["Name"]): d for d in scan if d.metadata["Name"]}
+        dists = pinned_dists(pins, installed)
+        findings = check({n: {INSTALLER} for n in pins}, policy, dists)
+        if args.write and not failures(findings, policy):
+            write_env_records(ENV_LICENSES, args.lock or "host", env_records(findings, date.today().isoformat()))
+    else:
+        installed = {_norm(d.metadata["Name"]): d for d in metadata.distributions() if d.metadata["Name"]}
+        findings = check(locked_closure(), policy, installed)
     print(table(findings))
     if args.json:
         args.json.write_text(json.dumps([f._asdict() for f in findings], indent=2) + "\n")

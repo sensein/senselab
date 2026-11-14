@@ -126,7 +126,7 @@ def test_every_storage_operation_on_a_planted_symlink_leaves_its_target_alone(tm
     report = bounded("probe_primitive", str(tmp_path), operation)
     assert report["victim_unchanged"], report
     assert report["error"] == PRIMITIVE[operation], report
-    if operation in ("write_atomically", "rename_onto", "write_atomically_hard_link", "fs_now_symlink"):
+    if operation in ("write_atomically", "rename_onto", "write_atomically_hard_link"):
         assert report["value"] == "file"
     if operation == "link_source":
         assert report["value"] == "symlink"

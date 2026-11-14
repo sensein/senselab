@@ -13,6 +13,9 @@ ARRAY_NAME = re.compile(r"^[0-9a-f]{64}\.npy$")
 ARRAY_TEMP_NAME = re.compile(r"^\.[0-9a-f]{32}\.tmp$")
 """An array file being written: a dot, a uuid4 hex, then `.tmp`."""
 
+ARRAY_FILE = re.compile(f"{ARRAY_NAME.pattern}|{ARRAY_TEMP_NAME.pattern}")
+"""An array file, written or being written: every name a client removes from its array directory."""
+
 UUID_HEX = re.compile(r"^[0-9a-f]{32}$")
 """A staging file or directory named by a uuid4 hex."""
 

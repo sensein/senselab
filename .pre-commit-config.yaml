@@ -29,16 +29,17 @@ repos:
 
 - repo: local
   hooks:
-  # Strict on every module under packages/, run by the locked mypy so the hook and `uv run mypy` are one version
-  # and see the same numpy, hypothesis and huggingface_hub stubs. `--platform linux` makes the result the same on
+  # Strict on every module under packages/, on the cluster harness (benchmarks/exit and benchmarks/scale) and on the 2.x
+  # scripts (those the 1.x freeze branch lacks; the rest of scripts/ is the frozen 1.x pool), run by the locked mypy so
+  # the hook and `uv run mypy` are one version and see the same numpy, hypothesis and huggingface_hub stubs. `--platform linux` makes the result the same on
   # a macOS checkout and on CI. `packages/conftest.py` and `packages/senselab-core/tests/runtime/conftest.py` are
   # both top-level `conftest` modules to mypy, which refuses a duplicate module name.
   - id: mypy-strict
-    name: mypy --strict (packages, locked)
+    name: mypy --strict (packages, harness, 2.x scripts, locked)
     entry: uv run --frozen --no-sync mypy --strict --platform linux --ignore-missing-imports --extra-checks
     language: system
-    files: ^packages/.*\.py$
-    exclude: ^packages/conftest\.py$
+    files: ^(packages/.*|benchmarks/(exit|scale)/.*|scripts/(check_(brief|config_derivations|fixed_parameters|fixture_budget|host_identity|licenses|local_paths|pr_models|pr_template|size_budgets|source_digests|spec_ids)|env_grouping|generate_(graph_schema|task_api)|limits_scope|lock_envs|probe_(lease|measures|queue)_cross_node|regenerate_equivalence|release_gate|run_calls))\.py$
+    exclude: ^packages/(.*/)?conftest\.py$
     require_serial: true
 - repo: https://github.com/pre-commit/mirrors-mypy
   rev: v1.18.2
@@ -79,6 +80,7 @@ repos:
     - --min-similarity-lines=4
     - packages/senselab-core/src
     - packages/senselab-worker/src
+    - packages/senselab/src
     files: ^packages/.*/src/.*\.py$
     pass_filenames: false
     require_serial: true
@@ -93,6 +95,7 @@ repos:
     - --min-similarity-lines=10
     - packages/senselab-core/tests
     - packages/senselab-worker/tests
+    - packages/senselab/tests
     files: ^packages/.*/tests/.*\.py$
     pass_filenames: false
     require_serial: true
@@ -151,7 +154,7 @@ repos:
     # extensions in the I/O format matrix. Each is a term codespell reads as a misspelling of
     # another word. Raw captured output is excluded rather than corrected: it is a verbatim
     # record, and a truncated word in a printed table is part of what was printed.
-    exclude: ^specs/.*/raw/
+    exclude: ^specs/.*/raw/|^packages/senselab/src/senselab/metrics/(open_asr/|data/open_asr_)
     # The second group are this workflow's own vocabulary and its verbatim records:
     # UNDET/UNDETERMINED and NotIn are value names; FigureStyle is a class; allk, empt and
     # empted are fragments of identifiers codespell splits; disjointness, declaring, meaned,
@@ -186,8 +189,35 @@ repos:
     language: system
     pass_filenames: false
     always_run: true
+  - id: fixed-parameters
+    name: No fixed parameters in package source (P-34).
+    entry: uv run --frozen --no-sync python scripts/check_fixed_parameters.py
+    language: system
+    pass_filenames: false
+    files: ^(packages/[^/]+/src/.*\.py|scripts/(check_fixed_parameters\.py|data/invariants\.yaml))$
+  - id: pr-template
+    name: The 2.x PR template carries engineering.md's per-commit checklist.
+    entry: python scripts/check_pr_template.py
+    language: python
+    pass_filenames: false
+    files: ^(\.github/PULL_REQUEST_TEMPLATE/2x\.md|specs/20261030-140022-senselab-2x-api/engineering\.md|scripts/check_pr_template\.py)$
+  - id: config-derivations
+    name: Config files hold values; their derivations are sections of config-derivations.md.
+    entry: uv run --frozen --no-sync python scripts/check_config_derivations.py
+    language: system
+    pass_filenames: false
+    files: (^|/)data/.*\.yaml$|config-derivations\.md$|^scripts/check_config_derivations\.py$
   - id: spec-ids
     name: No ruling, finding or review-round ids under packages/.
     entry: uv run --frozen --no-sync python scripts/check_spec_ids.py
     language: system
     files: ^packages/
+  - id: host-identity
+    name: No host or account name read in 2.x source or benchmarks.
+    entry: uv run --frozen --no-sync python scripts/check_host_identity.py
+    language: system
+    files: ^(packages/.*/src|benchmarks)/.*\.py$|^scripts/check_host_identity\.py$
+  - id: local-paths
+    name: No user home-directory paths in tracked files.
+    entry: python scripts/check_local_paths.py
+    language: python

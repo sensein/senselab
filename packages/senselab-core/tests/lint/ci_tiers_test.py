@@ -1,9 +1,11 @@
-"""The CI cadence for the test tiers: what a PR runs, what waits for the nightly run or the `limits` label."""
+"""The CI cadence for the test tiers: what a PR, the `limits` label and the nightly run select; the rest is ORCD."""
 
-import re
+import json
+import math
 import shlex
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -11,9 +13,11 @@ from _pytest.mark.expression import Expression
 
 REPO = Path(__file__).resolve().parents[4]
 WORKFLOW = REPO / ".github" / "workflows" / "2x-tests.yaml"
+NIGHTLY_WORKFLOW = REPO / ".github" / "workflows" / "2x-nightly.yaml"
 WORKFLOWS_2X = sorted((REPO / ".github" / "workflows").glob("2x-*.yaml"))
-FLOOR_LOCK = REPO / ".github" / "locks" / "worker-floor.txt"
 PYPROJECT = REPO / "pyproject.toml"
+BUDGETS = REPO / "packages" / "senselab" / "tests" / "data" / "tier_budgets.json"
+TIMEOUTS = REPO / "packages" / "senselab" / "tests" / "data" / "ci_job_timeouts.json"
 TIERS = ("logic", "contract", "limits", "usecase", "env")
 EVERY_PR, ON_LABEL, NIGHTLY = "every_pr", "on_label", "nightly"
 LABEL = "limits"
@@ -51,6 +55,49 @@ def package_selections(workflow: str) -> list[tuple[str, str | None, str]]:
     return selections
 
 
+def workspace_members() -> dict[str, tuple[str, frozenset[str]]]:
+    """Each workspace distribution: the directory under ``packages`` holding it, and the members it depends on."""
+    members = {}
+    for pyproject in [PYPROJECT, *sorted((REPO / "packages").glob("*/pyproject.toml"))]:
+        document = tomllib.loads(pyproject.read_text())
+        sources = document.get("tool", {}).get("uv", {}).get("sources", {})
+        needs = frozenset(name for name, source in sources.items() if source.get("workspace"))
+        members[document["project"]["name"]] = (f"packages/{document['project']['name']}", needs)
+    return members
+
+
+def _installs(argv: list[str], members: dict[str, tuple[str, frozenset[str]]]) -> set[str]:
+    """The workspace members a ``uv sync`` or a wheel ``uv pip install`` installs, their dependencies included."""
+    if argv[:2] == ["uv", "sync"]:
+        named = {argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--package"}
+        chosen = named or set(members)
+    elif argv[:3] == ["uv", "pip", "install"]:
+        chosen = {Path(a).name.split("-")[0].replace("_", "-") for a in argv if a.endswith(".whl")}
+    else:
+        return set()
+    while missing := {need for name in chosen for need in members[name][1]} - chosen:
+        chosen |= missing
+    return chosen
+
+
+def uninstalled_paths(workflow: str) -> list[tuple[str, str]]:
+    """``(job, path)`` for each ``pytest`` path under ``packages`` outside every member the job installs."""
+    members, found = workspace_members(), []
+    for name, job in yaml.safe_load(workflow).get("jobs", {}).items():
+        commands = [argv for step in job.get("steps", []) for argv in _commands(step.get("run", ""))]
+        installed = set().union(*(_installs(argv, members) for argv in commands))
+        roots = [members[member][0] for member in installed]
+        for argv in commands:
+            at = next((i for i, a in enumerate(argv) if Path(a).name == "pytest"), None)
+            if at is None:
+                continue
+            args = argv[at + 1 :]
+            values = {args[i + 1] for i, a in enumerate(args) if a in ("-m", "-p", "-k") and i + 1 < len(args)}
+            paths = [a for a in args if a.startswith("packages") and a not in values]
+            found += [(name, p) for p in paths if not any(p == r or p.startswith(f"{r}/") for r in roots)]
+    return found
+
+
 def pytest_paths_outside_packages(workflow: str) -> list[tuple[str, str]]:
     """``(job, path)`` for each path a ``pytest`` command in the workflow runs that is not under ``packages``."""
     found = []
@@ -68,13 +115,13 @@ def pytest_paths_outside_packages(workflow: str) -> list[tuple[str, str]]:
 
 
 class _Names:
-    """A marker-expression matcher that is true for the one tier name it holds."""
+    """A marker-expression matcher that is true for the marker names it holds."""
 
-    def __init__(self, tier: str) -> None:
-        self.tier = tier
+    def __init__(self, *names: str) -> None:
+        self.names = frozenset(names)
 
     def __call__(self, name: str, /, **_: str | int | bool | None) -> bool:
-        return name == self.tier
+        return name in self.names
 
 
 def tiers_of(marker: str | None) -> set[str]:
@@ -83,6 +130,14 @@ def tiers_of(marker: str | None) -> set[str]:
         return set(TIERS)
     expression = Expression.compile(marker)
     return {t for t in TIERS if expression.evaluate(_Names(t))}
+
+
+def admits_model(marker: str | None) -> bool:
+    """Whether a ``-m`` expression selects a test that carries `model` beside any tier."""
+    if marker is None:
+        return True
+    expression = Expression.compile(marker)
+    return any(expression.evaluate(_Names(t, "model")) for t in TIERS)
 
 
 def cadence(workflow: str) -> dict[str, set[str]]:
@@ -135,12 +190,23 @@ def test_a_pull_request_runs_logic_and_contract_and_nothing_slower() -> None:
 
 
 @pytest.mark.logic
-def test_limits_run_nightly_and_on_the_limits_label_and_use_cases_only_nightly() -> None:
-    """A job gated on the schedule selects limits and use cases; one gated on the `limits` label, limits only."""
-    when = cadence(WORKFLOW.read_text())
-    assert {"limits", "usecase"} <= when[NIGHTLY]
-    assert "limits" in when[ON_LABEL]
-    assert "usecase" not in when[ON_LABEL]
+def test_limits_without_a_model_run_on_the_label_and_nightly_and_use_cases_nowhere_in_github() -> None:
+    """The `limits` label runs limits; the nightly workflow runs limits too; no GitHub job selects a use case."""
+    assert "limits" in cadence(WORKFLOW.read_text())[ON_LABEL]
+    nightly = package_selections(NIGHTLY_WORKFLOW.read_text())
+    assert nightly and all(tiers_of(marker) == {"limits"} for _job, marker, _if in nightly)
+    for path in WORKFLOWS_2X:
+        assert "usecase" not in cadence(path.read_text())[NIGHTLY] | cadence(path.read_text())[ON_LABEL]
+
+
+@pytest.mark.logic
+def test_no_github_job_selects_a_test_that_loads_a_model() -> None:
+    """Every `pytest` selection in a 2.x workflow excludes `model`: model, backend-env and GPU tests run on ORCD."""
+    selections = [
+        (path.name, job, marker) for path in WORKFLOWS_2X for job, marker, _if in package_selections(path.read_text())
+    ]
+    assert selections
+    assert [s for s in selections if admits_model(s[2])] == []
 
 
 @pytest.mark.logic
@@ -150,12 +216,115 @@ def test_the_env_tier_runs_on_every_pr() -> None:
 
 
 @pytest.mark.logic
-def test_the_workflow_runs_nightly_and_reruns_when_a_label_is_added() -> None:
-    """The workflow has a cron schedule, and a PR that gains a label triggers it."""
-    workflow = yaml.safe_load(WORKFLOW.read_text())
-    triggers = workflow.get("on", workflow.get(True))
-    assert triggers["schedule"] and all("cron" in entry for entry in triggers["schedule"])
-    assert "labeled" in triggers["pull_request"]["types"]
+def test_the_nightly_workflow_runs_on_a_call_a_dispatch_and_a_full_matrix_branch_push() -> None:
+    """The nightly runs when called with a ref, on dispatch and on a `2x/full-matrix/` push; it holds no schedule."""
+    nightly = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
+    triggers = nightly.get("on", nightly.get(True))
+    assert "schedule" not in triggers and "workflow_dispatch" in triggers
+    assert triggers["push"]["branches"] == ["2x/full-matrix/**"]
+    assert triggers["workflow_call"]["inputs"]["ref"]["default"] == "2.x"
+    called = nightly["jobs"]["pr-jobs"]
+    assert called["uses"] == "./.github/workflows/2x-tests.yaml" and "if" not in called
+    assert called["with"]["ref"] == "${{ inputs.ref || github.sha }}"
+    assert "ref" in _called_inputs()
+
+
+def _cross_ref(uses: str) -> bool:
+    """Whether `uses` names a workflow of this repository at another ref."""
+    return uses.startswith("sensein/senselab/")
+
+
+def _called_inputs() -> dict[str, Any]:
+    """The inputs 2x-tests.yaml declares under `workflow_call`."""
+    tests = yaml.safe_load(WORKFLOW.read_text())
+    return dict((tests.get("on", tests.get(True)))["workflow_call"]["inputs"])
+
+
+@pytest.mark.logic
+def test_every_reusable_workflow_a_job_calls_is_local_and_accepts_what_it_is_passed() -> None:
+    """A called workflow is local and declares every input passed; another ref of this repository is refused.
+
+    GitHub validates a referenced workflow when it parses the caller, and actionlint cannot see a remote one.
+    """
+    for path in sorted((REPO / ".github" / "workflows").glob("*.yaml")):
+        for name, job in (yaml.safe_load(path.read_text()).get("jobs") or {}).items():
+            uses = job.get("uses")
+            if not uses:
+                continue
+            assert not _cross_ref(uses), f"{path.name}:{name} calls {uses}"
+            if uses.startswith("./"):
+                callee = yaml.safe_load((REPO / uses[2:]).read_text())
+                declared = (callee.get("on", callee.get(True)))["workflow_call"].get("inputs", {})
+                assert set(job.get("with", {})) <= set(declared), f"{path.name}:{name} passes inputs {uses} lacks"
+
+
+@pytest.mark.logic
+def test_a_cross_branch_reference_to_a_workflow_of_this_repository_is_found() -> None:
+    """The check's own predicate: a `sensein/senselab/...@ref` reference is not local."""
+    assert _cross_ref("sensein/senselab/.github/workflows/2x-tests.yaml@2.x")
+    assert not _cross_ref("./.github/workflows/2x-tests.yaml")
+    assert not _cross_ref("actions/checkout@v5")
+
+
+@pytest.mark.logic
+def test_the_nightly_limits_refs_come_from_the_plan_and_no_job_names_a_branch() -> None:
+    """The limits matrix is the plan job's output; a checkout names the input ref or the matrix, no literal."""
+    nightly = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
+    assert nightly["jobs"]["limits"]["strategy"]["matrix"]["ref"] == "${{ fromJSON(needs.plan.outputs.refs) }}"
+    checkouts = [
+        step for job in nightly["jobs"].values() for step in job.get("steps", []) if "checkout" in step.get("uses", "")
+    ]
+    assert checkouts and all(step["with"]["ref"] in {"${{ inputs.ref }}", "${{ matrix.ref }}"} for step in checkouts)
+    assert "2x/phase" not in NIGHTLY_WORKFLOW.read_text()
+    tests = yaml.safe_load(WORKFLOW.read_text())
+    on = tests.get("on", tests.get(True))
+    assert "schedule" not in on and "labeled" in on["pull_request"]["types"]
+    assert on["workflow_call"]["inputs"]["ref"]
+
+
+@pytest.mark.logic
+def test_the_nightly_group_differs_from_the_group_of_the_workflow_it_calls() -> None:
+    """A called workflow whose concurrency group equals its caller's is cancelled; the two prefixes must differ."""
+    nightly = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())["concurrency"]["group"]
+    called = yaml.safe_load(WORKFLOW.read_text())["concurrency"]["group"]
+    assert nightly.startswith("nightly-") and not called.startswith("nightly-")
+
+
+PUSH_IF = "github.event_name == 'push' && startsWith(github.ref, 'refs/heads/2x/')"
+SCOPED_IF = "steps.scope.outputs.run == 'true'"
+
+
+def _scope(job: dict[str, Any]) -> dict[str, Any]:
+    step: dict[str, Any] = next(step for step in job["steps"] if step.get("id") == "scope")
+    return step
+
+
+@pytest.mark.logic
+def test_core_limits_runs_on_the_label_and_on_a_push_to_a_2x_branch_and_asks_the_selector() -> None:
+    """The label runs the job on a PR, a push to a `2x/` branch reaches the selector, which gates every later step."""
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["core-limits"]
+    assert job["if"] == f"{LABEL_IF} || ({PUSH_IF})"
+    assert _scope(job)["run"] == 'python3 scripts/limits_scope.py scope >> "$GITHUB_OUTPUT"'
+    later = job["steps"][job["steps"].index(_scope(job)) + 1 :]
+    assert later and all(step.get("if") == SCOPED_IF for step in later)
+
+
+@pytest.mark.logic
+def test_every_job_tests_only_the_packages_it_installs() -> None:
+    """A job's pytest paths lie under the workspace members its sync or wheel install puts in the environment."""
+    assert [(path.name, *found) for path in WORKFLOWS_2X for found in uninstalled_paths(path.read_text())] == []
+
+
+@pytest.mark.logic
+def test_a_path_outside_the_installed_packages_is_found() -> None:
+    """Syncing one member and running every package's tests is found; a member's dependency and a wheel are not."""
+    run = "uv sync --locked --package senselab-core\npytest packages packages/senselab-worker/tests"
+    wheel = "uv pip install --no-deps dist/senselab_worker-1.whl\npytest packages/senselab-worker/tests"
+    planted = yaml.safe_dump({"jobs": {"core": {"steps": [{"run": run}]}, "floor": {"steps": [{"run": wheel}]}}})
+    assert uninstalled_paths(planted) == [("core", "packages")]
+    assert {p for p, _ in workspace_members().values()} == {
+        f"packages/{d.name}" for d in (REPO / "packages").iterdir() if (d / "tests").is_dir()
+    }
 
 
 @pytest.mark.logic
@@ -276,29 +445,6 @@ def test_every_2x_job_installs_from_the_lock() -> None:
 
 
 @pytest.mark.logic
-def test_the_floor_job_installs_the_hashed_floor_lock_then_the_wheel_without_resolving() -> None:
-    """``worker-floor`` syncs ``.github/locks/worker-floor.txt`` with hashes required, then adds the wheel alone."""
-    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["worker-floor"]
-    commands = [argv for step in job["steps"] for argv in _commands(step.get("run", ""))]
-    sync = next(argv for argv in commands if argv[:3] == ["uv", "pip", "sync"])
-    assert "--require-hashes" in sync and ".github/locks/worker-floor.txt" in sync
-    wheel = next(argv for argv in commands if argv[:3] == ["uv", "pip", "install"])
-    assert "--no-deps" in wheel
-    assert commands.index(sync) < commands.index(wheel)
-
-
-@pytest.mark.logic
-def test_the_floor_lock_pins_numpy_at_the_worker_floor_and_hashes_every_package() -> None:
-    """The lock was compiled for Python 3.10, pins numpy to the worker's floor, and every pin carries hashes."""
-    text = FLOOR_LOCK.read_text()
-    assert "--python-version 3.10" in text
-    floor = re.search(r"numpy>=(\d+\.\d+)", (REPO / "packages" / "senselab-worker" / "pyproject.toml").read_text())
-    assert floor and re.search(rf"^numpy=={re.escape(floor.group(1))}\.\d+ ", text, re.MULTILINE)
-    pins = re.findall(r"^[A-Za-z0-9_.-]+==\S+.*?(?=^[A-Za-z0-9_.-]+==|\Z)", text, re.MULTILINE | re.DOTALL)
-    assert pins and all("--hash=sha256:" in pin for pin in pins)
-
-
-@pytest.mark.logic
 def test_a_pip_install_and_an_unlocked_sync_are_found() -> None:
     """Planted resolving installs are reported; ``uv sync --locked``, ``--no-deps`` and ``--require-hashes`` are not."""
     planted = yaml.safe_dump(
@@ -316,3 +462,44 @@ def test_a_pip_install_and_an_unlocked_sync_are_found() -> None:
         }
     )
     assert [job for job, _ in unlocked_installs(planted)] == ["a", "b", "c", "h"]
+
+
+@pytest.mark.logic
+def test_a_selection_that_can_pick_a_model_test_is_found() -> None:
+    """A tier expression admits `model` tests unless it says `not model`."""
+    assert admits_model("logic or contract") and admits_model(None)
+    assert not admits_model("(logic or contract) and not model")
+    assert not admits_model("limits and not model")
+
+
+def expected_timeout_minutes(job: str, workflow: str, budgets: dict[str, float], timeouts: dict[str, Any]) -> int:
+    """The `timeout-minutes` of `job`: its slowest selected tier's budget plus its loaded measured run, over a floor."""
+    bound = max(
+        (budgets[t] for name, marker, _if in package_selections(workflow) if name == job for t in tiers_of(marker)),
+        default=0.0,
+    )
+    measured = float(timeouts["measured_s"][job])
+    return max(int(timeouts["floor_minutes"]), math.ceil((bound + float(timeouts["load_factor"]) * measured) / 60))
+
+
+@pytest.mark.logic
+def test_every_job_of_the_test_workflow_ends_at_a_timeout_derived_from_its_tier_bound() -> None:
+    """Each job sets `timeout-minutes`, so a hang costs minutes and not GitHub's six hours; its value is derived."""
+    workflow = WORKFLOW.read_text()
+    budgets = {t: float(row["budget_s"]) for t, row in json.loads(BUDGETS.read_text())["tiers"].items()}
+    timeouts = json.loads(TIMEOUTS.read_text())
+    jobs = yaml.safe_load(workflow)["jobs"]
+    assert set(timeouts["measured_s"]) == set(jobs)
+    assert {name: job.get("timeout-minutes") for name, job in jobs.items()} == {
+        name: expected_timeout_minutes(name, workflow, budgets, timeouts) for name in jobs
+    }
+
+
+@pytest.mark.logic
+def test_a_job_without_a_timeout_or_with_a_short_one_is_found() -> None:
+    """The derivation reads the slowest tier a job selects: a limits job gets its budget, a job with none the floor."""
+    planted = _workflow(("limits", ""), ("logic", ""))
+    budgets, timeouts = {"limits": 700.0, "logic": 900.0}, {"measured_s": {}, "floor_minutes": 5, "load_factor": 2}
+    assert expected_timeout_minutes("job0", planted, budgets, {**timeouts, "measured_s": {"job0": 30}}) == 13
+    assert expected_timeout_minutes("job1", planted, budgets, {**timeouts, "measured_s": {"job1": 30}}) == 16
+    assert expected_timeout_minutes("job2", planted, budgets, {**timeouts, "measured_s": {"job2": 1}}) == 5

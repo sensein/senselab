@@ -1,0 +1,4 @@
+format: benchmark-suite@1.0
+name: plumbing
+benchmarks:
+- {name: echo, adapter: echo_payloads, items: 12, task: fake.echo, params: {salt: x}, metric: none}

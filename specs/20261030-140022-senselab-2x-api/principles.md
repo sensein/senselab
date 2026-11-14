@@ -87,7 +87,7 @@ it is amended here.
   hard-coded in tasks.
 - **Source**: owner, 2026-10-30: "optimization for GPU versus CPU".
 - **Check**: a task declares its resource needs and the knobs it can tune. The values come from an
-  execution profile or from catalogue resource tables, which the scale ladder produces (Phase 3).
+  execution profile or from the measures roots a group's own scale-ladder runs write (Phase 3, R-252).
 
 ### P-8 Inference stacks are interchangeable
 - **Status**: active
@@ -221,6 +221,9 @@ it is amended here.
   relying on system libraries. i.e. one requirement is to install senselab into a venv".
 - **Check**: every activity in provenance names its env in the recorded execution context (ADR-002).
   The env tier audits each env's imports against its lock.
+- **Amended 2026-11-07** (owner, 2026-11-01: "no environments should use system python, always uv"): the
+  interpreter of every env is uv-managed (`uv python install <version>`, `--python-preference
+  only-managed`); a system interpreter is refused. A new env targets the newest Python its lock resolves on.
 
 ### P-26 Signals generalise; modality-specific tasks stay specific
 - **Status**: active
@@ -237,6 +240,20 @@ it is amended here.
 
 ### P-30 Tests are tiered; benchmarks are separate
 - **Status**: active. Full text in [`engineering.md`](engineering.md#p-30).
+
+### P-42 Packaged execution profiles are generic; site profiles are user files
+- **Status**: active
+- **Statement**: senselab is general purpose, so it packages no profile of one site. The packaged execution
+  profiles are `laptop` (a workstation; resources are discovered, not declared) and `slurm` (a template whose
+  site values are `<fill: ...>` placeholders). `ExecutionProfile.load` refuses a profile with a placeholder left,
+  naming each key. A site's profile is a file its users own and pass by path (`--execution FILE`, or
+  `ExecutionProfile.load(path)`); tests and benchmarks that need cluster values read a fixture file with
+  invented ones. No tracked file names a site, an account, a partition or a personal path (P-28).
+- **Source**: owner, 2026-11-09: senselab is general purpose; it ships no site execution profile.
+- **Check**: `packaged_profiles()` is `("laptop", "slurm")`; the template refuses to load unfilled; the
+  profile tests use the fixture, not a packaged name.
+  A file passed as `--execution` is a whole profile (`IncompleteProfile` otherwise); layering is
+  `load(name, override)`.
 
 ### P-41 Docs communicate senselab and its progress, with examples on public data
 - **Status**: active
@@ -259,8 +276,7 @@ it is amended here.
 - **Statement**: senselab's long-term goal is a flywheel in which machines and humans iteratively
   improve the system. Datasets, pipelines, annotations, reviews, fitting and model fine-tuning
   happen as needed, and are evaluated and promoted by identity. 2.x builds none of it, but its
-  decisions must keep the hooks in `roadmap.md` possible. Triage's decision layer is rebuilt as a
-  flywheel application after 2.x rather than ported.
+  decisions must keep the hooks in `roadmap.md` possible.
 - **Source**: owner, 2026-10-30: "triage should adopt a flywheel approach of a system that allows
   machines and humans to iteratively improve the system ... make this a future roadmap goal that
   should inform not force current decisions".
@@ -348,7 +364,14 @@ amending its origin.
 ### P-17 Thresholds are data with a derivation
 - **Status**: active. **Statement**: decision constants live in versioned data profiles with a
   derivation, and are regenerated rather than hand-edited. **Source**: `CLAUDE.md`. **Check**: a lint
-  flags numeric literals in `decide` tasks that have no profile key.
+  flags numeric literals in any task that have no profile key.
+- **Amended 2026-11-07** (where a derivation lives): a config file carries values and a one-line `#`
+  description per key. Derivations live in [`config-derivations.md`](config-derivations.md), a `##` section
+  per config file or profile and a `###` section per key. A checker that wants a derivation reads the spec
+  section. A value not yet measured says so there and names the task that measures it.
+  `scripts/check_config_derivations.py` refuses an inline `derivation:` or `derivations:` key in any YAML file
+  tracked under a `data/` directory of `packages/` or `scripts/`, and a key without its section; the files outside
+  either check are listed in it with their reasons (R-220).
 
 ### P-18 Configuration, not flags
 - **Status**: active. **Statement**: entry points take inputs and configuration, and the merged
@@ -360,7 +383,8 @@ amending its origin.
   reason about survivors. **Source**: `CLAUDE.md`. **Check**: the logical key in ADR-002 (`design.md` §4.8).
 
 ### P-20 Measurements and decisions are separate layers
-- **Status**: active. **Statement**: measuring nodes emit measurements; decisions are separate,
+- **Status**: retired 2026-11-01 (owner: "verdict/decision seems very specific to triage"); core holds no verdict type,
+  decision marker or verdict contract (H-R48). Any measure/decide layering belongs to the flywheel roadmap. Was: active. **Statement**: measuring nodes emit measurements; decisions are separate,
   declared nodes. **Source**: `audio_analysis/doc.md`. **Check**: the generated contract suite
   asserts that `measure` outputs carry no verdict fields.
 
@@ -429,6 +453,7 @@ amending its origin.
 - 2026-10-30: added P-39 (reconcile concurrent 1.x work on `alpha`; `migration-ledger.md`).
 - 2026-10-30: added P-40 (agent and model selection per task, independent reviewers) with its
   roster in `engineering.md`.
+- 2026-11-09: added P-42 (packaged execution profiles are generic; site profiles are user files).
 - 2026-10-30: added P-41 (docs for three audiences, PR previews showing progress, toy fixtures in
   the repo versus pulled versioned data); see `docs.md`.
 - 2026-11-01: owner decisions D-1..D-7 on the full review, recorded in
@@ -439,3 +464,12 @@ amending its origin.
     happen during development, not in CI (owner item 39, which replaced the advisory CI prose review).
   - ADR-000 gains the amendment rule: a change to an ADR's decision is a dated amendment section
     (D-7).
+
+- 2026-11-01: P-20 retired (owner: "verdict/decision seems very specific to triage"). Core drops `VERDICT_TYPES`,
+  the `DECISION` format marker and the measure-has-no-verdict contract case; task kinds stay plain declarations.
+
+- 2026-11-01: owner ("apply all 13") removed triage-derived vocabulary from the 2.x design: no `decide` or `measure` task kind
+  (kinds are `transform` and `fit`); route and loop predicates are any declared bool task (ADR-001 amendment); dataset
+  profiles map sidecar fields, not hints; neutral examples replace b2ai-voice and speaker_identity; Phase 4 exit no longer
+  names screening or review routing; P-17's lint covers every task; P-36's Statement drops the triage clause (kept in
+  `roadmap.md`).

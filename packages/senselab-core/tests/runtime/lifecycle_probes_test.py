@@ -5,10 +5,11 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
-from lifecycle_probes_fixture import alive, can_run, group_alive, state
+from lease_clock_fixture import ManualClock
+from senselab_core.testing.processes import POLL_S, alive, can_run, group_alive, group_gone, state
 
 SETTLE_S = 10.0
 SLEEPER = "import time; time.sleep(3600)"
@@ -74,3 +75,18 @@ def test_group_with_a_zombie_leader_and_a_live_member_is_alive() -> None:
             pass
         proc.wait()
     _until(lambda: not group_alive(proc.pid), "the forked member outlived SIGKILL")
+
+
+@pytest.mark.contract
+def test_group_gone_waits_out_its_timeout_on_the_clock(
+    leader: subprocess.Popen[bytes], lease_clock: Callable[..., ManualClock]
+) -> None:
+    """A live group is polled until `timeout_s` has passed on the clock, then not gone; a gone one is gone at once."""
+    clock = lease_clock()
+    timeout_s = 8 * POLL_S
+    assert not group_gone(leader.pid, timeout_s, clock)
+    assert set(clock.slept) == {POLL_S} and sum(clock.slept[:-1]) <= timeout_s < sum(clock.slept)
+    leader.kill()
+    leader.wait()
+    clock = lease_clock()
+    assert group_gone(leader.pid, timeout_s, clock) and clock.slept == []

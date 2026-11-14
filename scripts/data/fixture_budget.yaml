@@ -1,17 +1,9 @@
-format: fixture-budget@1.0
-# The data-policy budget for files tracked under packages/. Each value carries its derivation;
-# scripts/check_fixture_budget.py refuses an entry without one.
-
-file_max_bytes:
-  value: 256000
-  derivation: >-
-    docs.md, "Data policy: toy fixtures versus pulled data", budget (design call): at most 256 KB
-    per file. KB is read as 1000 bytes. It applies to every tracked file under packages/, code
-    included, since no source file of ours approaches it and a file that does is data.
-
-data_total_max_bytes:
-  value: 2000000
-  derivation: >-
-    docs.md, same section and design call: at most 2 MB in total. MB is read as 1000 * 1000
-    bytes. It totals the data files, every file that is not .py, .pyi or .ipynb, because the
-    policy budgets fixtures, and code is bounded by the per-file limit.
+format: fixture-budget@2.0
+# The data-policy budget for files tracked under packages/; scripts/check_fixture_budget.py reads it.
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under this file's path.
+# Bytes per tracked file.
+file_max_bytes: 256000
+# Bytes in total over the data files (every file that is not .py, .pyi or .ipynb).
+data_total_max_bytes: 2000000
+# Files under this prefix count against neither limit.
+exempt_prefix: packages/senselab/src/senselab/data/env_locks/

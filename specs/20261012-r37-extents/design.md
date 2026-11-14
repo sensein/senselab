@@ -1,6 +1,6 @@
 # r37 extents: complete in both directions (sections A, E2, E3)
 
-2026-10-12. Owner-approved r37 plan v2 (`~/Downloads/b2ai-reviews/r37_plan.md`, sections A, E and H), with
+2026-10-12. Owner-approved r37 plan v2 (`${LOCAL_INPUT}/b2ai-reviews/r37_plan.md`, sections A, E and H), with
 the review against the owner's notes (`r37_plan_review.md`). Inputs read: the 62 extent labels
 (`extent_check_9e550e2026a7.json` joined to `extent_check_listen.tsv`) and the 24 triage notes
 (`triage_review_be5d2593d524.json`). Code: `task_extent.py`, `data/task_extent.yaml` (v1), and the owning
@@ -125,7 +125,7 @@ verdict (`failed`, named in `why`) and is absent like any missing derivative; a 
 
 Every owning branch's reading taken in memory twice, all switches off and all on, over the 62,550 r36
 stores (`manifest_r34.jsonl`), at f2a806af on a fresh clone; CPU array on ORCD; nothing written to a store.
-Scratch: `/orcd/scratch/bcs/002/satra/r18d_20261010/extent_r37/` (`measure.py`, `analyse.py`,
+Scratch: `${ORCD_GROUP_SCRATCH}/r18d_20261010/extent_r37/` (`measure.py`, `analyse.py`,
 `analysis_n.txt`). 50,158 recordings carry an extent this work owns; 0 errors. Switched off, every extent
 equals the stored one except 140 coughs with no cough event, whose stored extent is AIRWAY's own fallback
 span. No decision or decision input moved.

@@ -1,8 +1,8 @@
 # The replay driver over twelve finished corpus runs
 
 `scripts/extend_replay_decisions.py` at `31a008ad`, over twelve runs of the finished 2026-09-19
-corpus at `/orcd/scratch/bcs/002/satra/triage_design_20260919/run/`, writing into a scratch tree
-with `--out-root`. Job 23463307 on `pi_satra`, 8 CPUs, 3 min 35 s for both passes.
+corpus at `${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/`, writing into a scratch tree
+with `--out-root`. Job 23463307 on `${CPU_PARTITION}`, 8 CPUs, 3 min 35 s for both passes.
 
 > **This section originally read "Nothing under the corpus tree was written, checked afterwards with
 > `find -newermt` over `run/out` — no hits." That claim was false.**
@@ -11,7 +11,7 @@ with `--out-root`. Job 23463307 on `pi_satra`, 8 CPUs, 3 min 35 s for both passe
 > runs had a live `redacted.flac` for a replayed REDACT to overwrite, so the failing case was never
 > in the sample. The full 2026-09-22 corpus replay did exercise it. **In the window after that
 > replay began, 17,924 `redacted.flac` files under
-> `/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out/` were overwritten** — exactly the
+> `${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/out/` were overwritten** — exactly the
 > count of recordings where REDACT ran. The mirror seeded `streams/redacted.flac` as a symlink into
 > the corpus tree, and REDACT's truncating write followed it.
 >

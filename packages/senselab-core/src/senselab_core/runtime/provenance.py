@@ -1,1188 +1,563 @@
-"""An append-only provenance store, modelled on W3C PROV.
+"""A run's provenance in PROV-O JSON-LD (ADR-010): one document per writer, read back as their union by `@id`.
 
-Entities are what the graph believes exists, activities are node executions, agents are what acted.
-Relations are PROV's own. A record holds the canonical form it was identified by and cannot change
-after it is built, so merging two stores is a set union and is order-independent.
+Each writer holds the records it adds (`senselab_core.kernel.prov`) and replaces its own `provenance@3.0` document,
+`<run>/prov/<writer uuid4 hex>.jsonld`, atomically. A reader takes the union of every writer's document; two
+different nodes under one `@id` are refused, every node read is rebuilt through the record builders, and a file of
+another provenance format is refused (`ProvenanceFormatRefused`).
 """
 
 from __future__ import annotations
 
-import base64
-import binascii
-import io
 import json
-import math
+import logging
+import os
 import re
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, fields, replace
-from decimal import Decimal, InvalidOperation
+import uuid
+from collections.abc import Callable, Iterable, Mapping
+from datetime import datetime
 from pathlib import Path
-from typing import Any, ClassVar, Literal, NoReturn, Sequence, TypeVar, cast, get_args, overload
+from typing import Any, TypeVar, cast
 
-import numpy
-from senselab_worker import digest as worker_digest
-from senselab_worker.canonical import (
-    NoCanonicalForm,
-    Recurse,
-    Tokeniser,
-    Walk,
-    canonical_npy_bytes,
-    jcs_dumps,
-    refuse_constant,
+from senselab_worker.canonical import jcs_dumps, jcs_loads, require_depth, require_json_depth
+
+from senselab_core.kernel import prov as kprov
+from senselab_core.kernel.formats import (
+    FORMAT_PATTERN,
+    PROVENANCE_FORMAT,
+    RETIRED_PROVENANCE_FORMATS,
+    FormatVerdict,
+    check,
 )
-from senselab_worker.digest import COMMIT_HEX, SHA256_HEX, identity_digest
+from senselab_core.runtime.locks import LeaseUnavailable
+from senselab_core.runtime.storage import TEMPORARY_NAME, WrongKindError, write_atomically
+from senselab_core.runtime.vocabulary import core_vocabulary
 
-from senselab_core.kernel._base import FrozenDict, FrozenList, frozen_array, thawed
-from senselab_core.runtime.storage import write_atomically
+logger = logging.getLogger("senselab")
+T = TypeVar("T")
+WRITER_DOCUMENT = re.compile(r"[0-9a-f]{32}\.jsonld")
+"""A writer's document in `<run>/prov/`: its writer uuid4 hex, `.jsonld`."""
+FILE_LABEL = re.compile(r"file-[1-9][0-9]*")
+"""A file's label, `senselab:fileLabel`: `file-` and its number in the run; never a path or a file name."""
+PROV_DIR = "prov"
+"""The run subdirectory that holds the writers' documents."""
+MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#retired-provenance-formats"
+"""Where the statement on retired provenance formats is: 2.x does not read them; re-running under 2.x migrates."""
+_DOCUMENT_KEYS = frozenset({"@context", "format", "@graph"})
+_ACTIVITY_KEYS = frozenset(
+    {
+        "@id",
+        "@type",
+        "@reverse",
+        "prov:startedAtTime",
+        "prov:endedAtTime",
+        "prov:used",
+        "prov:qualifiedUsage",
+        "prov:generated",
+        "prov:wasAssociatedWith",
+        "prov:qualifiedAssociation",
+    }
+)
+_NODE_KEYS = frozenset({"@id", "@type"})
+_ENDPOINT_KEYS = ("prov:used", "prov:generated", "prov:wasAssociatedWith")
+_REBUILD_ERRORS = (ValueError, TypeError, KeyError, AttributeError)
 
-PROV_TYPE = Literal["artifact"]
-"""Every entity type the store writes and reads; the writer and the reader share this one vocabulary.
 
-``artifact`` is a value or file set a node generated or used, identified by its content: it may carry a
-checksum with or without a ``path``.
-"""
-AGENT_TYPE = Literal["model", "software"]
-ENVIRONMENT_KIND = Literal["host", "venv"]
-RELATION = Literal[
-    "wasGeneratedBy", "used", "wasAssociatedWith", "wasAttributedTo", "wasDerivedFrom", "wasInvalidatedBy"
-]
+class ConflictingNode(ValueError):
+    """Two different nodes under one `@id`.
 
-CHECKSUM_ALGORITHM = "sha256"
-CHECKSUM_KEY = "checksum_sha256"
-CHECKSUM_UNRESOLVED_KEY = "checksum_unresolved_reason"
-SIZE_KEY = "size_bytes"
-MTIME_KEY = "mtime_ns"
-PATH_KEY = "path"
-_PROV_TYPES = frozenset(get_args(PROV_TYPE))
-_AGENT_TYPES = frozenset(get_args(AGENT_TYPE))
-_ENVIRONMENT_KINDS = frozenset(get_args(ENVIRONMENT_KIND))
-_RELATIONS = frozenset(get_args(RELATION))
-
-
-def file_digest(path: str | Path) -> tuple[str | None, str | None]:
-    """Read a file and return `worker_digest.file_digest("file@1", file)`, or the reason it has none.
-
-    Args:
-        path: The file to digest.
-
-    Returns:
-        ``(digest, reason)`` — a 64-character lowercase hex digest and None, or None and a reason
-        the digest could not be taken.
+    Attributes:
+        node_id: The `@id` the two nodes share.
     """
-    target = Path(path)
-    try:
-        with target.open("rb") as handle:
-            digest = worker_digest.file_digest("file@1", handle)
-    except FileNotFoundError:
-        return None, "file not found"
-    except IsADirectoryError:
-        return None, "path is a directory"
-    except PermissionError:
-        return None, "permission denied"
-    except OSError as err:
-        return None, f"read failed: {type(err).__name__}"
-    return digest, None
+
+    def __init__(self, node_id: str) -> None:
+        """Name the shared `@id`."""
+        super().__init__(f"two different nodes have the @id {node_id}")
+        self.node_id = node_id
 
 
-def file_attributes(path: str | Path, *, digest: str | None = None, reason: str | None = None) -> dict[str, Any]:
-    """Entity attributes describing a file's bytes as they are now.
+class DanglingReference(ValueError):
+    """A relation or attribute naming an `@id` no writer's document holds.
 
-    Args:
-        path: The file, used for ``size_bytes`` and ``mtime_ns`` and, unless a digest or a reason is
-            supplied, read to compute the digest.
-        digest: An already-computed SHA-256 to record instead of reading the file again.
-        reason: Why no digest is available, recorded instead of reading the file again.
-
-    Returns:
-        ``checksum_sha256`` or ``checksum_unresolved_reason``, and ``size_bytes`` and ``mtime_ns``
-        when the file can be stat'd.
-
-    Raises:
-        ValueError: If both ``digest`` and ``reason`` are supplied.
+    Attributes:
+        node_id: The node that names it.
+        target: The `@id` it names.
     """
-    if digest is not None and reason is not None:
-        raise ValueError("digest and reason contradict each other; supply at most one")
-    if digest is None and reason is None:
-        digest, reason = file_digest(path)
-    out: dict[str, Any] = {CHECKSUM_KEY: digest} if digest is not None else {CHECKSUM_UNRESOLVED_KEY: reason}
-    try:
-        stat = Path(path).stat()
-    except OSError:
-        return out
-    out[SIZE_KEY] = int(stat.st_size)
-    out[MTIME_KEY] = int(stat.st_mtime_ns)
-    return out
+
+    def __init__(self, node_id: str, target: str) -> None:
+        """Name the node and the missing target."""
+        super().__init__(f"{node_id} names {target}, which no writer's document holds")
+        self.node_id = node_id
+        self.target = target
 
 
-def _check_entity_attributes(attributes: Mapping[str, Any]) -> None:
-    """Refuse checksum attributes the store never accepts, at write time and at read-back alike.
+class MalformedDocument(ValueError):
+    """A writer's document, or a node in it, that the record builders would not write.
 
-    Args:
-        attributes: The entity's attributes.
-
-    Raises:
-        ValueError: If a digest and a reason it is missing are supplied together, if the digest is
-            not 64 lowercase hex characters, or if the reason is empty.
+    Attributes:
+        writer: The writer's uuid4 hex, or None for a file in `prov/` that is not a writer's document.
     """
-    digest, reason = attributes.get(CHECKSUM_KEY), attributes.get(CHECKSUM_UNRESOLVED_KEY)
-    if digest is not None and reason is not None:
-        raise ValueError(f"{CHECKSUM_KEY} and {CHECKSUM_UNRESOLVED_KEY} contradict each other; supply exactly one")
-    if digest is not None and not (isinstance(digest, str) and SHA256_HEX.fullmatch(digest)):
-        raise ValueError(f"{CHECKSUM_KEY} must be 64 lowercase hex characters, got {digest!r}")
-    if reason is not None and not (isinstance(reason, str) and reason.strip()):
-        raise ValueError(f"{CHECKSUM_UNRESOLVED_KEY} must not be empty; an empty reason says nothing")
 
-
-def _check_agent_fields(
-    agent_type: str, model_id: str | None, commit_sha: str | None, unresolved_reason: str | None
-) -> None:
-    """Refuse agent field combinations the store never accepts, at write time and at read-back alike.
-
-    Raises:
-        ValueError: If ``commit_sha`` is not exactly 40 hex characters, if ``commit_sha`` and
-            ``unresolved_reason`` are supplied together, if ``unresolved_reason`` is empty, or if a
-            model agent is missing ``model_id`` or supplies neither a commit nor a reason it is
-            missing.
-    """
-    if commit_sha is not None and not COMMIT_HEX.fullmatch(commit_sha):
-        raise ValueError(
-            f"commit_sha must be a resolved 40-hex commit, got {commit_sha!r}. A ref recorded as a "
-            "commit makes the provenance confidently wrong."
-        )
-    if commit_sha is not None and unresolved_reason is not None:
-        raise ValueError("commit_sha and unresolved_reason contradict each other; supply exactly one")
-    if unresolved_reason is not None and not unresolved_reason.strip():
-        raise ValueError("unresolved_reason must not be empty; an empty reason says nothing")
-    if agent_type == "model" and model_id is None:
-        raise ValueError("a model agent needs model_id")
-    if agent_type == "model" and commit_sha is None and unresolved_reason is None:
-        raise ValueError("a model agent needs commit_sha or unresolved_reason; silence is not a third option")
-
-
-PROVENANCE_FORMAT = "provenance@2.0"
-"""The one format `write_jsonl` writes and `read_jsonl` reads: its first line is the format record.
-
-Every record in it carries a `run_id`, and its id is checked against its content when it is read.
-"""
-
-MIGRATION_STATEMENT = "specs/20261030-140022-senselab-2x-api/migration-ledger.md#1x-provenance-stores"
-"""Where the statement on 1.x provenance stores is: 2.x does not read them; re-running under 2.x migrates."""
+    def __init__(self, writer: str | None, message: str) -> None:
+        """Name the writer; the message never echoes a refused id or value."""
+        super().__init__(f"writer {writer}: {message}" if writer else message)
+        self.writer = writer
 
 
 class ProvenanceFormatRefused(ValueError):
-    """A file `read_jsonl` refuses because its first line is not the `provenance@2.0` format record.
+    """A file in `prov/` that declares a format other than `provenance@3`, such as the retired `provenance@2.0`.
 
     Attributes:
-        path: The file.
-        found: The format its first line declares, or None when it carries no format record, which is a
-            1.x (`provenance@1`) store.
+        found: The format tag the file declares.
     """
 
-    def __init__(self, path: str | Path, found: object) -> None:
-        """Name the file, what it declares, and the migration statement."""
-        self.path, self.found = str(path), found
-        if found is None:
-            what = "carries no format record: it is a 1.x provenance store (provenance@1)"
-        else:
-            what = f"declares format {found!r}, not {PROVENANCE_FORMAT}"
+    def __init__(self, found: str) -> None:
+        """Name the declared format and the migration statement."""
         super().__init__(
-            f"{path} {what}. 2.x reads only {PROVENANCE_FORMAT}; a 1.x store stays readable by 1.x, and migrating"
-            f" it is re-running the pipeline under 2.x. See {MIGRATION_STATEMENT}"
+            f"a provenance file declares {found}; 2.x reads only {PROVENANCE_FORMAT}, and migrating a run is"
+            f" re-running it under 2.x. See {MIGRATION_STATEMENT}"
         )
+        self.found = found
 
 
-_ID_TAG = "provenance-id@4"
-_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
-_INT_TOKEN_TEXT = re.compile(r"^-?[1-9][0-9]*$")
-_PROV_TOKENS = frozenset({"$f", "$int", "$path", "$enum", "$nd", "$dec", "$bytes", "$set"})
-_FLOAT_NAMES = frozenset({"NaN", "Infinity", "-Infinity"})
+class RunIOError(OSError):
+    """An OS-level failure on a run's provenance or private files, reported by its errno text and never a path."""
+
+    def __init__(self, cause: BaseException) -> None:
+        """Keep the cause's errno and its generic text; its file names are dropped."""
+        code = cause.errno if isinstance(cause, OSError) and cause.errno else 0
+        super().__init__(code, os.strerror(code) if code else type(cause).__name__)
 
 
-class UnrecordableValue(NoCanonicalForm):
-    """A provenance attribute or parameter holds a value outside the declared provenance value type.
+def pathless(name: str, operation: Callable[[], T]) -> T:
+    """Return `operation()`, raising a `RunIOError` in place of any OS, lease or wrong-kind error.
 
-    Attributes:
-        path: Where the value sits, from the attribute or parameter root, e.g. `attributes.evidence[2]`.
-        type_name: The offending value's type, `module.qualname`.
-    """
-
-    refusal = "is not a provenance value"
-
-
-@dataclass(frozen=True)
-class EnumMember:
-    """An enum member as a record holds it: the qualified name of its type and its value, equal by both."""
-
-    type_name: str
-    value: Any
-
-
-def _held_family(v: object) -> tuple[str | None, object] | None:
-    t = type(v)
-    if t is FrozenDict:
-        return None, dict(cast("FrozenDict", v))
-    if t is FrozenList:
-        return None, list(cast("FrozenList", v))
-    if t is EnumMember:
-        member = cast(EnumMember, v)
-        return "$enum", [member.type_name, member.value]
-    return None
-
-
-def _nd_token(a: numpy.ndarray, recurse: Recurse, path: str) -> object:
-    return {"$nd": base64.b64encode(canonical_npy_bytes(a)).decode("ascii")}
-
-
-_TOKENISER = Tokeniser(array=_nd_token, extra=_held_family, error=UnrecordableValue)
-
-
-def normalised(value: object, path: str = "value") -> object:
-    """Return `value` as JSON the shared encoder accepts, every value outside the JSON domain as a tagged token.
-
-    The provenance value type is what the shared `canonical.Tokeniser` writes, with a `numpy.ndarray`
-    written as `{"$nd": <base64 of its canonical .npy bytes>}`. A value read back from a record
-    (`FrozenDict`, `FrozenList`, `EnumMember`) is written as the value it stands for, so recording a
-    read-back records the same tokens again.
+    The original error, which may name a path, is logged for the operator as a warning naming `name`.
 
     Raises:
-        UnrecordableValue: naming `path` and the type, for a value of no family, an array of a dtype
-            canonical `.npy` refuses, a non-`str` key, two keys equal after NFC, a container that contains
-            itself, an integer too long to write, or nesting deeper than `MAX_DEPTH`.
-    """
-    return _TOKENISER(value, path)
-
-
-def _refuse(path: str, value: object, reason: str) -> NoReturn:
-    raise UnrecordableValue(path, value, reason)
-
-
-def _token_value(key: str, payload: object, path: str, walk: Walk) -> object:
-    return _TOKEN_DECODERS[key](payload, f"{path}.{key}", walk)
-
-
-def _float_token(payload: object, where: str, walk: Walk) -> object:
-    if payload not in _FLOAT_NAMES:
-        _refuse(where, payload, f"is not one of {sorted(_FLOAT_NAMES)}")
-    return float(payload)
-
-
-def _int_token(payload: object, where: str, walk: Walk) -> object:
-    if not (isinstance(payload, str) and _INT_TOKEN_TEXT.fullmatch(payload)):
-        _refuse(where, payload, "is not a decimal integer")
-    try:
-        return int(payload)
-    except ValueError as err:
-        _refuse(where, payload, str(err))
-
-
-def _enum_token(payload: object, where: str, walk: Walk) -> object:
-    match payload:
-        case [str(name), value]:
-            return EnumMember(name, _decoded(value, f"{where}.value", walk, hashable=True))
-    _refuse(where, payload, "is not [<type name>, <value>]")
-
-
-def _set_token(payload: object, where: str, walk: Walk) -> object:
-    if not isinstance(payload, list):
-        _refuse(where, payload, "is not a list of elements")
-    return frozenset(_decoded(item, f"{where}[{i}]", walk, hashable=True) for i, item in enumerate(payload))
-
-
-def _text_token(payload: object, where: str) -> str:
-    if not isinstance(payload, str):
-        _refuse(where, payload, "is not text")
-    return payload
-
-
-def _path_token(payload: object, where: str, walk: Walk) -> object:
-    return Path(_text_token(payload, where))
-
-
-def _decimal_token(payload: object, where: str, walk: Walk) -> object:
-    try:
-        return Decimal(_text_token(payload, where))
-    except InvalidOperation as err:
-        _refuse(where, payload, f"is not a decimal: {err}")
-
-
-def _bytes_token(payload: object, where: str, walk: Walk) -> object:
-    try:
-        return bytes.fromhex(_text_token(payload, where))
-    except ValueError as err:
-        _refuse(where, payload, f"is not hex: {err}")
-
-
-def _npy_token(payload: object, where: str, walk: Walk) -> object:
-    text = _text_token(payload, where)
-    try:
-        return frozen_array(numpy.load(io.BytesIO(base64.b64decode(text, validate=True)), allow_pickle=False))
-    except (ValueError, TypeError, OSError, binascii.Error) as err:
-        _refuse(where, payload, f"is not a .npy array in base64: {err}")
-
-
-_TOKEN_DECODERS: dict[str, Callable[[object, str, Walk], object]] = {
-    "$f": _float_token,
-    "$int": _int_token,
-    "$enum": _enum_token,
-    "$set": _set_token,
-    "$path": _path_token,
-    "$dec": _decimal_token,
-    "$bytes": _bytes_token,
-    "$nd": _npy_token,
-}
-"""The decoder of each key in `_PROV_TOKENS`."""
-
-
-def _decoded(value: object, path: str, walk: Walk, *, hashable: bool = False) -> Any:  # noqa: ANN401
-    """Return the value a token form stands for: objects as `FrozenDict` (keys unescaped), arrays as `FrozenList`.
-
-    With `hashable`, an array is a `tuple` (an element of a set or an enum's value).
-
-    Raises:
-        UnrecordableValue: naming the path, for a malformed token, a cycle, or nesting deeper than `MAX_DEPTH`.
+        RunIOError: if `operation` raised one of those; it carries the errno text only, with no cause or context.
     """
     try:
-        if isinstance(value, dict):
-            items = cast("dict[str, object]", value)
-            if len(items) == 1:
-                ((key, payload),) = items.items()
-                if key in _PROV_TOKENS:
-                    return walk.enter(value, lambda: _token_value(key, payload, path, walk))
-            return walk.enter(
-                value,
-                lambda: FrozenDict(
-                    {(k[1:] if k.startswith("$$") else k): _decoded(v, f"{path}.{k}", walk) for k, v in items.items()}
-                ),
-            )
-        if isinstance(value, (list, tuple)):
-            elements = cast("Sequence[object]", value)
-            kind: Callable[[Any], Any] = tuple if hashable else FrozenList
-            return walk.enter(
-                value,
-                lambda: kind(_decoded(v, f"{path}[{i}]", walk, hashable=hashable) for i, v in enumerate(elements)),
-            )
-    except UnrecordableValue:
-        raise
-    except ValueError as err:
-        _refuse(path, value, str(err))
-    return value
-
-
-def _frozen_json(value: object, walk: Walk) -> Any:  # noqa: ANN401
-    if isinstance(value, dict):
-        items = cast("dict[str, object]", value)
-        return walk.enter(value, lambda: FrozenDict({k: _frozen_json(v, walk) for k, v in items.items()}))
-    if isinstance(value, list):
-        elements = cast("list[object]", value)
-        return walk.enter(value, lambda: FrozenList(_frozen_json(v, walk) for v in elements))
-    return value
-
-
-def _line(record: Mapping[str, Any]) -> bytes:
-    """Return the line a store file holds for a record: JSON with sorted keys, every number as Python writes it."""
-    return json.dumps(thawed(record), sort_keys=True, allow_nan=False).encode("utf-8")
-
-
-def recorded(value: object) -> Any:  # noqa: ANN401
-    """Return what a caller reads back from a record that recorded `value`: every token decoded.
-
-    Objects are `FrozenDict`, arrays `FrozenList` (equal to a `dict` and a `list` of the same items), a
-    non-finite float or a large integer is itself, a path is a `Path`, an array a read-only `numpy.ndarray`,
-    a set a `frozenset`, bytes `bytes`, a decimal a `Decimal`, and an enum member an `EnumMember`.
-
-    Raises:
-        UnrecordableValue: if `value` is outside the provenance value type.
-    """
-    return _decoded(normalised(value, "value"), "value", Walk())
-
-
-def plain_values(value: object) -> Any:  # noqa: ANN401
-    """Return a store file's JSON value as a caller reads it back: every token decoded, as `recorded` returns.
-
-    For readers that parse a store file as JSON rather than through `ProvStore.read_jsonl`.
-
-    Raises:
-        UnrecordableValue: for a malformed token.
-    """
-    return _decoded(value, "value", Walk())
-
-
-def _held_value(value: object, name: str) -> tuple[Any, Any]:
-    """Return a record field's tokens, read-only, and the decoded value a caller reads back.
-
-    Raises:
-        UnrecordableValue: if `value` is not a mapping of provenance values.
-    """
-    tokens = normalised(value, name)
-    if not isinstance(tokens, dict):
-        _refuse(name, value, "is not a mapping")
-    return _frozen_json(tokens, Walk()), _decoded(tokens, name, Walk())
-
-
-def _check_normal_form(tokens: object, name: str) -> Any:  # noqa: ANN401
-    """Return the decoded value of a field read from a `provenance@2` file, refusing a form the writer cannot write.
-
-    Raises:
-        UnrecordableValue: if decoding and normalising again does not give the same JSON.
-    """
-    value = _decoded(tokens, name, Walk())
-    if _line({"v": normalised(value, name)}) != _line({"v": tokens}):
-        _refuse(name, tokens, "is not a form the store writes: decoding and recording it again differs")
-    return value
-
-
-def _text(value: object, name: str, *, optional: bool = False) -> None:
-    if value is None and optional:
-        return
-    if not isinstance(value, str):
-        raise ValueError(f"{name} must be text, got {type(value).__name__}")
-
-
-def _extent(value: object) -> tuple[float, float] | None:
-    if value is None:
-        return None
-    if not (isinstance(value, (list, tuple)) and len(value) == 2):  # noqa: PLR2004 - (start, end)
-        raise ValueError(f"extent must be (start, end) or None, got {value!r}")
-    if any(isinstance(x, bool) or not isinstance(x, (int, float)) for x in value):
-        raise ValueError(f"extent must hold two finite numbers of seconds, got {value!r}")
-    start, end = float(value[0]), float(value[1])
-    if not (math.isfinite(start) and math.isfinite(end)):
-        raise ValueError(f"extent must hold two finite numbers of seconds, got {value!r}")
-    if start > end:
-        raise ValueError(f"extent ends before it starts: {value!r}")
-    return start, end
-
-
-class _Record:
-    """What every provenance record shares: it is read-only and bound to its id.
-
-    `_DIGESTED` names the fields the id covers, after `run_id`; `_VALUES` the fields of provenance values
-    (attributes, parameters, dependencies). A value field holds what a caller reads back, every token
-    decoded; the record also keeps the tokens it was identified by, which the file holds. Every record
-    carries the `run_id` it was minted in and has its id checked against its content when it is built; an
-    empty `id` is minted from the content. Two records are equal when their files' lines identify the same
-    content (JCS).
-    """
-
-    _DIGESTED: ClassVar[tuple[str, ...]]
-    _VALUES: ClassVar[tuple[str, ...]] = ()
-    _KIND: ClassVar[str]
-    __hash__ = None  # type: ignore[assignment]
-    id: str
-    run_id: str
-
-    def _prefix(self) -> str:
-        raise NotImplementedError
-
-    def _check(self) -> None:
-        raise NotImplementedError
-
-    def __post_init__(self) -> None:
-        """Check the fields, hold each value field decoded beside its tokens, and check the id against them."""
-        _text(self.id, "id")
-        _text(self.run_id, "run_id")
-        tokens: dict[str, Any] = {}
-        for name in self._VALUES:
-            tokens[name], held = _held_value(getattr(self, name), name)
-            object.__setattr__(self, name, held)
-        object.__setattr__(self, "_tokens", FrozenDict(tokens))
-        self._check()
-        minted = self.minted_id()
-        if self.id == "":
-            object.__setattr__(self, "id", minted)
-        elif self.id != minted:
-            raise ValueError(f"{self._KIND} id {self.id!r} is not the id of its content, {minted!r}")
-
-    def _field(self, name: str) -> Any:  # noqa: ANN401
-        return self._tokens[name] if name in self._VALUES else getattr(self, name)  # type: ignore[attr-defined]
-
-    def minted_id(self) -> str:
-        """Return the id of this content in the record's run: `<prefix>-` and 16 hex.
-
-        The hex is `identity_digest("provenance-id@4", [run_id, *<the digested fields, value fields as tokens>])`.
-
-        Raises:
-            UnrecordableValue: if the content, inside the id's envelope, nests deeper than `MAX_DEPTH` or
-                exceeds `MAX_CANONICAL_CHARS`.
-        """
-        parts = [self.run_id, *(thawed(self._field(name)) for name in self._DIGESTED)]
-        try:
-            digest = identity_digest(_ID_TAG, parts)
-        except ValueError as err:
-            raise UnrecordableValue(".".join(("run_id", *self._DIGESTED)), parts, str(err)) from err
-        return f"{self._prefix()}-{digest[:16]}"
-
-    def as_record(self) -> dict[str, Any]:
-        """Return the JSON object a file holds for this record: value fields as their tokens."""
-        return {"record": self._KIND, **{f.name: thawed(self._field(f.name)) for f in fields(cast(Any, self))}}
-
-    def __eq__(self, other: object) -> bool:
-        """Return whether `other` is a record of the same kind whose file line identifies the same content."""
-        if not isinstance(other, _Record):
-            return NotImplemented
-        return type(self) is type(other) and jcs_dumps(self.as_record()) == jcs_dumps(other.as_record())
-
-
-@dataclass(frozen=True, eq=False)
-class Entity(_Record):
-    """Something the graph believes exists.
-
-    Attributes:
-        id: `<prov_type>-<16 hex>`, the digest of `run_id`, `prov_type`, `extent` and `attributes`.
-        prov_type: One of `PROV_TYPE`.
-        extent: `(start, end)` in seconds, finite, `start <= end`, or None.
-        attributes: The normalised, read-only attributes.
-        run_id: The run the id was minted in.
-    """
-
-    _DIGESTED: ClassVar[tuple[str, ...]] = ("prov_type", "extent", "attributes")
-    _VALUES: ClassVar[tuple[str, ...]] = ("attributes",)
-    _KIND: ClassVar[str] = "entity"
-
-    id: str
-    prov_type: PROV_TYPE
-    extent: tuple[float, float] | None
-    attributes: Mapping[str, Any] = field(default_factory=dict)
-    run_id: str = field(kw_only=True)
-
-    def _prefix(self) -> str:
-        return self.prov_type
-
-    def _check(self) -> None:
-        if self.prov_type not in _PROV_TYPES:
-            raise ValueError(f"unknown prov_type {self.prov_type!r}; known: {sorted(_PROV_TYPES)}")
-        object.__setattr__(self, "extent", _extent(self.extent))
-        _check_entity_attributes(self.attributes)
-
-
-@dataclass(frozen=True, eq=False)
-class Activity(_Record):
-    """One node execution, or one step of one.
-
-    Attributes:
-        id: The activity's id. ``started`` and ``ended`` are not part of it.
-        node: The node executing.
-        step: Which step of it, when a node has several.
-        started: When it began, ISO 8601, or None when unrecorded.
-        ended: When it finished, ISO 8601, or None when unrecorded.
-        parameters: The normalised, read-only values it ran with.
-        run_id: The run the id was minted in.
-    """
-
-    _DIGESTED: ClassVar[tuple[str, ...]] = ("node", "step", "parameters")
-    _VALUES: ClassVar[tuple[str, ...]] = ("parameters",)
-    _KIND: ClassVar[str] = "activity"
-
-    id: str
-    node: str
-    step: str | None
-    started: str | None = None
-    ended: str | None = None
-    parameters: Mapping[str, Any] = field(default_factory=dict)
-    run_id: str = field(kw_only=True)
-
-    def _prefix(self) -> str:
-        return "act"
-
-    def _check(self) -> None:
-        _text(self.node, "node")
-        for name in ("step", "started", "ended"):
-            _text(getattr(self, name), name, optional=True)
-
-
-@dataclass(frozen=True, eq=False)
-class Agent(_Record):
-    """What acted: a model at a resolved commit, or the software itself.
-
-    Attributes:
-        id: The agent's id.
-        agent_type: ``"model"`` or ``"software"``.
-        model_id: The model's identifier, for a model agent.
-        commit_sha: A resolved 40-hex commit, when resolution succeeded.
-        unresolved_reason: Why the commit is unknown, when it is. A provenance model that cannot say
-            "I could not resolve this" forces either a lie or a crash.
-        version: Software version, for a software agent.
-        run_id: The run the id was minted in.
-    """
-
-    _DIGESTED: ClassVar[tuple[str, ...]] = ("agent_type", "model_id", "commit_sha", "unresolved_reason", "version")
-    _KIND: ClassVar[str] = "agent"
-
-    id: str
-    agent_type: AGENT_TYPE
-    model_id: str | None = None
-    commit_sha: str | None = None
-    unresolved_reason: str | None = None
-    version: str | None = None
-    run_id: str = field(kw_only=True)
-
-    def _prefix(self) -> str:
-        return "agent"
-
-    def _check(self) -> None:
-        if self.agent_type not in _AGENT_TYPES:
-            raise ValueError(f"unknown agent_type {self.agent_type!r}; known: {sorted(_AGENT_TYPES)}")
-        for name in ("model_id", "commit_sha", "unresolved_reason", "version"):
-            _text(getattr(self, name), name, optional=True)
-        _check_agent_fields(self.agent_type, self.model_id, self.commit_sha, self.unresolved_reason)
-
-
-@dataclass(frozen=True, eq=False)
-class Environment(_Record):
-    """The runtime a run actually executed in: the host interpreter, or one subprocess venv.
-
-    Attributes:
-        id: The environment's id.
-        kind: ``"host"`` for the interpreter running the pipeline, ``"venv"`` for one subprocess venv.
-        label: The host's own name, or the venv's resolved directory name — which encodes its
-            device key (e.g. ``"crisperwhisper-cpu"``).
-        python_version: The interpreter's version.
-        operating_system: ``platform.platform()``, for the host. None for a venv, which runs under
-            the same operating system as the host that built it.
-        dependencies: Package name to version, for whichever packages were recorded.
-        dependencies_digest: SHA-256 over the venv's full installed-distribution listing, when
-            ``dependencies`` holds a declared subset rather than that full listing.
-        senselab_version: senselab's own installed version, for the host.
-        run_id: The run the id was minted in.
-    """
-
-    _DIGESTED: ClassVar[tuple[str, ...]] = (
-        "kind",
-        "label",
-        "python_version",
-        "operating_system",
-        "dependencies",
-        "dependencies_digest",
-        "senselab_version",
-    )
-    _VALUES: ClassVar[tuple[str, ...]] = ("dependencies",)
-    _KIND: ClassVar[str] = "environment"
-
-    id: str
-    kind: ENVIRONMENT_KIND
-    label: str
-    python_version: str
-    operating_system: str | None = None
-    dependencies: Mapping[str, str] = field(default_factory=dict)
-    dependencies_digest: str | None = None
-    senselab_version: str | None = None
-    run_id: str = field(kw_only=True)
-
-    def _prefix(self) -> str:
-        return "env"
-
-    def _check(self) -> None:
-        if self.kind not in _ENVIRONMENT_KINDS:
-            raise ValueError(f"unknown environment kind {self.kind!r}; known: {sorted(_ENVIRONMENT_KINDS)}")
-        _text(self.label, "label")
-        _text(self.python_version, "python_version")
-        for name in ("operating_system", "dependencies_digest", "senselab_version"):
-            _text(getattr(self, name), name, optional=True)
-        if not all(isinstance(v, str) for v in self.dependencies.values()):
-            raise ValueError("dependencies must map package names to version text")
-
-
-_RECORD_TYPES: dict[str, type[_Record]] = {
-    "entity": Entity,
-    "activity": Activity,
-    "agent": Agent,
-    "environment": Environment,
-}
-_RECORD_KEYS: dict[str, frozenset[str]] = {
-    **{kind: frozenset(f.name for f in fields(cast(Any, t))) for kind, t in _RECORD_TYPES.items()},
-    "relation": frozenset({"relation", "source", "target"}),
-}
-
-
-_R = TypeVar("_R", bound=_Record)
-_UNTIMED: dict[str, Any] = {"started": None, "ended": None}
-
-
-def _mint(cls: type[_R], run_id: str, raw: Mapping[str, object], **plain: object) -> _R:
-    """Build a record of `cls` in `run_id` with the id minted from its content.
-
-    Raises:
-        UnrecordableValue: if a field holds a value outside the provenance value type.
-        ValueError: if the record's fields are refused.
-    """
-    return cls(id="", run_id=run_id, **raw, **plain)  # type: ignore[call-arg]
-
-
-@overload
-def revised(target: _R, /, **changes: object) -> _R: ...
-@overload
-def revised(target: Mapping[str, Any], /, **changes: object) -> FrozenDict: ...
-def revised(target: _Record | Mapping[str, Any], /, **changes: object) -> _Record | FrozenDict:
-    """Return a copy of a record, or of a mapping a record holds, with `changes`; the original is untouched.
-
-    For a mapping a record holds (attributes, parameters, an object inside them): what a caller reads back
-    from a record of its items with `changes` (`recorded`). For a record: the record of the changed content
-    minted in the same run, so it keeps the `run_id` and carries the id of its own content.
-
-    Raises:
-        UnrecordableValue: if a change holds a value outside the provenance value type.
-        ValueError: if a record's changed fields are refused, or a change names `id`, `run_id` or no field of
-            the record.
-    """
-    if isinstance(target, _Record):
-        names = {f.name for f in fields(cast(Any, target))} - {"id", "run_id"}
-        unknown = sorted(set(changes) - names)
-        if unknown:
-            raise ValueError(f"{type(target).__name__} cannot revise {unknown}")
-        return cast(_Record, replace(cast(Any, target), id="", **changes))
-    if not isinstance(target, Mapping):
-        raise TypeError(f"revised takes a record or a mapping a record holds, not {type(target).__name__}")
-    return cast(FrozenDict, recorded({**target, **changes}))
-
-
-def _timing(record: _Record) -> tuple[str, str]:
-    if isinstance(record, Activity):
-        return record.started or "", record.ended or ""
-    return "", ""
-
-
-def _put(table: dict[str, _R], record: _R, where: str = "") -> None:
-    """Hold `record` under its id, refusing a different record already held there.
-
-    Two activities that differ only in `started` and `ended` are one activity: the held one is the
-    later by `(started, ended)`, so holding them in either order holds the same record.
-
-    Raises:
-        ValueError: if a different record holds the id.
-    """
-    held = table.get(record.id)
-    if held is not None and held != record:
-        untimed = isinstance(record, Activity) and replace(cast(Any, held), **_UNTIMED) == replace(record, **_UNTIMED)
-        if not untimed:
-            raise ValueError(f"{where}two different records hold the id {record.id!r}: {held!r} and {record!r}")
-        if _timing(held) >= _timing(record):
-            return
-    table[record.id] = record
+        return operation()
+    except (OSError, WrongKindError, LeaseUnavailable) as err:
+        logger.warning("%s failed: %s", name, err)
+        failure = RunIOError(err)
+    raise failure
 
 
 class ProvStore:
-    """An append-only PROV document.
+    """A set of PROV records keyed by `@id`: one writer's records, or the union of a run's writers.
 
-    Args:
-        run_id: Mixed into every id so two runs never collide.
+    `add` holds a record and the `senselab:File` entities it names; `write` replaces this writer's document,
+    `<run>/prov/<writer>.jsonld`, atomically; `read` returns the union of every writer's document in a run.
+    Accessors return records in `@id` order.
+
+    A store used after a `fork` is a new writer in the child, so each process writes its own document.
     """
 
-    def __init__(self, run_id: str) -> None:
-        """Create an empty store."""
-        self.run_id = run_id
-        self._entities: dict[str, Entity] = {}
-        self._activities: dict[str, Activity] = {}
-        self._agents: dict[str, Agent] = {}
-        self._environments: dict[str, Environment] = {}
-        self._relations: dict[tuple[RELATION, str, str], None] = {}
-        self._targets_of: dict[tuple[RELATION, str], list[str]] = {}
-        self._sources_of: dict[tuple[RELATION, str], list[str]] = {}
-
-    def entity(self, *, prov_type: PROV_TYPE, extent: tuple[float, float] | None, attributes: dict[str, Any]) -> str:
-        """Add an entity holding the normalised, read-only form of `attributes`.
-
-        Args:
-            prov_type: What sort of thing it is.
-            extent: ``(start, end)`` in seconds, finite, ``start <= end``, or None for something without one.
-            attributes: Whatever describes it; a mapping with ``str`` keys of provenance values.
-
-        Returns:
-            Its id.
+    def __init__(self, records: Iterable[kprov.Record] = ()) -> None:
+        """Hold `records`.
 
         Raises:
-            UnrecordableValue: If ``attributes`` is not a mapping of provenance values.
-            ValueError: If ``prov_type`` is unknown, the extent is malformed, or the attributes carry
-                both a checksum and a reason it is missing, a malformed digest or an empty reason.
+            ConflictingNode: if two of them are different nodes under one `@id`.
         """
-        record = _mint(Entity, self.run_id, {"attributes": attributes}, prov_type=prov_type, extent=extent)
-        _put(self._entities, record)
-        return record.id
+        self._writer = (os.getpid(), uuid.uuid4().hex)
+        self._records: dict[str, kprov.Record] = {}
+        self.add(*records)
 
-    def activity(
-        self,
-        *,
-        node: str,
-        step: str | None,
-        parameters: dict[str, Any],
-        started: str | None = None,
-        ended: str | None = None,
-    ) -> str:
-        """Add an activity; of two with one id, differing only in timing, the store holds the later.
+    @property
+    def writer(self) -> str:
+        """This process's writer uuid4 hex: the name of the document `write` replaces."""
+        if self._writer[0] != os.getpid():
+            self._writer = (os.getpid(), uuid.uuid4().hex)
+        return self._writer[1]
 
-        Args:
-            node: The node executing.
-            step: Which step of it, when a node has several.
-            parameters: The values it ran with.
-            started: When it began, ISO 8601. Excluded from the id digest.
-            ended: When it finished, ISO 8601. Excluded from the id digest.
+    def restart(self) -> None:
+        """Forget every record held and take a new writer id, so the next `write` makes a document of its own."""
+        self._writer = (os.getpid(), uuid.uuid4().hex)
+        self._records = {}
 
-        Returns:
-            Its id — the same for two executions that differ only in ``started``/``ended``.
+    def add(self, *records: kprov.Record) -> None:
+        """Hold each record and the files it names; a record already held under its `@id` is kept once.
+
+        Nothing is added unless every record is.
 
         Raises:
-            UnrecordableValue: If ``parameters`` is not a mapping of provenance values.
+            ConflictingNode: if a record differs from the one held, or another one given, under its `@id`.
+            ValueError: if a record's `senselab:fileLabel` or `senselab:modelSource` is one the boundary refuses.
         """
-        record = _mint(
-            Activity, self.run_id, {"parameters": parameters}, node=node, step=step, started=started, ended=ended
-        )
-        _put(self._activities, record)
-        return record.id
+        added: dict[str, kprov.Record] = {}
+        for r in (r for record in records for r in (record, *record.files)):
+            if (problem := _boundary_problem(r)) is not None:
+                raise ValueError(problem)
+            held = self._records.get(r.id) or added.setdefault(r.id, r)
+            if held.jcs != r.jcs:
+                raise ConflictingNode(r.id)
+        self._records.update(added)
 
-    def agent(
-        self,
-        *,
-        agent_type: AGENT_TYPE,
-        model_id: str | None = None,
-        commit_sha: str | None = None,
-        unresolved_reason: str | None = None,
-        version: str | None = None,
-    ) -> str:
-        """Add an agent.
-
-        Args:
-            agent_type: ``"model"`` or ``"software"``.
-            model_id: Required for a model agent.
-            commit_sha: A resolved 40-hex commit.
-            unresolved_reason: Why the commit is unknown, if it is.
-            version: Software version, for a software agent.
-
-        Returns:
-            Its id.
+    @classmethod
+    def merge(cls, stores: Iterable[ProvStore]) -> ProvStore:
+        """Return the union of `stores` by `@id`; the result does not depend on their order.
 
         Raises:
-            ValueError: If ``agent_type`` is unknown, ``commit_sha`` is not exactly 40 hex characters,
-                ``commit_sha`` and ``unresolved_reason`` are supplied together, ``unresolved_reason``
-                is empty, or a model agent is missing ``model_id`` or supplies neither a commit nor a
-                reason it is missing.
+            ConflictingNode: if two stores hold different nodes under one `@id`.
         """
-        record = _mint(
-            Agent,
-            self.run_id,
-            {},
-            agent_type=agent_type,
-            model_id=model_id,
-            commit_sha=commit_sha,
-            unresolved_reason=unresolved_reason,
-            version=version,
-        )
-        _put(self._agents, record)
-        return record.id
+        return cls(r for store in stores for r in store.records())
 
-    def environment(  # noqa: PLR0913 - keyword-only, one argument per field of the environment record
-        self,
-        *,
-        kind: ENVIRONMENT_KIND,
-        label: str,
-        python_version: str,
-        operating_system: str | None = None,
-        dependencies: dict[str, str] | None = None,
-        dependencies_digest: str | None = None,
-        senselab_version: str | None = None,
-    ) -> str:
-        """Add an environment: the host interpreter, or one subprocess venv.
+    def records(self) -> list[kprov.Record]:
+        """Return every record, in `@id` order."""
+        return [self._records[k] for k in sorted(self._records)]
 
-        Args:
-            kind: ``"host"`` or ``"venv"``.
-            label: The host's own name, or the venv's resolved directory name.
-            python_version: The interpreter's version.
-            operating_system: ``platform.platform()``, for the host.
-            dependencies: Package name to version.
-            dependencies_digest: SHA-256 over the venv's full installed-distribution listing, when
-                ``dependencies`` is a declared subset of it.
-            senselab_version: senselab's own installed version, for the host.
-
-        Returns:
-            Its id.
+    def get(self, node_id: str) -> kprov.Record:
+        """Return the record under `node_id`.
 
         Raises:
-            ValueError: If ``kind`` is unknown or a field is not text.
+            KeyError: if none is held.
         """
-        record = _mint(
-            Environment,
-            self.run_id,
-            {"dependencies": dict(dependencies or {})},
-            kind=kind,
-            label=label,
-            python_version=python_version,
-            operating_system=operating_system,
-            dependencies_digest=dependencies_digest,
-            senselab_version=senselab_version,
-        )
-        _put(self._environments, record)
-        return record.id
+        return self._records[node_id]
 
-    def _relate(self, relation: RELATION, source: str, target: str) -> None:
-        triple = (relation, source, target)
-        if triple not in self._relations:
-            self._relations[triple] = None
-            self._targets_of.setdefault((relation, source), []).append(target)
-            self._sources_of.setdefault((relation, target), []).append(source)
+    def _of(self, *prefixes: str) -> list[kprov.Record]:
+        return [r for r in self.records() if r.id.partition(":")[0] in prefixes]
 
-    def was_generated_by(self, entity_id: str, activity_id: str) -> None:
-        """Record that an activity produced an entity."""
-        self._relate("wasGeneratedBy", entity_id, activity_id)
+    def entities(self) -> list[kprov.Record]:
+        """Return the content-addressed entities (`content:`, `output:`), in `@id` order."""
+        return self._of("content", "output")
 
-    def used(self, activity_id: str, entity_id: str) -> None:
-        """Record that an activity read an entity."""
-        self._relate("used", activity_id, entity_id)
-
-    def was_associated_with(self, activity_id: str, agent_id: str) -> None:
-        """Record which agent ran an activity."""
-        self._relate("wasAssociatedWith", activity_id, agent_id)
-
-    def was_attributed_to(self, entity_id: str, agent_id: str) -> None:
-        """Record which agent is answerable for an entity."""
-        self._relate("wasAttributedTo", entity_id, agent_id)
-
-    def was_derived_from(self, entity_id: str, source_entity_id: str) -> None:
-        """Record that an entity refines or answers another, keeping both."""
-        self._relate("wasDerivedFrom", entity_id, source_entity_id)
-
-    def was_invalidated_by(self, entity_id: str, activity_id: str) -> None:
-        """Record that an entity should no longer be read as what it was. It is not removed."""
-        self._relate("wasInvalidatedBy", entity_id, activity_id)
-
-    def get_entity(self, entity_id: str) -> Entity:
-        """Return one entity."""
-        return self._entities[entity_id]
-
-    def get_activity(self, activity_id: str) -> Activity:
-        """Return one activity."""
-        return self._activities[activity_id]
-
-    def get_agent(self, agent_id: str) -> Agent:
-        """Return one agent."""
-        return self._agents[agent_id]
-
-    def get_environment(self, environment_id: str) -> Environment:
-        """Return one environment."""
-        return self._environments[environment_id]
-
-    def entities(self, prov_type: PROV_TYPE | None = None) -> list[Entity]:
-        """Return entities, optionally of one type."""
-        return [e for e in self._entities.values() if prov_type is None or e.prov_type == prov_type]
-
-    def activities(self, node: str | None = None) -> list[Activity]:
-        """Return activities, optionally of one node."""
-        return [a for a in self._activities.values() if node is None or a.node == node]
-
-    def agents(self, agent_type: AGENT_TYPE | None = None) -> list[Agent]:
-        """Return agents, optionally of one type.
-
-        Args:
-            agent_type: ``"model"`` or ``"software"``, or None for every agent.
-
-        Returns:
-            The agents, in write order.
-        """
-        return [g for g in self._agents.values() if agent_type is None or g.agent_type == agent_type]
-
-    def environments(self, kind: ENVIRONMENT_KIND | None = None) -> list[Environment]:
-        """Return environments, optionally of one kind.
-
-        Args:
-            kind: ``"host"`` or ``"venv"``, or None for every environment.
-
-        Returns:
-            The environments, in write order.
-        """
-        return [e for e in self._environments.values() if kind is None or e.kind == kind]
-
-    def relations(self) -> list[tuple[RELATION, str, str]]:
-        """Return every relation as ``(relation, source, target)``, in write order."""
-        return list(self._relations)
-
-    def associations_of(self, agent_id: str) -> list[str]:
-        """Return the activities an agent was associated with.
-
-        The inverse of :meth:`associated_with`, for a reader asking what one agent did rather than
-        who ran one activity.
-
-        Args:
-            agent_id: The agent's id.
-
-        Returns:
-            The activity ids, in the order the relations were recorded.
-        """
-        return list(self._sources_of.get(("wasAssociatedWith", agent_id), ()))
-
-    def _targets(self, relation: RELATION, source: str) -> list[str]:
-        return list(self._targets_of.get((relation, source), ()))
-
-    def generated_by(self, entity_id: str) -> str | None:
-        """Return the activity that generated an entity, or None."""
-        found = self._targets("wasGeneratedBy", entity_id)
-        return found[0] if found else None
-
-    def uses_of(self, activity_id: str) -> list[str]:
-        """Return the entities an activity read."""
-        return self._targets("used", activity_id)
-
-    def associated_with(self, activity_id: str) -> list[str]:
-        """Return the agents associated with an activity."""
-        return self._targets("wasAssociatedWith", activity_id)
-
-    def derived_from(self, entity_id: str) -> list[str]:
-        """Return the entities an entity was derived from."""
-        return self._targets("wasDerivedFrom", entity_id)
-
-    def invalidated_by(self, entity_id: str) -> list[str]:
-        """Return the activities that invalidated an entity, in the order recorded.
-
-        Args:
-            entity_id: The entity's id.
-
-        Returns:
-            The activity ids, empty when the entity is still live.
-        """
-        return self._targets("wasInvalidatedBy", entity_id)
-
-    def is_invalidated(self, entity_id: str) -> bool:
-        """Whether an entity has been invalidated."""
-        return bool(self._targets("wasInvalidatedBy", entity_id))
-
-    def records(self) -> list[_Record]:
-        """Return every entity, activity, agent and environment, in that order and in write order within each."""
+    def activities(self, logical_key: object = None) -> list[kprov.Record]:
+        """Return the activities, or those whose `senselab:logicalKey` is `logical_key`, in `@id` order."""
+        out = self._of("activity")
+        if logical_key is None:
+            return out
+        wanted = jcs_dumps(logical_key)
         return [
-            *self._entities.values(),
-            *self._activities.values(),
-            *self._agents.values(),
-            *self._environments.values(),
+            r
+            for r in out
+            if "senselab:logicalKey" in (node := r.node())
+            and jcs_dumps(kprov.literal_value(node["senselab:logicalKey"])) == wanted
         ]
 
-    def _hold(self, record: _Record, where: str = "") -> None:
-        tables: dict[str, dict[str, Any]] = {
-            "entity": self._entities,
-            "activity": self._activities,
-            "agent": self._agents,
-            "environment": self._environments,
-        }
-        _put(tables[record._KIND], record, where)
+    def plans(self) -> list[kprov.Record]:
+        """Return the plans (`plan:<plan hash>`), in `@id` order."""
+        return self._of("plan")
 
-    def write_jsonl(self, path: str | Path) -> None:
-        """Write the store as one JSON record per line, keys sorted and numbers as Python writes them, atomically.
+    def agents(self) -> list[kprov.Record]:
+        """Return the agents, in `@id` order."""
+        return self._of("agent")
 
-        The first line is the `provenance@2.0` format record. Each entity, activity, agent and environment
-        line holds every field of the record, `run_id` included, value fields as the tokens the record was
-        identified by, so `read_jsonl` rebuilds the same records (a float stays a float) and checks each id
-        against its content. The records go to a temporary file in the target's directory, which is flushed,
-        fsynced and renamed onto the target, so the file at ``path`` is always either the previous store or
-        the new one whole. An existing target's permission bits are kept.
-        """
-        lines = [_line({"format": PROVENANCE_FORMAT, "record": "format"})]
-        lines += [_line(record.as_record()) for record in self.records()]
-        lines += [_line({"record": "relation", "relation": r, "source": s, "target": t}) for r, s, t in self._relations]
-        write_atomically(Path(path), b"".join(line + b"\n" for line in lines))
+    def environments(self) -> list[kprov.Record]:
+        """Return the environments, in `@id` order."""
+        return self._of("environment")
 
-    @classmethod
-    def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "ProvStore":
-        """Read a store back through the same record validation the store's own methods use.
+    def document(self) -> dict[str, object]:
+        """Return the JSON-LD document of every record, nodes in `@id` order."""
+        return kprov.document(self.records())
 
-        The file's first line must be the `provenance@2.0` format record. Each further line is read as JSON;
-        each value field must be a form the writer writes (decoding and recording it again gives the same
-        JSON), every record is rebuilt as its type, which checks its fields and that its id is the id of its
-        content, and a record without a `run_id` is refused. Callers read every value decoded, as `recorded`
-        returns it.
-        Relations pass through the same membership check as the relation methods, so a relation line
-        repeated reads back as one triple; a record repeated is held once, and two different records
-        with one id are refused.
-
-        Args:
-            path: The JSONL file to read.
-            run_id: The run id of the returned store, under which it mints the records it adds.
-
-        Returns:
-            The reconstructed store; for a file `write_jsonl` wrote, records equal to the written store's.
+    def write(self, run: str | Path) -> None:
+        """Replace this writer's document, `<run>/prov/<writer>.jsonld`, atomically with `document()` as JCS.
 
         Raises:
-            ProvenanceFormatRefused: If the first line is not the `provenance@2.0` format record, an empty
-                file included.
-            ValueError: If a line is not a record object, a line is not canonical JSON,
-                a record has an unrecognised kind, missing or unexpected keys, a field its type refuses,
-                or an id that is not the id of its content, or two records share an id. The error names the
-                file, the line and the record.
+            RunIOError: if the document cannot be written; the error names no path.
         """
-        store = cls(run_id=run_id)
-        lines = [(n, line) for n, line in enumerate(Path(path).read_bytes().split(b"\n"), start=1) if line.strip()]
-        _check_format_record(path, lines[0][1] if lines else None)
-        for line_no, line in lines[1:]:
-            where = f"{path}, line {line_no}"
-            rec = _parse(line, where)
-            kind = rec.pop("record", None)
-            expected = _RECORD_KEYS.get(cast(str, kind))
-            if expected is None:
-                raise ValueError(f"{where}: unrecognised record kind {kind!r}")
-            missing, unexpected = sorted(expected - rec.keys()), sorted(rec.keys() - expected)
-            if missing or unexpected:
-                raise ValueError(
-                    f"{where}: {kind} record missing keys {missing}, carrying unexpected keys {unexpected}"
-                )
-            if kind == "relation":
-                if rec["relation"] not in _RELATIONS:
-                    raise ValueError(f"{where}: unknown relation {rec['relation']!r}")
-                if not (isinstance(rec["source"], str) and isinstance(rec["target"], str)):
-                    raise ValueError(f"{where}: a relation joins two ids, got {rec!r}")
-                store._relate(cast(RELATION, rec["relation"]), rec["source"], rec["target"])
+        directory = Path(run) / PROV_DIR
+        data = jcs_dumps(self.document())
+
+        def write() -> None:
+            directory.mkdir(exist_ok=True)
+            write_atomically(directory / f"{self.writer}.jsonld", data)
+
+        pathless("writing the provenance document", write)
+
+    @classmethod
+    def read(cls, run: str | Path, vocabulary: kprov.Vocabulary | None = None) -> ProvStore:
+        """Return the union of the writers' documents in `<run>/prov/`, every node rebuilt over `vocabulary`.
+
+        Each node is rebuilt through the record builders over `vocabulary` (the core vocabulary when None) and
+        must be byte-identical to its rebuild, so its `@id`, terms and literals are all checked. Every relation
+        endpoint and every record an attribute names must be a node of the union. Temporaries of an interrupted
+        write are skipped.
+
+        Raises:
+            ProvenanceFormatRefused: on a file in `prov/` that declares a format other than `provenance@3`.
+            MalformedDocument: on a file in `prov/` that is not a writer's document or cannot be read, a document
+                of another shape, a node that differs from its rebuild, a `senselab:fileLabel` that is not
+                `file-<n>`, a local path as `senselab:modelSource`, or attribute references nested too deep.
+            ConflictingNode: if two writers hold different nodes under one `@id`.
+            DanglingReference: if a node names an `@id` the union does not hold.
+        """
+        return cls.from_documents(cls.read_documents(run), vocabulary)
+
+    @staticmethod
+    def read_documents(run: str | Path) -> dict[str, bytes]:
+        """Return `{file name: bytes}` of every document in `<run>/prov/`, temporaries of an interrupted write skipped.
+
+        Raises:
+            MalformedDocument: `prov/` cannot be listed, holds an entry that is not a regular file, or a file that
+                cannot be read; the message names an error class, never a path.
+        """
+        directory = Path(run) / PROV_DIR
+        documents: dict[str, bytes] = {}
+        failure: MalformedDocument | None = None
+        try:
+            for path in sorted(directory.iterdir()) if directory.is_dir() else []:
+                if TEMPORARY_NAME.fullmatch(path.name):
+                    continue
+                if not path.is_file() or path.is_symlink():
+                    raise MalformedDocument(None, f"{PROV_DIR}/ holds an entry that is not a regular file")
+                writer = path.name.removesuffix(".jsonld") if WRITER_DOCUMENT.fullmatch(path.name) else None
+                try:
+                    documents[path.name] = path.read_bytes()
+                except OSError as err:
+                    failure = MalformedDocument(writer, f"the document cannot be read ({type(err).__name__})")
+                    break
+        except OSError as err:
+            failure = MalformedDocument(None, f"{PROV_DIR}/ cannot be read ({type(err).__name__})")
+        if failure is not None:
+            raise failure
+        return documents
+
+    @classmethod
+    def from_documents(cls, documents: Mapping[str, bytes], vocabulary: kprov.Vocabulary | None = None) -> ProvStore:
+        """Return the union of `documents` (`read_documents`' result), every node rebuilt over `vocabulary`.
+
+        Each node is rebuilt through the record builders over `vocabulary` (the core vocabulary when None) and
+        must be byte-identical to its rebuild, so its `@id`, terms and literals are all checked. Every relation
+        endpoint and every record an attribute names must be a node of the union.
+
+        Raises:
+            ProvenanceFormatRefused: on a document that declares a format other than `provenance@3`.
+            MalformedDocument: on a file that is not a writer's document, a document of another shape, a node
+                that differs from its rebuild, a `senselab:fileLabel` that is not `file-<n>`, or attribute
+                references nested deeper than `MAX_DEPTH`.
+            ConflictingNode: if two writers hold different nodes under one `@id`.
+            DanglingReference: if a node names an `@id` the union does not hold.
+        """
+        nodes: dict[str, tuple[bytes, str]] = {}
+        for name, data in sorted(documents.items()):
+            writer = name.removesuffix(".jsonld") if WRITER_DOCUMENT.fullmatch(name) else None
+            found = _declared_format(data)
+            if (
+                found is not None
+                and check(PROVENANCE_FORMAT, found, RETIRED_PROVENANCE_FORMATS) is not FormatVerdict.ACCEPTED
+            ):
+                raise ProvenanceFormatRefused(found)
+            if writer is None:
+                raise MalformedDocument(None, f"{PROV_DIR}/ holds a file that is not a writer's document")
+            for node_id, raw in _writer_nodes(writer, data):
+                if nodes.setdefault(node_id, (raw, writer))[0] != raw:
+                    raise ConflictingNode(node_id)
+        return cls(_Rebuild(nodes, vocabulary or core_vocabulary()).all())
+
+
+_NAME = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+MODEL_SOURCE = re.compile(
+    rf"[a-z][a-z0-9_-]*(:{_NAME}(/{_NAME})?(@[0-9a-f]{{40,64}})?)?|{_NAME}/{_NAME}@[0-9a-f]{{40,64}}"
+)
+"""A `senselab:modelSource`: a source kind, a kind with an identity (`hf:org/model@<sha>`), or a repo at a commit."""
+
+
+def _boundary_problem(record: kprov.Record) -> str | None:
+    """Name what in `record` could carry a path: a bad `senselab:fileLabel` or `senselab:modelSource`."""
+    node = record.node()
+    label, source = node.get("senselab:fileLabel"), node.get("senselab:modelSource")
+    if label is not None and not (isinstance(label, str) and FILE_LABEL.fullmatch(label)):
+        return "a senselab:fileLabel is file-<n>"
+    if isinstance(source, str) and not MODEL_SOURCE.fullmatch(source):
+        return "a senselab:modelSource is a source kind and an identity, never a local path"
+    return None
+
+
+def _declared_format(data: bytes) -> str | None:
+    """Return the format tag a file declares as a JSON object's `format`, None if it declares none.
+
+    The whole file is read as one JSON document, so an indented one declares its format; a JSON-lines file declares
+    it on its first line.
+    """
+    for candidate in (data, data.partition(b"\n")[0]):
+        try:
+            require_json_depth(candidate)
+            document = json.loads(candidate)
+        except ValueError:
+            continue
+        found = document.get("format") if isinstance(document, dict) else None
+        return found if isinstance(found, str) and re.fullmatch(FORMAT_PATTERN, found) else None
+    return None
+
+
+def _writer_nodes(writer: str, data: bytes) -> list[tuple[str, bytes]]:
+    failure: MalformedDocument | None = None
+    try:
+        doc = jcs_loads(data)
+    except ValueError:
+        failure = MalformedDocument(writer, "the document is not canonical JSON")
+    if failure is not None:
+        raise failure
+    graph = doc.get("@graph") if isinstance(doc, dict) else None
+    if not (isinstance(doc, dict) and doc.keys() == _DOCUMENT_KEYS and isinstance(graph, list)):
+        raise MalformedDocument(
+            writer, f"a document is {{'@context': {kprov.CONTEXT_URL!r}, 'format': ..., '@graph': [...]}}"
+        )
+    if check(PROVENANCE_FORMAT, doc["format"]) is not FormatVerdict.ACCEPTED:
+        raise MalformedDocument(writer, f"a document's format is {PROVENANCE_FORMAT}")
+    if doc["@context"] != kprov.CONTEXT_URL:
+        raise MalformedDocument(writer, f"a document's @context is {kprov.CONTEXT_URL}")
+    out = []
+    for node in graph:
+        node_id = node.get("@id") if isinstance(node, dict) else None
+        if not (isinstance(node_id, str) and kprov.NODE_ID.fullmatch(node_id)):
+            raise MalformedDocument(writer, f"a node's @id is not of the form {kprov.NODE_ID.pattern}")
+        out.append((node_id, jcs_dumps(node)))
+    return out
+
+
+def _depth_refusal(depth: int) -> str | None:
+    try:
+        require_depth(depth)
+    except ValueError as err:
+        return str(err)
+    return None
+
+
+class _Rebuild:
+    """Rebuild a union of raw nodes through the record builders, checking each against its bytes."""
+
+    def __init__(self, nodes: Mapping[str, tuple[bytes, str]], vocabulary: kprov.Vocabulary) -> None:
+        self.nodes = nodes
+        self.vocabulary = vocabulary
+        self.done: dict[str, kprov.Record] = {}
+        self.pending: set[str] = set()
+
+    def all(self) -> list[kprov.Record]:
+        return [self.record(node_id, node_id) for node_id in sorted(self.nodes)]
+
+    def checked_build(self, node_id: str, node: dict[str, Any], writer: str) -> kprov.Record:
+        try:
+            return self.build(node_id, node)
+        except (DanglingReference, MalformedDocument):
+            raise
+        except _REBUILD_ERRORS as err:
+            refused = type(err).__name__
+        raise MalformedDocument(writer, f"{node_id} is not what the builders write ({refused})")
+
+    def record(self, node_id: str, named_by: str) -> kprov.Record:
+        if node_id in self.done:
+            return self.done[node_id]
+        if node_id not in self.nodes:
+            raise DanglingReference(named_by, node_id)
+        raw, writer = self.nodes[node_id]
+        if node_id in self.pending:
+            raise MalformedDocument(writer, f"{node_id} names itself through its attributes")
+        if (too_deep := _depth_refusal(len(self.pending) + 1)) is not None:
+            raise MalformedDocument(writer, f"{node_id}: attribute references: {too_deep}")
+        self.pending.add(node_id)
+        node = cast("dict[str, Any]", jcs_loads(raw))
+        rebuilt = self.checked_build(node_id, node, writer)
+        if rebuilt.jcs != raw:
+            raise MalformedDocument(writer, f"{node_id} differs from its rebuild")
+        for target in sorted(_endpoints(node)):
+            if target not in self.nodes:
+                raise DanglingReference(node_id, target)
+        self.pending.discard(node_id)
+        self.done[node_id] = rebuilt
+        return rebuilt
+
+    def build(self, node_id: str, node: dict[str, Any]) -> kprov.Record:
+        record = self.make(node_id, node)
+        if (problem := _boundary_problem(record)) is not None:
+            raise MalformedDocument(self.nodes[node_id][1], f"{node_id}: {problem}")
+        return record
+
+    def make(self, node_id: str, node: dict[str, Any]) -> kprov.Record:
+        kind = node_id.partition(":")[0]
+        types = node["@type"]
+        if kind == "activity":
+            return self.activity(node_id, node)
+        attributes = self.attributes(node_id, node, _NODE_KEYS)
+        if kind == "agent":
+            return kprov.agent(self.vocabulary, types=types, attributes=attributes)
+        if kind == "environment":
+            return kprov.environment(self.vocabulary, attributes)
+        if kind == "plan":
+            return kprov.plan(node_id.partition(":")[2], self.vocabulary)
+        return kprov.entity(node_id, self.vocabulary, types=types, attributes=attributes)
+
+    def activity(self, node_id: str, node: dict[str, Any]) -> kprov.Record:
+        usages = [
+            kprov.Usage(q["prov:entity"]["@id"], port=_role(q, "senselab:port"), time=_time(q.get("prov:atTime")))
+            for q in node.get("prov:qualifiedUsage", [])
+        ]
+        generations = [
+            kprov.Generation(
+                q["@reverse"]["prov:qualifiedGeneration"]["@id"],
+                port=_role(q, "senselab:port"),
+                time=_time(q.get("prov:atTime")),
+            )
+            for q in node.get("@reverse", {}).get("prov:activity", [])
+        ]
+        usages += [kprov.Usage(e) for e in _ids(node, "prov:used") - {u.entity for u in usages}]
+        generations += [kprov.Generation(e) for e in _ids(node, "prov:generated") - {g.entity for g in generations}]
+        associations = [
+            kprov.Association(
+                q["prov:agent"]["@id"] if "prov:agent" in q else None, _role(q, "senselab:nodeId"), _plan_of(q)
+            )
+            for q in node.get("prov:qualifiedAssociation", [])
+        ]
+        return kprov.activity(
+            self.vocabulary,
+            types=node["@type"],
+            attributes=self.attributes(node_id, node, _ACTIVITY_KEYS),
+            used=usages,
+            generated=generations,
+            associations=associations,
+            started=_time(node.get("prov:startedAtTime")),
+            ended=_time(node.get("prov:endedAtTime")),
+        )
+
+    def attributes(self, node_id: str, node: dict[str, Any], structural: frozenset[str]) -> dict[str, object]:
+        out: dict[str, object] = {}
+        for term, value in node.items():
+            if term in structural:
                 continue
-            try:
-                for name in _RECORD_TYPES[cast(str, kind)]._VALUES:
-                    rec[name] = _check_normal_form(rec[name], name)
-                record = _RECORD_TYPES[cast(str, kind)](**rec)
-            except (ValueError, TypeError) as err:
-                raise ValueError(f"{where}: {kind} {rec.get('id')!r}: {err}") from err
-            store._hold(record, f"{where}: ")
-        return store
-
-    @classmethod
-    def merge(cls, stores: Sequence["ProvStore"]) -> "ProvStore":
-        """Union several stores; order-independent, since one id holds one record and two timings of an activity one.
-
-        Raises:
-            ValueError: If two stores hold different records under one id.
-        """
-        out = cls(run_id="merged")
-        for s in stores:
-            for record in s.records():
-                out._hold(record)
-        for s in stores:
-            for rel in s._relations:
-                out._relate(*rel)
+            prop = self.vocabulary.property(term)
+            if prop is not None and prop.range not in kprov.LITERAL_RANGES:
+                out[term] = self.reference(node_id, value)
+            else:
+                out[term] = kprov.literal_value(value)
         return out
 
-    def fingerprint(self) -> str:
-        """A content hash that ignores insertion order: 16 hex of `provenance-id@4` over the sorted ids."""
-        listing = {
-            "e": sorted(self._entities),
-            "act": sorted(self._activities),
-            "ag": sorted(self._agents),
-            "env": sorted(self._environments),
-            "r": sorted(f"{r}:{s}:{t}" for r, s, t in self._relations),
-        }
-        return identity_digest(_ID_TAG, [listing])[:16]
+    def reference(self, node_id: str, value: Mapping[str, Any]) -> object:
+        if value.keys() == {"@set"}:
+            return frozenset(self.reference(node_id, v) for v in value["@set"])
+        if value.keys() == {"@list"}:
+            return tuple(self.reference(node_id, v) for v in value["@list"])
+        target = value["@id"]
+        if not (isinstance(target, str) and kprov.NODE_ID.fullmatch(target)):
+            raise ValueError("a reference is an @id")
+        return self.record(target, node_id)
 
 
-def _check_format_record(path: str | Path, first: bytes | None) -> None:
-    """Refuse a file whose first line is not exactly the `provenance@2.0` format record.
-
-    Raises:
-        ProvenanceFormatRefused: naming what the first line declares, or None when it declares nothing.
-    """
-    try:
-        value = json.loads(first) if first is not None else None
-    except ValueError:
-        value = None
-    if not (isinstance(value, dict) and value.get("record") == "format"):
-        raise ProvenanceFormatRefused(path, None)
-    if value != {"format": PROVENANCE_FORMAT, "record": "format"}:
-        raise ProvenanceFormatRefused(path, value.get("format"))
+def _endpoints(node: Mapping[str, Any]) -> set[str]:
+    """Return the `@id` of every record a node relates to: its PROV endpoints and the plans its associations name."""
+    plans = {p for q in node.get("prov:qualifiedAssociation", []) if (p := _plan_of(q)) is not None}
+    return {ref["@id"] for key in _ENDPOINT_KEYS for ref in node.get(key, [])} | plans
 
 
-def _parse(line: bytes, where: str) -> dict[str, Any]:
-    """Parse a line: JSON without bare non-finite literals, which the writer writes as tokens."""
-    try:
-        value = json.loads(line, parse_constant=refuse_constant)
-    except ValueError as err:
-        raise ValueError(f"{where}: not JSON: {err}") from err
-    if not isinstance(value, dict) or "record" not in value:
-        raise ValueError(f"{where}: not an object carrying a 'record' key: {line[:200]!r}")
+def _plan_of(association: Mapping[str, Any]) -> str | None:
+    named = association.get("prov:hadPlan")
+    return None if named is None else named["@id"]
+
+
+def _ids(node: Mapping[str, Any], key: str) -> set[str]:
+    return {ref["@id"] for ref in node.get(key, [])}
+
+
+def _role(qualified: Mapping[str, Any], term: str) -> str | None:
+    role = qualified.get("prov:hadRole")
+    return None if role is None else role[term]
+
+
+def _time(literal: object) -> datetime | None:
+    if literal is None:
+        return None
+    value = kprov.literal_value(literal)
+    if not isinstance(value, datetime):
+        raise TypeError("a time is an xsd:dateTime")
     return value

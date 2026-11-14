@@ -3,7 +3,7 @@
 # reports from it.
 #
 # derivation: owner, 2026-10-05, after listening to 16 empty-route recordings (0.12-0.45 s, gain-lifted
-# copies in ~/Downloads/empty_route_check_20261005/): "all of the ones brought in can be discarded.
+# copies in ${LOCAL_INPUT}/empty_route_check_20261005/): "all of the ones brought in can be discarded.
 # they are all too short relative to the task, and none of them contain the task." Measured on the r12
 # parquet (62,550 recordings, schema 19) excluding the 114 empty-route recordings: 1,475 recordings last
 # under 0.5 s (1,405 of them already flagged), 1,644 under 1.0 s and 1,734 under 1.5 s, so 1.0-1.5 s

@@ -1,0 +1,4 @@
+# ruff: noqa: D100 - the module docstring is generated
+from senselab.reference._code_pages import plans_page
+
+__doc__ = plans_page()

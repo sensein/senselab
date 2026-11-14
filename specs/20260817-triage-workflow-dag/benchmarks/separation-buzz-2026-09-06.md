@@ -4,7 +4,7 @@ Recording: `sub-SUBJ03-…_task-Story-recall.wav`, 25.542 s, 16 kHz, from `b2ai_
 Not the standing reference file. It carries a continuous electrical buzz; its first 2.29 s are that
 buzz alone, with no speech over it.
 
-Audio for every row is kept at `~/Downloads/buzz_separation_20260906/` (raw, `rms_matched/`,
+Audio for every row is kept at `${LOCAL_INPUT}/buzz_separation_20260906/` (raw, `rms_matched/`,
 `head_2s/`), with the ORCD run's manifest under `provenance/unasdiff/`.
 
 ## What each model did to the buzz

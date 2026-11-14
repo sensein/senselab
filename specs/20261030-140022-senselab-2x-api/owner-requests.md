@@ -46,3 +46,24 @@ The authority for the full review. Quoted as the owner wrote them; nothing parap
 37. "remember what i said about triage?"
 38. "it seems many components deviated from original discussion and decisions. run a full review after subagent is back."
 39. "i thought 22 was specifically about lists of words, not code sharpening. code review should happen during development not CI, so change it to be reviewed and compacted during development."
+40. "verdict/decision seems very specific to triage"
+41. "how are such things creeping in. if i did not notice it we would run into future refactors"
+42. "monitor weekly limit and try to minimize token usage - be succinct and to the point in all generative processes."
+43. "but the HF whisper and crisperwhisper are two different models."
+44. "push and open the drafts (then merge on green CI into the enh branch)."
+45. "models often use different data type on different systems and are not guaranteed to be bitwise identical. provenance should capture the difference. given that we may want to optimize a pipeline in a cluster, a user should be able to use what's available but if the user's requirement is consistency then that should enforce differences across versions. some models/tools will behave identically, and some not. without knowing, environments with different versions should be treated as different software agents."
+46. "confirm on licenses. noting that licensing should be transparent and whether it can be used should be determined by user."
+47. "there will be many vllm server paths or vllm-omni server paths. if it's a task that can be reused keep it. or a pipeline that can be reused."
+48. "R-186 - we should not be determining whether two things are equivalent beyond standard numpy metrics (exact, equal within some tolerance, etc) and hashing . definitely know config settings to set thresholds or numbers. won't output hashes change if outputs change, and then we need to know what in the output changed, and that's an entity specific hashing requirement."
+49. "also tolerances can be evaluated through benchmarks in the future."
+50. "ask a subagent to investigate why any pydra job takes 20 mins to run. the principles associated with senselab refactor should generally apply to pydra as well."
+51. "open separate pydra-pr - ask the subagent to optimize that by also looking at action history and artifact caching (e.g. containers - also the slurm container could be woefully out of date). macos runs are typically much slower. and perhaps when a pr is marked for release it could enable a broader suite of tests."
+52. "i'm still worried 902 is changing the intent of tests as a workflow system that could be running on multiple nodes with many parallel processes. also not clear where slurm.tar is coming from. it seems that pr should run full tests before being merged into main. do b - regarding cache invalidation, we don't need the next release to be compatible with prior caches. pydra is still alpha, so changes could break things."
+53. "the whole point of pydra is cf or parallel, why is serial (which uses a very different pattern) being used"
+54. "we should also optimize the matrix of python so that 3.13 becomes default and the rest 3.11 - 3.15 run when merging a release tagged PR."
+55. "senselab should single python default to the google colab default python (it is provided in their release notes)"
+56. "all PRs should get fast tier automatically to any branch." (pydra CI: `pull_request` on every base; full tier required only into `main`.)
+57. "paths can be scrubbed. add to a principle to separately create a gitignored file that can contain references, but anything that can be merged into a commit (such as a spec) should not contain path or content of file references." (P-28 amended 2026-11-03.)
+58. "regarding atomicity, isn't a mkdir inside a cache directory atomic across filesystems? and couldn't two directories be sufficient to maintain a heartbeat with mkdir + rmdir?" — "yes, amend" (ADR-003 amended 2026-11-03).
+59. "the heartbeat setting should be in pydra, right?" (P3-53: pydra owns the job-lease heartbeat; senselab configures it.)
+60. "let's review the intent of hashing in pydra, and the circumstances under which a function hash should change. ... hashing is intended to say no need to rerun this because the steps/algorithm underneath this function did not change. a comment change is not a code change. a user may or may not care if scipy/numpy version has changed depending on how strict they want to be about reproducibility." Decided after a principal review: adopt its design (code part of the key by `code_hash` tier `function`/`module`/`user`, default `user`, user code inferred from install paths with an override; environment, interpreter and package versions recorded and compared by `reuse`, default `consistent`; `version=` replaces the code part only; PR #906 trimmed to closure hashing; four follow-up PRs).

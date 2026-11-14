@@ -1,12 +1,12 @@
 import numpy as np, soundfile as sf, warnings, torch, sys, json
 warnings.filterwarnings("ignore")
-sys.path.insert(0,"/Users/satra/software/sensein/agentharness/scripts")
+sys.path.insert(0,"${SOFTWARE_ROOT}/sensein/agentharness/scripts")
 from score_against_labels import LABELS
 from scipy.signal import resample_poly, hilbert, butter, filtfilt, find_peaks
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification.api import classify_audios
-T="/Users/satra/.claude/jobs/295c3f8a/tmp/"
-y,sr=sf.read("/Users/satra/Downloads/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
+T="${AGENT_SCRATCH}/"
+y,sr=sf.read("${LOCAL_INPUT}/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
 x=resample_poly(y.mean(axis=1),16000,sr).astype(np.float64); fs=16000; dur=len(x)/fs
 SP=[l for l in LABELS if l["name"]=="speech"][0]; a_,b_=SP["span_lo"],SP["span_hi"]
 sig_pow=(x[int(a_*fs):int(b_*fs)]**2).mean()

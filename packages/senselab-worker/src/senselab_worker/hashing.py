@@ -8,7 +8,7 @@ from senselab_worker import _raw_digest
 from senselab_worker.canonical import canonical_text, utf16_sort_key
 from senselab_worker.digest import file_digest, identity_digest
 
-__all__ = ["DEFAULT_CHUNK_SIZE", "ContentId", "content_identity", "weights_identity"]
+__all__ = ["DEFAULT_CHUNK_SIZE", "ContentId", "chunk_digest", "content_identity", "content_root", "weights_identity"]
 
 DEFAULT_CHUNK_SIZE = 64 * 2**20
 
@@ -34,6 +34,16 @@ def _read_chunks(source: "str | os.PathLike[str] | BinaryIO", chunk_size: int) -
             yield chunk
 
 
+def chunk_digest(chunk: bytes) -> str:
+    """Return the sha256 hex of one chunk, as `content_identity` lists it."""
+    return _raw_digest.bytes_digest("file@1", chunk)
+
+
+def content_root(chunk_size: int, chunks: Sequence[str]) -> str:
+    """Return the root over a file's chunk digests: `identity_digest("content-root@2", {chunk_size, chunks})`."""
+    return identity_digest("content-root@2", {"chunk_size": chunk_size, "chunks": list(chunks)})
+
+
 def content_identity(source: "str | os.PathLike[str] | BinaryIO", *, chunk_size: int = DEFAULT_CHUNK_SIZE) -> ContentId:
     """Return the chunked identity of a file, read one chunk at a time: the file at a path, or an open binary file.
 
@@ -41,19 +51,14 @@ def content_identity(source: "str | os.PathLike[str] | BinaryIO", *, chunk_size:
     file hashes the bytes it decodes.
 
     `chunks` holds the sha256 hex of each consecutive `chunk_size`-byte chunk (the last may be shorter;
-    an empty file has none). `root` is `identity_digest("content-root@2", {"chunk_size": chunk_size,
-    "chunks": chunks})`, so the same bytes read in two chunk sizes have two roots.
+    an empty file has none). `root` is `content_root(chunk_size, chunks)`, so the same bytes read in two chunk
+    sizes have two roots.
 
     Raises:
         ValueError: if `chunk_size` is below 1.
     """
-    chunks = [_raw_digest.bytes_digest("file@1", chunk) for chunk in _read_chunks(source, chunk_size)]
-    return {
-        "algo": "sha256",
-        "chunk_size": chunk_size,
-        "chunks": chunks,
-        "root": identity_digest("content-root@2", {"chunk_size": chunk_size, "chunks": chunks}),
-    }
+    chunks = [chunk_digest(chunk) for chunk in _read_chunks(source, chunk_size)]
+    return {"algo": "sha256", "chunk_size": chunk_size, "chunks": chunks, "root": content_root(chunk_size, chunks)}
 
 
 def weights_identity(paths: Sequence[str | os.PathLike[str]], *, root: str | os.PathLike[str]) -> str:

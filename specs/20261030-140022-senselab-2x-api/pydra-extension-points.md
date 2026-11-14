@@ -182,7 +182,12 @@ Changes this requires:
 - `load_result` delegates to `store.load`.
 - The run-long `SoftFileLock` (`job.py:331`, `PydraFileLock` at `612`) becomes optional. With
   first-writer-wins, duplicate work is the only cost of not locking. A lease with a heartbeat
-  (senselab `work_pool` protocol) can avoid duplicates on clusters.
+  (senselab `work_pool` protocol) can avoid duplicates on clusters. senselab takes no run-long lock today:
+  its `SenselabStore` returns a lease that writes no lock file, and each attempt's pydra files, the
+  `_save.lock` `save` takes around each pickle among them, are under a root of its own
+  (`<run>/private/pydra/<attempt>/`), because a lock a killed coordinator leaves is broken only on its own
+  host and so would block a resume elsewhere. The run's coordinator epoch is its exclusion for every
+  executor (R-302).
 
 **Risk.** File outputs are produced under the working directory and referenced by absolute path.
 After the rename, the paths must be rewritten. `copyfile_workflow` (`result.py`) already rewrites

@@ -1,0 +1,49 @@
+# Test slack layered over the cluster fixture profile.
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, section test_slack.
+# Seconds a fake Slurm command that never answers is given before it is killed.
+substrate:
+  commands:
+    timeout_s: 1
+# Seconds a test first waits between reads of what its worker processes wrote, and the longest it waits for them.
+pool:
+  first_poll_s: 0.01
+  poll_s: 10
+# Test-only values, which the execution profile does not take: the `slack` fixture returns the rest, `slack_tests` these.
+tests:
+  # The pooled-fit scaling test: the ratio its 10^4-request operation count may reach over its 10^3-request count.
+  probe:
+    fit_ops_ratio: 25
+  # Times of the worker-observation tests. first_poll_s, poll_s and presence_refresh_s: a worker's polls and its reuse
+  # of what it read of its peers; long_poll_s is a poll the first one must beat, by advancing the test's clock one first poll.
+  observations:
+    first_poll_s: 0.01
+    poll_s: 0.05
+    long_poll_s: 3
+    presence_refresh_s: 100
+  # Times of the fault-message test's held lease: a staleness the test never reaches, and the wait that gives up on it.
+  held_lease:
+    stale_after_s: 60
+    timeout_s: 0.2
+  # The real seconds a fake worker thread waits between looks at its queue; no outcome depends on it.
+  fake_worker:
+    poll_s: 0.01
+  # A lease test's manual clock: the real seconds a parked thread waits between looks at its event, the fake seconds
+  # `until` advances by, and the share of the tier's budget after which a wait nobody ends fails, so the failure comes
+  # before the tier's timeout.
+  lease_clock:
+    poll_s: 0.0005
+    step_s: 0.01
+    hang_fraction: 0.5
+  # Times of the probe-queue tests: the lease's staleness and beat, and how long a stand-in peer process lives.
+  probe_queue:
+    stale_after_s: 0.4
+    renew_fraction: 0.25
+    peer_lifetime_s: 60
+  # The sizing invariants test: the relative slack its float comparisons (item seconds against the quantum, a card's
+  # budget against its headroom) allow for rounding in sums of at most a hundred jobs.
+  sizing:
+    relative_tolerance: 1.0e-9
+  # A bounded-stop test's real-time hang guard: seconds after which a wait nobody ends fails, so a lost wake is a
+  # failure within seconds and not at the tier's budget.
+  stop_test:
+    hang_s: 5

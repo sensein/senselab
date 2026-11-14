@@ -5,7 +5,6 @@ import io
 import json
 import math
 import struct
-import time
 import warnings
 from enum import Enum
 from typing import Any, Literal, cast
@@ -16,11 +15,14 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from numpy.typing import DTypeLike
 from senselab_worker.canonical import (
+    MAX_DEPTH,
+    NotCanonicalJSON,
     canonical_npy_bytes,
     canonical_scalar,
     canonical_text,
     jcs_dumps,
     jcs_loads,
+    require_json_depth,
 )
 from senselab_worker.digest import IDENTITY_TAGS, identity_digest
 
@@ -470,11 +472,14 @@ def test_tagged_digest_separates_domains() -> None:
         "audio@2",
         "value@1",
         "logical-key@4",
+        "logical-key@5",
+        "logical-key@6",
         "context@2",
+        "context@3",
         "weights@2",
         "provenance-id@2",
         "data-manifest@2",
-        "logical-key@5\x00",
+        "logical-key@7\x00",
         "nope@1",
     ],
 )
@@ -622,26 +627,24 @@ def test_a_shared_dag_is_written_once_per_node() -> None:
 
 
 @pytest.mark.logic
+@pytest.mark.parametrize("levels", [12, 23])
+def test_a_shared_dag_is_built_once_per_node(levels: int) -> None:
+    """JCS and the tokeniser build one result per container of `x = [x, x]`, not one per leaf they expand to."""
+    from senselab_worker.canonical import Tokeniser, Walk, jcs_dumps
+
+    written, tokened = Walk(), Walk()
+    jcs_dumps(_quadratic_dag(levels), written)
+    Tokeniser()(_quadratic_dag(levels), walk=tokened)
+    assert written.builds == levels + 1 and tokened.builds == levels + 1
+
+
+@pytest.mark.logic
 def test_a_shared_dag_beyond_the_budget_is_refused() -> None:
     """Sixty-three levels (2**63 leaves) are refused by the work budget, not expanded."""
     from senselab_worker.canonical import jcs_dumps
 
     with pytest.raises(ValueError, match="exceeds"):
         jcs_dumps(_quadratic_dag(63))
-
-
-@pytest.mark.limits
-def test_a_shared_dag_is_written_and_refused_in_bounded_time() -> None:
-    """Twenty-three levels encode, and sixty-three are refused, each in under 5 s."""
-    from senselab_worker.canonical import jcs_dumps
-
-    started = time.monotonic()
-    jcs_dumps(_quadratic_dag(23))
-    assert time.monotonic() - started < 5.0
-    started = time.monotonic()
-    with pytest.raises(ValueError, match="exceeds"):
-        jcs_dumps(_quadratic_dag(63))
-    assert time.monotonic() - started < 5.0
 
 
 @pytest.mark.logic
@@ -838,3 +841,52 @@ def test_a_shared_dag_encodes_as_its_expanded_tree(dag: object) -> None:
     assert jcs_dumps(dag) == jcs_dumps(tree)
     tokens = Tokeniser()
     assert jcs_dumps(tokens(dag)) == jcs_dumps(tokens(tree))
+
+
+def _nested(depth: int, inside: str = "") -> bytes:
+    return ("[" * depth + inside + "]" * depth).encode()
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    "text",
+    [
+        b'{"a": "' + b"[" * 200 + b'"}',
+        b'{"a": "\\"' + b"[" * 200 + b'"}',
+        b'{"a": "\\\\", "b": [1]}',
+        b'{"' + b"[{" * 100 + b'": 1}',
+        b'"' + b"]" * 200 + b'"',
+        b'{"a": "\\u005b\\u005b[[[[[[[[[["}',
+        _nested(64),
+    ],
+    ids=[
+        "brackets-in-string",
+        "escaped-quote",
+        "escaped-backslash",
+        "brackets-in-key",
+        "closers-in-string",
+        "uescape",
+        "exactly-64",
+    ],
+)
+def test_require_json_depth_counts_only_brackets_outside_strings(text: bytes) -> None:
+    r"""Brackets inside strings do not count, `\\"` and `\\\\` escapes are honoured, and 64 containers are accepted."""
+    require_json_depth(text)
+
+
+@pytest.mark.logic
+def test_require_json_depth_refuses_65_containers() -> None:
+    """One container past `MAX_DEPTH` is refused, by the scan, `jcs_loads` and nothing else needed."""
+    with pytest.raises(ValueError, match="deeper"):
+        require_json_depth(_nested(MAX_DEPTH + 1))
+    with pytest.raises(NotCanonicalJSON, match="deeper"):
+        jcs_loads(_nested(MAX_DEPTH + 1))
+
+
+@pytest.mark.logic
+def test_require_json_depth_is_linear_on_an_unterminated_escaped_quote_run() -> None:
+    r"""An unterminated run of `\\"` is one string token; it is not rescanned from every quote (hang guard only)."""
+    text = b'["' + b'\\"' * (2**19)
+    require_json_depth(text)
+    with pytest.raises(NotCanonicalJSON):
+        jcs_loads(text)

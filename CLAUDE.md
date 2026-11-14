@@ -23,7 +23,9 @@ Guidance for work on **senselab 2.x** in this branch. 1.x guidance lives on `alp
 
 ## Commands
 
-- Setup: `uv sync --all-extras --group dev`. `uv sync` is subtractive, so always pass the full set.
+- Setup: `uv sync --locked --all-extras --group dev --group test --group benchmarks`. `uv sync` is subtractive, so
+  always pass the full set: without `test` a venv lacks pandas and pyld, and without `benchmarks` the scale ladder's
+  pyarrow.
 - Tests: `uv run --no-sync pytest <dirs you changed> -q`, run serially. Never `-n auto`: each worker
   loads the ML stack separately.
 - Lint: `uv run lint-imports` and `uv run pre-commit run --all-files`.
@@ -31,6 +33,9 @@ Guidance for work on **senselab 2.x** in this branch. 1.x guidance lives on `alp
 ## Local machine versus ORCD
 
 - Locally, run only scoped tests and lint, in the existing `.venv`.
+- The shared local `.venv` is rebuilt by the controller alone, with `scripts/sync_local_venv.sh`, whenever `uv.lock`
+  or a `pyproject.toml` changes. Agents run `uv run --no-sync` and never sync. A run that prints `STALE VENV` is
+  not evidence, and a branch that changes dependencies is only linted locally; its tests run in CI and on ORCD.
 - Do not run full suites, create new venvs or download models locally. The full `packages` suite and the
   release-gate builds run on ORCD.
 - Every probe bounds itself: finite input, a file-size limit and a timeout.

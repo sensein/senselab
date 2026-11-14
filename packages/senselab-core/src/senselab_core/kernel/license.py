@@ -1,13 +1,16 @@
-"""Machine-readable license records (P-23)."""
+"""Machine-readable license records and the license sets a derived value carries."""
 
 import datetime
 import re
 from collections.abc import Mapping
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, StrictBool
+from pydantic import AfterValidator, PlainSerializer, StrictBool
 
-from senselab_core.kernel._base import Frozen, NonEmptyStr, StrMap
+from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, StrMap, thawed
+
+VERIFIED_HOW: tuple[str, ...] = ("hf-card", "pep639", "license-field", "classifier", "manual")
+"""The methods a license record may name in `verified["how"]`."""
 
 
 class MissingLicense(LookupError):
@@ -20,8 +23,8 @@ def _check_verified(v: Mapping[str, str]) -> Mapping[str, str]:
     if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", v["date"]):
         raise ValueError(f"verified date must be YYYY-MM-DD, got {v['date']!r}")
     datetime.date.fromisoformat(v["date"])
-    if not v["how"]:
-        raise ValueError("verified 'how' must name the method, such as hf-card, pep639 or manual")
+    if v["how"] not in VERIFIED_HOW:
+        raise ValueError(f"verified 'how' must be one of {list(VERIFIED_HOW)}, got {v['how']!r}")
     return v
 
 
@@ -32,8 +35,7 @@ Verified = Annotated[StrMap, AfterValidator(_check_verified)]
 class License(Frozen):
     """A license record: an SPDX `expression`, its derived flags, where it was read and how it was verified.
 
-    `verified` holds at least `date` (ISO `YYYY-MM-DD`) and `how` (for example `hf-card`, `pep639`,
-    `manual`); it is read-only.
+    `verified` holds at least `date` (ISO `YYYY-MM-DD`) and `how` (one of `VERIFIED_HOW`); it is read-only.
     """
 
     expression: NonEmptyStr
@@ -50,3 +52,48 @@ def require_license(record: License | None, subject: str) -> License:
     if record is None:
         raise MissingLicense(f"{subject} has no license record; add one or relax the policy to on_missing: warn")
     return record
+
+
+class LicenseConflict(ValueError):
+    """One subject recorded with two different license records; names the subject and, when known, the node."""
+
+    def __init__(self, subject: str, node: str | None = None) -> None:
+        """Name the subject and the node."""
+        where = "" if node is None else f"node {node!r}: "
+        super().__init__(f"{where}{subject} is recorded with two licenses")
+        self.subject = subject
+        self.node = node
+
+
+def _sorted_records(v: Mapping[str, License | None]) -> Mapping[str, License | None]:
+    return FrozenMapping({subject: v[subject] for subject in sorted(v)})
+
+
+class LicenseSet(Frozen):
+    """The licenses a value derives from, by subject (`model <ref>`, `env of backend <name>`).
+
+    A subject maps to its license record, or to None when it has none. `union` joins sets; a subject recorded
+    with two different records is refused.
+    """
+
+    records: Annotated[
+        Mapping[NonEmptyStr, License | None], AfterValidator(_sorted_records), PlainSerializer(thawed)
+    ] = FrozenMapping({})
+
+    def union(self, *others: "LicenseSet") -> "LicenseSet":
+        """Return the set holding every subject of this set and of `others`.
+
+        Raises:
+            LicenseConflict: a subject is recorded with two different records.
+        """
+        joined: dict[str, License | None] = dict(self.records)
+        for other in others:
+            for subject, record in other.records.items():
+                if subject in joined and joined[subject] != record:
+                    raise LicenseConflict(subject)
+                joined[subject] = record
+        return LicenseSet(records=joined)
+
+    def unrecorded(self) -> tuple[str, ...]:
+        """Return the subjects that have no license record."""
+        return tuple(s for s, r in self.records.items() if r is None)

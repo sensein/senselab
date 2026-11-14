@@ -180,7 +180,7 @@ The tests check stronger properties on synthetic stores:
 - Sample: 49 r9 run roots, drawn by a seeded shuffle of `refold/manifest.jsonl`. The draw was
   stratified to take up to 15 recordings under `release_with_redaction`; 14 were found in the first
   600 rows. The sample was then copied with `copytree` to
-  `/orcd/scratch/bcs/002/satra/task_audio_20261001/copies/` (321 MB).
+  `${ORCD_GROUP_SCRATCH}/task_audio_20261001/copies/` (321 MB).
 - Run: `extend_task_audio.py` at `f4561d18`, on one 2-CPU srun, against the copies only.
 - Caveat: the stores were copied while the v6 re-fold was still writing the tree, so each copy's
   release is whatever fold stood at copy time.
@@ -242,7 +242,7 @@ AIRWAY should have found the breaths is a question for that branch, not for the 
 
 ## 7. Staged corpus run
 
-`/orcd/scratch/bcs/002/satra/task_audio_20261001/stage/task_audio.sbatch` is staged and **not
+`${ORCD_GROUP_SCRATCH}/task_audio_20261001/stage/task_audio.sbatch` is staged and **not
 submitted**. It runs 64 CPU slices over `refold/manifest.jsonl`:
 
 - `--config review_on.yaml`, the configuration the fold ran under;

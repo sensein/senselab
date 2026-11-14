@@ -1,0 +1,4 @@
+format: default-python@2.0
+# The one interpreter every 2.x CI job and `.python-version` use; the other supported versions run nightly and on PRs
+# labelled full-matrix. Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under this file's path.
+default: '3.13'

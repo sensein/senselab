@@ -52,7 +52,7 @@ def _dist(**fields: str | list[str]) -> FakeDist:
 
 def test_the_policy_file_loads_with_a_set_per_distribution() -> None:
     """The three distributions each allow a union of named sets; the default for a missing record is to raise."""
-    assert set(POLICY.distributions) == {"senselab", "senselab-core", "senselab-worker"}
+    assert set(POLICY.distributions) == {"senselab", "senselab-core", "senselab-worker", "env-lock"}
     assert POLICY.on_missing == "raise"
     assert POLICY.distributions["senselab-worker"] < POLICY.distributions["senselab-core"]
     assert POLICY.bundled_allow["senselab-core"] == POLICY.distributions["senselab-core"]
@@ -70,7 +70,7 @@ def _broken(tmp_path: Path, name: str, mutate: Callable[[dict[str, Any]], object
 @pytest.mark.parametrize(
     ("name", "mutate"),
     [
-        ("derivation", lambda raw: raw["sets"]["permissive"].pop("derivation")),
+        ("ids", lambda raw: raw["sets"]["permissive"].pop("ids")),
         ("unknown_set", lambda raw: raw["distributions"]["senselab"].update(allow=["nonesuch"])),
         ("on_missing", lambda raw: raw.update(on_missing="ignore")),
         ("date", lambda raw: raw["manual"][0]["verified"].pop("date")),
@@ -81,7 +81,7 @@ def _broken(tmp_path: Path, name: str, mutate: Callable[[dict[str, Any]], object
 def test_a_policy_with_a_missing_field_is_refused(
     tmp_path: Path, name: str, mutate: Callable[[dict[str, Any]], object]
 ) -> None:
-    """A missing derivation, source or date, an unknown set name, a bad `on_missing` or a wrong format refuses."""
+    """Missing ids, source or date, an unknown set name, a bad `on_missing` or a wrong format refuses."""
     with pytest.raises(ValueError):
         lic.load_policy(_broken(tmp_path, name, mutate))
 
@@ -249,3 +249,86 @@ def test_the_locked_closure_is_transitive_and_records_who_needs_each_package(tmp
     assert "dev-only" not in closure
     assert closure["b"] == {"senselab", "senselab-core"}
     assert closure["c"] == {"senselab", "senselab-core", "senselab-worker"}
+
+
+_LOCK = """\
+# senselab env lock: toy
+alpha==1.0 \\
+    --hash=sha256:aa
+    # via -r requirements.in
+beta==2.1 ; sys_platform == 'win32' \\
+    --hash=sha256:bb
+Gamma_Pkg==0.3
+"""
+
+
+def test_lock_pins_are_read_with_names_normalised_and_markers_dropped(tmp_path: Path) -> None:
+    """Each ``name==version`` line is a pin; comments, hashes and markers are not."""
+    path = tmp_path / "toy.txt"
+    path.write_text(_LOCK)
+    assert lic.lock_pins(path.read_text()) == {"alpha": "1.0", "beta": "2.1", "gamma-pkg": "0.3"}
+
+
+def test_a_lock_is_read_from_the_installed_metadata_when_the_version_matches_else_fetched() -> None:
+    """A matching installed distribution is used; another version or none is fetched; no release is a gap."""
+    installed = {"alpha": FakeDist("alpha", {"License-Expression": "MIT"}), "beta": FakeDist("beta")}
+    fetched: list[tuple[str, str]] = []
+
+    def fetch(name: str, version: str) -> FakeDist | None:
+        fetched.append((name, version))
+        return None if name == "gamma-pkg" else FakeDist(name, {"License-Expression": "ISC"})
+
+    pins = {"alpha": "1.0", "beta": "2.1", "gamma-pkg": "0.3"}
+    dists = lic.pinned_dists(pins, installed, fetch)
+    assert fetched == [("beta", "2.1"), ("gamma-pkg", "0.3")]
+    assert sorted(dists) == ["alpha", "beta"]
+    found = lic.check({n: {lic.INSTALLER} for n in pins}, POLICY, dists)
+    assert [(f.subject, f.expression, f.problem) for f in found] == [
+        ("alpha", "MIT", ""),
+        ("beta", "ISC", ""),
+        ("gamma-pkg", "", "no license record"),
+    ]
+
+
+def test_a_pypi_release_reads_like_installed_metadata() -> None:
+    """The release JSON's expression, field and classifiers give the same record the wheel's METADATA would."""
+    info: dict[str, Any] = {"name": "x", "version": "1", "license_expression": None, "license": "BSD 3-Clause License"}
+    assert lic.read_license(lic.PypiDist(info), POLICY).how == "license-field"
+    info = {"name": "x", "version": "1", "license_expression": "MIT", "license": "other", "classifiers": []}
+    assert lic.read_license(lic.PypiDist(info), POLICY) == lic.Record("MIT", "pep639", "License-Expression")
+
+
+def test_env_records_keep_the_package_findings_that_hold_a_record_with_how_it_was_read() -> None:
+    """Each read keeps its own method, a dated manual record is `manual`; a bundled library or a gap has no entry."""
+    dists = {
+        "a": FakeDist("a", {"License-Expression": "MIT"}),
+        "b": FakeDist("b", {"License": "ISC License"}),
+        "c": FakeDist("c"),
+        "colorama": FakeDist("colorama"),
+    }
+    found = lic.check({n: {lic.INSTALLER} for n in dists}, POLICY, dists)
+    records = lic.env_records(found, "2026-11-02")
+    assert sorted(records) == ["a", "b", "colorama"]
+    assert records["a"]["verified"] == {"date": "2026-11-02", "how": "pep639"}
+    assert records["b"]["verified"] == {"date": "2026-11-02", "how": "license-field"}
+    assert records["colorama"]["verified"] == {"date": "2026-11-01", "how": "manual"}
+
+
+def test_env_records_replace_one_env_and_keep_the_others(tmp_path: Path) -> None:
+    """Writing an env replaces its entries and leaves the other envs and the format tag."""
+    path = tmp_path / "env_licenses.yaml"
+    lic.write_env_records(path, "one", {"a": {"expression": "MIT"}})
+    lic.write_env_records(path, "two", {"b": {"expression": "ISC"}})
+    lic.write_env_records(path, "one", {"c": {"expression": "MIT"}})
+    raw = yaml.safe_load(path.read_text())
+    assert raw["format"] == lic.ENV_LICENSES_FORMAT
+    assert {k: sorted(v) for k, v in raw["envs"].items()} == {"one": ["c"], "two": ["b"]}
+
+
+@pytest.mark.parametrize("expression", ["LicenseRef-NVIDIA-Proprietary", "MIT-CMU", "CNRI-Python"])
+def test_the_env_lock_policy_allows_what_a_shipped_distribution_does_not(expression: str) -> None:
+    """Vendor and notice-only licenses of backend env packages pass for `env-lock` and fail for every shipped one."""
+    dist = _dist(License_Expression=expression)
+    assert lic.check({"x": {"env-lock"}}, POLICY, {"x": dist})[0].problem == ""
+    for shipped in lic.DISTRIBUTIONS:
+        assert lic.check({"x": {shipped}}, POLICY, {"x": dist})[0].problem == f"not allowed for {shipped}"

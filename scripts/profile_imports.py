@@ -189,6 +189,7 @@ def time_single_import(import_line: str, timeout: int = 120) -> tuple[float, str
             capture_output=True,
             text=True,
             timeout=timeout,
+            check=False,
         )
         if result.returncode == 0:
             elapsed = float(result.stdout.strip())
@@ -215,6 +216,7 @@ def profile_import_dependencies(import_line: str, timeout: int = 120) -> list[di
             capture_output=True,
             text=True,
             timeout=timeout,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return []
@@ -261,6 +263,7 @@ def time_tutorial_imports(import_lines: list[str], timeout: int = 120) -> tuple[
             capture_output=True,
             text=True,
             timeout=timeout,
+            check=False,
         )
         if result.returncode == 0:
             elapsed = float(result.stdout.strip().split("\n")[-1])

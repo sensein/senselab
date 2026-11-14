@@ -5,7 +5,7 @@ from labels import LABELS
 from scipy.signal import resample_poly
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import HFModel
-F="/Users/satra/Downloads/streaming-audio-2026-07-30T04-21-56-487Z.wav"; T="/Users/satra/.claude/jobs/295c3f8a/tmp/"
+F="${LOCAL_INPUT}/streaming-audio-2026-07-30T04-21-56-487Z.wav"; T="${AGENT_SCRATCH}/"
 y,sr=sf.read(F,dtype="float32",always_2d=True); x=resample_poly(y.mean(axis=1),16000,sr).astype(np.float32)
 fs=16000; dur=len(x)/fs
 SPEECH=[l for l in LABELS if l["name"]=="speech"][0]

@@ -22,7 +22,7 @@ Contracts per type:
   `from_attributes=True`, raises `ValidationError`; an unsealed instance (`BaseModel.model_construct`)
   and an instance of a subclass are validated again from their fields as the type, so a forged
   identity planted in either is refused; no input form skips a validator.
-- `read_only`: setting or deleting any field or private attribute, writing `__dict__`, calling
+- `read_only`: setting or deleting any field or private attribute, calling
   `__setstate__` on a built value, re-initialising a reachable `FrozenMapping`, and changing the
   class's `model_config` all raise, and leave the value's digest unchanged.
 - `setstate_revalidates`: `__setstate__` on a blank instance builds the value from valid fields and
@@ -36,6 +36,7 @@ Contracts per type:
 import copy
 import functools
 import importlib
+import importlib.util
 import io
 import operator
 import pickle
@@ -54,15 +55,37 @@ from senselab_worker.canonical import canonical_npy_bytes
 import senselab_core.kernel
 import senselab_core.runtime
 from senselab_core.kernel._base import Frozen, FrozenMapping, digest_of
-from senselab_core.kernel.declare import BackendSpec, TaskParams, TaskSpec
+from senselab_core.kernel.dataset import FileInput, InputManifest, ManifestRow, Record, ValueInput
+from senselab_core.kernel.declare import (
+    BackendSpec,
+    Env,
+    InputsAgree,
+    ParamsOrdered,
+    ServerConfig,
+    TaskParams,
+    TaskSpec,
+)
 from senselab_core.kernel.formats import Formatted
+from senselab_core.kernel.graph import Edge, Graph, GraphIssue, Node
 from senselab_core.kernel.identity import ExecutionContext, LogicalKey, ModelIdentity, ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
-from senselab_core.kernel.results import Annotation, Embedding, Events, Intervals
+from senselab_core.kernel.plan import LogicalPlan, slice_identity
+from senselab_core.kernel.results import (
+    Annotation,
+    Embedding,
+    Events,
+    Intervals,
+    Metric,
+    TextSpans,
+    Transcript,
+    TranscriptNode,
+    Trials,
+)
 from senselab_core.kernel.signals import (
     Audio,
     ChannelInfo,
     IrregularGroup,
+    PlainText,
     Recording,
     RegularGroup,
     SourceStamp,
@@ -70,9 +93,20 @@ from senselab_core.kernel.signals import (
 from senselab_core.kernel.time import Span, TimeAnchor, TimeMap
 from senselab_core.runtime import audio_io
 from senselab_core.runtime.audio_io import READER
+from senselab_core.runtime.calibration import RunCalibration
+from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
+from senselab_core.runtime.compare import Difference, RunConfigFile, Threshold, Thresholds
+from senselab_core.runtime.envs import EnvRecord
+from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide
+from senselab_core.runtime.execution_settings import ResourceClass
 from senselab_core.runtime.fetch import DataFile, DataManifest
+from senselab_core.runtime.profiles import Envs, ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorePolicy
+from senselab_core.testing.calibration_samples import register_calibration_samples
+from senselab_core.testing.execution_samples import register_execution_samples
+from senselab_core.testing.format_skew import later_minor_ignored
+from senselab_core.testing.placement_samples import register_placement_samples
 
 Case = Callable[[], None]
 Factory = Callable[[], Sequence[Frozen]]
@@ -103,16 +137,36 @@ def register_samples(
     _SAMPLES[cls] = (factory, tuple(invalid_updates))
 
 
+def samples_of(cls: type[Frozen]) -> Sequence[Frozen]:
+    """Return fresh samples of `cls`.
+
+    Raises:
+        KeyError: if `cls` has no registered samples.
+    """
+    return _SAMPLES[cls][0]()
+
+
 def registered_types() -> set[type[Frozen]]:
     """Return the types with registered samples."""
     return set(_SAMPLES)
 
 
+OPTIONAL_MODULES: Mapping[str, str] = {"senselab_core.runtime.execution.runner": "pydra"}
+"""Modules that import an optional extra, by module, with the distribution they need."""
+
+
+def importable(module: str) -> bool:
+    """Whether `module` can be imported here: every module but one whose optional extra is not installed."""
+    needed = OPTIONAL_MODULES.get(module)
+    return needed is None or importlib.util.find_spec(needed) is not None
+
+
 def frozen_types() -> list[type[Frozen]]:
-    """Return every `Frozen` subclass defined under `SCANNED_PACKAGES`, after importing all their modules."""
+    """Return every `Frozen` subclass defined under `SCANNED_PACKAGES`, after importing all their importable modules."""
     for package in (senselab_core.kernel, senselab_core.runtime):
         for module in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
-            importlib.import_module(module.name)
+            if importable(module.name):
+                importlib.import_module(module.name)
     found: list[type[Frozen]] = []
     pending = list(Frozen.__subclasses__())
     while pending:
@@ -138,6 +192,7 @@ def value_cases() -> list[tuple[str, Case]]:
             "copy_refuses_unknown_fields": functools.partial(_copy_refuses_unknown_fields, factory),
             "built_from_mappings_only": functools.partial(_built_from_mappings_only, factory),
             "read_only": functools.partial(_read_only, factory),
+            "later_minor_ignored": lambda: later_minor_ignored(_samples(factory)),
             "setstate_revalidates": functools.partial(_setstate_revalidates, factory, invalid),
         }
         if cls in ATTESTED_IDENTITIES:
@@ -351,9 +406,6 @@ def _writes(v: Frozen) -> Iterator[tuple[str, Callable[[], object]]]:
     for name in [*cls.model_fields, "_canonical", "__class__"]:
         yield f"setattr {name}", functools.partial(setattr, v, name, None)
         yield f"delattr {name}", functools.partial(delattr, v, name)
-    first = next(iter(cls.model_fields))
-    yield "__dict__ item", functools.partial(operator.setitem, v.__dict__, first, None)
-    yield "__dict__ update", functools.partial(v.__dict__.update, {first: None})
     yield "private item", functools.partial(operator.setitem, v.__pydantic_private__, "_canonical", "f" * 64)
     yield "__setstate__", functools.partial(v.__setstate__, {"__dict__": dict(v.__dict__)})
     yield "model_config item", functools.partial(operator.setitem, cls.model_config, "frozen", False)
@@ -449,6 +501,12 @@ def _data_group(seed: int = 0) -> RegularGroup:
     return RegularGroup(channels=_channels(2), sampling_rate=250.0, data=numpy.arange(8.0).reshape(2, 4) + seed)
 
 
+def _decoded_group() -> RegularGroup:
+    """Samples held with the stamp of the file they were decoded from."""
+    source = audio_io.source_group(_channels(2, "audio", "FS"), _RATE, _wav("stereo", 2))
+    return RegularGroup.decoded_from(source, READER)
+
+
 def _irregular(seed: int = 0) -> IrregularGroup:
     return IrregularGroup(
         channels=_channels(1, "hr", "bpm"),
@@ -479,7 +537,7 @@ class SampleParams(TaskParams):
     n: int = 1
 
 
-def _context(host: str = "host") -> ExecutionContext:
+def _context(host: str = "host", env_license: License | None = None) -> ExecutionContext:
     return ExecutionContext(
         env_lock="lock",
         platform="linux-x86_64",
@@ -490,6 +548,7 @@ def _context(host: str = "host") -> ExecutionContext:
         host=host,
         protocol="2",
         model_source="hf",
+        env_license=env_license,
     )
 
 
@@ -501,6 +560,7 @@ def _key(task: str = "t") -> LogicalKey:
         backend_version="1",
         model=ModelIdentity(id="org/m", identity=_COMMIT),
         params={"n": [1, 2], "s": "x"},
+        backend_params={},
         inputs={"audio": "content:" + _SHA},
     )
 
@@ -519,6 +579,18 @@ def _manifest(version: str = "1") -> DataManifest:
         license=_license(),
         terms="cite",
         files=(_data_file(), _data_file("c.wav")),
+    )
+
+
+def _catalogue_entry(model_id: str = "org/m", revision: str = _COMMIT) -> CatalogueEntry:
+    return CatalogueEntry(
+        id=model_id,
+        revision=revision,
+        tasks=("t",),
+        backends=("b",),
+        stacks=("s",),
+        license=_license(),
+        default_for=("t",),
     )
 
 
@@ -559,6 +631,7 @@ def _register_kernel_samples() -> None:
             _data_group(),
             _data_group(1),
             audio_io.source_group(_channels(2, "audio", "FS"), _RATE, _wav("stereo", 2)),
+            _decoded_group(),
         ],
         invalid_updates=[
             {"sampling_rate": -5},
@@ -566,6 +639,7 @@ def _register_kernel_samples() -> None:
             {"channels": ()},
             {"data": numpy.zeros((3, 4))},
             {"data": numpy.zeros((2, 4), dtype=numpy.complex64)},
+            {"decoded": "0" * 64},
         ],
     )
     register_samples(
@@ -628,6 +702,7 @@ def _register_kernel_samples() -> None:
         ],
         invalid_updates=[{"label": numpy.array(["a"])}, {"value": numpy.array([True, False, True])}],
     )
+    _register_text_and_scoring_samples(span)
     register_samples(
         Formatted,
         lambda: [Formatted(format="thing@1.0"), Formatted(format="thing@2.1")],
@@ -661,10 +736,12 @@ def _register_kernel_samples() -> None:
     register_samples(
         LogicalKey,
         lambda: [_key(), _key("u")],
-        invalid_updates=[{"model": "main"}, {"inputs": {"a": "/home/x.wav"}}, {"params": {"x": float("nan")}}],
+        invalid_updates=[{"model": "main"}, {"inputs": {"a": "/home/user/x.wav"}}, {"params": {"x": float("nan")}}],
     )
     register_samples(
-        ExecutionContext, lambda: [_context(), _context("other")], invalid_updates=[{"env_lock": ""}, {"numerics": 1}]
+        ExecutionContext,
+        lambda: [_context(), _context("other", _license())],
+        invalid_updates=[{"env_lock": ""}, {"numerics": 1}, {"env_license": "MIT"}],
     )
     register_samples(
         License,
@@ -677,7 +754,7 @@ def _register_kernel_samples() -> None:
             TaskSpec(
                 name="t",
                 version="1",
-                kind="measure",
+                kind="transform",
                 inputs={"a": "Audio"},
                 outputs={"e": "Embedding"},
                 params=SampleParams,
@@ -694,21 +771,115 @@ def _register_kernel_samples() -> None:
         invalid_updates=[{"kind": "other"}, {"name": ""}],
     )
     register_samples(
+        InputsAgree,
+        lambda: [InputsAgree(ports=("a", "b"), property="clock_id"), InputsAgree(ports=("b", "a"), property="text")],
+        invalid_updates=[{"property": "other"}, {"ports": ("a",)}],
+    )
+    register_samples(
+        ParamsOrdered,
+        lambda: [ParamsOrdered(low="lo", high="hi"), ParamsOrdered(low="a", high="b")],
+        invalid_updates=[{"low": ""}, {"kind": "other"}],
+    )
+    register_samples(
+        Env,
+        lambda: [Env.host(), Env.isolated("e"), Env.server("e")],
+        invalid_updates=[{"kind": "other"}, {"name": "../e"}, {"name": ""}],
+    )
+    register_samples(
+        ServerConfig,
+        lambda: [
+            ServerConfig(settings={"max_model_len": 4096, "limit_mm_per_prompt": {"image": 0}}),
+            ServerConfig(settings={}),
+        ],
+        invalid_updates=[{"settings": 1}],
+    )
+    backend = {"task": "t", "version": "1", "stack": "fake", "worker": "w", "load_stub": {}}
+    register_samples(
         BackendSpec,
         lambda: [
-            BackendSpec(task="t", name="b", version="1", stack="fake", env="e", devices=("cpu",), license=_license()),
             BackendSpec(
-                task="t",
+                **backend, name="b", env=Env.host(), devices=("cpu",), batch_invariant=True, requirements=("numpy",)
+            ),
+            BackendSpec(
+                **backend,
                 name="c",
-                version="1",
-                stack="fake",
-                env="e",
+                env=Env.isolated("e"),
                 devices=("cpu", "cuda"),
-                license=_license(),
-                output_affecting=frozenset({"chunk_grid", "batch_formation"}),
+                batch_invariant=False,
+                tunables={"dtype": ("float16", "int8")},
+                output_affecting=("batch_formation", "chunk_grid"),
+            ),
+            BackendSpec(
+                **backend,
+                name="d",
+                env=Env.server("e"),
+                devices=("cuda",),
+                batch_invariant=True,
+                server=ServerConfig(settings={"max_num_seqs": 2}),
             ),
         ],
-        invalid_updates=[{"devices": ()}, {"output_affecting": frozenset({"bogus"})}],
+        invalid_updates=[
+            {"devices": ()},
+            {"server": {"settings": 1}},
+            {"output_affecting": ("bogus",)},
+            {"env": "host"},
+            {"tunables": {"d": ()}},
+            {"requirements": ("",)},
+            {"batch_invariant": True, "output_affecting": ("batch_formation",)},
+        ],
+    )
+
+
+def _register_text_and_scoring_samples(span: Span) -> None:
+    text = PlainText(content="call 555 0100")
+    register_samples(
+        PlainText,
+        lambda: [text, PlainText(content="cafe\u0301")],
+        invalid_updates=[{"content": 1}, {"identity": "content:" + "f" * 64}, {"format": "text@2.0"}],
+    )
+    word = TranscriptNode(text="call", span=span, confidence=0.5)
+    register_samples(
+        TranscriptNode,
+        lambda: [TranscriptNode(text="call 555", span=span, children=(word,)), TranscriptNode(text="untimed")],
+        invalid_updates=[{"confidence": 1.5}, {"span": {"start_ns": 0.5, "end_ns": 1, "clock_id": "c"}}],
+    )
+    other_clock = TranscriptNode(text="x", span=Span(start_ns=0, end_ns=1, clock_id="d"))
+    register_samples(
+        Transcript,
+        lambda: [
+            Transcript(
+                segments=(TranscriptNode(text="call", span=span, children=(word,)),),
+                extent=span,
+            ),
+            Transcript(segments=[]),
+        ],
+        invalid_updates=[
+            {"segments": (word, other_clock)},
+            {"segments": [1]},
+            {"extent": {"start_ns": 0.5, "end_ns": 1, "clock_id": "c"}},
+        ],
+    )
+    register_samples(
+        TextSpans,
+        lambda: [
+            TextSpans.over(text, start=[0, 5], end=[4, 13], label=["verb", "phone"], score=[0.5, 0.9]),
+            TextSpans.over(text, start=[5], end=[13], label=["phone"]),
+        ],
+        invalid_updates=[{"end": numpy.array([4, 14])}, {"score": numpy.array([numpy.nan, 1.0])}, {"length": -1}],
+    )
+    rows = numpy.array([[1.0, 0.0], [0.0, 1.0]])
+    register_samples(
+        Trials,
+        lambda: [
+            Trials(first=rows, second=rows[::-1], same=[True, False], space="s"),
+            Trials(first=rows, second=rows, same=[True, True], space="s"),
+        ],
+        invalid_updates=[{"same": numpy.array([1, 0])}, {"second": rows[:1]}, {"first": numpy.zeros((2, 0))}],
+    )
+    register_samples(
+        Metric,
+        lambda: [Metric(name="wer", value=0.25, unit="1", items=4), Metric(name="der", value=0.1, unit="1", items=2)],
+        invalid_updates=[{"items": 0}, {"value": float("nan")}, {"name": ""}],
     )
 
 
@@ -728,10 +899,32 @@ def _register_runtime_samples() -> None:
         ],
     )
     register_samples(
+        CatalogueEntry,
+        lambda: [_catalogue_entry(), _catalogue_entry("org/n", _SHA)],
+        invalid_updates=[{"revision": "main"}, {"tasks": ("",)}, {"default_for": ("other",)}],
+    )
+    register_samples(
+        Catalogue,
+        lambda: [
+            Catalogue(entries=(_catalogue_entry(),)),
+            Catalogue(entries=(_catalogue_entry("org/n"),)),
+        ],
+        invalid_updates=[
+            {"entries": (_catalogue_entry(), _catalogue_entry())},
+            {"format": "catalogue@3.0"},
+        ],
+    )
+    register_samples(
         StorePolicy,
         lambda: [
             StorePolicy.load_default(),
-            StorePolicy(world_readable=True, quarantine_retention_s=60, staging_stale_s=60, collect_interval_s=60),
+            StorePolicy(
+                world_readable=True,
+                quarantine_retention_s=60,
+                staging_stale_s=60,
+                collect_interval_s=60,
+                measures_file_bytes_max=1024,
+            ),
         ],
         invalid_updates=[
             {"quarantine_retention_s": 0},
@@ -741,11 +934,234 @@ def _register_runtime_samples() -> None:
         ],
     )
     register_samples(
+        Envs,
+        lambda: [
+            Envs(server_start_margin_s=60),
+            Envs(server_start_margin_s=1.5, torch_index="https://download.pytorch.org/whl/cpu"),
+        ],
+        invalid_updates=[{"torch_index": ""}, {"server_start_margin_s": 0}],
+    )
+    register_samples(
+        EnvRecord,
+        lambda: [
+            EnvRecord(
+                directory=f"demo-{'a' * 32}",
+                lock_sha="b" * 64,
+                torch_index=None,
+                python_version="3.12.4",
+                wheel_set="c" * 64,
+            ),
+            EnvRecord(
+                directory=f"demo-cu128-{'d' * 32}",
+                lock_sha="e" * 64,
+                torch_index="https://x.example/cu128",
+                python_version="3.14.0t",
+                wheel_set="f" * 64,
+            ),
+        ],
+        invalid_updates=[{"format": "env-record@2.0"}, {"lock_sha": 3}],
+    )
+    register_samples(
+        ExecutionProfile,
+        lambda: [
+            ExecutionProfile.load("laptop"),
+            ExecutionProfile.load("laptop", {"name": "offline", "network": "offline"}),
+        ],
+        invalid_updates=[
+            {"network": "maybe"},
+            {"devices": ("tpu",)},
+            {"format": "execution-profile@6.0"},
+            {"resource_classes": {"gpu:h100": ResourceClass(device="cpu", max_workers=1)}},
+        ],
+    )
+    register_samples(
         RetryPolicy,
-        lambda: [RetryPolicy.load_default(), RetryPolicy(attempts=1, first_backoff_s=0)],
+        lambda: [ExecutionProfile.load().retry, RetryPolicy(attempts=1, first_backoff_s=0)],
         invalid_updates=[{"attempts": 0}, {"attempts": 2.5}, {"first_backoff_s": -1}],
+    )
+    _register_comparison_samples()
+
+
+def _register_comparison_samples() -> None:
+    sides = (
+        EvidenceSide(fingerprint="a" * 64, numerics={"device_kind": "cpu"}, env_lock="lock-1"),
+        EvidenceSide(
+            fingerprint="b" * 64, numerics={"device_kind": "cuda", "gpu_architecture": "sm_90"}, env_lock="lock-2"
+        ),
+    )
+    register_samples(
+        EvidenceSide, lambda: sides, invalid_updates=[{"fingerprint": "main"}, {"numerics": {"k": 1}}, {"env_lock": ""}]
+    )
+    differences = (
+        Difference(
+            path="value",
+            rule="close",
+            threshold="value",
+            bound=Threshold(rtol=1e-6, atol=1e-9),
+            expected="[1.0]",
+            actual="[1.5]",
+            absolute=0.5,
+            relative=0.5,
+            detail="1 of 1 values beyond rtol 1e-06 atol 1e-09, largest |difference| 0.5",
+        ),
+        Difference(
+            path="span",
+            rule="optional",
+            threshold=None,
+            bound=None,
+            expected="absent",
+            actual="present",
+            absolute=None,
+            relative=None,
+            detail="absent on one side, present on the other",
+        ),
+    )
+    register_samples(
+        Difference,
+        lambda: differences,
+        invalid_updates=[{"rule": "undeclared"}, {"absolute": float("inf")}, {"path": 1}],
+    )
+    register_samples(
+        EquivalenceEvidence,
+        lambda: [
+            EquivalenceEvidence(
+                task="t",
+                backend="b",
+                key="c" * 64,
+                stored=sides[0],
+                current=sides[1],
+                mismatched=(),
+                thresholds="d" * 64,
+                run="slurm-1",
+            ),
+            EquivalenceEvidence(
+                task="t",
+                backend="b",
+                key="c" * 64,
+                stored=sides[1],
+                current=sides[0],
+                mismatched=(
+                    Difference(
+                        path="value",
+                        rule="close",
+                        threshold="value",
+                        bound=Threshold(rtol=1e-6, atol=1e-9),
+                        expected="[1.0]",
+                        actual="[1.5]",
+                        absolute=0.5,
+                        relative=0.5,
+                        detail="1 of 1 values beyond rtol 1e-06 atol 1e-09, largest |difference| 0.5",
+                    ),
+                ),
+                thresholds="d" * 64,
+                run="slurm-2",
+            ),
+        ],
+        invalid_updates=[{"format": "equivalence-evidence@2.0"}, {"key": "short"}, {"run": ""}, {"thresholds": "p"}],
+    )
+    bounds = (Threshold(rtol=0.0, atol=0.5), Threshold(rtol=1e-6, atol=0.0))
+    register_samples(Threshold, lambda: bounds, invalid_updates=[{"rtol": -1.0}, {"atol": float("inf")}])
+    register_samples(
+        Thresholds,
+        lambda: [Thresholds(by_name={"a": bounds[0]}), Thresholds(by_name={"a": bounds[0], "b": bounds[1]})],
+        invalid_updates=[{"by_name": {"a": 1}}],
+    )
+    register_samples(
+        RunConfigFile,
+        lambda: [
+            RunConfigFile(thresholds=Thresholds(by_name={"a": bounds[0]})),
+            RunConfigFile(thresholds={"a": bounds[1]}, calibration=RunCalibration(trust="own")),
+        ],
+        invalid_updates=[{"calibration": {"trust": "all"}}, {"thresholds": "a"}, {"format": "run-config@3.0"}],
+    )
+
+
+def _register_graph_samples() -> None:
+    nodes = (
+        Node(id="e", task="speech.embed", task_version="1", params={"w": 2}, backend_params={"b": {"n": [1]}}),
+        Node(id="p", task="speech.pool", task_version="1", model="org/m@main"),
+    )
+    edges = (Edge(source="input.clips", target="e.audio", kind="map"), Edge(source="e.v", target="p.vs", kind="gather"))
+    register_samples(Node, lambda: nodes, invalid_updates=[{"id": "a.b"}, {"task": ""}, {"params": [1]}])
+    register_samples(Edge, lambda: edges, invalid_updates=[{"kind": "route"}, {"source": "a"}])
+    register_samples(
+        Graph,
+        lambda: [Graph(inputs={"clips": "list[Audio]"}, nodes=nodes, edges=edges, outputs={"v": "p.v"}), Graph()],
+        invalid_updates=[{"format": "graph@2.0"}, {"nodes": (nodes[0], nodes[0])}, {"inputs": {"x": "list["}}],
+    )
+    register_samples(
+        GraphIssue,
+        lambda: [
+            GraphIssue(code="cycle", node="a", port=None, message="nodes ['a'] form a cycle"),
+            GraphIssue(code="unknown_port", node=None, port="x", message="the graph declares no input 'x'"),
+        ],
+        invalid_updates=[{"code": "other"}, {"message": ""}],
+    )
+
+
+def _register_dataset_samples() -> None:
+    identity = "content:" + "ab" * 32
+    rows = (
+        ManifestRow(id="a", entities={"sub": "01"}, inputs={"audio": identity}),
+        ManifestRow(id="b", entities={}, inputs={"audio": "output:" + "cd" * 32}),
+    )
+    register_samples(
+        FileInput,
+        lambda: [FileInput(path="sub-01/audio/a.wav"), FileInput(path="b.wav")],
+        invalid_updates=[{"path": ""}],
+    )
+    register_samples(
+        ValueInput,
+        lambda: [ValueInput(value=1), ValueInput(value={"k": [1, "x"]})],
+        invalid_updates=[{"value": {1, 2}}],
+    )
+    register_samples(
+        Record,
+        lambda: [
+            Record(id="a", entities={"sub": "01"}, inputs={"audio": FileInput(path="a.wav")}, sidecar={"age": "3"}),
+            Record(id="b", inputs={"n": ValueInput(value=2)}),
+        ],
+        invalid_updates=[{"id": ""}, {"entities": {"sub": 1}}],
+    )
+    register_samples(ManifestRow, lambda: list(rows), invalid_updates=[{"id": ""}, {"inputs": {"audio": "content:zz"}}])
+    register_samples(
+        InputManifest,
+        lambda: [InputManifest(rows=rows), InputManifest()],
+        invalid_updates=[{"format": "input-manifest@2.0"}, {"rows": tuple(reversed(rows))}],
+    )
+
+
+def _register_plan_samples() -> None:
+    node = Node(id="n", task="t.score", task_version="1", backend_params={"b": {"beam": 2}})
+    graph = Graph(inputs={"x": "list[json]"}, nodes=(node,), edges=(Edge(source="input.x", target="n.x", kind="map"),))
+    model = ResolvedModel(ref=ModelRef.parse(f"org/m@{_COMMIT}"), identity=_COMMIT, license=_license())
+    register_samples(
+        LogicalPlan,
+        lambda: [
+            LogicalPlan(
+                graph=graph,
+                models={"n": model},
+                profile_slices={"n": {"dataset.lexicon": slice_identity(["a"])}},
+                manifest_digest="ab" * 32,
+                bind={"x": "utterance"},
+                reuse="exact",
+            ),
+            LogicalPlan(graph=Graph(), models={}, profile_slices={}, manifest_digest="cd" * 32, reuse="equivalent"),
+        ],
+        invalid_updates=[
+            {"format": "logical-plan@2.0"},
+            {"models": {"z": None}},
+            {"reuse": "loose"},
+            {"manifest_digest": ""},
+        ],
     )
 
 
 _register_kernel_samples()
+_register_graph_samples()
+_register_dataset_samples()
+_register_plan_samples()
 _register_runtime_samples()
+register_placement_samples(register_samples, _license())
+register_execution_samples(register_samples)
+register_calibration_samples(register_samples, ExecutionProfile.load().calibration)

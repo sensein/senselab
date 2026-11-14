@@ -2,7 +2,7 @@
 
 - `storage_fault` is the one mapping from an `OSError` to a `StoreUnavailable` (or `StorageFull`), used by
   the result store and the data-fetch cache; whether it is transient is `faults.is_transient`.
-- `load_policy_values` reads a packaged policy file whose every value carries its derivation.
+- `load_policy_values` reads a packaged policy file.
 - `StorePolicy` holds the modes and retention ages, read from `data/store_policy.yaml`.
 - Committed objects (store entries, fetch blobs and completion markers) are read-only:
   `committed_modes` gives their file and directory modes. Staging objects are `STAGING_FILE_MODE`
@@ -11,45 +11,58 @@
   is followed, a mutable file is only ever replaced whole by a fresh file renamed over its name, every file
   name written matches a grammar the caller passes, and modes are set only through a
   descriptor (`set_mode`).
-- `StorageDir.fs_now` reads the current time from the filesystem itself, from a fresh sentinel file.
+- `StorageDir.publish` makes a write-once file appear whole (staged, fsynced, linked, directory fsynced), and
+  `StorageDir.append` adds one whole record to a log or leaves it as it was. `FileOps` is the seam their system
+  calls go through, so a test can fail any of them (`using_file_ops`). Run state is written through these and
+  `write_atomically` only; `tests/runtime/storage_writes_contract_test.py` refuses any other write under `runtime/`.
+- `StorageDir.dir_now` reads the current time from the filesystem itself, from a fresh probe directory, and writes
+  no file.
+- `StorageUnsupported` is a root without a primitive the runtime needs, such as an atomic `mkdir`.
+- `probe_capabilities` measures the primitives the lease protocol needs on a root itself.
 - `write_atomically` replaces a caller's file so a reader sees the old or the new bytes, never a mix.
 - An `AddressedFormat` is a persisted artifact whose location names its content. `ADDRESSED_FORMATS`
   lists every one: the store entry, the fetch blob and the fetch dataset marker.
 """
 
+import contextlib
 import errno
 import logging
 import os
 import pwd
 import re
+import shutil
 import stat
 import threading
+import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, Self, runtime_checkable
 
-import yaml
 from pydantic import Field, StrictBool
 from senselab_worker.ownership import UUID_HEX, remove_owned
 
 from senselab_core.kernel._base import Frozen
+from senselab_core.runtime.clock import Clock, SystemClock
+from senselab_core.runtime.config import load_yaml
+from senselab_core.runtime.execution_settings import StoreSettings
 from senselab_core.runtime.faults import is_transient
 
 logger = logging.getLogger("senselab")
 
-POLICY_FORMAT = "store-policy@1.0"
-STAGING_FILE_MODE = 0o660
-STAGING_DIR_MODE = 0o2770
-PRIVATE_DIR_MODE = 0o700
+POLICY_FORMAT = "store-policy@2.0"
+STAGING_FILE_MODE: Final = 0o660  # invariant: a staged file is owner and group read-write so a shared root works
+STAGING_DIR_MODE: Final = 0o2770  # invariant: a staged directory is group-sticky read-write-search, narrowed at commit
+PRIVATE_DIR_MODE: Final = 0o700  # invariant: owner-only access, whatever the site's group policy
 """The mode of a `Staging` directory that only this process's user can write."""
-CLOCK_NAME = ".clock"
-"""The sentinel `StorageDir.fs_now` replaces in a directory."""
-CLOCK = re.compile(re.escape(CLOCK_NAME))
+PRIVATE_DIR = "private"
+"""A run directory's one root for state that holds paths: substrate state, manifests, placements, worker logs."""
 """The grammar of the storage clock's sentinel."""
 
 _FULL_ERRNOS = frozenset({errno.ENOSPC, errno.EDQUOT})
+_UNSUPPORTED_ERRNOS = frozenset({errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS})
 _WORLD_READ = 0o004
 _WORLD_READ_SEARCH = 0o005
 
@@ -64,6 +77,13 @@ class StoreUnavailable(OSError):
 
 class StorageFull(StoreUnavailable):
     """The storage is out of space or over quota (`ENOSPC`, `EDQUOT`)."""
+
+
+class StorageUnsupported(OSError):
+    """The storage root lacks a primitive the runtime needs; the message names the primitive and the root.
+
+    `errno` and `filename` are those of the original error, which is the `__cause__`.
+    """
 
 
 def storage_fault(err: OSError, path: Path, *, hint: str | None = None) -> StoreUnavailable:
@@ -91,23 +111,15 @@ def storage_fault(err: OSError, path: Path, *, hint: str | None = None) -> Store
 
 
 def load_policy_values(package: str, file_name: str, policy_format: str) -> dict[str, object]:
-    """Return `{name: value}` from the packaged `data/<file_name>` of `package`; each policy entry carries a derivation.
+    """Return `{name: value}` from the packaged `data/<file_name>` of `package`.
 
     Raises:
-        ValueError: if the file lacks `format: <policy_format>`, or an entry is not exactly a `value` and a
-            non-empty `derivation`.
+        ValueError: if the file lacks `format: <policy_format>`.
     """
-    raw = yaml.safe_load(resources.files(package).joinpath("data", file_name).read_text("utf-8"))
-    if not isinstance(raw, dict) or raw.pop("format", None) != policy_format:
+    raw = load_yaml(resources.files(package).joinpath("data", file_name), file_name)
+    if raw.pop("format", None) != policy_format:
         raise ValueError(f"{file_name} must carry format {policy_format!r}")
-    values = {}
-    for name, entry in raw.items():
-        if not isinstance(entry, dict) or set(entry) != {"value", "derivation"}:
-            raise ValueError(f"{policy_format} entry {name!r} must be a mapping of exactly 'value' and 'derivation'")
-        if not isinstance(entry["derivation"], str) or not entry["derivation"].strip():
-            raise ValueError(f"{policy_format} entry {name!r} needs a non-empty derivation")
-        values[name] = entry["value"]
-    return values
+    return dict(raw)
 
 
 class StorePolicy(Frozen):
@@ -118,19 +130,21 @@ class StorePolicy(Frozen):
         quarantine_retention_s: Seconds a quarantined entry is kept before `ResultStore.collect` removes it.
         staging_stale_s: Seconds after which a staging directory or download belongs to a crashed writer.
         collect_interval_s: Least seconds between two collections that `ResultStore.put` starts.
+        measures_file_bytes_max: Most bytes of one measures file a reader takes; a larger file is malformed.
     """
 
     world_readable: StrictBool = False
     quarantine_retention_s: Annotated[int, Field(strict=True, gt=0)]
     staging_stale_s: Annotated[int, Field(strict=True, gt=0)]
     collect_interval_s: Annotated[int, Field(strict=True, gt=0)]
+    measures_file_bytes_max: Annotated[int, Field(strict=True, gt=0)]
 
     @classmethod
     def load_default(cls) -> Self:
         """Return the policy in `data/store_policy.yaml`.
 
         Raises:
-            ValueError: if the file lacks the format, an entry, or an entry's derivation.
+            ValueError: if the file lacks the format or an entry.
         """
         return cls.model_validate(load_policy_values("senselab_core.runtime", "store_policy.yaml", POLICY_FORMAT))
 
@@ -196,15 +210,32 @@ class WrongKindError(ValueError):
         self.found = found
 
 
+NAME_MAX = 255
+"""The most bytes of one path component: POSIX `NAME_MAX` on ext4, XFS, APFS and NFS."""
+
+
 def path_component(name: str) -> str:
-    """Return `name` if it is one path component: non-empty, not `.` or `..`, with no slash, backslash or NUL.
+    """Return `name` if it is one path component: non-empty, not `.` or `..`, no slash, backslash or NUL.
+
+    It is at most `NAME_MAX` bytes in the filesystem encoding.
 
     Raises:
         ValueError: otherwise.
     """
     if not isinstance(name, str) or name in ("", ".", "..") or any(c in name for c in "/\\\x00"):
         raise ValueError(f"{name!r} is not a single path component")
+    if len(os.fsencode(name)) > NAME_MAX:
+        raise ValueError(f"{name[:32]!r}... is longer than {NAME_MAX} bytes, the most one path component can hold")
     return name
+
+
+def temporary_name(name: str) -> str:
+    """Return a fresh `TEMPORARY_NAME` for a file being written in place of `name`.
+
+    Raises:
+        ValueError: the temporary would not be one path component.
+    """
+    return path_component(f".{name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
 
 
 def owner_remedy(path: Path) -> str:
@@ -245,6 +276,61 @@ def _owned(name: str, grammar: re.Pattern[str]) -> str:
     return name
 
 
+class FileOps:
+    """The system calls `StorageDir` makes to write: `write`, `fsync`, `link`, `ftruncate` and `mkdir`.
+
+    This is the one seam a fault is injected through. A test subclasses it and enters `using_file_ops`; the
+    methods here call the operating system.
+    """
+
+    def write(self, fd: int, data: bytes) -> int:
+        """Write `data` to `fd`; return how many bytes it took."""
+        return os.write(fd, data)
+
+    def fsync(self, fd: int) -> None:
+        """Flush `fd` to stable storage."""
+        os.fsync(fd)
+
+    def link(self, src: str, dst: str, *, src_dir_fd: int, dst_dir_fd: int) -> None:
+        """Hard-link `src` at `dst`, never following a symlink at `src`."""
+        os.link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd, follow_symlinks=False)
+
+    def ftruncate(self, fd: int, length: int) -> None:
+        """Cut `fd` to `length` bytes."""
+        os.ftruncate(fd, length)
+
+    def mkdir(self, name: str, mode: int, *, dir_fd: int) -> None:
+        """Make the directory `name` in the directory `dir_fd` with `mode`."""
+        os.mkdir(name, mode, dir_fd=dir_fd)
+
+
+_FILE_OPS: list[FileOps] = [FileOps()]
+
+
+@contextlib.contextmanager
+def using_file_ops(ops: FileOps) -> Iterator[None]:
+    """Make every `StorageDir` write through `ops` for the block."""
+    _FILE_OPS.append(ops)
+    try:
+        yield
+    finally:
+        _FILE_OPS.pop()
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """Write all of `data` to `fd`, continuing after a short write.
+
+    Raises:
+        OSError: a write failed, or took no bytes (`ENOSPC`).
+    """
+    view = memoryview(data)
+    while view:
+        taken = _FILE_OPS[-1].write(fd, bytes(view))
+        if taken <= 0:
+            raise OSError(errno.ENOSPC, "a write took no bytes")
+        view = view[taken:]
+
+
 class _Naming:
     """Re-raise an `OSError` naming `path`: as `storage_path`, and as `filename` when it carries an errno."""
 
@@ -268,7 +354,7 @@ class StorageDir:
     also matches the `grammar` the caller passes. Every operation is relative to the directory's
     descriptor, and a name is never followed when it is a symlink: `child` and `walk` refuse a symlink or
     a non-directory with `WrongKindError`, files are created with `O_EXCL | O_NOFOLLOW`, and a file that
-    changes is replaced whole by a fresh one renamed over its name (`write_atomically`, `fs_now`), so a
+    changes is replaced whole by a fresh one renamed over its name (`write_atomically`), so a
     symlink or hard link at the name is replaced and its target never touched. Modes are set only through
     descriptors. The root itself is opened as given, so a root that is a symlink is followed. A
     `StorageDir` is a context manager that closes its descriptor; errors name the full path.
@@ -380,7 +466,7 @@ class StorageDir:
                         raise
                     raise self.wrong_kind(name, "directory") from None
                 try:
-                    os.mkdir(name, 0o700 if mode is not None else 0o777, dir_fd=self.fd)
+                    _FILE_OPS[-1].mkdir(name, 0o700 if mode is not None else 0o777, dir_fd=self.fd)
                 except FileExistsError:
                     continue
                 made = StorageDir(path, os.open(name, _DIR_FLAGS, dir_fd=self.fd))
@@ -533,12 +619,121 @@ class StorageDir:
             with _Naming(self.path / name):
                 os.utime(path_component(name), dir_fd=self.fd, follow_symlinks=False)
 
+    def make_dir(self, name: str, *, grammar: re.Pattern[str], mode: int | None = None, exist_ok: bool = False) -> None:
+        """Create the directory `name`; with `mode`, set through its descriptor whatever the umask.
+
+        With `exist_ok`, a directory already at `name` is taken as made (and given `mode`).
+
+        Raises:
+            ValueError: `name` does not match `grammar`.
+            FileExistsError: something is at `name`, and it is not a directory or `exist_ok` is False.
+            StorageUnsupported: the filesystem refuses `mkdir` as an operation it does not support.
+        """
+        _owned(name, grammar)
+        try:
+            with _Naming(self.path / name):
+                _FILE_OPS[-1].mkdir(name, 0o700 if mode is not None else 0o777, dir_fd=self.fd)
+        except FileExistsError:
+            if not exist_ok or self.kind(name) != "directory":
+                raise
+        except OSError as err:
+            if err.errno not in _UNSUPPORTED_ERRNOS:
+                raise
+            unsupported = StorageUnsupported(err.errno, f"no atomic mkdir: {err.strerror}", str(self.path / name))
+            raise unsupported from err
+        if mode is not None:
+            with self.child(name) as made:
+                made.set_mode(mode)
+
+    def remove_dir(self, name: str, *, grammar: re.Pattern[str]) -> None:
+        """Remove the empty directory `name`, never following it."""
+        _owned(name, grammar)
+        with _Naming(self.path / name):
+            os.rmdir(name, dir_fd=self.fd)
+
     def write_new(self, name: str, data: bytes, mode: int, *, grammar: re.Pattern[str]) -> None:
         """Create the file `name` holding `data`, fsynced, with `mode` (`open_new`)."""
         with os.fdopen(self.open_new(name, mode, grammar=grammar), "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
+            _write_all(handle.fileno(), data)
+            _FILE_OPS[-1].fsync(handle.fileno())
+
+    def publish(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        grammar: re.Pattern[str],
+        mode: int | None = None,
+        on_exists: Literal["keep", "raise"] = "keep",
+    ) -> bool:
+        """Make `name` hold `data`, complete or absent, and never replace a file already there; return whether it did.
+
+        `data` is written to a temporary and fsynced, linked at `name`, and the directory is fsynced: a reader
+        sees no name before its bytes are on disk, and a kill leaves the name absent or whole. The temporary is
+        removed; an `EEXIST` whose name is a second link to the temporary (a lost reply) counts as this call's.
+        With `on_exists="raise"` a file at `name` raises `FileExistsError`; with `"keep"` it is left and
+        False is returned. `mode` is `umask_default_file_mode()` when None.
+
+        Raises:
+            ValueError: `name` does not match `grammar`.
+            FileExistsError: `on_exists` is `"raise"` and `name` exists.
+            OSError: the temporary cannot be written or linked.
+        """
+        _owned(name, grammar)
+        temporary = temporary_name(name)
+        self.write_new(temporary, data, mode if mode is not None else umask_default_file_mode(), grammar=TEMPORARY_NAME)
+        try:
+            self.link(temporary, self, name, grammar=grammar)
+        except FileExistsError:
+            if not self._linked(temporary, name):
+                if on_exists == "raise":
+                    raise
+                return False
+        finally:
+            self.remove_owned(temporary, pattern=TEMPORARY_NAME)
+        self.fsync()
+        return True
+
+    def _linked(self, temporary: str, name: str) -> bool:
+        """Return whether `name` links to `temporary`: a retried `link` whose reply was lost says EEXIST."""
+        staged, found = self.lstat(temporary), self.lstat(name)
+        return (
+            staged is not None
+            and found is not None
+            and staged.st_nlink == 2  # noqa: PLR2004 - the temporary and the name
+            and (staged.st_dev, staged.st_ino) == (found.st_dev, found.st_ino)
+        )
+
+    def append(self, name: str, data: bytes, *, grammar: re.Pattern[str], mode: int | None = None) -> None:
+        """Append `data` to the file `name`, made if missing, as one whole record by this directory's one writer of it.
+
+        A write that takes fewer bytes is continued. If the append cannot finish, the file is cut back to the
+        length it had, so no part of `data` stays, and the error is raised. A file whose last byte is not a newline
+        (a record a kill cut short) is first ended with one, so `data` starts a line of its own.
+
+        Raises:
+            ValueError: `name` does not match `grammar`.
+            OSError: the append failed; the file holds only what it held before.
+        """
+        _owned(name, grammar)
+        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+        with _Naming(self.path / name):
+            fd = os.open(name, flags, mode if mode is not None else 0o644, dir_fd=self.fd)
+        try:
+            size = os.fstat(fd).st_size
+            if size and os.pread(fd, 1, size - 1) != b"\n":
+                data = b"\n" + data
+            try:
+                _write_all(fd, data)
+            except BaseException as err:
+                try:
+                    _FILE_OPS[-1].ftruncate(fd, size)
+                except OSError as cut:
+                    logger.warning("cannot cut %s back to %d after a failed append: %s", self.path / name, size, cut)
+                    err.add_note(f"the file could not be cut back to {size} bytes: {cut}")
+                raise
+        finally:
+            os.close(fd)
 
     def symlink(self, target: str, name: str, *, grammar: re.Pattern[str]) -> None:
         """Create the symlink `name` pointing at `target`."""
@@ -550,7 +745,7 @@ class StorageDir:
         """Hard-link `name` (never followed) at `dst/dst_name`, which must not exist and must match `grammar`."""
         _owned(dst_name, grammar)
         with _Naming(dst.path / dst_name):
-            os.link(path_component(name), dst_name, src_dir_fd=self.fd, dst_dir_fd=dst.fd, follow_symlinks=False)
+            _FILE_OPS[-1].link(path_component(name), dst_name, src_dir_fd=self.fd, dst_dir_fd=dst.fd)
 
     def rename(
         self, name: str, dst: "StorageDir", dst_name: str, *, grammar: re.Pattern[str], replace: bool = False
@@ -606,7 +801,7 @@ class StorageDir:
     def fsync(self) -> None:
         """Sync this directory."""
         with _Naming(self.path):
-            os.fsync(self.fd)
+            _FILE_OPS[-1].fsync(self.fd)
 
     def write_atomically(
         self, name: str, data: bytes, *, grammar: re.Pattern[str], mode: int | None = None
@@ -624,30 +819,40 @@ class StorageDir:
             OSError: if the temporary cannot be written or renamed.
         """
         _owned(name, grammar)
-        temporary = f".{name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
+        temporary = temporary_name(name)
         with _Naming(self.path / temporary):
             descriptor = os.open(temporary, _NEW_FILE_FLAGS, 0o600, dir_fd=self.fd)
         try:
             with os.fdopen(descriptor, "wb") as handle:
                 set_mode(handle.fileno(), mode if mode is not None else umask_default_file_mode())
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
+                _write_all(handle.fileno(), data)
+                _FILE_OPS[-1].fsync(handle.fileno())
                 written = os.fstat(handle.fileno())
             if self.kind(name) not in (None, "file", "symlink"):
                 self.set_aside(name, None)
             self.rename(temporary, self, name, grammar=grammar, replace=True)
+            self.fsync()
         except BaseException:
             self.remove_owned(temporary, pattern=TEMPORARY_NAME)
             raise
         return written
 
-    def fs_now(self) -> float:
-        """Return the current time as the filesystem stamps it: the mtime of a fresh `CLOCK_NAME` (`write_atomically`).
+    def dir_now(self) -> float:
+        """Return the current time as the filesystem stamps it: the mtime of a fresh `ASIDE_NAME` directory, removed.
 
-        On NFS the server sets it, so ages compared with this clock do not depend on the local clock.
+        Raises:
+            StorageUnsupported: the filesystem has no `mkdir` here.
+            OSError: the probe cannot be made or read.
         """
-        return self.write_atomically(CLOCK_NAME, b"", grammar=CLOCK, mode=STAGING_FILE_MODE).st_mtime
+        probe = uuid.uuid4().hex
+        self.make_dir(probe, grammar=ASIDE_NAME)
+        try:
+            made = self.lstat(probe)
+        finally:
+            self.remove_dir(probe, grammar=ASIDE_NAME)
+        if made is None:
+            raise FileNotFoundError(errno.ENOENT, "the clock probe was removed before it was read", str(self.path))
+        return made.st_mtime
 
 
 def write_atomically(target: Path, data: bytes, *, mode: int | None = None) -> None:
@@ -666,6 +871,20 @@ def write_atomically(target: Path, data: bytes, *, mode: int | None = None) -> N
             if existing is not None and stat.S_ISREG(existing.st_mode):
                 mode = stat.S_IMODE(existing.st_mode)
         directory.write_atomically(target.name, data, grammar=_CALLER_FILE, mode=mode)
+
+
+def publish(
+    target: Path, data: bytes, *, mode: int | None = None, on_exists: Literal["keep", "raise"] = "keep"
+) -> bool:
+    """Publish `data` at the caller's file `target` as `StorageDir.publish` does, beside it; return whether it did.
+
+    Raises:
+        FileExistsError: `on_exists` is `"raise"` and `target` exists.
+        OSError: the temporary cannot be written or linked.
+    """
+    target = Path(target)
+    with StorageDir.open_root(target.parent) as directory:
+        return directory.publish(target.name, data, grammar=_CALLER_FILE, mode=mode, on_exists=on_exists)
 
 
 @runtime_checkable
@@ -714,10 +933,11 @@ class Staging:
         """Create the directory and return it open."""
         made = self.root.child(self.name, create=True, mode=self.mode)
         if self.mode == PRIVATE_DIR_MODE:
-            st = os.fstat(made.fd)
-            if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != PRIVATE_DIR_MODE:
+            try:
+                _check_private(made.fd, made.path)
+            except WrongKindError:
                 made.close()
-                raise WrongKindError(made.path, "directory", f"{made.path} is not a private staging directory")
+                raise
         self._dir = made
         return made
 
@@ -729,6 +949,157 @@ class Staging:
             self.root.remove_owned(self.name, pattern=UUID_HEX)
         except OSError as err:
             logger.warning("cannot remove staging directory %s: %s", self.root.path / self.name, err)
+
+
+def _check_private(fd: int, path: Path) -> None:
+    """Refuse the directory open at `fd` unless this process's user owns it with mode `PRIVATE_DIR_MODE`."""
+    st = os.fstat(fd)
+    if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != PRIVATE_DIR_MODE:
+        raise WrongKindError(path, "directory", f"{path} is not a private directory")
+
+
+def private_dir(path: Path) -> Path:
+    """Create `path` owner-only, its missing parents under the umask; return it once it is this user's, 0700.
+
+    An existing directory this user owns is set to `PRIVATE_DIR_MODE` whatever the umask; no parent's mode changes.
+
+    Raises:
+        WrongKindError: `path` is a symlink or not a directory, or another user owns it.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(FileExistsError):
+        path.mkdir(mode=PRIVATE_DIR_MODE)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as err:
+        if err.errno not in (errno.ELOOP, errno.ENOTDIR):
+            raise
+        raise WrongKindError(path, "symlink" if path.is_symlink() else "file", f"{path} is not a directory") from err
+    try:
+        if os.fstat(fd).st_uid == os.geteuid():
+            os.fchmod(fd, PRIVATE_DIR_MODE)
+        _check_private(fd, path)
+    finally:
+        os.close(fd)
+    return path
+
+
+@dataclass(frozen=True)
+class StorageCapabilities:
+    """What a root does, as measured: the primitives its leases and queues need, and its attribute delay.
+
+    Attributes:
+        atomic_mkdir: `mkdir` of a name that exists fails, so exactly one of two makers wins.
+        directory_rename: A directory is renamed whole and a rename onto a non-empty directory fails.
+        dir_mtime_server_clock: A directory's mtime moves to the present when an entry is made in it.
+        atomic_rename: A rename replaces a file whole.
+        exclusive_link: `link` of a name that exists fails, so exactly one of two linkers wins.
+        attribute_delay_s: Seconds from an entry being made to the directory's mtime showing it, as this client saw.
+    """
+
+    atomic_mkdir: bool
+    directory_rename: bool
+    dir_mtime_server_clock: bool
+    atomic_rename: bool
+    exclusive_link: bool
+    attribute_delay_s: float
+
+    def missing(self) -> list[str]:
+        """Return the primitives this root lacks, by field name."""
+        names = ("atomic_mkdir", "directory_rename", "dir_mtime_server_clock", "atomic_rename", "exclusive_link")
+        return [n for n in names if not getattr(self, n)]
+
+    def require(self, root: Path) -> None:
+        """Raise `StorageUnsupported` naming each primitive of `root` that is missing."""
+        lacking = self.missing()
+        if lacking:
+            raise StorageUnsupported(errno.ENOTSUP, f"no {', '.join(lacking)}", str(root))
+
+
+def _refused(call: Callable[[], object], *errnos: int) -> bool:
+    """Return whether `call` raised an `OSError` of one of `errnos`: the refusal an exclusive operation must give."""
+    try:
+        call()
+    except OSError as err:
+        return err.errno in errnos
+    return False
+
+
+def _mtime_after_entry(work: Path, settings: StoreSettings, clock: Clock) -> tuple[bool, float]:
+    """Return whether a new entry moves `work`'s mtime to the present, and the seconds until it showed.
+
+    The wait is bounded by `settings.probe_bound_s` and polled every `settings.probe_poll_s` on `clock`, and the mtime
+    is judged the present within `settings.clock_tolerance_s` of the host's clock.
+    """
+    old = time.time() - 86400
+    os.utime(work, (old, old))
+    before = work.stat().st_mtime_ns
+    (work / "entry").write_bytes(b"")
+    began = clock.now()
+    while True:
+        now = work.stat()
+        if now.st_mtime_ns != before:
+            return abs(now.st_mtime - clock.local_now()) < settings.clock_tolerance_s, clock.now() - began
+        if clock.now() - began >= settings.probe_bound_s:
+            return False, settings.probe_bound_s
+        clock.sleep(settings.probe_poll_s)
+
+
+def probe_capabilities(
+    root: Path,
+    *,
+    settings: StoreSettings | None = None,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
+) -> StorageCapabilities:
+    """Measure `root` itself: `mkdir`, directory and file rename, `link` and the directory mtime, in a probe directory.
+
+    A root that does not exist yet is judged by its nearest existing ancestor. The probe directory is removed. The
+    mtime wait runs on `clock` under `settings` (the packaged profile's `store` section when None).
+
+    Raises:
+        StorageUnsupported: `mkdir` is refused as an operation the filesystem does not support.
+        OSError: the root cannot be written.
+    """
+    if settings is None:
+        from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - profiles import this module
+
+        settings = ExecutionProfile.packaged().store
+    base = Path(root)
+    while not base.exists():
+        base = base.parent
+    work = base / f".senselab-probe-{uuid.uuid4().hex}"
+    try:
+        try:
+            os.mkdir(work)
+        except OSError as err:
+            if err.errno not in _UNSUPPORTED_ERRNOS:
+                raise
+            raise StorageUnsupported(err.errno, f"no atomic mkdir: {err.strerror}", str(root)) from err
+        os.mkdir(work / "made")
+        atomic_mkdir = _refused(lambda: os.mkdir(work / "made"), errno.EEXIST)
+        os.mkdir(work / "from")
+        os.mkdir(work / "full")
+        (work / "full" / "x").write_bytes(b"")
+        os.rename(work / "from", work / "to")
+        directory_rename = (work / "to").is_dir() and not (work / "from").exists()
+        os.mkdir(work / "again")
+        directory_rename = directory_rename and _refused(
+            lambda: os.rename(work / "again", work / "full"), errno.ENOTEMPTY, errno.EEXIST
+        )
+        (work / "a").write_bytes(b"new")
+        (work / "b").write_bytes(b"old")
+        os.rename(work / "a", work / "b")
+        replaced = (work / "b").read_bytes() == b"new" and not (work / "a").exists()
+        try:
+            os.link(work / "b", work / "c")
+            exclusive_link = _refused(lambda: os.link(work / "b", work / "c"), errno.EEXIST)
+        except OSError:
+            exclusive_link = False
+        server_clock, delay = _mtime_after_entry(work, settings, clock)
+        return StorageCapabilities(atomic_mkdir, directory_rename, server_clock, replaced, exclusive_link, delay)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 if TYPE_CHECKING:
@@ -746,24 +1117,32 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "ADDRESSED_FORMATS",
     "ASIDE_NAME",
-    "CLOCK",
+    "FileOps",
     "StorageDir",
     "WrongKindError",
     "owner_remedy",
     "path_component",
-    "CLOCK_NAME",
+    "private_dir",
+    "publish",
+    "probe_capabilities",
+    "NAME_MAX",
     "TEMPORARY_NAME",
     "STAGING_DIR_MODE",
     "STAGING_FILE_MODE",
+    "PRIVATE_DIR",
     "PRIVATE_DIR_MODE",
     "Staging",
     "AddressedFormat",
+    "StorageCapabilities",
     "StorageFull",
+    "StorageUnsupported",
     "StorePolicy",
     "StoreUnavailable",
     "committed_modes",
     "set_mode",
     "shared_dir_mode",
     "storage_fault",
+    "temporary_name",
+    "using_file_ops",
     "write_atomically",
 ]

@@ -11,10 +11,9 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from senselab_worker.fake import FakeFaults
+from senselab_worker.fake import FAULT_KEY, FakeFaults
 
-from senselab_core.kernel.declare import REGISTRY, BackendSpec, TaskParams, TaskSpec
-from senselab_core.kernel.license import License
+from senselab_core.kernel.declare import REGISTRY, BackendSpec, Env, TaskParams, TaskSpec
 from senselab_core.runtime.worker_client import WorkerClient
 
 WORKER_MODULE = "senselab_worker.fake"
@@ -29,7 +28,7 @@ class EchoParams(TaskParams):
 ECHO = TaskSpec(
     name="fake.echo",
     version="1",
-    kind="measure",
+    kind="transform",
     inputs={"payload": "json"},
     outputs={"value": "sha256"},
     params=EchoParams,
@@ -40,37 +39,30 @@ FAKE = BackendSpec(
     name="fake",
     version="1",
     stack="fake",
-    env="host",
+    env=Env.host(),
     devices=("cpu",),
-    license=License(
-        expression="Apache-2.0",
-        commercial_use="yes",
-        copyleft="none",
-        attribution=True,
-        gated=False,
-        source="senselab-worker pyproject.toml license",
-        verified={"date": "2026-10-30", "how": "pep639"},
-    ),
+    batch_invariant=True,
+    worker=WORKER_MODULE,
+    load_stub={},
 )
 
 REGISTRY.add_task(ECHO)
 REGISTRY.add_backend(FAKE)
 
 
-def faults_json(faults: FakeFaults) -> dict[str, Any]:
-    """Return `faults` as the JSON object `FakeFaults.from_json` reads."""
-    return {k: sorted(v) if isinstance(v, frozenset) else v for k, v in dataclasses.asdict(faults).items()}
+def fault_param(faults: FakeFaults) -> dict[str, Any]:
+    """Return the request param that makes the fake inject `faults`."""
+    return {FAULT_KEY: {k: sorted(v) if isinstance(v, frozenset) else v for k, v in dataclasses.asdict(faults).items()}}
 
 
 @contextlib.contextmanager
-def fake_worker(faults: FakeFaults, *, array_parent: Path | None = None) -> Iterator[WorkerClient]:
-    """Yield a client over a fresh fake worker injecting `faults`; stop it on exit.
+def fake_worker(*, array_parent: Path | None = None) -> Iterator[WorkerClient]:
+    """Yield a client over a fresh fake worker; stop it on exit.
 
     The client's array directory is made under `array_parent` (the system temporary directory if
     `None`) and removed on exit.
     """
-    init = {"faults": faults_json(faults)}
-    with WorkerClient(sys.executable, WORKER_MODULE, init=init, array_parent=array_parent) as w:
+    with WorkerClient(sys.executable, WORKER_MODULE, init={}, array_parent=array_parent) as w:
         yield w
 
 
@@ -89,5 +81,5 @@ def run_fake(
     Raises:
         ProtocolError, WorkerLost, WorkerFatal: infrastructure faults, such as a `crash_after` crash.
     """
-    with fake_worker(faults, array_parent=array_parent) as w:
-        return w.run(items, params)
+    with fake_worker(array_parent=array_parent) as w:
+        return w.run(items, {**params, **fault_param(faults)})

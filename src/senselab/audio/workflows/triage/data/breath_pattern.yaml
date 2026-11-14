@@ -9,8 +9,8 @@
 # absent reruns.
 #
 # derivation: owner, 2026-10-05. The owner listened to 23 breath recordings with gain-lifted copies
-# (~/Downloads/contrast_check_20261005/, ~/Downloads/breath_absent_check_20261005/,
-# ~/Downloads/breath_pattern_check_20261005/): ten confirmed breathing ("they all have breathing"),
+# (${LOCAL_INPUT}/contrast_check_20261005/, ${LOCAL_INPUT}/breath_absent_check_20261005/,
+# ${LOCAL_INPUT}/breath_pattern_check_20261005/): ten confirmed breathing ("they all have breathing"),
 # one with a single long breath where three quick breaths were asked (7c169ccc), ten with no breath
 # (including 517381e9, a 0.48 s burst inside speech the HeAR-scored detector counted as one breath
 # event, and 9d16c147, breaths too quiet to hear clearly, which the owner said to discard). With these
@@ -18,7 +18,7 @@
 # 7c169ccc and 517381e9, no_breathing on the silent ones. AIRWAY's detector passed 517381e9; HeAR
 # Breathe at 0.2 passed three silent recordings and Clef 27B on plain spectrograms called six of the
 # ten silent ones alternating_breaths. On 100 random breath-family recordings the measure read 71
-# alternating, 16 none, 11 single, 2 irregular (pilot: /orcd/scratch/bcs/002/satra/breath_pattern/).
+# alternating, 16 none, 11 single, 2 irregular (pilot: ${ORCD_GROUP_SCRATCH}/breath_pattern/).
 # The values are the pilot's, chosen from the anatomy of a breath and not fitted to the labels:
 #   - breath_band_hz: inhale/exhale turbulence energy sits below ~2.5 kHz; above 150 Hz leaves out
 #     mains hum and handling rumble.

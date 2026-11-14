@@ -5,7 +5,7 @@ from labels import SCORED, label
 from scipy.signal import resample_poly, hilbert, butter, filtfilt
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification.api import classify_audios
-y,sr=sf.read("/Users/satra/Downloads/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
+y,sr=sf.read("${LOCAL_INPUT}/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
 x=resample_poly(y.mean(axis=1),16000,sr).astype(np.float64); fs=16000
 SP=label("speech"); sig=(x[int(SP["span_lo"]*fs):int(SP["span_hi"]*fs)]**2).mean()
 rng=np.random.default_rng(17); w=rng.standard_normal(len(x)); W=np.fft.rfft(w)

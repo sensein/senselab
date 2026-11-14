@@ -51,7 +51,7 @@ from typing import Any
 
 TOOL = Path(__file__).resolve()
 WORKER_SBATCH = TOOL.parent / "worker.sbatch"
-DEFAULT_PY = "/orcd/scratch/bcs/002/satra/senselab-r28/.venv/bin/python"
+DEFAULT_PY = "${ORCD_GROUP_SCRATCH}/senselab-r28/.venv/bin/python"
 SUBDIRS = ("claims", "done", "failed", "interrupted", "tmp", "trash", "linger", "logs")
 GATE_RESUBMITTED = 10
 GATE_HALTED = 1

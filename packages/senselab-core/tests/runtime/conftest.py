@@ -1,14 +1,20 @@
 """Shared fixtures for the runtime tests."""
 
+import gc
 import importlib
 import os
-from collections.abc import Callable
+import subprocess
+import threading
+import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 from huggingface_hub import errors
 from huggingface_hub.errors import HfHubHTTPError
+from lease_clock_fixture import ManualClock
 
 
 def _hub_client() -> ModuleType:
@@ -41,3 +47,85 @@ def backends_importable(monkeypatch: pytest.MonkeyPatch) -> None:
     here = str(Path(__file__).parent)
     existing = os.environ.get("PYTHONPATH")
     monkeypatch.setenv("PYTHONPATH", here if not existing else f"{here}{os.pathsep}{existing}")
+
+
+@pytest.fixture
+def hang_s(tier_bound: float, slack_tests: dict[str, Any]) -> float:
+    """The real seconds a wait nobody ends may last in this module's tests: a fraction of the tier's bound.
+
+    A module whose tests stop workers overrides it with `stop_test.hang_s`.
+    """
+    return float(slack_tests["lease_clock"]["hang_fraction"] * tier_bound)
+
+
+@pytest.fixture
+def lease_clock(slack_tests: dict[str, Any], hang_s: float) -> Iterator[Callable[..., ManualClock]]:
+    """Build a `ManualClock`: polls and step from the test slack file, hang bound `hang_s` unless given.
+
+    The test fails at teardown if any clock it built tripped its guard, whoever caught the error.
+    """
+    section = slack_tests["lease_clock"]
+    built: list[ManualClock] = []
+
+    def make(**kwargs: Any) -> ManualClock:  # noqa: ANN401 - `ManualClock`'s own keyword arguments
+        clock = ManualClock(poll_s=section["poll_s"], step_s=section["step_s"], **{"hang_s": hang_s, **kwargs})
+        built.append(clock)
+        return clock
+
+    yield make
+    assert [t for c in built for t in c.tripped] == [], "a hang guard fired"
+
+
+@pytest.fixture
+def no_leaked_processes(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[subprocess.Popen[bytes]]]:
+    """Fail a test that leaves a worker process running or unreaped.
+
+    Records every ``Popen`` the client creates and asserts each has been waited on
+    (``returncode`` is set only by ``poll``/``wait``), so a zombie counts as a leak and
+    children spawned by other tests, such as multiprocessing helpers, are ignored.
+    """
+    spawned: list[subprocess.Popen[bytes]] = []
+    real = subprocess.Popen
+
+    class _Recording(real):  # type: ignore[valid-type, misc]
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)
+            spawned.append(self)
+
+    monkeypatch.setattr(subprocess, "Popen", _Recording)
+    yield spawned
+    monkeypatch.undo()
+    leaked = [p.pid for p in spawned if p.returncode is None]
+    for p in spawned:
+        if p.returncode is None:
+            p.kill()
+            p.wait()
+    assert leaked == []
+
+
+@pytest.fixture
+def array_parent(tmp_path: Path) -> Iterator[Path]:
+    """A parent for the client's array directory, which must hold nothing after the test."""
+    path = tmp_path / "arrays"
+    path.mkdir()
+    yield path
+    assert list(path.iterdir()) == []
+
+
+def _senselab_threads() -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if t.name.startswith("senselab-") and t.is_alive()]
+
+
+@pytest.fixture(autouse=True)
+def no_leaked_senselab_threads(slack_tests: dict[str, Any]) -> Iterator[None]:
+    """Fail a test that leaves a `senselab-*` thread running: an object that owns a thread must be closed.
+
+    A thread whose owner was collected is given `stop_test.hang_s` real seconds to see its wake.
+    """
+    before = set(_senselab_threads())
+    yield
+    deadline = time.monotonic() + slack_tests["stop_test"]["hang_s"]
+    while (leaked := [t for t in _senselab_threads() if t not in before]) and time.monotonic() < deadline:
+        gc.collect()
+        leaked[0].join(slack_tests["fake_worker"]["poll_s"])
+    assert [t.name for t in leaked] == []

@@ -17,12 +17,14 @@ import numpy
 import pytest
 import senselab_core
 import senselab_worker
+from senselab_core.testing.values import importable
 from senselab_worker import _raw_digest, digest
 
 REPO = Path(__file__).resolve().parents[4]
 IMPORTLINTER = REPO / ".importlinter"
 CONTRACT = "importlinter:contract:digests-are-tagged"
 RAW_CONTRACT = "importlinter:contract:raw-digest-owners"
+ABOVE_CORE_CONTRACT = "importlinter:contract:packages-not-1x"
 KERNEL_IO_CONTRACT = "importlinter:contract:kernel-does-no-io"
 
 
@@ -52,11 +54,22 @@ def _lint_imports(
     alerting: str = "none",
     contracts: tuple[str, ...] = (CONTRACT, RAW_CONTRACT),
 ) -> subprocess.CompletedProcess[str]:
-    """Run the repository's `contracts` (the two digest contracts by default), alone, over the stubs in `base`."""
+    """Run the repository's `contracts` (the two digest by default), alone, over `base`.
+
+    Packages above core and roots that `base` neither holds nor packages are left out of the root packages.
+    """
     parser = configparser.ConfigParser()
     parser.read(IMPORTLINTER)
     config = configparser.ConfigParser()
     config["importlinter"] = dict(parser["importlinter"])
+    above = _lines(parser[ABOVE_CORE_CONTRACT]["forbidden_modules"])
+    packaged = {d.name for d in (REPO / "packages").glob("*/src/*") if d.is_dir()}
+    roots = [
+        r
+        for r in _lines(parser["importlinter"]["root_packages"])
+        if r not in above and (r in packaged or (base / r).is_dir())
+    ]
+    config["importlinter"]["root_packages"] = "\n".join(roots)
     for name in contracts:
         config[name] = {**parser[name], "unmatched_ignore_imports_alerting": alerting}
     if extra_ignore:
@@ -217,7 +230,7 @@ def test_the_kernel_contract_passes_a_kernel_with_no_io_import(tmp_path: Path) -
 def _modules(package: types.ModuleType) -> list[types.ModuleType]:
     found = pkgutil.walk_packages(package.__path__, f"{package.__name__}.")
     names = [package.__name__] + [m.name for m in found if not m.name.endswith("__main__")]
-    return [importlib.import_module(n) for n in names]
+    return [importlib.import_module(n) for n in names if importable(n)]
 
 
 def _capability(obj: object) -> bool:

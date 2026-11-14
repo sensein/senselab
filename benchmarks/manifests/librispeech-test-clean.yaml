@@ -1,0 +1,20 @@
+format: data-manifest@2.0
+name: librispeech-test-clean
+version: openslr-12
+license:
+  expression: CC-BY-4.0
+  commercial_use: !!str yes
+  copyleft: none
+  attribution: true
+  gated: false
+  source: https://www.openslr.org/12/
+  verified: {date: '2026-11-01', how: manual}
+terms: >-
+  LibriSpeech (Panayotov et al., 2015) test-clean, CC BY 4.0 with attribution; open download from openslr.org, no
+  account. Per-item outputs may be published with attribution. The same archive serves the ASR items and the
+  speaker-embedding trials.
+files:
+- path: test-clean.tar.gz
+  url: https://www.openslr.org/resources/12/test-clean.tar.gz
+  sha256: 39fde525e59672dc6d1551919b1478f724438a95aa55f874b576be21967e6c23
+  size: 346663984

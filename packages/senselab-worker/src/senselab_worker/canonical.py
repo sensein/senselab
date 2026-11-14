@@ -15,10 +15,7 @@ import sys
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
-from decimal import Decimal
-from enum import Enum
 from importlib import resources
-from pathlib import PurePath
 from typing import Any, Callable, NoReturn, TypeVar, cast
 
 import numpy
@@ -140,7 +137,7 @@ FLOAT_TOKEN = "$f"
 """The one key of the token that stands for a non-finite float."""
 ARRAY_TOKEN = "$array"
 """The one key of the token that stands for an array by the sha256 of its canonical `.npy`."""
-TOKENS = (FLOAT_TOKEN, INT_TOKEN, "$path", "$enum", "$nd", ARRAY_TOKEN, "$dec", "$bytes", "$set", "$type", "$value")
+TOKENS = (FLOAT_TOKEN, INT_TOKEN, ARRAY_TOKEN, "$type", "$value")
 """The keys of the tokens canonical forms use, one per family of values outside the JSON domain."""
 
 
@@ -166,6 +163,28 @@ def require_depth(depth: int) -> None:
     """
     if depth > MAX_DEPTH:
         raise ValueError(f"nesting deeper than {MAX_DEPTH} containers")
+
+
+_JSON_BRACKETS = re.compile(rb'"(?:[^"\\]|\\[\s\S])*(?:"|\\?\Z)|[\[\]{}]')
+
+
+def require_json_depth(text: bytes) -> None:
+    """Refuse JSON text whose containers nest deeper than `MAX_DEPTH`, before any parser sees it.
+
+    The bound is counted over the brackets outside strings, so it is the same on every Python; no parser's
+    recursion limit is consulted.
+
+    Raises:
+        ValueError: if the text nests deeper than `MAX_DEPTH` containers.
+    """
+    depth = 0
+    for token in _JSON_BRACKETS.finditer(text):
+        char = token.group()
+        if char in (b"[", b"{"):
+            depth += 1
+            require_depth(depth)
+        elif char in (b"]", b"}"):
+            depth -= 1
 
 
 @contextmanager
@@ -200,7 +219,7 @@ class Walk:
 
     `enter` builds a container's result inside `entered` and keeps it by identity and depth, so a
     container shared by many parents is built once per depth. The memo holds each container it
-    keys, so no identity is reused while the pass lives.
+    keys, so no identity is reused while the pass lives. `builds` counts the results built, not reused.
     """
 
     def __init__(self, base: int = 0, budget: int = MAX_CANONICAL_CHARS) -> None:
@@ -209,6 +228,7 @@ class Walk:
         self.base = base
         self.budget = budget
         self.spent = 0
+        self.builds = 0
         self._done: dict[tuple[int, int], tuple[object, object]] = {}
 
     def charge(self, size: int) -> None:
@@ -233,6 +253,7 @@ class Walk:
             return cast(T, held[1])
         with entered(container, self.active, self.base):
             result = build()
+        self.builds += 1
         self._done[key] = (container, result)
         return result
 
@@ -243,16 +264,17 @@ class Walk:
         if held is not None:
             return cast(T, held[1])
         result = build()
+        self.builds += 1
         self._done[key] = (value, result)
         return result
 
 
-def jcs_dumps(obj: object) -> bytes:
+def jcs_dumps(obj: object, walk: Walk | None = None) -> bytes:
     """Serialise a JSON value as RFC 8785 canonical UTF-8 bytes.
 
     Containers are exactly `list`, `tuple` and `dict` with `str` keys; scalars are what
     `canonical_scalar` accepts. Strings and keys are in their canonical form (`canonical_text`); keys
-    sort by UTF-16 code units.
+    sort by UTF-16 code units. `walk`, when given, is the pass's `Walk`, which the caller reads afterwards.
 
     Raises:
         ValueError: on a NaN or infinite float, an integer outside +/-(2**53 - 1), a lone surrogate
@@ -261,15 +283,15 @@ def jcs_dumps(obj: object) -> bytes:
             `MAX_CANONICAL_CHARS` (`WorkBudgetExceeded`).
         TypeError: on any other type, including container subclasses, non-`str` keys and arrays.
     """
-    writer = _Writer()
+    writer = _Writer(walk)
     writer.write(obj)
     return "".join(writer.parts).encode("utf-8")
 
 
 class _Writer:
-    def __init__(self) -> None:
+    def __init__(self, walk: Walk | None) -> None:
         self.parts: list[str] = []
-        self.walk = Walk()
+        self.walk = Walk() if walk is None else walk
 
     def out(self, text: str) -> None:
         self.walk.charge(len(text))
@@ -347,6 +369,10 @@ def jcs_loads(data: bytes | str) -> object:
     """
     raw = data.encode("utf-8", "surrogatepass") if isinstance(data, str) else bytes(data)
     try:
+        require_json_depth(raw)
+    except ValueError as err:
+        raise NotCanonicalJSON(f"JSON nests deeper than {MAX_DEPTH} containers") from err
+    try:
         value = json.loads(
             raw.decode("utf-8"),
             parse_int=_parse_int,
@@ -354,8 +380,6 @@ def jcs_loads(data: bytes | str) -> object:
             parse_constant=refuse_constant,
             object_pairs_hook=unique_object,
         )
-    except RecursionError as err:
-        raise NotCanonicalJSON(f"JSON nests deeper than {MAX_DEPTH} containers") from err
     except NotCanonicalJSON:
         raise
     except ValueError as err:
@@ -579,11 +603,7 @@ class Tokeniser:
     - an integer outside +/-`MAX_SAFE_INT`: `{"$int": "<decimal>"}`;
     - `dict` with `str` keys: an object, a key starting with `$` gaining one more `$`;
     - `list` and `tuple`: an array;
-    - `set` and `frozenset`: `{"$set": [<elements, one per JCS form, sorted by their JCS bytes>]}`;
     - `numpy.ndarray`: what `array` returns for it;
-    - an `Enum` member: `{"$enum": ["<module>.<qualname>", <its value>]}`;
-    - a `PurePath`: `{"$path": <posix string>}`;
-    - a `Decimal`: `{"$dec": <str>}`; `bytes` or `bytearray`: `{"$bytes": <hex>}`;
     - a value `extra` maps to `(token, payload)`: `{token: <payload>}`, entered like a container, or
       the payload itself when `token` is `None`.
 
@@ -603,16 +623,15 @@ class Tokeniser:
         self.extra = extra
         self.error = error
 
-    def __call__(self, value: object, path: str = "value") -> object:
-        """Return `value` in tokens.
+    def __call__(self, value: object, path: str = "value", walk: Walk | None = None) -> object:
+        """Return `value` in tokens, in `walk` when given (one the caller reads afterwards).
 
         Raises:
             NoCanonicalForm: (`error`) naming the path and type, for a value of no family, a non-`str`
                 key, a key holding a lone surrogate, two keys with one canonical form, a container that contains itself,
-                nesting deeper than `MAX_DEPTH`, set elements over `MAX_CANONICAL_CHARS`, or an integer with more
-                digits than the interpreter writes as text.
+                nesting deeper than `MAX_DEPTH`, or an integer with more digits than the interpreter writes as text.
         """
-        return _Tokens(self, Walk()).value(value, path)
+        return _Tokens(self, Walk() if walk is None else walk).value(value, path)
 
 
 class _Tokens:
@@ -622,35 +641,18 @@ class _Tokens:
 
     def value(self, value: object, path: str) -> object:
         t = type(value)
-        if t is dict or t is list or t is tuple or t is set or t is frozenset or t is numpy.ndarray:
+        if t is dict or t is list or t is tuple or t is numpy.ndarray:
             try:
                 return self.walk.enter(value, lambda: self.container(value, path))
             except NoCanonicalForm:
                 raise
             except (ValueError, TypeError) as err:
                 raise self.spec.error(path, value, str(err)) from err
-        shared = self.shared(value, path)
-        if shared is not None:
-            return shared
         if self.spec.extra is not None:
             found = self.spec.extra(value)
             if found is not None:
                 return self.extra(value, found[0], found[1], path)
         return self.scalar(value, path)
-
-    def shared(self, value: object, path: str) -> dict[str, object] | None:
-        """The token of an `Enum`, a path, bytes or a `Decimal`; None for a value of none of these families."""
-        t = type(value)
-        if isinstance(value, Enum):
-            qualname = f"{t.__module__}.{t.__qualname__}"
-            return {"$enum": [qualname, self.value(value.value, f"{path}.value")]}
-        if isinstance(value, PurePath):
-            return {"$path": value.as_posix()}
-        if t is bytes or t is bytearray:
-            return {"$bytes": cast("bytes | bytearray", value).hex()}
-        if t is Decimal:
-            return {"$dec": str(value)}
-        return None
 
     def scalar(self, value: object, path: str) -> object:
         """A scalar in the JSON domain as itself, an integer too large for it or a non-finite float as a token."""
@@ -697,12 +699,4 @@ class _Tokens:
             return out
         if t is list or t is tuple:
             return [self.value(item, f"{path}[{i}]") for i, item in enumerate(value)]
-        if t is set or t is frozenset:
-            forms: dict[bytes, object] = {}
-            for item in value:
-                token = self.value(item, f"{path}{{}}")
-                form = jcs_dumps(token)
-                self.walk.charge(len(form))
-                forms.setdefault(form, token)
-            return {"$set": [forms[form] for form in sorted(forms)]}
         return self.spec.array(value, self.value, path)

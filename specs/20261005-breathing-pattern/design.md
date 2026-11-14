@@ -47,7 +47,7 @@ On the 23 recordings the owner listened to, the measure read every one as heard:
 ten confirmed breathing, single on 7c169ccc (one long breath where three were asked) and 517381e9
 (the burst in speech), none on the silent ones and on the quiet 9d16c147.
 
-In-memory re-fold (VERDICT only, r9 stores, nothing written; /orcd/scratch/bcs/002/satra/tmp_bpest/):
+In-memory re-fold (VERDICT only, r9 stores, nothing written; ${ORCD_GROUP_SCRATCH}/tmp_bpest/):
 
 - Labelled 22: all as heard. 7c169ccc flags `task_mismatch`; the ten silent ones and 517381e9 discard
   (`no_breath_captured`, or `too_short_for_task` for the two sub-second fragments); nine of the ten
@@ -69,7 +69,7 @@ AIRWAY run its detector on them; with the measure deciding, it is not needed.
 Owner, asking for it: "perhaps also consider how detecting cycles over subband envelopes using a
 modulation spectrum could help detect multiple breathing cycles". After listening to the six
 `task_mismatch` recordings with the largest gap between modulation peaks and events
-(~/Downloads/breath_modspec_check_20261005/): "seems like a rough doubling between instructed and
+(${LOCAL_INPUT}/breath_modspec_check_20261005/): "seems like a rough doubling between instructed and
 modulation peaks". Five-breath tasks gave 10, 11 and 11 peaks; three-breath tasks gave 7, 6 and 7. An
 inhale and an exhale each make a burst, so `peaks_per_breath` is 2, and an odd count rounds half up
 (the unpaired burst is still a breath; 39ba8784 has 9 peaks for five breaths).
@@ -78,7 +78,7 @@ The reading (`measure_modulation`) takes the same stored pre-emphasised `spectro
 seven subbands over 150-4000 Hz, log envelopes at 20 Hz, their modulation spectra, and the energy in
 the breathing band (0.1-1.2 Hz) against the syllabic band (2-8 Hz) speech occupies. It counts peaks of
 the breathing-band component inside the span where the broadband envelope stays 8 dB above its floor.
-Prototype and its evaluation: /orcd/scratch/bcs/002/satra/breath_modspec/.
+Prototype and its evaluation: ${ORCD_GROUP_SCRATCH}/breath_modspec/.
 
 What it decides:
 
@@ -92,7 +92,7 @@ What it decides:
   coherence and surrogate tests of the prototype decide nothing: silent recordings passed them.
 
 Effect, in memory on the 22 labelled and the 300-sample rows against 8f229ee0
-(/orcd/scratch/bcs/002/satra/tmp_modest/): every labelled recording as heard, 39ba8784 now passing on
+(${ORCD_GROUP_SCRATCH}/tmp_modest/): every labelled recording as heard, 39ba8784 now passing on
 its cycles; `task_mismatch` 46 → 34 rows, 9 cleared on cycles (1ba3214d, 3c6a97e9, 670e8db6 among
 them) and 3 discarded by the speech guard; 8 more recordings discard by the speech guard (7 of them
 passed before, with 4-6 events at -1.2 to +2.7 dB). Those eight are unlabelled and want listening.
@@ -103,7 +103,7 @@ Open: 1ba3214d is five clean cycles the event measure merged into one event. The
 ## Breath evidence (2026-10-05), replacing the speech guard
 
 The owner listened to the 11 recordings the 3 dB speech guard discarded
-(`~/Downloads/speech_guard_check_20261005/`) and heard breathing in 5 of them: 01 3d889bf8, 02 dac345e2,
+(`${LOCAL_INPUT}/speech_guard_check_20261005/`) and heard breathing in 5 of them: 01 3d889bf8, 02 dac345e2,
 06 0bcffa40, 08 b16acf04, 09 b451fe70. The other 6 "either don't have it or masked by other sounds or very
 soft". The breathing-over-syllabic ratio overlapped across the two (heard: −2.1 to +2.7 dB; not heard:
 −1.0 to +2.9 dB), so it cannot be the guard, and it is removed.
@@ -136,7 +136,7 @@ too: b16acf04 has 1 event, 5 peaks, 3 breaths and +1.8 dB, against 3 instructed.
 ## Breath vetoes (2026-10-05), replacing the breath evidence
 
 The breath-evidence rule moved 537 recordings from pass to discard. The owner listened to 12 of them
-(`~/Downloads/breath_evidence_check_20261005/`): "except for this [v2-breath 4d596bce] all the other
+(`${LOCAL_INPUT}/breath_evidence_check_20261005/`): "except for this [v2-breath 4d596bce] all the other
 ones have respiratory events". 2337c1e6 (YAMNet Breathing 0.001, HeAR 0.026) and 324cd5d0 (0.000, 0.035)
 breathe; 4d596bce (0.000, 0.014) does not. Classifier breath scores cannot decide presence, so they are
 context only.
@@ -164,7 +164,7 @@ d5a327c7, which the owner heard as "masked by other sounds or very soft". The pa
 ## Breath vetoes over the task extent (2026-10-06), replacing the four vetoes
 
 The four vetoes moved 181 recordings from pass to discard. The owner listened to 12
-(`~/Downloads/breath_veto_check_20261006/`) and heard breathing in 11. Each reason the owner gave
+(`${LOCAL_INPUT}/breath_veto_check_20261006/`) and heard breathing in 11. Each reason the owner gave
 became a structural rule:
 
 - 6ca9935e, discarded as speech: "breath followed by speech. does not overlap in task extent". Speech
@@ -247,7 +247,7 @@ measured and dropped:
   (5/7/9 dB, 0.15/0.3 active) left about 25 of them speech-vetoed. Without labels on those, keeping
   breathing is the safer error.
 
-**Measured** (in-memory re-fold of the r15 stores, 1,074 rows, 0 errors; `/orcd/scratch/bcs/002/satra/tmp_bxt/`):
+**Measured** (in-memory re-fold of the r15 stores, 1,074 rows, 0 errors; `${ORCD_GROUP_SCRATCH}/tmp_bxt/`):
 the label fit is 53 of 56, the same three as before, with 0 decisions changed against `1a73d8d0`.
 
 | Set | Source | Median extent, old → new |
@@ -259,11 +259,11 @@ On the 14 labelled recordings whose hull was 4 s or less, the breathing ones wid
 30.0 s, 80e179b4 3.7 → 19.7 s, 475ff714 3.7 → 12.1 s, 42442f80 2.4 → 9.0 s, cb69d304 3.6 → 8.4 s,
 7c169ccc 0.7 → 3.6 s); b16acf04 narrows (3.7 → 1.4 s, one measured event). 6ca9935e, breath then
 speech, ends at 10.8 s instead of 14.0 s. The images are in
-`~/Downloads/breath_extent_check_20261006/`.
+`${LOCAL_INPUT}/breath_extent_check_20261006/`.
 
 ## The breath train (2026-10-06), replacing the extent from modulation
 
-The owner reviewed the modulation-extent figures (`~/Downloads/breath_extent_check_20261006/`) and
+The owner reviewed the modulation-extent figures (`${LOCAL_INPUT}/breath_extent_check_20261006/`) and
 named what they missed: "this suggests we are missing clear peaks in modulation" (3d889bf8, three
 quick breaths read as one event), "this one has a long inhale followed by a short exhale" (7c169ccc),
 "this misses some of the modulation" (42442f80), "seems to miss the beginning" (SUBJ18
@@ -311,7 +311,7 @@ stays 0.25 s; the events' spans are instead trimmed to the frames within 10 dB o
 (`event_trim_db`), which is display and extent only and changes no count.
 
 **Measured** (in-memory re-fold of the r15 stores at the overlaid src, 1,074 rows, 0 errors;
-`/orcd/scratch/bcs/002/satra/tmp_qb/`), against the previous re-fold (`tmp_bxt/estimate.jsonl`):
+`${ORCD_GROUP_SCRATCH}/tmp_qb/`), against the previous re-fold (`tmp_bxt/estimate.jsonl`):
 
 | Set | Label fit | Decisions to/from discard | task_mismatch cleared / new | Review band (of kept) |
 |---|---|---|---|---|
@@ -367,13 +367,13 @@ decision changed. 988c1609 6 → 7 phases (3 → 4 breaths), ba1d1459 13 → 10 
 16.36 s), ecc63817 7 → 8 (4, extent from 0.0 s), 42442f80 and 7c169ccc unchanged. One phase
 more, from an edge phase or an overlap split, on e02a3f8b, SUBJ34, 772aa876, b451fe70, 943a8bbc,
 78e40278, dac345e2 and SUBJ02 (none crossing an instructed count); 517381e9 (no breathing, discarded either way)
-drops 5 → 1 phase under its "Yeah" chain. Figures: `~/Downloads/breath_extent_check_20261006/fixed2/`,
+drops 5 → 1 phase under its "Yeah" chain. Figures: `${LOCAL_INPUT}/breath_extent_check_20261006/fixed2/`,
 the stored pre-emphasised spectrogram at a fixed 80 dB display range (no dynamic gain), with the
 `_dyngain.wav` audio beside each.
 
 ## Speech at the breathing cadence, word placement and edge phases off the floor (2026-10-06)
 
-Two of the owner's notes on the contested-discard sample (`~/Downloads/discard_contested_check_20261006/`):
+Two of the owner's notes on the contested-discard sample (`${LOCAL_INPUT}/discard_contested_check_20261006/`):
 
 - **5201d61d** (breath-sounds): "the modulation part shows clear spans that are not being picked up
   as events". Ten regular bursts from 0.8 to 19.3 s, a sharp 0.42 Hz breathing-band modulation peak in
@@ -409,7 +409,7 @@ Three changes (`train` keys `word_spread_max_s`, `speech_bridge_cycles`):
   phases, 3 breaths, 1.4–8.1 s, matching the instruction.
 
 **Measured** (`breath_pattern_of` before at fix/policy-v8 36c3cf23 and after, on stored inputs;
-scripts in the job's `tmp/bt/`, the ORCD sample in `/orcd/scratch/bcs/002/satra/breathmod_20261006/`):
+scripts in the job's `tmp/bt/`, the ORCD sample in `${ORCD_GROUP_SCRATCH}/breathmod_20261006/`):
 
 | Set | n | Kept / label agreement | Review band | Readings changed |
 |---|---|---|---|---|

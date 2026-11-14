@@ -8,7 +8,7 @@
 #SBATCH --array=0-7%8
 # Four processes per array task, every task on its own node where Slurm allows; all start at the same wall minute.
 D=${RACE_DIR:?}; N=${RACE_NAMES:-400}
-PY=/orcd/scratch/bcs/002/satra/senselab-r28/.venv/bin/python
+PY=${ORCD_GROUP_SCRATCH}/senselab-r28/.venv/bin/python
 T=${RACE_START:?}; while [ "$(date +%s)" -lt "$T" ]; do sleep 0.2; done
-for k in 1 2 3 4; do $PY /orcd/scratch/bcs/002/satra/r18d_20261010/pool/harness/race.py run "$D" "$N" & done
+for k in 1 2 3 4; do $PY ${ORCD_GROUP_SCRATCH}/r18d_20261010/pool/harness/race.py run "$D" "$N" & done
 wait

@@ -1,23 +1,28 @@
 """A backend whose outputs are hashes of their inputs, with a declared fault model.
 
-Run as `python -m senselab_worker.launch senselab_worker.fake`. Faults come from `init["faults"]` and are replaced, per
-request, by `params["faults"]`; both take the fields of `FakeFaults`.
+Run as `python -m senselab_worker.launch senselab_worker.fake`. Faults come from the request's `params["_fault"]`, an
+object of the fields of `FakeFaults`; a worker's `load` binds none.
 """
 
+import json
 import os
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 import numpy
 
+from senselab_worker.canonical import MAX_SAFE_INT
 from senselab_worker.codec import MAX_LINE_BYTES
 from senselab_worker.digest import identity_digest, npy_digest
 from senselab_worker.faults import ContentFault, ResourceFault
 
+FAULT_KEY = "_fault"
+"""The request param that carries the faults to inject; reserved, never a task or backend param."""
 EXIT_CRASH = 70
-_NONCE_BYTES = 16
+_NONCE_BYTES: Final = 16  # invariant: a 128-bit random nonce
 
 
 @dataclass(frozen=True)
@@ -76,35 +81,55 @@ class UnprintableFault(ContentFault):
         raise RuntimeError("this fault cannot be represented")
 
 
+def injected(params: Mapping[str, Any]) -> FakeFaults:
+    """Return the faults `params[FAULT_KEY]` names; none when it is absent.
+
+    Raises:
+        TypeError: if it is not an object of the fields of `FakeFaults`.
+    """
+    return FakeFaults.from_json(params.get(FAULT_KEY, {}))
+
+
+def without_fault(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Return `params` without the reserved fault key."""
+    return {k: v for k, v in params.items() if k != FAULT_KEY}
+
+
 @dataclass
 class _State:
-    faults: FakeFaults
     handled: int = field(default=0)
 
 
 def load(init: dict[str, Any]) -> object:
-    """Return the fake's state; `init` may hold only `array_dir` and `faults`.
+    """Return the fake's state; `init` may hold only `array_dir`, and the `device` and `model` it ignores.
 
     Raises:
         ValueError: on any other key.
-        TypeError: on malformed faults.
     """
-    unknown = sorted(init.keys() - {"array_dir", "faults"})
+    unknown = sorted(init.keys() - {"array_dir", "device", "model"})
     if unknown:
-        raise ValueError(f"fake init takes only array_dir and faults, got {unknown}")
-    return _State(FakeFaults.from_json(init.get("faults", {})))
+        raise ValueError(f"fake init takes only array_dir, device and model, got {unknown}")
+    return _State()
+
+
+def state_bytes(state: object) -> int:
+    """Return 0: the fake loads no weights."""
+    return 0
 
 
 def handle(state: object, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     """Return `{"outputs": {"value": identity_digest("fake-output@1", {"inputs", "params"})}}` per item.
 
-    `params["faults"]` is excluded from the digest; a batch adds `"batch"` and `nondeterministic` a random `"nonce"`.
-    Arrays enter it as `npy_digest("npy@1", array)`.
+    `params["_fault"]` is excluded from the digest; a batch adds `"batch"` and `nondeterministic` a random `"nonce"`.
+    Arrays enter it as `npy_digest("npy@1", array)`, integers outside the I-JSON range as their decimal text. A
+    non-empty `params["outputs_json"]` is instead returned, parsed, as every item's outputs.
     """
     if not isinstance(state, _State):
         raise TypeError("state must come from load")
-    faults = FakeFaults.from_json(params["faults"]) if "faults" in params else state.faults
-    rest = _identity_view({k: v for k, v in params.items() if k != "faults"})
+    if params.get("outputs_json"):
+        return [{"outputs": json.loads(params["outputs_json"])} for _ in items]
+    faults = injected(params)
+    rest = _identity_view(without_fault(params))
     batch = [_identity_view(item["inputs"]) for item in items] if faults.batch_coupled else None
     results = []
     for item in items:
@@ -139,6 +164,8 @@ def _one(item: dict[str, Any], params: object, faults: FakeFaults, batch: list[o
 
 
 def _identity_view(value: object) -> object:
+    if type(value) is int and abs(value) > MAX_SAFE_INT:
+        return str(value)
     if isinstance(value, numpy.ndarray):
         return npy_digest("npy@1", value)
     if isinstance(value, dict):

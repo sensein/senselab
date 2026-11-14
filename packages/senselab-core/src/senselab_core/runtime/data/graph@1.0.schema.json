@@ -1,0 +1,133 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "x-senselab-format": "graph@1.0",
+    "description": "A `graph@1.0` document: typed inputs, task nodes, edges and named outputs.\n\nNode ids are distinct and none is `input`; an edge targets a node's input port, and binds a port no other edge\nbinds.",
+    "properties": {
+        "format": {
+            "type": "string",
+            "pattern": "^graph@1\\.\\d+$",
+            "description": "Required in a published document; a reader given none reads the document as graph@1.0."
+        },
+        "inputs": {
+            "patternProperties": {
+                "^[A-Za-z_][A-Za-z0-9_]*$": {
+                    "pattern": "^([A-Za-z_][A-Za-z0-9_]*|list\\[[A-Za-z_][A-Za-z0-9_]*\\])$",
+                    "type": "string"
+                }
+            },
+            "title": "Inputs",
+            "type": "object",
+            "additionalProperties": false
+        },
+        "nodes": {
+            "default": [],
+            "items": {
+                "description": "One call of a declared task: its version, params, per-backend params and model reference.",
+                "properties": {
+                    "id": {
+                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                        "title": "Id",
+                        "type": "string"
+                    },
+                    "task": {
+                        "minLength": 1,
+                        "title": "Task",
+                        "type": "string"
+                    },
+                    "task_version": {
+                        "minLength": 1,
+                        "title": "Task Version",
+                        "type": "string"
+                    },
+                    "params": {
+                        "additionalProperties": true,
+                        "title": "Params",
+                        "type": "object"
+                    },
+                    "backend_params": {
+                        "additionalProperties": {
+                            "additionalProperties": true,
+                            "type": "object"
+                        },
+                        "title": "Backend Params",
+                        "type": "object"
+                    },
+                    "model": {
+                        "anyOf": [
+                            {
+                                "minLength": 1,
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "default": null,
+                        "title": "Model"
+                    }
+                },
+                "required": [
+                    "id",
+                    "task",
+                    "task_version"
+                ],
+                "title": "Node",
+                "type": "object"
+            },
+            "title": "Nodes",
+            "type": "array"
+        },
+        "edges": {
+            "default": [],
+            "items": {
+                "description": "A wire from an output or graph input to a node's input port.\n\n`map` runs the target once per element of a `list[T]` source; `gather` collects a mapped node's outputs into a\nlist.",
+                "properties": {
+                    "source": {
+                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*$",
+                        "title": "Source",
+                        "type": "string"
+                    },
+                    "target": {
+                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*$",
+                        "title": "Target",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "default": "plain",
+                        "enum": [
+                            "plain",
+                            "map",
+                            "gather"
+                        ],
+                        "title": "Kind",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "source",
+                    "target"
+                ],
+                "title": "Edge",
+                "type": "object"
+            },
+            "title": "Edges",
+            "type": "array"
+        },
+        "outputs": {
+            "patternProperties": {
+                "^[A-Za-z_][A-Za-z0-9_]*$": {
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*$",
+                    "type": "string"
+                }
+            },
+            "title": "Outputs",
+            "type": "object",
+            "additionalProperties": false
+        }
+    },
+    "title": "Graph",
+    "type": "object",
+    "required": [
+        "format"
+    ]
+}

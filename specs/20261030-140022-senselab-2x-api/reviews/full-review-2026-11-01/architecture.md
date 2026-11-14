@@ -2,7 +2,7 @@
 
 Angle: package structure, module boundaries and public surfaces of `senselab-worker` and `senselab-core`
 against `design.md`, `execution.md`, `engine-choice.md`, `workflow-engines.md`,
-`pydra-extension-points.md`, and the pydra companion (`~/software/nipype/pydra-ext`, branch
+`pydra-extension-points.md`, and the pydra companion (`${SOFTWARE_ROOT}/nipype/pydra-ext`, branch
 `enh/execution-extensions` at `c697d8f9`, `proposals/0001-execution-extensions.md`); plus a code-quality sample.
 Paths below are relative to the worktree unless they say otherwise. `spec/` stands for
 `specs/20261030-140022-senselab-2x-api/`.

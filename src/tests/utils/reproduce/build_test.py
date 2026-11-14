@@ -159,7 +159,16 @@ def test_build_wheel_argv_env_and_patch(tmp_path: Path, fake_run: FakeRun) -> No
     assert fake_run.sources == ["VALUE = 2\n"]
     venv, py = work / "venv", str(work / "venv" / "bin" / "python")
     argvs = [argv for argv, _ in fake_run.calls]
-    assert argvs[0] == [UV, "venv", "--no-config", "--python", "3.11.15", str(venv)]
+    assert argvs[0] == [
+        UV,
+        "venv",
+        "--no-config",
+        "--python",
+        "3.11.15",
+        "--python-preference",
+        "only-managed",
+        str(venv),
+    ]
     assert argvs[1] == [
         *(UV, "pip", "install", "--no-config", "--python", py, "--no-deps", "--require-hashes"),
         *("--only-binary", ":all:", "-r", str(work / "inputs" / "envs/a/build.lock")),

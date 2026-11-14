@@ -238,8 +238,8 @@ owner has accepted flagging one file and has not accepted flagging fifteen thous
 ### The census — measured
 
 Job `23526686`, `mit_preemptable`, over all 62,548 replayed runs at
-`/orcd/scratch/bcs/002/satra/triage_replay_20260922/out/`. No store missing, none unreadable.
-Results at `/orcd/scratch/bcs/002/satra/voice_gate_census_20260923/results/census.json`.
+`${ORCD_GROUP_SCRATCH}/triage_replay_20260922/out/`. No store missing, none unreadable.
+Results at `${ORCD_GROUP_SCRATCH}/voice_gate_census_20260923/results/census.json`.
 
 | family | recordings | no `task_extent` | found and refused (≥0.5 s) | never found |
 |---|---:|---:|---:|---:|

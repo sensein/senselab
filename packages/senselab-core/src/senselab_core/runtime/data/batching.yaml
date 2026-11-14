@@ -1,0 +1,8 @@
+format: batching@1.0
+# The canonical length buckets a backend that keys its batch formation is batched by; BucketGrid.load_default() reads
+# them. Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under this file's path.
+
+# The grid's name, in every bucketed formation `bucket:<id>:<index>`; a change of edges is a new id.
+id: duration-pow2-30s
+# Bucket edges in ns, strictly increasing: bucket i holds lengths in [edges_ns[i-1], edges_ns[i]).
+edges_ns: [1000000000, 2000000000, 4000000000, 8000000000, 16000000000, 30000000000]

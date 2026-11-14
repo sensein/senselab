@@ -1,0 +1,14 @@
+# Placeholder names used in tracked text, with what each stands for.
+# Copy to references.local.yaml (gitignored), fill in the values, and keep that file local.
+# scripts/check_local_paths.py rejects user home-directory paths anywhere else in the tree.
+
+SOFTWARE_ROOT:            # directory holding local checkouts of sibling repositories
+AGENT_SCRATCH:            # scratch directory of a local agent session or job
+AGENT_MEMORY:             # memory directory of a local agent
+LOCAL_INPUT:              # local folder holding input files and exported figures
+XDG_DATA_HOME:            # per-user data directory
+ORCD_GROUP_SCRATCH:       # shared group scratch directory on the compute cluster
+ORCD_DATA:                # shared group data directory on the compute cluster
+ORCD_PERSONAL_SCRATCH:    # personal scratch directory on the compute cluster
+CPU_PARTITION:            # scheduler partition used for CPU jobs
+GPU_PARTITION:            # scheduler partition used for GPU jobs

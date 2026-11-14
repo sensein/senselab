@@ -1,0 +1,14 @@
+format: scale-suite@2.0
+name: table
+# The seed of the synthetic trees; one seed gives the same bytes on every host.
+seed: 0
+# The long signal's seconds: two hours of audio.
+long_s: 7200
+# The table profile: the calibration settings a point's probe runs under, whose measures roots a group shares.
+calibration:
+  length_strata: 3
+  batched_sizes: 2
+# Seconds of warm probe work a point's probe may take, Probe.plan's budget in place of the profile's probe_s.
+point_wall_s: 900
+tasks:
+- {task: signal.resample, port: series, data: synthetic, params: {target_rate: 8000}, points: [100, 1000]}

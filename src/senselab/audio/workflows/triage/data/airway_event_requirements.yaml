@@ -5,7 +5,7 @@
 # never the detection.
 #
 # derivation: owner, 2026-10-05, after listening to ten breath recordings with gain-lifted copies and
-# HeAR/YAMNet readings (~/Downloads/contrast_check_20261005/index.csv). AIRWAY's breath-event detector
+# HeAR/YAMNet readings (${LOCAL_INPUT}/contrast_check_20261005/index.csv). AIRWAY's breath-event detector
 # was the one reading that matched every listen: one event in the one recording that held a breath
 # (7c169ccc), none in the nine others. HeAR Breathe at score_min 0.2 passed three silent recordings
 # (254e47be 0.47, 517381e9 0.25, 0b8dcad5 0.23) and [breath] was written on three. The owner: "yes do

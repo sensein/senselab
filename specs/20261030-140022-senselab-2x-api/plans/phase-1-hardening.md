@@ -331,7 +331,7 @@ H6 and H7 can run at any time. H8 is last.
 
   @pytest.mark.logic
   def test_key_refuses_untyped_identities():
-      for bad in [{"model": "main"}, {"inputs": {"a": "/home/x/a.wav"}}, {"inputs": {"a": "f" * 64}}]:
+      for bad in [{"model": "main"}, {"inputs": {"a": "/home/user/a.wav"}}, {"inputs": {"a": "f" * 64}}]:
           with pytest.raises(ValidationError):
               LogicalKey(**{**BASE, **bad})
 

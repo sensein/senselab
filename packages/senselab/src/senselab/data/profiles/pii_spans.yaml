@@ -1,0 +1,50 @@
+format: profile-slice@1.0
+slice: pii_spans
+# derivation:
+#   instruction and categories: the identifiers of the HIPAA Safe Harbor standard, 45 CFR 164.514(b)(2)(i) (A)-(R),
+#   grouped into the eight categories below by the Safe Harbor identifiers each covers; ORGANIZATION and CONDITION
+#   hold no identifier by themselves and fall under the residual clause, (b)(2)(ii) actual knowledge.
+#   families: what counts as a task's own content, from the owner's rule that a task's stimulus and the words that
+#   explain it identify nobody ("redaction should take task into account. in tasks like productive vocabulary,
+#   the target word should be considered", 2026-10-04); a family matches a name when it equals it or starts with it
+#   and a hyphen. Per-family handling instructions are left out: the task
+#   marks spans and decides nothing about them.
+instruction: >-
+  Mark every span of the text that identifies a person, the speaker or anyone named, under the HIPAA Safe Harbor
+  standard: names; places smaller than a state; dates and ages over 89; telephone and fax numbers; email addresses;
+  web addresses; IP addresses; account, record, licence, vehicle and device numbers; and anything else that, with the
+  rest of the text, could single a person out, such as a rare role, a family detail or a rare condition. A state or
+  a country alone, a year alone and an age of 89 or under identify nobody. Quote each span exactly as it appears
+  in the text, once per distinct string, as short as it can be while holding the identifying words.
+categories:
+- {name: PERSON, description: 'A name of a person, the speaker or anyone else.'}
+- {name: LOCATION, description: 'A place smaller than a state: address, city, county, ZIP code.'}
+- {name: DATE_TIME, description: 'A date element related to a person, or an age over 89.'}
+- {name: CONTACT, description: 'A telephone or fax number, an email address, a web address or an IP address.'}
+- {name: ID, description: 'An account, record, licence, vehicle, device or other identifying number.'}
+- {name: ORGANIZATION, description: 'A named employer, school or institution that could single a person out.'}
+- {name: CONDITION, description: A health condition rare enough to single a person out.}
+- {name: OTHER, description: Any other unique identifying characteristic or code.}
+families:
+- names: [productive-vocabulary]
+  guidance: >-
+    The speaker is given a target word and says what it means. The target word, its inflections and everything that
+    explains its meaning are the task's own content and identify nobody: do not mark them. An anecdote of the
+    speaker's own inside the answer is marked as it would be anywhere.
+- names: [picture-description]
+  guidance: >-
+    The speaker describes a picture. People, animals and objects in the picture, and any name given to a figure in
+    it, are the task's own content: do not mark them. What the speaker says about their own life is marked as usual.
+- names: [cinderella-story, story-recall]
+  guidance: >-
+    The speaker retells a story they were given. The story's characters, places, ages, dates and events are the
+    task's own content, told exactly or not: do not mark them. What the speaker adds about their own life is marked
+    as usual.
+- names: [rainbow-passage, caterpillar-passage, harvard-sentences, cape-v-sentences]
+  guidance: >-
+    The speaker reads a given text aloud. Every word of that text, said correctly or not, is the task's own content:
+    do not mark it. Only what the speaker adds of their own is marked.
+- names: [open-response-questions]
+  guidance: >-
+    The speaker answers an open question about their own life. The question's own words are the task's content; the
+    answer is about the speaker and is marked as usual, places, people and dates included.

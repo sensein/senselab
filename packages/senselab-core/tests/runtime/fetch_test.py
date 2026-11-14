@@ -11,18 +11,22 @@ import stat
 import tempfile
 import time
 import unicodedata
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, BinaryIO
 
 import pytest
+import yaml
 from bounded_probe_fixture import MIB, FiniteSource, run_bounded
 from hypothesis import event, given, settings
 from hypothesis import strategies as st
+from lease_clock_fixture import ManualClock
 from planted_objects_fixture import bounded
 from senselab_core.cli import main as cli_main
 from senselab_core.runtime import fetch as fetch_module
+from senselab_core.runtime.clock import SystemClock
 from senselab_core.runtime.fetch import (
     DataFile,
     DataManifest,
@@ -32,12 +36,23 @@ from senselab_core.runtime.fetch import (
     default_cache_root,
     fetch,
 )
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.retry import RetryPolicy
 from senselab_core.runtime.storage import StorageDir, StorageFull, StorePolicy, StoreUnavailable
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import identity_digest
 from syscall_faults_fixture import Step, fail_at
 
 STALE_SECONDS = StorePolicy.load_default().staging_stale_s
+RETRY = ExecutionProfile.load().retry
+NO_WAIT = RetryPolicy(attempts=RETRY.attempts, first_backoff_s=0)
+"""A retry that never waits, for a transfer driven outside `fetch`, where no test clock reaches it."""
+
+
+def _backoffs() -> list[float]:
+    """The waits the profile's retry makes between its attempts: its first backoff, then doubling."""
+    return [RETRY.first_backoff_s * 2**n for n in range(RETRY.attempts - 1)]
+
 
 PAYLOAD = b"hello senselab data" * 1000
 SHA = hashlib.sha256(PAYLOAD).hexdigest()
@@ -118,14 +133,16 @@ def test_fetch_verifies_and_caches(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
-def test_partial_download_not_cached(tmp_path: Path) -> None:
-    """Partial download not cached."""
+def test_partial_download_not_cached(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
+    """Partial download not cached; the transfer is retried after waits that double, slept on the clock."""
+    clock = lease_clock()
 
     def opener(url: str) -> BinaryIO:
         return _Truncated(PAYLOAD)
 
     with pytest.raises(FetchError) as err:
-        fetch(_manifest(), cache_root=tmp_path, opener=opener)
+        fetch(_manifest(), cache_root=tmp_path, opener=opener, clock=clock)
+    assert clock.slept == _backoffs()
     assert "a/voice.wav" in str(err.value) and "https://x/a.wav" in str(err.value)
     assert not (tmp_path / "blobs").exists() or list((tmp_path / "blobs").iterdir()) == []
     assert list((tmp_path / "tmp").iterdir()) == []
@@ -205,16 +222,18 @@ def test_permissions_independent_of_umask(tmp_path: Path, umask: int) -> None:
 
 
 @pytest.mark.logic
-def test_stale_download_removed_but_live_one_kept(tmp_path: Path) -> None:
+def test_stale_download_removed_but_live_one_kept(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """Stale download removed but live one kept."""
+    clock = lease_clock(storage_root=tmp_path)
     (tmp_path / "tmp").mkdir()
     stale = tmp_path / "tmp" / ("5" * 32)
     live = tmp_path / "tmp" / ("1" * 32)
     stale.write_bytes(b"x")
+    clock.plant(stale)
+    clock.advance(STALE_SECONDS + 1)
     live.write_bytes(b"y")
-    old = time.time() - STALE_SECONDS - 60
-    os.utime(stale, (old, old))
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    clock.plant(live)
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), clock=clock)
     assert not stale.exists()
     assert live.exists()
 
@@ -421,7 +440,7 @@ def test_completion_marker_records_manifest_hash(tmp_path: Path) -> None:
     fetch(manifest, cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     marker = json.loads((_dataset(tmp_path) / ".complete").read_text())
     assert marker["manifest_sha256"] == manifest.digest()
-    assert (marker["format"], marker["name"], marker["version"]) == ("dataset-marker@2.0", "demo", "1")
+    assert (marker["format"], marker["name"], marker["version"]) == ("dataset-marker@2.1", "demo", "1")
 
 
 @pytest.mark.logic
@@ -449,17 +468,20 @@ def test_same_name_version_different_manifest_raises(tmp_path: Path) -> None:
 @pytest.mark.logic
 @pytest.mark.logic
 @pytest.mark.skipif(os.geteuid() == 0, reason="root removes a directory whatever its mode")
-def test_stale_cleanup_tolerates_unremovable_entries(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_stale_cleanup_tolerates_unremovable_entries(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, lease_clock: Callable[..., ManualClock]
+) -> None:
     """A stale entry that cannot be removed does not abort the fetch; the failure is logged."""
+    clock = lease_clock(storage_root=tmp_path)
     odd = tmp_path / "tmp" / ("5" * 32)
     (odd / "inner").mkdir(parents=True)
     (odd / "inner" / "x").write_bytes(b"x")
     (odd / "inner").chmod(0o500)
-    old = time.time() - STALE_SECONDS - 60
-    os.utime(odd, (old, old))
+    clock.plant(odd)
+    clock.advance(STALE_SECONDS + 1)
     try:
         with caplog.at_level("WARNING", logger="senselab"):
-            fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+            fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), clock=clock)
     finally:
         (odd / "inner").chmod(0o700)
     assert "cannot collect" in caplog.text
@@ -810,7 +832,15 @@ def probe_download_from_an_endless_source(directory: str, size: str) -> dict[str
     error = ""
     try:
         with open(staged, "xb") as out:
-            fetch_module._download("https://x/a", lambda url: source, out, size=int(size))  # type: ignore[arg-type,return-value]
+            fetch_module._download(
+                "https://x/a",
+                lambda url: source,  # type: ignore[arg-type,return-value]
+                out,
+                staged,
+                size=int(size),
+                retry=NO_WAIT,
+                clock=SystemClock(),
+            )
     except Exception as err:  # noqa: BLE001 - the report names whatever was raised
         error = f"{type(err).__name__}: {err}"
     return {"error": error, "served": source.served, "written": staged.stat().st_size}
@@ -840,13 +870,19 @@ def test_download_aborts_past_declared_size(tmp_path: Path, size: int) -> None:
 
 
 @pytest.mark.logic
-def test_download_short_of_declared_size_is_refused(tmp_path: Path) -> None:
+def test_download_short_of_declared_size_is_refused(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A source that ends before the declared size fails that source; the next mirror is tried."""
     manifest = _manifest([_file("v.wav", "https://x/a", mirrors=["https://m/a"])])
     routes = {"https://x/a": PAYLOAD[:-1], "https://m/a": PAYLOAD}
-    assert fetch(manifest, cache_root=tmp_path, opener=_opener(routes))["v.wav"].read_bytes() == PAYLOAD
-    with pytest.raises(FetchError, match="ended after"), open(tmp_path / ("6" * 32), "xb") as out:
-        fetch_module._download("https://x/a", _opener(routes), out, size=len(PAYLOAD))
+    assert (
+        fetch(manifest, cache_root=tmp_path, opener=_opener(routes), clock=lease_clock())["v.wav"].read_bytes()
+        == PAYLOAD
+    )
+    staged = tmp_path / ("6" * 32)
+    with pytest.raises(FetchError, match="ended after"), open(staged, "xb") as out:
+        fetch_module._download(
+            "https://x/a", _opener(routes), out, staged, size=len(PAYLOAD), retry=NO_WAIT, clock=SystemClock()
+        )
 
 
 @pytest.mark.logic
@@ -854,7 +890,7 @@ def test_download_short_of_declared_size_is_refused(tmp_path: Path) -> None:
 def test_non_https_refused(tmp_path: Path, url: str) -> None:
     """A non-https URL raises FetchError before any opener is called, through fetch or the default opener."""
     with pytest.raises(FetchError):
-        fetch_module._urlopen(url)
+        fetch_module._urlopen(url, 60)
     calls: list[str] = []
     with pytest.raises(FetchError) as err:
         fetch(_manifest([_file("a", url)]), cache_root=tmp_path, opener=_opener({url: PAYLOAD}, calls))
@@ -1098,7 +1134,106 @@ def test_a_blob_swapped_after_its_link_is_never_trusted_by_size(tmp_path: Path) 
 
 
 @pytest.mark.logic
-@pytest.mark.parametrize("op", ["collect", "fetch"])
-def test_a_hard_link_at_a_store_or_cache_clock_leaves_its_target_alone(tmp_path: Path, op: str) -> None:
-    """A hard link at the store's or the cache's `.clock`: the file it shares is not chmodded or re-stamped."""
-    assert bounded("probe_clock_hard_link", str(tmp_path), op) == {"error": "", "victim_unchanged": True}
+def test_superseded_version_links_removed(tmp_path: Path) -> None:
+    """Fetching a new version removes the other versions of that dataset, and nothing of any other dataset."""
+    fetch(_manifest(version="1"), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    fetch(_manifest(name="demo@1x"), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    unfinished = _dataset(tmp_path, version="0")
+    (unfinished / "files").mkdir(parents=True)
+    paths = fetch(_manifest(version="2"), cache_root=tmp_path, opener=_opener({}))
+    assert paths["a/voice.wav"].read_bytes() == PAYLOAD
+    assert sorted(p.name for p in (tmp_path / "datasets").iterdir()) == ["demo@0", "demo@1x@1", "demo@2"]
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+
+@pytest.mark.logic
+def test_an_older_version_fetched_again_keeps_the_current_one(tmp_path: Path) -> None:
+    """Fetching v1 after v2 superseded it keeps v2; fetching v2 again then removes v1."""
+    opener = _opener({"https://x/a.wav": PAYLOAD})
+
+    def versions() -> list[str]:
+        return sorted(p.name for p in (tmp_path / "datasets").iterdir())
+
+    for version, expected in (("1", ["demo@1"]), ("2", ["demo@2"]), ("1", ["demo@1", "demo@2"]), ("2", ["demo@2"])):
+        fetch(_manifest(version=version), cache_root=tmp_path, opener=opener)
+        assert versions() == expected, version
+    assert json.loads((_dataset(tmp_path, version="2") / ".complete").read_bytes())["superseded"] == ["1"]
+
+
+@pytest.mark.logic
+def test_fetch_retries_transient_by_packaged_policy(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
+    """A transient transfer failure is retried under the packaged policy; a permanent one goes to the next mirror."""
+    clock = lease_clock()
+    calls: list[str] = []
+    served = _opener({"https://x/a.wav": PAYLOAD, "https://m/b.wav": PAYLOAD[::-1]}, calls)
+
+    def opener(url: str) -> BinaryIO:
+        if url == "https://x/a.wav" and not calls:
+            calls.append(url)
+            raise ConnectionResetError(errno.ECONNRESET, "reset")
+        if url == "https://x/b.wav":
+            calls.append(url)
+            raise urllib.error.HTTPError(url, 404, "Not Found", http.client.HTTPMessage(), None)
+        return served(url)
+
+    manifest = _manifest(
+        [
+            _file("a.wav", "https://x/a.wav"),
+            _file("b.wav", "https://x/b.wav", PAYLOAD[::-1], mirrors=["https://m/b.wav"]),
+        ]
+    )
+    paths = fetch(manifest, cache_root=tmp_path, opener=opener, clock=clock)
+    assert paths["a.wav"].read_bytes() == PAYLOAD
+    assert clock.slept == [RETRY.first_backoff_s]
+    assert calls == ["https://x/a.wav", "https://x/a.wav", "https://x/b.wav", "https://m/b.wav"]
+    calls.clear()
+    clock.slept.clear()
+
+    def refused(url: str) -> BinaryIO:
+        calls.append(url)
+        raise ConnectionRefusedError(errno.ECONNREFUSED, "refused")
+
+    with pytest.raises(FetchError):
+        fetch(_manifest(version="2"), cache_root=tmp_path / "other", opener=refused, clock=clock)
+    assert len(calls) == RETRY.attempts and clock.slept == _backoffs()
+
+
+@pytest.mark.logic
+def test_a_fetch_request_waits_timeout_s(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`fetch` opens each URL with `timeout_s`, by default the profile's `timeouts.fetch_s`."""
+    seen: list[float] = []
+    packaged = ExecutionProfile.packaged()
+
+    def refuse(self: urllib.request.OpenerDirector, url: str, data: object = None, timeout: float = 0.0) -> object:
+        seen.append(timeout)
+        raise OSError("stop here")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refuse)
+    once = packaged.retry.model_copy(update={"attempts": 1})
+    for timeout in (None, 7.0):
+        with pytest.raises(FetchError):
+            fetch(_manifest(), cache_root=tmp_path, timeout_s=timeout, retry=once)
+    assert seen == [packaged.timeouts.fetch_s, 7.0]
+
+
+@pytest.mark.logic
+def test_data_fetch_waits_the_profiles_fetch_s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`senselab data fetch --profile FILE` opens each URL within that profile's `timeouts.fetch_s`."""
+    document = ExecutionProfile.packaged().model_dump(mode="json")
+    document["timeouts"]["fetch_s"] = 7.0
+    document["retry"]["attempts"] = 1
+    profile = tmp_path / "site.yaml"
+    profile.write_text(yaml.safe_dump(document))
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text(yaml.safe_dump(_manifest().model_dump(mode="json")))
+    seen: list[float] = []
+
+    def refuse(self: urllib.request.OpenerDirector, url: str, data: object = None, timeout: float = 0.0) -> object:
+        seen.append(timeout)
+        raise OSError("stop here")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refuse)
+    assert (
+        cli_main(["data", "fetch", str(manifest), "--cache", str(tmp_path / "cache"), "--profile", str(profile)]) == 1
+    )
+    assert seen == [7.0]

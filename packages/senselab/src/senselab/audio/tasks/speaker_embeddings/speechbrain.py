@@ -1,0 +1,134 @@
+"""Worker of backend `speechbrain` of `speaker_embeddings`: a SpeechBrain `EncoderClassifier`, one vector per item.
+
+`load` takes the pinned model in `init["model"]` (or `"stub": True` for the stub model); `handle` answers one
+`embedding@1.0` wire form, or one typed fault, per item. Each item is encoded alone: no item is padded to another's
+length. Imports are stdlib, numpy and `senselab_worker`; `torch` and the library load when the model is built.
+"""
+
+import hashlib
+import os
+import tempfile
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
+
+import numpy
+from senselab_worker.fake import injected
+from senselab_worker.units import NS_PER_S
+
+from senselab.item_faults import init_model, mono_samples
+
+WORKER_MODULE = "senselab.audio.tasks.speaker_embeddings.speechbrain"
+MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
+EXPECTED_RATE = 16_000
+STUB_DIMENSION = 192
+FBANK_HOP_SAMPLES = 160
+ENCODER_KERNELS_DILATIONS = ((5, 1), (3, 2), (3, 3), (3, 4), (1, 1))
+_INIT_KEYS = frozenset({"stub", "model", "device", "array_dir"})
+
+
+MIN_INPUT_FRAMES = max(d * (k - 1) // 2 for k, d in ENCODER_KERNELS_DILATIONS) + 1
+MIN_INPUT_NS = (MIN_INPUT_FRAMES - 1) * FBANK_HOP_SAMPLES * NS_PER_S // EXPECTED_RATE
+
+
+class StubModel:
+    """The fake stack's model: a vector derived from the samples, so different audio gives different vectors."""
+
+    def embed(self, samples: numpy.ndarray) -> numpy.ndarray:
+        """Return a finite `STUB_DIMENSION` vector seeded by the digest of `samples`."""
+        seed = int.from_bytes(hashlib.sha256(samples.tobytes()).digest()[:8], "big")
+        return numpy.random.default_rng(seed).standard_normal(STUB_DIMENSION).astype(numpy.float32)
+
+
+def unpinned_paths(paths: Mapping[str, str], snapshot: str) -> dict[str, str]:
+    """Return the checkpoint paths of `paths` that are not a file of the directory `snapshot`.
+
+    A path passes when it lies under `snapshot`, or when it resolves to the same file as an entry of `snapshot`: a
+    Hugging Face snapshot file links into `blobs/`, which may itself link into a hub-wide store.
+    """
+    root = snapshot.rstrip("/") + "/"
+    pinned = {os.path.realpath(os.path.join(top, name)) for top, _, names in os.walk(snapshot) for name in names}
+    return {
+        name: path
+        for name, path in paths.items()
+        if not (str(path).startswith(root) or os.path.realpath(str(path)) in pinned)
+    }
+
+
+class Encoder:
+    """The SpeechBrain speaker encoder, loaded from the pinned commit of the model onto one device."""
+
+    def __init__(self, model: Mapping[str, Any], device: str) -> None:
+        """Download the snapshot at the model's commit and build the classifier from that local copy.
+
+        Raises:
+            RuntimeError: when a checkpoint path of the classifier lies outside the snapshot.
+        """
+        from huggingface_hub import snapshot_download  # noqa: PLC0415 - loads when the encoder is built
+        from speechbrain.inference.speaker import EncoderClassifier  # noqa: PLC0415 - as above
+
+        snapshot = snapshot_download(str(model["id"]), revision=str(model["identity"]))
+        self.device = device
+        self._scratch = tempfile.TemporaryDirectory(prefix="speechbrain-")
+        self.classifier = EncoderClassifier.from_hparams(
+            source=snapshot,
+            savedir=self._scratch.name,
+            run_opts={"device": device},
+            overrides={"pretrained_path": snapshot},
+        )
+        stray = unpinned_paths(self.classifier.hparams.pretrainer.paths, snapshot)
+        if stray:
+            raise RuntimeError(f"checkpoints load from outside the pinned snapshot {snapshot}: {stray}")
+
+    def embed(self, samples: numpy.ndarray) -> numpy.ndarray:
+        """Return the 1-D embedding of `samples` as float32."""
+        import torch  # noqa: PLC0415 - loads when the encoder is built
+
+        with torch.inference_mode():
+            vector = self.classifier.encode_batch(torch.from_numpy(samples[None, :]).to(self.device))
+        return numpy.asarray(vector.reshape(-1).detach().cpu().numpy(), dtype=numpy.float32)
+
+
+@dataclass(frozen=True)
+class State:
+    """A loaded backend: the model (a stub or the encoder) and the space its vectors live in."""
+
+    model: Any  # noqa: ANN401 - a StubModel or an Encoder
+    space: str
+
+
+def load(init: dict[str, Any]) -> State:
+    """Return the worker's state from `init`.
+
+    `init` holds `model` (`{"source": "hf", "id", "identity"}`, `identity` a 40-hex commit) and `device`, or
+    `"stub": True`; it may hold `array_dir`.
+
+    Raises:
+        ValueError: on an unknown key, a model that is not a pinned hub commit, or both `stub` and `model`.
+    """
+    model = init_model(init, _INIT_KEYS, "speechbrain")
+    if model is None:
+        return State(StubModel(), f"stub:{MODEL_ID}")
+    return State(Encoder(model, str(init.get("device", "cpu"))), f"{model['id']}@{model['identity']}")
+
+
+def handle(state: State, items: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return one `{"outputs": {"embedding": <embedding@1.0 wire form>}}` per item, or its typed fault.
+
+    Raises:
+        ValueError: on a backend param; this backend takes none.
+    """
+    if params.get("backend_params"):
+        raise ValueError(f"unknown backend params {sorted(params['backend_params'])}; known: []")
+    faults = injected(params)
+    results: list[dict[str, Any]] = []
+    for item in items:
+        try:
+            samples, _ = mono_samples(item, faults, EXPECTED_RATE, "speechbrain", MIN_INPUT_NS)
+            vector = state.model.embed(samples)
+            results.append(
+                {"outputs": {"embedding": {"format": "embedding@1.0", "vector": vector, "space": state.space}}}
+            )
+        except Exception as exc:  # noqa: BLE001 - every per-item failure is reported as that item's typed fault
+            results.append({"error": exc})
+    return results

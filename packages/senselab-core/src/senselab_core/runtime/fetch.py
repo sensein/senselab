@@ -18,11 +18,11 @@ URLs are fetched, redirects included.
 """
 
 import errno
+import functools
 import json
 import logging
 import os
 import re
-import stat
 import unicodedata
 import urllib.parse
 import urllib.request
@@ -30,16 +30,22 @@ import uuid
 from collections.abc import Callable, Mapping
 from http.client import HTTPMessage
 from pathlib import Path
-from typing import IO, Annotated, Any, BinaryIO, Literal, NamedTuple
+from typing import IO, TYPE_CHECKING, Annotated, Any, BinaryIO, Literal, NamedTuple
 
-import yaml
 from pydantic import Field, ValidationError, field_validator, model_validator
 from senselab_worker.canonical import is_portable, jcs_dumps
 from senselab_worker.digest import SHA256_HEX, file_digest, identity_digest
 
 from senselab_core.kernel._base import Frozen, NonEmptyStr
 from senselab_core.kernel.license import License
+from senselab_core.kernel.prov import Record, Vocabulary
+from senselab_core.runtime.clock import Clock, SystemClock
+from senselab_core.runtime.config import ConfigError, load_yaml
+from senselab_core.runtime.network import Network, Offline, offline
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import (
+    ASIDE_NAME,
     PRIVATE_DIR_MODE,
     Staging,
     StorageDir,
@@ -53,12 +59,15 @@ from senselab_core.runtime.storage import (
 )
 
 MANIFEST_FORMAT = "data-manifest@2.0"
-MARKER_FORMAT = "dataset-marker@2.0"
+MARKER_FORMAT = "dataset-marker@2.1"
 CACHE_ENV = "SENSELAB_DATA_CACHE"
 ALLOWED_SCHEMES = frozenset({"https"})
 FILES_DIR = "files"
 COMPLETE_MARKER = ".complete"
 _CHUNK = 1 << 20
+if TYPE_CHECKING:
+    from senselab_core.runtime.bep028 import LabelMap
+
 logger = logging.getLogger("senselab")
 
 LINK_STAGING_NAME = re.compile(r"^\..+\.[0-9a-f]{32}$")
@@ -183,17 +192,20 @@ class DataManifest(Frozen):
         """Return `identity_digest("data-manifest@3", <the manifest's JSON form>)`."""
         return identity_digest("data-manifest@3", self.model_dump(mode="json"))
 
+    def file_entities(self, labels: "LabelMap", vocabulary: Vocabulary | None = None) -> list[Record]:
+        """Return a `senselab:File` entity per file, named by its sha256 and a label of `labels`; no path is in them.
+
+        Each file's dataset path is recorded under its label in the run's private label map only.
+        """
+        return labels.entities([(f"content:{f.sha256}", f.path) for f in self.files], vocabulary)
+
     @classmethod
     def load(cls, path: Path) -> "DataManifest":
         """Read and validate the manifest at `path`; raise `ManifestError` naming the file and the cause."""
         try:
-            raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-        except OSError as err:
-            raise ManifestError(f"cannot read manifest {path}: {err}") from err
-        except yaml.YAMLError as err:
-            raise ManifestError(f"manifest {path} is not valid YAML: {err}") from err
-        if not isinstance(raw, dict):
-            raise ManifestError(f"manifest {path} must be a mapping with format {MANIFEST_FORMAT!r}")
+            raw = load_yaml(Path(path), "manifest")
+        except ConfigError as err:
+            raise ManifestError(str(err)) from err
         try:
             return cls.model_validate(raw)
         except ValidationError as err:
@@ -242,52 +254,76 @@ def _https_opener() -> urllib.request.OpenerDirector:
     return opener
 
 
-def _urlopen(url: str) -> BinaryIO:
-    """Open `url` over `https`; raise `FetchError` before connecting if its scheme is not allowed."""
+def _urlopen(url: str, timeout_s: float) -> BinaryIO:
+    """Open `url` over `https`, waiting `timeout_s` seconds on the connection.
+
+    Raises:
+        FetchError: the scheme is not allowed, before any connection is made.
+    """
     _require_https(url)
-    return _https_opener().open(url, timeout=60)  # type: ignore[no-any-return]
+    return _https_opener().open(url, timeout=timeout_s)  # type: ignore[no-any-return]
 
 
-def _remove_stale_downloads(top: StorageDir, tmp: StorageDir, stale_s: int) -> None:
-    """Remove downloads in `tmp` older than `stale_s` on the cache's own clock; failures are logged."""
+def _offline(url: str) -> BinaryIO:
+    raise offline(f"downloading {url}")
+
+
+def _remove_stale_downloads(top: StorageDir, tmp: StorageDir, stale_s: int, clock: Clock) -> None:
+    """Remove downloads in `tmp` older than `stale_s` on the clock's storage time; failures are logged."""
     try:
-        cutoff = top.fs_now() - stale_s
+        cutoff = clock.storage_now(top) - stale_s
     except (OSError, WrongKindError) as err:
         logger.warning("cannot clear stale downloads in %s: %s", tmp.path, err)
         return
     tmp.remove_older(cutoff)
 
 
-def _download(url: str, opener: Callable[[str], BinaryIO], out: BinaryIO, *, size: int) -> None:
-    """Stream `url` into the open file `out`, reading at most `size + 1` bytes.
+def _download(  # noqa: PLR0913 - the source, the file it streams into, and the bound, retry and clock of the transfer
+    url: str,
+    opener: Callable[[str], BinaryIO],
+    out: BinaryIO,
+    where: Path,
+    *,
+    size: int,
+    retry: RetryPolicy,
+    clock: Clock,
+) -> None:
+    """Stream `url` into the open file `out` (at `where`), reading at most `size + 1` bytes.
+
+    A transfer that fails transiently (`faults.is_transient` of the opener's or the read's error) is
+    started again from the first byte under `retry`, its waits slept on `clock`.
 
     Raises:
         FetchError: the URL is not `https`, the opener or a read failed, or the source served more
             or fewer than `size` bytes.
-        OSError: the file could not be written.
+        StoreUnavailable: the file could not be written.
     """
     _require_https(url)
-    try:
-        source = opener(url)
-    except Exception as err:  # noqa: BLE001 - any opener failure is this source's failure
-        raise _SourceError(f"{type(err).__name__}: {err}") from err
-    received = 0
-    with source:
-        while True:
-            try:
-                chunk = source.read(min(_CHUNK, size + 1 - received))
-            except Exception as err:  # noqa: BLE001 - a dropped connection is this source's failure
-                raise _SourceError(f"{type(err).__name__}: {err}") from err
-            if not chunk:
-                break
-            received += len(chunk)
-            if received > size:
-                raise _SourceError(f"served more than the declared {size} bytes")
-            out.write(chunk)
+
+    def transfer() -> None:
+        out.seek(0)
+        out.truncate()
+        received = 0
+        with opener(url) as source:
+            while chunk := source.read(min(_CHUNK, size + 1 - received)):
+                received += len(chunk)
+                if received > size:
+                    raise _SourceError(f"served more than the declared {size} bytes")
+                try:
+                    out.write(chunk)
+                except OSError as err:
+                    raise storage_fault(err, where) from err
         if received < size:
             raise _SourceError(f"ended after {received} of the declared {size} bytes")
-        out.flush()
-        os.fsync(out.fileno())
+
+    try:
+        retry_on_transient_error(transfer, retry, clock=clock)
+    except (_SourceError, StoreUnavailable, Offline):
+        raise
+    except Exception as err:  # noqa: BLE001 - any other failure of the opener or a read is this source's
+        raise _SourceError(f"{type(err).__name__}: {err}") from err
+    out.flush()
+    os.fsync(out.fileno())
 
 
 def _commit(  # noqa: PLR0913 - source and target are each a directory and a name
@@ -360,24 +396,23 @@ def _stamp(st: os.stat_result) -> BlobStamp:
     return BlobStamp(st.st_size, st.st_mtime_ns, st.st_ino, st.st_ctime_ns)
 
 
-def _regular(path: Path) -> os.stat_result | None:
-    """Return the `lstat` of `path` if it is a regular file, None if it is absent or anything else."""
-    try:
-        st = os.lstat(path)
-    except FileNotFoundError:
-        return None
-    return st if stat.S_ISREG(st.st_mode) else None
-
-
 class _BlobFormat:
     """A blob as an addressed format: `blobs/<sha256 of its bytes>`."""
 
     name = "fetch-blob"
 
     def address_of(self, path: Path) -> str:
-        if _regular(path) is None:
+        with StorageDir.open_root(path.parent) as blobs:
+            try:
+                fd = blobs.open_regular(path.name)
+            except WrongKindError:
+                fd = None
+        if fd is None:
             raise BlobMismatchError(f"blob {path} is not a regular file")
-        return file_digest("file@1", path)
+        try:
+            return _hashed(fd)
+        finally:
+            os.close(fd)
 
     def address_at(self, path: Path) -> str:
         return path.name
@@ -429,6 +464,8 @@ def _ensure_blob(  # noqa: PLR0913 - the per-file step of _fetch_into, passed th
     recorded: Mapping[str, BlobStamp],
     verify: str,
     file_mode: int,
+    retry: RetryPolicy,
+    clock: Clock,
 ) -> tuple[Path, BlobStamp | None]:
     """Return `blobs/<sha256>` holding the file's bytes, and the stamp of the inode this call verified there.
 
@@ -444,7 +481,7 @@ def _ensure_blob(  # noqa: PLR0913 - the per-file step of _fetch_into, passed th
         try:
             with Staging(tmp, mode=PRIVATE_DIR_MODE) as private:
                 with os.fdopen(private.open_new(STAGED_BLOB, file_mode, grammar=STAGED_NAME), "w+b") as out:
-                    _download(url, opener, out, size=file.size)
+                    _download(url, opener, out, private.path / STAGED_BLOB, size=file.size, retry=retry, clock=clock)
                     actual = _hashed(out.fileno())
                     if actual != file.sha256:
                         tried.append(f"{url} (sha256 {actual[:12]}..., expected {file.sha256[:12]}...)")
@@ -583,13 +620,23 @@ def _foreign_files(files_dir: Path, manifest: DataManifest) -> list[str]:
     return sorted(foreign)
 
 
-def _read_marker(ds: StorageDir, manifest: DataManifest, tmp: StorageDir) -> tuple[dict[str, BlobStamp], str]:
-    """Return `(recorded blob stamps, state)`; state is `"valid"`, `"absent"` or `"corrupt"`.
+def _superseded(record: Mapping[str, Any]) -> frozenset[str] | None:
+    """Return the versions a marker record says its version replaced as current, None if it states none legibly."""
+    value = record.get("superseded")
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        return None
+    return frozenset(value)
+
+
+def _read_marker(
+    ds: StorageDir, manifest: DataManifest, tmp: StorageDir
+) -> tuple[dict[str, BlobStamp], str, frozenset[str]]:
+    """Return `(recorded blob stamps, state, superseded versions)`; state is `"valid"`, `"absent"` or `"corrupt"`.
 
     The marker is read through `ds` without following or blocking. Anything but a regular file there is
-    moved into `tmp` and the state is `"corrupt"`. A marker that is not a whole `dataset-marker@2.0`
-    record is `"corrupt"` and contributes no stamps, but a dataset or manifest digest it still names must
-    be this one.
+    moved into `tmp` and the state is `"corrupt"`. A marker that is not a whole `dataset-marker@2.1`
+    record is `"corrupt"` and contributes no stamps or versions, but a dataset or manifest digest it still
+    names must be this one.
 
     Raises:
         ManifestConflictError: the marker belongs to another dataset or names another manifest.
@@ -602,13 +649,13 @@ def _read_marker(ds: StorageDir, manifest: DataManifest, tmp: StorageDir) -> tup
         logger.warning("moving aside the completion marker %s: %s", path, err)
         if ds.kind(COMPLETE_MARKER) not in (None, "file"):
             ds.set_aside(COMPLETE_MARKER, tmp)
-        return {}, "corrupt"
+        return {}, "corrupt", frozenset()
     if data is None:
-        return {}, "absent"
+        return {}, "absent", frozenset()
     record = _marker_record(data)
     if record is None:
         logger.warning("ignoring unreadable completion marker %s", path)
-        return {}, "corrupt"
+        return {}, "corrupt", frozenset()
     recorded_digest = record.get("manifest_sha256")
     if isinstance(recorded_digest, str) and recorded_digest != manifest.digest():
         raise ManifestConflictError(
@@ -619,33 +666,47 @@ def _read_marker(ds: StorageDir, manifest: DataManifest, tmp: StorageDir) -> tup
         found = _marker_address(record, path)
     except ManifestConflictError:
         logger.warning("ignoring malformed completion marker %s", path)
-        return {}, "corrupt"
+        return {}, "corrupt", frozenset()
     if found != ds.path.name:
         raise ManifestConflictError(f"completion marker {path} belongs to {found}; remove {ds.path} to refetch")
-    stamps = _stamps(record.get("stamps"))
-    if record.get("format") != MARKER_FORMAT or stamps is None or not isinstance(recorded_digest, str):
+    stamps, superseded = _stamps(record.get("stamps")), _superseded(record)
+    if (
+        record.get("format") != MARKER_FORMAT
+        or stamps is None
+        or superseded is None
+        or not isinstance(recorded_digest, str)
+    ):
         logger.warning("ignoring malformed completion marker %s", path)
-        return {}, "corrupt"
-    return stamps, "valid"
+        return {}, "corrupt", frozenset()
+    return stamps, "valid", superseded
 
 
-def fetch(
+def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, verification and policies
     manifest: DataManifest,
     *,
     cache_root: Path,
     opener: Callable[[str], BinaryIO] | None = None,
     verify: Literal["size", "full"] = "size",
     policy: StorePolicy | None = None,
+    retry: RetryPolicy | None = None,
+    network: Network = "online",
+    timeout_s: float | None = None,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> dict[str, Path]:
     """Download every file of `manifest` into the cache and return `{file path: path under datasets/.../files/}`.
 
     A present blob is reused with no network call. `verify="size"` trusts a regular-file blob whose
     `BlobStamp` (size, mtime, inode, ctime) equals the one recorded when its dataset was completed; `"full"`,
     and any other blob, re-hashes it. A download streams to `tmp/<uuid>`, is bounded by the declared
-    size, is hashed, and is linked into `blobs/<sha256>` only on a match (first writer wins); on a
+    size, is hashed, and is linked into `blobs/<sha256>` only on a match (first writer wins); a transfer
+    that fails transiently is retried under `retry` (the packaged `laptop` profile's when None), a request waits
+    `timeout_s` seconds (its `timeouts.fetch_s` when None), and on a
     mismatch or failed transfer the next mirror is tried. When every link is in place
     `datasets/<name>@<version>/.complete` records the dataset, the manifest digest and the blob stamps;
-    it is rewritten when a stamp has changed, so a repaired blob is trusted again by size.
+    it is rewritten when a stamp has changed, so a repaired blob is trusted again by size. The marker also
+    lists the versions this one superseded as current: each other completed version of the dataset whose
+    marker does not list this version is superseded, and its directory removed (blobs are kept). There is
+    no other version ordering: a version that once superseded this one is kept when this one is fetched again.
     A dataset without a valid marker must hold no file outside the manifest.
 
     Raises:
@@ -654,15 +715,23 @@ def fetch(
             symlink or non-directory is where a directory of a manifest path belongs.
         StoreUnavailable: the cache could not be read or written; `StorageFull` when out of space.
         WrongKindError: an object of the wrong kind in the cache could not be moved aside.
+        Offline: `network` is `offline` and a file is not in the cache.
     """
     policy = policy if policy is not None else StorePolicy.load_default()
+    retry = retry if retry is not None else ExecutionProfile.load().retry
     dir_mode = shared_dir_mode(policy)
-    open_url = opener if opener is not None else _urlopen
+    if opener is not None:
+        open_url = opener
+    else:
+        bound = timeout_s if timeout_s is not None else ExecutionProfile.packaged().timeouts.fetch_s
+        open_url = functools.partial(_urlopen, timeout_s=bound)
+    if network == "offline":
+        open_url = _offline
     root = Path(cache_root)
     try:
         with StorageDir.open_root(root, create=True, mode=dir_mode) as top:
             with top.walk("tmp", create=True, mode=dir_mode, aside=lambda: None) as tmp:
-                return _fetch_into(manifest, top, tmp, open_url, verify, policy)
+                return _fetch_into(manifest, top, tmp, open_url, verify, policy, retry, clock)
     except OSError as err:
         raise storage_fault(err, root) from err
 
@@ -674,6 +743,8 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
     open_url: Callable[[str], BinaryIO],
     verify: str,
     policy: StorePolicy,
+    retry: RetryPolicy,
+    clock: Clock,
 ) -> dict[str, Path]:
     file_mode, _ = committed_modes(policy)
     dir_mode = shared_dir_mode(policy)
@@ -681,12 +752,13 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
     def aside() -> StorageDir:
         return StorageDir(tmp.path, os.dup(tmp.fd))
 
-    _remove_stale_downloads(top, tmp, policy.staging_stale_s)
+    _remove_stale_downloads(top, tmp, policy.staging_stale_s, clock)
     with (
         top.walk("blobs", create=True, mode=dir_mode, aside=aside) as blobs,
-        top.walk("datasets", f"{manifest.name}@{manifest.version}", create=True, mode=dir_mode, aside=aside) as ds,
+        top.walk("datasets", create=True, mode=dir_mode, aside=aside) as datasets,
+        datasets.walk(f"{manifest.name}@{manifest.version}", create=True, mode=dir_mode, aside=aside) as ds,
     ):
-        recorded, marker_state = _read_marker(ds, manifest, tmp)
+        recorded, marker_state, superseded = _read_marker(ds, manifest, tmp)
         with ds.walk(FILES_DIR, create=True, mode=dir_mode, aside=aside) as files:
             if marker_state != "valid" and (foreign := _foreign_files(files.path, manifest)):
                 raise ManifestConflictError(
@@ -696,16 +768,19 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
             result: dict[str, Path] = {}
             stamps: dict[str, BlobStamp] = {}
             for file in manifest.files:
-                blob, stamp = _ensure_blob(file, blobs, tmp, open_url, recorded, verify, file_mode)
+                blob, stamp = _ensure_blob(file, blobs, tmp, open_url, recorded, verify, file_mode, retry, clock)
                 result[file.path] = _link(files, file.path, blob, dir_mode)
                 if stamp is not None:
                     stamps[file.sha256] = stamp
-        if marker_state != "valid" or stamps != recorded:
+        replaced = _replaced(datasets, manifest)
+        now_superseded = superseded.union(*replaced.values())
+        if marker_state != "valid" or stamps != recorded or now_superseded != superseded:
             record = {
                 "format": MARKER_FORMAT,
                 "name": manifest.name,
                 "version": manifest.version,
                 "manifest_sha256": manifest.digest(),
+                "superseded": sorted(now_superseded),
                 "stamps": {
                     sha: {
                         "size": st.size,
@@ -726,7 +801,38 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
                     replace=marker_state != "absent",
                     keeps=lambda: _read_marker(ds, manifest, tmp)[1] == "valid",
                 )
+        for name in replaced:
+            try:
+                moved = datasets.set_aside(name, tmp)
+                (tmp if moved.parent == tmp.path else datasets).remove_owned(moved.name, pattern=ASIDE_NAME)
+            except (OSError, WrongKindError) as err:
+                logger.warning("cannot remove the superseded dataset %s: %s", datasets.path / name, err)
         return result
+
+
+def _replaced(datasets: StorageDir, manifest: DataManifest) -> dict[str, frozenset[str]]:
+    """Return the versions of `manifest`'s dataset this fetch makes current over, by directory name.
+
+    Each is a completed `<name>@<v>` whose marker names this dataset and does not list this version as one
+    it superseded, with the versions it stands for: its own and those it superseded. A version that once
+    superseded this one stays current. A directory without a legible marker is left; read failures are logged.
+    """
+    replaced: dict[str, frozenset[str]] = {}
+    for name in datasets.listdir():
+        if name == f"{manifest.name}@{manifest.version}" or not name.startswith(f"{manifest.name}@"):
+            continue
+        try:
+            with datasets.child(name) as other:
+                record = _marker_record(other.read_regular(COMPLETE_MARKER, limit=MARKER_LIMIT) or b"")
+        except (OSError, ValueError) as err:
+            logger.warning("cannot read the dataset %s: %s", datasets.path / name, err)
+            continue
+        if record is None or record.get("name") != manifest.name or not isinstance(record.get("version"), str):
+            continue
+        listed = _superseded(record) or frozenset()
+        if manifest.version not in listed:
+            replaced[name] = listed | {record["version"]}
+    return replaced
 
 
 __all__ = [

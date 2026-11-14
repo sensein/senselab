@@ -1,6 +1,6 @@
 """Fail when a Python file or function tracked under ``packages/`` is over its length budget.
 
-Four limits, each with its derivation, are in ``scripts/data/size_budget.yaml``: lines per source file, lines per
+Four limits are in ``scripts/data/size_budget.yaml``: lines per source file, lines per
 test file, and lines per function in each. Every run prints the longest files and functions, so a change that
 brings one near its limit is visible before it passes it.
 
@@ -21,7 +21,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 BUDGET = Path(__file__).resolve().parent / "data" / "size_budget.yaml"
-BUDGET_FORMAT = "size-budget@1.0"
+BUDGET_FORMAT = "size-budget@2.0"
 BUDGETED = "packages/"
 LIMITS = ("src_file_max_lines", "test_file_max_lines", "src_function_max_lines", "test_function_max_lines")
 REPORTED = 5
@@ -43,18 +43,16 @@ class Measure(NamedTuple):
 
 
 def load_budget(path: Path = BUDGET) -> Budget:
-    """Return the budget file at ``path``; an entry without a value and a derivation is refused."""
+    """Return the budget file at ``path``; a limit that is not a positive integer is refused."""
     raw = yaml.safe_load(path.read_text())
     if raw.get("format") != BUDGET_FORMAT:
         raise ValueError(f"{path}: format is {raw.get('format')!r}, not {BUDGET_FORMAT!r}")
     limits = {}
     for name in LIMITS:
-        entry = raw.get(name)
-        if not isinstance(entry, dict) or not str(entry.get("derivation", "")).strip():
-            raise ValueError(f"{path}: {name} needs a value and a derivation")
-        if not isinstance(entry.get("value"), int) or isinstance(entry["value"], bool) or entry["value"] <= 0:
+        value = raw.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{path}: {name} is not a positive integer")
-        limits[name] = entry["value"]
+        limits[name] = value
     exempt = set()
     for entry in raw.get("exempt") or []:
         if not str(entry.get("reason", "")).strip():

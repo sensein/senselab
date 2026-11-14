@@ -1,0 +1,16 @@
+format: scale-budgets@1.0
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under benchmarks/scale/budgets.yaml.
+# Per-item cost at 10⁴ items over per-item cost at 10² items, at most, for each of the per_item measures.
+flat_ratio: 1.25
+# Per module, the share a per-item cost may rise over its last measured value before a merge is blocked.
+regression_band: {}
+# Per suite entry label, ceilings: wall seconds per item, peak memory bytes, files and bytes written per item.
+per_item:
+  diarize~pyannote: {per_item_s: 0.056, peak_rss_bytes: 476000000, files_per_item: 7.29, bytes_per_item: 7860}
+  fake.echo~fake: {per_item_s: 0.0149, peak_rss_bytes: 360000000, files_per_item: 2.72, bytes_per_item: 4610}
+  pii_spans~transformers: {per_item_s: 12.3, peak_rss_bytes: 529000000, files_per_item: 8.55, bytes_per_item: 14600}
+  pii_spans~vllm: {per_item_s: 3.62, peak_rss_bytes: 503000000, files_per_item: 8.45, bytes_per_item: 15700}
+  signal.resample~numpy-sinc: {per_item_s: 0.0519, peak_rss_bytes: 514000000, files_per_item: 3.88, bytes_per_item: 107000}
+  speaker_embeddings~speechbrain: {per_item_s: 0.0411, peak_rss_bytes: 471000000, files_per_item: 4.79, bytes_per_item: 8090}
+  speech_to_text~crisperwhisper: {per_item_s: 1.39, peak_rss_bytes: 466000000, files_per_item: 3.54, bytes_per_item: 7450}
+  speech_to_text~transformers: {per_item_s: 0.246, peak_rss_bytes: 3370000000, files_per_item: 3.54, bytes_per_item: 7050}

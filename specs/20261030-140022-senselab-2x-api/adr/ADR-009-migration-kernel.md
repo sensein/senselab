@@ -1,6 +1,6 @@
 # ADR-009: Migration by use case, the kernel boundary, and faults typed at the source
 
-**Status:** accepted 2026-10-30; amended 2026-10-31, 2026-11-01.
+**Status:** accepted 2026-10-30; amended 2026-10-31, 2026-11-01, 2026-11-11.
 
 ## Context
 - Architect review §13 (R-49): the migration had no boundary and no budget for coexistence.
@@ -94,6 +94,77 @@ Ruling H-R57 and the F3 and F4 tasks ([`rulings.md`](../rulings.md)).
   file, OS and import machinery; the kernel keeps the value types and the `SourceReader` protocol, and the
   runtime supplies the reader and loads the equivalence table.
 
+## Amendment 2026-11-11: one bisection engine, and a crash is charged to the item that repeats it (R-288, Task 24-4)
+
+Finding R-288 ([`review-register.md`](../review-register.md)); owner ruling of 2026-11-10. Extends the per-item isolation
+this ADR's Decision gives a fault: a worker that dies on one item of a request must not fail its request-mates, and must
+not be retried without end.
+
+- **One engine.** `execute` (`runtime/execution/job.py`) is the only place a request is split. The flag
+  `bisect_resource` and the Pool's own split (`pool_worker.bisect`, `whole`, `_split_requests`) are deleted. `InProcess`
+  and a pool worker send through the same `execute`; a pool worker adds only the bookkeeping that is its own (the
+  `Sent` records, the handover of outcomes, the claim's cancellation).
+- **Two triggers split a request to a loaded worker.** A *resource* trigger: a request that raised a resource-class
+  exception (`splits` of 2026-11-09, now `trigger_of`) or answered a resource fault for each of several jobs. A
+  `WorkerFatal` the worker typed `resource` is among these (the worker's verdict wins: the lone job fails `resource`
+  and moves to a larger class, uncharged). A *crash* trigger: the request raised `WorkerLost`, `ProtocolError`, or any
+  other `WorkerFatal` reported for a request the worker had loaded for (a line it could not read, an exception outside
+  its handler). A request of several jobs that fires either is sent again as two requests, each split in turn.
+- **A load is not an item.** What checkout, start, load or reload raised (`WorkerLoadFailed`, a `WorkerFatal` that is a
+  load: `from_load`) never fires a trigger and is never split or retried here: it is the env's, as 2026-11-10's
+  `execution.md` §3.4 states. A `WorkerFatal` raised by a request to a worker that had loaded is a crash. This reverses
+  what Task 24-3 left the Pool: it stopped bisecting any `WorkerFatal`, because the type could not tell a load from a
+  request; the type now says which (`from_load` is set where the worker reports it, true at load and on a reload, false
+  on a request), so only the load case is excluded.
+- **Charging.** A request of one job whose worker was lost is sent again. A job that is lost
+  `faults.crashes_charged` times in a row, each time alone, is **charged to the item**: it is `Failed` with
+  `ItemCrashedWorker`, a `content`-class typed fault (`gap: false`) chained to the last loss, under its own key, and the
+  Pool applies the content effect (`content_attempts`, then `dead/`). The jobs that did not repeat the crash complete:
+  a request that crashed several jobs is halved until every job is alone, and a job that completes after a loss was
+  not the cause. An item charged here is the item's fault and so does not count toward holding the env.
+- **A loss the jobs survive is infrastructure, and the env is told.** A lost request all of whose jobs completed
+  (a lone job that completes on the retry, or a request whose halves all complete) is no job's failure. The item
+  reports each such loss in its outcome record (`survived`, the worker's infrastructure fault record), and the Pool
+  records it as an uncharged `failed` event of the env (not `replaced`) counted in `infrastructure_replacements`, so a
+  host that keeps killing workers reaches `BrokenEnv` as it did when the Pool's own split returned the lone job's
+  `WorkerLost`. The event names the item's first job and its key. A loss that a charged job caused is the item's, and
+  is not reported.
+- **`faults.crashes_charged` is a profile key** (default 2 in both packaged profiles) with a protocol derivation, not
+  a measurement (`config-derivations.md`): one loss of a worker may be the host's (a node fault, an external kill), and
+  a second loss of the same job alone on a worker started after the first cannot be, so two is the least that tells the
+  host from the item. It is at least 1; 1 charges on the first loss of a lone job.
+- **"Fresh worker"** is what the code guarantees, no more: a `WorkerClient` that fails a request is closed
+  (`_fail`), so it is not alive, and `WorkerSet`'s next checkout closes it and starts another process; a test
+  (`worker_set_test`) shows the next checkout's process id differs. A host or server worker runs in this process or over
+  a running server and is not replaced, so for those the retry is a second request to the same worker, not a new
+  process. The engine counts losses of a lone job in a row and does not know process identity.
+- **Cancellation.** A claim that is lost or halted sets the cancel flag `execute` is given; it is read before each
+  request and after any exception, so the `WorkerLost` that `WorkerSet.abandon` causes is the claim stopping, never a
+  crash to split or retry. `execute` then raises `Abandoned` carrying the outcomes already final.
+- **What did not change:** the fault taxonomy (ADR-009 Decision, the 2026-10-31 typed faults) and the rule that no
+  failure is stored.
+
+## Amendment 2026-11-12: placement fits a unit to its class (Task 24-7)
+
+Owner ruling of 2026-11-10: the probe should catch a load that cannot fit, instead of the run discovering it as an
+out-of-memory crash.
+
+- **Recorded.** A load-time resource fault writes a durable `unfit` fact for (unit, resource class) beside the unit's
+  other measure records (`measure-unfit@1.0`, ADR-006), bound to the code that failed. Every class whose load fails
+  writes its own.
+- **Judged.** Placement skips a class that is recorded unfit for the unit, or too small for it
+  (`resident + m0 > sizing.memory_headroom × grant`, both from the probe's measures), and moves the unit to the next
+  larger class of its device and GPU type. If none fits, the plan stops as `Unplaceable`, a plan outcome that no
+  environment is charged for; `status` and `explain` name the unit, each class tried and the numbers
+  (`calibration-probe.md` §7.5). `start()` and `coordinate()` both apply it.
+- **Fallback.** A load OOM that placement did not predict still holds the environment (Amendment 2026-11-11 and
+  `execution.md` §3.4), re-places the job on a larger class, and now records the unfit fact, so the next plan and the
+  next release never try the same class again.
+- **Gaps closed.** No release of a unit's jobs is unjudged (one gate, `ProbeMachine._release`); a probe's load fault is
+  recorded rather than ignored at batch below 2; resident memory is compared with the grant.
+- **The residual.** An unresolved unit, or one released on a late hello, has no digest to record under and stays
+  unjudged; its load OOM is held as an environment fault, as before. Accepted by the controller on 2026-11-12 per run-without-stalls, confirmed by the owner on 2026-11-14.
+
 ## Amendment log
 
 - 2026-10-30: the worker runtime is the base of the dependency direction, not a kernel dependent.
@@ -102,3 +173,6 @@ Ruling H-R57 and the F3 and F4 tasks ([`rulings.md`](../rulings.md)).
   triage's decision layer is superseded (H-R48, H-R51, H-R52).
 - 2026-11-01: `src/` is restored to 1.x as on `alpha` and never edited by 2.x (D-6).
 - 2026-11-01: the kernel does no I/O; decoding, stamping and the equivalence table load in the runtime (F3, F4, H-R57).
+- 2026-11-01: worker placement. A backend of an isolated or server env declares `worker_sources`: each module of its worker, by dotted name, to its source file, the `worker` module among them. `ensure_env` copies each file into the env's site-packages at its dotted path (namespace packages, no `__init__`), beside the `senselab_worker` overlay, and replaces a copy whose bytes differ from the source; the wheel set is unchanged. `WorkerClient` launches `-m senselab_worker.launch <worker>` unchanged. A placed module imports only stdlib, numpy, `senselab_worker`, a library of its env's lock, or another placed module; never `senselab_core`, never any other `senselab` module. A contract test over every backend with `worker_sources` pins this.
+- 2026-11-11: one bisection engine in `execute`, used by `InProcess` and the Pool; a lone job lost `faults.crashes_charged` times on fresh workers is charged to the item as `ItemCrashedWorker`; a load is still not an item (R-288, T24-4).
+- 2026-11-12: placement fits a unit to its class: an unfit or too-small class is skipped, none left is `Unplaceable`, a load OOM records the fact (T24-7).

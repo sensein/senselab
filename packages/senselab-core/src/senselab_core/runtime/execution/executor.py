@@ -1,0 +1,416 @@
+"""The `Executor` protocol and the documents it carries: plan fragments in, result references out."""
+
+import logging
+import os
+import pwd
+import re
+import socket
+from collections.abc import Iterator, Mapping
+from enum import Enum
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Protocol
+
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    Field,
+    PlainSerializer,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
+from senselab_worker.faults import ContentFault, FaultClass, InfrastructureFault, error_record, wire_text
+
+from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, thawed
+from senselab_core.kernel.formats import PLAN_FRAGMENT_FORMAT, FormatTag, Formatted
+from senselab_core.kernel.graph import NodeId
+from senselab_core.kernel.identity import (
+    GatherIdentity,
+    InputIdentity,
+    OutputIdentity,
+    gather_identity,
+    port_output_identity,
+)
+from senselab_core.kernel.placement import NodePlacement
+from senselab_core.kernel.plan import ReuseName
+from senselab_core.runtime.clock import Clock, SystemClock
+from senselab_core.runtime.planner import Plan
+
+if TYPE_CHECKING:
+    from senselab_core.runtime.execution.events import EventLog
+
+logger = logging.getLogger("senselab")
+
+_PATH = re.compile(r"(?<![\w.:/~-])(?:~|/)[^\s'\"`,;)\]}>]*")
+_OWNER = re.compile(r"owned by \S+ \(uid (\d+)\); as \S+,")
+_HOLDER = re.compile(r"('user': )'[^']*'")
+
+
+def _token(name: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])")
+
+
+def stored_message(message: str) -> str:
+    """Return `message` for a record other users read: paths, account and host names rendered to labels.
+
+    The full text goes to the operator log. An account is the running user's, the owner `owner_remedy` names, or the
+    lease holder `Lease.holder` names; a host is this one's name or its first label; a path is any absolute one. A
+    name is matched as a whole token.
+    """
+    kept = _OWNER.sub(r"owned by uid \1; as its owner,", message)
+    kept = _HOLDER.sub(r"\1'<account>'", kept)
+    shown = _token(pwd.getpwuid(os.getuid()).pw_name).sub("<account>", _PATH.sub("<path>", kept))
+    host = socket.gethostname()
+    for name in sorted({host, host.split(".")[0]} - {""}, key=len, reverse=True):
+        shown = _token(name).sub("<host>", shown)
+    if shown != message:
+        logger.info("a fault message was rendered for the record; the operator's text was: %s", message)
+    return shown
+
+
+Hex64 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
+def _frozen(v: Mapping[str, InputIdentity]) -> Mapping[str, InputIdentity]:
+    return FrozenMapping(v)
+
+
+JobInputs = Annotated[Mapping[str, InputIdentity], AfterValidator(_frozen), PlainSerializer(thawed)]
+"""One job's input identities by port."""
+
+
+class JobRef(Frozen):
+    """One job of a plan: the plan hash, the node, and the node's map indices (`()` for an unmapped node)."""
+
+    plan_hash: Hex64
+    node: NodeId
+    element: tuple[Annotated[int, Field(ge=0)], ...] = ()
+
+
+def _fault_name(v: object) -> object:
+    return v.value if isinstance(v, FaultClass) else v
+
+
+FaultName = Annotated[Literal["content", "resource", "infrastructure"], BeforeValidator(_fault_name)]
+"""A `FaultClass` by its value; given a `FaultClass`, its value is held."""
+
+
+class ItemCrashedWorker(ContentFault):
+    """A job that was lost on `faults.crashes_charged` fresh workers in a row, each time alone: the item's fault."""
+
+
+class CorruptItem(ContentFault):
+    """A queue item that is not the fragment its name digests."""
+
+
+class WrongKey(ContentFault):
+    """An outcome that gives a job a key other than its own."""
+
+
+class MissingItem(InfrastructureFault):
+    """A queue item whose file is missing."""
+
+
+class FaultRecord(Frozen):
+    """A job's failure: its fault class, the exception's type and message, whether it is a gap, whether it is charged.
+
+    Only a content fault that is not a gap is charged against the item's retry budget; a resource or infrastructure
+    fault re-places the job, and a gap fault, one the fallback table classified, is never charged. `load` is true for a
+    fault stated while a worker started, loaded or reloaded its model: it is the environment's, not an item's.
+    """
+
+    fault: FaultName
+    type: NonEmptyStr
+    message: str
+    gap: bool
+    charged: bool
+    load: bool = False
+
+    @model_serializer(mode="wrap")
+    def _omit_a_false_load(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Serialise `load` only when it is true, so a record that is no load's reads as it did before the field."""
+        data: dict[str, Any] = handler(self)
+        if not data.get("load"):
+            data.pop("load", None)
+        return data
+
+    @field_validator("message")
+    @classmethod
+    def _render_message(cls, v: str) -> str:
+        return stored_message(v)
+
+    @model_validator(mode="after")
+    def _check_charged(self) -> "FaultRecord":
+        if self.charged and (self.gap or self.fault != FaultClass.CONTENT.value):
+            raise ValueError("only a content fault that is not a gap is charged")
+        return self
+
+    @property
+    def counts_against_env(self) -> bool:
+        """Whether the failure is its environment's: infrastructure, a gap that is not resource, or a load's fault."""
+        return self.fault == "infrastructure" or (self.gap and self.fault != "resource") or self.load
+
+    @property
+    def fault_class(self) -> FaultClass:
+        """The fault class, as a `FaultClass`."""
+        return FaultClass(self.fault)
+
+    @classmethod
+    def from_exception(cls, exc: BaseException) -> "FaultRecord":
+        """Return the record of `exc` as a worker classifies it (`error_record`), its notes after its message."""
+        error = error_record(exc)
+        notes = [str(n) for n in getattr(exc, "__notes__", ())]
+        message = wire_text("\n".join([error["message"], *notes]))
+        return cls.of({**error, "message": message, "load": bool(getattr(exc, "from_load", False))})
+
+    @classmethod
+    def gap_of(cls, kind: str, message: str) -> "FaultRecord":
+        """Return the infrastructure gap `kind` with `message`: a failure no typed fault names, never charged."""
+        return cls.of({"type": kind, "message": message, "fault": FaultClass.INFRASTRUCTURE.value, "gap": True})
+
+    @classmethod
+    def of(cls, error: Mapping[str, Any]) -> "FaultRecord":
+        """Return the record of a worker's error object (`error_record`): charged for a content fault, not a gap.
+
+        The one place a `FaultRecord` is built from its parts; every other site calls it, `from_exception` or `gap_of`.
+        """
+        gap = bool(error.get("gap", True))
+        fault = FaultClass(error["fault"])
+        return cls(
+            fault=fault.value,
+            type=str(error["type"]),
+            message=str(error.get("message", "")),
+            gap=gap,
+            charged=fault is FaultClass.CONTENT and not gap,
+            load=bool(error.get("load", False)),
+        )
+
+
+SpanNs = Annotated[int, Field(strict=True, ge=0)]
+"""A recording's span in ns."""
+
+
+class UpstreamRef(Frozen):
+    """Where an `output:` input is stored: the upstream job's key digest, its entry's output identity, and the port.
+
+    `length_ns` is the span of the port's value when it is a recording (`ResultRef.lengths_ns`), else None.
+    """
+
+    key_digest: Hex64
+    outputs: OutputIdentity
+    port: NonEmptyStr
+    length_ns: SpanNs | None = None
+
+    def identity(self) -> OutputIdentity:
+        """Return the input identity of this port (`port_output_identity`)."""
+        return port_output_identity(self.key_digest, self.port)
+
+
+def _upstream(v: Mapping[str, UpstreamRef]) -> Mapping[str, UpstreamRef]:
+    return FrozenMapping(v)
+
+
+def _upstream_form(v: Mapping[str, UpstreamRef]) -> dict[str, object]:
+    return {k: ref.model_dump(mode="json") for k, ref in v.items()}
+
+
+Upstream = Annotated[Mapping[OutputIdentity, UpstreamRef], AfterValidator(_upstream), PlainSerializer(_upstream_form)]
+"""Each `output:` identity a fragment's jobs read, alone or gathered, with where the port's value is stored."""
+
+
+def _gathered(v: Mapping[str, tuple[str, ...]]) -> Mapping[str, tuple[str, ...]]:
+    return FrozenMapping(v)
+
+
+Gathered = Annotated[
+    Mapping[GatherIdentity, tuple[OutputIdentity, ...]], AfterValidator(_gathered), PlainSerializer(thawed)
+]
+"""Each `gather:` input identity a fragment's jobs read, with its elements' port identities in element order."""
+
+
+class Admission(Frozen):
+    """A plan admitted to an executor, with the values of its graph inputs, as the executor names it."""
+
+    id: NonEmptyStr
+    plan_hash: Hex64
+
+
+class PlanFragment(Formatted):
+    """A `plan-fragment@3.0` document: jobs of one node of one admitted plan, their input identities, the placement.
+
+    `inputs` holds one mapping per job, in the order of `jobs`; every job names `plan_hash` and `node`. `admission`
+    names the admission whose graph-input values the jobs read; `upstream` gives, for each `output:` input
+    identity (one port of one upstream job, `port_output_identity`), where that port's value is stored; `gathered`
+    gives, for each `gather:` input identity, its elements' port identities in element order, each in `upstream`.
+    `attempt` counts the submissions of these jobs.
+    """
+
+    format: FormatTag = PLAN_FRAGMENT_FORMAT
+    port_value: ClassVar[bool] = False
+    plan_hash: Hex64
+    node: NodeId
+    admission: NonEmptyStr
+    jobs: Annotated[tuple[JobRef, ...], Field(min_length=1)]
+    inputs: tuple[JobInputs, ...]
+    upstream: Upstream = FrozenMapping({})
+    gathered: Gathered = FrozenMapping({})
+    placement: NodePlacement
+    attempt: Annotated[int, Field(ge=1)] = 1
+
+    @model_validator(mode="after")
+    def _check_jobs(self) -> "PlanFragment":
+        if len(self.inputs) != len(self.jobs):
+            raise ValueError(f"a fragment of {len(self.jobs)} jobs holds {len(self.inputs)} input mappings")
+        if len(set(self.jobs)) != len(self.jobs):
+            raise ValueError("a fragment names each job once")
+        if any((j.plan_hash, j.node) != (self.plan_hash, self.node) for j in self.jobs):
+            raise ValueError(f"every job of the fragment is of plan {self.plan_hash} node {self.node!r}")
+        named = {i for inputs in self.inputs for i in inputs.values()}
+        if {i for i in named if i.startswith("gather:")} != set(self.gathered):
+            raise ValueError(f"gathered names {sorted(self.gathered)}; the jobs read other gathers")
+        if any(gather_identity(elements) != g for g, elements in self.gathered.items()):
+            raise ValueError("a gather identity is the identity of its elements in order")
+        read = {i for i in named if i.startswith("output:")} | {e for es in self.gathered.values() for e in es}
+        if read != set(self.upstream):
+            raise ValueError(f"upstream names {sorted(self.upstream)}; the jobs read {sorted(read)}")
+        if any(identity != ref.identity() for identity, ref in self.upstream.items()):
+            raise ValueError("an upstream identity is the identity of its key digest and port")
+        return self
+
+
+class ResultRef(Frozen):
+    """What one job gave: its key's digest and either its output identity or its failure.
+
+    `served` is the reuse policy under which a stored result gave it, None when the job executed. `lengths_ns` holds
+    the span of each recording output, by port, taken when the result was given.
+    """
+
+    job: JobRef
+    key_digest: Hex64
+    output_identity: OutputIdentity | None = None
+    failure: FaultRecord | None = None
+    served: ReuseName | None = None
+    lengths_ns: Annotated[Mapping[str, SpanNs], AfterValidator(FrozenMapping), PlainSerializer(dict)] = FrozenMapping(
+        {}
+    )
+
+    @model_validator(mode="after")
+    def _check_one(self) -> "ResultRef":
+        if self.served is not None and self.output_identity is None:
+            raise ValueError("only a result that was given can have been served from the store")
+        if (self.output_identity is None) == (self.failure is None):
+            raise ValueError("a result names exactly one of an output identity and a failure")
+        return self
+
+
+class Handle(Frozen):
+    """A submitted fragment, as the executor that took it names it."""
+
+    id: NonEmptyStr
+
+
+class Status(str, Enum):
+    """Where a submitted fragment is: waiting, running, every job done (completed or failed), or cancelled."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    CANCELLED = "cancelled"
+
+
+class QueueHeld(RuntimeError):
+    """An executor holds the queue of a fragment's jobs: env `env` failed `failures` times by infrastructure faults.
+
+    The jobs are not failed; they wait in the queue for a later attempt. `reason` is the latest fault's message.
+    """
+
+    def __init__(self, queue: str, env: str, failures: int, reason: str) -> None:
+        """Name the queue, the env, its failures and the latest cause."""
+        super().__init__(
+            f"queue {queue!r} is held: env {env!r} failed {failures} times by infrastructure faults: {reason}"
+        )
+        self.queue = queue
+        self.env = env
+        self.failures = failures
+        self.reason = reason
+
+
+class WorkersBroken(QueueHeld):
+    """The workers of a resource class (`*`: the substrate) failed to start `failures` times in a row.
+
+    The jobs are not failed; they wait in the queue for a later epoch, like a held env's. `reason` is the latest cause.
+    """
+
+    def __init__(self, queue: str, resource_class: str, failures: int, reason: str) -> None:
+        """Name the queue, the class (or `*`), its failures and the latest cause."""
+        super().__init__(queue, f"workers:{resource_class}", failures, reason)
+        RuntimeError.__init__(
+            self, f"queue {queue!r} is held: workers of {resource_class!r} failed to start {failures} times: {reason}"
+        )
+        self.resource_class = resource_class
+        self.reason = reason
+
+
+class Executor(Protocol):
+    """Runs plan fragments of admitted plans: `admit` a plan, `submit` its fragments, follow, stop and read them.
+
+    An admission holds the values of the plan's graph inputs by content identity, until it is released; an
+    `output:` input is read from the result store. Two admissions of one plan are independent. `logs_claims` says
+    whether the executor's workers log each job `claimed`, in which case the runner logs no `started` as it sends one.
+    `splits_fragments` says whether the executor splits a fragment into its own units of work, in which case the runner
+    sends the jobs of a node that are ready together as one fragment, not in fragments of the batch size.
+    """
+
+    logs_claims: ClassVar[bool]
+    splits_fragments: ClassVar[bool]
+
+    def bind_epoch(self, epoch: int, events: "EventLog") -> None:
+        """Run what follows as the coordinator of `epoch`, logging to `events` (that epoch's attempt)."""
+
+    def admit(self, plan: Plan, values: Mapping[InputIdentity, object]) -> Admission:
+        """Hold `plan` and the value of each graph-input identity its fragments name, and return the admission."""
+
+    def release(self, admission: Admission) -> None:
+        """Let go of `admission` and its values."""
+
+    def fragment_size(self, plan: Plan, node: str) -> int | None:
+        """Return the most jobs of `node` one fragment holds; None for an executor that splits fragments."""
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Take `fragment` and return its handle."""
+
+    def status(self, handle: Handle) -> Status:
+        """Return where the fragment of `handle` is."""
+
+    def cancel(self, handle: Handle) -> None:
+        """Stop the jobs of `handle` not yet run."""
+
+    def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
+        """Return the results of `handle` landed and not yet given, and whether every one is given; never wait."""
+
+
+def follow(
+    executor: Executor,
+    handle: Handle,
+    *,
+    first_s: float = 0.01,
+    max_s: float = 1.0,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
+) -> Iterator[ResultRef]:
+    """Yield each result of `handle` as `executor.poll` gives it, until every one is given.
+
+    A poll that gives nothing is followed by a wait of `first_s`, doubling up to `max_s`; one that gives a result
+    resets it; the waits run on `clock`. Errors `poll` raises are raised here, after the results given before them.
+    """
+    pause = first_s
+    while True:
+        given, done = executor.poll(handle)
+        yield from given
+        if done:
+            return
+        if given:
+            pause = first_s
+        else:
+            clock.sleep(pause)
+            pause = min(2 * pause, max_s)

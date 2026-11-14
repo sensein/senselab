@@ -1,0 +1,187 @@
+# A synthetic cluster profile for the execution tests: Slurm classes, group-trusted measures, env roots under a scratch link.
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, section test_slack (a fixture, not a packaged profile).
+# The profile's format.
+format: execution-profile@5.0
+# The profile's name.
+name: cluster
+# Per task, its stacks best first; empty lets each task's declared backend order decide.
+stack_preferences: {}
+# Device kinds best first; a node takes the first one its backend declares that a class offers.
+devices: [cuda, cpu]
+# Per env kind, the directory env trees are built under.
+env_roots:
+  isolated: ${SENSELAB_ENV_ROOT}
+  server: ${SENSELAB_ENV_ROOT}/servers
+# The server start wait margin and the torch wheel index override (null: probed from the host).
+envs:
+  server_start_margin_s: 60
+  torch_index:
+# Allowed hub organisations; null allows those of the catalogue entries.
+model_sources:
+# Cap on the in-process model cache; null measures it: the smallest visible GPU's memory, else the host's.
+model_cache_budget_bytes:
+# How a transient fault is retried: attempts and the first, doubling, wait.
+retry:
+  attempts: 3
+  first_backoff_s: 1.0
+# online, or offline to forbid any fetch.
+network: online
+# The worker classes nodes are placed on, by name, each with its grant and caps; a server backend takes a svc class first.
+resource_classes:
+  cpu:
+    device: cpu
+    cpus: 4
+    mem_bytes: 17179869184
+    time_s: 21600
+    partition: ${CPU_PARTITION}
+    max_workers: 32
+  cpu:large:
+    device: cpu
+    cpus: 8
+    mem_bytes: 68719476736
+    time_s: 21600
+    partition: ${CPU_PARTITION}
+    max_workers: 8
+  gpu:h100:
+    device: cuda
+    gpu_type: h100
+    cpus: 8
+    mem_bytes: 103079215104
+    time_s: 21600
+    partition: ${GPU_PARTITION}
+    gres: gpu:h100:1
+    max_workers: 4
+    memory_cap_bytes: 85899345920
+  svc:h100:
+    device: cuda
+    gpu_type: h100
+    cpus: 8
+    mem_bytes: 103079215104
+    time_s: 21600
+    partition: ${GPU_PARTITION}
+    gres: gpu:h100:1
+    max_workers: 4
+    memory_cap_bytes: 85899345920
+  gpu:
+    device: cuda
+    cpus: 8
+    mem_bytes: 103079215104
+    time_s: 21600
+    partition: ${GPU_PARTITION}
+    gres: gpu:1
+    max_workers: 4
+# What starts pool workers; the first and longest wait after a failed start; the site's placement hook (a
+# `module:callable`, none by default) and the seconds it may take; each Slurm command's timeout, tries and first retry wait.
+substrate:
+  kind: slurm
+  qos_cpu_cap:
+  exclude_nodes: []
+  start_backoff_first_s: 1
+  start_backoff_max_s: 30
+  placement_hook:
+  placement_hook_s: 1
+  stop_grace_s: 30
+  commands:
+    timeout_s: 60
+    attempts: 3
+    retry_first_s: 0.5
+# The quantum ceilings, how pool workers poll and roll index segments, how often a coordinator first reads an outcome, and how long a worker reuses its read of its peers, its device and its probe queues.
+pool:
+  quantum_items: 100
+  quantum_s: 300
+  poll_s: 30
+  first_poll_s: 1
+  presence_refresh_s: 30
+  segment_items: 512
+  admit_threads: 8
+  idle_polls: 3
+  cancel_check_s: 0.05
+  event_poll_s: 0.5
+# The fractions and targets each unit's batch, quantum and worker count are derived from: the load's largest share of a
+# quantum, the share of a worker's memory a batch fills, the wall time a queue's work aims to end in, and the one-job
+# items a unit without a measure runs first, the workers its queue is given for them, and the seconds a worker's read
+# of its processes' device memory may take.
+sizing:
+  load_share: 0.05
+  memory_headroom: 0.9
+  target_wall_s: 1800
+  calibration_items: 4
+  calibration_workers: 1
+  device_query_s: 30
+# How a unit without a measure is probed, where measures are kept and whose are trusted, and when a measure is stale.
+calibration:
+  # Roots read in order and pooled; writes go to the first writable one. An unset SENSELAB_MEASURES_ROOT is no root;
+  # ${cache_root} is senselab's cache root (SENSELAB_CACHE, else its default).
+  measures_roots:
+  - ${SENSELAB_MEASURES_ROOT}
+  - ${cache_root}/2x/measures
+  # group reads every file of every root; own only the reader's own files.
+  trust: group
+  # Requests a model state answers before one counts as warm.
+  warmup_requests: 1
+  # Strata of equal count a probe cuts its candidate jobs into.
+  length_strata: 2
+  # Warm requests a stratum needs for a quantity to be measured.
+  min_requests: 3
+  # Jobs of the one item per probe that separates the per-item cost from the per-job cost.
+  single_item_jobs: 2
+  # Batch sizes the batched phase measures.
+  batched_sizes: 1
+  # The one-sided z of the batch choice and of the item cut.
+  confidence: 1.645
+  # The two-sided z of the drift test.
+  drift_confidence: 2.576
+  # Superseded probes' observation files kept for audit.
+  observations_kept: 3
+  # Workers a unit without a measure runs on.
+  unmeasured_workers: 1
+# Every lease: seconds after which another process breaks it, the share of that between beats, and the
+# storage's attribute delay; load refuses (1 + missed_beats) × renew_fraction × stale_after_s + attribute_delay_s >= stale_after_s.
+lease:
+  stale_after_s: 300
+  renew_fraction: 0.33
+  attribute_delay_s: 60
+  missed_beats: 1
+  wait_s: 600
+  poll_s: 0.05
+  remove_attempts: 3
+  record_attempts: 3
+  dir_mode: '2770'
+# Retries per fault class before an item fails or its env is reported broken.
+faults:
+  content_attempts: 2
+  infrastructure_replacements: 6
+  resource_replacements: 1
+  # Fresh workers in a row a job alone must be lost on before the item is charged with the crash.
+  crashes_charged: 2
+# A worker's model-load and request timeouts in seconds; null for no bound.
+timeouts:
+  load_s:
+  request_s:
+  fetch_s: 60
+# Seconds a service stays up after its last consumer lease lapsed.
+services:
+  idle_exit_s: 600
+# Seconds `ps -o lstart=` may take when a supervisor reads a launched process's start time off Linux.
+supervisor:
+  start_time_probe_s: 5
+  reap_poll_s: 0.05
+  exit_bound_s: 5
+# How a result store commits and how a storage root's clock is probed.
+store:
+  commit_attempts: 3
+  probe_bound_s: 5
+  probe_poll_s: 0.005
+  clock_tolerance_s: 3600
+# How a vllm server is started and watched.
+vllm:
+  startup_s: 1800
+  poll_s: 0.5
+  request_s: 600
+  stop_s: 60
+  health_s: 5
+# How a worker client starts and watches its worker subprocess.
+worker:
+  hello_s: 60
+  leader_probe_s: 2
+  group_poll_max_s: 0.05

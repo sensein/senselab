@@ -5,6 +5,9 @@ import copy
 import multiprocessing as mp
 import os
 import pickle
+import subprocess
+import sys
+import textwrap
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -13,9 +16,18 @@ import numpy
 import pytest
 import soundfile
 from pydantic import ValidationError
-from senselab_core.kernel.signals import Audio, ChannelInfo, Recording, RegularGroup, StaleSource
+from senselab_core.kernel.signals import (
+    Audio,
+    ChannelInfo,
+    Recording,
+    RegularGroup,
+    StaleSource,
+    UndecodableSource,
+    audio_channels,
+)
 from senselab_core.runtime import audio_io
-from senselab_core.runtime.audio_io import READER, open_audio, source_group
+from senselab_core.runtime.audio_io import READER, open_audio, source_group, stamp
+from senselab_worker.digest import identity_digest
 from senselab_worker.hashing import content_identity
 
 RATE = 8_000
@@ -45,11 +57,15 @@ def read_spy(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[int]]:
 
 
 @pytest.mark.logic
-def test_audio_identity_is_raw_bytes(tmp_path: Path) -> None:
-    """A file-backed audio's identity is the content identity root of its bytes."""
+def test_audio_identity_is_bytes_and_layout(tmp_path: Path) -> None:
+    """A file-backed audio's identity covers the content identity root of its bytes and its channel layout."""
     p = write_wav(tmp_path)
     a = open_audio(p)
-    assert a.identity == "content:" + content_identity(p)["root"]
+    root = content_identity(p)["root"]
+    layout = [c.model_dump() for c in audio_channels(2)]
+    assert a.identity == "content:" + identity_digest("audio-file@1", {"content": root, "channels": layout})
+    named = tuple(c.model_copy(update={"name": f"mic{i}"}) for i, c in enumerate(audio_channels(2)))
+    assert Audio.from_group(source_group(named, RATE, p)).identity != a.identity
     group = a.groups["audio"]
     assert isinstance(group, RegularGroup) and group.sampling_rate == RATE and len(group.channels) == 2
     assert group.frames == RATE and a.anchor.clock_id == a.identity
@@ -83,7 +99,7 @@ def test_file_group_refuses_a_layout_the_file_does_not_have(tmp_path: Path) -> N
     """A source-backed group's channel count and rate must match the file header."""
     p = write_wav(tmp_path)
     ch = (ChannelInfo(name="a", type="audio", units="FS"),)
-    with pytest.raises(ValidationError, match="channels"):
+    with pytest.raises(ValueError, match="channels"):
         source_group(ch, RATE, p)
     two = (ch[0], ChannelInfo(name="b", type="audio", units="FS"))
     with pytest.raises(ValidationError, match="rate"):
@@ -92,10 +108,10 @@ def test_file_group_refuses_a_layout_the_file_does_not_have(tmp_path: Path) -> N
 
 @pytest.mark.logic
 def test_open_audio_refuses_a_file_that_is_not_audio(tmp_path: Path) -> None:
-    """A file soundfile cannot parse raises its typed error."""
+    """A file soundfile cannot parse raises the kernel `UndecodableSource`."""
     p = tmp_path / "x.wav"
     p.write_bytes(b"not audio at all")
-    with pytest.raises(soundfile.LibsndfileError):
+    with pytest.raises(UndecodableSource):
         open_audio(p)
 
 
@@ -233,10 +249,19 @@ def test_copies_of_a_source_recording_do_not_read_the_file(tmp_path: Path, open_
     a = open_audio(p)
     assert open_spy.count(f"open:{p}") == 1 and len(open_spy) == 2, open_spy
     open_spy.clear()
-    r = Recording.model_validate(a.model_dump())
-    copies = [copy.copy(a), copy.deepcopy(a), pickle.loads(pickle.dumps(a)), a.model_copy(), copy.deepcopy(r)]
+    r = Recording(groups=a.groups, anchor=a.anchor)
+    copies = [
+        copy.copy(a),
+        copy.deepcopy(a),
+        pickle.loads(pickle.dumps(a)),
+        a.model_copy(),
+        copy.deepcopy(Audio.model_validate(a.model_dump())),
+        copy.deepcopy(r),
+        pickle.loads(pickle.dumps(r)),
+        Recording.model_validate(r.model_dump()),
+    ]
     assert open_spy == []
-    assert all(c.identity == a.identity for c in copies)
+    assert all(c.identity == a.identity for c in copies[:5]) and all(c.identity == r.identity for c in copies[5:])
 
 
 @pytest.mark.logic
@@ -275,3 +300,163 @@ def test_source_memos_are_bounded_and_rederive_missing_entries(tmp_path: Path) -
         loaded_only, checked, again = job.result(timeout=120)
     assert (loaded_only, checked) == (0, 1)
     assert again == first and again.identity == first.identity != second.identity
+
+
+@pytest.mark.logic
+def test_ctime_change_defeats_stat_fast_path(tmp_path: Path) -> None:
+    """A same-size rewrite in place with its mtime restored fails `check` of a stamp this process took."""
+    p = write_wav(tmp_path)
+    taken = audio_io.stamp(p)
+    before = os.stat(p)
+    data = bytearray(p.read_bytes())
+    data[-1] ^= 0xFF
+    with open(p, "r+b") as f:
+        f.write(data)
+    os.utime(p, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = os.stat(p)
+    assert (after.st_size, after.st_mtime_ns, after.st_ino) == (before.st_size, before.st_mtime_ns, before.st_ino)
+    with pytest.raises(StaleSource):
+        audio_io.check(taken, p)
+
+
+CHUNK = 4096
+
+
+def _window_group(tmp_path: Path) -> tuple[Path, RegularGroup]:
+    p = write_wav(tmp_path, frames=8 * RATE)
+    return p, source_group(audio_channels(2), RATE, p, audio_io.stamp(p, chunk_size=CHUNK))
+
+
+def _flac(tmp_path: Path) -> Path:
+    noise = numpy.random.default_rng(0).uniform(-0.5, 0.5, (64 * RATE, 2)).astype(numpy.float32)
+    path = tmp_path / "x.flac"
+    soundfile.write(path, noise, RATE, subtype="PCM_16")
+    return path
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("kind", ["wav", "flac"])
+def test_range_read_reads_only_its_chunks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+    """A range read reads, at the `os` boundary, whole chunks only, twice its distinct chunks at most."""
+    p = write_wav(tmp_path, frames=8 * RATE) if kind == "wav" else _flac(tmp_path)
+    group = source_group(audio_channels(2), RATE, p, audio_io.stamp(p, chunk_size=CHUNK))
+    expected = soundfile.read(p, dtype="float32", always_2d=True)[0].T[:, 4 * RATE : 4 * RATE + 80]
+    preads: list[tuple[int, int]] = []
+    original = os.pread
+
+    def spy(fd: int, n: int, offset: int) -> bytes:
+        data = original(fd, n, offset)
+        preads.append((offset, len(data)))
+        return data
+
+    monkeypatch.setattr(os, "pread", spy)
+    monkeypatch.setattr(builtins, "open", lambda *a, **_: pytest.fail(f"opened {a[0]} by path"))
+    window = group.read(4 * 10**9, 4 * 10**9 + 10**7, reader=READER)
+    assert numpy.array_equal(window, expected)
+    offsets = [offset for offset, _ in preads]
+    assert 0 in offsets and all(offset % CHUNK == 0 for offset in offsets)
+    assert sum(n for _, n in preads) < p.stat().st_size // 8
+    assert sum(n for _, n in preads) <= 2 * len(set(offsets)) * CHUNK
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("kind", ["wav", "flac"])
+def test_a_full_read_keeps_two_chunks_at_most(tmp_path: Path, kind: str) -> None:
+    """Decoding a whole file through the checked reader keeps at most two verified chunks, never the file."""
+    p = write_wav(tmp_path, frames=64 * RATE) if kind == "wav" else _flac(tmp_path)
+    stamp = audio_io.stamp(p, chunk_size=CHUNK)
+    fd = os.open(p, os.O_RDONLY)
+    held: list[int] = []
+    try:
+        checked = audio_io._ChunkChecked(fd, stamp, p)
+        with soundfile.SoundFile(checked) as f:
+            while len(f.read(RATE, dtype="float32")):
+                held.append(checked.held)
+    finally:
+        os.close(fd)
+    assert len(held) == 64 and max(held) <= 2 < len(stamp.chunks)
+
+
+@pytest.mark.logic
+def test_rewrite_in_touched_chunk_is_stale(tmp_path: Path) -> None:
+    """A `cp -p` rewrite keeping size, mtime and inode is caught by a read touching it, and only by such a read."""
+    p, group = _window_group(tmp_path)
+    data = bytearray(p.read_bytes())
+    at = 4 * RATE * 8 + CHUNK
+    data[at] ^= 0xFF
+    edited = tmp_path / "edited.wav"
+    edited.write_bytes(bytes(data))
+    st = p.stat()
+    os.utime(edited, ns=(st.st_atime_ns, st.st_mtime_ns))
+    subprocess.run(["cp", "-p", str(edited), str(p)], check=True, timeout=30)
+    after = p.stat()
+    assert (after.st_size, after.st_mtime_ns, after.st_ino) == (st.st_size, st.st_mtime_ns, st.st_ino)
+    assert group.read(0, 10**7, reader=READER).shape == (2, 80)
+    with pytest.raises(StaleSource, match="chunk"):
+        group.read(4 * 10**9, 5 * 10**9, reader=READER)
+
+
+@pytest.mark.logic
+def test_check_of_another_process_stamp_reads_the_header_chunks_only(tmp_path: Path) -> None:
+    """`check` in a process that holds no memo of the stamp verifies chunks by `os.pread`, never the whole file."""
+    p, group = _window_group(tmp_path)
+    assert group.source_stamp is not None
+    stamp = tmp_path / "stamp.json"
+    stamp.write_text(group.source_stamp.model_dump_json())
+    child = textwrap.dedent(
+        f"""
+        import builtins, os, sys
+        from pathlib import Path
+        from senselab_core.runtime import audio_io
+        from senselab_core.kernel.signals import SourceStamp
+        s = SourceStamp.model_validate_json(Path({str(stamp)!r}).read_text())
+        offsets = []
+        real = os.pread
+        os.pread = lambda fd, n, off: (offsets.append(off), real(fd, n, off))[1]
+        builtins.open = lambda *a, **k: sys.exit("opened by path")
+        audio_io.check(s, Path({str(p)!r}))
+        print(len(offsets))
+        """
+    )
+    out = subprocess.run([sys.executable, "-c", child], capture_output=True, text=True, timeout=60, check=True)
+    reads = int(out.stdout.strip())
+    assert 0 < reads and reads * CHUNK < p.stat().st_size // 8
+
+
+@pytest.mark.logic
+def test_stamp_pins_channel_layout(tmp_path: Path) -> None:
+    """A stamp records its channel layout through a decode, and a re-stamp under another layout is another stamp."""
+    p = write_wav(tmp_path)
+    group = open_audio(p).group
+    named = tuple(c.model_copy(update={"name": f"mic{i}"}) for i, c in enumerate(group.channels))
+    restamped = stamp(p, channels=named)
+    assert group.source_stamp is not None and restamped.channels == named != group.source_stamp.channels
+    assert restamped.canonical_digest() != group.source_stamp.canonical_digest()
+    decoded = RegularGroup.decoded_from(source_group(named, RATE, p, restamped), READER)
+    assert decoded.source_stamp == restamped and decoded.channels == named
+    with pytest.raises(ValidationError, match="channel layout"):
+        RegularGroup(channels=group.channels, sampling_rate=RATE, source=p, source_stamp=restamped)
+
+
+@pytest.mark.logic
+def test_non_audio_file_is_undecodable_source(tmp_path: Path) -> None:
+    """A non-audio file named as a sound file is an `UndecodableSource`, not a libsndfile error."""
+    p = tmp_path / "x.wav"
+    p.write_text("hello")
+    with pytest.raises(UndecodableSource) as caught:
+        stamp(p)
+    assert isinstance(caught.value.__cause__, soundfile.LibsndfileError)
+
+
+@pytest.mark.logic
+def test_system_errors_are_not_undecodable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A libsndfile system error (code 2) is an `OSError`, not bad data."""
+    p = write_wav(tmp_path)
+
+    def fail(*_: object, **__: object) -> None:
+        raise soundfile.LibsndfileError(2, "system error")
+
+    monkeypatch.setattr(soundfile, "SoundFile", fail)
+    with pytest.raises(OSError, match="system error") as caught:
+        stamp(p)
+    assert isinstance(caught.value.__cause__, soundfile.LibsndfileError)

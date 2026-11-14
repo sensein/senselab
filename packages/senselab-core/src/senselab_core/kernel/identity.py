@@ -1,14 +1,15 @@
 """Identity v2: model references, logical keys, execution context and reuse policy (ADR-002, P-38)."""
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Any, Literal, assert_never
 from urllib.parse import urlsplit
 
-import yaml
 from pydantic import (
     AfterValidator,
+    BaseModel,
     BeforeValidator,
     Field,
     PlainSerializer,
@@ -29,14 +30,53 @@ _URL_HASH = "#sha256="
 ContentIdentity = Annotated[str, StringConstraints(pattern=r"^content:[0-9a-f]{64}$")]
 """The identity of source bytes: `content:` and a 64-hex digest."""
 
+
+@dataclass(frozen=True)
+class TextIdentityMark:
+    """Marks a field holding the identity of a text: given as `content:<hex>` or as `{"content": <the text>}`."""
+
+
+TextIdentity = Annotated[ContentIdentity, TextIdentityMark()]
+"""The identity of a text, `PlainText(content=<text>).identity`."""
+
+TEXT_IDENTITY_FORMS = (
+    "`content:` and 64 lowercase hex digits, the identity of the text",
+    '`{"content": "<the text>"}`, from which the identity is computed',
+)
+"""The two forms a call may give a `TextIdentity` field, in the order the error and `describe` state them."""
+
+
+def text_identity_fields(model: type[BaseModel]) -> tuple[str, ...]:
+    """Return the names of the `TextIdentity` fields of `model`."""
+    return tuple(n for n, f in model.model_fields.items() if any(isinstance(m, TextIdentityMark) for m in f.metadata))
+
+
 OutputIdentity = Annotated[str, StringConstraints(pattern=r"^output:[0-9a-f]{64}$")]
 """The identity of a stored result's outputs: `output:` and a 64-hex digest."""
 
-InputIdentity = ContentIdentity | OutputIdentity
-"""What a logical key's input names: source content or an upstream output."""
+GatherIdentity = Annotated[str, StringConstraints(pattern=r"^gather:[0-9a-f]{64}$")]
+"""The identity of a gathered input: `gather:` and the digest of its elements' port identities, in element order."""
+
+InputIdentity = ContentIdentity | OutputIdentity | GatherIdentity
+"""What a logical key's input names: source content, one output port of an upstream job, or a gather of such ports."""
+
+
+def port_output_identity(key_digest: str, port: str) -> OutputIdentity:
+    """Return the identity of output `port` of the job keyed `key_digest` (identity tag `port-output@1`)."""
+    return "output:" + identity_digest("port-output@1", {"key": key_digest, "port": port})
+
+
+def gather_identity(elements: Sequence[str]) -> GatherIdentity:
+    """Return the identity of a gathered input over `elements`, port output identities in element order."""
+    return "gather:" + identity_digest("port-gather@1", list(elements))
+
 
 ProfileSliceIdentity = Annotated[str, StringConstraints(pattern=r"^profile:[0-9a-f]{64}$")]
 """The identity of a profile slice a call reads: `profile:` and a 64-hex digest."""
+
+SliceName = Annotated[str, StringConstraints(pattern=r"^(run|dataset)(\.[A-Za-z_][A-Za-z0-9_-]*)+$")]
+"""A profile slice a task reads: `run.<path>` in the run config's settings or `dataset.<path>` in the dataset
+profile, `<path>` a dotted key path."""
 
 
 class UnpinnedModel(ValueError):
@@ -207,14 +247,38 @@ Params = Annotated[
 """A JSON object held in its RFC 8785 canonical value, deeply read-only (objects as mappings, arrays as tuples)."""
 
 
+class Attestation(Frozen):
+    """What a running model server is.
+
+    `engine_version` and `served_model` are observed: what the server reports at `/version` and `/v1/models`.
+    `model_identity` and `config_digest` are asserted: the pinned model and the settings the server was launched with.
+    """
+
+    engine_version: NonEmptyStr
+    served_model: NonEmptyStr
+    model_identity: NonEmptyStr
+    config_digest: NonEmptyStr
+
+    def driver(self) -> dict[str, str]:
+        """Return the attestation as `ExecutionContext.driver` entries; `observed` names the observed ones."""
+        return {
+            "engine_version": self.engine_version,
+            "served_model": self.served_model,
+            "model_identity": self.model_identity,
+            "config_digest": self.config_digest,
+            "observed": "engine_version served_model",
+        }
+
+
 class LogicalKey(Frozen):
     """The exact, portable identity of a task call (ADR-002).
 
-    `model` is a pinned model's identity; `params` is canonicalised (NFC strings, JCS numbers) at
-    construction and refused if it is not JSON; `inputs` maps input names to `content:` or
-    `output:` identities and `profile_slices` slice names to `profile:` identities. The digest is
-    computed at construction, so a key that validates can be digested. No execution context, code
-    or environment is part of the key.
+    `model` is a pinned model's identity; `params` and `backend_params` are canonicalised (NFC strings,
+    JCS numbers) at construction and refused if they are not JSON; `inputs` maps input names to `content:` or
+    `output:` identities and `profile_slices` slice names to `profile:` identities; `service` is the attestation of
+    the service a server backend's call is answered by, None for any other backend. The digest is computed at
+    construction, so a key that validates can be digested. No execution context, code or environment is part of the
+    key.
     """
 
     schema_version: Annotated[int, Strict(), Field(ge=1)] = 1
@@ -224,18 +288,20 @@ class LogicalKey(Frozen):
     backend_version: NonEmptyStr
     model: ModelIdentity | None
     params: Params
+    backend_params: Params
     inputs: Annotated[Mapping[str, InputIdentity], AfterValidator(FrozenMapping), PlainSerializer(dict)]
     profile_slices: Annotated[
         Mapping[str, ProfileSliceIdentity], AfterValidator(FrozenMapping), PlainSerializer(dict)
     ] = FrozenMapping({})
     batch_formation: NonEmptyStr | None = None
     chunk_grid: NonEmptyStr | None = None
+    service: Attestation | None = None
 
     def _derived(self) -> Mapping[str, object]:
-        return {**super()._derived(), "_digest": identity_digest("logical-key@5", self.model_dump())}
+        return {**super()._derived(), "_digest": identity_digest("logical-key@7", self.model_dump())}
 
     def digest(self) -> str:
-        """Return `identity_digest("logical-key@5", fields)`, computed at construction."""
+        """Return `identity_digest("logical-key@7", fields)`, computed at construction."""
         return str(self.__pydantic_private__["_digest"])  # type: ignore[index]
 
 
@@ -243,7 +309,10 @@ class ExecutionContext(Frozen):
     """Where and how a result was computed; recorded with each result, never keyed (ADR-002).
 
     `protocol` is recorded but checked only at the worker handshake; `model_source` is how the model's
-    weights were reached (`hf`, `url`, `local`, or None for a call without a model). Neither is fingerprinted.
+    weights were reached (`hf`, `url`, `local`, or None for a call without a model); `env_license` is the code
+    license of the env, derived from its lock's license records (None when no records were handed to the runtime).
+    `host` is the writer's `host_token()`, never a name. None of these, nor `host`, is fingerprinted; whether
+    `env_license` is recorded is.
     """
 
     env_lock: NonEmptyStr
@@ -255,10 +324,15 @@ class ExecutionContext(Frozen):
     host: NonEmptyStr
     protocol: NonEmptyStr
     model_source: Literal["hf", "url", "local"] | None
+    env_license: License | None
 
     def fingerprint(self) -> str:
-        """Return `identity_digest("context@3", fields)` over every field but `host`, `protocol` and `model_source`."""
-        return identity_digest("context@3", self.model_dump(exclude={"host", "protocol", "model_source"}))
+        """Return `identity_digest("context@5", fields)`: every field but the four not fingerprinted, and `licensed`.
+
+        `licensed` is whether `env_license` is recorded.
+        """
+        fields = self.model_dump(exclude={"host", "protocol", "model_source", "env_license"})
+        return identity_digest("context@5", {**fields, "licensed": self.env_license is not None})
 
 
 class ReusePolicy(str, Enum):
@@ -272,53 +346,12 @@ class ReusePolicy(str, Enum):
 DEFAULT_REUSE_POLICY = ReusePolicy.EQUIVALENT
 
 Equivalence = Mapping[str, Mapping[str, frozenset[str]]]
-"""Measured equivalence classes: backend name to class name to the context fingerprints in it."""
-
-EQUIVALENCE_FORMAT = "equivalence@1"
+"""Measured equivalence classes: backend name to class name to its members, each a `member_key`."""
 
 
-def _equivalence_class(where: str, raw: object) -> frozenset[str]:
-    if not isinstance(raw, Mapping) or set(raw) != {"fingerprints", "derivation"}:
-        raise ValueError(
-            f"{EQUIVALENCE_FORMAT} class {where} must be a mapping of exactly 'fingerprints' and 'derivation'"
-        )
-    derivation, fingerprints = raw["derivation"], raw["fingerprints"]
-    if not isinstance(derivation, str) or not derivation.strip():
-        raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} needs a non-empty derivation")
-    if not isinstance(fingerprints, list) or not all(
-        isinstance(f, str) and SHA256_HEX.fullmatch(f) for f in fingerprints
-    ):
-        raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} must list context fingerprints, 64 lowercase hex each")
-    members = frozenset(fingerprints)
-    if len(members) < 2:  # noqa: PLR2004 - a class is two or more members by definition, not a tunable
-        raise ValueError(f"{EQUIVALENCE_FORMAT} class {where} needs at least two distinct fingerprints")
-    return members
-
-
-def parse_equivalence(text: str) -> Equivalence:
-    """Return the read-only equivalence table an `equivalence@1` YAML document declares.
-
-    The document holds `format: equivalence@1` and `backends`, a mapping of backend name to class name
-    to `{fingerprints: [...], derivation: ...}`; a class lists at least two distinct context
-    fingerprints and a non-empty derivation.
-
-    Raises:
-        ValueError: if the document does not have that form.
-    """
-    raw = yaml.safe_load(text)
-    if not isinstance(raw, dict) or set(raw) != {"format", "backends"} or raw["format"] != EQUIVALENCE_FORMAT:
-        raise ValueError(f"an equivalence table is a mapping of exactly format {EQUIVALENCE_FORMAT!r} and 'backends'")
-    backends = raw["backends"]
-    if not isinstance(backends, dict) or not all(isinstance(classes, dict) for classes in backends.values()):
-        raise ValueError(f"{EQUIVALENCE_FORMAT} backends must map each backend to a mapping of classes")
-    return FrozenMapping(
-        {
-            str(backend): FrozenMapping(
-                {str(name): _equivalence_class(f"{backend}/{name}", cls) for name, cls in classes.items()}
-            )
-            for backend, classes in backends.items()
-        }
-    )
+def member_key(numerics: Mapping[str, str], env_lock: str) -> str:
+    """Return an equivalence class member, a numerics class in one env lock, as the JCS text of both."""
+    return jcs_dumps({"env_lock": env_lock, "numerics": dict(numerics)}).decode()
 
 
 NO_EQUIVALENCE: Equivalence = FrozenMapping({})
@@ -336,7 +369,8 @@ def acceptable(
     """Return whether a result `backend` computed in `stored` may be reused in `current` under `policy`.
 
     `policy` is coerced with `ReusePolicy(policy)`. `exact` needs equal fingerprints; `equivalent`
-    also accepts two fingerprints in one of the backend's classes in `equivalence`; `tolerant`
+    also accepts two contexts whose (numerics class, env lock) members (`member_key`) are in one of the backend's
+    classes in `equivalence`; both keep a result to its env lock unless a class measured that pair. `tolerant`
     accepts any context.
 
     Raises:
@@ -350,6 +384,7 @@ def acceptable(
         case ReusePolicy.EXACT:
             return a == b
         case ReusePolicy.EQUIVALENT:
-            return a == b or any(a in members and b in members for members in equivalence.get(backend, {}).values())
+            na, nb = member_key(stored.numerics, stored.env_lock), member_key(current.numerics, current.env_lock)
+            return a == b or any(na in members and nb in members for members in equivalence.get(backend, {}).values())
         case _:
             assert_never(policy)

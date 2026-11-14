@@ -1,0 +1,3116 @@
+envs:
+  crisperwhisper:
+    accelerate:
+      expression: Apache-2.0
+      source: accelerate 1.15.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.15.0
+    annotated-doc:
+      expression: MIT
+      source: annotated-doc 0.0.5 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.0.5
+    anyio:
+      expression: MIT
+      source: anyio 4.15.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.15.1
+    certifi:
+      expression: MPL-2.0
+      source: certifi 2026.7.22 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2026.7.22
+    cffi:
+      expression: MIT-0
+      source: cffi 2.1.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.1.1
+    click:
+      expression: BSD-3-Clause
+      source: click 8.5.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 8.5.0
+    colorama:
+      expression: BSD-3-Clause
+      source: colorama 0.4.6 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.4.6
+    crisperwhisper:
+      expression: MIT
+      source: crisperwhisper 2.0.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.0.1
+    ctranslate2:
+      expression: MIT
+      source: ctranslate2 4.8.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 4.8.2
+    ctranslate2-crisperwhisper:
+      expression: MIT
+      source: ctranslate2-crisperwhisper 4.7.1.post3 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 4.7.1.post3
+    filelock:
+      expression: MIT
+      source: filelock 4.0.9 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.0.9
+    fsspec:
+      expression: BSD-3-Clause
+      source: fsspec 2026.9.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2026.9.0
+    h11:
+      expression: MIT
+      source: h11 0.16.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.16.0
+    hf-xet:
+      expression: Apache-2.0
+      source: hf-xet 1.6.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.6.0
+    httpcore:
+      expression: BSD-3-Clause
+      source: httpcore 1.0.9 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.0.9
+    httpx:
+      expression: BSD-3-Clause
+      source: httpx 0.28.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.28.1
+    huggingface-hub:
+      expression: Apache-2.0
+      source: huggingface-hub 1.33.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.33.0
+    idna:
+      expression: BSD-3-Clause
+      source: idna 3.20 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.20'
+    jinja2:
+      expression: BSD-3-Clause
+      source: jinja2 3.1.6 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 3.1.6
+    markdown-it-py:
+      expression: MIT
+      source: markdown-it-py 4.2.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 4.2.0
+    markupsafe:
+      expression: BSD-3-Clause
+      source: markupsafe 3.0.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 3.0.3
+    mdurl:
+      expression: MIT
+      source: mdurl 0.1.2 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.1.2
+    mpmath:
+      expression: BSD-3-Clause
+      source: mpmath 1.3.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.3.0
+    networkx:
+      expression: BSD-3-Clause
+      source: networkx 3.7 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.7'
+    numpy:
+      expression: BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
+      source: numpy 2.5.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.5.3
+    nvidia-cublas-cu12:
+      expression: LicenseRef-NVIDIA-Proprietary
+      source: nvidia-cublas-cu12 12.9.2.10 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 12.9.2.10
+    nvidia-cuda-nvrtc-cu12:
+      expression: LicenseRef-NVIDIA-Proprietary
+      source: nvidia-cuda-nvrtc-cu12 12.9.86 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 12.9.86
+    packaging:
+      expression: Apache-2.0 OR BSD-2-Clause
+      source: packaging 26.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '26.3'
+    psutil:
+      expression: BSD-3-Clause
+      source: psutil 7.2.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 7.2.2
+    pycparser:
+      expression: BSD-3-Clause
+      source: pycparser 3.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.0'
+    pygments:
+      expression: BSD-2-Clause
+      source: pygments 2.21.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.21.0
+    pyyaml:
+      expression: MIT
+      source: pyyaml 6.0.3 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 6.0.3
+    regex:
+      expression: Apache-2.0 AND CNRI-Python
+      source: regex 2026.9.29 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2026.9.29
+    rich:
+      expression: MIT
+      source: rich 15.0.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 15.0.0
+    safetensors:
+      expression: Apache-2.0
+      source: safetensors 0.8.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.8.0
+    setuptools:
+      expression: MIT
+      source: setuptools 81.0.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 81.0.0
+    shellingham:
+      expression: ISC
+      source: shellingham 1.5.4 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.5.4
+    soundfile:
+      expression: BSD-3-Clause
+      source: soundfile 0.14.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.14.0
+    soxr:
+      expression: LGPL-2.1-or-later
+      source: soxr 1.1.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.1.0
+    sympy:
+      expression: BSD-3-Clause
+      source: sympy 1.14.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.14.0
+    tokenizers:
+      expression: Apache-2.0
+      source: tokenizers 0.23.2 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.23.2
+    tqdm:
+      expression: MPL-2.0 AND MIT
+      source: tqdm 4.70.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 4.70.1
+    transformers:
+      expression: Apache-2.0
+      source: transformers 5.18.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 5.18.0
+    typer:
+      expression: MIT
+      source: typer 0.27.2 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.27.2
+    typing-extensions:
+      expression: PSF-2.0
+      source: typing-extensions 4.16.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.16.0
+  host:
+    annotated-types:
+      expression: MIT
+      source: annotated-types 0.7.0 classifier
+      verified:
+        date: '2026-11-04'
+        how: classifier
+      version: 0.7.0
+    anyio:
+      expression: MIT
+      source: anyio 4.13.0 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 4.13.0
+    attrs:
+      expression: MIT
+      source: attrs 26.1.0 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 26.1.0
+    certifi:
+      expression: MPL-2.0
+      source: certifi 2026.2.25 license-field
+      verified:
+        date: '2026-11-04'
+        how: license-field
+      version: 2026.2.25
+    cffi:
+      expression: MIT
+      source: cffi 2.0.0 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 2.0.0
+    charset-normalizer:
+      expression: MIT
+      source: charset-normalizer 3.4.7 license-field
+      verified:
+        date: '2026-11-04'
+        how: license-field
+      version: 3.4.7
+    ci-info:
+      expression: MIT
+      source: ci-info 0.4.0 license-field
+      verified:
+        date: '2026-11-04'
+        how: license-field
+      version: 0.4.0
+    click:
+      expression: BSD-3-Clause
+      source: click 8.5.0 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 8.5.0
+    cloudpickle:
+      expression: BSD-3-Clause
+      source: cloudpickle 3.1.2 license-field
+      verified:
+        date: '2026-11-04'
+        how: license-field
+      version: 3.1.2
+    colorama:
+      expression: BSD-3-Clause
+      source: colorama 0.4.6 classifier
+      verified:
+        date: '2026-11-04'
+        how: classifier
+      version: 0.4.6
+    etelemetry:
+      expression: Apache-2.0
+      source: etelemetry 0.3.1 classifier
+      verified:
+        date: '2026-11-04'
+        how: classifier
+      version: 0.3.1
+    fileformats:
+      expression: Apache-2.0
+      source: fileformats 0.22.3 classifier
+      verified:
+        date: '2026-11-04'
+        how: classifier
+      version: 0.22.3
+    filelock:
+      expression: MIT
+      source: filelock 3.29.0 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 3.29.0
+    fsspec:
+      expression: BSD-3-Clause
+      source: fsspec 2026.2.0 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 2026.2.0
+    h11:
+      expression: MIT
+      source: h11 0.16.0 license-field
+      verified:
+        date: '2026-11-04'
+        how: license-field
+      version: 0.16.0
+    hf-xet:
+      expression: Apache-2.0
+      source: hf-xet 1.8.0 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 1.8.0
+    httpcore2:
+      expression: BSD-3-Clause
+      source: httpcore2 2.16.0 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 2.16.0
+    httpx2:
+      expression: BSD-3-Clause
+      source: httpx2 2.16.0 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 2.16.0
+    httpx2-jsfetch:
+      expression: BSD-3-Clause
+      source: httpx2-jsfetch 1.0 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: '1.0'
+    huggingface-hub:
+      expression: Apache-2.0
+      source: huggingface-hub 2.4.0 license-field
+      verified:
+        date: '2026-11-04'
+        how: license-field
+      version: 2.4.0
+    idna:
+      expression: BSD-3-Clause
+      source: idna 3.20 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: '3.20'
+    numpy:
+      expression: BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
+      source: numpy 2.4.4 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 2.4.4
+    packaging:
+      expression: Apache-2.0 OR BSD-2-Clause
+      source: packaging 26.1 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: '26.1'
+    platformdirs:
+      expression: MIT
+      source: platformdirs 4.9.6 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 4.9.6
+    pycparser:
+      expression: BSD-3-Clause
+      source: pycparser 3.0 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: '3.0'
+    pydantic:
+      expression: MIT
+      source: pydantic 2.13.3 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 2.13.3
+    pydantic-core:
+      expression: MIT
+      source: pydantic-core 2.46.3 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 2.46.3
+    pydra:
+      expression: Apache-2.0
+      source: pydra 1.0a13.dev204+gc8541fc56 classifier
+      verified:
+        date: '2026-11-04'
+        how: classifier
+      version: 1.0a13.dev204+gc8541fc56
+    pyyaml:
+      expression: MIT
+      source: pyyaml 6.0.3 license-field
+      verified:
+        date: '2026-11-04'
+        how: license-field
+      version: 6.0.3
+    requests:
+      expression: Apache-2.0
+      source: requests 2.33.1 license-field
+      verified:
+        date: '2026-11-04'
+        how: license-field
+      version: 2.33.1
+    soundfile:
+      expression: BSD-3-Clause
+      source: soundfile 0.13.1 license-field
+      verified:
+        date: '2026-11-04'
+        how: license-field
+      version: 0.13.1
+    tqdm:
+      expression: MPL-2.0 AND MIT
+      source: tqdm 4.67.3 license-field
+      verified:
+        date: '2026-11-04'
+        how: license-field
+      version: 4.67.3
+    truststore:
+      expression: MIT
+      source: truststore 0.10.5 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 0.10.5
+    typing-extensions:
+      expression: PSF-2.0
+      source: typing-extensions 4.15.0 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 4.15.0
+    typing-inspection:
+      expression: MIT
+      source: typing-inspection 0.4.2 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 0.4.2
+    urllib3:
+      expression: MIT
+      source: urllib3 2.6.3 License-Expression
+      verified:
+        date: '2026-11-04'
+        how: pep639
+      version: 2.6.3
+  pii-spans:
+    accelerate:
+      expression: Apache-2.0
+      source: accelerate 1.15.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.15.0
+    annotated-doc:
+      expression: MIT
+      source: annotated-doc 0.0.5 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.0.5
+    annotated-types:
+      expression: MIT
+      source: annotated-types 0.8.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.8.0
+    anyio:
+      expression: MIT
+      source: anyio 4.15.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.15.1
+    certifi:
+      expression: MPL-2.0
+      source: certifi 2026.7.22 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2026.7.22
+    click:
+      expression: BSD-3-Clause
+      source: click 8.5.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 8.5.0
+    colorama:
+      expression: BSD-3-Clause
+      source: colorama 0.4.6 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.4.6
+    compressed-tensors:
+      expression: Apache-2.0
+      source: compressed-tensors 0.15.0.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.15.0.1
+    filelock:
+      expression: MIT
+      source: filelock 4.0.9 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.0.9
+    fsspec:
+      expression: BSD-3-Clause
+      source: fsspec 2026.9.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2026.9.0
+    h11:
+      expression: MIT
+      source: h11 0.16.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.16.0
+    hf-xet:
+      expression: Apache-2.0
+      source: hf-xet 1.6.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.6.0
+    httpcore:
+      expression: BSD-3-Clause
+      source: httpcore 1.0.9 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.0.9
+    httpx:
+      expression: BSD-3-Clause
+      source: httpx 0.28.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.28.1
+    huggingface-hub:
+      expression: Apache-2.0
+      source: huggingface-hub 1.33.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.33.0
+    idna:
+      expression: BSD-3-Clause
+      source: idna 3.20 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.20'
+    jinja2:
+      expression: BSD-3-Clause
+      source: jinja2 3.1.6 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 3.1.6
+    loguru:
+      expression: MIT
+      source: loguru 0.7.3 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.7.3
+    markdown-it-py:
+      expression: MIT
+      source: markdown-it-py 4.2.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 4.2.0
+    markupsafe:
+      expression: BSD-3-Clause
+      source: markupsafe 3.0.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 3.0.3
+    mdurl:
+      expression: MIT
+      source: mdurl 0.1.2 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.1.2
+    mpmath:
+      expression: BSD-3-Clause
+      source: mpmath 1.3.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.3.0
+    networkx:
+      expression: BSD-3-Clause
+      source: networkx 3.7 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.7'
+    numpy:
+      expression: BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
+      source: numpy 2.5.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.5.3
+    packaging:
+      expression: Apache-2.0 OR BSD-2-Clause
+      source: packaging 26.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '26.3'
+    psutil:
+      expression: BSD-3-Clause
+      source: psutil 7.2.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 7.2.2
+    pydantic:
+      expression: MIT
+      source: pydantic 2.13.5 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.13.5
+    pydantic-core:
+      expression: MIT
+      source: pydantic-core 2.46.5 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.46.5
+    pygments:
+      expression: BSD-2-Clause
+      source: pygments 2.21.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.21.0
+    pyyaml:
+      expression: MIT
+      source: pyyaml 6.0.3 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 6.0.3
+    regex:
+      expression: Apache-2.0 AND CNRI-Python
+      source: regex 2026.9.29 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2026.9.29
+    rich:
+      expression: MIT
+      source: rich 15.0.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 15.0.0
+    safetensors:
+      expression: Apache-2.0
+      source: safetensors 0.8.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.8.0
+    setuptools:
+      expression: MIT
+      source: setuptools 84.0.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 84.0.0
+    shellingham:
+      expression: ISC
+      source: shellingham 1.5.4 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.5.4
+    sympy:
+      expression: BSD-3-Clause
+      source: sympy 1.14.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.14.0
+    tokenizers:
+      expression: Apache-2.0
+      source: tokenizers 0.23.2 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.23.2
+    tqdm:
+      expression: MPL-2.0 AND MIT
+      source: tqdm 4.70.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 4.70.1
+    transformers:
+      expression: Apache-2.0
+      source: transformers 5.18.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 5.18.0
+    typer:
+      expression: MIT
+      source: typer 0.27.2 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.27.2
+    typing-extensions:
+      expression: PSF-2.0
+      source: typing-extensions 4.16.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.16.0
+    typing-inspection:
+      expression: MIT
+      source: typing-inspection 0.4.4 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.4.4
+    win32-setctime:
+      expression: MIT
+      source: win32-setctime 1.2.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.2.0
+  pyannote:
+    aiohappyeyeballs:
+      expression: PSF-2.0
+      source: aiohappyeyeballs 2.7.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.7.1
+    aiohttp:
+      expression: Apache-2.0 AND MIT
+      source: aiohttp 3.14.3 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 3.14.3
+    aiosignal:
+      expression: Apache-2.0
+      source: aiosignal 1.4.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.4.0
+    alembic:
+      expression: MIT
+      source: alembic 1.20.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.20.0
+    anyio:
+      expression: MIT
+      source: anyio 4.15.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.15.1
+    asteroid-filterbanks:
+      expression: MIT
+      source: asteroid-filterbanks 0.4.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.4.0
+    attrs:
+      expression: MIT
+      source: attrs 26.1.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 26.1.0
+    certifi:
+      expression: MPL-2.0
+      source: certifi 2026.7.22 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2026.7.22
+    charset-normalizer:
+      expression: MIT
+      source: charset-normalizer 3.5.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 3.5.2
+    click:
+      expression: BSD-3-Clause
+      source: click 8.5.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 8.5.0
+    cloudpickle:
+      expression: BSD-3-Clause
+      source: cloudpickle 3.1.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 3.1.2
+    colorama:
+      expression: BSD-3-Clause
+      source: colorama 0.4.6 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.4.6
+    colorlog:
+      expression: MIT
+      source: colorlog 6.12.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 6.12.0
+    contourpy:
+      expression: BSD-3-Clause
+      source: contourpy 1.4.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.4.0
+    cycler:
+      expression: BSD-3-Clause
+      source: cycler 0.12.1 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.12.1
+    einops:
+      expression: MIT
+      source: einops 0.8.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.8.2
+    filelock:
+      expression: MIT
+      source: filelock 4.0.9 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.0.9
+    fonttools:
+      expression: MIT
+      source: fonttools 4.66.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 4.66.1
+    frozenlist:
+      expression: Apache-2.0
+      source: frozenlist 1.8.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.8.0
+    fsspec:
+      expression: BSD-3-Clause
+      source: fsspec 2026.9.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2026.9.0
+    googleapis-common-protos:
+      expression: Apache-2.0
+      source: googleapis-common-protos 1.75.5 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.75.5
+    grpcio:
+      expression: Apache-2.0
+      source: grpcio 1.84.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.84.0
+    h11:
+      expression: MIT
+      source: h11 0.16.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.16.0
+    hf-xet:
+      expression: Apache-2.0
+      source: hf-xet 1.6.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.6.0
+    httpcore2:
+      expression: BSD-3-Clause
+      source: httpcore2 2.13.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.13.1
+    httpx2:
+      expression: BSD-3-Clause
+      source: httpx2 2.13.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.13.1
+    httpx2-jsfetch:
+      expression: BSD-3-Clause
+      source: httpx2-jsfetch 1.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '1.0'
+    huggingface-hub:
+      expression: Apache-2.0
+      source: huggingface-hub 2.1.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.1.1
+    idna:
+      expression: BSD-3-Clause
+      source: idna 3.20 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.20'
+    jinja2:
+      expression: BSD-3-Clause
+      source: jinja2 3.1.6 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 3.1.6
+    joblib:
+      expression: BSD-3-Clause
+      source: joblib 1.6.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.6.0
+    julius:
+      expression: MIT
+      source: julius 0.2.8 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.2.8
+    kiwisolver:
+      expression: BSD-3-Clause
+      source: kiwisolver 1.5.1 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.5.1
+    lightning:
+      expression: Apache-2.0
+      source: lightning 2.6.6 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.6.6
+    lightning-utilities:
+      expression: Apache-2.0
+      source: lightning-utilities 0.15.3 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.15.3
+    mako:
+      expression: MIT
+      source: mako 1.4.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.4.3
+    markdown-it-py:
+      expression: MIT
+      source: markdown-it-py 4.2.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 4.2.0
+    markupsafe:
+      expression: BSD-3-Clause
+      source: markupsafe 3.0.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 3.0.3
+    matplotlib:
+      expression: PSF-2.0
+      source: matplotlib 3.11.2 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 3.11.2
+    mdurl:
+      expression: MIT
+      source: mdurl 0.1.2 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.1.2
+    mpmath:
+      expression: BSD-3-Clause
+      source: mpmath 1.3.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.3.0
+    multidict:
+      expression: Apache-2.0
+      source: multidict 6.9.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 6.9.1
+    narwhals:
+      expression: MIT
+      source: narwhals 2.26.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.26.0
+    networkx:
+      expression: BSD-3-Clause
+      source: networkx 3.7 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.7'
+    numpy:
+      expression: BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
+      source: numpy 2.5.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.5.3
+    opentelemetry-api:
+      expression: Apache-2.0
+      source: opentelemetry-api 1.45.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.0
+    opentelemetry-exporter-http-transport:
+      expression: Apache-2.0
+      source: opentelemetry-exporter-http-transport 0.66b0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.66b0
+    opentelemetry-exporter-otlp:
+      expression: Apache-2.0
+      source: opentelemetry-exporter-otlp 1.45.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.0
+    opentelemetry-exporter-otlp-common:
+      expression: Apache-2.0
+      source: opentelemetry-exporter-otlp-common 0.66b0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.66b0
+    opentelemetry-exporter-otlp-proto-common:
+      expression: Apache-2.0
+      source: opentelemetry-exporter-otlp-proto-common 1.45.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.0
+    opentelemetry-exporter-otlp-proto-grpc:
+      expression: Apache-2.0
+      source: opentelemetry-exporter-otlp-proto-grpc 1.45.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.0
+    opentelemetry-exporter-otlp-proto-http:
+      expression: Apache-2.0
+      source: opentelemetry-exporter-otlp-proto-http 1.45.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.0
+    opentelemetry-proto:
+      expression: Apache-2.0
+      source: opentelemetry-proto 1.45.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.0
+    opentelemetry-sdk:
+      expression: Apache-2.0
+      source: opentelemetry-sdk 1.45.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.0
+    opentelemetry-semantic-conventions:
+      expression: Apache-2.0
+      source: opentelemetry-semantic-conventions 0.66b0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.66b0
+    optuna:
+      expression: MIT
+      source: optuna 5.0.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 5.0.0
+    packaging:
+      expression: Apache-2.0 OR BSD-2-Clause
+      source: packaging 26.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '26.3'
+    pandas:
+      expression: BSD-3-Clause
+      source: pandas 3.0.6 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 3.0.6
+    pillow:
+      expression: MIT-CMU
+      source: pillow 12.3.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 12.3.0
+    primepy:
+      expression: MIT
+      source: primepy 1.3 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: '1.3'
+    propcache:
+      expression: Apache-2.0
+      source: propcache 0.5.4 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.5.4
+    protobuf:
+      expression: BSD-3-Clause
+      source: protobuf 7.36.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 7.36.2
+    pyannote-audio:
+      expression: MIT
+      source: pyannote-audio 4.0.7 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 4.0.7
+    pyannote-core:
+      expression: MIT
+      source: pyannote-core 6.0.1 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 6.0.1
+    pyannote-database:
+      expression: MIT
+      source: pyannote-database 6.1.1 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 6.1.1
+    pyannote-metrics:
+      expression: MIT
+      source: pyannote-metrics 4.1 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: '4.1'
+    pyannote-pipeline:
+      expression: MIT
+      source: pyannote-pipeline 4.0.0 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 4.0.0
+    pyannoteai-sdk:
+      expression: MIT
+      source: pyannoteai-sdk 0.4.0 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 0.4.0
+    pygments:
+      expression: BSD-2-Clause
+      source: pygments 2.21.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.21.0
+    pyparsing:
+      expression: MIT
+      source: pyparsing 3.3.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 3.3.3
+    python-dateutil:
+      expression: Apache-2.0
+      source: python-dateutil 2.9.0.post0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 2.9.0.post0
+    pytorch-lightning:
+      expression: Apache-2.0
+      source: pytorch-lightning 2.6.6 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.6.6
+    pytorch-metric-learning:
+      expression: MIT
+      source: pytorch-metric-learning 2.9.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 2.9.0
+    pyyaml:
+      expression: MIT
+      source: pyyaml 6.0.3 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 6.0.3
+    requests:
+      expression: Apache-2.0
+      source: requests 2.34.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.34.2
+    rich:
+      expression: MIT
+      source: rich 15.0.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 15.0.0
+    safetensors:
+      expression: Apache-2.0
+      source: safetensors 0.8.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.8.0
+    scikit-learn:
+      expression: BSD-3-Clause
+      source: scikit-learn 1.9.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.9.1
+    scipy:
+      expression: BSD-3-Clause
+      source: scipy 1.18.1 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.18.1
+    setuptools:
+      expression: MIT
+      source: setuptools 81.0.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 81.0.0
+    six:
+      expression: MIT
+      source: six 1.17.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.17.0
+    sortedcontainers:
+      expression: Apache-2.0
+      source: sortedcontainers 2.4.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.4.0
+    sqlalchemy:
+      expression: MIT
+      source: sqlalchemy 2.1.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.1.1
+    sympy:
+      expression: BSD-3-Clause
+      source: sympy 1.14.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.14.0
+    threadpoolctl:
+      expression: BSD-3-Clause
+      source: threadpoolctl 3.7.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 3.7.0
+    torch-audiomentations:
+      expression: MIT
+      source: torch-audiomentations 0.12.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.12.0
+    torch-pitch-shift:
+      expression: MIT
+      source: torch-pitch-shift 1.2.5 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.2.5
+    torchcodec:
+      expression: BSD-3-Clause
+      source: torchcodec 0.17.0 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 0.17.0
+    torchmetrics:
+      expression: Apache-2.0
+      source: torchmetrics 1.9.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.9.0
+    tqdm:
+      expression: MPL-2.0 AND MIT
+      source: tqdm 4.70.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 4.70.1
+    truststore:
+      expression: MIT
+      source: truststore 0.10.4 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.10.4
+    typing-extensions:
+      expression: PSF-2.0
+      source: typing-extensions 4.16.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.16.0
+    tzdata:
+      expression: Apache-2.0
+      source: tzdata 2026.4 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: '2026.4'
+    urllib3:
+      expression: MIT
+      source: urllib3 2.8.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.8.0
+    yarl:
+      expression: Apache-2.0
+      source: yarl 1.25.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.25.1
+  speechbrain:
+    anyio:
+      expression: MIT
+      source: anyio 4.15.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.15.1
+    certifi:
+      expression: MPL-2.0
+      source: certifi 2026.7.22 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2026.7.22
+    cffi:
+      expression: MIT-0
+      source: cffi 2.1.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.1.1
+    charset-normalizer:
+      expression: MIT
+      source: charset-normalizer 3.5.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 3.5.2
+    click:
+      expression: BSD-3-Clause
+      source: click 8.5.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 8.5.0
+    cloudpickle:
+      expression: BSD-3-Clause
+      source: cloudpickle 3.1.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 3.1.2
+    colorama:
+      expression: BSD-3-Clause
+      source: colorama 0.4.6 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.4.6
+    filelock:
+      expression: MIT
+      source: filelock 4.0.9 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.0.9
+    fsspec:
+      expression: BSD-3-Clause
+      source: fsspec 2026.9.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2026.9.0
+    h11:
+      expression: MIT
+      source: h11 0.16.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.16.0
+    hf-xet:
+      expression: Apache-2.0
+      source: hf-xet 1.6.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.6.0
+    httpcore2:
+      expression: BSD-3-Clause
+      source: httpcore2 2.13.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.13.1
+    httpx2:
+      expression: BSD-3-Clause
+      source: httpx2 2.13.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.13.1
+    httpx2-jsfetch:
+      expression: BSD-3-Clause
+      source: httpx2-jsfetch 1.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '1.0'
+    huggingface-hub:
+      expression: Apache-2.0
+      source: huggingface-hub 2.1.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.1.1
+    hyperpyyaml:
+      expression: Apache-2.0
+      source: hyperpyyaml 1.2.3 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.2.3
+    idna:
+      expression: BSD-3-Clause
+      source: idna 3.20 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.20'
+    jinja2:
+      expression: BSD-3-Clause
+      source: jinja2 3.1.6 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 3.1.6
+    joblib:
+      expression: BSD-3-Clause
+      source: joblib 1.6.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.6.0
+    markupsafe:
+      expression: BSD-3-Clause
+      source: markupsafe 3.0.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 3.0.3
+    mpmath:
+      expression: BSD-3-Clause
+      source: mpmath 1.3.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.3.0
+    networkx:
+      expression: BSD-3-Clause
+      source: networkx 3.7 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.7'
+    numpy:
+      expression: BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
+      source: numpy 2.5.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.5.3
+    packaging:
+      expression: Apache-2.0 OR BSD-2-Clause
+      source: packaging 26.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '26.3'
+    pycparser:
+      expression: BSD-3-Clause
+      source: pycparser 3.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.0'
+    pyyaml:
+      expression: MIT
+      source: pyyaml 6.0.3 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 6.0.3
+    requests:
+      expression: Apache-2.0
+      source: requests 2.34.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.34.2
+    ruamel-yaml:
+      expression: MIT
+      source: ruamel-yaml 0.18.17 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.18.17
+    ruamel-yaml-clib:
+      expression: MIT
+      source: ruamel-yaml-clib 0.2.15 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.2.15
+    scipy:
+      expression: BSD-3-Clause
+      source: scipy 1.18.1 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.18.1
+    sentencepiece:
+      expression: Apache-2.0
+      source: sentencepiece 0.2.2 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.2.2
+    setuptools:
+      expression: MIT
+      source: setuptools 81.0.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 81.0.0
+    soundfile:
+      expression: BSD-3-Clause
+      source: soundfile 0.14.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.14.0
+    speechbrain:
+      expression: Apache-2.0
+      source: speechbrain 1.1.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.1.1
+    sympy:
+      expression: BSD-3-Clause
+      source: sympy 1.14.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.14.0
+    tqdm:
+      expression: MPL-2.0 AND MIT
+      source: tqdm 4.70.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 4.70.1
+    truststore:
+      expression: MIT
+      source: truststore 0.10.4 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.10.4
+    typing-extensions:
+      expression: PSF-2.0
+      source: typing-extensions 4.16.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.16.0
+    urllib3:
+      expression: MIT
+      source: urllib3 2.8.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.8.0
+  vllm-server:
+    agent-detector:
+      expression: MIT
+      source: agent-detector 2.0.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.0.0
+    aiohappyeyeballs:
+      expression: PSF-2.0
+      source: aiohappyeyeballs 2.7.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.7.1
+    aiohttp:
+      expression: Apache-2.0 AND MIT
+      source: aiohttp 3.14.4 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 3.14.4
+    aiosignal:
+      expression: Apache-2.0
+      source: aiosignal 1.4.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.4.0
+    annotated-doc:
+      expression: MIT
+      source: annotated-doc 0.0.5 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.0.5
+    annotated-types:
+      expression: MIT
+      source: annotated-types 0.8.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.8.0
+    anthropic:
+      expression: MIT
+      source: anthropic 1.13.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.13.0
+    anyio:
+      expression: MIT
+      source: anyio 4.15.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.15.1
+    apache-tvm-ffi:
+      expression: Apache-2.0
+      source: apache-tvm-ffi 0.1.11 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.1.11
+    astor:
+      expression: BSD-3-Clause
+      source: astor 0.8.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.8.1
+    attrs:
+      expression: MIT
+      source: attrs 26.1.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 26.1.0
+    blake3:
+      expression: CC0-1.0 OR Apache-2.0
+      source: blake3 1.0.11 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.0.11
+    cachetools:
+      expression: MIT
+      source: cachetools 7.2.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 7.2.1
+    cbor2:
+      expression: MIT
+      source: cbor2 6.1.5 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 6.1.5
+    certifi:
+      expression: MPL-2.0
+      source: certifi 2026.7.22 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2026.7.22
+    cffi:
+      expression: MIT-0
+      source: cffi 2.1.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.1.1
+    charset-normalizer:
+      expression: MIT
+      source: charset-normalizer 3.5.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 3.5.2
+    click:
+      expression: BSD-3-Clause
+      source: click 8.5.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 8.5.0
+    cloudpickle:
+      expression: BSD-3-Clause
+      source: cloudpickle 3.1.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 3.1.2
+    colorama:
+      expression: BSD-3-Clause
+      source: colorama 0.4.6 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.4.6
+    compressed-tensors:
+      expression: Apache-2.0
+      source: compressed-tensors 0.17.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.17.0
+    cryptography:
+      expression: Apache-2.0 OR BSD-3-Clause
+      source: cryptography 50.0.2 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 50.0.2
+    cuda-bindings:
+      expression: Apache-2.0
+      source: cuda-bindings 13.4.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 13.4.3
+    cuda-core:
+      expression: Apache-2.0
+      source: cuda-core 1.2.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.2.1
+    cuda-pathfinder:
+      expression: Apache-2.0
+      source: cuda-pathfinder 1.8.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.8.3
+    cuda-python:
+      expression: Apache-2.0
+      source: cuda-python 13.4.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 13.4.1
+    cuda-tile:
+      expression: Apache-2.0
+      source: cuda-tile 1.6.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.6.0
+    depyf:
+      expression: MIT
+      source: depyf 0.20.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.20.0
+    detect-installer:
+      expression: 0BSD
+      source: detect-installer 0.2.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.2.1
+    dill:
+      expression: BSD-3-Clause
+      source: dill 0.4.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.4.1
+    dnspython:
+      expression: ISC
+      source: dnspython 2.9.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.9.0
+    docstring-parser:
+      expression: MIT
+      source: docstring-parser 0.18.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.18.0
+    einops:
+      expression: MIT
+      source: einops 0.8.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.8.2
+    email-validator:
+      expression: Unlicense
+      source: email-validator 2.3.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.3.0
+    fastapi:
+      expression: MIT
+      source: fastapi 0.136.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.136.3
+    fastapi-cli:
+      expression: MIT
+      source: fastapi-cli 0.0.32 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.0.32
+    fastapi-cloud-cli:
+      expression: MIT
+      source: fastapi-cloud-cli 0.26.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.26.0
+    fastar:
+      expression: MIT
+      source: fastar 0.12.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.12.0
+    fastsafetensors:
+      expression: Apache-2.0
+      source: fastsafetensors 0.4.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.4.0
+    filelock:
+      expression: MIT
+      source: filelock 4.1.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.1.0
+    flashinfer-python:
+      expression: Apache-2.0
+      source: flashinfer-python 0.7.0.post1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.7.0.post1
+    frozenlist:
+      expression: Apache-2.0
+      source: frozenlist 1.8.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.8.0
+    fsspec:
+      expression: BSD-3-Clause
+      source: fsspec 2026.9.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2026.9.0
+    googleapis-common-protos:
+      expression: Apache-2.0
+      source: googleapis-common-protos 1.75.5 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.75.5
+    grpcio:
+      expression: Apache-2.0
+      source: grpcio 1.84.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.84.0
+    h11:
+      expression: MIT
+      source: h11 0.16.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.16.0
+    hf-xet:
+      expression: Apache-2.0
+      source: hf-xet 1.7.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.7.0
+    httpcore:
+      expression: BSD-3-Clause
+      source: httpcore 1.0.9 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.0.9
+    httpcore2:
+      expression: BSD-3-Clause
+      source: httpcore2 2.13.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.13.1
+    httptools:
+      expression: MIT
+      source: httptools 0.9.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.9.0
+    httpx:
+      expression: BSD-3-Clause
+      source: httpx 0.28.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.28.1
+    httpx2:
+      expression: BSD-3-Clause
+      source: httpx2 2.13.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.13.1
+    httpx2-jsfetch:
+      expression: BSD-3-Clause
+      source: httpx2-jsfetch 1.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '1.0'
+    huggingface-hub:
+      expression: Apache-2.0
+      source: huggingface-hub 1.33.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.33.0
+    humming-kernels:
+      expression: Apache-2.0
+      source: humming-kernels 0.1.16 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.1.16
+    idna:
+      expression: BSD-3-Clause
+      source: idna 3.20 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.20'
+    ijson:
+      expression: BSD-3-Clause AND ISC
+      source: ijson 3.5.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 3.5.1
+    instanttensor:
+      expression: Apache-2.0
+      source: instanttensor 0.2.1 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 0.2.1
+    interegular:
+      expression: MIT
+      source: interegular 0.3.3 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.3.3
+    jinja2:
+      expression: BSD-3-Clause
+      source: jinja2 3.1.6 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 3.1.6
+    jiter:
+      expression: MIT
+      source: jiter 0.17.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.17.0
+    jmespath:
+      expression: MIT
+      source: jmespath 1.1.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.1.0
+    jsonschema:
+      expression: MIT
+      source: jsonschema 4.26.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.26.0
+    jsonschema-specifications:
+      expression: MIT
+      source: jsonschema-specifications 2025.9.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2025.9.1
+    lark:
+      expression: MIT
+      source: lark 1.2.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.2.2
+    llguidance:
+      expression: MIT
+      source: llguidance 1.7.6 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.7.6
+    llvmlite:
+      expression: BSD-2-Clause AND Apache-2.0 WITH LLVM-exception
+      source: llvmlite 0.47.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.47.0
+    lm-format-enforcer:
+      expression: MIT
+      source: lm-format-enforcer 0.11.3 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.11.3
+    loguru:
+      expression: MIT
+      source: loguru 0.7.3 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.7.3
+    markdown-it-py:
+      expression: MIT
+      source: markdown-it-py 4.2.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 4.2.0
+    markupsafe:
+      expression: BSD-3-Clause
+      source: markupsafe 3.0.4 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 3.0.4
+    mcp:
+      expression: MIT
+      source: mcp 2.3.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.3.0
+    mcp-types:
+      expression: MIT
+      source: mcp-types 2.3.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.3.0
+    mdurl:
+      expression: MIT
+      source: mdurl 0.1.2 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.1.2
+    mistral-common:
+      expression: Apache-2.0
+      source: mistral-common 1.12.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.12.0
+    ml-dtypes:
+      expression: Apache-2.0
+      source: ml-dtypes 0.6.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.6.0
+    model-hosting-container-standards:
+      expression: Apache-2.0
+      source: model-hosting-container-standards 0.1.16 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.1.16
+    mpmath:
+      expression: BSD-3-Clause
+      source: mpmath 1.3.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.3.0
+    msgspec:
+      expression: BSD-3-Clause
+      source: msgspec 0.22.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.22.0
+    multidict:
+      expression: Apache-2.0
+      source: multidict 6.9.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 6.9.1
+    nccl-extensions:
+      expression: Apache-2.0
+      source: nccl-extensions 0.1.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.1.0
+    nccl4py:
+      expression: Apache-2.0
+      source: nccl4py 0.6.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.6.0
+    networkx:
+      expression: BSD-3-Clause
+      source: networkx 3.7 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.7'
+    ninja:
+      expression: Apache-2.0
+      source: ninja 1.13.2 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.13.2
+    numba:
+      expression: BSD-3-Clause
+      source: numba 0.65.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.65.0
+    numpy:
+      expression: BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
+      source: numpy 2.4.6 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.4.6
+    nvidia-cuda-cccl:
+      expression: LicenseRef-NVIDIA-Proprietary
+      source: nvidia-cuda-cccl 13.3.4.3.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 13.3.4.3.1
+    nvidia-cuda-crt:
+      expression: LicenseRef-NVIDIA-Proprietary
+      source: nvidia-cuda-crt 13.4.92 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 13.4.92
+    nvidia-cuda-nvcc:
+      expression: LicenseRef-NVIDIA-Proprietary
+      source: nvidia-cuda-nvcc 13.4.92 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 13.4.92
+    nvidia-cuda-nvdisasm:
+      expression: LicenseRef-NVIDIA-Proprietary
+      source: nvidia-cuda-nvdisasm 13.4.92 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 13.4.92
+    nvidia-cuda-nvrtc:
+      expression: LicenseRef-NVIDIA-Proprietary
+      source: nvidia-cuda-nvrtc 13.4.92 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 13.4.92
+    nvidia-cuda-runtime:
+      expression: LicenseRef-NVIDIA-Proprietary
+      source: nvidia-cuda-runtime 13.4.92 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 13.4.92
+    nvidia-cudnn-frontend:
+      expression: Apache-2.0 AND MIT
+      source: nvidia-cudnn-frontend 1.31.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.31.0
+    nvidia-cutlass-dsl:
+      expression: LicenseRef-NVIDIA-Software-License-Agreement
+      source: nvidia-cutlass-dsl 4.7.1 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 4.7.1
+    nvidia-cutlass-dsl-libs-base:
+      expression: LicenseRef-NVIDIA-Software-License-Agreement
+      source: nvidia-cutlass-dsl-libs-base 4.7.1 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 4.7.1
+    nvidia-cutlass-dsl-libs-core:
+      expression: LicenseRef-NVIDIA-Software-License-Agreement
+      source: nvidia-cutlass-dsl-libs-core 4.7.1 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 4.7.1
+    nvidia-cutlass-dsl-libs-cu12:
+      expression: LicenseRef-NVIDIA-Software-License-Agreement
+      source: nvidia-cutlass-dsl-libs-cu12 4.7.1 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 4.7.1
+    nvidia-cutlass-dsl-libs-cu13:
+      expression: LicenseRef-NVIDIA-Software-License-Agreement
+      source: nvidia-cutlass-dsl-libs-cu13 4.7.1 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 4.7.1
+    nvidia-ml-py:
+      expression: BSD-3-Clause
+      source: nvidia-ml-py 13.615.71 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 13.615.71
+    nvidia-nvvm:
+      expression: LicenseRef-NVIDIA-Proprietary
+      source: nvidia-nvvm 13.4.92 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 13.4.92
+    nvtx:
+      expression: Apache-2.0 WITH LLVM-exception
+      source: nvtx 0.2.15 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 0.2.15
+    openai:
+      expression: Apache-2.0
+      source: openai 3.28.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 3.28.0
+    opencv-python-headless:
+      expression: Apache-2.0
+      source: opencv-python-headless 5.0.0.93 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 5.0.0.93
+    opentelemetry-api:
+      expression: Apache-2.0
+      source: opentelemetry-api 1.45.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.1
+    opentelemetry-exporter-http-transport:
+      expression: Apache-2.0
+      source: opentelemetry-exporter-http-transport 0.66b1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.66b1
+    opentelemetry-exporter-otlp:
+      expression: Apache-2.0
+      source: opentelemetry-exporter-otlp 1.45.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.1
+    opentelemetry-exporter-otlp-common:
+      expression: Apache-2.0
+      source: opentelemetry-exporter-otlp-common 0.66b1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.66b1
+    opentelemetry-exporter-otlp-proto-common:
+      expression: Apache-2.0
+      source: opentelemetry-exporter-otlp-proto-common 1.45.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.1
+    opentelemetry-exporter-otlp-proto-grpc:
+      expression: Apache-2.0
+      source: opentelemetry-exporter-otlp-proto-grpc 1.45.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.1
+    opentelemetry-exporter-otlp-proto-http:
+      expression: Apache-2.0
+      source: opentelemetry-exporter-otlp-proto-http 1.45.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.1
+    opentelemetry-proto:
+      expression: Apache-2.0
+      source: opentelemetry-proto 1.45.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.1
+    opentelemetry-sdk:
+      expression: Apache-2.0
+      source: opentelemetry-sdk 1.45.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.45.1
+    opentelemetry-semantic-conventions:
+      expression: Apache-2.0
+      source: opentelemetry-semantic-conventions 0.66b1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.66b1
+    opentelemetry-semantic-conventions-ai:
+      expression: Apache-2.0
+      source: opentelemetry-semantic-conventions-ai 0.5.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.5.1
+    oss-harmony:
+      expression: Apache-2.0
+      source: oss-harmony 0.0.11 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 0.0.11
+    outlines-core:
+      expression: Apache-2.0
+      source: outlines-core 0.2.14 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.2.14
+    packaging:
+      expression: Apache-2.0 OR BSD-2-Clause
+      source: packaging 26.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '26.3'
+    partial-json-parser:
+      expression: MIT
+      source: partial-json-parser 0.2.1.1.post7 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.2.1.1.post7
+    pillow:
+      expression: MIT-CMU
+      source: pillow 12.3.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 12.3.0
+    prometheus-client:
+      expression: Apache-2.0 AND BSD-2-Clause
+      source: prometheus-client 0.26.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.26.0
+    prometheus-fastapi-instrumentator:
+      expression: ISC
+      source: prometheus-fastapi-instrumentator 8.1.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 8.1.0
+    propcache:
+      expression: Apache-2.0
+      source: propcache 0.5.4 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.5.4
+    protobuf:
+      expression: BSD-3-Clause
+      source: protobuf 7.36.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 7.36.1
+    psutil:
+      expression: BSD-3-Clause
+      source: psutil 7.2.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 7.2.2
+    py-cpuinfo:
+      expression: MIT
+      source: py-cpuinfo 9.0.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 9.0.0
+    pybase64:
+      expression: BSD-2-Clause
+      source: pybase64 1.5.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.5.1
+    pycountry:
+      expression: LGPL-2.1-only
+      source: pycountry 26.2.16 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 26.2.16
+    pycparser:
+      expression: BSD-3-Clause
+      source: pycparser 3.11 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '3.11'
+    pydantic:
+      expression: MIT
+      source: pydantic 2.14.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.14.0
+    pydantic-core:
+      expression: MIT
+      source: pydantic-core 2.50.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.50.0
+    pydantic-extra-types:
+      expression: MIT
+      source: pydantic-extra-types 2.11.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.11.1
+    pydantic-settings:
+      expression: MIT
+      source: pydantic-settings 2.15.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.15.0
+    pygments:
+      expression: BSD-2-Clause
+      source: pygments 2.21.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.21.0
+    pyjwt:
+      expression: MIT
+      source: pyjwt 2.15.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.15.1
+    pynvvideocodec:
+      expression: MIT
+      source: pynvvideocodec 2.0.4 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.0.4
+    python-dotenv:
+      expression: BSD-3-Clause
+      source: python-dotenv 1.2.4 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.2.4
+    python-json-logger:
+      expression: BSD-2-Clause
+      source: python-json-logger 4.2.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.2.0
+    python-multipart:
+      expression: Apache-2.0
+      source: python-multipart 0.0.32 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.0.32
+    pywin32:
+      expression: PSF-2.0
+      source: pywin32 312 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: '312'
+    pyyaml:
+      expression: MIT
+      source: pyyaml 6.0.3 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 6.0.3
+    pyzmq:
+      expression: BSD-3-Clause
+      source: pyzmq 27.2.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 27.2.0
+    quack-kernels:
+      expression: Apache-2.0
+      source: quack-kernels 0.6.5 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 0.6.5
+    referencing:
+      expression: MIT
+      source: referencing 0.37.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.37.0
+    regex:
+      expression: Apache-2.0 AND CNRI-Python
+      source: regex 2026.9.29 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2026.9.29
+    requests:
+      expression: Apache-2.0
+      source: requests 2.34.2 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 2.34.2
+    rich:
+      expression: MIT
+      source: rich 15.0.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 15.0.0
+    rich-toolkit:
+      expression: MIT
+      source: rich-toolkit 0.20.6 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.20.6
+    rignore:
+      expression: MIT
+      source: rignore 0.8.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.8.1
+    rpds-py:
+      expression: MIT
+      source: rpds-py 2026.9.1 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2026.9.1
+    safetensors:
+      expression: Apache-2.0
+      source: safetensors 0.8.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.8.0
+    sentencepiece:
+      expression: Apache-2.0
+      source: sentencepiece 0.2.2 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.2.2
+    sentry-sdk:
+      expression: MIT
+      source: sentry-sdk 2.71.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.71.0
+    setproctitle:
+      expression: BSD-3-Clause
+      source: setproctitle 1.3.8 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.3.8
+    setuptools:
+      expression: MIT
+      source: setuptools 80.10.2 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 80.10.2
+    shellingham:
+      expression: ISC
+      source: shellingham 1.5.4 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.5.4
+    six:
+      expression: MIT
+      source: six 1.17.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.17.0
+    sniffio:
+      expression: MIT OR Apache-2.0
+      source: sniffio 1.3.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.3.1
+    sse-starlette:
+      expression: BSD-3-Clause
+      source: sse-starlette 3.5.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 3.5.0
+    starlette:
+      expression: BSD-3-Clause
+      source: starlette 1.7.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 1.7.0
+    supervisor:
+      expression: LicenseRef-repoze-bsd-derived
+      source: supervisor 4.3.0 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 4.3.0
+    sympy:
+      expression: BSD-3-Clause
+      source: sympy 1.14.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.14.0
+    tabulate:
+      expression: MIT
+      source: tabulate 0.10.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.10.0
+    tiktoken:
+      expression: MIT
+      source: tiktoken 0.14.0 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 0.14.0
+    tilelang:
+      expression: MIT
+      source: tilelang 0.1.12 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.1.12
+    tokenizers:
+      expression: Apache-2.0
+      source: tokenizers 0.23.3 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.23.3
+    tokenspeed-mla:
+      expression: MIT
+      source: tokenspeed-mla 0.1.8 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 0.1.8
+    tokenspeed-triton:
+      expression: MIT
+      source: tokenspeed-triton 3.9.10.post20261008 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 3.9.10.post20261008
+    torch-c-dlpack-ext:
+      expression: Apache-2.0
+      source: torch-c-dlpack-ext 0.1.5 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 0.1.5
+    torchcodec:
+      expression: BSD-3-Clause
+      source: torchcodec 0.17.0 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 0.17.0
+    torchvision:
+      expression: BSD-3-Clause
+      source: torchvision 0.28.0 manual
+      verified:
+        date: '2026-11-01'
+        how: manual
+      version: 0.28.0
+    tqdm:
+      expression: MPL-2.0 AND MIT
+      source: tqdm 4.70.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 4.70.1
+    transformers:
+      expression: Apache-2.0
+      source: transformers 5.17.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 5.17.0
+    truststore:
+      expression: MIT
+      source: truststore 0.10.4 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.10.4
+    typer:
+      expression: MIT
+      source: typer 0.27.3 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.27.3
+    typing-extensions:
+      expression: PSF-2.0
+      source: typing-extensions 4.16.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 4.16.0
+    typing-inspection:
+      expression: MIT
+      source: typing-inspection 0.4.4 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.4.4
+    urllib3:
+      expression: MIT
+      source: urllib3 2.8.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 2.8.0
+    uvicorn:
+      expression: BSD-3-Clause
+      source: uvicorn 0.54.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.54.0
+    uvloop:
+      expression: MIT
+      source: uvloop 0.23.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.23.0
+    vllm:
+      expression: Apache-2.0
+      source: vllm 0.31.0 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: 0.31.0
+    watchfiles:
+      expression: MIT
+      source: watchfiles 1.3.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.3.0
+    websockets:
+      expression: BSD-3-Clause
+      source: websockets 17.2 License-Expression
+      verified:
+        date: '2026-11-01'
+        how: pep639
+      version: '17.2'
+    win32-setctime:
+      expression: MIT
+      source: win32-setctime 1.2.0 classifier
+      verified:
+        date: '2026-11-01'
+        how: classifier
+      version: 1.2.0
+    xgrammar:
+      expression: Apache-2.0
+      source: xgrammar 0.2.7 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 0.2.7
+    yarl:
+      expression: Apache-2.0
+      source: yarl 1.25.1 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 1.25.1
+    z3-solver:
+      expression: MIT
+      source: z3-solver 4.15.4.0 license-field
+      verified:
+        date: '2026-11-01'
+        how: license-field
+      version: 4.15.4.0
+format: env-licenses@1.0

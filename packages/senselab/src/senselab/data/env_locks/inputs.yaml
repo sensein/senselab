@@ -1,0 +1,47 @@
+format: env-lock-inputs@2.0
+# What each lock beside this file is compiled from; scripts/lock_envs.py reads it. `max_cuda` is the CUDA index
+# ceiling (omitted: the default); `exclude_newer` is the pinned upload cutoff of the resolution.
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, under this file's path.
+quarantine:
+- lightning!=2.6.2,!=2.6.3
+- pytorch-lightning!=2.6.2,!=2.6.3
+base_requirements:
+- numpy
+envs:
+  crisperwhisper:
+    python: '3.12'
+    exclude_newer: '2026-10-02T00:00:00Z'
+    requirements:
+    - crisperwhisper[transformers]==2.0.1
+    - crisperwhisper[ct2]==2.0.1; sys_platform == 'linux' and platform_machine == 'x86_64'
+    - ctranslate2>=4.0; sys_platform != 'linux' or platform_machine != 'x86_64'
+    - torch>=2.4
+    - torchaudio>=2.4
+  vllm-server:
+    python: '3.12'
+    max_cuda: [13, 0]
+    exclude_newer: '2026-10-10T00:00:00Z'
+    requirements:
+    - vllm==0.31.0
+  pii-spans:
+    python: '3.12'
+    exclude_newer: '2026-10-02T00:00:00Z'
+    requirements:
+    - transformers>=5.8
+    - torch>=2.8,<2.9
+    - accelerate>=1.0
+    - compressed-tensors>=0.15
+  pyannote:
+    python: '3.12'
+    exclude_newer: '2026-10-02T00:00:00Z'
+    requirements:
+    - pyannote.audio>=4.0,<5
+    - torch>=2.8
+    - torchaudio>=2.8
+  speechbrain:
+    python: '3.12'
+    exclude_newer: '2026-10-02T00:00:00Z'
+    requirements:
+    - speechbrain>=1.0,<2
+    - torch>=2.8
+    - torchaudio>=2.8

@@ -1,0 +1,256 @@
+{
+    "@context": "https://w3id.org/senselab/ns/context.jsonld",
+    "@graph": [
+        {
+            "@id": "senselab:",
+            "@type": "owl:Ontology",
+            "owl:versionInfo": "senselab-vocab@1.4"
+        },
+        {
+            "@id": "senselab:Run",
+            "@type": "rdfs:Class",
+            "rdfs:subClassOf": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:comment": "One run of a pipeline."
+        },
+        {
+            "@id": "senselab:SoftwareAgent",
+            "@type": "rdfs:Class",
+            "rdfs:subClassOf": {
+                "@id": "prov:SoftwareAgent"
+            },
+            "rdfs:comment": "A backend, or the model it loads, that executed an activity."
+        },
+        {
+            "@id": "senselab:Environment",
+            "@type": "rdfs:Class",
+            "rdfs:subClassOf": {
+                "@id": "prov:Entity"
+            },
+            "rdfs:comment": "The locked environment an activity ran in."
+        },
+        {
+            "@id": "senselab:File",
+            "@type": "rdfs:Class",
+            "rdfs:subClassOf": {
+                "@id": "prov:Entity"
+            },
+            "rdfs:comment": "Bytes named by their content address; an array is its canonical .npy."
+        },
+        {
+            "@id": "senselab:Plan",
+            "@type": "rdfs:Class",
+            "rdfs:subClassOf": {
+                "@id": "prov:Plan"
+            },
+            "rdfs:comment": "A pipeline graph document, named by its plan hash."
+        },
+        {
+            "@id": "senselab:Reuse",
+            "@type": "rdfs:Class",
+            "rdfs:subClassOf": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:comment": "An activity that served a stored result in place of executing."
+        },
+        {
+            "@id": "senselab:fileLabel",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "senselab:File"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The file's per-run label, file-<n>; the label's path is only in the run's private label map."
+        },
+        {
+            "@id": "senselab:logicalKey",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "rdf:JSON"
+            },
+            "rdfs:comment": "The logical key of the call the activity executed."
+        },
+        {
+            "@id": "senselab:nodeId",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Role"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The pipeline node an association's agent acted for."
+        },
+        {
+            "@id": "senselab:port",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Role"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The task port an entity was used or generated on."
+        },
+        {
+            "@id": "senselab:modelSource",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Agent"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "Where the agent's model weights came from: hf, url or local."
+        },
+        {
+            "@id": "senselab:context",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "rdf:JSON"
+            },
+            "rdfs:comment": "The execution context the activity ran in, as an execution-context@4.0 record."
+        },
+        {
+            "@id": "senselab:executionProfile",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The canonical digest of the execution profile the activity ran under."
+        },
+        {
+            "@id": "senselab:storedContext",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "senselab:Reuse"
+            },
+            "rdfs:range": {
+                "@id": "rdf:JSON"
+            },
+            "rdfs:comment": "The execution context the served result was computed in, as an execution-context@4.0 record."
+        },
+        {
+            "@id": "senselab:reusePolicy",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "senselab:Reuse"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The reuse policy that admitted the stored result: exact, equivalent or tolerant."
+        },
+        {
+            "@id": "senselab:equivalence",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "senselab:Reuse"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The value digest of the equivalence table that admitted the stored result under the equivalent policy."
+        },
+        {
+            "@id": "senselab:verifyFraction",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "xsd:double"
+            },
+            "rdfs:comment": "The verify fraction of the run config the call ran under: the share of cross-context hits recomputed."
+        },
+        {
+            "@id": "senselab:verifySampling",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "How a cross-context hit is chosen for verification: the value-digest tag over the key digest and the two context fingerprints."
+        },
+        {
+            "@id": "senselab:verifyThresholds",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The canonical digest of the comparison thresholds of the run config the call ran under."
+        },
+        {
+            "@id": "senselab:unlicensedReuse",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "senselab:Reuse"
+            },
+            "rdfs:range": {
+                "@id": "xsd:boolean"
+            },
+            "rdfs:comment": "True when the stored result served records no env license and the run's license policy allowed it."
+        },
+        {
+            "@id": "senselab:verifies",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The canonical digest of the equivalence-evidence record a sampled call's execution produced."
+        },
+        {
+            "@id": "senselab:envLock",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Agent"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The sha of the env lock the agent ran in; an env at another lock is another agent."
+        },
+        {
+            "@id": "senselab:license",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Agent"
+            },
+            "rdfs:range": {
+                "@id": "rdf:JSON"
+            },
+            "rdfs:comment": "The code license of the agent's env, derived from its lock's license records."
+        },
+        {
+            "@id": "senselab:storedAgent",
+            "@type": "rdf:Property",
+            "rdfs:domain": {
+                "@id": "prov:Activity"
+            },
+            "rdfs:range": {
+                "@id": "xsd:string"
+            },
+            "rdfs:comment": "The @id of the agent that computed the result a reuse served."
+        }
+    ]
+}

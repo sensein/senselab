@@ -40,6 +40,14 @@ def declared_dependencies(pyproject: dict[str, object]) -> set[str]:
     return {_normalise(re.split(r"[\s<>=!~;\[]", spec, maxsplit=1)[0]) for spec in specs}
 
 
+def optional_dependencies(pyproject: dict[str, object]) -> set[str]:
+    """Normalised distribution names in every extra of ``[project.optional-dependencies]``."""
+    project = pyproject["project"]
+    assert isinstance(project, dict)
+    extras = project.get("optional-dependencies", {})
+    return {_normalise(re.split(r"[\s<>=!~;\[]", spec, maxsplit=1)[0]) for specs in extras.values() for spec in specs}
+
+
 def _normalise(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
@@ -66,8 +74,8 @@ def undeclared_imports(graph: grimp.ImportGraph, roots: set[str], allowed: set[s
     return externals - allowed - set(sys.stdlib_module_names)
 
 
-REPOSITORY_ROOTS = {"scripts"}
-"""Root packages outside ``packages/``: the repository scripts, whose 2.x modules the digest contract covers."""
+REPOSITORY_ROOTS = {"benchmarks", "scripts"}
+"""Root packages outside ``packages/``: the benchmark harness and the repository scripts."""
 
 
 @pytest.mark.logic
@@ -105,7 +113,10 @@ def undeclared_by_module(imports: dict[str, set[str]], allowed: set[str]) -> dic
 
 @pytest.mark.contract
 def test_packages_import_only_declared_dependencies() -> None:
-    """Each package's external imports are its declared dependencies, the stdlib and its sibling packages."""
+    """Each package's external imports are its declared dependencies and extras, the stdlib and its siblings.
+
+    An extra that is not installed here is allowed under its own name.
+    """
     roots = import_names(PACKAGES)
     graph = grimp.build_graph(*sorted(roots), include_external_packages=True)
     workspace = {_normalise(tomllib.loads(p.read_text())["project"]["name"]) for p in PACKAGES.glob("*/pyproject.toml")}
@@ -115,6 +126,11 @@ def test_packages_import_only_declared_dependencies() -> None:
         allowed = set(roots)
         for dist in declared_dependencies(data) - workspace:
             allowed |= import_names_of(dist)
+        for dist in optional_dependencies(data) - workspace:
+            try:
+                allowed |= import_names_of(dist)
+            except LookupError:
+                allowed.add(dist.replace("-", "_"))
         assert undeclared_by_module(external_imports(graph, own), allowed) == {}
 
 
@@ -197,3 +213,11 @@ def test_an_import_missing_from_the_test_group_is_found(tmp_path: Path) -> None:
     assert imports["a_test.py"] == {"os", "helper", "httpx", "grimp"}
     bad = undeclared_by_module(imports, {"grimp"} | local_modules(tmp_path))
     assert bad == {"a_test.py": {"httpx"}}
+
+
+@pytest.mark.contract
+def test_the_root_groups_install_what_the_tests_and_benchmarks_import() -> None:
+    """`uv sync --group test` installs pyld, which the core prov tests import; `--group benchmarks` installs pyarrow."""
+    groups = tomllib.loads((REPO / "pyproject.toml").read_text())["dependency-groups"]
+    declared = {g: {_normalise(re.split(r"[\s<>=!~;\[]", spec, maxsplit=1)[0]) for spec in groups[g]} for g in groups}
+    assert "pyld" in declared["test"] and "pyarrow" in declared["benchmarks"]

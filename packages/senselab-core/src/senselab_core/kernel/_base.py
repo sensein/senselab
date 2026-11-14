@@ -1,11 +1,13 @@
 """Shared base model and field types of the kernel."""
 
 import math
-import threading
 import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
+from contextvars import ContextVar
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Annotated, Any, NoReturn, Self, TypeVar
+from typing import Annotated, Any, ClassVar, NoReturn, Self, TypeVar
 
 import numpy
 from pydantic import (
@@ -15,11 +17,13 @@ from pydantic import (
     ConfigDict,
     Field,
     GetCoreSchemaHandler,
+    ModelWrapValidatorHandler,
     PlainSerializer,
     Strict,
     StringConstraints,
     ValidationError,
     ValidatorFunctionWrapHandler,
+    model_validator,
 )
 from senselab_worker.canonical import ARRAY_TOKEN, QUIET_NAN_BITS, Recurse, Tokeniser, Walk
 from senselab_worker.digest import identity_digest, npy_digest
@@ -106,12 +110,12 @@ def frozen_array(a: object) -> numpy.ndarray:
 
 
 _NPY_DIGESTS: dict[int, str] = {}
-_NPY_LOCK = threading.Lock()
+"""Digests of live frozen arrays by `id`, read and written by single dict calls under no lock (`_forget` runs from the
+garbage collector, inside any allocation)."""
 
 
 def _forget(key: int) -> None:
-    with _NPY_LOCK:
-        _NPY_DIGESTS.pop(key, None)
+    _NPY_DIGESTS.pop(key, None)
 
 
 def held_npy_digest(a: numpy.ndarray) -> str:
@@ -119,15 +123,12 @@ def held_npy_digest(a: numpy.ndarray) -> str:
     if not is_frozen(a):
         return npy_digest("npy@1", a)
     key = id(a)
-    with _NPY_LOCK:
-        held = _NPY_DIGESTS.get(key)
+    held = _NPY_DIGESTS.get(key)
     if held is not None:
         return held
     digest = npy_digest("npy@1", a)
-    with _NPY_LOCK:
-        if key not in _NPY_DIGESTS:
-            _NPY_DIGESTS[key] = digest
-            weakref.finalize(a, _forget, key)
+    if _NPY_DIGESTS.setdefault(key, digest) is digest:
+        weakref.finalize(a, _forget, key)
     return digest
 
 
@@ -160,11 +161,11 @@ def value_digest(type_name: str, fields: Mapping[str, object]) -> str:
     """Return `identity_digest("value@2", {"type": type_name, "fields": <fields in tokens>})`.
 
     `fields` is written by the shared `canonical.Tokeniser`, which gives each family outside JSON its
-    own token: an array is `{"$array": <sha256 of its canonical .npy>}`, a set `{"$set": [...]}`, an
-    enum `{"$enum": [<type>, <value>]}`, a path `{"$path": <posix text>}`, an integer outside the
+    own token: an array is `{"$array": <sha256 of its canonical .npy>}`, an integer outside the
     I-JSON range `{"$int": "<decimal>"}`, a non-finite float `{"$f": ...}`, a type
     `{"$type": "<module>.<qualname>"}` and a `Frozen` value `{"$value": {"type": ..., "fields": ...}}`;
-    any other mapping is an object, and a key that starts with `$` gains one more `$`.
+    any other mapping is an object, and a key that starts with `$` gains one more `$`. A set, an enum, a path,
+    bytes and a `Decimal` have no canonical form.
 
     Raises:
         NoCanonicalForm: on a value of no family, a lone surrogate, nesting deeper than `MAX_DEPTH`, or a
@@ -180,63 +181,54 @@ def digest_of(v: "Frozen") -> str:
     return value_digest(_type_name(type(v)), _fields(v))
 
 
-def _rebuild(cls: type[F], fields: dict[str, Any]) -> F:
-    return cls.model_validate(fields)
+def _held_frozen(x: object) -> Iterator["Frozen"]:
+    """Yield each `Frozen` held in `x` or in the containers inside it, not entering a `Frozen` or a container twice."""
+    seen: set[int] = set()
+    pending = [x]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, Frozen):
+            yield item
+        elif isinstance(item, (Mapping, list, tuple)) and id(item) not in seen:
+            seen.add(id(item))
+            pending.extend(reversed(list(item.values() if isinstance(item, Mapping) else item)))
 
 
-class FrozenDict(dict[str, Any]):
-    """A read-only `dict`: every mutating method raises `TypeError`; copies are the object itself.
-
-    It is the `__dict__` of a built `Frozen` value and the object form of a provenance record.
-    """
-
-    __slots__ = ()
-
-    def _refuse(self, *args: object, **kwargs: object) -> NoReturn:
-        raise TypeError("a FrozenDict is read-only")
-
-    __setitem__ = __delitem__ = __ior__ = _refuse
-    clear = pop = popitem = setdefault = update = _refuse
-
-    def __reduce__(self) -> tuple[type["FrozenDict"], tuple[dict[str, Any]]]:
-        """Pickle as a new read-only mapping of the same items."""
-        return type(self), (dict(self),)
-
-    def __copy__(self) -> "FrozenDict":
-        """Return `self`, which cannot change."""
-        return self
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> "FrozenDict":
-        """Return `self`; a deep copy is only as deep as what it holds, which the holder keeps read-only."""
-        return self
+def _children(value: "Frozen") -> Iterator["Frozen"]:
+    for name in type(value).model_fields:
+        yield from _held_frozen(getattr(value, name))
 
 
-class FrozenList(list[Any]):
-    """A read-only `list`: every mutating method raises `TypeError`; copies are the object itself.
+def _nodes(value: "Frozen") -> list["Frozen"]:
+    """Return `value` and every `Frozen` it holds, depth first, in field order, each object once."""
+    found: dict[int, Frozen] = {}
+    pending = [value]
+    while pending:
+        node = pending.pop()
+        if id(node) not in found:
+            found[id(node)] = node
+            pending.extend(reversed(list(_children(node))))
+    return list(found.values())
 
-    It is the array form of a provenance record's values: equal to a `list` of the same items, as JSON
-    writes it, and never changed after it is built.
-    """
 
-    __slots__ = ()
+def _reads(value: "Frozen") -> list["ReadUnder | None"]:
+    return [v.read_under() for v in _nodes(value)]
 
-    def _refuse(self, *args: object, **kwargs: object) -> NoReturn:
-        raise TypeError("a FrozenList is read-only")
 
-    __setitem__ = __delitem__ = __iadd__ = __imul__ = _refuse
-    append = clear = extend = insert = pop = remove = reverse = sort = _refuse
+def _carry(reads: Sequence["ReadUnder | None"], built: F) -> F:
+    """Give `built`, a rebuild of the value `reads` came from, the same read of itself and of each value it holds."""
+    nodes = _nodes(built)
+    if len(nodes) != len(reads):
+        nodes, reads = nodes[:1], reads[:1]
+    for node, read in zip(nodes, reads, strict=True):
+        held = object.__getattribute__(node, "__pydantic_private__")
+        object.__setattr__(node, "__pydantic_private__", MappingProxyType({**held, "_read": read}))
+    return built
 
-    def __reduce__(self) -> tuple[type["FrozenList"], tuple[list[Any]]]:
-        """Pickle as a new read-only list of the same items."""
-        return type(self), (list(self),)
 
-    def __copy__(self) -> "FrozenList":
-        """Return `self`, which cannot change."""
-        return self
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> "FrozenList":
-        """Return `self`; a deep copy is only as deep as what it holds, which the holder keeps read-only."""
-        return self
+def _rebuild(cls: type[F], fields: dict[str, Any], reads: Sequence["ReadUnder | None"] = ()) -> F:
+    built = cls.model_validate(fields)
+    return _carry(reads, built) if any(reads) else built
 
 
 def thawed(value: object, walk: Walk | None = None) -> Any:  # noqa: ANN401
@@ -258,17 +250,52 @@ def thawed(value: object, walk: Walk | None = None) -> Any:  # noqa: ANN401
 
 
 def _is_sealed(v: "Frozen") -> bool:
-    return type(object.__getattribute__(v, "__dict__")) is FrozenDict
+    return type(getattr(v, "__pydantic_private__", None)) is MappingProxyType
 
 
 def _seal(v: "Frozen") -> None:
-    """Make a freshly validated value read-only: its fields, its fields-set and its derived private values."""
+    """Make a freshly validated value read-only: its fields-set and its derived private values."""
     if _is_sealed(v):
         return
     private = MappingProxyType(dict(v._derived()))
-    object.__setattr__(v, "__pydantic_private__", private)
     object.__setattr__(v, "__pydantic_fields_set__", frozenset(object.__getattribute__(v, "__pydantic_fields_set__")))
-    object.__setattr__(v, "__dict__", FrozenDict(object.__getattribute__(v, "__dict__")))
+    object.__setattr__(v, "__pydantic_private__", private)
+
+
+@dataclass
+class _Reading:
+    tag: str
+    dropped: list[str]
+
+
+@dataclass(frozen=True)
+class ReadUnder:
+    """What reading a value under a later minor cost.
+
+    `tag` is the tag it was read under; `dropped` the fields the reader did not declare, as `<Type>.<field>`,
+    dropped from the value and every value below it.
+    """
+
+    tag: str
+    dropped: tuple[str, ...]
+
+
+_READING: ContextVar[_Reading | None] = ContextVar("senselab_reading", default=None)
+"""The record being validated, when it declares a later minor of its format: every `Frozen` under it drops the
+fields it does not declare and says so here. Set by `formats.reading`."""
+
+
+def ignoring_unknown_fields() -> bool:
+    """Whether the record being validated declares a later minor of its format (`formats.reading`)."""
+    return _READING.get() is not None
+
+
+def _declared(cls: type["Frozen"], data: Mapping[Any, Any]) -> dict[Any, Any]:
+    """Return `data` without the keys `cls` declares no field for, by name or alias."""
+    names = set(cls.model_fields)
+    for field in cls.model_fields.values():
+        names.update(a for a in (field.alias, field.validation_alias) if isinstance(a, str))
+    return {k: v for k, v in data.items() if k in names}
 
 
 def _held_fields(cls: type["Frozen"], data: object) -> object:
@@ -299,12 +326,15 @@ class Frozen(BaseModel):
     `__setstate__` on a blank instance) is rebuilt through `model_validate`, so it runs every
     validator. `model_construct` is refused. Validation errors do not repeat their input.
 
-    A built value is read-only: attribute assignment and deletion raise `ValidationError`, its
-    `__dict__` is a `FrozenDict`, its private values a read-only mapping, `__setstate__` on it raises
-    `TypeError`, and the class's `model_config` is a read-only mapping.
+    A built value is read-only: attribute assignment and deletion raise `ValidationError`, its private
+    values are a read-only mapping, `__setstate__` on it raises `TypeError`, and the class's `model_config`
+    is a read-only mapping.
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid", hide_input_in_errors=True)
+
+    clock_fields: ClassVar[tuple[str, ...] | None] = None
+    """The fields a re-bind to another clock shifts; a type with a `clock_id` must declare them (`()` for none)."""
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source: type[BaseModel], handler: GetCoreSchemaHandler) -> Any:  # noqa: ANN401
@@ -320,14 +350,54 @@ class Frozen(BaseModel):
         return {"type": "function-wrap", "function": {"type": "no-info", "function": build}, "schema": inner}
 
     @classmethod
+    def _reading(cls, data: object) -> AbstractContextManager[object]:  # noqa: ARG003
+        """Return the scope `data` is validated in; a type that declares its own format enters its reading rules."""
+        return nullcontext()
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _drop_unknown_fields(cls, data: object, handler: ModelWrapValidatorHandler[Self]) -> Self:
+        """Validate `data` in its reading scope, minus the undeclared fields while that scope is a later minor."""
+        with cls._reading(data):
+            read = _READING.get()
+            if read is None or not isinstance(data, Mapping):
+                return handler(data)
+            kept, start = _declared(cls, data), len(read.dropped)
+            read.dropped.extend(f"{cls.__name__}.{k}" for k in data if k not in kept)
+            value = handler(kept)
+            object.__setattr__(
+                value, "__pydantic_private__", {"_read": ReadUnder(read.tag, tuple(read.dropped[start:]))}
+            )
+            return value
+
+    @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
-        """Hold the subclass's config as a read-only mapping."""
+        """Hold the subclass's config as a read-only mapping, and require a clock type to declare its clock fields.
+
+        Raises:
+            TypeError: if a type with a `clock_id` field has no `clock_fields`, or names one that is not a field.
+        """
         super().__pydantic_init_subclass__(**kwargs)
+        unknown = [name for name in cls.clock_fields or () if name not in cls.model_fields]
+        if unknown or ("clock_id" in cls.model_fields and cls.clock_fields is None):
+            raise TypeError(
+                f"{cls.__name__}: clock_fields must name its clock-relative fields, got {unknown or 'none declared'}"
+            )
         cls.model_config = MappingProxyType(dict(cls.model_config))  # type: ignore[assignment]
 
     def _derived(self) -> Mapping[str, object]:
         """Return the private values a built value holds; a subclass extends this mapping."""
-        return {"_canonical": digest_of(self)}
+        held = object.__getattribute__(self, "__pydantic_private__") or {}
+        read = held.get("_read")
+        if read is None:
+            below = [r for child in _children(self) if (r := child.read_under()) is not None]
+            read = ReadUnder(below[0].tag, tuple(k for r in below for k in r.dropped)) if below else None
+        return {"_canonical": digest_of(self), "_read": read}
+
+    def read_under(self) -> ReadUnder | None:
+        """Return what reading this value under a later minor cost, None when it was read under its own."""
+        read: ReadUnder | None = (self.__pydantic_private__ or {}).get("_read")
+        return read
 
     def canonical_digest(self) -> str:
         """Return `value_digest("<module>.<qualname>", <each field's held value>)`, computed when the value was built.
@@ -373,17 +443,17 @@ class Frozen(BaseModel):
         """Return `hash(self.canonical_digest())`."""
         return hash(self.canonical_digest())
 
-    def __reduce__(self) -> tuple[Callable[..., Any], tuple[type[Self], dict[str, Any]]]:
+    def __reduce__(self) -> tuple[Callable[..., Any], tuple[type[Self], dict[str, Any], list[ReadUnder | None]]]:
         """Pickle as the dump, rebuilt through `model_validate`."""
-        return _rebuild, (type(self), self.model_dump())
+        return _rebuild, (type(self), self.model_dump(), _reads(self))
 
     def __copy__(self) -> Self:
         """Return a copy rebuilt through `model_validate`."""
-        return type(self).model_validate(self.model_dump())
+        return _rebuild(type(self), self.model_dump(), _reads(self))
 
     def __deepcopy__(self, memo: dict[int, Any] | None = None) -> Self:
         """Return a copy rebuilt through `model_validate`; a held array that `is_frozen` is shared, not copied."""
-        copied = type(self).model_validate(self.model_dump())
+        copied = _rebuild(type(self), self.model_dump(), _reads(self))
         if memo is not None:
             memo[id(self)] = copied
         return copied
@@ -397,7 +467,7 @@ class Frozen(BaseModel):
         unknown = sorted(set(update or {}) - set(type(self).model_fields), key=str)
         if unknown:
             raise ValueError(f"{type(self).__name__} has no fields {unknown}; known: {sorted(type(self).model_fields)}")
-        return type(self).model_validate({**self.model_dump(), **(update or {})})
+        return _carry(_reads(self), type(self).model_validate({**self.model_dump(), **(update or {})}))
 
     @classmethod  # type: ignore[no-redef]
     def model_construct(cls, _fields_set: set[str] | None = None, **values: object) -> Self:  # type: ignore[override]
@@ -466,14 +536,19 @@ LABEL_KINDS = "biufU"
 """Dtype kinds a label array may hold: those `canonical_npy_bytes` stores."""
 
 
-def as_ns_array(v: object) -> numpy.ndarray:
-    """Validate a 1-D signed or unsigned integer array and return it as a frozen int64 copy."""
+def as_int64_array(v: object, what: str = "nanosecond times") -> numpy.ndarray:
+    """Validate a 1-D signed or unsigned integer array of `what` and return it as a frozen int64 copy."""
     a = _plain_array(v)
     if a.ndim != 1 or a.dtype.kind not in "iu":
-        raise ValueError(f"nanosecond times must be a 1-D integer array, got {a.ndim}-D {a.dtype}")
+        raise ValueError(f"{what} must be a 1-D integer array, got {a.ndim}-D {a.dtype}")
     if not numpy.can_cast(a.dtype, numpy.int64, casting="safe"):
-        raise ValueError(f"nanosecond times must fit int64, got {a.dtype}")
+        raise ValueError(f"{what} must fit int64, got {a.dtype}")
     return frozen_array(a.astype(numpy.int64, copy=False))
+
+
+def as_ns_array(v: object) -> numpy.ndarray:
+    """Validate a 1-D signed or unsigned integer array and return it as a frozen int64 copy."""
+    return as_int64_array(v)
 
 
 def as_numeric_array(v: object, ndim: int) -> numpy.ndarray:
@@ -515,10 +590,45 @@ FiniteFloat = Annotated[float, Strict(), AfterValidator(_finite)]
 Rate = Annotated[float, Strict(), Field(gt=0, allow_inf_nan=False)]
 """A sampling rate in Hz: a positive finite number; bools, strings and non-finite values are refused."""
 
-NsArray = Annotated[numpy.ndarray, BeforeValidator(as_ns_array)]
+
+@dataclass(frozen=True)
+class ArrayForm:
+    """What an array field holds, for its JSON Schema: element JSON types `items`, `ndim`, `unit`, `meaning`."""
+
+    items: tuple[str, ...]
+    ndim: int = 1
+    unit: str | None = None
+    meaning: str = ""
+
+    def schema(self) -> dict[str, Any]:
+        """Return the schema of the array: nested `ndim` deep, each level with `items`, and its unit and meaning."""
+        node: dict[str, Any] = {"type": self.items[0] if len(self.items) == 1 else list(self.items)}
+        for _ in range(self.ndim):
+            node = {"type": "array", "items": node}
+        described = "-D ".join([str(self.ndim), "array"]) + (f" in {self.unit}" if self.unit else "")
+        node["description"] = f"{described}. {self.meaning}".strip()
+        node["x-senselab-ndim"] = self.ndim
+        if self.unit:
+            node["x-senselab-unit"] = self.unit
+        return node
+
+    def __get_pydantic_json_schema__(self, core_schema: Any, handler: Any) -> dict[str, Any]:  # noqa: ANN401, ARG002
+        """Give the field this schema in place of the generator's, wherever the field is used."""
+        return self.schema()
+
+
+NsArray = Annotated[
+    numpy.ndarray,
+    BeforeValidator(as_ns_array),
+    ArrayForm(("integer",), 1, "ns", "int64 nanoseconds on the clock named by `clock_id`."),
+]
 """1-D frozen int64 nanoseconds."""
 
-LabelArray = Annotated[numpy.ndarray, BeforeValidator(as_label_array)]
+LabelArray = Annotated[
+    numpy.ndarray,
+    BeforeValidator(as_label_array),
+    ArrayForm(("string", "number", "boolean"), 1, None, "One label per row, all of one kind."),
+]
 """1-D frozen labels."""
 
 StrMap = Annotated[Mapping[str, str], AfterValidator(FrozenMapping), PlainSerializer(dict)]

@@ -1,6 +1,6 @@
 import numpy as np, warnings
 warnings.filterwarnings("ignore")
-T="/Users/satra/.claude/jobs/295c3f8a/tmp/"
+T="${AGENT_SCRATCH}/"
 d=np.load(T+"stage1.npz"); h=np.load(T+"hear.npz")
 x=d["x"].astype(np.float32); fs=int(d["fs"])
 hl=[str(l) for l in h["labels"]]; HR=h["R"]; cen=h["centres"]

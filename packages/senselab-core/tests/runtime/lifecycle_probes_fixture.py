@@ -1,40 +1,16 @@
 """Probes the worker lifecycle tests share: process liveness, process groups and a gate backends block on."""
 
 import json
+import os
+import shlex
 import socket
-import subprocess
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 RUNTIME_TESTS = Path(__file__).parent
 GATE_TIMEOUT_S = 30.0
-
-
-def can_run(stat: str) -> bool:
-    """Whether a `ps` state string names a process that can still run user code: not a zombie, not exiting.
-
-    The first letter is the run state (`Z` zombie, `X` dead); macOS adds an `E` flag while a process exits.
-    """
-    return bool(stat) and stat[0] not in "ZX" and "E" not in stat[1:]
-
-
-def alive(pid: int) -> bool:
-    """Whether `pid` names a process that can still run user code."""
-    return can_run(state(pid))
-
-
-def state(pid: int) -> str:
-    """The `ps` state letters of `pid`, empty if it has gone."""
-    out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False)
-    return out.stdout.strip()
-
-
-def group_alive(pgid: int) -> bool:
-    """Whether any process of group `pgid` can still run user code, by `ps` over every process."""
-    out = subprocess.run(["ps", "-A", "-o", "pgid=,stat="], capture_output=True, text=True, check=True)
-    rows = (line.split() for line in out.stdout.splitlines())
-    return any(len(row) == 2 and int(row[0]) == pgid and can_run(row[1]) for row in rows)
 
 
 def recorded_pids(pid_file: Path) -> list[int]:
@@ -45,9 +21,13 @@ def recorded_pids(pid_file: Path) -> list[int]:
 
 
 def interpreter(directory: Path, body: str) -> Path:
-    """Write an executable shell script that stands in for the worker's interpreter and ignores its arguments."""
+    """Write an executable shell script that stands in for the worker's interpreter and ignores its arguments.
+
+    The script imports from this process's `sys.path`, which it sets as its `PYTHONPATH`.
+    """
     path = directory / "interpreter"
-    path.write_text(f"#!/bin/sh\n{body}\n")
+    paths = shlex.quote(os.pathsep.join(p for p in sys.path if p))
+    path.write_text(f"#!/bin/sh\nexport PYTHONPATH={paths}\n{body}\n")
     path.chmod(0o755)
     return path
 

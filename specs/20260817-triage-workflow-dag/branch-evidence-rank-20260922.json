@@ -1,7 +1,7 @@
 {
     "cap": 4,
     "parse_errors": {},
-    "root": "/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out",
+    "root": "${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/out",
     "tally": {
         "SPEECH_recordings_with_none_visible": 8281,
         "SPEECH_recordings_with_one_visible": 9296,

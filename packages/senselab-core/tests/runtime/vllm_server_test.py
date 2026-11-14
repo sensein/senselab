@@ -1,0 +1,410 @@
+"""Tests for `senselab_core.runtime.vllm_server`: lifecycle and attestation against `fake_vllm_fixture.py`."""
+
+import json
+import os
+import signal
+import stat
+import subprocess
+import sys
+import threading
+from collections.abc import Callable, Sequence
+from pathlib import Path
+from typing import Any
+
+import pytest
+from lease_clock_fixture import ManualClock, age
+from senselab_core.kernel.identity import Attestation, ExecutionContext, ModelRef, ResolvedModel
+from senselab_core.runtime import vllm_server as vs
+from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.hardware import DeviceMemory
+from senselab_core.runtime.locks import Lease, LeaseTimeout
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.testing.processes import group_gone
+from senselab_worker.digest import identity_digest
+from senselab_worker.faults import ResourceFault
+
+pytestmark = pytest.mark.logic
+
+SHA = "a" * 40
+MODEL = ResolvedModel(ref=ModelRef.parse(f"org/model@{SHA}"), identity=SHA)
+SETTINGS: dict[str, Any] = {
+    "max_model_len": 4096,
+    "max_num_seqs": 4,
+    "gpu_memory_utilization": 0.9,
+    "kv_cache_dtype": "auto",
+    "generation_config": "vllm",
+    "limit_mm_per_prompt": {"image": 0},
+    "enable_prefix_caching": False,
+    "flashinfer_sampler": False,
+}
+FAKE = Path(__file__).with_name("fake_vllm_fixture.py")
+PROFILE = ExecutionProfile.packaged()
+LEASE = PROFILE.lease.model_copy(update={"stale_after_s": 30, "renew_fraction": 0.01, "attribute_delay_s": 0})
+VLLM = PROFILE.vllm.model_copy(update={"startup_s": 30})
+
+_HOLDER = r"""
+import sys, threading
+from pathlib import Path
+from senselab_core.runtime.envs import EnvHandle
+from senselab_worker.digest import identity_digest
+from senselab_core.runtime.vllm_server import VllmServer
+from senselab_core.kernel.identity import ModelRef, ResolvedModel
+from senselab_core.runtime.execution_settings import JobLease
+
+python, locks, sha, settings = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+env = EnvHandle(python=python, python_version="3.12", lock_sha="l", wheel_set="w", torch_index=None)
+model = ResolvedModel(ref=ModelRef.parse(f"org/model@{sha}"), identity=sha)
+from senselab_core.runtime.profiles import ExecutionProfile
+base = ExecutionProfile.packaged()
+lease = base.lease.model_copy(update={"stale_after_s": 30, "renew_fraction": 0.1, "attribute_delay_s": 0})
+vllm = base.vllm.model_copy(update={"startup_s": 30})
+kwargs = {"start_lock_dir": Path(locks), "vllm": vllm, "start_margin_s": 1, "lease": lease}
+with VllmServer(env, model, __import__("json").loads(settings), **kwargs):
+    print("up", flush=True)
+    threading.Event().wait()
+"""
+
+
+@pytest.fixture
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EnvHandle:
+    """A server env whose `bin/vllm` is the fake; the fake's records go to `<tmp>/fake`."""
+    out = tmp_path / "fake"
+    out.mkdir()
+    exe = tmp_path / "env" / "bin" / "vllm"
+    exe.parent.mkdir(parents=True)
+    knobs = 'FAKE_VLLM_KNOBS="$(dirname "$0")/fake_vllm.json"'
+    exe.write_text(f'#!/bin/sh\n{knobs} exec "{sys.executable}" "{FAKE}" "$@"\n')
+    exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
+    _knob(tmp_path, FAKE_VLLM_DIR=str(out))
+    return EnvHandle(
+        python=str(exe.with_name("python")),
+        python_version="3.12",
+        lock_sha="l" * 8,
+        wheel_set="w" * 8,
+        torch_index=None,
+    )
+
+
+def _knob(tmp_path: Path, **knobs: str) -> None:
+    """Set `knobs` for the fake server of the `env` fixture."""
+    path = tmp_path / "env" / "bin" / "fake_vllm.json"
+    path.write_text(json.dumps({**(json.loads(path.read_text()) if path.exists() else {}), **knobs}))
+
+
+def _server(
+    env: EnvHandle,
+    tmp_path: Path,
+    settings: dict[str, Any] = SETTINGS,
+    **options: Any,  # noqa: ANN401
+) -> vs.VllmServer:
+    return vs.VllmServer(
+        env,
+        MODEL,
+        settings,
+        start_lock_dir=tmp_path / "locks",
+        vllm=VLLM,
+        start_margin_s=1,
+        lease=LEASE,
+        **options,
+    )
+
+
+def _records(tmp_path: Path) -> list[dict[str, Any]]:
+    return [json.loads(p.read_text()) for p in sorted((tmp_path / "fake").glob("*.json"))]
+
+
+def _context(fields: dict[str, Any]) -> ExecutionContext:
+    return ExecutionContext(
+        **fields,
+        platform="linux-x86_64",
+        numerics={},
+        decoder=None,
+        host="h",
+        protocol="p",
+        model_source="hf",
+        env_license=None,
+    )
+
+
+def test_attestation_enters_context(env: EnvHandle, tmp_path: Path) -> None:
+    """The served version, the model commit and the config digest reach the context and every reply."""
+    with _server(env, tmp_path) as server:
+        attestation = server.attestation
+        assert attestation == Attestation(
+            engine_version="0.31.0",
+            served_model="org/model",
+            model_identity=SHA,
+            config_digest=identity_digest(vs.CONFIG_TAG, [*server.args, "VLLM_USE_FLASHINFER_SAMPLER=0"]),
+        )
+        driver = _context(server.context_fields()).driver
+        assert {k: driver[k] for k in attestation.driver()} == attestation.driver()
+        assert server.chat([{"role": "user", "content": "hi"}], sampling={}).attestation == attestation
+    (record,) = _records(tmp_path)
+    assert record["argv"][1] == "org/model"
+    assert {f"--revision={SHA}", f"--tokenizer-revision={SHA}", "--max-num-seqs=4"} <= set(record["argv"])
+
+
+def test_an_ambient_engine_variable_never_reaches_the_server(
+    env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the declared engine variables reach the server; an ambient `VLLM_*` neither passes nor moves the digest."""
+    launches = []
+    for backend in (None, "FLASH_ATTN"):
+        if backend is not None:
+            monkeypatch.setenv("VLLM_ATTENTION_BACKEND", backend)
+        with _server(env, tmp_path) as server:
+            launches.append((server.launch, _context(server.context_fields()).driver["launch_env"]))
+    assert "VLLM_ATTENTION_BACKEND" not in launches[1][0].variables
+    assert launches[0][0].variables["VLLM_USE_FLASHINFER_SAMPLER"] == "0" and launches[0][1] == launches[1][1]
+
+
+def test_restart_with_new_config_changes_attestation(env: EnvHandle, tmp_path: Path) -> None:
+    """A restart with another config attests another digest and context; the same config attests the same."""
+    contexts = []
+    for settings in (SETTINGS, {**SETTINGS, "max_num_seqs": 8}, SETTINGS):
+        with _server(env, tmp_path, settings) as server:
+            contexts.append(_context(server.context_fields()).fingerprint())
+    assert contexts[0] != contexts[1] and contexts[0] == contexts[2]
+
+
+def test_engine_variables_reach_the_server_and_its_digest(env: EnvHandle, tmp_path: Path) -> None:
+    """`flashinfer_sampler` is set on the server process as `VLLM_USE_FLASHINFER_SAMPLER` and changes the digest."""
+    digests, seen = [], []
+    for on in (False, True):
+        with _server(env, tmp_path, {**SETTINGS, "flashinfer_sampler": on}) as server:
+            digests.append(server.config_digest)
+        seen.append({r["sampler"] for r in _records(tmp_path)})
+    assert seen == [{"0"}, {"0", "1"}] and digests[0] != digests[1]
+
+
+def test_server_stops_with_owner(env: EnvHandle, tmp_path: Path) -> None:
+    """Killing the owning process with SIGKILL takes the server's whole process group with it."""
+    holder = subprocess.Popen(  # noqa: S603 - this interpreter
+        [sys.executable, "-c", _HOLDER, env.python, str(tmp_path / "locks"), SHA, json.dumps(SETTINGS)],
+        stdout=subprocess.PIPE,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+    )
+    try:
+        assert holder.stdout is not None and holder.stdout.readline() == b"up\n"
+        (record,) = _records(tmp_path)
+        holder.send_signal(signal.SIGKILL)
+        holder.wait()
+        assert group_gone(record["pgid"], 30)
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def test_server_stops_on_exit(env: EnvHandle, tmp_path: Path) -> None:
+    """Leaving the context stops the group and ends the attestation."""
+    with _server(env, tmp_path) as server:
+        pass
+    (record,) = _records(tmp_path)
+    assert group_gone(record["pgid"], 5)
+    assert server.attestation is None
+    with pytest.raises(vs.StaleAttestation):
+        server.context_fields()
+
+
+def test_reply_from_another_model_is_stale(env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A reply naming another model does not carry the attestation."""
+    _knob(tmp_path, FAKE_VLLM_REPLY_MODEL="org/other")
+    with _server(env, tmp_path) as server, pytest.raises(vs.StaleAttestation, match="another model than org/model@"):
+        server.chat([{"role": "user", "content": "hi"}], sampling={})
+
+
+@pytest.mark.parametrize(
+    ("variable", "kind"), [("FAKE_VLLM_EXIT", "exited"), ("FAKE_VLLM_ROOT", "model"), ("FAKE_VLLM_VERSION", "version")]
+)
+def test_start_failure_is_typed_and_stops(
+    env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str, kind: str
+) -> None:
+    """A server that exits, serves another model or reports no version raises its kind and leaves nothing."""
+    _knob(tmp_path, **{variable: {"FAKE_VLLM_EXIT": "1", "FAKE_VLLM_ROOT": "org/other"}.get(variable, "")})
+    server = _server(env, tmp_path)
+    with pytest.raises(vs.VllmStartError) as raised:
+        server.__enter__()
+    assert raised.value.kind == kind and server.url is None
+    for record in _records(tmp_path):
+        assert group_gone(record["pgid"], 5)
+
+
+FREE_MEMORY = (
+    "ValueError: Free memory on device cuda:0 (7.9/79.18 GiB) on startup is less than desired GPU memory utilization"
+    " (0.9, 71.26 GiB)"
+)
+
+
+ENGINE_FAILED = "RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}"
+
+
+@pytest.mark.parametrize(
+    ("tail", "line", "kind"),
+    [
+        (f"{FREE_MEMORY}\nERROR engine core failed\n{ENGINE_FAILED}", FREE_MEMORY, "memory"),
+        (f"ERROR engine core failed\n{ENGINE_FAILED}", ENGINE_FAILED, "exited"),
+    ],
+    ids=["v1-free-memory", "v1-other"],
+)
+def test_a_start_failure_names_an_error_of_its_log_and_the_log(
+    env: EnvHandle, tmp_path: Path, tail: str, line: str, kind: str
+) -> None:
+    """An exit before health carries the log's memory error, else its last error, and the log's path."""
+    _knob(tmp_path, FAKE_VLLM_EXIT="1", FAKE_VLLM_STDERR=f"INFO loading\n{tail}\nINFO shutting down")
+    logs = tmp_path / "logs"
+    with pytest.raises(vs.VllmStartError) as raised:
+        _server(env, tmp_path, log_dir=logs).__enter__()
+    [log] = logs.iterdir()
+    assert raised.value.kind == kind and f"{line} [log: {log}]" in str(raised.value)
+    assert isinstance(raised.value, ResourceFault) == (kind == "memory")
+    with pytest.raises(vs.VllmStartError, match=r"exited with 1 before it was healthy$"):
+        _server(env, tmp_path).__enter__()
+
+
+def test_a_device_short_of_free_memory_is_refused_before_the_launch(env: EnvHandle, tmp_path: Path) -> None:
+    """A device with less free memory than gpu_memory_utilization of its total is a resource fault; nothing starts."""
+    gib = 2**30
+
+    def short(devices: Sequence[str] | None) -> tuple[DeviceMemory, ...]:
+        assert devices is None
+        return (DeviceMemory("GPU-a", 80 * gib, 80 * gib), DeviceMemory("GPU-b", 8 * gib, 80 * gib))
+
+    with pytest.raises(vs.VllmOutOfMemory, match=f"GPU-b has {8 * gib} of {80 * gib} bytes free") as raised:
+        _server(env, tmp_path, memory=short).__enter__()
+    assert raised.value.kind == "memory" and isinstance(raised.value, ResourceFault) and _records(tmp_path) == []
+    with _server(env, tmp_path, memory=lambda _: (DeviceMemory("GPU-a", 72 * gib, 80 * gib),)) as server:
+        assert server.url is not None
+    with _server(env, tmp_path, memory=lambda _: None) as server:
+        assert server.url is not None
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        ResolvedModel(ref=ModelRef.parse("url:https://h/m.bin#sha256=" + "b" * 64), identity="b" * 64),
+        ResolvedModel(ref=ModelRef.parse("org/model@main"), identity="main", unresolved_reason="a ref"),
+    ],
+)
+def test_url_or_unpinned_model_refused(env: EnvHandle, tmp_path: Path, model: ResolvedModel) -> None:
+    """Only a pinned hub or local model is served."""
+    with pytest.raises(ValueError, match="pinned|url"):
+        vs.VllmServer(env, model, SETTINGS, start_lock_dir=tmp_path, vllm=VLLM, start_margin_s=1, lease=LEASE)
+
+
+@pytest.mark.parametrize("settings", [{k: v for k, v in SETTINGS.items() if k != "max_num_seqs"}, {**SETTINGS, "x": 1}])
+def test_settings_must_be_the_known_keys(settings: dict[str, Any]) -> None:
+    """A missing or an unknown setting is refused, never dropped."""
+    with pytest.raises(ValueError, match="vLLM settings"):
+        vs.server_args(settings)
+
+
+def test_server_args_bind_values_to_flags() -> None:
+    """Each value is joined to its flag, so no value is read as another flag."""
+    args = vs.server_args({**SETTINGS, "kv_cache_dtype": "--enable-log-requests"})
+    assert "--kv-cache-dtype=--enable-log-requests" in args
+    assert args[-2:] == ['--limit-mm-per-prompt={"image":0}', "--no-enable-prefix-caching"]
+
+
+def test_local_model_errors_name_no_path(env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local model is served by its path, and an error names it by identity, never by that path."""
+    weights = tmp_path / "private-weights"
+    model = ResolvedModel(ref=ModelRef.parse(f"local:{weights}"), identity="c" * 64)
+    _knob(tmp_path, FAKE_VLLM_ROOT="elsewhere")
+    server = vs.VllmServer(
+        env, model, SETTINGS, start_lock_dir=tmp_path / "locks", vllm=VLLM, start_margin_s=1, lease=LEASE
+    )
+    with pytest.raises(vs.VllmStartError) as raised:
+        server.__enter__()
+    assert "private-weights" not in str(raised.value) and "c" * 12 in str(raised.value)
+    (record,) = _records(tmp_path)
+    assert (
+        record["argv"][1] == str(weights)
+        and f"--served-model-name={'c' * 64}" in record["argv"]
+        and not any(a.startswith("--revision") for a in record["argv"])
+    )
+
+
+def test_a_local_model_is_attested_under_its_identity_not_its_path(env: EnvHandle, tmp_path: Path) -> None:
+    """Weights at two paths give one attestation and one context; neither holds a path."""
+    contexts, served = [], []
+    for name in ("one", "two"):
+        weights = tmp_path / name / "weights"
+        model = ResolvedModel(ref=ModelRef.parse(f"local:{weights}"), identity="c" * 64)
+        with vs.VllmServer(
+            env, model, SETTINGS, start_lock_dir=tmp_path / "locks", vllm=VLLM, start_margin_s=1, lease=LEASE
+        ) as server:
+            assert server.attestation is not None and server.attestation.served_model == "c" * 64
+            reply = server.chat([{"role": "user", "content": "hi"}], sampling={})
+            contexts.append(_context(server.context_fields()))
+            served.append((reply.attestation, str(weights)))
+    assert contexts[0].fingerprint() == contexts[1].fingerprint() and served[0][0] == served[1][0]
+    for context, (attestation, path) in zip(contexts, served, strict=True):
+        assert path not in context.model_dump_json() and path not in attestation.model_dump_json()
+
+
+@pytest.mark.parametrize("kind", ["audio", "image"])
+def test_unreadable_media_error_names_no_path(tmp_path: Path, kind: str) -> None:
+    """A missing media file is refused by its suffix, never its path."""
+    with pytest.raises(ValueError, match="cannot read a '.wav' file") as raised:
+        vs.content_part(kind, tmp_path / "secret-name.wav")
+    assert "secret-name" not in str(raised.value) and raised.value.__cause__ is None
+
+
+def test_the_start_lease_outlasts_its_stale_bound_while_it_beats(
+    env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lease_clock: Callable[..., ManualClock]
+) -> None:
+    """While the server starts, the storage clock passes the start lease's stale bound; it beats and is never broken."""
+    clock, real_popen = lease_clock(spends=False), subprocess.Popen
+    started, breaks = [0], [0]
+
+    class Popen(real_popen):  # type: ignore[misc,valid-type]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+            if not started[0]:
+                for _ in range(4):
+                    started[0] += 1
+                    age(tmp_path / "locks", LEASE.stale_after_s / 3)
+                    clock.advance(LEASE.stale_after_s / 3)
+                    clock.settle()
+                    (lease,) = (tmp_path / "locks").glob("*.lease")
+                    try:
+                        with Lease(lease.with_suffix(""), timeout=0, stale_after=LEASE.stale_after_s):
+                            breaks[0] += 1
+                    except LeaseTimeout:
+                        pass
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", Popen)
+    with _server(env, tmp_path, clock=clock) as server:
+        assert server.attestation is not None
+    assert started[0] == 4 and breaks[0] == 0
+
+
+def test_a_start_lease_lost_after_the_launch_keeps_the_healthy_server(
+    env: EnvHandle,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lease_clock: Callable[..., ManualClock],
+    tier_bound: float,
+) -> None:
+    """The start lease only orders starts: lost while the launched server comes up, it is logged and the server kept."""
+    real_mkdir, real_popen = os.mkdir, subprocess.Popen
+    failing, failed, clock = threading.Event(), threading.Event(), lease_clock(spends=False)
+
+    def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if failing.is_set() and os.fsdecode(path).startswith("beat-"):
+            failed.set()
+            raise FileNotFoundError(2, "No such file or directory", os.fsdecode(path))
+        real_mkdir(path, mode, dir_fd=dir_fd)
+
+    class Popen(real_popen):  # type: ignore[misc,valid-type]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+            if not failing.is_set():
+                failing.set()
+                clock.advance(LEASE.renew_fraction * LEASE.stale_after_s)
+                assert failed.wait(tier_bound)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    monkeypatch.setattr(subprocess, "Popen", Popen)
+    with _server(env, tmp_path, clock=clock) as server:
+        assert server.attestation is not None

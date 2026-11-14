@@ -62,6 +62,14 @@ def test_verify_weights_unknown_name(tmp_path: Path) -> None:
         verify_weights("no-such-weights", f)
 
 
+@pytest.fixture(autouse=True)
+def cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The cache root every resolve here keeps its answers under: a fresh directory outside each test's models."""
+    root = tmp_path_factory.mktemp("cache")
+    monkeypatch.setenv("SENSELAB_CACHE", str(root))
+    return root
+
+
 @pytest.mark.logic
 def test_resolve_local_uses_weights_identity(tmp_path: Path) -> None:
     """A local directory resolves to the weights identity of its files; a file to its own."""
@@ -75,9 +83,34 @@ def test_resolve_local_uses_weights_identity(tmp_path: Path) -> None:
     assert one.identity == file_digest("file@1", tmp_path / "a.bin")
 
 
+@pytest.mark.logic
+def test_a_second_plan_reads_a_local_models_identity_without_hashing_it_again(tmp_path: Path) -> None:
+    """Unchanged sizes and mtimes reuse the kept identity, even over changed bytes; a new mtime hashes again."""
+    model, resolver = tmp_path / "model", Resolver(cache_root=tmp_path / "cache")
+    model.mkdir()
+    (model / "w.bin").write_bytes(b"aaaa")
+    first = resolve(ModelRef.parse(f"local:{model}"), resolver=resolver).identity
+    st = (model / "w.bin").stat()
+    (model / "w.bin").write_bytes(b"bbbb")
+    os.utime(model / "w.bin", ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert resolve(ModelRef.parse(f"local:{model}"), resolver=resolver).identity == first
+    os.utime(model / "w.bin", ns=(st.st_atime_ns, st.st_mtime_ns + 1))
+    again = resolve(ModelRef.parse(f"local:{model}"), resolver=resolver).identity
+    assert again != first and again == weights_identity([model / "w.bin"], root=model)
+
+
 def _model_key(text: str) -> LogicalKey:
     model = resolve(ModelRef.parse(text)).key_identity()
-    return LogicalKey(task="t", task_version="1", backend="b", backend_version="1", model=model, params={}, inputs={})
+    return LogicalKey(
+        task="t",
+        task_version="1",
+        backend="b",
+        backend_version="1",
+        model=model,
+        params={},
+        backend_params={},
+        inputs={},
+    )
 
 
 @pytest.mark.contract
@@ -149,6 +182,24 @@ def test_local_identity_covers_files_under_directory_links(tmp_path: Path, linke
         assert whole == weights_identity([root / "real" / "w.bin", root / "sub" / "w.bin", root / "top.bin"], root=root)
     assert keys["a"] != keys["b"]
     assert keys["a"] == keys["c"]
+
+
+@pytest.mark.logic
+def test_vcs_dirs_do_not_change_identity(tmp_path: Path) -> None:
+    """VCS metadata directories at any depth leave the identity unchanged; any other dotfile or directory is content."""
+    model = tmp_path / "m"
+    (model / "sub").mkdir(parents=True)
+    (model / "w.bin").write_bytes(b"w")
+    before = resolve(ModelRef.parse(f"local:{model}")).identity
+    for where in (model, model / "sub"):
+        for vcs in (".git", ".hg", ".svn"):
+            (where / vcs / "objects").mkdir(parents=True)
+            (where / vcs / "objects" / "pack").write_bytes(os.urandom(8))
+    assert resolve(ModelRef.parse(f"local:{model}")).identity == before
+    for incidental in (model / ".gitattributes", model / ".github" / "x"):
+        incidental.parent.mkdir(exist_ok=True)
+        incidental.write_bytes(b"x")
+        assert resolve(ModelRef.parse(f"local:{model}")).identity != before
 
 
 def _plant_fifo(at: Path) -> None:

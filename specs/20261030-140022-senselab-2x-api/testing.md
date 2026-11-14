@@ -3,7 +3,7 @@
 Status: draft. Principles: P-30 (tiers; benchmarks separate), P-21 (no rationale in code), P-29
 (local plus cluster within shared limits), P-28 (no identifiers), P-22 (Python range).
 The 3.10 tree walk (`ownership.py`) is exercised only by `worker-floor (3.10)` in CI; a developer on the
-pinned `.python-version` (3.12) does not run that path locally.
+pinned `.python-version` (3.13) does not run that path locally.
 
 ## 1. What the 1.x suite tells us
 
@@ -46,15 +46,19 @@ on. The default run is `-m logic`; contract, limits, use case and env are desele
 
 | Tier | Marker | Exercises | Inputs | Runs where | Gate |
 |---|---|---|---|---|---|
-| **Logic** | `logic` (default) | Behaviour of code: data types, identity and keys, params validation, planner decisions, graph semantics, decision rules, codecs | small synthetic signals; the `fake` stack | every PR on Python 3.11 and 3.14 from a core-only install (`core-only` job); worker tests on the 3.10 floor from the built wheel (`worker-floor`); a wider Python matrix is not yet in CI | blocking |
-| **Contract** | `contract` | Every declared task, backend, env and profile meets the framework contract | declarations | every PR (`-m "logic or contract"`, `core-only` on 3.11 and 3.14; worker contract on 3.10) | blocking |
-| **Limits** | `limits` | Parameter boundaries and edge inputs against real backends | synthetic edge signals + 3–4 shared fixtures | nightly, or on a PR carrying the `limits` label (which runs limits only); GPU subset on ORCD | blocking for touched backends |
-| **Use case** | `usecase` | One realistic end-to-end pipeline per use case | small public or synthetic recordings with licenses recorded | nightly and ORCD only, never on a PR or a label (H-R54); ORCD before release | blocking for release |
-| **Env** | `env` | Each locked env builds, imports the worker runtime and round-trips every data type | lock files | the release-gate build on every PR (`core-env`, `-m "env and not slow"`); per-lock builds for changed locks are not yet in CI; full builds weekly on ORCD | blocking for that env |
+| **Logic** | `logic` (default) | Behaviour of code: data types, identity and keys, params validation, planner decisions, graph semantics, decision rules, codecs | small synthetic signals; the `fake` stack | every PR on Python 3.13, Colab's default (`scripts/data/default_python.yaml`; owner items 54, 55), from a core-only install (`core-only` job, `-m "(logic or contract) and not model"`); 3.11–3.14 nightly and on a PR labelled `full-matrix`; worker tests on the 3.10 floor from the built wheel (`worker-floor`) | blocking |
+| **Contract** | `contract` | Every declared task, backend, env and profile meets the framework contract | declarations | every PR (`-m "logic or contract"`, `core-only` on 3.13, and 3.11–3.14 nightly and on `full-matrix`; worker contract on 3.10) | blocking |
+| **Limits** | `limits` | Parameter boundaries and edge inputs against real backends | synthetic edge signals + 3–4 shared fixtures | GitHub: limits that need no model, nightly and on a PR carrying the `limits` label (`-m "limits and not model"`). ORCD only, submitted from a pinned SHA: every limit that loads a model or needs a backend env, and the GPU subset | blocking for touched backends |
+| **Use case** | `usecase` | One realistic end-to-end pipeline per use case | small public or synthetic recordings with licenses recorded | ORCD only, submitted from a pinned SHA; never in GitHub CI, on a PR, a label or nightly (H-R54, P2-33) | blocking for release |
+| **Env** | `env` | Each locked env builds, imports the worker runtime and round-trips every data type | lock files | GitHub: the model-free release-gate packaging build on every PR (`core-env`, `-m "env and not slow and not model"`), which builds wheels and a venv of the senselab distributions and no backend env. ORCD only: every backend env build, per-lock builds for changed locks, full builds weekly | blocking for that env |
 | **Benchmark** | not pytest | Accuracy and speed on public data, tracked over releases | public benchmark subsets and full sets | CPU smoke (<15 min) on PRs touching a task and nightly (not yet in CI); GPU smoke weekly on ORCD; full per release on ORCD | tracked, not pass/fail; regressions beyond a band open an issue |
 
+**Site profile for model, env and GPU runs (P-42).** Senselab packages no site profile, so a run that selects the `model`, `large_model` or `gpu` marker (`-m "... and model"`) refuses to collect unless `SENSELAB_TEST_PROFILE` names a site profile file (a pytest usage error naming the variable); an ad hoc run that does not select those tiers skips such a test instead. ORCD model, backend-env and GPU runs therefore export `SENSELAB_TEST_PROFILE=<the group's site profile>` and optionally `SENSELAB_ENV_ROOT=<scratch>`; the profile is loaded untouched.
+
 Within limits and use cases, sub-markers `gpu`, `network` and `slow` select hardware and runtime.
-Both tiers are deselected by default, as are contract and env: the PR command is `-m "logic or contract"`.
+Both tiers are deselected by default, as are contract and env: the PR command is `-m "(logic or contract) and not model"`.
+
+The sub-marker `model` marks a test that loads weights or needs a backend env. It goes only with `limits`, `usecase` or `env` (`packages/conftest.py`), and no GitHub job selects it (`ci_tiers_test.py`): GitHub CI runs logic, contract and model-free limits, and runs no model, for review or otherwise (P2-33).
 
 ## 3. Logic tests: write less, generate more
 
@@ -73,7 +77,6 @@ For each declared task, backend, env and profile, one generic suite checks:
   as `exact`, and `tolerant` accepts and labels the result;
 - graph documents round-trip and validate; a list wired to an item port without `map` is a type
   error (ADR-001);
-- a `measure` task's output schema carries no verdict fields (P-20);
 - provenance is emitted with the required fields;
 - a license record exists, and a missing one raises under the default policy;
 - `Absent` and failure are distinguished, and only content-caused `Absent` is read back from the
@@ -90,6 +93,11 @@ module over the registry, with ids equal to the task, backend or profile name.
 - span algebra laws (union and intersection associativity, clipping to extent);
 - `TimeMap` composition and inversion;
 - identity hashes ignore container format and are stable across numpy versions.
+
+**Bad input at every boundary** (P-34). Each kernel and runtime boundary is exercised with: empty input, the
+wrong type, NaN and inf, a negative value, an oversize value, a non-UTF-8 path, a symlink out of the root, a
+truncated file, a concurrent writer, and `ESTALE` or `ENOENT` in the middle of the call. Backends add the edge
+set in §4.
 
 **Example tests** for decision logic: small tables, one row per behaviour.
 - Ids describe the behaviour (`"short_vowel_routes_to_review"`), never a register or round number.
@@ -136,16 +144,18 @@ module over the registry, with ids equal to the task, backend or profile name.
   - each declared stack.
 - It also runs boundary values of each `Params` field (min, max, each enum member).
 - Assertions are on type, shape, ranges, determinism (same identity gives the same result) and
-  agreement across stacks within the measured tolerance profile. Never on exact model scores.
+  agreement across stacks under the run config's thresholds (P2-95; amended 2026-11-10, P3-46). Never on exact model scores.
 - **Identity contracts on real backends:**
   - **perturbation (I-1):** perturb every undeclared source (env vars, other profile keys, cache
     roots); the output must not change;
-  - **batch invariance (I-3):** batch of 1 against mixed-length batches, within the measured
-    tolerance; otherwise the backend must declare itself not batch-invariant;
+  - **batch invariance (I-3):** batch of 1 against mixed-length batches, compared under the run
+    config's thresholds (amended 2026-11-10, P3-46); otherwise the backend must declare itself not batch-invariant;
   - **service attestation (I-8):** restarting a service with a new config changes keys;
   - **cross-context equivalence (P-38):** the limits tier runs each backend in every context of the
-    CI and ORCD matrix (platform, device class, precision). Agreement within tolerance is written
-    to the backend's tolerance profile; this is the data `equivalent` reuse relies on;
+    CI and ORCD matrix (platform, device class, precision). Agreement under the run config's thresholds is
+    recorded as `equivalence-evidence` and regenerated into the packaged equivalence table (`equivalence@4.0`,
+    `runtime/equivalence.py:1-7`); this is the data `equivalent` reuse relies on (amended 2026-11-10, P3-46; the
+    tolerance profiles are retired);
   - **verify sampling:** a run with `verify: k` recomputes k% of cross-context hits. Agreements are
     recorded and disagreements are reported against the equivalence class.
 - **Version-bump check (CI, not a test):** a change to a task's or backend's source digest without a
@@ -163,17 +173,17 @@ module over the registry, with ids equal to the task, backend or profile name.
 - They double as the 2.x tutorials, so tutorials are tested by construction.
 
 **Parity tests (migration only)**
-- `tests/parity/` compares 1.x and 2.x outputs per ported task, within measured tolerance profiles
-  (`design.md` §6).
+- `tests/parity/` compares 1.x and 2.x outputs per ported task, under the run config's thresholds
+  (`design.md` §6; amended 2026-11-10, P3-46).
 - They are deleted, along with the 1.x code, in Phase 5.
 
 ## 5. Where and how tests run (P-29)
 
 **Local**
-- `uv run pytest` runs logic tests in under a few minutes on a laptop, serially, scoped to the
-  package changed.
-- `uv run pytest -m limits -k <backend>` runs one backend's limits.
-- The nightly job needs a scheduled workflow on the default branch (`alpha`) that checks out `2.x`: GitHub runs `schedule` workflows only from the default branch.
+- `uv run --no-sync pytest` runs logic tests in under a few minutes on a laptop, serially, scoped to the
+  package changed. `--no-sync` because a plain `uv run` re-syncs the shared venv (P-29).
+- `uv run --no-sync pytest -m limits -k <backend>` runs one backend's limits.
+- The nightly job is `2x-nightly.yaml` on the default branch (`alpha`), which checks out `2.x`: GitHub runs `schedule` workflows only from the default branch. It calls `2x-tests.yaml@2.x` with `ref: 2.x` (every PR job) and runs `limits and not model`.
 - A test that builds a wheel or sdist, creates a venv or installs from an index carries `network`
   beside its tier, so `-m "not network"` runs none of them. The release-gate and packaging ones
   (`packages/senselab-core/tests/release_gate_test.py`) run in the
@@ -190,10 +200,11 @@ module over the registry, with ids equal to the task, backend or profile name.
 
 | When | What |
 |---|---|
-| every PR | `pre-commit`; logic + contract on 3.11 and 3.14 from a locked core-only install (`uv sync --locked`), with import contracts and per-distribution sdist-to-wheel builds (`core-only`); the release-gate env tests (`core-env`); worker logic, env and contract tests on 3.10 (`worker-floor`, the one job that does not install from `uv.lock`: the lock requires Python 3.11 or later, so a locked 3.10 constraints file is a follow). A guard test (`ci_tiers_test.py`) refuses any other unlocked install. Not yet in CI: per-lock env builds, CPU smoke benchmarks (<15 min) when a task is touched |
-| label on a PR (`limits`) | limits only, on 3.12 (`core-limits`); never use cases (H-R54) |
-| nightly (`schedule`, `workflow_dispatch`) | every PR job, and limits and use cases on 3.12 (`core-nightly`). A schedule runs the default branch's copy of the workflow, so this takes effect once 2.x is merged there. Not yet in CI: a wider Python matrix, the scale ladder (`benchmarks/scale`, P-33), CPU smoke benchmarks |
-| weekly (ORCD) | GPU smoke benchmarks; core CPU benchmark suite; full env builds; use cases on ORCD |
+| every PR | `pre-commit`; logic + contract, model-free, on 3.13 (3.11–3.14 on a PR labelled `full-matrix`) from a locked core-only install (`uv sync --locked`), with import contracts and per-distribution sdist-to-wheel builds (`core-only`); the source-digest check (`source-digests`, `scripts/check_source_digests.py`); the implementer and reviewer models differ (`pr-models`, `scripts/check_pr_models.py`); the model-free release-gate packaging tests (`core-env`); the execution, kernel and lint tests with the `pydra` extra, on 3.13 alone (`core-pydra`); the senselab package's tests from an install without extras (`senselab-lean`); worker logic, env and contract tests on 3.10 (`worker-floor`, the one job that does not install from `uv.lock`: the lock requires Python 3.11 or later, so a locked 3.10 constraints file is a follow). A guard test (`ci_tiers_test.py`) refuses any other unlocked install. Not yet in CI: per-lock env builds, CPU smoke benchmarks (<15 min) when a task is touched |
+| label on a PR (`limits`) | model-free limits only, on 3.13 (`core-limits`); never use cases (H-R54) |
+| nightly (`schedule`, `workflow_dispatch`; `2x-nightly.yaml` on `alpha`) | every PR job against `2.x` with the 3.11–3.14 matrix, and `limits and not model` on 3.13. No use case and no model test: those are ORCD. Not yet in CI: the scale ladder (`benchmarks/scale`, P-33), CPU smoke benchmarks, and 3.15 and the release-tagged-merge trigger of owner item 54 |
+| every pushed SHA on a task or backend change (ORCD) | the model, backend-env and GPU tiers the change touches, and the use cases, submitted from a pinned SHA; the job exports `SENSELAB_TEST_PROFILE=<the group's site profile file>` and, so env trees persist between jobs, `SENSELAB_ENV_ROOT=<scratch>` |
+| weekly (ORCD) | GPU smoke benchmarks; core CPU benchmark suite; full env builds; use cases |
 | per release (ORCD) | full benchmarks; GPU limits |
 
 **Forbidden in 2.x tests.** Enforced today: patching senselab internals (`tests/lint/internal_patches_test.py`),
@@ -242,3 +253,56 @@ The dataset choices per task and modality are in [`benchmarks.md`](benchmarks.md
 Toy fixtures in the repository versus versioned data pulled from public sources follow
 [`docs.md`](docs.md) (data policy). The same manifest and fetch serve use-case tests, benchmarks
 and docs.
+
+## Amendments 2026-11-02 (Phase 2 spec pass)
+
+- **Tolerance profiles are keyed by task and backend** (P2-87; §4, cross-context equivalence; ADR-002 amendment
+  2026-11-02). A backend serving two tasks has two profiles. The limits tier writes each to its own
+  `(task, backend)` profile.
+- **Parity of speaker labels is taken under the optimal one-to-one time-overlap mapping** (P2-89; §4, parity tests; P2-41). Diarization labels are arbitrary names, so a permutation of
+  them is not a difference. The 2.x and 1.x labels are matched by the assignment that maximises agreement, as in
+  DER scoring; a speaker left unmatched on either side is a mismatch. A label-assignment regression that a
+  permutation-blind comparison would mask is still caught by the unmatched count.
+- **Format migrations** (§3, "every reader has a test that reads the previous major format"): before the first 2.x
+  release a major bump has no previous-major reader, and the test is that the retired format is refused with a
+  typed error naming the migration statement (ADR-006 amendment, P2-44).
+
+## Amendment 2026-11-09 (owner): time in tests
+
+Owner: "aren't timing tests very brittle since they are dependent on resources they run on".
+
+- A logic or contract test never asserts a wall-time magnitude or a ratio of wall times. Such a figure depends on
+  the runner's load, CPU and disk, so the test fails without a code change.
+- Logic that depends on time passing (leases going stale, peer waits, presence refresh, retries, dead-holder
+  detection, per-request wall attribution) is tested with an injected clock: the code reads time through a clock
+  passed in, production passes the real monotonic clock, and the test advances it. Avoiding a brittle test
+  overrides the cost of the seam: any test whose outcome depends on real elapsed time gets an injected clock or is
+  removed (owner: "brittleness should still override").
+- Real durations, throughput and contention are measured only on controlled hardware (the ORCD benchmark and
+  ladder runs on typed resources) and are recorded, not used as pass/fail gates.
+- A complexity bound is asserted by counting operations at two sizes, not by timing them.
+- Existing tests that assert walls or rely on sleeps with slack are converted now, in a dedicated task, not left
+  until their area is next touched.
+
+## Amendment 2026-11-10 (Phase 3 spec pass, Task 22a)
+
+- **Agreement is the P2-95 comparisons, in every tier** (P3-46). Where §4 said "measured tolerance", "tolerance
+  profile" or "within tolerance" it now says the run config's thresholds: two outputs agree when their hashes are
+  equal, or leaf by leaf when each leaf is `exact` or within `numpy.isclose` of a named threshold
+  (`runtime/compare.py:1-7`; `runtime/data/comparison.yaml:1-8`). The thresholds are configuration values with written
+  derivations and are never fitted from calibration data (ADR-002 amendment 2026-11-02). This supersedes the 2026-11-02
+  amendment above that keys tolerance profiles by task and backend: the profiles, `scripts/generate_tolerance.py` and
+  `runtime.tolerance` are retired (ADR-002 amendment 2026-11-02), and the parity of speaker labels (P2-89) is the
+  `match_labels` rule of the comparison table.
+- **Python 3.13 is the default of every PR job but `worker-floor`, which runs 3.10, and of the pinned interpreter** (`.python-version:1`;
+  `.github/workflows/2x-tests.yaml:57`, `:74`, `:138`). The 3.11 to 3.14 matrix runs only on the nightly and on a PR
+  labelled `full-matrix` (`2x-tests.yaml:74`). This restates §2 and §5 and changes no rule.
+- **`core-pydra` carries the execution tests under Route A.** Running a plan needs the `pydra` extra
+  (`runtime/execution/run.py:941-942`), so the tests that run plans cannot run in `core-only`, which installs
+  `senselab-core` without it (`2x-tests.yaml:88`). `core-pydra (3.13)` installs the extra from `uv.lock` and runs
+  `packages/senselab-core/tests/runtime/execution`, `tests/kernel` and `tests/lint` with
+  `-m "(logic or contract) and not model"` (`2x-tests.yaml:110-127`). It runs on 3.13 only; the matrix does not cover
+  pydra.
+- **Site profile for model, env and GPU runs.** Checked against the code: `SENSELAB_TEST_PROFILE` is
+  `PROFILE_VARIABLE` in `packages/conftest.py:94`; a model or GPU test is skipped without it
+  (`conftest.py:132`). §2 and the cadence row already say so; nothing to add.

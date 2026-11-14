@@ -1,22 +1,3 @@
-# The 2.x packages: the repository's ruff configuration plus the complexity and Pylint rule families.
-# Limits are ruff's defaults: C901 10, PLR0911 6 returns, PLR0912 12 branches, PLR0913 5 arguments,
-# PLR0915 50 statements. They are set here, in one place, and a site that exceeds one carries a `noqa` with its reason.
+# The 2.x packages: the repository's ruff configuration, resolved from here so that isort's first-party
+# packages are those under packages/, not the 1.x pool under src/.
 extend = "../pyproject.toml"
-
-[lint]
-extend-select = ["C901", "PLC", "PLE", "PLR", "PLW"]
-
-[lint.mccabe]
-max-complexity = 10
-
-[lint.pylint]
-max-returns = 6
-max-branches = 12
-max-args = 5
-max-statements = 50
-
-[lint.per-file-ignores]
-"**/scripts/**" = ["ANN", "D", "E", "I", "F541", "PLR2004"]
-# Tests import inside a test to keep a collection error local, and assert on literals.
-"**/tests/**" = ["B009", "S102", "S307", "PLC0415", "PLR2004"]
-"**/conftest.py" = ["B009", "S102", "S307", "PLC0415", "PLR2004"]

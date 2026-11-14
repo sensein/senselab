@@ -3,7 +3,7 @@
 
     # from a directory of wavs (what a cluster job does)
     uv run python specs/20260817-triage-workflow-dag/runs/b2ai-v2/make_hints.py \
-        --dir /orcd/data/satra/002/.../sub-<uuid>/ --out hints/
+        --dir ${ORCD_DATA}/.../sub-<uuid>/ --out hints/
 
     # from a listing
     ls sub-*/**/*.wav | uv run python .../make_hints.py --list - --out hints/

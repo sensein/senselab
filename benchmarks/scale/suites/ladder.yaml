@@ -1,0 +1,8 @@
+format: scale-suite@2.0
+name: ladder
+# The seed of the synthetic trees; one seed gives the same bytes on every host.
+seed: 0
+# The long signal's seconds: two hours of audio.
+long_s: 7200
+tasks:
+- {task: signal.resample, port: series, data: synthetic, params: {target_rate: 8000}, points: [1, 100, 10000, long]}

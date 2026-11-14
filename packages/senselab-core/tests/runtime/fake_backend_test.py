@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from senselab_core.kernel.declare import REGISTRY
+from senselab_core.kernel.declare import REGISTRY, Env
 from senselab_core.runtime.fake_backend import ECHO, FAKE, EchoParams, fake_worker, run_fake
 from senselab_worker.digest import identity_digest
 from senselab_worker.fake import FakeFaults
@@ -15,7 +15,8 @@ def test_import_registers_echo_and_its_backend() -> None:
     """Importing the module declares `fake.echo` and its `fake` backend in the global registry."""
     assert ECHO in REGISTRY.tasks()
     assert REGISTRY.backends("fake.echo") == [FAKE]
-    assert (FAKE.stack, FAKE.env, FAKE.license.expression) == ("fake", "host", "Apache-2.0")
+    assert (FAKE.name, FAKE.version, FAKE.stack, FAKE.env) == ("fake", "1", "fake", Env.host())
+    assert (FAKE.worker, dict(FAKE.load_stub)) == ("senselab_worker.fake", {})
 
 
 @pytest.mark.logic
@@ -40,7 +41,7 @@ def test_run_fake_injects_declared_faults() -> None:
 @pytest.mark.logic
 def test_fake_worker_process_has_exited_on_exit(tmp_path: Path) -> None:
     """Leaving `fake_worker`, which `run_fake` runs inside, reaps the worker process and removes its array dir."""
-    with fake_worker(FakeFaults(), array_parent=tmp_path) as client:
+    with fake_worker(array_parent=tmp_path) as client:
         client.run([{"id": "a", "inputs": {"payload": "x"}}], {})
         assert client.returncode is None
     assert client.returncode is not None

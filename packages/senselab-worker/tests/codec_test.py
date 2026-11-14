@@ -5,7 +5,6 @@ import io
 import json
 import os
 import sys
-import time
 import types
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -14,7 +13,7 @@ import numpy
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from senselab_worker import _raw_digest, runtime_identity
+from senselab_worker import WIRE_VERSION, _raw_digest, runtime_identity
 from senselab_worker.canonical import MAX_DEPTH, npy_bytes
 from senselab_worker.codec import (
     MAX_LINE_BYTES,
@@ -152,6 +151,21 @@ def test_bad_array_reference_is_integrity_error(tmp_path: Path, field: str) -> N
 
 @pytest.mark.logic
 @pytest.mark.parametrize(
+    "damage",
+    [{"shape": [3.0]}, {"shape": [True, 3]}, {"shape": (3,)}, {"dtype": None}, {"extra": 1}, {"path": None}],
+    ids=repr,
+)
+def test_array_ref_schema_is_strict(tmp_path: Path, damage: dict[str, Any]) -> None:
+    """A reference is exactly `{path, sha256, dtype, shape}`, with a list of `int` as its shape."""
+    a = numpy.arange(3, dtype="<f4").reshape(1, 3) if damage.get("shape") == [True, 3] else numpy.arange(3, dtype="<f4")
+    ref = _ref(tmp_path, a)
+    ref["__array__"].update(damage)
+    with pytest.raises(ArrayIntegrityError):
+        from_wire({"x": ref}, array_dir=tmp_path)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
     "line",
     [b"[1]\n", b"not json\n", b'{"x": NaN}\n', b'{"x": Infinity}\n', b"\xff\n", b" " * (MAX_LINE_BYTES + 1)],
 )
@@ -197,13 +211,25 @@ def test_deadline_counts_down_and_names_what_expired() -> None:
     """`None` never expires; a spent deadline raises `TimeoutError` naming the step."""
     assert Deadline(None).remaining() is None and not Deadline(None).expired()
     Deadline(None).check("anything")
-    live = Deadline(60)
-    remaining = live.remaining()
-    assert remaining is not None and 0 < remaining <= 60 and not live.expired()
     spent = Deadline(0)
     assert spent.expired() and spent.remaining() == 0
     with pytest.raises(TimeoutError, match="reading arrays"):
         spent.check("reading arrays")
+
+
+@pytest.mark.logic
+def test_deadline_follows_the_clock_it_is_given() -> None:
+    """A deadline reads its `now`: it has the seconds left, none at the end, and never moves without the clock."""
+    at = [100.0]
+    deadline = Deadline(8, now=lambda: at[0])
+    assert deadline.remaining() == 8 and not deadline.expired()
+    at[0] += 3
+    assert deadline.remaining() == 5 and not deadline.expired()
+    deadline.check("early")
+    at[0] += 5
+    assert deadline.remaining() == 0 and deadline.expired()
+    with pytest.raises(TimeoutError, match="late"):
+        deadline.check("late")
 
 
 @pytest.mark.logic
@@ -214,18 +240,6 @@ def test_fifo_array_ref_is_refused_without_blocking(tmp_path: Path) -> None:
     ref = {"__array__": {"path": str(tmp_path / f"{sha}.npy"), "sha256": sha, "dtype": "<f4", "shape": [1]}}
     with pytest.raises(ArrayIntegrityError, match="regular file"):
         from_wire(ref, array_dir=tmp_path)
-
-
-@pytest.mark.limits
-def test_fifo_array_ref_is_refused_within_a_second(tmp_path: Path) -> None:
-    """A FIFO at `<sha>.npy` is refused in under 1 s."""
-    sha = "b" * 64
-    os.mkfifo(tmp_path / f"{sha}.npy")
-    ref = {"__array__": {"path": str(tmp_path / f"{sha}.npy"), "sha256": sha, "dtype": "<f4", "shape": [1]}}
-    t0 = time.monotonic()
-    with pytest.raises(ArrayIntegrityError, match="regular file"):
-        from_wire(ref, array_dir=tmp_path)
-    assert time.monotonic() - t0 < 1
 
 
 @pytest.mark.logic
@@ -262,7 +276,7 @@ def test_writer_leaves_no_temporary_after_a_failed_write(tmp_path: Path, monkeyp
 
 _ERROR = {"type": "ValueError", "message": "m", "fault": "content", "traceback": "", "gap": True}
 VALID: dict[str, dict[str, Any]] = {
-    "hello": {"hello": {"wire": 2, "runtime": "a" * 64, "python": "3.12.0", "numpy": "2.0.0", "pid": 7}},
+    "hello": {"hello": {"wire": WIRE_VERSION, "runtime": "a" * 64, "python": "3.12.0", "numpy": "2.0.0", "pid": 7}},
     "init": {"init": {"array_dir": "/tmp/x", "backend_key": 1}},
     "ready": {"ready": {"load_s": 0.5}},
     "request": {"id": "r", "items": [{"id": "a", "inputs": {}}, {"id": "b", "inputs": {"x": 1}}], "params": {}},
@@ -402,6 +416,24 @@ def test_validate_message_refuses_malformed_requests(items: list[Any]) -> None:
 
 
 @pytest.mark.logic
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"device_peak_bytes": -1, "device_allocated_bytes": 0},
+        {"device_peak_bytes": 1},
+        {"device_peak_bytes": 1.0, "device_allocated_bytes": 0},
+    ],
+)
+def test_done_device_figures_are_paired_non_negative_ints(fields: dict[str, object]) -> None:
+    """A `done` names a device peak and the allocation after it together, each a non-negative `int`."""
+    from senselab_worker.codec import validate_message
+
+    validate_message({"id": "r", "done": 1, "device_peak_bytes": 2, "device_allocated_bytes": 1}, "done")
+    with pytest.raises(ProtocolError):
+        validate_message({"id": "r", "done": 1, **fields}, "done")
+
+
+@pytest.mark.logic
 @pytest.mark.parametrize("done", [-1, True, 1.0])
 def test_done_counts_items(done: object) -> None:
     """`done` is a non-negative `int`."""
@@ -493,6 +525,18 @@ def test_very_deep_lines_are_protocol_errors_not_recursion_errors(depth: int) ->
     for line in (b"[" * depth + b"]" * depth, b'{"a":' * depth + b"1" + b"}" * depth):
         with pytest.raises(ProtocolError):
             parse_line(line + b"\n")
+
+
+@pytest.mark.logic
+def test_parse_line_accepts_exactly_max_depth_and_refuses_one_more() -> None:
+    """The root is at depth 1: 64 nested objects parse, 65 are refused by the pre-parse scan."""
+
+    def line(depth: int) -> bytes:
+        return b'{"a":' * depth + b"1" + b"}" * depth + b"\n"
+
+    assert parse_line(line(MAX_DEPTH)) is not None
+    with pytest.raises(ProtocolError, match="deeper"):
+        parse_line(line(MAX_DEPTH + 1))
 
 
 @pytest.mark.logic

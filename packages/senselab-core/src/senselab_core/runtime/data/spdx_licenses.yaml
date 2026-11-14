@@ -1,0 +1,72 @@
+format: spdx-licenses@1.0
+# The license table the flags of a license record are derived from. Each group names the flags every id in it
+# carries and the derivation that admits them; matching ignores case. An id absent from the table is refused:
+# add it to the group whose terms it shares, or to a new one with its own derivation.
+groups:
+- derivation: >-
+    Permissive licenses that require the copyright and license notice to be kept: commercial use is allowed,
+    no condition reaches code that links or imports the licensed work. MIT-CMU and CNRI-Python are notice-only
+    licenses; the LLVM exception waives the Apache-2.0 notice for object code; the Repoze BSD-derived license
+    (Supervisor's LICENSES.txt) adds a modified-files notice and a no-endorsement clause, and no copyleft.
+  commercial_use: true
+  copyleft: none
+  attribution: true
+  ids: [MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, PSF-2.0, Python-2.0, CC-BY-4.0, MIT-CMU, CNRI-Python, Apache-2.0 WITH LLVM-exception, LicenseRef-repoze-bsd-derived]
+- derivation: >-
+    Public-domain dedications and licenses with no notice condition on redistribution in binary form: commercial
+    use is allowed and nothing has to be reproduced.
+  commercial_use: true
+  copyleft: none
+  attribution: false
+  ids: [MIT-0, 0BSD, Unlicense, CC0-1.0, Zlib]
+- derivation: >-
+    GPL-3.0-or-later with the GCC Runtime Library Exception: the exception removes the copyleft condition for
+    the program that uses the runtime libraries, so the combination behaves as a permissive license with notice.
+  commercial_use: true
+  copyleft: none
+  attribution: true
+  ids: [GPL-3.0-or-later WITH GCC-exception-3.1]
+- derivation: >-
+    File-level (MPL) and library-level (LGPL) copyleft: changes to the licensed files or library are shared under
+    the same license; linking from other code is permitted. Commercial use is allowed.
+  commercial_use: true
+  copyleft: weak
+  attribution: true
+  ids: [MPL-2.0, LGPL-2.1-only, LGPL-2.1-or-later, LGPL-3.0-only, LGPL-3.0-or-later]
+- derivation: >-
+    Strong copyleft: a work that incorporates or is derived from the licensed work is distributed under the same
+    license. CC-BY-SA-4.0 carries the same share-alike condition. Commercial use is allowed.
+  commercial_use: true
+  copyleft: strong
+  attribution: true
+  ids: [GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later, CC-BY-SA-4.0]
+- derivation: >-
+    Network copyleft: the strong-copyleft condition also applies to users who interact with the work over a
+    network. Commercial use is allowed.
+  commercial_use: true
+  copyleft: network
+  attribution: true
+  ids: [AGPL-3.0-only, AGPL-3.0-or-later]
+- derivation: >-
+    Creative Commons NonCommercial licenses without share-alike, and the Nyra Health non-commercial research
+    license (the hub card names it `nyra-health-non-commercial-research` with a LICENSE.md in the repository):
+    commercial use is not granted, attribution is required.
+  commercial_use: false
+  copyleft: none
+  attribution: true
+  ids: [CC-BY-NC-4.0, CC-BY-NC-ND-4.0, LicenseRef-nyra-health-non-commercial-research]
+- derivation: >-
+    Creative Commons NonCommercial with share-alike: commercial use is not granted and adaptations carry the
+    same license.
+  commercial_use: false
+  copyleft: strong
+  attribution: true
+  ids: [CC-BY-NC-SA-4.0]
+- derivation: >-
+    Vendor end-user agreements (NVIDIA CUDA runtime libraries and the CUTLASS DSL): proprietary text whose
+    redistribution and commercial-use terms are not derivable from an identifier, so commercial use is unknown.
+    No copyleft; the agreement is to be kept with any redistribution.
+  commercial_use: unknown
+  copyleft: none
+  attribution: true
+  ids: [LicenseRef-NVIDIA-Proprietary, LicenseRef-NVIDIA-Software-License-Agreement]

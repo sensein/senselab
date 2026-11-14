@@ -7,14 +7,19 @@ from importlib import resources
 from pathlib import Path
 from types import MappingProxyType
 
-import yaml
-from senselab_worker.digest import SHA256_HEX, file_digest
+from senselab_worker.digest import SHA256_HEX, file_digest, identity_digest
 from senselab_worker.hashing import weights_identity
 
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
-from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver, resolve_revision
+from senselab_core.runtime.config import ConfigError, load_yaml
+from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver, cache_root, resolve_revision
+from senselab_core.runtime.storage import write_atomically
 
 WEIGHTS_FORMAT = "weights@1.0"
+VCS_DIRS = frozenset({".git", ".hg", ".svn"})
+"""The version-control metadata directories a local model's identity leaves out, at any depth."""
+LOCAL_IDENTITIES_DIR = "local-identities"
+"""Under the cache root, each local model's identity, named by the digest of its files' real paths, sizes and mtimes."""
 
 
 class WeightsMismatch(RuntimeError):
@@ -44,8 +49,11 @@ def parse_weights(text: str) -> Mapping[str, str]:
         WeightsManifestError: on a wrong format, a missing or non-mapping `weights`, or an entry
             that is not a 64-hex sha256 string.
     """
-    doc = yaml.safe_load(text)
-    if not isinstance(doc, dict) or doc.get("format") != WEIGHTS_FORMAT:
+    try:
+        doc = load_yaml(text, "weights.yaml")
+    except ConfigError as err:
+        raise WeightsManifestError(str(err)) from err
+    if doc.get("format") != WEIGHTS_FORMAT:
         raise WeightsManifestError(f"weights.yaml must carry format {WEIGHTS_FORMAT!r}")
     weights = doc.get("weights")
     if not isinstance(weights, dict):
@@ -103,7 +111,8 @@ def verify_model(model: ResolvedModel, path: Path) -> None:
 def _files_under(path: Path) -> list[Path]:
     """Return every regular file reachable under the directory `path`, sorted, named by where it sits.
 
-    Symlinks to files and to directories are followed; a file is named by its path under `path`, links unresolved.
+    Directories named in `VCS_DIRS` are skipped. Symlinks to files and to directories are followed; a file is
+    named by its path under `path`, links unresolved.
 
     Raises:
         ModelResolutionError: for an entry that is neither a regular file nor a directory (FIFO, socket,
@@ -121,6 +130,8 @@ def _files_under(path: Path) -> list[Path]:
             if stat.S_ISREG(st.st_mode):
                 files.append(here)
             elif stat.S_ISDIR(st.st_mode):
+                if entry.name in VCS_DIRS:
+                    continue
                 if (st.st_dev, st.st_ino) in holding:
                     raise ModelResolutionError(f"local model entry {here} links back to a directory holding it")
                 walk(here, holding | {(st.st_dev, st.st_ino)})
@@ -132,19 +143,29 @@ def _files_under(path: Path) -> list[Path]:
     return sorted(files)
 
 
-def _local_identity(path: Path) -> str:
+def _local_identity(path: Path, memo: Path) -> str:
+    """Return the identity of the local model at `path`, hashed once per state of its files and kept under `memo`."""
     try:
         st = path.stat()
     except FileNotFoundError:
         raise ModelResolutionError(f"local model path {path} does not exist") from None
     if stat.S_ISREG(st.st_mode):
-        return file_digest("file@1", path)
-    if not stat.S_ISDIR(st.st_mode):
+        files = [path]
+    elif not stat.S_ISDIR(st.st_mode):
         raise ModelResolutionError(f"local model path {path} is not a regular file or a directory")
-    files = _files_under(path)
-    if files:
-        return weights_identity(files, root=path)
-    raise ModelResolutionError(f"local model directory {path} holds no files")
+    elif not (files := _files_under(path)):
+        raise ModelResolutionError(f"local model directory {path} holds no files")
+    state = [[os.path.realpath(f), (s := f.stat()).st_size, str(s.st_mtime_ns)] for f in files]
+    kept = memo / LOCAL_IDENTITIES_DIR / identity_digest("local-weights-state@1", [os.path.realpath(path), state])
+    try:
+        if found := kept.read_text(encoding="utf-8"):
+            return found
+    except FileNotFoundError:
+        pass
+    identity = file_digest("file@1", path) if files == [path] else weights_identity(files, root=path)
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    write_atomically(kept, identity.encode())
+    return identity
 
 
 def resolve(ref: ModelRef, *, token: str | None = None, resolver: Resolver = PROCESS_RESOLVER) -> ResolvedModel:
@@ -152,7 +173,9 @@ def resolve(ref: ModelRef, *, token: str | None = None, resolver: Resolver = PRO
 
     - hf: the 40-hex commit from `resolve_revision` through `resolver` (its errors propagate).
     - local: the file's `file_digest`, or `weights_identity` of every regular file reachable under the directory
-      (symlinks followed), rooted at it. Every file counts, including editor and download metadata.
+      (symlinks followed), rooted at it. Every file counts, including editor and download metadata, except those
+      under a version-control directory (`VCS_DIRS`). It is hashed once per state of those files (real path, size,
+      mtime in ns) and kept under the resolver's cache root (`LOCAL_IDENTITIES_DIR`).
     - url: the hash declared in the reference (`url:<url>#sha256=<hex>`); nothing is downloaded.
       `verify_model` checks the downloaded bytes against it at load.
 
@@ -163,7 +186,8 @@ def resolve(ref: ModelRef, *, token: str | None = None, resolver: Resolver = PRO
     if ref.source == "hf":
         return ResolvedModel(ref=ref, identity=resolve_revision(ref.id, ref.ref, token=token, resolver=resolver))
     if ref.source == "local":
-        return ResolvedModel(ref=ref, identity=_local_identity(Path(ref.id)))
+        memo = resolver.cache_root if resolver.cache_root is not None else cache_root()
+        return ResolvedModel(ref=ref, identity=_local_identity(Path(ref.id), memo))
     if not ref.ref:
         raise ValueError(f"url model {ref.id!r} needs a declared hash: 'url:{ref.id}#sha256=<64 hex>'")
     return ResolvedModel(ref=ref, identity=ref.ref)

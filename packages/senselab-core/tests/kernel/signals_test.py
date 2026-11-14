@@ -1,5 +1,6 @@
 """Recordings, channel groups and audio."""
 
+import copy
 import hashlib
 from pathlib import Path
 
@@ -11,9 +12,12 @@ from senselab_core.kernel.signals import (
     Audio,
     ChannelInfo,
     IrregularGroup,
+    PlainText,
     Recording,
     RegularGroup,
+    RegularSeries,
     SourceStamp,
+    Text,
     audio_channels,
 )
 from senselab_core.kernel.time import TimeAnchor
@@ -144,15 +148,18 @@ def test_irregular_group_validates_timestamps() -> None:
 
 @pytest.mark.logic
 def test_audio_from_array_identity_construction() -> None:
-    """In-memory audio's identity hashes the canonical array with the sampling rate."""
+    """In-memory audio's identity hashes the canonical array with the sampling rate and the channels."""
     x = numpy.linspace(-1, 1, 50, dtype=numpy.float32)
     a = Audio.from_array(x, 16_000)
-    expected = "content:" + identity_digest(
-        "audio@3", {"npy": hashlib.sha256(canonical_npy_bytes(x.reshape(1, -1))).hexdigest(), "sampling_rate": 16_000}
-    )
+    npy = hashlib.sha256(canonical_npy_bytes(x.reshape(1, -1))).hexdigest()
+    channels = [{"name": "ch0", "type": "audio", "units": "FS", "placement": None, "reference": None}]
+    expected = "content:" + identity_digest("audio@4", {"npy": npy, "sampling_rate": 16_000, "channels": channels})
     assert a.identity == expected
     assert Audio.from_array(x.reshape(1, -1), 16_000.0).identity == expected
     assert Audio.from_array(x, 8_000).identity != expected
+    named = (ChannelInfo(name="left", type="audio", units="Pa"),)
+    relabelled = RegularGroup(channels=named, sampling_rate=16_000, data=x.reshape(1, -1))
+    assert Audio.from_group(relabelled).identity != expected
     group = a.groups["audio"]
     assert isinstance(group, RegularGroup) and group.read().shape == (1, 50)
 
@@ -283,6 +290,11 @@ def test_float32_pcm_conversion_is_bit_identical_to_float64(dtype: str) -> None:
     assert held.read()[0].tobytes() == expected.tobytes()
 
 
+def _file_identity(content: str, count: int) -> str:
+    channels = [c.model_dump() for c in audio_channels(count)]
+    return "content:" + identity_digest("audio-file@1", {"content": content, "channels": channels})
+
+
 def _stamp(frames: int = 8, channels: int = 2) -> SourceStamp:
     return SourceStamp(
         size=1,
@@ -290,9 +302,11 @@ def _stamp(frames: int = 8, channels: int = 2) -> SourceStamp:
         inode=0,
         device=0,
         frames=frames,
-        channels=channels,
+        channels=audio_channels(channels),
         sampling_rate=RATE,
         header="h",
+        chunk_size=4,
+        chunks=("d" * 64,),
         content="c" * 64,
     )
 
@@ -315,7 +329,7 @@ def test_a_source_group_validates_without_its_file(tmp_path: Path) -> None:
     missing = tmp_path / "absent.wav"
     group = RegularGroup(channels=audio_channels(2), sampling_rate=RATE, source=missing, source_stamp=_stamp())
     audio = Audio.from_group(group)
-    assert audio.identity == "content:" + "c" * 64 and group.frames == 8
+    assert audio.identity == _file_identity("c" * 64, 2) and group.frames == 8
     with pytest.raises(ValidationError, match="stamp"):
         RegularGroup(channels=audio_channels(2), sampling_rate=RATE, source=missing)
     with pytest.raises(ValidationError, match="channels"):
@@ -334,3 +348,46 @@ def test_a_source_group_is_read_only_through_a_reader(tmp_path: Path) -> None:
     for wrong in (numpy.ones((1, 3), dtype=numpy.float32), numpy.ones((2, 3)), numpy.full((2, 3), numpy.nan, "f4")):
         with pytest.raises(ValueError):
             group.read(10**9 // RATE, 4 * 10**9 // RATE, reader=_Reader(wrong))
+
+
+@pytest.mark.logic
+def test_regular_group_satisfies_regular_series() -> None:
+    """A regular group and audio both read as a `RegularSeries`: channels, rate, frames and `read`."""
+    audio = Audio.from_array(numpy.array([[0.25, -0.5, 0.75], [0.0, 0.5, -1.0]], dtype=numpy.float32), RATE)
+    group = audio.groups["audio"]
+    series: list[RegularSeries] = [group, audio] if isinstance(group, RegularGroup) else []
+    assert len(series) == 2 and all(isinstance(s, RegularSeries) for s in series)
+    for s in series:
+        assert (s.channels, s.sampling_rate, s.frames) == (audio_channels(2), RATE, 3)
+        assert s.read(0, 2 * 10**9 // RATE).tolist() == [[0.25, -0.5], [0.0, 0.5]]
+    assert not isinstance(IrregularGroup(channels=audio_channels(1), timestamps_ns=[0], data=[[0.0]]), RegularSeries)
+
+
+@pytest.mark.logic
+def test_plain_text_is_canonical_and_content_identified() -> None:
+    """Plain text is held in canonical form, its identity derived from it; a forged identity is refused."""
+    composed, decomposed = PlainText(content="caf\u00e9"), PlainText(content="cafe\u0301")
+    assert isinstance(composed, Text) and composed.content == decomposed.content == "caf\u00e9"
+    assert composed.identity == decomposed.identity == "content:" + value_digest("text", {"content": "caf\u00e9"})
+    assert composed.identity != PlainText(content="cafe").identity and composed.format == "text@1.0"
+    with pytest.raises(ValidationError, match="identity"):
+        PlainText(content="cafe", identity=composed.identity)
+
+
+@pytest.mark.logic
+def test_samples_carry_their_files_stamp_only_as_decoded_from_it(tmp_path: Path) -> None:
+    """Decoded samples keep the file's identity; other held samples under its stamp, or changed ones, are refused."""
+    samples = numpy.arange(16, dtype=numpy.float32).reshape(2, 8) / 16
+    source = RegularGroup(channels=audio_channels(2), sampling_rate=RATE, source=tmp_path / "a", source_stamp=_stamp())
+    decoded = RegularGroup.decoded_from(source, _Reader(samples))
+    assert Audio.from_group(decoded).identity == _file_identity("c" * 64, 2)
+    assert copy.deepcopy(decoded) == decoded and decoded.read().tolist() == samples.tolist()
+    zeros = numpy.zeros((2, 8), dtype=numpy.float32)
+    with pytest.raises(ValidationError, match="decoded_from"):
+        RegularGroup(channels=audio_channels(2), sampling_rate=RATE, data=zeros, source_stamp=_stamp())
+    with pytest.raises(ValidationError, match="decoded_from"):
+        decoded.model_copy(update={"data": zeros})
+    with pytest.raises(ValidationError, match="channels and frames"):
+        decoded.model_copy(update={"source_stamp": _stamp(frames=7)})
+    with pytest.raises(ValueError, match="source group"):
+        RegularGroup.decoded_from(decoded, _Reader(samples))

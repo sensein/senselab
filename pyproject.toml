@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "senselab"
 dynamic = ["version", "dependencies"]
-description = "senselab 2.x: installs the framework-free core and the subprocess worker runtime."
+description = "senselab 2.x: the public package and CLI over the framework-free core and the subprocess worker runtime."
 authors = [
   { name = "Fabio Catania", email = "fabiocat@mit.edu" },
   { name = "Satra Ghosh", email = "satra@mit.edu" }
@@ -34,8 +34,14 @@ Homepage = "https://github.com/sensein/senselab"
 Repository = "https://github.com/sensein/senselab"
 Documentation = "https://sensein.group/senselab"
 
+[project.optional-dependencies]
+torch = ["torch>=2.4", "transformers>=5.8"]
+
 [project.scripts]
-senselab = "senselab_core.cli:main"
+senselab = "senselab.cli:main"
+
+[project.entry-points."senselab.packages"]
+senselab = "senselab._api.packaged:register"
 
 [dependency-groups]
 dev = [
@@ -59,6 +65,17 @@ dev = [
   "import-linter~=2.0",
   "hypothesis~=6.0"
 ]
+test = [
+  "pytest",
+  "pytest-timeout~=2.4",
+  "import-linter~=2.0",
+  "grimp",
+  "jsonschema",
+  "hypothesis",
+  "pyld>=3",
+  "scipy>=1.11",
+  "pandas"
+]
 docs = [
   "pdoc~=16.0"
 ]
@@ -66,27 +83,37 @@ profiling = [
   "scalene>=2.2",
   "nbconvert>=7"
 ]
+benchmarks = [
+  "pyarrow>=18",
+  "scipy>=1.11"
+]
+
+[tool.uv]
+# Exact versions held for transitive dependencies of the root distribution.
+constraint-dependencies = ["fileformats==0.22.3"]
 
 [tool.uv.workspace]
-members = ["packages/*"]
+members = ["packages/senselab-*"]
 
 [tool.uv.sources]
 senselab-core = { workspace = true }
 senselab-worker = { workspace = true }
+pydra = { git = "https://github.com/nipype/pydra", rev = "c8541fc5604d6917e6d418279f0f443d4bab8328" }
 
 [tool.hatch.metadata.hooks.custom]
 path = "hatch_build_pins.py"
 pins = ["senselab-core", "senselab-worker"]
-dependencies = []
+dependencies = ["pydra"]
 
 [tool.senselab.release]
 RELEASE_FLOOR = "2.0.0a0"
 
 [tool.hatch.build.targets.wheel]
-bypass-selection = true
+packages = ["packages/senselab/src/senselab"]
+dev-mode-dirs = ["packages/senselab/src"]
 
 [tool.hatch.build.targets.sdist]
-only-include = ["pyproject.toml", "hatch_build_pins.py", "README.md", "LICENSE.md", "SECURITY.md", "uv.lock"]
+only-include = ["pyproject.toml", "hatch_build_pins.py", "packages/senselab/src", "README.md", "LICENSE.md", "SECURITY.md", "uv.lock"]
 
 [tool.hatch.version]
 source = "vcs"
@@ -107,12 +134,15 @@ markers = [
   "limits: behaviour at declared limits",
   "usecase: an end-to-end use case",
   "env: needs a built environment",
+  "model: loads weights or needs a backend env",
   "gpu: needs a GPU",
   "network: needs network outside the sandbox",
   "slow: long-running",
   "large_model: loads a large model"
 ]
+# tests outside packages/; each tier under packages/ takes its budget from packages/senselab/tests/data/tier_budgets.json
 timeout = 900
+timeout_method = "thread"
 
 [tool.mypy]
 ignore_missing_imports = true
@@ -149,7 +179,7 @@ exclude = [
   "./src",
   # The 1.x scripts under scripts/, not checked on the 2.x line. The 2.x scripts are release_gate,
   # check_fixture_budget, check_licenses, check_participant_ids, check_size_budgets, check_spec_ids,
-  # lock_subprocess_venvs and profile_*.
+  # lock_envs and profile_*.
   "scripts/adaptive_loop.py",
   "scripts/analyze_audio.py",
   "scripts/analyze_routing_evidence.py",
@@ -183,7 +213,7 @@ indent-width = 4
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["ANN", "D", "E", "F", "I", "B009", "S102", "S307"]
+select = ["ANN", "D", "E", "F", "I", "B009", "S102", "S307", "C901", "PLC", "PLE", "PLR", "PLW"]
 fixable = ["ALL"]
 unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
@@ -191,12 +221,25 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+# Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, section pyproject.toml.
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-returns = 6
+max-branches = 12
+max-args = 5
+max-statements = 50
+
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["B009", "S102", "S307"]
-"**/conftest.py" = ["B009", "S102", "S307"]
-"**/scripts/**" = ["ANN", "D", "E", "I", "F541"]
+"**/tests/**" = ["B009", "S102", "S307", "PLC0415", "PLR2004"]
+"**/conftest.py" = ["B009", "S102", "S307", "PLC0415", "PLR2004"]
+"**/scripts/**" = ["ANN", "D", "E", "I", "F541", "PLC0415", "PLR2004"]
+"benchmarks/**" = ["PLC0415"]
+# Complexity over the limits, pending a split: specs/.../review-register.md R-218.
+"scripts/profile_imports.py" = ["C901", "PLR0912", "PLR0915"]
 # Notebooks: cells share state but ruff lints per-cell, causing false positives
-"tutorials/**/*.ipynb" = ["F401", "F821", "E402", "I001", "F811", "ANN001", "ANN201", "D103"]
+"tutorials/**/*.ipynb" = ["F401", "F821", "E402", "I001", "F811", "ANN001", "ANN201", "D103", "PLC0415", "PLR2004"]
 
 [tool.ruff.format]
 exclude = ["scripts/**"]

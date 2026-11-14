@@ -1,0 +1,1 @@
+"""`diarize`: the `pyannote` backend."""

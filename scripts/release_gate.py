@@ -22,6 +22,7 @@ import email.parser
 import re
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tempfile
 import tomllib
@@ -181,9 +182,7 @@ def check_pins(files: list[Path]) -> None:
         pins = [r for r in requirements(path) if canonicalize_name(r.name) in DISTRIBUTIONS]
         got = sorted(canonicalize_name(r.name) for r in pins)
         if got != sorted(DEPENDS_ON[name]):
-            raise GateError(
-                f"{name} requires siblings {got or 'none'}, the graph requires {sorted(DEPENDS_ON[name])}"
-            )
+            raise GateError(f"{name} requires siblings {got or 'none'}, the graph requires {sorted(DEPENDS_ON[name])}")
         for pin in pins:
             version = built[canonicalize_name(pin.name)]
             specs = list(pin.specifier)
@@ -192,10 +191,16 @@ def check_pins(files: list[Path]) -> None:
 
 
 def _run(*args: str, cwd: str) -> str:
-    done = subprocess.run(args, capture_output=True, text=True, cwd=cwd)
+    done = subprocess.run(args, capture_output=True, text=True, cwd=cwd, check=False)
     if done.returncode != 0:
         raise GateError(f"{' '.join(args)} failed ({done.returncode}):\n{done.stdout}{done.stderr}")
     return done.stdout
+
+
+MANAGED_PYTHON = f"{sys.version_info.major}.{sys.version_info.minor}" + (
+    "t" if sysconfig.get_config_var("Py_GIL_DISABLED") else ""
+)
+"""The running interpreter's version, which the gate's venvs request from uv-managed interpreters only."""
 
 
 def check_installs(files: list[Path]) -> None:
@@ -208,7 +213,7 @@ def check_installs(files: list[Path]) -> None:
     with tempfile.TemporaryDirectory(prefix="release-gate-") as tmp:
         for name in DISTRIBUTIONS:
             venv = Path(tmp) / name
-            _run("uv", "venv", "--python", sys.executable, str(venv), cwd=tmp)
+            _run("uv", "venv", "--python-preference", "only-managed", "--python", MANAGED_PYTHON, str(venv), cwd=tmp)
             python = str(venv / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"))
             reached = [name, *(n for n in DISTRIBUTIONS if n != name and n in _reach(name))]
             _run("uv", "pip", "install", "--python", python, *(str(wheels[n]) for n in reached), cwd=tmp)

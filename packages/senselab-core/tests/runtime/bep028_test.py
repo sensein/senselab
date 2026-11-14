@@ -1,301 +1,428 @@
-"""The BEP028 serializer: identity round-trips, relations resolve, and nothing is invented."""
+"""Export redaction and the BEP028 profile: no document, export or provenance error holds a path."""
 
-import inspect
 import json
+import os
+import re
+import shutil
+import stat
+import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
-from senselab_core.runtime import bep028
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
+from lease_time_fixture import install, on_create
+from senselab_core.kernel import prov
+from senselab_core.kernel.prov import Association, Generation, Usage
 from senselab_core.runtime.bep028 import (
-    BEP028_CONTEXT,
-    SHA256_ALGORITHM,
-    bids_uri,
-    check_graph,
-    convert_store_file,
-    store_id,
-    to_bep028_graph,
-    write_bep028_files,
+    LABELS_NAME,
+    PRIVATE_DIR,
+    LabelMap,
+    LabelMapRetired,
+    ProfileViolation,
+    check_profile,
+    export,
+    file_entity,
+    layout_name,
 )
-from senselab_core.runtime.provenance import CHECKSUM_KEY, CHECKSUM_UNRESOLVED_KEY, ProvStore
+from senselab_core.runtime.fetch import DataManifest
+from senselab_core.runtime.provenance import PROV_DIR, MalformedDocument, ProvStore, RunIOError
+from senselab_core.runtime.vocabulary import core_vocabulary
+from senselab_core.testing.leases import packaged_lease
+from senselab_worker.canonical import MAX_DEPTH, jcs_dumps, jcs_loads
+from syscall_faults_fixture import displace_before_proof
 
 pytestmark = pytest.mark.logic
 
-DIGEST = "b" * 64
+VOCAB = core_vocabulary()
+T0 = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+OUTPUT = "output:" + "2" * 64
+COMPONENT = st.text(alphabet="ghjkmnpqrstuvwxyz", min_size=10, max_size=20)
+LICENSE = {
+    "expression": "CC-BY-4.0",
+    "commercial_use": "yes",
+    "copyleft": "none",
+    "attribution": True,
+    "gated": False,
+    "source": "https://example.org/license",
+    "verified": {"date": "2026-10-01", "how": "manual"},
+}
 
 
-@pytest.fixture
-def store() -> ProvStore:
-    """A store exercising every record kind, both checksum outcomes and every relation."""
-    store = ProvStore(run_id="run-1")
-    software = store.agent(agent_type="software", version="senselab 1.3.1a45.dev542")
-    model = store.agent(agent_type="model", model_id="MIT/ast", commit_sha="f" * 40)
-    unpinned = store.agent(
-        agent_type="model", model_id="https://tfhub.dev/google/yamnet/1", unresolved_reason="TF-Hub URL pin"
+BEP028_NAME = re.compile(r"prov-[0-9a-f]{32}_all\.jsonld")
+DRAFT_NAME = re.compile(r"prov-[A-Za-z0-9]+_(act|ent|agt|soft|env|base|all)\.(json|jsonld)")
+DRAFT_REQUIRED = ("@context", "BIDSProvVersion", "Records")
+"""The top-level keys of a BEP028 draft document (bids-standard/BEP028_BIDSprov @162bea57, `bep028spec.md` 1.4)."""
+
+
+def _manifest(*paths: str) -> DataManifest:
+    return DataManifest.model_validate(
+        {
+            "format": "data-manifest@2.0",
+            "name": "demo",
+            "version": "1",
+            "license": LICENSE,
+            "terms": "Cite the source.",
+            "files": [
+                {"path": p, "url": "https://x/f", "sha256": f"{i:x}" * 64, "size": 1} for i, p in enumerate(paths, 1)
+            ],
+        }
     )
-    admit = store.activity(node="ADMIT", step=None, parameters={"audio_file": "a.wav"})
-    step = store.activity(
-        node="PREPROCESS", step="gammatone", parameters={"hop_s": 0.01}, started="2026-09-08T00:00:00"
+
+
+def _store(
+    files: list[prov.Record], *, key: object = "k", ended: datetime | None = T0 + timedelta(seconds=1)
+) -> ProvStore:
+    agent = prov.agent(VOCAB, types=["senselab:SoftwareAgent"], attributes={"senselab:modelSource": "hf"})
+    execution = prov.activity(
+        VOCAB,
+        attributes={"senselab:logicalKey": key},
+        used=[Usage(f.id, port="audio") for f in files],
+        generated=[Generation(OUTPUT, port="transcript")],
+        associations=[Association(agent.id, "n1")],
+        started=T0,
+        ended=ended,
     )
-    recording = store.entity(
-        prov_type="artifact", extent=(0.0, 1.5), attributes={"path": "a.wav", CHECKSUM_KEY: DIGEST, "size_bytes": 9}
+    return ProvStore([execution, agent, prov.entity(OUTPUT, VOCAB), *files])
+
+
+def _run(root: Path, *paths: str, key: object = "k") -> tuple[Path, ProvStore]:
+    run = root / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    store = _store(_manifest(*paths).file_entities(LabelMap(run)), key=key)
+    store.write(run)
+    return run, store
+
+
+def _bytes_under(root: Path) -> list[bytes]:
+    return [p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()]
+
+
+def test_label_map_is_private(tmp_path: Path) -> None:
+    """The map is `private/labels@1.json`, 0600 in a 0700 directory, one label per address, and never exported."""
+    run, _ = _run(tmp_path, "sub-01/a.wav", "sub-02/b.wav")
+    private = run / PRIVATE_DIR
+    assert stat.S_IMODE(private.stat().st_mode) == 0o700
+    assert stat.S_IMODE((private / LABELS_NAME).stat().st_mode) == 0o600
+    assert LabelMap(run).paths() == {"file-1": ["sub-01/a.wav"], "file-2": ["sub-02/b.wav"]}
+    assert LabelMap(run).assign([("content:" + "2" * 64, "other/c.wav")]) == ["file-2"]
+    assert LabelMap(run).paths()["file-2"] == ["sub-02/b.wav", "other/c.wav"]
+    dest = tmp_path / "out"
+    export(run, dest)
+    assert sorted(p.relative_to(dest).parts[0] for p in dest.rglob("*") if p.is_file()) == [PROV_DIR]
+    assert all(b"sub-01" not in data for data in _bytes_under(dest))
+    assert any(b"sub-01" in data for data in _bytes_under(private))
+
+
+def test_a_label_map_that_is_not_labels1_is_refused(tmp_path: Path) -> None:
+    """A foreign or damaged map is refused with an error that names no path."""
+    run, _ = _run(tmp_path, "a.wav")
+    (run / PRIVATE_DIR / LABELS_NAME).write_text('{"format": "labels@3.0", "labels": {}}')
+    with pytest.raises(ValueError, match="labels@2.0") as caught:
+        LabelMap(run).paths()
+    assert str(run) not in str(caught.value)
+
+
+def test_export_conforms_to_bep028(tmp_path: Path) -> None:
+    """An export is the run's documents byte for byte, and its union meets the profile."""
+    run, store = _run(tmp_path, "sub-01/a.wav", "sub-01/b.wav")
+    copies = export(run, tmp_path / "out")
+    sources = sorted((run / PROV_DIR).iterdir())
+    assert [p.name for p in copies] == [layout_name(p.name) for p in sources]
+    assert [p.read_bytes() for p in copies] == [p.read_bytes() for p in sources]
+    assert all(BEP028_NAME.fullmatch(p.name) and p.parent.name == "prov" for p in copies)
+    assert check_profile(_doc(run)) == []
+    assert [r.id for r in ProvStore.read(run).records()] == [r.id for r in store.records()]
+    files = [r for r in store.records() if "senselab:File" in r.types()]
+    assert sorted(str(prov.literal_value(r.node()["senselab:fileLabel"])) for r in files) == ["file-1", "file-2"]
+
+
+def _doc(run: Path) -> dict[str, Any]:
+    doc: dict[str, Any] = jcs_loads(next((run / PROV_DIR).iterdir()).read_bytes())  # type: ignore[assignment]
+    return doc
+
+
+@pytest.mark.parametrize(
+    ("edit", "mentions"),
+    [
+        (lambda d: d.update({"@context": "https://x/y"}), "@context"),
+        (lambda d: d.update({"format": "provenance@2.0"}), "format"),
+        (lambda d: d["@graph"][0].update({"@id": "a/b/c.wav"}), "@id"),
+        (lambda d: d["@graph"].pop(1), "holds"),
+        (
+            lambda d: next(n for n in d["@graph"] if n["@id"].startswith("activity:")).update(
+                {"prov:startedAtTime": "garbage"}
+            ),
+            "activity:",
+        ),
+        (
+            lambda d: next(n for n in d["@graph"] if "senselab:fileLabel" in n).update(
+                {"senselab:fileLabel": "sub-01"}
+            ),
+            "senselab:fileLabel",
+        ),
+    ],
+)
+def test_profile_violations_are_named(tmp_path: Path, edit: Any, mentions: str) -> None:  # noqa: ANN401
+    """Each way a document leaves the profile is one named violation, and none echoes a value."""
+    run, _ = _run(tmp_path, "sub-01/a.wav")
+    doc = _doc(run)
+    assert check_profile(doc) == []
+    edit(doc)
+    problems = check_profile(doc)
+    assert problems and any(mentions in p for p in problems), problems
+    assert not any("a/b/c.wav" in p or "sub-01" in p for p in problems)
+
+
+@pytest.mark.parametrize(
+    ("started", "ended", "mentions"),
+    [(None, T0, "never starts"), (T0, T0 - timedelta(seconds=1), "before it starts")],
+)
+def test_activity_times_are_ordered(started: datetime | None, ended: datetime, mentions: str) -> None:
+    """An activity that ends without starting, or before it starts, is named."""
+    execution = prov.activity(VOCAB, started=started, ended=ended)
+    problems = check_profile(ProvStore([execution]).document())
+    assert [mentions in p for p in problems] == [True]
+    assert check_profile(ProvStore([prov.activity(VOCAB, started=T0, ended=T0)]).document()) == []
+
+
+def test_one_label_names_one_node(tmp_path: Path) -> None:
+    """Two nodes carrying one label are refused."""
+    run, _ = _run(tmp_path, "a.wav", "b.wav")
+    doc = _doc(run)
+    for node in doc["@graph"]:
+        if "senselab:fileLabel" in node:
+            node["senselab:fileLabel"] = "file-1"
+    assert any("another node has" in p for p in check_profile(doc))
+
+
+@pytest.mark.parametrize(
+    "leak",
+    [
+        "ds/sub-01_task-x.wav",
+        "/data/ds/sub-01_task-x.wav",
+        "sub-01_task-x.wav",
+        "sub-01_task-x.json",
+        "./ds//sub-01_task-x.wav",
+        "ds\\sub-01_task-x.wav",
+        "read from sub-01_task-x.wav",
+        {"ds/sub-01_task-x.wav": 1},
+        {"audio": ["ds", {"sub-01_task-x.wav": 1}]},
+    ],
+)
+def test_export_refuses_a_recorded_path_and_copies_nothing(tmp_path: Path, leak: object) -> None:
+    """A document naming a recorded path, its basename or stem, however spelt, in a value or a key is not exported."""
+    run, _ = _run(tmp_path, "ds/sub-01_task-x.wav", key=leak)
+    with pytest.raises(ProfileViolation, match="label map"):
+        export(run, tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize(
+    ("path", "leak"),
+    [
+        ("ds/clip.wav", "Clip.wav"),
+        ("ds/my clip.wav", "read my clip.wav"),
+        ("ds/clip,1.wav", "clip,1.wav"),
+        ("ds/cafe\u0301.wav", "caf\u00e9.wav"),
+    ],
+)
+def test_export_refuses_a_name_in_another_case_unicode_form_or_with_separators(
+    tmp_path: Path, path: str, leak: str
+) -> None:
+    """A basename is matched after NFC and casefolding, and whole, so a space or comma in it does not split it."""
+    run, _ = _run(tmp_path, path, key=leak)
+    with pytest.raises(ProfileViolation, match="label map"):
+        export(run, tmp_path / "out")
+
+
+@pytest.mark.parametrize(("path", "key", "port"), [("audio/clip.wav", "k", "audio"), ("k.wav", "k", "audio")])
+def test_a_directory_segment_or_a_short_name_alone_is_exported(tmp_path: Path, path: str, key: str, port: str) -> None:
+    """A port or key equal to a directory segment or a stem of a recorded path is not that path."""
+    run, _ = _run(tmp_path, path, key={port: key})
+    assert len(export(run, tmp_path / "out")) == 1
+
+
+def test_export_refuses_a_bids_subject_that_was_never_recorded(tmp_path: Path) -> None:
+    """A `sub-` label is a participant identifier wherever it appears, recorded or not."""
+    run, _ = _run(tmp_path, "ds/a.wav", key="/data/sub-07/ses-1/x.wav")
+    with pytest.raises(ProfileViolation):
+        export(run, tmp_path / "out")
+
+
+@pytest.mark.parametrize(
+    "source", ["/home/user/models/m", "~/m", "./m", "../m", "C:\\m", "a\\b", "org/model", "hf:../m"]
+)
+def test_a_local_path_is_not_a_model_source(source: str) -> None:
+    """`senselab:modelSource` is a source kind and an identity; a local path is refused at the store boundary."""
+    with pytest.raises(ValueError, match="never a local path"):
+        ProvStore([prov.agent(VOCAB, types=["senselab:SoftwareAgent"], attributes={"senselab:modelSource": source})])
+    ProvStore(
+        [
+            prov.agent(
+                VOCAB, types=["senselab:SoftwareAgent"], attributes={"senselab:modelSource": "org/model@" + "a" * 40}
+            )
+        ]
     )
-    lost = store.entity(
-        prov_type="artifact",
-        extent=None,
-        attributes={"path": "derivatives/gone.npz", CHECKSUM_UNRESOLVED_KEY: "file not found"},
+
+
+def test_a_path_is_not_a_file_label(tmp_path: Path) -> None:
+    """A path as `senselab:fileLabel` is refused by `add`, and by a read of a document that holds one."""
+    entity = prov.entity(
+        "content:" + "1" * 64, VOCAB, types=["senselab:File"], attributes={"senselab:fileLabel": "sub-01/a.wav"}
     )
-    span = store.entity(prov_type="artifact", extent=(0.2, 0.4), attributes={"kind": "speech"})
-    store.was_generated_by(recording, admit)
-    store.was_attributed_to(recording, software)
-    store.was_associated_with(admit, software)
-    store.was_associated_with(step, model)
-    store.was_associated_with(step, unpinned)
-    store.used(step, recording)
-    store.was_generated_by(lost, step)
-    store.was_derived_from(span, recording)
-    store.was_invalidated_by(span, step)
-    return store
+    with pytest.raises(ValueError, match="file-<n>"):
+        ProvStore([entity])
+    run, _ = _run(tmp_path, "a.wav")
+    path = next((run / PROV_DIR).iterdir())
+    doc = _doc(run)
+    next(n for n in doc["@graph"] if "senselab:fileLabel" in n)["senselab:fileLabel"] = "sub-01/a.wav"
+    path.write_bytes(jcs_dumps(doc))
+    with pytest.raises(MalformedDocument, match="fileLabel") as caught:
+        ProvStore.read(run)
+    assert "sub-01" not in str(caught.value)
 
 
-def test_identity_round_trips(store: ProvStore) -> None:
-    """Every id in the graph reverses to the store id it came from."""
-    graph = to_bep028_graph(store, label="run")
-    seen = {store_id(node["Id"]) for nodes in graph["Records"].values() for node in nodes}
-    expected = {e.id for e in store.entities()} | {a.id for a in store.activities()} | {g.id for g in store.agents()}
-    assert seen == expected
+def test_export_follows_the_bep028_draft(tmp_path: Path) -> None:
+    """The draft's `prov/prov-<label>_<suffix>.<ext>` naming and required top-level keys, from its rule and example."""
+    draft_names = ["prov-conversion_all.jsonld", "prov-dcm2niix_base.json", "prov-dcm2niix_soft.json"]
+    assert all(DRAFT_NAME.fullmatch(n) for n in draft_names)
+    run, _ = _run(tmp_path, "a.wav")
+    copies = export(run, tmp_path / "out")
+    assert all(DRAFT_NAME.fullmatch(p.name) and p.suffix == ".jsonld" for p in copies)
+    doc: dict[str, Any] = jcs_loads(copies[0].read_bytes())  # type: ignore[assignment]
+    assert {"@context", "@graph", "format"} <= set(doc)
+    assert set(DRAFT_REQUIRED) - {"BIDSProvVersion", "Records"} <= set(doc)
 
 
-@pytest.mark.parametrize("identifier", ["stream-abc", "measurement-abc", "act-abc", "agent-abc"])
-@pytest.mark.parametrize("dataset", ["", "study"])
-def test_bids_uri_is_reversible(identifier: str, dataset: str) -> None:
-    """The mapping is total and mechanical in both directions."""
-    uri = bids_uri(identifier, dataset=dataset)
-    assert uri.startswith(f"bids:{dataset}:prov#")
-    assert store_id(uri) == identifier
+def test_file_entity_label_is_file_n() -> None:
+    """A label is `file-<n>`; a path is not one."""
+    assert prov.literal_value(file_entity("content:" + "1" * 64, "file-3").node()["senselab:fileLabel"]) == "file-3"
+    with pytest.raises(ValueError, match="file-<n>"):
+        file_entity("content:" + "1" * 64, "sub-01/a.wav")
 
 
-def test_store_id_refuses_a_foreign_uri() -> None:
-    """A URI the serializer did not produce is an error, not a silent pass-through."""
-    with pytest.raises(ValueError, match="not a BIDS provenance URI"):
-        store_id("https://example.org/thing")
+@settings(max_examples=12, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(root=COMPONENT, session=COMPONENT, dataset=COMPONENT, name=COMPONENT, out=COMPONENT)
+def test_document_holds_no_path(root: str, session: str, dataset: str, name: str, out: str) -> None:
+    """Random path components never occur in a written document, an export, or an error of the provenance APIs."""
+    parts = {root, session, dataset, name, out}
+    with tempfile.TemporaryDirectory() as scratch:
+        base = Path(scratch) / root
+        run, _ = _run(base / session, f"{dataset}/{name}.wav")
+        dest = Path(scratch) / "export" / out
+        export(run, dest)
+        for data in _bytes_under(run / PROV_DIR) + _bytes_under(dest):
+            assert not any(p.encode() in data for p in parts)
+        assert any(dataset.encode() in data for data in _bytes_under(run / PRIVATE_DIR))
+        failures = _failures(base, run)
+    for text in failures:
+        assert not any(p in text for p in parts), text
 
 
-def test_graph_passes_its_own_checks(store: ProvStore) -> None:
-    """The serializer's output is JSON-LD whose context resolves every term it uses."""
-    assert check_graph(to_bep028_graph(store, label="run")) == []
+def _failures(base: Path, run: Path) -> list[str]:
+    """Return the text of each error a provenance or export API raises over paths holding the run's components."""
+    broken = base / "broken"
+    (broken / PROV_DIR).parent.mkdir(parents=True)
+    (broken / PROV_DIR).write_text("not a directory")
+    (broken / PRIVATE_DIR).write_text("not a directory")
+    unreadable = base / "unreadable"
+    (unreadable / PROV_DIR).mkdir(parents=True)
+    shutil.copy(next((run / PROV_DIR).iterdir()), unreadable / PROV_DIR)
+    (unreadable / PROV_DIR).chmod(0)
+    texts = []
+    try:
+        for action in (
+            lambda: ProvStore([prov.entity(OUTPUT, VOCAB)]).write(broken),
+            lambda: LabelMap(broken).assign([("content:" + "1" * 64, "x.wav")]),
+            lambda: LabelMap(broken).paths(),
+        ):
+            with pytest.raises(RunIOError) as caught:
+                action()
+            err = caught.value
+            assert err.filename is None and err.__cause__ is None and err.__context__ is None
+            texts += [str(err), repr(err), err.strerror or ""]
+        for read in (ProvStore.read, lambda r: export(r, base / "never")):
+            with pytest.raises(MalformedDocument) as refused:
+                read(unreadable)
+            assert refused.value.__context__ is None
+            texts += [str(refused.value), repr(refused.value)]
+    finally:
+        (unreadable / PROV_DIR).chmod(0o700)
+    assert os.fspath(run) not in "".join(texts)
+    return texts
 
 
-def test_graph_survives_a_json_round_trip(store: ProvStore) -> None:
-    """The document is plain JSON; nothing in it needs a custom encoder."""
-    graph = json.loads(json.dumps(to_bep028_graph(store, label="run")))
-    assert graph["@context"][0] == BEP028_CONTEXT
-    assert check_graph(graph) == []
+def test_label_map_is_jcs(tmp_path: Path) -> None:
+    """The map on disk is canonical JSON: re-serialising what it parses to gives its bytes back."""
+    run, _ = _run(tmp_path, "sub-01/a.wav", "sub-02/b.wav")
+    data = (run / PRIVATE_DIR / LABELS_NAME).read_bytes()
+    assert jcs_dumps(jcs_loads(data)) == data
+    (run / PRIVATE_DIR / LABELS_NAME).write_bytes(json.dumps(jcs_loads(data), indent=2).encode())
+    with pytest.raises(ValueError, match="labels@2.0"):
+        LabelMap(run).paths()
 
 
-def test_files_and_other_entities_are_separated(store: ProvStore) -> None:
-    """An entity with a path is a BEP028 ``Files`` object; one without is a ``prov:Entity``."""
-    records = to_bep028_graph(store, label="run")["Records"]
-    assert {node["AtLocation"] for node in records["Files"]} == {"a.wav", "derivatives/gone.npz"}
-    assert all("AtLocation" not in node for node in records["prov:Entity"])
+def test_a_retired_label_map_is_refused_not_corrupt(tmp_path: Path) -> None:
+    """A `labels@1.0` map, indented as it was written, is refused as retired, whatever else is wrong with it."""
+    run, _ = _run(tmp_path, "a.wav")
+    body = json.dumps({"format": "labels@1.0", "labels": {}}, indent=2)
+    (run / PRIVATE_DIR / LABELS_NAME).write_text(body)
+    with pytest.raises(LabelMapRetired, match="labels@1.0") as caught:
+        LabelMap(run).paths()
+    assert caught.value.found == "labels@1.0"
 
 
-def test_a_digest_becomes_an_spdx_checksum(store: ProvStore) -> None:
-    """The SHA-256 is emitted as BEP028 requires it."""
-    records = to_bep028_graph(store, label="run")["Records"]
-    [recording] = [node for node in records["Files"] if node["AtLocation"] == "a.wav"]
-    assert recording["Checksum"] == [{"ChecksumAlgorithm": SHA256_ALGORITHM, "ChecksumValue": DIGEST}]
+def test_a_deeply_nested_label_map_is_refused_typed(tmp_path: Path) -> None:
+    """A retired map nested past the parser's depth is refused as retired, not as an untyped recursion failure."""
+    run, _ = _run(tmp_path, "a.wav")
+    depth = 100_000
+    body = '{"format": "labels@1.0", "labels": ' + "[" * depth + "]" * depth + "}"
+    (run / PRIVATE_DIR / LABELS_NAME).write_text(body)
+    with pytest.raises(ValueError, match="labels@2.0"):
+        LabelMap(run).paths()
 
 
-def test_a_missing_digest_states_the_reason_and_emits_no_checksum(store: ProvStore) -> None:
-    """BEP028's Checksum cannot say "unknown", so nothing is put there and the reason is carried."""
-    records = to_bep028_graph(store, label="run")["Records"]
-    [lost] = [node for node in records["Files"] if node["AtLocation"] == "derivatives/gone.npz"]
-    assert "Checksum" not in lost
-    assert lost["ChecksumUnresolvedReason"] == "file not found"
+def test_a_label_map_nested_past_the_bound_is_refused_whatever_the_parser_can_parse(tmp_path: Path) -> None:
+    """The bound is the codec's `MAX_DEPTH`, not the parser's recursion limit: 65 levels parse fine and are refused."""
+    run, _ = _run(tmp_path, "a.wav")
+    depth = MAX_DEPTH + 1
+    body = '{"format": "labels@1.0", "labels": ' + "[" * depth + "]" * depth + "}"
+    json.loads(body)
+    (run / PRIVATE_DIR / LABELS_NAME).write_text(body)
+    with pytest.raises(ValueError, match="labels@2.0"):
+        LabelMap(run).paths()
 
 
-def test_an_unresolved_model_commit_omits_the_version(store: ProvStore) -> None:
-    """A required BEP028 field is left out rather than filled with something untrue."""
-    software = to_bep028_graph(store, label="run")["Records"]["Software"]
-    [unpinned] = [node for node in software if node["Label"].startswith("https://tfhub.dev")]
-    assert "Version" not in unpinned
-    assert unpinned["VersionUnresolvedReason"] == "TF-Hub URL pin"
+def test_a_label_map_nested_exactly_to_the_bound_reaches_the_format_check(tmp_path: Path) -> None:
+    """Two containers of the map plus 62 of nesting is 64 deep: read, then refused as retired, not as too deep."""
+    run, _ = _run(tmp_path, "a.wav")
+    depth = MAX_DEPTH - 2
+    body = '{"format": "labels@1.0", "labels": ' + "[" * depth + "]" * depth + "}"
+    (run / PRIVATE_DIR / LABELS_NAME).write_text(body)
+    with pytest.raises(LabelMapRetired):
+        LabelMap(run).paths()
 
 
-def test_a_resolved_model_commit_is_the_version(store: ProvStore) -> None:
-    """A model agent's version is its resolved commit, never a ref."""
-    software = to_bep028_graph(store, label="run")["Records"]["Software"]
-    [model] = [node for node in software if node["Label"] == "MIT/ast"]
-    assert model["Version"] == "f" * 40
+def test_the_label_map_lease_outlasts_its_stale_bound_while_it_beats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before the map is written the storage clock passes the stale bound; the lease beats, is never broken, writes."""
+    lease = packaged_lease(30, 0.01, 0)
+    clock = install(monkeypatch)
+    on_create(monkeypatch, f".{LABELS_NAME}.", lambda: clock.outlast(tmp_path / "private", lease.stale_after_s))
+    assert LabelMap(tmp_path, lease=lease).assign([("content:" + "1" * 64, "a.wav")]) == ["file-1"]
+    assert clock.attempts == 4 and clock.breaks == 0
+    assert LabelMap(tmp_path).paths() == {"file-1": ["a.wav"]}
 
 
-def test_the_software_agent_splits_into_a_name_and_a_version(store: ProvStore) -> None:
-    """``senselab <version>`` becomes BEP028's separate Label and Version."""
-    software = to_bep028_graph(store, label="run")["Records"]["Software"]
-    [senselab] = [node for node in software if node["Label"] == "senselab"]
-    assert senselab["Version"] == "1.3.1a45.dev542"
-
-
-def test_every_relation_is_emitted(store: ProvStore) -> None:
-    """All six store relations reach the graph, ``wasInvalidatedBy`` included."""
-    records = to_bep028_graph(store, label="run")["Records"]
-    terms = {term for nodes in records.values() for node in nodes for term in node}
-    assert {"GeneratedBy", "Used", "AssociatedWith", "AttributedTo", "DerivedFrom", "InvalidatedBy"} <= terms
-
-
-def test_the_activity_description_is_the_callers(store: ProvStore, tmp_path: Path) -> None:
-    """A caller describes its own activities; ``{label}`` names the activity."""
-    graph = to_bep028_graph(store, label="run", description="driver step, command withheld: {label}")
-    [step] = [node for node in graph["Records"]["Activities"] if node["Label"].endswith("gammatone")]
-    assert step["Description"] == "driver step, command withheld: PREPROCESS / gammatone"
-    path = tmp_path / "store.jsonl"
-    store.write_jsonl(path)
-    converted = convert_store_file(path, label="run", description="fixed text")
-    assert {node["Description"] for node in converted["Records"]["Activities"]} == {"fixed text"}
-
-
-def test_the_default_description_names_an_in_process_step(store: ProvStore) -> None:
-    """Triage's graphs read as before."""
-    [step] = [
-        node
-        for node in to_bep028_graph(store, label="run")["Records"]["Activities"]
-        if node["Label"].endswith("gammatone")
-    ]
-    assert step["Description"] == "in-process senselab step, not a shell command: PREPROCESS / gammatone"
-
-
-def test_an_activity_is_not_claimed_to_be_a_command(store: ProvStore) -> None:
-    """``Command`` is REQUIRED and we have none, so it is null and a Description says why."""
-    [step] = [
-        node
-        for node in to_bep028_graph(store, label="run")["Records"]["Activities"]
-        if node["Label"].endswith("gammatone")
-    ]
-    assert step["Command"] is None
-    assert "not a shell command" in step["Description"]
-    assert step["Parameters"] == {"hop_s": 0.01}
-    assert step["StartedAtTime"] == "2026-09-08T00:00:00"
-
-
-def test_no_environment_is_invented(store: ProvStore) -> None:
-    """The store records no environment, so the graph claims none."""
-    assert "Environments" not in to_bep028_graph(store, label="run")["Records"]
-
-
-def test_a_recorded_environment_reaches_the_graph(store: ProvStore) -> None:
-    """A store that did record one is not a case check_graph or the mapping table forgot."""
-    store.environment(
-        kind="host",
-        label="host",
-        python_version="3.12.11",
-        operating_system="macOS-15.0-arm64-arm-64bit",
-        dependencies={"torch": "2.8.0"},
-        senselab_version="1.3.1",
-    )
-    store.environment(
-        kind="venv",
-        label="crisperwhisper-cpu",
-        python_version="3.12.11",
-        dependencies={"torch": "2.14.0", "transformers": "5.16.1"},
-        dependencies_digest="c" * 64,
-    )
-    graph = to_bep028_graph(store, label="run")
-    environments = graph["Records"]["Environments"]
-    assert {node["Label"] for node in environments} == {"host", "crisperwhisper-cpu"}
-    [host] = [node for node in environments if node["Label"] == "host"]
-    assert host["OperatingSystem"] == "macOS-15.0-arm64-arm-64bit"
-    assert host["Dependencies"] == {"torch": "2.8.0"}
-    assert host["SenselabVersion"] == "1.3.1"
-    [venv] = [node for node in environments if node["Label"] == "crisperwhisper-cpu"]
-    assert venv["Dependencies"] == {"torch": "2.14.0", "transformers": "5.16.1"}
-    assert venv["DependenciesDigest"] == "c" * 64
-    assert "OperatingSystem" not in venv
-    assert "SenselabVersion" not in venv
-    assert check_graph(graph) == []
-
-
-def test_write_bep028_files_emits_the_env_suffix(store: ProvStore, tmp_path: Path) -> None:
-    """An ``_env`` file is written only when the store actually carries an environment."""
-    store.environment(kind="host", label="host", python_version="3.12.11")
-    graph = to_bep028_graph(store, label="run")
-    written = write_bep028_files(graph, tmp_path, label="run")
-    names = {path.name for path in written}
-    assert "prov-run_env.json" in names
-    body = json.loads((tmp_path / "prov-run_env.json").read_text())
-    assert body["Environments"][0]["Label"] == "host"
-
-
-def test_check_graph_catches_a_dangling_reference(store: ProvStore) -> None:
-    """A relation naming an id no node declares is a problem, not a silent broken edge."""
-    graph = to_bep028_graph(store, label="run")
-    graph["Records"]["Files"][0]["GeneratedBy"] = ["bids::prov#act-nothere"]
-    assert any("is not a node in the graph" in problem for problem in check_graph(graph))
-
-
-def test_check_graph_catches_a_term_that_would_be_dropped(store: ProvStore) -> None:
-    """An undeclared prefix expands to nothing, so JSON-LD would drop the key silently."""
-    graph = to_bep028_graph(store, label="run")
-    graph["Records"]["Files"][0]["nope:Thing"] = 1
-    assert any("would be dropped" in problem for problem in check_graph(graph))
-
-
-def test_check_graph_requires_a_vocabulary(store: ProvStore) -> None:
-    """Without @vocab, every store attribute would vanish from the graph."""
-    graph = to_bep028_graph(store, label="run")
-    graph["@context"] = [BEP028_CONTEXT, {}]
-    assert any("@vocab" in problem for problem in check_graph(graph))
-
-
-def test_check_graph_catches_a_duplicate_id(store: ProvStore) -> None:
-    """Two nodes sharing an Id would merge into one on load."""
-    graph = to_bep028_graph(store, label="run")
-    graph["Records"]["Files"].append(dict(graph["Records"]["Files"][0]))
-    assert any("declared twice" in problem for problem in check_graph(graph))
-
-
-def test_check_graph_catches_a_malformed_checksum(store: ProvStore) -> None:
-    """A digest that is not 64 lowercase hex characters is not a SHA-256."""
-    graph = to_bep028_graph(store, label="run")
-    graph["Records"]["Files"][0]["Checksum"] = [{"ChecksumAlgorithm": SHA256_ALGORITHM, "ChecksumValue": "nope"}]
-    assert any("64 lowercase hex" in problem for problem in check_graph(graph))
-
-
-def test_a_written_store_converts_without_the_pipeline(store: ProvStore, tmp_path: Path) -> None:
-    """An existing run directory converts from its store.jsonl alone."""
-    path = tmp_path / "store.jsonl"
-    store.write_jsonl(path)
-    assert convert_store_file(path, label="run") == to_bep028_graph(store, label="run")
-
-
-def test_the_split_files_partition_the_graph(store: ProvStore, tmp_path: Path) -> None:
-    """The BEP028-named files hold each record kind once, under the same context."""
-    graph = to_bep028_graph(store, label="run")
-    written = write_bep028_files(graph, tmp_path / "prov", label="run")
-    assert [path.name for path in written] == ["prov-run_io.json", "prov-run_act.json", "prov-run_soft.json"]
-    bodies = [json.loads(path.read_text()) for path in written]
-    assert all(body["@context"] == graph["@context"] for body in bodies)
-    keys = [key for body in bodies for key in body if key != "@context"]
-    assert sorted(keys) == ["Activities", "Files", "Software", "prov:Entity"]
-
-
-def test_a_symlink_at_a_sidecar_name_is_replaced_not_written_through(store: ProvStore, tmp_path: Path) -> None:
-    """A planted symlink at a BEP028 file name leaves its target unchanged and becomes the written file."""
-    victim = tmp_path / "victim.txt"
-    victim.write_text("keep")
-    prov = tmp_path / "prov"
-    prov.mkdir()
-    graph = to_bep028_graph(store, label="run")
-    names = [path.name for path in write_bep028_files(graph, tmp_path / "first", label="run")]
-    for name in names:
-        (prov / name).symlink_to(victim)
-    written = write_bep028_files(graph, prov, label="run")
-    assert victim.read_text() == "keep"
-    assert all(path.is_file() and not path.is_symlink() for path in written)
-    assert [path.name for path in written] == names
-
-
-@pytest.mark.parametrize("call", ["to_bep028_graph", "convert_store_file", "write_bep028_files"])
-def test_the_provenance_label_has_no_default(call: str) -> None:
-    """Every entry point takes ``label`` as a required keyword: no workflow's name is supplied for the caller."""
-    parameter = inspect.signature(getattr(bep028, call)).parameters["label"]
-    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY and parameter.default is inspect.Parameter.empty
+def test_a_label_map_holder_displaced_just_before_its_commit_does_not_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The map is committed only after a fresh `mkdir` proves the lease; a holder displaced before it writes nothing."""
+    displaced = displace_before_proof(monkeypatch, f"{LABELS_NAME}.lease")
+    with pytest.raises(RunIOError):
+        LabelMap(tmp_path).assign([("content:" + "1" * 64, "a.wav")])
+    assert displaced and not (tmp_path / "private" / LABELS_NAME).exists()

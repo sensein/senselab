@@ -1,4 +1,4 @@
-"""The size budgets: file and function length limits from a data file, each with a derivation."""
+"""The size budgets: file and function length limits from a data file."""
 
 import importlib.util
 import subprocess
@@ -71,12 +71,12 @@ def test_an_exempt_function_is_allowed_over_the_limit() -> None:
     assert _violations(_body(limit + 1), "packages/a/src/a/other.py", exempt)
 
 
-def test_a_limit_without_a_derivation_is_refused(tmp_path: Path) -> None:
-    """The budget file is data with reasons: a value alone, or an exemption without a reason, is refused."""
+def test_a_bad_limit_or_an_unreasoned_exemption_is_refused(tmp_path: Path) -> None:
+    """A limit that is not a positive integer, or an exemption without a reason, is refused."""
     text = _SCRIPT.parent.joinpath("data", "size_budget.yaml").read_text()
     bare = tmp_path / "bare.yaml"
-    bare.write_text(text.replace("derivation:", "note:", 1))
-    with pytest.raises(ValueError, match="derivation"):
+    bare.write_text(text.replace("src_file_max_lines: 1200", "src_file_max_lines: {value: 1200}", 1))
+    with pytest.raises(ValueError, match="src_file_max_lines"):
         sizes.load_budget(bare)
     unreasoned = tmp_path / "unreasoned.yaml"
     unreasoned.write_text(text.replace("reason:", "why:"))

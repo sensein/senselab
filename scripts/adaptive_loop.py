@@ -13,7 +13,7 @@ full decision audit trail.
 Usage:
     uv run python scripts/adaptive_loop.py artifacts/analyze_audio/<run_dir> \
         --cache-dir artifacts/analyze_audio_cache \
-        --ground-truth ~/Downloads/updated-label-XXXX.json
+        --ground-truth ${LOCAL_INPUT}/updated-label-XXXX.json
 
 Works in minimal environments (no torch): heavy senselab imports are bypassed
 via submodule loading when the full package cannot import.

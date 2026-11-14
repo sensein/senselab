@@ -7,7 +7,8 @@ and `sys.stdin` read `/dev/null` and fd 1 and `sys.stdout` write to stderr, so n
 its children read or print touches the channel. A worker started with fd 0 closed reads end of file
 and exits 0 after its hello. The backend module defines `load(init) -> state` and
 `handle(state, items, params) -> list[dict]` (see `serve`); it is imported during load, so an import
-failure is reported as a fatal error.
+failure is reported as a fatal error. A load whose init names a model, device and dtype goes through the
+process's `ModelCache` (`cached_load`).
 """
 
 import importlib
@@ -49,7 +50,8 @@ def main(argv: list[str]) -> int:
     """Serve the backend named by `argv[1]` on the original stdin and stdout; return the exit code."""
     claim_standard_fds()
     rx, tx = _claim_channel()
-    from senselab_worker.serve import serve  # noqa: PLC0415 - imported only once the fds are claimed
+    from senselab_worker.model_cache import ModelCache  # noqa: PLC0415 - imported only once the fds are claimed
+    from senselab_worker.serve import UNBOUNDED_BYTES, cached_load, serve  # noqa: PLC0415 - as above
 
     if len(argv) != 2:  # noqa: PLR2004 - the program name and one backend module
         print("usage: python -m senselab_worker.launch <backend_module>", file=sys.stderr)
@@ -65,7 +67,7 @@ def main(argv: list[str]) -> int:
         result: list[dict[str, Any]] = backend["handle"](state, items, params)
         return result
 
-    return serve(load, handle, rx, tx)
+    return serve(cached_load(load, argv[1], ModelCache(UNBOUNDED_BYTES)), handle, rx, tx)
 
 
 if __name__ == "__main__":

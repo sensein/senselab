@@ -1,10 +1,10 @@
-"""License record (P-23)."""
+"""License records and license sets."""
 
 import pickle
 
 import pytest
 from pydantic import ValidationError
-from senselab_core.kernel.license import License, MissingLicense, require_license
+from senselab_core.kernel.license import License, LicenseConflict, LicenseSet, MissingLicense, require_license
 
 
 def _record(**overrides: object) -> License:
@@ -76,3 +76,18 @@ def test_missing_license_raises() -> None:
     assert require_license(lic, "openai/whisper") is lic
     with pytest.raises(MissingLicense, match="openai/whisper"):
         require_license(None, "openai/whisper")
+
+
+@pytest.mark.logic
+def test_license_set_union_joins_subjects_and_keeps_unrecorded() -> None:
+    """A union holds every subject once, sorted; a subject with no record stays None; a conflict is refused."""
+    mit = _record(expression="MIT", commercial_use="yes")
+    model = LicenseSet(records={"model m": _record()})
+    env = LicenseSet(records={"env of backend t/b": None, "model m": _record()})
+    joined = model.union(env, LicenseSet(records={"env of backend t/c": mit}))
+    assert list(joined.records) == ["env of backend t/b", "env of backend t/c", "model m"]
+    assert joined.unrecorded() == ("env of backend t/b",) and joined.records["model m"] == _record()
+    with pytest.raises(LicenseConflict, match="model m is recorded with two licenses") as raised:
+        model.union(LicenseSet(records={"model m": mit}))
+    assert (raised.value.subject, raised.value.node) == ("model m", None)
+    assert "node 'n': model m" in str(LicenseConflict("model m", "n"))

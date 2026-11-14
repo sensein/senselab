@@ -7,7 +7,6 @@ import unicodedata
 
 import numpy
 import pytest
-import yaml
 from hypothesis import given
 from hypothesis import strategies as st
 from pydantic import ValidationError
@@ -22,6 +21,7 @@ from senselab_core.kernel.identity import (
     ReusePolicy,
     UnpinnedModel,
     acceptable,
+    member_key,
 )
 from senselab_core.kernel.license import License
 from senselab_worker.digest import identity_digest
@@ -40,6 +40,7 @@ BASE: dict[str, object] = {
     "backend_version": "1",
     "model": None,
     "params": {"x": 1},
+    "backend_params": {},
     "inputs": {},
 }
 
@@ -59,6 +60,7 @@ def _ctx(**overrides: object) -> ExecutionContext:
         "host": "node1",
         "protocol": "worker-c0ffee/wire-1",
         "model_source": "hf",
+        "env_license": None,
     }
     fields.update(overrides)
     return ExecutionContext.model_validate(fields)
@@ -108,10 +110,12 @@ def test_context_is_not_in_key() -> None:
         "backend_version",
         "model",
         "params",
+        "backend_params",
         "inputs",
         "profile_slices",
         "batch_formation",
         "chunk_grid",
+        "service",
     }
     assert not set(LogicalKey.model_fields) & set(ExecutionContext.model_fields)
 
@@ -128,13 +132,15 @@ def test_digest_is_the_tagged_digest_of_the_fields() -> None:
         "backend_version": "1",
         "model": {"id": "org/name", "identity": COMMIT},
         "params": {"beam": 5, "lang": "en", "t": [0.5, None]},
+        "backend_params": {},
         "inputs": {"audio": CONTENT},
         "profile_slices": {},
         "batch_formation": None,
         "chunk_grid": None,
+        "service": None,
     }
     assert k.model_dump() == expected
-    assert k.digest() == identity_digest("logical-key@5", expected)
+    assert k.digest() == identity_digest("logical-key@7", expected)
     assert len(k.digest()) == 64
 
 
@@ -193,7 +199,7 @@ def test_model_copy_revalidates_and_redigests() -> None:
         {"model": {"id": "org/name", "identity": "main"}},
         {"model": {"id": None, "identity": COMMIT}},
         {"model": {"source": "hf", "id": "org/name", "identity": COMMIT}},
-        {"inputs": {"a": "/home/x/a.wav"}},
+        {"inputs": {"a": "/home/user/a.wav"}},
         {"inputs": {"a": "f" * 64}},
         {"inputs": {"a": "content:" + "F" * 64}},
         {"inputs": {"a": "content:" + "f" * 63}},
@@ -242,7 +248,7 @@ def test_model_identity_names_a_hub_repo_and_never_a_source() -> None:
     """A hub identity carries its repo id; url and local weights carry only their digest, and one key for both."""
     with pytest.raises(ValidationError):
         ModelIdentity.model_validate({"source": "local", "id": None, "identity": SHA256})
-    local = ResolvedModel(ref=ModelRef.parse("local:/home/alice/m"), identity=SHA256)
+    local = ResolvedModel(ref=ModelRef.parse("local:/home/user/m"), identity=SHA256)
     url = ResolvedModel(ref=ModelRef.parse(f"url:https://x.org/m#sha256={SHA256}"), identity=SHA256)
     assert local.key_identity() == url.key_identity() == ModelIdentity(id=None, identity=SHA256)
 
@@ -297,9 +303,13 @@ def test_key_schema_version_is_a_positive_integer(schema_version: object) -> Non
 
 
 @pytest.mark.logic
-def test_fingerprint_excludes_host_protocol_and_model_source() -> None:
-    """Host, protocol and model source do not reach the fingerprint; every other context field does."""
+def test_fingerprint_excludes_host_protocol_model_source_and_license() -> None:
+    """The fingerprint skips host, protocol, model source and the license record, but not whether one is recorded."""
     base = _ctx()
+    mit = {"expression": "MIT", "commercial_use": "yes", "copyleft": "none", "attribution": True, "gated": False}
+    licensed = _ctx(env_license={**mit, "source": "lock", "verified": {"date": "2026-11-02", "how": "pep639"}})
+    other = _ctx(env_license={**mit, "source": "another lock", "verified": {"date": "2026-11-03", "how": "manual"}})
+    assert licensed.fingerprint() == other.fingerprint() != base.fingerprint() and licensed != other
     assert _ctx(host="node2").fingerprint() == base.fingerprint()
     assert _ctx(protocol="worker-beef/wire-2").fingerprint() == base.fingerprint()
     for source in ("url", "local", None):
@@ -367,9 +377,11 @@ def test_every_policy_member_is_dispatched(policy: ReusePolicy) -> None:
 
 @pytest.mark.logic
 def test_fingerprint_is_the_context_tagged_digest() -> None:
-    """The fingerprint is `identity_digest("context@3", fields without host, protocol and model source)`."""
+    """The fingerprint is `identity_digest("context@5", ...)` over all but the recorded-only fields, plus `licensed`."""
     c = _ctx()
-    assert c.fingerprint() == identity_digest("context@3", c.model_dump(exclude={"host", "protocol", "model_source"}))
+    recorded_only = {"host", "protocol", "model_source", "env_license"}
+    fields = {**c.model_dump(exclude=recorded_only), "licensed": c.env_license is not None}
+    assert c.fingerprint() == identity_digest("context@5", fields)
 
 
 @pytest.mark.logic
@@ -386,11 +398,15 @@ def test_another_protocol_is_the_same_context() -> None:
     assert stored.protocol != current.protocol
 
 
+def _cpu(device: str) -> ExecutionContext:
+    return _ctx(numerics={"device": device, "precision": "fp32"})
+
+
 @pytest.mark.logic
 def test_equivalent_reuses_within_a_measured_class() -> None:
-    """Two contexts in one of the backend's measured classes are equivalent; `exact` still refuses them."""
-    c1, c2, c3 = _ctx(platform="linux"), _ctx(platform="macos"), _ctx(platform="windows")
-    table = {"b": {"cpu-fp32": frozenset({c1.fingerprint(), c2.fingerprint()})}}
+    """Two contexts whose numerics classes are in one of the backend's classes are equivalent; `exact` refuses them."""
+    c1, c2, c3 = _cpu("cpu"), _cpu("cuda"), _cpu("mps")
+    table = {"b": {"c": frozenset({member_key(c1.numerics, c1.env_lock), member_key(c2.numerics, c2.env_lock)})}}
     assert acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="b", equivalence=table) and acceptable(
         c2, c1, ReusePolicy.EQUIVALENT, backend="b", equivalence=table
     )
@@ -402,8 +418,8 @@ def test_equivalent_reuses_within_a_measured_class() -> None:
 @pytest.mark.logic
 def test_equivalence_is_scoped_to_its_backend() -> None:
     """A class measured for backend A does not make the same contexts equivalent for backend B."""
-    c1, c2 = _ctx(platform="linux"), _ctx(platform="macos")
-    table = {"A": {"cpu-fp32": frozenset({c1.fingerprint(), c2.fingerprint()})}}
+    c1, c2 = _cpu("cpu"), _cpu("cuda")
+    table = {"A": {"c": frozenset({member_key(c1.numerics, c1.env_lock), member_key(c2.numerics, c2.env_lock)})}}
     assert acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="A", equivalence=table)
     assert not acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="B", equivalence=table)
 
@@ -416,42 +432,11 @@ def test_the_kernel_default_equivalence_is_empty() -> None:
     assert not acceptable(c1, c2, ReusePolicy.EQUIVALENT, backend="b")
 
 
-def _class(*fingerprints: str, derivation: object = "measured: agreement on 200 verify samples") -> dict[str, object]:
-    return {"fingerprints": list(fingerprints), "derivation": derivation}
-
-
 @pytest.mark.logic
-def test_equivalence_data_reads_each_class_with_its_derivation() -> None:
-    """A class names its context fingerprints and carries a derivation; the table is read-only."""
-    c1, c2 = _ctx(platform="linux").fingerprint(), _ctx(platform="macos").fingerprint()
-    text = yaml.safe_dump({"format": "equivalence@1", "backends": {"b": {"cpu-fp32": _class(c1, c2)}}})
-    table = identity.parse_equivalence(text)
-    assert table == {"b": {"cpu-fp32": frozenset({c1, c2})}}
-    assert acceptable(_ctx(platform="linux"), _ctx(platform="macos"), "equivalent", backend="b", equivalence=table)
-    with pytest.raises(TypeError):
-        table["b"] = {}
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize(
-    "document",
-    [
-        {"format": "equivalence@2", "backends": {}},
-        {"backends": {}},
-        {"format": "equivalence@1"},
-        {"format": "equivalence@1", "backends": {"b": {"c": _class("a" * 64, "b" * 64, derivation="")}}},
-        {"format": "equivalence@1", "backends": {"b": {"c": _class("a" * 64, "b" * 64, derivation=None)}}},
-        {"format": "equivalence@1", "backends": {"b": {"c": {"fingerprints": ["a" * 64, "b" * 64]}}}},
-        {"format": "equivalence@1", "backends": {"b": {"c": _class("a" * 64)}}},
-        {"format": "equivalence@1", "backends": {"b": {"c": _class("a" * 64, "linux")}}},
-        {"format": "equivalence@1", "backends": {"b": {"c": {**_class("a" * 64, "b" * 64), "k": 1}}}},
-        {"format": "equivalence@1", "backends": {"b": []}},
-    ],
-)
-def test_equivalence_data_refuses_a_class_without_derivation_or_fingerprints(document: dict[str, object]) -> None:
-    """A wrong format, a class with no derivation, fewer than two fingerprints or a non-fingerprint is refused."""
-    with pytest.raises(ValueError, match="equivalence"):
-        identity.parse_equivalence(yaml.safe_dump(document))
+def test_member_key_is_order_free() -> None:
+    """A member, a numerics class in an env lock, is one string whatever the order of its mapping."""
+    expected = '{"env_lock":"l","numerics":{"a":"1","b":"2"}}'
+    assert member_key({"a": "1", "b": "2"}, "l") == member_key({"b": "2", "a": "1"}, "l") == expected
 
 
 # Model references
@@ -574,3 +559,10 @@ def test_resolved_model_carries_license_and_pickles() -> None:
     m = ResolvedModel(ref=ModelRef.parse("org/name@main"), identity=COMMIT, license=lic)
     assert pickle.loads(pickle.dumps(m)) == m
     assert ResolvedModel.model_validate_json(m.model_dump_json()) == m
+
+
+@pytest.mark.logic
+def test_a_key_without_backend_params_is_refused() -> None:
+    """A `logical-key@5` record, which has no `backend_params`, does not parse."""
+    with pytest.raises(ValidationError, match="backend_params"):
+        LogicalKey.model_validate({k: v for k, v in BASE.items() if k != "backend_params"})

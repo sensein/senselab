@@ -5,13 +5,15 @@ and every participant binds to that answer; entries are append-if-absent. `2x/` 
 reads and writes no manifest outside it. Rationale: `specs/20261030-140022-senselab-2x-api/adr/ADR-006-formats.md`.
 """
 
+import contextlib
+import contextvars
 import functools
 import json
 import logging
 import os
 import re
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -19,11 +21,14 @@ from typing import Optional
 from senselab_worker.canonical import jcs_dumps
 from senselab_worker.digest import COMMIT_HEX
 
-from senselab_core.runtime.locks import Lease
+from senselab_core.runtime.clock import Clock, SystemClock
+from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.locks import LEASE_SUFFIX, Lease, LeaseUnavailable
+from senselab_core.runtime.network import Network, require_online
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.retry import RetryPolicy, retry_on_transient_error
 from senselab_core.runtime.storage import (
     ASIDE_NAME,
-    STAGING_FILE_MODE,
     TEMPORARY_NAME,
     StorageDir,
     StorePolicy,
@@ -42,7 +47,7 @@ MANIFEST_NAME = "resolutions@2.json"
 """The run manifest's file name; its `@<major>` is the format of its keys (`manifest_key`)."""
 MANIFEST = re.compile(re.escape(MANIFEST_NAME))
 _MANIFEST_TEMPORARY = re.compile(re.escape(f".{MANIFEST_NAME}.") + r"[0-9]+\.[0-9]+\.[0-9a-f]{32}\.tmp")
-"""The manifest's own temporaries, and not its lease's, which a live taker may be writing."""
+"""The manifest's own temporaries."""
 MANIFEST_LIMIT = 1 << 24
 """The most bytes a run manifest is read to."""
 
@@ -72,8 +77,8 @@ def run_component(run: str) -> str:
     return run
 
 
-def choose_run_id(environ: Mapping[str, str]) -> str:
-    """Return the run id `environ` names: `SENSELAB_RUN_ID`, else `SLURM_ARRAY_JOB_ID`, `SLURM_JOB_ID` or a UUID4.
+def choose_attempt_id(environ: Mapping[str, str]) -> str:
+    """Return the attempt id `environ` names: `SENSELAB_RUN_ID`, else `SLURM_ARRAY_JOB_ID`, `SLURM_JOB_ID` or a UUID4.
 
     Raises:
         ValueError: the chosen id is refused by `run_component`.
@@ -87,19 +92,51 @@ def choose_run_id(environ: Mapping[str, str]) -> str:
     try:
         return run_component(chosen)
     except ValueError as err:
-        raise ValueError(f"run id from SENSELAB_RUN_ID or Slurm: {err}") from None
+        raise ValueError(f"attempt id from SENSELAB_RUN_ID or Slurm: {err}") from None
+
+
+def fresh_attempt_id(environ: Mapping[str, str] | None = None) -> str:
+    """Return the attempt id of one run or resume: the id `environ` pins, else a new UUID4 every call.
+
+    Raises:
+        ValueError: the id is refused by `run_component`.
+    """
+    return choose_attempt_id(os.environ if environ is None else environ)
+
+
+_ATTEMPT: contextvars.ContextVar[str | None] = contextvars.ContextVar("senselab_attempt", default=None)
+
+
+@contextlib.contextmanager
+def attempt_scope(attempt: str) -> Iterator[str]:
+    """Make `attempt` the id `attempt_id()` returns in this context until the block exits."""
+    token = _ATTEMPT.set(run_component(attempt))
+    try:
+        yield attempt
+    finally:
+        _ATTEMPT.reset(token)
+
+
+def attempt_id() -> str:
+    """Return the id of the attempt running in this context (`attempt_scope`), else `process_attempt_id()`.
+
+    Raises:
+        ValueError: the chosen id is refused by `run_component`.
+    """
+    current = _ATTEMPT.get()
+    return current if current is not None else process_attempt_id()
 
 
 @functools.cache
-def run_id() -> str:
-    """Return this process's run id (`choose_run_id` of the environment), chosen once and exported.
+def process_attempt_id() -> str:
+    """Return this process's attempt id (`choose_attempt_id` of the environment), chosen once and exported.
 
     It is exported as `SENSELAB_RUN_ID` so subprocesses inherit it.
 
     Raises:
         ValueError: the chosen id is refused by `run_component`.
     """
-    chosen = choose_run_id(os.environ)
+    chosen = choose_attempt_id(os.environ)
     os.environ["SENSELAB_RUN_ID"] = chosen
     return chosen
 
@@ -121,24 +158,27 @@ def manifest_path(run: Optional[str] = None, *, root: Optional[Path] = None) -> 
         ValueError: `run` is refused by `run_component`.
     """
     base = cache_root() if root is None else Path(root)
-    return base / NAMESPACE / "runs" / run_component(run_id() if run is None else run) / MANIFEST_NAME
+    return base / NAMESPACE / "runs" / _run_name(run) / MANIFEST_NAME
 
 
-def _run_dir(
-    run: Optional[str], root: Optional[Path], *, create: bool, policy: Optional[StorePolicy] = None
-) -> StorageDir:
-    """Open `2x/runs/<run>/` under `root` (this run's when `run` is None), without following any symlink.
+def _open_runs(root: Optional[Path], policy: Optional[StorePolicy] = None) -> StorageDir:
+    """Open `2x/runs/` under `root` (`cache_root()` when None), without following any symlink.
 
-    With `create`, missing directories get the policy's `shared_dir_mode`, and an object of the wrong kind at
-    `2x/`, `runs/` or the run's directory is moved aside beside itself.
+    With a `policy`, missing directories are made with its `shared_dir_mode`, and an object of the wrong kind
+    at `2x/` or `runs/` is moved aside beside itself.
     """
-    path = manifest_path(run, root=root)
-    name = path.parent.name
-    mode = shared_dir_mode(policy) if policy is not None else None
-    with StorageDir.open_root(path.parents[3], create=create, mode=mode) as root_dir:
-        if not create:
-            return root_dir.walk(NAMESPACE, "runs", name)
-        return root_dir.walk(NAMESPACE, "runs", name, create=True, mode=mode, aside=lambda: None)
+    base = cache_root() if root is None else Path(root)
+    if policy is None:
+        with StorageDir.open_root(base) as top:
+            return top.walk(NAMESPACE, "runs")
+    mode = shared_dir_mode(policy)
+    with StorageDir.open_root(base, create=True, mode=mode) as top:
+        return top.walk(NAMESPACE, "runs", create=True, mode=mode, aside=lambda: None)
+
+
+def _run_name(run: Optional[str]) -> str:
+    """Return the directory name of run `run` (this run's when None), refused by `run_component` before any I/O."""
+    return run_component(attempt_id() if run is None else run)
 
 
 def _parse_manifest(data: Optional[bytes], where: Path) -> dict[str, str]:
@@ -173,8 +213,10 @@ def read_manifest(run: Optional[str] = None, *, root: Optional[Path] = None) -> 
     Raises:
         ValueError: `run` (or this run's id) is refused by `run_component`.
     """
+    name = _run_name(run)
     try:
-        run_dir = _run_dir(run, root, create=False)
+        with _open_runs(root) as runs:
+            run_dir = runs.walk(name)
     except (OSError, WrongKindError):
         return {}
     with run_dir:
@@ -184,23 +226,32 @@ def read_manifest(run: Optional[str] = None, *, root: Optional[Path] = None) -> 
             return {}
 
 
-def record_resolution(
-    repo_id: str, ref: str, sha: str, run: Optional[str] = None, *, root: Optional[Path] = None
+def record_resolution(  # noqa: PLR0913 - the binding and its run, then keyword-only root and lease
+    repo_id: str,
+    ref: str,
+    sha: str,
+    run: Optional[str] = None,
+    *,
+    root: Optional[Path] = None,
+    lease: Optional[JobLease] = None,
+    clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> str:
     """Record ``(repo_id, ref) -> sha`` for this run under `root` (`cache_root()` when None); return the binding SHA.
 
     Append-if-absent under a `Lease` on the manifest: a concurrent writer's entries are kept, and an
     existing commit SHA for the key wins over ``sha``. ``2x/runs/<run>/`` is reached through `StorageDir`
-    and made with the `StorePolicy`'s `shared_dir_mode`; the manifest and its lease get the policy's file
-    modes, whatever the umask. Under the lease, a dead writer's temporaries beside the manifest are removed,
-    as are objects moved aside under ``2x/runs/`` past the quarantine age.
+    and made with the `StorePolicy`'s `shared_dir_mode`, as is the manifest's lease; the manifest gets the policy's
+    file mode, whatever the umask. Under the lease, a dead writer's temporaries beside the manifest are removed,
+    as are objects moved aside under ``2x/runs/`` past the quarantine age on `clock`'s storage time. The lease
+    beats under `lease` (the packaged `laptop` profile's when None) and waits on `clock`; a holder whose lease was
+    lost does not write.
 
     Raises:
         RevisionResolutionError: ``sha`` is not a 40-hex commit SHA.
         ValueError: ``run`` (or this run's id) is refused by `run_component`.
         LeaseTimeout: the manifest's lease could not be taken within its timeout.
-        LeaseUnavailable: the manifest's lease cannot be taken in the run's directory, or what is at its name
-            cannot be moved aside.
+        LeaseUnavailable: the manifest's lease cannot be taken in the run's directory, what is at its name
+            cannot be moved aside, or it was displaced on each of `settings.record_attempts` takes.
         WrongKindError: an object of the wrong kind at ``2x/``, ``2x/runs/`` or the run's directory cannot be
             moved aside.
     """
@@ -210,43 +261,80 @@ def record_resolution(
             "a run manifest entry must be a 40-hex commit SHA."
         )
     policy = StorePolicy.load_default()
-    with _run_dir(run, root, create=True, policy=policy) as run_dir:
-        return _record_in(run_dir, manifest_key(repo_id, ref), sha, policy)
+    name = _run_name(run)
+    with (
+        _open_runs(root, policy) as runs,
+        runs.walk(name, create=True, mode=shared_dir_mode(policy), aside=lambda: None) as run_dir,
+    ):
+        settings = lease if lease is not None else ExecutionProfile.load().lease
+        return _record_in(runs, run_dir, manifest_key(repo_id, ref), sha, policy, settings, clock)
 
 
-def _record_in(run_dir: StorageDir, key: str, sha: str, policy: StorePolicy) -> str:
-    """Append-if-absent `key -> sha` to the manifest in `run_dir`, under the manifest's lease."""
-    lease_mode = STAGING_FILE_MODE | (0o004 if policy.world_readable else 0)
-    with Lease(run_dir.path / MANIFEST_NAME, file_mode=lease_mode, directory=run_dir):
-        _remove_leftovers(run_dir, policy)
-        current = _read_in(run_dir)
-        winner = current.get(key)
-        if winner is not None and COMMIT_HEX.fullmatch(winner):
-            return winner
-        current[key] = sha
-        run_dir.write_atomically(
-            MANIFEST_NAME,
-            json.dumps(current, indent=2, sort_keys=True).encode("utf-8"),
-            grammar=MANIFEST,
-            mode=committed_modes(policy)[0],
-        )
-        return sha
+def _record_in(  # noqa: PLR0913 - the two directories, the entry, then the store policy and the lease settings
+    runs: StorageDir, run_dir: StorageDir, key: str, sha: str, policy: StorePolicy, settings: JobLease, clock: Clock
+) -> str:
+    """Append-if-absent `key -> sha` to the manifest in `run_dir`, under the manifest's lease.
+
+    The commit is one atomic replace of the merged manifest, made only after `Lease.prove` shows the lease is
+    still held. A holder whose lease was displaced before its write (or whose temporary the new holder removed)
+    takes the lease again and re-reads and merges the manifest, so its entry is kept beside the entries of the
+    holder that displaced it, up to `settings.record_attempts` takes.
+
+    Raises:
+        LeaseUnavailable: the lease was displaced on every one of `settings.record_attempts` takes.
+    """
+    path = run_dir.path / MANIFEST_NAME
+    for _ in range(settings.record_attempts):
+        lease = Lease(path, settings=settings, mode=shared_dir_mode(policy), directory=run_dir, clock=clock)
+        with lease, lease.keep_alive(settings.renew_fraction) as state:
+
+            def owns() -> bool:
+                return not state.lost and lease.prove()
+
+            _remove_leftovers(runs, run_dir, policy, clock)
+            current = _read_in(run_dir)
+            winner = current.get(key)
+            if winner is not None and COMMIT_HEX.fullmatch(winner):
+                return winner
+            if owns():
+                current[key] = sha
+                try:
+                    run_dir.write_atomically(
+                        MANIFEST_NAME,
+                        json.dumps(current, indent=2, sort_keys=True).encode("utf-8"),
+                        grammar=MANIFEST,
+                        mode=committed_modes(policy)[0],
+                    )
+                except FileNotFoundError:
+                    if owns():
+                        raise
+                else:
+                    return sha
+        logger.warning("run manifest %s: lease displaced; re-reading and merging", path)
+    raise LeaseUnavailable(
+        path.with_name(MANIFEST_NAME + LEASE_SUFFIX),
+        f"the lease on {path} was displaced on each of {settings.record_attempts} takes; its stale_after is shorter "
+        "than a "
+        "manifest write, or another process keeps breaking it",
+    )
 
 
-def _remove_leftovers(run_dir: StorageDir, policy: StorePolicy) -> None:
+def _remove_leftovers(runs: StorageDir, run_dir: StorageDir, policy: StorePolicy, clock: Clock) -> None:
     """Remove dead writers' leftovers under the manifest's lease.
 
-    That is the manifest's temporaries in `run_dir` (any there under the lease is a dead writer's) and objects
-    moved aside under `2x/runs/` past the quarantine age.
+    That is the manifest's temporaries in `run_dir` (any there under the lease is a dead writer's), and objects
+    moved aside in `2x/runs/` or in `run_dir` past the quarantine age.
     """
     for name in run_dir.listdir():
         if _MANIFEST_TEMPORARY.fullmatch(name):
             run_dir.remove_owned(name, pattern=TEMPORARY_NAME)
     try:
-        with StorageDir.open_root(run_dir.path.parents[2]) as root, root.walk(NAMESPACE, "runs") as runs:
-            runs.remove_older(run_dir.fs_now() - policy.quarantine_retention_s)
+        cutoff = clock.storage_now(run_dir) - policy.quarantine_retention_s
     except (OSError, WrongKindError) as err:
-        logger.warning("cannot collect what was set aside under 2x/runs/: %s", err)
+        logger.warning("cannot read the clock of %s; not collecting: %s", run_dir.path, err)
+        return
+    for directory in (runs, run_dir):
+        directory.remove_older(cutoff)
 
 
 def get_cached_commit_hash(repo_id: str, revision: str = "main", *, cache_dir: Optional[Path] = None) -> str:
@@ -319,10 +407,16 @@ class Resolver:
     """The HF hub cache to read (`get_cached_commit_hash`); `HF_HUB_CACHE` when None."""
     hub: Callable[[str, str, Optional[str]], object] = hub_commit
     """Asked for the commit of `(repo_id, ref, token)` when the local cache has none."""
+    network: Network = "online"
+    """When `offline`, `hub` is never asked; a ref the local cache cannot resolve raises `Offline`."""
     cache_root: Optional[Path] = None
     """The root of the run manifests (`manifest_path`); `cache_root()` when None."""
-    retry: RetryPolicy = field(default_factory=RetryPolicy.load_default)
-    """How `hub` is retried on a transient fault; the packaged `data/retry_policy.yaml` by default."""
+    retry: RetryPolicy = field(default_factory=lambda: ExecutionProfile.load().retry)
+    """How `hub` is retried on a transient fault; the packaged `laptop` profile's by default."""
+    lease: JobLease = field(default_factory=lambda: ExecutionProfile.load().lease)
+    """How the run manifest's lease beats; the packaged `laptop` profile's by default."""
+    clock: Clock = SystemClock()  # noqa: RUF009 - stateless
+    """The clock `hub`'s retry waits on."""
     memo: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
     """This resolver's answers so far, by `manifest_key`."""
 
@@ -349,7 +443,9 @@ class Resolver:
             logger.warning(
                 "Run manifest entry for %s is not a commit SHA (%r); re-resolving and ignoring it", key, recorded
             )
-        binding = record_resolution(repo_id, ref, self.lookup(repo_id, ref, token), root=self.cache_root)
+        binding = record_resolution(
+            repo_id, ref, self.lookup(repo_id, ref, token), root=self.cache_root, lease=self.lease
+        )
         self.memo[key] = binding
         return binding
 
@@ -366,9 +462,10 @@ class Resolver:
             local = None
         if local and COMMIT_HEX.fullmatch(local):
             return local
+        require_online(self.network, f"resolving {repo_id}@{ref} on the Hub")
 
         try:
-            sha = retry_on_transient_error(lambda: self.hub(repo_id, ref, token), self.retry)
+            sha = retry_on_transient_error(lambda: self.hub(repo_id, ref, token), self.retry, clock=self.clock)
         except Exception as exc:
             raise RevisionResolutionError(
                 f"Cannot resolve {repo_id}@{ref} to a commit SHA: {exc}. "

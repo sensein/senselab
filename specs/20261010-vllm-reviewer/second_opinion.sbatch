@@ -12,7 +12,7 @@
 # A row whose store has no REVIEW annotation is an error row; rerun its review slice, then this one.
 
 #SBATCH --job-name=opinion-q6
-#SBATCH --partition=pi_satra,ou_bcs_low,mit_preemptable
+#SBATCH --partition=${CPU_PARTITION},ou_bcs_low,mit_preemptable
 #SBATCH --exclude=node2119,node2621,node3002,node1702
 #SBATCH --gres=gpu:h100:1
 #SBATCH --cpus-per-task=8
@@ -21,7 +21,7 @@
 #SBATCH --requeue
 
 set -uo pipefail
-S=/orcd/scratch/bcs/002/satra
+S=${ORCD_GROUP_SCRATCH}
 BASE="${BASE:?BASE must be the run directory}"
 SHA="${SENSELAB_SHA:?SENSELAB_SHA must be the pinned commit}"
 SLICES="${SLICES:?SLICES must be the array size}"
@@ -30,7 +30,7 @@ CHECKOUT="${CHECKOUT:-$BASE/senselab-$SHA}"
 PY="${PY:-$S/senselab-r27/.venv/bin/python}"
 OLLAMA="${OLLAMA:-$S/ollama-models-flash/ollama-0.35.1/bin/ollama}"
 OLLAMA_MODELS_DIR="${OLLAMA_MODELS_DIR:-$S/ollama-models-flash/models}"
-VERIFIED="${VERIFIED:-/orcd/data/satra/002/models/ollama-senselab/verified}"
+VERIFIED="${VERIFIED:-${ORCD_DATA}/models/ollama-senselab/verified}"
 
 source "$S/triage_design_20260919/env_common.sh"
 export SENSELAB_CACHE="$BASE/cache" SENSELAB_RUN_ID="slurm-${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}"

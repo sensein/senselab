@@ -70,13 +70,20 @@ PASS_THROUGH = (KeyboardInterrupt, SystemExit)
 """Exceptions no total function in the worker turns into a record; they end the process as usual."""
 
 
+_TYPED = (
+    (InfrastructureFault, FaultClass.INFRASTRUCTURE),
+    (ResourceFault, FaultClass.RESOURCE),
+    (ContentFault, FaultClass.CONTENT),
+)
+
+
 def _classify(exc: BaseException) -> tuple[FaultClass, bool]:
-    if isinstance(exc, InfrastructureFault):
-        return FaultClass.INFRASTRUCTURE, False
-    if isinstance(exc, ResourceFault):
-        return FaultClass.RESOURCE, False
-    if isinstance(exc, ContentFault):
-        return FaultClass.CONTENT, False
+    carried: tuple[FaultClass, bool] | None = getattr(exc, "carried_class", None)
+    if carried is not None:
+        return carried
+    for base, fault in _TYPED:
+        if isinstance(exc, base):
+            return fault, False
     if isinstance(exc, _CONTENT):
         return FaultClass.CONTENT, True
     if isinstance(exc, _RESOURCE) or any(c.__name__ == _OOM_CLASS_NAME for c in type(exc).__mro__):
@@ -85,8 +92,26 @@ def _classify(exc: BaseException) -> tuple[FaultClass, bool]:
 
 
 def classify(exc: BaseException) -> FaultClass:
-    """Return the fault class of an exception: by its typed fault base, else by the fallback table."""
+    """Return the fault class of an exception: by its typed fault base, else by the fallback table.
+
+    An exception that wraps another failure's class sets `carried_class` to that failure's `classification`, and its
+    class and gap are that pair, so a fault's class survives the wrapper.
+    """
     return _classify(exc)[0]
+
+
+def at_load(fault: FaultClass, gap: bool) -> tuple[FaultClass, bool]:
+    """Return the class and gap a fault stated while a model loads has: a content fault is the environment's.
+
+    A load has no item, so it carries no verdict on any item's input: content becomes infrastructure, and a resource
+    or infrastructure class stands.
+    """
+    return (FaultClass.INFRASTRUCTURE if fault is FaultClass.CONTENT else fault), gap
+
+
+def classification(exc: BaseException) -> tuple[FaultClass, bool]:
+    """Return the fault class of an exception and whether the fallback table decided it (a gap)."""
+    return _classify(exc)
 
 
 def wire_text(text: str) -> str:
@@ -108,10 +133,25 @@ def _safe_text(exc: BaseException) -> str:
     return f"<unprintable {wire_text(type(exc).__name__)}>"
 
 
+def _chain_limited(exc: BaseException) -> traceback.TracebackException:
+    """Return `exc`'s formatter holding its most recent `TRACEBACK_FRAMES` frames in total across its chain.
+
+    The frames are spent from `exc` outward along its causes and contexts, most recent first.
+    """
+    formatter = traceback.TracebackException(type(exc), exc, exc.__traceback__, compact=True)
+    left = TRACEBACK_FRAMES
+    node: traceback.TracebackException | None = formatter
+    while node is not None:
+        kept = list(node.stack)[-left:] if left else []
+        node.stack = traceback.StackSummary.from_list(kept)
+        left -= len(kept)
+        node = node.__cause__ or (None if node.__suppress_context__ else node.__context__)
+    return formatter
+
+
 def _safe_traceback(exc: BaseException) -> str:
     try:
-        frames = traceback.format_exception(type(exc), exc, exc.__traceback__, limit=-TRACEBACK_FRAMES)
-        return wire_text("".join(frames))
+        return wire_text("".join(_chain_limited(exc).format()))
     except PASS_THROUGH:
         raise
     except BaseException as failure:  # noqa: BLE001 - the record is total; a broken traceback is named, not raised
@@ -122,8 +162,9 @@ def error_record(exc: BaseException) -> dict[str, Any]:
     """Return the wire error object for an exception; total over every exception object.
 
     Keys: `type` (class name), `message` (`str(exc)`, else `repr(exc)`, else `<unprintable Type>`),
-    `fault`, `traceback` (the last 8 frames) and `gap`, which is false only for a `ContentFault`,
-    `ResourceFault` or `InfrastructureFault`, and true whenever the fallback table decided. Text
+    `fault`, `traceback` (the last 8 frames in total across the cause chain) and `gap`, which is false
+    only for a `ContentFault`, `ResourceFault` or `InfrastructureFault`, and true whenever the fallback
+    table decided. Text
     fields are cut to `MAX_TEXT_CHARS`, and code points UTF-8 cannot encode, such as lone
     surrogates, are backslash-escaped.
     """

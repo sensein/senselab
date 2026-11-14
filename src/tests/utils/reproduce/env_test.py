@@ -354,7 +354,16 @@ def test_prefetch_stage_argv_uv_export(tmp_path: Path, fake: tuple[FakeUv, FakeW
     assert body_argv[7:-1] == ["--require-hashes", "--only-binary", ":all:", "--index-url", PYPI, "-r"]
     assert wheel_argv[7:-1] == [] and wheel_argv[-1].endswith(WHEEL_NAME)
     venv_calls = [a for a, _ in uv.calls if a[1] == "venv"]
-    assert venv_calls[0] == [UV, "venv", "--no-config", "--python", "3.11.15", str(venv)]
+    assert venv_calls[0] == [
+        UV,
+        "venv",
+        "--no-config",
+        "--python",
+        "3.11.15",
+        "--python-preference",
+        "only-managed",
+        str(venv),
+    ]
     # Every -r and wheel path is a copy: outside the manifest repo and the wheelhouse, gone afterwards,
     # and holding the verified bytes.
     for path, text in uv.read.items():

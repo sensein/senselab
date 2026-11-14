@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 import pytest
-from senselab_worker.ownership import ARRAY_NAME, ARRAY_TEMP_NAME, UUID_HEX, remove_owned
+from senselab_worker.ownership import ARRAY_FILE, ARRAY_NAME, ARRAY_TEMP_NAME, UUID_HEX, remove_owned
 
 KINDS = ["file", "dir", "link_to_file", "link_to_dir", "fifo"]
 PLACES = ["child", "grandchild", "sibling"]
@@ -95,6 +95,8 @@ def test_dot_names_and_the_root_itself_are_refused(tmp_path: Path) -> None:
         (ARRAY_NAME, "a" * 64 + ".npy", ["a" * 64 + ".npy\n", "A" * 64 + ".npy", "a" * 63 + ".npy", "x.npy"]),
         (ARRAY_TEMP_NAME, "." + "0" * 32 + ".tmp", ["0" * 32 + ".tmp", "." + "0" * 31 + ".tmp"]),
         (UUID_HEX, "0" * 32, ["0" * 31, "0" * 32 + "\n", "g" * 32]),
+        (ARRAY_FILE, "a" * 64 + ".npy", ["a" * 64 + ".tmp", "." + "0" * 32 + ".npy", "a" * 64 + ".npy\n"]),
+        (ARRAY_FILE, "." + "0" * 32 + ".tmp", ["." + "0" * 32 + ".tmp\n", "x.npy"]),
     ],
 )
 def test_owned_name_patterns_are_exact(pattern: re.Pattern[str], good: str, bad: list[str]) -> None:

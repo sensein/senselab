@@ -143,6 +143,34 @@ def test_error_record_keeps_last_eight_frames() -> None:
     assert "raise ValueError" in record["traceback"]
 
 
+def _relay(depth: int, cause: int) -> None:
+    _wrap(depth, cause)
+
+
+def _wrap(depth: int, cause: int) -> None:
+    if depth:
+        _relay(depth - 1, cause)
+        return
+    try:
+        _ping(cause)
+    except ValueError as exc:
+        raise ContentFault("outer") from exc
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(("depth", "cause"), [(20, 20), (1, 20), (0, 1)])
+def test_traceback_limit_total_across_chain(depth: int, cause: int) -> None:
+    """The traceback holds 8 frames in total across the cause chain, the outermost exception's most recent first."""
+    try:
+        _wrap(depth, cause)
+    except ContentFault as exc:
+        text = error_record(exc)["traceback"]
+    cause_text, _, outer_text = text.partition("The above exception was the direct cause")
+    outer, frames = 2 * depth + 2, 2 * depth + 2 * cause + 4
+    assert outer_text.count('File "') == min(8, outer) and text.count('File "') == min(8, frames)
+    assert "ContentFault: outer" in outer_text and "ValueError: deep" in cause_text
+
+
 class _Raises(Exception):
     """Raises from `__str__`, `__repr__`, or both."""
 

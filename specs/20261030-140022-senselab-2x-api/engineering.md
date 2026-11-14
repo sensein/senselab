@@ -1,7 +1,8 @@
 # Engineering standards for senselab 2.x
 
-These apply to every commit, by humans and agents alike. Principles P-31..P-35 in
-[`principles.md`](principles.md); testing tiers in [`testing.md`](testing.md).
+These apply to every commit, by humans and agents alike. This file holds the authoritative text of P-27..P-35,
+P-39 and P-40; [`principles.md`](principles.md) keeps their ids and stubs. Testing tiers are in
+[`testing.md`](testing.md).
 
 ## Exemplar and sources
 
@@ -36,39 +37,69 @@ robust (worker errors carried to the caller, a bounded pool, explicit cancellati
 - **Quality gates:**
   - static analysis (ruff, mypy, import-linter for layering);
   - property-based and fault-injection tests (P-34);
-  - small reviewed changes;
+  - reviewed changes: a review package over 1200 diff lines (the source-file budget) is split before dispatch,
+    or the reviewer is briefed per named chunk;
   - continuous profiling at scale.
 
 ## Standards
 
 | Standard | Rule | Enforced by |
 |---|---|---|
-| **Minimal verbosity** (P-31) | Say a thing once, in the fewest words that are exact. A docstring states what and how to call it. A comment exists only where code cannot say it. History, measurements and rejected alternatives go to `specs/` (P-21). The same applies to logs, errors, CLI output and agent-facing text: an error names the cause and the fix in one line. | **model and agent review, not word lists.** In CI, a small pinned model (the owner suggested "nimble", to be evaluated alongside alternatives) reads the prose in the diff: docstrings, comments, messages, errors and docs. It scores the prose against the P-31 rubric and posts suggested tighter rewrites as advisory review comments; it never fails CI. Agents apply or sharpen the suggestions. The reviewer model is pinned by commit (P-16) and license-checked (P-23). Accepted and rejected suggestions become its evaluation labels. The one blocking rule is structural: an exact-pattern check for spec, register and round ids (`F-n`, `R-n`, `rNN`) outside `specs/`, like the identifier hook. |
-| **Clean, robust, reusable, efficient code** (P-32) | Follow the sources above: deep modules with thin surfaces, a functional core with an imperative shell, one implementation per concept, typed explicit errors, and algorithms chosen for the cost model (the fastio lesson), not naive loops. No duplicated logic: a second copy is factored before merge. No dead code, no flags for removed behaviour (P-14). Dependencies stay out of core (P-13). | ruff (including complexity `C901` and `PL` limits), mypy strict on core, a duplicate-code check, and file and function size budgets reported per PR |
+| **Minimal verbosity** (P-31) | Say a thing once, in the fewest words that are exact. A docstring states what and how to call it. A comment exists only where code cannot say it. History, measurements and rejected alternatives go to `specs/` (P-21). The same applies to logs, errors, CLI output and agent-facing text: an error names the cause and the fix in one line. | development-time review by the per-PR reviewer (roster below), who compacts prose before commit. No word lists and no model in CI (P-31). The one blocking rule is the exact-pattern check for spec, register and round ids (`F-n`, `R-n`, `rNN`) outside `specs/` (`spec-ids` hook). |
+| **Clean, robust, reusable, efficient code** (P-32) | Follow the sources above: deep modules with thin surfaces, a functional core with an imperative shell, one implementation per concept, typed explicit errors, and algorithms chosen for the cost model (the fastio lesson), not naive loops. No duplicated logic: a second copy is factored before merge. No dead code, no flags for removed behaviour (P-14). Dependencies stay out of core (P-13). | ruff, with complexity (`C901`) and pylint (`PL`) limits from the root `pyproject.toml` (derivations in `config-derivations.md`); mypy strict on core, a duplicate-code check, and file and function size budgets reported per PR |
 | **One implementation per behaviour** (P-37) | Two functions must not do the "same" thing, and code must not be copied with variants. A variant of a behaviour is a typed parameter, a strategy object or a backend over **one** engine. Consolidation must not create brittleness: the merged function never branches on its caller, a dataset or a model id; it has no flag that only one caller uses; and each variant keeps its own contract test. Prefer deleting a redundant function to wrapping it. | a duplicate-code check (token- and AST-similarity across the tree, with a threshold); the task registry refuses two tasks with the same declared operation and port types; an adversarial "find the duplicates" agent pass each phase; review checks flag count and caller-specific branches |
-| **Efficient at every scale** (P-33) | Code is measured at four scale points: 1 item, 10², 10⁴, and a long signal (hours of audio, days of actigraphy). Time, peak memory, files written and bytes moved per item must not grow with scale. Profiles find the hot spots, not guesses. | `benchmarks/scale/` ladder runs per PR on touched modules (small points) and nightly (large points). Scalene profiles attached on regression. Per-item budgets stored as data with derivations (P-17); a regression beyond a band blocks merge |
-| **Brittleness checked always** (P-34) | A change must not make the system depend on an accident: timing, ordering, one dataset, one host, one model's quirk, a magic number, a string match on output. Every boundary is exercised with bad input. Failures are typed and isolated. | property tests and fault injection in the logic tier (killed worker, stale lease, NFS rename race, network off, missing license, corrupted cache entry, truncated audio). A brittleness checklist in the PR template. Review rejects special-casing |
+| **Efficient at every scale** (P-33) | Code is measured at four scale points: 1 item, 10², 10⁴, and a long signal (hours of audio, days of actigraphy). Time, peak memory, files written and bytes moved per item must not grow with scale. Profiles find the hot spots, not guesses. | until Phase 3 Task 20: the PR quotes the measurement. After it: the `benchmarks/scale/` ladder runs per PR on touched modules (small points) and nightly (large points), with Scalene profiles attached on regression. Flatness and the regression band are data (P-33); a regression beyond the band blocks merge |
+| **Brittleness checked always** (P-34) | A change must not make the system depend on an accident: timing, ordering, one dataset, one host, one model's quirk, a magic number, a string match on output. Every boundary is exercised with bad input. Failures are typed and isolated. | property tests and fault injection in the logic tier (killed worker, stale lease, NFS rename race, network off, missing license, corrupted cache entry, truncated audio), over the bad-input set in `testing.md` §3. A brittleness checklist in the PR template. Review rejects special-casing. `scripts/check_fixed_parameters.py` in pre-commit and ruff `PLR2004` (P-34 Check) |
 | **Adversarial agents set standards** (P-35) | Agents are used to break the system: hostile inputs, races, scale, misuse of the API, and attempts to make a test pass by special-casing. Each break is fixed **by an architectural change**, not a patch for that case: a new invariant, a type, a contract test or a lint rule. The fix is generalised into the standards here or into a principle. | each phase ends with an adversarial round scoped to its new surfaces (`design.md` §6.2). Findings go to [`review-register.md`](review-register.md) with their architectural resolution. A fix that only adds an `if` for the found case is rejected |
 
 ## Per-commit checklist
 
-The PR template carries this checklist. Pre-commit and CI check what they can.
+The 2.x PR template (`.github/PULL_REQUEST_TEMPLATE/2x.md`) carries this checklist, generated from this section by
+`scripts/check_pr_template.py --write`; the `pr-template` hook fails when the two differ. `scripts/check_pr_models.py`
+(the `pr-models` job) refuses a PR body missing a line of it. Pre-commit and CI check what they can.
 
 - [ ] Prose is minimal: no history, no ids, docstrings say what and how (P-31).
 - [ ] No duplicated logic; surfaces are thin over shared engines (P-32).
 - [ ] No second function for an existing behaviour, and no copied variant. Variants are
   parameters, strategies or backends, with no caller-specific branches (P-37).
-- [ ] The scale ladder passes for touched modules; per-item cost is flat (P-33).
+- [ ] Per-item time and peak memory at 1 and 10² items are measured for touched modules and quoted in the PR
+  (`benchmarks/scale/` once Phase 3 Task 20 lands; until then `scripts/profile_with_scalene.py` output or a timed
+  test). An unmeasured change says so (P-33).
 - [ ] New boundaries have bad-input, fault and property tests; there is no special-casing (P-34).
-- [ ] No identifiers; tests are scoped and serial (P-28, P-29).
+- [ ] No fixed parameters: every numeric literal in runtime, execution and test-bound code is either an invariant
+  in the form P-34 defines or config (profile, run config or data file) with its derivation; sizing comes
+  from measurement before scaling (P-34, amended 2026-11-07).
+- [ ] No identifiers, no local paths and no content copied from a referenced local file in any committed text: code, specs, tests, data, commit messages, PR bodies; placeholders instead (P-28). Tests are scoped and serial (P-29).
 - [ ] Every new task, backend or profile is declared, so contract tests cover it (P-30).
-- [ ] The PR records the implementer and reviewer models, and they differ (P-40).
+- [ ] The PR records the implementer and reviewer models; the reviewer ran in a fresh context on a different model, or both are the top tier on a kernel item and the PR says so (P-40).
 - [ ] The ledger mark is current for any 1.x area touched (P-39).
+- [ ] No user scenario in [`user-scenarios.md`](user-scenarios.md) that the change's area touches is broken; the
+  PR names the scenarios checked, and an unchecked one is recorded as unchecked, never assumed to pass. A break
+  is blocking unless the owner amends the scenario (added 2026-11-08, owner).
+
+### Size budgets
+
+`scripts/check_size_budgets.py` reads three limits (the function limit serves source and tests) from `scripts/data/size_budget.yaml`; each follows from a standard
+here, not from the tree.
+
+- **Function, 100 lines (source and test).** ruff caps a function at 50 statements (`PLR0915`, P-32). A wrapped
+  call or
+  a literal takes two lines, so 50 statements fit in 100 lines; past that a function holds more than one idea. A
+  test function past it is a scenario that wants splitting.
+- **Source file, 1200 lines.** A reviewer reads a module whole in one pass (P-32). The read tool returns 2000 lines at a
+  time; 1200 leaves the reviewer's notes and the module's tests inside one window.
+- **Test file, 1300 lines.** A test file is read beside its subject, so it may exceed the source limit by one function
+  limit.
+
+A function or file over its limit is split, or listed in `exempt` with one of two reasons: a literal table, or
+vendored code kept diffable. Each exemption is re-read at each phase gate and removed or re-justified. The tree is measured against these
+limits on every pre-commit run, which prints the five longest files and functions.
 
 ## What "special-casing" means (rejected in review)
 
 - A branch on a dataset, recording, subject, model id or host name.
-- A threshold literal tuned to make one case pass (P-17).
+- A numeric literal added or changed in the same PR as the test it makes pass, with no entry in
+  `config-derivations.md` (P-17).
 - A retry, sleep or timeout added to hide a race instead of removing it.
 - A test that asserts the current output of a model, or a measured number, outside `benchmarks/`.
 - A try/except that turns an unknown failure into a default value.
@@ -80,38 +111,49 @@ without trading away P-31..P-39.
 
 | Task | Agent | Model, effort | Isolation |
 |---|---|---|---|
-| Lookups, inventories, fact checks, `migration-ledger.md` drift scans (P-39) | Explore | haiku, lower | read-only |
-| Mechanical changes: rewires, renames, module moves, applying a spelled-out pattern, doc consistency fixes | general-purpose | sonnet, lower | worktree |
-| Implementing a phase item outside the kernel: a backend port, a task, a dataset adapter, tests | general-purpose | sonnet | worktree |
-| Implementing kernel or concurrency code: identity, store and leases, graph format, worker protocol, planner | general-purpose | opus | worktree |
+| Lookups, inventories, fact checks, `migration-ledger.md` drift scans (P-39) | Explore | haiku, low | read-only; cites `file:line` |
+| Mechanical changes: rewires, renames, module moves, applying a spelled-out pattern, doc consistency fixes | general-purpose | sonnet, low | worktree |
+| Implementing a phase item: a backend port, a task, a dataset adapter, kernel or concurrency code, tests and test runs | general-purpose | sonnet (opus after the second failure) | worktree |
 | Design, ADRs, synthesis across threads | main thread or fork | opus | — |
-| Per-PR review (standards and checklist, P-31..P-37) | fresh general-purpose | sonnet; opus for kernel or concurrency PRs | read-only |
-| End-of-phase adversarial round (P-35) | general-purpose lead with up to 5 subagents | opus, higher; subagents sonnet | read-only |
-| Phase-gate architecture review | general-purpose lead with subagents | opus; verification subagents haiku, lower | read-only |
-| Verifying a reviewer's claims before acting on them | Explore | haiku or sonnet, lower | read-only |
-| ORCD jobs (benchmarks, GPU limits, env builds) | an agent submits; the main thread holds the wait | sonnet, lower | pinned checkout per job |
+| Per-PR review, first rounds (standards and checklist, P-31..P-37) | fresh general-purpose | opus | read-only |
+| Per-PR final review before merge | fresh general-purpose | opus; fable only for the high-stakes classes below | read-only |
+| End-of-phase adversarial round (P-35) | general-purpose lead with up to 5 subagents | opus, high; subagents sonnet | read-only |
+| Phase-gate architecture review | general-purpose lead with subagents | opus; at most three verification subagents, haiku, low, each on a disjoint section | read-only |
+| Verifying a reviewer's claims before acting on them | Explore, at most three, each on a disjoint section | haiku or sonnet, low | read-only; cites `file:line` |
+| ORCD jobs (benchmarks, GPU limits, env builds) | an agent submits; the main thread holds the wait | sonnet, low | pinned checkout per job |
 
 **Rules**
-- **Escalation.** Move up one tier (sonnet to opus) after a task fails its tests or review twice.
-  Use fable only after opus has failed on the same item, or for proofs about the lease and store
-  protocol (ADR-003).
+- **Escalation.** Any review verdict other than approve, and any failing test run, is a failure. After the
+  second on one task, the next round goes to a fresh agent one tier up (sonnet to opus), and the ledger line
+  says `escalated`. A 429 or usage-limit error is not a failure and is not escalated. Opus runs the final
+  review before a merge; fable runs it only for the high-stakes classes in the 2026-11-09 amendment, which
+  include proofs about the lease and store protocol (ADR-003). Fix rounds
+  on one symptom are counted separately (P-35); when the task counter and the symptom counter disagree, the
+  stricter one wins.
 - **Reviewer independence.** A review never runs on the model and context that produced the work.
-  Pair a sonnet implementation with an opus review on the kernel, and an opus implementation with
-  a fresh sonnet or opus reviewer. A reviewer gets the code and the principles, not the
+  A sonnet implementation gets opus review rounds and an opus final review in a fresh context; an escalated
+  opus implementation gets opus reviews in a fresh context, the pairing recorded, and fable only for the
+  high-stakes classes (P-40 Check, amended 2026-11-09). A reviewer gets the code and the principles, not the
   implementer's conclusions.
-- **Every brief carries:**
-  - the P-ids and ADRs the task touches;
-  - the per-commit checklist above;
-  - the test tier expected (`testing.md`);
-  - P-28 (no identifiers) and P-29 (serial, scoped tests; cluster limits);
-  - the reconciliation mark to check (P-39);
-  - the exact files to read.
+- **Every brief is a file with three headings**, implementer and reviewer briefs alike:
+  - `## Principles`: P-31..P-40 by id, one line each; the other P-ids and ADRs the task touches; the test tier
+    expected (`testing.md`); P-28 (no identifiers) and P-29 (serial, scoped tests; cluster limits); the
+    reconciliation mark to check (P-39);
+  - `## Checklist`: the per-commit checklist above, verbatim;
+  - `## Files`: the exact files to read.
 
-  A task without that brief is not delegated.
-- **Parallelism.** Independent items fan out with `effort: lower`. Several agents on ORCD share
+  A task without that brief is not delegated. `scripts/check_brief.py` refuses a brief missing any of the three
+  headings or whose checklist differs from this file's. The standing contracts are rendered from the tracked
+  templates `scripts/data/briefs/{implementer,reviewer}.md` (`scripts/check_brief.py --render`), and a CI test holds
+  the templates' checklist to this file's.
+- **A review reports against the checklist.** The reviewer's report carries one line per checklist item marked
+  `pass`, `fail` or `n.a.`, with evidence for each `pass` that a tool can give (for P-34, the output of
+  `scripts/check_fixed_parameters.py`). A review without that table is returned, not read.
+- **Parallelism.** Independent items fan out with `effort: low`. Several agents on ORCD share
   the QOS cap (P-29). Agents never hold cluster waits; the main thread does.
-- **Claims are verified before acting on them.** A finding that drives a change is checked
-  against the code first.
+- **Claims are verified before acting on them.** Before a fix round is dispatched on a blocking finding, the
+  controller, or a haiku verifier, quotes `file:line` for it in the ledger line. A finding without a quoted
+  location is not blocking.
 - **Record the tier used.** Each PR notes the implementer and reviewer models, so escalation rates
   per task type can be measured and the table tuned.
 
@@ -123,9 +165,11 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
 ### P-27 Commit and push early and often
 - **Status**: active
 - **Statement**: Each unit of work is committed when done and pushed promptly. Work in progress
-  stays visible on a branch with a PR. 2.x is built on the `2.x` branch: design is decided in the docs
-  PR (#617, `senselab-2x-api`), code and tests go in the code PR (#619, `2x/phase-1`), which merges
-  `senselab-2x-api` to stay current. A change to an ADR's decision is a dated amendment (ADR-000).
+  stays visible on a branch with a PR. 2.x is built on the `2.x` branch. A change to an ADR's decision is a
+  dated amendment (ADR-000).
+- **Amended 2026-11-07**: Phase N code is on `2x/phase-N`, cut from the previous phase's head; spec work is on
+  `2x/phase-N-spec`; both merge to `2.x`. [`STATE.md`](STATE.md) names the current pair. This replaces the
+  docs-PR and code-PR pair (#617, #619) of Phase 1.
 - **Source**: owner, 2026-10-30: "commit+push early often"; "in place on alpha". Amended by the
   owner, 2026-11-01: "are PRs being merged into a 2.x branch or to alpha? should be the former"; and
   decision D-7, "move specs to the docs PR" ([`decisions-2026-11-01.md`](decisions-2026-11-01.md)).
@@ -137,9 +181,23 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
 - **Statement**: No participant, subject or session identifier, no personal path and no site
   credential enters the repository, a spec, a test fixture, a commit message or a PR. Examples use
   synthetic identifiers.
-- **Source**: owner, 2026-10-30: "ensure no identifiers leak in".
-- **Check**: the pre-commit identifier hook passes, and reviewers check prose, which the hook may
-  not cover.
+- **Amended 2026-11-03**: nothing that can be committed (code, specs, tests, data files, commit
+  messages, PRs) contains a local path or the content of a referenced local file. Local values live
+  in a gitignored `references.local.yaml` at the repository root; tracked text uses only placeholder
+  names (`${ORCD_GROUP_SCRATCH}`, `${CPU_PARTITION}`, `${AGENT_SCRATCH}`, …), which the committed
+  `references.example.yaml` lists without values. A repository-relative path is not a local path.
+  Synthetic examples use the generic account (`/home/user/a.wav`).
+- **Source**: owner, 2026-10-30: "ensure no identifiers leak in"; owner, 2026-11-03: "separately create
+  a gitignored file that can contain references, but anything that can be merged into a commit (such
+  as a spec) should not contain path or content of file references".
+- **Check**: the review checklist item for P-28, applied to every change by its reviewer. A hook is
+  only a generic backstop and names nothing specific to one developer, machine or cluster: the
+  participant-id hook, and a home-directory check (`/Users/<name>/`, `/home/<name>/`,
+  `C:\Users\<name>\`, the generic accounts excepted; `~/<name>/`, the tool and cluster conventions
+  `~/.cache`, `~/.local`, `~/.config`, `~/.ssh`, `~/.cargo`, `~/ffmpeg`, `~/orcd/scratch` and `~/orcd/pool`
+  excepted).
+  Amended 2026-11-07: the generic accounts are `user`, `runner` and `ec2-user`, the list
+  `scripts/check_local_paths.py` holds; synthetic examples use `user`.
 
 <a id="p-29"></a>
 ### P-29 Fast test cycles locally and on the cluster, within shared limits
@@ -152,6 +210,16 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   keep load across agents in mind, and orcd partitions in mind".
 - **Check**: test jobs name a partition and resource class; concurrent agent jobs stay within the
   QOS cap.
+- **Amended 2026-11-07** (the shared local venv):
+  - The local `.venv` is rebuilt by the controller alone, with `uv sync --locked --all-extras --group dev`,
+    whenever `uv.lock` or any `pyproject.toml` on the current code branch (`STATE.md`) changes. Agents run
+    `uv run --no-sync` and never sync. ORCD jobs use the sync line of the phase plan's job shape.
+  - The sync, `scripts/sync_local_venv.sh`, writes `uv.lock`'s digest to `senselab-lock.sha` in the venv. A test
+    run whose branch `uv.lock` digest differs prints `STALE VENV` (a `packages/conftest.py` hook), and its result is
+    not evidence.
+  - A branch that changes dependencies is tested in CI and on ORCD only; its local run is lint.
+  - A ledger line that cites a local pass names the lock digest. A local/CI disagreement is diagnosed (which
+    env, which dependency) before either side is called local-only.
 
 <a id="p-30"></a>
 ### P-30 Tests are tiered; benchmarks are separate
@@ -208,6 +276,9 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
 - **Source**: owner, 2026-10-30: "profiling should detect inefficiencies at different scales".
 - **Check**: the `benchmarks/scale/` ladder with per-item budgets as data; Scalene profiles on
   regression.
+  Amended 2026-11-07: flat means per-item cost at 10⁴ items ÷ at 10² items ≤ `scale.flat_ratio`; the
+  regression band is `scale.regression_band` per module. Both are data with derivations (P-17). Until
+  Phase 3 Task 20 lands they do not exist, and a PR calls its scale behaviour unmeasured.
 
 <a id="p-34"></a>
 ### P-34 Brittleness is always checked
@@ -218,6 +289,29 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
 - **Source**: owner, 2026-10-30: "brittleness has to be checked for always".
 - **Check**: property tests and fault injection in the logic tier; the PR checklist; review rejects
   special-casing.
+  Amended 2026-11-07 (owner): no fixed parameters. A value that can vary by execution scenario (host,
+  partition, storage, substrate) or pipeline — a poll interval, retry count or backoff, timeout, join
+  wait, start budget, quantum, batch size, worker count, test slack — is config (execution profile,
+  run config or data file) with its derivation where P-17 puts it, never a code constant.
+  Execution is optimized before it is scaled: per-item cost and resources are measured, and quantum,
+  batch and worker counts are chosen from the measurement, not from a fixed guess. Owner: "we don't
+  want any fixed parameters. parameters should become configs as they can vary across execution
+  scenarios and pipelines. what senselab and/or pydra should contain is to be able to optimize
+  execution before scaling."
+  Amended 2026-11-07 (form): an invariant is a unit conversion, a protocol constant bound to a format
+  tag (ADR-006), or a mathematical identity, declared as `NAME: Final = ...  # invariant: <why it cannot
+  vary>`. Anything with a unit of seconds, bytes, attempts, workers, items or polls is config. Test slack
+  is read through the `slack` fixture (`packages/conftest.py`) from `tests/data/test_slack.yaml` beside the test
+  package; values only tests read sit under that file's `tests:` section and are read through the `slack_tests`
+  fixture. Specs name profile keys (`lease.record_attempts`), never identifiers in capitals.
+  `scripts/check_fixed_parameters.py` fails pre-commit on a module-level numeric assignment (outside classes and
+  functions) under `packages/*/src` whose name ends in `_S`, `_MS`, `_BYTES`, `_ATTEMPTS`, `_RETRIES`, `_WORKERS`,
+  `_ITEMS`, `_POLLS`, `_BUDGET` or `_MODE`, or on a non-zero literal argument to `sleep`, `timeout=`, `wait(` or
+  `join(`. `scripts/data/invariants.yaml` lists the declared invariants, each with its reason, and the sites still
+  in code under `pending`, each naming the register entry that moves it to config (R-219) and the count of sites it
+  admits in its file; a different count, or an entry that matches no site, fails too. A bare literal in an
+  expression (the beat-bound factor 2) is outside the hook; ruff `PLR2004` sees it only in a comparison, and is on
+  outside tests, scripts and tutorial notebooks.
 
 <a id="p-35"></a>
 ### P-35 Agents break the system to raise standards, not to add brittleness
@@ -233,6 +327,10 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   are the design's (import-linter contracts, the identifier check, the fixture budget, the
   workflow-expression guard); spelling-based lints over in-repo bypasses and tests whose only job is
   to make another test exist are not added.
+  Amended 2026-11-07: a symptom that survives a fix is a design question. Before a second fix round on
+  the same symptom the controller writes in the ledger the measurement, the component, and why the first
+  fix could not have changed it. The second round goes one tier up with that mechanism in its brief. A
+  third round on one symptom is not dispatched without an owner-visible ruling.
 
 <a id="p-39"></a>
 ### P-39 Concurrent 1.x work is reconciled, never lost
@@ -259,3 +357,20 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
   in principles) in tow".
 - **Check**: each PR records its implementer and reviewer models, and they differ. Briefs cite
   P-ids and the checklist.
+  Amended 2026-11-07: the reviewer runs in a fresh context; its model differs from the implementer's
+  unless both are the top tier for a kernel item, and the PR says so. `scripts/check_pr_models.py` encodes
+  exactly this, with the template's `Kernel item` line. The top tier is opus or
+  fable: an opus+opus or fable+fable pairing is allowed on a kernel item only. Briefs take the three-heading form and
+  reviews the checklist table set out under Rules above.
+  Amended 2026-11-08 (owner): implementation and testing agents run on sonnet; the first review rounds run on
+  opus; the final review before a merge runs on fable. Escalation after a second failure still moves an
+  implementation one tier up. Reviews judge the mechanism against the invariant it serves, with tasks as evidence
+  only, and a component on its second fix round gets a design review, not another scoped re-review. Owner:
+  "sonnet use for implementation and testing subagents, opus for initial review iterations, and fable for final
+  review".
+  Amended 2026-11-09 (owner): fable is used only for the most important issues. The final review before a merge
+  runs on opus in a fresh context. Fable reviews only these high-stakes classes: identity, privacy and security
+  (anything that could put a user's identifier where another user can read it, UX-28/UX-57); a change to the
+  wire, lease or store protocol or to an ADR's semantics; and the design review of a component on its second
+  fix round. An opus+opus pairing outside a kernel item is allowed in a fresh context and is recorded in the
+  ledger. Owner: "reduce fable usage except for the most important issues".

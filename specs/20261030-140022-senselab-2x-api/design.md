@@ -165,6 +165,9 @@ The summary below follows that model.
   SSD, 2026-10-31): one full hash per read, about 0.5 s per GB, whatever the window. This conflicts with
   ADR-005's "never hashed whole" (A I-5, R-109). Decoding and stamping moved out of the kernel (F3); the
   conflict with ADR-005 stays open as R-109, in Phase 2.
+  Amended 2026-11-02 (P2-21): the stamp carries per-chunk digests on the `content_identity` grid and a read
+  verifies only the chunks it touches, so the `cp -p` guarantee holds and the file is never hashed whole on a read
+  (ADR-005 amendment 2026-11-01). R-109 is closed.
 - **A recording's anchor is not its identity.** A recording placed on a session clock carries that
   clock's name, so validation does not tie `anchor.clock_id` to `identity`; the anchor is part of the
   value's canonical digest, not of its content identity.
@@ -173,6 +176,8 @@ The summary below follows that model.
   irregular group holds NaN as its missing-sample marker (pose and physiological dropouts), as the one
   quiet NaN of ADR-006. `Events.value` admits NaN. Label arrays of strings are held at the width of
   their longest string, so two label columns holding the same strings are one value.
+  Amended 2026-11-02: the NaN rule is a signal-model decision and is stated in ADR-005 (amendment 2026-11-02),
+  which governs; this paragraph restates it.
 - **One timeline.** Every timed result is a `Span{start_ns, end_ns, clock_id}`. A `TimeMap`
   (offset plus drift, with uncertainty) relates clocks. It comes from metadata or a synchronisation
   task, and is a declared input.
@@ -189,12 +194,12 @@ The summary below follows that model.
 - **Records.** A `Record` holds named views (`audio`, `video`, `ecg`, `acc@wrist`, `transcript`)
   that share its entities and timeline.
 
-### 4.2 Task (P-1, P-17, P-20)
+### 4.2 Task (P-1, P-17)
 
 A Task is declared once, in core, without importing a backend:
 
 ```python
-@task(name="speech_to_text", version=3, kind="measure")
+@task(name="speech_to_text", version=3, kind="transform")
 class SpeechToText:
     class Params(TaskParams):
         language: Language | None = None
@@ -204,9 +209,7 @@ class SpeechToText:
 ```
 
 - **Kinds:**
-  - `measure`: no verdict fields (P-20);
   - `transform`;
-  - `decide`: consumes measurements plus a profile;
   - `fit`: learns state, see section 4.14.
 - **Configured, immutable objects are the primary form:**
   ```python
@@ -238,8 +241,8 @@ class SpeechToText:
 - **Loading** takes only a `ResolvedModel`. Sources that cannot be pinned resolve with an
   `unresolved_reason` and are labelled `unpinned`.
 - **The catalogue** (from `model_registry.yaml`) is runtime data. Each entry holds the tasks it
-  serves, its backends and stacks, the default ref, its license, and a measured resource table per
-  hardware class. The scale ladder produces those tables (P-7, P-17).
+  serves, its backends and stacks, the default ref, its license. Measured resources are not the catalogue's: a
+  group's measures roots hold them, written by its own scale-ladder runs (P-7, P-17, R-252).
 
 ### 4.4 Backend, stack and environment (P-6, P-7, P-8, P-25)
 
@@ -252,6 +255,12 @@ class CrisperWhisperCt2: ...
 
 - **Stacks:** `transformers`, `vllm`, `vllm-omni`, `nemo`, `ct2`, `mlx`, `onnx`, `speechbrain`,
   `pyannote`, `dsp`. A task can have one backend per stack for the same model.
+  - Amended 2026-11-02 (P2-90): a backend is a code path (stack plus env) and a model is a catalogue entry
+    (§4.3), because the execution profile picks the backend (P-8). `speech_to_text` has two backends:
+    `transformers` runs HF Whisper in-process on the host, and `crisperwhisper` runs in its own isolated env with an
+    `engine` param (`ct2` or `transformers`) that enters the key. `models` in the example above lists the catalogue
+    models a backend is known to serve; it does not make a model a backend. A backend declares `name` and `version`,
+    both required (P2-47).
 - **Env kinds, all locked (P-25):**
   - `Env.host()`: in-process, in the locked senselab venv. It is allowed only when that lock
     covers the backend.
@@ -275,8 +284,8 @@ class CrisperWhisperCt2: ...
 p = sl.Pipeline("conversation")
 seg = p.add(sl.audio.Diarize(), audio=p.input("audio"))
 asr = p.add(sl.audio.SpeechToText(language="en"), audio=p.map(seg.out.segments))  # explicit fan-out
-spk = p.add(speaker_identity, audio=p.input("audio"), turns=seg.out.turns)  # nested Pipeline
-p.output(transcript=asr.out.transcript, speakers=spk.out.speakers)
+clean = p.add(denoise_then_asr, audio=p.input("audio"))  # nested Pipeline
+p.output(transcript=asr.out.transcript, clean=clean.out.transcript)
 ```
 
 - **Nesting.** A `Pipeline` satisfies the Task protocol, so it can be used as a node.
@@ -285,7 +294,7 @@ p.output(transcript=asr.out.transcript, speakers=spk.out.speakers)
   ([ADR-001](adr/ADR-001-graph-format.md)). `over=` names only a dataset grouping key (`session`,
   `participant`, `corpus`) taken from the dataset's entities (section 4.6).
 - **Routing and loops.** `p.route(predicate, branches={...})` and
-  `p.loop(body, until=predicate, max_rounds=n)` take a **declared decide task** as the predicate.
+  `p.loop(body, until=predicate, max_rounds=n)` take any declared task with a `bool` output as the predicate.
   Its output is a recorded result, so a resumed run takes the same branch. Unrolled rounds get
   distinct ids.
 - **Absence.** `Absent(cause)` is typed: content-caused or environment-caused (I-6). Downstream
@@ -299,7 +308,7 @@ p.output(transcript=asr.out.transcript, speakers=spk.out.speakers)
 ### 4.6 Dataset and profiles (P-11, P-12, P-18)
 
 ```python
-ds = sl.Dataset.bids("/data/ds", dataset_profile="b2ai-voice:2026-09")
+ds = sl.Dataset.bids("/data/ds", dataset_profile="voice-cohort:2026-09")
 ds = sl.Dataset.from_records([{"audio": "a.wav", "participant": "p1"}])
 ds = ds.filter(task="reading-passage")
 ```
@@ -307,7 +316,10 @@ ds = ds.filter(task="reading-passage")
 - **The `Dataset` protocol** yields `Record`s. It provides `entities()`, filtering, a stable
   `Record.id`, a manifest form, and slicing that is closed under grouping (I-7).
 - **Binding.** A record view binds to the pipeline input of the same name. `bind={}` overrides
-  that.
+  that; `bind` wins over the name. When exactly one record-bound input has neither, every record has exactly one
+  input of one name, and no other input reads it, it binds to that input; otherwise the error names the cause, and
+  the `bind` to pass when exactly one record input fits. The resolved mapping, automatic entries included, is the
+  logical plan's `bind`, so an automatic bind and the explicit bind it resolves to give one plan hash.
 - **Adapters.** The BIDS adapter parses entities once, with one implementation. The in-memory
   adapter wraps lists, dicts, frames, or HF datasets.
 - **Three profile kinds**, versioned as `name:version`, deep-merged over packaged defaults, and
@@ -316,7 +328,7 @@ ds = ds.filter(task="reading-passage")
   | Profile | Holds |
   |---|---|
   | run config | model choices, thresholds, aggregators, `license_policy` |
-  | dataset profile | entities, sidecar→hint mapping, task protocol, lexicons, cohort conditions, references to fitted-profile artifacts |
+  | dataset profile | entities, sidecar field mapping, task protocol, lexicons, cohort conditions, references to fitted-profile artifacts |
   | execution profile | hardware classes, substrate, partitions, roots, stack preferences, caps, policy limits, network policy |
 
 - **Profile slices.** A node reads only the profile slices it declares, and those slices are
@@ -327,13 +339,16 @@ ds = ds.filter(task="reading-passage")
 ### 4.7 Plan and run lifecycle (P-2, P-5, P-10)
 
 ```python
-plan = sl.plan(p, ds, config="cfg.yaml", dataset_profile=..., execution="orcd.yaml")
+plan = sl.plan(p, ds, config="cfg.yaml", dataset_profile=..., execution="site.yaml")
 plan.explain()             # backend, stack, env, device, batch, partition, licenses, cost, why
 run  = plan.run()          # -> Run
 run.status(); run.wait(); rs = run.results(); run.cancel()
 rs.to_frame()              # entities as index
 sl.run(p, ds, ...)         # = sl.plan(...).run(); task or pipeline
 sl.use(execution="laptop") # session default
+plan = sl.plan(p, ds, placement="site.yaml", placement_hook="site.hooks:place")
+plan.placement_request()   # placement-request@1.0: each class's needs; starts nothing
+sl.resume(plan, placement="fixed.yaml")  # a run a site refused, continued from the store
 ```
 
 - **A plan has two parts** ([ADR-004](adr/ADR-004-logical-plan.md)).
@@ -386,8 +401,8 @@ them to a principle.
 |---|---|---|
 | I-1 | **No ambient reads.** Everything a node reads reaches it through a declared, identified input. | perturbation contract: perturb every undeclared source (env vars, other profile keys, cache roots); output unchanged |
 | I-2 | **Context and protocol identity are not in the key.** The execution context is recorded per result. The protocol identity (worker-runtime source hash plus wire version) is checked only at handshake. The worker runtime is an overlay on each env. | env tier: a release that changes only the worker runtime leaves keys unchanged |
-| I-3 | **Batch invariance is declared and certified.** Otherwise batches form from canonical length buckets (bucket in the key) or batch size 1. Nondeterministic backends are labelled. | limits contract: batch of 1 against mixed batches, within a measured tolerance |
-| I-4 | **Cross-context reuse follows the reuse policy.** Equivalence classes come only from measured tolerance profiles and verify sampling. | logic: `equivalent` with no measurement behaves as `exact`; limits: verify sampling records agreement |
+| I-3 | **Batch invariance is declared and certified.** Otherwise batches form from canonical length buckets (bucket in the key) or batch size 1. Nondeterministic backends are labelled. | limits contract: batch of 1 against mixed batches, compared under the run config's thresholds (P2-95; amended 2026-11-10, P3-46) |
+| I-4 | **Cross-context reuse follows the reuse policy.** Equivalence classes come only from the agreements verify sampling records, judged by the P2-95 comparisons under the run config's thresholds (amended 2026-11-10, P3-46; the tolerance profiles are retired, ADR-002 amendment 2026-11-02). | logic: `equivalent` with no measurement behaves as `exact`; limits: verify sampling records agreement |
 | I-5 | **Early cutoff.** Derived inputs are identified by upstream output identity. A composite's identity is its `LogicalPlan` hash. | contract: an upstream change that yields identical output leaves downstream keys unchanged |
 | I-6 | **`Absent` carries a cause class.** Only content-caused absence is cached. | contract: environment-caused absence is never read back from the cache |
 | I-7 | **Shards are closed under the coarsest grouping level.** A group node's key includes a hash of its member manifest and it checks completeness. Chunkable tasks declare a chunk grid and receptive field as identity, and shards align to the grid. | logic: a split group fails planning; misaligned shards are refused |
@@ -412,7 +427,7 @@ them to a principle.
 node with the attested identities. BEP028 export is how runs are published. `reproduce` becomes a
 consumer of this store. Its model and format are W3C PROV, PROV-O in JSON-LD
 ([ADR-010](adr/ADR-010-w3c-prov.md)), implemented in Phase 2; until then the format is
-`provenance@2.0` (ADR-006). Recorded values have a declared type, and the digest is total over it by
+`provenance@2.0` (ADR-006; amended 2026-11-10: the format as built is `provenance@3.0`, `kernel/formats.py:26`). Recorded values have a declared type, and the digest is total over it by
 construction: pipelines record `-inf` dB for silence and nanosecond `mtime_ns` stamps, and evidence is
 often typed `Any`, so totality cannot rest on the suites that happen to run. Any other value raises a
 typed error at the boundary naming the attribute path and the type (H-R29, H-R30).
@@ -421,7 +436,7 @@ typed error at the boundary naming the attribute path and the type (H-R29, H-R30
 
 `execution.md` holds the full design; this is the summary.
 
-- **Executors:** `InProcess` (notebooks, tests) and `Pool` (`work_pool` with plan-fragment items).
+- **Executors:** `InProcess` (notebooks, tests) and `Pool` (queues of plan fragments in the run directory; amended 2026-11-10, `runtime/execution/pool.py:148`, `runtime/execution/executor.py:305`).
 - **Substrates in 2.0:** local processes and Slurm. They start pool workers; they do not run the
   graph.
 - **Coordination:** safety comes from idempotence, so a duplicate coordinator causes only duplicate
@@ -441,10 +456,21 @@ typed error at the boundary naming the attribute path and the type (H-R29, H-R30
 - **Version pinning.** pydra changes are used from the branch through `[tool.uv.sources]`, with
   the commit pinned in `uv.lock`, and released in 1.0 alphas.
 - **Decision gate at the start of Phase 3.** It decides only the default executor, not the format.
-  If E1, D1, F2 (with F1), K1 and K2 (with G1) are not working on the branch, senselab builds its own graph runner behind the
+  (Amended 2026-11-03, P3-1: K2 was delivered inside the gate, as Phase 3 Task 0; the gate passed, Route A.) If E1, D1, F2 (with F1), K1 and K2 (with G1) are not working on the branch, senselab builds its own graph runner behind the
   same `Executor` protocol: 2–4k lines, 3–5
   person-weeks, reusing `reproduce/dag.py` and `audio_analysis/contracts.py:991`
   `unrolled_contracts`.
+- **Gate outcome (amended 2026-11-10, Task 21 Step 7; `reviews/phase3-exit-evidence.md`, Step 7).** The gate passed,
+  Route A, at pydra `0c1bbcd9`, and no re-evaluation is due. As built, `Plan.run` always runs the plan through
+  `PydraRunner` (`runtime/execution/run.py:963`, `:974`) and raises `MissingExtra` without the `pydra` extra of
+  `senselab-core` (`run.py:941-942`; `packages/senselab-core/pyproject.toml:14`); `InProcess` and `Pool` are the
+  `Executor`s beneath it (ADR-001 amendment 2026-11-05). senselab pins pydra at `c8541fc5` (`pyproject.toml:101`), the
+  merge of #911; the branch head is `0e3bbbbd` (#912, atomic cache writes), four commits ahead. The pydra PR states were
+  read on 2026-11-10 and not re-queried in the close-out. No ADR-001 change follows from the outcome: its 2026-11-05
+  amendment already states Route A as built.
+- **The rest of the pydra proposals are carried, not delivered (amended 2026-11-10).** A0, A2, B1, B2, C, D2, E2, G2,
+  H0, H, I, J1 and J2 (Phase 3 Tasks 41-53) have no PR. Each is carried by a register row, R-238 to R-250, owned by the
+  senselab pydra track. None blocks a senselab task, because Route A runs jobs on senselab's own queues (P3-52).
 - **Citations.** pydra changes are cited by proposal id (A0…K2), from
   [proposal 0001](https://github.com/nipype/pydra/blob/enh/execution-extensions/proposals/0001-execution-extensions.md).
 - **Why pydra:** `engine-choice.md`.
@@ -466,9 +492,15 @@ typed error at the boundary naming the attribute path and the type (H-R29, H-R30
 - **MCP server (`senselab mcp`).** The same operations as JSON tools, with schemas generated
   from the declarations. It replaces DeepWiki lookups.
 - **Discovery:** `describe` works on tasks, pipelines, datasets (`describe_dataset`: entities,
-  counts, views, hints), profiles and executors. Port-type queries such as
+  counts, views, fields), profiles and executors. Port-type queries such as
   `tasks(accepts="Transcript")` are supported, and the graph format has a JSON Schema.
 - **Errors:** one envelope, `{code, message, fix, field, suggestions}`.
+  Every error `run_call` documents has one code (`unknown_task`, `inconsistent_inputs`, `content_fault`,
+  `resource_fault`, `infrastructure_fault`, `worker_failed`, ...); `ConfiguredTask._run` maps them, and a test
+  checks the table covers the `Raises:` section.
+- **Constraints:** a task declaration carries `constraints` as data (`inputs_agree` on a property of two ports,
+  `params_ordered` on two params). `describe()` renders them; the call path refuses a violation as
+  `inconsistent_inputs` before the call is keyed.
 - **Results:** inline up to a size cap; above it, a reference `{ref, shape, dtype, summary}`.
   Dataset-wide results are paginated.
 - **Runs:** `run` returns a handle immediately. The tools `runs`, `status`, `progress`
@@ -583,7 +615,7 @@ typed error at the boundary naming the attribute path and the type (H-R29, H-R30
   - `labels` are another task's results, or annotations in the dataset.
 - It returns a new fitted object whose state is a **Profile artifact**: content-hashed, with an
   emitted derivation (inputs, labels, code version, config) and provenance.
-- Decide tasks take `profile=<artifact>`. Dataset profiles refer to fitted artifacts by identity,
+- Any task may take `profile=<artifact>`. Dataset profiles refer to fitted artifacts by identity,
   so there is a single path, and the artifacts carry inherited licenses (I-9).
 
 **Interop:**
@@ -613,8 +645,8 @@ The taxonomy and tables are in `use-cases.md` §4.
    (delegating to MNE/YASA), `sl.eyetrack`.
 
 Inputs are typed `Signal[type ∈ {...}, units]`, so `tasks(accepts=...)` works for channels. QC
-tasks emit SQI tracks and gap intervals, while non-wear and unusable-epoch verdicts are `decide`
-tasks with fitted profiles.
+tasks emit SQI tracks and gap intervals, while non-wear and unusable-epoch labels are tasks that
+take fitted profiles.
 
 ## 5. Packaging (P-13, P-22, P-25)
 
@@ -659,7 +691,8 @@ checks, over `dist/` before upload:
 - that each distribution builds and installs from `dist/`.
 
 Member-set completeness, sdist rebuild identity, strict `WHEEL`/`METADATA` parsing, per-floor installs,
-cache isolation and import-every-module are specified at the first 2.x release.
+cache isolation, import-every-module and the provenance vocabulary check (ADR-010; a contract test until then) are
+specified at the first 2.x release.
 
 **Fixture budget** (docs.md): at most 256 KB per committed file and 2 MB in total over `packages/`, checked
 in pre-commit over the git index. A symlink or submodule fails.
@@ -702,21 +735,20 @@ principles and the engineering checklist and compacted before it is committed. N
   serialisation) plus a runtime (planner, executors, store, provenance, observability), with the
   layering enforced by import-linter (ADR-009).
 
-**Reconciling concurrent 1.x work (P-39).** 1.x development continues on `alpha` after the
-Phase 0 freeze tag. Those changes are ported, not lost.
-- `migration-ledger.md` records, per area (task module, workflow, utility), the last `alpha`
-  commit whose 1.x changes have been reconciled into 2.x, and how each change was handled:
-  ported (with the 2.x commit), folded into a profile, or dropped with a reason.
-- A **reconciliation task** lists commits on `alpha` since an area's ledger mark that touch its
-  1.x paths (`git log <mark>..alpha -- <paths>`). For each one it ports the behaviour change,
-  adds a parity or benchmark case where it changed outputs, and advances the mark.
-- It runs:
+**Reconciling concurrent 1.x work (P-39)** (amended 2026-11-02, D-6, P2-35). 1.x development continues on
+`alpha` after the Phase 0 freeze tag. 2.x does not port each `alpha` change as it lands: `src/` is the 1.x pool, and
+it is refreshed by merging `alpha`.
+- `migration-ledger.md` records, per area (task module, workflow, utility), the last `alpha` commit merged into the
+  pool.
+- Before a use case moves, `alpha` is merged into the 2.x line and the area's mark is set to the merged commit. The
+  rename-only `git mv` commit then moves the files as they stand on `alpha`, so every 1.x change to them arrives
+  with the move. The modify commit ports the behaviour onto the kernel and runtime, and adds a parity or benchmark
+  case where a 1.x change altered outputs.
+- The merge also runs:
   - at the start of every phase;
-  - before a use case is migrated;
-  - before any 1.x module is deleted, which is not allowed while its ledger mark lags `alpha`;
+  - before any 1.x module is deleted, which is not allowed while its mark lags `alpha`;
   - after any 1.x fix that a running campaign depends on.
-- Campaigns that need a 1.x fix move to a newer pinned 1.x commit. The freeze tag is only the
-  starting mark.
+- Campaigns that need a 1.x fix move to a newer pinned 1.x commit. The freeze tag is only the starting mark.
 
 **Consolidation inventory (P-37).** These are the known duplicates in 1.x. Each phase removes the
 ones it touches, and Phase 5's exit requires the list to be empty. Each consolidation keeps one
@@ -780,7 +812,7 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
 - Exit:
   - each two-stack call switches by execution profile alone (P-8);
   - an agent runs each task from `describe` output alone (P-1);
-  - parity holds within measured tolerance profiles (P-17), on CPU and on one CUDA host.
+  - parity holds under the run config's thresholds (P-17, P2-95; amended 2026-11-10, P3-46: "measured tolerance profiles" is retired), on CPU and on one CUDA host.
 
 **Phase 3: plans and executors.**
 - Build:
@@ -789,18 +821,20 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
   - plan-fragment items, the coordinator (idempotent, with an epoch file; ADR-003), and faults typed at the source (ADR-009);
   - cross-record batching under I-3;
   - a minimal BIDS adapter;
-  - the `benchmarks/scale` ladder and the catalogue resource tables (P-7, P-33).
+  - the `benchmarks/scale` ladder (P-7, P-33; its tables were dropped by R-252).
 - The pydra gate is decided at the start of this phase (section 4.9). Owners of the pydra PRs
   (proposal 0001, nipype/pydra#891): **Phase 2 owns the gate prerequisites**, which must be
-  working on the branch before Phase 3 starts: D1, E1, F1, F2, G1, K1, K2. **Phase 3 owns the
-  rest**: A0, A1, A2, B1, B2, C, D2, E2, G2, H0, H, I, J1, J2. The gate decision is Phase 3's
+  working on the branch before Phase 3 starts: A1, D1, E1, F1, F2, G1, K1, K2 (amended 2026-11-03, P3-1: K2 moved into Phase 3 Task 0; amended 2026-11-02, P2-39: F1
+  depends on A1 in the proposal, so A1 moves from Phase 3 to Phase 2). **Phase 3 owns the
+  rest**: A0, A2, B1, B2, C, D2, E2, G2, H0, H, I, J1, J2 (amended 2026-11-10: none is delivered in Phase 3; R-238 to R-250 carry them, §4.9). The gate decision is Phase 3's
   first task. The dates are the owner's to set; none is set yet.
 - Exit:
   - a 1,000-record BIDS `.map` runs on a laptop and on ORCD, with plans differing only in
     execution fields (P-10);
   - an interrupted run resumes from its plan hash and recomputes only what is missing (P-5).
 - New integrations follow this phase: vLLM-omni and a vLLM ASR backend. They are accepted against
-  the transformers stack on the same model, within a measured tolerance.
+  the transformers stack on the same model, by the P2-95 comparisons under the run config's thresholds (amended
+  2026-11-10, P3-46; `runtime/compare.py:1-7`, `runtime/data/run_config.yaml`).
 
 **Phase 4: pipelines, datasets, signals.**
 - Build:
@@ -818,10 +852,10 @@ Every phase ends with an adversarial round scoped to its new surfaces (P-35). Fi
     running campaigns and is superseded by the flywheel (P-36); `migration-ledger.md` classifies each
     module.
 - Exit:
-  - a **protocol screening pipeline** composed from the ported measurement tasks runs on B2AI and
-    on a constructed synthetic dataset by changing only the dataset profile (P-12):
+  - one pipeline composed from the ported tasks runs on two dataset profiles (B2AI and a constructed
+    synthetic dataset) by changing only the dataset profile (P-12):
     - the synthetic dataset has a different entity scheme and task protocol;
-    - its thresholds are declared `unfitted`, so they route to review;
+    - its unfitted thresholds yield a typed `Absent`;
     - every node runs or is typed-absent;
     - a static check finds no dataset names, task ids or sidecar fields in pipeline code;
   - pipelines nest unchanged (P-9);
@@ -891,7 +925,7 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
 - the run lifecycle and the single call shape (sections 4.2 and 4.7);
 - `fit` producing Profile artifacts (section 4.14);
 - the Phase 2 slice drawn from existing backends;
-- measured parity tolerances; triage measurements ported as tasks, with its decision layer left for the flywheel;
+- parity under the run config's thresholds (P3-46, amended 2026-11-10); triage measurements ported as tasks, with its decision layer left for the flywheel;
 - vLLM-omni and vLLM ASR as the only new integrations;
 - the pydra gate at the start of Phase 3, with its fallback (section 4.9);
 - the license CI gate equal to the run-time default (section 4.13);
@@ -904,10 +938,10 @@ Each cut keeps its interface or hook, and is added when a measurement or a use c
   Amended 2026-11-01 (owner item 30, D-7): 2.x merges to the `2.x` branch, not `alpha` (§6.1).
 - **Second dataset:** none exists, so genericity is shown by design (Phase 4 exit).
 - **The keep, port and drop list** is accepted:
-  - port `adaptive_loop` (as `p.loop`), and the tutorials;
+  - port the tutorials (`p.loop` only if a use case needs it);
   - replace `agentic_interface` with MCP;
   - keep the review-page and VLM tooling outside the package;
-  - move ORCD scripts into site profiles;
+  - move ORCD scripts into site profiles, which are user files: senselab packages only generic profiles (P-42);
   - keep benchmarks as dev scripts.
 - **Also:** locked isolated envs (P-25), signals (P-26), license sets with raise by default
   (P-23), process principles (P-27..P-29), testing tiers (P-30) and engineering standards
@@ -944,3 +978,10 @@ R-n in [`review-register.md`](review-register.md).
   1.x rewire or 1.x tests (D-6, D-7, §6.1, §6.2, §8).
 - 2026-11-01: triage's tasks and pipelines port; its decision layer is superseded (H-R52, §6.2).
 - 2026-11-01: a model's key is its weights' digest and its source is context; decoding and stamping live in `runtime/audio_io`; every 2.x CI job except `worker-floor` installs with `uv sync --locked` (H-R56, H-R57; ADR-002, ADR-009).
+- 2026-11-02: Phase 2 spec pass: §6.1 reconciles `alpha` by merge (D-6, P2-35); A1 is a Phase 2 gate prerequisite
+  (P2-39); the source-stamp conflict is closed (P2-21); backends are code paths and models are catalogue entries
+  (P2-90, P2-47).
+- 2026-11-03: the pydra gate passed at `0c1bbcd9` (Route A, §4.9); K2 was delivered in Phase 3 Task 0, not Phase 2 (P3-1, §4.9, §6.2; `reviews/phase3-gate/evidence.md`).
+- 2026-11-03: a lease is a directory taken by `mkdir`, renewed by beat directories (ADR-003, owner item 58).
+- 2026-11-08: a single unnamed record-bound input binds to the records' single input; the plan's `bind` records it (§ Binding, ADR-006; Phase 3 Task 21b).
+- 2026-11-10: Phase 3 spec pass (Task 22a): the pydra gate outcome as built and the carried proposals (§4.9, §6.2); agreement is the P2-95 comparisons, not a measured tolerance (§4.8 I-3 and I-4, §6.2; P3-46); the pool executors are queues of plan fragments (§4.9).

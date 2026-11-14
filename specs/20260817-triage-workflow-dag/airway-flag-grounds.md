@@ -21,7 +21,7 @@ commit that carries this paragraph. "The fixes, as made" is what shipped and wha
 | | |
 | --- | --- |
 | recordings | **29,484** completed rows, read 2026-09-20 while the array was still running |
-| rows | `/orcd/scratch/bcs/002/satra/triage_design_20260919/run/rows/**/*.row.json` |
+| rows | `${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/rows/**/*.row.json` |
 | stores | `.../run/out/**/run/store.jsonl`, opened for every in-family AIRWAY row (**6,080**) |
 | sidecars | `.../run/out/**/run/derivatives/hear_scores.json`, opened for those plus **3,183** controls |
 | controls | ten families that elicit no breathing task: `maximum-phonation-time`, `harvard-sentences-list`, `prolonged-vowel`, `free-speech`, `glides-low-to-high`, `word-color-stroop`, `animal-fluency`, `diadochokinesis-pataka`, `rainbow-passage`, `cinderella-story` |
@@ -664,8 +664,8 @@ and it makes `align_airway` agree with what routing already reports on the same 
 ```bash
 # on ORCD, read-only over the existing corpus. Nothing is submitted; both scripts are
 # I/O-bound readers over rows/ and out/ and need no cluster job.
-D=/orcd/scratch/bcs/002/satra/triage_design_20260919
-PY=/orcd/scratch/bcs/002/satra/senselab-corpus2/.venv/bin/python3.12   # the login node's is 3.6
+D=${ORCD_GROUP_SCRATCH}/triage_design_20260919
+PY=${ORCD_GROUP_SCRATCH}/senselab-corpus2/.venv/bin/python3.12   # the login node's is 3.6
 
 nice -n 19 $PY specs/20260817-triage-workflow-dag/airway-flag-grounds-census.py \
     --run $D/run --out $D/airwaygrounds --workers 10

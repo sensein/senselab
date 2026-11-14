@@ -3,7 +3,7 @@
 Status: design approved 2026-08-09, not yet implemented.
 
 senselab's caches are worth sharing. On a cluster, a group points `HF_HOME` at one large tree
-(`/orcd/data/satra/002/huggingface` — 790 GB, group-writable to `orcd_rg_hstor004_pi_satra`) so a
+(`${ORCD_DATA}/huggingface` — 790 GB, group-writable to `orcd_rg_hstor004_${CPU_PARTITION}`) so a
 16 GB checkpoint is downloaded once rather than once per person. senselab's own resolution cache is
 equally shareable: a repo's resolved commit SHA is the same for everyone.
 

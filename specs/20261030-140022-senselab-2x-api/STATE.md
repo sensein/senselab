@@ -8,11 +8,11 @@ task or decision changes state. Newest log entries go first.
 | What | Where |
 |---|---|
 | Integration branch | `2.x`. All 2.x work merges here, never into `alpha` (owner item 30). It carries the 2.x workflows (`2x-tests.yaml`, `2x-docs-preview.yaml`). |
-| Design (docs PR) | `senselab-2x-api` → `2.x`, draft PR sensein/senselab#617. Every spec change is made here: ADRs, principles, design, plans, registers, rulings, reviews and this file (D-7). Worktree `~/software/sensein/senselab-2x`. |
-| Code (code PR) | `2x/phase-1` → `senselab-2x-api` today, draft PR sensein/senselab#619. Code and tests only; it merges `senselab-2x-api` to stay current and is retargeted to `2.x` once #617 merges (D-7). Worktree `~/software/sensein/senselab-2x-impl`. |
+| Spec (current) | `2x/phase-3-spec` → `2.x` (P-27, ruling P3-5). Every spec change is made here: ADRs, principles, design, plans, registers, rulings, reviews and this file. Phase 1 used `senselab-2x-api` (PR #617). |
+| Code (current) | `2x/phase-3`, cut from the head of `2x/phase-2` → `2.x` (P-27, ruling P3-5). Code and tests only. Phase 1 used `2x/phase-1` (PR #619). |
 | 2.x workflows | merged: #620 (on `alpha`, 1.x and 2.x workflows separated) and #621 (on `2.x`). Previews are at `sensein.group/senselab/2x/pr-<N>/`. |
 | 1.x | developed on `alpha`; freeze branch `freeze-1x-2026-10-30` → `19834fdd` (= `1.4.0-alpha.11`). |
-| pydra proposal | branch `enh/execution-extensions` → draft PR nipype/pydra#891; worktree `~/software/nipype/pydra-ext`. |
+| pydra proposal | branch `enh/execution-extensions` → draft PR nipype/pydra#891; worktree `${SOFTWARE_ROOT}/nipype/pydra-ext`. |
 
 ## Where the records are (this directory)
 
@@ -30,7 +30,7 @@ task or decision changes state. Newest log entries go first.
   P-39, P-40).
 - **What to build:** `design.md`, `adr/` (ADR-001..010), `execution.md`, `testing.md`, `docs.md`,
   `wire-protocol.md`.
-- **Plans:** `plans/phase-1.md`, `plans/phase-1-hardening.md`.
+- **Plans:** `plans/phase-1.md`, `plans/phase-1-hardening.md`, `plans/phase-2.md`.
 - **Migration:** `migration-ledger.md`, a mark per 1.x area (P-39) and the triage classification.
 - The controller's working notes under `.superpowers/` in the code worktree are git-excluded scratch.
   Nothing here cites them; anything a later session needs is in the files above.
@@ -62,8 +62,10 @@ PR - clarify the decisions"):
 | Design | accepted 2026-10-30; amended 2026-10-31 and 2026-11-01 in #617 |
 | 0: freeze marker | done |
 | 1: kernel, worker runtime, identity, store, data fetch | T0–T15a done. Hardening done: H1–H8 (H8a–c), the H9 series (H9a–f, H9-compat, H9-collect, H9-cleanup, H9-ci), H10, **H11a** and **H11b** (including fix round 1). 2.x CI first fully green at `97b617c5`; Linux CI green after D-2 fix round 1 (`b76681a9`). Full review done 2026-11-01; its decisions are applied. **Phase 1 done 2026-11-01** at `195406b7`: CI green, exit adversarial round fixed (R-135..R-159), ORCD full packages suite and release gate green, cross-node NFS lock checks (a)-(f) pass. |
-| 2–5 | not started |
-| pydra PRs (A0…K2) | proposed in #891; none implemented. Owners named in design §6.2 (Phase 2: gate prerequisites; Phase 3: the rest); dates not set |
+| 2: tasks, backends, benchmarks, parity, ADR-010 | **done 2026-11-03** at `79b417a8`, except the pydra gate prerequisite K2, which was not delivered and moves to Phase 3 Task 0 (P3-1) (`2x/phase-2`): CI green; exit adversarial round fixed (R-168..R-195, groups A–E); ORCD verify A–D agree (equivalence classes from runs p2cmd-27735057, p2cmd-27735059); parity at `75a1c65c` 8 passed, 9 skipped (jobs 27748712..27748718), CrisperWhisper ct2 against transformers within 4e-6 on cpu and 4e-4 on H100 float16 |
+| 3: plans and executors | **done 2026-11-14** at `f37f1ae4` (`2x/phase-3`; ORCD evidence at `3c3dfced`, which differs by a tests-only diff, see `reviews/phase3-exit-evidence.md`): plan `plans/phase-3.md` (41 tasks); Task 0 gate passed 2026-11-03 at pydra `0c1bbcd9`, Route A (`reviews/phase3-gate/evidence.md`; CI 41606617714, ORCD 27757266); CI green at the head (run 43505114802); full matrix (3.10 worker floor, 3.11-3.14, core-only, lean, pydra, limits, licenses, source digests, pre-commit) 43566375276; exit adversarial round (Task 23, R-273..R-297) fixed by Task 24 (T24-1..T24-12, merge heads `7b56922d`..`3c3dfced`, then the Python 3.11 test fix) with every minor scheduled in `review-register.md`; ORCD exit evidence at the one head Steps 2 (29047611), 3 (29047612), 4 start, resume and provenance (29047613, 29047616, 29055900), 5 CPU, GPU and cross-node (29053174, 29047615, 29047619) and 6 (29049402) all pass at product `3c3dfced` (`reviews/phase3-exit-evidence.md`). The T24-7 I-5 residual (an unresolved unit is not fit-checked) was decided by the controller and confirmed by the owner on 2026-11-14. |
+| 4–5 | not started |
+| pydra PRs (A0…K2) | Phase 2 prerequisites (D1, G1, K1, A1, F1, F2, E1a, E1b) merged into `enh/execution-extensions` and closed; CI speed #902 open for review; workflow-cache fix #903. #891 carries the branch to `main` as a draft |
 
 ## Next actions, in order
 
@@ -118,20 +120,39 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
    7. Mark Phase 1 done, merge #617 into `2.x`, and retarget #619: done 2026-11-01 (owner: "do 2").
 4. **Phase 2:** ADR-010 (PROV-O JSON-LD store, `senselab:` vocabulary, token-family removal, export
    redaction) and the benchmark harness with its data manifest and smoke suite, alongside the tasks and
-   backends of design §6.2.
+   backends of design §6.2. Plan: [`plans/phase-2.md`](plans/phase-2.md) (Tasks 0–34); its planner rulings
+   P2-1..P2-32 await owner review.
 
 ## How to resume
 
-1. `cd ~/software/sensein/senselab-2x && git pull`. Read this file, then `decisions-2026-11-01.md`, then
+1. In the spec checkout, `git pull`. Read this file, then `decisions-2026-11-01.md`, then
    `principles.md` and `engineering.md` (roster and checklist).
-2. Code work happens in `~/software/sensein/senselab-2x-impl` on `2x/phase-1`. Spec changes happen here,
-   on `senselab-2x-api`, and reach the code branch by merge.
+2. Code work happens on the current code branch above; spec changes happen on the current spec branch.
 3. Check 1.x drift: `git fetch origin alpha && git log 19834fdd..origin/alpha --oneline -- src scripts tutorials`.
-4. PR state: `gh pr view 617`, `gh pr view 619`; 2.x CI runs on both.
+4. PR state: `gh pr list --base 2.x`; 2.x CI runs on every `2x/**` branch.
 5. Brief every delegated task as `engineering.md` requires; file-modifying agents use worktree isolation.
 
 ## Log
 
+- **2026-11-14 (Phase 3 done):** Task 24 fixed what the exit adversarial round and the Task 21 reruns found, in twelve tasks, each merged `--no-ff` onto the phase head with CI green and reviewed by a different model:
+  - **T24-1** `7b56922d`: every run-state write goes through `StorageDir` (`write_atomically`, `publish`), event appends loop and truncate, readers quarantine a torn line, an AST lint refuses a hand-rolled write (R-290, R-285).
+  - **T24-3** `88eeb813`: a fault class survives every wrapper; one `FaultRecord` constructor pair and one server-fault mapper; a load-time fault is the environment's, never split (R-287, R-289, R-292, R-257; `run-event@2.2`).
+  - **T24-2** `a4191872`: one run lease combined across epochs by the longest bound, an epoch current only once its attempt record exists, the license policy persisted and never loosened, a resumed coordinator follows the live item that holds a job instead of re-cutting it, `RunStatus.quarantined` (R-273, R-277, R-283, R-280; `run-event@2.3`).
+  - **T24-4** `2dbdb536`: one bisection engine for both executors; an item that crashes two fresh workers is charged to the item, a crash another item survives stays infrastructure (R-288; ADR-009 amendment).
+  - **T24-5** `fc4d203e`: shutdown is total, every step runs under `ExitStack` and a fault at each step is injected (R-291), with the two CI-hang test fixes (R-274, R-275).
+  - **T24-6** `6dec9d5c`: fixed parameters become profile keys with derivations, the caller's profile reaches the store, probe and fetch, and `equivalence.yaml` leaves the package (R-219, R-254, the vLLM timeout, R-300).
+  - **T24-7** `bb419411`: a load-time resource fault records an unfit-for-this-class fact; placement skips an unfit or too-small class and stops the plan as `Unplaceable` when none is left; `senselab unfit [--clear]`.
+  - **T24-8** `527f6925`: `WorkerClient.close()` is safe in a signal handler and every wait it reaches is lock-free (R-276, R-295).
+  - **T24-9** `a065218b`: the epoch is the one exclusion for every executor; the coordinator lease file and the pydra save lock are gone, each attempt has its own pydra root, `InProcess` has an epoch fence and a `superseded` status. A resume on another host no longer waits forever (R-302 closed).
+  - **T24-10** `33ceb341`: a worker's provenance for a claim is durable before its outcome is committed, one provenance document per claim (ADR-010 amendment).
+  - **T24-11** `1fc88492`: cluster-only defects caught locally: abrupt stops at every boundary of the commit path, a host-shape fixture, a lint refusing a host-bound lock, and the provenance completeness check as a product function (`senselab status --check-provenance`).
+  - **T24-12** `3c3dfced`: the ORCD step drivers live in `benchmarks/exit` under mypy-strict with a CI smoke test, one stall watchdog, and diagnostics that check their own joins.
+  Format tags bumped: `execution-profile@5.0`, `run-lease@2`, `server-settings@2.0`; new: `measure-unfit@1.0`; event tags `run-event@2.2` and `2.3`. Each older tag is refused naming both, and the group site profiles were re-tagged before the reruns.
+  Owner rulings recorded in `progress.md`: profile node exclusions are a floor (R-282; ADR-004 sentence now, code with Phase 4's merged loader); an item that crashes two fresh workers is charged to the item, the count a profile key (R-288); `equivalence.yaml` moves out of the package and no measured classes ship (N-8); a load-time resource fault records an unfit class and placement reroutes it ("New task now", T24-7); a run's license policy can be tightened and never loosened; Step 2 compares arrays under the run-config `samples` threshold (atol 1e-6), not identities; T24-11 and T24-12 added to Task 24 (2026-11-13); the pydra #902 replies approved.
+  Confirmed by the owner on 2026-11-14: T24-7's I-5 residual. A unit whose digest cannot be resolved has no key for an unfit record, so it is not fit-checked; its load OOM still holds the environment (T24-3) and is visible. The controller accepted it per run-without-stalls.
+  Deferred, with owners in `review-register.md`: 7a'-2 and T20R-11 after the exit (R-303, R-304), R-264 and R-281 to Phase 4, R-297 to Phase 5, within-item dedup of identical inputs (R-305), a per-commit delta provenance document at 10x scale (R-306); the nits the reviews deferred are in the register's Phase 3 exit register section. Phase 4 starts from `2x/phase-3` at the head above.
+- **2026-11-03 (Phase 3 gate):** K2 delivered as nipype/pydra#905 (Task 40); the gate passed at `0c1bbcd9` on all four criteria, so Task 9b builds `PydraRunner` (Route A). Fixes found on the way: #903 workflow-construction cache keyed by class, #904 cf workers never forked.
+- **2026-11-03 (Phase 2 done):** parity compared against 1.x for the first time (34i/34j) and found three differences: the 1.x embedding reference was one zero-padded batch, the 1.x ASR reference decoded with word timestamps, and the CrisperWhisper ct2 engine reported no confidence. Task 34k (`3ef57813..75a1c65c`) fixed all three; confidence is computed once per window on its final ids, by teacher forcing, on both engines. The 1.x producer takes its params from the items file, and `run` refuses an items file of another benchmark, backend or items. Rows R-196..R-201.
 - **2026-11-01 (final review, docs fixes):** the pydra environment fold corrected to ADR-002; as-built detail
   removed from ADR-003 and ADR-009; register rows R-132..R-134 added (prose review inert, config-guard tests,
   size budgets); stale plan text fixed.

@@ -1,437 +1,329 @@
-"""A PROV-O JSON-LD serializer for :class:`~senselab_core.runtime.provenance.ProvStore`, following BIDS BEP028.
+"""Export redaction and the BEP028 profile (ADR-007, ADR-010).
 
-The store is the single source of truth; this module only reads it, so a run directory written before
-this module existed converts without re-running the pipeline. The design, the mapping table and every
-place BEP028 and the store disagree are in ``specs/20260908-triage-prov-bep028/design.md``.
+A file is named in provenance by its content address and a per-run label, `file-<n>`. The label-to-path map is
+the run's private `<run>/private/labels@1.json` (mode 0600); it is never copied or exported. `export` copies a run's
+documents after `check_profile` finds the BEP028 profile met and after no path of the map is found in them.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+import re
+import unicodedata
+from collections.abc import Iterable, Mapping
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
-from senselab_worker.digest import SHA256_HEX
+from senselab_worker.canonical import jcs_dumps, jcs_loads, require_json_depth
 
+from senselab_core.kernel import prov as kprov
+from senselab_core.kernel.formats import LABELS_FORMAT, RETIRED_LABELS_FORMATS, FormatVerdict, check
+from senselab_core.runtime.execution_settings import JobLease
+from senselab_core.runtime.locks import Lease, LeaseUnavailable
+from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import (
-    CHECKSUM_KEY,
-    CHECKSUM_UNRESOLVED_KEY,
-    MTIME_KEY,
-    PATH_KEY,
-    SIZE_KEY,
-    Activity,
-    Agent,
-    Entity,
-    Environment,
+    FILE_LABEL,
+    PROV_DIR,
+    ConflictingNode,
+    DanglingReference,
+    MalformedDocument,
+    ProvenanceFormatRefused,
     ProvStore,
+    pathless,
 )
-from senselab_core.runtime.storage import write_atomically
+from senselab_core.runtime.storage import PRIVATE_DIR_MODE, StorageDir, write_atomically
+from senselab_core.runtime.vocabulary import core_vocabulary
 
-BEP028_CONTEXT_SOURCE = "https://github.com/bids-standard/bids-specification/pull/2099 — src/provenance-context.json"
-"""Where :data:`BEP028_CONTEXT` was copied from, verbatim."""
-
-BEP028_CONTEXT: dict[str, Any] = {
-    "@version": 1.1,
-    "Records": {"@container": "@type", "@id": "@graph"},
-    "prov": "http://www.w3.org/ns/prov#",
-    "xsd": "http://www.w3.org/2001/XMLSchema#",
-    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-    "spdx": "http://spdx.org/rdf/terms#",
-    "RRID": "http://scicrunch.org/resolver/",
-    "Id": "@id",
-    "Type": "@type",
-    "Label": "rdfs:label",
-    "Description": "rdfs:comment",
-    "StartedAtTime": {"@id": "prov:startedAtTime", "@type": "xsd:dateTime"},
-    "EndedAtTime": {"@id": "prov:endedAtTime", "@type": "xsd:dateTime"},
-    "GeneratedBy": {"@id": "prov:wasGeneratedBy", "@type": "@id"},
-    "AttributedTo": {"@id": "prov:wasAttributedTo", "@type": "@id"},
-    "AssociatedWith": {"@id": "prov:wasAssociatedWith", "@type": "@id"},
-    "InformedBy": {"@id": "prov:wasInformedBy", "@type": "@id"},
-    "DerivedFrom": {"@id": "prov:wasDerivedFrom", "@type": "@id"},
-    "Used": {"@id": "prov:used", "@type": "@id"},
-    "ActedOnBehalfOf": {"@id": "prov:actedOnBehalfOf", "@type": "@id"},
-    "Files": "prov:Entity",
-    "Datasets": "prov:Collection",
-    "Environments": "prov:Entity",
-    "Activities": "prov:Activity",
-    "Software": "prov:Agent",
-    "Atlocation": "prov:atLocation",
-    "Checksum": "spdx:Checksum",
-    "ChecksumAlgorithm": "spdx:ChecksumAlgorithm",
-    "ChecksumValue": "spdx:ChecksumValue",
-}
-"""BEP028's own JSON-LD context, embedded so a graph resolves with no network."""
-
-SENSELAB_VOCABULARY = "https://senselab.sensein.group/prov#"
-"""Namespace every store term BEP028 does not define expands into."""
-
-SENSELAB_CONTEXT: dict[str, Any] = {
-    "@vocab": SENSELAB_VOCABULARY,
-    "sl": SENSELAB_VOCABULARY,
-    "AtLocation": {"@id": "prov:atLocation"},
-    "InvalidatedBy": {"@id": "prov:wasInvalidatedBy", "@type": "@id"},
-}
-"""The additions BEP028's context needs: ``prov:wasInvalidatedBy``, the cased ``AtLocation`` its own
-examples use, and a vocabulary so no store attribute is silently dropped."""
-
-SHA256_ALGORITHM = "spdx:checksumAlgorithm_sha256"
-"""The SPDX term BEP028 requires for a SHA-256 checksum."""
-
-ID_PREFIX = "prov#"
-ENTITY_INFIX = "entity-"
-RELATION_TERMS: dict[str, str] = {
-    "wasGeneratedBy": "GeneratedBy",
-    "used": "Used",
-    "wasAssociatedWith": "AssociatedWith",
-    "wasAttributedTo": "AttributedTo",
-    "wasDerivedFrom": "DerivedFrom",
-    "wasInvalidatedBy": "InvalidatedBy",
-}
-"""Each store relation and the JSON-LD term it is emitted under."""
-
-STEP_DESCRIPTION = "in-process senselab step, not a shell command: {label}"
-"""The default activity ``Description``; ``{label}`` is replaced by the activity's label."""
-
-_JSONLD_KEYWORDS = frozenset({"@context", "@id", "@type", "@graph", "@version", "@container", "@vocab"})
+PRIVATE_DIR = "private"
+"""The run subdirectory that holds the label map; nothing in it is exported."""
+LABELS_NAME = "labels@1.json"
+"""The label map's file name in `<run>/private/`."""
+LABELS_MODE: Final = 0o600  # invariant: owner-only, whatever the site's group policy
+"""The mode of the label map."""
+_LABELS_FILE = re.compile(re.escape(LABELS_NAME))
+_KINDS = {"prov:Entity", "prov:Activity", "prov:Agent"}
 
 
-def bids_uri(store_id: str, *, dataset: str = "") -> str:
-    """The BIDS URI for a store id.
+class ProfileViolation(ValueError):
+    """A run whose provenance does not meet the BEP028 profile, or whose documents hold a recorded path.
 
-    Args:
-        store_id: An entity, activity or agent id as the store holds it.
-        dataset: The BIDS dataset name, or ``""`` for the current dataset.
-
-    Returns:
-        ``bids:<dataset>:prov#entity-<store_id>`` for an entity, ``bids:<dataset>:prov#<store_id>``
-        for an activity or agent.
+    Attributes:
+        violations: One message per violation; none echoes a value of the document.
     """
-    infix = "" if store_id.startswith(("act-", "agent-")) else ENTITY_INFIX
-    return f"bids:{dataset}:{ID_PREFIX}{infix}{store_id}"
+
+    def __init__(self, violations: list[str]) -> None:
+        """Hold `violations`."""
+        super().__init__("; ".join(violations))
+        self.violations = violations
 
 
-def store_id(uri: str) -> str:
-    """The store id a BIDS URI came from — the inverse of :func:`bids_uri`.
+class LabelMapRetired(ValueError):
+    """A label map in a retired format; a run keeps its private paths only in the current one, so re-run it."""
+
+    def __init__(self, found: str) -> None:
+        """Name the declared format."""
+        super().__init__(
+            f"the label map declares the retired format {found}; it is not read, re-run under this version"
+        )
+        self.found = found
+
+
+def _read_labels(directory: StorageDir) -> dict[str, tuple[str, list[str]]]:
+    data = directory.read_regular(LABELS_NAME)
+    if data is None:
+        return {}
+    try:
+        require_json_depth(data)
+    except ValueError:
+        raise ValueError(f"the label map is not {LABELS_FORMAT}") from None
+    try:
+        declared = json.loads(data).get("format")
+    except (ValueError, AttributeError):
+        declared = None
+    if check(LABELS_FORMAT, declared, RETIRED_LABELS_FORMATS) is FormatVerdict.RETIRED:
+        raise LabelMapRetired(str(declared))
+    try:
+        record: Any = jcs_loads(data)
+        labels = record["labels"]
+        valid = (
+            check(LABELS_FORMAT, record["format"]) is FormatVerdict.ACCEPTED
+            and isinstance(labels, dict)
+            and all(
+                FILE_LABEL.fullmatch(k)
+                and isinstance(v, dict)
+                and v.keys() == {"address", "paths"}
+                and isinstance(v["address"], str)
+                and kprov.ENTITY_ID.fullmatch(v["address"])
+                and isinstance(v["paths"], list)
+                and all(isinstance(p, str) for p in v["paths"])
+                for k, v in labels.items()
+            )
+        )
+    except (ValueError, KeyError, TypeError):
+        valid = False
+    if not valid:
+        raise ValueError(f"the label map is not {LABELS_FORMAT}")
+    return {k: (v["address"], list(v["paths"])) for k, v in labels.items()}
+
+
+class LabelMap:
+    """A run's private map from `file-<n>` labels to the content address and paths each names.
+
+    One label per content address; a second path of the same bytes is added to that label's paths.
 
     Args:
-        uri: A BIDS URI produced by :func:`bids_uri`.
+        run: The run directory; `private/` is made under it, mode 0700, when a label is first assigned.
+        lease: How the map's lease beats; the packaged `laptop` profile's when None.
+    """
 
-    Returns:
-        The store id.
+    def __init__(self, run: str | Path, *, lease: JobLease | None = None) -> None:
+        """Name the run; nothing is read or made until the first call."""
+        self._run = Path(run)
+        self._lease = lease
+
+    def assign(self, files: Iterable[tuple[str, str]]) -> list[str]:
+        """Return the label of each `(content address, path)`, recording the path under it, under one lease.
+
+        Raises:
+            ValueError: an address is not a `content:` or `output:` address, or the map on disk is not `labels@2`.
+            RunIOError: the map cannot be read or written, or its lease was lost; the error names no path.
+        """
+        items = list(files)
+        for address, _ in items:
+            if not kprov.ENTITY_ID.fullmatch(address):
+                raise ValueError("a file's address is a content: or output: address")
+        return pathless("assigning file labels", lambda: self._assign(items))
+
+    def _assign(self, items: list[tuple[str, str]]) -> list[str]:
+        settings = self._lease if self._lease is not None else ExecutionProfile.load().lease
+        with (
+            StorageDir.open_root(self._run, create=True) as run,
+            run.walk(PRIVATE_DIR, create=True, mode=PRIVATE_DIR_MODE, aside=None) as private,
+            Lease(private.path / LABELS_NAME, settings=settings, mode=PRIVATE_DIR_MODE, directory=private) as lease,
+            lease.keep_alive(settings.renew_fraction) as state,
+        ):
+            labels = _read_labels(private)
+            by_address = {address: label for label, (address, _) in labels.items()}
+            assigned = []
+            for address, path in items:
+                label = by_address.get(address)
+                if label is None:
+                    label = by_address[address] = f"file-{len(labels) + 1}"
+                    labels[label] = (address, [])
+                if path not in labels[label][1]:
+                    labels[label][1].append(path)
+                assigned.append(label)
+            record = {k: {"address": a, "paths": p} for k, (a, p) in labels.items()}
+            body = jcs_dumps({"format": LABELS_FORMAT, "labels": record})
+            if state.lost or not lease.prove():
+                raise LeaseUnavailable(lease.path, "the label map's lease was lost; nothing was written")
+            private.write_atomically(LABELS_NAME, body, grammar=_LABELS_FILE, mode=LABELS_MODE)
+            return assigned
+
+    def paths(self) -> dict[str, list[str]]:
+        """Return `{label: paths}` of the map, empty when the run has none.
+
+        Raises:
+            ValueError: the map on disk is not `labels@2`, or is `LabelMapRetired`.
+            RunIOError: the map cannot be read; the error names no path.
+        """
+
+        def read() -> dict[str, list[str]]:
+            try:
+                with StorageDir.open_root(self._run) as run, run.walk(PRIVATE_DIR) as private:
+                    return {k: p for k, (_, p) in _read_labels(private).items()}
+            except FileNotFoundError:
+                return {}
+
+        return pathless("reading the label map", read)
+
+    def entities(
+        self, files: Iterable[tuple[str, str]], vocabulary: kprov.Vocabulary | None = None
+    ) -> list[kprov.Record]:
+        """Return a `senselab:File` entity, carrying its label and no path, for each `(content address, path)`."""
+        items = list(files)
+        return [
+            file_entity(address, label, vocabulary)
+            for (address, _), label in zip(items, self.assign(items), strict=True)
+        ]
+
+
+def file_entity(address: str, label: str, vocabulary: kprov.Vocabulary | None = None) -> kprov.Record:
+    """Return the `senselab:File` entity of content `address` carrying `label`.
 
     Raises:
-        ValueError: If the URI is not one :func:`bids_uri` produces.
+        ValueError: `label` is not `file-<n>`, or `address` is not a content address.
     """
-    head, _, fragment = uri.partition(f":{ID_PREFIX}")
-    if not fragment or not head.startswith("bids:"):
-        raise ValueError(f"not a BIDS provenance URI: {uri!r}")
-    return fragment.removeprefix(ENTITY_INFIX)
+    if not FILE_LABEL.fullmatch(label):
+        raise ValueError("a file's label is file-<n>")
+    return kprov.entity(
+        address, vocabulary or core_vocabulary(), types=["senselab:File"], attributes={"senselab:fileLabel": label}
+    )
 
 
-def _checksum(attributes: Mapping[str, Any]) -> dict[str, Any]:
-    """The ``Checksum`` array for a file, or the reason it has none."""
-    digest = attributes.get(CHECKSUM_KEY)
-    if digest is not None:
-        return {"Checksum": [{"ChecksumAlgorithm": SHA256_ALGORITHM, "ChecksumValue": digest}]}
-    reason = attributes.get(CHECKSUM_UNRESOLVED_KEY)
-    return {"ChecksumUnresolvedReason": reason} if reason is not None else {}
+_VALIDATION_ERRORS = (MalformedDocument, ConflictingNode, DanglingReference, ProvenanceFormatRefused)
+_WHOLE_DOCUMENT = "0" * 32 + ".jsonld"
+_TOKENS = re.compile(r"[/\\\s\"',;=]+")
+_SUBJECT = re.compile(r"(?<![a-z0-9])(?:sub|ses)-[a-z0-9]+")
+_LAYOUT_NAME = "prov-{writer}_all.jsonld"
 
 
-def _extras(attributes: Mapping[str, Any]) -> dict[str, Any]:
-    """Store attributes with the ones that became BEP028 fields removed."""
-    consumed = {PATH_KEY, CHECKSUM_KEY, CHECKSUM_UNRESOLVED_KEY, SIZE_KEY, MTIME_KEY}
-    return {key: value for key, value in attributes.items() if key not in consumed and value is not None}
+def layout_name(writer_document: str) -> str:
+    """Return the BEP028 name of a run's document `<writer>.jsonld`: `prov-<writer>_all.jsonld`, in `prov/`."""
+    return _LAYOUT_NAME.format(writer=writer_document.removesuffix(".jsonld"))
 
 
-def _entity_record(entity: Entity, relations: dict[str, list[str]], *, dataset: str) -> dict[str, Any]:
-    """One ``Files`` or ``prov:Entity`` object."""
-    path = entity.attributes.get(PATH_KEY)
-    record: dict[str, Any] = {
-        "Id": bids_uri(entity.id, dataset=dataset),
-        "Label": Path(str(path)).name if path else entity.id,
-        "Type": [f"sl:{entity.prov_type}"],
-    }
-    if path:
-        record["AtLocation"] = str(path)
-        for key in (SIZE_KEY, MTIME_KEY):
-            if entity.attributes.get(key) is not None:
-                record[_term(key)] = entity.attributes[key]
-    record.update(_checksum(entity.attributes))
-    if entity.extent is not None:
-        record["ExtentStartSeconds"], record["ExtentEndSeconds"] = entity.extent
-    record.update(relations)
-    extras = _extras(entity.attributes)
-    if extras:
-        record["Attributes"] = extras
-    return record
+def check_profile(doc: Mapping[str, object]) -> list[str]:
+    """Return the ways `doc`, a `provenance@3` document, leaves the profile; none when it conforms.
 
-
-def _term(key: str) -> str:
-    """A store attribute name as an upper-camel JSON-LD term in the senselab vocabulary."""
-    return "".join(part.capitalize() for part in key.split("_"))
-
-
-def _activity_record(
-    activity: Activity, relations: dict[str, list[str]], *, dataset: str, description: str
-) -> dict[str, Any]:
-    """One ``Activities`` object."""
-    label = activity.node if activity.step is None else f"{activity.node} / {activity.step}"
-    record: dict[str, Any] = {
-        "Id": bids_uri(activity.id, dataset=dataset),
-        "Label": label,
-        "Command": None,
-        "Description": description.replace("{label}", label),
-        "Type": ["sl:workflow-node"],
-        "Node": activity.node,
-    }
-    if activity.step is not None:
-        record["Step"] = activity.step
-    if activity.started is not None:
-        record["StartedAtTime"] = activity.started
-    if activity.ended is not None:
-        record["EndedAtTime"] = activity.ended
-    record.update(relations)
-    if activity.parameters:
-        record["Parameters"] = activity.parameters
-    return record
-
-
-def _agent_record(agent: Agent, *, dataset: str) -> dict[str, Any]:
-    """One ``Software`` object."""
-    record: dict[str, Any] = {"Id": bids_uri(agent.id, dataset=dataset)}
-    if agent.agent_type == "model":
-        record["Label"] = str(agent.model_id)
-        record["Type"] = ["sl:model"]
-        if agent.commit_sha is not None:
-            record["Version"] = agent.commit_sha
-        else:
-            record["VersionUnresolvedReason"] = agent.unresolved_reason
-    else:
-        name, _, number = str(agent.version or "").partition(" ")
-        record["Label"] = name or "senselab"
-        record["Type"] = ["sl:software"]
-        if number:
-            record["Version"] = number
-    return record
-
-
-def _environment_record(environment: Environment, *, dataset: str) -> dict[str, Any]:
-    """One ``Environments`` object."""
-    record: dict[str, Any] = {
-        "Id": bids_uri(environment.id, dataset=dataset),
-        "Label": environment.label,
-        _term("python_version"): environment.python_version,
-    }
-    if environment.operating_system is not None:
-        record["OperatingSystem"] = environment.operating_system
-    if environment.dependencies:
-        record["Dependencies"] = environment.dependencies
-    if environment.dependencies_digest is not None:
-        record[_term("dependencies_digest")] = environment.dependencies_digest
-    if environment.senselab_version is not None:
-        record[_term("senselab_version")] = environment.senselab_version
-    return record
-
-
-def to_bep028_graph(
-    store: ProvStore, *, label: str, dataset: str = "", description: str = STEP_DESCRIPTION
-) -> dict[str, Any]:
-    """Serialize a store as one aggregated BEP028 provenance graph.
-
-    Args:
-        store: The store to read. It is not modified.
-        dataset: The BIDS dataset name for every identifier, or ``""`` for the current dataset.
-        label: The ``prov-<label>`` entity the graph belongs to.
-        description: Every activity's ``Description``, which says why ``Command`` is null;
-            ``{label}`` is replaced by the activity's label.
-
-    Returns:
-        A JSON-LD document: an ``@context`` and a ``Records`` object holding ``Files``,
-        ``prov:Entity``, ``Activities``, ``Software`` and ``Environments`` arrays. ``Environments``
-        is present only when the store recorded one — never invented at conversion time.
+    `doc` is validated as `ProvStore.from_documents` validates a writer's document. On top of that: an activity's
+    end has a start and is not before it, and a `senselab:fileLabel` names one node.
     """
-    outgoing: dict[str, dict[str, list[str]]] = {}
-    for relation, source, target in store.relations():
-        term = RELATION_TERMS[relation]
-        outgoing.setdefault(source, {}).setdefault(term, []).append(bids_uri(target, dataset=dataset))
-
-    files: list[dict[str, Any]] = []
-    others: list[dict[str, Any]] = []
-    for entity in store.entities():
-        record = _entity_record(entity, outgoing.get(entity.id, {}), dataset=dataset)
-        (files if entity.attributes.get(PATH_KEY) else others).append(record)
-
-    records: dict[str, Any] = {}
-    if files:
-        records["Files"] = files
-    if others:
-        records["prov:Entity"] = others
-    activities = [
-        _activity_record(activity, outgoing.get(activity.id, {}), dataset=dataset, description=description)
-        for activity in store.activities()
-    ]
-    if activities:
-        records["Activities"] = activities
-    software = [_agent_record(agent, dataset=dataset) for agent in store.agents()]
-    if software:
-        records["Software"] = software
-    environments = [_environment_record(environment, dataset=dataset) for environment in store.environments()]
-    if environments:
-        records["Environments"] = environments
-    return {
-        "@context": [BEP028_CONTEXT, SENSELAB_CONTEXT],
-        "Records": records,
-        "ProvenanceLabel": f"prov-{label}",
-        "StoreFingerprint": store.fingerprint(),
-    }
-
-
-def convert_store_file(
-    store_path: str | Path, *, label: str, dataset: str = "", description: str = STEP_DESCRIPTION
-) -> dict[str, Any]:
-    """Read a written ``store.jsonl`` and serialize it as a BEP028 graph.
-
-    Args:
-        store_path: The ``store.jsonl`` to read.
-        dataset: The BIDS dataset name for every identifier, or ``""`` for the current dataset.
-        label: The ``prov-<label>`` entity the graph belongs to.
-        description: Every activity's ``Description``, as for :func:`to_bep028_graph`.
-
-    Returns:
-        The JSON-LD document.
-    """
-    return to_bep028_graph(ProvStore.read_jsonl(store_path), dataset=dataset, label=label, description=description)
-
-
-def write_bep028_files(graph: dict[str, Any], prov_dir: str | Path, *, label: str) -> list[Path]:
-    """Split an aggregated graph into the BEP028-named provenance files.
-
-    Args:
-        graph: A document from :func:`to_bep028_graph`.
-        prov_dir: The ``prov/`` directory to write into. Created if absent. Each file is replaced, never written
-            through: a symlink at its name is replaced by the new file.
-        label: The ``prov-<label>`` entity the filenames carry.
-
-    Returns:
-        The files written, in the order ``_io``, ``_act``, ``_soft``, ``_env``.
-    """
-    records = graph["Records"]
-    grouped: dict[str, dict[str, Any]] = {
-        "io": {key: records[key] for key in ("Files", "Datasets", "prov:Entity") if key in records},
-        "act": {key: records[key] for key in ("Activities",) if key in records},
-        "soft": {key: records[key] for key in ("Software",) if key in records},
-        "env": {key: records[key] for key in ("Environments",) if key in records},
-    }
-    target = Path(prov_dir)
-    target.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
-    for suffix, body in grouped.items():
-        if not body:
-            continue
-        path = target / f"prov-{label}_{suffix}.json"
-        text = json.dumps({"@context": graph["@context"], **body}, indent=2, sort_keys=False) + "\n"
-        write_atomically(path, text.encode("utf-8"))
-        written.append(path)
-    return written
-
-
-def _declared_terms(context: list[dict[str, Any]]) -> tuple[set[str], set[str]]:
-    """The term names and namespace prefixes a merged context declares."""
-    terms: set[str] = set()
-    prefixes: set[str] = set()
-    for part in context:
-        for key, value in part.items():
-            if key.startswith("@"):
-                continue
-            terms.add(key)
-            if isinstance(value, str) and (value.startswith("http") or value.endswith(":")):
-                prefixes.add(key)
-    return terms, prefixes
-
-
-def _walk(node: object, prefixes: set[str], problems: list[str], where: str) -> None:
-    """Report every key JSON-LD would drop: an unknown keyword, or an undeclared prefix."""
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key.startswith("@") and key not in _JSONLD_KEYWORDS:
-                problems.append(f"{where}: {key!r} is not a JSON-LD keyword and would be dropped")
-            elif ":" in key and not key.startswith("@") and key.split(":", 1)[0] not in prefixes:
-                problems.append(f"{where}: term {key!r} has no declared prefix and would be dropped")
-            _walk(value, prefixes, problems, f"{where}.{key}")
-    elif isinstance(node, list):
-        for index, value in enumerate(node):
-            _walk(value, prefixes, problems, f"{where}[{index}]")
-
-
-def _check_node(node: dict[str, Any], where: str, declared: set[str], problems: list[str]) -> None:
-    """Append the problems of one node's ``Id`` and checksums, and add its ``Id`` to ``declared``."""
-    identifier = node.get("Id")
-    if not identifier:
-        problems.append(f"{where}: no Id")
-        return
-    if identifier in declared:
-        problems.append(f"{where}: Id {identifier!r} is declared twice")
-    declared.add(identifier)
     try:
-        store_id(identifier)
-    except ValueError as err:
-        problems.append(f"{where}: {err}")
-    for entry in node.get("Checksum") or []:
-        if entry.get("ChecksumAlgorithm") != SHA256_ALGORITHM:
-            problems.append(f"{where}: unexpected ChecksumAlgorithm {entry.get('ChecksumAlgorithm')!r}")
-        value = entry.get("ChecksumValue", "")
-        if not (isinstance(value, str) and SHA256_HEX.fullmatch(value)):
-            problems.append(f"{where}: ChecksumValue is not 64 lowercase hex characters")
-
-
-def _dangling_references(records: dict[str, Any], declared: set[str]) -> list[str]:
-    """Each relation in ``records`` that names an ``Id`` outside ``declared``."""
-    return [
-        f"Records.{kind}[{index}].{term}: {reference!r} is not a node in the graph"
-        for kind, nodes in records.items()
-        for index, node in enumerate(nodes)
-        for term in RELATION_TERMS.values()
-        for reference in node.get(term) or []
-        if reference not in declared
-    ]
-
-
-def check_graph(graph: dict[str, Any]) -> list[str]:
-    """Check a graph is JSON-LD its own context resolves, and that it refers only to itself.
-
-    Args:
-        graph: A document from :func:`to_bep028_graph`.
-
-    Returns:
-        Every problem found, empty when there are none. A graph is a problem when its context is
-        missing a vocabulary (so unmapped terms would be dropped rather than expanded), when two
-        nodes share an ``Id``, when an ``Id`` does not reverse to a store id, when a relation names
-        an ``Id`` no node in the document declares, or when a checksum is not the SPDX SHA-256 term
-        and 64 lowercase hex characters.
-    """
+        store = ProvStore.from_documents({_WHOLE_DOCUMENT: jcs_dumps(dict(doc))})
+    except _VALIDATION_ERRORS as err:
+        return [str(err)]
+    except ValueError:
+        return ["the document has no canonical JSON form"]
     problems: list[str] = []
-    context = graph.get("@context")
-    if not isinstance(context, list) or not context or context[0] != BEP028_CONTEXT:
-        problems.append("@context is not [BEP028_CONTEXT, ...]")
-        return problems
-    if not any(part.get("@vocab") for part in context):
-        problems.append("@context declares no @vocab; unmapped terms would be dropped, not expanded")
-    terms, prefixes = _declared_terms(context)
-
-    records = graph.get("Records")
-    if not isinstance(records, dict) or not records:
-        problems.append("Records is missing or empty")
-        return problems
-    for key in records:
-        if key not in terms and not (":" in key and key.split(":", 1)[0] in prefixes):
-            problems.append(f"Records key {key!r} is not a context term")
-
-    declared: set[str] = set()
-    for kind, nodes in records.items():
-        for index, node in enumerate(nodes):
-            _check_node(node, f"Records.{kind}[{index}]", declared, problems)
-    problems += _dangling_references(records, declared)
-    _walk({key: value for key, value in graph.items() if key != "@context"}, prefixes, problems, "graph")
+    labels: dict[str, str] = {}
+    for record in store.records():
+        node = record.node()
+        if "prov:Activity" in record.types():
+            problems += _time_problems(record.id, node)
+        label = node.get("senselab:fileLabel")
+        if isinstance(label, str) and labels.setdefault(label, record.id) != record.id:
+            problems.append(f"{record.id} has a senselab:fileLabel another node has")
     return problems
+
+
+def _time_problems(name: str, node: Mapping[str, object]) -> list[str]:
+    start, end = node.get("prov:startedAtTime"), node.get("prov:endedAtTime")
+    if end is None:
+        return []
+    if start is None:
+        return [f"{name} ends and never starts"]
+    began, ended = kprov.literal_value(start), kprov.literal_value(end)
+    if isinstance(began, datetime) and isinstance(ended, datetime) and ended < began:
+        return [f"{name} ends before it starts"]
+    return []
+
+
+def _strings(value: object) -> Iterable[str]:
+    """Yield every string of a parsed JSON value: its values and its object keys."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield key
+            yield from _strings(item)
+
+
+def _spelling(text: str) -> str:
+    """Return `text` with backslashes as `/` and empty and `.` segments dropped."""
+    return "/".join(t for t in text.replace("\\", "/").split("/") if t not in ("", "."))
+
+
+def _fold(text: str) -> str:
+    """Return `text` in NFC and casefolded, so the spelling of a letter does not decide a match."""
+    return unicodedata.normalize("NFC", text).casefold()
+
+
+def _leaks(documents: Iterable[bytes], paths: set[str]) -> bool:
+    """Whether a string of a document holds a recorded path, its basename, or a BIDS subject label.
+
+    Strings and paths are compared in NFC, casefolded and with backslashes as `/`. A path is held whole as a substring,
+    however spelt; its basename is held as a substring, or as the stem of a token (`clip.json` for `clip.wav`). A
+    directory segment alone is not: a port `audio` is not the path `audio/clip.wav`.
+    """
+    whole = {_spelling(_fold(p)) for p in paths} - {""}
+    names = {Path(w).name for w in whole}
+    stems = {Path(n).stem + "." for n in names}
+    for data in documents:
+        for text in _strings(json.loads(data)):
+            folded = _fold(text)
+            spelled = _spelling(folded)
+            tokens = [t for t in _TOKENS.split(folded) if t]
+            if (
+                _SUBJECT.search(folded)
+                or any(w in spelled for w in whole)
+                or any(n in spelled for n in names)
+                or any(t.startswith(stem) for t in tokens for stem in stems)
+            ):
+                return True
+    return False
+
+
+def export(run: str | Path, dest: str | Path, vocabulary: kprov.Vocabulary | None = None) -> list[Path]:
+    """Copy a run's provenance documents to `<dest>/prov/prov-<writer>_all.jsonld` and return the copies.
+
+    The documents are read once; the bytes validated, profile-checked and scanned are the bytes copied. The run's
+    private directory is never copied. A document may not hold a path of the run's label map or its basename, however
+    spelt (`./`, `//`, backslashes), nor a BIDS `sub-`/`ses-` label.
+
+    Raises:
+        ProfileViolation: a profile violation or a leak; nothing is copied.
+        ProvenanceFormatRefused, MalformedDocument, ConflictingNode, DanglingReference: as `ProvStore.from_documents`.
+        RunIOError: the label map or a copy cannot be read or written; the error names no path.
+    """
+    documents = ProvStore.read_documents(run)
+    problems = check_profile(ProvStore.from_documents(documents, vocabulary).document())
+    if _leaks(documents.values(), {p for group in LabelMap(run).paths().values() for p in group}):
+        problems.append("a document names a path of the run's label map, or a BIDS subject")
+    if problems:
+        raise ProfileViolation(problems)
+    target = Path(dest) / PROV_DIR
+
+    def copy() -> list[Path]:
+        target.mkdir(parents=True, exist_ok=True)
+        copies = []
+        for name, data in documents.items():
+            write_atomically(target / layout_name(name), data, mode=0o644)
+            copies.append(target / layout_name(name))
+        return copies
+
+    return pathless("exporting the provenance documents", copy)

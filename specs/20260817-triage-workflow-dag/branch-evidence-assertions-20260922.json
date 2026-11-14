@@ -40,5 +40,5 @@
         "VOICE": 1281
     },
     "recordings_with_speech_or_voice_assertion": 18858,
-    "root": "/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out"
+    "root": "${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/out"
 }

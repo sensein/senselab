@@ -4,10 +4,16 @@ Each helper wraps one `os` function through `monkeypatch`, so the code under tes
 meets the error at the call that real storage fails at.
 """
 
+import contextlib
 import errno
+import gc
 import io
 import os
-from collections.abc import Callable
+import shutil
+import threading
+import time
+import uuid
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Literal
 
@@ -29,11 +35,11 @@ def fail_at(  # noqa: C901, PLR0913 - one patcher over the five syscalls; the ke
     """Make the next `times` `at` steps on a file whose last path component is `name` raise `err`.
 
     `open` fails the `os.open` itself. `read` and `write` fail the first read or write that reaches the
-    descriptor, through a file object `os.fdopen` returns over it (duplicates included). `fsync` fails
-    `os.fsync` on it. With `creating` True only opens that pass `O_CREAT` count, with False only those
-    that do not. Returns the list each failure appends `name` to.
+    descriptor, through a file object `os.fdopen` returns over it (duplicates included) or through `os.write` on it
+    (`StorageDir`'s writes). `fsync` fails `os.fsync` on it. With `creating` True only opens that pass
+    `O_CREAT` count, with False only those that do not. Returns the list each failure appends `name` to.
     """
-    real_open, real_fdopen, real_fsync = os.open, os.fdopen, os.fsync
+    real_open, real_fdopen, real_fsync, real_write = os.open, os.fdopen, os.fsync, os.write
     inodes: set[tuple[int, int]] = set()
     failed: list[str] = []
 
@@ -94,9 +100,15 @@ def fail_at(  # noqa: C901, PLR0913 - one patcher over the five syscalls; the ke
             fail()
         real_fsync(fd)
 
+    def write(fd: int, data: Any) -> int:  # noqa: ANN401
+        if at == "write" and ours(fd) and due():
+            fail()
+        return real_write(fd, data)
+
     monkeypatch.setattr(os, "open", opened)
     monkeypatch.setattr(os, "fdopen", fdopen)
     monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "write", write)
     return failed
 
 
@@ -167,3 +179,247 @@ def refuse_fchmod(monkeypatch: pytest.MonkeyPatch, inode: int) -> None:
         real(fd, mode)
 
     monkeypatch.setattr(os, "fchmod", fchmod)
+
+
+def pause_replaces(
+    monkeypatch: pytest.MonkeyPatch, new: str, count: int
+) -> list[tuple[threading.Event, threading.Event]]:
+    """Hold each of the first `count` `os.replace` calls onto a name `new` (last path component) before it runs.
+
+    The i-th such call sets the first event of the i-th pair and waits (60 s at most) for the second.
+    """
+    real = os.replace
+    gates = [(threading.Event(), threading.Event()) for _ in range(count)]
+    seen: list[str] = []
+    lock = threading.Lock()
+
+    def replace(old: Any, dst: Any, **dir_fds: Any) -> None:  # noqa: ANN401
+        if os.path.basename(os.fsdecode(dst)) == new:
+            with lock:
+                index = len(seen)
+                seen.append(new)
+            if index < count:
+                reached, go = gates[index]
+                reached.set()
+                assert go.wait(60)
+        real(old, dst, **dir_fds)
+
+    monkeypatch.setattr(os, "replace", replace)
+    return gates
+
+
+def displace_after_take(monkeypatch: pytest.MonkeyPatch, name: str) -> list[str]:
+    """Remove the lease directory `name` at the first file or directory made after each take of it, as a breaker would.
+
+    A take is the `os.mkdir` of `name` and then of a token in it; the removal renames `name` aside in its parent
+    and removes the tree. Returns the list each displacement appends `name` to.
+    """
+    real_mkdir, real_open = os.mkdir, os.open
+    parent: list[int] = []
+    made: list[int] = [0]
+    displaced: list[str] = []
+
+    def displace() -> None:
+        aside = uuid.uuid4().hex
+        os.rename(name, aside, src_dir_fd=parent[0], dst_dir_fd=parent[0])
+        shutil.rmtree(aside, dir_fd=parent.pop())
+        displaced.append(name)
+
+    def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if parent and made[0]:
+            displace()
+        real_mkdir(path, mode, dir_fd=dir_fd)
+        if os.fsdecode(path) == name and dir_fd is not None:
+            parent[:] = [dir_fd]
+            made[0] = 0
+        elif parent:
+            made[0] += 1
+
+    def opened(path: Any, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:  # noqa: ANN401
+        if parent and flags & os.O_CREAT:
+            displace()
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    monkeypatch.setattr(os, "open", opened)
+    return displaced
+
+
+def displace_before_proof(monkeypatch: pytest.MonkeyPatch, name: str) -> list[str]:
+    """Remove the lease directory just before each `Lease.prove` makes its proof directory, as a breaker would.
+
+    The lease is the last directory made whose name ends with `name`. Returns the list each displacement appends the
+    lease's name to.
+    """
+    real_mkdir = os.mkdir
+    parent: list[tuple[int, str]] = []
+    displaced: list[str] = []
+
+    def mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:  # noqa: ANN401
+        if os.fsdecode(path).startswith("proof-") and parent:
+            fd, lease = parent[0]
+            aside = uuid.uuid4().hex
+            os.rename(lease, aside, src_dir_fd=fd, dst_dir_fd=fd)
+            shutil.rmtree(aside, dir_fd=fd)
+            displaced.append(lease)
+        real_mkdir(path, mode, dir_fd=dir_fd)
+        if os.fsdecode(path).endswith(name) and dir_fd is not None:
+            parent[:] = [(dir_fd, os.fsdecode(path))]
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    return displaced
+
+
+COUNTED = (
+    *("open", "close", "read", "write", "mkdir", "rmdir", "rename", "replace", "link", "symlink", "unlink"),
+    *("lstat", "stat", "fstat", "listdir", "scandir", "readlink", "utime", "fsync", "fchmod", "dup"),
+)
+"""The `os` functions `count_calls` counts."""
+
+
+def _returned_bytes(result: object) -> int:
+    if isinstance(result, (bytes, str)):
+        return len(result)
+    if isinstance(result, list):
+        return sum(len(n) for n in result if isinstance(n, (bytes, str)))
+    return 0
+
+
+def _counting(name: str, real: Callable[..., Any], totals: dict[str, int], owner: int) -> Callable[..., Any]:
+    def counted(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        result = real(*args, **kwargs)
+        if threading.get_ident() == owner:
+            totals["calls"] += 1
+            if name in ("read", "readlink", "listdir"):
+                totals["bytes"] += _returned_bytes(result)
+        return result
+
+    return counted
+
+
+@contextlib.contextmanager
+def count_calls(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, int]]:
+    """Count calls to the `COUNTED` functions in the block and the bytes they return, as `calls` and `bytes`.
+
+    The bytes are those `read` returns, the target `readlink` returns and the names `listdir` returns. Only calls made
+    by this thread count, and the garbage collector is run before the block and held off during it, so a finalizer of
+    an object left by earlier code, or another thread, adds nothing.
+    """
+    totals = {"calls": 0, "bytes": 0}
+    owner = threading.get_ident()
+    gc.collect()
+    collecting = gc.isenabled()
+    gc.disable()
+    try:
+        with monkeypatch.context() as patch:
+            for name in COUNTED:
+                if hasattr(os, name):
+                    patch.setattr(os, name, _counting(name, getattr(os, name), totals, owner))
+            yield totals
+    finally:
+        if collecting:
+            gc.enable()
+
+
+def stall(
+    function: str, prefix: str, pause: float | Callable[[], None], *, times: int | None = None, after: bool = False
+) -> None:
+    """In this process, make `os.<function>` on a name starting with `prefix` pause, without `monkeypatch`.
+
+    `pause` is a number of seconds to sleep, or a callable run in place of the sleep.
+    The pause comes before the call, or after it with `after`; only the first `times` matching calls pause (all with
+    None). For a spawned child, which ends with its patch.
+    """
+    real = getattr(os, function)
+    left = [times]
+
+    def hold() -> None:
+        if callable(pause):
+            pause()
+        else:
+            time.sleep(pause)
+
+    def stalled(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        names = [os.path.basename(os.fsdecode(a)) for a in args[:2] if isinstance(a, (str, bytes, os.PathLike))]
+        due = any(n.startswith(prefix) for n in names) and left[0] != 0
+        if due and left[0] is not None:
+            left[0] -= 1
+        if due and not after:
+            hold()
+        result = real(*args, **kwargs)
+        if due and after:
+            hold()
+        return result
+
+    setattr(os, function, stalled)
+
+
+def await_true(done: Callable[[], bool], bound_s: float, poll_s: float, what: str) -> None:
+    """Return once `done()` is true, checking every `poll_s`; fail naming `what` after `bound_s`."""
+    deadline = time.monotonic() + bound_s
+    while not done():
+        assert time.monotonic() < deadline, f"{what} never happened"
+        time.sleep(poll_s)
+
+
+def await_file(path: Path, bound_s: float, poll_s: float) -> None:
+    """Return once `path` exists, checking every `poll_s`; fail after `bound_s`."""
+    await_true(path.exists, bound_s, poll_s, path.name)
+
+
+def gate_pause(gate: Path, bound_s: float, poll_s: float) -> Callable[[], None]:
+    """Return a `stall` pause that creates `gate/stalled`, then waits for `gate/release` (see `await_file`)."""
+
+    def pause() -> None:
+        (gate / "stalled").touch()
+        await_file(gate / "release", bound_s, poll_s)
+
+    return pause
+
+
+def exit_at(function: str, prefix: str) -> None:
+    """In this process, make `os.<function>` on a name starting with `prefix` end the process at once, as a crash."""
+    real = getattr(os, function)
+
+    def crashed(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        names = [os.path.basename(os.fsdecode(a)) for a in args[:2] if isinstance(a, (str, bytes, os.PathLike))]
+        if any(n.startswith(prefix) for n in names):
+            os._exit(9)
+        return real(*args, **kwargs)
+
+    setattr(os, function, crashed)
+
+
+def stale_lookup(monkeypatch: pytest.MonkeyPatch, name: str, *, times: int = 1) -> list[str]:
+    """Answer the next `times` `os.lstat` calls on a name whose last component is `name` with `ENOENT`.
+
+    This stands in for an NFS client's negative dentry cache answering a lookup of a name that now exists. Returns
+    the list each stale answer appends `name` to.
+    """
+    real_lstat = os.lstat
+    answered: list[str] = []
+
+    def lstat(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:  # noqa: ANN401
+        if os.path.basename(os.fsdecode(path)) == name and len(answered) < times:
+            answered.append(name)
+            raise FileNotFoundError(errno.ENOENT, "stale negative lookup", os.fsdecode(path))
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    return answered
+
+
+def refuse_call(monkeypatch: pytest.MonkeyPatch, function: str, prefix: str, err: OSError) -> list[str]:
+    """Make every `os.<function>` call on a name starting with `prefix` raise `err`; return the names refused."""
+    real = getattr(os, function)
+    refused: list[str] = []
+
+    def refusing(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        names = [os.path.basename(os.fsdecode(a)) for a in args[:2] if isinstance(a, (str, bytes, os.PathLike))]
+        if hit := [n for n in names if n.startswith(prefix)]:
+            refused.append(hit[0])
+            raise err
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(os, function, refusing)
+    return refused

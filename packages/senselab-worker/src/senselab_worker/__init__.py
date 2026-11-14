@@ -6,7 +6,7 @@ before any module that may open a file.
 
 import functools
 
-WIRE_VERSION = 2
+WIRE_VERSION = 3
 
 
 @functools.lru_cache(maxsize=1)

@@ -1,25 +1,33 @@
 """``packages/conftest.py`` fails collection for a test with no tier marker or with two."""
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 HOOK = Path(__file__).resolve().parents[3] / "conftest.py"
-MARKERS = "[pytest]\nmarkers =\n    logic\n    contract\n    limits\n    usecase\n    env\n    network\n"
+MARKERS = "[pytest]\nmarkers =\n    logic\n    contract\n    limits\n    usecase\n    env\n    network\n    model\n"
 
 
-def _project(pytester: pytest.Pytester, body: str) -> None:
-    pytester.makeini(MARKERS)
-    pytester.makeconftest(HOOK.read_text())
-    pytester.makepyfile(test_sample=body)
+@pytest.fixture
+def project(pytester: pytest.Pytester, budgets_file: Path) -> Callable[[str], None]:
+    """Return a function that sets up a project holding the hook, its budgets and a test module of the given body."""
+
+    def make(body: str) -> None:
+        pytester.makeini(MARKERS)
+        pytester.makeconftest(HOOK.read_text())
+        budgets = pytester.path / budgets_file.relative_to(HOOK.parent)
+        budgets.parent.mkdir(parents=True, exist_ok=True)
+        budgets.write_text(budgets_file.read_text())
+        pytester.makepyfile(test_sample=body)
+
+    return make
 
 
 @pytest.mark.logic
-def test_untiered_test_fails_collection(pytester: pytest.Pytester) -> None:
+def test_untiered_test_fails_collection(pytester: pytest.Pytester, project: Callable[[str], None]) -> None:
     """A test with no tier marker is a usage error naming its node id; nothing runs."""
-    _project(
-        pytester, "import pytest\n\ndef test_bare():\n    pass\n\n@pytest.mark.network\ndef test_net():\n    pass\n"
-    )
+    project("import pytest\n\ndef test_bare():\n    pass\n\n@pytest.mark.network\ndef test_net():\n    pass\n")
     result = pytester.runpytest()
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     err = result.stderr.str()
@@ -27,10 +35,9 @@ def test_untiered_test_fails_collection(pytester: pytest.Pytester) -> None:
 
 
 @pytest.mark.logic
-def test_two_tiers_fail_collection(pytester: pytest.Pytester) -> None:
+def test_two_tiers_fail_collection(pytester: pytest.Pytester, project: Callable[[str], None]) -> None:
     """A test with two tier markers, on the function or split between class and function, fails collection."""
-    _project(
-        pytester,
+    project(
         "import pytest\n\n"
         "@pytest.mark.logic\n@pytest.mark.env\ndef test_two():\n    pass\n\n"
         "@pytest.mark.contract\nclass TestSplit:\n    @pytest.mark.limits\n    def test_split(self):\n        pass\n",
@@ -42,10 +49,9 @@ def test_two_tiers_fail_collection(pytester: pytest.Pytester) -> None:
 
 
 @pytest.mark.logic
-def test_exactly_one_tier_collects_and_runs(pytester: pytest.Pytester) -> None:
+def test_exactly_one_tier_collects_and_runs(pytester: pytest.Pytester, project: Callable[[str], None]) -> None:
     """One tier marker, alone or with a non-tier marker, collects and passes."""
-    _project(
-        pytester,
+    project(
         "import pytest\n\n@pytest.mark.logic\ndef test_a():\n    pass\n\n"
         "@pytest.mark.env\n@pytest.mark.network\ndef test_b():\n    pass\n",
     )
@@ -62,3 +68,36 @@ def test_hook_applies_only_under_packages(pytester: pytest.Pytester) -> None:
     (pytester.path / "packages" / "conftest.py").write_text(HOOK.read_text())
     pytester.makepyfile(test_outside="def test_bare():\n    pass\n")
     assert pytester.runpytest().ret == pytest.ExitCode.OK
+
+
+@pytest.mark.logic
+def test_model_goes_only_with_a_tier_that_runs_on_orcd(
+    pytester: pytest.Pytester, project: Callable[[str], None]
+) -> None:
+    """`model` beside logic or contract fails collection; beside limits, usecase or env it collects."""
+    project(
+        "import pytest\n\n@pytest.mark.logic\n@pytest.mark.model\ndef test_l():\n    pass\n\n"
+        "@pytest.mark.contract\n@pytest.mark.model\ndef test_c():\n    pass\n",
+    )
+    result = pytester.runpytest()
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    assert "test_sample.py::test_l" in result.stderr.str() and "test_sample.py::test_c" in result.stderr.str()
+    project("import pytest\n\n@pytest.mark.env\n@pytest.mark.model\ndef test_e():\n    pass\n")
+    assert pytester.runpytest().ret == pytest.ExitCode.OK
+
+
+@pytest.mark.logic
+def test_each_test_gets_its_tiers_budget_unless_it_sets_its_own(
+    pytester: pytest.Pytester, project: Callable[[str], None], tier_budget_s: dict[str, float]
+) -> None:
+    """A test is marked `timeout(<its tier's budget_s>)`; a test with its own `timeout` mark keeps it."""
+    project(
+        "import pytest\n\n@pytest.mark.logic\ndef test_a(request):\n"
+        "    assert request.node.get_closest_marker('timeout').args == (BUDGET,)\n\n"
+        "@pytest.mark.logic\n@pytest.mark.timeout(5)\ndef test_b(request):\n"
+        "    assert request.node.get_closest_marker('timeout').args == (5,)\n",
+    )
+    (pytester.path / "test_sample.py").write_text(
+        f"BUDGET = {tier_budget_s['logic']}\n" + (pytester.path / "test_sample.py").read_text()
+    )
+    pytester.runpytest().assert_outcomes(passed=2)
