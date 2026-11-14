@@ -1101,10 +1101,13 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
             == "p01"
         )
 
-    def test_a_refold_with_an_unchanged_hint_is_not_refused(self, tmp_path: Path) -> None:
-        """A re-fold records no identity, so the guard does not apply to it."""
+    def test_a_refold_is_not_refused_by_the_identity_guard(self, tmp_path: Path) -> None:
+        """A re-fold given another participant is refused by its own hint-differs rule, not as an identity change."""
         root = tmp_path / "rec-0001_20260920-030808"
         _seed_run(root, hint=self.HINT)
+        with pytest.raises(ReplayRefused, match="replay the run instead") as refused:
+            _checked(root, hint=hint_for("p02", "s1", "voluntary-cough"), hint_given=True, allow_hint_change=False)
+        assert not isinstance(refused.value, IdentityChangeRefused)
         assert _checked(root, hint=self.HINT, hint_given=True, allow_hint_change=False).changed == []
 
     def test_an_empty_recorded_participant_takes_the_hints(self, tmp_path: Path) -> None:
@@ -1207,6 +1210,27 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         [summary_path] = (tmp_path / "slices").glob("*.summary.json")
         assert json.loads(summary_path.read_text())["identity_participants"] == ["p01", "p02", "p03"]
         assert "participants affected: p01 p02 p03" in capsys.readouterr().out
+
+    def test_a_reread_outranks_a_refusal_in_the_exit_code_and_the_refusal_is_still_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A shard with both exits 3, as main() documents, and still names the refused run."""
+        roots = [tmp_path / f"run{n}" for n in range(2)]
+        for root in roots:
+            _seed_run(root)
+        manifest = _manifest(tmp_path / "manifest.jsonl", roots)
+        rows = iter(
+            [
+                {"status": cli.REFUSED, "identity_refused": {"session": {"from": "s1", "to": "s2"}}},
+                {"status": cli.OK, "retired": 0, "review": "needs_reread", "review_why": "x"},
+            ]
+        )
+        monkeypatch.setattr(cli, "replay_one", lambda run_root, config, **kwargs: next(rows))
+        code = cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)])
+        assert code == 3
+        [summary_path] = (tmp_path / "slices").glob("*.summary.json")
+        assert json.loads(summary_path.read_text())["identity_refused"] == ["run0"]
+        assert "REFUSED: 1 runs" in capsys.readouterr().err
 
     def test_the_slice_counts_refused_identity_changes_and_exits_1(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

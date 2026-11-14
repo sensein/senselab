@@ -32,7 +32,8 @@ never linked, so that write lands in the new root. Use it when the finished tree
 modified.
 
 Every recording is re-hashed before its run is replayed: the row's ``audio`` is ``verified`` only where the digest
-matched ADMIT's (the other passes take a recording whose size and modification time match as ``stat_matched``).
+matched ADMIT's (the other passes take a recording whose size and modification time match as ``stat_matched``). A
+recording that is no longer there cannot be hashed: its row's ``audio`` is ``unverified`` and the replay goes ahead.
 
 A store already carrying this configuration's and revision's replay marker is skipped and not rewritten,
 unless ``--force`` is given. A row whose store landed although a replayed node raised is ``errored``,
@@ -547,7 +548,8 @@ def main(argv: list[str] | None = None) -> int:
         ``error``, ``errored`` or ``refused`` (an identity change refused among them) — the other stores are
         written either way — 2 when the arguments could not be resolved and nothing was read, and 3 when any
         replayed recording's REVIEW reading could not be carried forward and must be read again (the summary's
-        ``needs_reread`` names them).
+        ``needs_reread`` names them). 3 takes precedence over 1: a shard with both exits 3, and its refused rows are
+        still printed to stderr and named in the summary (``counts``, ``identity_refused``).
     """
     args = build_parser().parse_args(argv)
 
