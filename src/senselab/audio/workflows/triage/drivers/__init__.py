@@ -27,7 +27,8 @@ Review pages: ``triage_review_page``, ``free_speech_review_page``, ``triage_revi
 ``triage_review_cache_backfill``, ``triage_vectors_viewer``.
 
 Profiles and checks: ``triage_profile_template``, ``fit_profile``, ``check_identity``, ``select_replay_manifest``,
-``triage_replay_diff``, ``verify_derivatives_copy``, ``verify_task_squim``, ``build_classifier_ontology_map``.
+``triage_replay_diff``, ``triage_scan_audit``, ``verify_derivatives_copy``, ``verify_task_squim``,
+``build_classifier_ontology_map``.
 
 Evaluation: ``evaluate_task_events``, ``score_taxonomy_ruleset``, ``analyze_routing_evidence``,
 ``gate_family_matrix``, ``measure_session_background``.
