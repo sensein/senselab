@@ -859,9 +859,10 @@ def read_under_this_policy(payload: Mapping[str, Any]) -> bool:
     unfingerprinted reading was read under, so a profile that later changes its policy text or word lists still
     gets these readings back unchanged, and so does every annotation that holds one
     (:func:`annotation_read_under_this_policy`). Only readings that record a fingerprint are read again on a change.
-    To re-read the older ones under a changed policy, run REVIEW over those recordings
-    (``scripts/extend_llm_review.py --force``) with a result cache that does not hold their entries; each new
-    reading records the fingerprint.
+    To re-read the older ones under a changed policy, run ``scripts/extend_llm_review.py --force`` over those
+    recordings with ``SENSELAB_RESULT_CACHE`` set to an empty directory (the result cache is
+    ``<SENSELAB_CACHE>/results`` when it is unset), so REVIEW finds no cached reading and reads each again; each new
+    reading records the fingerprint, and the new directory then holds them.
 
     Args:
         payload: The cached result.
