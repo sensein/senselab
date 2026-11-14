@@ -97,7 +97,7 @@ class TestMeasuredValues:
         The default is the commit the 2026-11-10 canary resolved ``main`` to; a profile or a run may name another
         commit, and the configuration hash then differs.
         """
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         assert cfg.require("pii.gliner") == {
             "model": "nvidia/gliner-pii",
             "revision": "bd23e8ef4425fd04e34c5204ab49ffaa706eae79",
@@ -182,10 +182,10 @@ class TestOverrides:
         """The detector commit is configuration: two runs scanning with different commits never share a hash."""
         override = tmp_path / "o.yaml"
         override.write_text("pii:\n  gliner:\n    revision: " + "a" * 40 + "\n")
-        changed = load_triage_config(override)
+        changed = load_triage_config(override, profile=ACTIVE)
         assert changed.require("pii.gliner.revision") == "a" * 40
         assert changed.require("pii.gliner.model") == "nvidia/gliner-pii", "the model is kept from the default"
-        assert changed.config_hash != load_triage_config().config_hash
+        assert changed.config_hash != load_triage_config(profile=ACTIVE).config_hash
 
     @pytest.mark.parametrize(
         ("gliner", "match"),
@@ -202,7 +202,7 @@ class TestOverrides:
         override = tmp_path / "o.yaml"
         override.write_text(f"pii:\n  gliner: {gliner}\n")
         with pytest.raises(ValueError, match=match):
-            load_triage_config(override)
+            load_triage_config(override, profile=ACTIVE)
 
     def test_an_unknown_key_is_refused_rather_than_ignored(self, tmp_path: Path) -> None:
         """A typo in an override key is an error, not a no-op."""
