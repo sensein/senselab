@@ -8,7 +8,9 @@ what it *claims* is its conformance. ``node_verdicts`` now carries only the node
 from __future__ import annotations
 
 import inspect
+import shutil
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import pytest
@@ -1070,6 +1072,70 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
                 [], evidence, ran
             )
             assert _release_from([], evidence, ran)[0] is None
+
+
+class TestTheFixtureProfileUnderTheReleaseRule:
+    """Satra review 2026-11-14 (#638): the fixture withholds nothing for residue; a release rule does.
+
+    The fixture profile sets ``verdict.llm_redaction_withholds: false``; a release runs with ``true``. The same
+    reading and REDACT pass, folded under the fixture as it is and under a copy that sets the release rule in its own
+    config: the profile's setting reaches the fold, and only the release rule withholds.
+    """
+
+    _READING = {
+        "status": "flagged",
+        "redaction": "incomplete",
+        "original": "carries_pii",
+        "flagged": ["PERSON"],
+        "proposal": [{"text": "alice", "action": "redact", "category": "PERSON", "why": "a name"}],
+    }
+
+    @staticmethod
+    def _policy(root: Path) -> FoldPolicy:
+        """The fold policy a run under the profile at ``root`` reads."""
+        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.dataset_profile import deactivate_profile
+
+        try:
+            return FoldPolicy.from_config(load_triage_config(profile=root))
+        finally:
+            deactivate_profile()
+
+    def _fold(self, policy: FoldPolicy, reading: Mapping[str, Any] | None) -> FileVerdict:
+        return fold_file_verdict(
+            [NodeVerdict("REDACT", Outcome.PASS, None, "every finding redacted")],
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED, "REDACT": RunState.COMPLETED},
+            hint_claims={},
+            route_state=ROUTED,
+            redaction=RedactionEvidence(lexical_words_n=40, scanned=True, findings_n=1, masks_n=1, masks_final_n=1),
+            llm_redaction=reading,
+            policy=policy,
+        )
+
+    @pytest.mark.parametrize("withholds", [False, True], ids=["fixture", "release_rule"])
+    def test_a_reading_of_residue_withholds_only_under_the_release_rule(
+        self, withholds: bool, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """Fixture (false): released redacted, the residue flagged. Release rule (true): withheld on that ground."""
+        from tests.conftest import FIXTURE_PROFILE
+
+        root = tmp_path / "profile"
+        shutil.copytree(FIXTURE_PROFILE, root)
+        if withholds:
+            config = root / "config.yaml"
+            text = config.read_text(encoding="utf-8")
+            assert text.count("llm_redaction_withholds: false") == 1
+            config.write_text(text.replace("llm_redaction_withholds: false", "llm_redaction_withholds: true"))
+        policy = self._policy(root)
+        assert policy.llm_redaction_withholds is withholds
+        folded = self._fold(policy, self._READING)
+        if withholds:
+            assert (folded.release, folded.release_ground) == (Release.WITHHELD, REVIEWER_PROPOSED_REDACTION)
+        else:
+            assert folded.release is Release.REDACTED
+        assert any(reason.why == f"{LLM_REDACTION_RESIDUE}: PERSON" for reason in folded.reasons)
+        assert self._fold(policy, None).release is Release.REDACTED, "no reading: the detectors' release stands"
 
 
 class TestAReviewerReadingClearsAReScanFail:
