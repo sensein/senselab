@@ -36,16 +36,28 @@ def test_rereads_are_the_replayed_rows_marked_needs_reread(tmp_path: Path) -> No
     assert json.loads((tmp_path / "rows_needs_reread.counts.json").read_text()) == summary
 
 
-def test_all_unread_takes_every_row_the_replay_did_not_read(tmp_path: Path) -> None:
-    """A corpus never reviewed: every row but one the replay itself read is picked, unlogged rows included."""
+def test_all_unread_takes_every_row_whose_reading_does_not_stand(tmp_path: Path) -> None:
+    """A corpus never reviewed: every row the replay neither read nor carried forward is picked, unlogged ones too."""
     manifest = _write_jsonl(tmp_path / "replay.jsonl", [_row(stem, tmp_path) for stem in ("a", "b", "c", "d")])
     logs = tmp_path / "logs"
     states = [{"stem": "a", "review": "none"}, {"stem": "b", "review": "read"}, {"stem": "c", "review": "carried"}]
     _write_jsonl(logs / "slices" / "replay-0.jsonl", states)
     out = tmp_path / "rows.jsonl"
     summary = rows_driver.pick_rereads(manifest, logs, out, all_unread=True)
-    assert [json.loads(line)["stem"] for line in out.read_text().splitlines()] == ["a", "c", "d"]
-    assert summary["rule"] == "all_unread" and summary["picked"] == 3
+    assert [json.loads(line)["stem"] for line in out.read_text().splitlines()] == ["a", "d"]
+    assert summary["rule"] == "all_unread" and summary["picked"] == 2
+
+
+def test_a_picked_row_keeps_its_recording_id_and_target_speaker(tmp_path: Path) -> None:
+    """The join key and the declared target speaker go on with the row; other manifest columns do not."""
+    row = {**_row("a", tmp_path), "recording_id": "rec-a", "target_speaker": "spk1", "participant": "p1"}
+    manifest = _write_jsonl(tmp_path / "replay.jsonl", [row])
+    logs = tmp_path / "logs"
+    _write_jsonl(logs / "slices" / "replay-0.jsonl", [{"stem": "a", "review": "needs_reread"}])
+    out = tmp_path / "rows.jsonl"
+    rows_driver.pick_rereads(manifest, logs, out)
+    (picked,) = [json.loads(line) for line in out.read_text().splitlines()]
+    assert picked == {key: row[key] for key in ("stem", "enhanced", "source", "recording_id", "target_speaker")}
 
 
 def test_split_follows_the_reviewers_words_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

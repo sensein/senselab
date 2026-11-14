@@ -8,10 +8,11 @@ r"""Pick the recordings the reviewer must read again after a replay, and split t
 ``rereads`` reads the slice logs ``extend_replay_decisions`` wrote under ``LOG_DIR/slices/`` and writes the rows of
 ``REPLAY_MANIFEST`` the reviewer must read, with ``ROWS.counts.json`` beside it counting every review state. By default
 those are the rows whose earlier reading could not be carried forward (``needs_reread``): a replay over a corpus that
-was reviewed before. ``--all-unread`` takes every row the replay did not itself read (any state but ``read``, and a
-row the logs do not name): a corpus whose runs were never reviewed, such as one fresh from a run with the reviewer
-off, where every state is ``none``. ``extend_llm_review`` skips a row whose reading already stands. The picked rows
-are what ``extend_llm_review`` and ``extend_second_opinion`` take next.
+was reviewed before. ``--all-unread`` takes every row whose reading does not stand (any state but ``read`` or
+``carried``, and a row the logs do not name): a corpus whose runs were never reviewed, such as one fresh from a run
+with the reviewer off, where every state is ``none``. The picked rows are what ``extend_llm_review`` and
+``extend_second_opinion`` take next; each picked row keeps the manifest's ``stem``, ``enhanced``, ``source``,
+``recording_id`` and ``target_speaker``.
 
 ``split`` sorts rows by what REVIEW reads, with REVIEW's own test: a recording whose transcript has words is a
 ``words`` row, which needs the reviewer's model; any other is a ``nowords`` row, which REVIEW and SECOND_OPINION record
@@ -35,6 +36,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from senselab.audio.workflows.triage.extend import (
+    REVIEW_CARRIED,
     REVIEW_NEEDS_REREAD,
     REVIEW_READ,
     SLICES_SUBDIR,
@@ -47,8 +49,9 @@ from senselab.audio.workflows.triage.extend import (
     worker_arguments,
     worker_failure,
 )
+from senselab.audio.workflows.triage.identity import RECORDING_ID_COLUMN, ROW_TARGET_SPEAKER
 
-KEPT_KEYS = ("stem", "enhanced", "source")
+KEPT_KEYS = ("stem", "enhanced", "source", RECORDING_ID_COLUMN, ROW_TARGET_SPEAKER)
 """The manifest fields a picked row keeps."""
 
 WORDS = "words"
@@ -73,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     rereads.add_argument("--replay-logs", type=Path, required=True, help="The replay's --log-dir")
     rereads.add_argument("--out", type=Path, required=True, help="The rows JSONL to write")
     rereads.add_argument(
-        "--all-unread", action="store_true", help="Every row the replay did not read, not only needs_reread"
+        "--all-unread", action="store_true", help="Every row whose reading does not stand, not only needs_reread"
     )
     split = commands.add_parser("split", help="Split rows into words and nowords")
     split.add_argument("rows", type=Path, nargs="+", help="Row JSONL files, each row with stem and enhanced")
@@ -119,8 +122,8 @@ def pick_rereads(manifest: Path, log_dir: Path, out: Path, *, all_unread: bool =
         manifest: The manifest the replay ran over.
         log_dir: The replay's ``--log-dir``.
         out: The rows JSONL to write; ``<out stem>.counts.json`` goes beside it.
-        all_unread: Pick every row the replay did not read (any state but ``read``, or none logged), not only
-            ``needs_reread``.
+        all_unread: Pick every row whose reading does not stand (any state but ``read`` or ``carried``, or none
+            logged), not only ``needs_reread``.
 
     Returns:
         The counts written.
@@ -130,7 +133,7 @@ def pick_rereads(manifest: Path, log_dir: Path, out: Path, *, all_unread: bool =
     counts = Counter(states.get(str(row["stem"]), NOT_IN_LOG) for row in rows)
 
     def wanted(state: str | None) -> bool:
-        return state != REVIEW_READ if all_unread else state == REVIEW_NEEDS_REREAD
+        return state not in (REVIEW_READ, REVIEW_CARRIED) if all_unread else state == REVIEW_NEEDS_REREAD
 
     picked = [
         {key: row[key] for key in KEPT_KEYS if key in row} for row in rows if wanted(states.get(str(row["stem"])))
