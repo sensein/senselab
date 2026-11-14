@@ -1,7 +1,8 @@
 r"""Triage every recording of a corpus manifest, one slice per task, resumably, then list the finished runs.
 
     python -m senselab.audio.workflows.triage.drivers.triage_corpus run MANIFEST --out-root OUT \
-        --slice-index I --slice-count N [--hints DIR] [--corpus-root ROOT] [--profile P] [--config C] [--commit SHA]
+        --slice-index I --slice-count N (--hints DIR | --no-hint) [--corpus-root ROOT] [--profile P] [--config C] \
+        [--commit SHA]
     python -m senselab.audio.workflows.triage.drivers.triage_corpus manifest OUT --out RUNS.jsonl [--expect MANIFEST]
 
 ``run`` is :func:`~senselab.audio.workflows.triage.run.run_triage` over the rows ``[I::N]`` of ``MANIFEST`` (one JSON
@@ -12,8 +13,10 @@ whose store and summary exist is skipped; anything less is run again, and the ru
 it are removed first. A failure is recorded in the recording's row and never stops the slice.
 
 ``--hints DIR`` names a directory holding a dataset's ``hints.py``, whose ``build_hint(path)`` gives each recording
-its hint, as the replay drivers read it; without it every recording runs with no hint. ``--corpus-root`` is the
-corpus's root, the recording's path relative to which is its id where its hint declares none.
+its hint, as the replay drivers read it. A recording whose hint is None, or declares no participant, session or task,
+is a failed row (:class:`HintDeclaresNothing`): senselab reads no file name, so it would run with no identity.
+``--no-hint`` runs every recording with no hint, for a dataset with no identities; one of the two is required.
+``--corpus-root`` is the corpus's root, the recording's path relative to which is its id where its hint declares none.
 
 ``manifest`` reads the rows under ``OUT/rows/`` and writes the finished runs as the manifest every ``extend_*``
 driver reads: one line per recording with ``stem``, ``source``, ``enhanced`` (the run's
@@ -45,7 +48,12 @@ from senselab.audio.workflows.triage.extend import (
     read_manifest,
     take_slice,
 )
-from senselab.audio.workflows.triage.identity import RECORDING_ID_COLUMN, identity_columns, identity_of
+from senselab.audio.workflows.triage.identity import (
+    RECORDING_ID_COLUMN,
+    RECORDING_ID_FIELD,
+    identity_columns,
+    identity_of,
+)
 from senselab.audio.workflows.triage.run import corpus_path_of, entity_subdir, run_triage
 from senselab.utils.portable_audio_io import audio_info
 from senselab.utils.venv_worker import shutdown_venv_workers, venv_worker_events, venv_worker_stats
@@ -69,6 +77,10 @@ _RUN_ROOT = re.compile(r"_\d{8}-\d{6}(-\d+)?$")
 """A run root's name less its stem: ``_<utc stamp>``, then ``-<n>`` where two runs landed in one second."""
 
 
+class HintDeclaresNothing(ValueError):
+    """A recording whose ``--hints`` builder gave it no hint, or a hint declaring no participant, session or task."""
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The CLI: ``run`` one slice of a manifest, or list the finished runs as a ``manifest``.
 
@@ -86,7 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--out-root", type=Path, required=True, help="Where out/ (run roots) and rows/ go")
     run.add_argument("--slice-index", type=int, required=True, help="This task's index, 0-based")
     run.add_argument("--slice-count", type=int, required=True, help="How many tasks the array has")
-    run.add_argument("--hints", type=Path, default=None, help="Directory holding a hints.py exposing build_hint")
+    hints = run.add_mutually_exclusive_group(required=True)
+    hints.add_argument("--hints", type=Path, default=None, help="Directory holding a hints.py exposing build_hint")
+    hints.add_argument("--no-hint", action="store_true", help="Run every recording with no hint (no identities)")
     run.add_argument("--corpus-root", type=Path, default=None, help="The corpus's root, for recording ids")
     run.add_argument("--commit", default=None, help="The code revision to record on each row")
     run.add_argument(
@@ -203,13 +217,14 @@ def triage_one(
         entry: The manifest row; its ``source`` is the recording.
         config: The triage configuration.
         out_root: The ``--out-root``.
-        build_hint: The dataset's hint populator, or None.
+        build_hint: The dataset's hint populator, or None to run with no hint.
         corpus_root: The corpus's root, or None.
         isolate_longer_than: Seconds at or above which no persistent model worker stays resident.
         context: Fields every row of this task carries (slice, commit, host, job).
 
     Returns:
-        The row written, or ``{"stem": ..., "skipped": True}`` where the recording had finished.
+        The row written, or ``{"stem": ..., "skipped": True}`` where the recording had finished. With ``build_hint``,
+        a recording whose hint is None or declares no participant, session or task is a failed row.
     """
     source = Path(str(entry["source"]))
     stem = source.stem
@@ -221,6 +236,9 @@ def triage_one(
             raise FileNotFoundError("input audio missing")
         hint = build_hint(source)[0] if build_hint is not None else None
         identity = identity_of(hint, stem=stem, corpus_path=corpus_path_of(source, corpus_root))
+        if build_hint is not None and not set(identity.sources) - {RECORDING_ID_FIELD}:
+            what = "no hint" if hint is None else "a hint declaring no participant, session or task"
+            raise HintDeclaresNothing(f"--hints gave this recording {what}")
         subdir = entity_subdir(identity)
         row["identity"] = {**identity_columns(identity), RECORDING_ID_COLUMN: identity.id_of(stem)}
     except Exception as error:  # noqa: BLE001 -- recorded per row, never fatal to the slice
@@ -290,7 +308,8 @@ def run_slice(
         slice_index: This task's 0-based index.
         slice_count: How many tasks the array has.
         config: The triage configuration.
-        build_hint: The dataset's hint populator (``hints.py``'s ``build_hint``), or None to run with no hint.
+        build_hint: The dataset's hint populator (``hints.py``'s ``build_hint``), or None to run with no hint. With
+            one, a recording whose hint is None or declares no participant, session or task fails.
         corpus_root: The corpus's root, or None.
         commit: The code revision to record on each row.
         isolate_longer_than: Seconds at or above which no persistent model worker stays resident.

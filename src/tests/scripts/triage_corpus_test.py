@@ -171,6 +171,49 @@ def test_the_manifest_lists_finished_runs_and_reports_the_rest(tmp_path: Path, m
     assert summary["missing"] == ["b"]
 
 
+def test_with_hints_a_recording_whose_hint_declares_nothing_is_a_failed_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No hint, or one declaring no participant, session or task, fails the row before the graph runs."""
+    fake = _FakeRun()
+    monkeypatch.setattr(driver, "run_triage", fake)
+    manifest = _manifest(tmp_path, ["none", "empty", "named"])
+    hints = {"none": None, "empty": hint_for(), "named": hint_for("p07", "s2")}
+    out = tmp_path / "out"
+
+    def build_hint(path: Path) -> tuple[Any, None]:  # noqa: ANN401
+        return hints[path.stem], None
+
+    summary = driver.run_slice(
+        manifest, out_root=out, slice_index=0, slice_count=1, config=CONFIG, build_hint=build_hint
+    )
+    assert summary["counts"] == {"ok": 1, "failed": 2, "skipped": 0} and summary["failed"] == ["none", "empty"]
+    assert fake.calls == ["named"]
+    for stem in ("none", "empty"):
+        row = json.loads((out / "rows" / "_unplaced" / f"{stem}.row.json").read_text())
+        assert row["ok"] is False and row["error"].startswith("HintDeclaresNothing")
+
+
+def test_run_takes_hints_or_no_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--no-hint`` runs with no hint and no refusal; ``--hints`` refuses an empty hint; one of the two is required."""
+    fake = _FakeRun()
+    monkeypatch.setattr(driver, "run_triage", fake)
+    monkeypatch.setattr(driver, "driver_config", lambda args: CONFIG)
+    manifest = _manifest(tmp_path, ["rec"])
+    hints = tmp_path / "hints"
+    hints.mkdir()
+    (hints / "hints.py").write_text("def build_hint(path):\n    return None, None\n")
+    base = ["run", str(manifest), "--slice-index", "0", "--slice-count", "1"]
+    assert driver.main([*base, "--out-root", str(tmp_path / "no_hint"), "--no-hint"]) == 0
+    assert fake.calls == ["rec"]
+    assert driver.main([*base, "--out-root", str(tmp_path / "hinted"), "--hints", str(hints)]) == 1
+    assert fake.calls == ["rec"]
+    for flags in ([], ["--no-hint", "--hints", str(hints)]):
+        with pytest.raises(SystemExit) as exited:
+            driver.main([*base, "--out-root", str(tmp_path / "neither"), *flags])
+        assert exited.value.code == 2
+
+
 def test_the_duration_is_read_from_the_header(tmp_path: Path) -> None:
     """The isolation rule reads a recording's length from its header, through senselab's audio reader."""
     import numpy as np
