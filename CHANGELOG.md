@@ -3,6 +3,11 @@
 #### 💥 Breaking Change
 
 - `extract_objective_quality_features_from_audios` (torchaudio SQUIM) now reads 10 s windows of each recording by default and reports the median STOI, PESQ and SI-SDR over the windows. New arguments: `window_s` (`None` for one pass), `min_window_s`, `start_s`, `end_s` and `floor_s`. Each result gains `windows`, `windows_n` and `span_s`. Every non-empty span is read by default; `floor_s` sets a cut-off below which the values are NaN. An empty span, or one outside the recording, raises `ValueError`. To get the previous whole-recording values, pass `window_s=None`, or `torchaudio_squim={"window_s": None}` to `extract_features_from_audios` ([#614](https://github.com/sensein/senselab/issues/614))
+- Triage provenance types (`span`, `verdict` and the rest of `senselab.audio.workflows.triage.prov_types`) are registered when `senselab.audio.workflows.triage` is imported, and `ProvStore` refuses an entity of an unregistered type. A reader that opens triage stores through `ProvStore` without importing the triage package (a notebook, an analysis script) now fails on the first such entity: import `senselab.audio.workflows.triage` first, or read with `ProvStore.read_jsonl(path, any_type=True)`, which reads entities of any type ([#634](https://github.com/sensein/senselab/pull/634))
+
+#### 📝 Documentation
+
+- Triage REVIEW: a cached reading or a stored annotation that records no `policy_fingerprint` (one read before fingerprints were recorded) stands as read under the fixed step-6 review policy, whatever the active profile's policy is. A profile that later changes its policy text or redaction word lists does not get those readings re-read; only fingerprinted readings are. To re-read them, run REVIEW over those recordings (`scripts/extend_llm_review.py --force`) with a result cache that does not hold their entries. See `read_under_this_policy` in `triage/nodes/review.py` ([#634](https://github.com/sensein/senselab/pull/634))
 
 ---
 

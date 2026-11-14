@@ -815,6 +815,14 @@ def read_under_this_policy(payload: Mapping[str, Any]) -> bool:
     A reading cached before the fingerprint was recorded carries none; it was read under the policy senselab held in
     code until plan step 6, which B2AI's profile carries unchanged, so it stands.
 
+    It stands under any profile, not only one whose policy is that step-6 text: nothing records which policy an
+    unfingerprinted reading was read under, so a profile that later changes its policy text or word lists still
+    gets these readings back unchanged, and so does every annotation that holds one
+    (:func:`annotation_read_under_this_policy`). Only readings that record a fingerprint are read again on a change.
+    To re-read the older ones under a changed policy, run REVIEW over those recordings
+    (``scripts/extend_llm_review.py --force``) with a result cache that does not hold their entries; each new
+    reading records the fingerprint.
+
     Args:
         payload: The cached result.
 
@@ -831,7 +839,8 @@ def annotation_read_under_this_policy(attributes: Mapping[str, Any]) -> bool:
     The annotation's own record decides. An annotation written before it kept one is judged by the cached reading
     its key names, which is the reading it holds unless a reading under another policy has since replaced it: then
     which policy the annotation was read under is unknown, and it does not stand. With no cached reading to ask,
-    nothing says otherwise and it stands, as :func:`read_under_this_policy` lets an unrecorded reading stand.
+    nothing says otherwise and it stands, as :func:`read_under_this_policy` lets an unrecorded reading stand: as read
+    under the step-6 policy, whatever the active profile's policy now is.
 
     Args:
         attributes: The ``redaction_llm_annotation`` entity's attributes.
