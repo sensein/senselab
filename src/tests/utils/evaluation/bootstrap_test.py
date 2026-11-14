@@ -384,3 +384,46 @@ def test_legacy_keys_use_the_report_spelling() -> None:
         "roc_auc",
         "average_precision",
     }
+
+
+def _fast_ba(y: np.ndarray, pred: np.ndarray) -> float:
+    """Binary balanced accuracy in numpy, for the simulation tests (as `_ba` on 0/1 labels, both classes present)."""
+    pos, neg = y == 1, y == 0
+    return float(0.5 * ((pred[pos] == 1).mean() + (pred[neg] == 0).mean()))
+
+
+def _paired_clusters(rng: np.random.Generator, n_clusters: int, acc_a: float, acc_b: float, rows: int = 4) -> tuple:
+    """Balanced binary truth in `n_clusters` clusters of `rows` rows; models A and B are right independently."""
+    y = np.tile(np.array([0, 1] * (rows // 2)), n_clusters)
+    g = np.repeat(np.arange(n_clusters), rows)
+    a = np.where(rng.random(len(y)) < acc_a, y, 1 - y)
+    b = np.where(rng.random(len(y)) < acc_b, y, 1 - y)
+    return y, a, b, g
+
+
+def test_planted_difference() -> None:
+    """A planted paired BA difference of 0.10 over 100 clusters has a 95 % interval excluding 0 and p < 0.05."""
+    y, a, b, g = _paired_clusters(np.random.default_rng(7), 100, 0.85, 0.75)
+    delta = paired_cluster_bootstrap_delta(_fast_ba, y, a, b, g, n_resamples=10000, seed=42)
+    assert delta.low is not None and delta.low > 0
+    assert delta.p_value is not None and delta.p_value < 0.05
+
+
+def test_p_value_of_identical_models_is_one_and_in_unit_interval() -> None:
+    """A model against itself has delta 0 on every resample, so p = 1; a plain interval has no p-value."""
+    y, s, g = _cohort()
+    pred = (s >= 0.5).astype(int)
+    assert paired_cluster_bootstrap_delta(_ba, y, pred, pred, g, n_resamples=200, seed=0).p_value == 1.0
+    assert cluster_bootstrap_ci({"ba": _ba}, y, pred, g, n_resamples=50, seed=0)["ba"].p_value is None
+
+
+@pytest.mark.slow
+def test_null_coverage() -> None:
+    """With no difference, the 95 % interval covers 0 in 930-970 of 1,000 datasets (2000 resamples)."""
+    rng = np.random.default_rng(2026)
+    covered = 0
+    for i in range(1000):
+        y, a, b, g = _paired_clusters(rng, 100, 0.8, 0.8)
+        d = paired_cluster_bootstrap_delta(_fast_ba, y, a, b, g, n_resamples=2000, seed=i)
+        covered += int(d.low is not None and d.high is not None and d.low <= 0 <= d.high)
+    assert 930 <= covered <= 970, covered

@@ -22,7 +22,7 @@ accuracy, ROC-AUC, average precision) for parity checks.
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Union
 
 import numpy as np
@@ -57,6 +57,8 @@ class BootstrapCI:
         unreliable: More than 5 % of resamples gave no value for this statistic: `(n_resamples - n_used) /
             n_resamples > 0.05`, counting both skipped resamples and resamples where it was undefined.
         method: `cluster_bootstrap_percentile`.
+        p_value: Two-sided bootstrap p-value of "the statistic is 0", `min(1, 2 * min(P*(x <= 0), P*(x >= 0)))` over the
+            resamples that gave a value; set by `paired_cluster_bootstrap_delta`, `None` elsewhere.
     """
 
     estimate: Optional[float]
@@ -70,6 +72,7 @@ class BootstrapCI:
     n_groups: int
     unreliable: bool
     method: str = METHOD
+    p_value: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """A plain, JSON-ready copy."""
@@ -265,9 +268,23 @@ def paired_cluster_bootstrap_delta(
         """The paired difference on one resample."""
         return float(metric_fn(truth[rows], a[rows]) - metric_fn(truth[rows], b[rows]))
 
-    return bootstrap_statistics(
-        {"delta": delta}, truth, group_arr, n_resamples=n_resamples, seed=seed, confidence=confidence
+    deltas: List[float] = []
+
+    def recorded(rows: np.ndarray) -> float:
+        """The difference on one resample, kept for the p-value."""
+        value = delta(rows)
+        deltas.append(value)
+        return value
+
+    interval = bootstrap_statistics(
+        {"delta": recorded}, truth, group_arr, n_resamples=n_resamples, seed=seed, confidence=confidence
     )["delta"]
+    resampled = np.array(deltas[1:])  # the first call is the estimate on all rows
+    resampled = resampled[~np.isnan(resampled)]
+    if resampled.size == 0:
+        return interval
+    p_value = min(1.0, 2.0 * min(float((resampled <= 0).mean()), float((resampled >= 0).mean())))
+    return replace(interval, p_value=p_value)
 
 
 def _ranking(metric: Callable[..., float], truth: np.ndarray, scores: np.ndarray) -> Optional[float]:
