@@ -1184,6 +1184,30 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         assert Path(record["run_root"]) == out_root / "p02" / "s1" / root.name
         assert (out_root / "p02" / "s1" / root.name / "run" / "store.jsonl").is_file()
 
+    def test_the_slice_lists_the_participants_an_identity_change_moved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Both sides of each recorded change are listed, so the cohort pass can rerun only those (plan check 9)."""
+        roots = [tmp_path / f"run{n}" for n in range(3)]
+        for root in roots:
+            _seed_run(root)
+        manifest = _manifest(tmp_path / "manifest.jsonl", roots)
+        rows = iter(
+            [
+                {
+                    "status": cli.OK,
+                    "identity_change": {"from": {DECLARED_PARTICIPANT: "p01"}, "to": {DECLARED_PARTICIPANT: "p02"}},
+                },
+                {"status": cli.OK, "identity_change": {"from": None, "to": {DECLARED_PARTICIPANT: "p03"}}},
+                {"status": cli.OK, "retired": 0},
+            ]
+        )
+        monkeypatch.setattr(cli, "replay_one", lambda run_root, config, **kwargs: next(rows))
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)]) == 0
+        [summary_path] = (tmp_path / "slices").glob("*.summary.json")
+        assert json.loads(summary_path.read_text())["identity_participants"] == ["p01", "p02", "p03"]
+        assert "participants affected: p01 p02 p03" in capsys.readouterr().out
+
     def test_the_slice_counts_refused_identity_changes_and_exits_1(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:

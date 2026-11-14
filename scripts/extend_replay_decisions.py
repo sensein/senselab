@@ -94,7 +94,12 @@ from senselab.audio.workflows.triage.extend import (
     write_store,
 )
 from senselab.audio.workflows.triage.hint_record import hint_digest
-from senselab.audio.workflows.triage.identity import RecordingIdentity, identity_of, recorded_identity
+from senselab.audio.workflows.triage.identity import (
+    DECLARED_PARTICIPANT,
+    RecordingIdentity,
+    identity_of,
+    recorded_identity,
+)
 from senselab.audio.workflows.triage.nodes.common import STREAM_SUFFIX, describe_exception
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.nodes.speech import SEPARATED_PREFIX
@@ -413,6 +418,16 @@ def process(
     return logged(rows, one, log)
 
 
+def _participants_of_change(change: dict[str, Any]) -> set[str]:
+    """The participants a row's ``identity_change`` names, before and after the replay."""
+    named: set[str] = set()
+    for side in ("from", "to"):
+        attributes = change.get(side) or {}
+        if attributes.get(DECLARED_PARTICIPANT):
+            named.add(str(attributes[DECLARED_PARTICIPANT]))
+    return named
+
+
 def run_slice(
     manifest: Path,
     *,
@@ -445,7 +460,9 @@ def run_slice(
         allow_identity_change: Accept a hint naming another participant or session than a run records.
 
     Returns:
-        The task's summary: its counts, its parameters, and where its log went.
+        The task's summary: its counts, its parameters, and where its log went. ``identity_participants`` lists the
+        participants a recorded identity change moved a run from or to, which ``extend_cohort.py apply
+        --participants`` reruns.
     """
     started = time.time()
     build_hint = load_hint_builder(hints) if hints is not None else None
@@ -477,6 +494,7 @@ def run_slice(
     reviews: dict[str, int] = {}
     needs_reread: list[str] = []
     identity_changed: list[str] = []
+    identity_participants: set[str] = set()
     identity_refused: list[str] = []
     retired = 0
     for record in log:
@@ -488,6 +506,7 @@ def run_slice(
             needs_reread.append(str(record["stem"]))
         if record.get("identity_change"):
             identity_changed.append(str(record["stem"]))
+            identity_participants.update(_participants_of_change(record["identity_change"]))
         if record.get("identity_refused"):
             identity_refused.append(str(record["stem"]))
         for node in record.get("errors") or {}:
@@ -508,6 +527,7 @@ def run_slice(
         "reviews": reviews,
         "needs_reread": needs_reread,
         "identity_changed": identity_changed,
+        "identity_participants": sorted(identity_participants),
         "identity_refused": identity_refused,
         "elapsed_s": time.time() - started,
         "log": str(log_path),
@@ -564,6 +584,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  review {state:<12} {number}")
     if summary["identity_changed"]:
         print(f"  identity recorded anew on {len(summary['identity_changed'])} runs (each row's identity_change)")
+        if summary["identity_participants"]:
+            print(f"  participants affected: {' '.join(summary['identity_participants'])}")
     if summary["identity_refused"]:
         print(
             f"REFUSED: {len(summary['identity_refused'])} runs whose hint names another participant or session "
