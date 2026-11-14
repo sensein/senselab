@@ -163,7 +163,7 @@ out-of-memory crash.
 - **Gaps closed.** No release of a unit's jobs is unjudged (one gate, `ProbeMachine._release`); a probe's load fault is
   recorded rather than ignored at batch below 2; resident memory is compared with the grant.
 - **The residual.** An unresolved unit, or one released on a late hello, has no digest to record under and stays
-  unjudged; its load OOM is held as an environment fault, as before. Accepted by the controller on 2026-11-12 per run-without-stalls, pending the owner's confirmation; if refused, a follow-up gates the late-hello path.
+  unjudged; its load OOM is held as an environment fault, as before. Accepted by the controller on 2026-11-12 per run-without-stalls, confirmed by the owner on 2026-11-14.
 
 ## Amendment log
 

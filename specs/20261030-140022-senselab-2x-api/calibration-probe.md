@@ -870,8 +870,8 @@ things record it, and one rule reads both.
 - **The residual, stated plainly.** A unit that is unresolved, and a unit released on a late hello, has no digest, so no
   record can be keyed and the release gate cannot judge it. It is released unjudged; its load OOM is held as a load
   fault of the environment (`execution.md` §3.4, T24-3) and is visible there, and no `unfit` record is written. This
-  is an exception, not part of the rule, accepted by the controller on 2026-11-12 per run-without-stalls, pending the
-  owner's confirmation; if refused, a follow-up gates the late-hello path.
+  is an exception, not part of the rule, accepted by the controller on 2026-11-12 per run-without-stalls, confirmed by the
+  owner on 2026-11-14.
 
 
 ## 8. Worker changes

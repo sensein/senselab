@@ -342,4 +342,3 @@ Full-matrix CI at `527f6925` (run 43248120719) completed success; `pr-models` is
 - Step 5 CPU job 29047618 failed one test once, `pyannote_backend_test::test_content_fault_isolated_with_real_weights` (a timestamp mismatch on item a). It did not reproduce in a probe, in a loop of 35 comparisons, or in the full rerun 29053174, and is recorded as a one-off. If it recurs, the test should compare against a second clean run with timestamps within one frame step of 16.875 ms.
 - Step 6 replays the agent call recorded at `ab62fd60`; it is not a fresh agent answer at this head.
 - Step 7 is carried, per `task-24-plan.md` section 3.
-- Owner confirmation is pending on the T24-7 I-5 residual: an unresolved unit is not fit-checked.
