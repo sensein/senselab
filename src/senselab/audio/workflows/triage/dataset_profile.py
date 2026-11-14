@@ -168,15 +168,28 @@ def canonical_json(value: Any) -> str:  # noqa: ANN401 -- a YAML value
 
     Returns:
         The JSON text.
+
+    Raises:
+        ValueError: If two keys of one mapping read the same as strings (``1`` and ``"1"``, ``null`` and
+            ``"None"``), or the value holds a set (``!!set``), whose order YAML does not fix.
     """
     return json.dumps(_string_keys(value), sort_keys=True, default=str)
 
 
 def _string_keys(value: Any) -> Any:  # noqa: ANN401 -- a YAML value
     if isinstance(value, Mapping):
-        return {key if isinstance(key, str) else str(key): _string_keys(held) for key, held in value.items()}
+        held: dict[str, Any] = {}
+        spelled: dict[str, Any] = {}
+        for key, item in value.items():
+            name = key if isinstance(key, str) else str(key)
+            if name in held:
+                raise ValueError(f"the keys {spelled[name]!r} and {key!r} both read as {name!r}; rename one")
+            held[name], spelled[name] = _string_keys(item), key
+        return held
+    if isinstance(value, (set, frozenset)):
+        raise ValueError(f"a YAML set (!!set) has no fixed order; write it as a list: {sorted(map(str, value))}")
     if isinstance(value, (list, tuple)):
-        return [_string_keys(held) for held in value]
+        return [_string_keys(item) for item in value]
     return value
 
 
@@ -190,7 +203,11 @@ def _digests(path: Path) -> tuple[str, str]:
         parsed = yaml.safe_load(raw.decode("utf-8"))
     except (yaml.YAMLError, UnicodeDecodeError):
         return raw_digest, raw_digest
-    return hashlib.sha256(canonical_json(parsed).encode()).hexdigest(), raw_digest
+    try:
+        canonical = canonical_json(parsed)
+    except ValueError as error:
+        raise ValueError(f"{path}: {error}") from error
+    return hashlib.sha256(canonical.encode()).hexdigest(), raw_digest
 
 
 def content_digest(path: Path) -> str:
@@ -203,6 +220,9 @@ def content_digest(path: Path) -> str:
 
     Returns:
         The hex digest.
+
+    Raises:
+        ValueError: As :func:`canonical_json`, naming the file.
     """
     return _digests(path)[0]
 
@@ -344,9 +364,9 @@ def recorded_digest_matches(recorded: object, profile: DatasetProfile) -> bool:
 
     Returns:
         True where it equals the profile's digest, or its legacy digest (one recorded before 2026-11-14, whose files
-        have not changed since).
+        have not changed since). An empty or absent record never matches.
     """
-    return recorded is not None and recorded in (profile.digest, profile.legacy_digest)
+    return bool(recorded) and recorded in tuple(digest for digest in (profile.digest, profile.legacy_digest) if digest)
 
 
 def profile_directory(reference: str, *, relative_to: Path | None = None) -> Path:

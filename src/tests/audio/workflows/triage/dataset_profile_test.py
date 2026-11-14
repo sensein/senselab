@@ -18,8 +18,10 @@ from senselab.audio.workflows.triage.dataset_profile import (
     PACKAGED_DATA,
     PACKAGED_PROFILES,
     DatasetDataMissing,
+    DatasetProfile,
     activate_profile,
     active_profile,
+    canonical_json,
     content_digest,
     data_path,
     data_values,
@@ -169,6 +171,37 @@ class TestLoading:
         changed = load_profile(root)
         assert changed.digest == profile.digest
         assert not recorded_digest_matches(profile.legacy_digest, changed), "its bytes changed since it was recorded"
+
+    def test_the_fixtures_legacy_digest_is_the_one_senselab_took_before(self) -> None:
+        """Pinned: the digests senselab 7c5872c5b (the last byte-hashing commit) gave the fixture and its base."""
+        profile = load_profile(FIXTURE_PROFILE)
+        assert profile.base is not None
+        assert (profile.legacy_digest, profile.base.legacy_digest) == ("87a5c40be8c893c1", "1b91670565fd4733")
+        assert recorded_digest_matches("87a5c40be8c893c1", profile)
+
+    def test_an_empty_recorded_digest_never_matches(self, tmp_path: Path) -> None:
+        """A profile with no legacy digest does not take a recorded "" for its own."""
+        profile = DatasetProfile(name="d", version="1", root=tmp_path, digest="0123456789abcdef")
+        assert profile.legacy_digest == ""
+        assert not recorded_digest_matches("", profile)
+        assert recorded_digest_matches("0123456789abcdef", profile)
+
+    @pytest.mark.parametrize("text", ["1: a\n'1': b\n", "null: a\n'None': b\n", "true: a\n'True': b\n"])
+    def test_keys_that_read_the_same_as_strings_are_refused(self, tmp_path: Path, text: str) -> None:
+        """Two keys spelled alike would hash as one: the file is refused, named, rather than one key dropped."""
+        path = tmp_path / "x.yaml"
+        path.write_text(text)
+        with pytest.raises(ValueError, match="both read as"):
+            canonical_json(yaml.safe_load(text))
+        with pytest.raises(ValueError, match="x.yaml"):
+            content_digest(path)
+
+    def test_a_yaml_set_is_refused(self, tmp_path: Path) -> None:
+        """A set has no order YAML fixes, so its hash would not be one value."""
+        path = tmp_path / "x.yaml"
+        path.write_text("words: !!set {b, a}\n")
+        with pytest.raises(ValueError, match="x.yaml.*!!set"):
+            content_digest(path)
 
     @pytest.mark.parametrize(
         "files",
