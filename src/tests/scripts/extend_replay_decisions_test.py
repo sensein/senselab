@@ -1023,7 +1023,7 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         """With the flag the new participant becomes the run's record, and the marker says what moved."""
         root = tmp_path / "rec-0001_20260920-030808"
         _seed_run(root, hint=self.HINT)
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         store = read_store(root, run_id=replay_run_id(root, config.config_hash))
         moved = hint_for("p02", "s1", "voluntary-cough")
         inputs = check_replay_inputs(store, root, config, hint=moved, hint_given=True, allow_identity_change=True)
@@ -1049,7 +1049,7 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         store = read_store(root)
         _strip_identity(store)
         given = check_replay_inputs(
-            store, root, load_triage_config(), hint=hint_for("p02", "s2", "voluntary-cough"), hint_given=True
+            store, root, load_triage_config(profile=ACTIVE), hint=hint_for("p02", "s2", "voluntary-cough"), hint_given=True
         )
         assert given.hint_from == HINT_GIVEN
 
@@ -1061,7 +1061,7 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         assert inputs.hint_from == HINT_GIVEN and inputs.changed
 
     def _replayed(self, root: Path, hint: AudioHints | None, **kwargs: Any) -> ProvStore:  # noqa: ANN401
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         store = read_store(root, run_id=replay_run_id(root, config.config_hash))
         inputs = check_replay_inputs(store, root, config, hint=hint, **kwargs)
         replay_decisions(
@@ -1112,7 +1112,7 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         before = (root / "run" / "store.jsonl").read_text()
         moved = hint_for("p02", "s1", "voluntary-cough")
         record = cli.replay_one(
-            root, load_triage_config(), build_hint=lambda _: (moved,), out_root=None, stem=root.name, commit=None
+            root, load_triage_config(profile=ACTIVE), build_hint=lambda _: (moved,), out_root=None, stem=root.name, commit=None
         )
         assert record["status"] == cli.REFUSED
         assert record["identity_refused"] == {"participant": {"from": "p01", "to": "p02"}}
@@ -1327,7 +1327,7 @@ class TestTheRecordingCheck:
         root = tmp_path / "rec-0001_20260920-030808"
         _substitute_keeping_stat(_seed_run(root))
         monkeypatch.setattr(cli, "replay_decisions", _stub_replay({}))
-        record = cli.replay_one(root, load_triage_config(), build_hint=None, out_root=None, stem=root.name, commit=None)
+        record = cli.replay_one(root, load_triage_config(profile=ACTIVE), build_hint=None, out_root=None, stem=root.name, commit=None)
         assert record["status"] == cli.REFUSED
         assert "digest differs" in record[cli.DERIVATION]
 
@@ -1338,7 +1338,7 @@ class TestTheRecordingCheck:
         root = tmp_path / "rec-0001_20260920-030808"
         _seed_run(root)
         hashed = _counting_digests(monkeypatch)
-        audio, _ = check_run_inputs(read_store(root), root, load_triage_config())
+        audio, _ = check_run_inputs(read_store(root), root, load_triage_config(profile=ACTIVE))
         assert audio == AUDIO_STAT_MATCHED
         assert hashed == []
 
@@ -1348,7 +1348,7 @@ class TestTheRecordingCheck:
         source = _seed_run(root)
         os.utime(source, ns=(1, 1))
         hashed = _counting_digests(monkeypatch)
-        audio, _ = check_run_inputs(read_store(root), root, load_triage_config())
+        audio, _ = check_run_inputs(read_store(root), root, load_triage_config(profile=ACTIVE))
         assert audio == AUDIO_VERIFIED
         assert hashed == [source]
 
@@ -1358,7 +1358,7 @@ class TestTheRecordingCheck:
         source = _seed_run(root)
         sf.write(str(source), _samples() * 0.5, SR)
         with pytest.raises(ReplayRefused, match="digest differs"):
-            check_run_inputs(read_store(root), root, load_triage_config())
+            check_run_inputs(read_store(root), root, load_triage_config(profile=ACTIVE))
 
 
 def test_an_out_root_mirror_is_placed_where_the_replay_leaves_the_identity() -> None:
