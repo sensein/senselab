@@ -22,6 +22,8 @@ load-bearing in them is inlined here.
 | 7 pydra, P-39 | PASS (K2 merged; 41-53 carried) | no job | gate PASS Route A at pydra 0c1bbcd9; K2 = #905 merged; Tasks 41-53 carried by R-238..R-250 |
 | R-253 | closed with a measurement | 28564898 (fd513f0c) | slope 7.29 +- 0.46 ms per job; see below |
 
+The rows above are Task 21's runs at the heads they name. Task 24 fixed what the exit adversarial round and these runs found, and every step was rerun at one head: see "Final rerun at `3c3dfced` (Task 24)" at the end of this file.
+
 ## Step 1 (CI)
 
 `2x-tests` green on the merge heads named above (progress.md 2026-11-10; the opus review checked the push run
@@ -295,3 +297,49 @@ test files only.
 - The corrected checker ran as cluster job 28608948 at 1f2ca81f: PASS 11/11 (435 senselab:Reuse = the resume's reuses, 284 by the coordinator and 151 by workers; at most one execution per key; 2 keys with a Reuse and no execution, within the kill allowance; one plan entity).
 - Not exercised at the exit: a multi-worker GPU pool, an interrupt with more than one worker, the SIGTERM path of an
   external `scancel`, and the "null for the default" model path of the Step 6 call (the agent named a model).
+
+## Final rerun at `3c3dfced` (Task 24)
+
+Task 24 (T24-1..T24-12) changed product code in every path the steps exercise, so each step was rerun at one head, `3c3dfced` (the merge of T24-12). The phase head is `f37f1ae4`: it differs from the evidence head by harness and test files only (`benchmarks/exit/orcd_driver.py`, where the resume-execution expectation now uses the resume's committed count; `packages/senselab/tests/bench/orcd_harness_test.py`; `packages/senselab-core/tests/runtime/execution/abrupt_stop_test.py`, which passes `onerror` where Python 3.11 lacks `shutil.rmtree`'s `onexc`). No product file changed, and the full matrix ran at `f37f1ae4`. The jobs ran from a checkout cloned from GitHub and pinned to that SHA, with the harness from the checkout's `benchmarks/exit`. The group site profiles were re-tagged `execution-profile@5.0` first. ORCD evidence: Steps 2 (29047611), 3 (29047612), 4 start, resume and provenance (29047613, 29047616, 29055900), 5 CPU, GPU and cross-node (29053174, 29047615, 29047619) and 6 (29049402) all pass at product `3c3dfced`.
+
+| Step | Job | Verdict | What it checks |
+|---|---|---|---|
+| CI | 43505114802 at `3c3dfced` | green | `2x-tests` on the evidence head |
+| Full matrix at `f37f1ae4` (`2x/full-matrix/phase-3-exit-9`) | 43566375276 | success (`pr-models` skipped by design; earlier runs also passed: 43562267946 on exit-8 at `c4dab1c2`, 43505114802 branch CI at `3c3dfced`) | 3.10 worker floor, 3.11-3.14 core-only and lean, pydra, limits, core-limits, core-env, licenses, source digests, pre-commit |
+| 2 P-10 | 29047611 | PASS 7/7 | one plan hash, placement-only diff, 1000 items on every executor, outputs equal per item under the run-config `samples` threshold (atol 1e-6, rtol 0) |
+| 3 P-10 model | 29047612 | PASS 6/6 | one plan hash, placement-only diff, 1000 of 1000 committed on the GPU class |
+| 4 P-5 start | 29047613 | PASS 3/3, 335 committed at the interrupt | interrupt with at least two workers; events and committed count |
+| 4 P-5 resume | 29047616 | PASS 5/5, on a different host from the start (the case T24-9 fixed) | resume on a different host than the start; every item committed |
+| 4 provenance | 29055900 | PASS 9/9 (driver from `f37f1ae4`, reading the run from `3c3dfced`; 0 lost keys, 0 items claimed twice) | `check_provenance`: every committed item has at least one execution or a Reuse, at most one Reuse per job of an item per attempt; executions 1000 (337 before the resume, 663 after; 663 = 1000 items - 336 committed at resume - 1 late), Reuse 337, equal to the resume's reuses (219 coordinator, 118 worker) |
+| 5 suite, CPU | 29053174 | PASS 6/6 | full suite, the env build of every lock |
+| 5 suite, GPU | 29047615 | PASS 6/6 | full suite on a typed GPU, the vLLM stop and fault paths, the load-OOM path |
+| 5 cross-node | 29047619 | PASS 6/6, lease and queue on 3 hosts | lease and queue checks on at least three hosts with the NFS parametrisation on; overlapping holds, lost items |
+| 6 P-1 | 29049402 | PASS 1/1 | the fresh agent's call plans and runs to completion |
+| 7 pydra, P-39 | not rerun | carried | task-24-plan.md section 3: "Step 7: no pydra or P-39 input changes. The Task 24 Step 3 log line re-checks the P-39 mark against `origin/alpha`." |
+
+### Reruns before the final head
+
+Each earlier rerun found something; the fixes are the Task 24 tasks named.
+
+| Head | Step | Job | Result | Cause and fix |
+|---|---|---|---|---|
+| `527f6925` | 3 | 28823950 | PASS 6/6 | |
+| `527f6925` | 4 start | 28823951 | PASS 3/3 | |
+| `527f6925` | 5 CPU, 5 GPU | 28823955, 28823952 | PASS, 0 test failures | |
+| `527f6925` | 2 | 28823949 | FAIL | harness compared identities exactly; the amended criterion compares arrays under the `samples` threshold |
+| `527f6925` | 5 cross-node | 28823956 | FAIL | script called `claim.broke(...)`, a property since T24-2 |
+| `527f6925` | 4 resume | 28823953 | TIMEOUT at 6 h | product: a coordinator lock left by a killed coordinator is broken only on the same host, so a resume on another host waited forever; T24-9 |
+| `a065218b` | 2, 3 | 28919871, 28919872 | PASS 7/7, 6/6 | |
+| `a065218b` | 4 start, resume | 28919873, 28919875 | PASS 3/3, 5/5 | resume on a different host than the start: T24-9 holds on the cluster |
+| `a065218b` | 5 GPU, 5 CPU | 28919874, 28919877 | PASS 6/6, 6/6 | |
+| `a065218b` | 4 provenance | 28919876, rerun 28925887 | FAIL | harness double-subtracted 51 keys (fixed); Reuse 334 against 336: the last claim's provenance was written after its commit and lost to the end-of-run stop; T24-10 |
+| `a065218b` | 5 cross-node | 28919878, rerun 28925888 | FAIL, then PASS 6/6 | harness start-order race: the breaker took the lease before the holder (fixed in the probe) |
+
+Full-matrix CI at `527f6925` (run 43248120719) completed success; `pr-models` is skipped by design on a push.
+
+### Not substantiated at this head
+
+- Step 5 CPU job 29047618 failed one test once, `pyannote_backend_test::test_content_fault_isolated_with_real_weights` (a timestamp mismatch on item a). It did not reproduce in a probe, in a loop of 35 comparisons, or in the full rerun 29053174, and is recorded as a one-off. If it recurs, the test should compare against a second clean run with timestamps within one frame step of 16.875 ms.
+- Step 6 replays the agent call recorded at `ab62fd60`; it is not a fresh agent answer at this head.
+- Step 7 is carried, per `task-24-plan.md` section 3.
+- Owner confirmation is pending on the T24-7 I-5 residual: an unresolved unit is not fit-checked.
