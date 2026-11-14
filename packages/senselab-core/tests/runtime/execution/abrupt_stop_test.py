@@ -13,6 +13,7 @@ worker works, so no lease is beaten or judged on wall time and no beat is writte
 
 import contextlib
 import shutil
+import sys
 import threading
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
@@ -205,11 +206,15 @@ def _stored(root: Path) -> set[str]:
 def _replace(live: Path, kept: Path) -> None:
     """Put the copy `kept` (none: nothing was there) where `live` is; read-only entries are made writable to go."""
 
-    def writable(function: Any, name: str, error: BaseException) -> None:  # noqa: ANN401, ARG001 - `shutil`'s handler
+    def writable(function: Any, name: str, error: Any) -> None:  # noqa: ANN401, ARG001 - `shutil`'s handler
         Path(name).parent.chmod(0o700)
         function(name)
 
-    shutil.rmtree(live, onexc=writable)
+    # `onexc` replaced `onerror` in 3.12; the handler takes the same three arguments under either keyword.
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(live, onexc=writable)
+    else:
+        shutil.rmtree(live, onerror=writable)
     if kept.exists():
         shutil.copytree(kept, live, symlinks=True)
 
