@@ -19,9 +19,11 @@ reads as the new decision, the old one, and the edge between them.
 ``--hints DIR`` names a directory holding a ``hints.py`` exposing ``build_hint(wav)``; routing, the branches,
 REDACT and VERDICT all read the hint. Without ``--hints`` the replay runs with the hint the store records
 (``hint: recorded`` on the row); a store that records none, or no task, is refused unless ``--no-hint`` is given,
-which runs with no hint and is recorded as such. A hint that declares another identity or task than the record, or
-a task list that now describes the task otherwise, is recorded as the run's own, and the row's ``identity_change``
-names what moved.
+which runs with no hint and is recorded as such. A hint that declares another task than the record, or a task list
+that now describes the task otherwise, is recorded as the run's own, and the row's ``identity_change`` names what
+moved. A hint that names another participant or session than the run records is refused (the row's
+``identity_refused`` names what it would move; the summary counts them) unless ``--allow-identity-change`` is given;
+a run that records no identity yet records the hint's.
 
 ``--out-root DIR`` writes each replayed run into a fresh root under ``DIR`` instead of in place,
 with the finished run's ``derivatives/``, its ``run.json`` and the streams the replay only reads reachable through
@@ -66,6 +68,7 @@ from senselab.audio.workflows.triage.extend import (
     RUN_SUBDIR,
     SKIPPED,
     SLICES_SUBDIR,
+    IdentityChangeRefused,
     ReplayOutcome,
     ReplayRefused,
     SliceLog,
@@ -140,6 +143,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--no-hint", action="store_true", help="Replay with no hint, where --hints is not given and none is recorded"
+    )
+    parser.add_argument(
+        "--allow-identity-change",
+        action="store_true",
+        help="Replay a run whose hint names another participant or session than the run records",
     )
     add_config_arguments(parser, allow_profile_change=True)
     return parser
@@ -222,6 +230,7 @@ def replay_one(
     force: bool = False,
     no_hint: bool = False,
     allow_profile_change: bool = False,
+    allow_identity_change: bool = False,
 ) -> dict[str, Any]:
     """Replay one finished run, writing its store only once every replayed node has run.
 
@@ -240,12 +249,14 @@ def replay_one(
         force: Replay even when this configuration's and revision's marker is already present.
         no_hint: Replay with no hint where none is given or recorded.
         allow_profile_change: Accept a profile whose name differs from the run's.
+        allow_identity_change: Accept a hint naming another participant or session than the run records.
 
     Returns:
         ``{status, replay, ...}`` — ``ok`` when the replay landed, ``errored`` when it landed but a
         replayed node raised (``errored_nodes`` names them), ``present`` when this configuration, revision
         and hint had already replayed the run, ``refused`` when the run's recorded inputs refuse it
-        (:func:`~senselab.audio.workflows.triage.extend.check_replay_inputs`), ``error`` when it could not.
+        (:func:`~senselab.audio.workflows.triage.extend.check_replay_inputs`; ``identity_refused`` names the
+        participant or session change where that is why), ``error`` when it could not.
     """
     try:
         hint = build_hint(source_of(run_root))[0] if build_hint is not None else None
@@ -271,7 +282,10 @@ def replay_one(
             hint_given=build_hint is not None,
             no_hint=no_hint,
             allow_profile_change=allow_profile_change,
+            allow_identity_change=allow_identity_change,
         )
+    except IdentityChangeRefused as refusal:
+        return {"status": REFUSED, DERIVATION: str(refusal), "identity_refused": refusal.change}
     except ReplayRefused as refusal:
         return {"status": REFUSED, DERIVATION: str(refusal)}
     if (
@@ -327,6 +341,7 @@ def process(
     force: bool = False,
     no_hint: bool = False,
     allow_profile_change: bool = False,
+    allow_identity_change: bool = False,
 ) -> list[dict[str, Any]]:
     """Replay every run named by these rows, one at a time.
 
@@ -343,6 +358,7 @@ def process(
         force: Replay runs that already carry this configuration's and revision's marker.
         no_hint: Replay with no hint where none is given or recorded.
         allow_profile_change: Accept a profile whose name differs from a run's.
+        allow_identity_change: Accept a hint naming another participant or session than a run records.
 
     Returns:
         One outcome record per input row, in order.
@@ -363,6 +379,7 @@ def process(
             force=force,
             no_hint=no_hint,
             allow_profile_change=allow_profile_change,
+            allow_identity_change=allow_identity_change,
         )
         return {**row, **replayed}
 
@@ -382,6 +399,7 @@ def run_slice(
     force: bool = False,
     no_hint: bool = False,
     allow_profile_change: bool = False,
+    allow_identity_change: bool = False,
 ) -> dict[str, Any]:
     """Replay every run in one array task's stride of the manifest.
 
@@ -397,6 +415,7 @@ def run_slice(
         force: Replay runs that already carry this configuration's and revision's marker.
         no_hint: Replay with no hint where none is given or recorded.
         allow_profile_change: Accept a profile whose name differs from a run's.
+        allow_identity_change: Accept a hint naming another participant or session than a run records.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -421,6 +440,7 @@ def run_slice(
             force=force,
             no_hint=no_hint,
             allow_profile_change=allow_profile_change,
+            allow_identity_change=allow_identity_change,
         )
     finally:
         rows_log.close()
@@ -430,6 +450,7 @@ def run_slice(
     reviews: dict[str, int] = {}
     needs_reread: list[str] = []
     identity_changed: list[str] = []
+    identity_refused: list[str] = []
     retired = 0
     for record in log:
         counts[str(record["status"])] = counts.get(str(record["status"]), 0) + 1
@@ -440,6 +461,8 @@ def run_slice(
             needs_reread.append(str(record["stem"]))
         if record.get("identity_change"):
             identity_changed.append(str(record["stem"]))
+        if record.get("identity_refused"):
+            identity_refused.append(str(record["stem"]))
         for node in record.get("errors") or {}:
             node_errors[node] = node_errors.get(node, 0) + 1
 
@@ -458,6 +481,7 @@ def run_slice(
         "reviews": reviews,
         "needs_reread": needs_reread,
         "identity_changed": identity_changed,
+        "identity_refused": identity_refused,
         "elapsed_s": time.time() - started,
         "log": str(log_path),
     }
@@ -473,10 +497,10 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         0 when every recording in the shard was replayed or already had been, 1 when any row is
-        ``error``, ``errored`` or ``refused`` — the other stores are written either way — 2 when the
-        arguments could not be resolved and nothing was read, and 3 when any replayed recording's REVIEW
-        reading could not be carried forward and must be read again (the summary's ``needs_reread`` names
-        them).
+        ``error``, ``errored`` or ``refused`` (an identity change refused among them) — the other stores are
+        written either way — 2 when the arguments could not be resolved and nothing was read, and 3 when any
+        replayed recording's REVIEW reading could not be carried forward and must be read again (the summary's
+        ``needs_reread`` names them).
     """
     args = build_parser().parse_args(argv)
 
@@ -496,6 +520,7 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
             no_hint=args.no_hint,
             allow_profile_change=args.allow_profile_change,
+            allow_identity_change=args.allow_identity_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
@@ -512,6 +537,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  review {state:<12} {number}")
     if summary["identity_changed"]:
         print(f"  identity recorded anew on {len(summary['identity_changed'])} runs (each row's identity_change)")
+    if summary["identity_refused"]:
+        print(
+            f"REFUSED: {len(summary['identity_refused'])} runs whose hint names another participant or session "
+            "(each row's identity_refused); check --hints, or pass --allow-identity-change",
+            file=sys.stderr,
+        )
     if summary["needs_reread"]:
         print(f"REVIEW: {len(summary['needs_reread'])} recordings need the reviewer again", file=sys.stderr)
         return 3

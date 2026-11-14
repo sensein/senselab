@@ -1133,6 +1133,28 @@ def require_recorded_identity(store: ProvStore, run_root: Path) -> None:
         )
 
 
+IDENTITY_GUARDED_FIELDS = ("participant", "session")
+"""The recorded identity fields a replay's hint may not move without ``allow_identity_change``; a task may move."""
+
+
+class IdentityChangeRefused(ReplayRefused):
+    """A replay whose hint names another participant or session than the run records.
+
+    Attributes:
+        change: ``{field: {from, to}}`` for each of :data:`IDENTITY_GUARDED_FIELDS` the hint moves.
+    """
+
+    def __init__(self, message: str, change: dict[str, dict[str, str | None]]) -> None:
+        """Build the refusal.
+
+        Args:
+            message: Why the replay is refused.
+            change: What the hint would move.
+        """
+        super().__init__(message)
+        self.change = change
+
+
 class StaleManifestRow(ReplayRefused):
     """A manifest row whose identity is not the one its run records; the whole group it joined is refused."""
 
@@ -1402,6 +1424,7 @@ def check_replay_inputs(
     no_hint: bool = False,
     allow_profile_change: bool = False,
     allow_hint_change: bool = True,
+    allow_identity_change: bool = False,
     source: Path | None = None,
 ) -> ReplayInputs:
     """Check a finished run's recorded inputs before a replay or re-fold, and settle the hint it runs with.
@@ -1412,7 +1435,9 @@ def check_replay_inputs(
     unless a hint is given or ``no_hint``, since its recorded hint names no task and every branch would take its
     out-of-family mode; a recorded hint that carried a ``target_speaker`` (only its digest is stored), unless a
     hint is given; a run recording no identity whose hint declares none (plan step 6a), or whose hint declares one
-    that cannot be built; a changed hint, unless ``allow_hint_change``. A re-fold (``allow_hint_change`` False) is
+    that cannot be built; a changed hint, unless ``allow_hint_change``; a replay whose hint names another participant
+    or session than the run records (:class:`IdentityChangeRefused`), unless ``allow_identity_change`` (a run that
+    records no identity yet, and a changed task, are not refused). A re-fold (``allow_hint_change`` False) is
     refused too where the store records no hint to compare its hint with (replay the run first), and where the
     run's decisions were taken under another profile (unless ``allow_profile_change``) or another set of stages off
     (:func:`decided_under`), since VERDICT would re-score the old reports. Anything else is accepted and recorded on
@@ -1427,13 +1452,15 @@ def check_replay_inputs(
         no_hint: Whether the caller asked to run with no hint (``--no-hint``).
         allow_profile_change: Accept a profile whose name differs from the run's.
         allow_hint_change: Accept a hint that differs from the recorded one; False for a re-fold.
+        allow_identity_change: Accept a replay hint that names another participant or session than the run records.
         source: The recording to re-hash; None reads the one ``run.json`` names.
 
     Returns:
         What was checked, and the hint to run with.
 
     Raises:
-        ReplayRefused: For each refusal above.
+        IdentityChangeRefused: For a participant or session change without ``allow_identity_change``.
+        ReplayRefused: For each other refusal above.
     """
     record = admit_record(store)
     attributes = record[0] if record is not None else {}
@@ -1483,6 +1510,20 @@ def check_replay_inputs(
         )
     if changed and not allow_hint_change:
         raise ReplayRefused(f"the hint differs from the recorded one ({', '.join(changed)}); replay the run instead")
+    recorded = recorded_identity(store)
+    if allow_hint_change and recorded is not None and not allow_identity_change:
+        change = {
+            name: {"from": getattr(recorded, name), "to": getattr(declared, name)}
+            for name in IDENTITY_GUARDED_FIELDS
+            if getattr(declared, name) != getattr(recorded, name)
+        }
+        if change:
+            moved = ", ".join(f"{name} {each['from']!r} -> {each['to']!r}" for name, each in change.items())
+            raise IdentityChangeRefused(
+                f"the replay's hint names another identity than the run records ({moved}); check --hints, or pass "
+                "--allow-identity-change where the driver takes it",
+                change,
+            )
     return ReplayInputs(hint=held, hint_from=hint_from, changed=changed, audio=audio, profile=profile)
 
 
@@ -1936,7 +1977,8 @@ def replay_decisions(
             the current task list (:func:`record_moved`), is recorded as the run's first
             (:func:`record_replayed_hint`), and the stimulus alignment is rebuilt where its expected speech
             moved (:func:`realign_stimulus`); the marker records the inputs, the stages left off and any change of
-            identity, which the outcome carries too.
+            identity, which the outcome carries too. A participant or session change reaches this only where
+            :func:`check_replay_inputs` was given ``allow_identity_change``.
 
     Returns:
         What the replay did, including the marker it wrote last.

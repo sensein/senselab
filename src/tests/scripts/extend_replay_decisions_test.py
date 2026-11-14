@@ -38,6 +38,7 @@ from senselab.audio.workflows.triage.extend import (
     REPLAY_MARKER_STEP,
     REPLAY_NODE,
     REPLAYED_NODES,
+    IdentityChangeRefused,
     ReplayInputs,
     ReplayRefused,
     check_replay_inputs,
@@ -982,6 +983,136 @@ class TestAChangedHintBecomesTheRunsRecord:
         assert outcome.identity_change is not None
         assert outcome.identity_change["to"]["declared_task_id"] == "rainbow-passage"
         assert marker[OFF_STAGES_KEY] == []
+
+
+def _strip_identity(store: ProvStore) -> None:
+    """Drop the identity ADMIT recorded, as on a store written before ADMIT recorded one."""
+    for stream in store.entities("stream"):
+        for key in (DECLARED_PARTICIPANT, DECLARED_SESSION, DECLARED_TASK_ID, DECLARED_FROM):
+            stream.attributes.pop(key, None)
+    for activity in store.activities("ADMIT"):
+        for key in (DECLARED_PARTICIPANT, DECLARED_SESSION, DECLARED_TASK_ID, DECLARED_FROM):
+            activity.parameters.pop(key, None)
+
+
+class TestAReplayDoesNotMoveTheParticipantOrSession:
+    """A hint naming another participant or session is refused unless allowed (Satra review 2026-11-14, decision 2)."""
+
+    HINT = hint_for("p01", "s1", "voluntary-cough")
+
+    def test_another_participant_is_refused(self, tmp_path: Path) -> None:
+        """A wrong --hints directory would re-identify the run; the replay refuses and names the change."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=self.HINT)
+        with pytest.raises(IdentityChangeRefused, match="--allow-identity-change") as refused:
+            _checked(root, hint=hint_for("p02", "s1", "voluntary-cough"), hint_given=True)
+        assert refused.value.change == {"participant": {"from": "p01", "to": "p02"}}
+
+    def test_another_session_is_refused(self, tmp_path: Path) -> None:
+        """The session is guarded as the participant is."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=self.HINT)
+        with pytest.raises(IdentityChangeRefused) as refused:
+            _checked(root, hint=hint_for("p01", "s2", "voluntary-cough"), hint_given=True)
+        assert refused.value.change == {"session": {"from": "s1", "to": "s2"}}
+
+    def test_an_allowed_change_is_replayed_and_recorded_as_an_identity_change(self, tmp_path: Path) -> None:
+        """With the flag the new participant becomes the run's record, and the marker says what moved."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=self.HINT)
+        config = load_triage_config()
+        store = read_store(root, run_id=replay_run_id(root, config.config_hash))
+        moved = hint_for("p02", "s1", "voluntary-cough")
+        inputs = check_replay_inputs(store, root, config, hint=moved, hint_given=True, allow_identity_change=True)
+        outcome = replay_decisions(
+            store,
+            config,
+            inputs.hint,
+            run_dir=root / "run",
+            artifacts_dir=root / "released",
+            summary_dir=root / "summary",
+            inputs=inputs,
+        )
+        recorded = recorded_identity(store)
+        assert recorded is not None and recorded.participant == "p02"
+        marker = store.get_activity(outcome.marker).parameters
+        assert marker["identity_change"]["from"][DECLARED_PARTICIPANT] == "p01"
+        assert marker["identity_change"]["to"][DECLARED_PARTICIPANT] == "p02"
+
+    def test_a_first_record_is_not_a_change(self, tmp_path: Path) -> None:
+        """A run that records no identity yet (a v4-era store) records the hint's."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=self.HINT)
+        store = read_store(root)
+        _strip_identity(store)
+        given = check_replay_inputs(
+            store, root, load_triage_config(), hint=hint_for("p02", "s2", "voluntary-cough"), hint_given=True
+        )
+        assert given.hint_from == HINT_GIVEN
+
+    def test_a_task_change_is_accepted(self, tmp_path: Path) -> None:
+        """A corrected task is what a replay is for."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=self.HINT)
+        inputs = _checked(root, hint=hint_for("p01", "s1", "rainbow-passage"), hint_given=True)
+        assert inputs.hint_from == HINT_GIVEN and inputs.changed
+
+    def test_a_refold_with_an_unchanged_hint_is_not_refused(self, tmp_path: Path) -> None:
+        """A re-fold records no identity, so the guard does not apply to it."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=self.HINT)
+        assert _checked(root, hint=self.HINT, hint_given=True, allow_hint_change=False).changed == []
+
+    def test_the_driver_row_names_the_refused_change(self, tmp_path: Path) -> None:
+        """The row is refused, names the change, and the store is left as it was."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=self.HINT)
+        before = (root / "run" / "store.jsonl").read_text()
+        moved = hint_for("p02", "s1", "voluntary-cough")
+        record = cli.replay_one(
+            root, load_triage_config(), build_hint=lambda _: (moved,), out_root=None, stem=root.name, commit=None
+        )
+        assert record["status"] == cli.REFUSED
+        assert record["identity_refused"] == {"participant": {"from": "p01", "to": "p02"}}
+        assert (root / "run" / "store.jsonl").read_text() == before
+
+    def test_the_slice_counts_refused_identity_changes_and_exits_1(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The summary lists the stems refused for an identity change, and the task fails."""
+        roots = [tmp_path / f"run{n}" for n in range(2)]
+        for root in roots:
+            _seed_run(root)
+        manifest = _manifest(tmp_path / "manifest.jsonl", roots)
+        rows = iter(
+            [
+                {"status": cli.REFUSED, "identity_refused": {"session": {"from": "s1", "to": "s2"}}},
+                {"status": cli.OK, "retired": 0},
+            ]
+        )
+        monkeypatch.setattr(cli, "replay_one", lambda run_root, config, **kwargs: next(rows))
+        code = cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)])
+        assert code == 1
+        [summary_path] = (tmp_path / "slices").glob("*.summary.json")
+        assert json.loads(summary_path.read_text())["identity_refused"] == ["run0"]
+        assert "REFUSED: 1 runs" in capsys.readouterr().err
+
+    def test_the_driver_passes_allow_identity_change(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """--allow-identity-change reaches each row's replay."""
+        root = tmp_path / "run0"
+        _seed_run(root)
+        manifest = _manifest(tmp_path / "manifest.jsonl", [root])
+        seen: list[object] = []
+
+        def _fake(run_root: Path, config: object, **kwargs: object) -> dict:
+            seen.append(kwargs["allow_identity_change"])
+            return {"status": cli.OK, "retired": 0}
+
+        monkeypatch.setattr(cli, "replay_one", _fake)
+        argv = [str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)]
+        assert cli.main([*argv, "--allow-identity-change"]) == 0
+        assert cli.main(argv) == 0
+        assert seen == [True, False]
 
 
 class TestTheStimulusAlignmentFollowsTheExpectedSpeech:
