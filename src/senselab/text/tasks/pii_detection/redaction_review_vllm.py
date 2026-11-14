@@ -429,3 +429,4 @@ def start_vllm_worker(worker: Any, timeout_s: int) -> None:  # noqa: ANN401 — 
     worker.engine = {key: live[key] for key in ("name", "version", "server_args", "concurrency")}
     worker.engine_details = live
     worker.load_s = round(time.monotonic() - began, 3)
+    worker.runtime = review.reviewer_runtime(venv_dir, worker.engine)

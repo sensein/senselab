@@ -87,6 +87,17 @@ def test_gpu_node_with_torch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert record["slurm_job_id"] is None
 
 
+def test_the_gpu_inventory_names_every_gpu_and_the_driver() -> None:
+    """Every visible GPU is named, in nvidia-smi's order; a host with no nvidia-smi has none and no driver."""
+    smi = (0, "NVIDIA H100 80GB HBM3, 570.86.15\nNVIDIA  L40S , 570.86.15\n")
+    assert host.gpu_inventory(runner=FakeRunner(smi=smi, probe=(0, ""))) == (
+        ["NVIDIA H100 80GB HBM3", "NVIDIA L40S"],
+        "570.86.15",
+    )
+    assert host.gpu_inventory(runner=FakeRunner(smi=None, probe=(0, ""))) == ([], None)
+    assert host.gpu_inventory(runner=FakeRunner(smi=(9, "garbage"), probe=(0, ""))) == ([], None)
+
+
 def test_failing_probe_and_smi_give_none(tmp_path: Path) -> None:
     """Failing probe and smi give none."""
     record = host_record(_venv(tmp_path), runner=FakeRunner(smi=(9, "garbage"), probe=(1, "Traceback")))

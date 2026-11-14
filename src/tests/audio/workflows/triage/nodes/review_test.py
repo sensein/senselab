@@ -922,6 +922,59 @@ class TestTheRoundsReachTheStoreAndTheSummaryStaysClean:
         assert not [key for key in annotation if key.endswith(("_s", "_mib"))]
 
 
+_RUNTIME_A = {
+    "host": "node-a",
+    "gpus": ["NVIDIA A100-SXM4-80GB"],
+    "nvidia_driver": "570.86.15",
+    "torch": "2.8.0+cu128",
+    "vllm": "0.31.0",
+    "slurm_job_id": "1",
+}
+_RUNTIME_B = {**_RUNTIME_A, "host": "node-b", "gpus": ["NVIDIA H100 80GB HBM3"], "nvidia_driver": "580.65.06"}
+
+
+class TestEachAnswerRecordsTheMachineItRanOn:
+    """Satra review 2026-11-14, decision 5: every round and the reading name the host, GPUs and software behind them."""
+
+    def test_every_round_and_the_annotation_carry_the_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each round's own record, and the reading's from its last answering round, beside the model and commit."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        proposal = ReviewProposal(text="alicia", action="redact", category="PERSON", why="a name")
+        flagged, clean = _flags(proposal), _clean()
+        flagged.runtime, clean.runtime = dict(_RUNTIME_A), dict(_RUNTIME_B)
+        _stub(monkeypatch, [flagged, clean])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        assert [entry["runtime"] for entry in _rounds_in(store)] == [_RUNTIME_A, _RUNTIME_B]
+        annotation = _annotation(store)
+        assert annotation["runtime"] == _RUNTIME_B
+        assert annotation["model_id"] and annotation["revision"] == "a" * 40, "the model and its commit stay beside it"
+
+    def test_a_reading_with_no_answer_names_no_machine(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A reviewer that never answered ran nowhere."""
+        store = ProvStore(run_id="r")
+        _seed(store)
+        _stub(monkeypatch, [ReviewResult(available=False, failure="no GPU", model_id="s/m")])
+        review(store, _config(tmp_path))
+        assert _annotation(store)["runtime"] == {}
+
+    def test_the_runtime_decides_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The same answers on two machines give the same reading; only the record of where differs."""
+        monkeypatch.setattr(review_module, "_resolved", lambda settings: None)  # no key: both are read
+        readings = []
+        for runtime in (_RUNTIME_A, _RUNTIME_B):
+            store = ProvStore(run_id=f"r-{runtime['host']}")
+            _seed(store, words=["hello", "alicia"])
+            answer = _clean()
+            answer.runtime = dict(runtime)
+            _stub(monkeypatch, [answer])
+            review(store, _config(tmp_path))
+            readings.append({k: v for k, v in _annotation(store).items() if k not in ("runtime", "result_cache")})
+        assert readings[0] == readings[1]
+
+
 class TestTheReviewerDegradesHonestly:
     """A model that will not load is a gap in the record, never a clean reading."""
 
@@ -1120,6 +1173,18 @@ class TestAReadingIsKeptInTheResultCache:
         assert base != review_cache_key("a b", None, {"task": "y"}, settings, "a" * 40)
         assert base != review_cache_key("a b", "[PERSON] b", {"task": "x"}, settings, "a" * 40)
         assert base != review_cache_key("a b", None, {"task": "x"}, settings, "b" * 40)
+
+    def test_a_cached_reading_keeps_the_machine_that_produced_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The runtime is not in the key: another machine takes the reading, and the record still names the first."""
+        answer = _clean()
+        answer.runtime = dict(_RUNTIME_A)
+        first = self._reviewed(tmp_path, monkeypatch, [answer])
+        second = self._reviewed(tmp_path, monkeypatch, [])
+        assert _annotation(second)["result_cache"]["hit"] is True
+        assert _annotation(second)["result_cache"]["key"] == _annotation(first)["result_cache"]["key"]
+        assert _annotation(second)["runtime"] == _annotation(first)["runtime"] == _RUNTIME_A
 
     def test_an_absent_reading_is_not_kept(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A reviewer that did not load is recorded, and asked again next time."""

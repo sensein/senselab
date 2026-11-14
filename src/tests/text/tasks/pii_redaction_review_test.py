@@ -222,6 +222,81 @@ class TestTheWeightsAreLoadedOncePerProcess:
         assert result.peak_reserved_mib == 0 and result.resident_mib == 0
 
 
+def _host_runner(smi: tuple[int, str], torch_version: str | None) -> Any:  # noqa: ANN401 — a host Runner
+    """A stand-in for the host probe's subprocess runner: canned ``nvidia-smi`` rows and a venv torch version."""
+
+    def run(argv: Any) -> tuple[int, str]:  # noqa: ANN401
+        if argv[0] == "nvidia-smi":
+            return smi
+        return 0, json.dumps({"python": "3.12.11", "torch": torch_version, "torch_cuda": None})
+
+    return run
+
+
+class TestEachAnswerRecordsWhereItRan:
+    """Satra review 2026-11-14, decision 5: the machine and software behind every answer are on its record."""
+
+    @pytest.fixture(autouse=True)
+    def _venv_python(self, tmp_path: Path) -> None:
+        (tmp_path / "venv" / "bin").mkdir(parents=True)
+        (tmp_path / "venv" / "bin" / "python").write_text("")
+
+    def test_the_answer_records_the_host_the_gpus_and_the_software(
+        self, harness: Harness, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Host, every GPU's name, the driver, the venv's torch and (no vLLM here) None; the amortised round too."""
+        import socket
+
+        from senselab.utils.reproduce import host
+
+        monkeypatch.setenv("SLURM_JOB_ID", "4242")
+        smi = (0, "NVIDIA A100-SXM4-80GB, 570.86.15\nNVIDIA A100-SXM4-80GB, 570.86.15\n")
+        monkeypatch.setattr(host, "_run", _host_runner(smi, "2.8.0+cu128"))
+        first = review_transcript("one", model_id="stub/model", policy=POLICY)
+        second = review_transcript("two", model_id="stub/model", policy=POLICY)
+        assert first.available, first.failure
+        assert first.runtime == {
+            "host": socket.gethostname(),
+            "gpus": ["NVIDIA A100-SXM4-80GB", "NVIDIA A100-SXM4-80GB"],
+            "nvidia_driver": "570.86.15",
+            "torch": "2.8.0+cu128",
+            "vllm": None,
+            "slurm_job_id": "4242",
+        }
+        assert set(first.runtime) == set(redaction_review.RUNTIME_KEYS)
+        assert second.runtime == first.runtime, "a reused worker answers on the same machine"
+        assert redaction_review.review_payload(first)["runtime"] == first.runtime
+        assert (first.model_id, first.revision) == ("stub/model", SHA), "the model and its commit stay beside it"
+
+    def test_a_host_without_a_gpu_records_none(self, harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No nvidia-smi: no GPUs and no driver, and the answer still stands."""
+        from senselab.utils.reproduce import host
+
+        monkeypatch.setattr(host, "_run", _host_runner((127, ""), None))
+        result = review_transcript("one", model_id="stub/model", policy=POLICY)
+        assert result.available
+        assert result.runtime["gpus"] == [] and result.runtime["nvidia_driver"] is None
+        assert result.runtime["torch"] is None
+
+    def test_a_failing_probe_never_fails_the_review(self, harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Provenance describes the answer; a probe that raises leaves every value None rather than no answer."""
+        from senselab.utils.reproduce import host
+
+        def _boom(*_a: object, **_k: object) -> dict[str, Any]:
+            raise OSError("no /proc")
+
+        monkeypatch.setattr(host, "host_record", _boom)
+        result = review_transcript("one", model_id="stub/model", policy=POLICY)
+        assert result.available
+        assert result.runtime == {**dict.fromkeys(redaction_review.RUNTIME_KEYS), "gpus": []}
+
+    def test_an_answer_that_never_came_records_no_machine(self, harness: Harness) -> None:
+        """A worker that did not start answered nothing, so nothing says where it ran."""
+        harness.directives("fail_load")
+        result = review_transcript("one", model_id="stub/model", policy=POLICY)
+        assert not result.available and result.runtime == {}
+
+
 class TestAWorkerThatCannotStartCostsOneAttempt:
     """A corpus of 15,000 recordings on a host with no reachable GPU must not pay 15,000 loads."""
 

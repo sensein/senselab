@@ -87,13 +87,31 @@ def _cpu_model() -> str | None:
     return None
 
 
-def _gpus(runner: Runner) -> tuple[str | None, str | None, int]:
+def _gpu_rows(runner: Runner) -> list[list[str]]:
     code, out = runner(NVIDIA_SMI)
     rows = [line.split(",") for line in out.splitlines() if line.strip()] if code == 0 else []
-    rows = [[_one_line(c) for c in row] for row in rows if len(row) == 2]
+    return [[_one_line(c) for c in row] for row in rows if len(row) == 2]
+
+
+def _gpus(runner: Runner) -> tuple[str | None, str | None, int]:
+    rows = _gpu_rows(runner)
     if not rows:
         return None, None, 0
     return rows[0][0] or None, rows[0][1] or None, len(rows)
+
+
+def gpu_inventory(*, runner: Runner | None = None) -> tuple[list[str], str | None]:
+    """Every visible GPU's name and the driver version, as ``nvidia-smi`` reports them.
+
+    Args:
+        runner: As :func:`host_record`'s; defaults to a subprocess runner.
+
+    Returns:
+        ``(names, driver)``: one name per GPU in ``nvidia-smi``'s order, and the first GPU's driver. ``([], None)``
+        where ``nvidia-smi`` is absent or fails.
+    """
+    rows = _gpu_rows(runner or _run)
+    return [row[0] for row in rows if row[0]], (rows[0][1] or None) if rows else None
 
 
 def _probe(venv: Path, runner: Runner) -> dict[str, Any]:

@@ -173,6 +173,9 @@ class _Reading:
         other_speaker_quotes: The passages it attributed to the other speaker.
         task_content_quotes: The PII-annotated words it judged task content.
         engine: The engine that answered the last round, as the worker reported it; empty where none did.
+        runtime: The machine and software the last answering round ran on
+            (:func:`~senselab.text.tasks.pii_detection.redaction_review.reviewer_runtime`); empty where none answered,
+            and on a cached reading the machine that first produced it.
         phrase_quotes_unplaced_n: How many of the last answering round's phrase quotes place on no run of the
             timed consensus words (:func:`~senselab.text.tasks.pii_detection.redaction_review.unplaced_phrase_quotes`).
         bypass_reason: One of :data:`BYPASS_REASONS` where the status is :data:`BYPASSED`, else None.
@@ -203,6 +206,7 @@ class _Reading:
     other_speaker_quotes: tuple[str, ...] = ()
     task_content_quotes: tuple[str, ...] = ()
     engine: dict[str, Any] = field(default_factory=dict)
+    runtime: dict[str, Any] = field(default_factory=dict)
     phrase_quotes_unplaced_n: int = 0
     bypass_reason: str | None = None
     absent_reason: str | None = None
@@ -801,6 +805,7 @@ def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[
     fields_["instructions_spoken"] = tuple(str(text) for text in fields_.get("instructions_spoken") or ())
     fields_["conditions"] = tuple(dict(entry) for entry in fields_.get("conditions") or ())
     fields_["engine"] = dict(fields_.get("engine") or {})
+    fields_["runtime"] = dict(fields_.get("runtime") or {})
     fields_.update(_task_reading(fields_))
     return _Reading(**fields_), [dict(review) for review in payload.get("reviews") or ()]
 
@@ -971,6 +976,7 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
         instructions_spoken=tuple(str(text) for text in held.get("instructions_spoken") or ()),
         conditions=tuple(dict(entry) for entry in held.get("conditions") or ()),
         engine=engine,
+        runtime=dict(held.get("runtime") or {}),
         phrase_quotes_unplaced_n=int(held.get("phrase_quotes_unplaced_n") or 0),
         **_task_reading(held),
     )
@@ -1096,6 +1102,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
                     instructions_spoken=spoken,
                     conditions=conditions,
                     engine=dict(answered[-1].get("engine") or {}),
+                    runtime=dict(answered[-1].get("runtime") or {}),
                     **_task_reading(answered[-1]),
                 )
             read_under = policy_fingerprint() if reading.status in READ_STATES else None
@@ -1187,6 +1194,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "task_content_quotes": list(reading.task_content_quotes),
             "prompt_version": PROMPT_VERSION,
             "engine": dict(reading.engine),
+            "runtime": dict(reading.runtime),
             "proposal": [dict(entry) for entry in reading.proposal],
             "proposal_redact_n": sum(1 for entry in reading.proposal if entry["action"] == REDACT),
             "proposal_release_n": sum(1 for entry in reading.proposal if entry["action"] != REDACT),
