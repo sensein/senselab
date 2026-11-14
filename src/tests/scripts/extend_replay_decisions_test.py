@@ -1049,7 +1049,11 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         store = read_store(root)
         _strip_identity(store)
         given = check_replay_inputs(
-            store, root, load_triage_config(profile=ACTIVE), hint=hint_for("p02", "s2", "voluntary-cough"), hint_given=True
+            store,
+            root,
+            load_triage_config(profile=ACTIVE),
+            hint=hint_for("p02", "s2", "voluntary-cough"),
+            hint_given=True,
         )
         assert given.hint_from == HINT_GIVEN
 
@@ -1112,7 +1116,12 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         before = (root / "run" / "store.jsonl").read_text()
         moved = hint_for("p02", "s1", "voluntary-cough")
         record = cli.replay_one(
-            root, load_triage_config(profile=ACTIVE), build_hint=lambda _: (moved,), out_root=None, stem=root.name, commit=None
+            root,
+            load_triage_config(profile=ACTIVE),
+            build_hint=lambda _: (moved,),
+            out_root=None,
+            stem=root.name,
+            commit=None,
         )
         assert record["status"] == cli.REFUSED
         assert record["identity_refused"] == {"participant": {"from": "p01", "to": "p02"}}
@@ -1327,7 +1336,9 @@ class TestTheRecordingCheck:
         root = tmp_path / "rec-0001_20260920-030808"
         _substitute_keeping_stat(_seed_run(root))
         monkeypatch.setattr(cli, "replay_decisions", _stub_replay({}))
-        record = cli.replay_one(root, load_triage_config(profile=ACTIVE), build_hint=None, out_root=None, stem=root.name, commit=None)
+        record = cli.replay_one(
+            root, load_triage_config(profile=ACTIVE), build_hint=None, out_root=None, stem=root.name, commit=None
+        )
         assert record["status"] == cli.REFUSED
         assert "digest differs" in record[cli.DERIVATION]
 
