@@ -157,6 +157,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def mirror_root(run_root: Path, out_root: Path, identity: RecordingIdentity) -> Path:
+    """Where :func:`mirror_run_root` places a replayed run root, without creating it.
+
+    Args:
+        run_root: The finished run root.
+        out_root: The tree replayed roots are created under.
+        identity: The identity the replay leaves the run with.
+
+    Returns:
+        The replayed run root's path.
+    """
+    return out_root / entity_subdir(identity) / run_root.name
+
+
 def mirror_run_root(run_root: Path, out_root: Path, identity: RecordingIdentity) -> Path:
     """A writable run root under ``out_root`` whose sidecars read through to the finished one.
 
@@ -175,7 +189,7 @@ def mirror_run_root(run_root: Path, out_root: Path, identity: RecordingIdentity)
     Returns:
         The replayed run root, created.
     """
-    dest = out_root / entity_subdir(identity) / run_root.name
+    dest = mirror_root(run_root, out_root, identity)
     run_dir = dest / RUN_SUBDIR
     (run_dir / STREAMS_SUBDIR).mkdir(parents=True, exist_ok=True)
     (dest / RELEASE_SUBDIR).mkdir(parents=True, exist_ok=True)
@@ -243,7 +257,8 @@ def replay_one(
     The store is read under :func:`replay_run_id`, so what the replay writes takes ids distinct
     from the decisions it retires. A run already carrying this configuration's and revision's marker is skipped
     and nothing is written; a run that raises before the write keeps the store it had, so a
-    preempted task redoes that recording from the beginning and cannot stack two retirements.
+    preempted task redoes that recording from the beginning and cannot stack two retirements. An ``out_root``
+    mirror is created only once the run's recorded inputs are accepted, so a refused run leaves none.
 
     Args:
         run_root: The finished run root.
@@ -269,12 +284,13 @@ def replay_one(
     except (OSError, ValueError, LookupError, KeyError, IndexError) as error:
         return {"status": ERROR, DERIVATION: f"hint: {describe_exception(error)}"}
     run_id = replay_run_id(run_root, config.config_hash, commit)
+    placed: RecordingIdentity | None = None
     try:
         store = read_store(run_root, run_id=run_id)
         target = run_root
         if out_root is not None:
             placed = replay_identity(recorded_identity(store), stem, hint, hint_given=build_hint is not None)
-            target = mirror_run_root(run_root, out_root, placed)
+            target = mirror_root(run_root, out_root, placed)
             if (target / RUN_SUBDIR / "store.jsonl").is_file():
                 store = read_store(target, run_id=run_id)
     except (OSError, ValueError) as error:
@@ -294,6 +310,11 @@ def replay_one(
         return {"status": REFUSED, DERIVATION: str(refusal), "identity_refused": refusal.change}
     except ReplayRefused as refusal:
         return {"status": REFUSED, DERIVATION: str(refusal)}
+    if out_root is not None and placed is not None:
+        try:
+            mirror_run_root(run_root, out_root, placed)
+        except OSError as error:
+            return {"status": ERROR, DERIVATION: describe_exception(error)}
     if (
         not force
         and find_replay_marker(

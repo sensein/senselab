@@ -1144,6 +1144,46 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         assert record["identity_refused"] == {"participant": {"from": "p01", "to": "p02"}}
         assert (root / "run" / "store.jsonl").read_text() == before
 
+    def test_a_refused_replay_leaves_no_out_root_mirror(self, tmp_path: Path) -> None:
+        """The check runs before the mirror is made, so nothing is created under the identity the hint would give."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=self.HINT)
+        out_root = tmp_path / "replayed"
+        moved = hint_for("p02", "s1", "voluntary-cough")
+        record = cli.replay_one(
+            root,
+            load_triage_config(profile=ACTIVE),
+            build_hint=lambda _: (moved,),
+            out_root=out_root,
+            stem=root.name,
+            commit=None,
+        )
+        assert record["status"] == cli.REFUSED and record["identity_refused"]
+        assert not (out_root / "p02").exists()
+        assert not out_root.exists() or not any(out_root.rglob("*"))
+
+    def test_an_accepted_replay_writes_its_out_root_mirror(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same replay, allowed, mirrors the run under the new participant and writes its store there."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=self.HINT)
+        out_root = tmp_path / "replayed"
+        moved = hint_for("p02", "s1", "voluntary-cough")
+        monkeypatch.setattr(cli, "replay_decisions", _stub_replay({}))
+        record = cli.replay_one(
+            root,
+            load_triage_config(profile=ACTIVE),
+            build_hint=lambda _: (moved,),
+            out_root=out_root,
+            stem=root.name,
+            commit=None,
+            allow_identity_change=True,
+        )
+        assert record["status"] == cli.OK
+        assert Path(record["run_root"]) == out_root / "p02" / "s1" / root.name
+        assert (out_root / "p02" / "s1" / root.name / "run" / "store.jsonl").is_file()
+
     def test_the_slice_counts_refused_identity_changes_and_exits_1(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
