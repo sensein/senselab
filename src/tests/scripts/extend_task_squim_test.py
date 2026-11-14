@@ -13,7 +13,7 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage import task_squim
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import find_measurement, path_attributes, write_stream
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import declared_identity_attributes
@@ -72,11 +72,11 @@ def test_in_place_the_store_gains_the_measurement(tmp_path: Path) -> None:
     """The run's own store holds a task_squim measurement afterwards, and a second pass writes nothing."""
     run_root = _run(tmp_path / "out")
     row = {"stem": STEM, "enhanced": str(run_root / "run" / "streams" / "enhanced.flac")}
-    [first] = cli.process([row], load_triage_config())
+    [first] = cli.process([row], load_triage_config(profile=ACTIVE))
     assert first["status"] == "ok" and first["windows_n"] == 1
     store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
     assert find_measurement(store, task_squim.MEASUREMENT) is not None
-    [second] = cli.process([row], load_triage_config())
+    [second] = cli.process([row], load_triage_config(profile=ACTIVE))
     assert second["status"] == "present"
 
 
@@ -85,7 +85,7 @@ def test_out_root_leaves_the_finished_store_untouched(tmp_path: Path) -> None:
     run_root = _run(tmp_path / "out")
     before = (run_root / "run" / "store.jsonl").read_bytes()
     row = {"stem": STEM, "enhanced": str(run_root / "run" / "streams" / "enhanced.flac")}
-    [record] = cli.process([row], load_triage_config(), out_root=tmp_path / "mirror")
+    [record] = cli.process([row], load_triage_config(profile=ACTIVE), out_root=tmp_path / "mirror")
     assert record["status"] == "ok"
     assert (run_root / "run" / "store.jsonl").read_bytes() == before
     mirrored = tmp_path / "mirror" / "p01" / "s1" / run_root.name

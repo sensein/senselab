@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.extend import withdraw_contradicted_clips
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import (
@@ -190,7 +190,7 @@ def _seed_run(
     )
 
     store = ProvStore(run_id=root.name)
-    config = load_triage_config()
+    config = load_triage_config(profile=ACTIVE)
     admitted = admit(store, source, config, run_dir=run_dir)
     assert admitted.audio is not None
     agent = software_agent(store)
@@ -342,7 +342,7 @@ def _margin() -> float:
     Returns:
         ``quality.clip_contradiction_margin``.
     """
-    return float(load_triage_config().require("quality.clip_contradiction_margin"))
+    return float(load_triage_config(profile=ACTIVE).require("quality.clip_contradiction_margin"))
 
 
 def _widened(tmp_path: Path, margin: float) -> Any:  # noqa: ANN401 — TriageConfig, without importing it
@@ -357,7 +357,7 @@ def _widened(tmp_path: Path, margin: float) -> Any:  # noqa: ANN401 — TriageCo
     """
     override = tmp_path / "margin.yaml"
     override.write_text(f"quality:\n  clip_contradiction_margin: {margin}\n", encoding="utf-8")
-    return load_triage_config(override)
+    return load_triage_config(override, profile=ACTIVE)
 
 
 def _run(manifest: Path) -> int:
@@ -418,7 +418,7 @@ class TestAContradictedClipIsTakenBack:
     ) -> None:
         """Same vocabulary, same extent, same numbers — so the same id, since an id digests those."""
         manifest, roots = corpus(1)
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         source = roots[0].parent / f"{roots[0].name}.wav"
         margin = float(config.require("quality.clip_contradiction_margin"))
         audio = admit(ProvStore(run_id="scratch"), source, config, run_dir=roots[0] / "run").audio
@@ -551,7 +551,7 @@ class TestAStoreWithNothingToWithdraw:
         root.mkdir(parents=True)
         _seed_run(root, spans=False)
         store = _store_of(root)
-        assert withdraw_contradicted_clips(store, load_triage_config()) is None
+        assert withdraw_contradicted_clips(store, load_triage_config(profile=ACTIVE)) is None
 
 
 class TestASecondPass:
@@ -599,7 +599,7 @@ class TestAStoreThePassCannotRead:
         root.mkdir(parents=True)
         _seed_run(root, amplitudes=False)
         with pytest.raises(LookupError, match="extend_clip_amplitudes"):
-            withdraw_contradicted_clips(_store_of(root), load_triage_config())
+            withdraw_contradicted_clips(_store_of(root), load_triage_config(profile=ACTIVE))
 
     def test_a_run_with_no_store_is_recorded_and_the_others_are_still_read(
         self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
@@ -626,20 +626,20 @@ class TestTheComparisonAtItsBoundary:
         """The comparison is ``>``: equality is inside the tolerance, not outside it."""
         margin = _margin()
         store = _seeded_amplitudes(level=0.5, peak=0.5 * (1.0 + margin))
-        assert withdraw_contradicted_clips(store, load_triage_config()) is None
+        assert withdraw_contradicted_clips(store, load_triage_config(profile=ACTIVE)) is None
         assert len(clip_spans(store, "recording")) == 1
 
     def test_one_ulp_above_the_margin_is(self) -> None:
         """The control on the test above, at the tightest separation a float admits."""
         margin = _margin()
         store = _seeded_amplitudes(level=0.5, peak=float(np.nextafter(0.5 * (1.0 + margin), 1.0)))
-        assert withdraw_contradicted_clips(store, load_triage_config()) is not None
+        assert withdraw_contradicted_clips(store, load_triage_config(profile=ACTIVE)) is not None
         assert clip_spans(store, "recording") == []
 
     def test_a_peak_below_the_spans_own_level_is_never_a_contradiction(self) -> None:
         """0.4995 under a 0.5 clip is the clip standing, whichever side the margin is read on."""
         store = _seeded_amplitudes(level=0.5, peak=0.4995)
-        assert withdraw_contradicted_clips(store, load_triage_config()) is None
+        assert withdraw_contradicted_clips(store, load_triage_config(profile=ACTIVE)) is None
         assert len(clip_spans(store, "recording")) == 1
 
     def test_the_margin_is_read_from_the_configuration(self, tmp_path: Path) -> None:
@@ -647,7 +647,7 @@ class TestTheComparisonAtItsBoundary:
         store = _seeded_amplitudes(level=0.5, peak=0.504)
         assert withdraw_contradicted_clips(store, _widened(tmp_path, 0.05)) is None
 
-        assert withdraw_contradicted_clips(store, load_triage_config()) is not None
+        assert withdraw_contradicted_clips(store, load_triage_config(profile=ACTIVE)) is not None
         assert clip_spans(store, "recording") == []
 
 
@@ -684,7 +684,7 @@ class TestARunWhereOnlySomeClipSpansFall:
 
         store = _store_of(roots[0])
         assert len(clip_spans(store, "recording")) == 1
-        assert withdraw_contradicted_clips(store, load_triage_config()) is None
+        assert withdraw_contradicted_clips(store, load_triage_config(profile=ACTIVE)) is None
 
     def test_the_audit_passes_on_what_this_pass_leaves(self, corpus: Callable[..., tuple[Path, list[Path]]]) -> None:
         """QUALITY reading the same numbers must find nothing left to contest."""
@@ -692,7 +692,7 @@ class TestARunWhereOnlySomeClipSpansFall:
         _run(manifest)
 
         store = _store_of(roots[0])
-        result = quality(store, "recording", load_triage_config(), run_dir=roots[0] / "run")
+        result = quality(store, "recording", load_triage_config(profile=ACTIVE), run_dir=roots[0] / "run")
         assert result.report.conformance is True
         assert store.get_entity(result.report_entity_id).attributes["checked_n"] == 1
 

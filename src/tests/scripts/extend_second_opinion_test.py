@@ -14,7 +14,7 @@ from typing import Any, Iterator
 
 import pytest
 
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
     SECOND_OPINION_ANSWERS,
@@ -40,7 +40,7 @@ ON = "second_opinion:\n  enabled: true\n"
 def _config(tmp_path: Path) -> Any:  # noqa: ANN401 — TriageConfig
     path = tmp_path / "override.yaml"
     path.write_text(ON, encoding="utf-8")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _answers(other: float) -> dict[str, Any]:
@@ -285,7 +285,7 @@ def test_a_server_failing_every_request_stops_the_slice_before_its_last_row(
             manifest,
             slice_index=0,
             slice_count=1,
-            config=load_triage_config(override),
+            config=load_triage_config(override, profile=ACTIVE),
             log_dir=tmp_path,
             open_ask=opener,
         )

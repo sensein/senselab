@@ -21,7 +21,7 @@ from senselab.audio.data_structures import (
 )
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes import speech as speech_module
 from senselab.audio.workflows.triage.nodes.branches import (
@@ -121,7 +121,7 @@ def _override(tmp_path: Path, yaml_text: str = "") -> TriageConfig:
     _deep_merge(values, yaml.safe_load(yaml_text) or {})
     path = tmp_path / f"override-{abs(hash(yaml_text)) % 10**10}.yaml"
     path.write_text(yaml.safe_dump(values))
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _speech_config(tmp_path: Path) -> TriageConfig:
@@ -954,7 +954,7 @@ class TestTheUnmeasuredKeyAndTheHintThatContradictsTheFile:
         """
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
 
-        result = speech(store, "plain", load_triage_config(), run_dir=tmp_path, enrollment=None)
+        result = speech(store, "plain", load_triage_config(profile=ACTIVE), run_dir=tmp_path, enrollment=None)
 
         assert result.report.conformance == UNDETERMINED
 
@@ -3282,7 +3282,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         assert marks, "redact.py selects on exactly this verb and label pair"
 
 
-_NEAR = near_match(load_triage_config())
+_NEAR = near_match(load_triage_config(profile=ACTIVE))
 
 
 class TestANearSpellingIsStillTheStimulusWord:
@@ -3460,9 +3460,9 @@ class TestEveryDiarizedStreamHasAReader:
 
     def test_the_shipped_config_diarizes_only_what_is_read(self) -> None:
         """Each configured stream costs a pyannote pass per recording; an unread one is pure cost."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        streams = tuple(load_triage_config(None).require("diarization.streams"))
+        streams = tuple(load_triage_config(None, profile=ACTIVE).require("diarization.streams"))
         assert len(streams) == 1, f"{len(streams)} streams configured; SPEECH reads only the first: {streams}"
         assert streams == ("enhanced",)
 

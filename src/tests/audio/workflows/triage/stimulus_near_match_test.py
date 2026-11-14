@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match
 
 
@@ -18,13 +18,13 @@ class TestTheBoundIsConfiguredNotLiteral:
 
     def test_the_packaged_config_carries_both_knobs(self) -> None:
         """Two keys, read together, so an override cannot leave half a rule in place."""
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         assert config.require("stimulus.near_match.exact_below") == 5
         assert config.require("stimulus.near_match.two_edits_from") == 8
 
     def test_the_node_reads_the_bound_from_the_config(self) -> None:
         """No literal in the matcher; the run's own config is what decides."""
-        assert near_match(load_triage_config()) == NearMatch(exact_below=5, two_edits_from=8)
+        assert near_match(load_triage_config(profile=ACTIVE)) == NearMatch(exact_below=5, two_edits_from=8)
 
     def test_a_two_edits_bound_below_the_exact_bound_is_refused(self) -> None:
         """An inverted pair would silently make the short tokens the loosest ones."""

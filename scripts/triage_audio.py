@@ -64,7 +64,7 @@ from typing import Mapping
 import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.data_structures import AudioHints, SpeakerEmbeddingProvenance
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import DatasetDataMissing, require_dataset_values
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.identity import identity_of
@@ -229,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: audio file not found: {args.audio}", file=sys.stderr)
         return 2
     try:
-        config = load_triage_config(args.config, profile=args.profile)
+        config = load_triage_config(args.config, profile=ACTIVE if args.profile is None else args.profile)
     except (OSError, ValueError, KeyError, RuntimeError) as error:
         print(f"ERROR: invalid triage config {args.config} or profile {args.profile}: {error}", file=sys.stderr)
         return 2

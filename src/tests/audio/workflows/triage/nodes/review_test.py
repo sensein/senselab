@@ -14,7 +14,7 @@ import pytest
 import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
     REVIEW_CARRIED,
     REVIEW_NEEDS_REREAD,
@@ -68,7 +68,7 @@ def _config(tmp_path: Path, text: str = LLM_ON) -> TriageConfig:
     """The packaged config with a partial YAML deep-merged over it."""
     path = tmp_path / "override.yaml"
     path.write_text(text, encoding="utf-8")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _extent(index: int) -> tuple[float, float]:
@@ -1246,7 +1246,7 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
     ) -> None:
         """The live annotation is the earlier reading, derived from it, and the replay's own is retired."""
         store, held, software = self._read_then_retire(tmp_path, monkeypatch)
-        off = load_triage_config()
+        off = load_triage_config(profile=ACTIVE)
         review(store, off)
         assert carry_reading_forward(store, off, None, held, software=software) == (REVIEW_CARRIED, None)
         live = find_measurement(store, REDACTION_LLM_ANNOTATION)
@@ -1269,7 +1269,9 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
         store, held, software = self._read_then_retire(tmp_path, monkeypatch)
         override = tmp_path / "workflow.yaml"
         override.write_text(yaml.safe_dump({"workflow": {"stages": [s for s in STAGE_NAMES if s != "REVIEW"]}}))
-        state, why = carry_reading_forward(store, load_triage_config(override), None, held, software=software)
+        state, why = carry_reading_forward(
+            store, load_triage_config(override, profile=ACTIVE), None, held, software=software
+        )
         assert state == REVIEW_NONE and why is not None and "off in this workflow" in why
         assert find_measurement(store, REDACTION_LLM_ANNOTATION) is None
 
@@ -1281,7 +1283,7 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
         plan = store.activity(node="REDACT", step="plan-again", parameters={})
         span = store.entity(prov_type="span", extent=_extent(3), attributes={"name": "redaction", "category": "PERSON"})
         store.was_generated_by(span, plan)
-        off = load_triage_config()
+        off = load_triage_config(profile=ACTIVE)
         review(store, off)
         state, why = carry_reading_forward(store, off, None, held, software=software)
         assert state == REVIEW_NEEDS_REREAD and why is not None and "changed" in why
@@ -1296,7 +1298,7 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
         assert held.annotation.attributes.get(review_module.POLICY_FINGERPRINT)
         monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / "emptied-cache"))
         monkeypatch.setattr(review_module, "policy_fingerprint", lambda: "e" * 64)
-        off = load_triage_config()
+        off = load_triage_config(profile=ACTIVE)
         review(store, off)
         state, why = carry_reading_forward(store, off, None, held, software=software)
         assert state == REVIEW_NEEDS_REREAD and why is not None and "policy" in why
@@ -1315,15 +1317,18 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
         """A store whose REVIEW never answered holds nothing a replay could lose."""
         store = ProvStore(run_id="replay-review-test")
         _seed(store, scan="ran")
-        review(store, load_triage_config())
+        review(store, load_triage_config(profile=ACTIVE))
         assert held_reading(store) is None
-        assert carry_reading_forward(store, load_triage_config(), None, None, software="s") == (REVIEW_NONE, None)
+        assert carry_reading_forward(store, load_triage_config(profile=ACTIVE), None, None, software="s") == (
+            REVIEW_NONE,
+            None,
+        )
 
 
 def test_the_cache_key_names_the_engine() -> None:
     """Same engine, same key; another engine or any other vLLM server argument, another key."""
     sha = "c" * 40
-    vllm = dict(load_triage_config().require("redaction.llm_check.vllm"))
+    vllm = dict(load_triage_config(profile=ACTIVE).require("redaction.llm_check.vllm"))
     base = {"model_id": "m/x", "max_new_tokens": 1024, "max_iterations": 3, "engine": "vllm", "vllm": vllm}
     key = review_module.review_cache_key("a b", None, {"task": "t"}, base, sha)
     assert key == review_module.review_cache_key("a b", None, {"task": "t"}, dict(base), sha)

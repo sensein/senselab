@@ -26,7 +26,7 @@ from senselab.audio.data_structures import Audio, AudioHints, ExpectedSpeech
 from senselab.audio.data_structures.audio_hints import SpeakerEmbeddingProvenance, TargetSpeakerEmbedding
 from senselab.audio.workflows.triage import extend as extend_module
 from senselab.audio.workflows.triage.background_model import write_view_arrays
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.extend import (
     AUDIO_UNVERIFIED,
     AUDIO_VERIFIED,
@@ -128,7 +128,7 @@ def _seed_run(root: Path, *, decided: bool = True, hint: AudioHints | None = Non
         sf.write(str(run_dir / "streams" / f"{name}.flac"), _samples(), SR)
 
     store = ProvStore(run_id=root.name)
-    config = load_triage_config()
+    config = load_triage_config(profile=ACTIVE)
     admitted = admit(store, source, config, hint, run_dir=run_dir)
     assert admitted.audio is not None
     agent = software_agent(store)
@@ -311,7 +311,7 @@ def test_a_marker_written_under_the_legacy_config_hash_still_reads_as_done(tmp_p
     """A replay recorded before 2026-11-14 hashed the profile's bytes; unchanged files make it this configuration's."""
     root = tmp_path / "rec-0001_20260920-030808"
     _seed_run(root)
-    config = load_triage_config()
+    config = load_triage_config(profile=ACTIVE)
     assert config.legacy_config_hash is not None and config.legacy_config_hash != config.config_hash
     store = read_store(root, run_id=replay_run_id(root, config.legacy_config_hash))
     parameters = {"config_hash": config.legacy_config_hash, "commit": None, "retired": 1}
@@ -348,9 +348,9 @@ def test_the_mirror_links_the_runs_log_so_later_passes_check_its_record(tmp_path
     assert (mirrored / "run" / "run.json").is_symlink()
     assert (mirrored / "run" / "run.json").read_text() == (root / "run" / "run.json").read_text()
     store = read_store(root)
-    assert check_replay_inputs(store, mirrored, load_triage_config(), hint=None, hint_given=False).audio == (
-        AUDIO_VERIFIED
-    )
+    assert check_replay_inputs(
+        store, mirrored, load_triage_config(profile=ACTIVE), hint=None, hint_given=False
+    ).audio == (AUDIO_VERIFIED)
 
 
 def test_a_stream_a_replayed_node_writes_is_never_a_link_into_the_finished_run(tmp_path: Path) -> None:
@@ -479,7 +479,7 @@ def test_a_run_already_carrying_this_configurations_marker_is_skipped(tmp_path: 
     """The resume predicate: the store says whether this configuration has already replayed it."""
     root = tmp_path / "rec-0001_20260920-030808"
     _seed_run(root)
-    config = load_triage_config()
+    config = load_triage_config(profile=ACTIVE)
     store = read_store(root, run_id=replay_run_id(root, config.config_hash))
     marker = store.activity(
         node=REPLAY_NODE,
@@ -506,7 +506,7 @@ def test_a_marker_under_another_hint_does_not_skip_the_replay(tmp_path: Path) ->
     """A corrected sidecar is a new hint: the run replays rather than reading as already done."""
     root = tmp_path / "rec-0001_20260920-030808"
     _seed_run(root)
-    config = load_triage_config()
+    config = load_triage_config(profile=ACTIVE)
     store = read_store(root, run_id=replay_run_id(root, config.config_hash))
     store.activity(
         node=REPLAY_NODE,
@@ -542,7 +542,7 @@ def test_a_row_whose_enhanced_path_is_not_in_a_run_tree_is_an_error_not_a_crash(
         {"stem": root.name, "enhanced": str(root / "run" / "streams" / "enhanced.flac")},
     ]
 
-    out = cli.process(rows, load_triage_config(), build_hint=None, out_root=None, commit=None)
+    out = cli.process(rows, load_triage_config(profile=ACTIVE), build_hint=None, out_root=None, commit=None)
 
     assert out[0]["status"] == cli.ERROR
     assert out[1]["status"] != cli.ERROR or "run_root" not in out[0]
@@ -564,7 +564,9 @@ def test_each_replayed_row_lands_in_the_row_log_as_it_completes(tmp_path: Path) 
 
     log.add = _watch  # type: ignore[method-assign]
     try:
-        out = cli.process(rows, load_triage_config(), build_hint=None, out_root=None, commit=None, log=log)
+        out = cli.process(
+            rows, load_triage_config(profile=ACTIVE), build_hint=None, out_root=None, commit=None, log=log
+        )
     finally:
         log.close()
     assert seen == [1, 2, 3], "a row was not on disk when the next one started"
@@ -589,7 +591,7 @@ def test_a_reading_that_must_be_read_again_is_named_and_fails_the_slice(
         manifest,
         slice_index=0,
         slice_count=1,
-        config=load_triage_config(),
+        config=load_triage_config(profile=ACTIVE),
         log_dir=tmp_path / "logs",
         hints=None,
         out_root=None,
@@ -632,7 +634,9 @@ def test_a_replay_whose_node_raised_is_errored_and_names_the_node(
     _seed_run(root)
     monkeypatch.setattr(cli, "replay_decisions", _stub_replay({"SPEECH": "RuntimeError: no libtorchcodec"}))
 
-    record = cli.replay_one(root, load_triage_config(), build_hint=None, out_root=None, stem=root.name, commit=None)
+    record = cli.replay_one(
+        root, load_triage_config(profile=ACTIVE), build_hint=None, out_root=None, stem=root.name, commit=None
+    )
 
     assert record["status"] == cli.ERRORED
     assert record["errored_nodes"] == ["SPEECH"]
@@ -644,7 +648,9 @@ def test_a_replay_with_no_node_error_is_ok(tmp_path: Path, monkeypatch: pytest.M
     _seed_run(root)
     monkeypatch.setattr(cli, "replay_decisions", _stub_replay({}))
 
-    record = cli.replay_one(root, load_triage_config(), build_hint=None, out_root=None, stem=root.name, commit=None)
+    record = cli.replay_one(
+        root, load_triage_config(profile=ACTIVE), build_hint=None, out_root=None, stem=root.name, commit=None
+    )
 
     assert record["status"] == cli.OK
     assert record["errored_nodes"] == []
@@ -665,7 +671,7 @@ def test_force_replays_a_run_that_already_carries_the_marker(tmp_path: Path, mon
     """``--force`` bypasses the resume predicate; without it the same run is ``present``."""
     root = tmp_path / "rec-0001_20260920-030808"
     _seed_run(root)
-    config = load_triage_config()
+    config = load_triage_config(profile=ACTIVE)
     store = read_store(root, run_id=replay_run_id(root, config.config_hash))
     store.activity(
         node=REPLAY_NODE,
@@ -694,7 +700,9 @@ HINT_RAINBOW = AudioHints(metadata={"task_token": "rainbow-passage"})
 
 def _checked(root: Path, **kwargs: Any) -> ReplayInputs:  # noqa: ANN401
     store = read_store(root)
-    return check_replay_inputs(store, root, load_triage_config(), **{"hint": None, "hint_given": False, **kwargs})
+    return check_replay_inputs(
+        store, root, load_triage_config(profile=ACTIVE), **{"hint": None, "hint_given": False, **kwargs}
+    )
 
 
 class TestTheReplayChecksTheRunsRecord:
@@ -752,8 +760,10 @@ class TestTheReplayChecksTheRunsRecord:
         for key in (HINT, HINT_DIGEST, HINT_FIELD_DIGESTS):
             del stream.attributes[key]
         with pytest.raises(ReplayRefused, match="records no hint"):
-            check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False)
-        accepted = check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False, no_hint=True)
+            check_replay_inputs(store, root, load_triage_config(profile=ACTIVE), hint=None, hint_given=False)
+        accepted = check_replay_inputs(
+            store, root, load_triage_config(profile=ACTIVE), hint=None, hint_given=False, no_hint=True
+        )
         assert (accepted.hint, accepted.changed) == (None, None)
 
     def test_a_store_that_recorded_no_task_is_refused_without_hints_or_no_hint(self, tmp_path: Path) -> None:
@@ -766,10 +776,12 @@ class TestTheReplayChecksTheRunsRecord:
         for activity in store.activities("ADMIT"):
             activity.parameters.pop(TASK_FROM, None)
         with pytest.raises(ReplayRefused, match="records no task"):
-            check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False)
-        given = check_replay_inputs(store, root, load_triage_config(), hint=HINT_COUGH, hint_given=True)
+            check_replay_inputs(store, root, load_triage_config(profile=ACTIVE), hint=None, hint_given=False)
+        given = check_replay_inputs(store, root, load_triage_config(profile=ACTIVE), hint=HINT_COUGH, hint_given=True)
         assert given.hint_from == HINT_GIVEN
-        none = check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False, no_hint=True)
+        none = check_replay_inputs(
+            store, root, load_triage_config(profile=ACTIVE), hint=None, hint_given=False, no_hint=True
+        )
         assert none.hint is None
 
     def test_a_run_recording_no_identity_is_refused_unless_the_hint_declares_one(self, tmp_path: Path) -> None:
@@ -784,9 +796,11 @@ class TestTheReplayChecksTheRunsRecord:
             for key in (DECLARED_PARTICIPANT, DECLARED_SESSION, DECLARED_TASK_ID, DECLARED_FROM):
                 activity.parameters.pop(key, None)
         with pytest.raises(ReplayRefused, match="records no identity"):
-            check_replay_inputs(store, root, load_triage_config(), hint=None, hint_given=False, no_hint=True)
+            check_replay_inputs(
+                store, root, load_triage_config(profile=ACTIVE), hint=None, hint_given=False, no_hint=True
+            )
         declaring = AudioHints(metadata={"participant_id": "p01", "session_id": "s1", "task_token": "x"})
-        given = check_replay_inputs(store, root, load_triage_config(), hint=declaring, hint_given=True)
+        given = check_replay_inputs(store, root, load_triage_config(profile=ACTIVE), hint=declaring, hint_given=True)
         assert given.hint_from == HINT_GIVEN
 
     def test_a_given_hint_that_differs_is_accepted_and_named(self, tmp_path: Path) -> None:
@@ -812,7 +826,7 @@ class TestTheReplayChecksTheRunsRecord:
         [stream] = store.entities("stream")
         for key in (HINT, HINT_DIGEST, HINT_FIELD_DIGESTS):
             del stream.attributes[key]
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         with pytest.raises(ReplayRefused, match="replay it first"):
             check_replay_inputs(store, root, config, hint=HINT_RAINBOW, hint_given=True, allow_hint_change=False)
         replayed = check_replay_inputs(store, root, config, hint=HINT_RAINBOW, hint_given=True)
@@ -822,7 +836,7 @@ class TestTheReplayChecksTheRunsRecord:
         """Same profile name, other digest: VERDICT would re-score the old reports; a replay is accepted (C3)."""
         root = tmp_path / "rec-0001_20260920-030808"
         source = _seed_run(root, hint=HINT_COUGH)
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         assert config.profile is not None
         recorded = {"name": config.profile.name, "version": config.profile.version, "digest": "another-digest"}
         (root / "run" / "run.json").write_text(json.dumps({"source": str(source), "config": {"profile": recorded}}))
@@ -834,7 +848,7 @@ class TestTheReplayChecksTheRunsRecord:
         """A byte digest recorded before 2026-11-14 names the unchanged profile: no --allow-profile-change."""
         root = tmp_path / "rec-0001_20260920-030808"
         source = _seed_run(root, hint=HINT_COUGH)
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         assert config.profile is not None and config.profile.legacy_digest != config.profile.digest
         recorded = {
             "name": config.profile.name,
@@ -891,7 +905,7 @@ class TestAChangedHintBecomesTheRunsRecord:
         """The recording stream is replaced; the marker says what moved and who was affected."""
         root = tmp_path / "rec-0001_20260920-030808"
         _seed_run(root, hint=HINT_COUGH)
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         store = read_store(root, run_id=replay_run_id(root, config.config_hash))
         inputs = check_replay_inputs(store, root, config, hint=HINT_RAINBOW, hint_given=True)
         outcome = replay_decisions(
@@ -915,7 +929,7 @@ class TestAChangedHintBecomesTheRunsRecord:
         root = tmp_path / "rec-0001_20260920-030808"
         _seed_run(root, hint=HINT_COUGH)
         store = read_store(root)
-        inputs = check_replay_inputs(store, root, load_triage_config(), hint=HINT_COUGH, hint_given=True)
+        inputs = check_replay_inputs(store, root, load_triage_config(profile=ACTIVE), hint=HINT_COUGH, hint_given=True)
         assert not inputs.hint_moved
         assert not record_moved(store, HINT_COUGH)
 
@@ -924,7 +938,7 @@ class TestAChangedHintBecomesTheRunsRecord:
         hint = hint_for("p01", "s1", "voluntary-cough")
         root = tmp_path / "rec-0001_20260920-030808"
         _seed_run(root, hint=hint)
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         store = read_store(root, run_id=replay_run_id(root, config.config_hash))
         held = recording_entity(store)
         assert held is not None
@@ -951,7 +965,7 @@ class TestAChangedHintBecomesTheRunsRecord:
         """The replay log's row names what moved, not only the marker (review K1)."""
         root = tmp_path / "rec-0001_20260920-030808"
         _seed_run(root, hint=HINT_COUGH)
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         store = read_store(root, run_id=replay_run_id(root, config.config_hash))
         inputs = check_replay_inputs(store, root, config, hint=HINT_RAINBOW, hint_given=True)
         outcome = replay_decisions(
@@ -987,14 +1001,17 @@ class TestTheStimulusAlignmentFollowsTheExpectedSpeech:
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello.")])
         store = self._store_with_alignment(prompts_digest(hint.expected_speech))
         monkeypatch.setattr(extend_module, "stimulus_alignment", lambda *a, **k: pytest.fail("rebuilt"))
-        assert realign_stimulus(store, load_triage_config(), hint, run_dir=tmp_path, software="s") is None
+        assert realign_stimulus(store, load_triage_config(profile=ACTIVE), hint, run_dir=tmp_path, software="s") is None
 
     def test_moved_expected_speech_is_realigned(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The old alignment is retired and a new one is written."""
         store = self._store_with_alignment("another")
         monkeypatch.setattr(extend_module, "stimulus_alignment", lambda *a, **k: "new-alignment")
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello.")])
-        assert realign_stimulus(store, load_triage_config(), hint, run_dir=tmp_path, software="s") == "new-alignment"
+        assert (
+            realign_stimulus(store, load_triage_config(profile=ACTIVE), hint, run_dir=tmp_path, software="s")
+            == "new-alignment"
+        )
         assert find_measurement(store, STIMULUS_MEASUREMENT) is None
 
     def test_a_rebuild_that_fails_leaves_the_old_alignment_standing(
@@ -1008,13 +1025,16 @@ class TestTheStimulusAlignmentFollowsTheExpectedSpeech:
 
         monkeypatch.setattr(extend_module, "stimulus_alignment", fail)
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello.")])
-        assert realign_stimulus(store, load_triage_config(), hint, run_dir=tmp_path, software="s") is None
+        assert realign_stimulus(store, load_triage_config(profile=ACTIVE), hint, run_dir=tmp_path, software="s") is None
         assert find_measurement(store, STIMULUS_MEASUREMENT) is not None
 
     def test_a_hint_with_no_expected_speech_retires_the_alignment(self, tmp_path: Path) -> None:
         """Nothing to align against: the alignment goes, with nothing in its place."""
         store = self._store_with_alignment("another")
-        assert realign_stimulus(store, load_triage_config(), AudioHints(), run_dir=tmp_path, software="s") is None
+        assert (
+            realign_stimulus(store, load_triage_config(profile=ACTIVE), AudioHints(), run_dir=tmp_path, software="s")
+            is None
+        )
         assert find_measurement(store, STIMULUS_MEASUREMENT) is None
 
     def test_an_alignment_that_recorded_no_digest_is_left_alone(
@@ -1024,7 +1044,7 @@ class TestTheStimulusAlignmentFollowsTheExpectedSpeech:
         store = self._store_with_alignment(None)
         monkeypatch.setattr(extend_module, "stimulus_alignment", lambda *a, **k: pytest.fail("rebuilt"))
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello.")])
-        assert realign_stimulus(store, load_triage_config(), hint, run_dir=tmp_path, software="s") is None
+        assert realign_stimulus(store, load_triage_config(profile=ACTIVE), hint, run_dir=tmp_path, software="s") is None
 
 
 class TestTheRecordAReplayWrites:

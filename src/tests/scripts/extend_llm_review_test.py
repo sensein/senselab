@@ -22,7 +22,7 @@ import pytest
 import soundfile as sf
 
 from senselab.audio.data_structures import AudioHints, ExpectedSpeech
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.extend import REFOLD_MARKER_STEP, REFOLD_NODE, refold_verdict
 from senselab.audio.workflows.triage.hint_record import hint_attributes
 from senselab.audio.workflows.triage.nodes import review as review_module
@@ -54,7 +54,7 @@ def _config(tmp_path: Path, text: str = LLM_ON) -> Any:  # noqa: ANN401 — Tria
     """The packaged config with a partial YAML deep-merged over it."""
     path = tmp_path / "override.yaml"
     path.write_text(text, encoding="utf-8")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 RECORDED = AudioHints(task="free-speech")

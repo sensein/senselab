@@ -12,7 +12,7 @@ from typing import Any, Mapping, Sequence
 import pytest
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.second_opinion import (
     ABSENT,
     BYPASSED,
@@ -43,7 +43,7 @@ ON = "second_opinion:\n  enabled: true\n"
 def _config(tmp_path: Path, text: str = ON) -> TriageConfig:
     path = tmp_path / "override.yaml"
     path.write_text(text, encoding="utf-8")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _store(
@@ -216,7 +216,7 @@ class TestTheOtherPaths:
     def test_the_packaged_config_is_disabled_and_asks_nothing(self, tmp_path: Path) -> None:
         """No GPU and no store in a default run."""
         store, ask = _store(), _Ask(_answers())
-        outcome = second_opinion(store, load_triage_config(), None, ask)
+        outcome = second_opinion(store, load_triage_config(profile=ACTIVE), None, ask)
         assert outcome.status == DISABLED and not ask.states
         assert _opinion(store, outcome.measurement_id)["bypass_reason"] is None
 

@@ -24,7 +24,7 @@ import pytest
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import redact as redact_module
 from senselab.audio.workflows.triage.nodes import speech as speech_module
 from senselab.audio.workflows.triage.nodes.common import live_entities
@@ -78,7 +78,7 @@ def _config(tmp_path: Path) -> TriageConfig:
     """
     path = tmp_path / "interlock-override.yaml"
     path.write_text("redaction:\n  padding_ms: 50\n  fill: silence\n")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _release(tmp_path: Path) -> Path:

@@ -13,7 +13,8 @@ A dataset profile (:mod:`~senselab.audio.workflows.triage.dataset_profile`) sits
 override is merged over the packaged file before a run's override, and the data files it supplies are read
 instead of the packaged ones. A configuration loaded with a profile carries it, and its hash covers the profile's
 name, version and digest (each YAML file by its parsed values, any other file by its bytes); one loaded without a
-profile hashes exactly as before.
+profile hashes exactly as before. A caller names the profile, or passes :data:`ACTIVE` for the one already active: a
+load naming none while one is active is refused.
 """
 
 from __future__ import annotations
@@ -28,7 +29,10 @@ from typing import Any, Mapping
 import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.workflows.triage.dataset_profile import (
+    ACTIVE,
+    ActiveProfile,
     DatasetProfile,
+    ProfileNotNamed,
     activate_profile,
     active_profile,
     check_run_data,
@@ -322,18 +326,20 @@ recorded in its configuration and never applied."""
 
 
 def load_triage_config(
-    override: str | Path | None = None, *, profile: str | Path | DatasetProfile | None = None
+    override: str | Path | None = None,
+    *,
+    profile: str | Path | DatasetProfile | ActiveProfile | None = None,
 ) -> TriageConfig:
     """Load the packaged configuration, then a dataset profile's override, then a run's override.
 
     Args:
         override: Path to a partial YAML. Its keys must already exist in the packaged file,
             except inside a mapping named in :data:`DATA_MAP_PATHS`, which may gain entries.
-        profile: A dataset profile, or its directory. When None and a profile is already active
-            (:func:`~senselab.audio.workflows.triage.dataset_profile.active_profile`), that profile is used, so the
-            configuration always names the profile its data files are read from. The profile's own override, if
-            it has one, is merged under ``override`` by the same rules, and the profile is activated only once
-            the merged configuration has validated.
+        profile: A dataset profile, or its directory; :data:`ACTIVE` for the profile already active in this process
+            (:func:`~senselab.audio.workflows.triage.dataset_profile.active_profile`), or none where none is; None
+            for no profile, refused while one is active, since the configuration would not name the profile its
+            data files are read from. The profile's own override, if it has one, is merged under ``override`` by
+            the same rules, and the profile is activated only once the merged configuration has validated.
 
     Returns:
         The resolved configuration, carrying the hash of the merged mapping and of the profile.
@@ -341,11 +347,20 @@ def load_triage_config(
     Raises:
         ValueError: If an override introduces a key the packaged file does not have, outside a
             data mapping, or the profile is malformed.
+        ProfileNotNamed: If ``profile`` is None and a profile is active. A ``RuntimeError`` subclass.
         RuntimeError: If a different profile is already active in this process.
     """
-    loaded = load_profile(profile) if isinstance(profile, (str, Path)) else profile
-    if loaded is None:
+    if profile is None and (active := active_profile()) is not None:
+        raise ProfileNotNamed(
+            f"dataset profile {active.name} {active.version} ({active.root}) is active and this load names no "
+            "profile: pass profile=ACTIVE to load with it, the profile itself, or deactivate it first"
+        )
+    if profile is ACTIVE:
         loaded = active_profile()
+    elif isinstance(profile, (str, Path)):
+        loaded = load_profile(profile)
+    else:
+        loaded = profile
     values = profile_config_values(loaded)
     if override is not None:
         run_values = yaml.safe_load(Path(override).read_text()) or {}

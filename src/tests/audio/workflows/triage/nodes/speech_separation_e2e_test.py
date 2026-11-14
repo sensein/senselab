@@ -23,7 +23,7 @@ import torch
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.nodes import speech as speech_module
 from senselab.audio.workflows.triage.nodes.speech import speech
 from senselab.utils.prov_store import ProvStore
@@ -127,7 +127,7 @@ def test_the_real_separator_produces_streams_the_localisation_reads(store: ProvS
     Audio(waveform=_mixture(), sampling_rate=_RATE).save_to_file(str(tmp_path / str(plain.attributes["path"])))
 
     hint = AudioHints(metadata={"task_token": "picture-description"})
-    speech(store, "plain", load_triage_config(), hint, run_dir=tmp_path, enrollment=None)
+    speech(store, "plain", load_triage_config(profile=ACTIVE), hint, run_dir=tmp_path, enrollment=None)
 
     detail = _report_entity(store, "SPEECH").attributes
     assert detail["separation"]["backend"] == "MossFormer2_SS_16K", detail["separation"]

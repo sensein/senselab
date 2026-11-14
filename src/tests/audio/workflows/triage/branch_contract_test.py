@@ -16,6 +16,7 @@ from typing import Any, Sequence
 import pytest
 
 from senselab.audio.workflows.triage.config import (
+    ACTIVE,
     UnknownConfigKey,
     UnmeasuredConfigKey,
     load_triage_config,
@@ -309,7 +310,7 @@ class TestADeviationAloneDoesNotFlag:
 
     def test_the_packaged_policy_does_not_fold_deviations(self) -> None:
         """The switch exists for when ground truth does, and ships off."""
-        assert FoldPolicy.from_config(load_triage_config()).deviation_flags is False
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).deviation_flags is False
 
     def test_turning_the_switch_on_is_what_would_flag_them(self) -> None:
         """The discriminating half: the deviation is genuinely the only thing in this fold."""
@@ -337,7 +338,7 @@ class TestAllUndeterminedIsSane:
 
     def test_the_packaged_policy_does_not_flag_an_unanswered_conformance(self) -> None:
         """A True here would flag every recording no branch was in-family for."""
-        assert FoldPolicy.from_config(load_triage_config()).undetermined_flags is False
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).undetermined_flags is False
 
     def test_turning_that_switch_on_is_what_would_flag_them(self) -> None:
         """The discriminating half."""
@@ -541,7 +542,7 @@ class TestABranchNeverRefuses:
 
     def test_require_tells_a_typo_from_an_unmeasured_key(self) -> None:
         """One ``ValueError`` for both is what would let a typo read as an unmeasured point."""
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         with pytest.raises(UnknownConfigKey):
             config.require("branch.smooting_window_s")
         with pytest.raises(UnmeasuredConfigKey):
@@ -553,7 +554,7 @@ class TestABranchNeverRefuses:
         """What was asked for first is what says where the evaluation stopped being possible."""
         override = tmp_path / "nulled.yaml"
         override.write_text("branch:\n  event_min_s: null\n  peak_prominence_db: null\n")
-        params = branch_params(load_triage_config(override))
+        params = branch_params(load_triage_config(override, profile=ACTIVE))
         assert params.point("event_min_s") is None
         assert params.point("peak_prominence_db") is None
         assert params.missing == ["event_min_s", "peak_prominence_db"]
@@ -565,19 +566,19 @@ class TestABranchNeverRefuses:
         """A gate's bound lives in ``verdict.gates``, so its ask is named by its full path there."""
         override = tmp_path / "nulled-gate.yaml"
         override.write_text("verdict:\n  gates:\n    by_group:\n      SYLLABLE_TRAIN:\n        train_min_s: null\n")
-        params = branch_params(load_triage_config(override)).bind(Pattern.SYLLABLE_TRAIN)
+        params = branch_params(load_triage_config(override, profile=ACTIVE)).bind(Pattern.SYLLABLE_TRAIN)
         assert params.gate("train_min_s") is None
         assert params.missing == ["verdict.gates.by_group.SYLLABLE_TRAIN.train_min_s"]
 
     def test_a_misspelled_point_still_raises_from_inside_a_branch(self) -> None:
         """The distinction the whole split exists for: this must not read as one more null."""
-        params = branch_params(load_triage_config())
+        params = branch_params(load_triage_config(profile=ACTIVE))
         with pytest.raises(KeyError, match="smooting_window_s"):
             params.point("smooting_window_s")
 
     def test_a_setting_outside_the_branch_section_is_read_the_same_way(self) -> None:
         """A branch reading another section's key must not refuse over it either."""
-        params = branch_params(load_triage_config())
+        params = branch_params(load_triage_config(profile=ACTIVE))
         assert params.setting("verdict.tilt_max_db_per_octave") is None
         assert params.missing == ["verdict.tilt_max_db_per_octave"]
         with pytest.raises(UnknownConfigKey):
@@ -626,24 +627,24 @@ class TestTheBranchSectionShipsValues:
 
     def test_every_branch_key_ships_a_value(self) -> None:
         """A key nobody could reason a default for was removed, not defaulted to a guess."""
-        values = load_triage_config().values[PARAM_SECTION]
+        values = load_triage_config(profile=ACTIVE).values[PARAM_SECTION]
         unset = sorted(key for key, value in values.items() if value is None)
         assert unset == [], f"{unset} ship null; either reason a default or remove the key"
 
     def test_the_three_declarations_agree(self) -> None:
         """``POINT_TYPES``, ``PARAM_KEYS`` and the packaged section are one vocabulary in three places."""
-        packaged = set(load_triage_config().values[PARAM_SECTION])
+        packaged = set(load_triage_config(profile=ACTIVE).values[PARAM_SECTION])
         assert set(POINT_TYPES) == set(PARAM_KEYS) == packaged
 
     def test_the_removed_key_is_gone_from_all_three(self) -> None:
         """``omission_score_max`` cut an acoustic score no derivative in the graph produces."""
         assert "omission_score_max" not in POINT_TYPES
         assert "omission_score_max" not in PARAM_KEYS
-        assert "omission_score_max" not in load_triage_config().values[PARAM_SECTION]
+        assert "omission_score_max" not in load_triage_config(profile=ACTIVE).values[PARAM_SECTION]
 
     def test_the_decision_keys_moved_to_the_verdict_section(self) -> None:
         """A threshold that judges the recording is this fold's, not a detector's."""
-        values = load_triage_config().values
+        values = load_triage_config(profile=ACTIVE).values
         for key in ("min_contrast_db", "tilt_max_db_per_octave", "level_min_dbfs"):
             assert key not in values[PARAM_SECTION], f"branch.{key} judges the recording"
             assert key in values["verdict"], f"verdict.{key} is where it belongs"

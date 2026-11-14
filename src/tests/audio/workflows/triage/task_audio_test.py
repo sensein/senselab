@@ -11,7 +11,7 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import find_measurement, path_attributes, write_stream
 from senselab.audio.workflows.triage.task_audio import (
     DEFINITION,
@@ -38,7 +38,7 @@ OUTSIDE = RedactionExtent(start=0.3, end=0.6, category="DATE_TIME")
 @pytest.fixture
 def config() -> TriageConfig:
     """The packaged triage configuration."""
-    return load_triage_config()
+    return load_triage_config(profile=ACTIVE)
 
 
 def _tone(rate: int, seconds: float, channels: int = 1) -> Audio:

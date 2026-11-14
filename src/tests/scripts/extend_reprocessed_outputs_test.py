@@ -21,7 +21,7 @@ import pytest
 import soundfile as sf
 
 from senselab.audio.tasks.phonation import F0RangeFailed, F0RangeUnavailable
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.consensus import (
     SourceHypothesis,
     align_sources,
@@ -69,7 +69,7 @@ DURATION_S = 1.5
 PHONATION_TRACKS = "phonation_tracks"
 CONSENSUS_TAXONOMY = "consensus_taxonomy"
 
-_LEXICON = {vocabulary_key(str(token)) for token in load_triage_config().require(ONOMATOPOEIC_TOKENS_KEY)}
+_LEXICON = {vocabulary_key(str(token)) for token in load_triage_config(profile=ACTIVE).require(ONOMATOPOEIC_TOKENS_KEY)}
 """The shipped onomatopoeic vocabulary, which is what the extend pass re-flags against."""
 
 SPELLINGS = {"hear": "Throat Clear", "yamnet": "Throat clearing"}
@@ -373,9 +373,9 @@ def _seed_run(
     if taxonomy == "old":
         _seed_string_matched_taxonomy(store, agent)
     elif taxonomy == "current":
-        _write_consensus_taxonomy(store, load_triage_config(), agent)
+        _write_consensus_taxonomy(store, load_triage_config(profile=ACTIVE), agent)
     if tracks:
-        phonation_tracks(store, load_triage_config(), run_dir=run_dir)
+        phonation_tracks(store, load_triage_config(profile=ACTIVE), run_dir=run_dir)
     store.write_jsonl(run_dir / "store.jsonl")
 
 
@@ -477,7 +477,7 @@ class TestThePhonationTracks:
 
         measurement = find_measurement(_store_of(roots[0]), PHONATION_TRACKS)
         assert measurement is not None
-        floor, ceiling = load_triage_config().require("voice.f0_search_range_hz")
+        floor, ceiling = load_triage_config(profile=ACTIVE).require("voice.f0_search_range_hz")
         assert floor <= measurement.attributes["f0_min_hz"] < measurement.attributes["f0_max_hz"] <= ceiling
         assert measurement.attributes["f0_signal"] == "preemphasised"
         assert measurement.attributes["formant_signal"] == "plain"

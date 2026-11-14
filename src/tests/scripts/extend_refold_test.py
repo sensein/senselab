@@ -19,7 +19,7 @@ import pytest
 import soundfile as sf
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.extend import REFOLD_MARKER_STEP, REFOLD_NODE, REFUSED
 from senselab.audio.workflows.triage.hint_record import hint_attributes
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
@@ -46,10 +46,10 @@ SR = 16000
 def _config(tmp_path: Path, text: str = "") -> Any:  # noqa: ANN401 — TriageConfig, kept off for brevity
     """The packaged config, with a partial YAML over it when one is given."""
     if not text:
-        return load_triage_config()
+        return load_triage_config(profile=ACTIVE)
     path = tmp_path / "override.yaml"
     path.write_text(text, encoding="utf-8")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _finished_run(

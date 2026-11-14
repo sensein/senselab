@@ -11,7 +11,7 @@ import pytest
 import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.workflows.triage import task_extent
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import (
     DATASET_PATHS,
     MERGED_PATHS,
@@ -75,7 +75,7 @@ class TestSenselabShipsNoDatasetData:
 
     def test_the_fixture_profile_supplies_everything_a_run_needs(self) -> None:
         """The suite's own profile leaves nothing missing."""
-        assert missing_dataset_values(load_triage_config().values) == []
+        assert missing_dataset_values(load_triage_config(profile=ACTIVE).values) == []
 
 
 class TestLoading:
@@ -236,7 +236,7 @@ class TestActivation:
         """The configuration always names the profile its data files are read from."""
         profile = active_profile()
         assert profile is not None and profile.root == FIXTURE_PROFILE.resolve()
-        assert load_triage_config().profile == profile
+        assert load_triage_config(profile=ACTIVE).profile == profile
 
     def test_a_failed_load_leaves_no_profile_active(self, without_triage_profile: None, tmp_path: Path) -> None:
         """The profile is activated only once its merged configuration has validated."""
@@ -298,16 +298,16 @@ class TestEveryValueIsOverridable:
 
     def test_a_run_changes_one_value_over_the_profile(self, tmp_path: Path) -> None:
         """The run's data section is applied after the profile's copy, and the config hash covers it."""
-        before = load_triage_config()
+        before = load_triage_config(profile=ACTIVE)
         packaged = task_extent.task_extent_parameters()
         override = tmp_path / "run.yaml"
         override.write_text("data:\n  task_extent.yaml:\n    trim:\n      ddk:\n        kept_share_min: 0.75\n")
-        config = load_triage_config(override)
+        config = load_triage_config(override, profile=ACTIVE)
         try:
             assert task_extent.task_extent_parameters()["trim"]["ddk"]["kept_share_min"] == 0.75
             assert config.config_hash != before.config_hash
         finally:
-            load_triage_config()
+            load_triage_config(profile=ACTIVE)
         assert task_extent.task_extent_parameters() == packaged
 
     def test_a_run_may_not_name_a_fixed_file(self, tmp_path: Path) -> None:
@@ -315,15 +315,15 @@ class TestEveryValueIsOverridable:
         override = tmp_path / "run.yaml"
         override.write_text("data:\n  recording_vectors/dictionary.yaml: {}\n")
         with pytest.raises(ValueError, match="dictionary"):
-            load_triage_config(override)
-        load_triage_config()
+            load_triage_config(override, profile=ACTIVE)
+        load_triage_config(profile=ACTIVE)
 
     def test_the_working_rate_is_fixed(self, tmp_path: Path) -> None:
         """Every model triage runs is native at 16 kHz."""
         override = tmp_path / "run.yaml"
         override.write_text("resample:\n  target_hz: 22050\n")
         with pytest.raises(ValueError, match="fixed"):
-            load_triage_config(override)
+            load_triage_config(override, profile=ACTIVE)
 
 
 class TestSenselabShipsNoFittedValue:
@@ -371,7 +371,7 @@ class TestSenselabShipsNoFittedValue:
 
     def test_the_reference_and_fixture_profiles_supply_every_required_value(self) -> None:
         """With the fixture profile (extending the reference profile) active, the start check finds nothing missing."""
-        assert missing_dataset_values(load_triage_config().values) == []
+        assert missing_dataset_values(load_triage_config(profile=ACTIVE).values) == []
 
     def test_the_reference_profile_alone_leaves_only_a_datasets_own_values(self, without_triage_profile: None) -> None:
         """Extending the reference profile, a dataset supplies its task list, policy, statistics and per-task values."""
@@ -439,8 +439,8 @@ class TestTheReviewFixes:
         override = tmp_path / "run.yaml"
         override.write_text("data:\n  tasks.yaml:\n    tasks: {}\n")
         with pytest.raises(ValueError, match="no loader merges"):
-            load_triage_config(override)
-        load_triage_config()
+            load_triage_config(override, profile=ACTIVE)
+        load_triage_config(profile=ACTIVE)
 
     def test_a_profile_config_may_not_carry_a_data_section(self, without_triage_profile: None, tmp_path: Path) -> None:
         """A profile changes data files by supplying them, so the chain's order holds."""
@@ -509,17 +509,17 @@ class TestValuesFollowTheWorkflow:
         override = tmp_path / "run.yaml"
         stages = [name for name in STAGE_NAMES if name != "AIRWAY"]
         override.write_text(yaml.safe_dump({"workflow": {"stages": stages}}))
-        missing = missing_dataset_values(load_triage_config(override).values)
+        missing = missing_dataset_values(load_triage_config(override, profile=ACTIVE).values)
         refused = [item for item in missing if item.startswith("tasks.yaml task ")]
         assert refused and all("its branch AIRWAY is off in this workflow" in item for item in refused)
-        assert not missing_dataset_values(load_triage_config().values)
+        assert not missing_dataset_values(load_triage_config(profile=ACTIVE).values)
 
     def test_a_named_cohort_list_the_profile_lacks_is_refused_before_the_run(self, tmp_path: Path) -> None:
         """Found by the step-11 speech-only run: VERDICT failed on every recording instead of the run refusing."""
         override = tmp_path / "run.yaml"
         override.write_text("verdict:\n  recruited_conditions: no_such_list\n")
         assert "recruited_conditions/no_such_list.yaml (config verdict.recruited_conditions names it)" in (
-            missing_dataset_values(load_triage_config(override).values)
+            missing_dataset_values(load_triage_config(override, profile=ACTIVE).values)
         )
 
     def test_a_value_every_run_reads_names_no_stage(self) -> None:

@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import (
     find_branch_report,
@@ -99,7 +99,7 @@ def _seed_run(
     sf.write(str(run_dir / "streams" / "enhanced.flac"), _samples(clip_level=clip_level, louder=None), SR)
 
     store = ProvStore(run_id=root.name)
-    config = load_triage_config()
+    config = load_triage_config(profile=ACTIVE)
     admitted = admit(store, source, config, run_dir=run_dir)
     assert admitted.audio is not None
     agent = software_agent(store)

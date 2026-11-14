@@ -58,9 +58,11 @@ from typing import Any, Collection, Iterator, Mapping, Sequence
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from senselab.audio.workflows.triage.extend import (  # noqa: E402
+    WorkerConfig,
     activate_in_worker,
     add_config_arguments,
     driver_config,
+    pool_initargs,
     worker_arguments,
     worker_failure,
 )
@@ -164,12 +166,12 @@ def _worker(payload: tuple[str, str]) -> dict[str, Any] | None:
 def _rows(
     payloads: Sequence[tuple[str, str]],
     workers: int,
-    worker_config: tuple[str | None, str | None] = (None, None),
+    worker_config: WorkerConfig | None = None,
 ) -> Iterator[dict[str, Any] | None]:
     if workers <= 1:
         yield from (_worker(payload) for payload in payloads)
         return
-    with Pool(workers, initializer=activate_in_worker, initargs=worker_config) as pool:
+    with Pool(workers, initializer=activate_in_worker, initargs=pool_initargs(worker_config)) as pool:
         yield from pool.imap_unordered(_worker, list(payloads), chunksize=8)
 
 
@@ -180,7 +182,7 @@ def extract(
     *,
     manifest: Path | None = None,
     walk_threads: int = fastio.DEFAULT_THREADS,
-    worker_config: tuple[str | None, str | None] = (None, None),
+    worker_config: WorkerConfig | None = None,
 ) -> dict[str, Any]:
     """Write one JSON line per recording.
 
@@ -190,7 +192,7 @@ def extract(
         workers: Processes reading stores.
         manifest: A file of run roots, one per line, to read instead of walking the tree.
         walk_threads: Participants listed at once while walking.
-        worker_config: The config override and profile each worker activates
+        worker_config: The config override and profile each worker activates; None, the profile active here
             (:func:`~senselab.audio.workflows.triage.extend.worker_arguments`): a spawned worker starts with none.
 
     Returns:

@@ -15,6 +15,7 @@ import pytest
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.triage.config import (
+    ACTIVE,
     DATA_MAP_PATHS,
     TriageConfig,
     UnknownConfigKey,
@@ -207,7 +208,7 @@ def ddk_config(tmp_path: Path) -> TriageConfig:
         "        train_min_s: 1.5\n"
         "        rate_prominence_min: 2.0\n"
     )
-    return load_triage_config(override)
+    return load_triage_config(override, profile=ACTIVE)
 
 
 def _train_envelope(duration_s: float, carrier: tuple[float, float], rate_hz: float, phase_s: float) -> np.ndarray:
@@ -834,7 +835,7 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
         override = tmp_path / "cleared.yaml"
         override.write_text("branch:\n  phoneme_place_classes: null\n")
         seed_ddk_store(store, task="diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7))
-        _run(store, load_triage_config(override), tmp_path, PA)
+        _run(store, load_triage_config(override, profile=ACTIVE), tmp_path, PA)
         reading = _reading(store)
         assert reading["decision"] is None
         assert reading["absent"] == ["branch.phoneme_place_classes"]
@@ -1186,7 +1187,7 @@ class TestTheClassMappingsAreCampaignOverridable:
         """A campaign may add a class without editing the installed package."""
         override = tmp_path / "campaign.yaml"
         override.write_text("branch:\n  phoneme_place_classes:\n    palatal: [ch, jh]\n")
-        classes = branch_params(load_triage_config(override)).point("phoneme_place_classes")
+        classes = branch_params(load_triage_config(override, profile=ACTIVE)).point("phoneme_place_classes")
         assert classes is not None
         assert classes["palatal"] == ("ch", "jh")
         assert classes["labial"] == ("p", "b")
@@ -1195,7 +1196,7 @@ class TestTheClassMappingsAreCampaignOverridable:
         """The same idiom, and the same reason."""
         override = tmp_path / "campaign.yaml"
         override.write_text("branch:\n  phoneme_vowel_classes:\n    nasalised: [ah]\n")
-        classes = branch_params(load_triage_config(override)).point("phoneme_vowel_classes")
+        classes = branch_params(load_triage_config(override, profile=ACTIVE)).point("phoneme_vowel_classes")
         assert classes is not None
         assert "nasalised" in classes
 
@@ -1206,7 +1207,7 @@ class TestTheClassMappingsAreCampaignOverridable:
             "branch:\n  label_sets:\n    cough: [Cough]\n  modulation_band_hz: [1.0, 10.0]\n  nope: 1\n"
         )
         with pytest.raises(ValueError):
-            load_triage_config(override)
+            load_triage_config(override, profile=ACTIVE)
 
 
 class TestThereIsNoSecondBranchForASyllableTask:

@@ -32,13 +32,14 @@ A dataset profile is a directory holding ``profile.yaml`` and the files it suppl
 
 :func:`activate_profile` makes a profile the one :func:`data_path` reads from. Loaders cache what they read under
 the active profile (:func:`profile_cache`), so a profile activated later is never served what an earlier one
-filled.
+filled. A caller loading a configuration names the profile, or passes :data:`ACTIVE` for the one already active.
 
 See ``specs/20261022-triage-dataset-profile/plan.md`` and ``inventory.md``.
 """
 
 from __future__ import annotations
 
+import enum
 import functools
 import hashlib
 import json
@@ -138,6 +139,21 @@ SUPPLIABLE_PATHS = DATASET_PATHS | DEFAULTED_PATHS
 
 class DatasetDataMissing(FileNotFoundError):
     """Triage needs a dataset path that no active profile supplies."""
+
+
+class ActiveProfile(enum.Enum):
+    """The type of :data:`ACTIVE`."""
+
+    ACTIVE = "active"
+
+
+ACTIVE = ActiveProfile.ACTIVE
+"""``load_triage_config(profile=ACTIVE)``: load with the profile already active in this process, or with none where
+none is."""
+
+
+class ProfileNotNamed(RuntimeError):
+    """A configuration was loaded without naming a profile while one is active."""
 
 
 YAML_SUFFIXES = (".yaml", ".yml")

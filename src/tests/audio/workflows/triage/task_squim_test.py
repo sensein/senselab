@@ -10,7 +10,7 @@ import pytest
 import torch
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import find_measurement, path_attributes, write_stream
 from senselab.audio.workflows.triage.task_squim import (
     ABSENT,
@@ -98,7 +98,7 @@ class TestTheWindows:
 @pytest.fixture
 def config() -> TriageConfig:
     """The packaged triage configuration."""
-    return load_triage_config()
+    return load_triage_config(profile=ACTIVE)
 
 
 def _tone(seconds: float) -> Audio:

@@ -15,7 +15,7 @@ import pytest
 import yaml
 
 from senselab.audio.data_structures import AudioHints, ExpectedSpeech
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.branches import (
     NO_TASK_ITEMS,
     SPEECH_EXPECTATIONS,
@@ -67,7 +67,7 @@ def _config(tmp_path: Path, settings: dict[str, Any] | None = None) -> TriageCon
         The resolved configuration.
     """
     supplied = dict(settings or {})
-    packaged = load_triage_config()
+    packaged = load_triage_config(profile=ACTIVE)
     branch = {key: value for key, value in supplied.items() if key not in GATE_SPECS}
     gates: dict[str, dict[str, Any]] = {}
     for key, value in supplied.items():
@@ -83,7 +83,7 @@ def _config(tmp_path: Path, settings: dict[str, Any] | None = None) -> TriageCon
         values["verdict"] = {"gates": {GROUP_LAYER: gates}}
     path = tmp_path / f"override-{abs(hash(yaml.safe_dump(values))) % 10**10}.yaml"
     path.write_text(yaml.safe_dump(values))
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _gated(result: Result, family: str, settings: TriageConfig, *, group: Pattern | None = None) -> Any:  # noqa: ANN401

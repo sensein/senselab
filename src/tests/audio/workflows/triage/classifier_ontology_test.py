@@ -30,7 +30,7 @@ from senselab.audio.workflows.triage.classifier_ontology import (
     load_classifier_ontology,
     unemittable_by_yamnet,
 )
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.routing_analysis.labels import (
     AUDIOSET_AIRWAY,
     AUDIOSET_BREATH,
@@ -49,7 +49,7 @@ def load_airway_roots() -> list[str]:
     Returns:
         The root display names.
     """
-    return [str(root) for root in load_triage_config().require("taxonomy.airway_ontology_roots")]
+    return [str(root) for root in load_triage_config(profile=ACTIVE).require("taxonomy.airway_ontology_roots")]
 
 
 class TestTheProfileIsShipped:
@@ -356,7 +356,7 @@ class TestTheAirwayKindIsOneOntologyClosure:
 
     def test_the_packaged_configuration_is_what_the_routing_tuples_read(self) -> None:
         """The config key and the routing tuple are one definition, not two that agree today."""
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         assert airway_audioset_labels(config) == AUDIOSET_AIRWAY
         assert airway_hear_labels(config) == HEAR_AIRWAY
 

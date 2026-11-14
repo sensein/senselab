@@ -29,9 +29,11 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from senselab.audio.workflows.triage.extend import (
+    WorkerConfig,
     activate_in_worker,
     add_config_arguments,
     driver_config,
+    pool_initargs,
     worker_arguments,
     worker_failure,
 )
@@ -1070,14 +1072,14 @@ def _admitted_task(attributes: Mapping[str, Any]) -> str:
 def _rows(
     payloads: Sequence[tuple[str, list[str]]],
     workers: int,
-    worker_config: tuple[str | None, str | None] = (None, None),
+    worker_config: WorkerConfig | None = None,
 ) -> Iterator[dict[str, Any] | None]:
     """Read every candidate store, in a pool or in this process.
 
     Args:
         payloads: One ``(run directory, family names)`` per candidate.
         workers: How many processes to read with; one reads serially.
-        worker_config: The config override and profile each worker activates
+        worker_config: The config override and profile each worker activates; None, the profile active here
             (:func:`~senselab.audio.workflows.triage.extend.worker_arguments`): a spawned worker starts with none.
 
     Yields:
@@ -1086,7 +1088,7 @@ def _rows(
     if workers <= 1:
         yield from (_worker(payload) for payload in payloads)
         return
-    with Pool(workers, initializer=activate_in_worker, initargs=worker_config) as pool:
+    with Pool(workers, initializer=activate_in_worker, initargs=pool_initargs(worker_config)) as pool:
         yield from pool.imap_unordered(_worker, list(payloads), chunksize=8)
 
 
@@ -1096,7 +1098,7 @@ def extract(
     workers: int,
     *,
     walk_threads: int = fastio.DEFAULT_THREADS,
-    worker_config: tuple[str | None, str | None] = (None, None),
+    worker_config: WorkerConfig | None = None,
 ) -> dict[str, Any]:
     """Walk a corpus and write one JSON line per free-response recording.
 

@@ -33,9 +33,11 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from senselab.audio.workflows.triage.extend import (
+    WorkerConfig,
     activate_in_worker,
     add_config_arguments,
     driver_config,
+    pool_initargs,
     worker_arguments,
     worker_failure,
 )
@@ -217,7 +219,7 @@ def extract_all(
     workers: int,
     memberships: Mapping[str, LabelMembership],
     onomatopoeic: frozenset[str],
-    worker_config: tuple[str | None, str | None] = (None, None),
+    worker_config: WorkerConfig | None = None,
 ) -> Path:
     """Extract features for every manifest row, resuming from what is already on disk.
 
@@ -230,7 +232,7 @@ def extract_all(
         workers: How many processes read stores in parallel.
         memberships: Which labels a span carries, per classifier.
         onomatopoeic: The vocabulary an unbracketed consensus word is counted against.
-        worker_config: The config override and profile each worker activates
+        worker_config: The config override and profile each worker activates; None, the profile active here
             (:func:`~senselab.audio.workflows.triage.extend.worker_arguments`).
 
     Returns:
@@ -253,7 +255,9 @@ def extract_all(
     buffered: list[RecordingFeatures] = []
     with (
         missing_path.open("a", encoding="utf-8") as misses,
-        ProcessPoolExecutor(max_workers=workers, initializer=activate_in_worker, initargs=worker_config) as pool,
+        ProcessPoolExecutor(
+            max_workers=workers, initializer=activate_in_worker, initargs=pool_initargs(worker_config)
+        ) as pool,
     ):
         extract = partial(_extract_one, memberships=memberships, onomatopoeic=onomatopoeic)
         for index, (row, result) in enumerate(zip(pending, pool.map(extract, pending, chunksize=8)), start=1):

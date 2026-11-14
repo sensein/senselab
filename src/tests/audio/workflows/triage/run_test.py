@@ -25,7 +25,7 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage import run as run_module
 from senselab.audio.workflows.triage import vocabulary as vocabulary_module
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import DatasetDataMissing
 from senselab.audio.workflows.triage.dataset_profile import require_dataset_values as real_require_dataset_values
 from senselab.audio.workflows.triage.identity import (
@@ -108,7 +108,7 @@ _MISSING = object()
 @pytest.fixture
 def config() -> TriageConfig:
     """The packaged configuration, unmodified."""
-    return load_triage_config()
+    return load_triage_config(profile=ACTIVE)
 
 
 def _conclude(store: ProvStore, node: str, outcome: Outcome, kind: str | None) -> tuple[str, NodeVerdict]:
@@ -833,7 +833,7 @@ def _workflow(tmp_path: Path, *off: str) -> TriageConfig:
     """The packaged configuration with ``off`` left out of its workflow."""
     override = tmp_path / "workflow.yaml"
     override.write_text(yaml.safe_dump({"workflow": {"stages": [name for name in STAGE_NAMES if name not in off]}}))
-    return load_triage_config(override)
+    return load_triage_config(override, profile=ACTIVE)
 
 
 class TestTheWorkflow:
@@ -1280,7 +1280,7 @@ class TestCli:
         assert cli.main([str(source)]) == 0
         assert seen["hint"] is None
         assert seen["out_dir"] == cli.DEFAULT_OUT_DIR
-        assert seen["config"].config_hash == load_triage_config().config_hash
+        assert seen["config"].config_hash == load_triage_config(profile=ACTIVE).config_hash
 
     def test_without_a_profile_the_cli_exits_2_naming_it(
         self, tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture[str]

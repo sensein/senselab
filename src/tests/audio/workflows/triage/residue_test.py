@@ -10,7 +10,7 @@ from typing import Sequence
 
 import pytest
 
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.residue import (
     ALIGNED,
     FREE,
@@ -271,7 +271,7 @@ class TestARecallSubtractsItsStory:
         from senselab.audio.workflows.triage.config import load_triage_config
         from senselab.audio.workflows.triage.residue import RECALL, residue_rule, task_residue
 
-        rule = residue_rule(load_triage_config())
+        rule = residue_rule(load_triage_config(profile=ACTIVE))
         said = "well grandfather is ninetythree years old and I am Alice Smith".split()
         residue = task_residue(said, "story-recall", self.STORY, rule, speech_type="recall")
         assert residue.method == RECALL
@@ -284,7 +284,7 @@ class TestARecallSubtractsItsStory:
         from senselab.audio.workflows.triage.config import load_triage_config
         from senselab.audio.workflows.triage.residue import FREE, residue_rule, task_residue
 
-        rule = residue_rule(load_triage_config())
+        rule = residue_rule(load_triage_config(profile=ACTIVE))
         said = "grandfather is ninetythree".split()
         residue = task_residue(said, "story-recall", self.STORY, rule)
         assert residue.method == FREE and len(residue.positions) == len(said)
@@ -297,7 +297,7 @@ def test_a_cue_family_reads_its_target_word_as_task_content(monkeypatch: pytest.
     from senselab.audio.workflows.triage.residue import residue_rule, task_residue
     from senselab.audio.workflows.triage.task_catalogue import DEFINES_A_CUE_WORD, has_trait
 
-    rule = residue_rule(load_triage_config())
+    rule = residue_rule(load_triage_config(profile=ACTIVE))
     assert has_trait("productive-vocabulary", DEFINES_A_CUE_WORD)
     texts = ["a", "gladiator", "is", "a", "roman", "fighter", "gladiators", "fought"]
     residue = task_residue(texts, "productive-vocabulary", ["gladiator"], rule)

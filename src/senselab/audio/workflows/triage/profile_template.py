@@ -172,6 +172,7 @@ def _base_config_values(reference: str | None) -> dict[str, Any]:
     from senselab.audio.workflows.triage.config import load_triage_config  # noqa: PLC0415
 
     before, run_data = dataset_profile.active_profile(), dataset_profile.run_data()
+    dataset_profile.deactivate_profile()
     try:
         config = load_triage_config(profile=reference) if reference is not None else load_triage_config()
         return dict(config.values)

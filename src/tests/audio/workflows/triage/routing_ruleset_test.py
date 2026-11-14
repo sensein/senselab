@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.routing_analysis.features import TRANSCRIPT_CAP, RecordingFeatures
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     AT_LEAST,
@@ -685,7 +685,7 @@ class TestThePosteriorgramGateRoutesWithoutATranscript:
 
     def test_the_gate_is_a_branch_gate_whose_threshold_comes_off_the_configuration(self, ruleset: Ruleset) -> None:
         """The cut is not a literal: the gate carries whatever ``taxonomy.ruleset.gates`` says."""
-        gates = load_triage_config().require("taxonomy.ruleset.gates")
+        gates = load_triage_config(profile=ACTIVE).require("taxonomy.ruleset.gates")
         assert "airway.ppg_silent_fraction" in ruleset.branch_gates["AIRWAY"]
         assert ruleset.gates["airway.ppg_silent_fraction"].threshold == float(
             gates["airway.ppg_silent_fraction"]["threshold"]
@@ -794,13 +794,16 @@ class TestWhichAbsenceIsCritical:
         """The owner named span-based measurements; they are critical exactly when nothing sits beside them."""
         path = tmp_path / "spans_only.yaml"
         path.write_text("taxonomy:\n  ruleset:\n    branch_gates:\n      VOICE: [voice.sustained]\n")
-        assert critical_blocks(load_ruleset(load_triage_config(path))) == ("consensus_transcript", "spans")
+        assert critical_blocks(load_ruleset(load_triage_config(path, profile=ACTIVE))) == (
+            "consensus_transcript",
+            "spans",
+        )
 
     def test_a_second_gate_over_another_block_ends_the_criticality(self, tmp_path: Path) -> None:
         """Nothing is hard-coded: the set is whatever the configured gates make it."""
         path = tmp_path / "two_gates.yaml"
         path.write_text("taxonomy:\n  ruleset:\n    branch_gates:\n      SPEECH: [speech.lexical, voice.sustained]\n")
-        assert critical_blocks(load_ruleset(load_triage_config(path))) == ()
+        assert critical_blocks(load_ruleset(load_triage_config(path, profile=ACTIVE))) == ()
 
     def test_a_branch_with_one_readable_gate_is_never_unreadable(self, ruleset: Ruleset) -> None:
         """A silent gate is an opinion; only a branch with no opinion at all is critical."""

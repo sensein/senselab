@@ -18,7 +18,7 @@ import pytest
 import soundfile as sf
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes.airway import (
     ACTIVITY_ENVELOPE,
@@ -94,7 +94,7 @@ def _override(tmp_path: Path, body: str = "", *, name: str = "airway") -> Triage
     """
     path = tmp_path / f"{name}.yaml"
     path.write_text(_BRANCH_POINTS + body)
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 @pytest.fixture

@@ -21,7 +21,7 @@ from typing import Callable
 import numpy as np
 import pytest
 
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import live_entities
 from senselab.audio.workflows.triage.nodes.preprocess import extend_clip_amplitudes, write_clip_spans
@@ -99,7 +99,7 @@ def _seed(
         The recording's path on disk.
     """
     path = wav_writer("input.wav", samples, SR)
-    settings = config if config is not None else load_triage_config()
+    settings = config if config is not None else load_triage_config(profile=ACTIVE)
     admitted = admit(store, path, settings, run_dir=tmp_path)
     assert admitted.audio is not None
     agent = store.agent(agent_type="software", version="senselab test-seed")
@@ -141,7 +141,7 @@ def _seed_bare(
         The recording's path on disk.
     """
     path = wav_writer("input.wav", samples, SR)
-    admitted = admit(store, path, load_triage_config(), run_dir=tmp_path)
+    admitted = admit(store, path, load_triage_config(profile=ACTIVE), run_dir=tmp_path)
     assert admitted.audio is not None
     agent = store.agent(agent_type="software", version="senselab test-seed")
     activity = store.activity(node="PREPROCESS", step="clip_spans", parameters={})
@@ -169,7 +169,7 @@ def _override(tmp_path: Path, text: str) -> TriageConfig:
     """
     path = tmp_path / "quality-override.yaml"
     path.write_text(text)
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _contests(store: ProvStore) -> list[Entity]:

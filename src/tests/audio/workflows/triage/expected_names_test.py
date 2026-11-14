@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import fields
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.nodes.branches import (
     SPEECH_EXPECTATIONS,
     Expectation,
@@ -19,7 +19,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
 from senselab.audio.workflows.triage.nodes.speech import declared_content, in_stimulus
 from senselab.audio.workflows.triage.stimulus import near_match
 
-_NEAR = near_match(load_triage_config())
+_NEAR = near_match(load_triage_config(profile=ACTIVE))
 
 
 class TestTheDeclarationLivesOnTheExpectationRow:

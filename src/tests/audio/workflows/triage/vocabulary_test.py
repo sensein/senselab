@@ -1321,16 +1321,16 @@ class TestAConditionNeverWithholds:
 
     def test_the_packaged_config_names_condition(self) -> None:
         """The shipped key names CONDITION and nothing else."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        assert FoldPolicy.from_config(load_triage_config()).condition_categories == ("CONDITION",)
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).condition_categories == ("CONDITION",)
 
     def test_the_packaged_config_names_the_study_s_cohort_profile(self) -> None:
         """The shipped key names the fixture's recruited-conditions profile, and it loads."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
         from senselab.audio.workflows.triage.recruited_conditions import load_recruited_conditions
 
-        name = FoldPolicy.from_config(load_triage_config()).recruited_conditions
+        name = FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).recruited_conditions
         assert name == "adult_speech_fixture_2026-09-04"
         assert load_recruited_conditions(name).diagnosis("spasmodic dysphonia") == "laryngeal_dystonia"
 
@@ -1696,11 +1696,11 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
 
     def test_the_packaged_config_exempts_no_family_from_the_speaker_gate(self) -> None:
         """Owner, 2026-09-30: no exemption; a model-speaker task (its task list trait) is named for the ground only."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
         from senselab.audio.workflows.triage.nodes.verdict import flag_gate_exemptions
         from senselab.audio.workflows.triage.task_catalogue import MODEL_SPEAKER_ALLOWED, has_trait
 
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         assert flag_gate_exemptions(config, "harvard-sentences-list") == ()
         assert has_trait("harvard-sentences-list", MODEL_SPEAKER_ALLOWED)
 
@@ -1720,15 +1720,15 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
 
     def test_the_packaged_config_turns_the_contradiction_flag_on(self) -> None:
         """Owner, 2026-09-28."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        assert FoldPolicy.from_config(load_triage_config()).llm_contradiction_flags is True
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).llm_contradiction_flags is True
 
     def test_the_packaged_config_turns_the_second_speaker_flag_on(self) -> None:
         """Owner, 2026-09-27."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        assert FoldPolicy.from_config(load_triage_config()).llm_second_speaker_flags is True
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).llm_second_speaker_flags is True
 
 
 class TestSecondOpinionDisagreementFlagsForReview:
@@ -1861,9 +1861,9 @@ class TestSecondOpinionDisagreementFlagsForReview:
 
     def test_the_packaged_policy_flags_at_the_proposed_thresholds(self) -> None:
         """Owner's switch on; thresholds 0.8 and 0.2, unfitted."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        policy = FoldPolicy.from_config(load_triage_config())
+        policy = FoldPolicy.from_config(load_triage_config(profile=ACTIVE))
         assert (
             policy.second_opinion_disagreement_flags,
             policy.second_opinion_confident_yes,
@@ -1922,9 +1922,9 @@ class TestSpokenInstructionsFlagForReview:
 
     def test_the_packaged_policy_flags(self) -> None:
         """The packaged config turns the ground on."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        assert FoldPolicy.from_config(load_triage_config()).llm_instructions_spoken_flags is True
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).llm_instructions_spoken_flags is True
 
 
 _SENTINEL = "Zebulon Quimby of Kalamazoo"

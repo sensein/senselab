@@ -10,7 +10,7 @@ import pytest
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage import vocabulary as vocabulary_module
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes import verdict as verdict_module
 from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY
@@ -92,7 +92,7 @@ def _hint_config(tmp_path: Path) -> TriageConfig:
     """
     path = tmp_path / "hints.yaml"
     path.write_text("routing:\n  hint_branch_map:\n    cough: AIRWAY\n    read-speech: SPEECH\n")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _evaluation(
@@ -160,7 +160,7 @@ def make_verdict_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Calla
         if route:
             reading = _evaluation(tuple(routed), route_state, unavailable or {}, tuple(declared), family)
             monkeypatch.setattr(routing_module, "evaluate_live_routes", lambda *a, **k: reading)
-            routing(store, None, config or load_triage_config(), hint, run_dir=tmp_path)
+            routing(store, None, config or load_triage_config(profile=ACTIVE), hint, run_dir=tmp_path)
         for node, outcome, kind in concluded:
             activity = store.activity(node=node, step="seed", parameters={})
             store.was_associated_with(activity, agent)
@@ -629,7 +629,7 @@ class TestHintsAreReadThroughRoutingsMap:
         """ROUTING recorded the typo on every decision; the fold names it beside the empty discard."""
         path = tmp_path / "typo.yaml"
         path.write_text("routing:\n  hint_branch_map:\n    cough: AIRWY\n")
-        typo_config = load_triage_config(path)
+        typo_config = load_triage_config(path, profile=ACTIVE)
         hint = AudioHints(may_contain=["cough"])
         store = make_verdict_store(
             concluded=[("ADMIT", Outcome.PASS, None)],
@@ -751,11 +751,11 @@ def _policy_config(tmp_path: Path, yaml_text: str) -> TriageConfig:
     Returns:
         The merged configuration.
     """
-    from senselab.audio.workflows.triage.config import load_triage_config
+    from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
     path = tmp_path / "policy.yaml"
     path.write_text(yaml_text, encoding="utf-8")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _annotate(store: ProvStore, **attributes: Any) -> str:  # noqa: ANN401 — the re-read's own fields
@@ -786,7 +786,7 @@ def _llm_off(tmp_path: Path) -> TriageConfig:
     """The packaged config with the redaction re-read's triage ground switched off."""
     path = tmp_path / "llm-off.yaml"
     path.write_text("verdict:\n  llm_redaction_flags: false\n")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
@@ -794,8 +794,8 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
 
     def test_the_packaged_config_ships_the_key_and_the_policy_reads_it(self) -> None:
         """A ground with no key is an unmeasured decision with no way to see or turn it off."""
-        assert load_triage_config().require("verdict.llm_redaction_flags") is True
-        assert FoldPolicy.from_config(load_triage_config()).llm_redaction_flags is True
+        assert load_triage_config(profile=ACTIVE).require("verdict.llm_redaction_flags") is True
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).llm_redaction_flags is True
 
     def test_a_flagged_re_read_does_not_withhold_the_release(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -809,9 +809,9 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
 
     def test_the_weighting_key_ships_off_and_unfitted(self) -> None:
         """132 recordings and 41 disagreements is not a fit; the shipped default changes nothing."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        assert load_triage_config().require("verdict.llm_redaction_withholds") is False
+        assert load_triage_config(profile=ACTIVE).require("verdict.llm_redaction_withholds") is False
 
     def test_the_weighting_may_withhold_a_recording_redact_passed(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -859,8 +859,8 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
 
     def test_the_reset_key_ships_on(self) -> None:
         """Owner, 2026-09-27: a reading's release entries unmask the words they name."""
-        assert load_triage_config().require("verdict.llm_reset_redactions") is True
-        assert FoldPolicy.from_config(load_triage_config()).llm_reset_redactions is True
+        assert load_triage_config(profile=ACTIVE).require("verdict.llm_reset_redactions") is True
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).llm_reset_redactions is True
 
     @staticmethod
     def _mask(
@@ -1903,7 +1903,7 @@ class TestTheGatesDecideTheDeclaredTask:
             "carrier_f0_spread_semitones": 1.0,
             "carrier_continuity": 0.8,
         }
-        settings = load_triage_config(override)
+        settings = load_triage_config(override, profile=ACTIVE)
         special = self._gated_store(tmp_path, family="maximum-phonation-time", branch="VOICE", readings=readings)
         sibling = self._gated_store(tmp_path, family="maximum-phonation-time-v2", branch="VOICE", readings=readings)
         applied = {
@@ -1939,7 +1939,7 @@ class TestTheGatesDecideTheDeclaredTask:
                 "carrier_continuity": 0.8,
             },
         )
-        result = verdict_module.verdict(store, None, load_triage_config(override), run_dir=tmp_path)
+        result = verdict_module.verdict(store, None, load_triage_config(override, profile=ACTIVE), run_dir=tmp_path)
         assert result.file_verdict.conformance["VOICE"] == UNDETERMINED
         assert result.file_verdict.unmeasured["VOICE"] == ["verdict.gates.by_group.SUSTAINED.production_min_s"]
 

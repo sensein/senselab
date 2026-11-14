@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import soundfile
 
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import voice as voice_module
 from senselab.audio.workflows.triage.nodes.branches import (
     PARAM_SECTION,
@@ -119,7 +119,7 @@ def config(**overrides: Any) -> TriageConfig:  # noqa: ANN401
     Returns:
         The configuration.
     """
-    packaged = load_triage_config()
+    packaged = load_triage_config(profile=ACTIVE)
     merged = dict(packaged.values)
     settings = {**SETTINGS, **{k: v for k, v in overrides.items() if k not in GATES}}
     gates = {**GATES, **{k: v for k, v in overrides.items() if k in GATES}}

@@ -160,13 +160,13 @@ def test_a_stale_manifest_row_refuses_its_whole_session(tmp_path: Path) -> None:
 
 def test_a_member_made_with_another_profile_refuses_its_whole_session(tmp_path: Path) -> None:
     """Review J4: a member's run refused for its profile refuses the session; no member's store is written."""
-    from senselab.audio.workflows.triage.config import load_triage_config
+    from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
     rows = [_run(tmp_path, f"rec-000{i}", _breaths(i), "pa", "s1", f"t{i}") for i in range(3)]
     log = Path(rows[1]["enhanced"]).parents[1] / "run.json"
     log.write_text(json.dumps({"config": {"profile": {"name": "another-dataset", "version": "1", "digest": "x"}}}))
     stores = [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows]
-    out = session_cli.process_session("pa/s1", rows, load_triage_config())
+    out = session_cli.process_session("pa/s1", rows, load_triage_config(profile=ACTIVE))
     assert {r["status"] for r in out} == {"error"}
     assert all("refused" in r[SESSION_FLOOR] for r in out)
     assert [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows] == stores

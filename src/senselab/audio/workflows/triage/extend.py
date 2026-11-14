@@ -51,7 +51,10 @@ from senselab.audio.workflows.triage.consensus import (
     word_from_attributes,
 )
 from senselab.audio.workflows.triage.dataset_profile import (
+    ACTIVE,
     DatasetProfile,
+    active_profile,
+    deactivate_profile,
     recorded_digest_matches,
     require_dataset_values,
 )
@@ -324,13 +327,15 @@ def driver_config(args: argparse.Namespace, *, require_values: bool = True, stag
             (:func:`~senselab.audio.workflows.triage.workflow.require_stage`).
 
     Returns:
-        The configuration, with the profile active where one was named.
+        The configuration, with the profile active where one was named. Without ``--profile`` it is loaded with the
+        profile already active in this process (:data:`~senselab.audio.workflows.triage.dataset_profile.ACTIVE`),
+        none in a process that activated none.
 
     Raises:
         DatasetDataMissing: Where ``require_values`` and the profile lacks a value a run needs.
         ValueError: Where ``stage`` is off in the workflow.
     """
-    config = load_triage_config(args.config, profile=args.profile)
+    config = load_triage_config(args.config, profile=ACTIVE if args.profile is None else args.profile)
     if stage is not None:
         require_stage(config.values, stage)
     if require_values:
@@ -338,40 +343,85 @@ def driver_config(args: argparse.Namespace, *, require_values: bool = True, stag
     return config
 
 
-def worker_arguments(args: argparse.Namespace, config: TriageConfig) -> tuple[str | None, str | None]:
+WorkerConfig = tuple[str | None, str | None, str | None]
+""":func:`activate_in_worker`'s arguments: ``(config override, profile directory, profile digest)``."""
+
+
+def worker_arguments(args: argparse.Namespace, config: TriageConfig) -> WorkerConfig:
     """What a worker process needs to read the driver's configuration again: :func:`activate_in_worker`'s arguments.
 
-    A spawned worker starts with no profile active, so a pool's initializer activates the one the driver did.
+    A spawned worker starts with no profile active, so a pool's initializer activates the one the driver did, named
+    explicitly: its directory and its digest.
 
     Args:
         args: The parsed :func:`add_config_arguments` options.
         config: The configuration :func:`driver_config` returned.
 
     Returns:
-        ``(config override, profile directory)``, each None where the driver had none.
+        ``(config override, profile directory, profile digest)``, each None where the driver had none.
     """
-    override = None if args.config is None else str(args.config)
-    return override, None if config.profile is None else str(config.profile.root)
+    return config_for_workers(None if args.config is None else str(args.config), config.profile)
+
+
+def config_for_workers(override: str | Path | None, profile: DatasetProfile | None) -> WorkerConfig:
+    """:func:`activate_in_worker`'s arguments for a configuration override and the parent's profile.
+
+    Every process pool that runs triage work passes these as its initializer's arguments, so each worker activates
+    the parent's profile rather than none.
+
+    Args:
+        override: The parent's config override, or None.
+        profile: The parent's profile (its configuration's ``profile``), or None.
+
+    Returns:
+        ``(config override, profile directory, profile digest)``, each None where the parent had none.
+    """
+    return (
+        None if override is None else str(override),
+        None if profile is None else str(profile.root),
+        None if profile is None else profile.digest,
+    )
+
+
+def pool_initargs(given: WorkerConfig | None = None) -> WorkerConfig:
+    """The arguments a process pool hands :func:`activate_in_worker`.
+
+    Args:
+        given: The driver's :func:`worker_arguments`; None hands each worker the profile active in this process, with
+            no config override.
+
+    Returns:
+        ``given``, or :func:`config_for_workers` of this process's active profile.
+    """
+    return given if given is not None else config_for_workers(None, active_profile())
 
 
 _WORKER_FAILURE: str | None = None
 
 
-def activate_in_worker(override: str | None, profile: str | None) -> None:
-    """A pool initializer: activate in this worker the configuration's profile and run data, as the driver did.
+def activate_in_worker(override: str | None, profile: str | None, digest: str | None = None) -> None:
+    """A pool initializer: activate in this worker the parent's profile and run data, as the parent did.
 
+    The worker loads exactly the profile it is handed (none where ``profile`` is None, whatever the process
+    inherited), and refuses one whose digest is not the parent's: its files changed after the parent loaded them.
     It never raises (a pool whose initializer raises starts a new worker for ever); a failure is held for
     :func:`worker_failure`, which every task the worker runs reports.
 
     Args:
-        override: The driver's config override, or None.
-        profile: The profile directory the driver activated, or None.
+        override: The parent's config override, or None.
+        profile: The profile directory the parent activated, or None.
+        digest: The parent's profile digest; None skips the comparison.
     """
     global _WORKER_FAILURE
     try:
-        load_triage_config(override, profile=profile)
+        if active_profile() is not None:
+            deactivate_profile()
+        config = load_triage_config(override, profile=profile)
+        if digest is not None and (config.profile is None or config.profile.digest != digest):
+            got = None if config.profile is None else config.profile.digest
+            raise RuntimeError(f"the profile at {profile} has digest {got}, not the parent's {digest}")
     except Exception as error:  # noqa: BLE001 -- held, and every task this worker runs reports it
-        _WORKER_FAILURE = f"the worker could not activate the driver's profile: {type(error).__name__}: {error}"
+        _WORKER_FAILURE = f"the worker could not activate the parent's profile: {type(error).__name__}: {error}"
 
 
 def worker_failure() -> str | None:

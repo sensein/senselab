@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, DATA_MAP_PATHS, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import branches as branches_module
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
@@ -213,7 +213,7 @@ def _params(group: Pattern = Pattern.SYLLABLE_TRAIN, **values: Any) -> BranchPar
     Returns:
         The record over a configuration carrying those values, bound to ``group``.
     """
-    config = load_triage_config()
+    config = load_triage_config(profile=ACTIVE)
     merged = dict(config.values)
     merged[PARAM_SECTION] = {
         **config.values[PARAM_SECTION],
@@ -492,7 +492,7 @@ class TestTheExpectationTableIsData:
 
     def test_the_reference_sets_match_the_ones_the_packaged_config_names(self) -> None:
         """``taxonomy.ruleset.reference_family_set`` names the same three sets by key."""
-        declared = load_triage_config().require("taxonomy.ruleset.reference_family_set")
+        declared = load_triage_config(profile=ACTIVE).require("taxonomy.ruleset.reference_family_set")
         assert declared == {"AIRWAY": "airway", "SPEECH": "speech", "VOICE": "voice"}
 
     def test_the_ten_syllable_families_are_speechs_with_the_instructions_own_expectation(self) -> None:
@@ -860,7 +860,7 @@ class TestEveryOperatingPointIsAConfigKey:
 
     def test_point_types_param_keys_and_the_packaged_section_all_match(self) -> None:
         """A key in one but not the other two is a drift nothing else would catch."""
-        assert set(POINT_TYPES) == set(PARAM_KEYS) == set(load_triage_config().values[PARAM_SECTION])
+        assert set(POINT_TYPES) == set(PARAM_KEYS) == set(load_triage_config(profile=ACTIVE).values[PARAM_SECTION])
 
     def test_there_are_no_numeric_p_star_properties_any_more(self) -> None:
         """The only accessor is ``point()``. ``p_normalise`` survives because it is a function."""
@@ -873,7 +873,7 @@ class TestEveryOperatingPointIsAConfigKey:
 
     def test_every_key_ships_a_value_and_point_reads_it_without_refusing(self) -> None:
         """The design fitted every key; none may still ship null, and ``point`` never raises for one."""
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         mappings = {key for key in PARAM_KEYS if f"{PARAM_SECTION}.{key}" in DATA_MAP_PATHS}
         numeric = [key for key in PARAM_KEYS if key not in mappings]
         assert mappings == {"label_sets", "phoneme_place_classes", "phoneme_vowel_classes"}
@@ -894,7 +894,7 @@ class TestEveryOperatingPointIsAConfigKey:
     def test_point_raises_only_for_a_name_outside_point_types(self) -> None:
         """A typo in the calling code is a programming error, not a measurement the graph is missing."""
         with pytest.raises(KeyError, match="PARAM_KEYS"):
-            branch_params(load_triage_config()).point("not_a_branch_key")
+            branch_params(load_triage_config(profile=ACTIVE)).point("not_a_branch_key")
 
     def test_record_names_every_null_key_in_read_order(self) -> None:
         """Which point a body reached for first is what says where the evaluation stopped."""
@@ -909,7 +909,7 @@ class TestEveryOperatingPointIsAConfigKey:
 
     def test_the_label_sets_ship_the_airway_decision_already_taken(self) -> None:
         """The one non-numeric key: set membership derived from ``airway.labels_of_interest``."""
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         assert branch_params(config).point("label_sets") == {"cough": ("Cough",), "breath": ("Breathe",)}
         assert set(config.require("airway.labels_of_interest")) == {"Cough", "Breathe"}
 
@@ -919,10 +919,10 @@ class TestEveryOperatingPointIsAConfigKey:
 
     def test_normalise_is_the_normalisation_the_transcript_was_built_under(self) -> None:
         """Not a config key: a function. A second spelling would compare against another normal form."""
-        normalise = branch_params(load_triage_config()).p_normalise
+        normalise = branch_params(load_triage_config(profile=ACTIVE)).p_normalise
         assert normalise("Hey,") == "hey"
         assert normalise("BUTTERCUP") == "buttercup"
-        assert "normalise" not in load_triage_config().values[PARAM_SECTION]
+        assert "normalise" not in load_triage_config(profile=ACTIVE).values[PARAM_SECTION]
 
     def test_a_tuple_valued_key_comes_back_as_a_tuple(self) -> None:
         """YAML gives a list; the body's arithmetic wants two floats."""

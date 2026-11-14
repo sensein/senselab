@@ -20,7 +20,7 @@ import soundfile as sf
 from senselab.audio.data_structures import Audio
 from senselab.audio.data_structures.audio_hints import AudioHints, ExpectedSpeech
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import redact as redact_module
 from senselab.audio.workflows.triage.nodes import verdict as verdict_module
 from senselab.audio.workflows.triage.nodes.common import consensus_words, live_entities, resolve_stream
@@ -92,7 +92,7 @@ def _override(tmp_path: Path, yaml_text: str) -> TriageConfig:
     """The production override mechanism: a partial YAML deep-merged over the packaged config."""
     path = tmp_path / f"override-{abs(hash(yaml_text))}.yaml"
     path.write_text(yaml_text)
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 @pytest.fixture(name="redact_config")
@@ -711,7 +711,7 @@ class TestTheWordLevelMaskRule:
         """The shipped key names the person and the place categories."""
         from senselab.audio.workflows.triage.vocabulary import FoldPolicy
 
-        assert FoldPolicy.from_config(load_triage_config()).trim_protected_categories == (
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).trim_protected_categories == (
             "PERSON",
             "NAME",
             "LOCATION",
@@ -1971,7 +1971,7 @@ class TestThePackagedConfigLeavesTheReviewerOff:
 
     def test_the_packaged_config_leaves_it_disabled(self) -> None:
         """The default is off, and the other keys are present so an override may only flip one."""
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         assert cfg.require("redaction.llm_check.enabled") is False
         assert cfg.require("redaction.llm_check.model_id") == "google/gemma-4-31B-it-qat-w4a16-ct"
         assert cfg.require("redaction.llm_check.ref") == "main"

@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.consensus import vocabulary_key
 from senselab.audio.workflows.triage.dataset_profile import data_path
 from senselab.audio.workflows.triage.label_membership import LabelMembership
@@ -238,10 +238,10 @@ def _silent_store(path: Path) -> Path:
     )
 
 
-PACKAGED_MEMBERSHIPS = span_label_memberships(load_triage_config())
+PACKAGED_MEMBERSHIPS = span_label_memberships(load_triage_config(profile=ACTIVE))
 """The shipped top-4 / 0.2 rule, so the tests read what the corpus extraction will."""
 
-PACKAGED_ONOMATOPOEIA = onomatopoeic_vocabulary(load_triage_config())
+PACKAGED_ONOMATOPOEIA = onomatopoeic_vocabulary(load_triage_config(profile=ACTIVE))
 """The shipped ``words.onomatopoeic_tokens`` vocabulary, for the same reason."""
 
 
@@ -383,7 +383,7 @@ class TestOnomatopoeicRenderings:
 
     def test_the_shipped_vocabulary_is_populated_and_already_normalised(self) -> None:
         """A token that is not its own vocabulary key could never match a word."""
-        vocabulary = onomatopoeic_vocabulary(load_triage_config())
+        vocabulary = onomatopoeic_vocabulary(load_triage_config(profile=ACTIVE))
         assert {"cough", "coughs", "coughing", "咳", "呵"} <= vocabulary
         assert all(token == vocabulary_key(token) for token in vocabulary)
 
@@ -1335,7 +1335,7 @@ class TestBranchHeldAndStagedAreDifferentStates:
 
     def test_no_held_detector_is_in_the_catalogue_or_gates_a_branch(self) -> None:
         """A branch detector is read inside a branch; it is not a gate into one."""
-        ruleset = load_ruleset(load_triage_config())
+        ruleset = load_ruleset(load_triage_config(profile=ACTIVE))
         gating = {name for names in ruleset.branch_gates.values() for name in names}
         catalogue = {detector.name for detector in detector_catalogue()}
         for detector in BRANCH_DETECTORS["VOICE"]:
@@ -2223,14 +2223,14 @@ def test_a_cough_on_a_span_class_carrying_no_level_writes_no_decibel(tmp_path: P
 @pytest.mark.parametrize("measure", UNMEASURABLE_MEASURES)
 def test_a_cough_on_a_span_class_carrying_no_level_is_a_definite_non_fire(tmp_path: Path, measure: str) -> None:
     """``airway.cough`` must read a measured zero, not an unreadable gate, on a labelled gap."""
-    ruleset = load_ruleset(load_triage_config())
+    ruleset = load_ruleset(load_triage_config(profile=ACTIVE))
     record = _cough_features(tmp_path, [(measure, None)])
     assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
 
 
 def test_a_cough_on_an_amplitude_span_still_fires_at_the_packaged_threshold(tmp_path: Path) -> None:
     """Narrowing the population changes no threshold: 50 dB was fitted on amplitude spans."""
-    ruleset = load_ruleset(load_triage_config())
+    ruleset = load_ruleset(load_triage_config(profile=ACTIVE))
     assert ruleset.gates["airway.cough"].threshold == pytest.approx(50.0)
     record = _cough_features(tmp_path / "loud", [("amplitude", 60.0)])
     assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"] == pytest.approx(60.0)
