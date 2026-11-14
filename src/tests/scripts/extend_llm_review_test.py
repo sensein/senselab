@@ -683,6 +683,42 @@ class TestItIsResumableTheWayTheFamilyIs:
         assert again["counts"] == {"present": 1}, "an identical re-reading is the same entity, not a second one"
         assert len(_annotations(run_root)) == 1
 
+    def test_force_on_another_machine_retires_nothing_when_the_reading_is_the_same(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Satra review 2026-11-14: where an answer ran is the activity's, so the same reading elsewhere is kept.
+
+        The annotation keeps its id and stays live; the re-reading's activity carries the second machine.
+        """
+        run_root = _finished_run(tmp_path / "corpus")
+        manifest = _manifest(tmp_path, run_root)
+        machines = iter(({"host": "node-a", "gpus": ["NVIDIA A100-SXM4-80GB"]}, {"host": "node-b", "gpus": None}))
+        _stub(monkeypatch)
+        answering = review_module.review_transcript
+
+        def _on_a_machine(original: str, **kw: Any) -> ReviewResult:  # noqa: ANN401
+            result = answering(original, **kw)
+            result.runtime = dict(next(machines))
+            return result
+
+        monkeypatch.setattr(review_module, "review_transcript", _on_a_machine)
+        cli.run_slice(manifest, slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path)
+        before = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        (first,) = [
+            e.id for e in before.entities("measurement") if e.attributes.get("name") == REDACTION_LLM_ANNOTATION
+        ]
+        cli.run_slice(manifest, slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path, force=True)
+        after = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        annotations = [e for e in after.entities("measurement") if e.attributes.get("name") == REDACTION_LLM_ANNOTATION]
+        assert [e.id for e in annotations] == [first], "the same reading is the same annotation"
+        assert not after.is_invalidated(first), "nothing that did not differ is retired"
+        hosts = [
+            activity.parameters[review_module.RUNTIME]["host"]
+            for activity in after.activities(review_module.NODE)
+            if activity.step == "llm_check"
+        ]
+        assert hosts == ["node-a", "node-b"]
+
 
 class TestItCannotWriteThroughTheCorpusSStreams:
     """17,924 redacted.flac files were overwritten by a mirror that seeded one as a symlink."""

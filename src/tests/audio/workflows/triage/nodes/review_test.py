@@ -925,21 +925,41 @@ class TestTheRoundsReachTheStoreAndTheSummaryStaysClean:
 _RUNTIME_A = {
     "host": "node-a",
     "gpus": ["NVIDIA A100-SXM4-80GB"],
-    "nvidia_driver": "570.86.15",
     "torch": "2.8.0+cu128",
+    "cuda_visible_devices": "0",
+    "node_gpus": ["NVIDIA A100-SXM4-80GB", "NVIDIA A100-SXM4-80GB"],
+    "nvidia_driver": "570.86.15",
     "vllm": "0.31.0",
     "slurm_job_id": "1",
 }
-_RUNTIME_B = {**_RUNTIME_A, "host": "node-b", "gpus": ["NVIDIA H100 80GB HBM3"], "nvidia_driver": "580.65.06"}
+_RUNTIME_B = {
+    **_RUNTIME_A,
+    "host": "node-b",
+    "gpus": ["NVIDIA H100 80GB HBM3"],
+    "node_gpus": ["NVIDIA H100 80GB HBM3"],
+    "nvidia_driver": "580.65.06",
+}
+
+
+def _check_activities(store: ProvStore) -> list[Any]:
+    """REVIEW's ``llm_check`` activities, in write order."""
+    return [activity for activity in store.activities(NODE) if activity.step == "llm_check"]
+
+
+def _annotation_entity(store: ProvStore) -> Any:  # noqa: ANN401 — an Entity
+    """The one annotation entity the store holds."""
+    found = [e for e in store.entities("measurement") if e.attributes.get("name") == REDACTION_LLM_ANNOTATION]
+    assert len(found) == 1, f"expected exactly one annotation, found {len(found)}"
+    return found[0]
 
 
 class TestEachAnswerRecordsTheMachineItRanOn:
     """Satra review 2026-11-14, decision 5: every round and the reading name the host, GPUs and software behind them."""
 
-    def test_every_round_and_the_annotation_carry_the_runtime(
+    def test_every_round_and_the_activity_carry_the_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Each round's own record, and the reading's from its last answering round, beside the model and commit."""
+        """Each round its own record; the activity that produced the reading its last answering round's."""
         store = ProvStore(run_id="r")
         _seed(store, words=["hello", "alicia"])
         proposal = ReviewProposal(text="alicia", action="redact", category="PERSON", why="a name")
@@ -948,9 +968,13 @@ class TestEachAnswerRecordsTheMachineItRanOn:
         _stub(monkeypatch, [flagged, clean])
         review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
         assert [entry["runtime"] for entry in _rounds_in(store)] == [_RUNTIME_A, _RUNTIME_B]
-        annotation = _annotation(store)
-        assert annotation["runtime"] == _RUNTIME_B
-        assert annotation["model_id"] and annotation["revision"] == "a" * 40, "the model and its commit stay beside it"
+        (activity,) = _check_activities(store)
+        assert activity.parameters[review_module.RUNTIME] == _RUNTIME_B
+        annotation = _annotation_entity(store)
+        assert store.generated_by(annotation.id) == activity.id
+        assert review_module.RUNTIME not in annotation.attributes, "the machine is not part of the reading's identity"
+        assert review_module.reading_runtime(store, annotation.id) == _RUNTIME_B
+        assert annotation.attributes["model_id"] and annotation.attributes["revision"] == "a" * 40
 
     def test_a_reading_with_no_answer_names_no_machine(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A reviewer that never answered ran nowhere."""
@@ -958,21 +982,34 @@ class TestEachAnswerRecordsTheMachineItRanOn:
         _seed(store)
         _stub(monkeypatch, [ReviewResult(available=False, failure="no GPU", model_id="s/m")])
         review(store, _config(tmp_path))
-        assert _annotation(store)["runtime"] == {}
+        (activity,) = _check_activities(store)
+        assert review_module.RUNTIME not in activity.parameters
+        assert review_module.reading_runtime(store, _annotation_entity(store).id) == {}
 
-    def test_the_runtime_decides_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The same answers on two machines give the same reading; only the record of where differs."""
+    def test_the_same_reading_on_another_machine_is_the_same_annotation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two identical readings in one store, on two machines: one annotation, live, and one activity per machine.
+
+        This is what lets ``scripts/extend_llm_review.py --force`` retire a reading only where the re-reading differs.
+        """
         monkeypatch.setattr(review_module, "_resolved", lambda settings: None)  # no key: both are read
-        readings = []
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        outcomes = []
         for runtime in (_RUNTIME_A, _RUNTIME_B):
-            store = ProvStore(run_id=f"r-{runtime['host']}")
-            _seed(store, words=["hello", "alicia"])
             answer = _clean()
             answer.runtime = dict(runtime)
             _stub(monkeypatch, [answer])
-            review(store, _config(tmp_path))
-            readings.append({k: v for k, v in _annotation(store).items() if k not in ("runtime", "result_cache")})
-        assert readings[0] == readings[1]
+            outcomes.append(review(store, _config(tmp_path)))
+        assert outcomes[0].annotation_id == outcomes[1].annotation_id
+        annotation = _annotation_entity(store)
+        assert not store.is_invalidated(annotation.id)
+        activities = _check_activities(store)
+        assert [activity.parameters[review_module.RUNTIME] for activity in activities] == [_RUNTIME_A, _RUNTIME_B]
+        generators = [t for r, s, t in store.relations() if r == "wasGeneratedBy" and s == annotation.id]
+        assert generators == [activity.id for activity in activities], "each machine's activity generated it"
+        assert review_module.reading_runtime(store, annotation.id) == _RUNTIME_A, "the machine that first produced it"
 
 
 class TestTheReviewerDegradesHonestly:
@@ -1184,7 +1221,8 @@ class TestAReadingIsKeptInTheResultCache:
         second = self._reviewed(tmp_path, monkeypatch, [])
         assert _annotation(second)["result_cache"]["hit"] is True
         assert _annotation(second)["result_cache"]["key"] == _annotation(first)["result_cache"]["key"]
-        assert _annotation(second)["runtime"] == _annotation(first)["runtime"] == _RUNTIME_A
+        recorded = [review_module.reading_runtime(store, _annotation_entity(store).id) for store in (first, second)]
+        assert recorded == [_RUNTIME_A, _RUNTIME_A]
 
     def test_an_absent_reading_is_not_kept(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A reviewer that did not load is recorded, and asked again next time."""
