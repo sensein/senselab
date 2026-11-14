@@ -1107,21 +1107,13 @@ class TestTheRecordAReplayWrites:
         assert kept is not None and kept.id_of("recording") == "p01/s2/recording.wav"
 
 
-class TestTheRecordingCheckReadsTheStatFirst:
-    """A recording whose size and modification time match the record is not re-hashed."""
+class TestTheRecordingCheckAlwaysHashes:
+    """The recording is re-hashed on every check; equal size and modification time prove nothing (#613-1)."""
 
-    def test_an_unchanged_recording_is_not_hashed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Reading every source end to end on every pass is the cost this avoids."""
-        root = tmp_path / "rec-0001_20260920-030808"
-        _seed_run(root)
-        monkeypatch.setattr(extend_module, "file_digest", lambda *a, **k: pytest.fail("hashed"))
-        assert _checked(root).audio == AUDIO_VERIFIED
-
-    def test_a_touched_recording_is_hashed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A changed modification time sends the check to the bytes."""
+    def test_an_unchanged_recording_is_hashed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Size and modification time as ADMIT recorded them still send the check to the bytes."""
         root = tmp_path / "rec-0001_20260920-030808"
         source = _seed_run(root)
-        os.utime(source, ns=(1, 1))
         hashed: list[Path] = []
         real = extend_module.file_digest
 
@@ -1132,6 +1124,20 @@ class TestTheRecordingCheckReadsTheStatFirst:
         monkeypatch.setattr(extend_module, "file_digest", counting)
         assert _checked(root).audio == AUDIO_VERIFIED
         assert hashed == [source]
+
+    def test_other_bytes_of_the_same_size_and_time_are_not_verified(self, tmp_path: Path) -> None:
+        """A substitute copied with its size and modification time preserved is refused, not verified."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        source = _seed_run(root)
+        before = source.stat()
+        substitute = bytearray(source.read_bytes())
+        substitute[-1] ^= 0xFF
+        source.write_bytes(bytes(substitute))
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+        after = source.stat()
+        assert (after.st_size, after.st_mtime_ns) == (before.st_size, before.st_mtime_ns)
+        with pytest.raises(ReplayRefused, match="digest differs"):
+            _checked(root)
 
 
 def test_an_out_root_mirror_is_placed_where_the_replay_leaves_the_identity() -> None:

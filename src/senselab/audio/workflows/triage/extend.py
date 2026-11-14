@@ -146,7 +146,7 @@ from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY, RED
 from senselab.audio.workflows.triage.word_arbitration import arbitrate_words
 from senselab.audio.workflows.triage.workflow import OFF_IN_WORKFLOW, off_notes, require_stage
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
-from senselab.utils.prov_store import CHECKSUM_KEY, MTIME_KEY, SIZE_KEY, Entity, ProvStore, file_digest
+from senselab.utils.prov_store import CHECKSUM_KEY, Entity, ProvStore, file_digest
 from senselab.utils.subprocess_venv import record_venv_use
 
 RUN_SUBDIR = "run"
@@ -1092,7 +1092,7 @@ REFUSED = "refused"
 AUDIO_VERIFIED = "verified"
 AUDIO_UNVERIFIED = "unverified"
 AUDIO_UNRECORDED = "unrecorded"
-"""Whether the recording was re-hashed and matched, could not be read, or has no digest recorded."""
+"""Whether the recording was re-hashed and its digest matched ADMIT's, could not be read, or has no digest recorded."""
 
 HINT_GIVEN = "given"
 HINT_RECORDED = "recorded"
@@ -1219,8 +1219,8 @@ def _check_recording_and_profile(
     Returns:
         The audio state and the profile change, or None where the profile did not change.
 
-    A recording whose size and modification time equal what ADMIT recorded is taken as the same bytes without
-    being re-hashed; any other is hashed.
+    The recording is always re-hashed: :data:`AUDIO_VERIFIED` means its digest matched ADMIT's, never that its size
+    and modification time did.
 
     Raises:
         ReplayRefused: On a differing recording, or a profile name that differs without ``allow_profile_change``.
@@ -1229,13 +1229,7 @@ def _check_recording_and_profile(
     audio = AUDIO_UNRECORDED
     if recorded_digest:
         recording = source if source is not None else Path(str(log.get("source") or ""))
-        stat = recording.stat() if recording.is_file() else None
-        unchanged = (
-            stat is not None
-            and attributes.get(SIZE_KEY) == stat.st_size
-            and attributes.get(MTIME_KEY) == stat.st_mtime_ns
-        )
-        now = recorded_digest if unchanged else (file_digest(recording)[0] if stat is not None else None)
+        now = file_digest(recording)[0] if recording.is_file() else None
         if now is None:
             audio = AUDIO_UNVERIFIED
         elif now != recorded_digest:
