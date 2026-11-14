@@ -64,7 +64,7 @@ dependencies = [
   "pydantic>=2.11",
   "pycountry>=24.6",
   "iso639>=0.1",
-  "scikit-learn>=1.7",
+  "scikit-learn>=1.8",  # 1.7.x StratifiedGroupKFold(shuffle=True) detaches class counts from groups
   "umap-learn>=0.5.4",  # 0.5.0-0.5.3 fail on Python 3.12+
   "python-dotenv>=1.0",
   "nest-asyncio>=1.6",
@@ -110,6 +110,7 @@ Documentation = "https://sensein.group/senselab"
 
 [project.scripts]
 senselab-ai = "senselab.agentic_interface.launcher:senselab_ai"
+senselab-evaluate = "senselab.utils.evaluation.cli:main"
 
 [dependency-groups]
 dev = [

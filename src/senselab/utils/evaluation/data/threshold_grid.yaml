@@ -1,0 +1,7 @@
+# Candidate decision thresholds for tune_threshold. A ported convention, not fitted to any data;
+# derivation in specs/20261007-evaluation-and-events/design.md, "Threshold grid".
+start: 0.05  # lowest candidate threshold
+stop: 0.95  # highest candidate threshold (inclusive)
+step: 0.05  # spacing between candidates
+tie_break: closest_to_0.5  # among equally good thresholds, the one nearest 0.5 (then the lower one)
+round: 4  # decimal places of each candidate and of the chosen threshold

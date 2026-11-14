@@ -1,0 +1,24 @@
+# Defaults for senselab-evaluate. A user config is deep-merged over this file; the merged mapping's
+# sha256 is written to metrics.json. Rationale lives in specs/20261007-evaluation-and-events/design.md.
+schema:  # path to the AnnotationSchema YAML whose labels are scored; required
+protocol:  # seen_subject or unseen_subject; required, no default
+columns:  # column names in the predictions CSV (and the ground-truth CSV)
+  item_ref: item_ref  # join key between predictions and ground truth
+  y_true: y_true  # true label; read from ground_truth when that is set
+  y_pred: y_pred  # predicted label; unused when a threshold is tuned
+  y_score:  # positive-class score column, if any
+  group:  # group id column (for example the subject) for cluster-bootstrap intervals, if any
+  split:  # split name column; without it every row is one split named by export.split or "all"
+ground_truth:  # optional CSV with item_ref and y_true, joined on item_ref
+positive_label:  # positive label of a binary task; needed with y_score
+threshold:
+  tune_on_split:  # split to tune a decision threshold on (validation data); null uses y_pred
+  objective: balanced_accuracy  # balanced_accuracy, or the explicit choices f1 or mcc
+bootstrap:
+  n_resamples: 2000  # cluster-bootstrap resamples when a group column is given
+  seed: 0  # bootstrap seed
+reader:
+  dtype: str  # every cell is read as a string; the only supported value
+  keep_default_na: false  # "NA" and empty cells stay strings; the only supported value
+export:
+  split:  # split exported in the reproduction driver's vocabulary; null means the only scored split
