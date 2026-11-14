@@ -171,6 +171,26 @@ def test_the_manifest_lists_finished_runs_and_reports_the_rest(tmp_path: Path, m
     assert summary["missing"] == ["b"]
 
 
+def test_the_manifest_lists_every_missing_recording_in_a_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Past five missing recordings the log names only the first five; the file beside the manifest names them all."""
+    stems = [f"r{index}" for index in range(7)]
+    monkeypatch.setattr(driver, "run_triage", _FakeRun(fail=set(stems[1:])))
+    manifest = _manifest(tmp_path, stems)
+    out = tmp_path / "out"
+    driver.run_slice(manifest, out_root=out, slice_index=0, slice_count=1, config=CONFIG)
+    listing = tmp_path / "runs.jsonl"
+    assert driver.main(["manifest", str(out), "--out", str(listing), "--expect", str(manifest)]) == 1
+    missing_list = tmp_path / "runs.missing_recordings.txt"
+    assert missing_list.read_text().splitlines() == stems[1:]
+    assert str(missing_list) in capsys.readouterr().out
+    monkeypatch.setattr(driver, "run_triage", _FakeRun())
+    driver.run_slice(manifest, out_root=out, slice_index=0, slice_count=1, config=CONFIG)
+    assert driver.main(["manifest", str(out), "--out", str(listing), "--expect", str(manifest)]) == 0
+    assert missing_list.read_text() == ""
+
+
 def test_with_hints_a_recording_whose_hint_declares_nothing_is_a_failed_row(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

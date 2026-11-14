@@ -21,7 +21,8 @@ is a failed row (:class:`HintDeclaresNothing`): senselab reads no file name, so 
 ``manifest`` reads the rows under ``OUT/rows/`` and writes the finished runs as the manifest every ``extend_*``
 driver reads: one line per recording with ``stem``, ``source``, ``enhanced`` (the run's
 ``run/streams/enhanced.flac``) and the identity columns the session and cohort passes group rows by, sorted by stem.
-With ``--expect``, it also reports every recording of that manifest with no finished run, and exits 1 if there is one.
+With ``--expect``, it also reports every recording of that manifest with no finished run, and exits 1 if there is one;
+the full list of their stems goes to ``<out stem>.missing_recordings.txt`` beside the manifest, one per line.
 
 The row carries what the run concluded per stage, its errors, its paths, its wall time, and the persistent model
 workers' events, load times and memory high-water marks; it carries no transcript or measurement.
@@ -65,6 +66,9 @@ ROWS_SUBDIR = "rows"
 """Where the per-recording rows go under ``--out-root``."""
 
 ROW_SUFFIX = ".row.json"
+
+MISSING_SUFFIX = ".missing_recordings.txt"
+"""What ``manifest --expect`` names its list of recordings with no finished run, after the manifest's stem."""
 
 ENHANCED_RELATIVE = Path("run") / "streams" / "enhanced.flac"
 """The stream every ``extend_*`` driver's manifest names, relative to the run root."""
@@ -396,7 +400,8 @@ def write_manifest(out_root: Path, out: Path, *, expect: Path | None = None) -> 
         expect: The input manifest, or None.
 
     Returns:
-        ``written`` (how many rows), and with ``expect`` the ``missing`` stems.
+        ``written`` (how many rows), and with ``expect`` the ``missing`` stems and ``missing_list``, the file
+        (:data:`MISSING_SUFFIX` beside ``out``) that lists every one of them, written even where there is none.
     """
     rows = finished_runs(out_root)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -408,6 +413,9 @@ def write_manifest(out_root: Path, out: Path, *, expect: Path | None = None) -> 
         have = {row["stem"] for row in rows}
         wanted = [Path(str(entry["source"])).stem for entry in read_manifest(expect, required=("source",))]
         summary["missing"] = sorted(stem for stem in wanted if stem not in have)
+        listed = out.with_name(out.stem + MISSING_SUFFIX)
+        listed.write_text("".join(f"{stem}\n" for stem in summary["missing"]), encoding="utf-8")
+        summary["missing_list"] = str(listed)
     return summary
 
 
@@ -432,6 +440,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         missing = summary.get("missing") or []
         if missing:
             print(f"Missing:  {len(missing)} recordings with no finished run, e.g. {missing[:5]}")
+            print(f"          all of them listed in {summary['missing_list']}")
         return 1 if missing else 0
     if not args.manifest.exists():
         print(f"ERROR: manifest not found: {args.manifest}", file=sys.stderr)
