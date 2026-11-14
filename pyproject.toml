@@ -17,7 +17,7 @@ maintainers = [
 ]
 license = { file = "LICENSE.md" }
 readme = "README.md"
-requires-python = ">=3.11,<3.15"
+requires-python = ">=3.11,<3.16"
 keywords = ["audio", "voice", "speech", "provenance", "reproducibility"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -25,6 +25,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
