@@ -9,11 +9,15 @@ import pytest
 
 from senselab.audio.workflows.triage.dataset_profile import FITTED_KIND, profile_values
 from senselab.audio.workflows.triage.fit import (
+    STATISTICS,
+    WHOLE,
     columns_read,
     fit_methods,
     fit_value,
     fit_values,
     fitted_values,
+    n_min_defaults,
+    n_min_of,
     select,
     statistic,
     task_families,
@@ -110,9 +114,66 @@ class TestWhichRowsAMethodReads:
     def test_a_value_by_family_is_one_median_per_family_with_its_count(self) -> None:
         """The per-task response medians."""
         rows = [{"declared_family": f, "x": x} for f, x in (("chat", 10.0), ("chat", 20.0), ("story", 40.0))]
-        method = {"column": "x", "statistic": "median", "decimals": 2, "by": "declared_family"}
+        method = {"column": "x", "statistic": "median", "decimals": 2, "by": "declared_family", "n_min": 1}
         fit = fit_value(rows, "f.yaml", ("a",), method, tasks=TASKS, setting=_no_setting)
         assert (fit.value, fit.n) == ({"chat": 15.0, "story": 40.0}, {"chat": 2, "story": 1})
+
+
+class TestTheMinimumCount:
+    """Satra review 2026-11-14 (#637-1): a statistic over too few values is not fitted unless allowed."""
+
+    def test_every_statistic_has_a_default_and_a_method_may_raise_it(self) -> None:
+        """The defaults cover every statistic; the 99th-percentile count-in gap sets its own, higher one."""
+        assert set(n_min_defaults()) == set(STATISTICS)
+        assert n_min_of({"statistic": "median"}) == n_min_defaults()["median"]
+        assert n_min_of({"statistic": "median", "n_min": 7}) == 7
+        gap = next(method for relative, path, method in fit_methods() if path == ("count_in", "gap_max_s"))
+        assert n_min_of(gap) > n_min_defaults()["percentile"]
+
+    @pytest.mark.parametrize("bad", [0, -1, 2.5, "ten", True])
+    def test_a_minimum_that_is_not_a_count_is_refused(self, bad: Any) -> None:  # noqa: ANN401
+        """A method's own n_min must be a whole number of at least one."""
+        with pytest.raises(ValueError, match="n_min"):
+            n_min_of({"statistic": "median", "n_min": bad})
+
+    def test_every_shipped_percentile_leaves_values_beyond_its_cut(self) -> None:
+        """At n_min, five or more values lie beyond each percentile a method fits.
+
+        The derivation is in config-derivations.md, "profile fit: n_min": the cut is then not the sample's extreme.
+        """
+        for _, path, method in fit_methods():
+            if method["statistic"] not in ("percentile", "percentile_band"):
+                continue
+            qs = method["q"] if isinstance(method["q"], list) else [method["q"]]
+            tail = min(min(float(q), 100.0 - float(q)) for q in qs) / 100.0
+            assert n_min_of(method) * tail >= 5, path
+
+    def test_a_value_below_its_minimum_is_not_fitted_unless_allowed(self) -> None:
+        """Twenty recordings are too few for a median at n_min 30; allowed, the median is written and still named."""
+        rows = [{"x": float(i)} for i in range(20)]
+        method = {"column": "x", "statistic": "median", "decimals": 2, "n_min": 30}
+        refused = fit_value(rows, "f.yaml", ("a",), method, tasks={}, setting=_no_setting)
+        assert (refused.value, refused.n, refused.n_min, refused.short) == (None, 20, 30, (WHOLE,))
+        allowed = fit_value(rows, "f.yaml", ("a",), method, tasks={}, setting=_no_setting, allow_short=True)
+        assert (allowed.value, allowed.short) == (9.5, (WHOLE,))
+        enough = fit_value(rows * 2, "f.yaml", ("a",), method, tasks={}, setting=_no_setting)
+        assert (enough.value, enough.short) == (9.5, ())
+
+    def test_no_values_at_all_stay_unfitted_and_are_not_short(self) -> None:
+        """A column the table never fills is left unfitted, as before, not counted as too few."""
+        fit = fit_value(
+            [{"x": None}], "f.yaml", ("a",), {"column": "x", "statistic": "median"}, tasks={}, setting=_no_setting
+        )
+        assert (fit.value, fit.n, fit.short) == (None, 0, ())
+
+    def test_each_family_of_a_value_by_family_needs_its_own_minimum(self) -> None:
+        """A family below n_min is left out while the others are fitted; its count is kept."""
+        rows = [{"declared_family": "chat", "x": float(i)} for i in range(5)] + [{"declared_family": "story", "x": 1.0}]
+        method = {"column": "x", "statistic": "median", "decimals": 2, "by": "declared_family", "n_min": 5}
+        fit = fit_value(rows, "f.yaml", ("a",), method, tasks=TASKS, setting=_no_setting)
+        assert (fit.value, fit.n, fit.short) == ({"chat": 2.0}, {"chat": 5, "story": 1}, ("story",))
+        allowed = fit_value(rows, "f.yaml", ("a",), method, tasks=TASKS, setting=_no_setting, allow_short=True)
+        assert allowed.value == {"chat": 2.0, "story": 1.0}
 
 
 class TestTheMethodsSenselabShips:
@@ -135,7 +196,10 @@ class TestTheMethodsSenselabShips:
         assert {method["column"] for _, _, method in fit_methods()} - {"gate_response_min_s"} <= set(FIT_COLUMNS)
 
     def test_fitting_a_table_nests_the_values_by_file_and_leaves_out_what_it_could_not_fit(self) -> None:
-        """A table of one participant fits the participant fences and nothing that needs other readings."""
+        """A table of one participant fits nothing: the participant fence is below its n_min.
+
+        Allowed, it fits that fence and nothing that needs other readings.
+        """
         rows = [
             {
                 "participant": "p1",
@@ -146,7 +210,14 @@ class TestTheMethodsSenselabShips:
         ]
         rows = [{**{name: None for name in columns_read()}, **row} for row in rows]
         settings = {("cohort_stage.yaml", ("shared_nonmatch", "recordings_min")): 3}
-        fits = fit_values(rows, tasks=TASKS, setting=lambda relative, key: settings.get((relative, tuple(key))))
+
+        def setting(relative: str, key: Any) -> Any:  # noqa: ANN401
+            return settings.get((relative, tuple(key)))
+
+        refused = fit_values(rows, tasks=TASKS, setting=setting)
+        assert fitted_values(refused) == {}
+        assert [fit.key for fit in refused if fit.short] == ["cohort_stage.yaml condition.hot_rms_dbfs_min"]
+        fits = fit_values(rows, tasks=TASKS, setting=setting, allow_short=True)
         values = fitted_values(fits)
         assert values == {"cohort_stage.yaml": {"condition": {"hot_rms_dbfs_min": -20.0}}}
         assert {fit.key: fit.n for fit in fits}["cohort_stage.yaml condition.hot_rms_dbfs_min"] == 1

@@ -5,6 +5,10 @@ own recordings) are computed by each value's written method (``senselab.audio.wo
 ``recording_vectors.parquet`` a pilot run's corpus pass wrote, and written with what they were fitted on. A value
 the profile sets in its own files wins over its fitted one; this script lists each such value beside the fit.
 
+Each value is fitted over at least its method's ``n_min`` values (``data/profile_values.yaml``; per family for a
+value by family). A table with fewer for any value is refused, naming each; ``--allow-small-n`` writes them anyway,
+marked ``below_n_min`` in ``fitted.yaml``. A value with no values at all is left unfitted, as before.
+
 The order for a new dataset (plan step 10):
 
 1. a pilot run, with ``pilot: true`` in the profile's ``profile.yaml`` (the corpus statistics may stay empty;
@@ -19,9 +23,11 @@ The order for a new dataset (plan step 10):
 
 Usage:
     python scripts/fit_profile.py <recording_vectors.parquet> --profile <profile dir> [--out FILE] [--force]
+        [--allow-small-n]
 
 Exit codes: 0 written; 2 refused (a table that is missing, unreadable or older than the fit columns, a fitted.yaml
-already there without ``--force``, or a profile that cannot be loaded).
+already there without ``--force``, a value with fewer than its ``n_min`` values without ``--allow-small-n``, or a
+profile that cannot be loaded).
 """
 
 from __future__ import annotations
@@ -48,7 +54,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     run_data,
 )
 from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config
-from senselab.audio.workflows.triage.fit import Fit, columns_read, fit_values, fitted_values
+from senselab.audio.workflows.triage.fit import WHOLE, Fit, columns_read, fit_values, fitted_values
 
 PREVIOUS = ".previous"
 """The suffix a refit keeps the fit it replaces under."""
@@ -109,8 +115,13 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _short(fit: Fit) -> bool | list[str]:
+    """``fitted.yaml``'s ``below_n_min`` for a fit: True for a whole value, else the families below its n_min."""
+    return True if fit.short == (WHOLE,) else list(fit.short)
+
+
 def document(fits: Sequence[Fit], table: Path, rows: int, schema_version: str | None) -> dict[str, Any]:
-    """The ``fitted.yaml`` document: what it was fitted on, the values, and each fit's count.
+    """The ``fitted.yaml`` document: what it was fitted on, the values, and each fit's count and minimum count.
 
     Args:
         fits: The fits.
@@ -140,6 +151,8 @@ def document(fits: Sequence[Fit], table: Path, rows: int, schema_version: str | 
                 "value": fit.key,
                 "fitted": fit.value,
                 "n": fit.n,
+                "n_min": fit.n_min,
+                **({"below_n_min": _short(fit)} if fit.short else {}),
                 "statistic": fit.method["statistic"],
                 "column": fit.method["column"],
             }
@@ -167,9 +180,22 @@ def _fit(args: argparse.Namespace) -> tuple[list[Fit], dict[str, Any]]:
         raise ValueError(f"{args.table} carries no {', '.join(absent)}; rebuild the corpus table (schema 32 on)")
     rows = pq.read_table(args.table, columns=columns_read()).to_pylist()
     tasks = dict(data_values("tasks.yaml").get("tasks") or {})
-    fits = fit_values(rows, tasks=tasks, setting=lambda relative, key: lookup_value(data_values(relative), key))
+    fits = fit_values(
+        rows,
+        tasks=tasks,
+        setting=lambda relative, key: lookup_value(data_values(relative), key),
+        allow_short=args.allow_small_n,
+    )
     version = (schema.metadata or {}).get(b"senselab.recording_vectors.schema_version")
     return fits, document(fits, args.table, len(rows), version.decode() if version else None)
+
+
+def _count(fit: Fit) -> str:
+    """The counts below a fit's n_min: ``n = 12``, or ``chat n = 12, story n = 3`` for a value by family."""
+    if fit.short == (WHOLE,):
+        return f"n = {fit.n}"
+    counts = fit.n if isinstance(fit.n, dict) else {}
+    return ", ".join(f"{group} n = {counts.get(group)}" for group in fit.short)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -187,6 +213,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=None, help=f"Where to write; default <profile>/{FITTED_FILE}")
     parser.add_argument(
         "--force", action="store_true", help=f"Replace a {FITTED_FILE} already there (kept as {FITTED_FILE}{PREVIOUS})"
+    )
+    parser.add_argument(
+        "--allow-small-n",
+        action="store_true",
+        help="Write values fitted over fewer than their method's n_min values (marked below_n_min)",
     )
     args = parser.parse_args(argv)
     if args.profile is None:
@@ -212,6 +243,12 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError, yaml.YAMLError, pa.ArrowException) as error:
             print(f"refusing: {error}", file=sys.stderr)
             return 2
+        short = [fit for fit in fits if fit.short]
+        if short and not args.allow_small_n:
+            print("refusing: too few values to fit (pass --allow-small-n to write them anyway):", file=sys.stderr)
+            for fit in short:
+                print(f"  {fit.key}: {_count(fit)} < n_min {fit.n_min}", file=sys.stderr)
+            return 2
         out.parent.mkdir(parents=True, exist_ok=True)
         partial = out.with_name(out.name + ".partial")
         partial.write_text(HEADER + yaml.safe_dump(held, sort_keys=False), encoding="utf-8")
@@ -232,7 +269,8 @@ def main(argv: list[str] | None = None) -> int:
             if own is None
             else f"  (the profile sets {own!r} itself, which wins)"
         )
-        print(f"  {fit.key}: {fit.value!r} over {fit.n}{note}")
+        below = f"  (below n_min {fit.n_min}: {_count(fit)})" if fit.short else ""
+        print(f"  {fit.key}: {fit.value!r} over {fit.n}{below}{note}")
     print("Next: " + "; then ".join(NEXT_STEPS) + ".")
     return 0
 

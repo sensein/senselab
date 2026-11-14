@@ -52,11 +52,11 @@ def _table(path: Path, rows: list[dict[str, Any]], columns: list[str] | None = N
     return path
 
 
-def _rows() -> list[dict[str, Any]]:
-    """Twelve recordings of four participants: chat responses, cough medians and count-in gaps."""
+def _rows(recordings: int = 600, participants: int = 150) -> list[dict[str, Any]]:
+    """Chat responses, cough medians and count-in gaps of participants (by default, enough for every n_min)."""
     return [
         {
-            "participant": f"p{i % 4}",
+            "participant": f"p{i % participants}",
             "session": f"s{i % 2}",
             "declared_family": "chat",
             "gate_response_min_s": 20.0 + i,
@@ -65,7 +65,7 @@ def _rows() -> list[dict[str, Any]]:
             "count_in_gap_s": 0.5 + 0.1 * i,
             "cohort_participant_rms_dbfs_median": -30.0 + (i % 4),
         }
-        for i in range(12)
+        for i in range(recordings)
     ]
 
 
@@ -82,10 +82,12 @@ def test_a_pilot_table_is_fitted_into_the_profile(no_profile: None, tmp_path: Pa
     table = _table(tmp_path / "rv.parquet", _rows())
     assert cli.main([str(table), "--profile", str(root)]) == 0
     written = yaml.safe_load((root / "fitted.yaml").read_text())
-    assert written["fitted_on"]["rows"] == 12
+    assert written["fitted_on"]["rows"] == 600
     fits = {entry["value"]: entry for entry in written["fits"]}
-    assert fits["cohort_stage.yaml condition.hot_rms_dbfs_min"]["n"] == 4, "one per participant"
-    assert fits["discard_replaced_task.yaml short_response.family_median_s"]["fitted"] == {"chat": 25.5}
+    assert fits["cohort_stage.yaml condition.hot_rms_dbfs_min"]["n"] == 150, "one per participant"
+    assert fits["cohort_stage.yaml condition.hot_rms_dbfs_min"]["n_min"] == 50
+    assert fits["discard_replaced_task.yaml short_response.family_median_s"]["fitted"] == {"chat": 319.5}
+    assert not any("below_n_min" in entry for entry in written["fits"])
     deactivate_profile()
     values = load_profile(root).fitted
     assert (
@@ -184,3 +186,33 @@ def test_any_failure_of_a_refit_puts_the_earlier_fit_back(
         assert (root / "fitted.yaml").read_bytes() == earlier, stop.__name__
         assert not (root / "fitted.yaml.previous").exists()
         deactivate_profile()
+
+
+def test_a_table_too_small_for_a_value_is_refused_unless_allowed(
+    no_profile: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Satra review 2026-11-14 (#637-1): twelve recordings of four participants are below every n_min.
+
+    The fit is refused, naming each value and its count, and an earlier fit is kept; --allow-small-n writes them,
+    marked below_n_min.
+    """
+    root = _profile(tmp_path / "lab")
+    assert cli.main([str(_table(tmp_path / "rv.parquet", _rows())), "--profile", str(root)]) == 0
+    earlier = (root / "fitted.yaml").read_bytes()
+    deactivate_profile()
+    small = _table(tmp_path / "small.parquet", _rows(12, 4))
+    assert cli.main([str(small), "--profile", str(root), "--force"]) == 2
+    err = capsys.readouterr().err
+    assert "cohort_stage.yaml condition.hot_rms_dbfs_min: n = 4 < n_min 50" in err
+    assert "discard_replaced_task.yaml short_response.family_median_s: chat n = 12 < n_min 30" in err
+    assert "task_extent.yaml count_in.gap_max_s: n = 12 < n_min 500" in err
+    assert (root / "fitted.yaml").read_bytes() == earlier and not (root / "fitted.yaml.previous").exists()
+    deactivate_profile()
+    assert cli.main([str(small), "--profile", str(root), "--force", "--allow-small-n"]) == 0
+    assert "below n_min 50: n = 4" in capsys.readouterr().out
+    written = yaml.safe_load((root / "fitted.yaml").read_text())
+    fits = {entry["value"]: entry for entry in written["fits"]}
+    assert fits["cohort_stage.yaml condition.hot_rms_dbfs_min"]["below_n_min"] is True
+    assert fits["discard_replaced_task.yaml short_response.family_median_s"]["below_n_min"] == ["chat"]
+    assert fits["discard_replaced_task.yaml short_response.family_median_s"]["fitted"] == {"chat": 25.5}
+    assert "below_n_min" not in fits["task_extent.yaml atypical.ddk_rate_hz"], "no values: unfitted, not short"
