@@ -12,7 +12,7 @@ import json
 import os
 import socket
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -100,28 +100,67 @@ def _gpus(runner: Runner) -> tuple[str | None, str | None, int]:
     return rows[0][0] or None, rows[0][1] or None, len(rows)
 
 
-def gpu_inventory(*, runner: Runner | None = None) -> tuple[list[str], str | None]:
-    """Every visible GPU's name and the driver version, as ``nvidia-smi`` reports them.
+NVIDIA_SMI_DEVICES = ("nvidia-smi", "--query-gpu=index,uuid,name,driver_version", "--format=csv,noheader")
+"""The query :func:`gpu_table` makes: one row per GPU, with what ``CUDA_VISIBLE_DEVICES`` names it by."""
+
+
+def gpu_table(*, runner: Runner | None = None) -> list[dict[str, str]]:
+    """Every GPU ``nvidia-smi`` lists: its index, UUID, name and driver version, from one query.
 
     Args:
         runner: As :func:`host_record`'s; defaults to a subprocess runner.
 
     Returns:
-        ``(names, driver)``: one name per GPU in ``nvidia-smi``'s order, and the first GPU's driver. ``([], None)``
-        where ``nvidia-smi`` is absent or fails.
+        One ``{index, uuid, name, driver}`` row per GPU in ``nvidia-smi``'s order; empty where ``nvidia-smi`` is
+        absent or fails.
     """
-    rows = _gpu_rows(runner or _run)
-    return [row[0] for row in rows if row[0]], (rows[0][1] or None) if rows else None
+    code, out = (runner or _run)(NVIDIA_SMI_DEVICES)
+    rows = [line.split(",") for line in out.splitlines() if line.strip()] if code == 0 else []
+    keys = ("index", "uuid", "name", "driver")
+    return [dict(zip(keys, (_one_line(cell) for cell in row))) for row in rows if len(row) == len(keys)]
+
+
+def visible_gpu_names(visible: str | None, table: Sequence[Mapping[str, str]]) -> list[str] | None:
+    """The names of the GPUs a ``CUDA_VISIBLE_DEVICES`` value lets a process see, read off :func:`gpu_table`.
+
+    Each entry is an ``nvidia-smi`` index or a GPU UUID (``GPU-...``, a unique prefix allowed, as CUDA allows).
+    Unset, every listed GPU is visible. An index is ``nvidia-smi``'s, which is CUDA's own order only under
+    ``CUDA_DEVICE_ORDER=PCI_BUS_ID``; a UUID is unambiguous.
+
+    Args:
+        visible: The process's ``CUDA_VISIBLE_DEVICES``; None where it is unset.
+        table: :func:`gpu_table`'s rows.
+
+    Returns:
+        One name per visible GPU, in the order the value lists them; None where no GPU is visible or any entry
+        names no listed GPU.
+    """
+    if visible is None:
+        return [row["name"] for row in table] or None
+    names: list[str] = []
+    for entry in (part.strip() for part in visible.split(",")):
+        if entry.isdigit():
+            found = [row for row in table if row["index"] == entry]
+        else:
+            found = [row for row in table if entry and row["uuid"].startswith(entry)]
+        if len(found) != 1:
+            return None
+        names.append(found[0]["name"])
+    return names or None
 
 
 WORKER_DEVICE_KEYS = ("gpus", "torch", "cuda_visible_devices")
 """What :data:`WORKER_DEVICE_PROBE` reports about the process it runs in."""
 
 WORKER_DEVICE_PROBE = r"""
-def senselab_worker_device():
+def senselab_worker_device(cuda=True):
     import os
+    import sys
 
     visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if not cuda:
+        version = getattr(sys.modules.get("torch"), "__version__", None)
+        return {"gpus": None, "torch": None if version is None else str(version), "cuda_visible_devices": visible}
     try:
         import torch
     except Exception:
@@ -138,8 +177,12 @@ def senselab_worker_device():
 
 It returns the keys in :data:`WORKER_DEVICE_KEYS`: the name of every CUDA device that process can see
 (``torch.cuda.get_device_name``), the process's own ``torch.__version__`` and its ``CUDA_VISIBLE_DEVICES``.
-``gpus`` is None where CUDA is unavailable and ``torch`` is None where torch does not import. The source holds no
-percent sign, so it can be pasted into a worker script that is itself ``%``-formatted.
+``gpus`` is None where CUDA is unavailable and ``torch`` is None where torch does not import.
+
+``senselab_worker_device(cuda=False)`` touches no CUDA, for a process beside a server that already holds the card:
+``gpus`` is None (name them with :func:`visible_gpu_names`), and ``torch`` is named only where the process has already
+imported it. The source holds no percent sign, so it can be pasted into a worker script that is itself
+``%``-formatted.
 """
 
 

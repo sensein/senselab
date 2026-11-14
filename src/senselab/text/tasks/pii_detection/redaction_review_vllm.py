@@ -131,7 +131,8 @@ def _server_log_path() -> str | None:
 #   {"model_id": str, "model_path": str, "revision": str, "vllm": str, "server_args": [str],
 #    "served_model_name": str, "start_lock": str, "startup_timeout_s": int, "server_log": str | None}
 # Load reply: {"ready": True, "revision": str, "load_s": float, "engine": {...}, "device": {...}}, "device" being
-# the worker process's own report (senselab.utils.reproduce.host.WORKER_DEVICE_PROBE), taken once the server is healthy.
+# the worker process's own report (senselab.utils.reproduce.host.WORKER_DEVICE_PROBE, with cuda=False: no CUDA
+# beside the server), taken once the server is healthy.
 # Review request and reply: as the transformers worker's. A request the server cannot take (a prompt that
 # with its max_new_tokens exceeds max_model_len) is answered {"error": {...}, "recoverable": True} and the
 # worker carries on; any other error ends it, and the server with it.
@@ -312,7 +313,7 @@ def main():
             "revision": state[4],
             "load_s": round(time.monotonic() - started, 3),
             "engine": state[3],
-            "device": senselab_worker_device(),
+            "device": senselab_worker_device(cuda=False),
         }
     )
     while True:

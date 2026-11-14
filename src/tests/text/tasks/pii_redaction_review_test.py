@@ -257,7 +257,7 @@ class TestEachAnswerRecordsWhereItRan:
 
         monkeypatch.setenv("SLURM_JOB_ID", "4242")
         calls: list[Any] = []
-        smi = _smi((0, "NVIDIA A100-SXM4-80GB, 570.86.15\nNVIDIA H100 80GB HBM3, 570.86.15\n"))
+        smi = _smi((0, "0, GPU-a, NVIDIA A100-SXM4-80GB, 570.86.15\n1, GPU-b, NVIDIA H100 80GB HBM3, 570.86.15\n"))
         monkeypatch.setattr(host, "_run", lambda argv: calls.append(argv) or smi(argv))
         harness.device.write_text(json.dumps(_DEVICE))
         first = review_transcript("one", model_id="stub/model", policy=POLICY)
@@ -297,7 +297,7 @@ class TestEachAnswerRecordsWhereItRan:
         """A worker whose ready reply carries no device report: the device fields are None, never guessed."""
         from senselab.utils.reproduce import host
 
-        monkeypatch.setattr(host, "_run", _smi((0, "NVIDIA A100-SXM4-80GB, 570.86.15\n")))
+        monkeypatch.setattr(host, "_run", _smi((0, "0, GPU-a, NVIDIA A100-SXM4-80GB, 570.86.15\n")))
         result = review_transcript("one", model_id="stub/model", policy=POLICY)
         assert result.available
         assert (result.runtime["gpus"], result.runtime["torch"], result.runtime["cuda_visible_devices"]) == (
@@ -314,7 +314,7 @@ class TestEachAnswerRecordsWhereItRan:
         def _boom(*_a: object, **_k: object) -> Any:  # noqa: ANN401
             raise OSError("no /proc")
 
-        monkeypatch.setattr(host, "gpu_inventory", _boom)
+        monkeypatch.setattr(host, "gpu_table", _boom)
         harness.device.write_text(json.dumps(_DEVICE))
         result = review_transcript("one", model_id="stub/model", policy=POLICY)
         assert result.available

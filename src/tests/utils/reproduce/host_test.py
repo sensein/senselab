@@ -87,15 +87,54 @@ def test_gpu_node_with_torch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert record["slurm_job_id"] is None
 
 
-def test_the_gpu_inventory_names_every_gpu_and_the_driver() -> None:
-    """Every visible GPU is named, in nvidia-smi's order; a host with no nvidia-smi has none and no driver."""
-    smi = (0, "NVIDIA H100 80GB HBM3, 570.86.15\nNVIDIA  L40S , 570.86.15\n")
-    assert host.gpu_inventory(runner=FakeRunner(smi=smi, probe=(0, ""))) == (
-        ["NVIDIA H100 80GB HBM3", "NVIDIA L40S"],
-        "570.86.15",
-    )
-    assert host.gpu_inventory(runner=FakeRunner(smi=None, probe=(0, ""))) == ([], None)
-    assert host.gpu_inventory(runner=FakeRunner(smi=(9, "garbage"), probe=(0, ""))) == ([], None)
+_TABLE = (
+    0,
+    "0, GPU-1111aaaa-0000, NVIDIA H100 80GB HBM3, 570.86.15\n"
+    "1, GPU-2222bbbb-0000, NVIDIA  L40S , 570.86.15\n"
+    "2, GPU-3333cccc-0000, NVIDIA A100-SXM4-80GB, 570.86.15\n",
+)
+
+
+def test_the_gpu_table_lists_every_gpu_from_one_query() -> None:
+    """Index, UUID, single-spaced name and driver per GPU, in nvidia-smi's order; nothing without nvidia-smi."""
+    runner = FakeRunner(smi=_TABLE, probe=(0, ""))
+    table = host.gpu_table(runner=runner)
+    assert [row["name"] for row in table] == ["NVIDIA H100 80GB HBM3", "NVIDIA L40S", "NVIDIA A100-SXM4-80GB"]
+    assert table[1] == {"index": "1", "uuid": "GPU-2222bbbb-0000", "name": "NVIDIA L40S", "driver": "570.86.15"}
+    assert runner.calls == [list(host.NVIDIA_SMI_DEVICES)]
+    assert host.gpu_table(runner=FakeRunner(smi=None, probe=(0, ""))) == []
+    assert host.gpu_table(runner=FakeRunner(smi=(9, "garbage"), probe=(0, ""))) == []
+
+
+class TestTheVisibleMaskNamesTheDevices:
+    """CUDA_VISIBLE_DEVICES, by index or by UUID, read against one nvidia-smi table without touching CUDA."""
+
+    table = host.gpu_table(runner=FakeRunner(smi=_TABLE, probe=(0, "")))
+
+    def test_an_index_list_names_those_gpus_in_its_order(self) -> None:
+        """Indices are nvidia-smi's; the mask's order is the process's device order."""
+        assert host.visible_gpu_names("2,0", self.table) == ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"]
+
+    def test_a_uuid_list_names_those_gpus_and_a_unique_prefix_will_do(self) -> None:
+        """A mask may name GPUs by UUID; CUDA accepts a unique prefix, and so does this."""
+        assert host.visible_gpu_names("GPU-2222bbbb-0000, GPU-1111", self.table) == [
+            "NVIDIA L40S",
+            "NVIDIA H100 80GB HBM3",
+        ]
+
+    def test_unset_means_every_gpu(self) -> None:
+        """No mask: the process sees every GPU the node lists."""
+        assert host.visible_gpu_names(None, self.table) == [
+            "NVIDIA H100 80GB HBM3",
+            "NVIDIA L40S",
+            "NVIDIA A100-SXM4-80GB",
+        ]
+        assert host.visible_gpu_names(None, []) is None
+
+    def test_an_empty_or_unmatched_mask_names_nothing_rather_than_guessing(self) -> None:
+        """No device visible, or an entry naming no listed GPU (or an ambiguous prefix): None."""
+        for mask in ("", "7", "GPU-9999", "GPU-", "0,7", "-1"):
+            assert host.visible_gpu_names(mask, self.table) is None, mask
 
 
 def test_failing_probe_and_smi_give_none(tmp_path: Path) -> None:
@@ -170,13 +209,16 @@ class cuda:
 """
 
 
-def _probe_in_a_worker(tmp_path: Path, torch_source: str | None, visible: str | None) -> dict[str, object]:
+def _probe_in_a_worker(
+    tmp_path: Path, torch_source: str | None, visible: str | None, *, call: str = "senselab_worker_device()"
+) -> dict[str, object]:
     """Run the worker device probe in a fresh interpreter with no site-packages, seeing only the given ``torch``.
 
     Args:
         tmp_path: Where the stand-in ``torch`` package goes.
         torch_source: The stand-in's ``__init__.py``; None leaves torch unimportable.
         visible: The worker's ``CUDA_VISIBLE_DEVICES``; None leaves it unset.
+        call: The probe call, after any imports it should find already made.
 
     Returns:
         What ``senselab_worker_device()`` returned there.
@@ -195,7 +237,7 @@ def _probe_in_a_worker(tmp_path: Path, torch_source: str | None, visible: str | 
     code = (
         f"import json, sys\nsys.path.insert(0, {str(root)!r})\n"
         + host.WORKER_DEVICE_PROBE
-        + "\nprint(json.dumps(senselab_worker_device()))\n"
+        + f"\nprint(json.dumps({call}))\n"
     )
     done = subprocess.run([sys.executable, "-S", "-c", code], capture_output=True, text=True, env=env, check=True)
     return json.loads(done.stdout.strip().splitlines()[-1])
@@ -230,6 +272,18 @@ class TestTheWorkerNamesTheDevicesItSees:
         """A CUDA runtime that fails on the query leaves the devices unnamed rather than failing the worker."""
         source = _FAKE_TORCH.format(version="2.9.0+cu128", available=True, count=3)
         assert _probe_in_a_worker(tmp_path, source, None)["gpus"] is None
+
+    def test_beside_a_server_the_probe_touches_no_cuda(self, tmp_path: Path) -> None:
+        """``cuda=False``: no CUDA query at all, and torch named only where the process had already imported it."""
+        refusing = (
+            '__version__ = "2.9.0+cu128"\n\n\ndef __getattr__(name):\n    raise AssertionError("touched " + name)\n'
+        )
+        imported = _probe_in_a_worker(
+            tmp_path, refusing, "1", call="(__import__('torch'), senselab_worker_device(cuda=False))[1]"
+        )
+        assert imported == {"gpus": None, "torch": "2.9.0+cu128", "cuda_visible_devices": "1"}
+        not_imported = _probe_in_a_worker(tmp_path / "again", refusing, None, call="senselab_worker_device(cuda=False)")
+        assert not_imported == {"gpus": None, "torch": None, "cuda_visible_devices": None}
 
     def test_a_report_is_read_back_with_anything_malformed_as_none(self) -> None:
         """The host side takes the three keys and nothing else, and a missing or odd report is None throughout."""

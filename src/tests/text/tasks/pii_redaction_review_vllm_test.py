@@ -222,32 +222,58 @@ class TestTheWorkerAgainstAMockedServer:
         argv = json.loads(Path(str(mocked_vllm["log"]) + ".argv").read_text())
         assert argv[argv.index("--max-model-len") + 1] == "12288" and "--enable-prefix-caching" in argv
 
+    @pytest.mark.parametrize(
+        ("mask", "named"),
+        [
+            ("1", ["NVIDIA H100 80GB HBM3"]),
+            ("GPU-0000aaaa-11", ["NVIDIA A100-SXM4-80GB"]),
+            (None, ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"]),
+        ],
+        ids=["index", "uuid", "unset"],
+    )
     def test_the_answer_records_the_vllm_version_and_the_machine(
-        self, mocked_vllm: dict[str, Any], monkeypatch: pytest.MonkeyPatch, policy: rr.ReviewPolicy
+        self,
+        mocked_vllm: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+        policy: rr.ReviewPolicy,
+        mask: str | None,
+        named: list[str],
     ) -> None:
-        """The answer names the vLLM that served it, and the worker process's own torch, devices and mask.
+        """The vLLM that served it, and the devices the worker's CUDA_VISIBLE_DEVICES names, read off nvidia-smi.
 
-        The worker is the shipped script on this interpreter, so its torch is this one; with no device visible it
-        names none. The node's inventory is recorded apart.
+        The worker beside the server touches no CUDA, so its devices come from its mask and one ``nvidia-smi``
+        table; its torch is named only where it had already imported torch.
         """
         import torch
 
         from senselab.utils.reproduce import host
 
+        calls: list[Any] = []
+
         def _run(argv: Any) -> tuple[int, str]:  # noqa: ANN401
+            calls.append(argv)
             assert argv[0] == "nvidia-smi"
-            return 0, "NVIDIA H100 80GB HBM3, 570.86.15\n"
+            return (
+                0,
+                "0, GPU-0000aaaa-11, NVIDIA A100-SXM4-80GB, 570.86.15\n"
+                "1, GPU-1111bbbb-22, NVIDIA H100 80GB HBM3, 570.86.15\n",
+            )
 
         monkeypatch.setattr(host, "_run", _run)
-        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+        if mask is None:
+            monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+        else:
+            monkeypatch.setenv("CUDA_VISIBLE_DEVICES", mask)
         engine = rv.engine_identity("vllm", _settings())
         result = rr.review_transcript("hello", policy=policy, context={"item_set": True}, engine=engine)
         assert result.available, result.failure
         assert result.runtime["vllm"] == "0.31.0" == engine["version"]
-        assert result.runtime["torch"] == torch.__version__, "the worker's own torch, not the host's probe of a venv"
-        assert result.runtime["gpus"] is None and result.runtime["cuda_visible_devices"] == ""
-        assert result.runtime["node_gpus"] == ["NVIDIA H100 80GB HBM3"]
+        assert result.runtime["cuda_visible_devices"] == mask
+        assert result.runtime["gpus"] == named
+        assert result.runtime["torch"] in (None, torch.__version__)
+        assert result.runtime["node_gpus"] == ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"]
         assert result.runtime["nvidia_driver"] == "570.86.15"
+        assert len(calls) == 1, "one nvidia-smi query per worker start"
         assert rr.review_payload(result)["runtime"] == result.runtime
 
     def test_an_over_long_request_fails_alone_and_the_server_stops_with_the_worker(

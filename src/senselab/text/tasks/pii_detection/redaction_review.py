@@ -881,8 +881,11 @@ def reviewer_runtime(engine: Mapping[str, Any], device: object) -> dict[str, Any
     Two runs of one checkpoint on one engine can answer differently on different machines (Satra review
     2026-11-14, decision 5), so each answer carries what the worker process itself reported
     (:data:`~senselab.utils.reproduce.host.WORKER_DEVICE_PROBE`): the name of every CUDA device it could see, its own
-    torch and its ``CUDA_VISIBLE_DEVICES``. Beside that, from this host: its name, every GPU ``nvidia-smi`` lists on
-    the node and the driver, the vLLM version the server reported, and the batch job id. None of it shapes the
+    torch and its ``CUDA_VISIBLE_DEVICES``. The vLLM worker touches no CUDA beside its server, so on that engine the
+    devices are its ``CUDA_VISIBLE_DEVICES`` named through ``nvidia-smi``
+    (:func:`~senselab.utils.reproduce.host.visible_gpu_names`). Beside that, from this host and one ``nvidia-smi``
+    query: its name, every GPU listed on the node and the driver, the vLLM version the server reported, and the batch
+    job id. None of it shapes the
     request, so none of it is in the reading's cache key, and a cached reading keeps the record of the machine that
     produced it.
 
@@ -900,23 +903,27 @@ def reviewer_runtime(engine: Mapping[str, Any], device: object) -> dict[str, Any
     import socket
 
     from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_VLLM
-    from senselab.utils.reproduce.host import gpu_inventory, worker_device
+    from senselab.utils.reproduce.host import gpu_table, visible_gpu_names, worker_device
 
-    vllm = engine.get("version") if engine.get("name") == ENGINE_VLLM else None
+    on_vllm = engine.get("name") == ENGINE_VLLM
+    vllm = engine.get("version") if on_vllm else None
     try:
-        node_gpus, driver = gpu_inventory()
+        table = gpu_table()
     except Exception as exc:  # noqa: BLE001 — provenance never fails the review it describes
         logger.warning(f"reviewer runtime: the GPU inventory failed ({type(exc).__name__}: {exc})")
-        node_gpus, driver = [], None
+        table = []
+    reported = worker_device(device)
+    if on_vllm and isinstance(device, dict) and "cuda_visible_devices" in device:
+        reported["gpus"] = visible_gpu_names(reported["cuda_visible_devices"], table)
     try:
         host: str | None = socket.gethostname()
     except OSError:
         host = None
     return {
         "host": host,
-        **worker_device(device),
-        "node_gpus": node_gpus,
-        "nvidia_driver": driver,
+        **reported,
+        "node_gpus": [row["name"] for row in table if row["name"]],
+        "nvidia_driver": (table[0]["driver"] or None) if table else None,
         "vllm": vllm,
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
     }
