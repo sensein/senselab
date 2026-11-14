@@ -25,7 +25,7 @@ class TestFromTheStem:
         identity = identity_from_name(STEM)
         assert (identity.participant, identity.session) == ("sub-a", "ses-b")
         assert identity.task_id == "respiration-and-cough-fivebreaths-2"
-        assert identity.task_family == "respiration-and-cough-fivebreaths"
+        assert task_family(identity.task_id) == "respiration-and-cough-fivebreaths"
         assert set(identity.sources.values()) == {FROM_STEM}
 
     def test_each_entity_is_read_on_its_own(self) -> None:
@@ -43,7 +43,7 @@ class TestFromTheStem:
             identity = identity_from_name(stem)
             assert (identity.participant, identity.session) == expected
             assert identity.task_id == task_id_of(stem)
-            assert identity.task_family == task_family(task_id_of(stem))
+            assert task_family(identity.task_id) == task_family(task_id_of(stem))
         assert identity_from_name("sub-a_task-x").session_key is None
 
     def test_a_stem_with_no_task_entity_declares_none(self) -> None:
