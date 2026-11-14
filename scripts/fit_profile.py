@@ -7,7 +7,8 @@ the profile sets in its own files wins over its fitted one; this script lists ea
 
 Each value is fitted over at least its method's ``n_min`` values (``data/profile_values.yaml``; per family for a
 value by family). A table with fewer for any value is refused, naming each; ``--allow-small-n`` writes them anyway,
-marked ``below_n_min`` in ``fitted.yaml``. A value with no values at all is left unfitted, as before.
+marked ``below_n_min`` in ``fitted.yaml``. A value the profile sets (or writes blank) itself is not counted, since
+its own value wins over the fit. A value with no values at all is left unfitted, as before.
 
 The order for a new dataset (plan step 10):
 
@@ -243,7 +244,8 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError, yaml.YAMLError, pa.ArrowException) as error:
             print(f"refusing: {error}", file=sys.stderr)
             return 2
-        short = [fit for fit in fits if fit.short]
+        # a value the profile sets (or blanks) itself wins over the fit, so its count cannot make the fit unsafe
+        short = [fit for fit in fits if fit.short and own_value(fit) is _ABSENT]
         if short and not args.allow_small_n:
             print("refusing: too few values to fit (pass --allow-small-n to write them anyway):", file=sys.stderr)
             for fit in short:

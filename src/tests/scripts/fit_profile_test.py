@@ -216,3 +216,26 @@ def test_a_table_too_small_for_a_value_is_refused_unless_allowed(
     assert fits["discard_replaced_task.yaml short_response.family_median_s"]["below_n_min"] == ["chat"]
     assert fits["discard_replaced_task.yaml short_response.family_median_s"]["fitted"] == {"chat": 25.5}
     assert "below_n_min" not in fits["task_extent.yaml atypical.ddk_rate_hz"], "no values: unfitted, not short"
+
+
+def test_a_short_value_the_profile_sets_itself_is_not_refused(
+    no_profile: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Satra review 2026-11-14, verifier round 1: only a fit the profile reads is held to its n_min.
+
+    300 recordings of 150 participants are enough for every value but the count-in gap (n_min 500). A profile that
+    sets that gap itself, or writes it blank, wins over the fit, so the fit is written; one that does not is refused.
+    """
+    table = _table(tmp_path / "rv.parquet", _rows(300, 150))
+    for name, own in (("sets", "count_in:\n  gap_max_s: 3.0\n"), ("blanks", "count_in:\n  gap_max_s:\n")):
+        root = _profile(tmp_path / name, {"task_extent.yaml": own})
+        assert cli.main([str(table), "--profile", str(root)]) == 0, name
+        line = next(line for line in capsys.readouterr().out.splitlines() if "count_in.gap_max_s" in line)
+        assert "below n_min 500: n = 300" in line, name
+        deactivate_profile()
+    root = _profile(tmp_path / "fits")
+    assert cli.main([str(table), "--profile", str(root)]) == 2
+    err = capsys.readouterr().err
+    assert "task_extent.yaml count_in.gap_max_s: n = 300 < n_min 500" in err
+    assert err.count("< n_min") == 1, err
+    assert not (root / "fitted.yaml").exists()
