@@ -296,6 +296,23 @@ def test_scanning_a_script_line_carries_its_timing_onto_every_finding(monkeypatc
     assert all(sp.speaker == "SPEAKER_01" for sp in scan.spans)
 
 
+def test_a_scan_carries_the_detector_commit_it_was_asked_to_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The caller's GLiNER commit reaches the backend, and the commit it loaded comes back on every scan."""
+    from senselab.text.tasks.pii_detection import api as pii_api_module
+    from senselab.text.tasks.pii_detection.api import scan_for_pii
+
+    asked: list[object] = []
+
+    def _fake(transcripts_by_asr: dict, **kwargs: object) -> dict:
+        asked.append(kwargs.get("gliner_revision"))
+        return {**_fake_rules_subprocess(transcripts_by_asr), "gliner_revision": "e" * 40}
+
+    monkeypatch.setattr(pii_api_module, "detect_pii_via_subprocess", _fake)
+    scans = scan_for_pii(["call alice@example.com", "or bob@example.com"], gliner_revision="e" * 40)
+    assert asked == ["e" * 40]
+    assert isinstance(scans, list) and [scan.gliner_revision for scan in scans] == ["e" * 40, "e" * 40]
+
+
 def test_scanning_a_bare_string_leaves_the_finding_unlocated(monkeypatch: pytest.MonkeyPatch) -> None:
     """A bare string carries no timing, so its findings claim none."""
     from senselab.text.tasks.pii_detection import api as pii_api_module

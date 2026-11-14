@@ -321,6 +321,8 @@ def _required(params: BranchParams, enrollment: Enrollment | None) -> dict[str, 
         "discontinuity_local_factor": float(config.require("disruptions.discontinuity_local_factor")),
         "discontinuity_window_ms": float(config.require("disruptions.discontinuity_window_ms")),
         "required_detectors": sorted(str(name) for name in config.require("pii.required_detectors")),
+        "gliner_model": str(config.require("pii.gliner.model")),
+        "gliner_revision": str(config.require("pii.gliner.revision")),
     }
     if enrollment is not None:
         model = params.setting("speech.enrollment_model", dict)
@@ -736,6 +738,24 @@ def _failure_type(failure: str) -> str:
     """
     head, separator, _ = failure.partition(":")
     return head if separator and head.isidentifier() else "type not recorded"
+
+
+def _gliner_revision_used(scans: Sequence[PiiScan]) -> str | None:
+    """The commit GLiNER was loaded at across one batch of scans, or None where it loaded for none.
+
+    Args:
+        scans: The batch's scans, one per haystack.
+
+    Returns:
+        The single commit the batch reports.
+
+    Raises:
+        ValueError: If the scans report more than one commit: one ``pii_scan`` record names one detector.
+    """
+    revisions = sorted({scan.gliner_revision for scan in scans if scan.gliner_revision})
+    if len(revisions) > 1:
+        raise ValueError(f"one PII scan loaded GLiNER at several commits: {revisions}")
+    return revisions[0] if revisions else None
 
 
 def _missing_detectors(required: list[str], scanned_by: set[str], failures: dict[str, str]) -> list[str]:
@@ -2522,7 +2542,11 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     }
     scans: list[PiiScan] = []
     if scanning:
-        raw_scans = scan_for_pii([text for _, text, _, _ in haystacks])
+        raw_scans = scan_for_pii(
+            [text for _, text, _, _ in haystacks],
+            gliner_model=values["gliner_model"],
+            gliner_revision=values["gliner_revision"],
+        )
         scans = raw_scans if isinstance(raw_scans, list) else [raw_scans]
     else:
         view.append(
@@ -2535,6 +2559,8 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                 attributes={
                     "scanned": False,
                     "why": "no lexical word outside the task's own content, or none but closed-class words",
+                    "gliner_model": values["gliner_model"],
+                    "gliner_revision": None,
                     "lexical_words_n": len(lexical),
                     "task_family": declared_family,
                     **residue_attributes,
@@ -2627,6 +2653,8 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "scanned_by": sorted(scanned_by),
             "failed": sorted(failures),
             "missing": missing,
+            "gliner_model": values["gliner_model"],
+            "gliner_revision": _gliner_revision_used(scans),
             "unplaced_findings": unplaced_findings,
             "cache": [
                 {"text": name, **(cache_attributes(scan.cache) or {})}

@@ -11,6 +11,10 @@
 
 - Triage REVIEW: a cached reading or a stored annotation that records no `policy_fingerprint` (one read before fingerprints were recorded) stands as read under the fixed step-6 review policy, whatever the active profile's policy is. A profile that later changes its policy text or redaction word lists does not get those readings re-read; only fingerprinted readings are. To re-read them, run REVIEW over those recordings (`scripts/extend_llm_review.py --force`) with a result cache that does not hold their entries. See `read_under_this_policy` in `triage/nodes/review.py` ([#634](https://github.com/sensein/senselab/pull/634))
 
+#### 🚀 Enhancement
+
+- PII detection pins its GLiNER detector: `detect_pii`, `scan_for_pii` and `detect_pii_via_subprocess` take `gliner_revision`, and with none load `nvidia/gliner-pii` at commit `bd23e8ef4425fd04e34c5204ab49ffaa706eae79` instead of resolving `main` (any other model still resolves `main`). `PiiScan.gliner_revision` reports the commit loaded. Triage reads the pin from `pii.gliner` and records it on every `pii_scan`.
+
 ---
 
 # 1.3.0 (Fri Dec 12 2025)

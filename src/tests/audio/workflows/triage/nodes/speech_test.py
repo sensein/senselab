@@ -2863,6 +2863,47 @@ class TestWhatAPiiFailureMayCarry:
         scan = find_measurement(store, "pii_scan")
         assert scan is not None and scan.attributes["missing"] == []
 
+    def test_the_scan_loads_the_configured_detector_commit_and_records_it(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``pii.gliner`` reaches the detector, and the commit it loaded is on the record (Satra review, decision 6).
+
+        The record carries what the backend reports it loaded, not the setting: a scan whose GLiNER did not load
+        records None.
+        """
+        pinned = "a" * 40
+        config = _override(tmp_path, f"pii:\n  gliner:\n    revision: {pinned}\n")
+        asked: list[dict[str, Any]] = []
+
+        def _fake(inputs: Any, **kw: Any) -> list[PiiScan]:  # noqa: ANN401
+            asked.append(kw)
+            texts = [inputs] if isinstance(inputs, str) else list(inputs)
+            return [
+                PiiScan(spans=[], detectors_used=default_detectors(), failures={}, gliner_revision=pinned)
+                for _ in texts
+            ]
+
+        monkeypatch.setattr(speech_module, "scan_for_pii", _fake)
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        assert [(kw["gliner_model"], kw["gliner_revision"]) for kw in asked] == [("nvidia/gliner-pii", pinned)]
+        scan = find_measurement(store, "pii_scan")
+        assert scan is not None
+        assert scan.attributes["gliner_model"] == "nvidia/gliner-pii"
+        assert scan.attributes["gliner_revision"] == pinned
+
+    def test_a_scan_whose_detector_did_not_load_records_no_commit(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No GLiNER, no commit: the record never names a commit that did not run."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[], detectors_used=["presidio", "rules"])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        scan = find_measurement(store, "pii_scan")
+        assert scan is not None and scan.attributes["gliner_revision"] is None
+
 
 class TestWhatTheBranchRecordsAboutItsOwnReads:
     """F8e, F8f, F8k: the used edges, the view, and the PREPROCESS span a speech span refines."""

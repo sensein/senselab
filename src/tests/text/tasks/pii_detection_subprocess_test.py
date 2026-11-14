@@ -27,6 +27,7 @@ from senselab.text.tasks.pii_detection import subprocess_backend as pii_subproce
 from senselab.text.tasks.pii_detection.subprocess_backend import (
     _DEFAULT_GLINER_LABELS,
     _DEFAULT_GLINER_MODEL,
+    _DEFAULT_GLINER_REVISION,
     _GLINER_TO_PRESIDIO_CATEGORY,
     _PRESIDIO_PII_ENTITIES,
     DETECTOR_GLINER,
@@ -35,6 +36,7 @@ from senselab.text.tasks.pii_detection.subprocess_backend import (
     DETECTOR_RULES,
     detect_pii_via_subprocess,
 )
+from senselab.utils.model_revision import resolve_revision as real_resolve_revision
 
 # ── Fixtures ────────────────────────────────────────────────────────
 
@@ -470,6 +472,85 @@ def test_the_parent_sends_no_snapshot_path_when_staging_fails(fake_venv: Path, m
     assert recorder.calls[0]["input"]["gliner_model_path"] is None
 
 
+# ── The pinned detector commit ───────────────────────────────────────
+
+
+@pytest.fixture
+def offline_resolution(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[tuple[str, str]]:
+    """The real ``resolve_revision`` over a Hub that cannot be reached; returns the refs it was asked to look up.
+
+    A full commit short-circuits before any lookup, so a test that passes under this fixture loads its
+    detector with no network at all.
+    """
+    from senselab.utils import model_revision
+
+    looked_up: list[tuple[str, str]] = []
+
+    def _unreachable(repo_id: str, ref: str, token: Optional[str] = None) -> str:
+        looked_up.append((repo_id, ref))
+        raise model_revision.RevisionResolutionError(f"offline: cannot resolve {repo_id}@{ref}")
+
+    monkeypatch.setattr(model_revision, "_resolve_uncached", _unreachable)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", real_resolve_revision)
+    monkeypatch.setattr(
+        "senselab.utils.dependencies.resolve_model", lambda repo_id, rev, **_: (rev, tmp_path / "snapshots" / rev)
+    )
+    return looked_up
+
+
+def test_the_default_detector_loads_at_its_pinned_commit_with_no_lookup(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch, offline_resolution: list[tuple[str, str]]
+) -> None:
+    """No revision named: the default model is loaded at the pinned commit, and "main" is never resolved."""
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["gliner"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_GLINER])
+
+    assert recorder.calls[0]["input"]["gliner_revision"] == _DEFAULT_GLINER_REVISION
+    assert offline_resolution == [], "a pinned commit is never looked up"
+
+
+def test_a_configured_commit_is_the_one_loaded_with_no_lookup(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch, offline_resolution: list[tuple[str, str]]
+) -> None:
+    """The caller's commit reaches the worker as given, offline, and keys the result cache."""
+    pinned = "c" * 40
+    recorder = _SubprocessRecorder(
+        {"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["gliner"], "gliner_revision": pinned}
+    )
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    result = detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_GLINER], gliner_revision=pinned)
+
+    assert recorder.calls[0]["input"]["gliner_revision"] == pinned
+    assert result["gliner_revision"] == pinned, "the commit the worker loaded is returned to the caller"
+    assert offline_resolution == []
+
+
+def test_another_detector_named_without_a_revision_still_resolves_main(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The pin belongs to the default model; any other model's ``main`` is resolved, never given the pin."""
+    asked: list[tuple[str, str]] = []
+
+    def _resolve(repo_id: str, ref: str = "main", **_: object) -> str:
+        asked.append((repo_id, ref))
+        return "d" * 40
+
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _resolve)
+    monkeypatch.setattr(
+        "senselab.utils.dependencies.resolve_model", lambda repo_id, rev, **_: (rev, tmp_path / "snapshots" / rev)
+    )
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["gliner"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_GLINER], gliner_model="org/other-gliner")
+
+    assert asked == [("org/other-gliner", "main")]
+    assert recorder.calls[0]["input"]["gliner_revision"] == "d" * 40
+
+
 def test_presidio_only_sends_no_gliner_snapshot_path(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Nothing is staged when GLiNER is not requested, so nothing is pointed at either."""
     recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["presidio"]})
@@ -555,6 +636,21 @@ def test_a_different_gliner_commit_misses(fake_venv: Path, monkeypatch: pytest.M
     monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "a" * 40)
     detect_pii_via_subprocess({"0": "Alice lives in Boston."})
     assert len(recorder.calls) == 2
+
+
+def test_a_different_configured_gliner_commit_misses(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch, offline_resolution: list[tuple[str, str]]
+) -> None:
+    """Two pinned commits never share a cached scan: the commit is in the key."""
+    recorder = _SubprocessRecorder({})
+    recorder.input_hook = _echo
+    monkeypatch.setattr(subprocess, "run", recorder)
+    first = detect_pii_via_subprocess({"0": "Alice lives in Boston."}, gliner_revision="a" * 40)
+    second = detect_pii_via_subprocess({"0": "Alice lives in Boston."}, gliner_revision="b" * 40)
+    again = detect_pii_via_subprocess({"0": "Alice lives in Boston."}, gliner_revision="a" * 40)
+    assert len(recorder.calls) == 2
+    assert first["cache"]["0"]["key"] != second["cache"]["0"]["key"]
+    assert again["cache"]["0"]["hit"] is True and again["cache"]["0"]["key"] == first["cache"]["0"]["key"]
 
 
 def test_an_incomplete_scan_is_not_stored(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:

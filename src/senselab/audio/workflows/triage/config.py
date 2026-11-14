@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -279,9 +280,34 @@ def _validate_recognizers(recognizers: Any) -> None:  # noqa: ANN401 -- parsed Y
         raise ValueError(f"asr.recognizers names a recognizer twice: {names}")
 
 
+_GLINER_KEYS = frozenset({"model", "revision"})
+
+_COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
+"""A full commit SHA, the only revision a pinned detector may name."""
+
+
+def _validate_gliner(gliner: Any) -> None:  # noqa: ANN401 -- parsed YAML
+    """Reject a ``pii.gliner`` setting that names no checkpoint, or names it by a ref rather than a commit.
+
+    A ref is refused rather than resolved: resolving ``main`` per run lets two slices of one campaign scan with
+    different detector commits under one configuration hash, and cannot be done offline.
+    """
+    if not isinstance(gliner, dict):
+        raise ValueError("pii.gliner must be a mapping with a model and a revision")
+    unknown = sorted(set(gliner) - _GLINER_KEYS)
+    if unknown:
+        raise ValueError(f"pii.gliner has unknown keys {unknown}; the keys are {sorted(_GLINER_KEYS)}")
+    if not gliner.get("model"):
+        raise ValueError("pii.gliner needs a model")
+    revision = gliner.get("revision")
+    if not isinstance(revision, str) or not _COMMIT_SHA.fullmatch(revision):
+        raise ValueError(f"pii.gliner.revision must be a full 40-hex commit, never a ref; received {revision!r}")
+
+
 def _validate(values: dict[str, Any]) -> None:
-    """Reject resolved settings that would misrepresent AST's temporal resolution, or name no recognizer."""
+    """Reject settings that misrepresent AST's resolution, name no recognizer, or leave the PII detector unpinned."""
     _validate_recognizers((values.get("asr") or {}).get("recognizers"))
+    _validate_gliner((values.get("pii") or {}).get("gliner"))
     try:
         hop_s = float(values["windows"]["ast"]["hop_s"])
     except (KeyError, TypeError, ValueError) as error:

@@ -549,6 +549,9 @@ disruptions:
 # The detector set a PII scan is required to have run.
 pii:
   required_detectors: [gliner, presidio, rules]   # the pii_detection module's own detector set
+  gliner:                              # the checkpoint the GLiNER detector loads; every pii_scan records the commit used
+    model: nvidia/gliner-pii
+    revision: bd23e8ef4425fd04e34c5204ab49ffaa706eae79  # a commit, never a ref; resolved by the 2026-11-10 canary
   name_words_max:                      # profile value (data/profile_values.yaml)
 
 # What a released transcript replaces, and by how much padding.

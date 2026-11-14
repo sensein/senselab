@@ -91,6 +91,18 @@ class TestMeasuredValues:
         cfg = load_triage_config(profile=ACTIVE)
         assert cfg.require("pii.required_detectors") == default_detectors()
 
+    def test_the_pii_detector_is_pinned_to_a_commit(self) -> None:
+        """``pii.gliner`` names the checkpoint and the commit every scan loads (Satra review 2026-11-14, decision 6).
+
+        The default is the commit the 2026-11-10 canary resolved ``main`` to; a profile or a run may name another
+        commit, and the configuration hash then differs.
+        """
+        cfg = load_triage_config()
+        assert cfg.require("pii.gliner") == {
+            "model": "nvidia/gliner-pii",
+            "revision": "bd23e8ef4425fd04e34c5204ab49ffaa706eae79",
+        }
+
     def test_identity_travels_with_the_config(self) -> None:
         """The config carries its name, version and hash."""
         cfg = load_triage_config(profile=ACTIVE)
@@ -165,6 +177,32 @@ class TestOverrides:
         assert (
             load_triage_config(override, profile=ACTIVE).config_hash != load_triage_config(profile=ACTIVE).config_hash
         )
+
+    def test_another_pii_detector_commit_changes_the_hash(self, tmp_path: Path) -> None:
+        """The detector commit is configuration: two runs scanning with different commits never share a hash."""
+        override = tmp_path / "o.yaml"
+        override.write_text("pii:\n  gliner:\n    revision: " + "a" * 40 + "\n")
+        changed = load_triage_config(override)
+        assert changed.require("pii.gliner.revision") == "a" * 40
+        assert changed.require("pii.gliner.model") == "nvidia/gliner-pii", "the model is kept from the default"
+        assert changed.config_hash != load_triage_config().config_hash
+
+    @pytest.mark.parametrize(
+        ("gliner", "match"),
+        [
+            ("{model: nvidia/gliner-pii, revision: main}", "full 40-hex commit, never a ref"),
+            ("{model: nvidia/gliner-pii, revision: bd23e8ef}", "full 40-hex commit, never a ref"),
+            ("{model: nvidia/gliner-pii, revision: null}", "full 40-hex commit, never a ref"),
+            ("{model: null, revision: " + "a" * 40 + "}", "needs a model"),
+            ("nvidia/gliner-pii", "must be a mapping"),
+        ],
+    )
+    def test_an_unpinned_pii_detector_is_refused(self, tmp_path: Path, gliner: str, match: str) -> None:
+        """A ref, a short SHA or no commit at all would let the detector move between slices; each is refused."""
+        override = tmp_path / "o.yaml"
+        override.write_text(f"pii:\n  gliner: {gliner}\n")
+        with pytest.raises(ValueError, match=match):
+            load_triage_config(override)
 
     def test_an_unknown_key_is_refused_rather_than_ignored(self, tmp_path: Path) -> None:
         """A typo in an override key is an error, not a no-op."""

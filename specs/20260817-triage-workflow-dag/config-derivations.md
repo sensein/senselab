@@ -2262,6 +2262,16 @@ fewer detectors says so; the config_hash then names that choice. The local-LLM d
 deliberately absent for the same reason it is absent from default_detectors(): it is never
 default-on, so requiring it would make every scan incomplete.
 
+pii.gliner {model: nvidia/gliner-pii, revision: bd23e8ef4425fd04e34c5204ab49ffaa706eae79} -- a pin,
+not a fit (Satra review 2026-11-14, decision 6). The commit is the one the 2026-11-10 canary
+resolved `main` to. Before the pin the scan resolved `main` once per run id (recorded in
+$SENSELAB_CACHE/runs/<run_id>/resolutions.json and in the PII result-cache key), so two slices of
+one campaign started on different days could scan with different detector commits under one
+config_hash, and an offline host could not resolve it at all. A full 40-hex commit is the only
+value accepted; it is in config_hash with every other setting, and every pii_scan record carries
+`gliner_model` and the `gliner_revision` the worker reports it loaded (None where GLiNER did not
+load).
+
 ### No duration bound on a finding -- REJECTED 2026-09-22
 
 There is deliberately no `pii.max_finding_s` and no ratio ceiling, and one should not be added

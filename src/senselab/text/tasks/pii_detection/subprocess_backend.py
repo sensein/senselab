@@ -125,6 +125,12 @@ _PII_REQUIREMENTS = [
 # coverage (urchade/gliner_multi-v2.1 is the usual swap).
 _DEFAULT_GLINER_MODEL = "nvidia/gliner-pii"
 
+# The commit _DEFAULT_GLINER_MODEL is loaded at when the caller names none, resolved from ``main`` by
+# the 2026-11-10 triage canary. A pin, not a ref: two runs started on different days scan with the
+# same detector, and an offline host loads it from the cache with no Hub lookup. A caller naming
+# another model and no revision gets that model's ``main``, resolved once per run id.
+_DEFAULT_GLINER_REVISION = "bd23e8ef4425fd04e34c5204ab49ffaa706eae79"
+
 # Labels passed to GLiNER's ``predict_entities``. The set below is the
 # HIPAA Safe Harbor 18 identifiers (matches b2aiprep PR #256 verbatim).
 # Callers can override via ``gliner_labels``.
@@ -595,6 +601,7 @@ def detect_pii_via_subprocess(
     gliner_model: str = _DEFAULT_GLINER_MODEL,
     gliner_labels: Optional[list[str]] = None,
     gliner_threshold: float = 0.5,
+    gliner_revision: Optional[str] = None,
     timeout: int = 600,
 ) -> dict[str, Any]:
     """Run Presidio + GLiNER + rules-cascade PII detection on per-ASR-model transcripts.
@@ -638,6 +645,11 @@ def detect_pii_via_subprocess(
             warnings above the constant for the empirical
             justification.**
         gliner_threshold: Drop GLiNER predictions below this score.
+        gliner_revision: The commit (or ref) of ``gliner_model`` to load. A full
+            40-hex commit is used as given, with no Hub lookup; a ref is resolved
+            once per run id (:func:`~senselab.utils.model_revision.resolve_revision`).
+            ``None`` loads the default model at its pinned commit
+            (``_DEFAULT_GLINER_REVISION``), and any other model at ``main``.
         timeout: Subprocess wall-clock cap. 10 minutes is generous for
             one pass's worth of transcripts; the bulk of the time is the
             initial model loads.
@@ -709,15 +721,19 @@ def detect_pii_via_subprocess(
     entities = presidio_entities if presidio_entities is not None else list(_PRESIDIO_PII_ENTITIES)
     uses_gliner = "gliner" in detectors_resolved and bool(gliner_model)
 
-    gliner_revision: Optional[str] = None
+    requested_revision = gliner_revision
+    gliner_revision = None
     if uses_gliner:
         # Resolve the ref to a commit SHA before staging, then forward that SHA (never
-        # the ref) to both the worker and hf_subprocess_env. Deferred import (not at module
-        # top) keeps this monkeypatch-friendly at
+        # the ref) to both the worker and hf_subprocess_env. A full SHA short-circuits
+        # with no I/O, so a pinned commit never goes back to "main". Deferred import (not
+        # at module top) keeps this monkeypatch-friendly at
         # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
         from senselab.utils.model_revision import resolve_revision
 
-        gliner_revision = resolve_revision(str(gliner_model), "main")
+        if requested_revision is None:
+            requested_revision = _DEFAULT_GLINER_REVISION if gliner_model == _DEFAULT_GLINER_MODEL else "main"
+        gliner_revision = resolve_revision(str(gliner_model), requested_revision)
 
     # rules.py's own source travels with the request rather than being duplicated as a
     # second string literal inside _PII_WORKER_SCRIPT -- two ~400-line copies of the same
