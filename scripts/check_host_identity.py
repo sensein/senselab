@@ -86,7 +86,7 @@ def findings(paths: list[Path], root: Path = ROOT) -> list[str]:
         imports = _Imports(tree)
         for node in ast.walk(tree):
             if (call := _banned(node, imports)) is not None:
-                found.append(f"{rel}:{node.lineno}: {call}")
+                found.append(f"{rel}:{getattr(node, 'lineno', 0)}: {call}")
     return found
 
 

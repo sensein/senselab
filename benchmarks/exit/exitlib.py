@@ -129,9 +129,12 @@ def build_tree(step: Step, work: Path) -> Path:
     if (root / "dataset_description.json").is_file():
         return root
     if step.tree == "synthetic" and step.seed is not None:
-        return bids_tree.synthetic(root, step.items, step.seed)
+        laid: Path = bids_tree.synthetic(root, step.items, step.seed)
+        return laid
     if step.tree == "librispeech" and step.manifest is not None:
-        return bids_tree.from_librispeech(root, ROOT / "benchmarks" / "manifests" / f"{step.manifest}.yaml", step.items)
+        manifest = ROOT / "benchmarks" / "manifests" / f"{step.manifest}.yaml"
+        fetched: Path = bids_tree.from_librispeech(root, manifest, step.items)
+        return fetched
     raise ValueError(f"tree {step.tree!r} with manifest {step.manifest!r} is not one this harness lays")
 
 
@@ -140,7 +143,8 @@ def planned(step: Step, root: Path, profile: ExecutionProfile) -> Plan:
     import senselab  # noqa: PLC0415 - imported after the cache root is set
 
     task = getattr(senselab, step.task)(**step.params)
-    return senselab.plan(task, senselab.Dataset.bids(root), execution=profile)
+    placed: Plan = senselab.plan(task, senselab.Dataset.bids(root), execution=profile)
+    return placed
 
 
 @dataclass(frozen=True)
@@ -661,11 +665,11 @@ def account_resume(before: Sequence[Event], after: Sequence[Event], items: int) 
     top = max((e.epoch for e in before), default=-1)
     new = [e for e in after if e.epoch > top]
     committed = committed_jobs(before)
-    keys = {(e.node, e.job.element): e.key for e in after if e.job is not None and e.key is not None}
-    jobs = {(e.node, e.job.element) for e in after if e.job is not None and e.job.element}
+    keys = {(e.node, e.job.element): e.key for e in after if e.job is not None and e.key is not None and e.node}
+    jobs = {(e.node, e.job.element) for e in after if e.job is not None and e.node and e.job.element}
     finished: dict[tuple[str, tuple[int, ...]], int] = defaultdict(int)
     for e in new:
-        if e.kind == "finished" and e.job is not None:
+        if e.kind == "finished" and e.job is not None and e.node:
             finished[(e.node, e.job.element)] += 1
     problems = []
     if not 0 < len(committed) < items:

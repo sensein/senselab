@@ -252,7 +252,16 @@ def _own_requests(observations: Sequence[Observation]) -> list[Observation]:
     found = []
     for o in observations:
         if o.probe is None:
-            key = (o.wall_s, o.units, o.padded_units, o.batch, o.jobs, o.since_load, o.load_s, o.outcome)
+            key: tuple[object, ...] = (
+                o.wall_s,
+                o.units,
+                o.padded_units,
+                o.batch,
+                o.jobs,
+                o.since_load,
+                o.load_s,
+                o.outcome,
+            )
             key += (o.device_peak, o.device_after, o.host_peak, o.host_after)
             if owner.setdefault(key, o.item) == o.item:
                 found.append(o)

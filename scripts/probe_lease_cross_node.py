@@ -2,10 +2,10 @@
 
 Three roles share one directory on the filesystem under test, each on its own node, at one commit. Node A takes the
 lease on ``<dir>/resource`` and beats for ``--hold`` seconds (more than ``--stale``), then SIGKILLs itself. Nodes B and
-C try to take it every second; a taker holds it, beating, for two bounds and releases it. ``verdict`` passes when no
-take precedes the kill, the first take follows the kill within ``--stale`` plus ``--slack``, no two holds overlap,
-and no holder lost its lease. Every event is stamped on the storage clock (a probe directory's mtime) and appended
-to ``<dir>/events-<role>.jsonl``.
+C wait for A's ``held`` event, then try to take it every second; a taker holds it, beating, for two bounds and releases
+it. ``verdict`` passes when no take precedes the kill, the first take follows the kill within ``--stale`` plus
+``--slack``, no two holds overlap, and no holder lost its lease. Every event is stamped on the storage clock (a probe
+directory's mtime) and appended to ``<dir>/events-<role>.jsonl``.
 
 The directory is the positional argument, or ``SENSELAB_LEASE_PROBE_DIR`` when it is omitted. Run (``<checkout>`` is
 a clone at the commit under test, ``<shared>`` a fresh directory on the shared filesystem; A, B and C on three
@@ -40,6 +40,7 @@ from senselab_core.runtime.storage import StorageDir
 DIR_VARIABLE = "SENSELAB_LEASE_PROBE_DIR"
 EVENT_POLL_S = 5.0
 TAKE_POLL_S = 1.0
+HELD_WAIT_S = 300.0
 HOSTS = 3
 
 
@@ -66,6 +67,18 @@ def hold(root: Path, stale: float, fraction: float, seconds: float) -> None:
             _log(root, "A", event="beat", beats=state.beats, lost=state.lost, owns=lease.owns())
         _log(root, "A", event="kill", beats=state.beats, lost=state.lost)
         os.kill(os.getpid(), signal.SIGKILL)
+
+
+def wait_held(root: Path, wait: float) -> None:
+    """Block until the holder's `held` event is in ``events-A.jsonl``; raise `TimeoutError` after `wait` seconds."""
+    deadline = time.monotonic() + wait
+    path = root / "events-A.jsonl"
+    while time.monotonic() < deadline:
+        lines = path.read_text().splitlines() if path.exists() else []
+        if any(json.loads(line).get("event") == "held" for line in lines if line):
+            return
+        time.sleep(TAKE_POLL_S)
+    raise TimeoutError(f"the holder (role A) logged no 'held' event in {path} within {wait:.0f}s; not taking first")
 
 
 def breaker(root: Path, stale: float, fraction: float, name: str, until: float) -> None:
@@ -145,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hold", type=float, default=360.0)
     parser.add_argument("--name", default="B")
     parser.add_argument("--until", type=float, default=1200.0)
+    parser.add_argument("--held-wait", type=float, default=HELD_WAIT_S)
     parser.add_argument("--slack", type=float, default=75.0)
     args = parser.parse_args(argv)
     if args.dir is None:
@@ -154,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.role == "hold":
         hold(root, args.stale, args.fraction, args.hold)
     elif args.role == "break":
+        wait_held(root, args.held_wait)
         breaker(root, args.stale, args.fraction, args.name, args.until)
     else:
         return 0 if verdict(root, args.stale, args.slack) else 1

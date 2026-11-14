@@ -2,27 +2,23 @@
 
 import importlib.util
 import json
-import platform
 import signal
 import subprocess
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
-from senselab_core.kernel.declare import REGISTRY, BackendSpec, TaskSpec
-from senselab_core.runtime import fake_backend
-from senselab_core.runtime.call import Packaged, TaskCall, use_packaged
-from senselab_core.runtime.catalogue import Catalogue
+from exit_fake_stack_fixture import fake_stack  # noqa: F401 - a fixture of every test here
+from senselab_core.kernel.declare import TaskSpec
+from senselab_core.runtime.call import TaskCall
 from senselab_core.runtime.datasets import from_records
-from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.events import Event, EventKind, EventLog, read_events
 from senselab_core.runtime.execution.executor import FaultRecord, JobRef
 from senselab_core.runtime.planner import plan
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.testing.workers import mit_lock_records
 
 CLUSTER = (
     next(p for p in Path(__file__).resolve().parents if p.name == "packages")
@@ -48,19 +44,6 @@ agent_plan = _module("agent_plan_under_test", EXIT / "agent_plan.py")
 interrupt_resume = _module("interrupt_resume_under_test", EXIT / "interrupt_resume.py")
 
 
-def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
-    return EnvHandle(sys.executable, platform.python_version(), "1" * 64, "2" * 64, None)
-
-
-@pytest.fixture
-def fake_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TaskSpec]:
-    """The fake echo task as the packaged stack, over a cache root of its own."""
-    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
-    previous = use_packaged(Packaged(Catalogue(entries=()), _this_interpreter, REGISTRY, mit_lock_records))
-    yield fake_backend.ECHO
-    use_packaged(previous)
-
-
 def _plan(salt: str, profile: ExecutionProfile) -> Any:  # noqa: ANN401 - a Plan
     call = TaskCall(task="fake.echo", task_version="1", inputs={}, params={"salt": salt})
     return plan(
@@ -84,7 +67,7 @@ def test_field_diff_lists_leaves_by_path_and_absent_fields() -> None:
 
 
 @pytest.mark.logic
-def test_plans_over_two_profiles_differ_only_in_placement(fake_stack: TaskSpec) -> None:  # noqa: ARG001
+def test_plans_over_two_profiles_differ_only_in_placement(fake_stack: TaskSpec) -> None:  # noqa: ARG001, F811
     """One logical plan under two profiles has one hash; a changed param is a difference outside placement."""
     laptop = ExecutionProfile.load("laptop")
     other = exitlib.profile_for("pool-local", laptop, SimpleNamespace(pool_local_workers=2))
