@@ -17,6 +17,9 @@ Triage reads its data files by their path under ``data/``. They come in four kin
 A run's configuration may carry a ``data`` section, ``{data path: values}``, applied over the profile by the same
 rules (:func:`set_run_data`); ``load_triage_config`` sets it, and the configuration hash covers it.
 
+A profile's digest hashes each YAML file by its parsed values, so a ``#`` comment can be corrected without changing
+it, and every other file (parquet, txt) by its bytes (:func:`content_digest`).
+
 A dataset profile is a directory holding ``profile.yaml`` and the files it supplies::
 
     name: my-dataset                 # required
@@ -38,6 +41,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Collection, Mapping, Sequence, TypeVar
@@ -136,6 +140,57 @@ class DatasetDataMissing(FileNotFoundError):
     """Triage needs a dataset path that no active profile supplies."""
 
 
+YAML_SUFFIXES = (".yaml", ".yml")
+"""The files :func:`content_digest` hashes by their parsed values."""
+
+
+def canonical_json(value: Any) -> str:  # noqa: ANN401 -- a YAML value
+    """A YAML value as canonical JSON: keys sorted, a non-string key spelled as a string, anything else as ``str``.
+
+    Args:
+        value: A parsed YAML value.
+
+    Returns:
+        The JSON text.
+    """
+    return json.dumps(_string_keys(value), sort_keys=True, default=str)
+
+
+def _string_keys(value: Any) -> Any:  # noqa: ANN401 -- a YAML value
+    if isinstance(value, Mapping):
+        return {key if isinstance(key, str) else str(key): _string_keys(held) for key, held in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_string_keys(held) for held in value]
+    return value
+
+
+def _digests(path: Path) -> tuple[str, str]:
+    """``(content, raw)``: :func:`content_digest` of a file and the sha256 of its bytes, from one read."""
+    raw = path.read_bytes()
+    raw_digest = hashlib.sha256(raw).hexdigest()
+    if path.suffix not in YAML_SUFFIXES:
+        return raw_digest, raw_digest
+    try:
+        parsed = yaml.safe_load(raw.decode("utf-8"))
+    except (yaml.YAMLError, UnicodeDecodeError):
+        return raw_digest, raw_digest
+    return hashlib.sha256(canonical_json(parsed).encode()).hexdigest(), raw_digest
+
+
+def content_digest(path: Path) -> str:
+    """The sha256 of a profile file's content: a YAML file's parsed values (:func:`canonical_json`), any other's bytes.
+
+    A YAML file that does not parse as one document is hashed by its bytes.
+
+    Args:
+        path: The file.
+
+    Returns:
+        The hex digest.
+    """
+    return _digests(path)[0]
+
+
 @dataclass(frozen=True)
 class DatasetProfile:
     """One loaded dataset profile.
@@ -147,11 +202,15 @@ class DatasetProfile:
         files: Data path to the file or directory the profile supplies for it.
         config: The profile's config override, or None.
         provenance: Whatever the profile says about where its values came from.
-        digest: Hash of the manifest, of every byte of every file it supplies, and of the profile it extends.
+        digest: Hash of the manifest, of every file it supplies (:func:`content_digest`: a YAML file by its parsed
+            values, any other by its bytes), and of the profile it extends.
         base: The profile it builds on (``extends``), or None.
         pilot: Whether the manifest marks it a pilot (:data:`PILOT_KEY`): its corpus statistics may be empty until
             ``scripts/fit_profile.py`` fits them.
         fitted: The values its :data:`FITTED_FILE` holds, by data file; empty where it has none.
+        legacy_digest: The digest as senselab took it before 2026-11-14, of every byte of the same files, its
+            base's legacy digest included: a run recorded under it is the same profile while the files are unchanged
+            (:func:`recorded_digest_matches`).
     """
 
     name: str
@@ -164,6 +223,7 @@ class DatasetProfile:
     base: "DatasetProfile | None" = None
     pilot: bool = False
     fitted: Mapping[str, Any] = field(default_factory=dict)
+    legacy_digest: str = field(default="", compare=False)
 
     def supplies(self, relative: str) -> Path | None:
         """Where this profile itself, not the one it extends, supplies a data path, or None.
@@ -215,12 +275,62 @@ def _relative(name: object, where: str) -> str:
     return str(path)
 
 
-def _file_digests(path: Path) -> list[tuple[str, str]]:
+def _file_digests(path: Path, *, legacy: bool) -> list[tuple[str, str]]:
     members = sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
     return [
-        (str(member.relative_to(path)) if path.is_dir() else "", hashlib.sha256(member.read_bytes()).hexdigest())
+        (str(member.relative_to(path)) if path.is_dir() else "", _digests(member)[1 if legacy else 0])
         for member in members
     ]
+
+
+def _profile_digest(
+    root: Path,
+    files: Mapping[str, Path],
+    config: Path | None,
+    base: DatasetProfile | None,
+    *,
+    legacy: bool,
+) -> str:
+    """A profile's digest (:attr:`DatasetProfile.digest`), or with ``legacy`` its :attr:`~DatasetProfile.legacy_digest`.
+
+    Args:
+        root: The profile directory.
+        files: The files it supplies.
+        config: Its config override, or None.
+        base: The profile it extends, or None.
+        legacy: Hash every file's bytes, as before 2026-11-14.
+
+    Returns:
+        16 hex digits.
+    """
+    which = 1 if legacy else 0
+    manifest_path = root / MANIFEST
+    hasher = hashlib.sha256(manifest_path.read_bytes() if legacy else _digests(manifest_path)[0].encode())
+    if (root / FITTED_FILE).is_file():
+        hasher.update(b"\0fitted\0" + _digests(root / FITTED_FILE)[which].encode())
+    if base is not None:
+        base_digest = base.legacy_digest if legacy else base.digest
+        hasher.update(f"\0extends\0{base.name}\0{base.version}\0{base_digest}".encode())
+    for relative in sorted(files):
+        for member, digest in _file_digests(files[relative], legacy=legacy):
+            hasher.update(f"\0{relative}\0{member}\0{digest}".encode())
+    if config is not None:
+        hasher.update(b"\0config\0" + _digests(config)[which].encode())
+    return hasher.hexdigest()[:16]
+
+
+def recorded_digest_matches(recorded: object, profile: DatasetProfile) -> bool:
+    """Whether a digest a run, marker or reading recorded names this profile's files as they are now.
+
+    Args:
+        recorded: The recorded digest.
+        profile: The profile now in use.
+
+    Returns:
+        True where it equals the profile's digest, or its legacy digest (one recorded before 2026-11-14, whose files
+        have not changed since).
+    """
+    return recorded is not None and recorded in (profile.digest, profile.legacy_digest)
 
 
 def profile_directory(reference: str, *, relative_to: Path | None = None) -> Path:
@@ -305,16 +415,6 @@ def load_profile(directory: str | Path, *, _seen: tuple[Path, ...] = ()) -> Data
     if not isinstance(pilot, bool):
         raise ValueError(f"{manifest_path}: {PILOT_KEY} is true or false, got {pilot!r}")
     fitted = load_fitted(root / FITTED_FILE)
-    hasher = hashlib.sha256(manifest_path.read_bytes())
-    if (root / FITTED_FILE).is_file():
-        hasher.update(b"\0fitted\0" + hashlib.sha256((root / FITTED_FILE).read_bytes()).hexdigest().encode())
-    if base is not None:
-        hasher.update(f"\0extends\0{base.name}\0{base.version}\0{base.digest}".encode())
-    for relative in sorted(files):
-        for member, digest in _file_digests(files[relative]):
-            hasher.update(f"\0{relative}\0{member}\0{digest}".encode())
-    if config is not None:
-        hasher.update(b"\0config\0" + hashlib.sha256(config.read_bytes()).hexdigest().encode())
     return DatasetProfile(
         name=str(manifest["name"]),
         version=str(manifest["version"]),
@@ -322,10 +422,11 @@ def load_profile(directory: str | Path, *, _seen: tuple[Path, ...] = ()) -> Data
         files=files,
         config=config,
         provenance=dict(manifest.get("provenance") or {}),
-        digest=hasher.hexdigest()[:16],
+        digest=_profile_digest(root, files, config, base, legacy=False),
         base=base,
         pilot=pilot,
         fitted=fitted,
+        legacy_digest=_profile_digest(root, files, config, base, legacy=True),
     )
 
 

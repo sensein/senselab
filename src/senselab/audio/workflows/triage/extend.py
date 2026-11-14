@@ -32,7 +32,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Collection, Iterator, Mapping, Sequence
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
@@ -50,7 +50,11 @@ from senselab.audio.workflows.triage.consensus import (
     word_attributes,
     word_from_attributes,
 )
-from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
+from senselab.audio.workflows.triage.dataset_profile import (
+    DatasetProfile,
+    recorded_digest_matches,
+    require_dataset_values,
+)
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.hint_record import (
     HINT,
@@ -846,7 +850,7 @@ def corpus_inputs_digest(store: ProvStore) -> str:
 
 def find_replay_marker(
     store: ProvStore,
-    config_hash: str,
+    config_hash: str | Collection[str],
     commit: str | None = None,
     hint_digest: str | None = None,
     *,
@@ -856,7 +860,8 @@ def find_replay_marker(
 
     Args:
         store: The run's store.
-        config_hash: The replaying configuration's hash.
+        config_hash: The replaying configuration's hash, or every hash it may be recorded under
+            (:attr:`~senselab.audio.workflows.triage.config.TriageConfig.config_hashes`).
         commit: The replaying code revision. None matches a marker of any revision.
         hint_digest: The replaying hint's digest
             (:func:`~senselab.audio.workflows.triage.hint_record.hint_digest`). None matches a marker of any
@@ -869,8 +874,9 @@ def find_replay_marker(
     Returns:
         The marker activity's id, or None when this store has not been replayed under all of them.
     """
+    hashes = {config_hash} if isinstance(config_hash, str) else set(config_hash)
     for activity in store.activities(REPLAY_NODE):
-        if activity.step != REPLAY_MARKER_STEP or activity.parameters.get("config_hash") != config_hash:
+        if activity.step != REPLAY_MARKER_STEP or activity.parameters.get("config_hash") not in hashes:
             continue
         if commit is not None and activity.parameters.get("commit") != commit:
             continue
@@ -1129,6 +1135,20 @@ def _profile_fields(profile: Any) -> dict[str, Any] | None:  # noqa: ANN401 -- a
     return {"name": profile.name, "version": profile.version, "digest": profile.digest}
 
 
+def _same_profile(recorded: Mapping[str, Any] | None, profile: DatasetProfile | None) -> bool:
+    """Whether a recorded profile (name, version, digest) is the one now in use, its files unchanged.
+
+    A digest recorded before 2026-11-14 hashed every byte; it still names the profile while its files are unchanged
+    (:func:`~senselab.audio.workflows.triage.dataset_profile.recorded_digest_matches`).
+    """
+    if recorded is None or profile is None:
+        return recorded is None and profile is None
+    return (recorded.get("name"), recorded.get("version")) == (
+        profile.name,
+        profile.version,
+    ) and recorded_digest_matches(recorded.get("digest"), profile)
+
+
 def _check_recording_and_profile(
     attributes: Mapping[str, Any],
     log: Mapping[str, Any],
@@ -1187,7 +1207,7 @@ def _check_recording_and_profile(
                 f"{None if current_profile is None else current_profile['name']!r}; pass --profile, or "
                 "--allow-profile-change where the driver takes it"
             )
-        if current_profile != recorded_profile:
+        if not _same_profile(recorded_profile, config.profile):
             profile = {"recorded": recorded_profile, "now": current_profile}
     return audio, profile
 
@@ -1313,7 +1333,7 @@ def _refold_refusal(
     """Why a re-fold would fold decisions taken under another profile or stage set, or None where it would not."""
     profile, off = decided_under(store, log)
     current = _profile_fields(config.profile)
-    if profile is not None and profile != current and not allow_profile_change:
+    if profile is not None and not _same_profile(profile, config.profile) and not allow_profile_change:
         return (
             f"this run's decisions were taken under profile {profile} and this pass has {current}; VERDICT would "
             "score the old reports against another task list: replay the run instead, or pass --allow-profile-change "

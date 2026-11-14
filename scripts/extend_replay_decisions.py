@@ -277,7 +277,7 @@ def replay_one(
     if (
         not force
         and find_replay_marker(
-            store, config.config_hash, commit, hint_digest(inputs.hint), corpus_inputs=corpus_inputs_digest(store)
+            store, config.config_hashes, commit, hint_digest(inputs.hint), corpus_inputs=corpus_inputs_digest(store)
         )
         is not None
     ):

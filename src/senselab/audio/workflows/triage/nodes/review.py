@@ -52,7 +52,12 @@ from senselab.audio.workflows.triage.nodes.redact import (
 )
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.residue import VOCAL, is_non_lexical
-from senselab.audio.workflows.triage.review_inputs import policy_fingerprint, redaction_lexicon, review_policy
+from senselab.audio.workflows.triage.review_inputs import (
+    legacy_policy_fingerprint,
+    policy_fingerprint,
+    redaction_lexicon,
+    review_policy,
+)
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, task_lexicon
 from senselab.audio.workflows.triage.task_speech import item_set_family, lexical_voice_family, non_lexical_family
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, PII_SCAN_MISSING, REDACTION_LLM_ANNOTATION, SCANNED
@@ -809,6 +814,15 @@ POLICY_REPLACED = "policy_fingerprints_replaced"
 """The cached reading's record of the fingerprints of the readings it replaced (:func:`cache_reading`)."""
 
 
+def _this_policy(recorded: object) -> bool:
+    """Whether a recorded fingerprint is :func:`policy_fingerprint` or, over unchanged files, the legacy one.
+
+    The legacy one is :func:`~senselab.audio.workflows.triage.review_inputs.legacy_policy_fingerprint`, as senselab
+    took it before 2026-11-14.
+    """
+    return recorded == policy_fingerprint() or recorded == legacy_policy_fingerprint()
+
+
 def read_under_this_policy(payload: Mapping[str, Any]) -> bool:
     """Whether a cached reading was read under the active profile's policy and word lists.
 
@@ -827,10 +841,11 @@ def read_under_this_policy(payload: Mapping[str, Any]) -> bool:
         payload: The cached result.
 
     Returns:
-        False only where the reading records another fingerprint.
+        False only where the reading records another fingerprint; one taken before 2026-11-14 over the same files
+        is the same (:func:`_this_policy`).
     """
     recorded = payload.get(POLICY_FINGERPRINT)
-    return recorded is None or recorded == policy_fingerprint()
+    return recorded is None or _this_policy(recorded)
 
 
 def annotation_read_under_this_policy(attributes: Mapping[str, Any]) -> bool:
@@ -850,7 +865,7 @@ def annotation_read_under_this_policy(attributes: Mapping[str, Any]) -> bool:
     """
     recorded = attributes.get(POLICY_FINGERPRINT)
     if recorded is not None:
-        return bool(recorded == policy_fingerprint())
+        return _this_policy(recorded)
     key = (attributes.get("result_cache") or {}).get("key")
     cached = result_lookup(str(key)) if key else None
     if cached is None:

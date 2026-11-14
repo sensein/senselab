@@ -279,6 +279,32 @@ class TestDatasetProfileLayer:
         assert profiled.values == packaged.values
         assert profiled.config_hash != packaged.config_hash
 
+    def test_a_comment_in_the_profile_keeps_the_hash_and_a_value_changes_it(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """``config_hash`` follows the profile's values, not its comments the hash taken before stays known."""
+        root = self._profile(tmp_path / "p", "spans:\n  k_db: 7.0\n")
+
+        def loaded() -> TriageConfig:
+            try:
+                return load_triage_config(profile=root)
+            finally:
+                deactivate_profile()
+
+        first = loaded()
+        assert first.profile is not None
+        legacy = json.dumps(first.values, sort_keys=True, default=str)
+        legacy += "\0".join(("", "profile", "demo", "1", first.profile.legacy_digest))
+        assert first.legacy_config_hash == hashlib.sha256(legacy.encode()).hexdigest()[:16]
+        assert first.config_hashes == {first.config_hash, first.legacy_config_hash}
+        (root / "override.yaml").write_text("# the span threshold\nspans:\n  k_db: 7.0  # dB\n")
+        (root / "profile.yaml").write_text("# a dataset\nname: demo\nversion: '1'\nconfig: override.yaml\n")
+        commented = loaded()
+        assert commented.config_hash == first.config_hash
+        assert commented.legacy_config_hash != first.legacy_config_hash
+        (root / "override.yaml").write_text("spans:\n  k_db: 8.0\n")
+        assert loaded().config_hash != first.config_hash
+
     def test_a_profile_override_obeys_the_same_key_rules(self, without_triage_profile: None, tmp_path: Path) -> None:
         """A key the packaged file lacks is refused in a profile override too."""
         root = self._profile(tmp_path / "p", "spans:\n  k_bd: 8.0\n")

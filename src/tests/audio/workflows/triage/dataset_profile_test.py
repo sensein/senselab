@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     DatasetDataMissing,
     activate_profile,
     active_profile,
+    content_digest,
     data_path,
     data_values,
     deactivate_profile,
@@ -26,6 +28,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     missing_dataset_values,
     needed,
     profile_values,
+    recorded_digest_matches,
     require_dataset_values,
     run_data,
 )
@@ -100,6 +103,72 @@ class TestLoading:
         assert load_profile(root).digest == first
         (root / "lex/x.yaml").write_text("b\n")
         assert load_profile(root).digest != first
+
+    def test_a_comment_edit_keeps_the_digest_and_a_value_edit_changes_it(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """Every YAML file, the manifest and the config override included, is hashed by its parsed values (#609-1)."""
+        manifest = {
+            "name": "d",
+            "version": "1",
+            "config": "config.yaml",
+            "files": {"task_lexicon": "lex", "task_extent.yaml": "te.yaml"},
+        }
+        files = {"lex/x.yaml": "a: 1\n", "te.yaml": "atypical: {}\n", "config.yaml": "spans:\n  k_db: 7.0\n"}
+        root = _profile(tmp_path / "p", manifest, files)
+        first = load_profile(root)
+        for relative in ("profile.yaml", "lex/x.yaml", "te.yaml", "config.yaml"):
+            path = root / relative
+            path.write_text("# corrected wording\n" + path.read_text().replace("\n", "  # a note\n", 1))
+        commented = load_profile(root)
+        assert commented.digest == first.digest
+        assert commented.legacy_digest != first.legacy_digest, "the bytes did change"
+        (root / "lex/x.yaml").write_text("a: 2\n")
+        assert load_profile(root).digest != first.digest
+
+    def test_a_file_that_is_not_yaml_is_hashed_by_its_bytes(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """A text file has no comments to leave out: any edit to it changes the digest."""
+        root = _profile(
+            tmp_path / "p",
+            {"name": "d", "version": "1", "files": {"review_policy.txt": "policy.txt"}},
+            {"policy.txt": "Remove names.\n"},
+        )
+        first = load_profile(root).digest
+        (root / "policy.txt").write_text("Remove names.\n# a note\n")
+        assert load_profile(root).digest != first
+
+    def test_a_yaml_file_with_number_keys_is_hashed_by_its_values(self, tmp_path: Path) -> None:
+        """Keys of mixed types hash, and their order and comments do not count."""
+        path = tmp_path / "x.yaml"
+        path.write_text("1: a\nb: c\n")
+        first = content_digest(path)
+        path.write_text("b: c  # a note\n1: a\n")
+        assert content_digest(path) == first
+        path.write_text("1: a\nb: d\n")
+        assert content_digest(path) != first
+
+    def test_the_legacy_digest_is_the_byte_digest_runs_recorded_before(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """A run recorded before 2026-11-14 named its profile by every byte; that still names the unchanged files."""
+        root = _profile(
+            tmp_path / "p",
+            {"name": "d", "version": "1", "files": {"task_extent.yaml": "te.yaml"}},
+            {"te.yaml": "a: 1  # a note\n"},
+        )
+        file_bytes = hashlib.sha256((root / "te.yaml").read_bytes()).hexdigest()
+        hasher = hashlib.sha256((root / "profile.yaml").read_bytes())
+        hasher.update(f"\0task_extent.yaml\0\0{file_bytes}".encode())
+        profile = load_profile(root)
+        assert profile.legacy_digest == hasher.hexdigest()[:16]
+        assert recorded_digest_matches(profile.digest, profile)
+        assert recorded_digest_matches(profile.legacy_digest, profile)
+        assert not recorded_digest_matches("0" * 16, profile)
+        assert not recorded_digest_matches(None, profile)
+        (root / "te.yaml").write_text("a: 1  # another note\n")
+        changed = load_profile(root)
+        assert changed.digest == profile.digest
+        assert not recorded_digest_matches(profile.legacy_digest, changed), "its bytes changed since it was recorded"
 
     @pytest.mark.parametrize(
         "files",

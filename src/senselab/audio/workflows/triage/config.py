@@ -12,7 +12,8 @@ whose keys are names the code reads, and a key it does not already have is refus
 A dataset profile (:mod:`~senselab.audio.workflows.triage.dataset_profile`) sits between the two: its own
 override is merged over the packaged file before a run's override, and the data files it supplies are read
 instead of the packaged ones. A configuration loaded with a profile carries it, and its hash covers the profile's
-name, version and every byte the profile lists; one loaded without a profile hashes exactly as before.
+name, version and digest (each YAML file by its parsed values, any other file by its bytes); one loaded without a
+profile hashes exactly as before.
 """
 
 from __future__ import annotations
@@ -107,6 +108,9 @@ class TriageConfig:
             configuration can be named.
         values: The merged mapping.
         profile: The dataset profile it was loaded with, or None.
+        legacy_config_hash: The hash as senselab took it before 2026-11-14, over the profile's legacy digest
+            (:attr:`~senselab.audio.workflows.triage.dataset_profile.DatasetProfile.legacy_digest`); None where it
+            equals ``config_hash``.
     """
 
     name: str
@@ -114,6 +118,12 @@ class TriageConfig:
     config_hash: str
     values: dict[str, Any]
     profile: DatasetProfile | None = None
+    legacy_config_hash: str | None = None
+
+    @property
+    def config_hashes(self) -> frozenset[str]:
+        """The hashes a record of this configuration may carry: ``config_hash``, and ``legacy_config_hash``."""
+        return frozenset(hash_ for hash_ in (self.config_hash, self.legacy_config_hash) if hash_)
 
     def get(self, path: str, default: Any = None) -> Any:  # noqa: ANN401
         """Read a value, returning ``default`` when it is absent or null.
@@ -350,11 +360,20 @@ def load_triage_config(
     hashed = json.dumps(values, sort_keys=True, default=str)
     listed_stages(values)  # an unknown stage, or one that may not be off, is refused here
     run_data = check_run_data(values.get(DATA_SECTION))
+    legacy = None
     if loaded is not None:
         activate_profile(loaded)
-        hashed += f"\0profile\0{loaded.name}\0{loaded.version}\0{loaded.digest}"
+        named = f"\0profile\0{loaded.name}\0{loaded.version}\0"
+        if loaded.legacy_digest and loaded.legacy_digest != loaded.digest:
+            legacy = hashlib.sha256((hashed + named + loaded.legacy_digest).encode()).hexdigest()[:16]
+        hashed += named + loaded.digest
     set_run_data(run_data)
     digest = hashlib.sha256(hashed.encode()).hexdigest()[:16]
     return TriageConfig(
-        name=values["name"], version=int(values["version"]), config_hash=digest, values=values, profile=loaded
+        name=values["name"],
+        version=int(values["version"]),
+        config_hash=digest,
+        values=values,
+        profile=loaded,
+        legacy_config_hash=legacy,
     )

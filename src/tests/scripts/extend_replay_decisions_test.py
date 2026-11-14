@@ -307,6 +307,19 @@ def test_the_marker_is_absent_for_another_revision_under_the_same_configuration(
     assert find_replay_marker(store, "aaaa") == marker
 
 
+def test_a_marker_written_under_the_legacy_config_hash_still_reads_as_done(tmp_path: Path) -> None:
+    """A replay recorded before 2026-11-14 hashed the profile's bytes; unchanged files make it this configuration's."""
+    root = tmp_path / "rec-0001_20260920-030808"
+    _seed_run(root)
+    config = load_triage_config()
+    assert config.legacy_config_hash is not None and config.legacy_config_hash != config.config_hash
+    store = read_store(root, run_id=replay_run_id(root, config.legacy_config_hash))
+    parameters = {"config_hash": config.legacy_config_hash, "commit": None, "retired": 1}
+    marker = store.activity(node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters=parameters)
+    assert find_replay_marker(store, config.config_hashes) == marker
+    assert find_replay_marker(store, config.config_hash) is None
+
+
 def test_mirror_run_root_is_writable_and_reads_through_to_the_finished_run(tmp_path: Path) -> None:
     """The out-root mirror must not write into the tree it reads."""
     root = tmp_path / "finished" / "rec-0001_20260920-030808"
@@ -816,6 +829,22 @@ class TestTheReplayChecksTheRunsRecord:
         with pytest.raises(ReplayRefused, match="replay the run instead"):
             _checked(root, hint=HINT_COUGH, hint_given=True, allow_hint_change=False)
         assert _checked(root, hint=HINT_COUGH, hint_given=True).profile["recorded"] == recorded
+
+    def test_decisions_recorded_under_the_legacy_digest_are_the_same_profile(self, tmp_path: Path) -> None:
+        """A byte digest recorded before 2026-11-14 names the unchanged profile: no --allow-profile-change."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        source = _seed_run(root, hint=HINT_COUGH)
+        config = load_triage_config()
+        assert config.profile is not None and config.profile.legacy_digest != config.profile.digest
+        recorded = {
+            "name": config.profile.name,
+            "version": config.profile.version,
+            "digest": config.profile.legacy_digest,
+        }
+        (root / "run" / "run.json").write_text(json.dumps({"source": str(source), "config": {"profile": recorded}}))
+        refold = _checked(root, hint=HINT_COUGH, hint_given=True, allow_hint_change=False)
+        assert refold.profile is None, "not recorded as a profile change"
+        assert _checked(root, hint=HINT_COUGH, hint_given=True).profile is None
 
     def test_a_refold_refuses_decisions_taken_with_other_stages_off(self, tmp_path: Path) -> None:
         """The run left REDACT off and this configuration runs it: a re-fold would fold another graph (C3)."""

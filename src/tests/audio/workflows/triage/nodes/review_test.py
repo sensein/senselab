@@ -1375,3 +1375,53 @@ def test_a_cached_reading_stands_only_under_the_policy_it_was_read_under() -> No
     assert review_module.read_under_this_policy({}), "a reading cached before the fingerprint stands"
     assert review_module.read_under_this_policy({review_module.POLICY_FINGERPRINT: policy_fingerprint()})
     assert not review_module.read_under_this_policy({review_module.POLICY_FINGERPRINT: "0" * 64})
+
+
+def test_a_reading_under_the_fingerprint_taken_before_still_stands() -> None:
+    """A fingerprint over the word lists' bytes (before 2026-11-14) names the unchanged policy: no re-read (#634)."""
+    from senselab.audio.workflows.triage.review_inputs import legacy_policy_fingerprint, policy_fingerprint
+
+    legacy = {review_module.POLICY_FINGERPRINT: legacy_policy_fingerprint()}
+    assert legacy_policy_fingerprint() != policy_fingerprint()
+    assert review_module.read_under_this_policy(legacy)
+    assert review_module.annotation_read_under_this_policy(legacy)
+    assert not review_module.annotation_read_under_this_policy({review_module.POLICY_FINGERPRINT: "0" * 64})
+
+
+def test_a_comment_in_the_word_lists_keeps_the_fingerprint_and_a_value_changes_it(tmp_path: Path) -> None:
+    """The word lists are hashed by their parsed values, so correcting a comment forces no GPU re-read (#634)."""
+    from senselab.audio.workflows.triage.dataset_profile import (
+        activate_profile,
+        active_profile,
+        data_path,
+        deactivate_profile,
+        load_profile,
+    )
+    from senselab.audio.workflows.triage.review_inputs import (
+        LEXICON_FILE,
+        legacy_policy_fingerprint,
+        policy_fingerprint,
+    )
+    from tests.conftest import FIXTURE_PROFILE
+
+    fixture = active_profile()
+    assert fixture is not None
+    lexicon = data_path(LEXICON_FILE).read_text(encoding="utf-8")
+    fingerprint, legacy = policy_fingerprint(), legacy_policy_fingerprint()
+    root = tmp_path / "p"
+    root.mkdir()
+    manifest = {"name": "commented", "version": "1", "extends": str(FIXTURE_PROFILE), "files": {LEXICON_FILE: "w.yaml"}}
+    (root / "profile.yaml").write_text(yaml.safe_dump(manifest))
+    deactivate_profile()
+    try:
+        (root / "w.yaml").write_text("# corrected wording\n" + lexicon, encoding="utf-8")
+        activate_profile(load_profile(root))
+        assert (policy_fingerprint(), legacy_policy_fingerprint() != legacy) == (fingerprint, True)
+        deactivate_profile()
+        changed = {**yaml.safe_load(lexicon), "test_only": ["x"]}
+        (root / "w.yaml").write_text(yaml.safe_dump(changed), encoding="utf-8")
+        activate_profile(load_profile(root))
+        assert policy_fingerprint() != fingerprint
+    finally:
+        deactivate_profile()
+        activate_profile(fixture)
