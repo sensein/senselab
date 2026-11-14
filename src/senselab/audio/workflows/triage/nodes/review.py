@@ -823,9 +823,30 @@ def _this_policy(recorded: object) -> bool:
     """Whether a recorded fingerprint is :func:`policy_fingerprint` or, over unchanged files, the legacy one.
 
     The legacy one is :func:`~senselab.audio.workflows.triage.review_inputs.legacy_policy_fingerprint`, as senselab
-    took it before 2026-11-14.
+    took it before 2026-11-14. An empty record is neither.
     """
-    return recorded == policy_fingerprint() or recorded == legacy_policy_fingerprint()
+    return bool(recorded) and recorded in (policy_fingerprint(), legacy_policy_fingerprint())
+
+
+def migrated_fingerprint(recorded: object) -> str | None:
+    """The fingerprint to record from now on for a reading that recorded ``recorded``.
+
+    A reading recorded under the legacy fingerprint, over files unchanged since, is recorded under
+    :func:`policy_fingerprint`, so a later ``#`` comment edit in the word lists, which changes the legacy one, does not
+    read it again. Any other record is kept as it is.
+
+    Args:
+        recorded: The fingerprint the reading or annotation records, or None.
+
+    Returns:
+        :func:`policy_fingerprint` for a legacy record, else ``recorded`` (None where it is None).
+    """
+    if recorded is None:
+        return None
+    current = policy_fingerprint()
+    if recorded != current and recorded and recorded == legacy_policy_fingerprint():
+        return current
+    return str(recorded)
 
 
 def read_under_this_policy(payload: Mapping[str, Any]) -> bool:
@@ -917,6 +938,33 @@ def cache_reading(
         model_id=reading.model_id,
         commit_sha=reading.revision,
         replace=replacing is not None,
+    )
+
+
+def restamp_reading(key: str, result: Mapping[str, Any], *, fingerprint: str) -> bool:
+    """Keep a cached reading under its key with ``fingerprint`` as its record, its reading and rounds unchanged.
+
+    For a reading recorded under the legacy fingerprint (:func:`migrated_fingerprint`): the entry records the
+    current one from then on. It is the same reading, so nothing records it as replaced (:data:`POLICY_REPLACED`).
+    The entry's provenance is the rewrite's; the machine and software that read it stay in the reading's
+    ``runtime`` and ``engine``.
+
+    Args:
+        key: The entry's key.
+        result: The held cached result.
+        fingerprint: The fingerprint to record.
+
+    Returns:
+        True when this call rewrote the entry.
+    """
+    reading = result.get("reading") or {}
+    return result_store(
+        key,
+        {**result, POLICY_FINGERPRINT: fingerprint},
+        process=REVIEW_PROCESS,
+        model_id=reading.get("model_id"),
+        commit_sha=reading.get("revision"),
+        replace=True,
     )
 
 
@@ -1088,7 +1136,10 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             reading, reviews = reading_from_cache(held["result"])
             cache = {"key": key, "hit": True}
             recorded = held["result"].get(POLICY_FINGERPRINT)
-            read_under = None if recorded is None else str(recorded)
+            read_under = migrated_fingerprint(recorded)
+            if read_under != recorded:
+                cache["legacy_fingerprint"] = recorded
+                cache["restamped"] = restamp_reading(str(key), held["result"], fingerprint=str(read_under))
         else:
             reading, reviews = _read(original, redacted, settings, context, placeable)
             answered = [review for review in reviews if review.get("available")]

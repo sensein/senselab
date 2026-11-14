@@ -123,9 +123,11 @@ from senselab.audio.workflows.triage.nodes.redact import settle_release
 from senselab.audio.workflows.triage.nodes.report import report
 from senselab.audio.workflows.triage.nodes.review import (
     LLM_REVIEW_MEASUREMENT,
+    POLICY_FINGERPRINT,
     PROMPT_VERSION,
     READ_STATES,
     annotation_read_under_this_policy,
+    migrated_fingerprint,
     reading_key,
 )
 from senselab.audio.workflows.triage.nodes.review import NODE as REVIEW_NODE
@@ -1946,7 +1948,9 @@ def carry_reading_forward(
     reading's own result-cache key against the key the replayed store's texts and task context give under the same
     commit. A match writes a REVIEW activity that used the held
     annotation, copies of its rounds and of the annotation derived from them, and retires the
-    replay's own unanswered annotation. Anything else leaves the replay's annotation standing.
+    replay's own unanswered annotation. Anything else leaves the replay's annotation standing. The copy records the
+    current fingerprint where the held annotation recorded the legacy one
+    (:func:`~senselab.audio.workflows.triage.nodes.review.migrated_fingerprint`).
 
     Args:
         store: The replayed store, after REVIEW ran and before VERDICT.
@@ -1982,6 +1986,8 @@ def carry_reading_forward(
         return REVIEW_NEEDS_REREAD, "the transcript texts or task context the reading read have changed"
     if not annotation_read_under_this_policy(attributes):
         return REVIEW_NEEDS_REREAD, "the review policy or the redaction word lists the reading read under have changed"
+    if attributes.get(POLICY_FINGERPRINT) is not None:
+        attributes[POLICY_FINGERPRINT] = migrated_fingerprint(attributes[POLICY_FINGERPRINT])
     activity = store.activity(
         node=REVIEW_NODE,
         step=READING_CARRIED_STEP,

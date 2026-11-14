@@ -1256,6 +1256,56 @@ class TestAReadingIsKeptInTheResultCache:
         assert not review_module.annotation_read_under_this_policy(unrecorded), "its entry was replaced"
         assert review_module.annotation_read_under_this_policy(reread)
 
+    def test_a_reading_under_the_legacy_fingerprint_is_recorded_under_the_current_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hit on a reading cached before 2026-11-14 records the current fingerprint, on the annotation and the entry.
+
+        A later comment edit in the word lists, which changes the legacy fingerprint, then reads nothing again.
+        """
+        from senselab.audio.workflows.triage.dataset_profile import (
+            activate_profile,
+            data_path,
+            deactivate_profile,
+            load_profile,
+        )
+        from senselab.audio.workflows.triage.review_inputs import (
+            LEXICON_FILE,
+            legacy_policy_fingerprint,
+            policy_fingerprint,
+        )
+        from senselab.utils.tasks.cached_inference import result_lookup, result_store
+        from tests.conftest import FIXTURE_PROFILE
+
+        first = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        key = _annotation(first)["result_cache"]["key"]
+        held = result_lookup(key)["result"]  # type: ignore[index]
+        legacy, current = legacy_policy_fingerprint(), policy_fingerprint()
+        assert legacy != current
+        earlier = {**held, review_module.POLICY_FINGERPRINT: legacy}
+        assert result_store(
+            key, earlier, process=review_module.REVIEW_PROCESS, model_id="s/m", commit_sha="a" * 40, replace=True
+        )
+        second = _annotation(self._reviewed(tmp_path, monkeypatch, []))
+        assert second["result_cache"] == {"key": key, "hit": True, "legacy_fingerprint": legacy, "restamped": True}
+        assert second[review_module.POLICY_FINGERPRINT] == current
+        entry = result_lookup(key)["result"]  # type: ignore[index]
+        assert entry[review_module.POLICY_FINGERPRINT] == current
+        assert review_module.POLICY_REPLACED not in entry and entry["reading"] == held["reading"]
+
+        lexicon = data_path(LEXICON_FILE).read_text(encoding="utf-8")
+        root = tmp_path / "commented"
+        root.mkdir()
+        manifest = {"name": "c", "version": "1", "extends": str(FIXTURE_PROFILE), "files": {LEXICON_FILE: "w.yaml"}}
+        (root / "profile.yaml").write_text(yaml.safe_dump(manifest))
+        (root / "w.yaml").write_text("# corrected wording\n" + lexicon, encoding="utf-8")
+        deactivate_profile()
+        activate_profile(load_profile(root))
+        assert (policy_fingerprint(), legacy_policy_fingerprint() != legacy) == (current, True)
+        third = _annotation(self._reviewed(tmp_path, monkeypatch, []))
+        assert third["result_cache"] == {"key": key, "hit": True}, "no reading again"
+        assert review_module.annotation_read_under_this_policy(second)
+
     def test_a_backfill_stamps_only_the_fingerprint_the_annotation_records(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1367,6 +1417,20 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
         review(store, off)
         state, why = carry_reading_forward(store, off, None, held, software=software)
         assert state == REVIEW_NEEDS_REREAD and why is not None and "policy" in why
+
+    def test_a_reading_carried_under_the_legacy_fingerprint_records_the_current_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The carried annotation records the current fingerprint, so a later comment edit carries it again."""
+        from senselab.audio.workflows.triage.review_inputs import legacy_policy_fingerprint, policy_fingerprint
+
+        store, held, software = self._read_then_retire(tmp_path, monkeypatch)
+        held.annotation.attributes[review_module.POLICY_FINGERPRINT] = legacy_policy_fingerprint()
+        off = load_triage_config(profile=ACTIVE)
+        review(store, off)
+        assert carry_reading_forward(store, off, None, held, software=software) == (REVIEW_CARRIED, None)
+        live = find_measurement(store, REDACTION_LLM_ANNOTATION)
+        assert live is not None and live.attributes[review_module.POLICY_FINGERPRINT] == policy_fingerprint()
 
     def test_a_replay_that_reads_again_keeps_its_own_reading(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
