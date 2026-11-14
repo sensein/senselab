@@ -146,7 +146,7 @@ from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY, RED
 from senselab.audio.workflows.triage.word_arbitration import arbitrate_words
 from senselab.audio.workflows.triage.workflow import OFF_IN_WORKFLOW, off_notes, require_stage
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
-from senselab.utils.prov_store import CHECKSUM_KEY, Entity, ProvStore, file_digest
+from senselab.utils.prov_store import CHECKSUM_KEY, MTIME_KEY, SIZE_KEY, Entity, ProvStore, file_digest
 from senselab.utils.subprocess_venv import record_venv_use
 
 RUN_SUBDIR = "run"
@@ -1090,9 +1090,11 @@ REFUSED = "refused"
 """A row whose recorded inputs say this replay or re-fold is almost certainly a mistake; nothing was written."""
 
 AUDIO_VERIFIED = "verified"
+AUDIO_STAT_MATCHED = "stat_matched"
 AUDIO_UNVERIFIED = "unverified"
 AUDIO_UNRECORDED = "unrecorded"
-"""Whether the recording was re-hashed and its digest matched ADMIT's, could not be read, or has no digest recorded."""
+"""Whether the recording was re-hashed and its digest matched ADMIT's, was not re-hashed because its size and
+modification time matched ADMIT's record, could not be read, or has no digest recorded."""
 
 HINT_GIVEN = "given"
 HINT_RECORDED = "recorded"
@@ -1199,7 +1201,8 @@ class ReplayInputs:
         hint_from: :data:`HINT_GIVEN`, :data:`HINT_RECORDED` or :data:`HINT_NONE`.
         changed: The hint fields that differ from the recorded hint (``metadata.<key>`` for metadata);
             ``[]`` when none, None when the store records no hint.
-        audio: :data:`AUDIO_VERIFIED`, :data:`AUDIO_UNVERIFIED` or :data:`AUDIO_UNRECORDED`.
+        audio: :data:`AUDIO_VERIFIED`, :data:`AUDIO_STAT_MATCHED`, :data:`AUDIO_UNVERIFIED` or
+            :data:`AUDIO_UNRECORDED`.
         profile: The recorded and current profile (name, version, digest) when they differ, else None.
     """
 
@@ -1259,6 +1262,7 @@ def _check_recording_and_profile(
     *,
     allow_profile_change: bool,
     source: Path | None,
+    hash_always: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
     """Checks 2 and 3 of :func:`check_replay_inputs`: the recording's digest and the profile's name.
 
@@ -1268,12 +1272,14 @@ def _check_recording_and_profile(
         config: The configuration now in use; None checks the recording alone.
         allow_profile_change: Accept a profile whose name differs from the run's.
         source: The recording to re-hash; None reads the one ``run.json`` names.
+        hash_always: Re-hash the recording even where its size and modification time match ADMIT's record.
 
     Returns:
         The audio state and the profile change, or None where the profile did not change.
 
-    The recording is always re-hashed: :data:`AUDIO_VERIFIED` means its digest matched ADMIT's, never that its size
-    and modification time did.
+    :data:`AUDIO_VERIFIED` means the recording's digest matched ADMIT's. Without ``hash_always``, a recording whose
+    size and modification time match ADMIT's record is not re-hashed and is :data:`AUDIO_STAT_MATCHED`; any other is
+    hashed.
 
     Raises:
         ReplayRefused: On a differing recording, or a profile name that differs without ``allow_profile_change``.
@@ -1282,8 +1288,17 @@ def _check_recording_and_profile(
     audio = AUDIO_UNRECORDED
     if recorded_digest:
         recording = source if source is not None else Path(str(log.get("source") or ""))
-        now = file_digest(recording)[0] if recording.is_file() else None
-        if now is None:
+        stat = recording.stat() if recording.is_file() else None
+        stat_matched = (
+            not hash_always
+            and stat is not None
+            and attributes.get(SIZE_KEY) == stat.st_size
+            and attributes.get(MTIME_KEY) == stat.st_mtime_ns
+        )
+        now = None if stat_matched or stat is None else file_digest(recording)[0]
+        if stat_matched:
+            audio = AUDIO_STAT_MATCHED
+        elif now is None:
             audio = AUDIO_UNVERIFIED
         elif now != recorded_digest:
             raise ReplayRefused(
@@ -1316,6 +1331,7 @@ def check_run_inputs(
     *,
     source: Path | None = None,
     allow_profile_change: bool = False,
+    hash_always: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
     """Checks 2 and 3 of :func:`check_replay_inputs` alone: the recording and the profile, not the hint.
 
@@ -1325,6 +1341,7 @@ def check_run_inputs(
         config: The configuration now in use; None checks the recording alone.
         source: The recording to re-hash; None reads the one ``run.json`` names.
         allow_profile_change: Accept a profile whose name differs from the run's.
+        hash_always: Re-hash even where size and modification time match (:func:`_check_recording_and_profile`).
 
     Returns:
         The audio state and the profile change, or None where the profile did not change.
@@ -1339,6 +1356,7 @@ def check_run_inputs(
         config,
         allow_profile_change=allow_profile_change,
         source=source,
+        hash_always=hash_always,
     )
 
 
@@ -1457,6 +1475,7 @@ def check_replay_inputs(
     allow_hint_change: bool = True,
     allow_identity_change: bool = False,
     source: Path | None = None,
+    hash_always: bool = False,
 ) -> ReplayInputs:
     """Check a finished run's recorded inputs before a replay or re-fold, and settle the hint it runs with.
 
@@ -1485,6 +1504,8 @@ def check_replay_inputs(
         allow_hint_change: Accept a hint that differs from the recorded one; False for a re-fold.
         allow_identity_change: Accept a replay hint that names another participant or session than the run records.
         source: The recording to re-hash; None reads the one ``run.json`` names.
+        hash_always: Re-hash the recording even where its size and modification time match ADMIT's record, so the
+            audio state is :data:`AUDIO_VERIFIED` only on a digest match; the replay driver passes it.
 
     Returns:
         What was checked, and the hint to run with.
@@ -1497,7 +1518,7 @@ def check_replay_inputs(
     attributes = record[0] if record is not None else {}
     log = _run_log(run_root)
     audio, profile = _check_recording_and_profile(
-        attributes, log, config, allow_profile_change=allow_profile_change, source=source
+        attributes, log, config, allow_profile_change=allow_profile_change, source=source, hash_always=hash_always
     )
     if not allow_hint_change:
         refusal = _refold_refusal(store, log, config, allow_profile_change=allow_profile_change)

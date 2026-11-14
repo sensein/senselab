@@ -31,6 +31,9 @@ symlinks. A stream a replayed node writes -- REDACT's ``redacted``, SPEECH's ``s
 never linked, so that write lands in the new root. Use it when the finished tree must not be
 modified.
 
+Every recording is re-hashed before its run is replayed: the row's ``audio`` is ``verified`` only where the digest
+matched ADMIT's (the other passes take a recording whose size and modification time match as ``stat_matched``).
+
 A store already carrying this configuration's and revision's replay marker is skipped and not rewritten,
 unless ``--force`` is given. A row whose store landed although a replayed node raised is ``errored``,
 not ``ok``, and names those nodes.
@@ -286,6 +289,7 @@ def replay_one(
             no_hint=no_hint,
             allow_profile_change=allow_profile_change,
             allow_identity_change=allow_identity_change,
+            hash_always=True,
         )
     except IdentityChangeRefused as refusal:
         return {"status": REFUSED, DERIVATION: str(refusal), "identity_refused": refusal.change}
