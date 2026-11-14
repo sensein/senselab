@@ -31,19 +31,19 @@ class TestFromTheStem:
     def test_each_entity_is_read_on_its_own(self) -> None:
         """``sub-`` and ``ses-`` are read wherever they sit; a lone participant keeps its folder and group."""
         cases = {
-            STEM: ("sub-a", "ses-b"),
-            "sub-a_acq-x_ses-b_task-loudness": ("sub-a", "ses-b"),
-            "sub-a_task-rainbow-passage": ("sub-a", None),
-            "ses-b_task-x": (None, "ses-b"),
-            "sub-_ses-_task-x": (None, None),
-            "plain-run-id": (None, None),
-            "": (None, None),
+            STEM: ("sub-a", "ses-b", "respiration-and-cough-fivebreaths"),
+            "sub-a_acq-x_ses-b_task-loudness": ("sub-a", "ses-b", "loudness"),
+            "sub-a_task-rainbow-passage": ("sub-a", None, "rainbow-passage"),
+            "ses-b_task-x": (None, "ses-b", "x"),
+            "sub-_ses-_task-x": (None, None, "x"),
+            "plain-run-id": (None, None, UNKNOWN_TASK),
+            "": (None, None, UNKNOWN_TASK),
         }
-        for stem, expected in cases.items():
+        for stem, (participant, session, family) in cases.items():
             identity = identity_from_name(stem)
-            assert (identity.participant, identity.session) == expected
-            assert identity.task_id == task_id_of(stem)
-            assert task_family(identity.task_id) == task_family(task_id_of(stem))
+            assert (identity.participant, identity.session) == (participant, session), stem
+            assert identity.task_id == task_id_of(stem), stem
+            assert task_family(identity.task_id) == family, stem
         assert identity_from_name("sub-a_task-x").session_key is None
 
     def test_a_stem_with_no_task_entity_declares_none(self) -> None:
