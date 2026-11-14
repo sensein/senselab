@@ -30,7 +30,7 @@ import statistics
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Collection, Iterator, Mapping, Sequence
 
@@ -1137,6 +1137,37 @@ IDENTITY_GUARDED_FIELDS = ("participant", "session")
 """The recorded identity fields a replay's hint may not move without ``allow_identity_change``; a task may move."""
 
 
+def replayed_identity(
+    hint: AudioHints | None,
+    recorded: RecordingIdentity | None,
+    *,
+    stem: str | None = None,
+    corpus_path: str | None = None,
+) -> RecordingIdentity:
+    """The identity a replay leaves a run with: the hint's, keeping each guarded field the hint does not declare.
+
+    Args:
+        hint: The hint the replay runs with.
+        recorded: The identity the run records, or None.
+        stem: As :func:`~senselab.audio.workflows.triage.identity.identity_of`.
+        corpus_path: As :func:`~senselab.audio.workflows.triage.identity.identity_of`.
+
+    Returns:
+        The hint's identity, with the recorded participant and session (and their sources) where the hint
+        declares none.
+    """
+    declared = identity_of(hint, stem=stem, corpus_path=corpus_path)
+    if recorded is None:
+        return declared
+    kept = {name: getattr(recorded, name) for name in IDENTITY_GUARDED_FIELDS if getattr(declared, name) is None}
+    kept = {name: value for name, value in kept.items() if value is not None}
+    if not kept:
+        return declared
+    sources = dict(declared.sources)
+    sources.update({name: recorded.sources[name] for name in kept if name in recorded.sources})
+    return replace(declared, sources=sources, **kept)
+
+
 class IdentityChangeRefused(ReplayRefused):
     """A replay whose hint names another participant or session than the run records.
 
@@ -1437,11 +1468,11 @@ def check_replay_inputs(
     hint is given; a run recording no identity whose hint declares none (plan step 6a), or whose hint declares one
     that cannot be built; a changed hint, unless ``allow_hint_change``; a replay whose hint names another participant
     or session than the run records (:class:`IdentityChangeRefused`), unless ``allow_identity_change`` (a run that
-    records no identity yet, and a changed task, are not refused). A re-fold (``allow_hint_change`` False) is
-    refused too where the store records no hint to compare its hint with (replay the run first), and where the
-    run's decisions were taken under another profile (unless ``allow_profile_change``) or another set of stages off
-    (:func:`decided_under`), since VERDICT would re-score the old reports. Anything else is accepted and recorded on
-    :class:`ReplayInputs`.
+    records no identity yet, a field the hint does not declare, and a changed task, are not refused). A re-fold
+    (``allow_hint_change`` False) is refused too where the store records no hint to compare its hint with (replay
+    the run first), and where the run's decisions were taken under another profile (unless
+    ``allow_profile_change``) or another set of stages off (:func:`decided_under`), since VERDICT would re-score the
+    old reports. Anything else is accepted and recorded on :class:`ReplayInputs`.
 
     Args:
         store: The run's store.
@@ -1515,7 +1546,7 @@ def check_replay_inputs(
         change = {
             name: {"from": getattr(recorded, name), "to": getattr(declared, name)}
             for name in IDENTITY_GUARDED_FIELDS
-            if getattr(declared, name) != getattr(recorded, name)
+            if getattr(declared, name) is not None and getattr(declared, name) != getattr(recorded, name)
         }
         if change:
             moved = ", ".join(f"{name} {each['from']!r} -> {each['to']!r}" for name, each in change.items())
@@ -1558,7 +1589,7 @@ def record_moved(store: ProvStore, hint: AudioHints | None) -> bool:
     recorded = identity_from_attributes(attributes)
     if recorded is None:
         return True
-    declared = identity_of(hint)
+    declared = replayed_identity(hint, recorded)
     if any(getattr(declared, name) != getattr(recorded, name) for name in RECORDED_IDENTITY_FIELDS):
         return True
     return any(attributes.get(key) != value for key, value in task_attributes(hint).items() if key != TASK_EXPECTS)
@@ -1571,10 +1602,11 @@ RECORDED_IDENTITY_FIELDS = ("participant", "session", "task_id", "target_speaker
 def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software: str) -> str | None:
     """Record the replay's hint and the identity it declares as the run's, retiring the record it replaces.
 
-    The identity is the hint's (:func:`~senselab.audio.workflows.triage.identity.identity_of`); nothing is read off
-    a file name (plan step 6a). :func:`check_replay_inputs` has already refused a run that records no identity and
-    a hint that declares none. A target speaker or recording id the replay's hint no longer declares is dropped,
-    but for an id ADMIT read off the corpus path, which a replay is not given and keeps (plan step 9b).
+    The identity is the hint's (:func:`replayed_identity`), keeping the recorded participant and session where the
+    hint declares none; nothing is read off a file name (plan step 6a). :func:`check_replay_inputs` has already
+    refused a run that records no identity and a hint that declares none. A target speaker or recording id the
+    replay's hint no longer declares is dropped, but for an id ADMIT read off the corpus path, which a replay is not
+    given and keeps (plan step 9b).
 
     Where ADMIT refused the recording and wrote no stream, the identity is recorded on the replay's own
     :data:`~senselab.audio.workflows.triage.identity.IDENTITY_RECORDED_STEP` activity, with the ``audio_file`` ADMIT
@@ -1592,11 +1624,14 @@ def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software:
     entity = recording_entity(store)
     if entity is None:
         return _record_refused_identity(store, hint, software=software)
-    corpus_path = corpus_path_recorded(identity_from_attributes(entity.attributes))
+    recorded = identity_from_attributes(entity.attributes)
+    corpus_path = corpus_path_recorded(recorded)
     kept = {k: v for k, v in entity.attributes.items() if k not in (DECLARED_TARGET_SPEAKER, DECLARED_RECORDING_ID)}
     attributes = {
         **kept,
-        **identity_of(hint, stem=_admitted_stem(store, entity), corpus_path=corpus_path).as_attributes(),
+        **replayed_identity(
+            hint, recorded, stem=_admitted_stem(store, entity), corpus_path=corpus_path
+        ).as_attributes(),
         **hint_attributes(hint),
         **task_attributes(hint),
         "replaces": entity.id,
@@ -1618,13 +1653,14 @@ def _record_refused_identity(store: ProvStore, hint: AudioHints | None, *, softw
     if record is None or not record[1]:
         return None
     attributes, audio_file = record
-    corpus_path = corpus_path_recorded(identity_from_attributes(attributes))
+    recorded = identity_from_attributes(attributes)
+    corpus_path = corpus_path_recorded(recorded)
     activity = store.activity(
         node=REPLAY_NODE,
         step=IDENTITY_RECORDED_STEP,
         parameters={
             "audio_file": audio_file,
-            **identity_of(hint, stem=Path(audio_file).stem, corpus_path=corpus_path).as_attributes(),
+            **replayed_identity(hint, recorded, stem=Path(audio_file).stem, corpus_path=corpus_path).as_attributes(),
             **hint_attributes(hint),
             **task_attributes(hint),
         },

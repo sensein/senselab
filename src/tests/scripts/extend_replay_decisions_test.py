@@ -1057,6 +1057,45 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         inputs = _checked(root, hint=hint_for("p01", "s1", "rainbow-passage"), hint_given=True)
         assert inputs.hint_from == HINT_GIVEN and inputs.changed
 
+    def _replayed(self, root: Path, hint: AudioHints | None, **kwargs: Any) -> ProvStore:  # noqa: ANN401
+        config = load_triage_config()
+        store = read_store(root, run_id=replay_run_id(root, config.config_hash))
+        inputs = check_replay_inputs(store, root, config, hint=hint, **kwargs)
+        replay_decisions(
+            store,
+            config,
+            inputs.hint,
+            run_dir=root / "run",
+            artifacts_dir=root / "released",
+            summary_dir=root / "summary",
+            inputs=inputs,
+        )
+        return store
+
+    def test_no_hint_keeps_the_recorded_participant_and_session(self, tmp_path: Path) -> None:
+        """--no-hint declares nothing, which is not a change: not refused, and the identity is not cleared."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=self.HINT)
+        store = self._replayed(root, None, hint_given=False, no_hint=True)
+        recorded = recorded_identity(store)
+        assert recorded is not None and (recorded.participant, recorded.session) == ("p01", "s1")
+        assert {"participant", "session"} <= set(recorded.sources)
+
+    def test_a_hint_declaring_only_the_task_keeps_the_participant_and_session(self, tmp_path: Path) -> None:
+        """A task-only hint moves the task and leaves the recorded participant and session standing."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=self.HINT)
+        store = self._replayed(root, hint_for(task="rainbow-passage"), hint_given=True)
+        recorded = recorded_identity(store)
+        assert recorded is not None and (recorded.participant, recorded.session) == ("p01", "s1")
+        assert recorded.task_id == "rainbow-passage"
+        assert (
+            cli.replay_identity(
+                identity_of(self.HINT), root.name, hint_for(task="rainbow-passage"), hint_given=True
+            ).participant
+            == "p01"
+        )
+
     def test_a_refold_with_an_unchanged_hint_is_not_refused(self, tmp_path: Path) -> None:
         """A re-fold records no identity, so the guard does not apply to it."""
         root = tmp_path / "rec-0001_20260920-030808"

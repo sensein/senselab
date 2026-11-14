@@ -84,6 +84,7 @@ from senselab.audio.workflows.triage.extend import (
     read_store,
     replay_decisions,
     replay_run_id,
+    replayed_identity,
     run_root_of,
     source_of,
     take_slice,
@@ -211,11 +212,13 @@ def replay_identity(
         hint_given: Whether a hint was given (``--hints``).
 
     Returns:
-        The given hint's identity; else the one the run records; else an identity declaring nothing (a run that
-        records none; the replay refuses such a run unless its hint declares one).
+        The given hint's identity, keeping the recorded participant and session where it declares none
+        (:func:`~senselab.audio.workflows.triage.extend.replayed_identity`); else the one the run records; else an
+        identity declaring nothing (a run that records none; the replay refuses such a run unless its hint declares
+        one).
     """
     if hint_given:
-        return identity_of(hint)
+        return replayed_identity(hint, recorded)
     return recorded if recorded is not None else identity_of(None)
 
 
