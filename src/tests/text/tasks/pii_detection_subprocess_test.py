@@ -65,7 +65,11 @@ def fake_venv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 class _SubprocessRecorder:
-    """Records calls + returns canned JSON output. Mirrors subprocess.run's signature."""
+    """Records calls + returns canned JSON output. Mirrors subprocess.run's signature.
+
+    A response that reports GLiNER loaded and carries no ``gliner_revision`` is given the commit the request named,
+    as the shipped worker reports it; a test of the unreported case sets ``gliner_revision`` to None explicitly.
+    """
 
     def __init__(self, response: dict[str, Any]) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -84,9 +88,12 @@ class _SubprocessRecorder:
     ) -> subprocess.CompletedProcess:
         parsed_input = json.loads(input) if input else {}
         self.calls.append({"argv": argv, "input": parsed_input, "timeout": timeout})
-        response = self._response_json
+        answer = json.loads(self._response_json)
         if self.input_hook is not None:
-            response = json.dumps(self.input_hook(parsed_input))
+            answer = self.input_hook(parsed_input)
+        if DETECTOR_GLINER in (answer.get("detectors_used") or []) and "gliner_revision" not in answer:
+            answer = {**answer, "gliner_revision": parsed_input.get("gliner_revision")}
+        response = json.dumps(answer)
         return subprocess.CompletedProcess(args=argv, returncode=0, stdout=response, stderr="")
 
 
@@ -591,6 +598,35 @@ def test_a_worker_that_loaded_another_commit_is_refused(
     assert first["spans_by_asr"]["whisper"] == [spans[1]], "a refused detector's findings are not reported"
     assert first["gliner_revision"] is None, "no commit is recorded for a detector that was refused"
     assert len(recorder.calls) == 2 and again["cache"]["whisper"]["hit"] is False, "an incomplete scan is not cached"
+
+
+def test_a_worker_that_names_no_commit_for_a_loaded_detector_is_refused(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GLiNER reported loaded with no commit fails closed, as a mismatch does: failed, findings dropped, not cached."""
+    spans = [
+        {"text": "Alice", "category": "PERSON", "source": "gliner/person", "score": 0.9},
+        {"text": "Boston", "category": "LOCATION", "source": "presidio", "score": 0.8},
+    ]
+    recorder = _SubprocessRecorder(
+        {
+            "spans_by_asr": {"whisper": spans},
+            "failures": {},
+            "detectors_used": ["presidio", "gliner"],
+            "gliner_revision": None,
+        }
+    )
+    monkeypatch.setattr(subprocess, "run", recorder)
+    both = [DETECTOR_PRESIDIO, DETECTOR_GLINER]
+
+    first = detect_pii_via_subprocess({"whisper": "Alice lives in Boston."}, detectors=both)
+    again = detect_pii_via_subprocess({"whisper": "Alice lives in Boston."}, detectors=both)
+
+    assert first["failures"][DETECTOR_GLINER].startswith("RevisionMismatch: the worker named no commit")
+    assert first["detectors_used"] == [DETECTOR_PRESIDIO]
+    assert first["spans_by_asr"]["whisper"] == [spans[1]]
+    assert first["gliner_revision"] is None
+    assert len(recorder.calls) == 2 and again["cache"]["whisper"]["hit"] is False
 
 
 # ── Offline staging from the HF cache ────────────────────────────────
