@@ -21,12 +21,14 @@ from typing import Any
 import numpy as np
 import pytest
 import soundfile as sf
+import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.data_structures import Audio, AudioHints, ExpectedSpeech
 from senselab.audio.data_structures.audio_hints import SpeakerEmbeddingProvenance, TargetSpeakerEmbedding
 from senselab.audio.workflows.triage import extend as extend_module
 from senselab.audio.workflows.triage.background_model import write_view_arrays
 from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
+from senselab.audio.workflows.triage.dataset_profile import deactivate_profile
 from senselab.audio.workflows.triage.extend import (
     AUDIO_STAT_MATCHED,
     AUDIO_UNVERIFIED,
@@ -36,6 +38,7 @@ from senselab.audio.workflows.triage.extend import (
     HINT_GIVEN,
     HINT_RECORDED,
     OFF_STAGES_KEY,
+    PROFILE_KEY,
     REPLAY_MARKER_STEP,
     REPLAY_NODE,
     REPLAYED_NODES,
@@ -85,6 +88,7 @@ from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, Outcome
 from senselab.audio.workflows.triage.workflow import OFF_IN_WORKFLOW
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import hint_for
+from tests.conftest import FIXTURE_PROFILE
 
 pytestmark = pytest.mark.usefixtures("triage_profile")
 """The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
@@ -882,6 +886,62 @@ class TestTheReplayChecksTheRunsRecord:
         assert decided_under(store, {"notes": {"REDACT": OFF_IN_WORKFLOW}})[1] == frozenset({"REDACT"})
         store.activity(node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters={OFF_STAGES_KEY: []})
         assert decided_under(store, {"notes": {"REDACT": OFF_IN_WORKFLOW}}) == (None, frozenset())
+
+    def test_a_marker_s_profile_speaks_for_its_decisions_over_run_json(self, tmp_path: Path) -> None:
+        """The profile a marker records is the one its decisions were taken under, whatever run.json says."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root)
+        store = read_store(root)
+        recorded = {"name": "p", "version": "1", "digest": "legacy"}
+        log = {"config": {"profile": recorded}}
+        assert decided_under(store, log)[0] == recorded
+        now = {"name": "p", "version": "1", "digest": "current"}
+        store.activity(node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters={PROFILE_KEY: now})
+        assert decided_under(store, log)[0] == now
+        store.activity(node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters={"profile_change": None})
+        assert decided_under(store, log)[0] == recorded, "a marker from before 2026-11-14 that recorded no change"
+
+    def test_a_legacy_run_replayed_once_takes_a_later_comment_edit_as_no_change(self, tmp_path: Path) -> None:
+        """Recorded under the byte digest; one replay records the current one, so a comment edit is no change."""
+        profile_root = tmp_path / "profile"
+        profile_root.mkdir()
+        manifest = yaml.safe_dump({"name": "extends-fixture", "version": "1", "extends": str(FIXTURE_PROFILE)})
+        (profile_root / "profile.yaml").write_text(manifest)
+        deactivate_profile()
+        config = load_triage_config(profile=profile_root)
+        assert config.profile is not None and config.profile.legacy_digest != config.profile.digest
+        root = tmp_path / "rec-0001_20260920-030808"
+        source = _seed_run(root, hint=HINT_COUGH)
+        legacy = {"name": "extends-fixture", "version": "1", "digest": config.profile.legacy_digest}
+        log = {"source": str(source), "config": {"profile": legacy}}
+        (root / "run" / "run.json").write_text(json.dumps(log))
+        store = read_store(root, run_id=replay_run_id(root, config.config_hash))
+        inputs = check_replay_inputs(store, root, config, hint=HINT_COUGH, hint_given=True)
+        assert inputs.profile is None, "the legacy digest names the unchanged profile"
+        outcome = replay_decisions(
+            store,
+            config,
+            inputs.hint,
+            run_dir=root / "run",
+            artifacts_dir=root / "released",
+            summary_dir=root / "summary",
+            inputs=inputs,
+        )
+        current = {"name": "extends-fixture", "version": "1", "digest": config.profile.digest}
+        assert store.get_activity(outcome.marker).parameters[PROFILE_KEY] == current
+
+        (profile_root / "profile.yaml").write_text("# corrected wording\n" + manifest)
+        deactivate_profile()
+        edited = load_triage_config(profile=profile_root)
+        assert edited.profile is not None and edited.profile.legacy_digest != config.profile.legacy_digest
+        assert edited.config_hash == config.config_hash
+        before = read_store(root)
+        with pytest.raises(ReplayRefused, match="replay the run instead"):
+            check_replay_inputs(before, root, edited, hint=HINT_COUGH, hint_given=True, allow_hint_change=False)
+        refold = check_replay_inputs(store, root, edited, hint=HINT_COUGH, hint_given=True, allow_hint_change=False)
+        assert refold.profile is None, "no --allow-profile-change, and not recorded as a change"
+        assert check_replay_inputs(store, root, edited, hint=HINT_COUGH, hint_given=True).profile is None
+        assert decided_under(store, log)[0] == current
 
     def test_a_hint_whose_identity_cannot_be_built_is_refused_not_raised(self, tmp_path: Path) -> None:
         """A label that cannot name a folder refuses this row; the rest of the slice goes on (review K4)."""

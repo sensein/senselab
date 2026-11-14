@@ -1203,7 +1203,8 @@ class ReplayInputs:
             ``[]`` when none, None when the store records no hint.
         audio: :data:`AUDIO_VERIFIED`, :data:`AUDIO_STAT_MATCHED`, :data:`AUDIO_UNVERIFIED` or
             :data:`AUDIO_UNRECORDED`.
-        profile: The recorded and current profile (name, version, digest) when they differ, else None.
+        profile: The profile (name, version, digest) the decisions were last taken under (:func:`decided_under`)
+            and the current one, when they differ, else None.
     """
 
     hint: AudioHints | None
@@ -1256,6 +1257,7 @@ def _same_profile(recorded: Mapping[str, Any] | None, profile: DatasetProfile | 
 
 
 def _check_recording_and_profile(
+    store: ProvStore,
     attributes: Mapping[str, Any],
     log: Mapping[str, Any],
     config: TriageConfig | None,
@@ -1266,7 +1268,11 @@ def _check_recording_and_profile(
 ) -> tuple[str, dict[str, Any] | None]:
     """Checks 2 and 3 of :func:`check_replay_inputs`: the recording's digest and the profile's name.
 
+    The profile compared is the one the store's live decisions were last taken under (:func:`decided_under`): the
+    run's, or the latest replay or re-fold marker's.
+
     Args:
+        store: The run's store.
         attributes: What ADMIT recorded.
         log: The run's ``run.json``.
         config: The configuration now in use; None checks the recording alone.
@@ -1308,7 +1314,7 @@ def _check_recording_and_profile(
             audio = AUDIO_VERIFIED
     if config is None:
         return audio, None
-    recorded_profile = _profile_fields((log.get("config") or {}).get("profile"))
+    recorded_profile = decided_under(store, log)[0]
     current_profile = _profile_fields(config.profile)
     profile = None
     if recorded_profile is not None:
@@ -1351,6 +1357,7 @@ def check_run_inputs(
     """
     record = admit_record(store)
     return _check_recording_and_profile(
+        store,
         record[0] if record is not None else {},
         _run_log(run_root),
         config,
@@ -1408,8 +1415,11 @@ def read_checked_store(
 def decided_under(store: ProvStore, log: Mapping[str, Any]) -> tuple[dict[str, Any] | None, frozenset[str] | None]:
     """The profile and the stages off that the store's live decisions were last taken under.
 
-    The run's ``run.json`` names both as the run made them; a later replay or re-fold marker that records them
-    (``profile_change``, ``off_stages``) speaks for the decisions it took.
+    The run's ``run.json`` names both as the run made them; a later replay or re-fold marker speaks for the decisions
+    it took: the profile it records (:data:`PROFILE_KEY`), else, on a marker written before 2026-11-14, the profile its
+    ``profile_change`` moved to, else the run's; and the stages off it records (``off_stages``). So a run whose
+    ``run.json`` names its profile by the digest taken before 2026-11-14 is named by the current digest after one
+    replay or re-fold, and a later comment edit in the profile is no change.
 
     Args:
         store: The run's store.
@@ -1431,7 +1441,10 @@ def decided_under(store: ProvStore, log: Mapping[str, Any]) -> tuple[dict[str, A
         if (activity.node, activity.step) not in ((REPLAY_NODE, REPLAY_MARKER_STEP), (REFOLD_NODE, REFOLD_MARKER_STEP)):
             continue
         change = activity.parameters.get("profile_change")
-        profile = _profile_fields(change.get("now")) if isinstance(change, Mapping) else run_profile
+        if PROFILE_KEY in activity.parameters:
+            profile = _profile_fields(activity.parameters[PROFILE_KEY])
+        else:
+            profile = _profile_fields(change.get("now")) if isinstance(change, Mapping) else run_profile
         stages = activity.parameters.get(OFF_STAGES_KEY)
         if isinstance(stages, list):
             off = frozenset(str(stage) for stage in stages)
@@ -1440,6 +1453,11 @@ def decided_under(store: ProvStore, log: Mapping[str, Any]) -> tuple[dict[str, A
 
 OFF_STAGES_KEY = "off_stages"
 """The marker parameter naming the stages the workflow left off for the decisions the replay or re-fold took."""
+
+PROFILE_KEY = "profile"
+"""The marker parameter naming the profile (name, version, digest) the replay or re-fold took its decisions under, as
+the digest is taken now; None where it ran with no profile. A marker written before 2026-11-14 records only a
+``profile_change``."""
 
 
 def _refold_refusal(
@@ -1479,7 +1497,8 @@ def check_replay_inputs(
     """Check a finished run's recorded inputs before a replay or re-fold, and settle the hint it runs with.
 
     Refused: a recording whose bytes differ from the digest ADMIT recorded; a profile whose name differs
-    from the run's, or none where the run had one, unless ``allow_profile_change``; no hint given where the
+    from the one the run's decisions were last taken under (:func:`decided_under`), or none where that had one,
+    unless ``allow_profile_change``; no hint given where the
     store records none, unless ``no_hint``; a store that records no task (written before ADMIT recorded one),
     unless a hint is given or ``no_hint``, since its recorded hint names no task and every branch would take its
     out-of-family mode; a recorded hint that carried a ``target_speaker`` (only its digest is stored), unless a
@@ -1517,6 +1536,7 @@ def check_replay_inputs(
     attributes = record[0] if record is not None else {}
     log = _run_log(run_root)
     audio, profile = _check_recording_and_profile(
+        store,
         attributes,
         log,
         config,
@@ -1860,6 +1880,7 @@ def refold_verdict(
             "commit": commit,
             **(inputs.marker_parameters() if inputs is not None else {"hint_digest": hint_digest(hint)}),
             OFF_STAGES_KEY: sorted(off_notes(config.values)),
+            PROFILE_KEY: _profile_fields(config.profile),
         },
     )
     store.was_associated_with(marker, software)
@@ -2092,6 +2113,7 @@ def replay_decisions(
             "identity_change": identity_change,
             CORPUS_INPUTS_KEY: corpus_inputs_digest(store),
             OFF_STAGES_KEY: sorted(off_notes(config.values)),
+            PROFILE_KEY: _profile_fields(config.profile),
         },
     )
     store.was_associated_with(marker, software)
