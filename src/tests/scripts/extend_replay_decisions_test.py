@@ -351,9 +351,7 @@ def test_the_mirror_links_the_runs_log_so_later_passes_check_its_record(tmp_path
     assert (mirrored / "run" / "run.json").is_symlink()
     assert (mirrored / "run" / "run.json").read_text() == (root / "run" / "run.json").read_text()
     store = read_store(root)
-    checked = check_replay_inputs(
-        store, mirrored, load_triage_config(profile=ACTIVE), hint=None, hint_given=False, hash_always=True
-    )
+    checked = check_replay_inputs(store, mirrored, load_triage_config(profile=ACTIVE), hint=None, hint_given=False)
     assert checked.audio == AUDIO_VERIFIED
 
 
@@ -716,7 +714,7 @@ class TestTheReplayChecksTheRunsRecord:
         """Re-hashed, it matches what ADMIT recorded."""
         root = tmp_path / "rec-0001_20260920-030808"
         _seed_run(root)
-        assert _checked(root, hash_always=True).audio == AUDIO_VERIFIED
+        assert _checked(root).audio == AUDIO_VERIFIED
 
     def test_a_different_recording_is_refused(self, tmp_path: Path) -> None:
         """Bytes that differ from the record are a different recording."""
@@ -1317,11 +1315,11 @@ class TestTheRecordingCheck:
     """Replay always re-hashes; the other passes take a matching size and mtime as ``stat_matched`` (#613-1)."""
 
     def test_replay_hashes_an_unchanged_recording(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Size and modification time as ADMIT recorded them still send a replay's check to the bytes."""
+        """Size and modification time as ADMIT recorded them still send the library replay check to the bytes."""
         root = tmp_path / "rec-0001_20260920-030808"
         source = _seed_run(root)
         hashed = _counting_digests(monkeypatch)
-        assert _checked(root, hash_always=True).audio == AUDIO_VERIFIED
+        assert _checked(root).audio == AUDIO_VERIFIED
         assert hashed == [source]
 
     def test_replay_refuses_other_bytes_of_the_same_size_and_time(self, tmp_path: Path) -> None:
@@ -1329,10 +1327,20 @@ class TestTheRecordingCheck:
         root = tmp_path / "rec-0001_20260920-030808"
         _substitute_keeping_stat(_seed_run(root))
         with pytest.raises(ReplayRefused, match="digest differs"):
-            _checked(root, hash_always=True)
+            _checked(root)
+
+    def test_a_refold_records_a_matching_stat_as_stat_matched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same check as a re-fold (allow_hint_change False) does not re-hash a recording whose stat matches."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root, hint=HINT_COUGH)
+        hashed = _counting_digests(monkeypatch)
+        assert _checked(root, hint=HINT_COUGH, hint_given=True, allow_hint_change=False).audio == AUDIO_STAT_MATCHED
+        assert hashed == []
 
     def test_the_replay_driver_hashes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The driver passes the replay's always-hash, so the substitute's row is refused."""
+        """The driver's replay check hashes too, so the substitute's row is refused."""
         root = tmp_path / "rec-0001_20260920-030808"
         _substitute_keeping_stat(_seed_run(root))
         monkeypatch.setattr(cli, "replay_decisions", _stub_replay({}))

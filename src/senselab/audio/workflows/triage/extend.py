@@ -1475,7 +1475,6 @@ def check_replay_inputs(
     allow_hint_change: bool = True,
     allow_identity_change: bool = False,
     source: Path | None = None,
-    hash_always: bool = False,
 ) -> ReplayInputs:
     """Check a finished run's recorded inputs before a replay or re-fold, and settle the hint it runs with.
 
@@ -1504,11 +1503,11 @@ def check_replay_inputs(
         allow_hint_change: Accept a hint that differs from the recorded one; False for a re-fold.
         allow_identity_change: Accept a replay hint that names another participant or session than the run records.
         source: The recording to re-hash; None reads the one ``run.json`` names.
-        hash_always: Re-hash the recording even where its size and modification time match ADMIT's record, so the
-            audio state is :data:`AUDIO_VERIFIED` only on a digest match; the replay driver passes it.
 
     Returns:
-        What was checked, and the hint to run with.
+        What was checked, and the hint to run with. A replay (``allow_hint_change``) always re-hashes the recording,
+        so its audio state is :data:`AUDIO_VERIFIED` only on a digest match; a re-fold takes a recording whose size
+        and modification time match ADMIT's record as :data:`AUDIO_STAT_MATCHED`.
 
     Raises:
         IdentityChangeRefused: For a participant or session change without ``allow_identity_change``.
@@ -1518,7 +1517,12 @@ def check_replay_inputs(
     attributes = record[0] if record is not None else {}
     log = _run_log(run_root)
     audio, profile = _check_recording_and_profile(
-        attributes, log, config, allow_profile_change=allow_profile_change, source=source, hash_always=hash_always
+        attributes,
+        log,
+        config,
+        allow_profile_change=allow_profile_change,
+        source=source,
+        hash_always=allow_hint_change,
     )
     if not allow_hint_change:
         refusal = _refold_refusal(store, log, config, allow_profile_change=allow_profile_change)

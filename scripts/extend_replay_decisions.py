@@ -289,7 +289,6 @@ def replay_one(
             no_hint=no_hint,
             allow_profile_change=allow_profile_change,
             allow_identity_change=allow_identity_change,
-            hash_always=True,
         )
     except IdentityChangeRefused as refusal:
         return {"status": REFUSED, DERIVATION: str(refusal), "identity_refused": refusal.change}
