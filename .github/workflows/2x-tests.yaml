@@ -70,11 +70,12 @@ jobs:
     needs: detect
     name: core-only (${{ matrix.python-version }})
     timeout-minutes: 26
+    continue-on-error: ${{ matrix.python-version == '3.15' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ (inputs.ref != '' || contains(github.event.pull_request.labels.*.name, 'full-matrix')) && fromJSON('["3.11","3.12","3.13","3.14"]') || fromJSON('["3.13"]') }}
+        python-version: ${{ (inputs.ref != '' || contains(github.event.pull_request.labels.*.name, 'full-matrix')) && fromJSON('["3.11","3.12","3.13","3.14","3.15"]') || fromJSON('["3.13"]') }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -134,11 +135,12 @@ jobs:
     needs: detect
     name: senselab-lean (${{ matrix.python-version }})
     timeout-minutes: 19
+    continue-on-error: ${{ matrix.python-version == '3.15' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ (inputs.ref != '' || contains(github.event.pull_request.labels.*.name, 'full-matrix')) && fromJSON('["3.11","3.12","3.13","3.14"]') || fromJSON('["3.13"]') }}
+        python-version: ${{ (inputs.ref != '' || contains(github.event.pull_request.labels.*.name, 'full-matrix')) && fromJSON('["3.11","3.12","3.13","3.14","3.15"]') || fromJSON('["3.13"]') }}
     steps:
     - uses: actions/checkout@v5
       with:

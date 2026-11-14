@@ -1,6 +1,6 @@
 name: 2x-nightly
 
-# The full 3.11-3.14 matrix of 2x-tests.yaml plus the model-free limits tier. GitHub runs `schedule` only from the
+# The full 3.11-3.15 matrix of 2x-tests.yaml plus the model-free limits tier. GitHub runs `schedule` only from the
 # default branch, so the schedule lives in 2x-nightly-schedule.yaml there, which calls this file at 2.x (`workflow_call`,
 # with `ref`). Without `ref` the run tests the commit it started on:
 #   - a push to a `2x/full-matrix/**` branch, which needs no default-branch copy of this file:
