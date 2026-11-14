@@ -9,6 +9,9 @@ from typing import Any
 
 import pytest
 
+from senselab.audio.workflows.triage.dataset_profile import active_profile
+from senselab.audio.workflows.triage.extend import activate_in_worker
+
 rows_driver = importlib.import_module("senselab.audio.workflows.triage.drivers.triage_review_rows")
 
 
@@ -101,6 +104,37 @@ def test_split_hands_its_workers_the_drivers_profile(tmp_path: Path, monkeypatch
     rows = _write_jsonl(tmp_path / "rows.jsonl", [_row("one", tmp_path)])
     argv = ["split", str(rows), "--out-dir", str(tmp_path / "out"), "--workers", "2", "--profile", str(FIXTURE_PROFILE)]
     assert rows_driver.main(argv) == 0
-    override, profile = seen["worker_config"]
-    assert seen["workers"] == 2 and override is None
+    override, profile, digest, config_hash = seen["worker_config"]
+    assert seen["workers"] == 2 and override is None and config_hash is not None
     assert profile is not None and Path(profile).resolve() == Path(FIXTURE_PROFILE).resolve()
+    active = active_profile()
+    assert active is not None and digest == active.digest
+
+
+def test_split_pool_hands_each_worker_the_profile_active_here(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    triage_profile: Any,  # noqa: ANN401 -- the fixture's profile
+) -> None:
+    """Called with no worker configuration, the pool's initializer gets this process's profile and its digest."""
+    seen: dict[str, Any] = {}
+
+    class _Pool:
+        def __init__(self, workers: int, *, initializer: Any, initargs: Any) -> None:  # noqa: ANN401
+            seen.update(initializer=initializer, initargs=initargs)
+
+        def __enter__(self) -> _Pool:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def map(self, one: Any, rows: list[dict[str, Any]], chunksize: int = 1) -> list[tuple[dict[str, Any], str]]:  # noqa: ANN401
+            return [(row, rows_driver.NOWORDS) for row in rows]
+
+    monkeypatch.setattr(rows_driver, "ProcessPoolExecutor", _Pool)
+    rows = _write_jsonl(tmp_path / "rows.jsonl", [_row("one", tmp_path), _row("two", tmp_path)])
+    rows_driver.split_rows([rows], tmp_path / "out", workers=2)
+    active = active_profile()
+    assert active is not None and seen["initializer"] is activate_in_worker
+    assert seen["initargs"] == (None, str(active.root), active.digest, None)

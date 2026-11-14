@@ -40,9 +40,11 @@ from senselab.audio.workflows.triage.extend import (
     REVIEW_NEEDS_REREAD,
     REVIEW_READ,
     SLICES_SUBDIR,
+    WorkerConfig,
     activate_in_worker,
     add_config_arguments,
     driver_config,
+    pool_initargs,
     read_manifest,
     read_store,
     run_root_of,
@@ -177,7 +179,7 @@ def split_rows(
     out_dir: Path,
     *,
     workers: int,
-    worker_config: tuple[str | None, str | None] = (None, None),
+    worker_config: WorkerConfig | None = None,
 ) -> dict[str, Any]:
     """Split rows into the words and nowords lists.
 
@@ -189,7 +191,8 @@ def split_rows(
         out_dir: Where the lists go.
         workers: Processes to read stores with.
         worker_config: :func:`~senselab.audio.workflows.triage.extend.worker_arguments` of the driver's configuration,
-            activated in each worker.
+            activated in each worker; None hands each worker the profile active here
+            (:func:`~senselab.audio.workflows.triage.extend.pool_initargs`).
 
     Returns:
         The counts written to ``split.counts.json``.
@@ -202,7 +205,9 @@ def split_rows(
                 seen.add(str(row["stem"]))
                 rows.append(row)
     if workers > 1 and rows:
-        with ProcessPoolExecutor(workers, initializer=activate_in_worker, initargs=worker_config) as pool:
+        with ProcessPoolExecutor(
+            workers, initializer=activate_in_worker, initargs=pool_initargs(worker_config)
+        ) as pool:
             results = list(pool.map(classify, rows, chunksize=8))
     else:
         results = [classify(row) for row in rows]
