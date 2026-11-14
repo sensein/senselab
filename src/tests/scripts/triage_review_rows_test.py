@@ -60,14 +60,15 @@ def test_split_follows_the_reviewers_words_test(tmp_path: Path, monkeypatch: pyt
     redact = importlib.import_module("senselab.audio.workflows.triage.nodes.redact")
     monkeypatch.setattr(rows_driver, "read_store", read_store)
     monkeypatch.setattr(redact, "transcript_texts", lambda store: (texts[store], None))
+    flat = {"stem": "flat", "enhanced": str(tmp_path / "flat" / "enhanced.flac"), "source": "/flat.wav"}
     first = _write_jsonl(tmp_path / "one.jsonl", [_row("talk", tmp_path), _row("quiet", tmp_path)])
-    second = _write_jsonl(tmp_path / "two.jsonl", [_row("talk", tmp_path), _row("broken", tmp_path)])
+    second = _write_jsonl(tmp_path / "two.jsonl", [_row("talk", tmp_path), _row("broken", tmp_path), flat])
     out = tmp_path / "split"
     counts = rows_driver.split_rows([first, second], out, workers=1)
-    assert counts["rows"] == 3 and (counts["words"], counts["nowords"], counts["error"]) == (1, 1, 1)
+    assert counts["rows"] == 4 and (counts["words"], counts["nowords"], counts["error"]) == (1, 1, 2)
     assert [json.loads(line)["stem"] for line in (out / "rows_words.jsonl").read_text().splitlines()] == ["talk"]
     assert [json.loads(line)["stem"] for line in (out / "rows_nowords.jsonl").read_text().splitlines()] == ["quiet"]
-    assert (out / "errors.txt").read_text() == "broken\terror:OSError\n"
+    assert (out / "errors.txt").read_text() == "broken\terror:OSError\nflat\terror:ValueError\n"
 
 
 def test_split_hands_its_workers_the_drivers_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

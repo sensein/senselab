@@ -43,6 +43,7 @@ from senselab.audio.workflows.triage.extend import (
     driver_config,
     read_manifest,
     read_store,
+    run_root_of,
     worker_arguments,
     worker_failure,
 )
@@ -149,10 +150,11 @@ def classify(row: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """Whether REVIEW would read words in a row's store.
 
     Args:
-        row: A manifest row with ``enhanced``.
+        row: A manifest row with ``enhanced``, ``<run_root>/run/streams/enhanced.flac``.
 
     Returns:
-        The row and :data:`WORDS`, :data:`NOWORDS`, or ``error:<type>`` where the store would not open.
+        The row and :data:`WORDS`, :data:`NOWORDS`, or ``error:<type>`` where the store would not open or
+        ``enhanced`` is not that shape.
     """
     from senselab.audio.workflows.triage.nodes.redact import transcript_texts
 
@@ -160,7 +162,7 @@ def classify(row: dict[str, Any]) -> tuple[dict[str, Any], str]:
     if failed is not None:
         return row, f"error:{failed}"
     try:
-        store = read_store(Path(str(row["enhanced"])).parents[2])
+        store = read_store(run_root_of(Path(str(row["enhanced"]))))
         original, _ = transcript_texts(store)
     except Exception as error:  # noqa: BLE001 -- a store that will not open is listed, never fatal
         return row, f"error:{type(error).__name__}"

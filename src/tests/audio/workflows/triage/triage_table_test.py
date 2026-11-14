@@ -514,3 +514,12 @@ def test_manifest_sources_name_the_run_directory_in_either_manifest_form(tmp_pat
     by_recording.write_text(json.dumps({"stem": "rec", "source": "/a/rec.wav", "enhanced": str(enhanced)}) + "\n")
     assert triage_table.manifest_sources(by_run_name) == {"rec_20261110-012101": "/a/rec.wav"}
     assert triage_table.manifest_sources(by_recording) == {"rec_20261110-012101": "/a/rec.wav"}
+
+
+def test_manifest_sources_refuse_an_enhanced_path_outside_the_run_layout(tmp_path: Path) -> None:
+    """An ``enhanced`` path not under ``<run_root>/run/streams/`` raises rather than name another directory."""
+    manifest = tmp_path / "flat.jsonl"
+    flat = tmp_path / "out" / "p1" / "rec_20261110-012101" / "enhanced.flac"
+    manifest.write_text(json.dumps({"stem": "rec", "source": "/a/rec.wav", "enhanced": str(flat)}) + "\n")
+    with pytest.raises(ValueError, match="no run root"):
+        triage_table.manifest_sources(manifest)
