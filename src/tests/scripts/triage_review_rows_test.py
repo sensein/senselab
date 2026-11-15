@@ -51,6 +51,49 @@ def test_all_unread_takes_every_row_whose_reading_does_not_stand(tmp_path: Path)
     assert summary["rule"] == "all_unread" and summary["picked"] == 2
 
 
+def test_rereads_exits_3_when_the_logs_record_no_review_state(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Rows the logs do not name, or name without a review key, are counted on stderr and make ``rereads`` exit 3."""
+    manifest = _write_jsonl(tmp_path / "replay.jsonl", [_row(stem, tmp_path) for stem in ("a", "b", "c", "d")])
+    logs = tmp_path / "logs"
+    states = [{"stem": "a", "review": "needs_reread"}, {"stem": "b", "status": "error"}, {"stem": "c"}]
+    _write_jsonl(logs / "slices" / "replay-0.jsonl", states)
+    out = tmp_path / "rows.jsonl"
+    argv = ["rereads", str(manifest), "--replay-logs", str(logs), "--out", str(out)]
+    assert rows_driver.main(argv) == rows_driver.UNRECORDED_EXIT == 3
+    assert [json.loads(line)["stem"] for line in out.read_text().splitlines()] == ["a"]
+    assert "WARNING: 3 rows left out" in capsys.readouterr().err
+    assert json.loads((tmp_path / "rows.counts.json").read_text())["unrecorded_left_out"] == 3
+    _write_jsonl(logs / "slices" / "replay-1.jsonl", [{"stem": s, "review": "read"} for s in ("b", "c", "d")])
+    assert rows_driver.main(argv) == 0
+
+
+def test_all_unread_never_picks_a_row_whose_replay_did_not_happen(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``error`` and ``refused`` rows are left out, counted as ``not_replayed``, and make ``rereads`` exit 3."""
+    manifest = _write_jsonl(tmp_path / "replay.jsonl", [_row(stem, tmp_path) for stem in ("a", "b", "c", "d")])
+    logs = tmp_path / "logs"
+    states = [
+        {"stem": "a", "status": "ok", "review": "none"},
+        {"stem": "b", "status": "error"},
+        {"stem": "c", "status": "refused"},
+    ]
+    _write_jsonl(logs / "slices" / "replay-0.jsonl", states)
+    out = tmp_path / "rows.jsonl"
+    argv = ["rereads", str(manifest), "--replay-logs", str(logs), "--out", str(out), "--all-unread"]
+    assert rows_driver.main(argv) == 3
+    assert [json.loads(line)["stem"] for line in out.read_text().splitlines()] == ["a", "d"]
+    counts = json.loads((tmp_path / "rows.counts.json").read_text())
+    assert counts["not_replayed"] == {"error": 1, "refused": 1} and counts["unrecorded_left_out"] == 2
+    assert "WARNING: 2 rows left out" in capsys.readouterr().err
+    _write_jsonl(logs / "slices" / "replay-1.jsonl", [{"stem": "b", "status": "ok", "review": "none"}])
+    _write_jsonl(logs / "slices" / "replay-2.jsonl", [{"stem": "c", "status": "present", "review": "carried"}])
+    assert rows_driver.main(argv) == 0
+    assert [json.loads(line)["stem"] for line in out.read_text().splitlines()] == ["a", "b", "d"]
+
+
 def test_a_picked_row_keeps_its_recording_id_and_target_speaker(tmp_path: Path) -> None:
     """The join key and the declared target speaker go on with the row; other manifest columns do not."""
     row = {**_row("a", tmp_path), "recording_id": "rec-a", "target_speaker": "spk1", "participant": "p1"}

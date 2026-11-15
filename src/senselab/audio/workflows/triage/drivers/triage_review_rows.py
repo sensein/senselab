@@ -10,9 +10,13 @@ r"""Pick the recordings the reviewer must read again after a replay, and split t
 those are the rows whose earlier reading could not be carried forward (``needs_reread``): a replay over a corpus that
 was reviewed before. ``--all-unread`` takes every row whose reading does not stand (any state but ``read`` or
 ``carried``, and a row the logs do not name): a corpus whose runs were never reviewed, such as one fresh from a run
-with the reviewer off, where every state is ``none``. The picked rows are what ``extend_llm_review`` and
-``extend_second_opinion`` take next; each picked row keeps the manifest's ``stem``, ``enhanced``, ``source``,
-``recording_id`` and ``target_speaker``.
+with the reviewer off, where every state is ``none``. A row the replay logged as ``error`` or ``refused`` is never
+picked: its replay did not happen, so the reviewer would read a store the replay did not touch. Rows whose review
+state the logs do not record are counted, warned about on stderr, and make ``rereads`` exit 3: by default every
+``unrecorded`` and ``not_in_replay_log`` row (nothing says whether its reading stands); with ``--all-unread`` the
+``error`` and ``refused`` rows it leaves out (``not_replayed`` in the counts). The picked rows are what
+``extend_llm_review`` and ``extend_second_opinion`` take next; each picked row keeps the manifest's ``stem``,
+``enhanced``, ``source``, ``recording_id`` and ``target_speaker``.
 
 ``split`` sorts rows by what REVIEW reads, with REVIEW's own test: a recording whose transcript has words is a
 ``words`` row, which needs the reviewer's model; any other is a ``nowords`` row, which REVIEW and SECOND_OPINION record
@@ -36,6 +40,8 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from senselab.audio.workflows.triage.extend import (
+    ERROR,
+    REFUSED,
     REVIEW_CARRIED,
     REVIEW_NEEDS_REREAD,
     REVIEW_READ,
@@ -60,6 +66,11 @@ WORDS = "words"
 NOWORDS = "nowords"
 NOT_IN_LOG = "not_in_replay_log"
 UNRECORDED = "unrecorded"
+NOT_REPLAYED = (ERROR, REFUSED)
+"""The replay statuses of a row whose replay did not happen: it carries no review state, and is never picked."""
+
+UNRECORDED_EXIT = 3
+"""``rereads``' exit code when rows were left out because the replay logs do not record their review state."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -96,16 +107,18 @@ def _write_rows(path: Path, rows: Sequence[dict[str, Any]]) -> None:
     partial.replace(path)
 
 
-def replay_review_states(log_dir: Path) -> dict[str, str]:
-    """Each replayed stem's review state, from the replay's slice logs; a later line for a stem wins.
+def replay_review_states(log_dir: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """Each replayed stem's review state and replay status, from the replay's slice logs; a later line for a stem wins.
 
     Args:
         log_dir: The replay's ``--log-dir``.
 
     Returns:
-        ``{stem: review state}``.
+        ``({stem: review state}, {stem: replay status})``; a logged row without a review key is :data:`UNRECORDED`,
+        one without a status is absent from the second.
     """
     states: dict[str, str] = {}
+    statuses: dict[str, str] = {}
     for path in sorted((log_dir / SLICES_SUBDIR).glob("*.jsonl")):
         with path.open(encoding="utf-8") as handle:
             for line in handle:
@@ -113,8 +126,12 @@ def replay_review_states(log_dir: Path) -> dict[str, str]:
                     continue
                 record = json.loads(line)
                 if "stem" in record:
-                    states[str(record["stem"])] = str(record.get("review") or UNRECORDED)
-    return states
+                    stem = str(record["stem"])
+                    states[stem] = str(record.get("review") or UNRECORDED)
+                    statuses.pop(stem, None)
+                    if record.get("status"):
+                        statuses[stem] = str(record["status"])
+    return states, statuses
 
 
 def pick_rereads(manifest: Path, log_dir: Path, out: Path, *, all_unread: bool = False) -> dict[str, Any]:
@@ -125,27 +142,34 @@ def pick_rereads(manifest: Path, log_dir: Path, out: Path, *, all_unread: bool =
         log_dir: The replay's ``--log-dir``.
         out: The rows JSONL to write; ``<out stem>.counts.json`` goes beside it.
         all_unread: Pick every row whose reading does not stand (any state but ``read`` or ``carried``, or none
-            logged), not only ``needs_reread``.
+            logged), not only ``needs_reread``. Rows the replay logged as ``error`` or ``refused`` are never picked.
 
     Returns:
-        The counts written.
+        The counts written. ``unrecorded_left_out`` counts the rows left out because nothing records their review
+        state: by default every ``unrecorded`` and ``not_in_replay_log`` row, with ``all_unread`` the
+        ``not_replayed`` ones; nonzero makes the CLI exit :data:`UNRECORDED_EXIT`.
     """
-    states = replay_review_states(log_dir)
+    states, statuses = replay_review_states(log_dir)
     rows = read_manifest(manifest, required=("stem", "enhanced"))
     counts = Counter(states.get(str(row["stem"]), NOT_IN_LOG) for row in rows)
+    not_replayed = Counter(statuses[str(row["stem"])] for row in rows if statuses.get(str(row["stem"])) in NOT_REPLAYED)
 
-    def wanted(state: str | None) -> bool:
+    def wanted(stem: str) -> bool:
+        if statuses.get(stem) in NOT_REPLAYED:
+            return False
+        state = states.get(stem)
         return state not in (REVIEW_READ, REVIEW_CARRIED) if all_unread else state == REVIEW_NEEDS_REREAD
 
-    picked = [
-        {key: row[key] for key in KEPT_KEYS if key in row} for row in rows if wanted(states.get(str(row["stem"])))
-    ]
+    picked = [{key: row[key] for key in KEPT_KEYS if key in row} for row in rows if wanted(str(row["stem"]))]
     _write_rows(out, picked)
+    left_out = sum(not_replayed.values()) if all_unread else counts[UNRECORDED] + counts[NOT_IN_LOG]
     summary = {
         "replay_rows": len(rows),
         "rule": "all_unread" if all_unread else REVIEW_NEEDS_REREAD,
         "picked": len(picked),
         "states": dict(sorted(counts.items())),
+        "not_replayed": dict(sorted(not_replayed.items())),
+        "unrecorded_left_out": left_out,
     }
     (out.parent / f"{out.stem}.counts.json").write_text(json.dumps(summary, indent=1) + "\n", encoding="utf-8")
     return summary
@@ -229,13 +253,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         argv: The command line, or None for ``sys.argv``.
 
     Returns:
-        0; 1 where ``split`` found a store that would not open; 2 where the arguments could not be resolved.
+        0; 1 where ``split`` found a store that would not open; 2 where the arguments could not be resolved;
+        :data:`UNRECORDED_EXIT` (3) where ``rereads`` left out rows whose review state the replay logs do not record
+        (the rows it did pick are still written).
     """
     args = build_parser().parse_args(argv)
     try:
         if args.command == "rereads":
             summary = pick_rereads(args.manifest, args.replay_logs, args.out, all_unread=args.all_unread)
             print(json.dumps(summary))
+            if summary["unrecorded_left_out"]:
+                why = (
+                    f"the replay logged as error or refused ({summary['not_replayed']}); their replay did not happen"
+                    if args.all_unread
+                    else "the replay logs record no review state for (unrecorded or not_in_replay_log)"
+                )
+                print(
+                    f"WARNING: {summary['unrecorded_left_out']} rows left out that {why}; see the counts file",
+                    file=sys.stderr,
+                )
+                return UNRECORDED_EXIT
             return 0
         workers = args.workers or int(os.environ.get("SLURM_CPUS_PER_TASK", "4"))
         config = driver_config(args)
