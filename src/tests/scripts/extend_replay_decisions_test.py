@@ -39,6 +39,8 @@ from senselab.audio.workflows.triage.extend import (
     HINT_RECORDED,
     OFF_STAGES_KEY,
     PROFILE_KEY,
+    REFOLD_MARKER_STEP,
+    REFOLD_NODE,
     REPLAY_MARKER_STEP,
     REPLAY_NODE,
     REPLAYED_NODES,
@@ -900,6 +902,34 @@ class TestTheReplayChecksTheRunsRecord:
         assert decided_under(store, log)[0] == now
         store.activity(node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters={"profile_change": None})
         assert decided_under(store, log)[0] == recorded, "a marker from before 2026-11-14 that recorded no change"
+
+    def test_the_marker_that_ended_last_speaks_though_it_repeats_an_earlier_one(self, tmp_path: Path) -> None:
+        """Satra review 2026-11-14, verifier round 2: markers P, Q, then P again: P's decisions stand.
+
+        A marker is content-addressed, so the repeated P keeps its first place in the store; its later end decides.
+        """
+        root = tmp_path / "rec-0001_20260920-030808"
+        _seed_run(root)
+        store = read_store(root)
+        log = {"config": {"profile": {"name": "p", "version": "1", "digest": "run"}}}
+        p_profile = {"name": "p", "version": "1", "digest": "P"}
+        q_profile = {"name": "p", "version": "1", "digest": "Q"}
+        p_marker = {PROFILE_KEY: p_profile, OFF_STAGES_KEY: []}
+        first = store.activity(
+            node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters=p_marker, ended="2026-11-14T01:00:00+00:00"
+        )
+        store.activity(
+            node=REFOLD_NODE,
+            step=REFOLD_MARKER_STEP,
+            parameters={PROFILE_KEY: q_profile, OFF_STAGES_KEY: ["REDACT"]},
+            ended="2026-11-14T02:00:00+00:00",
+        )
+        assert decided_under(store, log) == (q_profile, frozenset({"REDACT"}))
+        again = store.activity(
+            node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters=p_marker, ended="2026-11-14T03:00:00+00:00"
+        )
+        assert again == first and store.activities()[-1].id != again, "the repeat keeps its first place"
+        assert decided_under(store, log) == (p_profile, frozenset())
 
     def test_a_legacy_run_replayed_once_takes_a_later_comment_edit_as_no_change(self, tmp_path: Path) -> None:
         """Recorded under the byte digest; one replay records the current one, so a comment edit is no change."""

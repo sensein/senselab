@@ -22,6 +22,7 @@ See ``specs/20260912-extend-reprocessed-outputs/design.md`` and
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import importlib.util
 import json
@@ -149,7 +150,7 @@ from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY, RED
 from senselab.audio.workflows.triage.word_arbitration import arbitrate_words
 from senselab.audio.workflows.triage.workflow import OFF_IN_WORKFLOW, off_notes, require_stage
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
-from senselab.utils.prov_store import CHECKSUM_KEY, MTIME_KEY, SIZE_KEY, Entity, ProvStore, file_digest
+from senselab.utils.prov_store import CHECKSUM_KEY, MTIME_KEY, SIZE_KEY, Activity, Entity, ProvStore, file_digest
 from senselab.utils.subprocess_venv import record_venv_use
 
 RUN_SUBDIR = "run"
@@ -953,11 +954,14 @@ def find_replay_marker(
             does not compare them.
 
     Returns:
-        The marker activity's id, or None when this store has not been replayed under all of them.
+        The marker activity's id (the one that ended last, where several match), or None when this store has not
+        been replayed under all of them.
     """
     hashes = {config_hash} if isinstance(config_hash, str) else set(config_hash)
-    for activity in store.activities(REPLAY_NODE):
-        if activity.step != REPLAY_MARKER_STEP or activity.parameters.get("config_hash") not in hashes:
+    for activity in reversed(_markers_by_end(store)):
+        if activity.node != REPLAY_NODE or activity.step != REPLAY_MARKER_STEP:
+            continue
+        if activity.parameters.get("config_hash") not in hashes:
             continue
         if commit is not None and activity.parameters.get("commit") != commit:
             continue
@@ -1452,6 +1456,9 @@ def decided_under(store: ProvStore, log: Mapping[str, Any]) -> tuple[dict[str, A
     ``run.json`` names its profile by the digest taken before 2026-11-14 is named by the current digest after one
     replay or re-fold, and a later comment edit in the profile is no change.
 
+    The last marker is the one that ended last (:func:`_markers_by_end`), not the last in the store's order: a marker
+    is content-addressed, so a replay that repeats an earlier one's parameters keeps that earlier one's place.
+
     Args:
         store: The run's store.
         log: The run's ``run.json``.
@@ -1468,9 +1475,7 @@ def decided_under(store: ProvStore, log: Mapping[str, Any]) -> tuple[dict[str, A
         else None
     )
     profile = run_profile
-    for activity in store.activities():
-        if (activity.node, activity.step) not in ((REPLAY_NODE, REPLAY_MARKER_STEP), (REFOLD_NODE, REFOLD_MARKER_STEP)):
-            continue
+    for activity in _markers_by_end(store):
         change = activity.parameters.get("profile_change")
         if PROFILE_KEY in activity.parameters:
             profile = _profile_fields(activity.parameters[PROFILE_KEY])
@@ -1480,6 +1485,32 @@ def decided_under(store: ProvStore, log: Mapping[str, Any]) -> tuple[dict[str, A
         if isinstance(stages, list):
             off = frozenset(str(stage) for stage in stages)
     return profile, off
+
+
+def _marker_end() -> str:
+    """Now, as the ISO 8601 UTC string a replay or re-fold marker records as its ``ended``."""
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _markers_by_end(store: ProvStore) -> list[Activity]:
+    """The store's replay and re-fold markers, oldest first by the time each ended.
+
+    A marker re-added with the parameters of an earlier one keeps that one's id, and so its place in the store's
+    order, while its ``ended`` moves to the later write; sorting on ``ended`` puts it last again. Markers that record
+    no ``ended`` (written before 2026-11-14) come first, in the store's order.
+
+    Args:
+        store: The run's store.
+
+    Returns:
+        The markers.
+    """
+    markers = [
+        activity
+        for activity in store.activities()
+        if (activity.node, activity.step) in ((REPLAY_NODE, REPLAY_MARKER_STEP), (REFOLD_NODE, REFOLD_MARKER_STEP))
+    ]
+    return sorted(markers, key=lambda activity: (activity.ended is not None, activity.ended or ""))
 
 
 OFF_STAGES_KEY = "off_stages"
@@ -1913,6 +1944,7 @@ def refold_verdict(
             OFF_STAGES_KEY: sorted(off_notes(config.values)),
             PROFILE_KEY: _profile_fields(config.profile),
         },
+        ended=_marker_end(),
     )
     store.was_associated_with(marker, software)
     return RefoldOutcome(
