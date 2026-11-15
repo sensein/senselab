@@ -91,6 +91,7 @@ REVIEWED_INPROCESS = {
     "audio/workflows/audio_analysis/adaptive/audio_io.py",
     "audio/workflows/audio_analysis/adaptive/backends.py",
     "video/tasks/scene_description/backends.py",
+    "video/tasks/ssl_embeddings/api.py",
 }
 
 # Subprocess-venv backends whose worker loads a model; the parent stages it via
