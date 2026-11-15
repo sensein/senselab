@@ -22,7 +22,11 @@ is a failed row (:class:`HintDeclaresNothing`): senselab reads no file name, so 
 driver reads: one line per recording with ``stem``, ``source``, ``enhanced`` (the run's
 ``run/streams/enhanced.flac``) and the identity columns the session and cohort passes group rows by, sorted by stem.
 With ``--expect``, it also reports every recording of that manifest with no finished run, and exits 1 if there is one;
-the full list of their stems goes to ``<out stem>.missing_recordings.txt`` beside the manifest, one per line.
+the full list goes to ``<out stem>.missing_recordings.txt`` beside the manifest, rewritten on every ``manifest`` run:
+one line per distinct stem, sorted, ``<stem>\t<reason>`` (``cut -f1`` gives the stems). The reason is the failed row's
+``error`` (whitespace collapsed to single spaces, cut at 300 characters), ``no row`` where no row names the stem, or
+``finished row whose store or summary is gone`` / ``row unreadable``; where several rows name a stem, the newest
+counts. Without ``--expect`` any such file left by an earlier run is removed, so it never sits beside a newer manifest.
 
 The row carries what the run concluded per stage, its errors, its paths, its wall time, and the persistent model
 workers' events, load times and memory high-water marks; it carries no transcript or measurement.
@@ -69,6 +73,18 @@ ROW_SUFFIX = ".row.json"
 
 MISSING_SUFFIX = ".missing_recordings.txt"
 """What ``manifest --expect`` names its list of recordings with no finished run, after the manifest's stem."""
+
+NO_ROW = "no row"
+"""The missing-list reason of a recording no row names: it never ran, or its task never reached it."""
+
+PRODUCTS_GONE = "finished row whose store or summary is gone"
+"""The missing-list reason of a row that says it finished but whose store or summary products are missing."""
+
+ROW_UNREADABLE = "row unreadable"
+"""The missing-list reason of a row file that does not parse as a JSON object."""
+
+REASON_CHARS = 300
+"""How much of a failed row's error the missing list keeps."""
 
 ENHANCED_RELATIVE = Path("run") / "streams" / "enhanced.flac"
 """The stream every ``extend_*`` driver's manifest names, relative to the run root."""
@@ -398,6 +414,36 @@ def finished_runs(out_root: Path) -> list[dict[str, Any]]:
     return [rows[stem] for stem in sorted(rows)]
 
 
+def unfinished_reasons(out_root: Path) -> dict[str, str]:
+    """Why each recording with an unfinished row under ``out_root/rows`` did not finish; the newest row wins.
+
+    Args:
+        out_root: The ``--out-root`` the run tasks wrote.
+
+    Returns:
+        ``{stem: reason}`` for every row that is not :func:`finished`: its ``error`` (whitespace collapsed, cut at
+        :data:`REASON_CHARS`), :data:`PRODUCTS_GONE`, or :data:`ROW_UNREADABLE` (keyed by the file's stem).
+    """
+    newest: dict[str, tuple[float, str]] = {}
+    for row_file in (out_root / ROWS_SUBDIR).rglob(f"*{ROW_SUFFIX}"):
+        if finished(row_file):
+            continue
+        try:
+            row = json.loads(row_file.read_text(encoding="utf-8"))
+            mtime = row_file.stat().st_mtime
+        except (OSError, ValueError):
+            row, mtime = None, 0.0
+        if not isinstance(row, dict) or "stem" not in row:
+            stem, reason = row_file.name[: -len(ROW_SUFFIX)], ROW_UNREADABLE
+        else:
+            stem = str(row["stem"])
+            error = row.get("error")
+            reason = " ".join(str(error).split())[:REASON_CHARS] if error else PRODUCTS_GONE
+        if stem not in newest or mtime >= newest[stem][0]:
+            newest[stem] = (mtime, reason)
+    return {stem: reason for stem, (_, reason) in newest.items()}
+
+
 def write_manifest(out_root: Path, out: Path, *, expect: Path | None = None) -> dict[str, Any]:
     """Write the finished runs as the passes' manifest, and what of an expected manifest did not finish.
 
@@ -407,8 +453,10 @@ def write_manifest(out_root: Path, out: Path, *, expect: Path | None = None) -> 
         expect: The input manifest, or None.
 
     Returns:
-        ``written`` (how many rows), and with ``expect`` the ``missing`` stems and ``missing_list``, the file
-        (:data:`MISSING_SUFFIX` beside ``out``) that lists every one of them, written even where there is none.
+        ``written`` (how many rows), and with ``expect`` the distinct ``missing`` stems and ``missing_list``, the
+        file (:data:`MISSING_SUFFIX` beside ``out``) that lists every one of them, one tab-separated ``stem``,
+        ``reason`` line each, written even where there is none. Without ``expect`` that file, if an earlier run left
+        one, is removed.
     """
     rows = finished_runs(out_root)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -416,13 +464,20 @@ def write_manifest(out_root: Path, out: Path, *, expect: Path | None = None) -> 
     partial.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     partial.replace(out)
     summary: dict[str, Any] = {"written": len(rows), "out": str(out)}
-    if expect is not None:
-        have = {row["stem"] for row in rows}
-        wanted = [Path(str(entry["source"])).stem for entry in read_manifest(expect, required=("source",))]
-        summary["missing"] = sorted(stem for stem in wanted if stem not in have)
-        listed = out.with_name(out.stem + MISSING_SUFFIX)
-        listed.write_text("".join(f"{stem}\n" for stem in summary["missing"]), encoding="utf-8")
-        summary["missing_list"] = str(listed)
+    listed = out.with_name(out.stem + MISSING_SUFFIX)
+    if expect is None:
+        listed.unlink(missing_ok=True)
+        return summary
+    have = {row["stem"] for row in rows}
+    wanted = {Path(str(entry["source"])).stem for entry in read_manifest(expect, required=("source",))}
+    summary["missing"] = sorted(wanted - have)
+    reasons = unfinished_reasons(out_root) if summary["missing"] else {}
+    partial = listed.with_name(listed.name + ".partial")
+    partial.write_text(
+        "".join(f"{stem}\t{reasons.get(stem, NO_ROW)}\n" for stem in summary["missing"]), encoding="utf-8"
+    )
+    partial.replace(listed)
+    summary["missing_list"] = str(listed)
     return summary
 
 
