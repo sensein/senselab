@@ -44,6 +44,8 @@ from senselab.audio.workflows.triage.extend import (
     REPLAY_MARKER_STEP,
     REPLAY_NODE,
     REPLAYED_NODES,
+    REVIEW_KEY,
+    REVIEW_STATES,
     IdentityChangeRefused,
     ReplayInputs,
     ReplayRefused,
@@ -702,6 +704,90 @@ def test_force_replays_a_run_that_already_carries_the_marker(tmp_path: Path, mon
     assert forced["status"] == cli.OK
 
 
+def _mark_replayed(root: Path, config: Any, **recorded: Any) -> None:  # noqa: ANN401
+    """Write this configuration's replay marker into a run's store, with any further parameters."""
+    store = read_store(root, run_id=replay_run_id(root, config.config_hash))
+    store.activity(
+        node=REPLAY_NODE,
+        step=REPLAY_MARKER_STEP,
+        parameters={
+            "config_hash": config.config_hash,
+            "commit": None,
+            "retired": 0,
+            "hint_digest": NO_HINT,
+            CORPUS_INPUTS_KEY: corpus_inputs_digest(store),
+            **recorded,
+        },
+    )
+    store.write_jsonl(root / "run" / "store.jsonl")
+
+
+def test_a_present_or_failed_replay_leaves_no_out_root_mirror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Satra review 2026-11-14, verifier round 2: the mirror is made only for a replay that runs.
+
+    It is kept only if the replay lands; a failed replay removes what it created and nothing an earlier call made.
+    """
+    config = load_triage_config(profile=ACTIVE)
+    present = tmp_path / "rec-0001_20260920-030808"
+    _seed_run(present)
+    _mark_replayed(present, config)
+    out_root = tmp_path / "replayed"
+    record = cli.replay_one(present, config, build_hint=None, out_root=out_root, stem=present.name, commit=None)
+    assert record["status"] == cli.PRESENT
+    assert not out_root.exists()
+
+    failing = tmp_path / "rec-0002_20260920-030808"
+    _seed_run(failing)
+
+    def _raise(*args: object, **kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cli, "replay_decisions", _raise)
+    for existing in (False, True):
+        if existing:
+            (out_root / "earlier").mkdir(parents=True)
+        record = cli.replay_one(failing, config, build_hint=None, out_root=out_root, stem=failing.name, commit=None)
+        assert record["status"] == cli.ERROR and "disk full" in record[cli.DERIVATION]
+        if existing:
+            assert sorted(path.name for path in out_root.iterdir()) == ["earlier"], "an earlier call's tree is kept"
+        else:
+            assert not out_root.exists()
+
+
+def test_a_resubmitted_slice_s_present_rows_keep_the_review_state_their_replay_recorded(tmp_path: Path) -> None:
+    """Satra review 2026-11-14, verifier round 2: rows already replayed report the review state of that replay.
+
+    A resubmitted slice starts a fresh row log; its already-replayed rows come back ``present`` with the state the
+    replay's marker recorded, so a reading that must be read again is still named (and exits 3). A marker written
+    before the state was recorded reports none.
+    """
+    config = load_triage_config(profile=ACTIVE)
+    roots = [tmp_path / f"rec-000{n}_20260920-030808" for n in range(1, 4)]
+    for root in roots:
+        _seed_run(root)
+    _mark_replayed(roots[0], config, **{REVIEW_KEY: "needs_reread", "review_why": "the transcript moved"})
+    _mark_replayed(roots[1], config, **{REVIEW_KEY: "carried", "review_why": None})
+    _mark_replayed(roots[2], config)
+    manifest = _manifest(tmp_path / "manifest.jsonl", roots)
+    summary = cli.run_slice(
+        manifest,
+        slice_index=0,
+        slice_count=1,
+        config=config,
+        log_dir=tmp_path / "logs",
+        hints=None,
+        out_root=None,
+        commit=None,
+    )
+    assert summary["counts"] == {cli.PRESENT: 3}
+    assert summary["reviews"] == {"needs_reread": 1, "carried": 1}
+    assert summary["needs_reread"] == [roots[0].name]
+    rows = [json.loads(line) for line in Path(summary["log"]).read_text(encoding="utf-8").splitlines()]
+    by_stem = {row["stem"]: row for row in rows if "stem" in row}
+    assert by_stem[roots[0].name]["review_why"] == "the transcript moved"
+    assert "review" not in by_stem[roots[2].name]
+
+
 HINT_COUGH = AudioHints(metadata={"task_token": "voluntary-cough"})
 HINT_RAINBOW = AudioHints(metadata={"task_token": "rainbow-passage"})
 
@@ -958,7 +1044,10 @@ class TestTheReplayChecksTheRunsRecord:
             inputs=inputs,
         )
         current = {"name": "extends-fixture", "version": "1", "digest": config.profile.digest}
-        assert store.get_activity(outcome.marker).parameters[PROFILE_KEY] == current
+        written = store.get_activity(outcome.marker)
+        assert written.parameters[PROFILE_KEY] == current
+        assert written.ended is not None, "the marker records when it ended, which orders it among the others"
+        assert written.parameters[REVIEW_KEY] == outcome.review and outcome.review in REVIEW_STATES
 
         (profile_root / "profile.yaml").write_text("# corrected wording\n" + manifest)
         deactivate_profile()

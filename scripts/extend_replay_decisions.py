@@ -37,8 +37,8 @@ matched ADMIT's (the other passes take a recording whose size and modification t
 recording that is no longer there cannot be hashed: its row's ``audio`` is ``unverified`` and the replay goes ahead.
 
 A store already carrying this configuration's and revision's replay marker is skipped and not rewritten,
-unless ``--force`` is given. A row whose store landed although a replayed node raised is ``errored``,
-not ``ok``, and names those nodes.
+unless ``--force`` is given; its ``present`` row carries the ``review`` state that replay recorded. A row whose
+store landed although a replayed node raised is ``errored``, not ``ok``, and names those nodes.
 
 REVIEW is replayed too, under the replaying configuration. Where that configuration does not read
 (the LLM check off), an answered reading from before the replay is carried forward when the replayed
@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -69,7 +70,9 @@ from senselab.audio.workflows.triage.extend import (
     OK,
     PRESENT,
     REFUSED,
+    REVIEW_KEY,
     REVIEW_NEEDS_REREAD,
+    REVIEW_WHY_KEY,
     RUN_SUBDIR,
     SKIPPED,
     SLICES_SUBDIR,
@@ -247,6 +250,22 @@ def replay_identity(
     return recorded if recorded is not None else identity_of(None)
 
 
+def _first_missing(target: Path, out_root: Path) -> Path | None:
+    """The outermost directory from ``out_root`` down to ``target`` that does not exist yet, or None where all do.
+
+    Creating ``target`` creates that directory and everything under it, so removing it undoes the creation and
+    nothing a previous call made.
+    """
+    missing = None
+    for path in (target, *target.parents):
+        if path.exists() or path.is_symlink():
+            break
+        missing = path
+        if path == out_root:
+            break
+    return missing
+
+
 def replay_one(
     run_root: Path,
     config: TriageConfig,
@@ -266,7 +285,8 @@ def replay_one(
     from the decisions it retires. A run already carrying this configuration's and revision's marker is skipped
     and nothing is written; a run that raises before the write keeps the store it had, so a
     preempted task redoes that recording from the beginning and cannot stack two retirements. An ``out_root``
-    mirror is created only once the run's recorded inputs are accepted, so a refused run leaves none.
+    mirror is created only once the run's recorded inputs are accepted and the replay will run, so a refused run, or
+    one already replayed, leaves none; a replay that raises removes the part of the mirror this call created.
 
     Args:
         run_root: The finished run root.
@@ -283,7 +303,8 @@ def replay_one(
     Returns:
         ``{status, replay, ...}`` — ``ok`` when the replay landed, ``errored`` when it landed but a
         replayed node raised (``errored_nodes`` names them), ``present`` when this configuration, revision
-        and hint had already replayed the run, ``refused`` when the run's recorded inputs refuse it
+        and hint had already replayed the run (with the ``review`` and ``review_why`` that replay's marker
+        recorded, where it recorded them), ``refused`` when the run's recorded inputs refuse it
         (:func:`~senselab.audio.workflows.triage.extend.check_replay_inputs`; ``identity_refused`` names the
         participant or session change where that is why), ``error`` when it could not.
     """
@@ -318,20 +339,28 @@ def replay_one(
         return {"status": REFUSED, DERIVATION: str(refusal), "identity_refused": refusal.change}
     except ReplayRefused as refusal:
         return {"status": REFUSED, DERIVATION: str(refusal)}
-    if out_root is not None and placed is not None:
-        try:
-            mirror_run_root(run_root, out_root, placed)
-        except OSError as error:
-            return {"status": ERROR, DERIVATION: describe_exception(error)}
-    if (
-        not force
-        and find_replay_marker(
+    marker = (
+        None
+        if force
+        else find_replay_marker(
             store, config.config_hashes, commit, hint_digest(inputs.hint), corpus_inputs=corpus_inputs_digest(store)
         )
-        is not None
-    ):
-        return {"status": PRESENT, DERIVATION: "this configuration, revision and hint have already replayed this run"}
+    )
+    if marker is not None:
+        recorded = store.get_activity(marker).parameters
+        return {
+            "status": PRESENT,
+            DERIVATION: "this configuration, revision and hint have already replayed this run",
+            **(
+                {"review": recorded[REVIEW_KEY], "review_why": recorded.get(REVIEW_WHY_KEY)}
+                if recorded.get(REVIEW_KEY)
+                else {}
+            ),
+        }
+    created = _first_missing(target, out_root) if out_root is not None and placed is not None else None
     try:
+        if out_root is not None and placed is not None:
+            mirror_run_root(run_root, out_root, placed)
         outcome: ReplayOutcome = replay_decisions(
             store,
             config,
@@ -342,8 +371,12 @@ def replay_one(
             commit=commit,
             inputs=inputs,
         )
-    except (OSError, ValueError, LookupError) as error:
-        return {"status": ERROR, DERIVATION: describe_exception(error)}
+    except BaseException as error:
+        if created is not None:
+            shutil.rmtree(created, ignore_errors=True)  # what this call created goes; links are unlinked, not followed
+        if isinstance(error, (OSError, ValueError, LookupError)):
+            return {"status": ERROR, DERIVATION: describe_exception(error)}
+        raise
     write_store(store, target)
     export_prov(store, target)
     return {

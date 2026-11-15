@@ -206,6 +206,13 @@ REVIEW_NEEDS_REREAD = "needs_reread"
 
 REVIEW_STATES = (REVIEW_NONE, REVIEW_READ, REVIEW_CARRIED, REVIEW_NEEDS_REREAD)
 
+REVIEW_KEY = "review"
+"""The replay marker parameter holding what became of the reading REVIEW held (one of :data:`REVIEW_STATES`), so a
+run found already replayed reports the state its replay left; a marker written before 2026-11-14 records none."""
+
+REVIEW_WHY_KEY = "review_why"
+"""The replay marker parameter holding why the reading was not carried forward, or None."""
+
 REPLAYED_NODES: tuple[str, ...] = tuple(
     node for node in GRAPH_ORDER[GRAPH_ORDER.index("BACKGROUND") :] if node != "COHORT"
 )
@@ -2127,9 +2134,9 @@ def replay_decisions(
             record, a store that recorded none, or a recorded identity or task the hint no longer resolves to under
             the current task list (:func:`record_moved`), is recorded as the run's first
             (:func:`record_replayed_hint`), and the stimulus alignment is rebuilt where its expected speech
-            moved (:func:`realign_stimulus`); the marker records the inputs, the stages left off and any change of
-            identity, which the outcome carries too. A participant or session change reaches this only where
-            :func:`check_replay_inputs` was given ``allow_identity_change``.
+            moved (:func:`realign_stimulus`); the marker records the inputs, the stages left off, any change of
+            identity and the review state (:data:`REVIEW_KEY`), which the outcome carries too. A participant or
+            session change reaches this only where :func:`check_replay_inputs` was given ``allow_identity_change``.
 
     Returns:
         What the replay did, including the marker it wrote last.
@@ -2178,10 +2185,13 @@ def replay_decisions(
             "retired": len(retired),
             **(inputs.marker_parameters() if inputs is not None else {"hint_digest": hint_digest(hint)}),
             "identity_change": identity_change,
+            REVIEW_KEY: review_state,
+            REVIEW_WHY_KEY: review_why,
             CORPUS_INPUTS_KEY: corpus_inputs_digest(store),
             OFF_STAGES_KEY: sorted(off_notes(config.values)),
             PROFILE_KEY: _profile_fields(config.profile),
         },
+        ended=_marker_end(),
     )
     store.was_associated_with(marker, software)
     return ReplayOutcome(
