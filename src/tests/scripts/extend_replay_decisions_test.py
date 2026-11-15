@@ -1369,9 +1369,10 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
     def test_the_slice_lists_the_participants_an_identity_change_moved(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Both sides of each participant or session move are listed, so the cohort pass reruns only those (check 9).
+        """Both sides of each participant or session change are listed, so the cohort pass reruns only those (check 9).
 
-        Satra review 2026-11-14, verifier round 2: a first record, a task-only change and a change of where the
+        Satra review 2026-11-14, verifier round 2: a first record counts (the corpus passes refuse a store with no
+        identity, so the cohort pass sees that run for the first time); a task-only change and a change of where the
         identity came from move no run, so they list nobody.
         """
         roots = [tmp_path / f"run{n}" for n in range(6)]
@@ -1401,9 +1402,9 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)]) == 0
         [summary_path] = (tmp_path / "slices").glob("*.summary.json")
         summary = json.loads(summary_path.read_text())
-        assert summary["identity_participants"] == ["p01", "p02", "p04"]
+        assert summary["identity_participants"] == ["p01", "p02", "p03", "p04"]
         assert len(summary["identity_changed"]) == 5, "every recorded change is still named"
-        assert "participants affected: p01 p02 p04" in capsys.readouterr().out
+        assert "participants affected: p01 p02 p03 p04" in capsys.readouterr().out
 
     def test_a_reread_outranks_a_refusal_in_the_exit_code_and_the_refusal_is_still_reported(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

@@ -457,15 +457,17 @@ def process(
 def _participants_of_change(change: dict[str, Any]) -> set[str]:
     """The participants a row's ``identity_change`` moves a run from or to, for the cohort pass to rerun.
 
-    Only a move counts: a participant or a session that both sides name and that differs. A first record (no ``from``,
-    or a side that names none), or a change of the task or of where the identity came from, moves no run between
-    participants or sessions, so it names nobody.
+    A change counts where the participant or the session the run now records differs from the one it recorded
+    before, an empty ``from`` included: since the corpus passes refuse a store that records no identity, a first record
+    makes the run visible to the cohort pass for the first time. It names the ``to`` participant, and the ``from`` one
+    where there was one. A change of only the task, or of where the identity came from, moves no run, so it names
+    nobody.
     """
     before, after = change.get("from") or {}, change.get("to") or {}
     named: set[str] = set()
     for key in (DECLARED_PARTICIPANT, DECLARED_SESSION):
         old, new = before.get(key), after.get(key)
-        if old and new and old != new:
+        if new and old != new:
             named.update(str(side[DECLARED_PARTICIPANT]) for side in (before, after) if side.get(DECLARED_PARTICIPANT))
     return named
 
@@ -503,8 +505,9 @@ def run_slice(
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went. ``identity_participants`` lists the
-        participants a recorded participant or session move took a run from or to (:func:`_participants_of_change`),
-        which ``extend_cohort.py apply --participants`` reruns. ``refused`` holds each refused row's stem and reason.
+        participants a recorded participant or session change, a first record included, took a run from or to
+        (:func:`_participants_of_change`), which ``extend_cohort.py apply --participants`` reruns. ``refused`` holds
+        each refused row's stem and reason.
     """
     started = time.time()
     build_hint = load_hint_builder(hints) if hints is not None else None
