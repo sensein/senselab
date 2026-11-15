@@ -101,6 +101,21 @@ def test_a_recording_missing_from_or_repeated_in_the_tables_fails_the_build(
     assert not out.exists()
 
 
+def test_a_manifest_whose_enhanced_path_is_not_a_run_stream_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """A bad ``enhanced`` path, or a run named twice, is an input error: exit 2 naming the manifest, no traceback."""
+    decisions, evidence = _tables(tmp_path)
+    pq.write_table(decisions, tmp_path / "d.parquet")
+    pq.write_table(evidence, tmp_path / "e.parquet")
+    out = tmp_path / "pub" / triage_table.TABLE_NAME
+    manifest = tmp_path / "bad.jsonl"
+    manifest.write_text(json.dumps({"enhanced": str(tmp_path / "enhanced.flac"), "source": "/a.wav"}) + "\n")
+    assert _script().main([*_argv(tmp_path, out), "--manifest", str(manifest)]) == 2
+    assert f"ERROR: --manifest {manifest} could not be read" in capsys.readouterr().err
+    assert not out.exists()
+
+
 def test_without_a_profile_the_table_exits_2_naming_it(
     tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture
 ) -> None:

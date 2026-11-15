@@ -84,7 +84,11 @@ def main(argv: list[str] | None = None) -> int:
             releases[str(row["release"] or "")] += 1
             yield row
 
-    sources = triage_table.manifest_sources(args.manifest) if args.manifest else None
+    try:
+        sources = triage_table.manifest_sources(args.manifest) if args.manifest else None
+    except (OSError, ValueError) as error:
+        print(f"ERROR: --manifest {args.manifest} could not be read: {error}", file=sys.stderr)
+        return 2
     vectors = None
     if args.vectors is not None:
         wanted = ["stem", *triage_table.VECTOR_COLUMNS]
