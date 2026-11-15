@@ -948,8 +948,10 @@ def restamp_reading(key: str, result: Mapping[str, Any], *, fingerprint: str) ->
 
     For a reading recorded under the legacy fingerprint (:func:`migrated_fingerprint`): the entry records the
     current one from then on. It is the same reading, so nothing records it as replaced (:data:`POLICY_REPLACED`).
-    The entry's provenance is the rewrite's; the reading keeps its ``engine``, and the machine and software that read
-    it stay on the activity that generated it (:data:`RUNTIME`, :func:`reading_runtime`).
+    The rewrite replaces the entry's own ``provenance`` block (computed_at, host, senselab version and run id become
+    the rewrite's; model and commit stay the reading's). The reading itself is kept whole, its ``engine`` and its
+    ``runtime`` (the machine and software that read it) included, and that record also stays on the activity that
+    generated the reading in a store (:data:`RUNTIME`, :func:`reading_runtime`).
 
     Args:
         key: The entry's key.
