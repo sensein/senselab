@@ -7,8 +7,10 @@ the profile sets in its own files wins over its fitted one; this script lists ea
 
 Each value is fitted over at least its method's ``n_min`` values (``data/profile_values.yaml``; per family for a
 value by family). A table with fewer for any value is refused, naming each; ``--allow-small-n`` writes them anyway,
-marked ``below_n_min`` in ``fitted.yaml``. A value the profile sets (or writes blank) itself is not counted, since
-its own value wins over the fit. A value with no values at all is left unfitted, as before.
+marked ``below_n_min`` in ``fitted.yaml``. A value the profile's own files set to a real value is not counted, since
+that value wins over the fit. One they write blank is counted (the blank hides the fit only until the line is
+removed), and so is one only the run's ``--config`` data section sets: that override wins in runs given it, not in the
+profile. A value with no values at all is left unfitted, as before.
 
 The order for a new dataset (plan step 10):
 
@@ -86,26 +88,64 @@ def _held(node: Any, path: Sequence[str]) -> Any:  # noqa: ANN401 -- a YAML valu
     return node
 
 
-def own_value(fit: Fit) -> Any:  # noqa: ANN401 -- a YAML value
-    """What a layer merged after the profile's ``fitted.yaml`` writes for a fit.
-
-    That is the run's data section, else the profile's own file; a profile it extends is merged before its fitted
-    values, so never wins over them.
+def run_value(fit: Fit) -> Any:  # noqa: ANN401 -- a YAML value
+    """What the run's data section (``--config``) writes for a fit.
 
     Args:
         fit: The fit.
 
     Returns:
-        The value written (None where it is written blank), or :data:`_ABSENT` where neither writes it.
+        The value written (None where it is written blank), or :data:`_ABSENT` where it is not written.
     """
-    held = _held(run_data().get(fit.file), fit.path)
-    if held is not _ABSENT:
-        return held
+    return _held(run_data().get(fit.file), fit.path)
+
+
+def profile_value(fit: Fit) -> Any:  # noqa: ANN401 -- a YAML value
+    """What the profile's own file writes for a fit.
+
+    A profile it extends is merged before its fitted values, so never wins over them and is not read here.
+
+    Args:
+        fit: The fit.
+
+    Returns:
+        The value written (None where it is written blank), or :data:`_ABSENT` where it is not written.
+    """
     profile = active_profile()
     supplied = profile.supplies(fit.file) if profile is not None else None
     if supplied is None or not supplied.is_file():
         return _ABSENT
     return _held(yaml.safe_load(supplied.read_text(encoding="utf-8")) or {}, fit.path)
+
+
+def exempt(fit: Fit) -> bool:
+    """Whether a fit is not held to its n_min: the profile's own files set it to a real (non-blank) value.
+
+    A blank the profile writes, or a value only the run's data section sets, does not exempt it: the fit is what
+    the profile reads once that blank is removed, or in a run without that override.
+
+    Args:
+        fit: The fit.
+
+    Returns:
+        True where the profile's own value wins over the fit in every run.
+    """
+    return profile_value(fit) not in (_ABSENT, None)
+
+
+def _note(fit: Fit) -> str:
+    """What the summary line says about a value written over the fit: by the run's data section, else the profile."""
+    run = run_value(fit)
+    if run is not _ABSENT:
+        if run is None:
+            return "  (this run's --config data section writes it blank, which hides the fit in runs given it)"
+        return f"  (this run's --config data section sets {run!r}, which wins in runs given it; not the profile)"
+    own = profile_value(fit)
+    if own is _ABSENT:
+        return ""
+    if own is None:
+        return "  (the profile writes it blank, which hides the fit: remove that line)"
+    return f"  (the profile sets {own!r} itself, which wins)"
 
 
 def _sha256(path: Path) -> str:
@@ -244,8 +284,8 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError, yaml.YAMLError, pa.ArrowException) as error:
             print(f"refusing: {error}", file=sys.stderr)
             return 2
-        # a value the profile sets (or blanks) itself wins over the fit, so its count cannot make the fit unsafe
-        short = [fit for fit in fits if fit.short and own_value(fit) is _ABSENT]
+        # only a real value in the profile's own files wins over the fit in every run, so only its count is moot
+        short = [fit for fit in fits if fit.short and not exempt(fit)]
         if short and not args.allow_small_n:
             print("refusing: too few values to fit (pass --allow-small-n to write them anyway):", file=sys.stderr)
             for fit in short:
@@ -263,14 +303,7 @@ def main(argv: list[str] | None = None) -> int:
     if out.resolve() != loaded.resolve():
         print(f"  the profile reads none of these until they are its {loaded}")
     for fit in fits:
-        own = own_value(fit)
-        note = (
-            ""
-            if own is _ABSENT
-            else "  (the profile writes it blank, which hides the fit: remove that line)"
-            if own is None
-            else f"  (the profile sets {own!r} itself, which wins)"
-        )
+        note = _note(fit)
         below = f"  (below n_min {fit.n_min}: {_count(fit)})" if fit.short else ""
         print(f"  {fit.key}: {fit.value!r} over {fit.n}{below}{note}")
     print("Next: " + "; then ".join(NEXT_STEPS) + ".")

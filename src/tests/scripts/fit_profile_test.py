@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 import yaml  # type: ignore[import-untyped]
 
-from senselab.audio.workflows.triage.dataset_profile import deactivate_profile, load_profile
+from senselab.audio.workflows.triage.dataset_profile import deactivate_profile, load_profile, set_run_data
 from senselab.audio.workflows.triage.fit import columns_read
 
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "fit_profile.py"
@@ -71,9 +71,10 @@ def _rows(recordings: int = 600, participants: int = 150) -> list[dict[str, Any]
 
 @pytest.fixture
 def no_profile(without_triage_profile: None) -> Any:  # noqa: ANN401
-    """No profile active before the test, and none after it."""
+    """No profile active before the test, and none (nor a run data section) after it."""
     yield
     deactivate_profile()
+    set_run_data(None)
 
 
 def test_a_pilot_table_is_fitted_into_the_profile(no_profile: None, tmp_path: Path) -> None:
@@ -221,21 +222,33 @@ def test_a_table_too_small_for_a_value_is_refused_unless_allowed(
 def test_a_short_value_the_profile_sets_itself_is_not_refused(
     no_profile: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Satra review 2026-11-14, verifier round 1: only a fit the profile reads is held to its n_min.
+    """Satra review 2026-11-14, verifier rounds 1 and 2: only a real value in the profile's own files exempts a fit.
 
     300 recordings of 150 participants are enough for every value but the count-in gap (n_min 500). A profile that
-    sets that gap itself, or writes it blank, wins over the fit, so the fit is written; one that does not is refused.
+    sets that gap itself wins over the fit, so the fit is written. One that writes it blank, one that leaves it to the
+    run's --config data section, and one that does not set it at all are refused.
     """
     table = _table(tmp_path / "rv.parquet", _rows(300, 150))
-    for name, own in (("sets", "count_in:\n  gap_max_s: 3.0\n"), ("blanks", "count_in:\n  gap_max_s:\n")):
-        root = _profile(tmp_path / name, {"task_extent.yaml": own})
-        assert cli.main([str(table), "--profile", str(root)]) == 0, name
-        line = next(line for line in capsys.readouterr().out.splitlines() if "count_in.gap_max_s" in line)
-        assert "below n_min 500: n = 300" in line, name
+    root = _profile(tmp_path / "sets", {"task_extent.yaml": "count_in:\n  gap_max_s: 3.0\n"})
+    assert cli.main([str(table), "--profile", str(root)]) == 0
+    line = next(line for line in capsys.readouterr().out.splitlines() if "count_in.gap_max_s" in line)
+    assert "below n_min 500: n = 300" in line and "the profile sets 3.0 itself" in line
+    deactivate_profile()
+    override = tmp_path / "override.yaml"
+    override.write_text("data:\n  task_extent.yaml:\n    count_in:\n      gap_max_s: 3.0\n")
+    for name, own, extra in (
+        ("blanks", {"task_extent.yaml": "count_in:\n  gap_max_s:\n"}, []),
+        ("overrides", None, ["--config", str(override)]),
+        ("fits", None, []),
+    ):
+        root = _profile(tmp_path / name, own)
+        assert cli.main([str(table), "--profile", str(root), *extra]) == 2, name
+        err = capsys.readouterr().err
+        assert "task_extent.yaml count_in.gap_max_s: n = 300 < n_min 500" in err, name
+        assert err.count("< n_min") == 1, (name, err)
+        assert not (root / "fitted.yaml").exists(), name
         deactivate_profile()
-    root = _profile(tmp_path / "fits")
-    assert cli.main([str(table), "--profile", str(root)]) == 2
-    err = capsys.readouterr().err
-    assert "task_extent.yaml count_in.gap_max_s: n = 300 < n_min 500" in err
-    assert err.count("< n_min") == 1, err
-    assert not (root / "fitted.yaml").exists()
+    root = tmp_path / "overrides"
+    assert cli.main([str(table), "--profile", str(root), "--config", str(override), "--allow-small-n"]) == 0
+    line = next(line for line in capsys.readouterr().out.splitlines() if "count_in.gap_max_s" in line)
+    assert "--config data section sets 3.0" in line and "the profile sets" not in line
