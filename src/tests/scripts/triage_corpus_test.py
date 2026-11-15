@@ -214,6 +214,26 @@ def test_with_hints_a_recording_whose_hint_declares_nothing_is_a_failed_row(
         assert row["ok"] is False and row["error"].startswith("HintDeclaresNothing")
 
 
+def test_resuming_with_hints_skips_a_run_that_finished_before_the_hint_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recording that finished under ``--no-hint`` is skipped when the out root resumes with an empty hint."""
+    fake = _FakeRun()
+    monkeypatch.setattr(driver, "run_triage", fake)
+    manifest = _manifest(tmp_path, ["rec"])
+    out = tmp_path / "out"
+    driver.run_slice(manifest, out_root=out, slice_index=0, slice_count=1, config=CONFIG)
+
+    def build_hint(path: Path) -> tuple[Any, None]:  # noqa: ANN401
+        return hint_for(), None
+
+    summary = driver.run_slice(
+        manifest, out_root=out, slice_index=0, slice_count=1, config=CONFIG, build_hint=build_hint
+    )
+    assert summary["counts"] == {"ok": 0, "failed": 0, "skipped": 1} and fake.calls == ["rec"]
+    assert not (out / "rows" / "_unplaced").exists()
+
+
 def test_run_takes_hints_or_no_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--no-hint`` runs with no hint and no refusal; ``--hints`` refuses an empty hint; one of the two is required."""
     fake = _FakeRun()

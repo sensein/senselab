@@ -228,30 +228,37 @@ def triage_one(
 
     Returns:
         The row written, or ``{"stem": ..., "skipped": True}`` where the recording had finished. With ``build_hint``,
-        a recording whose hint is None or declares no participant, session or task is a failed row.
+        a recording whose hint is None or declares no participant, session or task is a failed row, under
+        ``rows/_unplaced/``; the check comes after the finished-row skip, so resuming an out root whose run for the
+        recording finished (with ``--no-hint``, say) skips it rather than adding a failed row beside it.
     """
     source = Path(str(entry["source"]))
     stem = source.stem
     row: dict[str, Any] = {"source": str(source), "stem": stem, **context}
     started = time.time()
     hint = None
+    declares = True
     try:
         if not source.is_file():
             raise FileNotFoundError("input audio missing")
         hint = build_hint(source)[0] if build_hint is not None else None
         identity = identity_of(hint, stem=stem, corpus_path=corpus_path_of(source, corpus_root))
-        if build_hint is not None and not set(identity.sources) - {RECORDING_ID_FIELD}:
-            what = "no hint" if hint is None else "a hint declaring no participant, session or task"
-            raise HintDeclaresNothing(f"--hints gave this recording {what}")
+        declares = build_hint is None or bool(set(identity.sources) - {RECORDING_ID_FIELD})
         subdir = entity_subdir(identity)
         row["identity"] = {**identity_columns(identity), RECORDING_ID_COLUMN: identity.id_of(stem)}
     except Exception as error:  # noqa: BLE001 -- recorded per row, never fatal to the slice
         subdir = Path("_unplaced")
         row.update(ok=False, error=f"{type(error).__name__}: {error}")
     row_file = row_path(out_root, subdir, stem)
+    if "error" not in row and finished(row_file):
+        return {"stem": stem, "skipped": True}
+    if "error" not in row and not declares:
+        what = "no hint" if hint is None else "a hint declaring no participant, session or task"
+        refusal = HintDeclaresNothing(f"--hints gave this recording {what}")
+        row.pop("identity", None)
+        row.update(ok=False, error=f"{type(refusal).__name__}: {refusal}")
+        row_file = row_path(out_root, Path("_unplaced"), stem)
     if "error" not in row:
-        if finished(row_file):
-            return {"stem": stem, "skipped": True}
         row["removed_attempts"] = remove_earlier_attempts(out_root / RUNS_SUBDIR, subdir, stem)
         seconds = _audio_seconds(source)
         isolated = seconds is not None and seconds >= isolate_longer_than
