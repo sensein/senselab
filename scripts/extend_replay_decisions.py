@@ -22,7 +22,8 @@ REDACT and VERDICT all read the hint. Without ``--hints`` the replay runs with t
 which runs with no hint and is recorded as such. A hint that declares another task than the record, or a task list
 that now describes the task otherwise, is recorded as the run's own, and the row's ``identity_change`` names what
 moved. A hint that names another participant or session than the run records is refused (the row's
-``identity_refused`` names what it would move; the summary counts them) unless ``--allow-identity-change`` is given;
+``identity_refused`` names what it would move; the summary counts them, and every refused row's reason is printed
+to stderr) unless ``--allow-identity-change`` is given;
 a run that records no identity yet records the hint's.
 
 ``--out-root DIR`` writes each replayed run into a fresh root under ``DIR`` instead of in place,
@@ -97,6 +98,7 @@ from senselab.audio.workflows.triage.extend import (
 from senselab.audio.workflows.triage.hint_record import hint_digest
 from senselab.audio.workflows.triage.identity import (
     DECLARED_PARTICIPANT,
+    DECLARED_SESSION,
     RecordingIdentity,
     identity_of,
     recorded_identity,
@@ -420,12 +422,18 @@ def process(
 
 
 def _participants_of_change(change: dict[str, Any]) -> set[str]:
-    """The participants a row's ``identity_change`` names, before and after the replay."""
+    """The participants a row's ``identity_change`` moves a run from or to, for the cohort pass to rerun.
+
+    Only a move counts: a participant or a session that both sides name and that differs. A first record (no ``from``,
+    or a side that names none), or a change of the task or of where the identity came from, moves no run between
+    participants or sessions, so it names nobody.
+    """
+    before, after = change.get("from") or {}, change.get("to") or {}
     named: set[str] = set()
-    for side in ("from", "to"):
-        attributes = change.get(side) or {}
-        if attributes.get(DECLARED_PARTICIPANT):
-            named.add(str(attributes[DECLARED_PARTICIPANT]))
+    for key in (DECLARED_PARTICIPANT, DECLARED_SESSION):
+        old, new = before.get(key), after.get(key)
+        if old and new and old != new:
+            named.update(str(side[DECLARED_PARTICIPANT]) for side in (before, after) if side.get(DECLARED_PARTICIPANT))
     return named
 
 
@@ -462,8 +470,8 @@ def run_slice(
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went. ``identity_participants`` lists the
-        participants a recorded identity change moved a run from or to, which ``extend_cohort.py apply
-        --participants`` reruns.
+        participants a recorded participant or session move took a run from or to (:func:`_participants_of_change`),
+        which ``extend_cohort.py apply --participants`` reruns. ``refused`` holds each refused row's stem and reason.
     """
     started = time.time()
     build_hint = load_hint_builder(hints) if hints is not None else None
@@ -497,6 +505,7 @@ def run_slice(
     identity_changed: list[str] = []
     identity_participants: set[str] = set()
     identity_refused: list[str] = []
+    refused: list[dict[str, str]] = []
     retired = 0
     for record in log:
         counts[str(record["status"])] = counts.get(str(record["status"]), 0) + 1
@@ -510,6 +519,8 @@ def run_slice(
             identity_participants.update(_participants_of_change(record["identity_change"]))
         if record.get("identity_refused"):
             identity_refused.append(str(record["stem"]))
+        if record["status"] == REFUSED:
+            refused.append({"stem": str(record["stem"]), "why": str(record.get(DERIVATION) or "")})
         for node in record.get("errors") or {}:
             node_errors[node] = node_errors.get(node, 0) + 1
 
@@ -530,6 +541,7 @@ def run_slice(
         "identity_changed": identity_changed,
         "identity_participants": sorted(identity_participants),
         "identity_refused": identity_refused,
+        "refused": refused,
         "elapsed_s": time.time() - started,
         "log": str(log_path),
     }
@@ -548,8 +560,9 @@ def main(argv: list[str] | None = None) -> int:
         ``error``, ``errored`` or ``refused`` (an identity change refused among them) — the other stores are
         written either way — 2 when the arguments could not be resolved and nothing was read, and 3 when any
         replayed recording's REVIEW reading could not be carried forward and must be read again (the summary's
-        ``needs_reread`` names them). 3 takes precedence over 1: a shard with both exits 3, and its refused rows are
-        still printed to stderr and named in the summary (``counts``, ``identity_refused``).
+        ``needs_reread`` names them). 3 takes precedence over 1: a shard with both exits 3. Every refused row's stem
+        and reason is printed to stderr either way, and named in the summary (``counts``, ``refused``, and
+        ``identity_refused`` for an identity change).
     """
     args = build_parser().parse_args(argv)
 
@@ -588,6 +601,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  identity recorded anew on {len(summary['identity_changed'])} runs (each row's identity_change)")
         if summary["identity_participants"]:
             print(f"  participants affected: {' '.join(summary['identity_participants'])}")
+    for row in summary["refused"]:
+        print(f"REFUSED {row['stem']}: {row['why']}", file=sys.stderr)
     if summary["identity_refused"]:
         print(
             f"REFUSED: {len(summary['identity_refused'])} runs whose hint names another participant or session "

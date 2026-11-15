@@ -1280,26 +1280,41 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
     def test_the_slice_lists_the_participants_an_identity_change_moved(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Both sides of each recorded change are listed, so the cohort pass can rerun only those (plan check 9)."""
-        roots = [tmp_path / f"run{n}" for n in range(3)]
+        """Both sides of each participant or session move are listed, so the cohort pass reruns only those (check 9).
+
+        Satra review 2026-11-14, verifier round 2: a first record, a task-only change and a change of where the
+        identity came from move no run, so they list nobody.
+        """
+        roots = [tmp_path / f"run{n}" for n in range(6)]
         for root in roots:
             _seed_run(root)
         manifest = _manifest(tmp_path / "manifest.jsonl", roots)
+
+        def _side(participant: str, session: str = "s1", task: str = "t", source: str = "hint") -> dict[str, str]:
+            return {
+                DECLARED_PARTICIPANT: participant,
+                DECLARED_SESSION: session,
+                DECLARED_TASK_ID: task,
+                DECLARED_FROM: source,
+            }
+
         rows = iter(
             [
-                {
-                    "status": cli.OK,
-                    "identity_change": {"from": {DECLARED_PARTICIPANT: "p01"}, "to": {DECLARED_PARTICIPANT: "p02"}},
-                },
-                {"status": cli.OK, "identity_change": {"from": None, "to": {DECLARED_PARTICIPANT: "p03"}}},
+                {"status": cli.OK, "identity_change": {"from": _side("p01"), "to": _side("p02")}},
+                {"status": cli.OK, "identity_change": {"from": None, "to": _side("p03")}},
+                {"status": cli.OK, "identity_change": {"from": _side("p04", "s1"), "to": _side("p04", "s2")}},
+                {"status": cli.OK, "identity_change": {"from": _side("p05", task="a"), "to": _side("p05", task="b")}},
+                {"status": cli.OK, "identity_change": {"from": _side("p06", source="x"), "to": _side("p06")}},
                 {"status": cli.OK, "retired": 0},
             ]
         )
         monkeypatch.setattr(cli, "replay_one", lambda run_root, config, **kwargs: next(rows))
         assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)]) == 0
         [summary_path] = (tmp_path / "slices").glob("*.summary.json")
-        assert json.loads(summary_path.read_text())["identity_participants"] == ["p01", "p02", "p03"]
-        assert "participants affected: p01 p02 p03" in capsys.readouterr().out
+        summary = json.loads(summary_path.read_text())
+        assert summary["identity_participants"] == ["p01", "p02", "p04"]
+        assert len(summary["identity_changed"]) == 5, "every recorded change is still named"
+        assert "participants affected: p01 p02 p04" in capsys.readouterr().out
 
     def test_a_reread_outranks_a_refusal_in_the_exit_code_and_the_refusal_is_still_reported(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -1342,6 +1357,29 @@ class TestAReplayDoesNotMoveTheParticipantOrSession:
         [summary_path] = (tmp_path / "slices").glob("*.summary.json")
         assert json.loads(summary_path.read_text())["identity_refused"] == ["run0"]
         assert "REFUSED: 1 runs" in capsys.readouterr().err
+
+    def test_every_refused_row_s_reason_is_printed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Satra review 2026-11-14, verifier round 2: a refusal that is not an identity change is printed too."""
+        roots = [tmp_path / f"run{n}" for n in range(2)]
+        for root in roots:
+            _seed_run(root)
+        manifest = _manifest(tmp_path / "manifest.jsonl", roots)
+        rows = iter(
+            [
+                {"status": cli.REFUSED, cli.DERIVATION: "the recording's digest differs from ADMIT's"},
+                {"status": cli.REFUSED, cli.DERIVATION: "moves session", "identity_refused": {"session": {}}},
+            ]
+        )
+        monkeypatch.setattr(cli, "replay_one", lambda run_root, config, **kwargs: next(rows))
+        code = cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)])
+        assert code == 1
+        err = capsys.readouterr().err
+        assert "REFUSED run0: the recording's digest differs from ADMIT's" in err
+        assert "REFUSED run1: moves session" in err
+        [summary_path] = (tmp_path / "slices").glob("*.summary.json")
+        assert [row["stem"] for row in json.loads(summary_path.read_text())["refused"]] == ["run0", "run1"]
 
     def test_the_driver_passes_allow_identity_change(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """--allow-identity-change reaches each row's replay."""
