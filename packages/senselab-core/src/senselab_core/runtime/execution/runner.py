@@ -17,8 +17,6 @@ nothing a killed coordinator leaves is on a later attempt's path.
 import asyncio
 import contextlib
 import contextvars
-import os
-import re
 import threading
 import typing
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -28,9 +26,10 @@ from pathlib import Path
 from typing import Any
 
 from pydra.compose import python, workflow
+from pydra.engine.lease import Lease
 from pydra.engine.result import Result
-from pydra.engine.store import Lease, context_key
-from pydra.engine.submitter import Submitter, WorkflowError
+from pydra.engine.store import context_key
+from pydra.engine.submitter import JobErrorEntry, Submitter, WorkflowError
 from pydra.utils.resources import ComputeResources
 from pydra.utils.routing import tag_router
 from pydra.workers.base import Worker
@@ -63,8 +62,6 @@ RECORD_FIELD = "row"
 """The records node's input, a row index; `records.row` is the split every gather combines over."""
 REF = "ref"
 """The one output of every compiled node: the job's `ResultRef` as JSON (the row index, for the records node)."""
-NO_TELEMETRY = "NO_ET"
-"""The environment variable whose presence stops pydra's version check from fetching anything."""
 
 
 class ElementFailed(RuntimeError):
@@ -99,8 +96,14 @@ class RunOutcome:
         return not failed and not any(self.blocked.values())
 
 
-class _EpochLease(Lease):  # type: ignore[misc]
+class _EpochLease:
     """pydra's lease of a job, held without a lock file: the run's coordinator epoch excludes other coordinators."""
+
+    def __init__(self, checksum: str, cache_dir: Path, lockfile: Path) -> None:
+        """Name the job `checksum` whose directory is `cache_dir` and whose (unwritten) lock is `lockfile`."""
+        self.checksum = checksum
+        self.cache_dir = cache_dir
+        self.lockfile = lockfile
 
     def __enter__(self) -> "_EpochLease":
         return self
@@ -861,14 +864,14 @@ def _submit_plan(run: _Run, store: SenselabStore, classes: Sequence[str]) -> Non
         Exception: as `PydraRunner.run_plan`.
     """
     try:
-        with _no_telemetry(), _submitter(run, store, classes) as submitter:
+        with _submitter(run, store, classes) as submitter:
             submitter(compile_plan(run.placed), raise_errors=True)
     except WorkflowError as error:
         if run.errors:
             raise run.errors[0] from error
         if error.__context__ is not None:
             raise error.__context__ from error
-        if not (error.errors and all(_errored_job(entry) in run.element_failures for entry in error.errors)):
+        if not (error.entries and all(_errored_job(entry) in run.element_failures for entry in error.entries)):
             raise
 
 
@@ -880,29 +883,15 @@ def _submitter(run: _Run, store: SenselabStore, classes: Sequence[str]) -> Submi
         workers={name: ExecutorWorker(run_state=run, resource_class=name) for name in classes},
         router=tag_router({name: name for name in classes}),
         on_error="raise_at_end",
+        telemetry=False,
     )
 
 
-def _errored_job(entry: str) -> str | None:
-    """Return the job an entry of a `WorkflowError` names as having raised, or None for any other entry."""
-    found = _ERRORED.match(entry)
-    return found[1] if found is not None else None
-
-
-_ERRORED = re.compile(r"^Job '([^']+)', (?!inputs could not be resolved)")
-
-
-@contextlib.contextmanager
-def _no_telemetry() -> Iterator[None]:
-    """Set `NO_TELEMETRY` for the block, unless it is already set, and remove it after."""
-    if NO_TELEMETRY in os.environ:
-        yield
-        return
-    os.environ[NO_TELEMETRY] = "1"
-    try:
-        yield
-    finally:
-        os.environ.pop(NO_TELEMETRY, None)
+def _errored_job(entry: JobErrorEntry) -> str | None:
+    """Return the job an entry of a `WorkflowError` names as having raised, or None for an unresolved input."""
+    if entry.phase != "run":
+        return None
+    return entry.job_name if entry.state_index is None else f"{entry.job_name}({entry.state_index})"
 
 
 def _outcome(placed: Plan, run: _Run) -> RunOutcome:
