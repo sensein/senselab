@@ -13,8 +13,11 @@ reading the release decision applies:
 - ``error``: the store would not open.
 
 Each store with a record is also counted per criterion: ``scanned_by`` empty in every record, a ``failed`` detector,
-a ``missing`` detector; overall, among the ``declined`` stores and among the rest. Where SPEECH read lexical words,
-a ``complete`` store can be released as ``scan_found_nothing`` and an ``incomplete`` one is ``scan_unrecorded``.
+a ``missing`` detector; overall, among the ``declined`` stores and among the rest. ``release_reading`` counts the
+same states by the release ground each could reach: ``complete_scans_found_nothing_eligible`` is every ``complete``
+store, which is released as ``scan_found_nothing`` only where SPEECH read lexical words, REDACT did not run and no
+live ``pii`` finding stands (none of which this audit reads; a store with no lexical word is ``no_lexical_word``);
+an ``incomplete`` or unrecorded one would be ``scan_unrecorded`` under the same conditions.
 ``affected`` counts the stores the earlier rule read as scanned (any record, unless one says ``scanned: false``) and
 :func:`scan_state` does not: those whose release that change moves from found-nothing to unrecorded.
 
@@ -168,7 +171,7 @@ def summarise(root: Path, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "criteria_declined": _criteria([row for row in recorded if row["state"] == DECLINED]),
         "criteria_not_declined": _criteria([row for row in recorded if row["state"] != DECLINED]),
         "release_reading": {
-            "scan_found_nothing_open": states.get(COMPLETE, 0),
+            "complete_scans_found_nothing_eligible": states.get(COMPLETE, 0),
             "scan_unrecorded_with_record": states.get(INCOMPLETE, 0),
             "scan_unrecorded_no_record": states.get(NO_RECORD, 0),
             "nothing_beyond_stimulus": states.get(DECLINED, 0),

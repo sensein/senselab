@@ -65,7 +65,8 @@ def test_each_store_is_read_as_the_release_decision_reads_it(tmp_path: Path) -> 
         "missing_nonempty": 1,
     }
     assert summary["earlier_rule_scanned"] == 5 and summary["affected"] == 3
-    assert summary["release_reading"]["scan_found_nothing_open"] == 2
+    assert summary["release_reading"]["complete_scans_found_nothing_eligible"] == 2
+    assert "scan_found_nothing_open" not in summary["release_reading"]
     assert json.loads((tmp_path / "out" / "summary.json").read_text()) == summary
     with (tmp_path / "out" / "not_complete.tsv").open() as handle:
         rows = {Path(row["store"]).parents[1].name: row for row in csv.DictReader(handle, delimiter="\t")}
