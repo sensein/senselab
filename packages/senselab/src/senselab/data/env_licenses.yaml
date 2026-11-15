@@ -465,11 +465,11 @@ envs:
       version: '3.20'
     numpy:
       expression: BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
-      source: numpy 2.4.4 License-Expression
+      source: numpy 2.5.4 License-Expression
       verified:
-        date: '2026-11-04'
+        date: '2026-11-14'
         how: pep639
-      version: 2.4.4
+      version: 2.5.4
     packaging:
       expression: Apache-2.0 OR BSD-2-Clause
       source: packaging 26.1 License-Expression
