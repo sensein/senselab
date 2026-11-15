@@ -2,7 +2,7 @@
 r"""Triage one recording through the senselab triage graph.
 
     uv run python scripts/triage_audio.py recording.wav [--out DIR] [--config OVERRIDE.yaml] \
-        [--hint HINT.yaml] [--enrollment ENROLLMENT.yaml]
+        [--hint HINT.yaml [--no-identity]] [--enrollment ENROLLMENT.yaml]
 
 Two arguments, and three optional files. There are deliberately no per-knob flags: every number the
 graph uses lives in one versioned file with its derivation written beside it,
@@ -20,6 +20,15 @@ it maps onto ``senselab.audio.data_structures.AudioHints``:
     expected_speech:
       - text: "The quick brown fox"
         prompt_id: harvard-01
+    metadata:
+      participant_id: sub-01
+      session_id: ses-1
+
+senselab reads no file name, so a ``--hint`` that declares no participant, session or task (no ``metadata``
+``participant_id`` / ``session_id``, no task) is refused, exit 2, as ``triage_corpus --hints`` refuses one: the run
+would have no identity. ``--no-identity`` runs it anyway, for a dataset with no identities; without ``--hint`` the
+recording runs with no hint and no refusal. (:func:`~senselab.audio.workflows.triage.run.run_triage` itself refuses
+nothing: the caller decides.)
 
 ``--enrollment`` is the target speaker's vector, estimated across that subject's recordings by
 whatever produced it; SPEECH identifies the target by this and by nothing in the hint. It maps onto
@@ -67,7 +76,7 @@ from senselab.audio.data_structures import AudioHints, SpeakerEmbeddingProvenanc
 from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import DatasetDataMissing, require_dataset_values
 from senselab.audio.workflows.triage.enrollment import Enrollment
-from senselab.audio.workflows.triage.identity import identity_of
+from senselab.audio.workflows.triage.identity import RECORDING_ID_FIELD, identity_of
 from senselab.audio.workflows.triage.run import corpus_path_of, run_triage
 from senselab.audio.workflows.triage.vocabulary import RunState, release_value
 
@@ -121,6 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="AudioHints YAML: what the recording was declared to contain. An assertion, not a measurement.",
+    )
+    parser.add_argument(
+        "--no-identity",
+        action="store_true",
+        help="Run with a --hint that declares no participant, session or task (a dataset with no identities), "
+        "rather than refuse it.",
     )
     parser.add_argument(
         "--enrollment",
@@ -219,7 +234,8 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         0 when VERDICT concluded and no node raised, 1 when a node raised or VERDICT never
         concluded — the verdict is still written and the run directory still holds everything the
-        graph reached — and 2 when the arguments could not be resolved and nothing was measured.
+        graph reached — and 2 when the arguments could not be resolved and nothing was measured, a
+        ``--hint`` declaring no participant, session or task without ``--no-identity`` among them.
         The code reports whether the graph ran, never what it concluded: a ``discard`` is a
         successful run.
     """
@@ -246,9 +262,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: invalid hint {args.hint}: {error}", file=sys.stderr)
             return 2
     try:
-        identity_of(hint, stem=args.audio.stem, corpus_path=corpus_path_of(args.audio, args.corpus_root))
+        identity = identity_of(hint, stem=args.audio.stem, corpus_path=corpus_path_of(args.audio, args.corpus_root))
     except ValueError as error:
         print(f"ERROR: the recording's identity could not be resolved: {error}", file=sys.stderr)
+        return 2
+    if args.hint is not None and not args.no_identity and not set(identity.sources) - {RECORDING_ID_FIELD}:
+        print(
+            f"ERROR: {args.hint} declares no participant, session or task, and senselab reads no file name, so "
+            "the run would have no identity; declare them in the hint, or pass --no-identity to run without one",
+            file=sys.stderr,
+        )
         return 2
     enrollment = None
     if args.enrollment is not None:
