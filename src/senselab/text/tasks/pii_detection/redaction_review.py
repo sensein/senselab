@@ -883,11 +883,11 @@ def reviewer_runtime(engine: Mapping[str, Any], device: object) -> dict[str, Any
     (:data:`~senselab.utils.reproduce.host.WORKER_DEVICE_PROBE`): the name of every CUDA device it could see, its own
     torch and its ``CUDA_VISIBLE_DEVICES``. The vLLM worker touches no CUDA beside its server, so on that engine the
     devices are its ``CUDA_VISIBLE_DEVICES`` named through ``nvidia-smi``
-    (:func:`~senselab.utils.reproduce.host.visible_gpu_names`). Beside that, from this host and one ``nvidia-smi``
-    query: its name, every GPU listed on the node and the driver, the vLLM version the server reported, and the batch
-    job id. None of it shapes the
-    request, so none of it is in the reading's cache key, and a cached reading keeps the record of the machine that
-    produced it.
+    (:func:`~senselab.utils.reproduce.host.visible_gpu_names`; an index on a node of mixed GPU models names nothing
+    unless ``CUDA_DEVICE_ORDER=PCI_BUS_ID``), and its torch is the version installed in its venv. Beside that, from
+    this host and one ``nvidia-smi`` query: its name, every GPU listed on the node and the driver, the vLLM version
+    the server reported, and the batch job id. None of it shapes the request, so none of it is in the reading's cache
+    key, and a cached reading keeps the record of the machine that produced it.
 
     Args:
         engine: The engine identity the worker reported; its ``version`` is the vLLM version on that engine.
@@ -914,7 +914,9 @@ def reviewer_runtime(engine: Mapping[str, Any], device: object) -> dict[str, Any
         table = []
     reported = worker_device(device)
     if on_vllm and isinstance(device, dict) and "cuda_visible_devices" in device:
-        reported["gpus"] = visible_gpu_names(reported["cuda_visible_devices"], table)
+        # the worker inherits this process's environment, so its CUDA_DEVICE_ORDER is this one
+        order = os.environ.get("CUDA_DEVICE_ORDER")
+        reported["gpus"] = visible_gpu_names(reported["cuda_visible_devices"], table, device_order=order)
     try:
         host: str | None = socket.gethostname()
     except OSError:

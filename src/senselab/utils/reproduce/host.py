@@ -120,26 +120,33 @@ def gpu_table(*, runner: Runner | None = None) -> list[dict[str, str]]:
     return [dict(zip(keys, (_one_line(cell) for cell in row))) for row in rows if len(row) == len(keys)]
 
 
-def visible_gpu_names(visible: str | None, table: Sequence[Mapping[str, str]]) -> list[str] | None:
+def visible_gpu_names(
+    visible: str | None, table: Sequence[Mapping[str, str]], *, device_order: str | None = None
+) -> list[str] | None:
     """The names of the GPUs a ``CUDA_VISIBLE_DEVICES`` value lets a process see, read off :func:`gpu_table`.
 
     Each entry is an ``nvidia-smi`` index or a GPU UUID (``GPU-...``, a unique prefix allowed, as CUDA allows).
     Unset, every listed GPU is visible. An index is ``nvidia-smi``'s, which is CUDA's own order only under
-    ``CUDA_DEVICE_ORDER=PCI_BUS_ID``; a UUID is unambiguous.
+    ``CUDA_DEVICE_ORDER=PCI_BUS_ID`` (CUDA's default, ``FASTEST_FIRST``, may reorder unlike models), so an index
+    entry is named only under that order or where every GPU on the node is the same model; a UUID is unambiguous.
 
     Args:
         visible: The process's ``CUDA_VISIBLE_DEVICES``; None where it is unset.
         table: :func:`gpu_table`'s rows.
+        device_order: The process's ``CUDA_DEVICE_ORDER``; None where it is unset.
 
     Returns:
-        One name per visible GPU, in the order the value lists them; None where no GPU is visible or any entry
-        names no listed GPU.
+        One name per visible GPU, in the order the value lists them; None where no GPU is visible, any entry
+        names no listed GPU, or an index entry cannot be read as CUDA's on a node of mixed models.
     """
     if visible is None:
         return [row["name"] for row in table] or None
+    indices_hold = device_order == "PCI_BUS_ID" or len({row["name"] for row in table}) <= 1
     names: list[str] = []
     for entry in (part.strip() for part in visible.split(",")):
         if entry.isdigit():
+            if not indices_hold:
+                return None
             found = [row for row in table if row["index"] == entry]
         else:
             found = [row for row in table if entry and row["uuid"].startswith(entry)]
@@ -155,12 +162,16 @@ WORKER_DEVICE_KEYS = ("gpus", "torch", "cuda_visible_devices")
 WORKER_DEVICE_PROBE = r"""
 def senselab_worker_device(cuda=True):
     import os
-    import sys
 
     visible = os.environ.get("CUDA_VISIBLE_DEVICES")
     if not cuda:
-        version = getattr(sys.modules.get("torch"), "__version__", None)
-        return {"gpus": None, "torch": None if version is None else str(version), "cuda_visible_devices": visible}
+        try:
+            from importlib.metadata import version as installed
+
+            version = installed("torch")
+        except Exception:
+            version = None
+        return {"gpus": None, "torch": version, "cuda_visible_devices": visible}
     try:
         import torch
     except Exception:
@@ -180,9 +191,9 @@ It returns the keys in :data:`WORKER_DEVICE_KEYS`: the name of every CUDA device
 ``gpus`` is None where CUDA is unavailable and ``torch`` is None where torch does not import.
 
 ``senselab_worker_device(cuda=False)`` touches no CUDA, for a process beside a server that already holds the card:
-``gpus`` is None (name them with :func:`visible_gpu_names`), and ``torch`` is named only where the process has already
-imported it. The source holds no percent sign, so it can be pasted into a worker script that is itself
-``%``-formatted.
+``gpus`` is None (name them with :func:`visible_gpu_names`), and ``torch`` is the version installed where the process
+runs (``importlib.metadata``), read without importing it; None where torch is not installed. The source holds no
+percent sign, so it can be pasted into a worker script that is itself ``%``-formatted.
 """
 
 

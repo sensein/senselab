@@ -223,13 +223,14 @@ class TestTheWorkerAgainstAMockedServer:
         assert argv[argv.index("--max-model-len") + 1] == "12288" and "--enable-prefix-caching" in argv
 
     @pytest.mark.parametrize(
-        ("mask", "named"),
+        ("mask", "order", "named"),
         [
-            ("1", ["NVIDIA H100 80GB HBM3"]),
-            ("GPU-0000aaaa-11", ["NVIDIA A100-SXM4-80GB"]),
-            (None, ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"]),
+            ("1", "PCI_BUS_ID", ["NVIDIA H100 80GB HBM3"]),
+            ("1", None, None),
+            ("GPU-0000aaaa-11", None, ["NVIDIA A100-SXM4-80GB"]),
+            (None, None, ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"]),
         ],
-        ids=["index", "uuid", "unset"],
+        ids=["index-pci-order", "index-default-order", "uuid", "unset"],
     )
     def test_the_answer_records_the_vllm_version_and_the_machine(
         self,
@@ -237,14 +238,16 @@ class TestTheWorkerAgainstAMockedServer:
         monkeypatch: pytest.MonkeyPatch,
         policy: rr.ReviewPolicy,
         mask: str | None,
-        named: list[str],
+        order: str | None,
+        named: list[str] | None,
     ) -> None:
         """The vLLM that served it, and the devices the worker's CUDA_VISIBLE_DEVICES names, read off nvidia-smi.
 
         The worker beside the server touches no CUDA, so its devices come from its mask and one ``nvidia-smi``
-        table; its torch is named only where it had already imported torch.
+        table, and its torch is the version installed where it runs, read without importing torch. On this node of
+        two models an index is CUDA's only under ``CUDA_DEVICE_ORDER=PCI_BUS_ID``; otherwise it names nothing.
         """
-        import torch
+        from importlib.metadata import version
 
         from senselab.utils.reproduce import host
 
@@ -264,13 +267,17 @@ class TestTheWorkerAgainstAMockedServer:
             monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
         else:
             monkeypatch.setenv("CUDA_VISIBLE_DEVICES", mask)
+        if order is None:
+            monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
+        else:
+            monkeypatch.setenv("CUDA_DEVICE_ORDER", order)
         engine = rv.engine_identity("vllm", _settings())
         result = rr.review_transcript("hello", policy=policy, context={"item_set": True}, engine=engine)
         assert result.available, result.failure
         assert result.runtime["vllm"] == "0.31.0" == engine["version"]
         assert result.runtime["cuda_visible_devices"] == mask
         assert result.runtime["gpus"] == named
-        assert result.runtime["torch"] in (None, torch.__version__)
+        assert result.runtime["torch"] == version("torch"), "the worker's python is this one, torch installed"
         assert result.runtime["node_gpus"] == ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"]
         assert result.runtime["nvidia_driver"] == "570.86.15"
         assert len(calls) == 1, "one nvidia-smi query per worker start"
