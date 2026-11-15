@@ -15,6 +15,7 @@ These embeddings capture rich acoustic representations learned from large-scale 
 | wav2vec2-base | HuggingFace | 768 | 95M | LibriSpeech | General SSL features |
 | HuBERT-large | HuggingFace | 1024 | 315M | LibriLight | General SSL features |
 | WavLM-large | HuggingFace | 1024 | 315M | LibriLight | General SSL features |
+| Whisper (encoder only) | HuggingFace | 1280 (large-v3) | 635M encoder | Weakly supervised ASR | Speech encoder features |
 | ECAPA-TDNN | SpeechBrain | 192 | 7.3M | VoxCeleb | Speaker identification |
 | APC | S3PRL | 512 | 4.1M | LibriSpeech | Generative SSL |
 | TERA | S3PRL | 768 | 21M | LibriSpeech | Generative SSL |
@@ -42,5 +43,12 @@ s3_emb = extract_ssl_embeddings_from_audios([audio], "apc")
 ```
 
 ## Backend Notes
+
+**Whisper-style encoder-decoder models** (feature extractor returns `input_features`): only the encoder runs. Audio is cut into consecutive 30 s windows, each encoded on its own, and the states are concatenated in time, so the result keeps the `[num_layers, time_frames, embedding_dim]` shape (20 ms frames; window k fills frames `[1500k, 1500(k+1))`). The `revision` must be a 40-hex commit:
+
+```python
+whisper = HFModel(path_or_uri="openai/whisper-large-v3", revision="06f233fe06e710322aca913c1bc4249a0d71fce1")
+w_emb = extract_ssl_embeddings_from_audios([audio], whisper)
+```
 
 **S3PRL** runs in an isolated subprocess venv because it requires torchaudio<2.5 (it uses the removed `torchaudio.set_audio_backend()` API). The venv is automatically provisioned on first use via `uv`.
