@@ -141,3 +141,27 @@ def test_load_model_loads_the_resolved_commit(monkeypatch: pytest.MonkeyPatch, t
     api._load_model(_model(SHA), None)
     assert asked == {"repo_id": "facebook/vjepa2-test", "revision": SHA}
     assert seen == {"model": f"facebook/vjepa2-test@{resolved}", "processor": f"facebook/vjepa2-test@{resolved}"}
+
+
+def test_preprocess_with_the_real_vjepa2_processor_config() -> None:
+    """The published V-JEPA2 ViT-g processor config (vendored JSON, no weights) maps a clip to (1, T, 3, 256, 256).
+
+    A tiny random V-JEPA2 at that crop size accepts the result.
+    """
+    from transformers import VJEPA2VideoProcessor
+
+    cfg = Path(__file__).parent / "data" / "vjepa2_vitg_fpc64_256_video_preprocessor_config.json"
+    processor = VJEPA2VideoProcessor.from_json_file(str(cfg))
+    gen = torch.Generator().manual_seed(2)
+    clip = torch.randint(0, 256, (4, 90, 120, 3), generator=gen, dtype=torch.uint8)
+    pixels = api.make_preprocess(processor)(clip)
+    assert tuple(pixels.shape) == (1, 4, 3, 256, 256)
+    torch.manual_seed(0)
+    config = VJEPA2Config(
+        crop_size=256, frames_per_clip=4, tubelet_size=2, patch_size=64, hidden_size=HIDDEN, num_hidden_layers=1,
+        num_attention_heads=2, mlp_ratio=2, pred_hidden_size=16, pred_num_attention_heads=2, pred_num_hidden_layers=1,
+        pred_num_mask_tokens=1, pred_mlp_ratio=2,
+    )  # fmt: skip
+    with torch.no_grad():
+        states = VJEPA2Model(config).eval()(pixel_values_videos=pixels, skip_predictor=True).last_hidden_state
+    assert states.shape[0] == 1 and states.shape[-1] == HIDDEN

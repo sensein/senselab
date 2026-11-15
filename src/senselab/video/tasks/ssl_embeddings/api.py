@@ -51,11 +51,16 @@ def _load_model(model: HFModel, device: Optional[DeviceType]) -> Tuple[Any, Prep
     sha, _ = resolve_model(name, revision)
     encoder = AutoModel.from_pretrained(name, revision=sha).to(chosen.value).eval()
     processor = AutoVideoProcessor.from_pretrained(name, revision=sha)
+    return encoder, make_preprocess(processor), chosen.value
+
+
+def make_preprocess(processor: Any) -> Preprocess:  # noqa: ANN401 - a transformers video processor
+    """A function from one clip `(T, H, W, C)` uint8 to the processor's `pixel_values_videos` `(1, T, C, H, W)`."""
 
     def preprocess(clip: torch.Tensor) -> torch.Tensor:
         return processor(clip.permute(0, 3, 1, 2), return_tensors="pt")["pixel_values_videos"]
 
-    return encoder, preprocess, chosen.value
+    return preprocess
 
 
 def _resample_indices(n_frames: int, source_fps: float, fps: float) -> np.ndarray:
