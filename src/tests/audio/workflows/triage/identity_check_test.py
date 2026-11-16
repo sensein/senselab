@@ -35,7 +35,7 @@ from senselab.audio.workflows.triage.task_catalogue import (
 
 
 def _record(
-    stem: str, location: str | None = None, *, task: str = "listed", task_source: str | None = FROM_TASK_LIST
+    stem: str, location: str | None = None, *, task: str | None = "listed", task_source: str | None = FROM_TASK_LIST
 ) -> IdentityRecord:
     """A recording whose identity is read off its stem, its declared task one the task list describes by default."""
     return IdentityRecord(
