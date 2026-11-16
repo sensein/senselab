@@ -30,6 +30,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     SPEECH_EXPECTATIONS,
     VOICE_EXPECTATIONS,
     VOICE_EXPECTATIONS_PENDING_DECLARATION,
+    BranchParams,
     Expectation,
     Result,
     branch_params,
@@ -528,14 +529,16 @@ class TestADatasetThatIsNotB2AI:
         params = branch_params(lab_corpus)
         for branch in ("AIRWAY", "SPEECH", "VOICE"):
             ran: list[str] = []
-            dispatch(
-                branch,
-                store,
-                params,
-                AudioHints(task=task),
-                align=lambda family, *_: ran.append(f"align {family}") or Result([], []),
-                detect=lambda *_: ran.append("detect") or Result([], []),
-            )
+
+            def align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
+                ran.append(f"align {task_family}")
+                return Result([], [])
+
+            def detect(store: ProvStore, params: BranchParams) -> Result:
+                ran.append("detect")
+                return Result([], [])
+
+            dispatch(branch, store, params, AudioHints(task=task), align=align, detect=detect)
             assert ran == ([f"align {task}"] if branch == aligned_by else ["detect"]), branch
 
     def test_a_task_its_list_lacks_is_read_by_no_branch(self, lab_corpus: TriageConfig, tmp_path: Path) -> None:
