@@ -15,15 +15,18 @@ records its ``input_closure``; verifying a restricted input purges every public 
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import shutil
 import signal
 import subprocess
+import time
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 from senselab.utils.reproduce import cache, digest, inputs
 from senselab.utils.reproduce.spec import (
@@ -47,6 +50,11 @@ HOOK_ENV = {"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8"}
 RELEASED_FILES = ("metrics.json", "summary.json")
 RELEASE_MODE = 0o660
 PURGE_CLAIM_TIMEOUT_S = cache.CLAIM_TIMEOUT_S
+"""Seconds the purge waits for a result's claim before counting it in flight."""
+_CONTENDED_S = 0.5
+"""A claim taken after waiting longer than this counts as released by a live holder."""
+POOL_CONTROLLER_LOCK = ("controller", "lock")
+"""A work pool's controller lock file, under the pool dir (`senselab.utils.work_pool.Controller.run`)."""
 _KEY = re.compile(r"^[0-9a-f]{64}$")
 PROFILE_FIELDS = ("restricted_dirs", "restricted_results_root", "released_metrics_root", "scan_hook")
 _WILD = re.compile(r"[*?\[]")
@@ -357,6 +365,7 @@ def _summary_bytes(summary: dict[str, object]) -> bytes:
 UNPURGED = "E_INPUT_UNPURGED"
 _NO_SUMMARY = "no-summary"
 _NO_CLOSURE = "no-closure"
+_UNREADABLE = "unreadable"
 
 
 def _closure_state(out: Path) -> list[str] | str:
@@ -447,34 +456,91 @@ def _run_links(runs_root: Path) -> list[Path]:
     return found
 
 
-def purge_closure(profile: Profile, input_id: str) -> int:
+class Purge(NamedTuple):
+    """What `purge_closure` did: result dirs removed, and results left alone because a run may still own them."""
+
+    purged: int
+    skipped_inflight: int
+
+
+def _fresh_closure_state(out: Path) -> list[str] | str:
+    """`_closure_state` read after listing the result dir; a summary listed but unreadable is `_UNREADABLE`."""
+    try:
+        names = os.listdir(out)
+    except OSError:
+        return _NO_SUMMARY
+    state = _closure_state(out)
+    return _UNREADABLE if state == _NO_SUMMARY and cache.SUMMARY in names else state
+
+
+def _controller_running(pool: Path) -> bool:
+    """Whether a work-pool controller holds ``pool``'s controller lock (a shared lock attempt is refused)."""
+    try:
+        handle = open(pool.joinpath(*POOL_CONTROLLER_LOCK))  # noqa: SIM115
+    except OSError:
+        return False
+    with handle:
+        try:
+            fcntl.lockf(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.lockf(handle, fcntl.LOCK_UN)
+        return False
+
+
+def live_pools(runs_root: Path) -> int:
+    """How many work pools ``<runs_root>/<date>/<analysis>/pools/<step>`` have a running controller."""
+    count = 0
+    if not runs_root.is_dir():
+        return count
+    for day in (p for p in runs_root.iterdir() if p.is_dir() and not p.is_symlink()):
+        for analysis in (p for p in day.iterdir() if p.is_dir() and not p.is_symlink()):
+            pools = analysis / POOLS_DIR
+            if not pools.is_dir() or pools.is_symlink():
+                continue
+            count += sum(_controller_running(p) for p in pools.iterdir() if p.is_dir() and not p.is_symlink())
+    return count
+
+
+def purge_closure(profile: Profile, input_id: str) -> Purge:
     """Remove every public result whose summary's ``input_closure`` holds ``input_id``, and its run links.
 
-    A result with no readable summary (a run in flight, or one that died) is taken under its claim too, which
-    waits for a live run: it is removed unless its summary, read again there, has a closure without the id. A
-    summary with no ``input_closure`` (written before A8) cannot say, so it is purged too.
-    A held claim (`PURGE_CLAIM_TIMEOUT_S`) skips that result and the purge goes on. Stateless: no earlier
-    record is consulted, so a second call removes nothing.
+    Each candidate is read again under its claim, after listing its dir (`_fresh_closure_state`). A closure that
+    holds the id, in either read, removes the result; one without it keeps it. A summary with no
+    ``input_closure`` (written before closures were recorded) removes it. A result with no readable summary is
+    removed unless a run may still own it, in which case it is counted in ``skipped_inflight``: the claim was
+    contended, the summary is listed but unreadable, or a work pool under the runs root has a running
+    controller (`live_pools`). A claim that stays held for `PURGE_CLAIM_TIMEOUT_S` is counted the same way.
+    Stateless: no earlier record is consulted, so a second call removes nothing.
 
     Returns:
-        The number of result dirs removed.
+        The counts (`Purge`).
 
     Raises:
-        CacheError: ``E_CLAIM_HELD`` after the other results, when a claim stayed held.
         OSError: When a dir or link cannot be removed.
     """
     root = profile.results_root
-    purged, held = 0, False
+    purged = skipped = 0
     links = None
+    pools: int | None = None
     for out in _public_results(profile):
-        closure = _closure_of(out)
-        if closure is not None and input_id not in closure:
+        first = _closure_of(out)
+        if first is not None and input_id not in first:
             continue
+        started = time.monotonic()
         try:
             with cache.claim(root, out.name, timeout=PURGE_CLAIM_TIMEOUT_S):
-                closure = _closure_of(out)
-                if (closure is not None and input_id not in closure) or not out.is_dir():
+                contended = time.monotonic() - started > _CONTENDED_S
+                state = _fresh_closure_state(out)
+                seen = first is not None or (isinstance(state, list) and input_id in state)
+                if not out.is_dir() or (isinstance(state, list) and not seen):
                     continue
+                in_flight_state = state in (_NO_SUMMARY, _UNREADABLE) and first is None
+                if in_flight_state:
+                    pools = live_pools(profile.runs_root) if pools is None else pools
+                    if contended or state == _UNREADABLE or pools:
+                        skipped += 1
+                        continue
                 real = os.path.realpath(out)
                 links = _run_links(profile.runs_root) if links is None else links
                 for link in links:
@@ -483,10 +549,8 @@ def purge_closure(profile: Profile, input_id: str) -> int:
                 shutil.rmtree(out)
                 purged += 1
         except cache.CacheError:
-            held = True
-    if held:
-        raise cache.CacheError("E_CLAIM_HELD")
-    return purged
+            skipped += 1
+    return Purge(purged, skipped)
 
 
 def closure_now_restricted(closure: Iterable[str], base_dir: Path, profile: Profile) -> bool:

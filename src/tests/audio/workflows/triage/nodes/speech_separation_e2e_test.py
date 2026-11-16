@@ -89,7 +89,7 @@ def _everything_but_the_separator(
     monkeypatch.setattr(
         speech_module,
         "extract_objective_quality_features_from_audios",
-        lambda audios, device=None: [{"stoi": 0.9, "pesq": 3.0, "si_sdr": 18.0} for _ in audios],
+        lambda audios, **kw: [{"stoi": 0.9, "pesq": 3.0, "si_sdr": 18.0} for _ in audios],
     )
     monkeypatch.setattr(
         speech_module,

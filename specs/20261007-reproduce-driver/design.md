@@ -1764,10 +1764,11 @@ is refused before the reset (`E_SCAN_HOOK_MISSING`), so the dry run is blocked; 
 
 **Input closure and reclassification.** A public summary carries `input_closure`: the step's `lock_inputs` and its
 upstream summaries' closures (`E_UPSTREAM_CLOSURE` when one is missing). When an input becomes restricted
-(flagged, or moved under a restricted dir), `verify-inputs` purges first (`purge_closure`, printing `purged=<n>`):
-every public result whose closure holds the id is removed under its claim, which waits for a live run; a result with
-no readable summary is taken under its claim and checked there, dead summary-less dirs included; a held claim does
-not stop the purge of the others, after which `E_CLAIM_HELD` is raised (`PURGE_CLAIM_TIMEOUT_S`). Old public verify
+(flagged, or moved under a restricted dir), `verify-inputs` purges first (`purge_closure`, printing `purged=<n>
+skipped_inflight=<n>`): every public result whose closure holds the id is removed under its claim, which waits for a
+live run; a result with no readable summary is taken under its claim and checked there, and removed unless a run may
+still own it (counted in `skipped_inflight`; `specs/20261023-reproduce-pool-hostcheck-purge-inflight/`); a claim
+still held after `PURGE_CLAIM_TIMEOUT_S` is counted the same way and does not stop the purge of the others. Old public verify
 records and overlays are removed under the records lock. Only then is an unflagged input in a restricted dir refused
 (`E_INPUT_REGISTRY`, in `verify_dir`, `accepted` and `registry_codes`). A public run whose closure became restricted
 mid-run fails with `E_SPEC_RESTRICTED` and loses `work/`. A public summary with no `input_closure` (one that

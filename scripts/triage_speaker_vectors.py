@@ -1,8 +1,12 @@
 """Build one speaker embedding per subject from a tree of finished triage runs.
 
-    uv run python scripts/triage_speaker_vectors.py <corpus_root> --out <dir>
-    uv run python scripts/triage_speaker_vectors.py <corpus_root> --out <dir> --slice 3 --slices 64
+    uv run python scripts/triage_speaker_vectors.py <corpus_root> --table <recording_vectors.parquet> --out <dir>
+    uv run python scripts/triage_speaker_vectors.py <corpus_root> --table <parquet> --out <dir> --slice 3 --slices 64
     uv run python scripts/triage_speaker_vectors.py --merge <dir>
+
+``--table`` is the corpus table ``scripts/triage_recording_vectors.py`` built over the same root: it names
+each run directory and the participant, session and task its run recorded. A speaker is a participant; a
+run the table has no row for is not embedded.
 
 The parquet is a biometric derived from human-subject audio: it is written mode 600, is gitignored,
 and must never be copied to a shared location.
@@ -99,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("corpus_root", type=Path, nargs="?", help="A tree of finished run directories.")
+    parser.add_argument("--table", type=Path, help="recording_vectors.parquet built over corpus_root.")
     parser.add_argument("--out", type=Path, help="Where the parquet and report go.")
     parser.add_argument("--slice", type=int, default=0, help="This worker's index.")
     parser.add_argument("--slices", type=int, default=1, help="How many workers share the tree.")
@@ -109,8 +114,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.merge is not None:
         return merge(args.merge)
-    if args.corpus_root is None or args.out is None:
-        parser.error("corpus_root and --out are required unless --merge is given")
+    if args.corpus_root is None or args.table is None or args.out is None:
+        parser.error("corpus_root, --table and --out are required unless --merge is given")
 
     device = None
     if args.device is not None:
@@ -120,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
 
     rows, report = scan(
         args.corpus_root,
+        args.table,
         args.slice,
         args.slices,
         device=device,

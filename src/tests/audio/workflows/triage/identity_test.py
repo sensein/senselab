@@ -4,20 +4,28 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.identity import (
+    ADMIT_NODE,
     DECLARED_TASK_ID,
     FROM_HINT,
     FROM_STEM,
     PARTICIPANT_KEY,
     SESSION_KEY,
     TASK_TOKEN_KEY,
+    IdentityLabelError,
+    ManifestWithoutIdentity,
     declared_session_key,
     declared_task_id,
+    identity_columns,
+    identity_disagreement,
     identity_from_stem,
     identity_of,
     recorded_identity,
-    session_key_of,
+    row_groups,
+    row_identity,
 )
 from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family, task_id_of
 from senselab.utils.prov_store import ProvStore
@@ -42,13 +50,23 @@ class TestFromTheStem:
         assert identity.task_family == "respiration-and-cough-fivebreaths"
         assert set(identity.sources.values()) == {FROM_STEM}
 
-    def test_the_readings_match_the_stem_parsers(self) -> None:
-        """Task id, family and session key equal the parsers every caller used before."""
-        for stem in (STEM, "sub-a_acq-x_ses-b_task-loudness", "plain-run-id", "sub-a_task-rainbow-passage", ""):
+    def test_each_entity_is_read_on_its_own(self) -> None:
+        """``sub-`` and ``ses-`` are read wherever they sit; a lone participant keeps its folder and group."""
+        cases = {
+            STEM: ("sub-a", "ses-b"),
+            "sub-a_acq-x_ses-b_task-loudness": ("sub-a", "ses-b"),
+            "sub-a_task-rainbow-passage": ("sub-a", None),
+            "ses-b_task-x": (None, "ses-b"),
+            "sub-_ses-_task-x": (None, None),
+            "plain-run-id": (None, None),
+            "": (None, None),
+        }
+        for stem, expected in cases.items():
             identity = identity_from_stem(stem)
+            assert (identity.participant, identity.session) == expected
             assert identity.task_id == task_id_of(stem)
             assert identity.task_family == task_family(task_id_of(stem))
-            assert identity.session_key == session_key_of(stem)
+        assert identity_from_stem("sub-a_task-x").session_key is None
 
     def test_a_stem_with_no_task_entity_declares_none(self) -> None:
         """The task id is the parsers' own placeholder."""
@@ -64,7 +82,7 @@ class TestFromTheHint:
         identity = identity_of("recording-0042", hint)
         assert (identity.participant, identity.session, identity.task_id) == ("P7", "visit-2", "cough-3")
         assert identity.task_family == "cough"
-        assert identity.session_key == "P7_visit-2"
+        assert identity.session_key == "P7/visit-2"
         assert set(identity.sources.values()) == {FROM_HINT}
 
     def test_a_partial_declaration_keeps_the_stem_for_the_rest(self) -> None:
@@ -73,6 +91,14 @@ class TestFromTheHint:
         assert (identity.participant, identity.session, identity.task_id) == ("sub-a", "ses-b", "loudness")
         assert identity.sources == {"participant": FROM_STEM, "session": FROM_STEM, "task_id": FROM_HINT}
 
+    @pytest.mark.parametrize("label", ["a/b", "..", ".", "a\\b"])
+    def test_a_label_that_cannot_name_a_folder_is_refused(self, label: str) -> None:
+        """A declared participant or session becomes a folder and a file name; a slash or dot path is refused."""
+        with pytest.raises(IdentityLabelError):
+            identity_of(STEM, AudioHints(metadata={PARTICIPANT_KEY: label}))
+        with pytest.raises(IdentityLabelError):
+            identity_of(STEM, AudioHints(metadata={SESSION_KEY: label}))
+
     def test_a_blank_declaration_is_no_declaration(self) -> None:
         """An empty or whitespace value falls back to the stem."""
         identity = identity_of(STEM, AudioHints(metadata={TASK_TOKEN_KEY: "  ", PARTICIPANT_KEY: ""}))
@@ -80,14 +106,24 @@ class TestFromTheHint:
 
 
 class TestRecordedOnTheRun:
-    """What ADMIT recorded is read back; a store from before it recorded anything reads the stem."""
+    """What ADMIT recorded is read back; a store from before it recorded anything has no identity."""
 
-    def test_a_store_without_a_declaration_reads_the_stem(self) -> None:
-        """An earlier run replays exactly as it ran."""
+    def test_a_store_without_a_declaration_has_no_identity(self) -> None:
+        """The stem is not read: a store from before ADMIT recorded identity records none."""
         store = ProvStore(run_id="old")
         _recording(store, f"/data/{STEM}.wav")
-        assert recorded_identity(store) == identity_from_stem(STEM)
-        assert declared_session_key(store) == "sub-a_ses-b"
+        assert recorded_identity(store) is None
+        assert declared_session_key(store) is None
+
+    def test_a_refused_recording_keeps_the_identity_on_admits_activity(self) -> None:
+        """ADMIT writes no stream for a file it refuses; its activity still records the identity."""
+        store = ProvStore(run_id="refused")
+        declared = identity_from_stem(STEM)
+        store.activity(
+            node=ADMIT_NODE, step=None, parameters={"audio_file": f"/data/{STEM}.wav", **declared.as_attributes()}
+        )
+        assert recorded_identity(store) == declared
+        assert declared_session_key(store) == "sub-a/ses-b"
 
     def test_a_recorded_declaration_is_read_back(self) -> None:
         """The attributes ADMIT wrote come back as the identity."""
@@ -97,7 +133,7 @@ class TestRecordedOnTheRun:
         )
         _recording(store, "/data/x.wav", **declared.as_attributes())
         assert recorded_identity(store) == declared
-        assert declared_session_key(store) == "P7_s1"
+        assert declared_session_key(store) == "P7/s1"
 
     def test_no_recording_stream_is_no_identity(self) -> None:
         """Without ADMIT's stream there is nothing to read."""
@@ -164,3 +200,39 @@ class TestDeclaredTaskId:
     def test_no_admit_record_is_unknown(self) -> None:
         """Neither a stream nor an activity: nothing declares a task."""
         assert declared_task_id(ProvStore(run_id="empty")) == UNKNOWN_TASK
+
+
+class TestCorpusRows:
+    """Corpus passes group by the identity columns a row carries, never by its stem."""
+
+    def test_a_row_round_trips_through_its_columns(self) -> None:
+        """The columns written from an identity read back as that identity."""
+        identity = identity_of(STEM, AudioHints(metadata={TASK_TOKEN_KEY: "loudness"}))
+        row = {"stem": STEM, **identity_columns(identity)}
+        assert row_identity(row) == identity
+        assert row_groups(row) == ("sub-a", "sub-a/ses-b")
+
+    def test_a_row_whose_run_records_no_identity_is_its_own_group(self) -> None:
+        """Every column null: no identity, and the stem keys both groups."""
+        row = {"stem": STEM, **identity_columns(None)}
+        assert row_identity(row) is None
+        assert row_groups(row) == (STEM, STEM)
+
+    def test_a_participant_without_a_session_groups_by_participant(self) -> None:
+        """The session group falls back to the stem; the participant group does not."""
+        row = {"stem": "sub-a_task-x", **identity_columns(identity_from_stem("sub-a_task-x"))}
+        assert row_groups(row) == ("sub-a", "sub-a_task-x")
+
+    def test_a_row_without_identity_columns_is_refused(self) -> None:
+        """A manifest from before rows carried identity is rebuilt, not parsed."""
+        with pytest.raises(ManifestWithoutIdentity):
+            row_identity({"stem": STEM, "enhanced": "/x"})
+
+    def test_a_row_disagreeing_with_the_record_is_named(self) -> None:
+        """Each differing field is listed; a missing identity on either side is a disagreement."""
+        recorded = identity_from_stem(STEM)
+        moved = identity_of(STEM, AudioHints(metadata={SESSION_KEY: "ses-c"}))
+        assert identity_disagreement(recorded, recorded) == []
+        assert identity_disagreement(moved, recorded) == ["session"]
+        assert identity_disagreement(None, recorded) == ["recorded identity"]
+        assert identity_disagreement(recorded, None) == ["recorded identity"]

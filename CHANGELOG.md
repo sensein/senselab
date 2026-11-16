@@ -1,3 +1,11 @@
+# Unreleased
+
+#### 💥 Breaking Change
+
+- `extract_objective_quality_features_from_audios` (torchaudio SQUIM) now reads 10 s windows of each recording by default and reports the median STOI, PESQ and SI-SDR over the windows. New arguments: `window_s` (`None` for one pass), `min_window_s`, `start_s`, `end_s` and `floor_s`. Each result gains `windows`, `windows_n` and `span_s`. Every non-empty span is read by default; `floor_s` sets a cut-off below which the values are NaN. An empty span, or one outside the recording, raises `ValueError`. To get the previous whole-recording values, pass `window_s=None`, or `torchaudio_squim={"window_s": None}` to `extract_features_from_audios` ([#614](https://github.com/sensein/senselab/issues/614))
+
+---
+
 # 1.3.0 (Fri Dec 12 2025)
 
 #### 🚀 Enhancement

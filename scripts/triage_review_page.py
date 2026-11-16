@@ -61,7 +61,7 @@ from senselab.audio.workflows.triage.review_page.records import transcripts  # n
 from senselab.utils import fastio  # noqa: E402
 
 EXTRACT_SCHEMA = "senselab.triage.review.extract"
-EXTRACT_VERSION = 3
+EXTRACT_VERSION = 4
 
 
 def _free_speech_page() -> Any:  # noqa: ANN401 -- a module
@@ -200,7 +200,7 @@ def load(path: Path, stems: Collection[str] | None = None) -> list[Mapping[str, 
 
     Args:
         path: The JSONL.
-        stems: Only these recordings, or None for every one. A line naming none of them is not parsed.
+        stems: Only these recordings, or None for every one.
 
     Returns:
         The records.
@@ -215,8 +215,7 @@ def load(path: Path, stems: Collection[str] | None = None) -> list[Mapping[str, 
     if stems is None:
         return [record for record in map(json.loads, lines[1:]) if "error" not in record]
     wanted = set(stems)
-    named = [line for line in lines[1:] if any(stem in line for stem in wanted)]
-    return [record for record in map(json.loads, named) if "error" not in record and record["stem"] in wanted]
+    return [record for record in map(json.loads, lines[1:]) if "error" not in record and record["stem"] in wanted]
 
 
 OWNER_PREFIX = "owner_"
@@ -258,54 +257,54 @@ def listen_set(
     return ListenSet(name, question, tuple(labels), columns, checks, proposed, tuple(directions))
 
 
-def participant_of(stem: str) -> str:
-    """A stem's participant: everything before its ``_ses-``.
-
-    Args:
-        stem: A recording stem.
-
-    Returns:
-        The ``sub-...`` participant.
-    """
-    return stem.split("_ses-", 1)[0]
-
-
-def labelled_participants(directory: Path) -> set[str]:
-    """Every participant an owner label file in a directory names.
+def labelled_stems(directory: Path) -> set[str]:
+    """Every stem an owner label file in a directory names.
 
     Args:
         directory: The owner labels: review exports (JSON with ``entries`` carrying ``stem``) and TSVs with a
             ``stem`` column.
 
     Returns:
-        The participants.
+        The stems.
     """
     found: set[str] = set()
     for path in sorted(directory.glob("*.json")):
         data = json.loads(path.read_text())
         entries = data.get("entries") if isinstance(data, dict) else data
         values = entries.values() if isinstance(entries, dict) else entries or ()
-        found |= {participant_of(str(e["stem"])) for e in values if isinstance(e, dict) and e.get("stem")}
+        found |= {str(e["stem"]) for e in values if isinstance(e, dict) and e.get("stem")}
     for path in sorted(directory.glob("*.tsv")):
         lines = [line for line in path.read_text().splitlines() if line.strip()]
         if lines and "stem" in lines[0].split("\t"):
-            found |= {participant_of(row["stem"]) for row in csv.DictReader(lines, delimiter="\t") if row.get("stem")}
+            found |= {row["stem"] for row in csv.DictReader(lines, delimiter="\t") if row.get("stem")}
     return found
 
 
-def already_labelled(stems: Sequence[str], directory: Path, allowed: Sequence[str] = ()) -> list[str]:
+def already_labelled(
+    stems: Sequence[str],
+    labelled: Collection[str],
+    participants: Mapping[str, str | None],
+    allowed: Sequence[str] = (),
+) -> tuple[list[str], list[str]]:
     """The stems whose participant an owner has already labelled, less those named as allowed.
+
+    No stem is parsed: a participant is the one the extract's record carries, the run's recorded identity.
 
     Args:
         stems: The listen set's stems.
-        directory: The owner labels (:func:`labelled_participants`).
-        allowed: Participants (or stems) the listen set names on purpose.
+        labelled: The stems the owner labels name (:func:`labelled_stems`).
+        participants: Each extract record's stem to its participant.
+        allowed: Stems or participants the listen set names on purpose; one that is a stem the extract
+            holds stands for that stem's participant, any other is a participant.
 
     Returns:
-        The offending stems, in order.
+        The offending stems, in order, and the labelled stems the extract does not hold, sorted, whose
+        participants cannot be known and so are not checked.
     """
-    labelled = labelled_participants(directory) - {participant_of(a) for a in allowed}
-    return [stem for stem in stems if participant_of(stem) in labelled]
+    unknown = sorted(stem for stem in labelled if stem not in participants)
+    exempt = {participants[a] if a in participants else a for a in allowed}
+    taken = {participants[stem] for stem in labelled if participants.get(stem)} - exempt
+    return [stem for stem in stems if participants.get(stem) in taken], unknown
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -346,10 +345,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--exclude-labelled",
         type=Path,
         default=None,
-        help="the owner labels directory: refuse a listen set naming a participant already labelled there",
+        help="the owner labels directory: refuse a listen set naming a participant already labelled there; the "
+        "participants are the extract's",
     )
     renderer.add_argument(
         "--allow-labelled", default="", help="participants or stems the listen set names on purpose, comma-separated"
+    )
+    renderer.add_argument(
+        "--ignore-unknown-labelled",
+        action="store_true",
+        help="write the page although some labelled recordings are not in the extract, so their participants are "
+        "not checked",
     )
     arguments = parser.parse_args(argv)
     if arguments.command == "extract":
@@ -371,17 +377,32 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.question,
             [d.strip() for d in arguments.directions.split(",") if d.strip()],
         )
-        if arguments.exclude_labelled is not None:
-            allowed = [a.strip() for a in arguments.allow_labelled.split(",") if a.strip()]
-            offending = already_labelled(list(listen.checks), arguments.exclude_labelled, allowed)
-            if offending:
-                print(
-                    f"refusing: {len(offending)} listed recordings belong to participants already labelled in "
-                    f"{arguments.exclude_labelled}: {sorted({participant_of(s) for s in offending})}",
-                    file=sys.stderr,
-                )
+    labelled: set[str] = set()
+    allowed = [a.strip() for a in arguments.allow_labelled.split(",") if a.strip()]
+    if listen is not None and arguments.exclude_labelled is not None:
+        labelled = labelled_stems(arguments.exclude_labelled)
+    records = load(arguments.data, None if listen is None else {*listen.checks, *labelled, *allowed})
+    if listen is not None and arguments.exclude_labelled is not None:
+        participants = {str(r["stem"]): r.get("participant") for r in records}
+        offending, unknown = already_labelled(list(listen.checks), labelled, participants, allowed)
+        if unknown:
+            print(
+                f"{'' if arguments.ignore_unknown_labelled else 'refusing: '}{len(unknown)} labelled recordings in "
+                f"{arguments.exclude_labelled} are not in the extract, so their participants cannot be checked: "
+                f"{unknown}",
+                file=sys.stderr,
+            )
+            if not arguments.ignore_unknown_labelled:
                 return 2
-    records = load(arguments.data, None if listen is None else listen.checks)
+        if offending:
+            print(
+                f"refusing: {len(offending)} listed recordings belong to participants already labelled in "
+                f"{arguments.exclude_labelled}: {sorted({str(participants[s]) for s in offending})}",
+                file=sys.stderr,
+            )
+            return 2
+    if listen is not None:
+        records = [r for r in records if r["stem"] in listen.checks]
     written = write_page(
         records,
         arguments.out,

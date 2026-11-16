@@ -64,9 +64,11 @@ from senselab.audio.workflows.triage.hint_record import expected_speech_digest a
 from senselab.audio.workflows.triage.identity import (
     ADMIT_NODE,
     admit_record,
+    identity_disagreement,
     identity_of,
     recorded_identity,
     recording_entity,
+    row_identity,
 )
 from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
@@ -920,6 +922,10 @@ class ReplayRefused(ValueError):
     """A replay or re-fold its run's recorded inputs refuse; the message says why and what to pass."""
 
 
+class StaleManifestRow(ReplayRefused):
+    """A manifest row whose identity is not the one its run records; the whole group it joined is refused."""
+
+
 @dataclass(frozen=True)
 class ReplayInputs:
     """What a replay or re-fold checked against the run's record, and the hint it runs with.
@@ -1065,7 +1071,12 @@ def check_run_inputs(
 
 
 def read_checked_store(
-    run_root: Path, config: TriageConfig | None, *, run_id: str | None = None, allow_profile_change: bool = False
+    run_root: Path,
+    config: TriageConfig | None,
+    *,
+    run_id: str | None = None,
+    allow_profile_change: bool = False,
+    row: Mapping[str, Any] | None = None,
 ) -> ProvStore:
     """:func:`read_store`, refusing a run whose recording or profile differs from the record.
 
@@ -1074,16 +1085,32 @@ def read_checked_store(
         config: The configuration now in use; None checks the recording alone.
         run_id: As :func:`read_store`.
         allow_profile_change: Accept a profile whose name differs from the run's.
+        row: The manifest row the run was grouped by; refused where its identity is not the one the run records.
 
     Returns:
         The store.
 
     Raises:
         FileNotFoundError: If the run holds no store.
-        ReplayRefused: As :func:`check_replay_inputs`, checks 2 and 3.
+        ReplayRefused: As :func:`check_replay_inputs`, checks 2 and 3, and a run that records no identity.
+        StaleManifestRow: If ``row`` names an identity the run does not record.
+        ManifestWithoutIdentity: If ``row`` carries no identity columns.
     """
     store = read_store(run_root, run_id=run_id)
     check_run_inputs(store, run_root, config, allow_profile_change=allow_profile_change)
+    if row is not None:
+        named, recorded = row_identity(row), recorded_identity(store)
+        if named is None or recorded is None:
+            raise ReplayRefused(
+                f"the run for {row.get('stem')!r} records no identity: replay it, which records one, then rebuild the "
+                "corpus table and the manifest"
+            )
+        disagree = identity_disagreement(named, recorded)
+        if disagree:
+            raise StaleManifestRow(
+                f"the manifest row for {row.get('stem')!r} disagrees with the run's record on {', '.join(disagree)}: "
+                "rebuild the corpus table and the manifest"
+            )
     return store
 
 
@@ -1533,8 +1560,11 @@ def replay_decisions(
         if inputs.hint_moved:
             record_replayed_hint(store, hint, software=software)
         after = recorded_identity(store)
-        if before is not None and after is not None and before.as_attributes() != after.as_attributes():
-            identity_change = {"from": before.as_attributes(), "to": after.as_attributes()}
+        if after is not None and (before is None or before.as_attributes() != after.as_attributes()):
+            identity_change = {
+                "from": before.as_attributes() if before is not None else None,
+                "to": after.as_attributes(),
+            }
         realign_stimulus(store, config, hint, run_dir=run_dir, software=software)
     held = held_reading(store)
     retired = retire_decisions(store, live_decisions(store), software=software)

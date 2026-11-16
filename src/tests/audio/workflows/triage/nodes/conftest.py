@@ -142,7 +142,7 @@ def _stub_models(
         seen.setdefault("transcribe", []).append(str(model.path_or_uri))
         return [(crisper if str(model.path_or_uri) == CRISPERWHISPER_ID else qwen) or _line("")]
 
-    def fake_squim(audios: list, device: Any = None) -> list:  # noqa: ANN401
+    def fake_squim(audios: list, **kw: Any) -> list:  # noqa: ANN401
         """One objective-head dict per input."""
         return [{"stoi": 0.91, "pesq": 1.8, "si_sdr": 7.5} for _ in audios]
 

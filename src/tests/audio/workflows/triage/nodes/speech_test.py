@@ -844,7 +844,7 @@ def _no_model_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         speech_module,
         "extract_objective_quality_features_from_audios",
-        lambda audios, device=None: [{"stoi": 0.9, "pesq": 3.0, "si_sdr": 18.0} for _ in audios],
+        lambda audios, **kw: [{"stoi": 0.9, "pesq": 3.0, "si_sdr": 18.0} for _ in audios],
     )
     monkeypatch.setattr(speech_module, "_second_diarizer_model", lambda model_id: _FakeModel(model_id))
     monkeypatch.setattr(speech_module, "_clearvoice_model", lambda model_id: _FakeModel(model_id))
@@ -2776,7 +2776,7 @@ class TestSquimIsInertWhileItsFloorsAreNull:
         monkeypatch.setattr(
             speech_module,
             "extract_objective_quality_features_from_audios",
-            lambda audios, device=None: [{"stoi": 0.05, "pesq": 1.0, "si_sdr": -20.0} for _ in audios],
+            lambda audios, **kw: [{"stoi": 0.05, "pesq": 1.0, "si_sdr": -20.0} for _ in audios],
         )
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
@@ -2794,7 +2794,7 @@ class TestSquimIsInertWhileItsFloorsAreNull:
         monkeypatch.setattr(
             speech_module,
             "extract_objective_quality_features_from_audios",
-            lambda audios, device=None: (_ for _ in ()).throw(RuntimeError("too short")),
+            lambda audios, **kw: (_ for _ in ()).throw(RuntimeError("too short")),
         )
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)

@@ -5,18 +5,20 @@
 # joined with ";", empty when there is none; a missing value is an empty field. Columns are written in
 # the order listed here. The files group is relative to derivatives/senselab-triage/ and empty when the
 # file is absent. units, levels and levels_from (reasons: data/decision_reasons.yaml meaning; release_grounds:
-# vocabulary.RELEASE_GROUND_KEYS) feed the BIDS sidecar triage.json.
-version: 3
+# vocabulary.RELEASE_GROUND_KEYS) feed the BIDS sidecar triage.json. Since version 5 the identity columns are the
+# run's recorded identity (what ADMIT wrote on the recording stream), not a reading of the stem; all three are empty
+# for a run that records none.
+version: 5
 columns:
 - name: participant_id
   group: identity
-  description: BIDS participant label, with its sub- prefix
+  description: the participant the run recorded (ADMIT's declared participant), as declared, e.g. sub-01
 - name: session_id
   group: identity
-  description: BIDS session label, with its ses- prefix
+  description: the session the run recorded (ADMIT's declared session), as declared, e.g. ses-02
 - name: task
   group: identity
-  description: BIDS task label
+  description: the task id the run recorded (ADMIT's declared task id), lower-cased, with any trailing index
 - name: task_family
   group: identity
   description: the task family the recording declares
@@ -135,13 +137,13 @@ columns:
   units: dB
 - name: squim_pesq
   group: quality
-  description: the median SQUIM PESQ over the plain stream's spans; empty for airway families
+  description: the median SQUIM PESQ over fixed 10 s windows of the task extent, plain stream (data/task_squim.yaml); empty for airway and voice families and where the task extent is missing or under 1 s
 - name: squim_stoi
   group: quality
-  description: the median SQUIM STOI over the plain stream's spans; empty for airway families
+  description: the median SQUIM STOI over fixed 10 s windows of the task extent, plain stream (data/task_squim.yaml); empty for airway and voice families and where the task extent is missing or under 1 s
 - name: squim_si_sdr
   group: quality
-  description: the median SQUIM SI-SDR over the plain stream's spans, dB; empty for airway families
+  description: the median SQUIM SI-SDR over fixed 10 s windows of the task extent, plain stream (data/task_squim.yaml), dB; empty for airway and voice families and where the task extent is missing or under 1 s
   units: dB
 - name: clipped_s
   group: quality

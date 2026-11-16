@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from senselab.audio.workflows.triage import recording_vectors as rv
+from senselab.audio.workflows.triage.identity import FROM_HINT, FROM_STEM
 from senselab.audio.workflows.triage.nodes import review
 from senselab.audio.workflows.triage.nodes.gates import CONFORMANCE_GATES, FLAG_GATES, GATE_SPECS
 from senselab.audio.workflows.triage.residue import ALIGNED, FREE, SYLLABLE, VOCAL
@@ -206,6 +207,9 @@ def test_carrier_rejected_lists_every_name_voice_can_write() -> None:
         ("llm_redaction_judgment", list(REDACTION_STATES)),
         ("llm_original_judgment", list(ORIGINAL_STATES)),
         ("llm_speakers", list(SPEAKER_STATES)),
+        ("participant_from", [FROM_HINT, FROM_STEM]),
+        ("session_from", [FROM_HINT, FROM_STEM]),
+        ("task_from", [FROM_HINT, FROM_STEM]),
     ],
 )
 def test_a_closed_vocabulary_is_the_one_the_code_declares(column: str, vocabulary: list[str]) -> None:

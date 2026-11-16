@@ -14,6 +14,7 @@ import soundfile as sf
 
 from senselab.audio.workflows.triage.cohort_fold import COHORT_READING, MEASURED
 from senselab.audio.workflows.triage.extend import read_store, write_store
+from senselab.audio.workflows.triage.identity import ManifestWithoutIdentity, identity_columns, identity_from_stem
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
@@ -81,7 +82,12 @@ def _run(  # noqa: ANN202
         extent=None,
         attributes={"name": "yamnet_scores", "signal": "plain", "path": "derivatives/yamnet_scores.json"},
     )
-    store.entity(prov_type="stream", extent=(0.0, duration), attributes={"name": "recording", "path": f"/b/{stem}.wav"})
+    identity = identity_from_stem(stem)
+    store.entity(
+        prov_type="stream",
+        extent=(0.0, duration),
+        attributes={"name": "recording", "path": f"/b/{stem}.wav", **identity.as_attributes()},
+    )
     store.entity(prov_type="stream", extent=None, attributes={"name": "plain", "path": "streams/plain.wav"})
     store.entity(
         prov_type="measurement",
@@ -97,7 +103,7 @@ def _run(  # noqa: ANN202
     for index, span in enumerate(words):
         store.entity(prov_type="word", extent=span, attributes=word_attributes(f"word{index}", span, index=index))
     write_store(store, run_root)
-    return {"stem": run_root.name, "enhanced": str(streams / "enhanced.flac")}
+    return {"stem": run_root.name, "enhanced": str(streams / "enhanced.flac"), **identity_columns(identity)}
 
 
 @pytest.fixture()
@@ -241,8 +247,8 @@ def test_apply_shards_by_participant_and_falls_back_across_sessions(
     manifest = _two_participants(tmp_path)
     grouped = cli.participants_of([json.loads(line) for line in manifest.read_text().splitlines()])
     assert [(p, [s for s, _ in sessions]) for p, sessions in grouped] == [
-        ("sub-a", ["sub-a_ses-1", "sub-a_ses-2"]),
-        ("sub-b", ["sub-b_ses-1"]),
+        ("sub-a", ["sub-a/ses-1", "sub-a/ses-2"]),
+        ("sub-b", ["sub-b/ses-1"]),
     ]
     quantiles = _quantiles(manifest)
     out = tmp_path / "readings"
@@ -276,10 +282,10 @@ def test_apply_shards_by_participant_and_falls_back_across_sessions(
         for i in range(2)
     ]
     assert [sorted({r["participant"] for r in records}) for records in slices] == [["sub-a"], ["sub-b"]]
-    assert sorted({r["session"] for r in slices[0]}) == ["sub-a_ses-1", "sub-a_ses-2"]
+    assert sorted({r["session"] for r in slices[0]}) == ["sub-a/ses-1", "sub-a/ses-2"]
     sources = {r["session"]: r["enrollment_source"] for r in slices[0]}
-    assert sources == {"sub-a_ses-1": "session", "sub-a_ses-2": "participant_other_sessions"}
-    breath = next(r for r in slices[0] if r["session"] == "sub-a_ses-2")
+    assert sources == {"sub-a/ses-1": "session", "sub-a/ses-2": "participant_other_sessions"}
+    breath = next(r for r in slices[0] if r["session"] == "sub-a/ses-2")
     assert breath["nonmatch"] == ["non_task"], "the talker's words and the removed speech around them, pooled"
     assert breath["pools"]["non_task"]["pooled_s"] == 3.0 and breath["pools"]["target"]["status"] == "not_applicable"
     assert {r["consistency"]["status"] for r in slices[1]} == {"not_applicable"}
@@ -303,3 +309,38 @@ def test_an_unset_enrollment_model_leaves_the_enrollment_unavailable(corpus: Pat
     reading = _reading(rows[6])
     assert reading["other_speaker"]["status"] == "unavailable"
     assert reading["checks"]["recording_duration_outlier"]["outcome"] == "review"
+
+
+def test_a_stale_manifest_row_refuses_its_whole_participant(
+    tmp_path: Path, config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row naming an identity its run does not record refuses every store of its participant, before any write."""
+    monkeypatch.setattr(cli, "ecapa_embedder", lambda *a, **k: _embed)
+    manifest = _two_participants(tmp_path)
+    rows = [json.loads(line) for line in manifest.read_text().splitlines()]
+    rows[1] = {**rows[1], "task": "loudness"}
+    manifest.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    quantiles = _quantiles(manifest)
+    stores = {r["stem"]: (Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows}
+    _apply(manifest, config, quantiles, "--participants", "sub-a")
+    sub_a = [r for r in rows if r["participant"] == "sub-a"]
+    assert all(
+        (Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() == stores[r["stem"]] for r in sub_a
+    )
+
+
+def test_a_manifest_without_identity_columns_is_refused(tmp_path: Path) -> None:
+    """Grouping never parses a stem: a manifest from before rows carried identity is rebuilt."""
+    with pytest.raises(ManifestWithoutIdentity):
+        cli.participants_of([{"stem": "sub-a_ses-1_task-x", "enhanced": "/x"}])
+
+
+def test_recordings_declaring_no_session_pool_under_their_participant() -> None:
+    """A participant's session-less recordings form one pool, not one session each; a nameless one is its own."""
+    rows = [
+        {"stem": "a", "enhanced": "/x/a", **identity_columns(identity_from_stem("sub-a_task-x"))},
+        {"stem": "b", "enhanced": "/x/b", **identity_columns(identity_from_stem("sub-a_task-y"))},
+        {"stem": "c", "enhanced": "/x/c", **identity_columns(identity_from_stem("recording-c"))},
+    ]
+    grouped = {p: [s for s, _ in sessions] for p, sessions in cli.participants_of(rows)}
+    assert grouped == {"sub-a": ["sub-a/"], "c": ["c"]}

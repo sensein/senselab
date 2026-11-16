@@ -1,6 +1,6 @@
 # `speaker_vectors.parquet` — the schema a reader decodes against
 
-One row per speaker. `schema_version` 2, carried twice: as an `int32` column on every row and as
+One row per speaker. `schema_version` 3, carried twice: as an `int32` column on every row and as
 arrow metadata `senselab.speaker_vectors.schema_version`. No column changes without this file
 changing with it.
 
@@ -27,7 +27,7 @@ assumptions about how they are laid out.
 
 | column | type | meaning |
 | --- | --- | --- |
-| `speaker_id` | `string` | The BIDS `sub-<id>`. The only speaker key the corpus has; see `coverage.md` for what that assumes. |
+| `speaker_id` | `string` | The `participant` the corpus table names: the participant the run recorded (ADMIT's declared participant), e.g. `sub-<id>`. The only speaker key the corpus has; see `coverage.md` for what that assumes. |
 | `vector` | `list<double>` | The pooled embedding, unit norm. Length `dim`. **Raw, not corpus-centred.** Centring the corpus improves verification and costs identification; `design.md` D-7 has both numbers, and the corpus mean is recoverable from this column in one pass. |
 | `dim` | `int32` | 192 for ECAPA. |
 | `n_extents` | `int32` | Task extents that contributed a window. |
@@ -43,7 +43,7 @@ assumptions about how they are laid out.
 | `unresolved_reason` | `string` | Why the sha is null. Non-null exactly when the sha is null. |
 | `method` | `string` | The pooling rule, `recording_equal_spherical_mean`: windows → extent centroid → recording centroid → speaker vector. Measured against the one-stage window-weighted alternative in `design.md` D-7; the recording rather than the extent is the unit for the reason in D-9. |
 | `window_s`, `hop_s` | `float64` | The window grid, 2.0 and 1.0. |
-| `schema_version` | `int32` | 2. |
+| `schema_version` | `int32` | 3. |
 | `corpus_root` | `string` | The tree the extents were read from — which matters, because the replay moves task extent. |
 
 ### Counts a reader needs to weight a row
@@ -93,6 +93,11 @@ were handed to the estimator. A reader zips them.
 | `extent_leave_one_out_cos` | `list<double>` |
 | `extent_centroid_to_pooled_cos` | `list<double>` |
 
+`extent_stem`, `extent_run_dir`, `extent_session` and `extent_task` are the corpus table's `stem`,
+`run_dir` (relative to `corpus_root`), `session` and `task` for that extent's recording; since
+`schema_version` 3 `extent_task` is the recorded task id, lower-cased and without a `task-` prefix, and
+`extent_run_dir` is the table's relative path rather than the run directory's name.
+
 `extent_start_s` and `extent_end_s` are the **exact** store seconds, not quantised. The
 per-recording sibling quantises its times to `uint16` because it carries hundreds of them per row
 for drawing; there are a few dozen here and they are provenance, so they stay exact.
@@ -111,10 +116,22 @@ nothing, so a key a row does not carry becomes null rather than a default. The s
 is the one that exercises this in practice: `cos_extent_pairwise_q50` and
 `auc_same_extent_vs_diff_extent` are null there, not 0.0 and not 0.5.
 
+## Where the recordings come from
+
+Since `schema_version` 3 the corpus table (`recording_vectors.parquet`, `--table`) is the index: no folder
+is walked and no folder or file name is read for identity. Each table row gives the run directory
+(`run_dir`, read as `CORPUS_ROOT / run_dir`) and the identity the run recorded; rows are grouped by
+`participant`. A row with no `participant` (a run that records no identity) is skipped and counted in
+`recordings_without_participant`, one with no `run_dir` in `recordings_without_run_dir`. Where the table
+names one stem in one folder more than once, the lexically latest run directory is read, as the
+corpus table itself keeps it. **A run the table has no row for is not embedded**: the corpus table
+writes a row only for a store with a VERDICT fold, so a run without one is absent here and cannot be
+counted; build the table after the runs finish.
+
 ## Shards and the merge
 
 Sharding is by **subject**, not by recording — a speaker's extents must all land in one worker or
-the pooling is wrong. `shard_of(subject, slices)` is `sha1(subject)[:8] % slices`, content-
+the pooling is wrong. `shard_of(subject, slices)` is `sha1(participant)[:8] % slices`, content-
 addressed so a growing tree never reshuffles a subject into another worker.
 
 `scripts/triage_speaker_vectors.py` writes `speaker_vectors.NNN.parquet` plus
@@ -126,7 +143,8 @@ that wrote no row exits 1.
 
 The report is not decoration. It carries `subjects_without_extent` and `subjects_all_refused`
 separately — nothing to embed and everything below the floor are different facts about a speaker
-— plus `recordings_seen`, `recordings_with_extent`, `recordings_unreadable`, `extents_admitted`,
+— plus `recordings_seen`, `recordings_with_extent`, `recordings_unreadable`,
+`recordings_without_participant`, `recordings_without_run_dir`, `extents_admitted`,
 `extents_refused_short`, `extents_refused_family`, `extents_missing_audio` and `subjects_failed`.
 A thin result must never be mistaken for a clean one.
 
@@ -139,7 +157,7 @@ far below its `recordings_with_extent` is reporting family composition, not a fa
 
 ```bash
 # one shard
-uv run python scripts/triage_speaker_vectors.py CORPUS_ROOT --out DIR --slice N --slices 64
+uv run python scripts/triage_speaker_vectors.py CORPUS_ROOT --table RECORDING_VECTORS.parquet --out DIR --slice N --slices 64
 # then, once every shard has written
 uv run python scripts/triage_speaker_vectors.py --merge DIR
 ```

@@ -28,6 +28,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from senselab.audio.workflows.triage.b2ai_hints import read_sidecars
 from senselab.audio.workflows.triage.extend import source_of
+from senselab.audio.workflows.triage.identity import participant_group
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS, expected_names
 from senselab.audio.workflows.triage.nodes.gates import Pattern
 from senselab.audio.workflows.triage.recording_vectors import (
@@ -35,9 +36,9 @@ from senselab.audio.workflows.triage.recording_vectors import (
     STORE_NAME,
     Entity,
     StoreView,
-    identity,
     recording_dirs,
     stem_of,
+    view_identity,
 )
 from senselab.audio.workflows.triage.residue import is_content_word
 from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
@@ -72,7 +73,7 @@ RELEASE_ORDER = (
 discard, or a release the graph could not assess."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
-EXTRACT_VERSION = 12
+EXTRACT_VERSION = 13
 """12 replaces the bypass reason ``unscanned`` with ``non_lexical_task`` and carries an ``absent`` reading's
 ``absent_reason`` (``pii_scan_missing``).
 
@@ -731,7 +732,9 @@ def recording_record(run_root: Path, families: frozenset[str] | None) -> dict[st
     if not declared or (families is not None and declared not in families):
         return None
     declared = str(declared)
-    participant, session, _ = identity(stem)
+    recorded = view_identity(view)
+    participant = participant_group(recorded, stem) if recorded is not None else stem
+    session = recorded.session if recorded is not None else None
     marked = marked_words(view)
     ledger = ledger_of(view)
     states = word_states(ledger)
@@ -1420,7 +1423,7 @@ def recording_html(row: dict[str, Any]) -> str:
     stream = row.get("ss")
     tag = f'<span class="ss">{html.escape(str(stream["src"]))} only</span>' if stream else ""
     body = paragraph(row.get("w") or [], marks) or '<span class="empty">no words</span>'
-    stem = str(row.get("stem") or f"{row['p']}_{row['ses']}_task-{row['task']}")
+    stem = str(row["stem"])
     return (
         f'<article class="rec" data-rel="{html.escape(str(row["rel"]) or "unrecorded")}" '
         f'data-fam="{html.escape(str(row["fam"]))}" data-fired="{fired}" '
@@ -1559,7 +1562,7 @@ def render(corpus: Corpus, title: str) -> str:
     sections = "".join(participant_html(participant, corpus.participants[participant]) for participant in order)
     jump = "".join(
         f'<li><a href="#{html.escape(participant)}" data-p="{html.escape(participant)}">'
-        f'<span class="jp">{html.escape(participant[4:16])}</span>'
+        f'<span class="jp">{html.escape(participant.removeprefix("sub-")[:12])}</span>'
         f'<span class="meter"><i class="mr"></i><i class="mj"></i></span>'
         f'<em class="jn">{len(corpus.participants[participant])}</em></a></li>'
         for participant in order

@@ -31,6 +31,7 @@ from senselab.audio.workflows.triage.extend import (
     OK,
     RUN_SUBDIR,
     SLICES_SUBDIR,
+    StaleManifestRow,
     export_prov,
     read_checked_store,
     read_manifest,
@@ -39,10 +40,10 @@ from senselab.audio.workflows.triage.extend import (
     take_slice,
     write_store,
 )
+from senselab.audio.workflows.triage.identity import row_groups
 from senselab.audio.workflows.triage.nodes.background import (
     OWN_FLOOR,
     SESSION_FLOOR,
-    session_key,
     write_session_floor,
     write_speech_residual,
 )
@@ -70,17 +71,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def sessions_of(rows: Sequence[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
-    """The manifest's rows grouped by BIDS session, sessions in sorted order.
+    """The manifest's rows grouped by the session their identity columns name, sessions in sorted order.
 
     Args:
-        rows: Every manifest row.
+        rows: Every manifest row, carrying the corpus table's identity columns.
 
     Returns:
-        ``(session, rows)`` pairs; a stem naming no session is its own group, keyed by the stem.
+        ``(session, rows)`` pairs; a recording naming no participant and session, or whose run records no
+        identity, is its own group, keyed by its stem.
+
+    Raises:
+        ManifestWithoutIdentity: If a row carries no identity columns.
     """
     groups: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        groups.setdefault(session_key(str(row["stem"])) or str(row["stem"]), []).append(row)
+        groups.setdefault(row_groups(row)[1], []).append(row)
     return sorted(groups.items())
 
 
@@ -95,12 +100,18 @@ def process_session(session: str, rows: Sequence[dict[str, Any]]) -> list[dict[s
         One outcome record per member.
     """
     opened: list[tuple[dict[str, Any], Path | None, ProvStore | None, str]] = []
+    stale: list[str] = []
     for row in rows:
         try:
             run_root = run_root_of(Path(row["enhanced"]))
-            opened.append((row, run_root, read_checked_store(run_root, None), ""))
+            opened.append((row, run_root, read_checked_store(run_root, None, row=row), ""))
         except (OSError, ValueError) as error:
+            if isinstance(error, StaleManifestRow):
+                stale.append(str(row["stem"]))
             opened.append((row, None, None, describe_exception(error)))
+    if stale:
+        why = f"session refused: the manifest is stale for {', '.join(sorted(stale))}; nothing was written"
+        return [{**row, "status": ERROR, SESSION_FLOOR: why} for row in rows]
     members = []
     readings = []
     for _, run_root, store, _ in opened:

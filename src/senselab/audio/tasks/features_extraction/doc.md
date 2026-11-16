@@ -94,6 +94,31 @@ Beyond the descriptors listed below, users can extract additional acoustic repre
   ([from spectrograms](https://sensein.group/senselab/senselab/audio/tasks/features_extraction/torchaudio.html#extract_mel_filter_bank_from_spectrograms))
 - [Pitch values](https://sensein.group/senselab/senselab/audio/tasks/features_extraction/torchaudio.html#extract_pitch_from_audios)
 
+### SQUIM objective quality over windows
+
+`extract_objective_quality_features_from_audios` reads PESQ, STOI and SI-SDR over fixed windows of a
+span of each recording and reports the median over the windows:
+
+```python
+extract_objective_quality_features_from_audios(
+    audios,
+    window_s=10.0,      # None reads the span in one pass
+    min_window_s=3.0,   # a shorter trailing remainder folds into the previous window
+    start_s=None,       # span start, default 0
+    end_s=None,         # span end, default the recording's duration
+    floor_s=0.0,        # a shorter span returns NaN with windows_n == 0; 0 reads every span
+    device=None,
+)
+```
+
+Each result carries `stoi`, `pesq` and `si_sdr` (the medians), `windows` (one
+`{start_s, end_s, stoi, pesq, si_sdr}` per window), `windows_n` and `span_s`. A span outside
+`0 <= start_s < end_s <= duration`, an empty one included, raises a `ValueError`. Every non-empty span is
+read by default. Values from spans under about 0.5 s vary more than those from 10 s windows
+([#614](https://github.com/sensein/senselab/issues/614)); set `floor_s` for a cut-off. `extract_features_from_audios` takes the same
+keys as a dict, `torchaudio_squim={"window_s": None}`. Triage's `task_squim` plans its windows with the
+same `plan_windows`, dropping rather than folding a short remainder.
+
 
 **Note:** This section is actively under development. Coming updates will address usability, efficiency, clarity, robustness, and overall effectiveness. We welcome any feedback—feel free to reach out via email at [fabiocat@mit.edu](mailto:fabiocat@mit.edu) or open an issue on [GitHub](https://github.com/sensein/senselab/issues).
 

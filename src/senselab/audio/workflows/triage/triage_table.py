@@ -3,8 +3,8 @@
 The decision, its decisive evidence and the acquisition readings come from ``triage_decisions`` and
 ``triage_evidence`` (:mod:`~senselab.audio.workflows.triage.decision_tables`); the run tree supplies the
 source path, the recording's duration, which task-audio files exist and the whole-file readings its store
-holds (:func:`store_readings`); the recording vectors supply the whole-file SNR, noise floor and SQUIM
-(:data:`VECTOR_COLUMNS`). The columns and their order are ``data/triage_table.yaml``.
+holds (:func:`store_readings`); the recording vectors supply the whole-file SNR and noise floor and the
+task-extent SQUIM (:data:`VECTOR_COLUMNS`). The columns and their order are ``data/triage_table.yaml``.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import yaml
 from senselab.audio.workflows.triage.decision import reason_vocabulary
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
 from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, StoreView, read_store
-from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
+from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.audio.workflows.triage.vocabulary import release_ground_meanings
 from senselab.utils import fastio
 
@@ -56,13 +56,13 @@ _SCALAR_ITEMS = frozenset({LEVEL_ITEM, ACTIVE_ITEM, LEXICAL_ITEM, SPEECH_IN_TASK
 VECTOR_COLUMNS = {
     "q_plain_snr_db": "snr_db",
     "q_plain_floor_dbfs": "noise_floor_dbfs",
-    "q_plain_squim_pesq": "squim_pesq",
-    "q_plain_squim_stoi": "squim_stoi",
-    "q_plain_squim_si_sdr": "squim_si_sdr",
+    "q_task_squim_pesq": "squim_pesq",
+    "q_task_squim_stoi": "squim_stoi",
+    "q_task_squim_si_sdr": "squim_si_sdr",
 }
-"""``recording_vectors`` column to ``triage.tsv`` column: the whole-file plain-stream readings."""
+"""``recording_vectors`` column to ``triage.tsv`` column: the plain-stream readings (SQUIM over the task extent)."""
 SQUIM_COLUMNS = ("squim_pesq", "squim_stoi", "squim_si_sdr")
-NO_SQUIM_BRANCHES = ("AIRWAY",)
+NO_SQUIM_BRANCHES = ("AIRWAY", "VOICE")
 """Branches whose families SQUIM, a speech-quality estimate, does not describe: their SQUIM columns are empty."""
 WITHHELD = "withheld"
 
@@ -526,7 +526,7 @@ def row(
         The row, keyed by :func:`columns`.
     """
     verdict = decision.get("verdict")
-    family = decision.get("declared_family") or task_family(task_id_of(str(decision.get("stem") or "")))
+    family = decision.get("declared_family") or task_family(str(decision.get("task") or ""))
     branch = branch_of(family)
     reasons = list(decision.get("reasons") or ())
     annotations = list(decision.get("annotations") or ())

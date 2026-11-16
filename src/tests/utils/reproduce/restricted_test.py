@@ -610,14 +610,14 @@ def test_reclassifying_an_input_purges_its_whole_public_closure(site: Site, caps
     assert {"flip.json", f"flip{inputs.OVERLAY_SUFFIX}"} <= {p.name for p in public_records.iterdir()}
     _reflag(site, "flip", restricted=True, category="restricted-derivative")
     line = _verify_line(site, capsys, "flip")
-    assert line.startswith("flip\tok\t") and line.endswith(" purged=3"), line
+    assert line.startswith("flip\tok\t") and line.endswith(" purged=3 skipped_inflight=0"), line
     assert not {"flip.json", f"flip{inputs.OVERLAY_SUFFIX}"} & {p.name for p in public_records.iterdir()}
     for name in ("A", "B", "C"):
         out = outcomes[name].out
         assert out is not None and not out.exists()
         assert not (cache.run_dir(site.tmp / "runs", site.config().date, "demo") / name).is_symlink()
     assert outcomes["U"].out is not None and cache.is_done(outcomes["U"].out)
-    assert _verify_line(site, capsys, "flip").endswith(" purged=0")
+    assert _verify_line(site, capsys, "flip").endswith(" purged=0 skipped_inflight=0")
 
 
 @needs_userns
@@ -644,7 +644,7 @@ def test_moving_an_input_under_a_restricted_dir_purges_too(site: Site, capsys: p
         restricted=True,
         category="restricted-derivative",
     )
-    assert _verify_line(site, capsys, "flip").endswith(" purged=0")
+    assert _verify_line(site, capsys, "flip").endswith(" purged=0 skipped_inflight=0")
 
 
 @needs_userns
@@ -657,7 +657,7 @@ def test_canary_grep_over_public_trees_is_zero(site: Site, capsys: pytest.Captur
     _flip_input(site)
     site.run(_chain(site))
     _reflag(site, "flip", restricted=True, category="restricted-derivative")
-    assert _verify_line(site, capsys, "flip").endswith(" purged=3")
+    assert _verify_line(site, capsys, "flip").endswith(" purged=3 skipped_inflight=0")
     assert _released(site, released.key).is_dir()
     public = [site.tmp / "results", site.tmp / "runs", site.tmp / "slurm", site.data / "reruns"]
     assert [f for top in public for f in _files_with(top, CANARY)] == []
@@ -675,7 +675,7 @@ def _key_dir(root: Path, closure: list[str] | None, name: str) -> Path:
 def test_purge_waits_for_a_claim_and_removes_incomplete_results(site: Site, monkeypatch: pytest.MonkeyPatch) -> None:
     """A result with no summary is purged under its claim: a run in flight is waited for, a dead one removed.
 
-    A held claim does not stop the purge of the other results; the purge then raises ``E_CLAIM_HELD``.
+    A held claim does not stop the purge of the other results; that result is counted in flight and kept.
     """
     profile = site.profile()
     root = profile.results_root
@@ -699,7 +699,7 @@ def test_purge_waits_for_a_claim_and_removes_incomplete_results(site: Site, monk
     worker = threading.Thread(target=in_flight)
     worker.start()
     started.wait(10)
-    assert restricted.purge_closure(profile, "flip") == 2
+    assert restricted.purge_closure(profile, "flip") == restricted.Purge(2, 0)
     worker.join()
     assert not dead.exists() and not flying.exists() and other.exists()
     assert sorted(p.name for p in analysis.rglob("*") if p.is_symlink()) == ["kept"]
@@ -717,8 +717,7 @@ def test_purge_waits_for_a_claim_and_removes_incomplete_results(site: Site, monk
     worker.start()
     started.wait(10)
     monkeypatch.setattr(restricted, "PURGE_CLAIM_TIMEOUT_S", 0.5)
-    with pytest.raises(cache.CacheError, match="E_CLAIM_HELD"):
-        restricted.purge_closure(profile, "flip")
+    assert restricted.purge_closure(profile, "flip") == restricted.Purge(1, 1)
     release.set()
     worker.join()
     assert held.exists() and not free.exists() and other.exists()
@@ -867,7 +866,7 @@ def test_lint_and_submit_refuse_while_a_restricted_input_has_unpurged_public_dep
     with pytest.raises(ValueError, match="E_INPUT_UNPURGED"):
         slurm.submit([manifest], _submit_config(site, manifest), runner=fake)
     assert fake.calls == []
-    assert restricted.purge_closure(profile, "canary") == 3
+    assert restricted.purge_closure(profile, "canary").purged == 3
     assert not dependent.exists() and not pre_a8.exists() and not in_flight.exists() and unrelated.is_dir()
     assert restricted.unpurged_dependants(profile, "canary") == 0
     restricted.check_manifest_set([manifest], site.base, profile)
