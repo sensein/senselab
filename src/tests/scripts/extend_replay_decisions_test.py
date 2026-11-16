@@ -830,7 +830,9 @@ class TestTheReplayChecksTheRunsRecord:
         (root / "run" / "run.json").write_text(json.dumps({"source": str(source), "config": {"profile": recorded}}))
         with pytest.raises(ReplayRefused, match="another-dataset"):
             _checked(root)
-        assert _checked(root, allow_profile_change=True).profile["recorded"] == recorded
+        profile = _checked(root, allow_profile_change=True).profile
+        assert profile is not None
+        assert profile["recorded"] == recorded
 
     def test_a_run_with_no_recorded_profile_is_accepted(self, tmp_path: Path) -> None:
         """A run from before profiles: nothing to compare."""
@@ -936,7 +938,9 @@ class TestTheReplayChecksTheRunsRecord:
         (root / "run" / "run.json").write_text(json.dumps({"source": str(source), "config": {"profile": recorded}}))
         with pytest.raises(ReplayRefused, match="replay the run instead"):
             _checked(root, hint=HINT_COUGH, hint_given=True, allow_hint_change=False)
-        assert _checked(root, hint=HINT_COUGH, hint_given=True).profile["recorded"] == recorded
+        profile = _checked(root, hint=HINT_COUGH, hint_given=True).profile
+        assert profile is not None
+        assert profile["recorded"] == recorded
 
     def test_decisions_recorded_under_the_legacy_digest_are_the_same_profile(self, tmp_path: Path) -> None:
         """A byte digest recorded before 2026-11-14 names the unchanged profile: no --allow-profile-change."""

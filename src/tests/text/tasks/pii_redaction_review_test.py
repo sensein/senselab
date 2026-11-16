@@ -258,7 +258,12 @@ class TestEachAnswerRecordsWhereItRan:
         monkeypatch.setenv("SLURM_JOB_ID", "4242")
         calls: list[Any] = []
         smi = _smi((0, "0, GPU-a, NVIDIA A100-SXM4-80GB, 570.86.15\n1, GPU-b, NVIDIA H100 80GB HBM3, 570.86.15\n"))
-        monkeypatch.setattr(host, "_run", lambda argv: calls.append(argv) or smi(argv))
+
+        def run(argv: Any) -> Any:  # noqa: ANN401
+            calls.append(argv)
+            return smi(argv)
+
+        monkeypatch.setattr(host, "_run", run)
         harness.device.write_text(json.dumps(_DEVICE))
         first = review_transcript("one", model_id="stub/model", policy=POLICY)
         second = review_transcript("two", model_id="stub/model", policy=POLICY)
