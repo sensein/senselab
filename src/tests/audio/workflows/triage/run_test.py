@@ -49,6 +49,7 @@ from senselab.audio.workflows.triage.nodes.routing import routing as real_routin
 from senselab.audio.workflows.triage.nodes.taxonomy import TaxonomyResult
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.run import entity_subdir, prepare_run_layout, run_triage
+from senselab.audio.workflows.triage.task_catalogue import task_attributes
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
     DISCARDED,
@@ -222,8 +223,9 @@ def _fakes(
     ) -> AdmitResult:
         _record("ADMIT")
         entity_id, verdict = _conclude(store, "ADMIT", admit_outcome, None)
+        declared = task_attributes(hint)
         if admit_outcome is Outcome.FAIL:
-            store.activity(node="ADMIT", step=None, parameters={"audio_file": str(source)})
+            store.activity(node="ADMIT", step=None, parameters={"audio_file": str(source), **declared})
             return AdmitResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, audio=None)
         audio = _tone()
         audio.save_to_file(str(source))
@@ -235,6 +237,7 @@ def _fakes(
                 "path": str(Path(source).resolve()),
                 "sampling_rate": int(audio.sampling_rate),
                 "channels": int(audio.waveform.shape[0]),
+                **declared,
             },
         )
         store.was_generated_by(stream_id, store.activity(node="ADMIT", step="stream", parameters={}))
@@ -695,7 +698,9 @@ class TestConditionalExecution:
     ) -> None:
         """A breath task AIRWAY never ran on carries ``task_extent_absent`` naming the branch, not nothing."""
         graph(routed=("SPEECH",), routing_outcome="none")
-        result = run_triage(tmp_path / "sub-a_ses-1_task-breath-sounds.wav", tmp_path / "out", config)
+        result = run_triage(
+            tmp_path / "sub-a_ses-1_task-breath-sounds.wav", tmp_path / "out", config, AudioHints(task="breath-sounds")
+        )
         assert result.ran["AIRWAY"] is RunState.SKIPPED
         store = ProvStore.read_jsonl(result.store_path)
         absent = [
@@ -939,8 +944,9 @@ class TestAdmitFailShortCircuits:
     ) -> None:
         """A breath task ADMIT refused carries ``task_extent_absent`` naming AIRWAY, not nothing."""
         graph(admit_outcome=Outcome.FAIL)
+        hint = AudioHints(task="respiration-and-cough-fivebreaths", task_variant={"route": "nose"}, task_take=3)
         result = run_triage(
-            tmp_path / "sub-a_ses-1_task-respiration-and-cough-fivebreaths-3.wav", tmp_path / "out", config
+            tmp_path / "sub-a_ses-1_task-respiration-and-cough-fivebreaths-3.wav", tmp_path / "out", config, hint
         )
         store = ProvStore.read_jsonl(result.store_path)
         absent = [
@@ -955,9 +961,11 @@ class TestAdmitFailShortCircuits:
     def test_a_refused_recording_with_no_declared_family_records_no_absence(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A path naming no task is not a missing extent."""
+        """A hint naming no task is not a missing extent, whatever task the path names."""
         graph(admit_outcome=Outcome.FAIL)
-        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        result = run_triage(
+            tmp_path / "sub-a_ses-1_task-respiration-and-cough-fivebreaths-3.wav", tmp_path / "out", config
+        )
         store = ProvStore.read_jsonl(result.store_path)
         assert not [e for e in store.entities("measurement") if e.attributes.get("name") == "task_extent_absent"]
 

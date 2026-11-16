@@ -122,6 +122,7 @@ from senselab.audio.workflows.triage.run import (
     _attempt_artifacts,
     drive_decisions,
 )
+from senselab.audio.workflows.triage.task_catalogue import task_attributes, task_from_attributes
 from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY, REDACTION_LLM_ANNOTATION
 from senselab.audio.workflows.triage.word_arbitration import arbitrate_words
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
@@ -1130,9 +1131,11 @@ def check_replay_inputs(
 
     Refused: a recording whose bytes differ from the digest ADMIT recorded; a profile whose name differs
     from the run's, or none where the run had one, unless ``allow_profile_change``; no hint given where the
-    store records none, unless ``no_hint``; a recorded hint that carried a ``target_speaker`` (only its
-    digest is stored), unless a hint is given; a changed hint, unless ``allow_hint_change``. Anything else is
-    accepted and recorded on :class:`ReplayInputs`.
+    store records none, unless ``no_hint``; a store that records no task (written before ADMIT recorded one),
+    unless a hint is given or ``no_hint``, since its recorded hint names no task and every branch would take its
+    out-of-family mode; a recorded hint that carried a ``target_speaker`` (only its digest is stored), unless a
+    hint is given; a changed hint, unless ``allow_hint_change``. Anything else is accepted and recorded on
+    :class:`ReplayInputs`.
 
     Args:
         store: The run's store.
@@ -1161,6 +1164,11 @@ def check_replay_inputs(
         held, hint_from = hint, HINT_GIVEN
     elif no_hint:
         held, hint_from = None, HINT_NONE
+    elif task_from_attributes(attributes) is None:
+        raise ReplayRefused(
+            "this store records no task (written before ADMIT recorded one); pass --hints to rebuild its hint, "
+            "or --no-hint to run without a task"
+        )
     elif recorded_hint_digest(store) is None:
         raise ReplayRefused("this store records no hint; pass --hints to rebuild it, or --no-hint to run without one")
     elif recorded_hint_digest(store) == NO_HINT:
@@ -1200,6 +1208,7 @@ def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software:
         **entity.attributes,
         **identity_of(stem, hint).as_attributes(),
         **hint_attributes(hint),
+        **task_attributes(hint),
         "replaces": entity.id,
     }
     activity = store.activity(node=REPLAY_NODE, step=IDENTITY_RECORDED_STEP, parameters={"replaces": entity.id})

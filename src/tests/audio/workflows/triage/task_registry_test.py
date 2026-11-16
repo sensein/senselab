@@ -139,6 +139,15 @@ def test_a_category_the_questionnaire_records_reaches_the_hint(tmp_path: Path) -
         "questionnaire:phenotype/task/random_item_generation.tsv:random_item_generation_category"
     )
     assert record["item_category_from"] == hint.metadata["item_category_from"]
+    assert (hint.item_category, hint.item_category_from) == ("Country names", hint.metadata["item_category_from"])
+
+
+def test_a_category_the_instructions_speak_outranks_the_questionnaire(tmp_path: Path) -> None:
+    """B2AI's ``Category:`` line is the recording's own declaration; the builder reads it, not senselab."""
+    hint, _ = build_hint(_random_item_recording(tmp_path, "Speak a series of items. Category: Letters."))
+    assert hint is not None
+    assert (hint.item_category, hint.item_category_from) == ("Letters", "instructions")
+    assert hint.metadata["item_category"] == "Country names"
 
 
 def test_no_phenotype_table_leaves_the_category_undeclared(tmp_path: Path) -> None:
@@ -148,4 +157,4 @@ def test_no_phenotype_table_leaves_the_category_undeclared(tmp_path: Path) -> No
         json.dumps({"task_name": "random-item-generation-v2", "instructions": "x", "acoustic_task_id": "abc-123"})
     )
     hint, _ = build_hint(wav)
-    assert hint is not None and "item_category" not in hint.metadata
+    assert hint is not None and "item_category" not in hint.metadata and hint.item_category is None

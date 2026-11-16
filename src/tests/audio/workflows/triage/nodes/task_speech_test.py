@@ -46,12 +46,13 @@ from senselab.audio.workflows.triage.vocabulary import (
     release_ground_key,
 )
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import record_task
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 from tests.audio.workflows.triage.nodes.redact_test import _seed_redact_store, _word_extent
 
-BREATH_STEM = "sub-x_ses-y_task-respiration-and-cough-v2-threebreathsnose"
-VOWEL_STEM = "sub-x_ses-y_task-prolonged-vowel"
-ITEMS_STEM = "sub-x_ses-y_task-random-item-generation"
+BREATH_TASK = "respiration-and-cough-v2-threebreathsnose"
+VOWEL_TASK = "prolonged-vowel"
+ITEMS_TASK = "random-item-generation"
 QWEN = {"asr_crisperwhisper": "Hey", "asr_qwen": "Hay"}
 
 
@@ -84,7 +85,7 @@ class TestSpeechInANonLexicalTask:
     ) -> None:
         """Words far from the breaths, which the extent never reached, are all speech outside the task."""
         _seed_redact_store(
-            store, tmp_path, words=["[breath]", "[breath]", "so", "where", "did", "you"], recording_stem=BREATH_STEM
+            store, tmp_path, words=["[breath]", "[breath]", "so", "where", "did", "you"], task=BREATH_TASK
         )
         _breath_reading(store, [_word_extent(0), _word_extent(1)])
         read = task_speech_of(store, "respiration-and-cough-v2-threebreathsnose")
@@ -100,7 +101,7 @@ class TestSpeechInANonLexicalTask:
             tmp_path,
             words=["Hey", "[breath]", "what", "time", "is"],
             readings={0: QWEN},
-            recording_stem=BREATH_STEM,
+            task=BREATH_TASK,
         )
         _breath_reading(store, [_word_extent(0), (_word_extent(2)[0], _word_extent(4)[1])])
         read = task_speech_of(store, "respiration-and-cough-v2-threebreathsnose")
@@ -108,13 +109,13 @@ class TestSpeechInANonLexicalTask:
 
     def test_the_prolonged_vowel_count_in_is_task_text(self, store: ProvStore, tmp_path: Path) -> None:
         """The count-in before the vowel is the voice family's declared text; anything else is speech."""
-        _seed_redact_store(store, tmp_path, words=["1", "two", "three", "aaaah", "okay"], recording_stem=VOWEL_STEM)
+        _seed_redact_store(store, tmp_path, words=["1", "two", "three", "aaaah", "okay"], task=VOWEL_TASK)
         read = task_speech_of(store, "prolonged-vowel")
         assert len(read.task_text_ids) == 3 and read.words_n == 1
 
     def test_words_after_the_last_task_event_are_speech(self, store: ProvStore, tmp_path: Path) -> None:
         """r37 B3: the count-in said after the vowel's last hold is no longer task text; before it, it is."""
-        _seed_redact_store(store, tmp_path, words=["1", "two", "aaaah", "three", "okay"], recording_stem=VOWEL_STEM)
+        _seed_redact_store(store, tmp_path, words=["1", "two", "aaaah", "three", "okay"], task=VOWEL_TASK)
         activity = store.activity(node="VOICE", step="phonation", parameters={})
         write_measurement(
             store,
@@ -133,8 +134,9 @@ class TestSpeechInANonLexicalTask:
         store.entity(
             prov_type="stream",
             extent=(0.0, 10.0),
-            attributes={"name": "recording", "path": f"streams/{BREATH_STEM}.wav"},
+            attributes={"name": "recording", "path": f"streams/sub-x_ses-y_task-{BREATH_TASK}.wav"},
         )
+        record_task(store, BREATH_TASK)
         store.entity(
             prov_type="word",
             extent=(0.0, 0.0),
@@ -145,7 +147,7 @@ class TestSpeechInANonLexicalTask:
 
     def test_a_lexical_family_reads_nothing(self, store: ProvStore, tmp_path: Path) -> None:
         """A free-speech recording's words are its task."""
-        _seed_redact_store(store, tmp_path, words=["hello", "there"], recording_stem="sub-x_ses-y_task-free-speech")
+        _seed_redact_store(store, tmp_path, words=["hello", "there"], task="free-speech")
         assert task_speech_of(store, "free-speech").words_n == 0
 
 
@@ -180,7 +182,7 @@ class TestSpeechOutsideTheTaskIsMasked:
             store,
             tmp_path,
             words=["[breath]", "is", "it", "on", "[breath]", "yes"],
-            recording_stem=BREATH_STEM,
+            task=BREATH_TASK,
             scanned=False,
         )
         _write(store, "respiration-and-cough-v2-threebreathsnose")
@@ -263,11 +265,14 @@ class TestTheFoldReviewsAndReleases:
         assert folded.triage is Triage.PASS and folded.release is Release.AS_IS
 
 
-def _timed_words(store: ProvStore, stem: str, words: Sequence[tuple[str, float]]) -> None:
-    """A recording stream naming the stem, and one agreed word per ``(text, start)``, 0.4 s long."""
+def _timed_words(store: ProvStore, task: str, words: Sequence[tuple[str, float]]) -> None:
+    """A recording stream of the task ADMIT recorded, and one agreed word per ``(text, start)``, 0.4 s long."""
     store.entity(
-        prov_type="stream", extent=(0.0, 60.0), attributes={"name": "recording", "path": f"streams/{stem}.wav"}
+        prov_type="stream",
+        extent=(0.0, 60.0),
+        attributes={"name": "recording", "path": f"streams/sub-x_ses-y_task-{task}.wav"},
     )
+    record_task(store, task)
     for index, (text, start) in enumerate(words):
         extent = (start, start + 0.4)
         store.entity(prov_type="word", extent=extent, attributes=word_attributes(text, extent, index=index))
@@ -282,7 +287,7 @@ def _said(store: ProvStore, utterances: Sequence[str], *, pause_s: float = 0.8) 
             words.append((text, at))
             at += 0.5
         at += pause_s - 0.1
-    _timed_words(store, ITEMS_STEM, words)
+    _timed_words(store, ITEMS_TASK, words)
 
 
 def _item_fold(
@@ -570,12 +575,12 @@ class TestTheReviewerQuotesBecomeMasks:
             lambda i: (float(i), i + 0.5) if i < 4 else (4.0 + (i - 4) * 0.6, 4.5 + (i - 4) * 0.6),
         )
         joined: dict[int, dict[str, tuple[float, float]]] = {}
-        _seed_redact_store(store, tmp_path, words=words, timings=joined, recording_stem=ITEMS_STEM, scanned=False)
+        _seed_redact_store(store, tmp_path, words=words, timings=joined, task=ITEMS_TASK, scanned=False)
         _write(store, "random-item-generation")
         self._annotate(store, phrases_instead_of_items="occasional", phrase_quotes=["so my doctor said that"])
         assert mask_plan(store, reviewer_applies=True, padding_ms=50).non_task_speech_masked_n == 0
         other = ProvStore(run_id="predominant")
-        _seed_redact_store(other, tmp_path, words=words, timings=joined, recording_stem=ITEMS_STEM, scanned=False)
+        _seed_redact_store(other, tmp_path, words=words, timings=joined, task=ITEMS_TASK, scanned=False)
         _write(other, "random-item-generation")
         self._annotate(other, phrases_instead_of_items="predominant", phrase_quotes=["so my doctor said that"])
         plan = mask_plan(other, reviewer_applies=True, padding_ms=50)
@@ -594,7 +599,7 @@ class TestTheReviewerQuotesBecomeMasks:
             "_word_extent",
             lambda i: (float(i), i + 0.5) if i < 4 else (4.0 + (i - 4) * 0.6, 4.5 + (i - 4) * 0.6),
         )
-        _seed_redact_store(store, tmp_path, words=words, timings={}, recording_stem=ITEMS_STEM, scanned=False)
+        _seed_redact_store(store, tmp_path, words=words, timings={}, task=ITEMS_TASK, scanned=False)
         bear = next(word.id for word in consensus_words(store) if word.attributes.get("text") == "bear")
         _write(store, "random-item-generation", member_ids={bear})
         self._annotate(
@@ -605,13 +610,13 @@ class TestTheReviewerQuotesBecomeMasks:
         assert masked == words[3:]
 
     @staticmethod
-    def _off_task_plan(store: ProvStore, tmp_path: Path, stem: str, level: str = "some") -> MaskPlan:
+    def _off_task_plan(store: ProvStore, tmp_path: Path, task: str, level: str = "some") -> MaskPlan:
         _seed_redact_store(
             store,
             tmp_path,
             words=["lion", "tiger", "my", "doctor", "said", "Paris"],
             findings=[("LOCATION", _word_extent(5))],
-            recording_stem=stem,
+            task=task,
         )
         activity = store.activity(node="REVIEW", step="read", parameters={})
         write_measurement(
@@ -635,18 +640,16 @@ class TestTheReviewerQuotesBecomeMasks:
         self, store: ProvStore, tmp_path: Path
     ) -> None:
         """Three quoted off-task words stay masked; a finding the reviewer called task content is not."""
-        plan = self._off_task_plan(store, tmp_path, "sub-x_ses-y_task-rainbow-passage")
+        plan = self._off_task_plan(store, tmp_path, "rainbow-passage")
         assert plan.non_task_speech_masked_n == 3
         assert all(word.text != "Paris" or word.state != "masked" for mask in plan.masks for word in mask.words)
 
     def test_a_narrative_task_s_off_task_aside_is_not_masked(self, store: ProvStore, tmp_path: Path) -> None:
         """r37 G1 (07929b7b cinderella): "some" off-task speech in a free response masks nothing; extensive does."""
-        assert self._off_task_plan(store, tmp_path, "sub-x_ses-y_task-cinderella-story").non_task_speech_masked_n == 0
+        assert self._off_task_plan(store, tmp_path, "cinderella-story").non_task_speech_masked_n == 0
         other = ProvStore(run_id="extensive")
         (tmp_path / "extensive").mkdir()
-        plan = self._off_task_plan(
-            other, tmp_path / "extensive", "sub-x_ses-y_task-cinderella-story", level="extensive"
-        )
+        plan = self._off_task_plan(other, tmp_path / "extensive", "cinderella-story", level="extensive")
         assert plan.non_task_speech_masked_n == 3
         assert plan.pii_masks_final_n == 0
 
@@ -657,15 +660,11 @@ def test_a_lexical_task_s_own_words_are_its_own_sound_and_an_airway_task_has_non
     """QUALITY sets a spoken task's words aside as the participant's; a breath task's words stay candidates."""
     from senselab.audio.workflows.triage.nodes.quality import spoken_task_words
 
-    _seed_redact_store(store, tmp_path, words=["once", "upon", "a"], recording_stem="sub-x_ses-y_task-cinderella-story")
+    _seed_redact_store(store, tmp_path, words=["once", "upon", "a"], task="cinderella-story")
     assert len(spoken_task_words(store)) == 3
     other = ProvStore(run_id="airway")
-    _seed_redact_store(other, tmp_path, words=["hello"], recording_stem=BREATH_STEM)
+    _seed_redact_store(other, tmp_path, words=["hello"], task=BREATH_TASK)
     assert spoken_task_words(other) == []
-
-
-LOUDNESS_STEM = "sub-x_ses-y_task-loudness"
-LOUDNESS_V2_STEM = "sub-x_ses-y_task-loudness-v2"
 
 
 def _speech_fold(task: TaskEvidence, redaction: RedactionEvidence) -> FileVerdict:
@@ -687,18 +686,18 @@ def _speech_fold(task: TaskEvidence, redaction: RedactionEvidence) -> FileVerdic
 class TestLoudnessIsAVoiceTask:
     """Owner, 2026-10-11: loudness is a voice task beyond its "hey", as the count-in is in prolonged-vowel."""
 
-    @pytest.mark.parametrize("stem,family", [(LOUDNESS_STEM, "loudness"), (LOUDNESS_V2_STEM, "loudness-v2")])
-    def test_every_variant_of_hey_is_task_text(self, store: ProvStore, tmp_path: Path, stem: str, family: str) -> None:
+    @pytest.mark.parametrize("family", ["loudness", "loudness-v2"])
+    def test_every_variant_of_hey_is_task_text(self, store: ProvStore, tmp_path: Path, family: str) -> None:
         """Casing, punctuation, hyphenation and repetition of the declared word are all task text."""
         words = ["hey", "Hey!", "HEY", "hey-hey", "HEY-HEY!", "heyhey", "hey,", "Hey."]
-        _seed_redact_store(store, tmp_path, words=words, recording_stem=stem)
+        _seed_redact_store(store, tmp_path, words=words, task=family)
         assert non_lexical_family(family) and lexical_voice_family(family) and words_min_for(family) == 1
         read = task_speech_of(store, family)
         assert read.words_n == 0 and len(read.task_text_ids) == len(words)
 
     def test_only_hey_neither_reviews_nor_masks(self, store: ProvStore, tmp_path: Path) -> None:
         """'hey', 'hey hey' and 'HEY!' pass the fold and leave no mask."""
-        _seed_redact_store(store, tmp_path, words=["hey", "hey", "HEY!"], recording_stem=LOUDNESS_STEM, scanned=False)
+        _seed_redact_store(store, tmp_path, words=["hey", "hey", "HEY!"], task="loudness", scanned=False)
         _write(store, "loudness")
         plan = mask_plan(store, reviewer_applies=False, padding_ms=50)
         assert [mask for mask in plan.masks if mask.source == NON_TASK_SPEECH] == []
@@ -710,9 +709,7 @@ class TestLoudnessIsAVoiceTask:
 
     def test_any_other_word_is_masked_and_reviewed(self, store: ProvStore, tmp_path: Path) -> None:
         """A word beside the 'hey's is speech outside the task: masked, and the recording reviewed."""
-        _seed_redact_store(
-            store, tmp_path, words=["hey", "okay", "hey", "HEY!"], recording_stem=LOUDNESS_STEM, scanned=False
-        )
+        _seed_redact_store(store, tmp_path, words=["hey", "okay", "hey", "HEY!"], task="loudness", scanned=False)
         read = task_speech_of(store, "loudness")
         assert read.words_n == 1 and len(read.task_text_ids) == 3
         _write(store, "loudness")
@@ -726,7 +723,7 @@ class TestLoudnessIsAVoiceTask:
 
     def test_prolonged_vowel_is_unchanged(self, store: ProvStore, tmp_path: Path) -> None:
         """The count-in stays the vowel's task text; neither 'hey' nor a run-together count-in is."""
-        _seed_redact_store(store, tmp_path, words=["one", "two", "three", "hey", "oneone"], recording_stem=VOWEL_STEM)
+        _seed_redact_store(store, tmp_path, words=["one", "two", "three", "hey", "oneone"], task=VOWEL_TASK)
         read = task_speech_of(store, "prolonged-vowel")
         assert len(read.task_text_ids) == 3 and read.words_n == 2
         assert not lexical_voice_family("prolonged-vowel") and voice_task_text("prolonged-vowel") is None
@@ -744,7 +741,7 @@ def test_the_narrative_families_are_the_free_responses() -> None:
 
 def test_speech_before_the_task_is_its_words_and_their_span(store: ProvStore) -> None:
     """r37 G3 (168c5e68): the words whose midpoint precedes the extent, from the first's start to the last's end."""
-    _timed_words(store, ITEMS_STEM, [("hello", 0.1), ("there", 0.6), ("cat", 2.5), ("dog", 3.5)])
+    _timed_words(store, ITEMS_TASK, [("hello", 0.1), ("there", 0.6), ("cat", 2.5), ("dog", 3.5)])
     words = consensus_words(store)
     assert speech_before(words, 2.4) == {"words_n": 2, "start_s": 0.1, "end_s": 1.0, "seconds": 0.9}
     assert speech_before(words, 0.0) == {}

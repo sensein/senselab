@@ -1,8 +1,8 @@
 """The syllable-train task: its events, their identity, their rate and regularity, for the ten tasks that ask for one.
 
 An instrument, not a branch: DDK was dissolved into SPEECH, so ``vocabulary.BRANCHES`` is
-``("AIRWAY", "SPEECH", "VOICE")`` and SPEECH's ``align_speech`` serves the ten
-``SYLLABLE_REPETITION`` families through :func:`align_ddk`. The task events are the task layer's
+``("AIRWAY", "SPEECH", "VOICE")`` and SPEECH's ``align_speech`` serves the syllable-repetition
+tasks (the task list's ``syllable_repetition`` kind) through :func:`align_ddk`. The task events are the task layer's
 (:mod:`~senselab.audio.workflows.triage.ddk_task`): syllables and cycles over BACKGROUND's activity
 regions, each scored against the declared phoneme template on the phonetic posteriorgram. The energy
 envelope's modulation peak is read beside them. Every measurement below is a SPEECH measurement.
@@ -640,7 +640,7 @@ def align_ddk(
     *,
     reads: DdkReads = DdkReads(),
 ) -> Result:
-    """Evaluate one declared ``SYLLABLE_REPETITION`` task.
+    """Evaluate one declared syllable-repetition task.
 
     Spans proposed: exactly one ``task_extent``, the task events' span (:func:`task_extent_span`), or
     none where no task event stands.

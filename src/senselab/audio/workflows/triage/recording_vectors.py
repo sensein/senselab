@@ -40,10 +40,11 @@ from senselab.audio.workflows.triage.identity import (
     identity_columns,
     identity_from_attributes,
 )
+from senselab.audio.workflows.triage.task_catalogue import ResolvedTask, task_from_attributes
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -502,6 +503,23 @@ def view_identity(view: StoreView) -> RecordingIdentity | None:
         [activity["parameters"] for activity in view.activities if activity.get("node") == ADMIT_NODE],
     )
     return identity_from_attributes(record[0]) if record is not None else None
+
+
+def view_task(view: StoreView) -> ResolvedTask | None:
+    """The task ADMIT recorded for a run, read from the same record as :func:`view_identity`.
+
+    Args:
+        view: The store, read.
+
+    Returns:
+        The recorded task, or None where ADMIT recorded none (a store written before it recorded the task).
+    """
+    recording = view.last("stream", name=RECORDING_STREAM)
+    record = admit_choice(
+        recording.attributes if recording is not None else None,
+        [activity["parameters"] for activity in view.activities if activity.get("node") == ADMIT_NODE],
+    )
+    return task_from_attributes(record[0]) if record is not None else None
 
 
 def role_kind(role: Any) -> str | None:  # noqa: ANN401 -- a store attribute is any type
@@ -1404,6 +1422,7 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
         "stem": stem,
         "run_dir": str(run_root.relative_to(root)) if run_root.is_relative_to(root) else str(run_root),
         "declared_family": decision.get("declared_family"),
+        "declared_task_source": task.source if (task := view_task(view)) is not None else None,
         "release": decision.get("release"),
         "release_ground": decision.get("release_ground"),
         "release_ground_key": decision.get("release_ground_key"),
@@ -1611,6 +1630,7 @@ def _fields() -> list[pa.Field]:
         pa.field("stem", pa.string()),
         pa.field("run_dir", pa.string()),
         pa.field("declared_family", pa.string()),
+        pa.field("declared_task_source", pa.string()),
         pa.field("release", pa.string()),
         pa.field("release_ground", pa.string()),
         pa.field("release_ground_key", pa.string()),

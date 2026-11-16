@@ -41,7 +41,6 @@ MIN_AST_HOP_S = 8.0
 
 DATA_MAP_PATHS = frozenset(
     {
-        "airway.route_by_task_index",
         "branch.label_sets",
         "branch.phoneme_place_classes",
         "branch.phoneme_vowel_classes",

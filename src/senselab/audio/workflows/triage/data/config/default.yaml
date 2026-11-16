@@ -159,8 +159,8 @@ stimulus:
   task_lexicons: []    # dataset profile (B2AI: cinderella-story, animal-fluency, random-item-generation[-v2]).  families whose packaged lexicon, and item category's, is task content
 
 # The declared task ALWAYS adds a route to its own branch. That route needs no key here: the task is
-# read off the recording's own BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`
-# below, which is the graph's one family -> branch mapping. This block is the OPTIONAL second,
+# the one the hint declares, recorded by ADMIT, and its task list entry names the branch
+# (`taxonomy.ruleset.reference_family_set` below names each branch's task kind). This block is the OPTIONAL second,
 # caller-supplied declaration source, and it is additive in the same direction: it adds routes and
 # removes none. Null, because populating it would invent a tag vocabulary nobody fitted. The
 # derivation is in `specs/20260817-triage-workflow-dag/config-derivations.md`.
@@ -178,9 +178,6 @@ routing:
 # names, and the two modes read that split rather than these labels directly.
 airway:
   labels_of_interest: [Cough, Breathe]  # the HeAR labels this branch acts on
-  # a task's trailing index -> the route its instruction prescribes. Data, not schema: a campaign
-  # with another protocol supplies its own map.
-  route_by_task_index: {}   # dataset profile: a task id's trailing index -> nose or mouth (B2AI: 1 nose, 2 mouth, 3 nose, 4 mouth)
 
 # Praat's harmonicity and pitch settings for the whole-stream F0/formant tracks.
 phonation:

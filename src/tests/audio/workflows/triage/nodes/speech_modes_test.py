@@ -46,7 +46,9 @@ from senselab.audio.workflows.triage.nodes.speech import (
     align_speech,
     detect_speech,
 )
+from senselab.audio.workflows.triage.task_catalogue import read_task_list
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import record_task
 from tests.audio.workflows.triage.nodes.conftest import gated_conformance
 
 HARVARD = "The birch canoe slid on the smooth planks."
@@ -106,7 +108,8 @@ def _store(*, family: str | None = None, duration_s: float = 20.0) -> ProvStore:
     """A store carrying only the ``recording`` stream the mode selector reads.
 
     Args:
-        family: The declared task family, written into a BIDS stem, or None for no declaration.
+        family: The task ADMIT records the hint naming (``record_task``), also written into a BIDS stem that no
+            stage reads; or None for no declaration.
         duration_s: The recording's duration.
 
     Returns:
@@ -119,6 +122,8 @@ def _store(*, family: str | None = None, duration_s: float = 20.0) -> ProvStore:
         extent=(0.0, duration_s),
         attributes={"name": "recording", "path": path, "sampling_rate": 16000, "channels": 1},
     )
+    if family is not None:
+        record_task(store, family)
     return store
 
 
@@ -250,10 +255,19 @@ def _unmeasured(result: Result) -> list[str]:
     return list(found[0].evidence["value"]) if found else []
 
 
+B2AI_PROFILE = Path(__file__).parents[1] / "profiles" / "bridge2ai_voice_adult"
+_B2AI_SPEECH_TASKS = sorted(
+    name
+    for name, entry in read_task_list((B2AI_PROFILE / "tasks.yaml").read_text(encoding="utf-8"), "tasks.yaml").items()
+    if entry.branch == "SPEECH"
+)
+"""The B2AI profile's SPEECH tasks, read from its file: parameters are collected before any profile is active."""
+
+
 class TestTheDeclarationPicksTheMode:
     """The declared family selects the mode and never supplies the answer."""
 
-    @pytest.mark.parametrize("family", sorted(SPEECH_EXPECTATIONS))
+    @pytest.mark.parametrize("family", _B2AI_SPEECH_TASKS)
     def test_every_in_family_declaration_takes_align(self, family: str) -> None:
         """All 31 rows are reachable: a family in the table never falls through to detect."""
         assert mode_of("SPEECH", _store(family=family)) == ("align", family)
@@ -656,11 +670,11 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
     def test_a_rule_category_admits_its_members_without_a_list(self, tmp_path: Path) -> None:
         """``Numbers`` admits digits and spelled numbers; ``words starting with 't'`` admits by initial."""
         numbers = self._listed("random-item-generation", ["7", "twelve", "apple"])
-        hint = AudioHints(instructions="List as many as possible. Category: Numbers.")
+        hint = AudioHints(item_category="Numbers")
         result = align_speech("random-item-generation", numbers, hint, branch_params(_config(tmp_path)))
         assert _of_kind(result, "count", "category_items")[0].evidence["found"] == 2
         words = self._listed("random-item-generation", ["table", "time", "apple"])
-        hint = AudioHints(instructions="Category: English words starting with 't'.")
+        hint = AudioHints(item_category="English words starting with 't'")
         result = align_speech("random-item-generation", words, hint, branch_params(_config(tmp_path)))
         assert _of_kind(result, "count", "category_items")[0].evidence["found"] == 2
 
@@ -682,26 +696,32 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
         assert source.evidence["found"] is None
         assert _gated(result, "random-item-generation", _config(tmp_path)) is not UNDETERMINED
 
-    def test_a_category_the_hint_metadata_declares_is_read(self, tmp_path: Path) -> None:
-        """No ``Category:`` line: the questionnaire's category in the hint metadata decides, and its source is kept."""
+    def test_the_category_the_hint_declares_is_read_with_its_source(self, tmp_path: Path) -> None:
+        """The hint names the category and where the dataset read it; the record keeps both."""
         store = self._listed("random-item-generation", ["a", "a"])
-        hint = AudioHints(
-            instructions="The selection will appear when you start recording.",
-            metadata={"item_category": "Animals", "item_category_from": "questionnaire:t.tsv:cat"},
-        )
+        hint = AudioHints(item_category="Animals", item_category_from="questionnaire:t.tsv:cat")
         result = align_speech("random-item-generation", store, hint, branch_params(_config(tmp_path)))
         assert _of_kind(result, "count", "item_category")[0].evidence["found"] == "Animals"
         assert _of_kind(result, "count", "item_category_from")[0].evidence["found"] == "questionnaire:t.tsv:cat"
         assert len(_of_kind(result, "deviation", "repeated_item")) == 1
         assert _of_kind(result, "measure", "repetition_rule") == []
 
-    def test_the_instructions_category_outranks_the_metadata(self, tmp_path: Path) -> None:
-        """The spoken ``Category:`` line is the recording's own declaration."""
+    def test_nothing_is_read_out_of_the_instructions(self, tmp_path: Path) -> None:
+        """A ``Category:`` line is the dataset's to read (B2AI's builder does); senselab reads the hint's field."""
         store = self._listed("random-item-generation", ["a", "a"])
-        hint = AudioHints(instructions="Category: Letters.", metadata={"item_category": "Animals"})
+        hint = AudioHints(instructions="Category: Letters.")
         result = align_speech("random-item-generation", store, hint, branch_params(_config(tmp_path)))
-        assert _of_kind(result, "count", "item_category")[0].evidence["found"] == "Letters"
-        assert _of_kind(result, "count", "item_category_from")[0].evidence["found"] == "instructions"
+        assert _of_kind(result, "count", "item_category")[0].evidence["found"] is None
+        assert _of_kind(result, "measure", "repetition_rule")
+
+    def test_a_category_the_task_does_not_list_concludes_nothing_about_repetition(self, tmp_path: Path) -> None:
+        """The entry lists the categories it allows; any other has no rule to apply."""
+        store = self._listed("random-item-generation", ["a", "a"])
+        hint = AudioHints(item_category="Colours")
+        result = align_speech("random-item-generation", store, hint, branch_params(_config(tmp_path)))
+        [rule] = _of_kind(result, "measure", "repetition_rule")
+        assert "Colours" in str(rule.evidence)
+        assert _of_kind(result, "deviation", "repeated_item") == []
 
     def test_an_unreadable_category_still_places_the_task_extent(self, tmp_path: Path) -> None:
         """The repetition rule is unknown; where the items were said is not."""
@@ -716,7 +736,7 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
     def test_no_item_is_written_as_an_absence_with_its_reason(self, tmp_path: Path) -> None:
         """No word to hull, so the record says so rather than staying silent."""
         store = self._listed("random-item-generation", [])
-        hint = AudioHints(instructions="Category: Animals.")
+        hint = AudioHints(item_category="Animals")
         result = align_speech("random-item-generation", store, hint, branch_params(_config(tmp_path)))
         assert result.components == []
         [absence] = _of_kind(result, "measure", TASK_EXTENT_ABSENT)
@@ -725,7 +745,7 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
     def test_the_category_that_allows_repetition_reports_none(self, tmp_path: Path) -> None:
         """`Letters` says repetition is allowed, so a repeat is not a departure."""
         store = self._listed("random-item-generation", ["a", "a"])
-        hint = AudioHints(instructions="The selection will appear when you start recording. Category: Letters.")
+        hint = AudioHints(item_category="Letters")
         result = align_speech("random-item-generation", store, hint, branch_params(_config(tmp_path)))
         assert _of_kind(result, "deviation", "repeated_item") == []
         [allowed] = _of_kind(result, "count", "repetition_allowed")
@@ -734,7 +754,7 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
     def test_a_category_that_forbids_it_reports_the_repeat(self, tmp_path: Path) -> None:
         """The discriminator: eight of the ten categories say do not repeat any item."""
         store = self._listed("random-item-generation", ["a", "a"])
-        hint = AudioHints(instructions="The selection will appear when you start recording. Category: Animals.")
+        hint = AudioHints(item_category="Animals")
         result = align_speech("random-item-generation", store, hint, branch_params(_config(tmp_path)))
         assert len(_of_kind(result, "deviation", "repeated_item")) == 1
 

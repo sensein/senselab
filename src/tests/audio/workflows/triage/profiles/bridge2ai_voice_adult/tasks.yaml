@@ -1,0 +1,301 @@
+# What each Bridge2AI-Voice adult task asks for: one entry per task, keyed by the name B2AI's hints declare.
+# `branch` is the analysis that reads the task; `expects` is senselab's description of the instruction
+# (nodes/branches.py Expectation; a field left out takes its default). `unused_voice_reading` is a voice-branch
+# description written for four lexical tasks and never applied (user, 2026-11-02: they stay speech tasks).
+# `voice_reading_text`: a word task also read for its voice over these words (owner, 2026-10-11, loudness: "should
+# be treated as voice tasks beyond the hey hey"; specs/20261007-task-events-in-background/design.md, "Loudness is a
+# voice task"). It stays a SPEECH task for routing and measurement.
+# `lexicon` names the file of a task's own words and phrases. `categories` lists the categories a word-generation
+# task's hint may declare (AudioHints.item_category): each one's rule (list: its `words` file; letters; numbers: digits
+# and its `number_words`; initial_letter: its `letter`), and `repetition_allowed` where the category's own instruction
+# permits saying an item twice (Letters, Numbers: senselab's REPETITION_ALLOWED_CATEGORIES before step 4). The ten are
+# B2AI's questionnaire field random_item_generation_category, as its phenotype table spells them.
+# Moved unchanged from senselab's packaged tables (step 4 of specs/20261022-triage-dataset-profile/plan.md).
+x-number-words: &number_words [zero, one, two, three, four, five, six, seven, eight, nine, ten, eleven, twelve, thirteen,
+  fourteen, fifteen, sixteen, seventeen, eighteen, nineteen, twenty, thirty, forty, fifty, sixty, seventy, eighty,
+  ninety, hundred, thousand, million]
+x-random-item-categories: &random_item_categories
+  Numbers: {rule: numbers, number_words: *number_words, repetition_allowed: true}
+  Letters: {rule: letters, repetition_allowed: true}
+  First names: {rule: list, words: task_lexicon/categories/first-names.yaml}
+  City names: {rule: list, words: task_lexicon/categories/city-names.yaml}
+  Country names: {rule: list, words: task_lexicon/categories/country-names.yaml}
+  Jobs: {rule: list, words: task_lexicon/categories/jobs.yaml}
+  Fruits: {rule: list, words: task_lexicon/categories/fruits.yaml}
+  Drinks: {rule: list, words: task_lexicon/categories/drinks.yaml}
+  Animals: {rule: list, words: task_lexicon/categories/animals.yaml}
+  English words starting with 't': {rule: initial_letter, letter: t}
+version: 1
+tasks:
+  harvard-sentences-list:
+    branch: SPEECH
+    expects: {pattern: ordered_tokens, token_source: stimulus_text}
+  cape-v-sentences:
+    branch: SPEECH
+    expects: {pattern: ordered_tokens, token_source: stimulus_text}
+    unused_voice_reading: {pattern: per_sentence, token_source: stimulus_text}
+  cape-v-sentences-v2:
+    branch: SPEECH
+    expects: {pattern: ordered_tokens, token_source: stimulus_text}
+    unused_voice_reading: {pattern: per_sentence, token_source: stimulus_text}
+  rainbow-passage:
+    branch: SPEECH
+    expects: {pattern: ordered_tokens, token_source: stimulus_text, connected: true}
+  caterpillar-passage:
+    branch: SPEECH
+    expects: {pattern: ordered_tokens, token_source: stimulus_text, connected: true}
+  word-color-stroop:
+    branch: SPEECH
+    expects:
+      pattern: ordered_tokens
+      token_source: stimulus_text
+      declared_duration_s: 75.0
+      emit_filler: false
+      vocabulary: [amarillo, azul, beige, black, blanco, blue, brown, burgundy, color, colour, cyan, fuchsia, gold, gray,
+        green, grey, gris, indigo, lavender, lime, magenta, maroon, morado, naranja, navy, negro, olive, orange, peach,
+        pink, purple, red, rojo, rosa, silver, tan, teal, turquoise, verde, violet, white, yellow]
+  loudness:
+    branch: SPEECH
+    voice_reading_text: [hey]   # owner, 2026-10-11: the participant says "hey", then shouts it
+    expects:
+      pattern: ordered_tokens
+      tokens: [hey, hey, hey]
+      required_count: {value: 3, unit: tokens}
+    unused_voice_reading:
+      pattern: effort
+      tokens: [hey]
+      required_count: {value: 3, unit: events}
+      unviable:
+      - [effort_absolute, '`level` is uncalibrated and no SPL reference exists in the graph']
+  loudness-v2:
+    branch: SPEECH
+    voice_reading_text: [hey]   # owner, 2026-10-11: the participant says "hey", then shouts it
+    expects:
+      pattern: ordered_tokens
+      tokens: [hey, hey]
+      required_count: {value: 2, unit: tokens}
+    unused_voice_reading:
+      pattern: effort
+      tokens: [hey]
+      required_count: {value: 2, unit: events}
+      contrast: true
+  free-speech:
+    branch: SPEECH
+    expects: {pattern: free_response, token_source: stimulus_text, anti_pattern: verbatim_prompt}
+  free-speech-v2:
+    branch: SPEECH
+    expects: {pattern: free_response, declared_duration_s: 30.0}
+  story-recall:
+    branch: SPEECH
+    expects: {pattern: free_response, token_source: stimulus_text, anti_pattern: verbatim_source}
+  story-recall-v2:
+    branch: SPEECH
+    expects: {pattern: free_response, token_source: stimulus_text, anti_pattern: verbatim_source}
+  cinderella-story:
+    branch: SPEECH
+    lexicon: task_lexicon/cinderella-story.yaml
+    expects:
+      pattern: free_response
+      expected_names: [anastasia, bruno, charming, cinderella, drizella, duke, fairy, godmother, gus, jaq, king, lucifer,
+        prince, princess, queen, stepmother, stepmothers, stepsister, stepsisters, tremaine]
+      unviable:
+      - [source_overlap, '`stimulus_text` is empty on all 258; the source is a physical storybook']
+  productive-vocabulary:
+    branch: SPEECH
+    expects:
+      pattern: free_response
+      token_source: stimulus_text
+      unviable:
+      - [defines_its_cue, 'a lexicon or a text model, branch-local, and no waveform']
+  picture-description:
+    branch: SPEECH
+    expects: {pattern: free_response, connected: true}
+  picture-description-option1:
+    branch: SPEECH
+    expects: {pattern: free_response, connected: true}
+  picture-description-option2:
+    branch: SPEECH
+    expects: {pattern: free_response, connected: true}
+  open-response-questions:
+    branch: SPEECH
+    expects: {pattern: free_response, token_source: stimulus_text, declared_duration_s: 30.0, connected: true}
+  animal-fluency:
+    branch: SPEECH
+    expects: {pattern: item_list, declared_duration_s: 60.0, repetition_allowed: false, item_category: Animals}
+    categories:
+      Animals: {rule: list, words: task_lexicon/categories/animals.yaml}
+  random-item-generation:
+    branch: SPEECH
+    expects: {pattern: item_list, repetition_from_category: true}
+    categories: *random_item_categories
+  random-item-generation-v2:
+    branch: SPEECH
+    expects: {pattern: item_list, repetition_from_category: true}
+    categories: *random_item_categories
+  diadochokinesis-pa:
+    branch: SPEECH
+    expects:
+      pattern: syllable_train
+      required_count: {value: 10, unit: repetitions}
+      sequence: [p, aa]
+  diadochokinesis-ta:
+    branch: SPEECH
+    expects:
+      pattern: syllable_train
+      required_count: {value: 10, unit: repetitions}
+      sequence: [t, aa]
+  diadochokinesis-ka:
+    branch: SPEECH
+    expects:
+      pattern: syllable_train
+      required_count: {value: 10, unit: repetitions}
+      sequence: [k, aa]
+  diadochokinesis-v2-puh:
+    branch: SPEECH
+    expects:
+      pattern: syllable_train
+      declared_duration_s: 5.0
+      sequence: [p, ah]
+  diadochokinesis-v2-tuh:
+    branch: SPEECH
+    expects:
+      pattern: syllable_train
+      declared_duration_s: 5.0
+      sequence: [t, ah]
+  diadochokinesis-v2-kuh:
+    branch: SPEECH
+    expects:
+      pattern: syllable_train
+      declared_duration_s: 5.0
+      sequence: [k, ah]
+  diadochokinesis-pataka:
+    branch: SPEECH
+    expects:
+      pattern: syllable_sequence
+      required_count: {value: 10, unit: repetitions}
+      sequence: [p, aa, t, aa, k, aa]
+  diadochokinesis-v2-puhtuhkuh:
+    branch: SPEECH
+    expects:
+      pattern: syllable_sequence
+      declared_duration_s: 5.0
+      sequence: [p, ah, t, ah, k, ah]
+  diadochokinesis-buttercup:
+    branch: SPEECH
+    expects:
+      pattern: syllable_sequence
+      required_count: {value: 10, unit: repetitions}
+      sequence: [b, ah, t, er, k, ah, p]
+  diadochokinesis-v2-buttercup:
+    branch: SPEECH
+    expects:
+      pattern: syllable_sequence
+      declared_duration_s: 5.0
+      sequence: [b, ah, t, er, k, ah, p]
+  prolonged-vowel:
+    branch: VOICE
+    expects:
+      pattern: sustained
+      tokens: [one, two, three]
+      token_source: instructions
+      declared_duration_s: 12.0
+      lexical_separator: true
+  maximum-phonation-time:
+    branch: VOICE
+    expects: {pattern: sustained, forbid_lexical: true, expect_inhale: true}
+  maximum-phonation-time-v2:
+    branch: VOICE
+    expects: {pattern: sustained, forbid_lexical: true}
+  glides-low-to-high:
+    branch: VOICE
+    expects: {pattern: glide, declared_direction: up}
+  glides-high-to-low:
+    branch: VOICE
+    expects: {pattern: glide, declared_direction: down}
+  high-to-low:
+    branch: VOICE
+    expects: {pattern: glide, declared_direction: down}
+  respiration-and-cough-cough:
+    branch: AIRWAY
+    expects:
+      pattern: event_series
+      required_count: {value: 5, unit: events}
+      label_set: cough
+  respiration-and-cough-v2-hardcough:
+    branch: AIRWAY
+    expects:
+      pattern: event_series
+      label_set: cough
+      unviable:
+      - [effort_absolute, no within-recording contrast and no SPL reference; `hard` is not measurable]
+  voluntary-cough:
+    branch: AIRWAY
+    expects:
+      pattern: event_alternation
+      required_count: {value: 3, unit: events}
+      label_set: cough
+  respiration-and-cough-fivebreaths:
+    branch: AIRWAY
+    expects:
+      pattern: event_series
+      required_count: {value: 5, unit: events}
+      label_set: breath
+      route_per_recording: true
+      unviable:
+      - [route, 'the discriminating band sits above the 8 kHz ceiling and the residual tilt is confounded, one for one,
+          with mouth-to-microphone geometry']
+  respiration-and-cough-v2-threebreathsnose:
+    branch: AIRWAY
+    expects:
+      pattern: event_series
+      required_count: {value: 3, unit: events}
+      label_set: breath
+      declared_route: nose
+      unviable:
+      - [route, as `fivebreaths`]
+  respiration-and-cough-v2-threebreathsmouth:
+    branch: AIRWAY
+    expects:
+      pattern: event_series
+      required_count: {value: 3, unit: events}
+      label_set: breath
+      declared_route: mouth
+      unviable:
+      - [route, as `fivebreaths`]
+  respiration-and-cough-threequickbreaths:
+    branch: AIRWAY
+    expects:
+      pattern: event_series
+      required_count: {value: 3, unit: events}
+      label_set: breath
+      timed_intervals: true
+  respiration-and-cough-v2-threebreaths:
+    branch: AIRWAY
+    expects:
+      pattern: event_series
+      required_count: {value: 3, unit: events}
+      label_set: breath
+      timed_intervals: true
+  respiration-and-cough-breath:
+    branch: AIRWAY
+    expects: {pattern: sound_coverage, declared_duration_s: 30.0, label_set: breath}
+  respiration-and-cough-v2-breath:
+    branch: AIRWAY
+    expects:
+      pattern: sound_coverage
+      declared_duration_s: 20.0
+      label_set: breath
+      declared_route: mouth
+      unviable:
+      - [route, as `fivebreaths`]
+  breath-sounds:
+    branch: AIRWAY
+    expects:
+      pattern: event_series
+      required_count: {value: 3, unit: events}
+      declared_duration_s: 73.0
+      label_set: breath
+      declared_route: mouth
+      relax_s: 60.0
+      unviable:
+      - [route, as `fivebreaths`]

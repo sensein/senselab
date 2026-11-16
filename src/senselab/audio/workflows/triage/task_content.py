@@ -23,7 +23,7 @@ from senselab.audio.workflows.audio_analysis.harmonize import normalise_token
 from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.nodes.common import find_measurement, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
-from senselab.audio.workflows.triage.routing_analysis import families as family_sets
+from senselab.audio.workflows.triage.task_catalogue import is_kind
 from senselab.utils.prov_store import Entity, ProvStore
 
 TASK_CONTENT_PATH = Path(__file__).parent / "data" / "task_content.yaml"
@@ -53,7 +53,7 @@ def readings_for(family: str | None) -> tuple[str, ...]:
     if not family:
         return ()
     for set_name, names in (task_content_parameters().get("families") or {}).items():
-        if family in getattr(family_sets, str(set_name), frozenset()):
+        if is_kind(family, str(set_name)):
             return tuple(str(name) for name in names or ())
     return ()
 
@@ -231,9 +231,7 @@ def task_content_ids(
         and word.id not in spoken
         and share_inside(word_hull(word), events, pad_s) >= min_share
     ]
-    any_word = any(
-        family in getattr(family_sets, str(name), frozenset()) for name in parameters.get("any_word_families") or ()
-    )
+    any_word = any(is_kind(family, str(name)) for name in parameters.get("any_word_families") or ())
     if any_word:
         return {word.id for word in on}
     widened = _merged(events, pad_s)

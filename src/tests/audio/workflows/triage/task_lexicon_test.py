@@ -9,12 +9,12 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import data_path
 from senselab.audio.workflows.triage.residue import FREE, residue_rule, task_residue
+from senselab.audio.workflows.triage.task_catalogue import item_category_rule, task_list
 from senselab.audio.workflows.triage.task_lexicon import (
     SECTIONS,
     TaskLexicon,
     category_members,
     category_phrases,
-    category_slug,
     declared_names_lexicon,
     packaged_phrases,
     task_lexicon,
@@ -82,12 +82,20 @@ def test_an_empty_lexicon_changes_nothing() -> None:
     assert plain == empty
 
 
-def test_every_packaged_category_lexicon_names_its_own_category() -> None:
-    """A file under ``categories/`` loads under the category its stem is the slug of."""
-    for path in sorted(data_path("task_lexicon/categories").glob("*.yaml")):
-        category = str(yaml.safe_load(path.read_text())["category"])
-        assert category_slug(category) == path.stem
-        assert category_phrases(category), path
+def test_every_listed_category_names_a_words_file_of_its_own_category() -> None:
+    """Each ``list`` category of the task list loads, under the name its file declares."""
+    listed = {
+        category.words: category
+        for entry in task_list().values()
+        for category in entry.categories.values()
+        if category.words is not None
+    }
+    assert listed
+    for words, category in listed.items():
+        assert str(yaml.safe_load(data_path(words).read_text())["category"]) == category.name
+        assert category_phrases(category), words
+    packaged = {f"task_lexicon/categories/{path.name}" for path in data_path("task_lexicon/categories").glob("*.yaml")}
+    assert packaged == set(listed)
 
 
 def test_an_animal_fluency_list_is_task_content() -> None:
@@ -96,9 +104,9 @@ def test_an_animal_fluency_list_is_task_content() -> None:
     assert lexicon.positions(["Cat,", "dogs", "and", "Marisol"]) == {0, 1}
 
 
-def test_a_random_item_list_takes_its_category_from_the_instructions() -> None:
-    """``Category: First names.`` makes the listed first names task content; nothing else is."""
-    hint = AudioHints(instructions="The selection will appear when you start recording. Category: First names.")
+def test_a_random_item_list_takes_its_category_from_the_hint() -> None:
+    """The category ``First names`` makes the listed first names task content; nothing else is."""
+    hint = AudioHints(item_category="First names")
     config = load_triage_config()
     assert task_lexicon(config, "random-item-generation", hint).positions(["Susan", "John", "table"]) == {0, 1}
     assert task_lexicon(config, "random-item-generation").positions(["Susan"]) == set()
@@ -106,7 +114,18 @@ def test_a_random_item_list_takes_its_category_from_the_instructions() -> None:
 
 def test_a_rule_category_admits_numbers_without_a_list() -> None:
     """A ``Numbers`` list read as digits is the task, not a phone number."""
-    hint = AudioHints(instructions="Category: Numbers.")
+    hint = AudioHints(item_category="Numbers")
     lexicon = task_lexicon(load_triage_config(), "random-item-generation-v2", hint)
     assert lexicon.positions(["4", "seven", "hello"]) == {0, 1}
-    assert category_members("Letters", ["b", "bee"]) == {0}
+    assert category_members(item_category_rule("random-item-generation", "Letters"), ["b", "bee"]) == {0}
+
+
+def test_a_category_names_its_rule_and_nothing_is_parsed_from_its_name() -> None:
+    """The letter, the number words and the repetition rule are the entry's; a name the entry lacks has no rule."""
+    letter = item_category_rule("random-item-generation", "English words starting with 't'")
+    assert letter is not None and (letter.rule, letter.letter) == ("initial_letter", "t")
+    assert category_members(letter, ["table", "time", "apple"]) == {0, 1}
+    numbers = item_category_rule("random-item-generation", "Numbers")
+    assert numbers is not None and numbers.repetition_allowed and "twelve" in numbers.number_words
+    assert item_category_rule("random-item-generation", "words starting with 'b'") is None
+    assert category_members(None, ["b"]) == set()

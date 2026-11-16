@@ -22,7 +22,6 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.routing_analysis.detectors import Detector, detector_value, evidence_blocks
-from senselab.audio.workflows.triage.routing_analysis.families import DECLARED_KIND, SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures
 from senselab.audio.workflows.triage.routing_analysis.report import (
     OVER_ROUTING_BUDGETS,
@@ -30,6 +29,7 @@ from senselab.audio.workflows.triage.routing_analysis.report import (
     RecallCurve,
     recall_at_budgets,
 )
+from senselab.audio.workflows.triage.task_catalogue import TASKS_BY_KIND
 from senselab.audio.workflows.triage.vocabulary import BRANCHES
 
 RULESET_PATH = "taxonomy.ruleset"
@@ -50,8 +50,8 @@ AT_MOST = "at_most"
 _POLARITY: Mapping[str, str] = {AT_LEAST: "above", AT_MOST: "below"}
 """Each comparison's firing side, in the polarity vocabulary the recall curve reads."""
 
-FAMILY_SETS: Mapping[str, frozenset[str]] = {**DECLARED_KIND, "syllable_repetition": SYLLABLE_REPETITION}
-"""Every named family set a branch's reference standard may be taken from."""
+FAMILY_SETS: Mapping[str, frozenset[str]] = TASKS_BY_KIND
+"""Every named family set a branch's reference standard may be taken from: a task kind, read off the task list."""
 
 _PUNCTUATION = re.compile(r"[^\w\s]+")
 

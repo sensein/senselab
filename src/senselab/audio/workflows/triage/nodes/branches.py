@@ -41,13 +41,6 @@ from senselab.audio.workflows.triage.nodes.gates import (
     Pattern,
     load_gate_bounds,
 )
-from senselab.audio.workflows.triage.routing_analysis.families import (
-    AIRWAY_ELICITING,
-    SPEECH_ELICITING,
-    SYLLABLE_REPETITION,
-    VOICE_ELICITING,
-    task_family,
-)
 from senselab.utils.prov_store import Entity, ProvStore
 
 UNDETERMINED: Literal["UNDETERMINED"] = "UNDETERMINED"
@@ -727,7 +720,8 @@ class Expectation:
             order; its length is one repetition.
         declared_direction: Which way a pitch sweep is asked to go.
         declared_route: Nose or mouth, where the instruction prescribes one.
-        route_from_index: Whether the route is carried by the task's trailing index.
+        route_per_recording: Whether the route is declared per recording, in the hint's ``task_variant``
+            (``route``), rather than for every recording of the task.
         relax_s: Leading interval the instruction gives to settling rather than to the task.
         repetition_allowed: Whether repeating an item is permitted.
         repetition_from_category: Whether the repetition rule follows from the recording's category.
@@ -761,7 +755,7 @@ class Expectation:
     sequence: tuple[str, ...] | None = None
     declared_direction: str | None = None
     declared_route: str | None = None
-    route_from_index: bool = False
+    route_per_recording: bool = False
     relax_s: float | None = None
     repetition_allowed: bool | None = None
     repetition_from_category: bool = False
@@ -826,305 +820,71 @@ class Expectation:
         return cls(**values)
 
 
-VOICE_EXPECTATIONS: dict[str, Expectation] = {
-    "prolonged-vowel": Expectation(
-        pattern=Pattern.SUSTAINED,
-        tokens=("one", "two", "three"),
-        token_source="instructions",
-        declared_duration_s=12.0,
-        lexical_separator=True,
-    ),
-    "maximum-phonation-time": Expectation(pattern=Pattern.SUSTAINED, forbid_lexical=True, expect_inhale=True),
-    "maximum-phonation-time-v2": Expectation(pattern=Pattern.SUSTAINED, forbid_lexical=True, expect_inhale=False),
-    "glides-low-to-high": Expectation(pattern=Pattern.GLIDE, declared_direction="up"),
-    "glides-high-to-low": Expectation(pattern=Pattern.GLIDE, declared_direction="down"),
-    "high-to-low": Expectation(pattern=Pattern.GLIDE, declared_direction="down"),
-}
-"""VOICE's six in-family rows: ``VOICE_ELICITING``."""
+class BranchTable(Mapping[str, Expectation]):
+    """One branch's in-family tasks, read from the active dataset profile's task list (:mod:`~.task_catalogue`).
 
-VOICE_EXPECTATIONS_PENDING_DECLARATION: dict[str, Expectation] = {
-    "loudness": Expectation(
-        pattern=Pattern.EFFORT,
-        tokens=("hey",),
-        required_count=RequiredCount(3, CountUnit.EVENTS),
-        unviable=(("effort_absolute", "`level` is uncalibrated and no SPL reference exists in the graph"),),
-    ),
-    "loudness-v2": Expectation(
-        pattern=Pattern.EFFORT, tokens=("hey",), required_count=RequiredCount(2, CountUnit.EVENTS), contrast=True
-    ),
-    "cape-v-sentences": Expectation(pattern=Pattern.PER_SENTENCE, token_source="stimulus_text"),
-    "cape-v-sentences-v2": Expectation(pattern=Pattern.PER_SENTENCE, token_source="stimulus_text"),
-}
-"""VOICE's own instrument families, which ``families.py`` places in ``LEXICAL_SPEECH``.
+    A read-only mapping from task name to :class:`Expectation`, so a lookup reads as it did when the rows were
+    packaged here. senselab ships no task: without a profile supplying ``tasks.yaml`` the table cannot be read.
+    """
 
-Out of family for VOICE under the reference family set, so neither ``align_voice`` nor
-:data:`EXPECTATIONS` reads this table.
-"""
+    def __init__(self, branch: str, *, unused_voice: bool = False) -> None:
+        """Name the branch whose entries this table holds.
 
-CINDERELLA_CAST: tuple[str, ...] = (
-    "anastasia",
-    "bruno",
-    "charming",
-    "cinderella",
-    "drizella",
-    "duke",
-    "fairy",
-    "godmother",
-    "gus",
-    "jaq",
-    "king",
-    "lucifer",
-    "prince",
-    "princess",
-    "queen",
-    "stepmother",
-    "stepmothers",
-    "stepsister",
-    "stepsisters",
-    "tremaine",
-)
-"""The cast a Cinderella retelling is expected to name.
+        Args:
+            branch: One of :data:`BRANCHES`.
+            unused_voice: Hold the entries' ``unused_voice_reading`` instead (never applied; kept with the task).
+        """
+        self._branch = branch
+        self._unused_voice = unused_voice
 
-Task metadata, not corpus-derived: the proper nouns the instruction itself puts in the speaker's
-mouth. The measurement that says this family needs one is in
-``specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md``.
-"""
+    def _rows(self) -> Mapping[str, Expectation]:
+        from senselab.audio.workflows.triage.task_catalogue import branch_rows, unused_voice_rows  # noqa: PLC0415
 
-STROOP_COLOURS: tuple[str, ...] = (
-    "amarillo",
-    "azul",
-    "beige",
-    "black",
-    "blanco",
-    "blue",
-    "brown",
-    "burgundy",
-    "color",
-    "colour",
-    "cyan",
-    "fuchsia",
-    "gold",
-    "gray",
-    "green",
-    "grey",
-    "gris",
-    "indigo",
-    "lavender",
-    "lime",
-    "magenta",
-    "maroon",
-    "morado",
-    "naranja",
-    "navy",
-    "negro",
-    "olive",
-    "orange",
-    "peach",
-    "pink",
-    "purple",
-    "red",
-    "rojo",
-    "rosa",
-    "silver",
-    "tan",
-    "teal",
-    "turquoise",
-    "verde",
-    "violet",
-    "white",
-    "yellow",
-)
-"""The colour names a Stroop response is drawn from: the ink is named, not the word read.
+        return unused_voice_rows() if self._unused_voice else branch_rows(self._branch)
 
-Task metadata, not corpus-derived. The measurement that says this family needs one is in
-``specs/20260925-lexical-only-pii-pathway/design.md``.
-"""
+    def __getitem__(self, name: str) -> Expectation:
+        """The task's expectation.
+
+        Args:
+            name: The task's name in the profile's task list.
+
+        Returns:
+            Its expectation.
+        """
+        return self._rows()[name]
+
+    def __iter__(self):  # noqa: ANN204 -- a Mapping's key iterator
+        """The task names, in the task list's order."""
+        return iter(self._rows())
+
+    def __len__(self) -> int:
+        """How many tasks the branch holds."""
+        return len(self._rows())
+
+    def __repr__(self) -> str:
+        """The branch and its task names."""
+        return f"BranchTable({self._branch!r}, {list(self)!r})"
 
 
-SPEECH_EXPECTATIONS: dict[str, Expectation] = {
-    "harvard-sentences-list": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text"),
-    "cape-v-sentences": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text"),
-    "cape-v-sentences-v2": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text"),
-    "rainbow-passage": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text", connected=True),
-    "caterpillar-passage": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text", connected=True),
-    "word-color-stroop": Expectation(
-        pattern=Pattern.ORDERED_TOKENS,
-        token_source="stimulus_text",
-        declared_duration_s=75.0,
-        emit_filler=False,
-        vocabulary=STROOP_COLOURS,
-    ),
-    "loudness": Expectation(
-        pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey", "hey"), required_count=RequiredCount(3, CountUnit.TOKENS)
-    ),
-    "loudness-v2": Expectation(
-        pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey"), required_count=RequiredCount(2, CountUnit.TOKENS)
-    ),
-    "free-speech": Expectation(
-        pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text", anti_pattern="verbatim_prompt"
-    ),
-    "free-speech-v2": Expectation(pattern=Pattern.FREE_RESPONSE, declared_duration_s=30.0),
-    "story-recall": Expectation(
-        pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text", anti_pattern="verbatim_source"
-    ),
-    "story-recall-v2": Expectation(
-        pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text", anti_pattern="verbatim_source"
-    ),
-    "cinderella-story": Expectation(
-        pattern=Pattern.FREE_RESPONSE,
-        expected_names=CINDERELLA_CAST,
-        unviable=(("source_overlap", "`stimulus_text` is empty on all 258; the source is a physical storybook"),),
-    ),
-    "productive-vocabulary": Expectation(
-        pattern=Pattern.FREE_RESPONSE,
-        token_source="stimulus_text",
-        unviable=(("defines_its_cue", "a lexicon or a text model, branch-local, and no waveform"),),
-    ),
-    "picture-description": Expectation(pattern=Pattern.FREE_RESPONSE, connected=True),
-    "picture-description-option1": Expectation(pattern=Pattern.FREE_RESPONSE, connected=True),
-    "picture-description-option2": Expectation(pattern=Pattern.FREE_RESPONSE, connected=True),
-    "open-response-questions": Expectation(
-        pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text", declared_duration_s=30.0, connected=True
-    ),
-    "animal-fluency": Expectation(
-        pattern=Pattern.ITEM_LIST,
-        declared_duration_s=60.0,
-        repetition_allowed=False,
-        item_category="Animals",
-    ),
-    "random-item-generation": Expectation(
-        pattern=Pattern.ITEM_LIST,
-        repetition_from_category=True,
-    ),
-    "random-item-generation-v2": Expectation(
-        pattern=Pattern.ITEM_LIST,
-        repetition_from_category=True,
-    ),
-    "diadochokinesis-pa": Expectation(
-        pattern=Pattern.SYLLABLE_TRAIN,
-        sequence=PA,
-        required_count=RequiredCount(10, CountUnit.REPETITIONS),
-    ),
-    "diadochokinesis-ta": Expectation(
-        pattern=Pattern.SYLLABLE_TRAIN,
-        sequence=TA,
-        required_count=RequiredCount(10, CountUnit.REPETITIONS),
-    ),
-    "diadochokinesis-ka": Expectation(
-        pattern=Pattern.SYLLABLE_TRAIN,
-        sequence=KA,
-        required_count=RequiredCount(10, CountUnit.REPETITIONS),
-    ),
-    "diadochokinesis-v2-puh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=PUH, declared_duration_s=5.0),
-    "diadochokinesis-v2-tuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=TUH, declared_duration_s=5.0),
-    "diadochokinesis-v2-kuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=KUH, declared_duration_s=5.0),
-    "diadochokinesis-pataka": Expectation(
-        pattern=Pattern.SYLLABLE_SEQUENCE,
-        sequence=PATAKA,
-        required_count=RequiredCount(10, CountUnit.REPETITIONS),
-    ),
-    "diadochokinesis-v2-puhtuhkuh": Expectation(
-        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=PUHTUHKUH, declared_duration_s=5.0
-    ),
-    "diadochokinesis-buttercup": Expectation(
-        pattern=Pattern.SYLLABLE_SEQUENCE,
-        sequence=BUTTERCUP,
-        required_count=RequiredCount(10, CountUnit.REPETITIONS),
-    ),
-    "diadochokinesis-v2-buttercup": Expectation(
-        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=BUTTERCUP, declared_duration_s=5.0
-    ),
-}
-"""SPEECH's 31 in-family rows: ``LEXICAL_SPEECH`` (21) plus ``SYLLABLE_REPETITION`` (10).
+VOICE_EXPECTATIONS = BranchTable("VOICE")
+"""VOICE's in-family tasks, from the active profile's task list."""
 
-Each syllable-repetition row carries its instruction as a phoneme sequence, and one body reads both
-the one-syllable trains and the sequential ones with ``len(sequence)`` as one repetition.
-See ``specs/20260817-triage-workflow-dag/ddk-template-decode.md`` and
-``ddk-dissolved-into-speech.md``.
-"""
+VOICE_EXPECTATIONS_PENDING_DECLARATION = BranchTable("VOICE", unused_voice=True)
+"""Voice readings a profile wrote for some of its SPEECH tasks and that no stage applies; kept with the task."""
 
-AIRWAY_EXPECTATIONS: dict[str, Expectation] = {
-    "respiration-and-cough-cough": Expectation(
-        pattern=Pattern.EVENT_SERIES, label_set="cough", required_count=RequiredCount(5, CountUnit.EVENTS)
-    ),
-    "respiration-and-cough-v2-hardcough": Expectation(
-        pattern=Pattern.EVENT_SERIES,
-        label_set="cough",
-        unviable=(("effort_absolute", "no within-recording contrast and no SPL reference; `hard` is not measurable"),),
-    ),
-    "voluntary-cough": Expectation(
-        pattern=Pattern.EVENT_ALTERNATION, label_set="cough", required_count=RequiredCount(3, CountUnit.EVENTS)
-    ),
-    "respiration-and-cough-fivebreaths": Expectation(
-        pattern=Pattern.EVENT_SERIES,
-        label_set="breath",
-        required_count=RequiredCount(5, CountUnit.EVENTS),
-        route_from_index=True,
-        unviable=(
-            (
-                "route",
-                "the discriminating band sits above the 8 kHz ceiling and the residual tilt is confounded, "
-                "one for one, with mouth-to-microphone geometry",
-            ),
-        ),
-    ),
-    "respiration-and-cough-v2-threebreathsnose": Expectation(
-        pattern=Pattern.EVENT_SERIES,
-        label_set="breath",
-        required_count=RequiredCount(3, CountUnit.EVENTS),
-        declared_route="nose",
-        unviable=(("route", "as `fivebreaths`"),),
-    ),
-    "respiration-and-cough-v2-threebreathsmouth": Expectation(
-        pattern=Pattern.EVENT_SERIES,
-        label_set="breath",
-        required_count=RequiredCount(3, CountUnit.EVENTS),
-        declared_route="mouth",
-        unviable=(("route", "as `fivebreaths`"),),
-    ),
-    "respiration-and-cough-threequickbreaths": Expectation(
-        pattern=Pattern.EVENT_SERIES,
-        label_set="breath",
-        required_count=RequiredCount(3, CountUnit.EVENTS),
-        timed_intervals=True,
-    ),
-    "respiration-and-cough-v2-threebreaths": Expectation(
-        pattern=Pattern.EVENT_SERIES,
-        label_set="breath",
-        required_count=RequiredCount(3, CountUnit.EVENTS),
-        timed_intervals=True,
-    ),
-    "respiration-and-cough-breath": Expectation(
-        pattern=Pattern.SOUND_COVERAGE, label_set="breath", declared_duration_s=30.0
-    ),
-    "respiration-and-cough-v2-breath": Expectation(
-        pattern=Pattern.SOUND_COVERAGE,
-        label_set="breath",
-        declared_duration_s=20.0,
-        declared_route="mouth",
-        unviable=(("route", "as `fivebreaths`"),),
-    ),
-    "breath-sounds": Expectation(
-        pattern=Pattern.EVENT_SERIES,
-        label_set="breath",
-        required_count=RequiredCount(3, CountUnit.EVENTS),
-        declared_route="mouth",
-        relax_s=60.0,
-        declared_duration_s=73.0,
-        unviable=(("route", "as `fivebreaths`"),),
-    ),
-}
-"""AIRWAY's eleven in-family rows: ``AIRWAY_ELICITING``."""
+SPEECH_EXPECTATIONS = BranchTable("SPEECH")
+"""SPEECH's in-family tasks, from the active profile's task list."""
 
-EXPECTATIONS: dict[str, dict[str, Expectation]] = {
+AIRWAY_EXPECTATIONS = BranchTable("AIRWAY")
+"""AIRWAY's in-family tasks, from the active profile's task list."""
+
+EXPECTATIONS: dict[str, BranchTable] = {
     "AIRWAY": AIRWAY_EXPECTATIONS,
     "SPEECH": SPEECH_EXPECTATIONS,
     "VOICE": VOICE_EXPECTATIONS,
 }
-"""48 rows over 48 declared families, one per family: the in-family membership test, as data.
+"""Each branch's in-family tasks: the in-family membership test, as data the dataset profile supplies."""
 
-The ten ``SYLLABLE_REPETITION`` families are SPEECH's, like every other speaking task.
-"""
 
 DETECT_GROUP: dict[str, Pattern] = {
     "AIRWAY": Pattern.EVENT_SERIES,
@@ -1138,15 +898,11 @@ What it needs is the group whose reading its instrument takes: AIRWAY walks even
 free response, VOICE qualifies a sustained production.
 """
 
-REFERENCE_FAMILY_SET: dict[str, frozenset[str]] = {
-    "AIRWAY": AIRWAY_ELICITING,
-    "SPEECH": SPEECH_ELICITING,
-    "VOICE": VOICE_ELICITING,
-}
-"""Each branch's in-family family set, as ``families.py`` declares it.
+REFERENCE_KIND: dict[str, str] = {"AIRWAY": "airway", "SPEECH": "speech", "VOICE": "voice"}
+"""Each branch's in-family task kind, whose tasks are the task list's entries for that branch.
 
-The packaged config names the same three sets by key under
-``taxonomy.ruleset.reference_family_set``, and :data:`EXPECTATIONS` covers them exactly.
+The packaged config names the same three kinds under ``taxonomy.ruleset.reference_family_set``, and
+:data:`EXPECTATIONS` covers their tasks exactly.
 """
 
 
@@ -1154,17 +910,40 @@ The packaged config names the same three sets by key under
 
 
 def declared_task_family(store: ProvStore) -> str | None:
-    """The declared task family, from :func:`~senselab.audio.workflows.triage.identity.declared_task_id`.
+    """The task the recording was asked to perform, by its name, as ADMIT recorded it from the hint.
+
+    Nothing is read off a file name: the name is the hint's (``AudioHints.task``), and it names the task's entry in the
+    dataset profile's task list and in every other per-task table the profile supplies.
 
     Args:
         store: The provenance store.
 
     Returns:
-        The family, or None when nothing declares one: no ``recording`` entity and no ADMIT activity, a path
-        that is not a BIDS stem, or a task id of ``"unknown"``. None takes the out-of-family mode.
+        The task's name, or None where the hint declared none or the store predates the record. None takes the
+        out-of-family mode.
     """
-    family = task_family(declared_task_id(store))
-    return family if family and family != UNKNOWN_TASK else None
+    from senselab.audio.workflows.triage.task_catalogue import recorded_task  # noqa: PLC0415
+
+    task = recorded_task(store)
+    return task.name if task is not None and task.name else None
+
+
+def declared_expectation(store: ProvStore, branch: str) -> Expectation | None:
+    """What the recording was asked to contain, where the branch reading it is ``branch``.
+
+    Read from ADMIT's record, so a task described inline in the hint is read as one from the task list is.
+
+    Args:
+        store: The provenance store.
+        branch: One of :data:`BRANCHES`.
+
+    Returns:
+        The recorded expectation, or None where the recording's task is another branch's, or is not described.
+    """
+    from senselab.audio.workflows.triage.task_catalogue import recorded_task  # noqa: PLC0415
+
+    task = recorded_task(store)
+    return task.expects if task is not None and task.branch == branch else None
 
 
 class AlignMode(Protocol):
@@ -1274,18 +1053,11 @@ def expected_names(task_family: str | None) -> tuple[str, ...]:
     return () if expectation is None else expectation.expected_names
 
 
-CATEGORY_LINE = re.compile(r"Category:\s*([^.\n]+)")
-"""Where a per-recording category is spoken in the instructions: ``Category: Country names.``"""
-
-
-ITEM_CATEGORY_KEY = "item_category"
-"""The hint ``metadata`` key a per-recording category is declared under, where the instructions name none."""
-
-ITEM_CATEGORY_FROM_KEY = "item_category_from"
-"""The hint ``metadata`` key naming where :data:`ITEM_CATEGORY_KEY` was read."""
-
 CATEGORY_FROM_FAMILY = "family"
-CATEGORY_FROM_INSTRUCTIONS = "instructions"
+"""Where a category is read when the task itself fixes it (``Expectation.item_category``)."""
+
+CATEGORY_FROM_HINT = "hint"
+"""Where a per-recording category is read when the hint says nothing of its own source."""
 
 
 def item_category_of(task_family: str | None, hint: AudioHints | None) -> tuple[str | None, str | None]:
@@ -1293,13 +1065,13 @@ def item_category_of(task_family: str | None, hint: AudioHints | None) -> tuple[
 
     Args:
         task_family: The declared family, a key of :data:`SPEECH_EXPECTATIONS`, or None.
-        hint: What the recording was declared to contain; its instructions carry a per-recording
-            category, and its ``metadata`` may declare one under :data:`ITEM_CATEGORY_KEY`.
+        hint: What the recording was declared to contain; ``item_category`` names a per-recording category and
+            ``item_category_from`` where the dataset read it.
 
     Returns:
-        ``(category, source)``: the family's declared category (:data:`CATEGORY_FROM_FAMILY`), else the
-        one its instructions name (:data:`CATEGORY_FROM_INSTRUCTIONS`), else the hint metadata's, with
-        the source that metadata names; ``(None, None)`` where none of them declares one.
+        ``(category, source)``: the family's declared category (:data:`CATEGORY_FROM_FAMILY`), else the hint's,
+        with the source it names (:data:`CATEGORY_FROM_HINT` where it names none); ``(None, None)`` where neither
+        declares one. Nothing is read out of the instructions' text.
     """
     expectation = SPEECH_EXPECTATIONS.get(str(task_family))
     if expectation is None:
@@ -1308,12 +1080,9 @@ def item_category_of(task_family: str | None, hint: AudioHints | None) -> tuple[
         return expectation.item_category, CATEGORY_FROM_FAMILY
     if not expectation.repetition_from_category or hint is None:
         return None, None
-    found = CATEGORY_LINE.search(str(hint.instructions)) if hint.instructions else None
-    if found:
-        return found.group(1).strip(), CATEGORY_FROM_INSTRUCTIONS
-    declared = str(hint.metadata.get(ITEM_CATEGORY_KEY) or "").strip()
+    declared = (hint.item_category or "").strip()
     if declared:
-        return declared, str(hint.metadata.get(ITEM_CATEGORY_FROM_KEY) or "metadata")
+        return declared, hint.item_category_from or CATEGORY_FROM_HINT
     return None, None
 
 

@@ -11,11 +11,16 @@ object carrying ``source`` (the field the extend drivers' manifests carry it in)
 with ``#`` are skipped. Each recording's identity is the one ADMIT would record,
 :func:`~senselab.audio.workflows.triage.identity.identity_of` over its stem and the hint ``--hints`` builds.
 ``--hints DIR`` names a directory holding a ``hints.py`` exposing ``build_hint(wav)``, as the replay driver takes;
-without it every identity is read off the stem. No store is opened.
+without it every identity is read off the stem and no recording declares a task. Each hint's task is resolved
+against the task list of ``--profile`` (the dataset profile), as ADMIT resolves it. No store is opened.
 
 ``--table`` checks a finished corpus: the ``recording_vectors`` parquet, of which only ``stem``, ``run_dir``,
-``participant``, ``session``, ``task`` and their ``*_from`` columns are read. A row whose ``*_from`` columns are
-all empty is a run that records no identity.
+``participant``, ``session``, ``task`` and their ``*_from`` columns are read, and ``declared_family`` and
+``declared_task_source`` where the table has them. A row whose ``*_from`` columns are all empty is a run that records
+no identity; one whose ``declared_task_source`` is empty or absent is a run that records no task.
+
+Each hint's task is resolved against the active profile's task list, so ``--recordings`` with ``--hints`` needs
+``--profile``; without one the check stops (exit 2) rather than refusing every recording.
 
 The checks and their levels are in :mod:`senselab.audio.workflows.triage.identity_check`. ``--session-scope``
 says where the corpus's session identifiers are unique: within their participant (the default, as BIDS ``ses-1``) or
@@ -37,7 +42,8 @@ from typing import Any, Callable
 
 import pyarrow.parquet as pq
 
-from senselab.audio.workflows.triage.extend import load_hint_builder
+from senselab.audio.workflows.triage.dataset_profile import DatasetDataMissing
+from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config, load_hint_builder
 from senselab.audio.workflows.triage.identity import (
     ROW_PARTICIPANT,
     ROW_SESSION,
@@ -56,15 +62,21 @@ from senselab.audio.workflows.triage.identity_check import (
     IdentityRecord,
     IdentityReport,
     check_identities,
-    triage_families,
 )
 from senselab.audio.workflows.triage.nodes.common import describe_exception
+from senselab.audio.workflows.triage.task_catalogue import resolve_task
 
 SOURCE_KEY = "source"
 """The manifest field a recording's path is carried in."""
 
+DECLARED_TASK_COLUMN = "declared_family"
+DECLARED_TASK_SOURCE_COLUMN = "declared_task_source"
 TABLE_COLUMNS = ("stem", "run_dir", ROW_PARTICIPANT, ROW_SESSION, ROW_TASK, *ROW_SOURCES.values())
-"""The corpus-table columns the check reads; no other column is read."""
+"""The corpus-table columns the check needs; no other column is read but :data:`TASK_COLUMNS`."""
+
+TASK_COLUMNS = (DECLARED_TASK_COLUMN, DECLARED_TASK_SOURCE_COLUMN)
+"""The declared-task columns, read where the table has them (schema 31 on); a table without them is one whose runs
+record no task."""
 
 PRIVATE_FILE_MODE = 0o600
 SHOWN_PER_CHECK = 5
@@ -92,6 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Where session identifiers are unique: within their participant (default) or across the corpus",
     )
     parser.add_argument("--out", type=Path, default=None, help="Where the JSON report goes")
+    add_config_arguments(parser)
     return parser
 
 
@@ -140,13 +153,16 @@ def records_before_run(recordings: list[Path], build_hint: Callable[[Path], Any]
         try:
             hint = build_hint(wav)[0] if build_hint is not None else None
             identity = identity_of(stem, hint)
+            task = resolve_task(hint)
         except IdentityLabelError as error:
             records.append(IdentityRecord(stem, str(wav), None, parsed, str(error)))
             continue
+        except DatasetDataMissing:
+            raise
         except (OSError, ValueError, LookupError, TypeError) as error:
             records.append(IdentityRecord(stem, str(wav), None, parsed, f"hint: {describe_exception(error)}"))
             continue
-        records.append(IdentityRecord(stem, str(wav), identity, parsed))
+        records.append(IdentityRecord(stem, str(wav), identity, parsed, task=task.name, task_source=task.source))
     return records
 
 
@@ -166,11 +182,20 @@ def records_after_run(table: Path) -> list[IdentityRecord]:
     missing = [column for column in TABLE_COLUMNS if column not in present]
     if missing:
         raise ValueError(f"{table} carries no {', '.join(missing)}; rebuild it from a current corpus pass")
-    rows = pq.read_table(table, columns=list(TABLE_COLUMNS)).to_pylist()
+    rows = pq.read_table(table, columns=[*TABLE_COLUMNS, *(c for c in TASK_COLUMNS if c in present)]).to_pylist()
     records: list[IdentityRecord] = []
     for row in rows:
         stem = str(row.get("stem") or "")
-        records.append(IdentityRecord(stem, str(row.get("run_dir") or ""), row_identity(row), identity_from_stem(stem)))
+        records.append(
+            IdentityRecord(
+                stem,
+                str(row.get("run_dir") or ""),
+                row_identity(row),
+                identity_from_stem(stem),
+                task=row.get(DECLARED_TASK_COLUMN),
+                task_source=row.get(DECLARED_TASK_SOURCE_COLUMN),
+            )
+        )
     return records
 
 
@@ -229,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         scope = args.session_scope
+        driver_config(args)
         if args.recordings is not None:
             build_hint = load_hint_builder(args.hints) if args.hints is not None else None
             records = records_before_run(read_recording_list(args.recordings), build_hint)
@@ -238,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
 
-    report = check_identities(records, session_scope=scope, known_families=triage_families())
+    report = check_identities(records, session_scope=scope)
     if args.out is not None:
         extra = {
             "mode": "recordings" if args.recordings is not None else "table",

@@ -46,7 +46,7 @@ from senselab.audio.workflows.triage.nodes.verdict import verdict
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.vocabulary import Outcome, RunStatus, Triage
 from senselab.utils.prov_store import Entity, ProvStore
-from tests.audio.workflows.triage.conftest import declare_hint_identity
+from tests.audio.workflows.triage.conftest import record_task
 from tests.audio.workflows.triage.nodes.conftest import gated_from_store, store_readings, word_attributes
 
 PROV_ASSERTION: Literal["assertion"] = "assertion"
@@ -150,6 +150,7 @@ def _seed(  # noqa: C901 — one independent block per derivative, as PREPROCESS
     tmp_path: Path,
     *,
     task: str | None = None,
+    variant: dict[str, str] | None = None,
     spans: Sequence[tuple[float, float]] = (),
     scores: Sequence[dict[str, float] | None] = (),
     labels: Sequence[Sequence[str]] | None = None,
@@ -171,8 +172,10 @@ def _seed(  # noqa: C901 — one independent block per derivative, as PREPROCESS
     Args:
         store: The store to seed.
         tmp_path: The run directory; sidecars go under ``streams/`` and ``derivatives/``.
-        task: The BIDS ``task-`` id written into the ``recording`` stream's path. None writes a
-            stem carrying no task at all, which is what takes the out-of-family mode.
+        task: The task ADMIT records the hint naming (``record_task``), also written into the ``recording``
+            stream's path as its ``task-`` entity, which no stage reads. None records no task and writes a stem
+            carrying none, which is what takes the out-of-family mode.
+        variant: The task's declared variants, e.g. ``{"route": "mouth"}``.
         spans: ``[(start, end), ...]`` amplitude spans, in the order ``scores`` indexes.
         scores: One ``span_hear`` ``raw_scores`` mapping per span; a None entry writes no
             ``span_hear`` for that span, which is an absent measurement rather than a zero.
@@ -220,6 +223,8 @@ def _seed(  # noqa: C901 — one independent block per derivative, as PREPROCESS
         (0.0, duration_s),
         {"name": "recording", "path": str(tmp_path / f"{stem}.wav"), "sampling_rate": 16000, "channels": 1},
     )
+    if task is not None:
+        ids["recording"] = record_task(store, task, variant=variant)
     ids["plain"] = _write(
         "stream",
         (0.0, duration_s),
@@ -494,11 +499,24 @@ class TestTheModeComesFromTheDeclaration:
         _seed(store, tmp_path, task=None)
         assert mode_of("AIRWAY", store) == ("detect", None)
 
-    def test_the_recorded_task_token_outranks_the_path(self, store: ProvStore, tmp_path: Path) -> None:
-        """The clean carrier wins, which is what makes the ugly one replaceable; ADMIT records it."""
+    def test_the_recorded_task_outranks_the_path(self, store: ProvStore, tmp_path: Path) -> None:
+        """The task ADMIT recorded from the hint is read; the path's ``task-`` entity is not."""
         _seed(store, tmp_path, task="harvard-sentences-list")
-        declare_hint_identity(store, AudioHints(metadata={"task_token": "respiration-and-cough-breath"}))
+        record_task(store, "respiration-and-cough-breath")
         assert mode_of("AIRWAY", store) == ("align", "respiration-and-cough-breath")
+
+    def test_a_path_naming_a_task_with_none_recorded_takes_detect(self, store: ProvStore, tmp_path: Path) -> None:
+        """Nothing is read off the file name: a stem naming an AIRWAY task with no recorded task is out of family."""
+        _seed(store, tmp_path, task=None)
+        store.entity(
+            prov_type="stream",
+            extent=(0.0, 5.0),
+            attributes={
+                "name": "recording",
+                "path": str(tmp_path / "sub-a_ses-b_task-respiration-and-cough-cough.wav"),
+            },
+        )
+        assert mode_of("AIRWAY", store) == ("detect", None)
 
     def test_the_node_records_which_mode_ran(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -825,14 +843,15 @@ class TestTheRouteIsNotSeparableByThisDesign:
         airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _counts(store)["declared_route"] == {"found": None, "declared": "nose"}
 
-    def test_the_declared_route_comes_from_the_trailing_index_where_the_family_does_not_carry_it(
+    def test_the_declared_route_comes_from_the_recorded_variant_where_the_row_does_not_carry_it(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """``fivebreaths`` splits 1,778/1,778 on an index the family name collapses."""
+        """``fivebreaths`` splits 1,778/1,778 on a route each recording's hint declares as its variant."""
         _seed(
             store,
             tmp_path,
-            task="respiration-and-cough-fivebreaths-2",
+            task="respiration-and-cough-fivebreaths",
+            variant={"route": "mouth"},
             spans=[(0.0, 5.0)],
             scores=[{"Breathe": 0.9}],
             envelope=bump(500, (250,)),
@@ -840,14 +859,15 @@ class TestTheRouteIsNotSeparableByThisDesign:
         airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _counts(store)["declared_route"] == {"found": None, "declared": "mouth"}
 
-    def test_an_index_the_map_does_not_name_reads_as_no_declared_route(
+    def test_a_recording_declaring_no_route_reads_as_no_declared_route(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """An unrecognised index is an absence, and the row still reports the unviable measurement."""
+        """A hint naming no route is an absence, and the row still reports the unviable measurement."""
         _seed(
             store,
             tmp_path,
-            task="respiration-and-cough-fivebreaths-9",
+            task="respiration-and-cough-fivebreaths",
+            variant={"index": "9"},
             spans=[(0.0, 5.0)],
             scores=[{"Breathe": 0.9}],
             envelope=bump(500, (250,)),

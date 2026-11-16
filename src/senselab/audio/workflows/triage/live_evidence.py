@@ -107,16 +107,28 @@ def declared_task(stem: str) -> tuple[str, str]:
 
 
 def declared_task_of(store: ProvStore, stem: str = "") -> tuple[str, str]:
-    """The declared task and its family, from :func:`~senselab.audio.workflows.triage.identity.declared_task_id`.
+    """The declared task id and its family.
+
+    The family is the task ADMIT recorded from the hint (:func:`~senselab.audio.workflows.triage.task_catalogue.
+    recorded_task`). The task id is :func:`~senselab.audio.workflows.triage.identity.declared_task_id` (the hint's
+    task token, else the stem), or the task's name where neither carries one. Only a store from before ADMIT recorded
+    the task reads both off the task id.
 
     Args:
         store: The provenance store.
-        stem: The stem to read where no hint's task was recorded; empty reads the path ADMIT recorded.
+        stem: The stem to read where no hint's task token was recorded; empty reads the path ADMIT recorded.
 
     Returns:
         ``(task_id, family)``, both :data:`UNDECLARED` when nothing declares a task.
     """
+    from senselab.audio.workflows.triage.task_catalogue import recorded_task  # noqa: PLC0415
+
     task_id = declared_task_id(store, stem)
+    task = recorded_task(store)
+    if task is not None:
+        if not task.name:
+            return UNDECLARED, UNDECLARED
+        return (task.name if task_id == UNKNOWN_TASK else task_id), task.name
     if task_id == UNKNOWN_TASK:
         return UNDECLARED, UNDECLARED
     return task_id, task_family(task_id)

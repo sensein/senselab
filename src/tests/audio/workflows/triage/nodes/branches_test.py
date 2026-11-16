@@ -29,7 +29,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     PARAM_SECTION,
     POINT_TYPES,
     PROPOSERS,
-    REFERENCE_FAMILY_SET,
+    REFERENCE_KIND,
     RESERVED_SPAN_ATTRIBUTES,
     SPEECH_EXPECTATIONS,
     UNDETERMINED,
@@ -103,24 +103,20 @@ from senselab.audio.workflows.triage.nodes.gates import (
     TYPICAL_COUNT,
     UNGATEABLE_READINGS,
 )
-from senselab.audio.workflows.triage.routing_analysis.families import (
-    AIRWAY_ELICITING,
-    SPEECH_ELICITING,
-    SYLLABLE_REPETITION,
-    VOICE_ELICITING,
-)
+from senselab.audio.workflows.triage.task_catalogue import TASKS_BY_KIND, task_attributes
 from senselab.utils.prov_store import Entity, ProvStore
-from tests.audio.workflows.triage.conftest import declare_hint_identity
+from tests.audio.workflows.triage.conftest import declare_hint_identity, record_admitted_hint, record_task
 
 BIDS_STEM = "sub-abc123_ses-1_task-harvard-sentences-list-10-3"
-"""A real stem shape: two trailing numeric segments, which ``task_family`` collapses."""
+"""A real stem shape: two trailing numeric segments. No stage reads a task off it."""
 
 
-def _store(*, path: str | None = BIDS_STEM + ".wav", duration_s: float = 20.0) -> ProvStore:
+def _store(*, path: str | None = BIDS_STEM + ".wav", task: str | None = None, duration_s: float = 20.0) -> ProvStore:
     """A store holding only what the mode selector reads.
 
     Args:
         path: The ``recording`` stream's source path, or None to omit the stream entirely.
+        task: The task ADMIT records the hint naming (``record_task``), or None to record none.
         duration_s: The recording's duration.
 
     Returns:
@@ -133,6 +129,8 @@ def _store(*, path: str | None = BIDS_STEM + ".wav", duration_s: float = 20.0) -
             extent=(0.0, duration_s),
             attributes={"name": "recording", "path": path, "sampling_rate": 16000, "channels": 1},
         )
+    if task is not None:
+        record_task(store, task)
     return store
 
 
@@ -315,7 +313,7 @@ class TestAProposerMintsOnlyIntoItsOwnFamily:
             return Result([], [])
 
         with pytest.raises(ValueError, match="mints only into 'voice'"):
-            dispatch("VOICE", _store(path="x_task-prolonged-vowel.wav"), _params(), align=align, detect=detect)
+            dispatch("VOICE", _store(task="prolonged-vowel"), _params(), align=align, detect=detect)
 
     def test_the_proposer_table_covers_every_branch_and_no_more(self) -> None:
         """QUALITY has only the detect mode and is deliberately not a routed branch."""
@@ -482,13 +480,8 @@ class TestTheExpectationTableIsData:
 
     def test_each_table_is_exactly_its_branchs_reference_family_set(self) -> None:
         """A row for a family the branch does not own would never be reached; a gap returns detect."""
-        for branch, families in (
-            ("AIRWAY", AIRWAY_ELICITING),
-            ("SPEECH", SPEECH_ELICITING),
-            ("VOICE", VOICE_ELICITING),
-        ):
-            assert set(EXPECTATIONS[branch]) == set(families), branch
-            assert REFERENCE_FAMILY_SET[branch] == families
+        for branch, kind in REFERENCE_KIND.items():
+            assert set(EXPECTATIONS[branch]) == set(TASKS_BY_KIND[kind]), branch
 
     def test_the_reference_sets_match_the_ones_the_packaged_config_names(self) -> None:
         """``taxonomy.ruleset.reference_family_set`` names the same three sets by key."""
@@ -497,7 +490,7 @@ class TestTheExpectationTableIsData:
 
     def test_the_ten_syllable_families_are_speechs_with_the_instructions_own_expectation(self) -> None:
         """A syllable train is a speaking task, so its row says what the instruction asked for."""
-        assert set(SYLLABLE_REPETITION) <= set(SPEECH_EXPECTATIONS)
+        assert set(TASKS_BY_KIND["syllable_repetition"]) <= set(SPEECH_EXPECTATIONS)
         assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].pattern is Pattern.SYLLABLE_TRAIN
         assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == ("p", "aa")
         assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].pattern is Pattern.SYLLABLE_SEQUENCE
@@ -542,7 +535,7 @@ class TestTheExpectationTableIsData:
         assert SPEECH_EXPECTATIONS["diadochokinesis-v2-puh"].sequence == ("p", "ah")
 
     def test_the_pending_declaration_rows_are_not_in_the_dispatch_table(self) -> None:
-        """CAPE-V and loudness are ``LEXICAL_SPEECH``, so ``align_voice`` must not reach them."""
+        """CAPE-V and loudness are lexical speech tasks, so ``align_voice`` must not reach them."""
         assert set(VOICE_EXPECTATIONS_PENDING_DECLARATION) == {
             "cape-v-sentences",
             "cape-v-sentences-v2",
@@ -696,9 +689,13 @@ class TestARowSaysWhoGaveItsCountAndWhatItCounts:
 class TestTheDeclaredFamilyIsDerivedInOnePlace:
     """Nothing passes a task family to a branch, so the mode test derives its own."""
 
-    def test_the_recording_path_yields_the_family_with_its_trailing_index_collapsed(self) -> None:
-        """The one carrier available today: ADMIT's ``path`` on the ``recording`` stream."""
-        assert declared_task_family(_store()) == "harvard-sentences-list"
+    def test_the_recorded_task_is_the_family(self) -> None:
+        """The one carrier: the task ADMIT recorded on the ``recording`` stream from the hint."""
+        assert declared_task_family(_store(task="harvard-sentences-list")) == "harvard-sentences-list"
+
+    def test_a_path_naming_a_task_with_none_recorded_names_no_family(self) -> None:
+        """Nothing is read off the file name: a BIDS stem with no recorded task takes the safe arm."""
+        assert declared_task_family(_store()) is None
 
     def test_a_non_bids_path_names_no_family(self) -> None:
         """A path with no ``task-`` entity is not a declaration; None takes the safe arm."""
@@ -708,12 +705,20 @@ class TestTheDeclaredFamilyIsDerivedInOnePlace:
         """A branch reached before ADMIT wrote, or on a store read back without it, concludes nothing."""
         assert declared_task_family(_store(path=None)) is None
 
-    def test_a_refused_recording_is_named_by_the_file_admit_was_run_on(self) -> None:
-        """ADMIT wrote no stream for an all-zero recording; its activity's ``audio_file`` still names the task."""
+    def test_a_refused_recording_is_named_by_the_task_admit_recorded_on_its_activity(self) -> None:
+        """ADMIT wrote no stream for an all-zero recording; its activity still records the hint's task."""
+        store = _store(path=None)
+        audio_file = "/data/sub-a_ses-1_task-respiration-and-cough-fivebreaths-3.wav"
+        declared = task_attributes(AudioHints(task="respiration-and-cough-fivebreaths", task_take=3))
+        store.activity(node="ADMIT", step=None, parameters={"audio_file": audio_file, **declared})
+        assert declared_task_family(store) == "respiration-and-cough-fivebreaths"
+
+    def test_a_refused_recording_with_no_task_recorded_names_no_family(self) -> None:
+        """The activity's ``audio_file`` names a task in its stem, and it is not read."""
         store = _store(path=None)
         audio_file = "/data/sub-a_ses-1_task-respiration-and-cough-fivebreaths-3.wav"
         store.activity(node="ADMIT", step=None, parameters={"audio_file": audio_file})
-        assert declared_task_family(store) == "respiration-and-cough-fivebreaths"
+        assert declared_task_family(store) is None
 
     def test_a_recording_entity_with_no_path_names_no_family(self) -> None:
         """The attribute may be absent; that is not an error either."""
@@ -721,23 +726,23 @@ class TestTheDeclaredFamilyIsDerivedInOnePlace:
         store.entity(prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording"})
         assert declared_task_family(store) is None
 
-    def test_the_recorded_hint_carrier_is_read_first(self) -> None:
-        """The clean route works the moment something populates it, with no branch changing."""
+    def test_the_hint_task_is_read_over_the_path(self) -> None:
+        """The task the hint names, as ADMIT records it, wins over the stem's ``task-`` entity."""
         store = _store()
-        declare_hint_identity(store, AudioHints(metadata={"task_token": "prolonged-vowel-2"}))
+        record_admitted_hint(store, AudioHints(task="prolonged-vowel", task_variant={"index": "2"}))
         assert declared_task_family(store) == "prolonged-vowel"
 
-    def test_an_empty_hint_token_falls_through_to_the_path(self) -> None:
-        """A blank carrier is not a declaration of "no family"; the other carrier still speaks."""
+    def test_a_hint_naming_no_task_does_not_fall_through_to_the_path(self) -> None:
+        """A recorded "no task" is a declaration of no family; the stem does not speak in its place."""
         store = _store()
-        declare_hint_identity(store, AudioHints(metadata={"task_token": "   "}))
-        assert declared_task_family(store) == "harvard-sentences-list"
+        record_task(store, None)
+        assert declared_task_family(store) is None
 
     def test_a_hint_with_no_metadata_at_all_is_fine(self) -> None:
         """``AudioHints.metadata`` may be None."""
         store = _store()
         declare_hint_identity(store, AudioHints())
-        assert declared_task_family(store) == "harvard-sentences-list"
+        assert declared_task_family(store) is None
 
     def test_a_stem_whose_task_is_literally_unknown_names_no_family(self) -> None:
         """``task_id_of`` spells an absent task ``"unknown"``; so must an explicit one."""
@@ -759,14 +764,14 @@ class TestTheModeSelector:
             seen.append("detect")
             return Result([], [])
 
-        result = dispatch("VOICE", _store(path="sub-a_task-prolonged-vowel.wav"), _params(), align=align, detect=detect)
+        result = dispatch("VOICE", _store(task="prolonged-vowel"), _params(), align=align, detect=detect)
         assert seen == ["prolonged-vowel"]
         assert [finding.name for finding in result.deviations] == ["carrier_duration_s"]
 
     def test_another_branchs_family_takes_the_out_of_family_mode(self) -> None:
         """A CAPE-V recording is out of family for VOICE under the reference family set."""
-        assert mode_of("VOICE", _store(path="sub-a_task-cape-v-sentences.wav")) == ("detect", "cape-v-sentences")
-        assert mode_of("SPEECH", _store(path="sub-a_task-cape-v-sentences.wav")) == ("align", "cape-v-sentences")
+        assert mode_of("VOICE", _store(task="cape-v-sentences")) == ("detect", "cape-v-sentences")
+        assert mode_of("SPEECH", _store(task="cape-v-sentences")) == ("align", "cape-v-sentences")
 
     def test_no_declaration_takes_the_out_of_family_mode(self) -> None:
         """The safe arm: annotate the speciality, conclude nothing. There is no third arm."""
@@ -774,7 +779,7 @@ class TestTheModeSelector:
 
     def test_a_syllable_family_is_in_family_for_speech_and_no_other_branch(self) -> None:
         """One recording, one align mode. There is no second branch to divide the task with."""
-        store = _store(path="sub-a_task-diadochokinesis-pa.wav")
+        store = _store(task="diadochokinesis-pa")
         assert mode_of("SPEECH", store)[0] == "align"
         assert mode_of("VOICE", store)[0] == "detect"
         assert mode_of("AIRWAY", store)[0] == "detect"
@@ -796,9 +801,7 @@ class TestTheModeSelector:
         def detect(store: ProvStore, params: BranchParams) -> Result:
             return Result([], [measured("lexical_words", None, None, 2)])
 
-        in_family = dispatch(
-            "VOICE", _store(path="sub-a_task-prolonged-vowel.wav"), _params(), align=align, detect=detect
-        )
+        in_family = dispatch("VOICE", _store(task="prolonged-vowel"), _params(), align=align, detect=detect)
         out_of_family = dispatch("SPEECH", _store(path="/tmp/plain.wav"), _params(), align=align, detect=detect)
         assert [finding.name for finding in in_family.deviations] == ["expected_tokens_matched"]
         assert [finding.name for finding in out_of_family.deviations] == ["lexical_words"]

@@ -86,7 +86,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     fold_file_verdict,
 )
 from senselab.utils.prov_store import Entity, ProvStore
-from tests.audio.workflows.triage.conftest import declare_hint_identity
+from tests.audio.workflows.triage.conftest import record_admitted_hint, record_task
 from tests.audio.workflows.triage.nodes.conftest import gated_from_store, level_of_raster, seed_background_view
 
 SR = 16000
@@ -253,13 +253,15 @@ def seed_ddk_store(tmp_path: Path) -> Callable[..., dict[str, str]]:
 
     Every argument defaults to writing nothing for that derivative, which is how a test sets up an
     absence. A seeded posteriorgram brings a background view whose level follows its phonemes unless
-    ``background`` is False.
+    ``background`` is False. ``task`` is the task ADMIT records the hint naming (``record_task``), also written
+    into the stem as its ``task-`` entity, which no stage reads; None records none.
     """
 
     def _seed(
         store: ProvStore,
         *,
         stem: str = "recording",
+        task: str | None = None,
         duration_s: float = 6.0,
         envelope: np.ndarray | None = None,
         spans: Sequence[tuple[float, float]] = (),
@@ -283,12 +285,16 @@ def seed_ddk_store(tmp_path: Path) -> Callable[..., dict[str, str]]:
             store.was_attributed_to(entity_id, agent)
             return entity_id
 
+        if task is not None:
+            stem = f"sub-a_ses-1_task-{task}"
         for name in ("recording", "plain"):
             ids[name] = _write(
                 "stream",
                 (0.0, duration_s),
                 {"name": name, "path": f"{stem}.wav", "sampling_rate": SR, "channels": 1},
             )
+        if task is not None:
+            ids["recording"] = record_task(store, task)
         if envelope is not None:
             np.savez(
                 tmp_path / "derivatives" / "energy_envelope.npz",
@@ -404,9 +410,9 @@ def _reading(store: ProvStore) -> dict[str, Any]:
     return dict(reading.attributes)
 
 
-PA = AudioHints(metadata={"task_token": "diadochokinesis-pa"})
-PATAKA_HINT = AudioHints(metadata={"task_token": "diadochokinesis-pataka"})
-BUTTERCUP_HINT = AudioHints(metadata={"task_token": "diadochokinesis-buttercup"})
+PA = AudioHints(task="diadochokinesis-pa", metadata={"task_token": "diadochokinesis-pa"})
+PATAKA_HINT = AudioHints(task="diadochokinesis-pataka", metadata={"task_token": "diadochokinesis-pataka"})
+BUTTERCUP_HINT = AudioHints(task="diadochokinesis-buttercup", metadata={"task_token": "diadochokinesis-buttercup"})
 
 
 class TestTheTaskLayerDecidesTheSyllableTask:
@@ -416,9 +422,7 @@ class TestTheTaskLayerDecidesTheSyllableTask:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """Eight /pa/ syllables: eight events, the target's identity, present."""
-        seed_ddk_store(
-            store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
-        )
+        seed_ddk_store(store, task="diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7))
         _run(store, ddk_config, tmp_path, PA)
         reading = _reading(store)
         assert reading["decision"] == "present"
@@ -432,7 +436,7 @@ class TestTheTaskLayerDecidesTheSyllableTask:
         """Eighteen syllables of a three-syllable template are six cycle events."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            task="diadochokinesis-pataka",
             posteriorgram=_cv_raster(["labial", "alveolar", "velar"] * 6, [0.2] * 17),
         )
         _run(store, ddk_config, tmp_path, PATAKA_HINT)
@@ -445,7 +449,7 @@ class TestTheTaskLayerDecidesTheSyllableTask:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """Six words, each followed by a pause, are six cycles from the first to the last."""
-        seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-buttercup", posteriorgram=_buttercup_raster(6))
+        seed_ddk_store(store, task="diadochokinesis-buttercup", posteriorgram=_buttercup_raster(6))
         _run(store, ddk_config, tmp_path, BUTTERCUP_HINT)
         reading = _reading(store)
         assert reading["events_n"] == 6
@@ -457,7 +461,7 @@ class TestTheTaskLayerDecidesTheSyllableTask:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """Nothing over the floor: absent, and no extent."""
-        seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_raster([("<silent>", 6.0)]))
+        seed_ddk_store(store, task="diadochokinesis-pa", posteriorgram=_raster([("<silent>", 6.0)]))
         _run(store, ddk_config, tmp_path, PA)
         assert _reading(store)["decision"] == "absent"
         assert _spans_of(store) == []
@@ -468,7 +472,7 @@ class TestTheTaskLayerDecidesTheSyllableTask:
         """/ta/ said for /pa/ stands over the floor and reads as another activity on its consonant."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             posteriorgram=_raster(
                 [("<silent>", 0.2), *[(p, d) for _ in range(8) for p, d in (("s", 0.05), ("iy", 0.2))]]
             ),
@@ -488,9 +492,7 @@ class TestTheTaskLayerDecidesTheSyllableTask:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """A group with no conformance gate answers ``UNDETERMINED``, whatever was read."""
-        seed_ddk_store(
-            store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
-        )
+        seed_ddk_store(store, task="diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7))
         _run(store, ddk_config, tmp_path, PA)
         assert _gated(store, ddk_config, "diadochokinesis-pa") == UNDETERMINED
 
@@ -502,9 +504,7 @@ class TestTheInstructedCountIsAnAnnotation:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """Found against required, in the unit the declaration names; no fraction is gated on."""
-        seed_ddk_store(
-            store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
-        )
+        seed_ddk_store(store, task="diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7))
         _run(store, ddk_config, tmp_path, PA)
         [counts] = _measurements(store, "counts")
         assert counts.attributes["entries"][REQUIRED_COUNT] == {"found": 8, "required": 10, "unit": "repetitions"}
@@ -515,7 +515,7 @@ class TestTheInstructedCountIsAnAnnotation:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """Two buttercups of ten is a short train, not an absent one, and no deviation."""
-        seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-buttercup", posteriorgram=_buttercup_raster(2))
+        seed_ddk_store(store, task="diadochokinesis-buttercup", posteriorgram=_buttercup_raster(2))
         result = _run(store, ddk_config, tmp_path, BUTTERCUP_HINT)
         reading = _reading(store)
         assert reading["events_n"] == 2
@@ -548,7 +548,7 @@ class TestTheTaskExtentIsTheTaskEventsSpan:
         """The only span this family proposes, and the task events mint it."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            task="diadochokinesis-pataka",
             posteriorgram=_cv_raster(["labial", "alveolar", "velar"] * 6, [0.2] * 17),
         )
         _run(store, ddk_config, tmp_path, PATAKA_HINT)
@@ -566,7 +566,7 @@ class TestTheTaskExtentIsTheTaskEventsSpan:
         """Under propose-only the derivation is the whole record of where the extent came from."""
         ids = seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            task="diadochokinesis-pataka",
             posteriorgram=_cv_raster(["labial", "alveolar", "velar"] * 6, [0.2] * 17),
         )
         _run(store, ddk_config, tmp_path, PATAKA_HINT)
@@ -579,7 +579,7 @@ class TestTheTaskExtentIsTheTaskEventsSpan:
         """An amplitude carrier is not a task event, so it cannot say where the task was."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
             spans=[(1.0, 5.0)],
         )
@@ -592,7 +592,7 @@ class TestTheTaskExtentIsTheTaskEventsSpan:
         """The reading names the missing view and takes no decision."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7),
             background=False,
         )
@@ -608,7 +608,7 @@ class TestTheTaskExtentIsTheTaskEventsSpan:
         """DDK dissolved into SPEECH, so a ``ddk`` family would be a family no reader knows."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            task="diadochokinesis-pataka",
             posteriorgram=_cv_raster(["labial", "alveolar", "velar"] * 6, [0.2] * 17),
         )
         _run(store, ddk_config, tmp_path, PATAKA_HINT)
@@ -623,7 +623,7 @@ class TestTheTaskExtentIsTheTaskEventsSpan:
         seed_ddk_store(
             store,
             duration_s=raster.shape[0] * FRAME_S - 0.001,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             posteriorgram=raster,
         )
         result = _run(store, ddk_config, tmp_path, PA)
@@ -639,7 +639,7 @@ class TestTheEnvelopeChannelIsTheModulationSpectrumAndNothingElse:
         """A 5 Hz train reads 5 Hz, in syllables per second because the family repeats one syllable."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
             spans=[(1.0, 5.0)],
         )
@@ -655,7 +655,7 @@ class TestTheEnvelopeChannelIsTheModulationSpectrumAndNothingElse:
         """A sequential train modulates at the cycle rate as well as the syllable rate."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            task="diadochokinesis-pataka",
             envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
             spans=[(1.0, 5.0)],
         )
@@ -669,7 +669,7 @@ class TestTheEnvelopeChannelIsTheModulationSpectrumAndNothingElse:
         """The reader can see which of the two the peak matched."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            task="diadochokinesis-pataka",
             envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
             spans=[(1.0, 5.0)],
             posteriorgram=_cv_raster(["labial", "alveolar", "velar"] * 6, [0.2] * 17),
@@ -684,7 +684,7 @@ class TestTheEnvelopeChannelIsTheModulationSpectrumAndNothingElse:
         """Envelope-first, then qualified by modulation: a flat carrier holds no rate."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             envelope=_flat_envelope(6.0, [(1.0, 5.0)]),
             spans=[(1.0, 5.0)],
         )
@@ -697,7 +697,7 @@ class TestTheEnvelopeChannelIsTheModulationSpectrumAndNothingElse:
         """Keyed on the surviving span, so it cannot describe an extent no reader ever sees."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             posteriorgram=_cv_raster(["labial"] * 17, [0.25] * 16, lead_s=1.0),
         )
         _run(store, ddk_config, tmp_path, PA)
@@ -727,7 +727,7 @@ class TestThePosteriorgramScoresAndNoLongerLocates:
         """/papapa/ said for /pataka/: the alveolar and velar positions read nothing."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            task="diadochokinesis-pataka",
             posteriorgram=_cv_raster(["labial"] * 18, [0.2] * 17),
         )
         result = _run(store, ddk_config, tmp_path, PATAKA_HINT)
@@ -743,9 +743,7 @@ class TestThePosteriorgramScoresAndNoLongerLocates:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any], flap: str
     ) -> None:
         """ARPAbet-40 has no flap symbol, so /ɾ/ surfaces as ``t``, ``d`` or ``r`` — one segment."""
-        seed_ddk_store(
-            store, stem="sub-a_ses-1_task-diadochokinesis-buttercup", posteriorgram=_buttercup_raster(6, flap=flap)
-        )
+        seed_ddk_store(store, task="diadochokinesis-buttercup", posteriorgram=_buttercup_raster(6, flap=flap))
         _run(store, ddk_config, tmp_path, BUTTERCUP_HINT)
         [mass] = _measurements(store, POSITION_MASS)
         assert mass.attributes["value"][2] > 0.9
@@ -756,7 +754,7 @@ class TestThePosteriorgramScoresAndNoLongerLocates:
         """A "buttercap" reads the rhotic position low and the open ones high."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-buttercup",
+            task="diadochokinesis-buttercup",
             posteriorgram=_buttercup_raster(6, nuclei=("ah", "ah", "ah")),
         )
         _run(store, ddk_config, tmp_path, BUTTERCUP_HINT)
@@ -770,7 +768,7 @@ class TestThePosteriorgramScoresAndNoLongerLocates:
         """The syllable rate, the cycle rate and the period's dispersion, each an annotation."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            task="diadochokinesis-pataka",
             posteriorgram=_cv_raster(["labial", "alveolar", "velar"] * 6, [0.2] * 17),
         )
         _run(store, ddk_config, tmp_path, PATAKA_HINT)
@@ -791,7 +789,7 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """The measurement has no value and names the derivative that was missing."""
-        seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-pa")
+        seed_ddk_store(store, task="diadochokinesis-pa")
         _run(store, ddk_config, tmp_path)
         [rate] = _measurements(store, RATE)
         assert rate.attributes["value"] is None
@@ -804,7 +802,7 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
         """The identity has no reading, and the reading names what it lacked."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
             spans=[(1.0, 5.0)],
         )
@@ -821,7 +819,7 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """This is a reading, and it is the only one of the three that can support a discard."""
-        seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_raster([("<silent>", 6.0)]))
+        seed_ddk_store(store, task="diadochokinesis-pa", posteriorgram=_raster([("<silent>", 6.0)]))
         _run(store, ddk_config, tmp_path, PA)
         reading = _reading(store)
         assert reading["decision"] == "absent"
@@ -835,9 +833,7 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
         """A branch does not refuse over an unmeasured point; the reading names it absent."""
         override = tmp_path / "cleared.yaml"
         override.write_text("branch:\n  phoneme_place_classes: null\n")
-        seed_ddk_store(
-            store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
-        )
+        seed_ddk_store(store, task="diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7))
         _run(store, load_triage_config(override), tmp_path, PA)
         reading = _reading(store)
         assert reading["decision"] is None
@@ -854,7 +850,7 @@ class TestEveryReportKeyAReaderSelectsHasAWriter:
         """The fullest reading: both instruments, a counted family, a contested word."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-buttercup",
+            task="diadochokinesis-buttercup",
             envelope=_train_envelope(6.0, (0.2, 4.5), 5.0, 0.1),
             spans=[(0.2, 4.5)],
             posteriorgram=_buttercup_raster(6),
@@ -870,9 +866,7 @@ class TestEveryReportKeyAReaderSelectsHasAWriter:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """A key the writer emits that no reader selects is invisible in the report."""
-        seed_ddk_store(
-            store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
-        )
+        seed_ddk_store(store, task="diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7))
         result = _run(store, ddk_config, tmp_path, PA)
         assert set(_detail(result)) <= set(BRANCH_MEASURES["SPEECH"])
         assert not [key for key in BRANCH_MEASURES["SPEECH"] if key.startswith("ppg_")]
@@ -881,7 +875,7 @@ class TestEveryReportKeyAReaderSelectsHasAWriter:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """Which part of the sequence was realised."""
-        seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-buttercup", posteriorgram=_buttercup_raster(6))
+        seed_ddk_store(store, task="diadochokinesis-buttercup", posteriorgram=_buttercup_raster(6))
         result = _run(store, ddk_config, tmp_path, BUTTERCUP_HINT)
         detail = _detail(result)
         assert detail["ddk_positions"] == list(BUTTERCUP)
@@ -895,9 +889,7 @@ class TestTheDeclaredFamilySelectsTheBody:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """The in-family mode, over the row the declaration names."""
-        seed_ddk_store(
-            store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
-        )
+        seed_ddk_store(store, task="diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7))
         assert mode_of("SPEECH", store) == ("align", "diadochokinesis-pa")
         _run(store, ddk_config, tmp_path)
         assert _reading(store)["decision"] == "present"
@@ -907,21 +899,19 @@ class TestTheDeclaredFamilySelectsTheBody:
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """A declared cough is AIRWAY's row, so SPEECH detects rather than expecting."""
-        seed_ddk_store(
-            store, stem="sub-a_ses-1_task-respiration-and-cough", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
-        )
+        seed_ddk_store(store, task="respiration-and-cough", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7))
         assert mode_of("SPEECH", store) == ("detect", "respiration-and-cough")
         _run(store, ddk_config, tmp_path)
         assert _measurements(store, DDK_READING) == []
 
-    def test_the_hint_task_token_selects_the_syllable_body_over_the_path(
+    def test_the_hint_task_selects_the_syllable_body_over_the_path(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """A recording whose stem says nothing, declared by its sidecar metadata instead."""
+        """A recording whose stem says nothing, declared by its hint instead, as ADMIT records it."""
         seed_ddk_store(
             store, stem="recording", posteriorgram=_cv_raster(["labial", "alveolar", "velar"] * 6, [0.2] * 17)
         )
-        declare_hint_identity(store, PATAKA_HINT)
+        record_admitted_hint(store, PATAKA_HINT)
         assert mode_of("SPEECH", store) == ("align", "diadochokinesis-pataka")
         _run(store, ddk_config, tmp_path, PATAKA_HINT)
         assert _reading(store)["unit"] == "cycle"
@@ -966,7 +956,7 @@ class TestTheInstrumentIsTheAuthorityOverTheRecogniserText:
         """Without this record the two readings sit side by side and neither claims the task."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             posteriorgram=_cv_raster(*PA_TRAIN),
             words=[*INSIDE, OUTSIDE],
         )
@@ -983,7 +973,7 @@ class TestTheInstrumentIsTheAuthorityOverTheRecogniserText:
         """One inner list per task event, one number per template position, and no word text."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             posteriorgram=_cv_raster(*PA_TRAIN),
             words=[*INSIDE, OUTSIDE],
         )
@@ -1000,7 +990,7 @@ class TestTheInstrumentIsTheAuthorityOverTheRecogniserText:
         """Nothing is claimed where no task event stands."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             posteriorgram=_cv_raster(*PA_TRAIN),
             words=[*INSIDE, OUTSIDE],
         )
@@ -1016,7 +1006,7 @@ class TestTheInstrumentIsTheAuthorityOverTheRecogniserText:
         """Which recogniser words it contradicts; a bracketed token and an outside word are left alone."""
         ids = seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             posteriorgram=_cv_raster(*PA_TRAIN),
             words=[*INSIDE, OUTSIDE],
         )
@@ -1035,7 +1025,7 @@ class TestTheInstrumentIsTheAuthorityOverTheRecogniserText:
         """Mark, do not delete, and make no second copy of possibly-identifying text."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             posteriorgram=_cv_raster(*PA_TRAIN),
             words=[*INSIDE, OUTSIDE],
         )
@@ -1053,7 +1043,7 @@ class TestTheInstrumentIsTheAuthorityOverTheRecogniserText:
         """The instrument disagreeing with a recogniser is not a departure by the participant."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             posteriorgram=_cv_raster(*PA_TRAIN),
             words=[*INSIDE, OUTSIDE],
         )
@@ -1071,7 +1061,7 @@ class TestTheInstrumentIsTheAuthorityOverTheRecogniserText:
         """No evidence the task was performed is no authority over anything the recogniser said."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            task="diadochokinesis-pataka",
             posteriorgram=_raster([("<silent>", 2.0)]),
             words=[("pa", (0.3, 0.5))],
         )
@@ -1085,7 +1075,7 @@ class TestTheInstrumentIsTheAuthorityOverTheRecogniserText:
         """``BRANCH_MEASURES`` names the key."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            task="diadochokinesis-pa",
             posteriorgram=_cv_raster(*PA_TRAIN),
             words=[*INSIDE, OUTSIDE],
         )
@@ -1236,7 +1226,7 @@ class TestThereIsNoSecondBranchForASyllableTask:
         self, store: ProvStore, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """The fold is handed one branch decision for a declared train, and it is SPEECH's."""
-        seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-pa")
+        seed_ddk_store(store, task="diadochokinesis-pa")
         assert [branch for branch in BRANCHES if mode_of(branch, store)[0] == "align"] == ["SPEECH"]
 
     def test_a_routed_branch_that_reported_nothing_still_flags(self) -> None:
@@ -1273,7 +1263,7 @@ class TestOnlyADeclaredSyllableTaskMakesTheInstrumentTheAuthority:
         """A train found incidentally on connected speech overrides no recogniser."""
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-free-speech",
+            task="free-speech",
             posteriorgram=_cv_raster(*PA_TRAIN),
             words=[*INSIDE, OUTSIDE],
         )
@@ -1286,8 +1276,8 @@ class TestOnlyADeclaredSyllableTaskMakesTheInstrumentTheAuthority:
     ) -> None:
         """``speech.lexical`` is not discounted: the count the gate reads is untouched either way."""
         undeclared = ProvStore(run_id="test-run-undeclared")
-        for target, stem in ((store, "sub-a_ses-1_task-diadochokinesis-pa"), (undeclared, "recording")):
-            seed_ddk_store(target, stem=stem, posteriorgram=_cv_raster(*PA_TRAIN), words=[*INSIDE, OUTSIDE])
+        for target, task in ((store, "diadochokinesis-pa"), (undeclared, None)):
+            seed_ddk_store(target, task=task, posteriorgram=_cv_raster(*PA_TRAIN), words=[*INSIDE, OUTSIDE])
         _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
         _run(undeclared, ddk_config, tmp_path)
         assert len(_contest_assertions(store)) == 2

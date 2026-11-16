@@ -7,7 +7,7 @@ version: 9
 # `speech.target_match_cosine` (the cut is the enrollment's leave-one-out step only); the shortest span embedded is
 # `comparison.pooled_min_s`.
 enrollment:
-  families: lexical_speech          # routing_analysis.families.LEXICAL_SPEECH enrolls the participant, less task_speech.yaml voice_task_text (owner, 2026-10-11)
+  families: lexical_speech          # the task kind that enrolls the participant, less the tasks with voice_reading_text (tasks.yaml) (owner, 2026-10-11)
   window_s: 2.0                     # window each span is embedded on, as the speaker vectors were fitted
   hop_s: 1.0                        # its hop
   single_speaker_recordings_min: 2  # this many single-speaker recordings in the session: only they enroll
@@ -50,7 +50,7 @@ comparison:
   target:                               # what a family's target pool holds: speech (lexical words in the task extent), task_text (task_speech.task_text_ids words) or none
     default: none                       # owner, 2026-10-11: airway, voice and DDK have no target comparison
     kinds:
-      lexical_speech: speech            # DECLARED_KIND key -> rule
+      lexical_speech: speech            # task kind -> rule
     families: {}                        # dataset profile: family -> rule (B2AI: loudness and loudness-v2 -> task_text)
 
 # Speech the enhancer removed: speech-classified on `from` and not on `kept`. A removed region holding a
@@ -65,15 +65,15 @@ speech:
 # elsewhere the task_speech reading's words. In a syllable-repetition family a word spelled only from its
 # task syllables is task text.
 non_task:
-  task_syllables:               # a families.py set -> the syllables its task text is spelled from; a word made only of them is task text
-    SYLLABLE_REPETITION: [pa, pah, ta, tah, ka, kah, puh, tuh, kuh, buh, ba, da, ga]   # the standard DDK syllables; B2AI adds butter, cup
+  task_syllables:               # a task kind -> the syllables its task text is spelled from; a word made only of them is task text
+    syllable_repetition: [pa, pah, ta, tah, ka, kah, puh, tuh, kuh, buh, ba, da, ga]   # the standard DDK syllables; B2AI adds butter, cup
 
 # Distribution checks: each names its level, its bounds and the ground it raises.
 quantiles: [0.05, 0.25, 0.5, 0.75, 0.95]
 checks:
   recording_duration_outlier:
     level: family
-    kinds: [airway, voice]      # declared kinds (routing_analysis.families.DECLARED_KIND) the check reads
+    kinds: [airway, voice]      # task kinds (task_catalogue.KINDS) the check reads
     ground: recording_duration_outlier
     duration_ratio_max: 3.0     # longer than this times the family median duration ...
     extent_fraction_min: 0.5    # ... with the task extent covering less than this of the recording
