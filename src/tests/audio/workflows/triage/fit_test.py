@@ -62,7 +62,7 @@ class TestWhichRowsAMethodReads:
 
     def test_a_participant_reading_counts_once_however_many_recordings_repeat_it(self) -> None:
         """COHORT repeats a participant's reading on each recording; the fence takes one per participant."""
-        rows = [
+        rows: list[dict[str, Any]] = [
             {"participant": "p1", "session": "s1", "x": 1.0},
             {"participant": "p1", "session": "s2", "x": 1.0},
             {"participant": "p2", "session": "s1", "x": 3.0},
@@ -132,7 +132,9 @@ class TestTheMethodsSenselabShips:
             }
         ]
         rows = [{**{name: None for name in columns_read()}, **row} for row in rows]
-        settings = {("cohort_stage.yaml", ("shared_nonmatch", "recordings_min")): 3}
+        settings: dict[tuple[str, tuple[str, ...]], int] = {
+            ("cohort_stage.yaml", ("shared_nonmatch", "recordings_min")): 3
+        }
         fits = fit_values(rows, tasks=TASKS, setting=lambda relative, key: settings.get((relative, tuple(key))))
         values = fitted_values(fits)
         assert values == {"cohort_stage.yaml": {"condition": {"hot_rms_dbfs_min": -20.0}}}
