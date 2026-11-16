@@ -85,6 +85,19 @@ def test_the_hint_carries_the_instructions_and_names_their_source(tmp_path: Path
     assert hint.metadata["registry_task"] == "adult.story-recall.v1"
 
 
+def test_the_hint_declares_the_stems_own_identity(tmp_path: Path) -> None:
+    """Participant, session and task token are the stem's, not the sidecar's ``task_name``."""
+    wav = tmp_path / "sub-a_ses-b_task-high-to-low.wav"
+    (tmp_path / "sub-a_ses-b_task-high-to-low_recording-metadata.json").write_text(
+        json.dumps({"task_name": "glides-high-to-low", "speech_type": "non-lexical"})
+    )
+    hint, _ = build_hint(wav)
+    assert hint is not None
+    assert hint.metadata["task_name"] == "glides-high-to-low"
+    assert (hint.metadata["participant_id"], hint.metadata["session_id"]) == ("sub-a", "ses-b")
+    assert hint.metadata["task_token"] == "high-to-low"
+
+
 def test_a_recording_in_another_language_keeps_its_own_instructions() -> None:
     """r6's Spanish sessions: the curated corrections are English and would replace Spanish text."""
     spanish = "A continuación, se le presentará una historia."

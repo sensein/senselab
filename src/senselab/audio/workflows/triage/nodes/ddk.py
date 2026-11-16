@@ -28,7 +28,7 @@ from senselab.audio.workflows.triage.ddk_task import (
     ddk_parameters,
     ddk_reading_of,
 )
-from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
+from senselab.audio.workflows.triage.live_evidence import declared_task_of
 from senselab.audio.workflows.triage.nodes.branches import (
     BranchParams,
     EnvelopeTrack,
@@ -614,7 +614,7 @@ def ddk_reading(
         required_count=None if required is None else required.value,
         recording_s=duration(stream_extent(store)),
         speech_runs=ddk_speech_runs(store),
-        family=declared_task(recording_stem(store))[1] or None,
+        family=declared_task_of(store)[1] or None,
     )
     return reading, ids
 
@@ -628,7 +628,7 @@ def ddk_speech_runs(store: ProvStore) -> list[tuple[float, float]]:
     Returns:
         ``task_extent.agreed_speech_runs`` over the consensus words, at ``trim.ddk.agreed_run_min``.
     """
-    family = declared_task(recording_stem(store))[1] or None
+    family = declared_task_of(store)[1] or None
     run_min = int(task_extent_parameters()["trim"]["ddk"]["agreed_run_min"])
     return agreed_speech_runs(lexical_words(store), family, run_min)
 

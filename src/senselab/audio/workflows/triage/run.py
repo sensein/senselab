@@ -18,13 +18,12 @@ from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE
 from senselab.audio.workflows.triage.cohort_stage import write_cohort_unavailable
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.enrollment import Enrollment
-from senselab.audio.workflows.triage.live_evidence import recording_stem
+from senselab.audio.workflows.triage.identity import declared_session_key
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.airway import airway
 from senselab.audio.workflows.triage.nodes.background import (
     BACKGROUND_NODE,
     SESSION_NODE,
-    session_key,
     write_background,
     write_session_floor,
     write_speech_residual,
@@ -306,7 +305,7 @@ def _drive_branches(
         lambda: write_session_floor(
             store,
             (),
-            session=session_key(recording_stem(store)),
+            session=declared_session_key(store),
             background_members=(write_speech_residual(store, run_dir),),
         ),
     )
