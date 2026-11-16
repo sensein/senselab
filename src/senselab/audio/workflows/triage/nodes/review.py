@@ -854,7 +854,7 @@ def read_under_this_policy(payload: Mapping[str, Any]) -> bool:
     """Whether a cached reading was read under the active profile's policy and word lists.
 
     A reading cached before the fingerprint was recorded carries none; it was read under the policy senselab held in
-    code until plan step 6, which B2AI's profile carries unchanged, so it stands.
+    code until plan step 6, which the profiles that took it over carry unchanged, so it stands.
 
     It stands under any profile, not only one whose policy is that step-6 text: nothing records which policy an
     unfingerprinted reading was read under, so a profile that later changes its policy text or word lists still
