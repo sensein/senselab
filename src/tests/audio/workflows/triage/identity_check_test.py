@@ -37,7 +37,7 @@ from senselab.audio.workflows.triage.task_catalogue import (
 
 
 def _record(
-    stem: str, location: str | None = None, *, task: str = "listed", task_source: str | None = FROM_TASK_LIST
+    stem: str, location: str | None = None, *, task: str | None = "listed", task_source: str | None = FROM_TASK_LIST
 ) -> IdentityRecord:
     """A recording whose identity is read off its stem, its declared task one the task list describes by default."""
     return IdentityRecord(
@@ -304,7 +304,10 @@ def test_a_repeated_recording_id_is_refused_before_a_run_and_reported_after() ->
     ]
     before = check_identities(flat, session_scope="participant", before_run=True)
     assert before.refused and before.counts[DUPLICATE_RECORDING_ID] == 1
-    ided = [IdentityRecord(r.stem, r.location, replace(r.identity, recording_id=r.location[3:]), None) for r in flat]
+    ided = []
+    for r in flat:
+        assert r.identity is not None
+        ided.append(IdentityRecord(r.stem, r.location, replace(r.identity, recording_id=r.location[3:]), None))
     assert not check_identities(ided, session_scope="participant", before_run=True).counts[DUPLICATE_RECORDING_ID]
     after = check_identities(flat, session_scope="participant")
     assert after.counts[DUPLICATE_STEM] == 1 and not after.counts[DUPLICATE_RECORDING_ID]

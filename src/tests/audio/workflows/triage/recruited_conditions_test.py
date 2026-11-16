@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from senselab.audio.workflows.triage.recruited_conditions import (
@@ -79,7 +81,7 @@ def test_an_unknown_profile_is_refused() -> None:
 def test_a_store_from_before_the_rename_reads_under_the_new_names() -> None:
     """Plan step 9: ``cohort`` was the recruited kind, and its keys were ``cohort_*``; both still read."""
     assert condition_kind_of("cohort") == RECRUITED and condition_kind_of(OTHER) == OTHER
-    old = {"cohort_diagnoses": ["essential_tremor"], "counts": {"cohort_condition_n": 2}}
+    old: dict[str, Any] = {"cohort_diagnoses": ["essential_tremor"], "counts": {"cohort_condition_n": 2}}
     assert ledger_value(old, "recruited_diagnoses") == ["essential_tremor"]
     assert ledger_value(old["counts"], "recruited_condition_n") == 2
     assert ledger_value({"recruited_diagnoses": []}, "recruited_diagnoses") == []

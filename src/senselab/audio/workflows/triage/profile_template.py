@@ -243,7 +243,7 @@ def write_template(
         source = Path(start_from).resolve()
         load_profile(source)
         shutil.copytree(source, root)
-        manifest = yaml.safe_load((root / MANIFEST).read_text()) or {}
+        manifest: dict[str, Any] = yaml.safe_load((root / MANIFEST).read_text()) or {}
         copied = manifest.get("name")
         manifest["name"] = name
         manifest["version"] = "0"

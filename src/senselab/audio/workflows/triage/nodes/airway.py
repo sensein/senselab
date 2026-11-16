@@ -1176,6 +1176,7 @@ def airway(
     span_ids = propose_spans(store, activity, software, result.components)
     finding_ids = write_findings(store, activity, software, findings, signal=source)
     if mode == "align" and family in AIRWAY_EXPECTATIONS:
+        assert family is not None  # the table is keyed by task name, so None is never in it
         finding_ids.extend(
             measure_airway_task(
                 store,

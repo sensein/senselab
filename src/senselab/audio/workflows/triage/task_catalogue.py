@@ -265,8 +265,10 @@ def read_task_list(text: str, source: str) -> dict[str, TaskEntry]:
         if entry.get("branch") not in BRANCHES:
             raise ValueError(f"{where}: branch {entry.get('branch')!r} is not one of {', '.join(BRANCHES)}")
         voice = entry.get("unused_voice_reading")
-        text = entry.get("voice_reading_text")
-        if text is not None and (not isinstance(text, list) or not all(isinstance(word, str) for word in text)):
+        reading_text = entry.get("voice_reading_text")
+        if reading_text is not None and (
+            not isinstance(reading_text, list) or not all(isinstance(word, str) for word in reading_text)
+        ):
             raise ValueError(f"{where}: voice_reading_text is a list of words")
         lexicon = entry.get("lexicon")
         if lexicon is not None and not isinstance(lexicon, str):
@@ -282,7 +284,7 @@ def read_task_list(text: str, source: str) -> dict[str, TaskEntry]:
             branch=str(entry["branch"]),
             expects=expectation_of(entry.get("expects") or {}, where),
             unused_voice_reading=None if voice is None else expectation_of(voice, f"{where} unused_voice_reading"),
-            voice_reading_text=None if text is None else tuple(text),
+            voice_reading_text=None if reading_text is None else tuple(reading_text),
             lexicon=lexicon,
             categories={str(key): _item_category(str(key), value, where) for key, value in categories.items()},
             traits=frozenset(str(trait) for trait in traits),

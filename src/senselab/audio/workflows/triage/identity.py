@@ -236,11 +236,11 @@ def identity_of(
     )
 
 
-def _recording_id(
-    hint: AudioHints | None, stem: str | None, corpus_path: str | None
-) -> tuple[str | None, str | None]:
-    """The id to record and its source: the hint's, else the corpus-relative path; ``(None, None)`` where that is
-    the stem or neither exists."""
+def _recording_id(hint: AudioHints | None, stem: str | None, corpus_path: str | None) -> tuple[str | None, str | None]:
+    """The id to record and its source.
+
+    The hint's, else the corpus-relative path; ``(None, None)`` where that is the stem or neither exists.
+    """
     declared = _declared(hint, RECORDING_ID_KEY)
     found, source = (declared, FROM_HINT) if declared else (corpus_path, FROM_CORPUS_PATH)
     return (None, None) if found is None or found == stem else (found, source)

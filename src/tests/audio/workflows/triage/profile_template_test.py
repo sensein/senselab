@@ -114,7 +114,8 @@ class TestTheTemplate:
         root = write_template(tmp_path / "sub" / "child", name="child", extends="base")
         assert Path(yaml.safe_load((root / "profile.yaml").read_text())["extends"]).is_absolute()
         monkeypatch.chdir(tmp_path / "sub")
-        assert load_profile(root).base is not None and load_profile(root).base.root == base.resolve()
+        loaded_base = load_profile(root).base
+        assert loaded_base is not None and loaded_base.root == base.resolve()
 
     def test_a_bad_base_writes_nothing(self, tmp_path: Path) -> None:
         """An unknown base is refused before the directory is made (review finding 9)."""
