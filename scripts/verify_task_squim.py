@@ -29,8 +29,9 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 import numpy as np
 from scipy.stats import spearmanr
 
+from senselab.audio.workflows.triage.b2ai_hints import task_id_of
 from senselab.audio.workflows.triage.recording_vectors import stem_of
-from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
+from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.audio.workflows.triage.task_squim import branch_of_family
 
 HEADS = ("squim_pesq", "squim_stoi", "squim_si_sdr")

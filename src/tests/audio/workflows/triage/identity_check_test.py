@@ -6,7 +6,8 @@ import json
 
 import pytest
 
-from senselab.audio.workflows.triage.identity import FROM_HINT, RecordingIdentity, identity_from_stem, identity_of
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
+from senselab.audio.workflows.triage.identity import FROM_HINT, RecordingIdentity, identity_of
 from senselab.audio.workflows.triage.identity_check import (
     CHECK_LEVELS,
     DUPLICATE_IDENTITY,
@@ -40,8 +41,8 @@ def _record(
     return IdentityRecord(
         stem,
         location or f"/corpus/{stem}.wav",
-        identity_of(stem),
-        identity_from_stem(stem),
+        identity_from_name(stem),
+        identity_from_name(stem),
         task=task,
         task_source=task_source,
     )
@@ -52,7 +53,7 @@ def _declared(stem: str, participant: str | None, session: str | None, task_id: 
     sources = {"participant": FROM_HINT, "session": FROM_HINT, "task_id": FROM_HINT}
     identity = RecordingIdentity(participant, session, task_id, sources)
     return IdentityRecord(
-        stem, f"/corpus/{stem}.wav", identity, identity_from_stem(stem), task="listed", task_source=FROM_TASK_LIST
+        stem, f"/corpus/{stem}.wav", identity, identity_from_name(stem), task="listed", task_source=FROM_TASK_LIST
     )
 
 
@@ -240,7 +241,7 @@ def test_a_stem_naming_nothing_cannot_disagree(scope: str) -> None:
 def test_a_run_with_no_recorded_identity_is_reported(scope: str) -> None:
     """A run from before ADMIT recorded identity is listed, keyed by its stem, not refused."""
     stem = "sub-1_ses-1_task-rainbow-passage"
-    report = _check([IdentityRecord(stem, "sub-1/ses-1/run", None, identity_from_stem(stem))], scope)
+    report = _check([IdentityRecord(stem, "sub-1/ses-1/run", None, identity_from_name(stem))], scope)
     assert report.counts[NO_RECORDED_IDENTITY] == 1
     (finding,) = report.findings
     assert finding.locations == ("sub-1/ses-1/run",)
@@ -261,8 +262,8 @@ def test_the_report_is_json_and_tuples_are_accepted() -> None:
     stem = "sub-1_ses-1_task-rainbow-passage"
     report = check_identities(
         [
-            (stem, "/a", identity_of(stem), None, None, "rainbow-passage", FROM_TASK_LIST),
-            (stem, "/b", identity_of(stem), None, None, "rainbow-passage", FROM_TASK_LIST),
+            (stem, "/a", identity_from_name(stem), None, None, "rainbow-passage", FROM_TASK_LIST),
+            (stem, "/b", identity_from_name(stem), None, None, "rainbow-passage", FROM_TASK_LIST),
         ],
         session_scope=SESSION_SCOPE_PARTICIPANT,
     )

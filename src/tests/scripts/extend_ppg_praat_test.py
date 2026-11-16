@@ -35,6 +35,7 @@ from senselab.audio.workflows.triage.nodes.preprocess import PPG_MEASUREMENT, PR
 from senselab.utils import subprocess_venv
 from senselab.utils.data_structures import DeviceType
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import seed_recorded_identity
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_ppg_praat.py"
@@ -153,6 +154,7 @@ def _seed_run(
     sf.write(str(enhanced), wave.astype(np.float32), PPGS_SAMPLE_RATE)
 
     store = ProvStore(run_id=root.name)
+    seed_recorded_identity(store, root.name)
     agent = software_agent(store)
     activity = store.activity(node="PREPROCESS", step="residual", parameters={})
     store.was_associated_with(activity, agent)

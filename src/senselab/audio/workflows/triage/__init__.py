@@ -1,5 +1,6 @@
 """The audio triage workflow."""
 
+from . import prov_types  # noqa: F401 -- registers triage's entity types with the provenance store
 from .config import TriageConfig, load_triage_config
 from .enrollment import Enrollment
 from .vocabulary import (

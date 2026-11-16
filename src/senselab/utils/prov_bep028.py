@@ -298,7 +298,9 @@ def convert_store_file(
     Returns:
         The JSON-LD document.
     """
-    return to_bep028_graph(ProvStore.read_jsonl(store_path), dataset=dataset, label=label, description=description)
+    return to_bep028_graph(
+        ProvStore.read_jsonl(store_path, any_type=True), dataset=dataset, label=label, description=description
+    )
 
 
 def write_bep028_files(graph: dict[str, Any], prov_dir: str | Path, *, label: str = "triage") -> list[Path]:

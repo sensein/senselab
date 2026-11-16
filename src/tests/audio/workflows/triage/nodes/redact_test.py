@@ -20,7 +20,9 @@ import soundfile as sf
 from senselab.audio.data_structures import Audio
 from senselab.audio.data_structures.audio_hints import AudioHints, ExpectedSpeech
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.identity import PARTICIPANT_KEY, SESSION_KEY, TASK_TOKEN_KEY
 from senselab.audio.workflows.triage.nodes import redact as redact_module
 from senselab.audio.workflows.triage.nodes import verdict as verdict_module
 from senselab.audio.workflows.triage.nodes.common import consensus_words, live_entities, resolve_stream
@@ -73,7 +75,7 @@ from senselab.audio.workflows.triage.vocabulary import (
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
 from senselab.text.tasks.pii_detection.api import scan_for_pii as real_scan_for_pii
 from senselab.utils.prov_store import Entity, ProvStore
-from tests.audio.workflows.triage.conftest import record_task
+from tests.audio.workflows.triage.conftest import record_admitted_hint, record_task
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 SR = 16000
@@ -210,6 +212,11 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
         store.was_generated_by(stream_id, pre)
     if task is not None:
         record_task(store, task)
+    elif recording_stem != "plain":
+        # B2AI's hint builder declares what the file name names; senselab reads no file name (plan step 6a).
+        named = identity_from_name(recording_stem)
+        declared = {PARTICIPANT_KEY: named.participant, SESSION_KEY: named.session, TASK_TOKEN_KEY: named.task_id}
+        record_admitted_hint(store, AudioHints(metadata={k: v for k, v in declared.items() if v and v != "unknown"}))
 
     consensus = store.activity(node="PREPROCESS", step="consensus", parameters={})
     store.was_associated_with(consensus, software)
@@ -3422,3 +3429,13 @@ class TestWhatShipsIsVerifiedNotReDetected:
 
         evidence = RedactionEvidence(masks_final_n=1, coverage_failed=True)
         assert final_release(Release.REDACTED, None, evidence) == (Release.WITHHELD, MASK_COVERAGE_FAILED)
+
+
+def test_the_ledger_records_the_profiles_word_list_version() -> None:
+    """The version on every ledger is the active profile's word list's own, not a literal that can fall behind it."""
+    import yaml  # type: ignore[import-untyped]
+
+    from senselab.audio.workflows.triage.dataset_profile import data_path
+    from senselab.audio.workflows.triage.review_inputs import LEXICON_FILE, lexicon_version
+
+    assert lexicon_version() == yaml.safe_load(data_path(LEXICON_FILE).read_text())["version"] == 11

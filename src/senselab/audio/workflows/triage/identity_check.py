@@ -95,8 +95,8 @@ class IdentityRecord(NamedTuple):
         stem: The recording's file stem.
         location: Where it is: the run directory (a corpus table's ``run_dir``) or the source path.
         identity: Its declared or recorded identity, or None where its run records none.
-        stem_identity: What its stem alone names (:func:`~senselab.audio.workflows.triage.identity.identity_from_stem`),
-            or None to skip :data:`STEM_DISAGREES` for it.
+        stem_identity: What its stem names, as the dataset's file-name reader reads it (senselab reads no file
+            name, plan step 6a), or None to skip :data:`STEM_DISAGREES` for it.
         error: Why its identity could not be built, or None.
         task: The task its hint declares, by name, or None.
         task_source: What describes that task (``ResolvedTask.source``: the task list, the hint, neither, or no task

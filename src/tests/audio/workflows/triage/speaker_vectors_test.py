@@ -13,7 +13,7 @@ import soundfile
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage import speaker_vectors as sv
-from senselab.audio.workflows.triage.identity import identity_from_stem
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.recording_vectors import recording_dirs
 
 PROFILE = Path(sv.__file__).parent / "data" / "speaker_vector_profile" / "2026-09-22.yaml"
@@ -125,7 +125,7 @@ def _recording(run_root: Path, root: Path, **identity: Any) -> dict[str, Any]:  
         The row, in :data:`speaker_vectors.TABLE_COLUMNS`.
     """
     stem = _TIMESTAMP.sub("", run_root.name)
-    named = identity_from_stem(stem)
+    named = identity_from_name(stem)
     row = {"participant": named.participant, "session": named.session, "task": named.task_id}
     return {**row, **identity, "stem": stem, "run_dir": str(run_root.relative_to(root))}
 

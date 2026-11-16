@@ -25,10 +25,15 @@ from senselab.text.tasks.decision_model import (
     verify_pin,
 )
 from senselab.text.tasks.decision_model.second_opinion import MORE_THAN_ONE, opinion_state
+from senselab.text.tasks.pii_detection.redaction_review import load_review_policy
 
 WEIGHTS = b"not really a gguf, but bytes with a digest"
 CONFIG = b'{"model_format": "gguf"}'
 SYSTEM = b"Classify the context using the supplied schema."
+
+DATA = Path(__file__).parents[2] / "data_for_testing" / "redaction_review"
+POLICY = load_review_policy(DATA / "review_policy.txt", DATA / "task_guidance.yaml")
+"""The test's own review policy: the second opinion reads the caller's (plan step 6b), not a dataset's."""
 
 
 def _digest(data: bytes) -> str:
@@ -199,9 +204,9 @@ class TestTheAnswers:
         from senselab.text.tasks.decision_model.second_opinion import QUESTION_SET_VERSION
         from senselab.text.tasks.pii_detection.redaction_review import redaction_policy_text, task_nature_description
 
-        state = opinion_state("dog cat", {"task": "animal-fluency"}, "dog cat")
-        assert state["redaction_policy"] == redaction_policy_text()
-        assert state["task_nature"] == task_nature_description("animal-fluency") != ""
+        state = opinion_state("dog cat", {"task": "list-task"}, "dog cat", POLICY)
+        assert state["redaction_policy"] == redaction_policy_text(POLICY)
+        assert state["task_nature"] == task_nature_description("list-task", POLICY) != ""
         assert "state.redaction_policy" in QUESTIONS["policy_identifier_present"]["instructions"]
         assert "state.masked_text" in QUESTIONS["masked_text_free_of_identifiers"]["instructions"]
         assert QUESTIONS["off_task_speech"]["type"] == "choice" and QUESTION_SET_VERSION == 6
@@ -210,8 +215,8 @@ class TestTheAnswers:
         """Owner, 2026-10-10: the item-set set swaps off_task_speech for phrases_instead_of_items, nothing else."""
         from senselab.text.tasks.decision_model.second_opinion import ITEM_SET_QUESTIONS, questions_for
 
-        assert questions_for({"task": "animal-fluency", "item_set": True}) is ITEM_SET_QUESTIONS
-        assert questions_for({"task": "animal-fluency"}) is QUESTIONS
+        assert questions_for({"task": "list-task", "item_set": True}) is ITEM_SET_QUESTIONS
+        assert questions_for({"task": "list-task"}) is QUESTIONS
         assert set(ITEM_SET_QUESTIONS) == (set(QUESTIONS) - {"off_task_speech"}) | {"phrases_instead_of_items"}
         criteria = ITEM_SET_QUESTIONS["phrases_instead_of_items"]["criteria"]
         assert list(criteria) == ["none", "occasional", "predominant"]
@@ -226,7 +231,7 @@ class TestTheAnswers:
             }
             return answers
 
-        opinion = ask_second_opinion(ask, "dog cat", {"task": "animal-fluency", "item_set": True}, "dog cat")
+        opinion = ask_second_opinion(ask, "dog cat", {"task": "list-task", "item_set": True}, "dog cat", POLICY)
         assert asked == [set(ITEM_SET_QUESTIONS)]
         assert opinion.choices["phrases_instead_of_items"] == "predominant"
         assert opinion.probabilities["phrases_instead_of_items"] == pytest.approx(0.7)
@@ -253,6 +258,7 @@ class TestTheAnswers:
             "the rainbow passage",
             {"task": "reading", "instructions": "Read aloud.", "asked_to_say": "When the sunlight"},
             "the [PERSON] passage",
+            POLICY,
         )
         assert state == {
             "task": "reading",
@@ -261,7 +267,7 @@ class TestTheAnswers:
             "instructions": "Read aloud.",
             "stimulus": "When the sunlight",
             "task_content": "",
-            "redaction_policy": redaction_policy_text(),
+            "redaction_policy": redaction_policy_text(POLICY),
             "transcript": "the rainbow passage",
             "masked_text": "the [PERSON] passage",
         }
@@ -274,7 +280,7 @@ class TestTheAnswers:
             seen.append((state, questions))
             return _answers()
 
-        ask_second_opinion(ask, "hello", {"task": "free-speech"}, "[PERSON]")
+        ask_second_opinion(ask, "hello", {"task": "free-speech"}, "[PERSON]", POLICY)
         assert seen[0][1] is QUESTIONS and seen[0][0]["transcript"] == "hello"
         assert seen[0][0]["masked_text"] == "[PERSON]"
 

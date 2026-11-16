@@ -23,7 +23,7 @@ from typing import Any, Mapping
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.identity import declared_task_id
 from senselab.audio.workflows.triage.label_membership import LabelMembership
-from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family, task_id_of
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     extract_features,
@@ -90,40 +90,23 @@ def recording_stem(store: ProvStore) -> str:
     return Path(str(found[-1].attributes.get("path") or "")).stem
 
 
-def declared_task(stem: str) -> tuple[str, str]:
-    """The task a recording's own file stem declares, and the family it collapses into.
-
-    Args:
-        stem: The recording's file stem, from :func:`recording_stem`.
-
-    Returns:
-        ``(task_id, family)``, both :data:`UNDECLARED` when the stem carries no ``task-`` entity.
-        The one place the graph reads a declaration off the recording itself.
-    """
-    task_id = task_id_of(stem) if stem else UNKNOWN_TASK
-    if task_id == UNKNOWN_TASK:
-        return UNDECLARED, UNDECLARED
-    return task_id, task_family(task_id)
-
-
-def declared_task_of(store: ProvStore, stem: str = "") -> tuple[str, str]:
+def declared_task_of(store: ProvStore) -> tuple[str, str]:
     """The declared task id and its family.
 
     The family is the task ADMIT recorded from the hint (:func:`~senselab.audio.workflows.triage.task_catalogue.
     recorded_task`). The task id is :func:`~senselab.audio.workflows.triage.identity.declared_task_id` (the hint's
-    task token, else the stem), or the task's name where neither carries one. Only a store from before ADMIT recorded
-    the task reads both off the task id.
+    task token), or the task's name where the hint declares none. Only a store from before ADMIT recorded the task
+    reads both off the task id, which it records none of until a replay records one.
 
     Args:
         store: The provenance store.
-        stem: The stem to read where no hint's task token was recorded; empty reads the path ADMIT recorded.
 
     Returns:
         ``(task_id, family)``, both :data:`UNDECLARED` when nothing declares a task.
     """
     from senselab.audio.workflows.triage.task_catalogue import recorded_task  # noqa: PLC0415
 
-    task_id = declared_task_id(store, stem)
+    task_id = declared_task_id(store)
     task = recorded_task(store)
     if task is not None:
         if not task.name:
@@ -166,7 +149,7 @@ def read_live_features(
     )
     handle.close()
     path = Path(handle.name)
-    task_id, family = declared_task_of(store, stem)
+    task_id, family = declared_task_of(store)
     try:
         store.write_jsonl(path)
         return extract_features(

@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.identity import identity_of
 
 _SCRIPT = Path(__file__).resolve().parents[5] / "scripts" / "free_speech_review_page.py"
@@ -74,7 +75,7 @@ def _store(tmp_path: Path, stem: str, records: list[dict[str, Any]], *, identity
     run_root = tmp_path / participant / session / f"{stem}_20260101-000000"
     (run_root / "run").mkdir(parents=True)
     if identity:
-        attributes = {"name": "recording", **identity_of(stem).as_attributes()}
+        attributes = {"name": "recording", **identity_from_name(stem).as_attributes()}
         records = [_entity("stream-recording", "stream", attributes, [0.0, 1.0]), *records]
     (run_root / "run" / "store.jsonl").write_text("\n".join(json.dumps(record) for record in records) + "\n")
     return run_root

@@ -47,6 +47,7 @@ from senselab.audio.workflows.triage.nodes.preprocess import phonation_tracks
 from senselab.audio.workflows.triage.nodes.taxonomy import NODE as TAXONOMY_NODE
 from senselab.audio.workflows.triage.nodes.taxonomy import PER_SPAN_CLASSIFIERS, _write_consensus_taxonomy
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import seed_recorded_identity
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_reprocessed_outputs.py"
@@ -345,6 +346,7 @@ def _seed_run(
     sf.write(str(run_dir / "streams" / "enhanced.flac"), samples, SR)
 
     store = ProvStore(run_id=root.name)
+    seed_recorded_identity(store, root.name)
     agent = software_agent(store)
     condition = store.activity(node="PREPROCESS", step="condition", parameters={"target_hz": SR})
     store.was_associated_with(condition, agent)

@@ -1,0 +1,36 @@
+# A test's own redaction word lists (plan step 6b): the policy functions take the caller's.
+version: 1
+months: [january, february, march, april, may, june, july, august, september, october, november, december]
+months_es: [enero, febrero, marzo, abril, mayo]
+seasons: [summer, winter, autumn, verano, invierno]
+seasons_in_context: [spring, fall]
+season_context_before: [the, this, last, next, in]
+season_context_after: [break, semester]
+holidays: [christmas, thanksgiving, halloween, easter]
+holiday_phrases:
+- [new, year]
+- [fourth, of, july]
+age_after: [old, olds, yo]
+age_units: [year, years, ano, anos]
+age_before: [age, aged, edad, tengo]
+age_decades: [teens, twenties, thirties, forties, fifties, sixties, seventies]
+age_decade_before: [my, his, her]
+birthday: [birthday, cumpleanos]
+first_person_be: [i'm, im, i am]
+number_words: [one, two, three, five, seven, eight, ten, twenty, thirty, fifty, seventy, ninety, hundred, thousand,
+  nineteen, y]
+ordinal_words: [first, second, third, fiftieth]
+year_centuries: [seventeen, eighteen, nineteen]
+year_twenty_followers: [ten, eleven, twelve, twenty]
+year_thousand_heads: [[two, thousand], [dos, mil]]
+year_lead: [in, since, until, from, en, desde]
+kinship: [mother, motherinlaw, brother, wife, abuela, mama]
+countries: [mexico, canada, france]
+country_phrases:
+- [united, states]
+country_abbreviations: [US, USA, UK]
+states: [florida, maine, texas, virginia, ohio, california]
+state_phrases:
+- [new, york]
+- [new, mexico]
+state_abbreviations: [NYC]

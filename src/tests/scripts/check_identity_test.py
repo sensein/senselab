@@ -24,6 +24,7 @@ from senselab.audio.workflows.triage.identity_check import (
     UNREADABLE_IDENTITY,
 )
 from senselab.audio.workflows.triage.task_catalogue import FROM_TASK_LIST
+from tests.conftest import B2AI_TRIAGE_PROFILE
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "check_identity.py"
@@ -34,14 +35,33 @@ sys.modules["check_identity_under_test"] = cli
 _spec.loader.exec_module(cli)
 
 
-def _hints(tmp_path: Path, body: str) -> Path:
-    """A ``hints.py`` whose ``build_hint`` runs ``body`` over the recording's ``path``."""
+def _hints(tmp_path: Path, body: str, *, name_reader: bool = False) -> Path:
+    """A ``hints.py`` whose ``build_hint`` runs ``body`` over the recording's ``path``.
+
+    ``name_reader`` also exposes B2AI's ``identity_from_name``, the dataset's file-name reader the
+    ``stem_disagrees`` check takes (senselab reads no file name itself, plan step 6a).
+    """
     directory = tmp_path / "scope"
     directory.mkdir(parents=True, exist_ok=True)
+    reader = (
+        "from senselab.audio.workflows.triage.b2ai_hints import identity_from_name  # noqa: F401\n"
+        if name_reader
+        else ""
+    )
     (directory / "hints.py").write_text(
-        "from senselab.audio.data_structures import AudioHints\n\n\ndef build_hint(path):\n" + body, encoding="utf-8"
+        "from senselab.audio.data_structures import AudioHints\n" + reader + "\n\ndef build_hint(path):\n" + body,
+        encoding="utf-8",
     )
     return directory
+
+
+_DECLARE_FROM_NAME = (
+    "    from senselab.audio.workflows.triage.b2ai_hints import identity_from_name\n"
+    "    n = identity_from_name(path.stem)\n"
+    "    return (AudioHints(metadata={'participant_id': n.participant, 'session_id': n.session,"
+    " 'task_token': n.task_id}),)\n"
+)
+"""A ``build_hint`` declaring what a B2AI file name carries, as B2AI's hint builder does."""
 
 
 def _recordings(tmp_path: Path, lines: list[str]) -> Path:
@@ -125,6 +145,7 @@ class TestBeforeARun:
             tmp_path,
             "    return (AudioHints(metadata={'participant_id': 'sub-x', 'session_id': 'ses-x',"
             " 'task_token': 'rainbow-passage'}),)\n",
+            name_reader=True,
         )
         listing = _recordings(
             tmp_path, ["/c/sub-1_ses-1_task-rainbow-passage.wav", "/c/sub-2_ses-1_task-rainbow-passage.wav"]
@@ -145,8 +166,12 @@ class TestBeforeARun:
             tmp_path, ["/c/sub-1_ses-1_task-rainbow-passage.wav", "/c/sub-2_ses-1_task-rainbow-passage.wav"]
         )
         out = tmp_path / "report.json"
-        assert cli.main(["--recordings", str(listing)]) == 0
-        assert cli.main(["--recordings", str(listing), "--session-scope", "global", "--out", str(out)]) == 0
+        hints = _hints(tmp_path, _DECLARE_FROM_NAME)
+        assert (
+            cli.main(["--recordings", str(listing), "--hints", str(hints), "--profile", str(B2AI_TRIAGE_PROFILE)]) == 0
+        )
+        argv = ["--recordings", str(listing), "--hints", str(hints), "--profile", str(B2AI_TRIAGE_PROFILE)]
+        assert cli.main([*argv, "--session-scope", "global", "--out", str(out)]) == 0
         assert _report(out)["counts"][SESSION_UNDER_TWO_PARTICIPANTS] == 1
 
     def test_json_rows_unnamed_files_and_a_failing_hint(self, tmp_path: Path) -> None:
@@ -196,12 +221,13 @@ class TestBeforeARun:
         assert cli.main(["--recordings", str(listing), "--hints", str(hints)]) == 2
         assert "tasks.yaml" in capsys.readouterr().err
 
-    def test_hints_with_a_table_are_refused(self, tmp_path: Path) -> None:
-        """A finished run's identity is the one it recorded, so no hint applies."""
-        table = _table(tmp_path, [_row("a", "a", None, None, None)])
-        with pytest.raises(SystemExit) as raised:
-            cli.main(["--table", str(table), "--hints", str(tmp_path)])
-        assert raised.value.code == 2
+    def test_without_a_name_reader_no_stem_is_compared(self, tmp_path: Path) -> None:
+        """No dataset file-name reader: ``stem_disagrees`` does not run, since senselab reads no file name."""
+        row = _row("sub-1_ses-1_task-rainbow-passage", "r", "sub-7", "ses-1", "rainbow-passage")
+        row["participant_from"] = FROM_HINT
+        out = tmp_path / "report.json"
+        assert cli.main(["--table", str(_table(tmp_path, [row])), "--out", str(out)]) == 0
+        assert _report(out)["counts"][STEM_DISAGREES] == 0
 
     def test_a_missing_list_is_exit_2(self, tmp_path: Path) -> None:
         """Nothing is checked when the input is not there."""
@@ -249,7 +275,8 @@ class TestAfterARun:
         row = _row("sub-1_ses-1_task-rainbow-passage", "r", "sub-7", "ses-1", "rainbow-passage")
         row["participant_from"] = FROM_HINT
         out = tmp_path / "report.json"
-        assert cli.main(["--table", str(_table(tmp_path, [row])), "--out", str(out)]) == 0
+        hints = _hints(tmp_path, "    return None, {}\n", name_reader=True)
+        assert cli.main(["--table", str(_table(tmp_path, [row])), "--hints", str(hints), "--out", str(out)]) == 0
         (finding,) = _report(out)["findings"]
         assert finding["check"] == STEM_DISAGREES
         assert finding["detail"]["fields"] == {"participant": {"declared": "sub-7", "stem": "sub-1"}}

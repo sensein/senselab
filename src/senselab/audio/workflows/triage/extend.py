@@ -63,6 +63,7 @@ from senselab.audio.workflows.triage.hint_record import (
 from senselab.audio.workflows.triage.hint_record import expected_speech_digest as prompts_digest
 from senselab.audio.workflows.triage.identity import (
     ADMIT_NODE,
+    RecordingIdentity,
     admit_record,
     identity_disagreement,
     identity_of,
@@ -107,6 +108,7 @@ from senselab.audio.workflows.triage.nodes.review import (
     LLM_REVIEW_MEASUREMENT,
     PROMPT_VERSION,
     READ_STATES,
+    read_under_this_policy,
     reading_key,
 )
 from senselab.audio.workflows.triage.nodes.review import NODE as REVIEW_NODE
@@ -129,6 +131,7 @@ from senselab.audio.workflows.triage.workflow import off_notes, require_stage
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
 from senselab.utils.prov_store import CHECKSUM_KEY, MTIME_KEY, SIZE_KEY, Entity, ProvStore, file_digest
 from senselab.utils.subprocess_venv import record_venv_use
+from senselab.utils.tasks.cached_inference import result_lookup
 
 RUN_SUBDIR = "run"
 STORE_FILE = "store.jsonl"
@@ -870,6 +873,15 @@ class ReplayOutcome:
     review_why: str | None = None
 
 
+def _hints_module(directory: Path) -> Any:  # noqa: ANN401 -- a dataset's own module
+    spec = importlib.util.spec_from_file_location("extend_hints", directory / "hints.py")
+    if spec is None or spec.loader is None:
+        raise FileNotFoundError(f"no importable hints.py in {directory}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_hint_builder(directory: Path) -> Callable[[Path], Any]:
     """The hint populator from a directory holding ``hints.py``.
 
@@ -882,13 +894,31 @@ def load_hint_builder(directory: Path) -> Callable[[Path], Any]:
     Raises:
         FileNotFoundError: If the directory holds no importable ``hints.py``.
     """
-    spec = importlib.util.spec_from_file_location("extend_hints", directory / "hints.py")
-    if spec is None or spec.loader is None:
-        raise FileNotFoundError(f"no importable hints.py in {directory}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    builder: Callable[[Path], Any] = module.build_hint
+    builder: Callable[[Path], Any] = _hints_module(directory).build_hint
     return builder
+
+
+NAME_READER = "identity_from_name"
+"""The function a dataset's ``hints.py`` may expose that reads a recording's identity off its file stem."""
+
+
+def load_hints(directory: Path) -> tuple[Callable[[Path], Any], Callable[[str], RecordingIdentity] | None]:
+    """A dataset's ``hints.py``, run once: its hint populator and its file-name reader.
+
+    Args:
+        directory: The directory holding ``hints.py``.
+
+    Returns:
+        Its ``build_hint``, and its :data:`NAME_READER` (called with a file stem) or None where it exposes none;
+        senselab reads no file name itself.
+
+    Raises:
+        FileNotFoundError: If the directory holds no importable ``hints.py``.
+    """
+    module = _hints_module(directory)
+    builder: Callable[[Path], Any] = module.build_hint
+    reader: Callable[[str], RecordingIdentity] | None = getattr(module, NAME_READER, None)
+    return builder, reader
 
 
 def source_of(run_root: Path) -> Path:
@@ -936,6 +966,27 @@ _NO_STIMULUS_REASON = "the replay's hint declares no expected speech to align ag
 
 class ReplayRefused(ValueError):
     """A replay or re-fold its run's recorded inputs refuse; the message says why and what to pass."""
+
+
+def require_recorded_identity(store: ProvStore, run_root: Path) -> None:
+    """Refuse a corpus pass over a run that records no identity: replay it first, which records one.
+
+    A store written before ADMIT recorded identity names no task, and triage reads none off its file name (plan step
+    6a), so every stage a pass runs would read the task as unknown. Replay is the one driver that runs over such a
+    store, because it records the identity from the dataset's hint before anything reads it.
+
+    Args:
+        store: The run's store.
+        run_root: The run root, for the message.
+
+    Raises:
+        ReplayRefused: If the store records no identity.
+    """
+    if recorded_identity(store) is None:
+        raise ReplayRefused(
+            f"the run at {run_root} records no identity (written before ADMIT recorded one): replay it first "
+            "(scripts/extend_replay_decisions.py with the dataset's --hints), which records one"
+        )
 
 
 class StaleManifestRow(ReplayRefused):
@@ -1114,6 +1165,7 @@ def read_checked_store(
     """
     store = read_store(run_root, run_id=run_id)
     check_run_inputs(store, run_root, config, allow_profile_change=allow_profile_change)
+    require_recorded_identity(store, run_root)
     if row is not None:
         named, recorded = row_identity(row), recorded_identity(store)
         if named is None or recorded is None:
@@ -1149,7 +1201,8 @@ def check_replay_inputs(
     store records none, unless ``no_hint``; a store that records no task (written before ADMIT recorded one),
     unless a hint is given or ``no_hint``, since its recorded hint names no task and every branch would take its
     out-of-family mode; a recorded hint that carried a ``target_speaker`` (only its digest is stored), unless a
-    hint is given; a changed hint, unless ``allow_hint_change``. Anything else is accepted and recorded on
+    hint is given; a run recording no identity whose hint declares none (plan step 6a); a changed hint, unless
+    ``allow_hint_change``. Anything else is accepted and recorded on
     :class:`ReplayInputs`.
 
     Args:
@@ -1194,6 +1247,11 @@ def check_replay_inputs(
         )
     else:
         held, hint_from = recorded_hint(store), HINT_RECORDED
+    if recorded_identity(store) is None and not identity_of(held).sources:
+        raise ReplayRefused(
+            "this run records no identity and the hint it would replay with declares none, so it would record an "
+            "identity declaring nothing (senselab reads no file name, plan step 6a): pass the dataset's --hints"
+        )
     changed = changed_fields(store, held)
     if changed and not allow_hint_change:
         raise ReplayRefused(f"the hint differs from the recorded one ({', '.join(changed)}); replay the run instead")
@@ -1203,7 +1261,9 @@ def check_replay_inputs(
 def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software: str) -> str | None:
     """Record the replay's hint and the identity it declares as the run's, retiring the record it replaces.
 
-    The identity is read off the stem of the file ADMIT was given (its ``audio_file``), as ADMIT read it.
+    The identity is the hint's (:func:`~senselab.audio.workflows.triage.identity.identity_of`); nothing is read off
+    a file name (plan step 6a). :func:`check_replay_inputs` has already refused a run that records no identity and
+    a hint that declares none.
 
     Args:
         store: The run's store.
@@ -1216,12 +1276,9 @@ def record_replayed_hint(store: ProvStore, hint: AudioHints | None, *, software:
     entity = recording_entity(store)
     if entity is None:
         return None
-    admitted = [a for a in store.activities(ADMIT_NODE) if a.parameters.get("audio_file")]
-    source = admitted[-1].parameters["audio_file"] if admitted else entity.attributes.get("path")
-    stem = Path(str(source or "")).stem
     attributes = {
         **entity.attributes,
-        **identity_of(stem, hint).as_attributes(),
+        **identity_of(hint).as_attributes(),
         **hint_attributes(hint),
         **task_attributes(hint),
         "replaces": entity.id,
@@ -1459,7 +1516,8 @@ def carry_reading_forward(
 ) -> tuple[str, str | None]:
     """Re-attach a reading a replay retired, where the replayed store holds exactly what it read.
 
-    The comparison is the reading's own result-cache key against the key the replayed store's texts
+    A reading whose cache entry records another policy fingerprint (the review policy and the word lists, plan step 6)
+    is read again. The comparison is the reading's own result-cache key against the key the replayed store's texts
     and task context give under the same commit. A match writes a REVIEW activity that used the held
     annotation, copies of its rounds and of the annotation derived from them, and retires the
     replay's own unanswered annotation. Anything else leaves the replay's annotation standing.
@@ -1496,6 +1554,9 @@ def carry_reading_forward(
         return REVIEW_NEEDS_REREAD, describe_exception(error)
     if key != held_key:
         return REVIEW_NEEDS_REREAD, "the transcript texts or task context the reading read have changed"
+    cached = result_lookup(held_key)
+    if cached is not None and not read_under_this_policy(cached["result"]):
+        return REVIEW_NEEDS_REREAD, "the review policy or the redaction word lists the reading read under have changed"
     activity = store.activity(
         node=REVIEW_NODE,
         step=READING_CARRIED_STEP,
