@@ -19,10 +19,10 @@ faults:                           # a capture fault touching a task span reviews
     min_s: 0.0
     decides: false
   dropout:
-    min_s: 0.5                    # fitted: over the 0.42 s dropout inside 3b06709b's glide, heard present
+    min_s: 0.0                    # any detected dropout decides; B2AI's profile uses 0.5, fitted: over the 0.42 s dropout inside 3b06709b's glide, heard present
     decides: true
   clip:
-    min_s: 0.02                   # fitted: over the 16 ms clip inside fac74f45's breathing, heard present
+    min_s: 0.0                    # any detected clip decides; B2AI's profile uses 0.02, fitted: over the 16 ms clip inside fac74f45's breathing, heard present
     decides: true
   discontinuity:
     min_s: 0.0

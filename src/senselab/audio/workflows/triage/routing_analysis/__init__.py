@@ -10,9 +10,9 @@ The reference standards, their weakness and the measurements taken with this mod
 
 from senselab.audio.workflows.triage.routing_analysis.detectors import (
     BRANCH_DETECTORS,
-    DETECTORS,
     STAGED_DETECTORS,
     Detector,
+    detector_catalogue,
     detector_value,
     sweep_points,
 )
@@ -105,6 +105,7 @@ __all__ = [
     "Confusion",
     "DECIDING_CLASSES",
     "DETECTORS",
+    "detector_catalogue",
     "DISAGREEMENT_KINDS",
     "Deciding",
     "Detector",
@@ -181,3 +182,10 @@ __all__ = [
     "write_gate_matrix",
     "write_report",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """``DETECTORS``, the detector catalogue, built on first access from the active dataset profile."""
+    if name == "DETECTORS":
+        return detector_catalogue()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

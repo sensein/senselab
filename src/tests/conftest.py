@@ -10,9 +10,11 @@ The only things NOT checked here are:
 - Docker — runtime service, not a pip package
 """
 
+import functools
 import importlib
 import warnings
-from typing import List
+from pathlib import Path
+from typing import Any, Iterator, List
 
 import pytest
 import torch
@@ -161,3 +163,38 @@ def cpu_cuda_device(request: pytest.FixtureRequest) -> DeviceType:
 def _isolated_result_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     """Give every test its own empty result cache, so no test reads another's entries."""
     monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path_factory.mktemp("result-cache")))
+
+
+B2AI_TRIAGE_PROFILE = Path(__file__).parent / "audio" / "workflows" / "triage" / "profiles" / "bridge2ai_voice_adult"
+"""The Bridge2AI-Voice adult triage profile: the data and settings the triage tests were written against."""
+
+
+@pytest.fixture
+def b2ai_triage_profile() -> Iterator[Any]:
+    """Run the test with the Bridge2AI-Voice adult triage profile active, and nothing active after it.
+
+    Triage ships no dataset data, so its tests read B2AI's from this profile. A test about running without a
+    profile takes :func:`without_triage_profile` as well.
+    """
+    from senselab.audio.workflows.triage import dataset_profile
+
+    dataset_profile.deactivate_profile()
+    dataset_profile.activate_profile(_loaded_b2ai_profile())
+    yield dataset_profile.active_profile()
+    dataset_profile.deactivate_profile()
+
+
+@pytest.fixture
+def without_triage_profile(b2ai_triage_profile: Any) -> Iterator[None]:  # noqa: ANN401 -- ordering only
+    """Run the test with no dataset profile active (after the triage suite's own activation)."""
+    from senselab.audio.workflows.triage import dataset_profile
+
+    dataset_profile.deactivate_profile()
+    yield
+
+
+@functools.cache
+def _loaded_b2ai_profile() -> Any:  # noqa: ANN401 -- a DatasetProfile, imported lazily
+    from senselab.audio.workflows.triage.dataset_profile import load_profile
+
+    return load_profile(B2AI_TRIAGE_PROFILE)

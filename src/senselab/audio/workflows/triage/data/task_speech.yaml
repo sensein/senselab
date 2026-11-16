@@ -17,6 +17,4 @@ phrase_words_min: 3    # owner, 2026-10-10: an utterance of at least this many l
 # lexical word is speech outside the task (words_min above), and COHORT word-gates the family and does not
 # enroll from it (cohort_stage.yaml v4). The families stay on SPEECH for routing and measurement. Derivation:
 # specs/20261007-task-events-in-background/design.md, "Loudness is a voice task".
-voice_task_text:
-  loudness: [hey]      # owner, 2026-10-11: the participant says "hey", then shouts it
-  loudness-v2: [hey]   # owner, 2026-10-11
+voice_task_text: {}    # dataset profile: lexical family -> its declared task text (B2AI: loudness and loudness-v2 -> [hey])

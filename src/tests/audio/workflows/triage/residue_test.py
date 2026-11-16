@@ -23,6 +23,7 @@ from senselab.audio.workflows.triage.residue import (
     residue_rule,
     task_residue,
 )
+from tests.conftest import B2AI_TRIAGE_PROFILE
 
 RAINBOW = (
     "When the sunlight strikes raindrops in the air, they act as a prism and form a rainbow. "
@@ -33,7 +34,7 @@ RAINBOW = (
 @pytest.fixture(scope="module")
 def rule() -> ResidueRule:
     """The packaged rule."""
-    return residue_rule(load_triage_config())
+    return residue_rule(load_triage_config(profile=B2AI_TRIAGE_PROFILE))
 
 
 def _residue(text: str, family: str | None, rule: ResidueRule, stimulus: str = "") -> list[str]:

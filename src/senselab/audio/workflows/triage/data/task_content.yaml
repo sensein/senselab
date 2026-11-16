@@ -13,10 +13,7 @@ families:              # a family set of routing_analysis/families.py -> the tas
   SYLLABLE_REPETITION: [ddk_task_reading]
   AIRWAY_ELICITING: [airway_breath_reading, airway_cough_reading]
   VOICE_ELICITING: [voice_phonation_reading]
-open_vocabulary_families:  # owner, 2026-10-10: tasks eliciting open-vocabulary items; a word of an item run is task content (task_speech.py)
-- animal-fluency
-- random-item-generation
-- random-item-generation-v2
+open_vocabulary_families: []  # dataset profile (B2AI, owner 2026-10-10: animal-fluency, random-item-generation[-v2]):\1
 any_word_families: [SYLLABLE_REPETITION]   # families whose every word on the events is task content
 agreed_run_min: 2      # adjacent agreed dictionary words that are a run of speech
 decisions: [present, review]   # a reading's evidence decision that read the task; `absent` read another activity

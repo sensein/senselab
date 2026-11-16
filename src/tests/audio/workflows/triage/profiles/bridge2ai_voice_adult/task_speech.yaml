@@ -1,0 +1,22 @@
+# Speech outside the task (task_speech.py): the lexical consensus words, over the whole file, that are not
+# the task's own content. A non-lexical (airway, voice) family's own content is its declared task text and
+# the recognisers' misreadings of its events (task_content.yaml v3). An item-set family's
+# (task_content.yaml open_vocabulary_families) speech is split into utterances at pauses, and each utterance
+# is an item or a phrase; the share of phrases is evidence only, because the reviewer decides what is a
+# phrase. Derivation: specs/20261007-task-events-in-background/design.md ("Speech outside the task",
+# "Phrases instead of items", "The reviewer reads the phrases").
+version: 6
+words_min: 1           # owner, 2026-10-10 (k = 1): this many such words in a non-lexical family is speech_in_task
+utterance_gap_s: 0.3   # owner, 2026-10-10: a pause at least this long between two consensus words ends an utterance
+phrase_words_min: 3    # owner, 2026-10-10: an utterance of at least this many lexical words, holding a closed-class word, is a phrase
+
+# Lexical families read as voice tasks, each with its declared task text. Owner, 2026-10-11: "loudness should
+# be treated as voice tasks beyond the hey hey (similar to one two three ah in phonation)". As with the
+# prolonged-vowel count-in, a consensus word is task text where it is the declared word in any casing or
+# punctuation, every hyphen piece of it is ("hey-hey"), or it is the word run together ("heyhey"); every other
+# lexical word is speech outside the task (words_min above), and COHORT word-gates the family and does not
+# enroll from it (cohort_stage.yaml v4). The families stay on SPEECH for routing and measurement. Derivation:
+# specs/20261007-task-events-in-background/design.md, "Loudness is a voice task".
+voice_task_text:
+  loudness: [hey]      # owner, 2026-10-11: the participant says "hey", then shouts it
+  loudness-v2: [hey]   # owner, 2026-10-11

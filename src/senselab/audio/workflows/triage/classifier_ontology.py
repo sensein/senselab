@@ -22,6 +22,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 
+from senselab.audio.workflows.triage.dataset_profile import data_path
+
 if TYPE_CHECKING:  # pragma: no cover - import cycle would be runtime-only
     from senselab.audio.workflows.triage.config import TriageConfig
 
@@ -47,10 +49,10 @@ def _bundled_profile_path() -> Path:
     Raises:
         FileNotFoundError: If the package ships no profile.
     """
-    bundled = sorted(PROFILE_DIR.glob("*.json"))
+    bundled = sorted(data_path("classifier_ontology").glob("*.json"))
     if not bundled:
         raise FileNotFoundError(
-            f"no classifier-ontology profile in {PROFILE_DIR}; "
+            f"no classifier-ontology profile in {data_path('classifier_ontology')}; "
             "run `uv run python scripts/build_classifier_ontology_map.py`"
         )
     return bundled[-1]

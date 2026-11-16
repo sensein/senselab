@@ -1160,11 +1160,11 @@ class TestCli:
         assert cli.main([str(tmp_path / "absent.wav")]) == 2
 
     def test_it_has_no_per_knob_flags(self) -> None:
-        """Every value but the four paths lives in the config file."""
+        """Every option is a path; every value lives in a file (the config, or a dataset profile)."""
         cli = _cli()
         parser = cli.build_parser()
         options = {action.dest for action in parser._actions if action.dest != "help"}
-        assert options == {"audio", "out", "config", "hint", "enrollment"}
+        assert options == {"audio", "out", "config", "profile", "hint", "enrollment"}
 
     def test_a_hints_table_is_refused_rather_than_read_as_an_empty_hint(self, tmp_path: Path) -> None:
         """AudioHints ignores unknown keys, so a filename-keyed hints table validated to may_contain=[].

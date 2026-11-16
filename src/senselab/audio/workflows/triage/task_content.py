@@ -12,7 +12,6 @@ non-lexical task").
 
 from __future__ import annotations
 
-import functools
 import re
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
@@ -21,6 +20,7 @@ from typing import Any
 import yaml
 
 from senselab.audio.workflows.audio_analysis.harmonize import normalise_token
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.nodes.common import find_measurement, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.routing_analysis import families as family_sets
@@ -31,14 +31,14 @@ TASK_CONTENT_PATH = Path(__file__).parent / "data" / "task_content.yaml"
 Span = tuple[float, float]
 
 
-@functools.cache
+@profile_cache
 def task_content_parameters() -> dict[str, Any]:
     """The parameters of ``data/task_content.yaml``.
 
     Returns:
         The parsed mapping.
     """
-    return dict(yaml.safe_load(TASK_CONTENT_PATH.read_text()) or {})
+    return dict(yaml.safe_load(data_path("task_content.yaml").read_text()) or {})
 
 
 def readings_for(family: str | None) -> tuple[str, ...]:

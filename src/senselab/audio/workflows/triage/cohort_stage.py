@@ -27,7 +27,6 @@ import json
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +54,7 @@ from senselab.audio.workflows.triage.cohort_fold import (
     UNAVAILABLE,
 )
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.decision import PASS, REVIEW
 from senselab.audio.workflows.triage.identity import declared_session_key
 from senselab.audio.workflows.triage.live_evidence import declared_task_of, recording_stem
@@ -130,14 +130,14 @@ AudioLoader = Callable[[], "tuple[np.ndarray, int] | None"]
 """Loads one recording's plain stream as mono float32 samples and their rate, or None."""
 
 
-@cache
+@profile_cache
 def cohort_parameters() -> dict[str, Any]:
     """The packaged ``data/cohort_stage.yaml``.
 
     Returns:
         The parsed file.
     """
-    return dict(yaml.safe_load(PARAMETERS_PATH.read_text(encoding="utf-8")))
+    return dict(yaml.safe_load(data_path("cohort_stage.yaml").read_text(encoding="utf-8")))
 
 
 def _digest(payload: object) -> str:

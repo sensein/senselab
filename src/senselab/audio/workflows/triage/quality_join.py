@@ -12,12 +12,12 @@ Every parameter is in ``data/quality_join.yaml``; the design is
 
 from __future__ import annotations
 
-import functools
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import yaml
 
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.task_events import GenericView, event_snr_db
 
 QUALITY_JOIN_PATH = Path(__file__).parent / "data" / "quality_join.yaml"
@@ -35,14 +35,14 @@ OUTSIDE = "out"
 Span = tuple[float, float]
 
 
-@functools.cache
+@profile_cache
 def quality_join_parameters() -> dict[str, Any]:
     """The parameters of ``data/quality_join.yaml``.
 
     Returns:
         The parsed mapping.
     """
-    return dict(yaml.safe_load(QUALITY_JOIN_PATH.read_text()) or {})
+    return dict(yaml.safe_load(data_path("quality_join.yaml").read_text()) or {})
 
 
 def touches(span: Span, task_spans: Sequence[Span], abut_s: float) -> bool:

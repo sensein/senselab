@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from functools import cache
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence, cast
 
 import yaml
 
 from senselab.audio.workflows.audio_analysis.harmonize import harmonize_transcripts, normalise_token
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 
 __all__ = [
     "ALGORITHM",
@@ -200,25 +200,25 @@ DEGENERATE_PATH = Path(__file__).parent / "data" / "asr_degenerate.yaml"
 WORD_TIMING_PATH = Path(__file__).parent / "data" / "word_timing.yaml"
 
 
-@cache
+@profile_cache
 def word_timing_parameters() -> dict[str, Any]:
     """The parameters of ``data/word_timing.yaml``.
 
     Returns:
         ``point_width_s``, the width a point span is read over.
     """
-    document = yaml.safe_load(WORD_TIMING_PATH.read_text()) or {}
+    document = yaml.safe_load(data_path("word_timing.yaml").read_text()) or {}
     return {"point_width_s": float(document["point_width_s"])}
 
 
-@cache
+@profile_cache
 def arbitration_parameters() -> dict[str, float]:
     """The ``arbitration`` block of ``data/word_timing.yaml``.
 
     Returns:
         ``disagreement_s``, ``held_voicing_min_s``, ``held_voicing_bridge_s`` and ``voiced_strength_min``.
     """
-    document = yaml.safe_load(WORD_TIMING_PATH.read_text()) or {}
+    document = yaml.safe_load(data_path("word_timing.yaml").read_text()) or {}
     return {key: float(value) for key, value in dict(document["arbitration"]).items()}
 
 
@@ -274,14 +274,14 @@ def located_span(
     return low, min(low + width, bound)
 
 
-@cache
+@profile_cache
 def degenerate_parameters() -> dict[str, Any]:
     """The bounds of ``data/asr_degenerate.yaml``, keyed by :func:`degenerate_token`'s parameter names.
 
     Returns:
         ``chars_min``, ``unit_chars_max`` and ``repeats_min``.
     """
-    document = yaml.safe_load(DEGENERATE_PATH.read_text()) or {}
+    document = yaml.safe_load(data_path("asr_degenerate.yaml").read_text()) or {}
     return {
         "chars_min": int(document["chars_min"]),
         "unit_chars_max": int(document["unit_chars_max"]),

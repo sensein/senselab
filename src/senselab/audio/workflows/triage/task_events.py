@@ -33,6 +33,7 @@ from senselab.audio.workflows.triage.background_model import (
     read_view_arrays,
     regions_of,
 )
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.task_extent import (
@@ -59,14 +60,14 @@ DECISIONS = (PRESENT, REVIEW, ABSENT)
 Span = tuple[float, float]
 
 
-@functools.cache
+@profile_cache
 def task_events_parameters() -> dict[str, Any]:
     """The parameters of ``data/task_events.yaml``.
 
     Returns:
         The parsed mapping.
     """
-    return dict(yaml.safe_load(TASK_EVENTS_PATH.read_text()) or {})
+    return dict(yaml.safe_load(data_path("task_events.yaml").read_text()) or {})
 
 
 @dataclass(frozen=True)

@@ -7,13 +7,14 @@ and switch is in ``data/task_extent.yaml``; the design is ``specs/20261012-r37-e
 
 from __future__ import annotations
 
-import functools
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
 import yaml
+
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 
 TASK_EXTENT_PATH = Path(__file__).parent / "data" / "task_extent.yaml"
 
@@ -34,14 +35,14 @@ STIMULUS_EXTENT_CHECK = "stimulus_extent_check"
 """SPEECH's measurement of whether a read stimulus's extent holds every word read as the stimulus."""
 
 
-@functools.cache
+@profile_cache
 def task_extent_parameters() -> dict[str, Any]:
     """The parameters of ``data/task_extent.yaml``.
 
     Returns:
         The parsed mapping.
     """
-    return dict(yaml.safe_load(TASK_EXTENT_PATH.read_text()) or {})
+    return dict(yaml.safe_load(data_path("task_extent.yaml").read_text()) or {})
 
 
 def enabled(section: str, p: Mapping[str, Any] | None = None) -> bool:
