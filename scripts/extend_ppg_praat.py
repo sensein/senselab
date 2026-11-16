@@ -68,16 +68,18 @@ from senselab.audio.tasks.features_extraction import (
     extract_ppgs_from_audios,
     ppgs_venv_is_provisioned,
 )
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.extend import (
     CONSENSUS_TRANSCRIPT,
     PRAAT_MEASUREMENT_SUPERSEDED,
     RUN_SUBDIR,
     SLICES_SUBDIR,
+    add_config_arguments,
     batches,
+    driver_config,
     export_prov,
+    read_checked_store,
     read_manifest,
-    read_store,
     run_root_of,
     supersede,
     take_slice,
@@ -147,7 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
-    parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
+    add_config_arguments(parser)
     parser.add_argument(
         "--force",
         action="store_true",
@@ -276,7 +278,7 @@ def process_batch(
     for position, row in enumerate(rows):
         try:
             run_root = run_root_of(Path(row["enhanced"]))
-            store = read_store(run_root)
+            store = read_checked_store(run_root, config)
         except (OSError, ValueError) as error:
             outcomes[position] = {
                 "status": _ERROR,
@@ -467,7 +469,7 @@ def main(argv: list[str] | None = None) -> int:
             slice_count=args.slice_count,
             batch_size=args.batch_size,
             device=DeviceType(args.device) if args.device else None,
-            config=load_triage_config(args.config) if args.config else load_triage_config(),
+            config=driver_config(args),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
             force=args.force,
         )

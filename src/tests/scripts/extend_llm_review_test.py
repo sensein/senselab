@@ -21,8 +21,10 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.extend import REFOLD_MARKER_STEP, REFOLD_NODE, refold_verdict
+from senselab.audio.workflows.triage.hint_record import hint_attributes
 from senselab.audio.workflows.triage.nodes import review as review_module
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.nodes.redact import PII_LEDGER
@@ -277,6 +279,30 @@ class TestTheDecisionIsTakenAgainOverTheReading:
         assert store.is_invalidated(held["VERDICT"])
         live = [entity for entity in store.entities("verdict") if not store.is_invalidated(entity.id)]
         assert [entity.attributes["node"] for entity in live].count("VERDICT") == 1
+
+    def test_a_hint_that_differs_from_the_record_is_refused_before_review_reads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A re-fold cannot take a changed hint, so REVIEW must not write a reading the fold would refuse."""
+        run_root = _finished_run(tmp_path / "corpus")
+        _seed_verdicts(run_root)
+        store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        recording = next(e for e in store.entities("stream") if e.attributes.get("name") == "recording")
+        recording.attributes.update(hint_attributes(AudioHints(metadata={"task_token": "rainbow-passage"})))
+        store.write_jsonl(run_root / "run" / "store.jsonl")
+        before = (run_root / "run" / "store.jsonl").read_text()
+        calls = _stub(monkeypatch)
+        summary = cli.run_slice(
+            _manifest(tmp_path, run_root),
+            slice_index=0,
+            slice_count=1,
+            config=_config(tmp_path),
+            log_dir=tmp_path,
+            hints=_hints(tmp_path, run_root),
+        )
+        assert summary["counts"] == {"refused": 1}
+        assert calls == []
+        assert (run_root / "run" / "store.jsonl").read_text() == before
 
     def test_an_unchanged_re_fold_keeps_one_live_ledger(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The store is content-addressed: a second fold mints the same ledger, which must stay live."""

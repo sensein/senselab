@@ -32,6 +32,7 @@ from senselab.audio.workflows.triage.extend import (
     RUN_SUBDIR,
     SLICES_SUBDIR,
     export_prov,
+    read_checked_store,
     read_manifest,
     read_store,
     run_root_of,
@@ -97,7 +98,7 @@ def process_session(session: str, rows: Sequence[dict[str, Any]]) -> list[dict[s
     for row in rows:
         try:
             run_root = run_root_of(Path(row["enhanced"]))
-            opened.append((row, run_root, read_store(run_root), ""))
+            opened.append((row, run_root, read_checked_store(run_root, None), ""))
         except (OSError, ValueError) as error:
             opened.append((row, None, None, describe_exception(error)))
     members = []

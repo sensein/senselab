@@ -19,7 +19,7 @@ import pytest
 import soundfile as sf
 
 from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.extend import REFOLD_MARKER_STEP, REFOLD_NODE
+from senselab.audio.workflows.triage.extend import REFOLD_MARKER_STEP, REFOLD_NODE, REFUSED
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.run import LOG_FILE
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
@@ -249,11 +249,17 @@ class TestItIsIdempotentRatherThanResumable:
 class TestItRefusesToRunBlind:
     """Re-folding with no declaration flags every recording it touches."""
 
-    def test_the_hints_argument_is_required(self, tmp_path: Path) -> None:
-        """Not optional, because the corpus-wide failure it prevents reads as a finding."""
+    def test_a_store_that_recorded_no_hint_is_refused_without_hints(self, tmp_path: Path) -> None:
+        """No hint given and none recorded is refused, so the corpus-wide failure cannot read as a finding."""
         run_root = _finished_run(tmp_path / "corpus")
-        with pytest.raises(SystemExit):
-            cli.main([str(_manifest(tmp_path, run_root)), "--slice-index", "0", "--slice-count", "1"])
+        before = (run_root / "run" / "store.jsonl").read_text()
+        manifest = _manifest(tmp_path, run_root)
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)]) == 1
+        [row] = [
+            json.loads(line) for line in (tmp_path / "slices" / "refold-slice-0-of-1.jsonl").read_text().splitlines()
+        ]
+        assert row["status"] == REFUSED
+        assert (run_root / "run" / "store.jsonl").read_text() == before
 
 
 class TestTheMarkerSaysWhatFoldedIt:

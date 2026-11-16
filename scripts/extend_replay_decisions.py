@@ -52,18 +52,23 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.extend import (
     ERROR,
     ERRORED,
     OK,
     PRESENT,
+    REFUSED,
     REVIEW_NEEDS_REREAD,
     RUN_SUBDIR,
     SKIPPED,
     SLICES_SUBDIR,
     ReplayOutcome,
+    ReplayRefused,
     SliceLog,
+    add_config_arguments,
+    check_replay_inputs,
+    driver_config,
     export_prov,
     find_replay_marker,
     load_hint_builder,
@@ -77,6 +82,7 @@ from senselab.audio.workflows.triage.extend import (
     take_slice,
     write_store,
 )
+from senselab.audio.workflows.triage.hint_record import hint_digest
 from senselab.audio.workflows.triage.nodes.common import STREAM_SUFFIX, describe_exception
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.nodes.speech import SEPARATED_PREFIX
@@ -127,16 +133,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
-    parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
+    parser.add_argument(
+        "--no-hint", action="store_true", help="Replay with no hint, where --hints is not given and none is recorded"
+    )
+    add_config_arguments(parser, allow_profile_change=True)
     return parser
 
 
 def mirror_run_root(run_root: Path, out_root: Path, stem: str) -> Path:
     """A writable run root under ``out_root`` whose sidecars read through to the finished one.
 
-    ``derivatives/`` is a symlink because no replayed node writes there. ``streams/`` is a real
-    directory holding a symlink per stream the replay only *reads*; a stream a replayed node writes
-    is never linked, so the write lands here and not in the finished tree.
+    ``derivatives/`` is a real directory holding a symlink per entry of the finished one; the sidecar
+    writers a replay runs remove the entry before writing, so a rewrite replaces the link here and never
+    follows it. A ``derivatives`` that an earlier mirror made a link to the whole directory is replaced.
+    ``streams/`` is a real directory holding a symlink per stream the replay only *reads*; a stream a
+    replayed node writes is never linked.
 
     Args:
         run_root: The finished run root.
@@ -152,8 +163,13 @@ def mirror_run_root(run_root: Path, out_root: Path, stem: str) -> Path:
     (dest / RELEASE_SUBDIR).mkdir(parents=True, exist_ok=True)
     finished = run_root / RUN_SUBDIR
     derivatives = run_dir / DERIVATIVES_SUBDIR
-    if not derivatives.is_symlink() and not derivatives.exists():
-        derivatives.symlink_to(finished / DERIVATIVES_SUBDIR)
+    if derivatives.is_symlink():
+        derivatives.unlink()
+    derivatives.mkdir(parents=True, exist_ok=True)
+    for entry in sorted((finished / DERIVATIVES_SUBDIR).glob("*")):
+        link = derivatives / entry.name
+        if not link.is_symlink() and not link.exists():
+            link.symlink_to(entry)
     for stream in sorted((finished / STREAMS_SUBDIR).glob("*")):
         if written_by_a_replayed_node(stream.name):
             continue
@@ -172,6 +188,8 @@ def replay_one(
     stem: str,
     commit: str | None,
     force: bool = False,
+    no_hint: bool = False,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Replay one finished run, writing its store only once every replayed node has run.
 
@@ -188,11 +206,14 @@ def replay_one(
         stem: The recording's file stem.
         commit: The code revision to record on the marker.
         force: Replay even when this configuration's and revision's marker is already present.
+        no_hint: Replay with no hint where none is given or recorded.
+        allow_profile_change: Accept a profile whose name differs from the run's.
 
     Returns:
         ``{status, replay, ...}`` — ``ok`` when the replay landed, ``errored`` when it landed but a
-        replayed node raised (``errored_nodes`` names them), ``present`` when this configuration had
-        already replayed the run, ``error`` when it could not.
+        replayed node raised (``errored_nodes`` names them), ``present`` when this configuration, revision
+        and hint had already replayed the run, ``refused`` when the run's recorded inputs refuse it
+        (:func:`~senselab.audio.workflows.triage.extend.check_replay_inputs`), ``error`` when it could not.
     """
     target = mirror_run_root(run_root, out_root, stem) if out_root is not None else run_root
     read_from = target if (target / RUN_SUBDIR / "store.jsonl").is_file() else run_root
@@ -200,21 +221,34 @@ def replay_one(
         store = read_store(read_from, run_id=replay_run_id(run_root, config.config_hash, commit))
     except (OSError, ValueError) as error:
         return {"status": ERROR, DERIVATION: describe_exception(error)}
-    if not force and find_replay_marker(store, config.config_hash, commit) is not None:
-        return {"status": PRESENT, DERIVATION: "this configuration and revision have already replayed this run"}
     try:
         hint = build_hint(source_of(run_root))[0] if build_hint is not None else None
     except (OSError, ValueError, LookupError, KeyError, IndexError) as error:
         return {"status": ERROR, DERIVATION: f"hint: {describe_exception(error)}"}
     try:
+        inputs = check_replay_inputs(
+            store,
+            run_root,
+            config,
+            hint=hint,
+            hint_given=build_hint is not None,
+            no_hint=no_hint,
+            allow_profile_change=allow_profile_change,
+        )
+    except ReplayRefused as refusal:
+        return {"status": REFUSED, DERIVATION: str(refusal)}
+    if not force and find_replay_marker(store, config.config_hash, commit, hint_digest(inputs.hint)) is not None:
+        return {"status": PRESENT, DERIVATION: "this configuration, revision and hint have already replayed this run"}
+    try:
         outcome: ReplayOutcome = replay_decisions(
             store,
             config,
-            hint,
+            inputs.hint,
             run_dir=target / RUN_SUBDIR,
             artifacts_dir=target / RELEASE_SUBDIR,
             summary_dir=target / SUMMARY_SUBDIR,
             commit=commit,
+            inputs=inputs,
         )
     except (OSError, ValueError, LookupError) as error:
         return {"status": ERROR, DERIVATION: describe_exception(error)}
@@ -226,7 +260,9 @@ def replay_one(
         "errored_nodes": sorted(outcome.errors),
         "run_root": str(target),
         "retired": outcome.retired,
-        "hint": "built" if build_hint is not None else "none",
+        "hint": inputs.hint_from,
+        "hint_changed": inputs.changed,
+        "audio": inputs.audio,
         "states": outcome.states,
         "errors": outcome.errors,
         "released": sorted(outcome.released),
@@ -245,6 +281,8 @@ def process(
     commit: str | None,
     log: SliceLog | None = None,
     force: bool = False,
+    no_hint: bool = False,
+    allow_profile_change: bool = False,
 ) -> list[dict[str, Any]]:
     """Replay every run named by these rows, one at a time.
 
@@ -259,6 +297,8 @@ def process(
         commit: The code revision to record on each marker.
         log: Where each row's record is appended as it lands, or None.
         force: Replay runs that already carry this configuration's and revision's marker.
+        no_hint: Replay with no hint where none is given or recorded.
+        allow_profile_change: Accept a profile whose name differs from a run's.
 
     Returns:
         One outcome record per input row, in order.
@@ -277,6 +317,8 @@ def process(
             stem=str(row["stem"]),
             commit=commit,
             force=force,
+            no_hint=no_hint,
+            allow_profile_change=allow_profile_change,
         )
         return {**row, **replayed}
 
@@ -294,6 +336,8 @@ def run_slice(
     out_root: Path | None,
     commit: str | None,
     force: bool = False,
+    no_hint: bool = False,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Replay every run in one array task's stride of the manifest.
 
@@ -307,6 +351,8 @@ def run_slice(
         out_root: Where to write replayed runs, or None to replay in place.
         commit: The code revision to record on each marker.
         force: Replay runs that already carry this configuration's and revision's marker.
+        no_hint: Replay with no hint where none is given or recorded.
+        allow_profile_change: Accept a profile whose name differs from a run's.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -321,7 +367,17 @@ def run_slice(
     log_path = slices_dir / f"{label}.jsonl"
     rows_log = SliceLog(log_path, slice_index=slice_index, slice_count=slice_count, total=len(mine))
     try:
-        log = process(mine, config, build_hint=build_hint, out_root=out_root, commit=commit, log=rows_log, force=force)
+        log = process(
+            mine,
+            config,
+            build_hint=build_hint,
+            out_root=out_root,
+            commit=commit,
+            log=rows_log,
+            force=force,
+            no_hint=no_hint,
+            allow_profile_change=allow_profile_change,
+        )
     finally:
         rows_log.close()
 
@@ -369,9 +425,10 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         0 when every recording in the shard was replayed or already had been, 1 when any row is
-        ``error`` or ``errored`` — the other stores are written either way — 2 when the arguments could not be
-        resolved and nothing was read, and 3 when any replayed recording's REVIEW reading could not
-        be carried forward and must be read again (the summary's ``needs_reread`` names them).
+        ``error``, ``errored`` or ``refused`` — the other stores are written either way — 2 when the
+        arguments could not be resolved and nothing was read, and 3 when any replayed recording's REVIEW
+        reading could not be carried forward and must be read again (the summary's ``needs_reread`` names
+        them).
     """
     args = build_parser().parse_args(argv)
 
@@ -383,12 +440,14 @@ def main(argv: list[str] | None = None) -> int:
             args.manifest,
             slice_index=args.slice_index,
             slice_count=args.slice_count,
-            config=load_triage_config(args.config) if args.config else load_triage_config(),
+            config=driver_config(args),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
             hints=args.hints,
             out_root=args.out_root,
             commit=args.commit,
             force=args.force,
+            no_hint=args.no_hint,
+            allow_profile_change=args.allow_profile_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
@@ -406,7 +465,8 @@ def main(argv: list[str] | None = None) -> int:
     if summary["needs_reread"]:
         print(f"REVIEW: {len(summary['needs_reread'])} recordings need the reviewer again", file=sys.stderr)
         return 3
-    return 1 if summary["counts"].get(ERROR) or summary["counts"].get(ERRORED) else 0
+    counts = summary["counts"]
+    return 1 if counts.get(ERROR) or counts.get(ERRORED) or counts.get(REFUSED) else 0
 
 
 if __name__ == "__main__":

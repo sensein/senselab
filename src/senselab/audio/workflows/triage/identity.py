@@ -213,12 +213,12 @@ def admit_record(store: ProvStore) -> tuple[Mapping[str, Any], str] | None:
 
 
 def declared_task_id(store: ProvStore, stem: str = "") -> str:
-    """The task id every stage reads: the hint's, as ADMIT recorded it, else the stem's.
+    """The task id every stage reads: the one ADMIT recorded, else the stem's.
 
     Args:
         store: The provenance store.
-        stem: The stem to read where no hint's task was recorded; empty reads the stem of the path ADMIT
-            recorded (:func:`admit_record`).
+        stem: The stem to read where ADMIT recorded no task (a store from before it recorded identity);
+            empty reads the stem of the path ADMIT recorded (:func:`admit_record`).
 
     Returns:
         The lower-cased task id with its trailing index, or :data:`UNKNOWN_TASK`.
@@ -226,9 +226,8 @@ def declared_task_id(store: ProvStore, stem: str = "") -> str:
     record = admit_record(store)
     if record is not None:
         attributes, path = record
-        sources = attributes.get(DECLARED_FROM)
         recorded = attributes.get(DECLARED_TASK_ID)
-        if isinstance(sources, Mapping) and sources.get("task_id") == FROM_HINT and isinstance(recorded, str):
+        if isinstance(recorded, str):
             return recorded
         stem = stem or Path(path).stem
     return task_id_of(stem) if stem else UNKNOWN_TASK
