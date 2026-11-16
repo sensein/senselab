@@ -34,6 +34,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     REVIEWER_UNMASKED_ALL,
     REVIEWER_UNMASKED_SOME,
     SCAN_FOUND_NOTHING,
+    SCAN_UNRECORDED,
     TASK,
     TASK_NOT_CONFORMED,
     UNCOMPUTED_READING,
@@ -679,6 +680,30 @@ class TestTheReleaseAxis:
         assert result.file_verdict.release is Release.AS_IS
         assert result.file_verdict.release_ground == SCAN_FOUND_NOTHING
         assert _file_verdict_entity(store).attributes["release_ground"] == SCAN_FOUND_NOTHING
+
+    def test_a_scan_whose_detectors_all_failed_is_unchecked_not_clean(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A scan record with no detector that ran is not "found nothing": the release is unknown, not as is.
+
+        A dataset's canary run (2026-11-10) ran with its PII detectors unreachable: every record read
+        ``scanned_by: []`` and the recordings were released as is on ``scan_found_nothing``.
+        """
+        store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=42, scanned=None)
+        store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={
+                "name": "pii_scan",
+                "signal": "consensus_transcript",
+                "scanned_by": [],
+                "failed": ["pii_subprocess"],
+                "missing": ["gliner", "presidio", "rules"],
+            },
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is None
+        assert result.file_verdict.release_ground == SCAN_UNRECORDED
 
     def test_a_declined_scan_is_determined(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -2227,3 +2252,38 @@ class TestTheOwnerCouldLook:
         }
         absent = verdict_module._owner_absent_inputs(self._store(), ("VOICE",), record)
         assert absent == ("VOICE:voiced_fraction_min",)
+
+
+class TestScanState:
+    """``scan_state``: complete only where a detector ran and none failed or went unattempted."""
+
+    def test_a_complete_scan_is_true(self) -> None:
+        """A detector ran, none failed, none missing."""
+        assert verdict_module.scan_state([{"scanned_by": ["rules", "gliner"], "failed": [], "missing": []}]) is True
+
+    def test_a_declined_scan_is_false(self) -> None:
+        """Nothing beyond the stimulus to scan."""
+        assert verdict_module.scan_state([{"scanned": False}]) is False
+
+    @pytest.mark.parametrize(
+        "record",
+        [
+            {"scanned_by": [], "failed": ["pii_subprocess"], "missing": ["gliner", "presidio", "rules"]},
+            {"scanned_by": ["rules"], "failed": ["gliner"], "missing": []},
+            {"scanned_by": ["rules"], "failed": [], "missing": ["presidio"]},
+            {"scanned_by": []},
+            {},
+        ],
+    )
+    def test_an_incomplete_scan_is_unknown(self, record: dict[str, Any]) -> None:
+        """A failed, unattempted or empty detector set leaves the scan unknown."""
+        assert verdict_module.scan_state([record]) is None
+
+    def test_one_complete_record_stands_beside_an_incomplete_one(self) -> None:
+        """A later all-missing record does not undo an earlier complete one."""
+        records = [{"scanned_by": ["rules"], "failed": [], "missing": []}, {"scanned_by": [], "missing": ["rules"]}]
+        assert verdict_module.scan_state(records) is True
+
+    def test_no_record_is_unknown(self) -> None:
+        """No scan record at all."""
+        assert verdict_module.scan_state([]) is None

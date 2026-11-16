@@ -6,19 +6,13 @@ What the store does not carry is its own run id, and the summary's title is buil
 
 from __future__ import annotations
 
-import importlib.util
-import sys
+import importlib
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parents[5] / "scripts" / "triage_rerender.py"
-_SPEC = importlib.util.spec_from_file_location("triage_rerender", _SCRIPT)
-assert _SPEC is not None and _SPEC.loader is not None
-rerender_module = importlib.util.module_from_spec(_SPEC)
-sys.modules["triage_rerender"] = rerender_module
-_SPEC.loader.exec_module(rerender_module)
+rerender_module = importlib.import_module("senselab.audio.workflows.triage.drivers.triage_rerender")
 
 
 class TestFindingTheRuns:

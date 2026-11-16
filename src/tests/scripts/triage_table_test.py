@@ -1,6 +1,6 @@
 """The triage.tsv script: decision tables and a run tree in, the TSV and its column dictionary out."""
 
-import importlib.util
+import importlib
 import json
 from pathlib import Path
 from types import ModuleType
@@ -15,16 +15,10 @@ from tests.audio.workflows.triage.triage_table_test import BIDS, HEADER, _tables
 pytestmark = pytest.mark.usefixtures("triage_profile")
 """The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
-SCRIPT = Path(__file__).parents[3] / "scripts" / "triage_table.py"
-
 
 def _script() -> ModuleType:
-    """The script, imported from its path."""
-    spec = importlib.util.spec_from_file_location("triage_table_script", SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    """The ``triage_table`` driver module."""
+    return importlib.import_module("senselab.audio.workflows.triage.drivers.triage_table")
 
 
 def test_the_script_writes_the_table_and_reports_its_counts(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
@@ -104,6 +98,21 @@ def test_a_recording_missing_from_or_repeated_in_the_tables_fails_the_build(
     assert _script().main([*_argv(tmp_path, out), "--manifest", str(manifest)]) == 2
     err = capsys.readouterr().err
     assert "1 recordings appear more than once" in err and "1 source paths are held by more than one row" in err
+    assert not out.exists()
+
+
+def test_a_manifest_whose_enhanced_path_is_not_a_run_stream_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """A bad ``enhanced`` path, or a run named twice, is an input error: exit 2 naming the manifest, no traceback."""
+    decisions, evidence = _tables(tmp_path)
+    pq.write_table(decisions, tmp_path / "d.parquet")
+    pq.write_table(evidence, tmp_path / "e.parquet")
+    out = tmp_path / "pub" / triage_table.TABLE_NAME
+    manifest = tmp_path / "bad.jsonl"
+    manifest.write_text(json.dumps({"enhanced": str(tmp_path / "enhanced.flac"), "source": "/a.wav"}) + "\n")
+    assert _script().main([*_argv(tmp_path, out), "--manifest", str(manifest)]) == 2
+    assert f"ERROR: --manifest {manifest} could not be read" in capsys.readouterr().err
     assert not out.exists()
 
 

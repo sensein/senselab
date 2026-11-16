@@ -1023,6 +1023,29 @@ def task_audible(store: ProvStore, masks: Sequence[Any]) -> tuple[float | None, 
     return round(length, 3), round(max(0.0, length - covered), 3)
 
 
+def scan_state(scans: Sequence[Mapping[str, Any]]) -> bool | None:
+    """Whether the live ``pii_scan`` records say a scan read the transcript, as the release decision reads it.
+
+    ``False`` where a record says there was nothing beyond the stimulus to scan (``scanned`` false). ``True`` only
+    where a record shows a complete scan: at least one detector in ``scanned_by``, and none ``failed`` or
+    ``missing`` -- the same test REDACT applies to its own scan record. ``None`` otherwise: no record, or every
+    record left a detector failed or unattempted, so the recording is unchecked, not clean, and its release is
+    unknown (:data:`~senselab.audio.workflows.triage.vocabulary.SCAN_UNRECORDED`) rather than as is.
+
+    Args:
+        scans: The attributes of every live ``pii_scan`` measurement.
+
+    Returns:
+        The tri-state.
+    """
+    if not scans:
+        return None
+    if any(scan.get(SCANNED) is False for scan in scans):
+        return False
+    complete = any(scan.get("scanned_by") and not scan.get("failed") and not scan.get("missing") for scan in scans)
+    return True if complete else None
+
+
 def _redaction_evidence(
     store: ProvStore, reports: Sequence[tuple[Entity, BranchReport]], plan: MaskPlan, coverage: Coverage
 ) -> RedactionEvidence:
@@ -1046,7 +1069,7 @@ def _redaction_evidence(
     extent_s, audible_s = task_audible(store, plan.final)
     return RedactionEvidence(
         lexical_words_n=None if words is None else int(words),
-        scanned=None if not scans else not any(scan.get(SCANNED) is False for scan in scans),
+        scanned=scan_state(scans),
         findings_n=len([finding for finding in store.entities("pii") if not store.is_invalidated(finding.id)]),
         coverage_failed=not coverage.ok,
         masks_n=len(plan.masks),

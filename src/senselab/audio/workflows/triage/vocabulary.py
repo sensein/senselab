@@ -239,7 +239,10 @@ RELEASE_WITHOUT_REDACTION_GROUNDS = (
 NO_TRANSCRIPT = "SPEECH did not run, so nothing read the recording for content a redaction would remove"
 SPEECH_UNREAD = "SPEECH left no lexical count, so whether the recording carries redactable content is unknown"
 REDACTION_OWED = "the scan found content to redact and REDACT left no verdict over it"
-SCAN_UNRECORDED = "SPEECH read lexical words and recorded no scan either way"
+SCAN_UNRECORDED = (
+    "SPEECH read lexical words and no complete scan stands: none was recorded, or a detector failed or was never "
+    "attempted"
+)
 
 RELEASE_UNKNOWN_GROUNDS = (NO_TRANSCRIPT, SPEECH_UNREAD, REDACTION_OWED, SCAN_UNRECORDED)
 """Why the graph could not tell. One of these stands behind every release the graph could not assess."""

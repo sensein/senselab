@@ -400,20 +400,26 @@ def manifest_sources(path: Path) -> dict[str, str]:
     """The run manifest's source per run directory name.
 
     Args:
-        path: A JSONL manifest, one ``{"stem": <run directory name>, "source": <audio path>}`` per line.
+        path: A JSONL manifest, one object per line with ``source`` (the audio path) and either ``enhanced`` (the run's
+            ``run/streams/enhanced.flac``, which names the run directory) or ``stem`` as the run directory name. A
+            manifest whose ``stem`` is the recording's stem, as the corpus table and the corpus driver write it,
+            carries ``enhanced``.
 
     Returns:
         ``{run directory name: source path}``.
 
     Raises:
-        ValueError: Where a run directory name appears twice.
+        ValueError: Where a run directory name appears twice, or an ``enhanced`` path is not
+            ``<run_root>/run/streams/<stream>``.
     """
+    from senselab.audio.workflows.triage.extend import run_root_of  # noqa: PLC0415 -- extend loads the model backends
+
     sources: dict[str, str] = {}
     for line in path.read_text().splitlines():
         if not line.strip():
             continue
         record = json.loads(line)
-        name = str(record["stem"])
+        name = run_root_of(Path(str(record["enhanced"]))).name if record.get("enhanced") else str(record["stem"])
         if name in sources:
             raise ValueError(f"manifest names run directory {name} twice")
         sources[name] = str(record["source"])
