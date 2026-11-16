@@ -889,11 +889,14 @@ def result_store(
     model_id: str | None,
     commit_sha: str | None,
     arrays: Mapping[str, Any] | None = None,
+    replace: bool = False,
 ) -> bool:
-    """Store one result, atomically; the first writer of a key wins.
+    """Store one result, atomically; the first writer of a key wins unless ``replace`` is given.
 
     The entry is assembled in a private directory and renamed into place, so a concurrent reader
     never sees half an entry and two jobs computing the same key cannot interleave their files.
+    A replacing write moves the held entry aside before renaming its own into place; a reader in
+    between sees a miss, never a mixture.
 
     Args:
         key: From :func:`result_cache_key`.
@@ -902,15 +905,18 @@ def result_store(
         model_id: The model it ran, recorded as provenance.
         commit_sha: The commit that model resolved to, recorded as provenance.
         arrays: Named NumPy arrays stored losslessly beside the result.
+        replace: Whether to replace an entry the key already holds (its origin goes with it), for a caller
+            that has found the held result no longer answers the key's question.
 
     Returns:
-        True when this call wrote the entry, False when the cache is off or the key was already held.
+        True when this call wrote the entry, False when the cache is off or the key was already held (and
+        not replaced).
     """
     cache_dir = result_cache_dir()
     if cache_dir is None:
         return False
     final = _entry_dir(cache_dir, key)
-    if (final / _RESULT_FILE).exists():
+    if (final / _RESULT_FILE).exists() and not replace:
         return False
     final.parent.mkdir(parents=True, exist_ok=True)
     staging = final.parent / f".{key}.{os.getpid()}.{uuid.uuid4().hex[:8]}"
@@ -940,8 +946,18 @@ def result_store(
         try:
             os.rename(staging, final)
         except OSError:
-            shutil.rmtree(staging, ignore_errors=True)
-            return False
+            if not replace or not final.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+                return False
+            retired = final.parent / f".{key}.replaced.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+            try:
+                os.rename(final, retired)
+                os.rename(staging, final)
+            except OSError:
+                shutil.rmtree(staging, ignore_errors=True)
+                return False
+            finally:
+                shutil.rmtree(retired, ignore_errors=True)
         return True
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)

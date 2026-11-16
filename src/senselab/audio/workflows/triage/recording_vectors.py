@@ -46,6 +46,7 @@ from senselab.audio.workflows.triage.identity import (
     admit_choice,
     identity_columns,
     identity_from_attributes,
+    records_admission,
 )
 from senselab.audio.workflows.triage.recruited_conditions import CONDITION_KINDS, DIAGNOSES_KEY, ledger_value
 from senselab.audio.workflows.triage.residue import is_non_lexical
@@ -492,6 +493,15 @@ def stem_of(run_root: Path) -> str:
     return _TIMESTAMP.sub("", run_root.name)
 
 
+def _admissions(view: StoreView) -> list[Mapping[str, Any]]:
+    """Every activity's parameters that may speak for the recording where ADMIT wrote no stream, in store order."""
+    return [
+        activity["parameters"]
+        for activity in view.activities
+        if records_admission(str(activity.get("node")), activity.get("step"))
+    ]
+
+
 def view_identity(view: StoreView) -> RecordingIdentity | None:
     """The identity ADMIT recorded for a run, read from its store view.
 
@@ -509,7 +519,7 @@ def view_identity(view: StoreView) -> RecordingIdentity | None:
     recording = view.last("stream", name=RECORDING_STREAM)
     record = admit_choice(
         recording.attributes if recording is not None else None,
-        [activity["parameters"] for activity in view.activities if activity.get("node") == ADMIT_NODE],
+        _admissions(view),
     )
     return identity_from_attributes(record[0]) if record is not None else None
 
@@ -526,7 +536,7 @@ def view_task(view: StoreView) -> ResolvedTask | None:
     recording = view.last("stream", name=RECORDING_STREAM)
     record = admit_choice(
         recording.attributes if recording is not None else None,
-        [activity["parameters"] for activity in view.activities if activity.get("node") == ADMIT_NODE],
+        _admissions(view),
     )
     return task_from_attributes(record[0]) if record is not None else None
 
@@ -1184,9 +1194,13 @@ def _fit_columns(view: StoreView) -> dict[str, Any]:
     extent = phonation.attributes.get("extent") if phonation is not None else None
     gap = (
         round(float(extent["start_s"]) - float(count_in[1]), 3)
-        if isinstance(count_in, (list, tuple)) and len(count_in) == 2 and isinstance(extent, Mapping)
+        if isinstance(count_in, (list, tuple))
+        and len(count_in) == 2
+        and isinstance(extent, Mapping)
+        and float(count_in[0]) < float(extent["start_s"])  # a count-in after the phonation began precedes nothing
         else None
     )
+    decided = ddk.attributes.get("decision") if ddk is not None else None
     return {
         "cohort_participant_rms_dbfs_median": _number(participant.get("rms_dbfs_median")),
         "cohort_participant_clipped_fraction": _number(participant.get("clipped_fraction")),
@@ -1201,7 +1215,7 @@ def _fit_columns(view: StoreView) -> dict[str, Any]:
         "cohort_participant_compared_n": nonmatch.get("recordings_compared_n"),
         "cough_event_s_median": round(float(np.median(durations)), 4) if durations else None,
         "ddk_syllable_rate_hz": _number(rate),
-        "ddk_task_found": None if ddk is None else ddk.attributes.get("decision") != "absent",
+        "ddk_task_found": None if decided is None else decided != "absent",
         "count_in_gap_s": gap,
     }
 
@@ -2264,8 +2278,11 @@ def latest_recordings(
 ) -> list[Path]:
     """The run directory this shard reads for each recording it owns: the lexically latest.
 
-    A recording is a stem in one folder: its run directories share a parent and differ only in their
-    launch timestamp. Two recordings with the same stem in different folders are both read.
+    A recording is a recording id in one folder: its run directories share a parent and differ only in their
+    launch timestamp. Two recordings with the same stem in different folders are both read. Where one folder holds
+    several run directories of one stem, each store's recorded id (:meth:`~.identity.RecordingIdentity.id_of`)
+    tells reruns of one recording from distinct recordings sharing the stem (plan step 9b); a store whose id cannot
+    be read counts as its stem.
 
     Args:
         root: The tree of finished run directories.
@@ -2275,23 +2292,36 @@ def latest_recordings(
         walk_threads: How many top-level directories are listed at once while finding run directories.
 
     Returns:
-        One run directory per recording, in (folder, stem) order.
+        One run directory per recording, in (folder, stem, recording id) order.
     """
-    latest: dict[tuple[str, str], Path] = {}
+    by_stem: dict[tuple[str, str], list[Path]] = {}
     for recording in recording_dirs(root, threads=walk_threads):
         stem = stem_of(recording)
         if shard_of(stem, slices) != slice_index:
             continue
         report.considered += 1
-        key = (recording_folder(recording, root), stem)
-        previous = latest.get(key)
-        if previous is None or recording.name > previous.name:
-            if previous is not None:
-                report.superseded.append(previous.name)
-            latest[key] = recording
-        else:
-            report.superseded.append(recording.name)
+        by_stem.setdefault((recording_folder(recording, root), stem), []).append(recording)
+    latest: dict[tuple[str, str, str], Path] = {}
+    for (folder, stem), runs in by_stem.items():
+        for recording in runs:
+            key = (folder, stem, stem if len(runs) == 1 else _recorded_id(recording, stem))
+            previous = latest.get(key)
+            if previous is None or recording.name > previous.name:
+                if previous is not None:
+                    report.superseded.append(previous.name)
+                latest[key] = recording
+            else:
+                report.superseded.append(recording.name)
     return [recording for _, recording in sorted(latest.items())]
+
+
+def _recorded_id(run_root: Path, stem: str) -> str:
+    """The recording id a run directory's store records, else its stem (unreadable, or no identity recorded)."""
+    try:
+        identity = view_identity(read_store(run_root / RUN_SUBDIR / STORE_NAME))
+    except (OSError, ValueError, KeyError, TypeError):
+        return stem
+    return identity.id_of(stem) if identity is not None else stem
 
 
 def recording_folder(run_root: Path, root: Path) -> str:

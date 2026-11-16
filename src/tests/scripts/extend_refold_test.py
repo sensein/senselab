@@ -17,15 +17,23 @@ from typing import Any, Sequence
 import numpy as np
 import pytest
 import soundfile as sf
+import yaml  # type: ignore[import-untyped]
 
-from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.extend import REFOLD_MARKER_STEP, REFOLD_NODE, REFUSED
+from senselab.audio.data_structures import AudioHints
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
+from senselab.audio.workflows.triage.dataset_profile import deactivate_profile
+from senselab.audio.workflows.triage.extend import PROFILE_KEY, REFOLD_MARKER_STEP, REFOLD_NODE, REFUSED
+from senselab.audio.workflows.triage.hint_record import hint_attributes
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.run import LOG_FILE
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
+from tests.conftest import FIXTURE_PROFILE
+
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_refold.py"
@@ -41,15 +49,21 @@ SR = 16000
 def _config(tmp_path: Path, text: str = "") -> Any:  # noqa: ANN401 — TriageConfig, kept off for brevity
     """The packaged config, with a partial YAML over it when one is given."""
     if not text:
-        return load_triage_config()
+        return load_triage_config(profile=ACTIVE)
     path = tmp_path / "override.yaml"
     path.write_text(text, encoding="utf-8")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
-def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> Path:
-    """A finished run: streams, consensus words, a run log, and one verdict per deciding node."""
-    run_root = root / "sub-a_task-free-speech_20260925-000000"
+def _finished_run(
+    root: Path, *, words: Sequence[str] = ("hello", "alicia"), hint: AudioHints | None = AudioHints(task="free-speech")
+) -> Path:
+    """A finished run: streams, consensus words, a run log, one verdict per deciding node, and the recorded hint.
+
+    ``hint`` is the hint ADMIT recorded, by default the one :func:`_hints` builds, so the re-fold has a recorded
+    hint to compare; None seeds a store from before ADMIT recorded hints.
+    """
+    run_root = root / "rec-0001_20260925-000000"
     streams = run_root / "run" / "streams"
     streams.mkdir(parents=True, exist_ok=True)
     wave = (0.05 * np.random.default_rng(0).standard_normal(SR * 3)).astype(np.float32)
@@ -69,7 +83,8 @@ def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> 
                 "path": f"streams/{name}.flac",
                 "sampling_rate": SR,
                 "channels": 1,
-                **(b2ai_identity_attributes(run_root.name) if name == "recording" else {}),
+                **(declared_identity_attributes("pa", None, "free-speech") if name == "recording" else {}),
+                **(hint_attributes(hint) if name == "recording" and hint is not None else {}),
             },
         )
         store.was_generated_by(stream, activity)
@@ -258,7 +273,7 @@ class TestItRefusesToRunBlind:
 
     def test_a_store_that_recorded_no_hint_is_refused_without_hints(self, tmp_path: Path) -> None:
         """No hint given and none recorded is refused, so the corpus-wide failure cannot read as a finding."""
-        run_root = _finished_run(tmp_path / "corpus")
+        run_root = _finished_run(tmp_path / "corpus", hint=None)
         before = (run_root / "run" / "store.jsonl").read_text()
         manifest = _manifest(tmp_path, run_root)
         assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)]) == 1
@@ -290,6 +305,37 @@ class TestTheMarkerSaysWhatFoldedIt:
         assert len(markers) == 1
         assert markers[0].parameters["commit"] == "c0ffee"
         assert markers[0].parameters["config_hash"] == config.config_hash
+
+
+class TestALegacyRunIsMovedForward:
+    """A run recorded under the profile digest taken before 2026-11-14 is re-folded, then its profile is commented."""
+
+    def test_a_comment_edit_after_one_refold_is_no_profile_change(self, tmp_path: Path) -> None:
+        """The marker records the current digest, so the next re-fold needs no --allow-profile-change."""
+        profile_root = tmp_path / "profile"
+        profile_root.mkdir()
+        manifest = yaml.safe_dump({"name": "extends-fixture", "version": "1", "extends": str(FIXTURE_PROFILE)})
+        (profile_root / "profile.yaml").write_text(manifest)
+        deactivate_profile()
+        config = load_triage_config(profile=profile_root)
+        assert config.profile is not None and config.profile.legacy_digest != config.profile.digest
+        run_root = _finished_run(tmp_path / "corpus")
+        log = json.loads((run_root / "run" / LOG_FILE).read_text())
+        legacy = {"name": "extends-fixture", "version": "1", "digest": config.profile.legacy_digest}
+        (run_root / "run" / LOG_FILE).write_text(json.dumps({**log, "config": {"profile": legacy}}))
+        args = {"slice_index": 0, "slice_count": 1, "log_dir": tmp_path, "hints": _hints(tmp_path)}
+        manifest_path = _manifest(tmp_path, run_root)
+        assert cli.run_slice(manifest_path, config=config, **args)["counts"] == {"ok": 1}
+        store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        [marker] = [a for a in store.activities() if a.node == REFOLD_NODE and a.step == REFOLD_MARKER_STEP]
+        assert marker.parameters[PROFILE_KEY] == {**legacy, "digest": config.profile.digest}
+
+        (profile_root / "profile.yaml").write_text("# corrected wording\n" + manifest)
+        deactivate_profile()
+        edited = load_triage_config(profile=profile_root)
+        assert edited.profile is not None and edited.profile.legacy_digest != config.profile.legacy_digest
+        counts = cli.run_slice(manifest_path, config=edited, **args)["counts"]
+        assert REFUSED not in counts and counts == {"unchanged": 1}
 
 
 def _rows_manifest(tmp_path: Path, rows: Sequence[dict[str, Any]]) -> Path:

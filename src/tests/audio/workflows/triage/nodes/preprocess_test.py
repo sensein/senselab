@@ -17,7 +17,7 @@ from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS, PpgsPos
 from senselab.audio.tasks.phonation import F0RangeFailed, F0RangeUnavailable
 from senselab.audio.tasks.speech_enhancement.residual import compute_residual
 from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperDecoderPositionsExceeded
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.hint_record import field_digests
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
 from senselab.audio.workflows.triage.nodes.airway import content_band_hz
@@ -1306,7 +1306,7 @@ class TestTheConsensusTranscript:
         _seed_admit(store, tmp_path, wav_writer)
         seen: dict[str, Any] = {}
         _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello there"), record=seen)
-        preprocess(store, _audio(tmp_path), load_triage_config(override), run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), load_triage_config(override, profile=ACTIVE), run_dir=tmp_path)
         assert seen["transcribe"] == [QWEN_ID]
         assert find_measurement(store, "asr_crisperwhisper") is None
         consensus = find_measurement(store, "consensus_transcript")
@@ -1610,7 +1610,7 @@ class TestWordsAreBracketAware:
         """With the vocabulary supplied, 'khh' becomes [KHH] and the raw token stays in the readings."""
         override = tmp_path / "tokens.yaml"
         override.write_text("words:\n  onomatopoeic_tokens: [khh, ahem]\n")
-        config = load_triage_config(override)
+        config = load_triage_config(override, profile=ACTIVE)
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello khh world"), qwen=_line("hello khh world"))
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
@@ -1629,7 +1629,7 @@ class TestWordsAreBracketAware:
         """With the vocabulary emptied, `khh` stays the word the recognizer produced."""
         override = tmp_path / "no-tokens.yaml"
         override.write_text("words:\n  onomatopoeic_tokens: null\n")
-        config = load_triage_config(override)
+        config = load_triage_config(override, profile=ACTIVE)
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello khh world"), qwen=_line("hello khh world"))
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
@@ -2021,7 +2021,7 @@ class TestResidualStep:
         whose false value makes a declared gate unreadable is not an option a configuration may
         offer, so the configuration states none and PREPROCESS reads none.
         """
-        packaged = load_triage_config()
+        packaged = load_triage_config(profile=ACTIVE)
         assert packaged.get("residual.enabled") is None
         assert "enabled" not in dict(packaged.require("residual"))
         source = (Path(preprocess_module.__file__)).read_text(encoding="utf-8")
@@ -2651,7 +2651,7 @@ class TestTheStimulusAlignmentBlock:
         _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
         override = tmp_path / "no-terminators.yaml"
         override.write_text("stimulus:\n  sentence_terminators: null\n")
-        config = load_triage_config(override)
+        config = load_triage_config(override, profile=ACTIVE)
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello world.")])
         result = preprocess(store, _audio(tmp_path), config, hint, run_dir=tmp_path)
 
@@ -2982,7 +2982,7 @@ class TestTheDiarizationBlock:
         """
         override = tmp_path / "plain_diarization.yaml"
         override.write_text("diarization:\n  streams: [plain]\n")
-        config = load_triage_config(override)
+        config = load_triage_config(override, profile=ACTIVE)
         assert diarization_streams(config) == ("plain",)
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, diarize=_diarizer((0.0, 1.0, "SPEAKER_00")))
@@ -3006,7 +3006,7 @@ class TestTheDiarizationBlock:
         """The packaged file hands no bound; an override that states one must reach the call."""
         override = tmp_path / "bounded.yaml"
         override.write_text("diarization:\n  streams: [plain]\n  max_speakers: 3\n")
-        config = load_triage_config(override)
+        config = load_triage_config(override, profile=ACTIVE)
         _seed_admit(store, tmp_path, wav_writer)
         seen: dict[str, Any] = {}
         _stub_models(monkeypatch, record=seen, diarize=None)
@@ -3062,7 +3062,7 @@ class TestTheDiarizationBlock:
         """
         override = tmp_path / "two_stream_diarization.yaml"
         override.write_text("diarization:\n  streams: [enhanced, residual]\n")
-        config = load_triage_config(override)
+        config = load_triage_config(override, profile=ACTIVE)
         _seed_admit(store, tmp_path, wav_writer)
 
         calls: list[int] = []
@@ -3102,7 +3102,7 @@ class TestTheDiarizationBlock:
         """
         override = tmp_path / "two_stream_sidecar.yaml"
         override.write_text("diarization:\n  streams: [enhanced, residual]\n")
-        config = load_triage_config(override)
+        config = load_triage_config(override, profile=ACTIVE)
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(
             monkeypatch,
@@ -3144,7 +3144,7 @@ class TestTheDiarizationBlock:
         override.write_text("diarization:\n  streams: null\n")
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch)
-        result = preprocess(store, _audio(tmp_path), load_triage_config(override), run_dir=tmp_path)
+        result = preprocess(store, _audio(tmp_path), load_triage_config(override, profile=ACTIVE), run_dir=tmp_path)
 
         assert "diarization" in result.absent
         assert "has no value" in _absent_map(store)["diarization"]
@@ -3167,7 +3167,7 @@ class TestTheDiarizationBlock:
         override.write_text("diarization:\n  streams: [plain, residual]\n")
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, diarize=_diarizer((0.0, 1.0, "SPEAKER_00")), enhance=_frcrn_unavailable)
-        result = preprocess(store, _audio(tmp_path), load_triage_config(override), run_dir=tmp_path)
+        result = preprocess(store, _audio(tmp_path), load_triage_config(override, profile=ACTIVE), run_dir=tmp_path)
 
         assert find_measurement(store, diarization_measurement("plain")) is not None
         assert find_measurement(store, RESIDUAL_DIARIZATION) is None

@@ -70,7 +70,7 @@ from senselab.audio.workflows.triage.extend import (
     take_slice,
     write_store,
 )
-from senselab.audio.workflows.triage.hint_record import recorded_hint, recorded_hint_digest
+from senselab.audio.workflows.triage.hint_record import recorded_hint, recorded_hint_digest, recorded_voice
 from senselab.audio.workflows.triage.nodes.common import describe_exception, find_measurement, software_agent
 from senselab.audio.workflows.triage.nodes.second_opinion import ABSENT, NODE, Ask, pin_of, second_opinion, settings
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, SECOND_OPINION_ANSWERS
@@ -327,6 +327,11 @@ def extend_one(
     replaced = live_opinions(store)
     if build_hint is None and recorded_hint_default and recorded_hint_digest(store) is None:
         return {"status": REFUSED, NODE: "this store records no hint; pass --hints to rebuild the task context"}
+    if build_hint is None and recorded_hint_default and recorded_voice(store):
+        return {
+            "status": REFUSED,
+            NODE: "the recorded hint carried a target speaker's voice, which is stored only as a digest; pass --hints",
+        }
     hint: AudioHints | None = recorded_hint(store) if build_hint is None and recorded_hint_default else None
     if build_hint is not None and source is not None:
         try:

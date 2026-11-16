@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import taxonomy as taxonomy_module
 from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
@@ -27,7 +27,7 @@ def _config(tmp_path: Path) -> TriageConfig:
     """
     path = tmp_path / "taxonomy.yaml"
     path.write_text("taxonomy:\n  speech_labels: [Speech, Narration, monologue, Conversation]\n")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 class TestItRunsNoModels:

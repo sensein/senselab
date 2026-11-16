@@ -53,6 +53,7 @@ import yaml
 
 from senselab.text.tasks.pii_detection.redaction_policy import Lexicon, country_runs, date_positions, state_positions
 from senselab.utils.dependencies import hf_subprocess_env
+from senselab.utils.reproduce.host import WORKER_DEVICE_PROBE
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
 
 logger = logging.getLogger("senselab")
@@ -834,6 +835,8 @@ class ReviewResult:
         engine: The engine that answered, as the worker reported it
             (:func:`~senselab.text.tasks.pii_detection.redaction_review_vllm.engine_identity`); empty where none
             answered.
+        runtime: Where and on what software the answer was produced (:func:`reviewer_runtime`); empty where
+            none was.
     """
 
     available: bool
@@ -865,6 +868,67 @@ class ReviewResult:
     peak_reserved_mib: int = 0
     resident_mib: int = 0
     engine: dict[str, Any] = field(default_factory=dict)
+    runtime: dict[str, Any] = field(default_factory=dict)
+
+
+RUNTIME_KEYS = ("host", "gpus", "torch", "cuda_visible_devices", "node_gpus", "nvidia_driver", "vllm", "slurm_job_id")
+"""What :func:`reviewer_runtime` records about the machine and software behind an answer."""
+
+
+def reviewer_runtime(engine: Mapping[str, Any], device: object) -> dict[str, Any]:
+    """Where and on what software a reviewer worker answers, recorded beside each answer and never in its key.
+
+    Two runs of one checkpoint on one engine can answer differently on different machines (Satra review
+    2026-11-14, decision 5), so each answer carries what the worker process itself reported
+    (:data:`~senselab.utils.reproduce.host.WORKER_DEVICE_PROBE`): the name of every CUDA device it could see, its own
+    torch and its ``CUDA_VISIBLE_DEVICES``. The vLLM worker touches no CUDA beside its server, so on that engine the
+    devices are its ``CUDA_VISIBLE_DEVICES`` named through ``nvidia-smi``
+    (:func:`~senselab.utils.reproduce.host.visible_gpu_names`; an index on a node of mixed GPU models names nothing
+    unless ``CUDA_DEVICE_ORDER=PCI_BUS_ID``), and its torch is the version installed in its venv. Beside that, from
+    this host and one ``nvidia-smi`` query: its name, every GPU listed on the node and the driver, the vLLM version
+    the server reported, and the batch job id. None of it shapes the request, so none of it is in the reading's cache
+    key, and a cached reading keeps the record of the machine that produced it.
+
+    Args:
+        engine: The engine identity the worker reported; its ``version`` is the vLLM version on that engine.
+        device: The worker's device report, as it sent it; None where it sent none.
+
+    Returns:
+        The keys in :data:`RUNTIME_KEYS`. ``gpus`` (the worker's devices) is None where the worker saw no CUDA
+        device or reported none; ``node_gpus`` (the node's inventory) is empty where ``nvidia-smi`` is absent. A
+        value that cannot be determined is None, and a probe that fails leaves its values so rather than failing the
+        review.
+    """
+    import os
+    import socket
+
+    from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_VLLM
+    from senselab.utils.reproduce.host import gpu_table, visible_gpu_names, worker_device
+
+    on_vllm = engine.get("name") == ENGINE_VLLM
+    vllm = engine.get("version") if on_vllm else None
+    try:
+        table = gpu_table()
+    except Exception as exc:  # noqa: BLE001 — provenance never fails the review it describes
+        logger.warning(f"reviewer runtime: the GPU inventory failed ({type(exc).__name__}: {exc})")
+        table = []
+    reported = worker_device(device)
+    if on_vllm and isinstance(device, dict) and "cuda_visible_devices" in device:
+        # the worker inherits this process's environment, so its CUDA_DEVICE_ORDER is this one
+        order = os.environ.get("CUDA_DEVICE_ORDER")
+        reported["gpus"] = visible_gpu_names(reported["cuda_visible_devices"], table, device_order=order)
+    try:
+        host: str | None = socket.gethostname()
+    except OSError:
+        host = None
+    return {
+        "host": host,
+        **reported,
+        "node_gpus": [row["name"] for row in table if row["name"]],
+        "nvidia_driver": (table[0]["driver"] or None) if table else None,
+        "vllm": vllm,
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+    }
 
 
 # A line protocol over the worker's stdin/stdout, one JSON object per line.
@@ -875,7 +939,9 @@ class ReviewResult:
 #     "model_path": str | None,   # staged snapshot dir, named by the commit it holds
 #     "revision": str | None,     # resolved commit SHA, never a mutable ref
 #   }
-# Load reply (stdout):        {"ready": True, "revision": str | None, "load_s": float}
+# Load reply (stdout):        {"ready": True, "revision": str | None, "load_s": float,
+#                              "device": {"gpus": [str] | None, "torch": str | None,
+#                                         "cuda_visible_devices": str | None}}
 #
 # Review request (stdin):     {"text": str, "prompt": str, "max_new_tokens": int}
 # Review reply (stdout):      {"completion": str, "generate_s": float, "output_tokens": int,
@@ -910,6 +976,10 @@ def emit(payload):
     _replies.write(MARKER + json.dumps(payload) + "\n")
     _replies.flush()
 
+"""
+    + WORKER_DEVICE_PROBE
+    + r"""
+
 
 def load(args):
     import torch
@@ -934,7 +1004,14 @@ def load(args):
 def main():
     started = time.monotonic()
     torch, tokenizer, model, loaded_revision = load(json.loads(sys.stdin.readline()))
-    emit({"ready": True, "revision": loaded_revision, "load_s": round(time.monotonic() - started, 3)})
+    emit(
+        {
+            "ready": True,
+            "revision": loaded_revision,
+            "load_s": round(time.monotonic() - started, 3),
+            "device": senselab_worker_device(),
+        }
+    )
     while True:
         line = sys.stdin.readline()
         if not line:
@@ -982,8 +1059,7 @@ except Exception as exc:
     emit({"error": {"type": type(exc).__name__, "message": str(exc)}})
     sys.exit(1)
 """
-    % _WORKER_MARKER
-)
+) % _WORKER_MARKER
 
 
 def _staged_snapshot(repo_id: str, revision: str) -> Optional[str]:
@@ -1616,6 +1692,7 @@ class _ReviewWorker:
         load_s: How long starting it and loading the weights took.
         engine: The engine's identity: as expected before :meth:`start`, as the worker reported it after.
         engine_details: Everything the worker reported about its engine.
+        runtime: The machine and software it answers on (:func:`reviewer_runtime`), once started.
     """
 
     def __init__(self, model_id: str, revision: str, engine: Mapping[str, Any] | None = None) -> None:
@@ -1633,6 +1710,7 @@ class _ReviewWorker:
         self.load_s = 0.0
         self.engine: dict[str, Any] = dict(engine or engine_identity(ENGINE_TRANSFORMERS))
         self.engine_details: dict[str, Any] = dict(self.engine)
+        self.runtime: dict[str, Any] = {}
         self._process: Optional[subprocess.Popen[str]] = None
         self._replies: queue.Queue[dict[str, Any]] = queue.Queue()
         self._noise: deque[str] = deque(maxlen=40)
@@ -1670,6 +1748,7 @@ class _ReviewWorker:
         reply = self._await(timeout_s)
         self.revision = reply.get("revision") or self.revision
         self.load_s = round(time.monotonic() - began, 3)
+        self.runtime = reviewer_runtime(self.engine, reply.get("device"))
 
     @property
     def alive(self) -> bool:
@@ -1934,6 +2013,7 @@ def review_transcript(
             )
         loaded_revision = worker.revision
         answered_by = dict(worker.engine)
+        answered_on = dict(worker.runtime)
 
     completion = str(output.get("completion") or "")
     parsed = parse_completion(completion)
@@ -1966,6 +2046,7 @@ def review_transcript(
         peak_reserved_mib=int(output.get("peak_reserved_mib") or 0),
         resident_mib=int(output.get("resident_mib") or 0),
         engine=answered_by,
+        runtime=answered_on,
     )
 
 
@@ -1983,7 +2064,8 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         ``off_task_speech`` (one of :data:`OFF_TASK_STATES` or None), ``off_task_quotes``,
         ``phrases_instead_of_items`` (one of :data:`PHRASE_STATES` or None), ``phrase_quotes``,
         ``other_speaker`` (one of :data:`OTHER_SPEAKER_ROLES` or None), ``other_speaker_quotes`` and
-        ``task_content_quotes`` (lists of quoted strings) are the task reading.
+        ``task_content_quotes`` (lists of quoted strings) are the task reading. ``engine`` is the engine that
+        answered and ``runtime`` the machine and software it answered on (:func:`reviewer_runtime`).
     """
     return {
         "available": result.available,
@@ -2028,4 +2110,5 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         "peak_reserved_mib": result.peak_reserved_mib,
         "resident_mib": result.resident_mib,
         "engine": dict(result.engine),
+        "runtime": dict(result.runtime),
     }

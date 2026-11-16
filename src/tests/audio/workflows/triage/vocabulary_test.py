@@ -8,7 +8,9 @@ what it *claims* is its conformance. ``node_verdicts`` now carries only the node
 from __future__ import annotations
 
 import inspect
+import shutil
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import pytest
@@ -1072,6 +1074,70 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
             assert _release_from([], evidence, ran)[0] is None
 
 
+class TestTheFixtureProfileUnderTheReleaseRule:
+    """Satra review 2026-11-14 (#638): the fixture withholds nothing for residue; a release rule does.
+
+    The fixture profile sets ``verdict.llm_redaction_withholds: false``; a release runs with ``true``. The same
+    reading and REDACT pass, folded under the fixture as it is and under a copy that sets the release rule in its own
+    config: the profile's setting reaches the fold, and only the release rule withholds.
+    """
+
+    _READING = {
+        "status": "flagged",
+        "redaction": "incomplete",
+        "original": "carries_pii",
+        "flagged": ["PERSON"],
+        "proposal": [{"text": "alice", "action": "redact", "category": "PERSON", "why": "a name"}],
+    }
+
+    @staticmethod
+    def _policy(root: Path) -> FoldPolicy:
+        """The fold policy a run under the profile at ``root`` reads."""
+        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.dataset_profile import deactivate_profile
+
+        try:
+            return FoldPolicy.from_config(load_triage_config(profile=root))
+        finally:
+            deactivate_profile()
+
+    def _fold(self, policy: FoldPolicy, reading: Mapping[str, Any] | None) -> FileVerdict:
+        return fold_file_verdict(
+            [NodeVerdict("REDACT", Outcome.PASS, None, "every finding redacted")],
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED, "REDACT": RunState.COMPLETED},
+            hint_claims={},
+            route_state=ROUTED,
+            redaction=RedactionEvidence(lexical_words_n=40, scanned=True, findings_n=1, masks_n=1, masks_final_n=1),
+            llm_redaction=reading,
+            policy=policy,
+        )
+
+    @pytest.mark.parametrize("withholds", [False, True], ids=["fixture", "release_rule"])
+    def test_a_reading_of_residue_withholds_only_under_the_release_rule(
+        self, withholds: bool, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """Fixture (false): released redacted, the residue flagged. Release rule (true): withheld on that ground."""
+        from tests.conftest import FIXTURE_PROFILE
+
+        root = tmp_path / "profile"
+        shutil.copytree(FIXTURE_PROFILE, root)
+        if withholds:
+            config = root / "config.yaml"
+            text = config.read_text(encoding="utf-8")
+            assert text.count("llm_redaction_withholds: false") == 1
+            config.write_text(text.replace("llm_redaction_withholds: false", "llm_redaction_withholds: true"))
+        policy = self._policy(root)
+        assert policy.llm_redaction_withholds is withholds
+        folded = self._fold(policy, self._READING)
+        if withholds:
+            assert (folded.release, folded.release_ground) == (Release.WITHHELD, REVIEWER_PROPOSED_REDACTION)
+        else:
+            assert folded.release is Release.REDACTED
+        assert any(reason.why == f"{LLM_REDACTION_RESIDUE}: PERSON" for reason in folded.reasons)
+        assert self._fold(policy, None).release is Release.REDACTED, "no reading: the detectors' release stands"
+
+
 class TestAReviewerReadingClearsAReScanFail:
     """A clean reading releases the redacted copy of a REDACT re-scan fail.
 
@@ -1227,7 +1293,7 @@ class TestAConditionNeverWithholds:
             policy=policy,
         )
 
-    _POLICY = FoldPolicy(llm_redaction_withholds=True, recruited_conditions="bridge2ai_voice_adult_2026-09-04")
+    _POLICY = FoldPolicy(llm_redaction_withholds=True, recruited_conditions="adult_speech_fixture_2026-09-04")
 
     @staticmethod
     def _conditions(*texts: str) -> dict[str, Any]:
@@ -1255,17 +1321,17 @@ class TestAConditionNeverWithholds:
 
     def test_the_packaged_config_names_condition(self) -> None:
         """The shipped key names CONDITION and nothing else."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        assert FoldPolicy.from_config(load_triage_config()).condition_categories == ("CONDITION",)
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).condition_categories == ("CONDITION",)
 
     def test_the_packaged_config_names_the_study_s_cohort_profile(self) -> None:
-        """The shipped key names the Bridge2AI-Voice adult profile, and it loads."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        """The shipped key names the fixture's recruited-conditions profile, and it loads."""
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
         from senselab.audio.workflows.triage.recruited_conditions import load_recruited_conditions
 
-        name = FoldPolicy.from_config(load_triage_config()).recruited_conditions
-        assert name == "bridge2ai_voice_adult_2026-09-04"
+        name = FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).recruited_conditions
+        assert name == "adult_speech_fixture_2026-09-04"
         assert load_recruited_conditions(name).diagnosis("spasmodic dysphonia") == "laryngeal_dystonia"
 
 
@@ -1630,11 +1696,11 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
 
     def test_the_packaged_config_exempts_no_family_from_the_speaker_gate(self) -> None:
         """Owner, 2026-09-30: no exemption; a model-speaker task (its task list trait) is named for the ground only."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
         from senselab.audio.workflows.triage.nodes.verdict import flag_gate_exemptions
         from senselab.audio.workflows.triage.task_catalogue import MODEL_SPEAKER_ALLOWED, has_trait
 
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         assert flag_gate_exemptions(config, "harvard-sentences-list") == ()
         assert has_trait("harvard-sentences-list", MODEL_SPEAKER_ALLOWED)
 
@@ -1654,15 +1720,15 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
 
     def test_the_packaged_config_turns_the_contradiction_flag_on(self) -> None:
         """Owner, 2026-09-28."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        assert FoldPolicy.from_config(load_triage_config()).llm_contradiction_flags is True
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).llm_contradiction_flags is True
 
     def test_the_packaged_config_turns_the_second_speaker_flag_on(self) -> None:
         """Owner, 2026-09-27."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        assert FoldPolicy.from_config(load_triage_config()).llm_second_speaker_flags is True
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).llm_second_speaker_flags is True
 
 
 class TestSecondOpinionDisagreementFlagsForReview:
@@ -1739,7 +1805,7 @@ class TestSecondOpinionDisagreementFlagsForReview:
         assert self._grounds(folded) == [f"{SECOND_OPINION_DISAGREES}: policy_identifier_present p=0.05 reviewer=yes"]
 
     def test_a_listed_condition_is_never_a_disagreement(self) -> None:
-        """r12, sub-SUBJ01 free-speech-2: conditions listed, an old named_diagnosis p=0.96; no flag."""
+        """r12, a free-speech-2 recording: conditions listed, an old named_diagnosis p=0.96; no flag."""
         reading = self._reading(
             status="flagged",
             conditions=[{"text": "essential tremors", "why": "x"}, {"text": "synovial joint cyst", "why": "y"}],
@@ -1795,9 +1861,9 @@ class TestSecondOpinionDisagreementFlagsForReview:
 
     def test_the_packaged_policy_flags_at_the_proposed_thresholds(self) -> None:
         """Owner's switch on; thresholds 0.8 and 0.2, unfitted."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        policy = FoldPolicy.from_config(load_triage_config())
+        policy = FoldPolicy.from_config(load_triage_config(profile=ACTIVE))
         assert (
             policy.second_opinion_disagreement_flags,
             policy.second_opinion_confident_yes,
@@ -1856,9 +1922,9 @@ class TestSpokenInstructionsFlagForReview:
 
     def test_the_packaged_policy_flags(self) -> None:
         """The packaged config turns the ground on."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        assert FoldPolicy.from_config(load_triage_config()).llm_instructions_spoken_flags is True
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).llm_instructions_spoken_flags is True
 
 
 _SENTINEL = "Zebulon Quimby of Kalamazoo"

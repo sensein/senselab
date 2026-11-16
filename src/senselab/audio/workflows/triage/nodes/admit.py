@@ -5,8 +5,9 @@ change while ADMIT reads them. No thresholds, no ``flag`` outcome, no models, no
 ``specs/20260817-triage-workflow-dag/admit.md``.
 
 On ``pass`` ADMIT also records the recording's identity on the ``recording`` stream it writes: the
-participant, session and task the hint declares, or the file stem's reading where it declares none
-(:mod:`~senselab.audio.workflows.triage.identity`), and the hint with a digest of each of its fields
+participant, session and task the hint declares, and nothing where it declares none, since nothing is read off
+the file name (:mod:`~senselab.audio.workflows.triage.identity`); the task it resolved from the task list
+(:mod:`~senselab.audio.workflows.triage.task_catalogue`); and the hint with a digest of each of its fields
 (:mod:`~senselab.audio.workflows.triage.hint_record`). Both are also recorded on ADMIT's activity, which a
 refused recording keeps.
 """

@@ -14,10 +14,10 @@ from senselab.audio.workflows.triage.cohort_stage import (
 from senselab.utils.prov_store import ProvStore
 
 
-def _facts(stem: str = "sub-a_ses-1_task-word-color-stroop", **fields: object) -> RecordingFacts:
+def _facts(stem: str = "rec-0001", **fields: object) -> RecordingFacts:
     base = RecordingFacts(
         stem=stem,
-        session="sub-a_ses-1",
+        session="pa/s1",
         family="word-color-stroop",
         lexical_task=True,
         duration_s=60.0,

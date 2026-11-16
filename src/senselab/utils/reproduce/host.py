@@ -12,7 +12,7 @@ import json
 import os
 import socket
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -87,13 +87,133 @@ def _cpu_model() -> str | None:
     return None
 
 
-def _gpus(runner: Runner) -> tuple[str | None, str | None, int]:
+def _gpu_rows(runner: Runner) -> list[list[str]]:
     code, out = runner(NVIDIA_SMI)
     rows = [line.split(",") for line in out.splitlines() if line.strip()] if code == 0 else []
-    rows = [[_one_line(c) for c in row] for row in rows if len(row) == 2]
+    return [[_one_line(c) for c in row] for row in rows if len(row) == 2]
+
+
+def _gpus(runner: Runner) -> tuple[str | None, str | None, int]:
+    rows = _gpu_rows(runner)
     if not rows:
         return None, None, 0
     return rows[0][0] or None, rows[0][1] or None, len(rows)
+
+
+NVIDIA_SMI_DEVICES = ("nvidia-smi", "--query-gpu=index,uuid,name,driver_version", "--format=csv,noheader")
+"""The query :func:`gpu_table` makes: one row per GPU, with what ``CUDA_VISIBLE_DEVICES`` names it by."""
+
+
+def gpu_table(*, runner: Runner | None = None) -> list[dict[str, str]]:
+    """Every GPU ``nvidia-smi`` lists: its index, UUID, name and driver version, from one query.
+
+    Args:
+        runner: As :func:`host_record`'s; defaults to a subprocess runner.
+
+    Returns:
+        One ``{index, uuid, name, driver}`` row per GPU in ``nvidia-smi``'s order; empty where ``nvidia-smi`` is
+        absent or fails.
+    """
+    code, out = (runner or _run)(NVIDIA_SMI_DEVICES)
+    rows = [line.split(",") for line in out.splitlines() if line.strip()] if code == 0 else []
+    keys = ("index", "uuid", "name", "driver")
+    return [dict(zip(keys, (_one_line(cell) for cell in row))) for row in rows if len(row) == len(keys)]
+
+
+def visible_gpu_names(
+    visible: str | None, table: Sequence[Mapping[str, str]], *, device_order: str | None = None
+) -> list[str] | None:
+    """The names of the GPUs a ``CUDA_VISIBLE_DEVICES`` value lets a process see, read off :func:`gpu_table`.
+
+    Each entry is an ``nvidia-smi`` index or a GPU UUID (``GPU-...``, a unique prefix allowed, as CUDA allows).
+    Unset, every listed GPU is visible. An index is ``nvidia-smi``'s, which is CUDA's own order only under
+    ``CUDA_DEVICE_ORDER=PCI_BUS_ID`` (CUDA's default, ``FASTEST_FIRST``, may reorder unlike models), so an index
+    entry is named only under that order or where every GPU on the node is the same model; a UUID is unambiguous.
+
+    Args:
+        visible: The process's ``CUDA_VISIBLE_DEVICES``; None where it is unset.
+        table: :func:`gpu_table`'s rows.
+        device_order: The process's ``CUDA_DEVICE_ORDER``; None where it is unset.
+
+    Returns:
+        One name per visible GPU, in the order the value lists them; None where no GPU is visible, any entry
+        names no listed GPU, or an index entry cannot be read as CUDA's on a node of mixed models.
+    """
+    if visible is None:
+        return [row["name"] for row in table] or None
+    indices_hold = device_order == "PCI_BUS_ID" or len({row["name"] for row in table}) <= 1
+    names: list[str] = []
+    for entry in (part.strip() for part in visible.split(",")):
+        if entry.isdigit():
+            if not indices_hold:
+                return None
+            found = [row for row in table if row["index"] == entry]
+        else:
+            found = [row for row in table if entry and row["uuid"].startswith(entry)]
+        if len(found) != 1:
+            return None
+        names.append(found[0]["name"])
+    return names or None
+
+
+WORKER_DEVICE_KEYS = ("gpus", "torch", "cuda_visible_devices")
+"""What :data:`WORKER_DEVICE_PROBE` reports about the process it runs in."""
+
+WORKER_DEVICE_PROBE = r"""
+def senselab_worker_device(cuda=True):
+    import os
+
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if not cuda:
+        try:
+            from importlib.metadata import version as installed
+
+            version = installed("torch")
+        except Exception:
+            version = None
+        return {"gpus": None, "torch": version, "cuda_visible_devices": visible}
+    try:
+        import torch
+    except Exception:
+        return {"gpus": None, "torch": None, "cuda_visible_devices": visible}
+    gpus = None
+    try:
+        if torch.cuda.is_available():
+            gpus = [str(torch.cuda.get_device_name(index)) for index in range(torch.cuda.device_count())]
+    except Exception:
+        gpus = None
+    return {"gpus": gpus, "torch": str(torch.__version__), "cuda_visible_devices": visible}
+"""
+"""Source of ``senselab_worker_device()``, for a worker script to define and call in its own process.
+
+It returns the keys in :data:`WORKER_DEVICE_KEYS`: the name of every CUDA device that process can see
+(``torch.cuda.get_device_name``), the process's own ``torch.__version__`` and its ``CUDA_VISIBLE_DEVICES``.
+``gpus`` is None where CUDA is unavailable and ``torch`` is None where torch does not import.
+
+``senselab_worker_device(cuda=False)`` touches no CUDA, for a process beside a server that already holds the card:
+``gpus`` is None (name them with :func:`visible_gpu_names`), and ``torch`` is the version installed where the process
+runs (``importlib.metadata``), read without importing it; None where torch is not installed. The source holds no
+percent sign, so it can be pasted into a worker script that is itself ``%``-formatted.
+"""
+
+
+def worker_device(reported: object) -> dict[str, Any]:
+    """A worker's :data:`WORKER_DEVICE_PROBE` report, with anything malformed or missing read as None.
+
+    Args:
+        reported: What the worker sent; None where it sent nothing.
+
+    Returns:
+        A dict with exactly the keys in :data:`WORKER_DEVICE_KEYS`.
+    """
+    given: dict[str, Any] = reported if isinstance(reported, dict) else {}
+    gpus = given.get("gpus")
+    torch_version, visible = given.get("torch"), given.get("cuda_visible_devices")
+    return {
+        "gpus": [str(name) for name in gpus] if isinstance(gpus, list) else None,
+        "torch": torch_version if isinstance(torch_version, str) else None,
+        "cuda_visible_devices": visible if isinstance(visible, str) else None,
+    }
 
 
 def _probe(venv: Path, runner: Runner) -> dict[str, Any]:

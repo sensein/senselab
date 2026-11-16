@@ -158,12 +158,15 @@ class PiiScan:
         cache: The result-cache record of this input's detector scan — ``key``, whether it was
             reused (``hit``) and where a reused scan was first computed (``origin``). Empty when
             the input never reached the detectors.
+        gliner_revision: The 40-hex commit GLiNER was loaded at for this scan, or None when
+            GLiNER did not run.
     """
 
     spans: list[PiiSpan] = field(default_factory=list)
     detectors_used: list[str] = field(default_factory=list)
     failures: dict[str, str] = field(default_factory=dict)
     cache: dict[str, Any] = field(default_factory=dict)
+    gliner_revision: str | None = None
 
 
 @dataclass
@@ -401,6 +404,7 @@ def scan_for_pii(
     gliner_labels: list[str] | None = None,
     gliner_threshold: float = 0.5,
     local_llm_config: LocalLlmConfig | None = None,
+    gliner_revision: str | None = None,
 ) -> PiiScan | list[PiiScan]:
     """Run the detectors over a string or ``ScriptLine`` and return what they found.
 
@@ -437,6 +441,8 @@ def scan_for_pii(
             :class:`~senselab.text.tasks.pii_detection.local_llm.LocalLlmConfig`'s own
             loopback default. A non-loopback URL raises at construction — see that module
             for why that is a checked invariant rather than a documented one.
+        gliner_revision: The commit of the GLiNER checkpoint to load. ``None`` loads the
+            default checkpoint at its pinned commit; see ``detect_pii_via_subprocess``.
 
     Returns:
         A single :class:`PiiScan` when ``inputs`` is a scalar; a list of the same length and
@@ -485,6 +491,8 @@ def scan_for_pii(
             subprocess_kwargs["gliner_model"] = gliner_model
         if gliner_labels is not None:
             subprocess_kwargs["gliner_labels"] = gliner_labels
+        if gliner_revision is not None:
+            subprocess_kwargs["gliner_revision"] = gliner_revision
         result = detect_pii_via_subprocess(transcripts_by_index, **subprocess_kwargs)
     except Exception as exc:  # noqa: BLE001 — caller needs a scan to continue, not a crash
         msg = f"PII subprocess failed: {type(exc).__name__}: {exc}"
@@ -495,6 +503,7 @@ def scan_for_pii(
     cache_by_index = dict(result.get("cache", {}))
     failures = dict(result.get("failures", {}))
     detectors_used = list(result.get("detectors_used", []))
+    loaded_revision = result.get("gliner_revision")
 
     # The local LLM runs here, not in the venv -- it needs nothing but stdlib urllib
     # (see local_llm.py). Merged before the "did anything run?" check below so that
@@ -537,6 +546,7 @@ def scan_for_pii(
                 detectors_used=list(detectors_used),
                 failures=dict(failures),
                 cache=dict(cache_by_index.get(str(i), {})),
+                gliner_revision=None if loaded_revision is None else str(loaded_revision),
             )
         )
     return _finish(scans)
@@ -629,6 +639,7 @@ def detect_pii(
     gliner_threshold: float = 0.5,
     require_cross_source_corroboration: bool = True,
     local_llm_config: LocalLlmConfig | None = None,
+    gliner_revision: str | None = None,
 ) -> PiiReport | list[PiiReport]:
     """Scan for PII and decide on the result: :func:`scan_for_pii` then :func:`decide_pii`.
 
@@ -647,6 +658,7 @@ def detect_pii(
         gliner_threshold: See :func:`scan_for_pii`.
         require_cross_source_corroboration: See :func:`decide_pii`.
         local_llm_config: See :func:`scan_for_pii`.
+        gliner_revision: See :func:`scan_for_pii`.
 
     Returns:
         A single ``PiiReport`` when ``inputs`` is a scalar; a list of the same length and
@@ -660,6 +672,7 @@ def detect_pii(
         gliner_labels=gliner_labels,
         gliner_threshold=gliner_threshold,
         local_llm_config=local_llm_config,
+        gliner_revision=gliner_revision,
     )
     return decide_pii(scans, require_cross_source_corroboration=require_cross_source_corroboration)
 

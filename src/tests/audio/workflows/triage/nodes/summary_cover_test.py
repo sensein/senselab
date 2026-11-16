@@ -5,7 +5,7 @@ from typing import Any, Iterator
 
 import pytest
 
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.figure import (
     FigureStyle,
     branch_lanes,
@@ -89,7 +89,7 @@ def cover_store(store: ProvStore, tmp_path: Path) -> ProvStore:
 @pytest.fixture
 def pdf_config(tmp_path: Path) -> TriageConfig:
     """The packaged config in the paginated form."""
-    return load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+    return load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"), profile=ACTIVE)
 
 
 def _rendered_pages(

@@ -10,7 +10,7 @@ from typing import Sequence
 
 import pytest
 
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.residue import (
     ALIGNED,
     FREE,
@@ -23,7 +23,7 @@ from senselab.audio.workflows.triage.residue import (
     residue_rule,
     task_residue,
 )
-from tests.conftest import B2AI_TRIAGE_PROFILE
+from tests.conftest import FIXTURE_PROFILE
 
 RAINBOW = (
     "When the sunlight strikes raindrops in the air, they act as a prism and form a rainbow. "
@@ -34,7 +34,7 @@ RAINBOW = (
 @pytest.fixture(scope="module")
 def rule() -> ResidueRule:
     """The packaged rule."""
-    return residue_rule(load_triage_config(profile=B2AI_TRIAGE_PROFILE))
+    return residue_rule(load_triage_config(profile=FIXTURE_PROFILE))
 
 
 def _residue(text: str, family: str | None, rule: ResidueRule, stimulus: str = "") -> list[str]:
@@ -271,7 +271,7 @@ class TestARecallSubtractsItsStory:
         from senselab.audio.workflows.triage.config import load_triage_config
         from senselab.audio.workflows.triage.residue import RECALL, residue_rule, task_residue
 
-        rule = residue_rule(load_triage_config())
+        rule = residue_rule(load_triage_config(profile=ACTIVE))
         said = "well grandfather is ninetythree years old and I am Alice Smith".split()
         residue = task_residue(said, "story-recall", self.STORY, rule, speech_type="recall")
         assert residue.method == RECALL
@@ -284,7 +284,7 @@ class TestARecallSubtractsItsStory:
         from senselab.audio.workflows.triage.config import load_triage_config
         from senselab.audio.workflows.triage.residue import FREE, residue_rule, task_residue
 
-        rule = residue_rule(load_triage_config())
+        rule = residue_rule(load_triage_config(profile=ACTIVE))
         said = "grandfather is ninetythree".split()
         residue = task_residue(said, "story-recall", self.STORY, rule)
         assert residue.method == FREE and len(residue.positions) == len(said)
@@ -297,7 +297,7 @@ def test_a_cue_family_reads_its_target_word_as_task_content(monkeypatch: pytest.
     from senselab.audio.workflows.triage.residue import residue_rule, task_residue
     from senselab.audio.workflows.triage.task_catalogue import DEFINES_A_CUE_WORD, has_trait
 
-    rule = residue_rule(load_triage_config())
+    rule = residue_rule(load_triage_config(profile=ACTIVE))
     assert has_trait("productive-vocabulary", DEFINES_A_CUE_WORD)
     texts = ["a", "gladiator", "is", "a", "roman", "fighter", "gladiators", "fought"]
     residue = task_residue(texts, "productive-vocabulary", ["gladiator"], rule)
@@ -306,3 +306,20 @@ def test_a_cue_family_reads_its_target_word_as_task_content(monkeypatch: pytest.
     monkeypatch.setattr(residue_module, "has_trait", lambda task, trait: False)
     plain = task_residue(texts, "productive-vocabulary", ["gladiator"], rule)
     assert "gladiator" in {texts[i] for i in plain.positions}
+
+
+def test_the_function_words_follow_the_profile_and_the_run() -> None:
+    """The Spanish list is read when asked for, under the run's data section, not frozen at import (review G2)."""
+    from senselab.audio.workflows.triage import residue as residue_module
+    from senselab.audio.workflows.triage.dataset_profile import set_run_data
+    from senselab.audio.workflows.triage.residue import is_function_word
+
+    assert is_function_word("para") and not is_function_word("zorblat")
+    set_run_data({"function_words_es.yaml": {"words": ["zorblat"]}})
+    try:
+        assert is_function_word("zorblat") and not is_function_word("para")
+        assert "zorblat" in residue_module.FUNCTION_WORDS
+        assert not is_content_word("zorblat")
+    finally:
+        set_run_data(None)
+    assert is_function_word("para") and not is_function_word("zorblat")

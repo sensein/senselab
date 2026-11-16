@@ -1,3 +1,4 @@
+# TEMPLATE: fill in your dataset's own lists below, then delete this line; a run refuses the file while it keeps it.
 # Which words of a DATE_TIME-family finding the fold releases by kind: a time of day, a weekday, a season, a relative
 # reference or a length of time, none of which is an absolute date element. Your release policy, in your
 # recordings' languages: list each kind's words (lower case, accents and apostrophes dropped); an empty list releases

@@ -131,6 +131,7 @@ SPEECH_STORE = [
 
 def _recording(
     root: Path,
+    stem: str,
     task: str,
     family: str,
     verdict: str,
@@ -139,9 +140,8 @@ def _recording(
     cuts: list[str],
     store: list[dict] | None = None,
 ) -> dict[str, Any]:
-    """One run directory in the tree, and its ``triage_decisions`` row."""
-    participant, session = "sub-SUBJ13", "ses-01"
-    stem = f"{participant}_{session}_task-{task}"
+    """One run directory in the tree, and its ``triage_decisions`` row: ``stem`` declared ``p13``/``s01``/``task``."""
+    participant, session = "p13", "s01"
     run_dir = Path(participant) / session / f"{stem}_20261008-000000"
     streams = root / "out" / run_dir / "run" / "streams"
     streams.mkdir(parents=True)
@@ -210,6 +210,7 @@ def _tables(root: Path) -> tuple[pa.Table, pa.Table]:
     """Three recordings, one per branch and verdict, with their evidence."""
     breath = _recording(
         root,
+        "rec-0001",
         "respiration-and-cough-breath-1",
         "respiration-and-cough-breath",
         "review",
@@ -222,6 +223,7 @@ def _tables(root: Path) -> tuple[pa.Table, pa.Table]:
     )
     speech = _recording(
         root,
+        "rec-0002",
         "free-speech-1",
         "free-speech",
         "pass",
@@ -231,7 +233,14 @@ def _tables(root: Path) -> tuple[pa.Table, pa.Table]:
         SPEECH_STORE,
     )
     vowel = _recording(
-        root, "prolonged-vowel", "prolonged-vowel", "discard", "as_is", [_item("phonation_found", False, "discard")], []
+        root,
+        "rec-0003",
+        "prolonged-vowel",
+        "prolonged-vowel",
+        "discard",
+        "as_is",
+        [_item("phonation_found", False, "discard")],
+        [],
     )
     evidence = [
         _evidence(breath["stem"], "capture.level_rel_db", -3.217),
@@ -342,9 +351,7 @@ def test_lists_are_joined_and_acquisition_readings_fill_their_columns(tmp_path: 
     assert (breath["task_events_found"], breath["task_events_instructed"]) == ("3", "5")
     assert (breath["level_rel_session_db"], breath["active_s"]) == ("-3.217", "7.5")
     assert (breath["recording_duration_s"], breath["task_start_s"], breath["task_end_s"]) == ("12.5", "1.13", "9.58")
-    assert breath["source_path"] == (
-        "sub-SUBJ13/ses-01/audio/sub-SUBJ13_ses-01_task-respiration-and-cough-breath-1.wav"
-    )
+    assert breath["source_path"] == "p13/s01/audio/rec-0001.wav"
     assert breath["task_audio_plain"].endswith("run/streams/task_plain.flac")
     assert breath["task_audio_enhanced"].endswith("run/streams/task_enhanced.flac")
     assert breath["task_audio_redacted"] == ""
@@ -443,9 +450,31 @@ def test_the_squim_columns_read_the_task_extent_vectors_not_the_per_span_ones() 
             "q_task_squim_si_sdr": [17.0],
         }
     )
-    readings = triage_table.vector_readings(vectors)["s1"]
+    readings = triage_table.vector_readings(vectors)[("s1", "")]
     assert (readings["squim_pesq"], readings["squim_stoi"], readings["squim_si_sdr"]) == (2.9, 0.98, 17.0)
     assert triage_table.column_dictionary()["version"] == 5
+
+
+def test_two_recordings_sharing_a_stem_join_their_own_readings() -> None:
+    """Review D4: evidence and vectors join on the recording id (and target speaker), never the stem alone."""
+    evidence = pa.Table.from_pylist(
+        [
+            {"stem": "rec", "recording_id": rid, "name": "capture.level_rel_db", "value": value}
+            for rid, value in (("a/rec", "-3.0"), ("b/rec", "1.5"))
+        ],
+        schema=decision_tables.evidence_schema(),
+    )
+    by_recording = triage_table.acquisition_by_recording(evidence)
+    assert by_recording[("a/rec", "")]["level_rel_session_db"] == -3.0
+    assert by_recording[("b/rec", "")]["level_rel_session_db"] == 1.5
+    vectors = pa.table({"stem": ["rec", "rec"], "recording_id": ["a/rec", "b/rec"], "q_task_squim_pesq": [2.0, 3.0]})
+    assert triage_table.vector_readings(vectors)[("b/rec", "")]["squim_pesq"] == 3.0
+    decisions = pa.Table.from_pylist(
+        [{"stem": "rec", "recording_id": rid, "run_dir": f"p/s/rec_{n}"} for n, rid in enumerate(("a/rec", "b/rec"))],
+        schema=decision_tables.decisions_schema(),
+    )
+    rows = [{"source_path": "a/rec.wav"}, {"source_path": "b/rec.wav"}]
+    assert triage_table.coverage_problems(decisions, rows) == []
 
 
 def test_a_voice_row_carries_no_squim_even_where_the_vectors_hold_one() -> None:
@@ -456,3 +485,20 @@ def test_a_voice_row_carries_no_squim_even_where_the_vectors_hold_one() -> None:
     assert voice["branch"] == "VOICE"
     assert (voice["squim_pesq"], voice["squim_stoi"], voice["squim_si_sdr"]) == (None, None, None)
     assert speech["squim_pesq"] == 1.3
+
+
+def test_a_pilots_session_consistency_cosine_reaches_the_table() -> None:
+    """Review J2: a pilot COHORT reading holds the cosine beside its unset bound, with no comparison; it is read."""
+    from senselab.audio.workflows.triage.triage_table import _cohort_columns
+
+    pilot = {"checks": {"session_speaker_consistency": {"status": "unavailable", "cosine": 0.7134}}}
+    assert _cohort_columns(pilot)["session_consistency_cosine"] == 0.7134
+    measured = {
+        "checks": {
+            "session_speaker_consistency": {
+                "status": "measured",
+                "comparisons": [{"name": "session_vs_other_sessions_cosine", "value": 0.82}],
+            }
+        }
+    }
+    assert _cohort_columns(measured)["session_consistency_cosine"] == 0.82

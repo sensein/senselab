@@ -14,7 +14,7 @@ import soundfile as sf
 import torch
 
 from senselab.audio.data_structures import Audio, AudioHints
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.identity import identity_of
 from senselab.audio.workflows.triage.nodes.branches import contest, deviation, write_findings
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_report, write_verdict
@@ -50,14 +50,14 @@ def _write(tmp_path: Path, body: str) -> Path:
 
 def _override(tmp_path: Path, body: str) -> TriageConfig:
     """The packaged config with one partial override merged over it."""
-    return load_triage_config(_write(tmp_path, body))
+    return load_triage_config(_write(tmp_path, body), profile=ACTIVE)
 
 
 def _png(tmp_path: Path) -> TriageConfig:
     """The packaged config with the report format declared as an image."""
     path = tmp_path / "report.yaml"
     path.write_text("report:\n  format: png\n")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _capture_panels(monkeypatch: pytest.MonkeyPatch) -> list[list[dict[str, Any]]]:
@@ -216,7 +216,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         typed_findings: Whether SPEECH and VOICE each write typed findings through
             ``write_findings``: a located deviation, a contest, and a per-recording deviation.
     """
-    config = load_triage_config()
+    config = load_triage_config(profile=ACTIVE)
     software = software_agent(store)
     activity = store.activity(
         node="ADMIT", step=None, parameters={"audio_file": str(tmp_path / ("refused.wav" if admit_failed else "r.wav"))}
@@ -636,7 +636,7 @@ class TestBothProductsAlways:
         """``report.format`` is a presentation choice and changes no claim."""
         _seed_report_store(store, tmp_path, full=True)
         as_png = json.loads(report(store, tmp_path / "png", _png(tmp_path))["json"].read_text())
-        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"), profile=ACTIVE)
         as_pdf = json.loads(report(store, tmp_path / "pdf", pdf_config)["json"].read_text())
         assert as_png["steps"] == as_pdf["steps"]
         assert as_png["verdict"] == as_pdf["verdict"]
@@ -660,7 +660,7 @@ class TestTheStructuredJsonCompanion:
     def test_pdf_and_versioned_json_agree_on_the_file_decision(self, store: ProvStore, tmp_path: Path) -> None:
         """Both sibling artifacts exist and the decision fields are one source of truth."""
         _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
-        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"), profile=ACTIVE)
         artifacts = report(store, tmp_path / "summary", pdf_config)
         payload = json.loads(artifacts["json"].read_text())
         assert artifacts["summary"].exists() and artifacts["json"].exists()
@@ -1046,14 +1046,18 @@ class TestTheSummaryLayers:
     ) -> None:
         """A branch writes no verdict, so the header may not read one; conformance stands in its place."""
         _seed_report_store(store, tmp_path, full=True)
-        document = _report_document(store, _assertions_by_source(store), load_triage_config(), summary_format="pdf")
+        document = _report_document(
+            store, _assertions_by_source(store), load_triage_config(profile=ACTIVE), summary_format="pdf"
+        )
         assert "verdict" not in next(iter(document["routing"].values()))
         assert "outcomes: AIRWAY=True" in _header(document)["support"]
 
     def test_the_measured_findings_read_the_gate_names_routing_writes(self, store: ProvStore, tmp_path: Path) -> None:
         """ROUTING writes ``flag_gates``; a line keyed to ``flags`` can never show one."""
         _seed_report_store(store, tmp_path, full=True)
-        document = _report_document(store, _assertions_by_source(store), load_triage_config(), summary_format="pdf")
+        document = _report_document(
+            store, _assertions_by_source(store), load_triage_config(profile=ACTIVE), summary_format="pdf"
+        )
         decision = next(iter(document["routing"].values()))
         assert "flags" not in decision and "flag_gates" in decision
         document["routing"]["AIRWAY"]["flag_gates"] = ["cough_present"]
@@ -1409,7 +1413,9 @@ class TestTheHintReadingIsOnThePage:
             deviations=(),
             detail={},
         )
-        fold_verdict(store, None, load_triage_config(), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
+        fold_verdict(
+            store, None, load_triage_config(profile=ACTIVE), AudioHints(may_contain=["cough"]), run_dir=tmp_path
+        )
 
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
@@ -1940,7 +1946,7 @@ class TestAnUnscannedTranscriptIsNotACleanOne:
 class TestTheTitleIsShort:
     """The title carries the decision at a glance; the run id is provenance and belongs in the block."""
 
-    _RUN_ID = "sub-SUBJ05_ses-SES03_task-Respiration-and-cough-(v2)-Breath_20260825-123640"
+    _RUN_ID = "rec-0001_20260825-123640"
 
     def test_it_names_the_task_token_the_date_and_the_decision(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2022,7 +2028,7 @@ class TestThePdfPagination:
     def test_a_full_run_leads_with_the_decision_then_the_evidence(self, store: ProvStore, tmp_path: Path) -> None:
         """The decision record first, then the figure's cover, then one page per page_seconds."""
         _seed_report_store(store, tmp_path, full=True)
-        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"), profile=ACTIVE)
         artifacts = report(store, tmp_path / "summary", pdf_config)
         assert artifacts["summary"].suffix == ".pdf"
         # one decision page for this record, the figure's cover, one 20 s page for 6 s of audio
@@ -2032,7 +2038,7 @@ class TestThePdfPagination:
     def test_a_refusal_renders_the_decision_and_says_there_is_no_axis(self, store: ProvStore, tmp_path: Path) -> None:
         """A file with no readable stream has no axis to draw, and still owes the decision record."""
         _seed_report_store(store, tmp_path, admit_failed=True)
-        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"), profile=ACTIVE)
         artifacts = report(store, tmp_path / "summary", pdf_config)
         assert _pdf_pages(artifacts["summary"]) == 2
         assert _pdf_letter_landscape_pages(artifacts["summary"]) == 2
@@ -2040,7 +2046,7 @@ class TestThePdfPagination:
     def test_a_long_recording_gets_one_evidence_page_per_page_width(self, store: ProvStore, tmp_path: Path) -> None:
         """Long timelines are paginated rather than compressed into unreadable labels."""
         _seed_report_store(store, tmp_path, full=True, duration_s=70.0)
-        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"), profile=ACTIVE)
         artifacts = report(store, tmp_path / "summary", pdf_config)
         # one decision page, the cover, then four 20 s pages covering 70 s
         assert _pdf_pages(artifacts["summary"]) == 1 + 1 + 4
@@ -2061,7 +2067,7 @@ class TestThePdfPagination:
 
         monkeypatch.setattr(report_module, "summary_pages", _spy)
         _seed_report_store(store, tmp_path, full=True, duration_s=25.0)
-        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"), profile=ACTIVE)
         report(store, tmp_path / "summary", pdf_config)
         assert names == ["cover", "page01", "page02"]
 
@@ -2080,7 +2086,7 @@ class TestThePdfPagination:
 
         monkeypatch.setattr(report_module, "_text_figure", _spy)
         _seed_report_store(store, tmp_path, full=True, words=["hello", "world"])
-        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"), profile=ACTIVE)
         report(store, tmp_path / "summary", pdf_config)
         blocks = "\n".join(drawn[0])
         assert "DECISION SUMMARY" in blocks and "SCREENING AND ROUTING" in blocks and "**hello** **world**" in blocks
@@ -2121,7 +2127,7 @@ class TestThePdfPagination:
         empty_audio = Audio(waveform=np.zeros((1, 0), dtype=np.float32), sampling_rate=_RATE)
         monkeypatch.setattr(report_module, "_stream", lambda *_args: empty_audio)
         monkeypatch.setattr(report_module, "_text_figure", _spy)
-        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"), profile=ACTIVE)
 
         artifacts = report(store, tmp_path / "summary", pdf_config)
 
@@ -2149,7 +2155,7 @@ class TestThePdfPagination:
 
         monkeypatch.setattr(report_module, "summary_pages", _spy)
         _seed_report_store(store, tmp_path, full=True, duration_s=70.0)
-        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"), profile=ACTIVE)
 
         report(store, tmp_path / "summary", pdf_config)
 

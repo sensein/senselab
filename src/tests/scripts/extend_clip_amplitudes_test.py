@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities
 from senselab.audio.workflows.triage.nodes.quality import (
@@ -30,6 +30,9 @@ from senselab.audio.workflows.triage.nodes.quality import (
 )
 from senselab.audio.workflows.triage.vocabulary import UNDETERMINED
 from senselab.utils.prov_store import ProvStore
+
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_clip_amplitudes.py"
@@ -84,7 +87,7 @@ def _seed_run(root: Path, *, clip_level: float = 0.5, louder: float | None = 0.9
     sf.write(str(run_dir / "streams" / "enhanced.flac"), _samples(clip_level=clip_level, louder=None), SR)
 
     store = ProvStore(run_id=root.name)
-    admitted = admit(store, source, load_triage_config(), run_dir=run_dir)
+    admitted = admit(store, source, load_triage_config(profile=ACTIVE), run_dir=run_dir)
     assert admitted.audio is not None
     if spans:
         agent = store.agent(agent_type="software", version="senselab test-seed")
@@ -188,7 +191,7 @@ class TestTheExtendPass:
     ) -> None:
         """The whole point of the pass: the store refuses before it and produces a verdict after."""
         manifest, roots = corpus(1)
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         with pytest.raises(LookupError, match=CLIP_AMPLITUDE_MEASUREMENT):
             quality(_store_of(roots[0]), "recording", config, run_dir=roots[0] / "run")
 
@@ -277,7 +280,7 @@ class TestARunWithNothingToMeasure:
         assert (roots[0] / "run" / "store.jsonl").read_bytes() == before
         assert find_measurement(_store_of(roots[0]), CLIP_AMPLITUDE_MEASUREMENT) is None
         assert _log(tmp_path)[0]["status"] == "skipped"
-        result = quality(_store_of(roots[0]), "recording", load_triage_config(), run_dir=roots[0] / "run")
+        result = quality(_store_of(roots[0]), "recording", load_triage_config(profile=ACTIVE), run_dir=roots[0] / "run")
         assert result.report.conformance == UNDETERMINED
 
 

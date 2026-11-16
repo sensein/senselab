@@ -408,7 +408,7 @@ class TestRedaction:
     def test_no_stored_text_reaches_the_report(self, tmp_path: Path) -> None:
         """Nor does it survive the fold and the rendering."""
         store = _replayed(tmp_path, {"fold": _fold(), "pii_categories": ("PERSON",)}, {"fold": _fold()})
-        report = aggregate([{**diff_store(store), "stem": "sub-a_task-vowel"}])
+        report = aggregate([{**diff_store(store), "stem": "rec-0001"}])
         assert SECRET not in render_markdown(report, tmp_path)
 
 
@@ -423,7 +423,7 @@ class TestUnreplayed:
 
     def test_a_missing_store_is_a_status(self, tmp_path: Path) -> None:
         """A run root the replay has not written yet reads as ``no_store``."""
-        assert diff_run(tmp_path, stem="sub-a")["status"] == NO_STORE
+        assert diff_run(tmp_path, stem="rec-0001")["status"] == NO_STORE
 
     def test_a_run_that_decided_nothing_before_is_not_identical(self, tmp_path: Path) -> None:
         """A corpus run that left no decision for the replay to retire reads against ``UNREAD``."""
@@ -505,14 +505,14 @@ class TestNotReplayable:
             {"fold": _fold(ran={"PREPROCESS": RunState.COMPLETED})},
             {"fold": _fold(ran={"PREPROCESS": RunState.COMPLETED})},
         )
-        report = aggregate([{**diff_store(blocked), "stem": "sub-blocked"}, {**diff_store(fine), "stem": "sub-fine"}])
+        report = aggregate([{**diff_store(blocked), "stem": "rec-0001"}, {**diff_store(fine), "stem": "rec-0002"}])
         assert report.compared == 1
         assert report.triage == {"pass->pass": 1}
         assert report.not_replayable["count"] == 1
-        assert report.not_replayable["stems"] == ["sub-blocked"]
+        assert report.not_replayable["stems"] == ["rec-0001"]
         rendered = render_markdown(report, tmp_path)
         assert "1 not replayable and excluded" in rendered
-        assert "`sub-blocked`" in rendered
+        assert "`rec-0001`" in rendered
         assert "discard" not in rendered
 
 
@@ -530,7 +530,7 @@ class TestAggregate:
         )
         return [
             {**diff_store(store), "stem": stem}
-            for store, stem in ((unmoved, "sub-a"), (same, "sub-b"), (moved, "sub-c"))
+            for store, stem in ((unmoved, "rec-0001"), (same, "rec-0002"), (moved, "rec-0003"))
         ]
 
     def test_identical_is_the_headline(self, tmp_path: Path) -> None:
@@ -547,7 +547,7 @@ class TestAggregate:
             (tmp_path / name).mkdir()
         report = aggregate(self._rows(tmp_path))
         assert report.triage == {"pass->pass": 2, "review->pass": 1}
-        assert report.moved_stems["triage"] == {"review->pass": ["sub-c"]}
+        assert report.moved_stems["triage"] == {"review->pass": ["rec-0003"]}
 
     def test_the_leaking_direction_has_its_own_count(self, tmp_path: Path) -> None:
         """Scanned before and not now is counted apart and named in the report."""
@@ -555,11 +555,11 @@ class TestAggregate:
             (tmp_path / name).mkdir()
         report = aggregate(self._rows(tmp_path))
         assert report.pii_scanned_then_not["count"] == 1
-        assert report.pii_scanned_then_not["stems"] == ["sub-c"]
+        assert report.pii_scanned_then_not["stems"] == ["rec-0003"]
         assert report.pii_not_scanned_then_now["count"] == 0
         rendered = render_markdown(report, tmp_path)
         assert "scanned before, not scanned now: 1" in rendered
-        assert "`sub-c`" in rendered
+        assert "`rec-0003`" in rendered
 
     def test_typed_findings_report_their_totals(self, tmp_path: Path) -> None:
         """The assertions table names what each pass wrote, not only how many recordings moved."""
@@ -568,7 +568,7 @@ class TestAggregate:
             {"fold": _fold(), "deviation_assertions": ("truncation",)},
             {"fold": _fold(), "deviation_assertions": ("truncation", "truncation")},
         )
-        report = aggregate([{**diff_store(store), "stem": "sub-a"}])
+        report = aggregate([{**diff_store(store), "stem": "rec-0001"}])
         assert report.deviation_assertions["SPEECH"]["truncation"] == {"before": 1, "after": 2, "gained": 1}
         assert "| `SPEECH` | `truncation` | 1 | 2 | 1 | 0 |" in render_markdown(report, tmp_path)
 

@@ -21,7 +21,7 @@ import pytest
 import soundfile as sf
 
 from senselab.audio.tasks.phonation import F0RangeFailed, F0RangeUnavailable
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.consensus import (
     SourceHypothesis,
     align_sources,
@@ -49,6 +49,9 @@ from senselab.audio.workflows.triage.nodes.taxonomy import PER_SPAN_CLASSIFIERS,
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.conftest import seed_recorded_identity
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_reprocessed_outputs.py"
 _spec = importlib.util.spec_from_file_location("extend_reprocessed_outputs_under_test", _CLI)
@@ -66,7 +69,7 @@ DURATION_S = 1.5
 PHONATION_TRACKS = "phonation_tracks"
 CONSENSUS_TAXONOMY = "consensus_taxonomy"
 
-_LEXICON = {vocabulary_key(str(token)) for token in load_triage_config().require(ONOMATOPOEIC_TOKENS_KEY)}
+_LEXICON = {vocabulary_key(str(token)) for token in load_triage_config(profile=ACTIVE).require(ONOMATOPOEIC_TOKENS_KEY)}
 """The shipped onomatopoeic vocabulary, which is what the extend pass re-flags against."""
 
 SPELLINGS = {"hear": "Throat Clear", "yamnet": "Throat clearing"}
@@ -323,6 +326,8 @@ def _seed_run(
     words: str = "null",
     asr_span: bool = False,
     voiced: bool = True,
+    participant: str | None = None,
+    session: str | None = None,
 ) -> None:
     """Write one finished run in the shape the corpus is in, or one of its variations.
 
@@ -338,6 +343,8 @@ def _seed_run(
         asr_span: Whether the store carries a span the ASR proposer contributed.
         voiced: Whether the conditioned streams carry pitch. False is a cough, a breath or a 0.33 s
             fragment: no F0 range can be derived from it, so it has no phonation track.
+        participant: The participant the recording's hint declares, recorded as ADMIT records it.
+        session: The session the recording's hint declares.
     """
     run_dir = root / "run"
     (run_dir / "streams").mkdir(parents=True, exist_ok=True)
@@ -346,7 +353,7 @@ def _seed_run(
     sf.write(str(run_dir / "streams" / "enhanced.flac"), samples, SR)
 
     store = ProvStore(run_id=root.name)
-    seed_recorded_identity(store, root.name)
+    seed_recorded_identity(store, root.name, participant, session)
     agent = software_agent(store)
     condition = store.activity(node="PREPROCESS", step="condition", parameters={"target_hz": SR})
     store.was_associated_with(condition, agent)
@@ -366,9 +373,9 @@ def _seed_run(
     if taxonomy == "old":
         _seed_string_matched_taxonomy(store, agent)
     elif taxonomy == "current":
-        _write_consensus_taxonomy(store, load_triage_config(), agent)
+        _write_consensus_taxonomy(store, load_triage_config(profile=ACTIVE), agent)
     if tracks:
-        phonation_tracks(store, load_triage_config(), run_dir=run_dir)
+        phonation_tracks(store, load_triage_config(profile=ACTIVE), run_dir=run_dir)
     store.write_jsonl(run_dir / "store.jsonl")
 
 
@@ -449,9 +456,9 @@ def corpus(tmp_path: Path) -> Callable[..., tuple[Path, list[Path]]]:
     def _build(count: int, **kwargs: Any) -> tuple[Path, list[Path]]:  # noqa: ANN401 — _seed_run's own keywords
         roots = []
         for index in range(count):
-            root = tmp_path / "corpus" / f"sub-{index:02d}_ses-1_20260912-000000"
+            root = tmp_path / "corpus" / f"rec-{index:04d}_20260912-000000"
             root.mkdir(parents=True, exist_ok=True)
-            _seed_run(root, **kwargs)
+            _seed_run(root, participant=f"p{index:02d}", session="s1", **kwargs)
             roots.append(root)
         return _manifest(tmp_path / "manifest.jsonl", roots), roots
 
@@ -470,7 +477,7 @@ class TestThePhonationTracks:
 
         measurement = find_measurement(_store_of(roots[0]), PHONATION_TRACKS)
         assert measurement is not None
-        floor, ceiling = load_triage_config().require("voice.f0_search_range_hz")
+        floor, ceiling = load_triage_config(profile=ACTIVE).require("voice.f0_search_range_hz")
         assert floor <= measurement.attributes["f0_min_hz"] < measurement.attributes["f0_max_hz"] <= ceiling
         assert measurement.attributes["f0_signal"] == "preemphasised"
         assert measurement.attributes["formant_signal"] == "plain"
@@ -884,7 +891,7 @@ class TestRebracketingTheWords:
 
         fresh_root = tmp_path / "fresh" / roots[0].name
         fresh_root.mkdir(parents=True)
-        _seed_run(fresh_root, words="current")
+        _seed_run(fresh_root, words="current", participant="p00", session="s1")
 
         extended, fresh = _store_of(roots[0]), _store_of(fresh_root)
         assert [word.id for word in consensus_words(extended)] == [word.id for word in consensus_words(fresh)]

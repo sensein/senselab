@@ -14,7 +14,7 @@ import pytest
 import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
     REVIEW_CARRIED,
     REVIEW_NEEDS_REREAD,
@@ -51,7 +51,7 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     parse_completion,
 )
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import record_admitted_hint
+from tests.audio.workflows.triage.conftest import hint_for, record_admitted_hint
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 
@@ -68,7 +68,7 @@ def _config(tmp_path: Path, text: str = LLM_ON) -> TriageConfig:
     """The packaged config with a partial YAML deep-merged over it."""
     path = tmp_path / "override.yaml"
     path.write_text(text, encoding="utf-8")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _extent(index: int) -> tuple[float, float]:
@@ -240,7 +240,7 @@ class TestTheReviewerReadsTheResidue:
         """A lexical family's words with no PII scan: absent with pii_scan_missing, never bypassed, no model asked."""
         from senselab.audio.data_structures import AudioHints
 
-        for hint in (None, AudioHints(metadata={"task_token": "free-speech"})):
+        for hint in (None, hint_for(task="free-speech")):
             store = ProvStore(run_id="review-test")
             _seed(store, scan=None)
             seen = _stub(monkeypatch, [_clean()])
@@ -266,7 +266,7 @@ class TestTheReviewerReadsTheResidue:
         store = ProvStore(run_id="review-test")
         _seed(store, scan=None)
         seen = _stub(monkeypatch, [_clean()])
-        review(store, _config(tmp_path), AudioHints(metadata={"task_token": task}))
+        review(store, _config(tmp_path), hint_for(task=task))
         assert seen == []
         annotation = _annotation(store)
         assert (annotation["status"], annotation["bypass_reason"], annotation["absent_reason"]) == (
@@ -287,7 +287,7 @@ class TestTheReviewerReadsTheResidue:
             store = ProvStore(run_id="review-test")
             _seed(store, words=["hey", "HEY!"], scan=scan, residue=residue)
             seen = _stub(monkeypatch, [_clean()])
-            review(store, _config(tmp_path), AudioHints(metadata={"task_token": task}))
+            review(store, _config(tmp_path), hint_for(task=task))
             assert seen == []
             annotation = _annotation(store)
             assert (annotation["status"], annotation["bypass_reason"]) == ("bypassed", "non_lexical_task")
@@ -300,7 +300,7 @@ class TestTheReviewerReadsTheResidue:
 
         store = ProvStore(run_id="review-test")
         _seed(store, words=["one", "two", "three"], scan="ran", residue=[])
-        review(store, _config(tmp_path), AudioHints(metadata={"task_token": "prolonged-vowel"}))
+        review(store, _config(tmp_path), hint_for(task="prolonged-vowel"))
         assert (_annotation(store)["status"], _annotation(store)["bypass_reason"]) == ("bypassed", "task_content_only")
 
     def test_no_bypass_reason_names_a_missing_scan(self) -> None:
@@ -401,10 +401,11 @@ class TestTheReviewerSeesEveryRecogniserSReading:
         answer.other_speaker_quotes = ["world"]
         answer.task_content_quotes = ["hello world"]
         _stub(monkeypatch, [answer])
-        hint = AudioHints(
+        hint = hint_for(
+            task="animal-fluency",
             instructions="Say it.",
             speech_type="elicited",
-            metadata={"task_token": "animal-fluency", "task_name": "Animal fluency"},
+            metadata={"task_name": "Animal fluency"},
         )
         review(store, _config(tmp_path), hint)
         annotation = _annotation(store)
@@ -921,6 +922,96 @@ class TestTheRoundsReachTheStoreAndTheSummaryStaysClean:
         assert not [key for key in annotation if key.endswith(("_s", "_mib"))]
 
 
+_RUNTIME_A = {
+    "host": "node-a",
+    "gpus": ["NVIDIA A100-SXM4-80GB"],
+    "torch": "2.8.0+cu128",
+    "cuda_visible_devices": "0",
+    "node_gpus": ["NVIDIA A100-SXM4-80GB", "NVIDIA A100-SXM4-80GB"],
+    "nvidia_driver": "570.86.15",
+    "vllm": "0.31.0",
+    "slurm_job_id": "1",
+}
+_RUNTIME_B = {
+    **_RUNTIME_A,
+    "host": "node-b",
+    "gpus": ["NVIDIA H100 80GB HBM3"],
+    "node_gpus": ["NVIDIA H100 80GB HBM3"],
+    "nvidia_driver": "580.65.06",
+}
+
+
+def _check_activities(store: ProvStore) -> list[Any]:
+    """REVIEW's ``llm_check`` activities, in write order."""
+    return [activity for activity in store.activities(NODE) if activity.step == "llm_check"]
+
+
+def _annotation_entity(store: ProvStore) -> Any:  # noqa: ANN401 — an Entity
+    """The one annotation entity the store holds."""
+    found = [e for e in store.entities("measurement") if e.attributes.get("name") == REDACTION_LLM_ANNOTATION]
+    assert len(found) == 1, f"expected exactly one annotation, found {len(found)}"
+    return found[0]
+
+
+class TestEachAnswerRecordsTheMachineItRanOn:
+    """Satra review 2026-11-14, decision 5: every round and the reading name the host, GPUs and software behind them."""
+
+    def test_every_round_and_the_activity_carry_the_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each round its own record; the activity that produced the reading its last answering round's."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        proposal = ReviewProposal(text="alicia", action="redact", category="PERSON", why="a name")
+        flagged, clean = _flags(proposal), _clean()
+        flagged.runtime, clean.runtime = dict(_RUNTIME_A), dict(_RUNTIME_B)
+        _stub(monkeypatch, [flagged, clean])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        assert [entry["runtime"] for entry in _rounds_in(store)] == [_RUNTIME_A, _RUNTIME_B]
+        (activity,) = _check_activities(store)
+        assert activity.parameters[review_module.RUNTIME] == _RUNTIME_B
+        annotation = _annotation_entity(store)
+        assert store.generated_by(annotation.id) == activity.id
+        assert review_module.RUNTIME not in annotation.attributes, "the machine is not part of the reading's identity"
+        assert review_module.reading_runtime(store, annotation.id) == _RUNTIME_B
+        assert annotation.attributes["model_id"] and annotation.attributes["revision"] == "a" * 40
+
+    def test_a_reading_with_no_answer_names_no_machine(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A reviewer that never answered ran nowhere."""
+        store = ProvStore(run_id="r")
+        _seed(store)
+        _stub(monkeypatch, [ReviewResult(available=False, failure="no GPU", model_id="s/m")])
+        review(store, _config(tmp_path))
+        (activity,) = _check_activities(store)
+        assert review_module.RUNTIME not in activity.parameters
+        assert review_module.reading_runtime(store, _annotation_entity(store).id) == {}
+
+    def test_the_same_reading_on_another_machine_is_the_same_annotation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two identical readings in one store, on two machines: one annotation, live, and one activity per machine.
+
+        This is what lets ``scripts/extend_llm_review.py --force`` retire a reading only where the re-reading differs.
+        """
+        monkeypatch.setattr(review_module, "_resolved", lambda settings: None)  # no key: both are read
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        outcomes = []
+        for runtime in (_RUNTIME_A, _RUNTIME_B):
+            answer = _clean()
+            answer.runtime = dict(runtime)
+            _stub(monkeypatch, [answer])
+            outcomes.append(review(store, _config(tmp_path)))
+        assert outcomes[0].annotation_id == outcomes[1].annotation_id
+        annotation = _annotation_entity(store)
+        assert not store.is_invalidated(annotation.id)
+        activities = _check_activities(store)
+        assert [activity.parameters[review_module.RUNTIME] for activity in activities] == [_RUNTIME_A, _RUNTIME_B]
+        generators = [t for r, s, t in store.relations() if r == "wasGeneratedBy" and s == annotation.id]
+        assert generators == [activity.id for activity in activities], "each machine's activity generated it"
+        assert review_module.reading_runtime(store, annotation.id) == _RUNTIME_A, "the machine that first produced it"
+
+
 class TestTheReviewerDegradesHonestly:
     """A model that will not load is a gap in the record, never a clean reading."""
 
@@ -1120,6 +1211,19 @@ class TestAReadingIsKeptInTheResultCache:
         assert base != review_cache_key("a b", "[PERSON] b", {"task": "x"}, settings, "a" * 40)
         assert base != review_cache_key("a b", None, {"task": "x"}, settings, "b" * 40)
 
+    def test_a_cached_reading_keeps_the_machine_that_produced_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The runtime is not in the key: another machine takes the reading, and the record still names the first."""
+        answer = _clean()
+        answer.runtime = dict(_RUNTIME_A)
+        first = self._reviewed(tmp_path, monkeypatch, [answer])
+        second = self._reviewed(tmp_path, monkeypatch, [])
+        assert _annotation(second)["result_cache"]["hit"] is True
+        assert _annotation(second)["result_cache"]["key"] == _annotation(first)["result_cache"]["key"]
+        recorded = [review_module.reading_runtime(store, _annotation_entity(store).id) for store in (first, second)]
+        assert recorded == [_RUNTIME_A, _RUNTIME_A]
+
     def test_an_absent_reading_is_not_kept(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A reviewer that did not load is recorded, and asked again next time."""
         failed = ReviewResult(available=False, failure="no GPU", model_id="s/m")
@@ -1139,6 +1243,124 @@ class TestAReadingIsKeptInTheResultCache:
         assert backfill_from_store(first, _config(tmp_path))[0] == BACKFILL_HELD
         second = self._reviewed(tmp_path, monkeypatch, [])
         assert _annotation(second)["result_cache"]["hit"] is True
+
+    def test_an_entry_the_earlier_code_wrote_still_hits_under_an_unchanged_policy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fingerprint stays out of the key: an entry kept before this change, with or without it, is a hit."""
+        from senselab.audio.workflows.triage.review_inputs import policy_fingerprint
+        from senselab.utils.tasks.cached_inference import result_lookup, result_store
+
+        first = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        key = _annotation(first)["result_cache"]["key"]
+        held = result_lookup(key)
+        assert held is not None
+        reading, reviews = held["result"]["reading"], held["result"]["reviews"]
+        for name, earlier in (
+            ("fingerprinted", {"reading": reading, "reviews": reviews, "policy_fingerprint": policy_fingerprint()}),
+            ("before-the-fingerprint", {"reading": reading, "reviews": reviews}),
+        ):
+            monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / name))
+            assert result_store(key, earlier, process=review_module.REVIEW_PROCESS, model_id="s/m", commit_sha="a" * 40)
+            again = self._reviewed(tmp_path, monkeypatch, [])
+            assert _annotation(again)["result_cache"] == {"key": key, "hit": True}
+            assert _annotation(again)["status"] == "clean"
+            assert result_lookup(key)["result"] == earlier, "a hit leaves the entry as it was"  # type: ignore[index]
+
+    def test_a_changed_policy_reads_again_and_replaces_the_entry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reading under another policy is read again under the same key, and the new reading is the one kept."""
+        from senselab.utils.tasks.cached_inference import result_lookup
+
+        first = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        before = _annotation(first)
+        key = before["result_cache"]["key"]
+        assert before[review_module.POLICY_FINGERPRINT] == result_lookup(key)["result"]["policy_fingerprint"]  # type: ignore[index]
+        assert review_module.annotation_read_under_this_policy(before)
+        monkeypatch.setattr(review_module, "policy_fingerprint", lambda: "f" * 64)
+        second = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        reread = _annotation(second)
+        assert reread["result_cache"] == {"key": key, "hit": False, "stored": True}
+        assert reread[review_module.POLICY_FINGERPRINT] == "f" * 64
+        entry = result_lookup(key)["result"]  # type: ignore[index]
+        assert entry["policy_fingerprint"] == "f" * 64
+        assert entry[review_module.POLICY_REPLACED] == [before[review_module.POLICY_FINGERPRINT]]
+        third = self._reviewed(tmp_path, monkeypatch, [])
+        assert _annotation(third)["result_cache"] == {"key": key, "hit": True}
+        assert _annotation(third)[review_module.POLICY_FINGERPRINT] == "f" * 64
+        assert not review_module.annotation_read_under_this_policy(before), "the first reading's own record"
+        unrecorded = {k: v for k, v in before.items() if k != review_module.POLICY_FINGERPRINT}
+        assert not review_module.annotation_read_under_this_policy(unrecorded), "its entry was replaced"
+        assert review_module.annotation_read_under_this_policy(reread)
+
+    def test_a_reading_under_the_legacy_fingerprint_is_recorded_under_the_current_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hit on a reading cached before 2026-11-14 records the current fingerprint, on the annotation and the entry.
+
+        A later comment edit in the word lists, which changes the legacy fingerprint, then reads nothing again.
+        """
+        from senselab.audio.workflows.triage.dataset_profile import (
+            activate_profile,
+            data_path,
+            deactivate_profile,
+            load_profile,
+        )
+        from senselab.audio.workflows.triage.review_inputs import (
+            LEXICON_FILE,
+            legacy_policy_fingerprint,
+            policy_fingerprint,
+        )
+        from senselab.utils.tasks.cached_inference import result_lookup, result_store
+        from tests.conftest import FIXTURE_PROFILE
+
+        first = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        key = _annotation(first)["result_cache"]["key"]
+        held = result_lookup(key)["result"]  # type: ignore[index]
+        legacy, current = legacy_policy_fingerprint(), policy_fingerprint()
+        assert legacy != current
+        earlier = {**held, review_module.POLICY_FINGERPRINT: legacy}
+        assert result_store(
+            key, earlier, process=review_module.REVIEW_PROCESS, model_id="s/m", commit_sha="a" * 40, replace=True
+        )
+        second = _annotation(self._reviewed(tmp_path, monkeypatch, []))
+        assert second["result_cache"] == {"key": key, "hit": True, "legacy_fingerprint": legacy, "restamped": True}
+        assert second[review_module.POLICY_FINGERPRINT] == current
+        entry = result_lookup(key)["result"]  # type: ignore[index]
+        assert entry[review_module.POLICY_FINGERPRINT] == current
+        assert review_module.POLICY_REPLACED not in entry and entry["reading"] == held["reading"]
+
+        lexicon = data_path(LEXICON_FILE).read_text(encoding="utf-8")
+        root = tmp_path / "commented"
+        root.mkdir()
+        manifest = {"name": "c", "version": "1", "extends": str(FIXTURE_PROFILE), "files": {LEXICON_FILE: "w.yaml"}}
+        (root / "profile.yaml").write_text(yaml.safe_dump(manifest))
+        (root / "w.yaml").write_text("# corrected wording\n" + lexicon, encoding="utf-8")
+        deactivate_profile()
+        activate_profile(load_profile(root))
+        assert (policy_fingerprint(), legacy_policy_fingerprint() != legacy) == (current, True)
+        third = _annotation(self._reviewed(tmp_path, monkeypatch, []))
+        assert third["result_cache"] == {"key": key, "hit": True}, "no reading again"
+        assert review_module.annotation_read_under_this_policy(second)
+
+    def test_a_backfill_stamps_only_the_fingerprint_the_annotation_records(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A store whose annotation records no fingerprint seeds an entry recording none (step-6 review 3)."""
+        from senselab.utils.tasks.cached_inference import result_lookup
+
+        first = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        annotation = find_measurement(first, REDACTION_LLM_ANNOTATION)
+        assert annotation is not None
+        recorded = annotation.attributes[review_module.POLICY_FINGERPRINT]
+        monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / "recorded"))
+        state, key = backfill_from_store(first, _config(tmp_path))
+        assert state == BACKFILL_STORED and result_lookup(key)["result"]["policy_fingerprint"] == recorded  # type: ignore[index]
+        annotation.attributes.pop(review_module.POLICY_FINGERPRINT)
+        monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / "unrecorded"))
+        state, key = backfill_from_store(first, _config(tmp_path))
+        assert state == BACKFILL_STORED and "policy_fingerprint" not in result_lookup(key)["result"]  # type: ignore[index]
 
     def test_a_reading_from_another_prompt_version_is_not_backfilled(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1177,7 +1399,7 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
     ) -> None:
         """The live annotation is the earlier reading, derived from it, and the replay's own is retired."""
         store, held, software = self._read_then_retire(tmp_path, monkeypatch)
-        off = load_triage_config()
+        off = load_triage_config(profile=ACTIVE)
         review(store, off)
         assert carry_reading_forward(store, off, None, held, software=software) == (REVIEW_CARRIED, None)
         live = find_measurement(store, REDACTION_LLM_ANNOTATION)
@@ -1200,7 +1422,9 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
         store, held, software = self._read_then_retire(tmp_path, monkeypatch)
         override = tmp_path / "workflow.yaml"
         override.write_text(yaml.safe_dump({"workflow": {"stages": [s for s in STAGE_NAMES if s != "REVIEW"]}}))
-        state, why = carry_reading_forward(store, load_triage_config(override), None, held, software=software)
+        state, why = carry_reading_forward(
+            store, load_triage_config(override, profile=ACTIVE), None, held, software=software
+        )
         assert state == REVIEW_NONE and why is not None and "off in this workflow" in why
         assert find_measurement(store, REDACTION_LLM_ANNOTATION) is None
 
@@ -1212,12 +1436,39 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
         plan = store.activity(node="REDACT", step="plan-again", parameters={})
         span = store.entity(prov_type="span", extent=_extent(3), attributes={"name": "redaction", "category": "PERSON"})
         store.was_generated_by(span, plan)
-        off = load_triage_config()
+        off = load_triage_config(profile=ACTIVE)
         review(store, off)
         state, why = carry_reading_forward(store, off, None, held, software=software)
         assert state == REVIEW_NEEDS_REREAD and why is not None and "changed" in why
         live = find_measurement(store, REDACTION_LLM_ANNOTATION)
         assert live is not None and live.attributes["status"] == "disabled"
+
+    def test_a_reading_under_another_policy_is_read_again(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The annotation's own fingerprint decides, so a changed policy is caught with the cache entry gone."""
+        store, held, software = self._read_then_retire(tmp_path, monkeypatch)
+        assert held.annotation.attributes.get(review_module.POLICY_FINGERPRINT)
+        monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / "emptied-cache"))
+        monkeypatch.setattr(review_module, "policy_fingerprint", lambda: "e" * 64)
+        off = load_triage_config(profile=ACTIVE)
+        review(store, off)
+        state, why = carry_reading_forward(store, off, None, held, software=software)
+        assert state == REVIEW_NEEDS_REREAD and why is not None and "policy" in why
+
+    def test_a_reading_carried_under_the_legacy_fingerprint_records_the_current_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The carried annotation records the current fingerprint, so a later comment edit carries it again."""
+        from senselab.audio.workflows.triage.review_inputs import legacy_policy_fingerprint, policy_fingerprint
+
+        store, held, software = self._read_then_retire(tmp_path, monkeypatch)
+        held.annotation.attributes[review_module.POLICY_FINGERPRINT] = legacy_policy_fingerprint()
+        off = load_triage_config(profile=ACTIVE)
+        review(store, off)
+        assert carry_reading_forward(store, off, None, held, software=software) == (REVIEW_CARRIED, None)
+        live = find_measurement(store, REDACTION_LLM_ANNOTATION)
+        assert live is not None and live.attributes[review_module.POLICY_FINGERPRINT] == policy_fingerprint()
 
     def test_a_replay_that_reads_again_keeps_its_own_reading(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1233,15 +1484,18 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
         """A store whose REVIEW never answered holds nothing a replay could lose."""
         store = ProvStore(run_id="replay-review-test")
         _seed(store, scan="ran")
-        review(store, load_triage_config())
+        review(store, load_triage_config(profile=ACTIVE))
         assert held_reading(store) is None
-        assert carry_reading_forward(store, load_triage_config(), None, None, software="s") == (REVIEW_NONE, None)
+        assert carry_reading_forward(store, load_triage_config(profile=ACTIVE), None, None, software="s") == (
+            REVIEW_NONE,
+            None,
+        )
 
 
 def test_the_cache_key_names_the_engine() -> None:
     """Same engine, same key; another engine or any other vLLM server argument, another key."""
     sha = "c" * 40
-    vllm = dict(load_triage_config().require("redaction.llm_check.vllm"))
+    vllm = dict(load_triage_config(profile=ACTIVE).require("redaction.llm_check.vllm"))
     base = {"model_id": "m/x", "max_new_tokens": 1024, "max_iterations": 3, "engine": "vllm", "vllm": vllm}
     key = review_module.review_cache_key("a b", None, {"task": "t"}, base, sha)
     assert key == review_module.review_cache_key("a b", None, {"task": "t"}, dict(base), sha)
@@ -1250,11 +1504,11 @@ def test_the_cache_key_names_the_engine() -> None:
     assert key != review_module.review_cache_key("a b", None, {"task": "t"}, shared, sha)
 
 
-class TestBridge2AIsReviewPolicy:
-    """The B2AI profile's review policy reaches the reviewer unchanged (plan step 6b moved it out of senselab)."""
+class TestTheFixturesReviewPolicy:
+    """The fixture profile's review policy reaches the reviewer unchanged (plan step 6b moved it out of senselab)."""
 
     def test_its_policy_prose_is_in_the_prompt(self) -> None:
-        """B2AI's rules and examples, then the Safe Harbor identifiers senselab adds."""
+        """The fixture's rules and examples, then the Safe Harbor identifiers senselab adds."""
         from senselab.audio.workflows.triage.review_inputs import review_policy
         from senselab.text.tasks.pii_detection.redaction_review import review_prompt
 
@@ -1293,3 +1547,53 @@ def test_a_cached_reading_stands_only_under_the_policy_it_was_read_under() -> No
     assert review_module.read_under_this_policy({}), "a reading cached before the fingerprint stands"
     assert review_module.read_under_this_policy({review_module.POLICY_FINGERPRINT: policy_fingerprint()})
     assert not review_module.read_under_this_policy({review_module.POLICY_FINGERPRINT: "0" * 64})
+
+
+def test_a_reading_under_the_fingerprint_taken_before_still_stands() -> None:
+    """A fingerprint over the word lists' bytes (before 2026-11-14) names the unchanged policy: no re-read (#634)."""
+    from senselab.audio.workflows.triage.review_inputs import legacy_policy_fingerprint, policy_fingerprint
+
+    legacy = {review_module.POLICY_FINGERPRINT: legacy_policy_fingerprint()}
+    assert legacy_policy_fingerprint() != policy_fingerprint()
+    assert review_module.read_under_this_policy(legacy)
+    assert review_module.annotation_read_under_this_policy(legacy)
+    assert not review_module.annotation_read_under_this_policy({review_module.POLICY_FINGERPRINT: "0" * 64})
+
+
+def test_a_comment_in_the_word_lists_keeps_the_fingerprint_and_a_value_changes_it(tmp_path: Path) -> None:
+    """The word lists are hashed by their parsed values, so correcting a comment forces no GPU re-read (#634)."""
+    from senselab.audio.workflows.triage.dataset_profile import (
+        activate_profile,
+        active_profile,
+        data_path,
+        deactivate_profile,
+        load_profile,
+    )
+    from senselab.audio.workflows.triage.review_inputs import (
+        LEXICON_FILE,
+        legacy_policy_fingerprint,
+        policy_fingerprint,
+    )
+    from tests.conftest import FIXTURE_PROFILE
+
+    fixture = active_profile()
+    assert fixture is not None
+    lexicon = data_path(LEXICON_FILE).read_text(encoding="utf-8")
+    fingerprint, legacy = policy_fingerprint(), legacy_policy_fingerprint()
+    root = tmp_path / "p"
+    root.mkdir()
+    manifest = {"name": "commented", "version": "1", "extends": str(FIXTURE_PROFILE), "files": {LEXICON_FILE: "w.yaml"}}
+    (root / "profile.yaml").write_text(yaml.safe_dump(manifest))
+    deactivate_profile()
+    try:
+        (root / "w.yaml").write_text("# corrected wording\n" + lexicon, encoding="utf-8")
+        activate_profile(load_profile(root))
+        assert (policy_fingerprint(), legacy_policy_fingerprint() != legacy) == (fingerprint, True)
+        deactivate_profile()
+        changed = {**yaml.safe_load(lexicon), "test_only": ["x"]}
+        (root / "w.yaml").write_text(yaml.safe_dump(changed), encoding="utf-8")
+        activate_profile(load_profile(root))
+        assert policy_fingerprint() != fingerprint
+    finally:
+        deactivate_profile()
+        activate_profile(fixture)

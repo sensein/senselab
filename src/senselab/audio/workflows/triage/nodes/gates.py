@@ -6,10 +6,10 @@ apply it. Instrument settings stay in ``branch:`` and in PREPROCESS.
 
 **A bound resolves most-specific-first: family, then group, then default**, and a family overrides
 its group key by key rather than wholesale, so a family naming one gate inherits the group's
-others. A task group alone is too coarse — ``SYLLABLE_TRAIN`` holds both ``diadochokinesis-pa``,
-which asks for a count of ten, and ``diadochokinesis-v2-puh``, which asks for five seconds and
-names no count. Which layer supplied a bound travels with it, so a verdict says whether a
-recording was judged by a special case or by an inherited one.
+others. A task group alone is too coarse — ``SYLLABLE_TRAIN`` holds both a train that asks for a
+count of ten repetitions and one that asks for five seconds and names no count. Which layer
+supplied a bound travels with it, so a verdict says whether a recording was judged by a special
+case or by an inherited one.
 
 VERDICT applies the conformance gates :data:`CONFORMANCE_GATES` names for the group; the remaining
 gates are applied where the finding they produce is located, which is inside the reporting node.

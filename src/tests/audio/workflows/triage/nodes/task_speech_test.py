@@ -9,7 +9,7 @@ from typing import Sequence
 import pytest
 
 from senselab.audio.tasks.redaction.api import RedactionExtent
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import consensus_words, software_agent, write_measurement
 from senselab.audio.workflows.triage.nodes.redact import NON_TASK_SPEECH, MaskPlan, mask_plan
 from senselab.audio.workflows.triage.nodes.verdict import task_audible
@@ -134,7 +134,7 @@ class TestSpeechInANonLexicalTask:
         store.entity(
             prov_type="stream",
             extent=(0.0, 10.0),
-            attributes={"name": "recording", "path": f"streams/sub-x_ses-y_task-{BREATH_TASK}.wav"},
+            attributes={"name": "recording", "path": "streams/rec-0001.wav"},
         )
         record_task(store, BREATH_TASK)
         store.entity(
@@ -270,7 +270,7 @@ def _timed_words(store: ProvStore, task: str, words: Sequence[tuple[str, float]]
     store.entity(
         prov_type="stream",
         extent=(0.0, 60.0),
-        attributes={"name": "recording", "path": f"streams/sub-x_ses-y_task-{task}.wav"},
+        attributes={"name": "recording", "path": "streams/rec-0001.wav"},
     )
     record_task(store, task)
     for index, (text, start) in enumerate(words):
@@ -323,7 +323,7 @@ def _item_fold(
             task_speech=reading.record(),
             item_set=True,
         ),
-        policy=FoldPolicy.from_config(load_triage_config()),
+        policy=FoldPolicy.from_config(load_triage_config(profile=ACTIVE)),
     )
 
 
@@ -502,7 +502,7 @@ class TestTheReviewerAndTheSecondOpinionDecide:
             second_opinion=opinion,
             cohort=cohort,
             task=task or TaskEvidence(owning_branches=("SPEECH",)),
-            policy=FoldPolicy.from_config(load_triage_config()),
+            policy=FoldPolicy.from_config(load_triage_config(profile=ACTIVE)),
         )
 
     def test_the_reviewer_s_off_task_and_other_speaker_readings_review_under_their_subjects(self) -> None:

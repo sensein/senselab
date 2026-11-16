@@ -9,11 +9,11 @@ from pathlib import Path
 from types import ModuleType
 
 import numpy as np
+import pytest
 import soundfile as sf
 
-from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.extend import read_store, write_store
-from senselab.audio.workflows.triage.identity import identity_columns
+from senselab.audio.workflows.triage.identity import identity_columns, identity_of
 from senselab.audio.workflows.triage.nodes.background import (
     FLOOR_FROM_SESSION,
     OWN_FLOOR,
@@ -22,7 +22,10 @@ from senselab.audio.workflows.triage.nodes.background import (
 )
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import record_task
+from tests.audio.workflows.triage.conftest import hint_for, record_task
+
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 RATE = 16000
@@ -51,14 +54,17 @@ def _breaths(seed: int) -> np.ndarray:
     return x.astype(np.float32)
 
 
-def _run(root: Path, stem: str, samples: np.ndarray) -> dict[str, str | None]:
+def _run(
+    root: Path, stem: str, samples: np.ndarray, participant: str, session: str, task: str
+) -> dict[str, str | None]:
+    """One finished run under ``stem``, its identity recorded as its hint declares it."""
     run_root = root / stem
     streams = run_root / "run" / "streams"
     streams.mkdir(parents=True)
     sf.write(streams / "plain.wav", samples, RATE, subtype="FLOAT")
     sf.write(streams / "enhanced.flac", samples, RATE)
     store = ProvStore(run_id=stem)
-    identity = identity_from_name(stem)
+    identity = identity_of(hint_for(participant, session, task))
     store.entity(
         prov_type="stream",
         extent=None,
@@ -77,27 +83,30 @@ def _run_root(row: dict[str, str | None]) -> Path:
 
 def test_members_of_one_session_share_one_floor(tmp_path: Path) -> None:
     """Three quiet members and a fourth from another session: the three read their session's floor."""
-    rows = [_run(tmp_path, f"sub-a_ses-1_task-t{i}", _breaths(i)) for i in range(3)]
-    rows.append(_run(tmp_path, "sub-b_ses-9_task-t0", _breaths(7)))
+    rows = [_run(tmp_path, f"rec-000{i}", _breaths(i), "pa", "s1", f"t{i}") for i in range(3)]
+    rows.append(_run(tmp_path, "rec-0003", _breaths(7), "pb", "s9", "t0"))
     assert [r["status"] for r in floor_cli.process(rows)] == ["ok"] * 4
-    assert [s for s, _ in session_cli.sessions_of(rows)] == ["sub-a/ses-1", "sub-b/ses-9"]
-    out = session_cli.process_session("sub-a/ses-1", rows[:3])
+    assert [s for s, _ in session_cli.sessions_of(rows)] == ["pa/s1", "pb/s9"]
+    out = session_cli.process_session("pa/s1", rows[:3])
     assert {r[SESSION_FLOOR] for r in out} == {FLOOR_FROM_SESSION}
     store = read_store(_run_root(rows[0]))
     assert find_measurement(store, OWN_FLOOR) is not None
     found = find_measurement(store, SESSION_FLOOR)
-    assert found is not None and found.attributes["used_n"] == 3 and found.attributes["session"] == "sub-a/ses-1"
+    assert found is not None and found.attributes["used_n"] == 3 and found.attributes["session"] == "pa/s1"
 
 
 def test_an_own_floor_already_written_is_not_written_again(tmp_path: Path) -> None:
     """The own-floor pass skips a store that already carries one."""
-    rows = [_run(tmp_path, "sub-a_ses-1_task-t0", _breaths(1))]
+    rows = [_run(tmp_path, "rec-0000", _breaths(1), "pa", "s1", "t0")]
     floor_cli.process(rows)
     assert floor_cli.process(rows)[0]["status"] == "skipped"
 
 
-def _speech_run(root: Path, stem: str, seed: int, *, task: str) -> dict[str, str | None]:
-    """One finished run under ``stem``, its ``task`` recorded as ADMIT records the hint's (``record_task``)."""
+def _speech_run(root: Path, stem: str, seed: int, *, task: str, token: str | None = None) -> dict[str, str | None]:
+    """One finished run under ``stem`` in ``pa``/``s1``, its identity and ``task`` recorded as ADMIT records the hint's.
+
+    ``token`` is the task id with its trailing index, where it differs from ``task``.
+    """
     rng = np.random.default_rng(seed)
     t = np.arange(6 * RATE) / RATE
     speech = (np.sin(2 * np.pi * 150.0 * t) * 0.05 * ((t % 2.0) < 1.0)).astype(np.float32)
@@ -109,7 +118,7 @@ def _speech_run(root: Path, stem: str, seed: int, *, task: str) -> dict[str, str
     for name, samples in (("plain", speech + room), ("enhanced", speech), ("residual", room)):
         sf.write(streams / f"{name}.wav", samples, RATE, subtype="FLOAT")
         store.entity(prov_type="stream", extent=None, attributes={"name": name, "path": f"streams/{name}.wav"})
-    identity = identity_from_name(stem)
+    identity = identity_of(hint_for("pa", "s1", task, token=token))
     store.entity(
         prov_type="stream",
         extent=None,
@@ -130,12 +139,12 @@ def _speech_run(root: Path, stem: str, seed: int, *, task: str) -> dict[str, str
 def test_the_session_pass_writes_each_speech_residual_and_the_session_background(tmp_path: Path) -> None:
     """Two speech tasks and a breath task: each store gains its reading; the session background has the two."""
     rows = [
-        _speech_run(tmp_path, "sub-a_ses-1_task-rainbow-passage", 1, task="rainbow-passage"),
-        _speech_run(tmp_path, "sub-a_ses-1_task-free-speech-1", 2, task="free-speech"),
-        _speech_run(tmp_path, "sub-a_ses-1_task-breath-sounds", 3, task="breath-sounds"),
+        _speech_run(tmp_path, "rec-0001", 1, task="rainbow-passage"),
+        _speech_run(tmp_path, "rec-0002", 2, task="free-speech", token="free-speech-1"),
+        _speech_run(tmp_path, "rec-0003", 3, task="breath-sounds"),
     ]
     floor_cli.process(rows)
-    out = session_cli.process_session("sub-a/ses-1", rows)
+    out = session_cli.process_session("pa/s1", rows)
     assert {r["session_background"] for r in out} == {"speech_residual"}
     assert {r["session_background_members_n"] for r in out} == {2}
     store = read_store(_run_root(rows[2]))
@@ -143,18 +152,53 @@ def test_the_session_pass_writes_each_speech_residual_and_the_session_background
     assert reading is not None and reading.attributes["kind"] == "airway" and reading.attributes["foreground"]
     found = find_measurement(store, SESSION_FLOOR)
     assert found is not None
-    assert sorted(found.attributes["session_background"]["members"]) == [
-        "sub-a_ses-1_task-free-speech-1",
-        "sub-a_ses-1_task-rainbow-passage",
-    ]
+    assert sorted(found.attributes["session_background"]["members"]) == ["rec-0001", "rec-0002"]
 
 
 def test_a_stale_manifest_row_refuses_its_whole_session(tmp_path: Path) -> None:
     """One member whose row names another identity than its run records: no member's store is written."""
-    rows = [_run(tmp_path, f"sub-a_ses-1_task-t{i}", _breaths(i)) for i in range(3)]
-    rows[2] = {**rows[2], "participant": "sub-z"}
+    rows = [_run(tmp_path, f"rec-000{i}", _breaths(i), "pa", "s1", f"t{i}") for i in range(3)]
+    rows[2] = {**rows[2], "participant": "pz"}
     stores = [(_run_root(r) / "run" / "store.jsonl").read_bytes() for r in rows]
-    out = session_cli.process_session("sub-a/ses-1", rows)
+    out = session_cli.process_session("pa/s1", rows)
     assert {r["status"] for r in out} == {"error"}
     assert all("stale" in r[SESSION_FLOOR] for r in out)
     assert [(_run_root(r) / "run" / "store.jsonl").read_bytes() for r in rows] == stores
+
+
+def test_a_member_made_with_another_profile_refuses_its_whole_session(tmp_path: Path) -> None:
+    """Review J4: a member's run refused for its profile refuses the session; no member's store is written."""
+    from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
+
+    rows = [_run(tmp_path, f"rec-000{i}", _breaths(i), "pa", "s1", f"t{i}") for i in range(3)]
+    log = _run_root(rows[1]) / "run" / "run.json"
+    log.write_text(json.dumps({"config": {"profile": {"name": "another-dataset", "version": "1", "digest": "x"}}}))
+    stores = [(_run_root(r) / "run" / "store.jsonl").read_bytes() for r in rows]
+    out = session_cli.process_session("pa/s1", rows, load_triage_config(profile=ACTIVE))
+    assert {r["status"] for r in out} == {"error"}
+    assert all("refused" in r[SESSION_FLOOR] for r in out)
+    assert [(_run_root(r) / "run" / "store.jsonl").read_bytes() for r in rows] == stores
+
+
+@pytest.mark.parametrize("cli", [floor_cli, session_cli], ids=["background_floor", "session_floor"])
+def test_without_a_profile_the_driver_exits_2_naming_it(
+    cli: ModuleType, tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review A1: the driver activates the profile it is given; with none it exits 2 before reading a store."""
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("")
+    assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 2
+    assert "dataset profile" in capsys.readouterr().err
+
+
+def test_with_its_profile_named_the_driver_runs_from_no_active_profile(
+    tmp_path: Path, without_triage_profile: None
+) -> None:
+    """Review A1: ``--profile`` alone supplies what the driver reads."""
+    from tests.conftest import FIXTURE_PROFILE
+
+    rows = [_run(tmp_path, f"rec-000{i}", _breaths(i), "pa", "s1", f"t{i}") for i in range(2)]
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    argv = [str(manifest), "--slice-index", "0", "--slice-count", "1", "--profile", str(FIXTURE_PROFILE)]
+    assert floor_cli.main(argv) == 0

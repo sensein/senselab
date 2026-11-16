@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml  # type: ignore[import-untyped]
 
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.workflow import (
     OFF_IN_WORKFLOW,
     OPTIONAL_STAGES,
@@ -46,8 +46,8 @@ class TestTheStageTable:
         }
 
     def test_senselab_runs_every_stage_by_default(self) -> None:
-        """Without a profile the workflow is the whole graph, so B2AI's runs are unchanged."""
-        config = load_triage_config()
+        """Without a profile the workflow is the whole graph, so a dataset's runs are unchanged."""
+        config = load_triage_config(profile=ACTIVE)
         assert listed_stages(config.values) == STAGE_NAMES
         assert off_notes(config.values) == {}
 
@@ -85,7 +85,7 @@ class TestAWorkflow:
         override = tmp_path / "override.yaml"
         override.write_text(yaml.safe_dump({"workflow": {"stages": ["ADMIT", "VERDICT"]}}))
         with pytest.raises(ValueError, match="may be off"):
-            load_triage_config(override)
+            load_triage_config(override, profile=ACTIVE)
 
     def test_a_corpus_pass_for_a_stage_that_is_off_is_refused(self) -> None:
         """extend_cohort over a workflow without COHORT has nothing to write."""

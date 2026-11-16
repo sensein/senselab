@@ -14,7 +14,7 @@ from typing import Any, Iterator
 
 import pytest
 
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
     SECOND_OPINION_ANSWERS,
@@ -22,6 +22,9 @@ from senselab.audio.workflows.triage.vocabulary import (
 )
 from senselab.utils.prov_store import ProvStore
 from tests.scripts.extend_llm_review_test import _finished_run, _hints, _manifest, _seed_verdicts
+
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_second_opinion.py"
@@ -37,7 +40,7 @@ ON = "second_opinion:\n  enabled: true\n"
 def _config(tmp_path: Path) -> Any:  # noqa: ANN401 — TriageConfig
     path = tmp_path / "override.yaml"
     path.write_text(ON, encoding="utf-8")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _answers(other: float) -> dict[str, Any]:
@@ -134,7 +137,7 @@ def test_a_store_review_has_not_read_is_an_error_and_a_later_review_asks_again(t
 
 def test_without_hints_a_store_that_records_no_hint_is_refused(tmp_path: Path) -> None:
     """The command line without --hints asks with the recorded hint, and refuses where there is none."""
-    run_root = _reviewed_run(tmp_path / "corpus")
+    run_root = _reviewed_run(tmp_path / "corpus", hint=None)
     opener = _Opener()
     assert _run(tmp_path, run_root, opener, recorded_hint_default=True)["counts"] == {"refused": 1}
     assert opener.opened == 0 and _opinions(run_root) == []
@@ -282,7 +285,7 @@ def test_a_server_failing_every_request_stops_the_slice_before_its_last_row(
             manifest,
             slice_index=0,
             slice_count=1,
-            config=load_triage_config(override),
+            config=load_triage_config(override, profile=ACTIVE),
             log_dir=tmp_path,
             open_ask=opener,
         )

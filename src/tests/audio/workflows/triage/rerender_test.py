@@ -25,8 +25,8 @@ class TestFindingTheRuns:
     """A run directory is found by the store it holds, at whatever depth."""
 
     def test_every_store_under_the_tree_is_one_run(self, tmp_path: Path) -> None:
-        """A corpus tree nests by subject and session; the depth is not fixed."""
-        for stem in ("sub-a/ses-1/rec_2026/run", "sub-b/ses-2/rec_2027/run"):
+        """A corpus tree nests by participant and session; the depth is not fixed."""
+        for stem in ("p01/s1/rec_2026/run", "p02/s2/rec_2027/run"):
             path = tmp_path / stem
             path.mkdir(parents=True)
             (path / "store.jsonl").write_text("")
@@ -45,7 +45,7 @@ class TestTheRunIdComesFromTheDirectory:
 
     def test_the_run_id_is_the_run_directory_s_parent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without it every summary in a corpus is titled 'read', which is read_jsonl's default."""
-        run_dir = tmp_path / "sub-a_ses-1_task-loudness_20260920-030735" / "run"
+        run_dir = tmp_path / "rec-0001_20260920-030735" / "run"
         run_dir.mkdir(parents=True)
         (run_dir / "store.jsonl").write_text("")
         seen: dict[str, Any] = {}
@@ -61,7 +61,7 @@ class TestTheRunIdComesFromTheDirectory:
         monkeypatch.setattr(rerender_module.ProvStore, "read_jsonl", staticmethod(_read))
         monkeypatch.setattr(rerender_module, "report", _report)
         rerender_module.rerender(run_dir, config=object())
-        assert seen["run_id"] == "sub-a_ses-1_task-loudness_20260920-030735"
+        assert seen["run_id"] == "rec-0001_20260920-030735"
         assert seen["run_id"] != "read"
 
     def test_the_summary_goes_beside_the_store_not_under_it(
@@ -79,3 +79,11 @@ class TestTheRunIdComesFromTheDirectory:
         )
         rerender_module.rerender(run_dir, config=object())
         assert seen["summary_dir"] == tmp_path / "rec_2026" / "summary"
+
+
+def test_without_a_profile_the_rerender_exits_2_naming_it(
+    tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review A2: the panels read the profile's data; with none the driver exits 2 and renders nothing."""
+    assert rerender_module.main([str(tmp_path)]) == 2
+    assert "dataset profile" in capsys.readouterr().err

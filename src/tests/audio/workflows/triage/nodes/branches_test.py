@@ -16,13 +16,12 @@ import numpy as np
 import pytest
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, DATA_MAP_PATHS, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import branches as branches_module
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
     BRANCH_FAMILY,
     BRANCHES,
-    DDK_MEDIANS,
     DEVIATION_TYPES,
     EXPECTATIONS,
     PARAM_KEYS,
@@ -55,6 +54,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     count,
     count_against_instruction,
     count_beside_typical,
+    declared_carrier,
     declared_duration_count,
     declared_task_family,
     deviation,
@@ -86,6 +86,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     spans_by_measure,
     spectral_balance_db,
     stream_extent,
+    task_owner,
     token_occurrences,
     touches_edge,
     trace_slice,
@@ -103,15 +104,21 @@ from senselab.audio.workflows.triage.nodes.gates import (
     TYPICAL_COUNT,
     UNGATEABLE_READINGS,
 )
-from senselab.audio.workflows.triage.task_catalogue import TASKS_BY_KIND, task_attributes
+from senselab.audio.workflows.triage.task_catalogue import SYLLABLE_PATTERNS, TASKS_BY_KIND, task_attributes, task_list
 from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.conftest import declare_hint_identity, record_admitted_hint, record_task
 
 BIDS_STEM = "sub-abc123_ses-1_task-harvard-sentences-list-10-3"
-"""A real stem shape: two trailing numeric segments. No stage reads a task off it."""
+"""A BIDS-like stem naming a task, with two trailing numeric segments. No stage reads a task off it."""
+
+PLAIN_PATH = "rec-0001.wav"
+"""A recording's path that carries no identity: the default every store here is seeded at."""
+
+DDK_MEDIANS = "specs/20260817-triage-workflow-dag/measure-distributions.md"
+"""Where the fixture's syllable-repetition medians were measured: the derivation its typical counts cite."""
 
 
-def _store(*, path: str | None = BIDS_STEM + ".wav", task: str | None = None, duration_s: float = 20.0) -> ProvStore:
+def _store(*, path: str | None = PLAIN_PATH, task: str | None = None, duration_s: float = 20.0) -> ProvStore:
     """A store holding only what the mode selector reads.
 
     Args:
@@ -206,7 +213,7 @@ def _params(group: Pattern = Pattern.SYLLABLE_TRAIN, **values: Any) -> BranchPar
     Returns:
         The record over a configuration carrying those values, bound to ``group``.
     """
-    config = load_triage_config()
+    config = load_triage_config(profile=ACTIVE)
     merged = dict(config.values)
     merged[PARAM_SECTION] = {
         **config.values[PARAM_SECTION],
@@ -485,7 +492,7 @@ class TestTheExpectationTableIsData:
 
     def test_the_reference_sets_match_the_ones_the_packaged_config_names(self) -> None:
         """``taxonomy.ruleset.reference_family_set`` names the same three sets by key."""
-        declared = load_triage_config().require("taxonomy.ruleset.reference_family_set")
+        declared = load_triage_config(profile=ACTIVE).require("taxonomy.ruleset.reference_family_set")
         assert declared == {"AIRWAY": "airway", "SPEECH": "speech", "VOICE": "voice"}
 
     def test_the_ten_syllable_families_are_speechs_with_the_instructions_own_expectation(self) -> None:
@@ -694,8 +701,8 @@ class TestTheDeclaredFamilyIsDerivedInOnePlace:
         assert declared_task_family(_store(task="harvard-sentences-list")) == "harvard-sentences-list"
 
     def test_a_path_naming_a_task_with_none_recorded_names_no_family(self) -> None:
-        """Nothing is read off the file name: a BIDS stem with no recorded task takes the safe arm."""
-        assert declared_task_family(_store()) is None
+        """Nothing is read off the file name: a BIDS-like stem with no recorded task takes the safe arm."""
+        assert declared_task_family(_store(path=BIDS_STEM + ".wav")) is None
 
     def test_a_non_bids_path_names_no_family(self) -> None:
         """A path with no ``task-`` entity is not a declaration; None takes the safe arm."""
@@ -708,7 +715,7 @@ class TestTheDeclaredFamilyIsDerivedInOnePlace:
     def test_a_refused_recording_is_named_by_the_task_admit_recorded_on_its_activity(self) -> None:
         """ADMIT wrote no stream for an all-zero recording; its activity still records the hint's task."""
         store = _store(path=None)
-        audio_file = "/data/sub-a_ses-1_task-respiration-and-cough-fivebreaths-3.wav"
+        audio_file = "/data/rec-0001.wav"
         declared = task_attributes(AudioHints(task="respiration-and-cough-fivebreaths", task_take=3))
         store.activity(node="ADMIT", step=None, parameters={"audio_file": audio_file, **declared})
         assert declared_task_family(store) == "respiration-and-cough-fivebreaths"
@@ -728,13 +735,13 @@ class TestTheDeclaredFamilyIsDerivedInOnePlace:
 
     def test_the_hint_task_is_read_over_the_path(self) -> None:
         """The task the hint names, as ADMIT records it, wins over the stem's ``task-`` entity."""
-        store = _store()
+        store = _store(path=BIDS_STEM + ".wav")
         record_admitted_hint(store, AudioHints(task="prolonged-vowel", task_variant={"index": "2"}))
         assert declared_task_family(store) == "prolonged-vowel"
 
     def test_a_hint_naming_no_task_does_not_fall_through_to_the_path(self) -> None:
         """A recorded "no task" is a declaration of no family; the stem does not speak in its place."""
-        store = _store()
+        store = _store(path=BIDS_STEM + ".wav")
         record_task(store, None)
         assert declared_task_family(store) is None
 
@@ -776,6 +783,32 @@ class TestTheModeSelector:
     def test_no_declaration_takes_the_out_of_family_mode(self) -> None:
         """The safe arm: annotate the speciality, conclude nothing. There is no third arm."""
         assert mode_of("AIRWAY", _store(path="/tmp/plain.wav")) == ("detect", None)
+
+    def test_the_recorded_task_is_owned_as_the_task_list_owns_it(self) -> None:
+        """For every listed task, ADMIT's record gives the branch and description the task list gives."""
+        for name, entry in task_list().items():
+            assert task_owner(_store(task=name), name) == (entry.branch, entry.expects), name
+
+    def test_a_task_the_list_lacks_is_owned_by_no_branch(self) -> None:
+        """ADMIT recorded the name and no description, so every branch takes its out-of-family mode."""
+        store = _store(task="audio-check")
+        assert task_owner(store, "audio-check") is None
+        assert all(mode_of(branch, store) == ("detect", "audio-check") for branch in BRANCHES)
+
+    def test_a_family_the_record_does_not_name_is_read_from_the_task_list(self) -> None:
+        """A caller asking about another task than the one recorded gets the list's entry for it."""
+        assert task_owner(_store(task="prolonged-vowel"), "diadochokinesis-pa") == (
+            "SPEECH",
+            SPEECH_EXPECTATIONS["diadochokinesis-pa"],
+        )
+
+    def test_the_fixtures_carriers_are_the_last_part_of_each_syllable_tasks_name(self) -> None:
+        """The carriers its entries declare are exactly what senselab read off the names before they did."""
+        syllable = [name for name, row in SPEECH_EXPECTATIONS.items() if row.pattern in SYLLABLE_PATTERNS]
+        assert len(syllable) == 10
+        assert {name: declared_carrier(name) for name in syllable} == {
+            name: name.rsplit("-", 1)[-1] for name in syllable
+        }
 
     def test_a_syllable_family_is_in_family_for_speech_and_no_other_branch(self) -> None:
         """One recording, one align mode. There is no second branch to divide the task with."""
@@ -827,7 +860,7 @@ class TestEveryOperatingPointIsAConfigKey:
 
     def test_point_types_param_keys_and_the_packaged_section_all_match(self) -> None:
         """A key in one but not the other two is a drift nothing else would catch."""
-        assert set(POINT_TYPES) == set(PARAM_KEYS) == set(load_triage_config().values[PARAM_SECTION])
+        assert set(POINT_TYPES) == set(PARAM_KEYS) == set(load_triage_config(profile=ACTIVE).values[PARAM_SECTION])
 
     def test_there_are_no_numeric_p_star_properties_any_more(self) -> None:
         """The only accessor is ``point()``. ``p_normalise`` survives because it is a function."""
@@ -840,7 +873,7 @@ class TestEveryOperatingPointIsAConfigKey:
 
     def test_every_key_ships_a_value_and_point_reads_it_without_refusing(self) -> None:
         """The design fitted every key; none may still ship null, and ``point`` never raises for one."""
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         mappings = {key for key in PARAM_KEYS if f"{PARAM_SECTION}.{key}" in DATA_MAP_PATHS}
         numeric = [key for key in PARAM_KEYS if key not in mappings]
         assert mappings == {"label_sets", "phoneme_place_classes", "phoneme_vowel_classes"}
@@ -861,7 +894,7 @@ class TestEveryOperatingPointIsAConfigKey:
     def test_point_raises_only_for_a_name_outside_point_types(self) -> None:
         """A typo in the calling code is a programming error, not a measurement the graph is missing."""
         with pytest.raises(KeyError, match="PARAM_KEYS"):
-            branch_params(load_triage_config()).point("not_a_branch_key")
+            branch_params(load_triage_config(profile=ACTIVE)).point("not_a_branch_key")
 
     def test_record_names_every_null_key_in_read_order(self) -> None:
         """Which point a body reached for first is what says where the evaluation stopped."""
@@ -876,7 +909,7 @@ class TestEveryOperatingPointIsAConfigKey:
 
     def test_the_label_sets_ship_the_airway_decision_already_taken(self) -> None:
         """The one non-numeric key: set membership derived from ``airway.labels_of_interest``."""
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         assert branch_params(config).point("label_sets") == {"cough": ("Cough",), "breath": ("Breathe",)}
         assert set(config.require("airway.labels_of_interest")) == {"Cough", "Breathe"}
 
@@ -886,10 +919,10 @@ class TestEveryOperatingPointIsAConfigKey:
 
     def test_normalise_is_the_normalisation_the_transcript_was_built_under(self) -> None:
         """Not a config key: a function. A second spelling would compare against another normal form."""
-        normalise = branch_params(load_triage_config()).p_normalise
+        normalise = branch_params(load_triage_config(profile=ACTIVE)).p_normalise
         assert normalise("Hey,") == "hey"
         assert normalise("BUTTERCUP") == "buttercup"
-        assert "normalise" not in load_triage_config().values[PARAM_SECTION]
+        assert "normalise" not in load_triage_config(profile=ACTIVE).values[PARAM_SECTION]
 
     def test_a_tuple_valued_key_comes_back_as_a_tuple(self) -> None:
         """YAML gives a list; the body's arithmetic wants two floats."""

@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """Score candidate TAXONOMY routing detectors over a completed triage run.
 
-    uv run python scripts/analyze_routing_evidence.py <run_dir> <out_dir> [--workers N] [--config FILE]
+    uv run python scripts/analyze_routing_evidence.py <run_dir> <out_dir> --profile PROFILE [--workers N] \
+        [--config FILE]
 
 ``run_dir`` is the triage out dir: each recording's ``<stem>.summary.json`` sits beside the run
 root it names, under that stem's BIDS entity path. ``out_dir`` receives the extracted features,
@@ -15,7 +16,8 @@ writes no features from a manifest with rows in it fails too. Both are the same 
 reads nothing and reports success -- caught at the two places it can appear.
 
 Which labels a span carries is read from ``windows.<classifier>`` in the triage configuration, the
-same pair PREPROCESS stamps its own windows with, so ``--config`` changes both together.
+same pair PREPROCESS stamps its own windows with, so ``--config`` changes both together. ``--profile`` names
+the dataset profile the runs were made with; every worker process reads it too.
 """
 
 from __future__ import annotations
@@ -30,11 +32,18 @@ from functools import partial
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from senselab.audio.workflows.triage.b2ai_hints import task_id_of
-from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
+from senselab.audio.workflows.triage.extend import (
+    WorkerConfig,
+    activate_in_worker,
+    add_config_arguments,
+    driver_config,
+    pool_initargs,
+    worker_arguments,
+    worker_failure,
+)
 from senselab.audio.workflows.triage.label_membership import LabelMembership
-from senselab.audio.workflows.triage.routing_analysis.families import task_family
+from senselab.audio.workflows.triage.recording_vectors import read_store, view_identity, view_task
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     extract_features,
@@ -124,8 +133,6 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
                         "stem": stem,
                         "run_root": run_root,
                         "store": str(local / "run" / "store.jsonl") if local else "",
-                        "task_id": task_id_of(stem),
-                        "family": task_family(task_id_of(stem)),
                     }
                 )
             )
@@ -136,6 +143,26 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
     temporary.replace(manifest)
     print(f"[manifest] {len(summaries)} rows in {time.time() - started:.0f}s", flush=True)
     return manifest
+
+
+def recorded_task(store: Path) -> tuple[str, str]:
+    """The task id and the task the run recorded (ADMIT's record), never read off a file name.
+
+    Args:
+        store: The run's ``store.jsonl``.
+
+    Returns:
+        ``(task id, family)``: the identity's task id and the recorded task's name, the family a recording is
+        scored under. :data:`UNKNOWN_TASK` where the run records none; a store written before ADMIT recorded the
+        task takes the family its task id collapses into.
+    """
+    view = read_store(store)
+    identity = view_identity(view)
+    task_id = identity.task_id if identity is not None else UNKNOWN_TASK
+    task = view_task(view)
+    if task is None:
+        return task_id, task_family(task_id)
+    return task_id, task.name or UNKNOWN_TASK
 
 
 def _extract_one(
@@ -156,13 +183,17 @@ def _extract_one(
     store = Path(row["store"])
     if not store.is_file():
         return None
+    failed = worker_failure()
+    if failed is not None:
+        return failed
     try:
+        task, family = recorded_task(store)
         return extract_features(
             store,
             row["stem"],
             row["run_root"],
-            row["task_id"],
-            row["family"],
+            task,
+            family,
             memberships,
             onomatopoeic=onomatopoeic,
         )
@@ -188,6 +219,7 @@ def extract_all(
     workers: int,
     memberships: Mapping[str, LabelMembership],
     onomatopoeic: frozenset[str],
+    worker_config: WorkerConfig | None = None,
 ) -> Path:
     """Extract features for every manifest row, resuming from what is already on disk.
 
@@ -200,6 +232,8 @@ def extract_all(
         workers: How many processes read stores in parallel.
         memberships: Which labels a span carries, per classifier.
         onomatopoeic: The vocabulary an unbracketed consensus word is counted against.
+        worker_config: The config override and profile each worker activates; None, the profile active here
+            (:func:`~senselab.audio.workflows.triage.extend.worker_arguments`).
 
     Returns:
         The shard directory.
@@ -221,7 +255,9 @@ def extract_all(
     buffered: list[RecordingFeatures] = []
     with (
         missing_path.open("a", encoding="utf-8") as misses,
-        ProcessPoolExecutor(max_workers=workers) as pool,
+        ProcessPoolExecutor(
+            max_workers=workers, initializer=activate_in_worker, initargs=pool_initargs(worker_config)
+        ) as pool,
     ):
         extract = partial(_extract_one, memberships=memberships, onomatopoeic=onomatopoeic)
         for index, (row, result) in enumerate(zip(pending, pool.map(extract, pending, chunksize=8)), start=1):
@@ -268,12 +304,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("out_dir", type=Path, help="where the analysis is written")
     parser.add_argument("--workers", type=int, default=min(16, (os.cpu_count() or 4)))
     parser.add_argument("--expect", type=int, default=None, help="assert this many recordings resolved")
-    parser.add_argument("--config", type=Path, default=None, help="a partial triage config override")
+    add_config_arguments(parser)
     arguments = parser.parse_args(argv)
 
+    try:
+        config = driver_config(arguments)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
     arguments.out_dir.mkdir(parents=True, exist_ok=True)
-    config = load_triage_config(arguments.config)
-    require_dataset_values(config.values)
     memberships = span_label_memberships(config)
     onomatopoeic = onomatopoeic_vocabulary(config)
     print(f"[extract] span labels: config hash {config.config_hash}, {memberships}", flush=True)
@@ -282,7 +321,14 @@ def main(argv: list[str] | None = None) -> int:
     n_rows = sum(1 for line in manifest.open() if line.strip())
     if arguments.expect is not None and n_rows != arguments.expect:
         raise SystemExit(f"resolved {n_rows} recordings, expected {arguments.expect}")
-    shard_dir = extract_all(manifest, arguments.out_dir, arguments.workers, memberships, onomatopoeic)
+    shard_dir = extract_all(
+        manifest,
+        arguments.out_dir,
+        arguments.workers,
+        memberships,
+        onomatopoeic,
+        worker_arguments(arguments, config),
+    )
     records: list[RecordingFeatures] = load_features(shard_dir)
     if n_rows and not records:
         raise SystemExit(

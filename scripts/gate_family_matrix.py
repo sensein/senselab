@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """Where each task family routes, the family x ruleset-gate matrix behind it, and the heatmap.
 
-    uv run python scripts/gate_family_matrix.py <features> <out_dir> [--config FILE] [--profile FILE]
+    uv run python scripts/gate_family_matrix.py <features> <out_dir> --profile PROFILE [--config FILE] \
+        [--disagreement-profile FILE]
 
 ``features`` is the shard directory ``analyze_routing_evidence.py`` wrote under ``features/``, or
 one shard file out of it. The gates come from ``taxonomy.ruleset`` in the triage configuration, so
@@ -37,8 +38,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
+from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures
 from senselab.audio.workflows.triage.routing_analysis.gate_matrix import (
     DECIDING_CLASSES,
@@ -330,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
         argv: Command-line arguments, or None for ``sys.argv``.
 
     Returns:
-        0 on success.
+        0 on success; 2 when the dataset profile cannot be loaded or lacks a value.
 
     Raises:
         SystemExit: When the shard holds no recordings, which is a run that read nothing and would
@@ -339,18 +339,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("features", type=Path, help="a features shard written by analyze_routing_evidence.py")
     parser.add_argument("out_dir", type=Path, help="where the matrix, the tables and the figures are written")
-    parser.add_argument("--config", type=Path, default=None, help="a partial triage config override")
+    add_config_arguments(parser)
     parser.add_argument(
-        "--profile", type=Path, default=None, help="a disagreement profile; default the packaged newest"
+        "--disagreement-profile",
+        type=Path,
+        default=None,
+        help="a disagreement profile; default the packaged newest (this was --profile, which now names the "
+        "dataset profile as on every other driver)",
     )
     parser.add_argument("--no-annotate", action="store_true", help="draw the heatmap without per-cell numbers")
     arguments = parser.parse_args(argv)
 
+    try:
+        config = driver_config(arguments)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
     arguments.out_dir.mkdir(parents=True, exist_ok=True)
-    config = load_triage_config(arguments.config)
-    require_dataset_values(config.values)
     ruleset: Ruleset = load_ruleset(config)
-    profile = load_disagreement_profile(None if arguments.profile is None else str(arguments.profile))
+    chosen = arguments.disagreement_profile
+    profile = load_disagreement_profile(None if chosen is None else str(chosen))
     band = float(profile["near_threshold_band"])
     print(f"[gates] {len(ruleset.gates)} gates, config hash {config.config_hash}", flush=True)
 

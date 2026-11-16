@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.label_membership import (
     LabelMembership,
     load_label_membership,
@@ -49,7 +49,7 @@ class TestTheRuleComesOffTheConfiguration:
 
     def test_the_packaged_pair_is_shared_by_both_span_classifiers(self) -> None:
         """One pair of values, so the two readers of it cannot drift."""
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         yamnet = optional_label_membership(config, "yamnet")
         hear = optional_label_membership(config, "hear")
         assert yamnet is not None and hear is not None
@@ -58,17 +58,17 @@ class TestTheRuleComesOffTheConfiguration:
 
     def test_a_null_floor_reads_as_no_rule_rather_than_as_zero(self) -> None:
         """AST's floor is unmeasured, and a rule admitting everything is not the honest stand-in."""
-        assert optional_label_membership(load_triage_config(), "ast") is None
+        assert optional_label_membership(load_triage_config(profile=ACTIVE), "ast") is None
 
     def test_the_strict_reader_refuses_a_null_override_map(self) -> None:
         """``label_thresholds`` is still an open key, which is what keeps the whole-file fold absent."""
         with pytest.raises(ValueError, match="has no value"):
-            load_label_membership(load_triage_config(), "yamnet")
+            load_label_membership(load_triage_config(profile=ACTIVE), "yamnet")
 
     def test_an_override_changes_the_rule(self, tmp_path: Path) -> None:
         """The pair is configuration, so a partial YAML moves both readers at once."""
         override = tmp_path / "membership.yaml"
         override.write_text("windows:\n  yamnet:\n    label_top_k: 2\n    default_threshold: 0.7\n")
-        rule = optional_label_membership(load_triage_config(override), "yamnet")
+        rule = optional_label_membership(load_triage_config(override, profile=ACTIVE), "yamnet")
         assert rule is not None
         assert (rule.top_k, rule.floor) == (2, 0.7)

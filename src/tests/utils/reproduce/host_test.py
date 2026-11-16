@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -87,6 +88,69 @@ def test_gpu_node_with_torch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert record["slurm_job_id"] is None
 
 
+_TABLE = (
+    0,
+    "0, GPU-1111aaaa-0000, NVIDIA H100 80GB HBM3, 570.86.15\n"
+    "1, GPU-2222bbbb-0000, NVIDIA  L40S , 570.86.15\n"
+    "2, GPU-3333cccc-0000, NVIDIA A100-SXM4-80GB, 570.86.15\n",
+)
+
+
+def test_the_gpu_table_lists_every_gpu_from_one_query() -> None:
+    """Index, UUID, single-spaced name and driver per GPU, in nvidia-smi's order; nothing without nvidia-smi."""
+    runner = FakeRunner(smi=_TABLE, probe=(0, ""))
+    table = host.gpu_table(runner=runner)
+    assert [row["name"] for row in table] == ["NVIDIA H100 80GB HBM3", "NVIDIA L40S", "NVIDIA A100-SXM4-80GB"]
+    assert table[1] == {"index": "1", "uuid": "GPU-2222bbbb-0000", "name": "NVIDIA L40S", "driver": "570.86.15"}
+    assert runner.calls == [list(host.NVIDIA_SMI_DEVICES)]
+    assert host.gpu_table(runner=FakeRunner(smi=None, probe=(0, ""))) == []
+    assert host.gpu_table(runner=FakeRunner(smi=(9, "garbage"), probe=(0, ""))) == []
+
+
+class TestTheVisibleMaskNamesTheDevices:
+    """CUDA_VISIBLE_DEVICES, by index or by UUID, read against one nvidia-smi table without touching CUDA."""
+
+    table = host.gpu_table(runner=FakeRunner(smi=_TABLE, probe=(0, "")))
+
+    def test_an_index_list_names_those_gpus_in_its_order(self) -> None:
+        """Indices are nvidia-smi's; the mask's order is the process's device order."""
+        named = ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"]
+        assert host.visible_gpu_names("2,0", self.table, device_order="PCI_BUS_ID") == named
+
+    @pytest.mark.parametrize("order", [None, "FASTEST_FIRST"])
+    def test_an_index_on_a_node_of_mixed_models_needs_the_pci_order(self, order: str | None) -> None:
+        """Satra review 2026-11-14, verifier round 2: CUDA's default order may reorder unlike GPUs.
+
+        An index entry is named only under ``PCI_BUS_ID`` or where every GPU is one model; a UUID entry is exact
+        either way.
+        """
+        assert host.visible_gpu_names("2,0", self.table, device_order=order) is None
+        assert host.visible_gpu_names("GPU-2222bbbb-0000", self.table, device_order=order) == ["NVIDIA L40S"]
+        same = [dict(row, name="NVIDIA H100 80GB HBM3") for row in self.table]
+        assert host.visible_gpu_names("2,0", same, device_order=order) == ["NVIDIA H100 80GB HBM3"] * 2
+
+    def test_a_uuid_list_names_those_gpus_and_a_unique_prefix_will_do(self) -> None:
+        """A mask may name GPUs by UUID; CUDA accepts a unique prefix, and so does this."""
+        assert host.visible_gpu_names("GPU-2222bbbb-0000, GPU-1111", self.table) == [
+            "NVIDIA L40S",
+            "NVIDIA H100 80GB HBM3",
+        ]
+
+    def test_unset_means_every_gpu(self) -> None:
+        """No mask: the process sees every GPU the node lists."""
+        assert host.visible_gpu_names(None, self.table) == [
+            "NVIDIA H100 80GB HBM3",
+            "NVIDIA L40S",
+            "NVIDIA A100-SXM4-80GB",
+        ]
+        assert host.visible_gpu_names(None, []) is None
+
+    def test_an_empty_or_unmatched_mask_names_nothing_rather_than_guessing(self) -> None:
+        """No device visible, or an entry naming no listed GPU (or an ambiguous prefix): None."""
+        for mask in ("", "7", "GPU-9999", "GPU-", "0,7", "-1"):
+            assert host.visible_gpu_names(mask, self.table, device_order="PCI_BUS_ID") is None, mask
+
+
 def test_failing_probe_and_smi_give_none(tmp_path: Path) -> None:
     """Failing probe and smi give none."""
     record = host_record(_venv(tmp_path), runner=FakeRunner(smi=(9, "garbage"), probe=(1, "Traceback")))
@@ -138,3 +202,114 @@ def test_no_venv_probes_only_the_host() -> None:
     record = host_record(None, runner=runner)
     assert (record["python"], record["torch"], record["torch_cuda"]) == (None, None, None)
     assert [c[0] for c in calls] == ["nvidia-smi"]
+
+
+_FAKE_TORCH = """
+__version__ = "{version}"
+
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return {available}
+
+    @staticmethod
+    def device_count():
+        return {count}
+
+    @staticmethod
+    def get_device_name(index):
+        return ["NVIDIA H100 80GB HBM3", "NVIDIA A100-SXM4-80GB"][index]
+"""
+
+
+def _probe_in_a_worker(
+    tmp_path: Path, torch_source: str | None, visible: str | None, *, call: str = "senselab_worker_device()"
+) -> Any:  # noqa: ANN401 -- the JSON the call printed
+    """Run the worker device probe in a fresh interpreter with no site-packages, seeing only the given ``torch``.
+
+    Args:
+        tmp_path: Where the stand-in ``torch`` package goes.
+        torch_source: The stand-in's ``__init__.py``; None leaves torch unimportable.
+        visible: The worker's ``CUDA_VISIBLE_DEVICES``; None leaves it unset.
+        call: The probe call, after any imports it should find already made.
+
+    Returns:
+        What ``senselab_worker_device()`` returned there.
+    """
+    import os
+    import subprocess
+    import sys
+
+    root = tmp_path / "site"
+    if torch_source is not None:
+        (root / "torch").mkdir(parents=True)
+        (root / "torch" / "__init__.py").write_text(torch_source)
+    env = {key: value for key, value in os.environ.items() if key not in ("PYTHONPATH", "CUDA_VISIBLE_DEVICES")}
+    if visible is not None:
+        env["CUDA_VISIBLE_DEVICES"] = visible
+    code = (
+        f"import json, sys\nsys.path.insert(0, {str(root)!r})\n"
+        + host.WORKER_DEVICE_PROBE
+        + f"\nprint(json.dumps({call}))\n"
+    )
+    done = subprocess.run([sys.executable, "-S", "-c", code], capture_output=True, text=True, env=env, check=True)
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+class TestTheWorkerNamesTheDevicesItSees:
+    """Satra review 2026-11-14: the GPU on a reviewer's answer is the device its worker process saw."""
+
+    def test_a_cuda_worker_names_every_visible_device_its_torch_and_its_mask(self, tmp_path: Path) -> None:
+        """``torch.cuda.get_device_name`` per visible device, the process's own torch, and CUDA_VISIBLE_DEVICES."""
+        source = _FAKE_TORCH.format(version="2.9.0+cu128", available=True, count=2)
+        assert _probe_in_a_worker(tmp_path, source, "3,5") == {
+            "gpus": ["NVIDIA H100 80GB HBM3", "NVIDIA A100-SXM4-80GB"],
+            "torch": "2.9.0+cu128",
+            "cuda_visible_devices": "3,5",
+        }
+
+    def test_a_cpu_worker_names_no_device(self, tmp_path: Path) -> None:
+        """No CUDA: no devices, and torch still named."""
+        source = _FAKE_TORCH.format(version="2.9.0+cpu", available=False, count=0)
+        assert _probe_in_a_worker(tmp_path, source, None) == {
+            "gpus": None,
+            "torch": "2.9.0+cpu",
+            "cuda_visible_devices": None,
+        }
+
+    def test_a_worker_without_torch_reports_none(self, tmp_path: Path) -> None:
+        """Torch absent: every device field None, and the probe does not raise."""
+        assert _probe_in_a_worker(tmp_path, None, "") == {"gpus": None, "torch": None, "cuda_visible_devices": ""}
+
+    def test_a_cuda_query_that_raises_names_no_device(self, tmp_path: Path) -> None:
+        """A CUDA runtime that fails on the query leaves the devices unnamed rather than failing the worker."""
+        source = _FAKE_TORCH.format(version="2.9.0+cu128", available=True, count=3)
+        assert _probe_in_a_worker(tmp_path, source, None)["gpus"] is None
+
+    def test_beside_a_server_the_probe_touches_no_cuda(self, tmp_path: Path) -> None:
+        """``cuda=False``: no CUDA query and no torch import; torch is the version installed, None where it is not.
+
+        Satra review 2026-11-14, verifier round 2: the version comes from the installed distribution's metadata, so
+        a worker that never imported torch still names it.
+        """
+        refusing = 'raise AssertionError("imported torch")\n'
+        dist = tmp_path / "site" / "torch-2.9.0+cu128.dist-info"
+        dist.mkdir(parents=True)
+        (dist / "METADATA").write_text("Metadata-Version: 2.1\nName: torch\nVersion: 2.9.0+cu128\n")
+        call = "(senselab_worker_device(cuda=False), 'torch' in sys.modules)"
+        report, imported = _probe_in_a_worker(tmp_path, refusing, "1", call=call)
+        assert report == {"gpus": None, "torch": "2.9.0+cu128", "cuda_visible_devices": "1"}
+        assert imported is False
+        absent = _probe_in_a_worker(tmp_path / "again", None, None, call="senselab_worker_device(cuda=False)")
+        assert absent == {"gpus": None, "torch": None, "cuda_visible_devices": None}
+
+    def test_a_report_is_read_back_with_anything_malformed_as_none(self) -> None:
+        """The host side takes the three keys and nothing else, and a missing or odd report is None throughout."""
+        empty = dict.fromkeys(host.WORKER_DEVICE_KEYS)
+        assert host.worker_device(None) == empty
+        assert host.worker_device("garbage") == empty
+        assert host.worker_device({"gpus": "H100", "torch": 2, "cuda_visible_devices": 0, "extra": 1}) == empty
+        reported = {"gpus": ["NVIDIA L40S"], "torch": "2.8.0", "cuda_visible_devices": "0"}
+        assert host.worker_device(reported) == reported
+        assert set(host.worker_device(reported)) == set(host.WORKER_DEVICE_KEYS)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from pathlib import Path
 from typing import Any, cast
@@ -10,14 +11,18 @@ import pytest
 import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.workflows.triage import task_extent
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.dataset_profile import (
     DATASET_PATHS,
     MERGED_PATHS,
     PACKAGED_DATA,
+    PACKAGED_PROFILES,
     DatasetDataMissing,
+    DatasetProfile,
     activate_profile,
     active_profile,
+    canonical_json,
+    content_digest,
     data_path,
     data_values,
     deactivate_profile,
@@ -25,11 +30,12 @@ from senselab.audio.workflows.triage.dataset_profile import (
     missing_dataset_values,
     needed,
     profile_values,
+    recorded_digest_matches,
     require_dataset_values,
     run_data,
 )
 from senselab.audio.workflows.triage.workflow import OPTIONAL_STAGES, STAGE_NAMES
-from tests.conftest import B2AI_TRIAGE_PROFILE
+from tests.conftest import FIXTURE_PROFILE
 
 
 def _profile(root: Path, manifest: dict, files: dict[str, str] | None = None) -> Path:
@@ -69,9 +75,9 @@ class TestSenselabShipsNoDatasetData:
         with pytest.raises(DatasetDataMissing, match="no dataset profile"):
             require_dataset_values(config.values)
 
-    def test_the_b2ai_profile_supplies_everything_a_run_needs(self) -> None:
+    def test_the_fixture_profile_supplies_everything_a_run_needs(self) -> None:
         """The suite's own profile leaves nothing missing."""
-        assert missing_dataset_values(load_triage_config().values) == []
+        assert missing_dataset_values(load_triage_config(profile=ACTIVE).values) == []
 
 
 class TestLoading:
@@ -99,6 +105,103 @@ class TestLoading:
         assert load_profile(root).digest == first
         (root / "lex/x.yaml").write_text("b\n")
         assert load_profile(root).digest != first
+
+    def test_a_comment_edit_keeps_the_digest_and_a_value_edit_changes_it(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """Every YAML file, the manifest and the config override included, is hashed by its parsed values (#609-1)."""
+        manifest = {
+            "name": "d",
+            "version": "1",
+            "config": "config.yaml",
+            "files": {"task_lexicon": "lex", "task_extent.yaml": "te.yaml"},
+        }
+        files = {"lex/x.yaml": "a: 1\n", "te.yaml": "atypical: {}\n", "config.yaml": "spans:\n  k_db: 7.0\n"}
+        root = _profile(tmp_path / "p", manifest, files)
+        first = load_profile(root)
+        for relative in ("profile.yaml", "lex/x.yaml", "te.yaml", "config.yaml"):
+            path = root / relative
+            path.write_text("# corrected wording\n" + path.read_text().replace("\n", "  # a note\n", 1))
+        commented = load_profile(root)
+        assert commented.digest == first.digest
+        assert commented.legacy_digest != first.legacy_digest, "the bytes did change"
+        (root / "lex/x.yaml").write_text("a: 2\n")
+        assert load_profile(root).digest != first.digest
+
+    def test_a_file_that_is_not_yaml_is_hashed_by_its_bytes(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """A text file has no comments to leave out: any edit to it changes the digest."""
+        root = _profile(
+            tmp_path / "p",
+            {"name": "d", "version": "1", "files": {"review_policy.txt": "policy.txt"}},
+            {"policy.txt": "Remove names.\n"},
+        )
+        first = load_profile(root).digest
+        (root / "policy.txt").write_text("Remove names.\n# a note\n")
+        assert load_profile(root).digest != first
+
+    def test_a_yaml_file_with_number_keys_is_hashed_by_its_values(self, tmp_path: Path) -> None:
+        """Keys of mixed types hash, and their order and comments do not count."""
+        path = tmp_path / "x.yaml"
+        path.write_text("1: a\nb: c\n")
+        first = content_digest(path)
+        path.write_text("b: c  # a note\n1: a\n")
+        assert content_digest(path) == first
+        path.write_text("1: a\nb: d\n")
+        assert content_digest(path) != first
+
+    def test_the_legacy_digest_is_the_byte_digest_runs_recorded_before(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """A run recorded before 2026-11-14 named its profile by every byte; that still names the unchanged files."""
+        root = _profile(
+            tmp_path / "p",
+            {"name": "d", "version": "1", "files": {"task_extent.yaml": "te.yaml"}},
+            {"te.yaml": "a: 1  # a note\n"},
+        )
+        file_bytes = hashlib.sha256((root / "te.yaml").read_bytes()).hexdigest()
+        hasher = hashlib.sha256((root / "profile.yaml").read_bytes())
+        hasher.update(f"\0task_extent.yaml\0\0{file_bytes}".encode())
+        profile = load_profile(root)
+        assert profile.legacy_digest == hasher.hexdigest()[:16]
+        assert recorded_digest_matches(profile.digest, profile)
+        assert recorded_digest_matches(profile.legacy_digest, profile)
+        assert not recorded_digest_matches("0" * 16, profile)
+        assert not recorded_digest_matches(None, profile)
+        (root / "te.yaml").write_text("a: 1  # another note\n")
+        changed = load_profile(root)
+        assert changed.digest == profile.digest
+        assert not recorded_digest_matches(profile.legacy_digest, changed), "its bytes changed since it was recorded"
+
+    def test_the_fixtures_legacy_digest_is_the_one_senselab_took_before(self) -> None:
+        """Pinned: the digests senselab 7c5872c5b (the last byte-hashing commit) gave the fixture and its base."""
+        profile = load_profile(FIXTURE_PROFILE)
+        assert profile.base is not None
+        assert (profile.legacy_digest, profile.base.legacy_digest) == ("87a5c40be8c893c1", "1b91670565fd4733")
+        assert recorded_digest_matches("87a5c40be8c893c1", profile)
+
+    def test_an_empty_recorded_digest_never_matches(self, tmp_path: Path) -> None:
+        """A profile with no legacy digest does not take a recorded "" for its own."""
+        profile = DatasetProfile(name="d", version="1", root=tmp_path, digest="0123456789abcdef")
+        assert profile.legacy_digest == ""
+        assert not recorded_digest_matches("", profile)
+        assert recorded_digest_matches("0123456789abcdef", profile)
+
+    @pytest.mark.parametrize("text", ["1: a\n'1': b\n", "null: a\n'None': b\n", "true: a\n'True': b\n"])
+    def test_keys_that_read_the_same_as_strings_are_refused(self, tmp_path: Path, text: str) -> None:
+        """Two keys spelled alike would hash as one: the file is refused, named, rather than one key dropped."""
+        path = tmp_path / "x.yaml"
+        path.write_text(text)
+        with pytest.raises(ValueError, match="both read as"):
+            canonical_json(yaml.safe_load(text))
+        with pytest.raises(ValueError, match="x.yaml"):
+            content_digest(path)
+
+    def test_a_yaml_set_is_refused(self, tmp_path: Path) -> None:
+        """A set has no order YAML fixes, so its hash would not be one value."""
+        path = tmp_path / "x.yaml"
+        path.write_text("words: !!set {b, a}\n")
+        with pytest.raises(ValueError, match="x.yaml.*!!set"):
+            content_digest(path)
 
     @pytest.mark.parametrize(
         "files",
@@ -165,8 +268,8 @@ class TestActivation:
     def test_a_config_loaded_without_a_profile_names_the_active_one(self) -> None:
         """The configuration always names the profile its data files are read from."""
         profile = active_profile()
-        assert profile is not None and profile.root == B2AI_TRIAGE_PROFILE.resolve()
-        assert load_triage_config().profile == profile
+        assert profile is not None and profile.root == FIXTURE_PROFILE.resolve()
+        assert load_triage_config(profile=ACTIVE).profile == profile
 
     def test_a_failed_load_leaves_no_profile_active(self, without_triage_profile: None, tmp_path: Path) -> None:
         """The profile is activated only once its merged configuration has validated."""
@@ -228,16 +331,16 @@ class TestEveryValueIsOverridable:
 
     def test_a_run_changes_one_value_over_the_profile(self, tmp_path: Path) -> None:
         """The run's data section is applied after the profile's copy, and the config hash covers it."""
-        before = load_triage_config()
+        before = load_triage_config(profile=ACTIVE)
         packaged = task_extent.task_extent_parameters()
         override = tmp_path / "run.yaml"
         override.write_text("data:\n  task_extent.yaml:\n    trim:\n      ddk:\n        kept_share_min: 0.75\n")
-        config = load_triage_config(override)
+        config = load_triage_config(override, profile=ACTIVE)
         try:
             assert task_extent.task_extent_parameters()["trim"]["ddk"]["kept_share_min"] == 0.75
             assert config.config_hash != before.config_hash
         finally:
-            load_triage_config()
+            load_triage_config(profile=ACTIVE)
         assert task_extent.task_extent_parameters() == packaged
 
     def test_a_run_may_not_name_a_fixed_file(self, tmp_path: Path) -> None:
@@ -245,15 +348,15 @@ class TestEveryValueIsOverridable:
         override = tmp_path / "run.yaml"
         override.write_text("data:\n  recording_vectors/dictionary.yaml: {}\n")
         with pytest.raises(ValueError, match="dictionary"):
-            load_triage_config(override)
-        load_triage_config()
+            load_triage_config(override, profile=ACTIVE)
+        load_triage_config(profile=ACTIVE)
 
     def test_the_working_rate_is_fixed(self, tmp_path: Path) -> None:
         """Every model triage runs is native at 16 kHz."""
         override = tmp_path / "run.yaml"
         override.write_text("resample:\n  target_hz: 22050\n")
         with pytest.raises(ValueError, match="fixed"):
-            load_triage_config(override)
+            load_triage_config(override, profile=ACTIVE)
 
 
 class TestSenselabShipsNoFittedValue:
@@ -277,8 +380,11 @@ class TestSenselabShipsNoFittedValue:
             assert shipped == [], relative
 
     def test_senselab_data_names_no_dataset_task(self) -> None:
-        """No key or value of a packaged data file is a B2AI task name (the vendored registry moves in step 7)."""
-        tasks = set(yaml.safe_load((B2AI_TRIAGE_PROFILE / "tasks.yaml").read_text())["tasks"])
+        """No key or value of a packaged data file, nor of the reference profile senselab ships, is a fixture task.
+
+        The vendored registry is exempt until plan step 7 moves it out of senselab.
+        """
+        tasks = set(yaml.safe_load((FIXTURE_PROFILE / "tasks.yaml").read_text())["tasks"])
 
         def strings(node: Any) -> list[str]:  # noqa: ANN401 -- a YAML value
             if isinstance(node, dict):
@@ -287,16 +393,18 @@ class TestSenselabShipsNoFittedValue:
                 return [text for value in node for text in strings(value)]
             return [node] if isinstance(node, str) else []
 
+        reference = PACKAGED_PROFILES / "adult_clinical_speech"
         named = {
-            str(path.relative_to(PACKAGED_DATA)): sorted(set(strings(yaml.safe_load(path.read_text()))) & tasks)
-            for path in sorted(PACKAGED_DATA.rglob("*.yaml"))
+            str(path.relative_to(root.parent)): sorted(set(strings(yaml.safe_load(path.read_text()))) & tasks)
+            for root in (PACKAGED_DATA, reference)
+            for path in sorted(root.rglob("*.yaml"))
             if "b2ai_task_registry" not in path.parts
         }
         assert {path: names for path, names in named.items() if names} == {}
 
-    def test_the_reference_and_b2ai_profiles_supply_every_required_value(self) -> None:
-        """With B2AI's profile (which extends the reference profile) active, the start check finds nothing missing."""
-        assert missing_dataset_values(load_triage_config().values) == []
+    def test_the_reference_and_fixture_profiles_supply_every_required_value(self) -> None:
+        """With the fixture profile (extending the reference profile) active, the start check finds nothing missing."""
+        assert missing_dataset_values(load_triage_config(profile=ACTIVE).values) == []
 
     def test_the_reference_profile_alone_leaves_only_a_datasets_own_values(self, without_triage_profile: None) -> None:
         """Extending the reference profile, a dataset supplies its task list, policy, statistics and per-task values."""
@@ -364,8 +472,8 @@ class TestTheReviewFixes:
         override = tmp_path / "run.yaml"
         override.write_text("data:\n  tasks.yaml:\n    tasks: {}\n")
         with pytest.raises(ValueError, match="no loader merges"):
-            load_triage_config(override)
-        load_triage_config()
+            load_triage_config(override, profile=ACTIVE)
+        load_triage_config(profile=ACTIVE)
 
     def test_a_profile_config_may_not_carry_a_data_section(self, without_triage_profile: None, tmp_path: Path) -> None:
         """A profile changes data files by supplying them, so the chain's order holds."""
@@ -430,21 +538,21 @@ class TestValuesFollowTheWorkflow:
         assert not needed({"path": ["x"], "required": False}, None)
 
     def test_a_task_whose_branch_is_off_is_refused_by_name(self, tmp_path: Path) -> None:
-        """B2AI's breathing tasks under a workflow without AIRWAY: the start check names each one."""
+        """The fixture's breathing tasks under a workflow without AIRWAY: the start check names each one."""
         override = tmp_path / "run.yaml"
         stages = [name for name in STAGE_NAMES if name != "AIRWAY"]
         override.write_text(yaml.safe_dump({"workflow": {"stages": stages}}))
-        missing = missing_dataset_values(load_triage_config(override).values)
+        missing = missing_dataset_values(load_triage_config(override, profile=ACTIVE).values)
         refused = [item for item in missing if item.startswith("tasks.yaml task ")]
         assert refused and all("its branch AIRWAY is off in this workflow" in item for item in refused)
-        assert not missing_dataset_values(load_triage_config().values)
+        assert not missing_dataset_values(load_triage_config(profile=ACTIVE).values)
 
     def test_a_named_cohort_list_the_profile_lacks_is_refused_before_the_run(self, tmp_path: Path) -> None:
         """Found by the step-11 speech-only run: VERDICT failed on every recording instead of the run refusing."""
         override = tmp_path / "run.yaml"
         override.write_text("verdict:\n  recruited_conditions: no_such_list\n")
         assert "recruited_conditions/no_such_list.yaml (config verdict.recruited_conditions names it)" in (
-            missing_dataset_values(load_triage_config(override).values)
+            missing_dataset_values(load_triage_config(override, profile=ACTIVE).values)
         )
 
     def test_a_value_every_run_reads_names_no_stage(self) -> None:
@@ -457,7 +565,7 @@ class TestValuesFollowTheWorkflow:
     ) -> None:
         """tasks.yaml goes after the profile loaded (loading refuses it sooner): the start check names it (review 6)."""
         root = tmp_path / "p"
-        shutil.copytree(B2AI_TRIAGE_PROFILE, root)
+        shutil.copytree(FIXTURE_PROFILE, root)
         config = load_triage_config(profile=root)
         (root / "tasks.yaml").unlink()
         missing = missing_dataset_values(config.values)
@@ -561,3 +669,201 @@ class TestAPilotAndItsFit:
         )
         with pytest.raises(ValueError, match="not a value file a fit writes"):
             load_profile(root)
+
+
+class TestMergingAcrossLayers:
+    """How a value file's layers combine: the profile's own over its fit, directories, empty mappings (review H)."""
+
+    def test_a_profiles_own_family_mapping_wins_over_its_fit(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """A family the profile's own medians leave out is not brought back by its fit (H1)."""
+        fitted = {"discard_replaced_task.yaml": {"short_response": {"family_median_s": {"story": 40.0, "chat": 20.0}}}}
+        root = _profile(
+            tmp_path / "p",
+            {"name": "p", "version": "0", "files": {"discard_replaced_task.yaml": "d.yaml"}},
+            {
+                "d.yaml": "short_response:\n  family_median_s:\n    story: 45.0\n",
+                "fitted.yaml": yaml.safe_dump({"values": fitted}),
+            },
+        )
+        activate_profile(load_profile(root))
+        try:
+            assert data_values("discard_replaced_task.yaml")["short_response"]["family_median_s"] == {"story": 45.0}
+        finally:
+            deactivate_profile()
+
+    def test_two_layers_may_each_supply_a_value_directory(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """A dated file only the base's directory holds is the base's; the newest across the layers is found (H2)."""
+        from senselab.audio.workflows.triage.dataset_profile import newest_member
+
+        base = _profile(
+            tmp_path / "base",
+            {"name": "base", "version": "0", "files": {"disagreement_profile": "dp"}},
+            {"dp/2099-01-01.yaml": "schema_version: '1'\nnear_threshold_band: 0.4\n"},
+        )
+        child = _profile(
+            tmp_path / "child",
+            {"name": "child", "version": "0", "extends": str(base), "files": {"disagreement_profile": "dp"}},
+            {"dp/2098-01-01.yaml": "schema_version: '1'\nnear_threshold_band: 0.3\n"},
+        )
+        activate_profile(load_profile(child))
+        try:
+            assert newest_member("disagreement_profile") == "disagreement_profile/2099-01-01.yaml"
+            assert data_values("disagreement_profile/2099-01-01.yaml")["near_threshold_band"] == 0.4
+            assert data_values("disagreement_profile/2098-01-01.yaml")["near_threshold_band"] == 0.3
+            assert data_path("disagreement_profile/2099-01-01.yaml") == base.resolve() / "dp" / "2099-01-01.yaml"
+        finally:
+            deactivate_profile()
+
+    def test_a_mapping_senselab_leaves_empty_takes_keys_from_every_layer(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """The base fills senselab's empty per-task floors; the extending profile and the run each add one (H3)."""
+        from senselab.audio.workflows.triage.dataset_profile import set_run_data
+
+        base = _profile(
+            tmp_path / "base",
+            {"name": "base", "version": "0", "files": {"task_minimum_duration.yaml": "m.yaml"}},
+            {"m.yaml": "families:\n  cough: 0.5\n"},
+        )
+        child = _profile(
+            tmp_path / "child",
+            {"name": "child", "version": "0", "extends": str(base), "files": {"task_minimum_duration.yaml": "m.yaml"}},
+            {"m.yaml": "families:\n  sniff: 0.3\n"},
+        )
+        activate_profile(load_profile(child))
+        try:
+            set_run_data({"task_minimum_duration.yaml": {"families": {"hum": 0.2}}})
+            assert data_values("task_minimum_duration.yaml")["families"] == {"cough": 0.5, "sniff": 0.3, "hum": 0.2}
+            set_run_data({"task_minimum_duration.yaml": {"familes": {"hum": 0.2}}})  # codespell:ignore familes
+            with pytest.raises(ValueError, match="familes"):  # codespell:ignore familes
+                data_values("task_minimum_duration.yaml")
+        finally:
+            set_run_data(None)
+            deactivate_profile()
+
+
+class TestTheStartCheckReadsWhatARunWouldFailOn:
+    """The start check refuses, by name, what would otherwise fail only once a recording reached it (review I)."""
+
+    def _fixture_copy(self, tmp_path: Path) -> Path:
+        root = tmp_path / "p"
+        shutil.copytree(FIXTURE_PROFILE, root)
+        return root
+
+    def _missing(self, root: Path, override: Path | None = None) -> list[str]:
+        try:
+            return missing_dataset_values(load_triage_config(override, profile=root).values)
+        finally:
+            deactivate_profile()
+
+    def test_the_fixture_and_the_reference_pass(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """The strengthened check leaves the fixture's profile, and a lab corpus written from the template, whole."""
+        assert self._missing(FIXTURE_PROFILE) == []
+        assert self._missing(Path(__file__).parent / "profiles" / "lab_corpus") == []
+
+    def test_a_word_list_file_missing_a_key_is_refused(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """A redaction word list without months, or with a typo, is named before REDACT or VERDICT reads it (I1)."""
+        root = self._fixture_copy(tmp_path)
+        source = Path(load_profile("senselab:adult_clinical_speech").files["redaction_policy.yaml"])
+        policy = yaml.safe_load(source.read_text())
+        policy["month"] = policy.pop("months")
+        (root / "redaction_policy.yaml").write_text(yaml.safe_dump(policy))
+        manifest = yaml.safe_load((root / "profile.yaml").read_text())
+        manifest["files"]["redaction_policy.yaml"] = "redaction_policy.yaml"
+        (root / "profile.yaml").write_text(yaml.safe_dump(manifest))
+        problems = [item for item in self._missing(root) if item.startswith("redaction_policy.yaml")]
+        assert problems == [
+            "redaction_policy.yaml (it lacks the keys ['months'])",
+            "redaction_policy.yaml (no rule reads its keys ['month'])",
+        ]
+
+    def test_a_yaml_template_left_unwritten_is_refused(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """Each policy template carries the marker, as review_policy.txt does (I2)."""
+        from senselab.audio.workflows.triage.dataset_profile import is_template
+        from senselab.audio.workflows.triage.profile_template import TEMPLATE_DIR
+
+        for name in ("review_policy.txt", "time_release.yaml", "airway_event_tokens.yaml", "task_guidance.yaml"):
+            assert is_template(TEMPLATE_DIR / name), name
+        root = self._fixture_copy(tmp_path)
+        shutil.copy(TEMPLATE_DIR / "time_release.yaml", root / "time_release.yaml")
+        assert "time_release.yaml (still the template: write your own)" in self._missing(root)
+
+    def test_a_task_list_that_fails_only_when_read_is_refused(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """A missing or shared lexicon, a missing category list and a fixed category the task lacks (I4)."""
+        root = self._fixture_copy(tmp_path)
+        tasks = yaml.safe_load((root / "tasks.yaml").read_text())
+        story = next(name for name, entry in tasks["tasks"].items() if entry.get("lexicon"))
+        other = next(name for name in tasks["tasks"] if name != story)
+        tasks["tasks"][other]["lexicon"] = tasks["tasks"][story]["lexicon"]
+        animals = next(
+            name for name, entry in tasks["tasks"].items() if (entry.get("expects") or {}).get("item_category")
+        )
+        tasks["tasks"][animals]["categories"] = {
+            "Fruits": {"rule": "list", "words": "task_lexicon/categories/none.yaml"}
+        }
+        (root / "tasks.yaml").write_text(yaml.safe_dump(tasks))
+        missing = self._missing(root)
+        assert any(
+            item.startswith(f"tasks.yaml task {other} lexicon:") and "declares family" in item for item in missing
+        )
+        assert any("task_lexicon/categories/none.yaml (the file is absent)" in item for item in missing)
+        assert f"tasks.yaml task {animals}: expects.item_category 'Animals' is not one of its categories" in missing
+
+    def test_settings_keyed_by_a_task_or_kind_triage_lacks_are_refused(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """A per-task gate naming no task or no gate, and a task-content kind triage does not know (I5)."""
+        root = self._fixture_copy(tmp_path)
+        override = tmp_path / "run.yaml"
+        override.write_text(
+            yaml.safe_dump(
+                {
+                    "verdict": {"gates": {"by_family": {"no-such-task": {"content_omission_fraction_max": 0.1}}}},
+                    "data": {"task_content.yaml": {"any_word_families": ["no_such_kind"]}},
+                }
+            )
+        )
+        missing = self._missing(root, override)
+        assert "config verdict.gates.by_family names tasks the task list lacks: ['no-such-task']" in missing
+        assert any(item.startswith("task_content.yaml any_word_families names kinds") for item in missing)
+        override.write_text(yaml.safe_dump({"verdict": {"gates": {"by_family": {"rainbow-passage": {"no_gate": 1}}}}}))
+        assert "config verdict.gates.by_family.rainbow-passage names gates triage does not have: ['no_gate']" in (
+            self._missing(root, override)
+        )
+
+    def test_a_value_file_that_does_not_merge_is_refused(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """A run's data section, or a profile's own file, with a key senselab's file lacks (I6)."""
+        root = self._fixture_copy(tmp_path)
+        override = tmp_path / "run.yaml"
+        typo = "trian"  # codespell:ignore trian
+        override.write_text(yaml.safe_dump({"data": {"breath_pattern.yaml": {typo: {"distance_s": 0.5}}}}))
+        assert any(item.startswith("breath_pattern.yaml (") and typo in item for item in self._missing(root, override))
+        (root / "task_speech.yaml").write_text((root / "task_speech.yaml").read_text() + "no_such_key: 1\n")
+        assert any(item.startswith("task_speech.yaml (") for item in self._missing(root))
+
+
+def test_a_run_records_the_files_beside_the_profiles_data(without_triage_profile: None, tmp_path: Path) -> None:
+    """A hint builder beside the data is digested on its own; the profile's digest leaves it out (review O4)."""
+    from senselab.audio.workflows.triage.dataset_profile import unlisted_files
+
+    root = _profile(tmp_path / "p", {"name": "p", "version": "0"}, {"hints.py": "def build_hint(wav): ...\n"})
+    (root / "__pycache__").mkdir()
+    (root / "__pycache__" / "hints.cpython-312.pyc").write_bytes(b"\0")
+    before = load_profile(root)
+    recorded = unlisted_files(before)
+    assert recorded["files"] == ["p/hints.py"]
+    (root / "hints.py").write_text("def build_hint(wav): return None\n")
+    after = load_profile(root)
+    assert after.digest == before.digest and unlisted_files(after)["digest"] != recorded["digest"]
+
+
+def test_the_per_task_response_medians_are_asked_for() -> None:
+    """Plan step 10c: a new dataset's template asks for its free-response medians, a pilot's fit fills them (N2)."""
+    [entry] = [
+        e for e in profile_values()["discard_replaced_task.yaml"] if e["path"] == ["short_response", "family_median_s"]
+    ]
+    assert entry["required"] and entry["kind"] == "b"

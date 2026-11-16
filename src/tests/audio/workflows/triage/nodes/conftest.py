@@ -11,7 +11,7 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.consensus import ALGORITHM, NORMALISATION, ROUTINE, SOURCE_ORDER, TIME_FIT
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
 from senselab.audio.workflows.triage.nodes.admit import admit
@@ -80,7 +80,7 @@ def _seed_admit(
 ) -> None:
     """Write the fixture recording and run ADMIT over it, so the ``recording`` stream exists."""
     path = wav_writer("input.wav", _default_samples() if samples is None else samples, sampling_rate)
-    admitted = admit(store, path, load_triage_config(), run_dir=tmp_path)
+    admitted = admit(store, path, load_triage_config(profile=ACTIVE), run_dir=tmp_path)
     assert admitted.audio is not None
 
 
@@ -182,7 +182,7 @@ def _stub_models(
 @pytest.fixture
 def config() -> TriageConfig:
     """The packaged configuration, unmodified."""
-    return load_triage_config()
+    return load_triage_config(profile=ACTIVE)
 
 
 def readings_of(result: Any) -> dict[str, Any]:  # noqa: ANN401 — branches.Result, not imported here
@@ -233,7 +233,7 @@ def gated_from_store(
     Returns:
         True, False, or ``UNDETERMINED``.
     """
-    bounds = load_gate_bounds(settings or load_triage_config(), group)
+    bounds = load_gate_bounds(settings or load_triage_config(profile=ACTIVE), group)
     names = conformance_gate_names(group)
     return apply_gates(names, bounds, store_readings(store), reading_absences(store, names))[0]
 
@@ -257,7 +257,7 @@ def gated_conformance(
     Returns:
         True, False, or ``UNDETERMINED``.
     """
-    bounds = load_gate_bounds(settings or load_triage_config(), group)
+    bounds = load_gate_bounds(settings or load_triage_config(profile=ACTIVE), group)
     names = conformance_gate_names(group)
     return apply_gates(names, bounds, readings_of(result), NO_COUNT_ABSENCE)[0]
 
@@ -278,7 +278,7 @@ def gated_flags(
     Returns:
         Flag gate name to True, False, ``UNDETERMINED`` or ``NOT_APPLICABLE``.
     """
-    bounds = load_gate_bounds(settings or load_triage_config(), group)
+    bounds = load_gate_bounds(settings or load_triage_config(profile=ACTIVE), group)
     return {gate.name: gate.passed for gate in apply_flag_gates(bounds, readings_of(result))}
 
 
@@ -335,7 +335,7 @@ def windows_config(tmp_path: Path) -> TriageConfig:
         "    default_threshold: 0.5\n"
         "    label_thresholds: {}\n"
     )
-    return load_triage_config(override)
+    return load_triage_config(override, profile=ACTIVE)
 
 
 @pytest.fixture
@@ -345,7 +345,7 @@ def phonation_config() -> TriageConfig:
     The F0 range is no longer part of this fixture: PREPROCESS derives the recording's own from
     ``voice.f0_search_range_hz``, which the packaged file states.
     """
-    return load_triage_config()
+    return load_triage_config(profile=ACTIVE)
 
 
 @pytest.fixture
@@ -374,7 +374,7 @@ def spans_config(tmp_path: Path) -> TriageConfig:
         "spans:\n"
         "  k_db: 12.0\n"
     )
-    return load_triage_config(override)
+    return load_triage_config(override, profile=ACTIVE)
 
 
 @pytest.fixture
@@ -404,7 +404,7 @@ def asr_span_config(tmp_path: Path) -> TriageConfig:
         "  k_db: 12.0\n"
         "speech:\n"
     )
-    return load_triage_config(override)
+    return load_triage_config(override, profile=ACTIVE)
 
 
 @pytest.fixture
@@ -441,7 +441,7 @@ def span_quality_config(tmp_path: Path) -> TriageConfig:
         "    default_threshold: 0.5\n"
         "    label_thresholds: {Speech: 0.4}\n"
     )
-    return load_triage_config(override)
+    return load_triage_config(override, profile=ACTIVE)
 
 
 def window(start: float, end: float, scores: dict[str, float]) -> dict[str, Any]:

@@ -1,0 +1,28 @@
+fitted_on:
+  table: made up for the tests (plan step 8c)
+  rows: 0
+values:
+  cohort_stage.yaml:
+    condition:
+      hot_rms_dbfs_min: -10.0
+      clipped_fraction_min: 0.5
+      shift_level_db_min: 18.0
+      shift_snr_db_min: 15.0
+    participant:
+      consistency_cosine_min: 0.6
+    shared_nonmatch:
+      fraction_min: 0.2
+  discard_replaced_task.yaml:
+    non_lexical:
+      free_speech_words_per_s: 2.0
+    short_response:
+      family_median_s:
+        tell-a-story: 40.0
+  task_extent.yaml:
+    count_in:
+      gap_max_s: 3.0
+    atypical:
+      cough_event_s_max: 1.8
+      ddk_rate_hz:
+      - 2.2
+      - 7.7
