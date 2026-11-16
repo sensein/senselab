@@ -379,8 +379,7 @@ The authoritative text of P-27..P-35. `principles.md` keeps their ids and stubs.
 
 `packages/senselab-core/tests/lint/pydra_move_fence_test.py` holds, per module, the senselab names it imports.
 `locks.py`, `storage.py`, `execution/queue.py`, `execution/epoch.py`, `execution/supervisor.py` and
-`worker_pipes.py` are planned to move their generic mechanism to pydra after Phases 4 and 5 (Route B analysis, §4
-M0b and M1-M5). A senselab type imported into one of them makes that move larger, so a new import fails the test
-until it is added to the baseline with its reason. Dropping an import also fails, so the baseline stays exact.
+`worker_pipes.py` are planned to move their generic mechanism to pydra after Phases 4 and 5 (`route-b.md`, §4). A senselab type imported into one
+of them makes that move larger, so a new import fails the test until it is added to the baseline with its reason. Dropping an import also fails, so the baseline stays exact.
 The baseline is the state at 2026-11-16: locks 9, storage 11, queue 24, epoch 8, supervisor 5, worker_pipes 2.
 Shrinking an entry is the goal; adding one needs a ruling.
