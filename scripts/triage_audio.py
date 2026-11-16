@@ -66,7 +66,8 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.data_structures import AudioHints, SpeakerEmbeddingProvenance
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.enrollment import Enrollment
-from senselab.audio.workflows.triage.run import run_triage
+from senselab.audio.workflows.triage.identity import identity_of
+from senselab.audio.workflows.triage.run import corpus_path_of, run_triage
 from senselab.audio.workflows.triage.vocabulary import RunState, release_value
 
 DEFAULT_OUT_DIR = Path("artifacts/triage")
@@ -89,6 +90,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("audio", type=Path, help="Input audio file (.wav, .flac, .mp3, ...)")
+    parser.add_argument(
+        "--corpus-root",
+        type=Path,
+        default=None,
+        help="The corpus's root: the recording's path under it is its id where the hint declares none",
+    )
     parser.add_argument(
         "--out",
         type=Path,
@@ -232,6 +239,11 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as error:
             print(f"ERROR: invalid hint {args.hint}: {error}", file=sys.stderr)
             return 2
+    try:
+        identity_of(hint, stem=args.audio.stem, corpus_path=corpus_path_of(args.audio, args.corpus_root))
+    except ValueError as error:
+        print(f"ERROR: the recording's identity could not be resolved: {error}", file=sys.stderr)
+        return 2
     enrollment = None
     if args.enrollment is not None:
         try:
@@ -243,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
     profile = f", profile {config.profile.name} {config.profile.version}" if config.profile is not None else ""
     print(f"Config: {config.name} v{config.version}{profile} ({config.config_hash})")
     print(f"Input:  {args.audio}")
-    result = run_triage(args.audio, args.out, config, hint=hint, enrollment=enrollment)
+    result = run_triage(args.audio, args.out, config, hint=hint, enrollment=enrollment, corpus_root=args.corpus_root)
 
     print(f"Run:    {result.run_dir}")
     print(f"Store:  {result.store_path}")

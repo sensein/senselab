@@ -89,7 +89,13 @@ from senselab.audio.workflows.triage.extend import (
     take_slice,
     write_store,
 )
-from senselab.audio.workflows.triage.identity import is_undeclared_session, row_groups, row_identity, undeclared_session
+from senselab.audio.workflows.triage.identity import (
+    is_undeclared_session,
+    row_groups,
+    row_identity,
+    speaker_group,
+    undeclared_session,
+)
 from senselab.audio.workflows.triage.nodes.common import capture_environments, describe_exception, find_measurement
 from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.utils.prov_store import ProvStore
@@ -318,6 +324,8 @@ def participants_of(rows: Sequence[dict[str, Any]]) -> list[tuple[str, list[tupl
     for row in rows:
         participant, session = row_groups(row)
         identity = row_identity(row)
+        if identity is not None:
+            participant = speaker_group(identity, str(row.get("stem") or ""))
         if identity is not None and identity.participant and not identity.session:
             session = undeclared_session(identity.participant)
         groups.setdefault(participant, {}).setdefault(session, []).append(row)

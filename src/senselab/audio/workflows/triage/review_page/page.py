@@ -61,6 +61,11 @@ SHARD_DIR = "data"
 SPEECH_TEXT = re.compile(r"<[^>]+>")
 
 
+def record_key(record: Mapping[str, Any]) -> str:
+    """The id a record joins listening sheets on: its recording id (plan step 9b), else its stem."""
+    return str(record.get("recording_id") or record["stem"])
+
+
 def ordered(records: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """Records in page order: participant, session, stem.
 
@@ -249,10 +254,12 @@ def index_of(
         if listen.directions:
             listened["directions"] = list(listen.directions)
         payload["listen"] = listened
-        columns["checks"] = [list(listen.checks[r["stem"]]) if r["stem"] in listen.checks else None for r in records]
+        columns["checks"] = [
+            list(listen.checks[record_key(r)]) if record_key(r) in listen.checks else None for r in records
+        ]
         if listen.proposed:
             columns["proposed_extent"] = [
-                [float(v) for v in listen.proposed[r["stem"]]] if r["stem"] in listen.proposed else None
+                [float(v) for v in listen.proposed[record_key(r)]] if record_key(r) in listen.proposed else None
                 for r in records
             ]
     index = {"build": payload, "cols": columns, "evidence": evidence, "participants": participant_summaries(records)}
@@ -346,7 +353,7 @@ def write_page(
     Returns:
         The page's id, record count and sizes in bytes: the page, the Parquet shards and their wrappers.
     """
-    rows = ordered(r for r in records if listen is None or r["stem"] in listen.checks)
+    rows = ordered(r for r in records if listen is None or record_key(r) in listen.checks)
     index = index_of(rows, title=title, audio_base=audio_base, source_base=source_base, listen=listen)
     size = int(index["build"]["shard_size"])
     out_dir.mkdir(parents=True, exist_ok=True)

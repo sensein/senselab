@@ -29,10 +29,10 @@ import numpy as np
 import pyarrow as pa
 import yaml  # type: ignore[import-untyped]
 
-from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.identity import (
     ADMIT_NODE,
+    RECORDING_ID_COLUMN,
     RECORDING_STREAM,
     ROW_TASK,
     RecordingIdentity,
@@ -40,6 +40,7 @@ from senselab.audio.workflows.triage.identity import (
     identity_columns,
     identity_from_attributes,
 )
+from senselab.audio.workflows.triage.recruited_conditions import CONDITION_KINDS, DIAGNOSES_KEY, ledger_value
 from senselab.audio.workflows.triage.task_catalogue import ResolvedTask, task_from_attributes
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
@@ -809,7 +810,8 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
         :data:`LEDGER_PLACE_REASONS`, ``task_text_words_n``, ``task_event_words_n``, ``person_name_masked_n``,
         ``name_release_proposed_n``, ``propagated_n``, ``propagated_masked_n``, ``unplaced_n``, ``unplaced_open``,
         ``redact_agreed_n``, ``redact_by_kind_n``, ``redact_new_n``, ``conditions_n``, a count per
-        condition kind and ``cohort_diagnoses``. All null where the store carries no ledger.
+        condition kind and ``recruited_diagnoses``; a store from before plan step 9 is read under its old keys. All null
+        where the store carries no ledger.
     """
     ledger: Mapping[str, Any] | None = None
     for entity in view.live("measurement"):
@@ -841,7 +843,7 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
         "redact_new_n",
         "conditions_n",
         *(f"{kind}_condition_n" for kind in CONDITION_KINDS),
-        "cohort_diagnoses",
+        DIAGNOSES_KEY,
     ]
     if ledger is None:
         return dict.fromkeys(names)
@@ -880,8 +882,8 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
         "redact_by_kind_n": int(counts.get("proposals_by_kind_n") or 0),
         "redact_new_n": int(counts.get("proposals_new_n") or 0),
         "conditions_n": int(counts.get("conditions_n") or 0),
-        **{f"{kind}_condition_n": int(counts.get(f"{kind}_condition_n") or 0) for kind in CONDITION_KINDS},
-        "cohort_diagnoses": [str(name) for name in ledger.get("cohort_diagnoses") or ()],
+        **{f"{kind}_condition_n": int(ledger_value(counts, f"{kind}_condition_n") or 0) for kind in CONDITION_KINDS},
+        DIAGNOSES_KEY: [str(name) for name in ledger_value(ledger, DIAGNOSES_KEY) or ()],
     }
 
 
@@ -1402,7 +1404,8 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
         return None
     decision = fold.attributes
     stem = stem_of(run_root)
-    recorded = identity_columns(view_identity(view))
+    identity = view_identity(view)
+    recorded = identity_columns(identity)
 
     recording = view.last("stream", name=RECORDING_STREAM)
     conditioned = view.last("stream", name="preemphasised") or view.last("stream", name="plain")
@@ -1420,6 +1423,7 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
             [str(key) for key in decision["reason_keys"]] if isinstance(decision.get("reason_keys"), list) else None
         ),
         "stem": stem,
+        RECORDING_ID_COLUMN: identity.id_of(stem) if identity is not None else stem,
         "run_dir": str(run_root.relative_to(root)) if run_root.is_relative_to(root) else str(run_root),
         "declared_family": decision.get("declared_family"),
         "declared_task_source": task.source if (task := view_task(view)) is not None else None,
@@ -1624,10 +1628,12 @@ def _fields() -> list[pa.Field]:
         pa.field("reason", pa.string()),
         pa.field("reason_keys", pa.list_(pa.string())),
         pa.field("session", pa.string()),
+        pa.field("target_speaker", pa.string()),
         pa.field("participant_from", pa.string()),
         pa.field("session_from", pa.string()),
         pa.field("task_from", pa.string()),
         pa.field("stem", pa.string()),
+        pa.field(RECORDING_ID_COLUMN, pa.string()),
         pa.field("run_dir", pa.string()),
         pa.field("declared_family", pa.string()),
         pa.field("declared_task_source", pa.string()),
@@ -1679,7 +1685,7 @@ def _fields() -> list[pa.Field]:
         pa.field("redact_new_n", pa.int32()),
         pa.field("conditions_n", pa.int32()),
         *[pa.field(f"{kind}_condition_n", pa.int32()) for kind in CONDITION_KINDS],
-        pa.field("cohort_diagnoses", pa.list_(pa.string())),
+        pa.field(DIAGNOSES_KEY, pa.list_(pa.string())),
         pa.field("gate_node", pa.string()),
         pa.field("gate_group", pa.string()),
         pa.field("gate_family", pa.string()),

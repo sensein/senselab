@@ -6,5 +6,6 @@ from .audio_hints import (  # noqa: F401
     AudioHints,
     ExpectedSpeech,
     SpeakerEmbeddingProvenance,
+    TargetSpeaker,
     TargetSpeakerEmbedding,
 )

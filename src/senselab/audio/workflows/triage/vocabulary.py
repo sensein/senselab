@@ -1373,7 +1373,7 @@ class FoldPolicy:
             condition is never masked and never withholds.
         trim_protected_categories: Upper-cased detector categories under which a marked word
             written as a proper noun is never unmasked by the content-word trim.
-        cohort_conditions: The packaged cohort profile a listed condition is read against
+        recruited_conditions: The recruited-conditions list a listed condition is read against
             (:mod:`senselab.audio.workflows.triage.cohort`), or None where the study declares none,
             in which case every condition is an ``other`` one.
         person_name_review_flags: Whether a masked person's name is a flag ground
@@ -1406,7 +1406,7 @@ class FoldPolicy:
     llm_reset_redactions: bool = False
     condition_categories: tuple[str, ...] = ("CONDITION",)
     trim_protected_categories: tuple[str, ...] = ()
-    cohort_conditions: str | None = None
+    recruited_conditions: str | None = None
     person_name_review_flags: bool = False
     llm_second_speaker_flags: bool = False
     llm_contradiction_flags: bool = False
@@ -1444,7 +1444,7 @@ class FoldPolicy:
             trim_protected_categories=tuple(
                 str(category).upper() for category in (config.get(f"{_SECTION}.trim_protected_categories") or ())
             ),
-            cohort_conditions=str(config.get(f"{_SECTION}.cohort_conditions") or "") or None,
+            recruited_conditions=str(config.get(f"{_SECTION}.recruited_conditions") or "") or None,
             llm_second_speaker_flags=bool(config.get(f"{_SECTION}.llm_second_speaker_flags", False)),
             llm_contradiction_flags=bool(config.get(f"{_SECTION}.llm_contradiction_flags", False)),
             llm_instructions_spoken_flags=bool(config.get(f"{_SECTION}.llm_instructions_spoken_flags", False)),
