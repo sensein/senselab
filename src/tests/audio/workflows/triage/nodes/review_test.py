@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import pytest
+import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -41,6 +42,7 @@ from senselab.audio.workflows.triage.nodes.review import (
     review as _review_node,
 )
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED, Outcome
+from senselab.audio.workflows.triage.workflow import STAGE_NAMES
 from senselab.text.tasks.pii_detection.redaction_review import (
     PHRASE_QUOTES_UNPLACED_FEEDBACK,
     PROMPT_VERSION,
@@ -1188,6 +1190,17 @@ class TestAReplayKeepsTheReadingItDidNotReadAgain:
         assert len(unread) == 1 and store.is_invalidated(unread[0].id)
         rounds = [e for e in store.entities("measurement") if e.attributes.get("name") == LLM_REVIEW_MEASUREMENT]
         assert sum(1 for e in rounds if not store.is_invalidated(e.id)) == 1
+
+    def test_a_workflow_without_review_carries_nothing_forward(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """REVIEW is off in the replaying workflow, so the earlier reading stays retired (step-11 review 2)."""
+        store, held, software = self._read_then_retire(tmp_path, monkeypatch)
+        override = tmp_path / "workflow.yaml"
+        override.write_text(yaml.safe_dump({"workflow": {"stages": [s for s in STAGE_NAMES if s != "REVIEW"]}}))
+        state, why = carry_reading_forward(store, load_triage_config(override), None, held, software=software)
+        assert state == REVIEW_NONE and why is not None and "off in this workflow" in why
+        assert find_measurement(store, REDACTION_LLM_ANNOTATION) is None
 
     def test_changed_inputs_are_reported_and_nothing_is_carried(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -34,6 +34,7 @@ from senselab.audio.workflows.triage.dataset_profile import (
     load_profile,
     set_run_data,
 )
+from senselab.audio.workflows.triage.workflow import listed_stages
 
 _DEFAULT = Path(__file__).parent / "data" / "config" / "default.yaml"
 _OPEN_QUESTIONS = "specs/20260817-triage-workflow-dag/benchmarks/open.md"
@@ -211,8 +212,62 @@ def _deep(base: Any, over: Any) -> Any:  # noqa: ANN401 -- YAML values
     return deepcopy(over)
 
 
+RECOGNIZER_TIMESTAMPS = ("native", "bundled_aligner")
+"""How a recognizer's word times are taken: by the recognizer itself, or by its ``timestamp_model``."""
+
+_RECOGNIZER_KEYS = frozenset({"name", "model", "revision", "timestamps", "timestamp_model", "options"})
+
+RECOGNIZER_PREFIX = "asr_"
+"""What every recognizer's name starts with: the name is its measurement's, which no other block may write."""
+
+
+def _default_aligner(model: str) -> str | None:
+    """The aligner a bundled-aligner recognizer uses when its options name none; None where senselab knows none."""
+    from senselab.audio.tasks.speech_to_text.api import _QWEN_ASR_PREFIXES  # noqa: PLC0415
+    from senselab.audio.tasks.speech_to_text.qwen import _DEFAULT_FORCED_ALIGNER  # noqa: PLC0415
+
+    return _DEFAULT_FORCED_ALIGNER if model.startswith(_QWEN_ASR_PREFIXES) else None
+
+
+def _validate_recognizers(recognizers: Any) -> None:  # noqa: ANN401 -- parsed YAML
+    """Reject an ``asr.recognizers`` list PREPROCESS could not run."""
+    if not isinstance(recognizers, list) or not recognizers:
+        raise ValueError("asr.recognizers must list at least one speech recognizer")
+    names = []
+    for index, entry in enumerate(recognizers):
+        where = f"asr.recognizers[{index}]"
+        if not isinstance(entry, dict):
+            raise ValueError(f"{where} must be a mapping")
+        unknown = sorted(set(entry) - _RECOGNIZER_KEYS)
+        if unknown:
+            raise ValueError(f"{where} has unknown keys {unknown}; the keys are {sorted(_RECOGNIZER_KEYS)}")
+        for key in ("name", "model", "revision"):
+            if not entry.get(key):
+                raise ValueError(f"{where} needs a {key}")
+        if entry.get("timestamps") not in RECOGNIZER_TIMESTAMPS:
+            raise ValueError(f"{where}.timestamps must be one of {RECOGNIZER_TIMESTAMPS}")
+        if not str(entry["name"]).startswith(RECOGNIZER_PREFIX):
+            raise ValueError(f"{where}.name must start with {RECOGNIZER_PREFIX!r}, so it names no other measurement")
+        if (entry["timestamps"] == "bundled_aligner") != bool(entry.get("timestamp_model")):
+            raise ValueError(f"{where}: timestamp_model is given exactly when timestamps is bundled_aligner")
+        options = entry.get("options") or {}
+        if not isinstance(options, dict):
+            raise ValueError(f"{where}.options must be a mapping")
+        if entry.get("timestamp_model"):
+            aligner = options.get("forced_aligner") or _default_aligner(str(entry["model"]))
+            if aligner != entry["timestamp_model"]:
+                raise ValueError(
+                    f"{where}: timestamp_model {entry['timestamp_model']!r} is not the aligner the recognizer uses "
+                    f"({aligner!r}); name it in options.forced_aligner"
+                )
+        names.append(str(entry["name"]))
+    if len(set(names)) != len(names):
+        raise ValueError(f"asr.recognizers names a recognizer twice: {names}")
+
+
 def _validate(values: dict[str, Any]) -> None:
-    """Reject resolved settings that would misrepresent AST's temporal resolution."""
+    """Reject resolved settings that would misrepresent AST's temporal resolution, or name no recognizer."""
+    _validate_recognizers((values.get("asr") or {}).get("recognizers"))
     try:
         hop_s = float(values["windows"]["ast"]["hop_s"])
     except (KeyError, TypeError, ValueError) as error:
@@ -260,6 +315,7 @@ def load_triage_config(
         values = _merge(values, yaml.safe_load(Path(override).read_text()) or {})
     _validate(values)
     hashed = json.dumps(values, sort_keys=True, default=str)
+    listed_stages(values)  # an unknown stage, or one that may not be off, is refused here
     run_data = check_run_data(values.get(DATA_SECTION))
     if loaded is not None:
         activate_profile(loaded)

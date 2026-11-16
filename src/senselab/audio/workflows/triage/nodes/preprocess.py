@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass
 from functools import partial
 from importlib.metadata import version as _dist_version
 from pathlib import Path
-from typing import Any, Callable, Sequence, cast
+from typing import Any, Callable, Mapping, Sequence, cast
 
 import numpy as np
 import torch
@@ -153,12 +153,7 @@ from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioMod
 from senselab.utils.prov_store import CHECKSUM_KEY, PATH_KEY, Entity, ProvStore, file_digest
 
 NODE = "PREPROCESS"
-CRISPERWHISPER_ID = "nyralabs/CrisperWhisper2.0_turbo"
-QWEN_ID = "Qwen/Qwen3-ASR-1.7B"
-QWEN_TIMESTAMP_MODEL = "Qwen/Qwen3-ForcedAligner-0.6B"
-AST_ID = "MIT/ast-finetuned-audioset-10-10-0.4593"
 YAMNET_MODEL_URI = "https://tfhub.dev/google/yamnet/1"
-FRCRN_ID = "alibabasglab/FRCRN_SE_16K"
 PPG_MEASUREMENT = "ppg_posteriorgram"
 PRAAT_MEASUREMENT = "praat_features"
 STIMULUS_MEASUREMENT = "stimulus_alignment"
@@ -177,24 +172,14 @@ WITHDRAWN_CLIPS = "clip_withdrawn"
 """The derivative name the withdrawn clip candidates are listed under in PREPROCESS's verdict."""
 
 
-def _crisperwhisper_model() -> HFModel:
-    """The CrisperWhisper model spec; its commit resolves at construction."""
-    return HFModel(path_or_uri=CRISPERWHISPER_ID, revision="main")
+def _hf_model(model_id: str, revision: str) -> HFModel:
+    """A Hugging Face model spec; its commit resolves at construction."""
+    return HFModel(path_or_uri=model_id, revision=revision)
 
 
-def _qwen_model() -> HFModel:
-    """The Qwen3-ASR model spec; its commit resolves at construction."""
-    return HFModel(path_or_uri=QWEN_ID, revision="main")
-
-
-def _ast_model() -> HFModel:
-    """The AST model spec; its commit resolves at construction."""
-    return HFModel(path_or_uri=AST_ID, revision="main")
-
-
-def _frcrn_model() -> HFModel:
-    """The FRCRN enhancement model spec; its commit resolves at construction."""
-    return HFModel(path_or_uri=FRCRN_ID, revision="main")
+def _configured_model(config: TriageConfig, section: str) -> HFModel:
+    """The model a configuration section names by ``model`` and ``revision`` (``ast``, ``residual.enhancer``)."""
+    return _hf_model(str(config.require(f"{section}.model")), str(config.require(f"{section}.revision")))
 
 
 @dataclass(frozen=True)
@@ -2189,7 +2174,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
 
     def _ast_scores() -> None:
         """AST at the configured window and hop, over its whole label space (C1, C2)."""
-        model = _ast_model()
+        model = _configured_model(config, "ast")
         _scores(
             "ast_scores",
             store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha),
@@ -2624,6 +2609,16 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         derivatives[name] = entity_id
         view.append(entity_id)
 
+    def _recognizer(entry: Mapping[str, Any]) -> Callable[[], None]:
+        """One ``asr.recognizers`` entry as its block."""
+        return lambda: _asr(
+            str(entry["name"]),
+            lambda: _hf_model(str(entry["model"]), str(entry["revision"])),
+            str(entry["timestamps"]),
+            entry.get("timestamp_model"),
+            **dict(entry.get("options") or {}),
+        )
+
     def _consensus() -> None:
         """The consensus stream over every ``asr_hypothesis`` measurement in the store, plus its words."""
         hypotheses: dict[str, Entity] = {}
@@ -2920,7 +2915,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         """
         max_lag_ms = float(config.require("residual.max_lag_ms"))
         bands_hz = [(float(band[0]), float(band[1])) for band in config.require("residual.bands_hz")]
-        model = _frcrn_model()
+        model = _configured_model(config, "residual.enhancer")
         agent = store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha)
         parameters: dict[str, Any] = {
             "model": str(model.path_or_uri),
@@ -3130,7 +3125,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
 
     def _stream_ast(prefix: str) -> None:
         """AST's whole-file windows over one stream, plus its speech-overlap label summaries."""
-        model = _ast_model()
+        model = _configured_model(config, "ast")
         agent = store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha)
         name = f"{prefix}_ast_scores"
         windows = _stream_classifier_scores(
@@ -3176,11 +3171,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         ("level", _level),
         ("disruptions_file", _disruptions_file),
         ("band_profile", _band_profile),
-        ("asr_crisperwhisper", lambda: _asr("asr_crisperwhisper", _crisperwhisper_model, "native", None)),
-        (
-            "asr_qwen",
-            lambda: _asr("asr_qwen", _qwen_model, "bundled_aligner", QWEN_TIMESTAMP_MODEL, return_timestamps=True),
-        ),
+        *((str(entry["name"]), _recognizer(entry)) for entry in config.require("asr.recognizers")),
         ("consensus_transcript", _consensus),
         (PHONATION_TRACKS_MEASUREMENT, _phonation_tracks),
         ("energy_envelope", _envelope),

@@ -7,6 +7,7 @@ from typing import Any, Callable
 import numpy as np
 import pytest
 import torch
+import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.data_structures.audio_hints import ExpectedSpeech
@@ -29,10 +30,8 @@ from senselab.audio.workflows.triage.nodes.common import (
     resolve_stream,
 )
 from senselab.audio.workflows.triage.nodes.preprocess import (
-    CRISPERWHISPER_ID,
     PPG_MEASUREMENT,
     PRAAT_MEASUREMENT,
-    QWEN_ID,
     STIMULUS_MEASUREMENT,
     diarization_measurement,
     diarization_model,
@@ -46,7 +45,9 @@ from senselab.audio.workflows.triage.vocabulary import UNDETERMINED, Outcome
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import (
+    CRISPERWHISPER_ID,
     FAKE_PPGS_SHA,
+    QWEN_ID,
     SR,
     _audio,
     _default_samples,
@@ -1281,6 +1282,36 @@ class TestTheConsensusTranscript:
         assert len(attributes["word_ids"]) == attributes["n_words"] == 2
         for retired in ("words", "provenance", "systems", "timing_authority", "event_ids"):
             assert retired not in attributes
+
+    def test_the_consensus_is_built_over_the_configured_recognizers(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One recognizer in ``asr.recognizers``: only it runs, and the consensus has it as its only source."""
+        override = tmp_path / "one.yaml"
+        override.write_text(
+            yaml.safe_dump(
+                {
+                    "asr": {
+                        "recognizers": [
+                            {"name": "asr_only", "model": QWEN_ID, "revision": "main", "timestamps": "native"}
+                        ]
+                    }
+                }
+            )
+        )
+        _seed_admit(store, tmp_path, wav_writer)
+        seen: dict[str, Any] = {}
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello there"), record=seen)
+        preprocess(store, _audio(tmp_path), load_triage_config(override), run_dir=tmp_path)
+        assert seen["transcribe"] == [QWEN_ID]
+        assert find_measurement(store, "asr_crisperwhisper") is None
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None
+        assert [row["name"] for row in consensus.attributes["sources"]] == ["asr_only"]
 
     def test_each_hypothesis_measurement_carries_its_role_source_and_model(
         self,
