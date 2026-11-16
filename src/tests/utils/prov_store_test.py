@@ -388,7 +388,13 @@ class TestRoundTrip:
     def test_an_unregistered_type_is_refused_on_read_unless_any_type_is_asked_for(self, tmp_path: Path) -> None:
         """A store of another workflow's types opens for a converter (any_type) and nowhere else."""
         path = tmp_path / "prov.jsonl"
-        line = {"record": "entity", "id": "segment-0", "prov_type": "segment", "extent": None, "attributes": {}}
+        line: dict[str, object] = {
+            "record": "entity",
+            "id": "segment-0",
+            "prov_type": "segment",
+            "extent": None,
+            "attributes": {},
+        }
         path.write_text(json.dumps(line) + "\n")
         with pytest.raises(ValueError, match="unknown prov_type 'segment'"):
             ProvStore.read_jsonl(path)

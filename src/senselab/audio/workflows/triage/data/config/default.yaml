@@ -142,16 +142,16 @@ phonation_spans:
 # takes any number of them; one is enough to run. A profile replaces the whole list.
 asr:
   recognizers:
-    - name: asr_crisperwhisper
-      model: nyralabs/CrisperWhisper2.0_turbo
-      revision: main                   # resolved to an immutable commit at load; the agent records that SHA
-      timestamps: native
-    - name: asr_qwen
-      model: Qwen/Qwen3-ASR-1.7B
-      revision: main
-      timestamps: bundled_aligner
-      timestamp_model: Qwen/Qwen3-ForcedAligner-0.6B
-      options: {return_timestamps: true}
+  - name: asr_crisperwhisper
+    model: nyralabs/CrisperWhisper2.0_turbo
+    revision: main                     # resolved to an immutable commit at load; the agent records that SHA
+    timestamps: native
+  - name: asr_qwen
+    model: Qwen/Qwen3-ASR-1.7B
+    revision: main
+    timestamps: bundled_aligner
+    timestamp_model: Qwen/Qwen3-ForcedAligner-0.6B
+    options: {return_timestamps: true}
 
 # The AudioSet sound-event classifier PREPROCESS and TAXONOMY read. Another checkpoint must carry AudioSet's label set,
 # which data/classifier_ontology maps.
