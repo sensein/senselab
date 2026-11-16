@@ -1,22 +1,18 @@
 # Which transcript words are the task's own content: those lying on a task event the task layer read
-# (task_content.py, read by nodes/redact.py). Such a word is never PII and never masked.
-# Derivation: specs/20261007-task-events-in-background/design.md ("Task content in the transcript").
-# v2 (owner, 2026-10-09): the release ground task_content_unmasked is these events' alone -- every
-# located finding lying on them; a finding on a lexical task's declared or stimulus words keeps
-# no_content_masked / reviewer_unmasked_all.
-# v3 (owner, 2026-10-10): the exemption is recognisers' misreadings of the task's own sounds only. In a
-# syllable-repetition family any word on the events; in an airway or voice family only a word the
+# (task_content.py, read by nodes/redact.py). Such a word is never PII and never masked. In a
+# syllable-repetition task any word on the events; in an airway or voice task only a word the
 # recognisers disagree on, one spelled as a sound, or a lexicon word, lying alone on one event. A run of
-# agreed dictionary words is never task content. Design "Speech in a non-lexical task".
+# agreed dictionary words is never task content.
+# Values left empty are a dataset profile's (data/profile_values.yaml); senselab's adult_clinical_speech profile
+# carries a set, each with its derivation.
 version: 3
 families:              # a task kind (task_catalogue.KINDS) -> the task readings whose events are its content
   syllable_repetition: [ddk_task_reading]
   airway: [airway_breath_reading, airway_cough_reading]
   voice: [voice_phonation_reading]
-open_vocabulary_families: []  # dataset profile (B2AI, owner 2026-10-10: animal-fluency, random-item-generation[-v2]):\1
 any_word_families: [syllable_repetition]   # task kinds whose every word on the events is task content
-agreed_run_min: 2      # adjacent agreed dictionary words that are a run of speech
+agreed_run_min:        # profile value (data/profile_values.yaml)
 decisions: [present, review]   # a reading's evidence decision that read the task; `absent` read another activity
 overlap:
-  pad_s: 0.05          # each event widened by this either side (as task_events.yaml entangle_abut_s)
-  min_share: 0.5       # of a word's timing hull inside the widened events, for the word to be task content
+  pad_s:               # profile value (data/profile_values.yaml)
+  min_share:           # profile value (data/profile_values.yaml)

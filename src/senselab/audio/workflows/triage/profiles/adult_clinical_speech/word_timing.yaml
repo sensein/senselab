@@ -9,4 +9,3 @@ arbitration:
   disagreement_s: 1.0         # located starts further apart than this are a disagreement on where the word is
   held_voicing_min_s: 1.5     # in a voice family, a voiced run at least this long is the held phonation (voice_phonation.yaml speech_word_max_s)
   held_voicing_bridge_s: 0.25 # unvoiced gaps up to this long inside a held run are bridged (voice_phonation.yaml break_min_s)
-  voiced_strength_min: 0.45   # periodicity strength at which a phonation-track frame is voiced (voice_phonation.yaml f0.strength_min)

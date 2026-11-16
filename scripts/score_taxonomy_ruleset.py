@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
 from senselab.audio.workflows.triage.routing_analysis.report import OVER_ROUTING_BUDGETS, load_features
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     AXES,
@@ -245,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
 
     arguments.out_dir.mkdir(parents=True, exist_ok=True)
     config = load_triage_config(arguments.config)
+    require_dataset_values(config.values)
     ruleset: Ruleset = load_ruleset(config)
     print(f"[ruleset] {len(ruleset.gates)} gates, config hash {config.config_hash}", flush=True)
 

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
 from senselab.audio.workflows.triage.label_membership import LabelMembership
 from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 from senselab.audio.workflows.triage.routing_analysis.features import (
@@ -271,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
 
     arguments.out_dir.mkdir(parents=True, exist_ok=True)
     config = load_triage_config(arguments.config)
+    require_dataset_values(config.values)
     memberships = span_label_memberships(config)
     onomatopoeic = onomatopoeic_vocabulary(config)
     print(f"[extract] span labels: config hash {config.config_hash}, {memberships}", flush=True)

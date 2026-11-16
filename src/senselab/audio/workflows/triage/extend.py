@@ -296,16 +296,25 @@ def add_config_arguments(parser: argparse.ArgumentParser, *, allow_profile_chang
         )
 
 
-def driver_config(args: argparse.Namespace) -> TriageConfig:
+def driver_config(args: argparse.Namespace, *, require_values: bool = True) -> TriageConfig:
     """The configuration a driver's :func:`add_config_arguments` options name.
 
     Args:
         args: The parsed options.
+        require_values: Refuse, before anything runs, a profile that leaves a value a run needs empty
+            (:func:`~senselab.audio.workflows.triage.dataset_profile.require_dataset_values`); False for a driver
+            that reads no stage's values (the identity check).
 
     Returns:
         The configuration, with the profile active where one was named.
+
+    Raises:
+        DatasetDataMissing: Where ``require_values`` and the profile lacks a value a run needs.
     """
-    return load_triage_config(args.config, profile=args.profile)
+    config = load_triage_config(args.config, profile=args.profile)
+    if require_values:
+        require_dataset_values(config.values)
+    return config
 
 
 def read_manifest(path: Path, *, required: Sequence[str] = ("stem",)) -> list[dict[str, Any]]:

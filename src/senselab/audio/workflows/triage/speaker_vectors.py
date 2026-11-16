@@ -34,7 +34,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from senselab.audio.workflows.triage.dataset_profile import data_path
+from senselab.audio.workflows.triage.dataset_profile import PACKAGED_DATA, data_values
 
 SCHEMA_VERSION = 3
 """Bumped whenever a column is added, removed or retyped, or the pooling rule changes."""
@@ -94,14 +94,15 @@ def load_min_extent_s(path: Optional[Path] = None) -> float:
     """
     import yaml  # type: ignore[import-untyped]
 
-    target = Path(path) if path is not None else data_path("speaker_vector_profile/2026-09-22.yaml")
+    relative = "speaker_vector_profile/2026-09-22.yaml"
+    target = Path(path) if path is not None else PACKAGED_DATA / relative
     if not target.exists():
         raise ValueError(
             f"speaker-vector profile {target} is missing from this install. Refusing to "
             "substitute an unfitted floor and report it as measured; reinstall senselab or pass "
             "an explicit path."
         )
-    doc = yaml.safe_load(target.read_text()) or {}
+    doc = (yaml.safe_load(target.read_text()) or {}) if path is not None else data_values(relative)
     if str(doc.get("schema_version")) != _PROFILE_VERSION:
         raise ValueError(f"{target}: schema_version {doc.get('schema_version')!r}, expected {_PROFILE_VERSION!r}")
     value = doc.get("min_extent_s")

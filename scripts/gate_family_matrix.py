@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures
 from senselab.audio.workflows.triage.routing_analysis.gate_matrix import (
     DECIDING_CLASSES,
@@ -347,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
 
     arguments.out_dir.mkdir(parents=True, exist_ok=True)
     config = load_triage_config(arguments.config)
+    require_dataset_values(config.values)
     ruleset: Ruleset = load_ruleset(config)
     profile = load_disagreement_profile(None if arguments.profile is None else str(arguments.profile))
     band = float(profile["near_threshold_band"])

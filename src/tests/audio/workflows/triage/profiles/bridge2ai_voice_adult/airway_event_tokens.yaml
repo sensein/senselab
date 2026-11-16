@@ -14,9 +14,8 @@
 # (~/Downloads/contrast_check_20261005/): [breath] was written on three with no breath in them
 # (254e47be, 29be45ea, 0b8dcad5), so for a breath task it is context, never evidence. The cough
 # tokens stay: no listening has contradicted the owner's [cough] rule.
-version: 2
+#
+# version 3 (step 5a): the tokens are listed per airway event kind; a task's kind is the task list's (tasks.yaml), so
+# the family map that named the three cough tasks is gone.
+version: 3
 cough: [cough, coughing, coughs, 咳]
-families:
-  respiration-and-cough-cough: cough
-  respiration-and-cough-v2-hardcough: cough
-  voluntary-cough: cough

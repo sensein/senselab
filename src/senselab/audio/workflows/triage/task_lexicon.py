@@ -2,8 +2,8 @@
 
 One definition read by three consumers, so they cannot drift: the residue (task words never reach the
 PII detectors), REDACT's stimulus exemption, and the fold's mask plan (no mask covers a task word). A
-family's lexicon is the names its expectation row declares (``expected_names``) plus, where the run's
-``stimulus.task_lexicons`` enables it, the file its task list entry names (``lexicon``) and, for a word-generation
+family's lexicon is the names its expectation row declares (``expected_names``) plus the file its task list entry
+names (``lexicon``) and, for a word-generation
 task, the words of the category the recording's hint declares, by the rule the entry gives that category
 (:class:`~senselab.audio.workflows.triage.task_catalogue.ItemCategory`). senselab names no file and no category: both
 are the dataset profile's. The derivation of each packaged list is in the file itself and in
@@ -29,6 +29,7 @@ from senselab.audio.workflows.triage.task_catalogue import (
     LETTERS_RULE,
     NUMBERS_RULE,
     ItemCategory,
+    has_own_words,
     item_category_rule,
     task_lexicon_file,
 )
@@ -39,7 +40,6 @@ if TYPE_CHECKING:
 SECTIONS = ("characters", "objects", "events", "time")
 """The lists a lexicon file carries; every entry of each is a word or a phrase."""
 
-_CONFIG_KEY = "stimulus.task_lexicons"
 _POSSESSIVE = ("'s", "s'", "'")
 _PLURAL = ("es", "s")
 
@@ -225,18 +225,16 @@ def task_lexicon(config: "TriageConfig", family: str | None, hint: AudioHints | 
     """The run's task lexicon for one family.
 
     Args:
-        config: The triage configuration; ``stimulus.task_lexicons`` lists the families whose lexicon file, and
-            whose item category's words file or rule, is read.
+        config: The triage configuration, for the near-match.
         family: The declared task family, or None.
         hint: What the recording was declared to contain, for a category named per recording.
 
     Returns:
-        The declared names plus, where enabled, the packaged file's phrases and the item category's, with
-        the run's near-match.
+        The declared names plus, where the task's entry names its own words (a lexicon file or categories), the
+        lexicon file's phrases and the item category's, with the run's near-match.
     """
     names = declared_names_lexicon(family).phrases
-    enabled = {str(name) for name in (config.get(_CONFIG_KEY) or ())}
-    on = bool(family) and str(family) in enabled
+    on = has_own_words(family)
     packaged = packaged_phrases(str(family)) if on else ()
     category = recording_category(family, hint) if on else None
     items = category_phrases(category)

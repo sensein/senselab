@@ -1,0 +1,16 @@
+# Which words of a DATE_TIME-family finding the fold releases by kind: a time of day, a weekday, a season, a relative
+# reference or a length of time, none of which is an absolute date element. Your release policy, in your
+# recordings' languages: list each kind's words (lower case, accents and apostrophes dropped); an empty list releases
+# none of that kind. `blockers` are words that keep a finding masked whatever else it holds (months, holidays, ages).
+time_of_day: []
+weekdays: []
+relative_days: []
+seasons: []
+relative_modifiers: []
+clock_markers: []
+units: []
+plural_units: []
+quantities: []
+modifiers: []
+ordinal_words: []
+blockers: []

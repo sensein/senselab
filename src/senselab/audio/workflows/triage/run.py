@@ -463,6 +463,10 @@ def _write_log(path: Path, source: Path, config: TriageConfig, result: TriageRun
                         "name": config.profile.name,
                         "version": config.profile.version,
                         "digest": config.profile.digest,
+                        "extends": [
+                            {"name": layer.name, "version": layer.version, "digest": layer.digest}
+                            for layer in config.profile.chain()[:-1]
+                        ],
                     }
                 }
                 if config.profile is not None

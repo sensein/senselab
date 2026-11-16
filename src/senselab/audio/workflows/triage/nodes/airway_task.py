@@ -1,6 +1,6 @@
 """AIRWAY's task measures: the breath train and the cough onsets, written to the store.
 
-A declared airway family named in the dataset profile's ``airway_event_requirements.yaml`` is measured here, inside
+A declared breath or cough task (its kind in the dataset profile's task list) is measured here, inside
 the AIRWAY branch, and VERDICT reads only what this module writes. The design is in
 ``specs/20261006-airway-move/design.md``.
 """
@@ -34,26 +34,21 @@ COUGH_READING = "airway_cough_reading"
 """The measurement holding AIRWAY's cough-onset reading, or the inputs it lacked."""
 
 
-@profile_cache
-def _airway_event_requirements() -> dict[str, str]:
-    """Per declared airway family, the event kind it is decided on (profile: ``airway_event_requirements.yaml``)."""
-    document = yaml.safe_load(data_path("airway_event_requirements.yaml").read_text()) or {}
-    return {
-        str(family): str(kind) for kind, families in document.items() if kind != "version" for family in families or ()
-    }
-
-
 def required_event(declared_family: str | None) -> str | None:
-    """The event kind a declared airway family is decided on, or None.
+    """The event kind a declared airway task is decided on, or None.
+
+    A breath or cough task is decided on detected events of its own kind: where AIRWAY, holding every input it needs,
+    detects none, the recording discards with the kind's own ground. The kind is the task list's (step 4).
 
     Args:
-        declared_family: The task family the recording declares.
+        declared_family: The task the recording declares.
 
     Returns:
-        ``breath`` or ``cough`` for a family the dataset profile's ``airway_event_requirements.yaml`` lists under it;
-        None otherwise.
+        ``breath`` or ``cough`` for a task of that kind; None otherwise.
     """
-    return _airway_event_requirements().get(declared_family or "")
+    from senselab.audio.workflows.triage.task_catalogue import BREATH_KIND, COUGH_KIND, is_kind  # noqa: PLC0415
+
+    return next((kind for kind in (BREATH_KIND, COUGH_KIND) if is_kind(declared_family, kind)), None)
 
 
 def breath_attributes(read: BreathPattern | tuple[str, ...]) -> dict[str, Any]:

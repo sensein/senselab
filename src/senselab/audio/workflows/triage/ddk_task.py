@@ -511,7 +511,8 @@ def ddk_reading_of(
         p: The parameters; ``data/task_events.yaml`` when None.
         speech_runs: Runs of agreed non-task words (``task_extent.agreed_speech_runs``).
         extent_p: The parameters of ``data/task_extent.yaml``; the packaged file when None.
-        family: The declared family; one under ``trim.ddk.exclude_families`` is never trimmed.
+        family: The declared task; one whose word fills the recording (the ``spans_the_recording`` trait) is never
+            trimmed.
 
     Returns:
         The reading; with ``absent`` naming ``background_model`` or ``ppg_posteriorgram`` where either
@@ -545,7 +546,9 @@ def ddk_reading_of(
     ratio = float(t["ddk"]["edge_duration_ratio"])
     trim: Trim | None = None
     trimmed: list[TaskEvent] = []
-    spanning = family in set(t["ddk"].get("exclude_families") or ())
+    from senselab.audio.workflows.triage.task_catalogue import SPANS_THE_RECORDING, has_trait  # noqa: PLC0415
+
+    spanning = has_trait(family, SPANS_THE_RECORDING)
     extent = (cluster[0].start_s, max(e.end_s for e in cluster)) if cluster else None
     if cluster and extent is not None and enabled("trim", extent_p) and not spanning:
         trim = trim_train(

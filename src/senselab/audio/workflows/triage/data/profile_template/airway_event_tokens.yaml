@@ -1,0 +1,5 @@
+# Bracketed recognizer tokens that name an airway task's own event, per event kind: a token such as [cough] on a cough
+# task's transcript corroborates AIRWAY's own detection; it is never a word. List the tokens your recognizers write for
+# the kind (lower case, without brackets); leave a kind out where a token is context, not evidence.
+version: 3
+cough: []

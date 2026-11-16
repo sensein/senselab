@@ -16,14 +16,10 @@ extent:                          # which cluster of events is the task (task_clu
   speech_score_min: 0.5          # a plain-stream YAMNet window whose speech-label score reaches this is speech (as background_speech.yaml speech_min)
   count_weight: 1.0              # UNFITTED (owner direction): agreement with the instructed count, or size against the largest cluster where none is instructed
   position_weight: 0.5           # UNFITTED (owner direction): earliness, 1 - start / duration; the task is performed when asked, not at the end of a long file
-  events_per_instructed:         # task events one instructed unit gives
-    breath: 2                    # an inhale and an exhale phase
-    cough: 1
 inhale:
   margin_db: 6.0                 # the level the preparatory inhale stands over the floor (as cough_pattern.yaml inhale). TO REFIT with decision.snr_low_db
   back_max_s: 2.0                # the furthest the extent runs back before the first event
 rhythm:
-  band_hz: [0.1, 1.2]            # the breathing band (C3)
   prominence_min_db: 6.0         # C3 r: a modulation peak this prominent is a rhythm; it groups and recovers phases, never decides
 breath:
   gap_min_s: 3.0                 # the dominant cluster's least inner gap without a rhythm
@@ -34,8 +30,6 @@ cough:
 voice:
   gap_s: 10.0                    # the dominant cluster's longest inner gap between holds (reported only)
 ddk:                             # the diadochokinesis task layer (ddk_task.py); design "DDK task layer"
-  voicing_strength_min: 0.45     # a pitch-track frame is voiced at or over this strength, as breath_pattern.yaml
-  smooth_s: 0.03                 # the nucleus series is smoothed over this
   unvoiced_db: 6.0               # UNFITTED: an unvoiced frame's level is lowered this much, so voicing troughs split nuclei
   nucleus_prominence_db: 6.0     # UNFITTED: a nucleus stands this far over the troughs either side
   nucleus_spacing_s: 0.08        # nuclei at least this far apart (12.5 syllables a second)
