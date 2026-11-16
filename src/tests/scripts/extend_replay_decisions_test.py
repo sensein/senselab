@@ -830,7 +830,9 @@ class TestTheReplayChecksTheRunsRecord:
         (root / "run" / "run.json").write_text(json.dumps({"source": str(source), "config": {"profile": recorded}}))
         with pytest.raises(ReplayRefused, match="another-dataset"):
             _checked(root)
-        assert _checked(root, allow_profile_change=True).profile["recorded"] == recorded
+        profile = _checked(root, allow_profile_change=True).profile
+        assert profile is not None
+        assert profile["recorded"] == recorded
 
     def test_a_run_with_no_recorded_profile_is_accepted(self, tmp_path: Path) -> None:
         """A run from before profiles: nothing to compare."""

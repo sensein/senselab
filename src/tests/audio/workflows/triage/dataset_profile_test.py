@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import yaml  # type: ignore[import-untyped]
@@ -516,7 +516,7 @@ class TestTheReviewFixes:
             {"dp/2099-01-01.yaml": "schema_version: '1'\nnear_threshold_band: 0.4\n"},
         )
         activate_profile(load_profile(root))
-        load_disagreement_profile.cache_clear()
+        cast(Any, load_disagreement_profile).cache_clear()  # profile_cache adds cache_clear; its type does not say so
         assert load_disagreement_profile()["near_threshold_band"] == 0.4
 
 

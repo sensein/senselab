@@ -66,7 +66,7 @@ class TestWhichRowsAMethodReads:
 
     def test_a_participant_reading_counts_once_however_many_recordings_repeat_it(self) -> None:
         """COHORT repeats a participant's reading on each recording; the fence takes one per participant."""
-        rows = [
+        rows: list[dict[str, Any]] = [
             {"participant": "p1", "session": "s1", "x": 1.0},
             {"participant": "p1", "session": "s2", "x": 1.0},
             {"participant": "p2", "session": "s1", "x": 3.0},
