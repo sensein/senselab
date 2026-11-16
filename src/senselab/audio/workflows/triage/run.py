@@ -18,7 +18,7 @@ from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE
 from senselab.audio.workflows.triage.cohort_stage import write_cohort_unavailable
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
+from senselab.audio.workflows.triage.dataset_profile import require_dataset_values, unfitted_values
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.identity import RecordingIdentity, check_label, declared_session_key, identity_of
 from senselab.audio.workflows.triage.nodes.admit import admit
@@ -60,7 +60,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunState,
     release_value,
 )
-from senselab.audio.workflows.triage.workflow import STAGE_NAMES, off_notes
+from senselab.audio.workflows.triage.workflow import STAGE_NAMES, off_notes, running_stages
 from senselab.utils.prov_store import ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
 
@@ -495,6 +495,11 @@ def _write_log(path: Path, source: Path, config: TriageConfig, result: TriageRun
                             {"name": layer.name, "version": layer.version, "digest": layer.digest}
                             for layer in config.profile.chain()[:-1]
                         ],
+                        **(
+                            {"pilot": True, "unfitted": unfitted_values(running_stages(config.values))}
+                            if config.profile.pilot
+                            else {}
+                        ),
                     }
                 }
                 if config.profile is not None

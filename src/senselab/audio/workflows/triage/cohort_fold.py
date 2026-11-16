@@ -184,9 +184,13 @@ def _hot_or_clipped(summary: Any) -> bool | None:  # noqa: ANN401 -- a stored bl
     if rms is None and clipped is None:
         return None
     return bool(
-        (rms is not None and float(rms) >= float(bounds["hot_rms_dbfs_min"]))
-        or (clipped is not None and float(clipped) >= float(bounds["clipped_fraction_min"]))
+        _at_least(rms, bounds.get("hot_rms_dbfs_min")) or _at_least(clipped, bounds.get("clipped_fraction_min"))
     )
+
+
+def _at_least(value: Any, bound: Any) -> bool:  # noqa: ANN401 -- stored readings and YAML values
+    """Whether a reading reaches its bound; a missing reading, or a bound a pilot run has not fitted, reads False."""
+    return value is not None and bound is not None and float(value) >= float(bound)
 
 
 def hot_or_clipped(reading: Mapping[str, Any] | None, scope: str = "participant") -> bool | None:
@@ -232,8 +236,8 @@ def condition_shift(reading: Mapping[str, Any] | None) -> dict[str, Any] | None:
     flags = (_hot_or_clipped(own), _hot_or_clipped(other))
     differs = None not in flags and flags[0] != flags[1]
     explained = (
-        (level is not None and abs(level) >= float(bounds["shift_level_db_min"]))
-        or (snr is not None and abs(snr) >= float(bounds["shift_snr_db_min"]))
+        _at_least(None if level is None else abs(level), bounds.get("shift_level_db_min"))
+        or _at_least(None if snr is None else abs(snr), bounds.get("shift_snr_db_min"))
         or differs
     )
     return {"level_db": level, "snr_db": snr, "hot_or_clipped_differs": differs, "explained": bool(explained)}
@@ -252,7 +256,7 @@ def shared_nonmatch(reading: Mapping[str, Any] | None) -> bool:
     block = _block(reading, PARTICIPANT_NONMATCH)
     bounds = _parameters()["shared_nonmatch"]
     count, fraction = block.get("recordings_nonmatch_n"), block.get("nonmatch_fraction")
-    if count is None or fraction is None:
+    if count is None or fraction is None or bounds.get("fraction_min") is None:
         return False
     return int(count) >= int(bounds["recordings_min"]) and float(fraction) >= float(bounds["fraction_min"])
 

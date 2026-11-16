@@ -124,3 +124,13 @@ def test_the_fold_discards_on_the_rule_only_when_enabled(monkeypatch: pytest.Mon
     decisive = [entry for entry in on.evidence if entry.decisive]
     assert [entry.name for entry in decisive] == [TASK_REPLACED_BY_TALK]
     assert decisive[0].value == pytest.approx(10 / 10.0 / _rate(), abs=1e-4)
+
+
+def test_an_unfitted_free_speech_rate_reads_no_talk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Plan step 10: a pilot run has no reference rate, so the non-lexical rule holds for no recording."""
+    import copy
+
+    params = copy.deepcopy(rule.parameters())
+    params[RULE_NON_LEXICAL]["free_speech_words_per_s"] = None
+    inputs = ReplacedTaskInputs(BREATH, duration_s=10.0, talk_words_n=100.0, task_mismatch=True)
+    assert replaced_task(inputs, params) is None
