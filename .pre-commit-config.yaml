@@ -34,8 +34,11 @@ repos:
   # A profile's recruited-condition lists hold regular expressions; the formatter strips their quotes, and an
   # unquoted `\btremors?\b` inside a flow list is not valid YAML, so it would break the file it formats.
   - id: pretty-format-yaml
-    # A profile's task_guidance.yaml is hashed by bytes into the reviewer and second-opinion cache identity
-    exclude: (^|/)(recruited_conditions/|task_guidance\.yaml$)
+    # A profile's task_guidance.yaml is hashed by bytes into the reviewer and second-opinion cache identity, and
+    # its redaction_policy.yaml (the word lists) by bytes into the review's policy_fingerprint. A dataset
+    # profile's files are hashed by bytes into the profile's digest (dataset_profile.load_profile), so the
+    # profiles under triage/profiles/ stay byte-identical as written.
+    exclude: (^|/)(recruited_conditions/|task_guidance\.yaml$|redaction_policy\.yaml$)|^src/(senselab|tests)/audio/workflows/triage/profiles/
     args:
     - --autofix
     - --indent=2
@@ -52,8 +55,10 @@ repos:
   - id: check-added-large-files
     args: [--maxkb=15000]
   - id: check-case-conflict
+  # The dataset profiles under triage/profiles/ are hashed by bytes into each profile's digest, so the
+  # fixers leave them as written.
   - id: end-of-file-fixer
-    exclude: ^specs/.*/raw/
+    exclude: ^(specs/.*/raw/|src/(senselab|tests)/audio/workflows/triage/profiles/)
   - id: trailing-whitespace
     exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/review_page/vendor/)
   - id: pretty-format-json

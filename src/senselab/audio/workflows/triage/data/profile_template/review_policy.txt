@@ -7,4 +7,3 @@ ages, places (which levels: street, city, state, country), organizations, health
 transcripts are in. Give one quoted example of each. senselab sends this text, then HIPAA Safe Harbor identifiers (D)
 to (R), the numbers, contact details, codes and the like, ahead of the reviewer's questions. It never adds names (A),
 places (B) or dates and ages (C): your rules above are the reviewer's only instructions for those.
-

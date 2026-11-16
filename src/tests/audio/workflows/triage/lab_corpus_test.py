@@ -42,6 +42,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     CATEGORY_FROM_HINT,
     EXPECTATIONS,
     UNDETERMINED,
+    BranchParams,
     Expectation,
     Finding,
     Pattern,
@@ -171,14 +172,16 @@ def test_each_kind_is_read_by_its_branchs_matcher(lab_corpus: TriageConfig, tmp_
     params = branch_params(lab_corpus)
     for branch in ("AIRWAY", "SPEECH", "VOICE"):
         ran: list[str] = []
-        dispatch(
-            branch,
-            store,
-            params,
-            hint_for("p07", "s2", task),
-            align=lambda family, *_: ran.append(f"align {family}") or Result([], []),
-            detect=lambda *_: ran.append("detect") or Result([], []),
-        )
+
+        def align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
+            ran.append(f"align {task_family}")
+            return Result([], [])
+
+        def detect(store: ProvStore, params: BranchParams) -> Result:
+            ran.append("detect")
+            return Result([], [])
+
+        dispatch(branch, store, params, hint_for("p07", "s2", task), align=align, detect=detect)
         assert ran == ([f"align {task}"] if branch == owner else ["detect"]), branch
 
 
@@ -456,14 +459,16 @@ class TestATaskDescribedInline:
         assert mode_of("VOICE", store) == ("align", "hum-softly")
         assert mode_of("SPEECH", store) == ("detect", "hum-softly")
         ran: list[str] = []
-        dispatch(
-            "VOICE",
-            store,
-            branch_params(lab_corpus),
-            None,
-            align=lambda family, *_: ran.append(f"align {family}") or Result([], []),
-            detect=lambda *_: ran.append("detect") or Result([], []),
-        )
+
+        def align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
+            ran.append(f"align {task_family}")
+            return Result([], [])
+
+        def detect(store: ProvStore, params: BranchParams) -> Result:
+            ran.append("detect")
+            return Result([], [])
+
+        dispatch("VOICE", store, branch_params(lab_corpus), None, align=align, detect=detect)
         assert ran == ["align hum-softly"]
 
     def test_verdict_reads_its_recorded_description(self, lab_corpus: TriageConfig) -> None:

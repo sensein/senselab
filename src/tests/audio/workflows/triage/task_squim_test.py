@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 import pytest
 import torch
@@ -342,11 +342,11 @@ def test_the_shipped_scorer_reads_each_window_in_one_pass(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(torchaudio_squim, "extract_objective_quality_features_from_audios", fake)
     monkeypatch.setattr(task_squim, "verify_weights", lambda asset, sha256: sha256)
-    task_squim.squim_scorer.cache_clear()
+    cast(Any, task_squim.squim_scorer).cache_clear()
     try:
         assert task_squim.squim_scorer()([_tone(12.0)]) == [{"pesq": 2.0, "stoi": 0.9, "si_sdr": 10.0}]
     finally:
-        task_squim.squim_scorer.cache_clear()
+        cast(Any, task_squim.squim_scorer).cache_clear()
     assert calls and calls[0]["window_s"] is None and "floor_s" not in calls[0]
 
 
@@ -361,9 +361,14 @@ def test_the_scorer_is_built_per_active_profile(monkeypatch: pytest.MonkeyPatch)
     )
 
     verified: list[str] = []
-    monkeypatch.setattr(task_squim, "verify_weights", lambda asset, sha256: verified.append(sha256) or sha256)
+
+    def verify(asset: Any, sha256: str) -> str:  # noqa: ANN401
+        verified.append(sha256)
+        return sha256
+
+    monkeypatch.setattr(task_squim, "verify_weights", verify)
     held = active_profile()
-    task_squim.squim_scorer.cache_clear()
+    cast(Any, task_squim.squim_scorer).cache_clear()
     try:
         task_squim.squim_scorer()
         task_squim.squim_scorer()
@@ -373,7 +378,7 @@ def test_the_scorer_is_built_per_active_profile(monkeypatch: pytest.MonkeyPatch)
         task_squim.squim_scorer()
         assert len(verified) == 2, "another profile builds its own"
     finally:
-        task_squim.squim_scorer.cache_clear()
+        cast(Any, task_squim.squim_scorer).cache_clear()
         deactivate_profile()
         if held is not None:
             activate_profile(held)
