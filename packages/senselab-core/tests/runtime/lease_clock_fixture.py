@@ -7,7 +7,7 @@ once). `sleep` advances the clock, only yields (`spends=False`) or parks until a
 reads the beats that advance caused. Every wait and loop that a real event ends keeps a real failure bound, `hang_s`.
 
 `age` backdates the stamps in a lease's directory, which is how a test makes storage time
-pass for a lease nobody is renewing.
+pass for a lease whose holder stopped renewing it.
 """
 
 import os

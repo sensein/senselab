@@ -130,7 +130,6 @@ class Recording:
             store=store, profile=profile, run=RunConfig(), workers=WORKERS, measures=measures, units=units
         )
         self.fragments: list[PlanFragment] = []
-        self.telemetry: list[str | None] = []
 
     def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:
         """Admit through `InProcess`."""
@@ -145,9 +144,8 @@ class Recording:
         return self.inner.fragment_size(placed, node)
 
     def submit(self, fragment: PlanFragment) -> Handle:
-        """Record `fragment` and the telemetry opt-out it is submitted under, and submit it."""
+        """Record `fragment` and submit it."""
         self.fragments.append(fragment)
-        self.telemetry.append(os.environ.get("NO_ET"))
         return self.inner.submit(fragment)
 
     def status(self, handle: Handle) -> Status:
@@ -527,12 +525,14 @@ def test_an_unrelated_pydra_error_raises_beside_a_failed_element(tmp_path: Path)
 
 @pytest.mark.contract
 def test_a_run_makes_no_telemetry_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Under an offline profile, pydra's version check is opted out for the run, and the opt-out is gone after."""
+    """Under an offline profile, pydra's version check is never called, and the environment is left as it was."""
+    checks: list[object] = []
+    monkeypatch.setattr("pydra.engine.job.Job.check_etelemetry", staticmethod(lambda: checks.append(1)))
     monkeypatch.delenv("NO_ET", raising=False)
     offline = ExecutionProfile.load("laptop", {"devices": ["cpu"], "network": "offline"})
     placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "one"}], profile=offline)
-    status, executor, _ = _run(placed, values, tmp_path, profile=offline)
-    assert status.done and executor.telemetry == ["1", "1"] and "NO_ET" not in os.environ
+    status, _, _ = _run(placed, values, tmp_path, profile=offline)
+    assert status.done and checks == [] and "NO_ET" not in os.environ
 
 
 @pytest.mark.logic
@@ -551,11 +551,18 @@ def test_compile_plan_refuses_a_gather_into_a_mapped_node(extra: Edge) -> None:
 
 
 @pytest.mark.logic
-def test_the_pinned_pydra_takes_no_lease_settings() -> None:
-    """The profile's job lease is held, not passed: the pinned pydra has no `LeaseSettings`; this fails once it does."""
-    store = pytest.importorskip("pydra.engine.store")
-    assert not hasattr(store, "LeaseSettings")
+def test_the_runner_holds_pydras_lease_protocol_but_not_its_directory_lease() -> None:
+    """The job lease satisfies pydra's `Lease` Protocol and is not a `DirectoryLease`, whose settings are not passed.
+
+    Fails once the runner adopts pydra's lease: the change is then a design change to be made on purpose.
+    """
+    lease_module = pytest.importorskip("pydra.engine.lease")
+    assert hasattr(lease_module, "LeaseSettings")
+    held = runner.SenselabStore(Path("root")).acquire("c", {})
+    assert isinstance(held, lease_module.Lease) and not isinstance(held, lease_module.DirectoryLease)
     assert not hasattr(runner.PydraRunner(profile=PROFILE), "lease")
+    with held as entered:
+        assert entered is held
 
 
 class Cancelling(Recording):

@@ -15,7 +15,7 @@ from typing import Any, ClassVar, cast
 import numpy
 import pytest
 import soundfile
-from epoch_fixture import KILLED_HOLDERS, KILLED_LOCKS, left_by_a_killed_coordinator, taken, waited_past_queued
+from epoch_fixture import taken, waited_past_queued
 from host_fixture import HostShape
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, Node
@@ -275,21 +275,15 @@ def test_an_attempt_that_ended_and_was_then_superseded_gives_no_results(tmp_path
     assert (raised.value.mine, raised.value.current) == (run.epoch, newer)
 
 
-@pytest.mark.parametrize("lock", KILLED_LOCKS)
-@pytest.mark.parametrize("holder", sorted(KILLED_HOLDERS))
-def test_a_resume_runs_past_the_lock_its_killed_coordinator_left(
-    tmp_path: Path, hang_s: float, holder: str, lock: str, host_shape: HostShape
+def test_a_resume_on_another_host_reuses_what_its_killed_coordinator_committed(
+    tmp_path: Path, hang_s: float, host_shape: HostShape
 ) -> None:
-    """A pydra lock a killed coordinator leaves, naming a holder that cannot be proven dead, stops no resume.
-
-    The lock is its run-long lease or a save it was in the middle of.
-    """
+    """A resume from another host reuses the jobs a killed coordinator committed and runs the rest."""
     store = ResultStore(tmp_path / "store")
     placed = _plan(4)
     stopped = placed.run(Stopping(store, 2), store=store)
     with pytest.raises(RuntimeError, match="planted stop"):
         stopped.wait(60)
-    left_by_a_killed_coordinator(stopped.run_dir, holder, lock)
     with host_shape.moved():
         resumed = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
         assert waited_past_queued(resumed, 10.0, hang_s).done

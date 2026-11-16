@@ -3,8 +3,8 @@
 `filelock`'s `SoftFileLock` breaks a stale lock only when its holder's pid is dead on the host that wrote it, so a
 coordinator killed on one node leaves a lock no process of another node can break. The runtime's exclusion is the lease
 (`runtime/locks.py`) and the epoch, both judged on the storage clock. A lock primitive of the forms below, anywhere in
-a package's `src/`, fails here unless `ALLOWED` names it and says why it may stay. A lock that a dependency takes
-(`pydra`'s `save`) is not source of ours; the resume tests run in the `another host` shape to meet it.
+a package's `src/`, fails here unless `ALLOWED` names it and says why it may stay. pydra's own store lock is the
+`DirectoryLease`, judged on the storage clock; senselab's store takes none (`SenselabStore.acquire`).
 """
 
 import ast

@@ -1,17 +1,14 @@
 """Epochs a test makes current: `take` and `bind` in one call, as a coordinator that is ready does.
 
-`left_by_a_killed_coordinator` writes a pydra lock a coordinator killed while it held it leaves, and
 `waited_past_queued` fails a run stuck before its first submit in seconds.
 """
 
-import socket
 import time
 from pathlib import Path
 
-from host_fixture import dead_pid
 from senselab_core.runtime.execution.epoch import Epoch
 from senselab_core.runtime.execution.events import RunStatus, read_events
-from senselab_core.runtime.execution.run import PYDRA_DIR, Run, prepare
+from senselab_core.runtime.execution.run import Run, prepare
 from senselab_core.runtime.execution_settings import JobLease
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -33,39 +30,6 @@ def prepared(placed: Plan, run_dir: Path, store: ResultStore) -> tuple[int, str,
     n = epochs.take(profile.lease)
     epochs.bind(n, attempt, ordinal)
     return n, attempt, ordinal
-
-
-KILLED_HOLDERS = {
-    "another host": f"1\n{socket.gethostname()}.elsewhere\n",
-    "a live process of this host": f"1\n{socket.gethostname()}\n",
-    "a dead process of this host": "",
-}
-"""The holder a killed coordinator's lock file names, as `filelock` writes it (pid, host).
-
-The first two are not provably dead; the third names this host and a pid that ended, which `filelock` breaks from
-this host and from no other, so a resume that moves to another host (`host_fixture`) meets it unbreakable."""
-
-KILLED_LOCKS = ("lease", "save")
-"""The pydra locks a coordinator killed in the middle of them leaves: its run-long lease, or one pickle's save."""
-
-
-def left_by_a_killed_coordinator(run_dir: Path, holder: str, lock: str = "lease") -> Path:
-    """Write the pydra lock `lock` of the run's one workflow job naming `KILLED_HOLDERS[holder]`, and return it.
-
-    The lock goes beside the job directory pydra made, wherever under the run's pydra root that is: `lease` is the
-    run-long lease's `<checksum>-<context>.lock`, `save` is `<checksum>/<context>_save.lock` with the job's pickle
-    cut short, as a kill in the middle of `save` leaves them.
-    """
-    [job] = [d for d in (run_dir / PYDRA_DIR).rglob("plan-*") if d.is_dir()]
-    [context] = [d for d in job.iterdir() if d.is_dir()]
-    if lock == "save":
-        pickled = context / "_job.pklz"
-        pickled.write_bytes(pickled.read_bytes()[:16])
-        path = job / f"{context.name}_save.lock"
-    else:
-        path = job.parent / f"{job.name}-{context.name}.lock"
-    path.write_text(KILLED_HOLDERS[holder] or f"{dead_pid()}\n{socket.gethostname()}\n")
-    return path
 
 
 def waited_past_queued(run: Run, stall_s: float, hang_s: float) -> RunStatus:
