@@ -173,7 +173,7 @@ def write_template(
         source = Path(start_from).resolve()
         load_profile(source)
         shutil.copytree(source, root)
-        manifest = yaml.safe_load((root / MANIFEST).read_text()) or {}
+        manifest: dict[str, Any] = yaml.safe_load((root / MANIFEST).read_text()) or {}
         copied = manifest.get("name")
         manifest["name"] = name
         manifest["version"] = "0"
@@ -207,7 +207,7 @@ def write_template(
         else:
             top = relative.split("/")[0]
             files[top] = top
-    manifest: dict[str, Any] = {"name": name, "version": "0"}
+    manifest = {"name": name, "version": "0"}
     if reference is not None:
         manifest["extends"] = reference
     manifest["provenance"] = {"template": "senselab triage profile template", "written": written}
