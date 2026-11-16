@@ -177,9 +177,9 @@ def entity_subdir(identity: RecordingIdentity) -> Path:
         IdentityLabelError: If a label cannot name a folder (:func:`~.identity.check_label`).
     """
     parts = [
-        label
+        checked
         for label, what in ((identity.participant, "participant"), (identity.session, "session"))
-        if check_label(label, what) is not None
+        if (checked := check_label(label, what)) is not None
     ]
     return Path(*parts) if parts else Path(".")
 

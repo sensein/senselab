@@ -49,7 +49,7 @@ def _breaths(seed: int) -> np.ndarray:
     return x.astype(np.float32)
 
 
-def _run(root: Path, stem: str, samples: np.ndarray) -> dict[str, str]:
+def _run(root: Path, stem: str, samples: np.ndarray) -> dict[str, str | None]:
     run_root = root / stem
     streams = run_root / "run" / "streams"
     streams.mkdir(parents=True)
@@ -67,6 +67,12 @@ def _run(root: Path, stem: str, samples: np.ndarray) -> dict[str, str]:
     return {"stem": stem, "enhanced": str(streams / "enhanced.flac"), **identity_columns(identity)}
 
 
+def _run_root(row: dict[str, str | None]) -> Path:
+    enhanced = row["enhanced"]
+    assert enhanced is not None
+    return Path(enhanced).parents[2]
+
+
 def test_members_of_one_session_share_one_floor(tmp_path: Path) -> None:
     """Three quiet members and a fourth from another session: the three read their session's floor."""
     rows = [_run(tmp_path, f"sub-a_ses-1_task-t{i}", _breaths(i)) for i in range(3)]
@@ -75,7 +81,7 @@ def test_members_of_one_session_share_one_floor(tmp_path: Path) -> None:
     assert [s for s, _ in session_cli.sessions_of(rows)] == ["sub-a/ses-1", "sub-b/ses-9"]
     out = session_cli.process_session("sub-a/ses-1", rows[:3])
     assert {r[SESSION_FLOOR] for r in out} == {FLOOR_FROM_SESSION}
-    store = read_store(Path(rows[0]["enhanced"]).parents[2])
+    store = read_store(_run_root(rows[0]))
     assert find_measurement(store, OWN_FLOOR) is not None
     found = find_measurement(store, SESSION_FLOOR)
     assert found is not None and found.attributes["used_n"] == 3 and found.attributes["session"] == "sub-a/ses-1"
@@ -88,7 +94,7 @@ def test_an_own_floor_already_written_is_not_written_again(tmp_path: Path) -> No
     assert floor_cli.process(rows)[0]["status"] == "skipped"
 
 
-def _speech_run(root: Path, stem: str, seed: int) -> dict[str, str]:
+def _speech_run(root: Path, stem: str, seed: int) -> dict[str, str | None]:
     rng = np.random.default_rng(seed)
     t = np.arange(6 * RATE) / RATE
     speech = (np.sin(2 * np.pi * 150.0 * t) * 0.05 * ((t % 2.0) < 1.0)).astype(np.float32)
@@ -128,7 +134,7 @@ def test_the_session_pass_writes_each_speech_residual_and_the_session_background
     out = session_cli.process_session("sub-a/ses-1", rows)
     assert {r["session_background"] for r in out} == {"speech_residual"}
     assert {r["session_background_members_n"] for r in out} == {2}
-    store = read_store(Path(rows[2]["enhanced"]).parents[2])
+    store = read_store(_run_root(rows[2]))
     reading = find_measurement(store, SPEECH_RESIDUAL)
     assert reading is not None and reading.attributes["kind"] == "airway" and reading.attributes["foreground"]
     found = find_measurement(store, SESSION_FLOOR)
@@ -143,8 +149,8 @@ def test_a_stale_manifest_row_refuses_its_whole_session(tmp_path: Path) -> None:
     """One member whose row names another identity than its run records: no member's store is written."""
     rows = [_run(tmp_path, f"sub-a_ses-1_task-t{i}", _breaths(i)) for i in range(3)]
     rows[2] = {**rows[2], "participant": "sub-z"}
-    stores = [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows]
+    stores = [(_run_root(r) / "run" / "store.jsonl").read_bytes() for r in rows]
     out = session_cli.process_session("sub-a/ses-1", rows)
     assert {r["status"] for r in out} == {"error"}
     assert all("stale" in r[SESSION_FLOOR] for r in out)
-    assert [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows] == stores
+    assert [(_run_root(r) / "run" / "store.jsonl").read_bytes() for r in rows] == stores
