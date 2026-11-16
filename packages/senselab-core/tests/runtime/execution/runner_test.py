@@ -551,13 +551,18 @@ def test_compile_plan_refuses_a_gather_into_a_mapped_node(extra: Edge) -> None:
 
 
 @pytest.mark.logic
-def test_the_runner_holds_its_job_lease_and_passes_no_lease_settings() -> None:
-    """The job lease is the coordinator epoch (`_EpochLease`), not pydra's `DirectoryLease`: no settings are passed."""
-    pytest.importorskip("pydra.engine.lease")
+def test_the_runner_holds_pydras_lease_protocol_but_not_its_directory_lease() -> None:
+    """The job lease satisfies pydra's `Lease` Protocol and is not a `DirectoryLease`, whose settings are not passed.
+
+    Fails once the runner adopts pydra's lease: the change is then a design change to be made on purpose.
+    """
+    lease_module = pytest.importorskip("pydra.engine.lease")
+    assert hasattr(lease_module, "LeaseSettings")
+    held = runner.SenselabStore(Path("root")).acquire("c", {})
+    assert isinstance(held, lease_module.Lease) and not isinstance(held, lease_module.DirectoryLease)
     assert not hasattr(runner.PydraRunner(profile=PROFILE), "lease")
-    lease = runner.SenselabStore(Path("root")).acquire("c", {})
-    with lease as held:
-        assert held is lease and lease.checksum == "c"
+    with held as entered:
+        assert entered is held
 
 
 class Cancelling(Recording):
