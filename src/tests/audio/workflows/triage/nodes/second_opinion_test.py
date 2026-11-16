@@ -21,11 +21,21 @@ from senselab.audio.workflows.triage.nodes.second_opinion import (
     OK,
     opinion_cache_key,
     pin_of,
-    second_opinion,
+)
+from senselab.audio.workflows.triage.nodes.second_opinion import (
+    second_opinion as _second_opinion_node,
 )
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, SECOND_OPINION_ANSWERS
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import record_admitted_hint
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
+
+
+def second_opinion(store: ProvStore, config: Any, hint: AudioHints | None = None, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+    """SECOND_OPINION as a run reaches it: ADMIT has already recorded the hint's identity (``record_admitted_hint``)."""
+    record_admitted_hint(store, hint)
+    return _second_opinion_node(store, config, hint, *args, **kwargs)
+
 
 ON = "second_opinion:\n  enabled: true\n"
 

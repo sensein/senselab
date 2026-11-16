@@ -13,11 +13,11 @@ from senselab.audio.workflows.triage.identity import (
     SESSION_KEY,
     TASK_TOKEN_KEY,
     declared_session_key,
+    declared_task_id,
     identity_from_stem,
     identity_of,
     recorded_identity,
     session_key_of,
-    task_id_candidates,
 )
 from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family, task_id_of
 from senselab.utils.prov_store import ProvStore
@@ -104,33 +104,57 @@ class TestRecordedOnTheRun:
         assert recorded_identity(ProvStore(run_id="empty")) is None
 
 
-class TestTaskIdCandidates:
-    """The task ids a branch tries, best carrier first."""
+class TestDeclaredTaskId:
+    """The one task id every stage reads."""
 
-    def test_the_hint_token_then_the_stem(self) -> None:
-        """Without a recorded declaration: the token, then the stem's task id."""
+    def test_without_a_recorded_declaration_the_stem_is_read(self) -> None:
+        """A store that recorded no hint gives the stem's task id; there is no live hint to consult."""
         store = ProvStore(run_id="c")
         _recording(store, f"/data/{STEM}.wav")
-        hint = AudioHints(metadata={TASK_TOKEN_KEY: "Loudness"})
-        assert task_id_candidates(store, hint) == ["loudness", "respiration-and-cough-fivebreaths-2"]
-        assert task_id_candidates(store, None) == ["respiration-and-cough-fivebreaths-2"]
+        assert declared_task_id(store) == "respiration-and-cough-fivebreaths-2"
 
-    def test_a_task_recorded_from_a_hint_is_tried_before_the_stem(self) -> None:
+    def test_a_task_recorded_from_a_hint_wins_over_the_stem(self) -> None:
         """A reader without the hint still sees what it declared."""
         store = ProvStore(run_id="c")
         declared = identity_of(STEM, AudioHints(metadata={TASK_TOKEN_KEY: "loudness"}))
         _recording(store, f"/data/{STEM}.wav", **declared.as_attributes())
-        assert task_id_candidates(store, None) == ["loudness", "respiration-and-cough-fivebreaths-2"]
+        assert declared_task_id(store) == "loudness"
 
-    def test_a_task_recorded_from_the_stem_is_not_repeated(self) -> None:
-        """A stem-read declaration adds nothing the stem does not already give."""
+    def test_a_hint_that_declares_an_unknown_task_is_not_overruled_by_the_stem(self) -> None:
+        """The hint is the declaration: a task it names as unknown stays unknown."""
+        store = ProvStore(run_id="c")
+        declared = identity_of(STEM, AudioHints(metadata={TASK_TOKEN_KEY: "unknown"}))
+        _recording(store, f"/data/{STEM}.wav", **declared.as_attributes())
+        assert declared_task_id(store) == UNKNOWN_TASK
+
+    def test_a_task_recorded_from_the_stem_is_the_stem(self) -> None:
+        """A stem-read declaration gives what the stem gives."""
         store = ProvStore(run_id="c")
         _recording(store, f"/data/{STEM}.wav", **identity_from_stem(STEM).as_attributes())
-        assert task_id_candidates(store, None) == ["respiration-and-cough-fivebreaths-2"]
+        assert declared_task_id(store) == "respiration-and-cough-fivebreaths-2"
         assert DECLARED_TASK_ID in store.entities("stream")[0].attributes
 
-    def test_a_refused_recording_falls_back_to_the_admit_activity(self) -> None:
-        """ADMIT wrote no stream, so the file it was run with stands in."""
+    def test_an_explicit_stem_is_read_where_no_hint_task_was_recorded(self) -> None:
+        """A caller holding the stem it means passes it; a recorded hint task still wins."""
+        store = ProvStore(run_id="c")
+        _recording(store, f"/data/{STEM}.wav")
+        assert declared_task_id(store, "sub-1_ses-1_task-loudness-3") == "loudness-3"
+
+    def test_a_refused_recording_reads_what_the_admit_activity_recorded(self) -> None:
+        """ADMIT wrote no stream; its activity carries the file and what the hint declared."""
+        store = ProvStore(run_id="c")
+        declared = identity_of("recording-0042", AudioHints(metadata={TASK_TOKEN_KEY: "cough-2"}))
+        store.activity(
+            node="ADMIT", step=None, parameters={"audio_file": "/data/recording-0042.wav", **declared.as_attributes()}
+        )
+        assert declared_task_id(store) == "cough-2"
+
+    def test_a_refused_recording_without_a_declaration_reads_the_admitted_file(self) -> None:
+        """A store from before ADMIT recorded declarations on its activity: the file's stem."""
         store = ProvStore(run_id="c")
         store.activity(node="ADMIT", step=None, parameters={"audio_file": f"/data/{STEM}.wav"})
-        assert task_id_candidates(store, None) == ["respiration-and-cough-fivebreaths-2"]
+        assert declared_task_id(store) == "respiration-and-cough-fivebreaths-2"
+
+    def test_no_admit_record_is_unknown(self) -> None:
+        """Neither a stream nor an activity: nothing declares a task."""
+        assert declared_task_id(ProvStore(run_id="empty")) == UNKNOWN_TASK

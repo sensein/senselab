@@ -86,6 +86,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     fold_file_verdict,
 )
 from senselab.utils.prov_store import Entity, ProvStore
+from tests.audio.workflows.triage.conftest import declare_hint_identity
 from tests.audio.workflows.triage.nodes.conftest import gated_from_store, level_of_raster, seed_background_view
 
 SR = 16000
@@ -920,7 +921,8 @@ class TestTheDeclaredFamilySelectsTheBody:
         seed_ddk_store(
             store, stem="recording", posteriorgram=_cv_raster(["labial", "alveolar", "velar"] * 6, [0.2] * 17)
         )
-        assert mode_of("SPEECH", store, PATAKA_HINT) == ("align", "diadochokinesis-pataka")
+        declare_hint_identity(store, PATAKA_HINT)
+        assert mode_of("SPEECH", store) == ("align", "diadochokinesis-pataka")
         _run(store, ddk_config, tmp_path, PATAKA_HINT)
         assert _reading(store)["unit"] == "cycle"
 

@@ -193,43 +193,45 @@ def recorded_identity(store: ProvStore) -> RecordingIdentity | None:
     )
 
 
-def task_id_candidates(store: ProvStore, hint: AudioHints | None) -> list[str]:
-    """Every task id the hint and the store carry, best carrier first, trailing index intact.
-
-    The order is the hint's own token, then a task id ADMIT recorded from a hint, then the recording's
-    stem. Where ADMIT refused the recording and wrote no stream, the stem of the ``audio_file`` its
-    activity was run with stands in.
+def admit_record(store: ProvStore) -> tuple[Mapping[str, Any], str] | None:
+    """What ADMIT recorded about the recording, and the path it recorded it for.
 
     Args:
         store: The provenance store.
-        hint: The recording's hints, or None.
 
     Returns:
-        The candidate task ids, lower-cased, in the order they should be tried.
+        The latest live ``recording`` stream's attributes and its ``path``; where ADMIT refused the recording
+        and wrote no stream, its activity's parameters and ``audio_file``; None when ADMIT left neither.
     """
-    found: list[str] = []
-    token = _declared(hint, TASK_TOKEN_KEY)
-    if token:
-        found.append(token.lower())
-    with_path = [
-        entity
-        for entity in store.entities("stream")
-        if entity.attributes.get("name") == RECORDING_STREAM
-        and entity.attributes.get("path")
-        and not store.is_invalidated(entity.id)
-    ]
-    if with_path:
-        attributes = with_path[-1].attributes
+    entity = recording_entity(store)
+    if entity is not None:
+        return entity.attributes, str(entity.attributes.get("path") or "")
+    admitted = [a for a in store.activities(ADMIT_NODE) if a.parameters.get("audio_file")]
+    if admitted:
+        return admitted[-1].parameters, str(admitted[-1].parameters["audio_file"])
+    return None
+
+
+def declared_task_id(store: ProvStore, stem: str = "") -> str:
+    """The task id every stage reads: the hint's, as ADMIT recorded it, else the stem's.
+
+    Args:
+        store: The provenance store.
+        stem: The stem to read where no hint's task was recorded; empty reads the stem of the path ADMIT
+            recorded (:func:`admit_record`).
+
+    Returns:
+        The lower-cased task id with its trailing index, or :data:`UNKNOWN_TASK`.
+    """
+    record = admit_record(store)
+    if record is not None:
+        attributes, path = record
         sources = attributes.get(DECLARED_FROM)
         recorded = attributes.get(DECLARED_TASK_ID)
         if isinstance(sources, Mapping) and sources.get("task_id") == FROM_HINT and isinstance(recorded, str):
-            found.append(recorded)
-        found.append(task_id_of(Path(str(attributes["path"])).stem))
-    else:
-        admitted = [a for a in store.activities(ADMIT_NODE) if a.parameters.get("audio_file")]
-        if admitted:
-            found.append(task_id_of(Path(str(admitted[-1].parameters["audio_file"])).stem))
-    return found
+            return recorded
+        stem = stem or Path(path).stem
+    return task_id_of(stem) if stem else UNKNOWN_TASK
 
 
 def declared_session_key(store: ProvStore, stem: str | None = None) -> str | None:

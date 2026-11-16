@@ -7,12 +7,23 @@ from typing import Callable, cast
 import numpy as np
 import pytest
 
-from senselab.audio.data_structures import AudioHints
+from senselab.audio.data_structures import AudioHints, ExpectedSpeech
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.hint_record import (
+    HINT,
+    HINT_DIGEST,
+    HINT_FIELD_DIGESTS,
+    NO_HINT,
+    changed_fields,
+    hint_digest,
+    recorded_hint,
+    recorded_hint_digest,
+)
 from senselab.audio.workflows.triage.identity import (
     DECLARED_FROM,
     DECLARED_SESSION,
     DECLARED_TASK_ID,
+    declared_task_id,
     recorded_identity,
 )
 from senselab.audio.workflows.triage.nodes import admit as admit_module
@@ -182,6 +193,40 @@ class TestStoreWrites:
         identity = recorded_identity(store)
         assert identity is not None
         assert (identity.participant, identity.session, identity.task_family) == ("P7", "s1", "cough")
+
+    def test_pass_records_the_hint_and_its_field_digests(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """The hint itself is kept, so a later pass can tell what this run was given."""
+        path = wav_writer("recording-0042.wav", _sine())
+        hint = AudioHints(metadata={"task_token": "cough-2"}, expected_speech=[ExpectedSpeech(text="Hello.")])
+        admit(store, path, config, hint, run_dir=tmp_path)
+        [stream] = store.entities("stream")
+        assert stream.attributes[HINT] == hint.model_dump(mode="json", exclude_defaults=True)
+        assert stream.attributes[HINT_DIGEST] == hint_digest(hint)
+        assert set(stream.attributes[HINT_FIELD_DIGESTS]) >= {"expected_speech", "metadata.task_token"}
+        assert recorded_hint(store) == hint
+        assert changed_fields(store, hint) == []
+
+    def test_pass_records_that_no_hint_was_given(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """No hint is recorded as such, which is not the same as a store that predates the record."""
+        path = wav_writer("sub-01_ses-02_task-loudness-1.wav", _sine())
+        admit(store, path, config, run_dir=tmp_path)
+        assert recorded_hint_digest(store) == NO_HINT
+        assert recorded_hint(store) is None
+
+    def test_a_refused_recording_keeps_what_its_hint_declared(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """No stream is written, so ADMIT's activity carries the identity and the hint."""
+        path = wav_writer("recording-0042.wav", np.zeros(16000))
+        hint = AudioHints(metadata={"task_token": "cough-2"})
+        admit(store, path, config, hint, run_dir=tmp_path)
+        assert store.entities("stream") == []
+        assert declared_task_id(store) == "cough-2"
+        assert recorded_hint_digest(store) == hint_digest(hint)
 
     def test_fail_writes_only_a_verdict(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]

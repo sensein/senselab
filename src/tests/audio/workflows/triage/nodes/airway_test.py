@@ -46,6 +46,7 @@ from senselab.audio.workflows.triage.nodes.verdict import verdict
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.vocabulary import Outcome, RunStatus, Triage
 from senselab.utils.prov_store import Entity, ProvStore
+from tests.audio.workflows.triage.conftest import declare_hint_identity
 from tests.audio.workflows.triage.nodes.conftest import gated_from_store, store_readings, word_attributes
 
 PROV_ASSERTION: Literal["assertion"] = "assertion"
@@ -493,11 +494,11 @@ class TestTheModeComesFromTheDeclaration:
         _seed(store, tmp_path, task=None)
         assert mode_of("AIRWAY", store) == ("detect", None)
 
-    def test_the_hints_task_token_outranks_the_path(self, store: ProvStore, tmp_path: Path) -> None:
-        """The clean carrier wins, which is what makes the ugly one replaceable."""
+    def test_the_recorded_task_token_outranks_the_path(self, store: ProvStore, tmp_path: Path) -> None:
+        """The clean carrier wins, which is what makes the ugly one replaceable; ADMIT records it."""
         _seed(store, tmp_path, task="harvard-sentences-list")
-        hint = AudioHints(metadata={"task_token": "respiration-and-cough-breath"})
-        assert mode_of("AIRWAY", store, hint) == ("align", "respiration-and-cough-breath")
+        declare_hint_identity(store, AudioHints(metadata={"task_token": "respiration-and-cough-breath"}))
+        assert mode_of("AIRWAY", store) == ("align", "respiration-and-cough-breath")
 
     def test_the_node_records_which_mode_ran(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
