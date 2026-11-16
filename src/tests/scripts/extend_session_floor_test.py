@@ -95,7 +95,7 @@ def test_an_own_floor_already_written_is_not_written_again(tmp_path: Path) -> No
     assert floor_cli.process(rows)[0]["status"] == "skipped"
 
 
-def _speech_run(root: Path, stem: str, seed: int, *, task: str) -> dict[str, str]:
+def _speech_run(root: Path, stem: str, seed: int, *, task: str) -> dict[str, str | None]:
     """One finished run under ``stem``, its ``task`` recorded as ADMIT records the hint's (``record_task``)."""
     rng = np.random.default_rng(seed)
     t = np.arange(6 * RATE) / RATE
