@@ -336,7 +336,7 @@ def test_shard_assignment_depends_only_on_the_subject(tmp_path: Path) -> None:
 
 def test_a_rerun_of_one_recording_contributes_once_at_its_latest_timestamp(tmp_path: Path) -> None:
     """Two runs of the same stem are one recording, not two extents from one reading."""
-    rerun = {"participant": "p-r", "session": "s", "task": "x"}
+    rerun: dict[str, Any] = {"participant": "p-r", "session": "s", "task": "x"}
     build_recording(tmp_path, timestamp="20260920-010000", extents=((1.0, 9.0, "speech"),), **rerun)
     build_recording(tmp_path, timestamp="20260920-020000", extents=((2.0, 9.0, "speech"),), **rerun)
     grouped, _ = sv.gather(tmp_path, _table(tmp_path))
@@ -368,7 +368,7 @@ def test_two_recordings_sharing_a_stem_in_one_folder_are_two_rows(tmp_path: Path
 
 def test_speakers_are_the_table_s_participants_wherever_the_runs_sit(tmp_path: Path) -> None:
     """Runs in folders that name no subject are grouped by the participant the table records for them."""
-    elsewhere = {"participant": "x", "session": "y", "task": "one"}
+    elsewhere: dict[str, Any] = {"participant": "x", "session": "y", "task": "one"}
     first = build_recording(tmp_path / "site-a", extents=((1.0, 9.0, "speech"),), **elsewhere)
     second = build_recording(tmp_path / "site-b", extents=((1.0, 8.0, "speech"),), **elsewhere)
     rows = [_recording(run_root, tmp_path, participant="P1") for run_root in (first, second)]

@@ -83,7 +83,7 @@ class TestWhichRowsAMethodReads:
 
     def test_a_target_speaker_is_its_own_group_as_cohort_reads_it(self) -> None:
         """Review J1: two target speakers of one participant are two groups, as COHORT groups them, not one."""
-        rows = [
+        rows: list[dict[str, Any]] = [
             {"participant": "p1", "session": "s1", "target_speaker": "p1:child", "x": 1.0},
             {"participant": "p1", "session": "s1", "target_speaker": "p1:parent", "x": 2.0},
             {"participant": "p1", "session": "s1", "target_speaker": "p1:parent", "x": 2.0},

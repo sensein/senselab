@@ -54,7 +54,9 @@ def _breaths(seed: int) -> np.ndarray:
     return x.astype(np.float32)
 
 
-def _run(root: Path, stem: str, samples: np.ndarray, participant: str, session: str, task: str) -> dict[str, str]:
+def _run(
+    root: Path, stem: str, samples: np.ndarray, participant: str, session: str, task: str
+) -> dict[str, str | None]:
     """One finished run under ``stem``, its identity recorded as its hint declares it."""
     run_root = root / stem
     streams = run_root / "run" / "streams"
@@ -100,7 +102,7 @@ def test_an_own_floor_already_written_is_not_written_again(tmp_path: Path) -> No
     assert floor_cli.process(rows)[0]["status"] == "skipped"
 
 
-def _speech_run(root: Path, stem: str, seed: int, *, task: str, token: str | None = None) -> dict[str, str]:
+def _speech_run(root: Path, stem: str, seed: int, *, task: str, token: str | None = None) -> dict[str, str | None]:
     """One finished run under ``stem`` in ``pa``/``s1``, its identity and ``task`` recorded as ADMIT records the hint's.
 
     ``token`` is the task id with its trailing index, where it differs from ``task``.
@@ -157,11 +159,11 @@ def test_a_stale_manifest_row_refuses_its_whole_session(tmp_path: Path) -> None:
     """One member whose row names another identity than its run records: no member's store is written."""
     rows = [_run(tmp_path, f"rec-000{i}", _breaths(i), "pa", "s1", f"t{i}") for i in range(3)]
     rows[2] = {**rows[2], "participant": "pz"}
-    stores = [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows]
+    stores = [(_run_root(r) / "run" / "store.jsonl").read_bytes() for r in rows]
     out = session_cli.process_session("pa/s1", rows)
     assert {r["status"] for r in out} == {"error"}
     assert all("stale" in r[SESSION_FLOOR] for r in out)
-    assert [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows] == stores
+    assert [(_run_root(r) / "run" / "store.jsonl").read_bytes() for r in rows] == stores
 
 
 def test_a_member_made_with_another_profile_refuses_its_whole_session(tmp_path: Path) -> None:
@@ -169,13 +171,13 @@ def test_a_member_made_with_another_profile_refuses_its_whole_session(tmp_path: 
     from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
     rows = [_run(tmp_path, f"rec-000{i}", _breaths(i), "pa", "s1", f"t{i}") for i in range(3)]
-    log = Path(rows[1]["enhanced"]).parents[1] / "run.json"
+    log = _run_root(rows[1]) / "run" / "run.json"
     log.write_text(json.dumps({"config": {"profile": {"name": "another-dataset", "version": "1", "digest": "x"}}}))
-    stores = [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows]
+    stores = [(_run_root(r) / "run" / "store.jsonl").read_bytes() for r in rows]
     out = session_cli.process_session("pa/s1", rows, load_triage_config(profile=ACTIVE))
     assert {r["status"] for r in out} == {"error"}
     assert all("refused" in r[SESSION_FLOOR] for r in out)
-    assert [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows] == stores
+    assert [(_run_root(r) / "run" / "store.jsonl").read_bytes() for r in rows] == stores
 
 
 @pytest.mark.parametrize("cli", [floor_cli, session_cli], ids=["background_floor", "session_floor"])

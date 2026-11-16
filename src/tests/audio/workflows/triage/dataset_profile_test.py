@@ -736,8 +736,8 @@ class TestMergingAcrossLayers:
         try:
             set_run_data({"task_minimum_duration.yaml": {"families": {"hum": 0.2}}})
             assert data_values("task_minimum_duration.yaml")["families"] == {"cough": 0.5, "sniff": 0.3, "hum": 0.2}
-            set_run_data({"task_minimum_duration.yaml": {"familes": {"hum": 0.2}}})
-            with pytest.raises(ValueError, match="familes"):
+            set_run_data({"task_minimum_duration.yaml": {"familes": {"hum": 0.2}}})  # codespell:ignore familes
+            with pytest.raises(ValueError, match="familes"):  # codespell:ignore familes
                 data_values("task_minimum_duration.yaml")
         finally:
             set_run_data(None)
@@ -839,10 +839,9 @@ class TestTheStartCheckReadsWhatARunWouldFailOn:
         """A run's data section, or a profile's own file, with a key senselab's file lacks (I6)."""
         root = self._fixture_copy(tmp_path)
         override = tmp_path / "run.yaml"
-        override.write_text(yaml.safe_dump({"data": {"breath_pattern.yaml": {"trian": {"distance_s": 0.5}}}}))
-        assert any(
-            item.startswith("breath_pattern.yaml (") and "trian" in item for item in self._missing(root, override)
-        )
+        typo = "trian"  # codespell:ignore trian
+        override.write_text(yaml.safe_dump({"data": {"breath_pattern.yaml": {typo: {"distance_s": 0.5}}}}))
+        assert any(item.startswith("breath_pattern.yaml (") and typo in item for item in self._missing(root, override))
         (root / "task_speech.yaml").write_text((root / "task_speech.yaml").read_text() + "no_such_key: 1\n")
         assert any(item.startswith("task_speech.yaml (") for item in self._missing(root))
 

@@ -94,9 +94,9 @@ def test_a_replacing_write_takes_the_key() -> None:
     assert ci.result_store(key, {"n": 2}, process="clearvoice", model_id=None, commit_sha=None, replace=True)
     entry = ci.result_lookup(key)
     assert entry is not None and entry["result"] == {"n": 2} and entry["origin"] is None
-    assert not [
-        path for path in ci._entry_dir(ci.result_cache_dir(), key).parent.iterdir() if path.name.startswith(".")
-    ]  # type: ignore[arg-type]
+    cache_dir = ci.result_cache_dir()
+    assert cache_dir is not None
+    assert not [path for path in ci._entry_dir(cache_dir, key).parent.iterdir() if path.name.startswith(".")]
 
 
 def test_the_origin_is_recorded_once() -> None:
