@@ -1,6 +1,8 @@
 """This module contains functions for extracting features from pre-trained self-supervised models."""
 
+import math
 import os
+import re
 from typing import Dict, List, Optional, Union
 
 import torch
@@ -28,6 +30,48 @@ try:
     SPEECHBRAIN_AVAILABLE = True
 except ModuleNotFoundError:
     SPEECHBRAIN_AVAILABLE = False
+
+_HEX40 = re.compile(r"[0-9a-f]{40}")
+
+
+def _windowed_encoder_states(
+    feat_extractor: AutoFeatureExtractor,
+    encoder: torch.nn.Module,
+    waveform: torch.Tensor,
+    sampling_rate: int,
+    device: DeviceType,
+) -> torch.Tensor:
+    """Encoder hidden states over consecutive windows of the feature extractor's `n_samples` (30 s for Whisper).
+
+    Args:
+        feat_extractor: A feature extractor that returns `input_features` for a fixed-length window.
+        encoder: The encoder of an encoder-decoder model.
+        waveform: Mono samples, shape `(n_samples,)`.
+        sampling_rate: Sampling rate of `waveform`.
+        device: Device the encoder runs on; features are cast to it and to the encoder's dtype.
+
+    Returns:
+        Tensor `(layers + 1, frames, hidden)`. Window k fills frames `[k * F, (k + 1) * F)`, F being the frames of a
+        full window; the last window is cut to the samples it holds.
+
+    Raises:
+        ValueError: If the waveform has no samples.
+    """
+    if waveform.shape[-1] == 0:
+        raise ValueError("audio has no samples")
+    window = int(feat_extractor.n_samples)  # type: ignore[attr-defined]
+    dtype = next(encoder.parameters()).dtype
+    pieces = []
+    with torch.no_grad():
+        for start in range(0, waveform.shape[-1], window):
+            chunk = waveform[start : start + window]
+            features = feat_extractor(  # type: ignore[operator]
+                chunk.cpu().numpy(), sampling_rate=sampling_rate, return_tensors="pt"
+            ).input_features
+            out = encoder(features.to(device.value, dtype), output_hidden_states=True)
+            states = torch.cat(out.hidden_states)
+            pieces.append(states[:, : math.ceil(chunk.shape[-1] * states.shape[1] / window)])
+    return torch.cat(pieces, dim=1)
 
 
 class SSLEmbeddingsFactory:
@@ -105,6 +149,9 @@ class SSLEmbeddingsFactory:
     ) -> List[torch.Tensor]:
         """Compute the ssl embeddings of audio signals.
 
+        A model whose feature extractor returns `input_features` (Whisper-style encoder-decoder) runs its encoder only,
+        window by window (see `_windowed_encoder_states`), and must be given a 40-hex commit as `revision`.
+
         Args:
             audios (List[Audio]): A list of Audio objects containing the audio signals and their properties.
             model (HFModel): The model used to compute the embeddings
@@ -128,6 +175,9 @@ class SSLEmbeddingsFactory:
                 "Please use a model with a known sampling rate."
             )
         sampling_rate: int = sr
+        encoder_only = "input_features" in getattr(feat_extractor, "model_input_names", [])
+        if encoder_only and not _HEX40.fullmatch(str(model.revision)):
+            raise ValueError(f"an encoder-decoder model needs a resolved 40-hex commit, got {model.revision!r}")
         ssl_model = cls._load_model(model=model, cache_dir=cache_dir, device=device)
 
         # Check that all audio objects have the correct sampling rate
@@ -138,6 +188,12 @@ class SSLEmbeddingsFactory:
                 raise ValueError(
                     "Audio sampling rate " + str(audio.sampling_rate) + " does not match expected " + str(sampling_rate)
                 )
+        if encoder_only:
+            encoder = ssl_model.get_encoder()  # type: ignore[attr-defined]
+            return [
+                _windowed_encoder_states(feat_extractor, encoder, audio.waveform[0], sampling_rate, device)
+                for audio in audios
+            ]
         # Pre-process audio using the SSL mode feature extractor
         preprocessed_audios = [
             feat_extractor(  # type: ignore[operator]
@@ -149,7 +205,8 @@ class SSLEmbeddingsFactory:
         # Extract embeddings (hidden states from all layers) from pre-trained model
         embeddings = [
             ssl_model(  # type: ignore[operator]
-                audio.input_values.squeeze(0).to(device.value), output_hidden_states=True
+                audio.input_values.squeeze(0).to(device.value, ssl_model.dtype),  # type: ignore[attr-defined]
+                output_hidden_states=True,
             )
             for audio in preprocessed_audios
         ]

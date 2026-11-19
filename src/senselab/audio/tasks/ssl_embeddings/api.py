@@ -1,7 +1,7 @@
 """Unified API for SSL embedding extraction across multiple backends.
 
 Routes to the appropriate backend based on model type:
-- ``HFModel`` -> HuggingFace Transformers (wav2vec2, HuBERT, WavLM, etc.)
+- ``HFModel`` -> HuggingFace Transformers (wav2vec2, HuBERT, WavLM, etc.; Whisper-style models run encoder only)
 - ``SpeechBrainModel`` -> SpeechBrain EncoderClassifier (ECAPA-TDNN, x-vector, etc.)
 - ``str`` -> S3PRL subprocess venv (apc, tera, cpc, etc.)
 """
@@ -32,7 +32,8 @@ def extract_ssl_embeddings_from_audios(
     Dispatches to the correct backend based on the model type:
     - **HFModel**: Uses HuggingFace Transformers (e.g., wav2vec2-base,
       HuBERT-large, WavLM-large). Returns all hidden states concatenated
-      with shape ``[num_layers, time_frames, embedding_dim]``.
+      with shape ``[num_layers, time_frames, embedding_dim]``. A Whisper-style encoder-decoder model runs its
+      encoder only over 30 s windows concatenated in time, and needs a 40-hex commit as ``revision``.
     - **SpeechBrainModel**: Uses SpeechBrain EncoderClassifier (e.g.,
       ECAPA-TDNN, x-vector, ResNet). Returns fixed-dimensional embeddings
       with shape ``[embedding_dim]``.
