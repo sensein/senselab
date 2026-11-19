@@ -48,7 +48,7 @@ def _windowed_encoder_states(
         encoder: The encoder of an encoder-decoder model.
         waveform: Mono samples, shape `(n_samples,)`.
         sampling_rate: Sampling rate of `waveform`.
-        device: Device the encoder runs on.
+        device: Device the encoder runs on; features are cast to it and to the encoder's dtype.
 
     Returns:
         Tensor `(layers + 1, frames, hidden)`. Window k fills frames `[k * F, (k + 1) * F)`, F being the frames of a
@@ -60,6 +60,7 @@ def _windowed_encoder_states(
     if waveform.shape[-1] == 0:
         raise ValueError("audio has no samples")
     window = int(feat_extractor.n_samples)  # type: ignore[attr-defined]
+    dtype = next(encoder.parameters()).dtype
     pieces = []
     with torch.no_grad():
         for start in range(0, waveform.shape[-1], window):
@@ -67,7 +68,7 @@ def _windowed_encoder_states(
             features = feat_extractor(  # type: ignore[operator]
                 chunk.cpu().numpy(), sampling_rate=sampling_rate, return_tensors="pt"
             ).input_features
-            out = encoder(features.to(device.value), output_hidden_states=True)
+            out = encoder(features.to(device.value, dtype), output_hidden_states=True)
             states = torch.cat(out.hidden_states)
             pieces.append(states[:, : math.ceil(chunk.shape[-1] * states.shape[1] / window)])
     return torch.cat(pieces, dim=1)
@@ -204,7 +205,8 @@ class SSLEmbeddingsFactory:
         # Extract embeddings (hidden states from all layers) from pre-trained model
         embeddings = [
             ssl_model(  # type: ignore[operator]
-                audio.input_values.squeeze(0).to(device.value), output_hidden_states=True
+                audio.input_values.squeeze(0).to(device.value, ssl_model.dtype),  # type: ignore[attr-defined]
+                output_hidden_states=True,
             )
             for audio in preprocessed_audios
         ]

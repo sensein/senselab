@@ -5,7 +5,7 @@ The Whisper tests use the published `openai/whisper-large-v3` feature extractor 
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 import pytest
 import torch
@@ -153,3 +153,15 @@ def test_whisper_refuses_empty_audio(monkeypatch: pytest.MonkeyPatch, loads: Dic
     empty = Audio(waveform=torch.zeros(1, 0), sampling_rate=SR)
     with pytest.raises(ValueError, match="no samples"):
         extract_ssl_embeddings_from_audios([empty], _model("org/whisper-test", WHISPER_SHA), device=DeviceType.CPU)
+
+
+@pytest.mark.parametrize("parts", [_whisper_parts, _wav2vec2_parts], ids=["input_features", "input_values"])
+def test_half_precision_model_gets_inputs_in_its_dtype(
+    monkeypatch: pytest.MonkeyPatch, loads: Dict[str, List], parts: Callable[[], Dict[str, Any]]
+) -> None:
+    """A model loaded in bfloat16 is fed features of its own dtype, not the extractor's float32."""
+    built = parts()
+    built["model"] = built["model"].to(torch.bfloat16)
+    _install(monkeypatch, loads, built)
+    out = extract_ssl_embeddings_from_audios([_audio(1.0)], _model("org/half-test", WHISPER_SHA), device=DeviceType.CPU)
+    assert out[0].dtype == torch.bfloat16 and out[0].shape[0] == LAYERS + 1
