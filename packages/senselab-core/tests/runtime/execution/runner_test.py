@@ -577,10 +577,10 @@ class Cancelling(Recording):
 
 @pytest.mark.contract
 def test_a_cancellation_beside_a_failed_element_propagates(tmp_path: Path) -> None:
-    """Element 1 of `a` fails and `b`'s submission is cancelled: the cancellation propagates, not a run status."""
+    """Element 1 of `a` fails and `b`'s submission is cancelled: the run raises `RunCancelled`, not a run status."""
     placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "fail")])
     executor = Cancelling(ResultStore(tmp_path / "store"))
-    with pytest.raises(asyncio.CancelledError) as raised:
+    with pytest.raises(runner.RunCancelled) as raised:
         runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
             placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1)
         )

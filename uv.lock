@@ -3257,8 +3257,8 @@ wheels = [
 
 [[package]]
 name = "pydra"
-version = "1.0a13.dev253+g3f734f9a0"
-source = { git = "https://github.com/nipype/pydra?rev=3f734f9a045690740846cc0388610c6a181023c9#3f734f9a045690740846cc0388610c6a181023c9" }
+version = "1.0a13.dev347+g444ce3814"
+source = { git = "https://github.com/nipype/pydra?rev=444ce381417b56386a503d4173b3865d4fe75461#444ce381417b56386a503d4173b3865d4fe75461" }
 dependencies = [
     { name = "attrs" },
     { name = "click" },
@@ -4178,7 +4178,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pydra", git = "https://github.com/nipype/pydra?rev=3f734f9a045690740846cc0388610c6a181023c9" },
+    { name = "pydra", git = "https://github.com/nipype/pydra?rev=444ce381417b56386a503d4173b3865d4fe75461" },
     { name = "senselab-core", editable = "packages/senselab-core" },
     { name = "senselab-worker", editable = "packages/senselab-worker" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.4" },
@@ -4273,7 +4273,7 @@ requires-dist = [
     { name = "packaging" },
     { name = "pandas", marker = "extra == 'pandas'" },
     { name = "pydantic", specifier = ">=2,<3" },
-    { name = "pydra", marker = "extra == 'pydra'", git = "https://github.com/nipype/pydra?rev=3f734f9a045690740846cc0388610c6a181023c9" },
+    { name = "pydra", marker = "extra == 'pydra'", git = "https://github.com/nipype/pydra?rev=444ce381417b56386a503d4173b3865d4fe75461" },
     { name = "pyyaml" },
     { name = "senselab-worker", editable = "packages/senselab-worker" },
     { name = "soundfile", specifier = ">=0.12" },

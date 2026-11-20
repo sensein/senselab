@@ -111,6 +111,10 @@ class _EpochLease:
     def __exit__(self, *_: object) -> None:
         return None
 
+    def try_take(self) -> float | None:
+        """Take the lease without waiting: always taken, the epoch excludes other coordinators."""
+        return None
+
     async def __aenter__(self) -> "_EpochLease":
         return self
 
@@ -626,6 +630,13 @@ async def _dispatched(
         handle = await loop.run_in_executor(
             run.senders, contextvars.copy_context().run, run.send, node, elements, upstream
         )
+    except asyncio.CancelledError as cancelled:
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            raise
+        error = RunCancelled("the executor cancelled the submission")
+        error.__cause__ = cancelled
+        return error
     except Exception as raised:  # noqa: BLE001 - the caller fails the batch with it, and the run re-raises it
         return raised
     run.follower.follow(handle, lambda ref: soon(settle, ref), lambda error: soon(end, error))
