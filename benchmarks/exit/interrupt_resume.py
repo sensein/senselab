@@ -21,10 +21,9 @@ from typing import Any
 sys.path[:0] = [str(Path(__file__).resolve().parent)]
 import exitlib  # noqa: E402 - beside this script
 from senselab_core.runtime.execution.events import read_events, run_dir_of  # noqa: E402
-from senselab_core.runtime.execution.run import RESULTS_DIR  # noqa: E402
-from senselab_core.runtime.execution.substrates import worker_id  # noqa: E402
+from senselab_core.runtime.execution.run import results_root  # noqa: E402
+from senselab_core.runtime.hardware import host_token  # noqa: E402
 from senselab_core.runtime.revision import cache_root  # noqa: E402
-from senselab_core.runtime.store import ResultStore  # noqa: E402
 
 STEP = "stt"
 EXECUTOR = "pool-slurm"
@@ -85,7 +84,7 @@ def _plan(work: Path, profile_argument: str, config: exitlib.Config) -> tuple[An
 def run_child(work: Path, profile_argument: str, config: exitlib.Config) -> int:
     """Plan and run the step to its end; the process `start` spawns, killed at the interrupt."""
     _, placed = _plan(work, profile_argument, config)
-    run, _ = exitlib.launch(placed, EXECUTOR, ResultStore(cache_root() / RESULTS_DIR))
+    run, _ = exitlib.launch(placed, EXECUTOR, results_root())
     while not run.wait(timeout=config.watch_poll_s).done:
         pass
     return 0
@@ -117,7 +116,7 @@ def start(
     items = len(placed.manifest.rows)
     target = exitlib.interrupt_target(items, config.interrupt_share)
     bounds, poll = config.bounds[EXECUTOR], config.watch_poll_s
-    prefix = exitlib.slurm_prefix(profile, run_dir, placed.hash)
+    prefix = exitlib.slurm_prefix(run_dir)
     timeout = exitlib.slurm_timeout(profile, poll)
     child = spawn(work, profile_argument)
     deadline = None if bounds.wall_s is None else time.monotonic() + bounds.wall_s
@@ -152,7 +151,13 @@ def start(
         raise
     exitlib.write_json(
         out,
-        {"hash": placed.hash, "items": items, "committed": committed, "coordinator": worker_id(), "workers": cancelled},
+        {
+            "hash": placed.hash,
+            "items": items,
+            "committed": committed,
+            "coordinator": f"{host_token()}-{os.getpid()}",
+            "workers": cancelled,
+        },
     )
     print(f"INTERRUPTED hash={placed.hash} committed={committed}/{items} cancelled={' '.join(cancelled)}")
     return 0
@@ -187,7 +192,7 @@ def resume(plan_hash: str, work: Path, out: Path, profile_argument: str) -> int:
     exitlib.isolate(work, STEP)
     run_dir = run_dir_of(plan_hash)
     profile = exitlib.load_profile(profile_argument)
-    prefix = exitlib.slurm_prefix(profile, run_dir, plan_hash)
+    prefix = exitlib.slurm_prefix(run_dir)
     live = exitlib.slurm_job_ids(
         prefix, exitlib.slurm_timeout(profile, exitlib.load_config().watch_poll_s), exitlib.squeue
     )

@@ -21,23 +21,12 @@ from typing import Any, Final, Protocol
 
 from senselab_core.kernel.dataset import ManifestRow
 from senselab_core.runtime.config import load_yaml
-from senselab_core.runtime.execution.events import RESULTS, Event, EventLog, read_events, run_dir_of, terminal_events
-from senselab_core.runtime.execution.pool import Pool
-from senselab_core.runtime.execution.queue import QueueSet
-from senselab_core.runtime.execution.run import RESULTS_DIR, Run
-from senselab_core.runtime.execution.substrates import (
-    LIVE_STATES,
-    SQUEUE,
-    SQUEUE_FIELDS,
-    SQUEUE_FORMAT,
-    Slurm,
-    substrate_of,
-)
+from senselab_core.runtime.execution.events import RESULTS, Event, read_events, run_dir_of, terminal_events
+from senselab_core.runtime.execution.run import Run, results_root
 from senselab_core.runtime.hardware import host_token
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.revision import MANIFEST_NAME, NAMESPACE, cache_root
-from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.revision import MANIFEST_NAME, NAMESPACE
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -48,6 +37,12 @@ CONFIG = HERE / "exit.yaml"
 CONFIG_FORMAT = "exit-checks@1.0"
 IDENTITIES_FORMAT = "exit-identities@1.0"
 EXECUTORS = ("in-process", "pool-local", "pool-slurm")
+SQUEUE = "squeue"
+LIVE_STATES = "PENDING,CONFIGURING,RUNNING,COMPLETING"
+"""The job states a live pool worker's Slurm job is in."""
+SQUEUE_FIELDS = 4
+SQUEUE_FORMAT = "--format=%i|%T|%k|%j"
+"""The `squeue` row format: id, state, comment, name."""
 KIB: Final = 1024  # invariant: `ps` reports resident set sizes in KiB
 
 
@@ -419,25 +414,19 @@ def profile_for(executor: str, profile: ExecutionProfile, config: Config) -> Exe
     return profile.model_copy(update={"resource_classes": classes})
 
 
-def launch(placed: Plan, executor: str, store: ResultStore) -> tuple[Run, Callable[[], None]]:
-    """Start `placed` on `executor`; return the run and what closes the executor after it.
+def launch(placed: Plan, executor: str, store: Path) -> tuple[Run, Callable[[], None]]:
+    """Start `placed` on `executor` into the result store at `store`; return the run and what closes its pool after it.
 
-    `in-process` and `pool-slurm` are the defaults of the plan's substrate, owned by the run; `pool-local` is a `Pool`
-    over local workers of the plan's profile.
+    `in-process` and `pool-slurm` run on the pool the run makes under the plan's profile, whose substrate starts its
+    workers (processes on this host, or one Slurm job each); `pool-local` on a `PoolSession` over local workers of
+    the plan's profile, closed after the run.
     """
     if executor != "pool-local" or placed.execution is None:
         return placed.run(store=store), lambda: None
-    run_dir, profile = run_dir_of(placed.hash), placed.execution
-    pool = Pool(
-        run_dir,
-        queues=QueueSet.for_run(run_dir, profile, own=profile.lease),
-        store=store,
-        events=EventLog(run_dir, "a0", 1, epoch=0),
-        profile=profile,
-        substrate=substrate_of(profile, run_dir, placed.hash),
-        epoch=0,
-    )
-    return placed.run(pool, store=store), pool.close
+    from senselab_core.runtime.execution.warm import PoolSession  # noqa: PLC0415 - imports pydra
+
+    session = PoolSession(placed.execution, run_dir_of(placed.hash), store)
+    return placed.run(session), session.close
 
 
 @dataclass(frozen=True)
@@ -462,7 +451,7 @@ def execute(placed: Plan, executor: str, config: Config) -> Execution:
     run_dir = run_dir_of(placed.hash)
     if run_dir.exists():
         raise FileExistsError(f"{run_dir} exists; remove the work directory to run afresh")
-    store = ResultStore(cache_root() / RESULTS_DIR)
+    store = results_root()
     bounds, began = config.bounds[executor], time.monotonic()
     with Watch(bounds, config.watch_poll_s) as watch, Progress(run_dir, len(placed.manifest.rows), config.progress_s):
         run, close = launch(placed, executor, store)
@@ -711,16 +700,14 @@ def assert_no_resolution(before: Mapping[str, Mapping[str, str]], after: Mapping
         raise ResumeMismatch("the resume resolved refs: " + "; ".join(sorted(added)))
 
 
-def slurm_prefix(profile: ExecutionProfile, run_dir: Path, plan_hash: str) -> str:
-    """Return the start of the name of every Slurm job of the run in `run_dir`.
+def slurm_prefix(run_dir: Path) -> str:
+    """Return the start of the name of every Slurm job of the pool the run in `run_dir` made: `pydra-<pool id>-`.
 
     Raises:
-        TypeError: the profile's substrate is not Slurm.
+        FileNotFoundError: the run made no pool of its own.
     """
-    substrate = substrate_of(profile, run_dir, plan_hash)
-    if not isinstance(substrate, Slurm):
-        raise TypeError(f"profile {profile.name} names a {type(substrate).__name__} substrate, not Slurm")
-    return substrate.prefix
+    header = json.loads((run_dir / "pool" / "pool.json").read_text(encoding="utf-8"))
+    return f"pydra-{header['pool_id']}-"
 
 
 def slurm_timeout(profile: ExecutionProfile, fallback_s: float) -> float:
