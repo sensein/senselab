@@ -609,9 +609,10 @@ are recorded here (R-200).
   `pool.poll_s` while a fragment is followed, a submit or retry wakes it, `close` stops it, and it is the only caller
   of `scale`, so a slow `sbatch` never delays settling or a cancel and concurrent submits cannot over-start. `poll`
   reads the epoch fence at most once per `first_poll_s`. The sender threads are explicit: the profile's summed
-  `max_workers` (3 under `laptop`; a Slurm profile's is the sum its user sets), or `PydraRunner(senders=...)`. For `InProcess` they are where
-  the jobs run, so they bound its concurrency at the `WorkerSet` bound; before, the default executor gave
-  `min(32, cpus + 4)` threads (14 on a 10-CPU laptop), whose extras only waited on leases.
+  `max_workers` (3 under `laptop`; a Slurm profile's is the sum its user sets), or `PydraRunner(senders=...)`. `InProcess` bounds its own
+  concurrency at the `WorkerSet` bound, one semaphore (`InProcess.slots`) over every round its `submit_many` runs, so
+  neither the sender count nor overlapping rounds raise it; before, the default executor gave `min(32, cpus + 4)`
+  threads (14 on a 10-CPU laptop), whose extras only waited on leases.
 - **The runner drives pydra's `GraphRunner` (route-b S1a, pydra `integration/senselab` @`0036ca22`).** The
   asynchronous `Submitter` path, `ExecutorWorker`, the `Follower` class, `serve_shared`, `_upstream` and `_dispatched`
   are gone. `PydraRunner` drives a `GraphRunner(..., lookup_before_dispatch=False)` by the RFC 0002 §3.5 loop on one
@@ -629,7 +630,12 @@ are recorded here (R-200).
   no hit is served past the executor's reuse policy (`tests/lint/graph_runner_seam_test.py`). Workaround retired with
   the merge: the `Finishing` event-loop case of `runner_test.py`, which guarded the asyncio path's
   `run_in_executor` ordering; no event loop runs in the driver. `_EpochLease.try_take` returns `None`: the epoch is
-  the run's exclusion and a job lease is held at once.
+  the run's exclusion and a job lease is held at once. Fix round 1: `submit_many(fragments, stop)` takes the runner's stop check, tested
+  before each fragment after it takes a slot, so a cancel (or the driver ending, as on Ctrl-C) leaves every fragment
+  not yet started as `RunCancelled` in its slot and at most the bound's worth runs on; the Pool ignores `stop`, its
+  put returning at once. A sender that raises posts its error as the refusal of every batch of its round not yet
+  followed, so no batch stays open and the run raises it. The driver shuts its senders down before closing the poll
+  thread, so a handle a late sender follows is still cancelled.
 - **Worker report (Task 14, for Task 15a).** A pool worker commits each item with `report(claim, digest, outcomes)`:
   the outcome record carries `jobs`, one `ResultRef` per job. A queue `dead` outcome (a corrupt item) is a content
   fault of each of its jobs. A held queue (`Queue.hold`) gives no claim.

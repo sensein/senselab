@@ -92,7 +92,26 @@ logical key …"; and "The pydra executor is the runtime that senselab extends (
 
 Authority: Phase 3 Task 9b, the gate's Route A outcome (design §4.9), P3-2.
 
+## Amendment 2026-11-21: the runner drives pydra's `GraphRunner`; `submit_many` with `stop`
+
+Replaces, in the 2026-11-05 amendment, the protocol bullet and the bullet naming `ExecutorWorker`.
+
+- The `Executor` protocol is `admit(plan, values) -> Admission`, `release(admission)`, `fragment_size(plan, node)`,
+  `bind_epoch(epoch, events)`, `submit(fragment) -> Handle`, `submit_many(fragments, stop=None) -> list[Handle |
+  Exception]`, `status`, `cancel` and `poll(handle) -> (results landed, done)`; `follow(executor, handle)` is the
+  blocking loop over `poll`. `submit_many` takes one round, every node's fragments released together, and returns
+  each fragment's handle or the exception that refused it, in order; a fragment not started once `stop()` is true
+  holds `RunCancelled`. Its implementations are `InProcess` and `Pool`.
+- `PydraRunner` drives pydra's `GraphRunner` (RFC 0002 §3.5) on one thread, built with
+  `lookup_before_dispatch=False` over a run-scoped store that serves no hit: it sends each round of ready jobs to the
+  `Executor` as plan fragments of the placement's batch size (one per node for an executor that splits fragments) in
+  one `submit_many`, and reports each outcome to the `GraphRunner`; a failed element fails only its descendants.
+  Sender and poll threads pass outcomes to the driver through a queue.
+
+Authority: route-B task S1a, the repin to pydra `integration/senselab` @`0036ca22`.
+
 ## Amendment log
 
 - 2026-11-01: route and loop predicates are any declared task with a `bool` output; no `decide` kind (owner, leakage audit).
 - 2026-11-05: under Route A pydra is the graph runner above the `Executor`s, not an executor; node-supplied checksums, no byte representations; record lists zip per record; nested fan-outs refused by `validate`, a map over a list output not run in Phase 3 (Task 9b, P3-2).
+- 2026-11-21: `PydraRunner` drives pydra's `GraphRunner` by the RFC 0002 §3.5 loop in place of `ExecutorWorker`; the protocol lists `poll`, `fragment_size`, `bind_epoch` and `submit_many(fragments, stop)` (route-B S1a).
