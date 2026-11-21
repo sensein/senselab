@@ -18,7 +18,8 @@ environments.
   commit, the benchmark harness and its smoke suite. A backend is a code path; a model is a catalogue entry.
 - Phase 3 adds plans and executors: `senselab.plan` turns a task and a dataset into a plan with one hash under every
   execution profile, `Plan.explain` shows where each node runs, `Plan.run` starts a run, and `senselab.resume`
-  continues one. A run executes `InProcess` or on a `Pool` of workers started locally or on Slurm.
+  continues one. A run's jobs run on pydra's warm worker pool: workers started locally or one Slurm job each load a
+  backend's model once and run job after job, and results go to a pydra `PortableStore` under senselab's identity.
 - Pipelines are not ported yet.
 - The API reference, including plans, runs, executors, the profile keys and a LibriSpeech example, and the generated
   2.x status page are built from the code, the declarations and the specs; see `senselab.reference` in the

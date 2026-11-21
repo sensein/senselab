@@ -281,9 +281,9 @@ def exit_checks(root: Path | None) -> Mapping[str, Any]:
 def executor_rows(root: Path | None = None) -> list[tuple[str, ...]]:
     """Return the executors as `(executor, substrate, default under, exit check declared)` rows.
 
-    `default under` names the packaged profiles whose substrate makes `Plan.run` choose it (`default_executor`: a
-    `local` substrate runs `InProcess`, a `slurm` one a `Pool` over `Slurm`). An exit check is declared when the
-    checkout's exit checks bound that executor; whether it passed is the phase table's.
+    `default under` names the packaged profiles whose substrate a run's own pool starts its workers with (`local`:
+    processes on this host, `slurm`: one Slurm job each). An exit check is declared when the checkout's exit checks
+    bound that executor; whether it passed is the phase table's.
     """
     kinds = {
         name: load_yaml(
@@ -297,9 +297,9 @@ def executor_rows(root: Path | None = None) -> list[tuple[str, ...]]:
         return ", ".join(f"`{n}`" for n, k in kinds.items() if k == kind) or "-"
 
     return [
-        ("`InProcess`", "this process", chosen("local"), _mark("in-process" in bounds)),
-        ("`Pool`", "`Local`", "-", _mark("pool-local" in bounds)),
-        ("`Pool`", "`Slurm`", chosen("slurm"), _mark("pool-slurm" in bounds)),
+        ("`WarmPool` (the run's own)", "`LocalSubstrate`", chosen("local"), _mark("in-process" in bounds)),
+        ("`PoolSession`", "`LocalSubstrate`", "-", _mark("pool-local" in bounds)),
+        ("`WarmPool` (the run's own)", "`SlurmSubstrate`", chosen("slurm"), _mark("pool-slurm" in bounds)),
     ]
 
 

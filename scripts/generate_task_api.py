@@ -168,7 +168,7 @@ def _render_task(spec: TaskSpec, imports: _Imports) -> tuple[str, str, str]:
         "        )",
         "",
         *_signature("def __call__", ["self", *data], [], "Result", "    "),
-        '        """Run this task on the inputs with `InProcess` and return its one result."""',
+        '        """Run this task on the inputs on a warm pool and return its one result."""',
         "        return self._run(",
         *_dict_arg(ports, "            "),
         "        )",
