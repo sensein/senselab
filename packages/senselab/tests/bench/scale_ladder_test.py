@@ -433,9 +433,9 @@ def test_flatness_reads_request_walls_not_end_times() -> None:
     """Per-item seconds are the production span, first claim to last commit, over the jobs that gave a result.
 
     Both ends are the workers' own clock (the samples' `ended_s` less their claim's start), never the coordinator's
-    events, which are written when the follower next reads: that lag is not in the figure. A model load before the first
-    claim, the wait after the last commit and a probe running beside production do not change it, and a later commit
-    does. Worker seconds per job come from request walls and leave the loading request out.
+    events, which are written when the poll thread next reads: that lag is not in the figure. A model load before the
+    first claim, the wait after the last commit and a probe running beside production do not change it, and a later
+    commit does. Worker seconds per job come from request walls and leave the loading request out.
     """
     ladder = _module("scale_ladder_walls_under_test", ROOT / "benchmarks" / "scale" / "ladder.py")
     probe = ProbeRef(id="p1", phase="SINGLE", stratum=0)

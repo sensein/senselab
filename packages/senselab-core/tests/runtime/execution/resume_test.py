@@ -239,12 +239,12 @@ def test_an_older_attempt_of_one_plan_on_this_host_stops_once_a_newer_one_is_cur
     older = HeldBack(store, 2)
     first = placed.run(older, store=store)
     await_true(lambda: older.ran == 2, hang_s, 0.01, "the older attempt's first two fragments")
-    [pickled] = (first.run_dir / PYDRA_DIR).rglob("_job.pklz")
-    inode, loaded = pickled.stat().st_ino, len(older.workers.pooled())
+    [own] = (first.run_dir / PYDRA_DIR).iterdir()
+    inode, loaded = own.stat().st_ino, len(older.workers.pooled())
     second = resume(placed.hash, execution=PROFILE, store=store, executor=_executor(store))
     try:
         assert second.wait(hang_s).done
-        assert pickled.stat().st_ino == inode and len(list((first.run_dir / PYDRA_DIR).rglob("_job.pklz"))) == 2
+        assert own.stat().st_ino == inode and len(list((first.run_dir / PYDRA_DIR).iterdir())) == 2
         older.gate.set()
         with pytest.raises(StaleCoordinator):
             first.wait(hang_s)
@@ -506,6 +506,10 @@ class Delegating:
     def submit(self, fragment: PlanFragment) -> Handle:
         """Submit through `inner`."""
         return self.inner.submit(fragment)
+
+    def submit_many(self, fragments: Sequence[PlanFragment]) -> list[Handle | Exception]:
+        """Submit the round through `inner`."""
+        return self.inner.submit_many(fragments)
 
     def status(self, handle: Handle) -> Status:
         """Return the status `inner` gives."""

@@ -612,6 +612,24 @@ are recorded here (R-200).
   `max_workers` (3 under `laptop`; a Slurm profile's is the sum its user sets), or `PydraRunner(senders=...)`. For `InProcess` they are where
   the jobs run, so they bound its concurrency at the `WorkerSet` bound; before, the default executor gave
   `min(32, cpus + 4)` threads (14 on a 10-CPU laptop), whose extras only waited on leases.
+- **The runner drives pydra's `GraphRunner` (route-b S1a, pydra `integration/senselab` @`0036ca22`).** The
+  asynchronous `Submitter` path, `ExecutorWorker`, the `Follower` class, `serve_shared`, `_upstream` and `_dispatched`
+  are gone. `PydraRunner` drives a `GraphRunner(..., lookup_before_dispatch=False)` by the RFC 0002 §3.5 loop on one
+  thread: `ready()`, send the round, `complete()` each outcome. Sender threads (`submit_many`) and one poll thread
+  (`senselab-poll`, the old follower's waits and cancel check) only post to a queue the driver drains, because the
+  `GraphRunner` is not thread-safe. A round goes to the executor in one `submit_many`, so the Pool wakes its scaler
+  once for the round and `InProcess` runs its fragments at most `WorkerSet.bound` at once. Outcomes, per job: a
+  result is a pydra `Result` holding its `ResultRef`, an element failure `Failed(ElementFailed)`; a license refusal
+  `Failed(LicenseRefused)`, logged `failed` and never raised (RFC 0002 §3.5 table); a held env or queue, or a newer
+  coordinator, `NotRun(held=True)` with no terminal event, the hold raised after the loop so the run ends
+  interrupted; a cancelled submission `RunCancelled`; any other executor error `Failed`, raised after the run. pydra
+  now settles a twin (`Settled(how="shared")`) itself; the driver sends a successful twin to the executor again so it
+  is served as a reuse (provenance and `cache_hit`), and gives a failed twin its first's failure. A `records` job is
+  answered by the driver. `SenselabStore` defines no `read_succeeded`, `find`, `withdraw_success` or `work_dir`, so
+  no hit is served past the executor's reuse policy (`tests/lint/graph_runner_seam_test.py`). Workaround retired with
+  the merge: the `Finishing` event-loop case of `runner_test.py`, which guarded the asyncio path's
+  `run_in_executor` ordering; no event loop runs in the driver. `_EpochLease.try_take` returns `None`: the epoch is
+  the run's exclusion and a job lease is held at once.
 - **Worker report (Task 14, for Task 15a).** A pool worker commits each item with `report(claim, digest, outcomes)`:
   the outcome record carries `jobs`, one `ResultRef` per job. A queue `dead` outcome (a corrupt item) is a content
   fault of each of its jobs. A held queue (`Queue.hold`) gives no claim.

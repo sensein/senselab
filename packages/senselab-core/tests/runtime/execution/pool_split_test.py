@@ -590,7 +590,7 @@ def _run_cancelled(  # noqa: PLR0913 - the plan and its gate, then the cancel an
     gated: Gated,
     clock: ManualClock,
 ) -> None:
-    """Run `placed` until its items are queued and the follower waits, cancel, and time the notice on `clock`."""
+    """Run `placed` until its items are queued and the poll thread waits, cancel, and time the notice on `clock`."""
     runner = pytest.importorskip("senselab_core.runtime.execution.runner", exc_type=ImportError)
     assert gated.queued_at is not None
     queued, cancel, noticed, ended = gated.queued_at[0], threading.Event(), threading.Event(), []
@@ -606,17 +606,15 @@ def _run_cancelled(  # noqa: PLR0913 - the plan and its gate, then the cancel an
     try:
         assert queued.wait(clock.hang_s)
         guard = time.monotonic() + clock.hang_s
-        while not (
-            waiting := [t for t in threading.enumerate() if t.name == "senselab-follower" and clock.is_parked(t)]
-        ):
-            assert time.monotonic() < guard, "no follower of this run parked on its clock"
+        while not (waiting := [t for t in threading.enumerate() if t.name == "senselab-poll" and clock.is_parked(t)]):
+            assert time.monotonic() < guard, "no poll thread of this run parked on its clock"
             cancel.wait(clock.poll_s)
-        follower = waiting[0]
+        poll = waiting[0]
         cancel.set()
         before = clock.now()
         while not noticed.is_set():
             assert time.monotonic() < guard, "the runner did not notice the cancel"
-            if clock.is_parked(follower):
+            if clock.is_parked(poll):
                 clock.advance(profile.pool.cancel_check_s)
             noticed.wait(clock.poll_s)
         after = clock.now()
