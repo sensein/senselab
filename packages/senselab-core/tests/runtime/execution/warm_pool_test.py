@@ -15,7 +15,8 @@ from senselab_core.runtime.execution.run import start
 from senselab_core.runtime.execution.warm import PoolSession
 from senselab_core.runtime.licenses import LicensePolicy
 from senselab_core.runtime.profiles import ExecutionProfile
-from warm_fixture import PROFILE, served
+from senselab_core.testing.pools import POOL_PROFILE as PROFILE
+from senselab_core.testing.pools import served
 
 pytestmark = pytest.mark.contract
 

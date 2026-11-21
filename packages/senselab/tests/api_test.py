@@ -1,4 +1,4 @@
-"""The generated task API, `describe` and `models`: drift, calls run on `InProcess`, schemas, discovery, errors."""
+"""The generated task API, `describe` and `models`: drift, calls run on a warm pool, schemas, discovery, errors."""
 
 import importlib.util
 import inspect
@@ -29,8 +29,8 @@ from senselab_core.kernel.signals import Audio, PlainText
 from senselab_core.runtime.call import Packaged, Result, TaskCall, bind_input, input_binding, packaged, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.envs import EnvHandle
+from senselab_core.runtime.execution.calls import CallFailed, call
 from senselab_core.runtime.execution.executor import FaultRecord
-from senselab_core.runtime.execution.in_process import CallFailed, InProcess
 from senselab_core.runtime.execution.workers import WorkerLoadFailed
 from senselab_core.runtime.licenses import backend_license, packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -218,14 +218,14 @@ def _echo_namespace() -> dict[str, Any]:
 
 @pytest.mark.logic
 def test_function_equals_configured_call(fake_stack: None) -> None:  # noqa: ARG001 - the fixture's effect
-    """`echo(x, **params)` is exactly `Echo(**params)(x)`, which is `InProcess().call(Echo(**params).call(x))`."""
+    """`echo(x, **params)` is exactly `Echo(**params)(x)`, which is `calls.call(Echo(**params).call(x))`."""
     namespace = _echo_namespace()
     echo, cls = namespace["echo"], namespace["Echo"]
     configured = cls(salt="s")
     assert isinstance(configured.call({"x": 1}), TaskCall)
     result = echo({"x": 1}, salt="s")
     assert isinstance(result, Result)
-    for again in (configured({"x": 1}), InProcess().call(configured.call({"x": 1}))):
+    for again in (configured({"x": 1}), call(configured.call({"x": 1}))):
         assert (again.outputs, again.output_identity, again.key) == (result.outputs, result.output_identity, result.key)
     assert result.output_identity != echo({"x": 1}, salt="t").output_identity
     assert configured.call({"x": 1}).params.salt == "s"
@@ -236,12 +236,12 @@ def test_call_from_describe_alone(fake_stack: None) -> None:  # noqa: ARG001 - t
     """A call written only from `describe()` JSON validates as a `TaskCall` and runs on the fake stack."""
     document = json.loads(json.dumps(describe(fake.ECHO.name)))
     params = {name: field["default"] for name, field in document["params"]["properties"].items()}
-    call = {
+    given = {
         "task": document["task"],
         "inputs": {port: {"text": "hello"} for port in document["inputs"]["required"]},
         "params": params,
     }
-    result = InProcess().call(TaskCall.model_validate(json.loads(json.dumps(call))))
+    result = call(TaskCall.model_validate(json.loads(json.dumps(given))))
     assert set(result.outputs) == set(document["outputs"]["required"])
     assert result.placement.backend.stack in document["stacks"]
 
@@ -657,14 +657,14 @@ def test_a_load_that_fails_after_declaring_is_rolled_back_and_retried_cleanly(tm
 
 
 def _documented_errors() -> list[str]:
-    raises = (InProcess.call.__doc__ or "").split("Raises:")[1]
+    raises = (call.__doc__ or "").split("Raises:")[1]
     names = [n for line in raises.splitlines() if ":" in line for n in line.split(":")[0].split(",")]
     return [n.strip() for n in names]
 
 
 @pytest.mark.contract
 def test_every_error_a_call_documents_has_an_envelope_code() -> None:
-    """Each exception class in `InProcess.call`'s `Raises:` section is a row of the error-code table."""
+    """Each exception class in `calls.call`'s `Raises:` section is a row of the error-code table."""
     table = {kind.__name__ for kind, _, _ in ERROR_CODES} | {"CallFailed"}
     assert set(_documented_errors()) <= table, sorted(set(_documented_errors()) - table)
 
@@ -672,12 +672,13 @@ def test_every_error_a_call_documents_has_an_envelope_code() -> None:
 @pytest.mark.logic
 def test_a_call_failure_carries_its_fault_class_in_the_envelope_code() -> None:
     """A failed call maps to `<fault>_fault`, whatever the class of the backend's own exception."""
-    codes = {
-        fault: api_error(  # type: ignore[union-attr]
+    errors = {
+        fault: api_error(
             CallFailed(FaultRecord(fault=fault, type="X", message="m", gap=False, charged=fault == "content"))
-        ).envelope.code
+        )
         for fault in ("content", "resource", "infrastructure")
     }
+    codes = {fault: error.envelope.code for fault, error in errors.items() if error is not None}
     assert codes == {"content": "content_fault", "resource": "resource_fault", "infrastructure": "infrastructure_fault"}
 
 

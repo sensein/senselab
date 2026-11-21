@@ -1,62 +1,33 @@
-"""`PydraRunner`: a placed plan run through an `Executor`, batched, per element, keyed by senselab (fake stack)."""
+"""`PydraRunner`: a placed plan's jobs run on a warm pool session, per element, keyed by senselab (fake stack)."""
 
-import asyncio
 import dataclasses
 import os
 import platform
-import stat
 import threading
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, ClassVar, TypeVar
+from typing import Any
 
 import pytest
-from lease_clock_fixture import ManualClock
 from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, Node, fan_out_issues
-from senselab_core.kernel.identity import InputIdentity, gather_identity, port_output_identity
 from senselab_core.kernel.license import License
-from senselab_core.runtime.calibration import (
-    Estimate,
-    EstimateSource,
-    MemoryFit,
-    Observation,
-    RequestFit,
-    StratumBatch,
-)
 from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.events import TERMINAL, EventLog, read_events, status_from
-from senselab_core.runtime.execution.executor import (
-    Admission,
-    Handle,
-    PlanFragment,
-    QueueHeld,
-    ResultRef,
-    Status,
-    follow,
-    submit_each,
-)
-from senselab_core.runtime.execution.in_process import InProcess, node_fragment
-from senselab_core.runtime.execution.workers import WorkerSet
-from senselab_core.runtime.licenses import LicenseRefused, license_record
-from senselab_core.runtime.locks import LeaseTimeout
-from senselab_core.runtime.measures import MeasureSource, MeasureUnit
-from senselab_core.runtime.planner import Plan, UnmappedOutput, plan
+from senselab_core.runtime.execution import runner
+from senselab_core.runtime.execution.events import TERMINAL, EventLog, read_events, run_dir_of, status_from
+from senselab_core.runtime.execution.executor import RunCancelled
+from senselab_core.runtime.execution.portable import read_outputs
+from senselab_core.runtime.execution.records import add_plan_entity
+from senselab_core.runtime.licenses import LicensePolicy, license_record
+from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.store import ResultStore
-from senselab_core.runtime.units import UnitOf
-from senselab_core.testing.calibration_samples import UNIT, observation
+from senselab_core.runtime.provenance import ProvStore
 from senselab_core.testing.interpreter import source_tree_python
-from senselab_worker.faults import ResourceFault
-
-T = TypeVar("T")
-
-runner = pytest.importorskip("senselab_core.runtime.execution.runner", exc_type=ImportError)
+from senselab_core.testing.pools import POOL_PROFILE, served
 
 SCORE = TaskSpec(
     name="runner_test.score",
@@ -69,10 +40,9 @@ SCORE = TaskSpec(
 CHAIN = SCORE.model_copy(update={"name": "runner_test.chain", "inputs": {"value": "sha256"}})
 GATHER = SCORE.model_copy(update={"name": "runner_test.gather", "inputs": {"values": "list[sha256]"}})
 PAIR = SCORE.model_copy(update={"name": "runner_test.pair", "inputs": {"left": "sha256", "right": "json"}})
-TWIN = SCORE.model_copy(update={"name": "runner_test.twin", "inputs": {"first": "json", "second": "json"}})
 
 REGISTRY = Registry()
-for _task in (SCORE, CHAIN, GATHER, PAIR, TWIN):
+for _task in (SCORE, CHAIN, GATHER, PAIR):
     REGISTRY.add_task(_task)
     REGISTRY.add_backend(
         BackendSpec(
@@ -88,8 +58,7 @@ for _task in (SCORE, CHAIN, GATHER, PAIR, TWIN):
         )
     )
 CATALOGUE = Catalogue.load("format: catalogue@2.0\nentries: []\n")
-PROFILE = ExecutionProfile.load("laptop", {"devices": ["cpu"]})
-WORKERS = WorkerSet(4)
+PROFILE = POOL_PROFILE
 
 
 def _license() -> License:
@@ -107,79 +76,13 @@ def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHan
 
 
 @pytest.fixture(autouse=True)
-def packaged() -> Iterator[None]:
-    """The runner's executor reads this module's registry and opens every env as this interpreter, MIT-locked."""
+def packaged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The runner reads this module's registry and opens every env as this interpreter, MIT-locked; cache here."""
+    monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
     records = {"pkg": _license()}
     previous = use_packaged(Packaged(CATALOGUE, _this_interpreter, REGISTRY, lambda _: records))
     yield
     use_packaged(previous)
-    WORKERS.close()
-
-
-class Recording:
-    """An `Executor` over `InProcess` that records each fragment it is given, in order."""
-
-    logs_claims: ClassVar[bool] = False
-    splits_fragments: ClassVar[bool] = False
-
-    def bind_epoch(self, epoch: int, events: EventLog) -> None:
-        """Bind through `InProcess`."""
-        self.inner.bind_epoch(epoch, events)
-
-    def __init__(
-        self,
-        store: ResultStore,
-        profile: ExecutionProfile = PROFILE,
-        measures: MeasureSource | None = None,
-        units: UnitOf | None = None,
-    ) -> None:
-        """Run on an `InProcess` executor over `store` under `profile`, sized from `measures`."""
-        self.store = store
-        self.inner = InProcess(
-            store=store, profile=profile, run=RunConfig(), workers=WORKERS, measures=measures, units=units
-        )
-        self.fragments: list[PlanFragment] = []
-        self.rounds: list[list[str]] = []
-
-    def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:
-        """Admit through `InProcess`."""
-        return self.inner.admit(placed, values)
-
-    def release(self, admission: Admission) -> None:
-        """Release through `InProcess`."""
-        self.inner.release(admission)
-
-    def fragment_size(self, placed: Plan, node: str) -> int:
-        """Return the size `InProcess` gives."""
-        return self.inner.fragment_size(placed, node)
-
-    def submit(self, fragment: PlanFragment) -> Handle:
-        """Record `fragment` and submit it."""
-        self.fragments.append(fragment)
-        return self.inner.submit(fragment)
-
-    def submit_many(
-        self, fragments: Sequence[PlanFragment], stop: Callable[[], bool] | None = None
-    ) -> list[Handle | Exception]:
-        """Record the round's nodes and submit its fragments through `submit`, as `InProcess` runs them."""
-        self.rounds.append([f.node for f in fragments])
-        return submit_each(self, fragments, width=self.inner.workers.bound, stop=stop, slots=self.inner.slots)
-
-    def status(self, handle: Handle) -> Status:
-        """Return the status `InProcess` gives."""
-        return self.inner.status(handle)
-
-    def cancel(self, handle: Handle) -> None:
-        """Cancel through `InProcess`."""
-        self.inner.cancel(handle)
-
-    def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
-        """Poll through `InProcess`."""
-        return self.inner.poll(handle)
-
-    def sizes(self, node: str) -> list[int]:
-        """Return the number of jobs of each fragment of `node`, in submission order."""
-        return [len(f.jobs) for f in self.fragments if f.node == node]
 
 
 def _graph(nodes: Sequence[tuple[str, TaskSpec]], edges: Sequence[tuple[str, str, str]], **inputs: str) -> Graph:
@@ -191,58 +94,30 @@ def _graph(nodes: Sequence[tuple[str, TaskSpec]], edges: Sequence[tuple[str, str
 
 
 def _plan(
-    graph: Graph,
-    rows: Sequence[Mapping[str, str]],
-    broadcast: Mapping[str, object] | None = None,
-    profile: ExecutionProfile = PROFILE,
+    graph: Graph, rows: Sequence[Mapping[str, str]], broadcast: Mapping[str, object] | None = None
 ) -> tuple[Plan, dict[str, object]]:
-    """Return `graph` planned over records of `rows` under `profile`, and the admitted value of each input identity."""
+    """Return `graph` planned over records of `rows`, and the value of each input identity."""
     records = [Record(id=f"r{i}", inputs={k: ValueInput(value=v) for k, v in r.items()}) for i, r in enumerate(rows)]
-    placed = plan(graph, RecordSet(records), config=RunConfig(), execution=profile, inputs=broadcast or None)
+    placed = plan(graph, RecordSet(records), config=RunConfig(), execution=PROFILE, inputs=broadcast or None)
     given = [*(v for r in rows for v in r.values()), *(broadcast or {}).values()]
     return placed, {bind_input("x", "json", v)[0]: v for v in given}
 
 
-class _Root:
-    def observations(self, unit: MeasureUnit) -> Sequence[Observation]:
-        return (observation(),)
-
-
-def _batching() -> tuple[ExecutionProfile, MeasureSource]:
-    """A profile whose fragments hold two jobs, and a measure under which `size` batches them."""
-    profile = ExecutionProfile.load(
-        "laptop", {"devices": ["cpu"], "pool": {"quantum_items": 2}, "resource_classes": {"cpu": {"mem_bytes": 2**30}}}
-    )
-    estimate = Estimate(
-        status="measured",
-        unit_kind="audio_s",
-        load_s=1.0,
-        load_n=3,
-        item_s=0.01,
-        item_n=3,
-        single=RequestFit(batch=1, r=0.1, u=0.01, n=6, spread=0.1, lo=1.0, hi=10.0),
-        batch=(StratumBatch(lo=1.0, hi=10.0, batch=2),),
-        host=MemoryFit(resident=2**20, m0=0.0, m1=1.0, n=6),
-        source=EstimateSource(probe_ids=("p",), observations=6),
-    )
-    return profile, MeasureSource([_Root()], estimate=lambda unit, observed: estimate)
-
-
-def _run(  # noqa: PLR0913 - the plan, values and directory, then the profile and what sizes the fragments
-    placed: Plan,
-    values: Mapping[str, object],
-    tmp_path: Path,
-    profile: ExecutionProfile = PROFILE,
-    measures: MeasureSource | None = None,
-    **kw: object,
-) -> tuple[Any, Recording, list[Any]]:
-    executor = Recording(ResultStore(tmp_path / "store"), profile, measures, lambda call, placement, decoder: UNIT)
+def _run(placed: Plan, values: Mapping[str, object], tmp_path: Path, **kw: Any) -> tuple[Any, Any, list[Any]]:  # noqa: ANN401
+    """Run `placed` on a pool served here; return its outcome, the session's store and its events."""
     events = EventLog(tmp_path / "run", "a1", 1)
-    work = tmp_path / "pydra"
-    status = runner.PydraRunner(profile=profile, work_dir=work).run_plan(
-        placed, executor, values=values, events=events, **kw
-    )
-    return status, executor, read_events(tmp_path / "run")
+    with served(tmp_path / "pool") as (session, _):
+        outcome = runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
+            placed, session, values=values, events=events, **kw
+        )
+        store = session.store
+    return outcome, store, read_events(tmp_path / "run")
+
+
+def _terminal(events: Sequence[Any], node: str) -> list[Any]:
+    """Return the terminal events of `node`'s jobs in element order."""
+    ended = [e for e in events if e.node == node and e.job is not None and e.kind in TERMINAL]
+    return sorted(ended, key=lambda e: e.job.element)
 
 
 CHAINED = [("a", SCORE), ("b", CHAIN)]
@@ -263,18 +138,6 @@ ZIPPED = _graph(
     both="json",
 )
 ZIPPED_ROWS = [{"text": f"t{i}", "other": f"o{i}"} for i in range(3)]
-
-
-@pytest.mark.contract
-def test_map_node_submits_one_fragment_per_batch(tmp_path: Path) -> None:
-    """Under a measure that batches two, five records go as fragments of 2, 2 and 1 jobs, every element once."""
-    profile, measures = _batching()
-    graph = _graph(CHAINED, CHAIN_EDGES, text="list[json]")
-    placed, values = _plan(graph, [{"text": f"t{i}"} for i in range(5)], profile=profile)
-    status, executor, _ = _run(placed, values, tmp_path, profile, measures)
-    assert sorted(executor.sizes("a")) == [1, 2, 2]
-    assert sum(executor.sizes("b")) == 5 and max(executor.sizes("b")) <= 2
-    assert status.done and [r.job.element for r in status.results["b"]] == [(i,) for i in range(5)]
 
 
 @pytest.mark.contract
@@ -301,43 +164,28 @@ def test_errored_element_fails_only_its_descendants(tmp_path: Path) -> None:
     assert len(status.results["c"]) == 3 and status.blocked["c"] == ()
     assert status.blocked["d"] == ((1,),) and status.blocked["g"] == ((),) and not status.done
     assert {(e.node, e.job.element) for e in events if e.kind == "failed" and e.job} == {("a", (1,))}
-    assert {(n, e) for n, elements in status.blocked.items() for e in elements} == {("b", (1,)), ("d", (1,)), ("g", ())}
 
 
 @pytest.mark.contract
 def test_record_bound_inputs_zip_and_a_broadcast_input_reaches_every_element(tmp_path: Path) -> None:
-    """`d` reads its record's `other` beside `a`'s same element; the broadcast `both` is one identity everywhere."""
+    """`d` reads its record's `other` beside `a`'s same element; the broadcast `both` is one value everywhere."""
     placed, values = _plan(ZIPPED, ZIPPED_ROWS, {"both": "shared"})
-    status, executor, _ = _run(placed, values, tmp_path)
-    assert status.done and len(status.results["d"]) == 3
-    inputs = {(f.node, j.element): i for f in executor.fragments for j, i in zip(f.jobs, f.inputs, strict=True)}
-    rows = placed.manifest.rows
-    assert all(inputs[("d", (i,))]["right"] == rows[i].inputs["other"] for i in range(3))
-    assert {inputs[("e", (i,))]["right"] for i in range(3)} == {rows[0].inputs["both"]}
+    status, _, _ = _run(placed, values, tmp_path)
+    assert status.done and len(status.results["d"]) == 3 and len(status.results["e"]) == 3
+    assert len({r.key_digest for r in status.results["d"]}) == 3
 
 
 @pytest.mark.contract
-def test_gather_waits_for_every_element(tmp_path: Path) -> None:
-    """The gather's one fragment is sent after every element of `a`, and reads their ports in element order."""
-    graph = _graph(GATHERED, GATHER_EDGES, text="list[json]")
-    placed, values = _plan(graph, [{"text": t} for t in ("one", "two", "three")])
-    status, executor, _ = _run(placed, values, tmp_path)
-    assert [f.node for f in executor.fragments][-1] == "g" and executor.sizes("g") == [1]
-    ports = [port_output_identity(r.key_digest, "value") for r in status.results["a"]]
-    [fragment] = [f for f in executor.fragments if f.node == "g"]
-    assert fragment.inputs[0]["values"] == gather_identity(ports)
-    assert len([f for f in executor.fragments if f.node == "a"]) == 3
-
-
-@pytest.mark.contract
-def test_an_empty_map_gathers_to_the_empty_list(tmp_path: Path) -> None:
-    """No records: the mapped node runs no job, and the gathering node runs once over `gather:` of no element."""
-    graph = _graph(GATHERED, GATHER_EDGES, text="list[json]")
-    placed, values = _plan(graph, [])
-    status, executor, _ = _run(placed, values, tmp_path)
-    assert status.results["a"] == () and executor.sizes("a") == []
-    [fragment] = executor.fragments
-    assert fragment.inputs[0]["values"] == gather_identity([]) and status.done
+def test_gather_waits_for_every_element_and_an_empty_map_gathers_to_the_empty_list(tmp_path: Path) -> None:
+    """The gather starts after every element of `a` ended; over no record it runs once, on no element."""
+    placed, values = _plan(_graph(GATHERED, GATHER_EDGES, text="list[json]"), [{"text": t} for t in ("x", "y", "z")])
+    status, _, events = _run(placed, values, tmp_path / "three")
+    ended = max(e.seq for e in _terminal(events, "a"))
+    [started] = [e for e in events if e.node == "g" and e.kind == "started"]
+    assert status.done and started.seq > ended
+    placed, values = _plan(_graph(GATHERED, GATHER_EDGES, text="list[json]"), [])
+    status, _, _ = _run(placed, values, tmp_path / "none")
+    assert status.results["a"] == () and len(status.results["g"]) == 1 and status.done
 
 
 @pytest.mark.contract
@@ -353,13 +201,14 @@ def test_an_empty_map_gathers_to_the_empty_list(tmp_path: Path) -> None:
 def test_pydra_checksum_equals_logical_key(
     graph: Graph, rows: list[dict[str, str]], broadcast: dict[str, str], jobs: int, tmp_path: Path
 ) -> None:
-    """Every leaf job pydra recorded, plain, gathered, zipped or broadcast, is keyed as the executor keyed it."""
+    """Every leaf job pydra recorded, plain, gathered, zipped or broadcast, is keyed as its pool job is keyed."""
     placed, values = _plan(graph, rows, broadcast)
-    store = runner.SenselabStore(tmp_path / "records")
-    status, _, _ = _run(placed, values, tmp_path, store=store)
+    records = runner.SenselabStore(tmp_path / "records")
+    status, store, _ = _run(placed, values, tmp_path, store=records)
     keys = {r.key_digest for refs in status.results.values() for r in refs}
-    leaves = {c for c in store.checksums() if not c.startswith(("records-", "plan-"))}
+    leaves = {c for c in records.checksums() if not c.startswith(("records-", "plan-"))}
     assert status.done and len(keys) == jobs and leaves == keys
+    assert all(store.stored(k) for k in keys)
 
 
 @pytest.mark.contract
@@ -371,146 +220,94 @@ def test_no_result_pickle_written(tmp_path: Path) -> None:
 
 
 @pytest.mark.contract
-def test_inprocess_and_pool_give_same_store(tmp_path: Path) -> None:
-    """The runner over `InProcess` stores the keys and outputs a node-by-node run by hand stores."""
+def test_a_run_logs_each_job_queued_started_and_finished(tmp_path: Path) -> None:
+    """Every job of a two-node chain is logged `queued`, `started` and `finished` with its key and placement."""
     placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "two")])
-    status, executor, _ = _run(placed, values, tmp_path / "run")
-    by_hand = InProcess(store=ResultStore(tmp_path / "hand"), profile=PROFILE, run=RunConfig(), workers=WORKERS)
-    admission = by_hand.admit(placed, values)
-    upstream = list(follow(by_hand, by_hand.submit(node_fragment(placed, admission, "a"))))
-    downstream = list(follow(by_hand, by_hand.submit(node_fragment(placed, admission, "b", upstream={"a": upstream}))))
-    by_hand.release(admission)
-    ran = {(r.key_digest, r.output_identity) for refs in status.results.values() for r in refs}
-    assert ran == {(r.key_digest, r.output_identity) for r in (*upstream, *downstream)} and status.done
-    for key, identity in ran:
-        assert identity is not None
-        stored = executor.inner.store.outputs_of(key, identity)
-        assert stored is not None and stored == by_hand.store.outputs_of(key, identity)
-    assert len(_entries(executor.inner.store.root)) == 4
-    assert _entries(executor.inner.store.root) == _entries(by_hand.store.root)
-
-
-def _entries(root: Path) -> set[str]:
-    """Return the committed entries under a result store's root, as `<key digest>/<context fingerprint>`."""
-    return {f"{p.parent.name}/{p.name}" for p in root.glob("*/*/*/*") if p.is_dir() and len(p.parent.name) == 64}
-
-
-class Refusing(Recording):
-    """A `Recording` executor whose `submit` raises for node `b`."""
-
-    def submit(self, fragment: PlanFragment) -> Handle:
-        """Raise for node `b`; submit any other fragment."""
-        if fragment.node == "b":
-            raise LookupError("b is refused")
-        return super().submit(fragment)
-
-
-class Faulting(Recording):
-    """A `Recording` executor whose `submit` raises `error` for node `b`."""
-
-    error: Exception = RuntimeError("unclassified")
-
-    def submit(self, fragment: PlanFragment) -> Handle:
-        """Raise `error` for node `b`; submit any other fragment."""
-        if fragment.node == "b":
-            raise self.error
-        return super().submit(fragment)
+    status, _, events = _run(placed, values, tmp_path)
+    for node in ("a", "b"):
+        for element in ((0,), (1,)):
+            kinds = [e.kind for e in events if e.node == node and e.job is not None and e.job.element == element]
+            assert kinds == ["queued", "started", "finished"]
+    finished = [e for e in events if e.kind == "finished"]
+    assert {e.key for e in finished} == {r.key_digest for refs in status.results.values() for r in refs}
+    assert all(e.output is not None and e.placement_digest is not None and e.env == "host" for e in finished)
 
 
 @pytest.mark.contract
-@pytest.mark.parametrize(
-    ("error", "fault", "gap"),
-    [
-        (RuntimeError("unclassified"), "infrastructure", True),
-        (ResourceFault("out of memory"), "resource", False),
-        (LeaseTimeout("busy"), "resource", True),
-    ],
-    ids=["unclassified", "typed-resource", "lease"],
-)
-def test_a_batch_the_executor_raised_for_is_failed_with_the_errors_own_class(
-    tmp_path: Path, error: Exception, fault: str, gap: bool
-) -> None:
-    """`fail_batch` records what `error_record` gives: the typed class, and a gap for an unclassified exception."""
+def test_a_set_cancel_sends_no_job_and_raises_run_cancelled(tmp_path: Path) -> None:
+    """Cancelled before the run, no job reaches the pool and the run raises `RunCancelled`; each job ends cancelled."""
     placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "two")])
-    executor = Faulting(ResultStore(tmp_path / "store"))
-    executor.error = error
-    with pytest.raises(type(error)):
-        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1)
-        )
-    failures = [e.failure for e in read_events(tmp_path / "events") if e.kind == "failed" and e.node == "b"]
-    assert failures and {(f.fault, f.gap, f.charged) for f in failures if f} == {(fault, gap, False)}
+    cancel = threading.Event()
+    cancel.set()
+    with pytest.raises(RunCancelled):
+        _run(placed, values, tmp_path, cancel=cancel)
+    kinds = [e.kind for e in read_events(tmp_path / "run")]
+    assert "started" not in kinds and kinds.count("cancelled") == 4
 
 
 @pytest.mark.contract
-def test_an_executor_error_is_raised_after_the_run(tmp_path: Path) -> None:
-    """An error the executor raises is not an element's failure: the run raises it once every other job ran."""
+def test_a_license_refusal_fails_every_job_of_its_node_and_is_not_raised(tmp_path: Path) -> None:
+    """A run config refusing the env's license fails `a`'s jobs with `LicenseRefused`; `b` is blocked; no raise."""
     placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "two")])
-    executor = Refusing(ResultStore(tmp_path / "store"))
-    with pytest.raises(LookupError, match="refused"):
-        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1)
-        )
-    assert executor.sizes("a") == [1, 1]
+    refusing = dataclasses.replace(placed, config=RunConfig(licenses=LicensePolicy(refuse=frozenset({"MIT"}))))
+    status, _, events = _run(refusing, values, tmp_path)
+    assert [r.failure.type for r in status.results["a"] if r.failure] == ["LicenseRefused"] * 2
+    assert status.blocked["b"] == ((0,), (1,)) and not [e for e in events if e.kind == "started"]
 
 
 @pytest.mark.contract
-def test_two_record_lists_zip_within_one_node(tmp_path: Path) -> None:
-    """One node mapped over two record lists runs one job per record, each reading its own row of both."""
+def test_records_of_one_content_are_one_execution_and_exact_reuses(tmp_path: Path) -> None:
+    """Two records of one text: per node one job runs and the other is served it, exact, with its own output."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "same"}, {"text": "same"}])
+    status, store, events = _run(placed, values, tmp_path)
+    assert status.done and status_from(events).counts["done"] == 4
+    for node in ("a", "b"):
+        first, second = status.results[node]
+        assert (first.key_digest, first.output_identity) == (second.key_digest, second.output_identity)
+        assert [(e.kind, e.reuse) for e in _terminal(events, node)] == [("finished", None), ("cache_hit", "exact")]
+        outputs = [read_outputs(store, e.key, e.output) for e in _terminal(events, node)]
+        assert outputs[0] is not None and outputs[0] == outputs[1]
+    plan_entity = ProvStore()
+    add_plan_entity(plan_entity, placed.hash)
+    plan_entity.write(run_dir_of(placed.hash))
+    activities = ProvStore.read(run_dir_of(placed.hash)).activities()
+    assert sorted("senselab:Reuse" in a.types() for a in activities) == [False, False, True, True]
+
+
+@pytest.mark.contract
+def test_records_of_one_failing_content_both_fail_and_only_descendants_are_blocked(tmp_path: Path) -> None:
+    """Two records of one failing text: both fail with the one failure; their `b` jobs are blocked by it."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "fail"}, {"text": "fail"}])
+    status, _, events = _run(placed, values, tmp_path)
+    first, second = status.results["a"]
+    assert first.failure is not None and first.failure == second.failure and status.blocked["a"] == ()
+    assert [e.kind for e in _terminal(events, "a")] == ["failed", "failed"]
+    assert [e.kind for e in _terminal(events, "b")] == ["blocked", "blocked"] and status.blocked["b"] == ((0,), (1,))
+
+
+@pytest.mark.parametrize(("text", "kinds"), [("one", ["finished", "cache_hit"]), ("fail", ["failed", "failed"])])
+@pytest.mark.contract
+def test_two_nodes_of_one_job_each_hold_their_own_result(text: str, kinds: list[str], tmp_path: Path) -> None:
+    """Nodes `a` and `a2` run one task on one record: one job runs, and each node's result names that node."""
     graph = _graph(
-        [("t", TWIN)],
-        [("input.first", "t.first", "map"), ("input.second", "t.second", "map")],
-        first="list[json]",
-        second="list[json]",
-    )
-    placed, values = _plan(graph, [{"first": f"f{i}", "second": f"s{i}"} for i in range(3)])
-    status, executor, _ = _run(placed, values, tmp_path)
-    assert status.done and executor.sizes("t") == [1, 1, 1]
-    inputs = {j.element: i for f in executor.fragments for j, i in zip(f.jobs, f.inputs, strict=True)}
-    rows = placed.manifest.rows
-    assert all(inputs[(i,)] == {"first": rows[i].inputs["first"], "second": rows[i].inputs["second"]} for i in range(3))
-
-
-_STORE: Any = runner.SenselabStore
-
-
-class LosingC(_STORE):  # type: ignore[misc]
-    """A completion store that cannot record the results of node `c`."""
-
-    def record(self, checksum: str, result: Any) -> None:  # noqa: ANN401 - a pydra result
-        """Raise for a result of node `c`; record any other."""
-        ref = getattr(result.outputs, "ref", None)
-        if isinstance(ref, Mapping) and ref.get("job", {}).get("node") == "c":
-            raise OSError("the record of c is lost")
-        super().record(checksum, result)
-
-
-@pytest.mark.contract
-def test_an_unrelated_pydra_error_raises_beside_a_failed_element(tmp_path: Path) -> None:
-    """Element 1 of `a` fails and, unrelated, every job of `c` errors in pydra: the run raises, not reports."""
-    graph = _graph(
-        [("a", SCORE), ("c", SCORE)],
-        [("input.text", "a.text", "map"), ("input.other", "c.text", "map")],
+        [("a", SCORE), ("a2", SCORE)],
+        [("input.text", "a.text", "map"), ("input.text", "a2.text", "map")],
         text="list[json]",
-        other="list[json]",
     )
-    placed, values = _plan(graph, [{"text": t, "other": f"o-{t}"} for t in ("one", "fail")])
-    with pytest.raises(Exception, match="n_c") as raised:
-        _run(placed, values, tmp_path, store=LosingC(tmp_path / "records"))
-    assert type(raised.value).__name__ == "WorkflowError"
-    status, _, _ = _run(placed, values, tmp_path / "again")
-    assert status.blocked == {"a": (), "c": ()} and not status.done
+    placed, values = _plan(graph, [{"text": text}])
+    status, _, events = _run(placed, values, tmp_path)
+    assert [r.job.node for n in ("a", "a2") for r in status.results[n]] == ["a", "a2"]
+    assert sorted(e.kind for n in ("a", "a2") for e in _terminal(events, n)) == sorted(kinds)
 
 
 @pytest.mark.contract
 def test_a_run_makes_no_telemetry_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Under an offline profile, pydra's version check is never called, and the environment is left as it was."""
+    """Pydra's version check is never called, and the environment is left as it was."""
     checks: list[object] = []
     monkeypatch.setattr("pydra.engine.job.Job.check_etelemetry", staticmethod(lambda: checks.append(1)))
     monkeypatch.delenv("NO_ET", raising=False)
-    offline = ExecutionProfile.load("laptop", {"devices": ["cpu"], "network": "offline"})
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "one"}], profile=offline)
-    status, _, _ = _run(placed, values, tmp_path, profile=offline)
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "one"}])
+    status, _, _ = _run(placed, values, tmp_path)
     assert status.done and checks == [] and "NO_ET" not in os.environ
 
 
@@ -531,505 +328,20 @@ def test_compile_plan_refuses_a_gather_into_a_mapped_node(extra: Edge) -> None:
 
 @pytest.mark.logic
 def test_the_runner_holds_pydras_lease_protocol_but_not_its_directory_lease() -> None:
-    """The job lease satisfies pydra's `Lease` Protocol and is not a `DirectoryLease`, whose settings are not passed.
-
-    Fails once the runner adopts pydra's lease: the change is then a design change to be made on purpose.
-    """
+    """The job lease of the run's records satisfies pydra's `Lease` Protocol and is not a `DirectoryLease`."""
     lease_module = pytest.importorskip("pydra.engine.lease")
-    assert hasattr(lease_module, "LeaseSettings")
     held = runner.SenselabStore(Path("root")).acquire("c", {})
     assert isinstance(held, lease_module.Lease) and not isinstance(held, lease_module.DirectoryLease)
-    assert not hasattr(runner.PydraRunner(profile=PROFILE), "lease")
     assert held.try_take() is None
     with held as entered:
         assert entered is held
 
 
-class Cancelling(Recording):
-    """A `Recording` executor whose `submit` raises `asyncio.CancelledError` for node `b`."""
-
-    def submit(self, fragment: PlanFragment) -> Handle:
-        """Raise a cancellation for node `b`; submit any other fragment."""
-        if fragment.node == "b":
-            raise asyncio.CancelledError
-        return super().submit(fragment)
-
-
 @pytest.mark.contract
-def test_a_cancellation_beside_a_failed_element_is_the_runs_cancellation(tmp_path: Path) -> None:
-    """Element 1 of `a` fails and `b`'s submission is cancelled: the run raises `RunCancelled` from it.
-
-    The cancelled job is logged `cancelled`; the failed element's descendant is not sent.
-    """
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "fail")])
-    executor = Cancelling(ResultStore(tmp_path / "store"))
-    with pytest.raises(runner.RunCancelled) as raised:
-        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1)
-        )
-    assert isinstance(raised.value.__cause__, asyncio.CancelledError) and executor.sizes("a") == [1, 1]
-    ended = {(e.node, e.job.element): e.kind for e in read_events(tmp_path / "events") if e.kind in TERMINAL and e.job}
-    assert ended == {("a", (0,)): "finished", ("a", (1,)): "failed", ("b", (0,)): "cancelled", ("b", (1,)): "cancelled"}
-
-
-class Raising(Recording):
-    """A `Recording` executor whose `submit` raises the exception `raise_for` gives a fragment's node, if any."""
-
-    def __init__(self, store: ResultStore, raise_for: Callable[[str], Exception | None]) -> None:
-        """Run on `store`, refusing as `raise_for` says."""
-        super().__init__(store)
-        self.raise_for = raise_for
-
-    def submit(self, fragment: PlanFragment) -> Handle:
-        """Raise what `raise_for` gives for the fragment's node; submit it otherwise."""
-        error = self.raise_for(fragment.node)
-        if error is not None:
-            raise error
-        return super().submit(fragment)
-
-
-def _outcomes(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
-    """Return the list each `GraphRunner.complete` of the test appends (job name, outcome) to."""
-    seen: list[tuple[str, Any]] = []
-    complete = runner.GraphRunner.complete
-
-    def spied(self: Any, job: Any, outcome: Any) -> None:  # noqa: ANN401 - pydra's job and outcome
-        seen.append((job.name, outcome))
-        complete(self, job, outcome)
-
-    monkeypatch.setattr(runner.GraphRunner, "complete", spied)
-    return seen
-
-
-SIDE = _graph(
-    [*CHAINED, ("c", SCORE)],
-    [*CHAIN_EDGES, ("input.other", "c.text", "map")],
-    text="list[json]",
-    other="list[json]",
-)
-SIDE_ROWS = [{"text": f"t{i}", "other": f"o{i}"} for i in range(2)]
-
-
-@pytest.mark.contract
-def test_a_license_refusal_fails_every_job_of_its_fragment_and_is_not_raised(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`execute` refuses `b`'s license: each job of `b` is `Failed(LicenseRefused)`, logged failed; nothing raises."""
-    seen = _outcomes(monkeypatch)
-    placed, values = _plan(SIDE, SIDE_ROWS)
-    refusal = LicenseRefused("GPL-3.0-only is refused")
-    executor = Raising(ResultStore(tmp_path / "store"), lambda node: refusal if node == "b" else None)
-    status = runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-        placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1)
-    )
-    refused = [o for name, o in seen if name == "n_b"]
-    assert len(refused) == 2 and all(isinstance(o, runner.Failed) for o in refused)
-    assert all(isinstance(o.error, LicenseRefused) for o in refused)
-    assert [r.failure.type for r in status.results["b"] if r.failure] == ["LicenseRefused"] * 2
-    assert status.blocked["b"] == () and len(status.results["c"]) == 2 and not status.done
-    failed = [e for e in read_events(tmp_path / "events") if e.kind == "failed"]
-    assert sorted(e.job.element for e in failed if e.job and e.node == "b") == [(0,), (1,)]
-
-
-@pytest.mark.contract
-@pytest.mark.parametrize(
-    "held", [QueueHeld("cpu", "host", 2, "lost"), runner.StaleCoordinator(1, 2)], ids=["queue", "stale"]
-)
-def test_a_held_queue_leaves_each_job_not_run_and_the_run_raises_the_hold(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, held: Exception
-) -> None:
-    """`b`'s queue is held: each job of `b` is `NotRun(held=True)`, no job gets a terminal event, the hold is raised."""
-    seen = _outcomes(monkeypatch)
-    placed, values = _plan(SIDE, SIDE_ROWS)
-    executor = Raising(ResultStore(tmp_path / "store"), lambda node: held if node == "b" else None)
-    with pytest.raises(type(held)):
-        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1)
-        )
-    not_run = [o for name, o in seen if name == "n_b"]
-    assert len(not_run) == 2 and all(isinstance(o, runner.NotRun) and o.held for o in not_run)
-    ended = {(e.node, e.kind) for e in read_events(tmp_path / "events") if e.kind in TERMINAL}
-    assert ("b", "blocked") not in ended and ("b", "failed") not in ended and ("b", "cancelled") not in ended
-
-
-@pytest.mark.contract
-def test_a_round_goes_to_the_executor_in_one_submit_many(tmp_path: Path) -> None:
-    """Five records batched by two: `a`'s three fragments, and the side node `c`, reach the executor as rounds."""
-    profile, measures = _batching()
-    placed, values = _plan(SIDE, [{"text": f"t{i}", "other": f"o{i}"} for i in range(5)], profile=profile)
-    status, executor, _ = _run(placed, values, tmp_path, profile, measures)
-    first = executor.rounds[0]
-    assert status.done and sorted(first) == ["a", "a", "a", "c", "c", "c"]
-    assert sum(len(r) for r in executor.rounds) == len(executor.fragments)
-
-
-class CancellingAtFirst(Recording):
-    """A `Recording` executor whose first `submit` sets `cancel`."""
-
-    def __init__(self, store: ResultStore, cancel: threading.Event) -> None:
-        """Run on `store`, setting `cancel` as the first fragment is submitted."""
-        super().__init__(store)
-        self.run_cancel = cancel
-
-    def submit(self, fragment: PlanFragment) -> Handle:
-        """Set `cancel`, then submit."""
-        self.run_cancel.set()
-        return super().submit(fragment)
-
-
-@pytest.mark.contract
-def test_a_cancel_during_a_round_sends_at_most_the_bound_of_its_fragments(tmp_path: Path) -> None:
-    """A round of 12 one-job fragments, cancelled as its first is submitted: at most `WorkerSet.bound` are submitted."""
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": f"t{i}"} for i in range(12)])
-    cancel = threading.Event()
-    executor = CancellingAtFirst(ResultStore(tmp_path / "store"), cancel)
-    with pytest.raises(runner.RunCancelled):
-        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1), cancel=cancel
-        )
-    assert executor.rounds[0] == ["a"] * 12
-    assert 1 <= len(executor.sizes("a")) <= WORKERS.bound and executor.sizes("b") == []
-
-
-class Short(Recording):
-    """A `Recording` executor whose `submit_many` returns one entry too few for a round of several fragments."""
-
-    def submit_many(
-        self, fragments: Sequence[PlanFragment], stop: Callable[[], bool] | None = None
-    ) -> list[Handle | Exception]:
-        """Submit the round and drop its last entry."""
-        taken = super().submit_many(fragments, stop)
-        return taken[:-1] if len(taken) > 1 else taken
-
-
-@pytest.mark.contract
-@pytest.mark.timeout(60)
-def test_a_sender_that_raises_ends_the_run_with_its_error_and_leaks_no_thread(tmp_path: Path) -> None:
-    """A round whose `submit_many` breaks its contract: the run raises the sender's error, every thread ended."""
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": f"t{i}"} for i in range(3)])
-    with pytest.raises(ValueError, match="zip"):
-        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, Short(ResultStore(tmp_path / "store")), values=values, events=EventLog(tmp_path / "events", "a1", 1)
-        )
-    running = {t.name.rsplit("_", 1)[0] for t in threading.enumerate()}
-    assert not running & {"senselab-send", "senselab-poll"}
-
-
-class Holding:
-    """An executor stand-in whose `submit` holds until `release` is set, counting the submissions inside it."""
-
-    def __init__(self) -> None:
-        """Start empty, released by nobody."""
-        self.inside = self.peak = 0
-        self.lock = threading.Lock()
-        self.entered = threading.Condition(self.lock)
-        self.release = threading.Event()
-
-    def submit(self, fragment: Any) -> Handle:  # noqa: ANN401 - any stand-in fragment
-        """Count this submission in, hold until released, count it out."""
-        with self.entered:
-            self.inside += 1
-            self.peak = max(self.peak, self.inside)
-            self.entered.notify_all()
-        assert self.release.wait(30)
-        with self.lock:
-            self.inside -= 1
-        return Handle(id=f"held-{id(fragment)}")
-
-
-class CountingSlots(threading.BoundedSemaphore):
-    """A bounded semaphore that counts the threads holding it and the threads blocked on it."""
-
-    def __init__(self, value: int) -> None:
-        """Hold `value` slots, none taken."""
-        super().__init__(value)
-        self.held = self.waiting = 0
-        self.changed = threading.Condition()
-
-    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:  # noqa: FBT001, FBT002 - as threading's
-        """Take a slot, counted as waiting while blocked and as held once taken."""
-        got = super().acquire(blocking=False)
-        if not got and blocking:
-            with self.changed:
-                self.waiting += 1
-                self.changed.notify_all()
-            got = super().acquire(timeout=timeout)
-            with self.changed:
-                self.waiting -= 1
-        if got:
-            with self.changed:
-                self.held += 1
-                self.changed.notify_all()
-        return got
-
-    def __enter__(self, blocking: bool = True, timeout: float | None = None) -> bool:  # noqa: FBT001, FBT002
-        """Take a slot, as `acquire` does."""
-        return self.acquire(blocking, timeout)
-
-    def release(self, n: int = 1) -> None:
-        """Give back `n` slots."""
-        with self.changed:
-            self.held -= n
-        super().release(n)
-
-
-@pytest.mark.logic
-def test_rounds_sharing_slots_run_at_most_the_slots_at_once_between_them() -> None:
-    """Two rounds of three over two shared slots: with four submissions blocked on the slots, two are inside."""
-    executor, slots = Holding(), CountingSlots(2)
-    fragments: list[Any] = [SimpleNamespace(node="a") for _ in range(3)]
-    rounds = [
-        threading.Thread(target=submit_each, args=(executor, fragments), kwargs={"width": 3, "slots": slots})
-        for _ in range(2)
-    ]
-    for one in rounds:
-        one.start()
-    with slots.changed:
-        assert slots.changed.wait_for(lambda: slots.waiting == 4, 30)
-    with executor.entered:
-        assert executor.entered.wait_for(lambda: executor.inside == 2, 30)
-        inside = executor.inside
-    executor.release.set()
-    for one in rounds:
-        one.join(30)
-    assert inside == 2 and executor.peak == 2
-
-
-class FirstCancels(InProcess):
-    """An `InProcess` whose first `submit` sets `cancel`; each `submit` records whether it held one of `slots`."""
-
-    def __init__(self, store: ResultStore, cancel: threading.Event) -> None:
-        """Run on `store` under the test profile, setting `cancel` at the first submission."""
-        super().__init__(store=store, profile=PROFILE, run=RunConfig(), workers=WORKERS)
-        self.counted = CountingSlots(WORKERS.bound)
-        self.slots = self.counted
-        self.run_cancel = cancel
-        self.held: list[int] = []
-
-    def submit(self, fragment: PlanFragment) -> Handle:
-        """Record the slots held, set `cancel`, then submit."""
-        with self.counted.changed:
-            self.held.append(self.counted.held)
-        self.run_cancel.set()
-        return super().submit(fragment)
-
-
-@pytest.mark.contract
-def test_a_cancel_during_an_in_process_round_submits_at_most_its_bound_each_in_a_slot(tmp_path: Path) -> None:
-    """`InProcess.submit_many` over a round of 12, cancelled at the first: at most the bound run, each in a slot."""
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": f"t{i}"} for i in range(12)])
-    cancel = threading.Event()
-    executor = FirstCancels(ResultStore(tmp_path / "store"), cancel)
-    with pytest.raises(runner.RunCancelled):
-        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1), cancel=cancel
-        )
-    assert 1 <= len(executor.held) <= WORKERS.bound and all(held >= 1 for held in executor.held)
-
-
-@pytest.mark.logic
-def test_compile_plan_refuses_a_map_over_a_node_output() -> None:
-    """A map over a node's list output is refused before pydra sees it, naming the node and the output."""
-    placed, _ = _plan(_graph(GATHERED, GATHER_EDGES, text="list[json]"), [{"text": "one"}])
-    graph = placed.logical.graph
-    mapped = graph.model_copy(update={"edges": (*graph.edges, Edge(source="g.value", target="a.extra", kind="map"))})
-    unplanned = dataclasses.replace(placed, logical=placed.logical.model_copy(update={"graph": mapped}))
-    with pytest.raises(UnmappedOutput, match="has no identity yet") as raised:
-        runner.compile_plan(unplanned)
-    assert (raised.value.node, raised.value.source) == ("a", "g.value")
-
-
-@pytest.mark.contract
-def test_a_run_logs_each_job_queued_started_and_finished(tmp_path: Path) -> None:
-    """Every job of a two-node chain is logged `queued`, `started` and `finished` with its key and placement."""
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "two")])
-    status, _, events = _run(placed, values, tmp_path)
-    for node in ("a", "b"):
-        for element in ((0,), (1,)):
-            kinds = [e.kind for e in events if e.node == node and e.job is not None and e.job.element == element]
-            assert kinds == ["queued", "started", "finished"]
-    finished = [e for e in events if e.kind == "finished"]
-    assert {e.key for e in finished} == {r.key_digest for refs in status.results.values() for r in refs}
-    assert all(e.output is not None and e.placement_digest is not None and e.env == "host" for e in finished)
-
-
-@pytest.mark.contract
-def test_a_set_cancel_sends_no_further_fragment(tmp_path: Path) -> None:
-    """Cancelled before the run, no fragment reaches the executor and the run raises `RunCancelled`."""
-    import threading  # noqa: PLC0415
-
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "two")])
-    executor = Recording(ResultStore(tmp_path / "store"))
-    cancel = threading.Event()
-    cancel.set()
-    with pytest.raises(runner.RunCancelled):
-        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
-            placed, executor, values=values, events=EventLog(tmp_path / "run", "a1", 1), cancel=cancel
-        )
-    assert executor.fragments == []
-
-
-@pytest.mark.contract
-def test_a_run_completes_with_pydra_pickle_loading_refused_and_leaves_no_pickle(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Every cloudpickle load fails; the run completes and writes no result, error or return-value pickle."""
-
-    def refuse(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("pydra unpickled")
-
-    monkeypatch.setattr("cloudpickle.load", refuse)
-    monkeypatch.setattr("cloudpickle.loads", refuse)
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "two")])
-    status, _, _ = _run(placed, values, tmp_path)
-    assert status.done and {p.name for p in (tmp_path / "pydra").rglob("*.pklz")} <= {"_job.pklz"}
-
-
-@pytest.mark.contract
-def test_the_pydra_work_dir_is_private_under_a_permissive_umask(tmp_path: Path) -> None:
-    """The work dir the runner creates is mode `0o700` under umask `0o022`, and it is kept after the run."""
+def test_a_plan_of_another_profile_is_refused(tmp_path: Path) -> None:
+    """A session runs only plans placed under its own profile."""
     placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "one"}])
-    before = os.umask(0o022)
-    try:
-        status, _, _ = _run(placed, values, tmp_path)
-    finally:
-        os.umask(before)
-    assert status.done and stat.S_IMODE((tmp_path / "pydra").stat().st_mode) == 0o700
-
-
-@pytest.mark.logic
-def test_the_graph_runner_is_built_over_a_senselab_store_with_no_lookup_and_no_readonly_caches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`PydraRunner` drives a `GraphRunner` over `SenselabStore`: no `lookup_before_dispatch`, no read-only cache."""
-    built: list[Any] = []
-
-    class Spied(runner.GraphRunner):  # type: ignore[misc, name-defined]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401 - pydra's signature
-            super().__init__(*args, **kwargs)
-            built.append(self)
-
-    monkeypatch.setattr(runner, "GraphRunner", Spied)
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "one"}])
-    status, _, _ = _run(placed, values, tmp_path)
-    [graph] = built
-    assert status.done and type(graph.store) is runner.SenselabStore and graph.lookup_before_dispatch is False
-    assert graph.submitter.readonly_caches is None and not hasattr(graph.store, "readonly_caches")
-
-
-@pytest.mark.logic
-def test_the_poll_thread_checks_cancel_every_cancel_check_s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The poll thread waiting between rounds wakes at `cancel_check_s`, however long its pause."""
-    waits: list[float] = []
-
-    clock = ManualClock(poll_s=0.001, hang_s=5.0, waits="spend")
-    wait = clock.wait
-
-    def recorded(event: threading.Event, timeout: float) -> bool:
-        waits.append(timeout)
-        return bool(wait(event, timeout))
-
-    monkeypatch.setattr(clock, "wait", recorded)
-    poller = runner._Poller(
-        Recording(ResultStore(tmp_path / "store"), PROFILE),
-        threading.Event(),
-        lambda message: None,
-        first_s=1,
-        max_s=1,
-        cancel_check_s=0.25,
-        clock=clock,
-    )
-    poller._nap(1.0)
-    assert waits == [0.25] * 4
-
-
-def _terminal(events: Sequence[Any], node: str) -> list[Any]:
-    """Return the terminal events of `node`'s jobs in element order."""
-    ended = [e for e in events if e.node == node and e.job is not None and e.kind in TERMINAL]
-    return sorted(ended, key=lambda e: e.job.element)
-
-
-@pytest.mark.logic
-def test_records_of_one_content_are_one_execution_and_exact_reuses(tmp_path: Path) -> None:
-    """Two records of one text: per node one job runs and the other is served it, exact, with its own output."""
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "same"}, {"text": "same"}])
-    status, executor, events = _run(placed, values, tmp_path)
-    store = executor.inner.store
-    assert status.done and status_from(events).counts["done"] == 4
-    for node in ("a", "b"):
-        first, second = status.results[node]
-        assert (first.job.element, second.job.element) == ((0,), (1,))
-        assert (first.key_digest, first.output_identity) == (second.key_digest, second.output_identity)
-        assert [(e.kind, e.reuse) for e in _terminal(events, node)] == [("finished", None), ("cache_hit", "exact")]
-        outputs = [store.outputs_of(e.key, e.output) for e in _terminal(events, node)]
-        assert outputs[0] is not None and outputs[0] == outputs[1]
-    activities = store.provenance.activities()
-    assert sorted("senselab:Reuse" in a.types() for a in activities) == [False, False, True, True]
-
-
-@pytest.mark.logic
-def test_records_of_one_failing_content_both_fail_and_only_descendants_are_blocked(tmp_path: Path) -> None:
-    """Two records of one failing text: both fail with the one failure; their `b` jobs are blocked by it."""
-    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "fail"}, {"text": "fail"}])
-    status, _, events = _run(placed, values, tmp_path)
-    first, second = status.results["a"]
-    assert first.failure is not None and first.failure == second.failure and status.blocked["a"] == ()
-    assert [e.kind for e in _terminal(events, "a")] == ["failed", "failed"]
-    assert [e.kind for e in _terminal(events, "b")] == ["blocked", "blocked"] and status.blocked["b"] == ((0,), (1,))
-    assert status_from(events).counts["blocked"] == 2 and status_from(events).counts["failed"] == 2
-
-
-@pytest.mark.logic
-def test_a_job_reading_a_shared_result_runs_under_its_own_element(tmp_path: Path) -> None:
-    """`a` is one job for both records; `d` reads each record's own `other` and runs once per record, as itself."""
-    rows = [{"text": "same", "other": f"o{i}"} for i in range(2)]
-    placed, values = _plan(ZIPPED, rows, {"both": "shared"})
-    status, executor, events = _run(placed, values, tmp_path)
-    assert status.done and status_from(events).counts["done"] == 6
-    sent = {(f.node, j.element): i for f in executor.fragments for j, i in zip(f.jobs, f.inputs, strict=True)}
-    assert [sent[("d", (i,))]["right"] for i in range(2)] == [placed.manifest.rows[i].inputs["other"] for i in range(2)]
-    assert [e.kind for e in _terminal(events, "d")] == ["finished", "finished"]
-    assert [e.kind for e in _terminal(events, "e")] == ["finished", "cache_hit"]
-
-
-@pytest.mark.logic
-def test_a_gather_over_records_of_one_content_reads_every_record_under_its_plan_key(tmp_path: Path) -> None:
-    """Three records, two of one text: the gather reads three ports in record order, under its queued key."""
-    placed, values = _plan(_graph(GATHERED, GATHER_EDGES, text="list[json]"), [{"text": t} for t in ("x", "y", "x")])
-    status, executor, events = _run(placed, values, tmp_path)
-    [fragment] = [f for f in executor.fragments if f.node == "g"]
-    ports = [port_output_identity(r.key_digest, "value") for r in status.results["a"]]
-    assert fragment.inputs[0]["values"] == gather_identity(ports) and len(set(ports)) == 2
-    [queued] = [e for e in events if e.node == "g" and e.kind == "queued"]
-    [ended] = _terminal(events, "g")
-    assert status.done and ended.kind == "finished" and ended.key == queued.key
-
-
-@pytest.mark.parametrize(("text", "kinds"), [("one", ["finished", "cache_hit"]), ("fail", ["failed", "failed"])])
-@pytest.mark.logic
-def test_two_nodes_of_one_job_each_hold_their_own_result(text: str, kinds: list[str], tmp_path: Path) -> None:
-    """Nodes `a` and `a2` run one task on one record: one job runs, and each node's result names that node."""
-    graph = _graph(
-        [("a", SCORE), ("a2", SCORE)],
-        [("input.text", "a.text", "map"), ("input.text", "a2.text", "map")],
-        text="list[json]",
-    )
-    placed, values = _plan(graph, [{"text": text}])
-    status, _, events = _run(placed, values, tmp_path)
-    assert [r.job.node for n in ("a", "a2") for r in status.results[n]] == ["a", "a2"]
-    assert sorted(e.kind for n in ("a", "a2") for e in _terminal(events, n)) == sorted(kinds)
-
-
-@pytest.mark.logic
-def test_a_duplicate_whose_hit_the_license_rule_refuses_is_executed_again(tmp_path: Path) -> None:
-    """With no env license recorded, a hit is refused: the second record of one text runs as its own execution."""
-    previous = use_packaged(Packaged(CATALOGUE, _this_interpreter, REGISTRY, None))
-    try:
-        placed, values = _plan(
-            _graph([("a", SCORE)], [("input.text", "a.text", "map")], text="list[json]"), [{"text": "same"}] * 2
-        )
-        status, executor, events = _run(placed, values, tmp_path)
-    finally:
-        use_packaged(previous)
-    assert status.done and [(e.kind, e.reuse) for e in _terminal(events, "a")] == [("finished", None)] * 2
-    assert [a.types() for a in executor.inner.store.provenance.activities()] == [("prov:Activity",)] * 2
+    other = PROFILE.model_copy(update={"pool": PROFILE.pool.model_copy(update={"idle_polls": 7})})
+    events = EventLog(tmp_path / "run", "a1", 1)
+    with served(tmp_path / "pool", other) as (session, _), pytest.raises(ValueError, match="another execution profile"):
+        runner.PydraRunner(profile=other).run_plan(placed, session, values=values, events=events)

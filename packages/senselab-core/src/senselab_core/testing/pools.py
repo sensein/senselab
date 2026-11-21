@@ -1,4 +1,4 @@
-"""A senselab pool session over an in-process pool worker on a thread: the warm pool tests' scaffold."""
+"""A pool session whose workers run on threads of this process, for tests: `served`, `Served` and `POOL_PROFILE`."""
 
 import contextlib
 import threading
@@ -8,11 +8,12 @@ from pathlib import Path
 from pydra.workers.pool.classes import WorkerClass
 from pydra.workers.pool.substrate import ExternalSubstrate
 from pydra.workers.pool.worker import Worker
+
 from senselab_core.runtime.execution.warm import PoolSession, classify, settings, worker_classes
 from senselab_core.runtime.execution.workers import release_process_caches
 from senselab_core.runtime.profiles import ExecutionProfile
 
-PROFILE = ExecutionProfile.load(
+POOL_PROFILE = ExecutionProfile.load(
     "laptop",
     {
         "devices": ["cpu"],
@@ -49,18 +50,25 @@ class Served:
         self.threads.append(thread)
 
     def close(self) -> None:
-        """Wait for every worker to exit."""
+        """Wait for every worker to exit: once idle, within its idle polls and one lease's staleness."""
+        profile = self.session.profile
+        bound = profile.pool.idle_polls * profile.pool.poll_s + profile.lease.stale_after_s
         for thread in self.threads:
-            thread.join(timeout=120)
+            thread.join(bound)
 
 
 @contextlib.contextmanager
 def served(
-    tmp_path: Path, profile: ExecutionProfile = PROFILE, workers: int = 1
+    tmp_path: Path, profile: ExecutionProfile = POOL_PROFILE, workers: int = 1, store: Path | None = None
 ) -> Iterator[tuple[PoolSession, Served]]:
-    """Open a session over `tmp_path` whose pool workers run here, `workers` of the first class, closed after."""
+    """Open a session over `tmp_path` whose pool workers run here, `workers` of the first class, closed after.
+
+    Its results are in the store at `store` (`<tmp_path>/store` when None). The process model caches are emptied
+    before and after, so a test's loads are its own.
+    """
     release_process_caches()
-    session = PoolSession(profile, tmp_path / "session", tmp_path / "store", substrate=ExternalSubstrate())
+    root = store if store is not None else tmp_path / "store"
+    session = PoolSession(profile, tmp_path / "session", root, substrate=ExternalSubstrate())
     pool = Served(session)
     for _ in range(workers):
         pool.serve()

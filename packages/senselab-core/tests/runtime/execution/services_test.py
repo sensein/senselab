@@ -7,7 +7,6 @@ import threading
 import urllib.error
 import uuid
 from collections.abc import Callable, Iterator
-from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -20,15 +19,11 @@ from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
 from senselab_core.kernel.identity import Attestation, ModelRef, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.executor import FaultRecord
-from senselab_core.runtime.execution.pool_worker import PoolWorker
-from senselab_core.runtime.execution.queue import RUN_QUEUES
-from senselab_core.runtime.execution.services import ConsumerLease, ServiceEntry, ServiceRegistry, service_registry
-from senselab_core.runtime.execution.workers import WorkerSet, expected_of
+from senselab_core.runtime.execution.providers import Loader, Model, SenselabWorker
+from senselab_core.runtime.execution.services import ServiceEntry, ServiceRegistry, service_registry
 from senselab_core.runtime.hardware import host_token
-from senselab_core.runtime.keys import Call, Placement, call_key
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.teardown import run_all
 from senselab_core.runtime.vllm_server import ServerRejected, ServiceUnavailable, StaleAttestation, chat, server_fault
 from senselab_core.runtime.worker_client import WorkerClient
@@ -119,14 +114,6 @@ def starts() -> Iterator[list[StandIn]]:
         server.stop()
 
 
-def _provider(registry: ServiceRegistry, starts: list[StandIn], identity: Attestation = IDENTITY) -> WorkerSet:
-    def start(backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profile: ExecutionProfile) -> StandIn:  # noqa: ARG001 - a ServerStart
-        starts.append(StandIn(identity))
-        return starts[-1]
-
-    return WorkerSet(1, start_server=start, registry=registry, provide=True)
-
-
 def test_service_registered_under_renewed_lease(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """An entry `{identity, endpoint}` stays live past its stale bound while its lease beats, and not once it stops."""
     clock = lease_clock()
@@ -157,106 +144,6 @@ def test_service_registered_under_renewed_lease(tmp_path: Path, lease_clock: Cal
     age(registry.root, 10 * PROFILE.lease.stale_after_s)
     assert registry.lookup(IDENTITY) is None
     registry.register(IDENTITY, "http://127.0.0.1:3").close()
-
-
-def test_a_service_record_holds_no_host_name(tmp_path: Path, starts: list[StandIn]) -> None:
-    """A provider and a consumer on the host-keyed registry leave no host name, account or home path under its root."""
-    profile = PROFILE.model_copy(update={"env_roots": {**PROFILE.env_roots, "server": str(tmp_path / "servers")}})
-    registry = service_registry(profile, {"CUDA_VISIBLE_DEVICES": "0"})
-    provider, consumer = _provider(registry, starts), WorkerSet(1, registry=registry)
-    try:
-        provider.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY)
-        consumer.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY)
-        assert registry.root.relative_to(tmp_path / "servers").parts[1] == host_token()
-        assert identity_leaks(tmp_path / "servers", tmp_path) == []
-    finally:
-        consumer.close()
-        provider.close()
-
-
-def test_two_consumers_one_server(registry: ServiceRegistry, starts: list[StandIn]) -> None:
-    """Two consumers of one identity share the one registered server, each under its own lease."""
-    provider = _provider(registry, starts)
-    consumers = [WorkerSet(1, registry=registry) for _ in range(2)]
-    try:
-        provider.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY)
-        served = [c.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY) for c in consumers]
-        assert all(isinstance(s, ConsumerLease) for s in served) and len(starts) == 1
-        assert {s.url for s in served} == {starts[0].url}
-        assert all(s.chat(CHAT, sampling={}).attestation == IDENTITY for s in served)  # type: ignore[attr-defined]
-        assert registry.live_consumers(IDENTITY) == 2
-        consumers[0].close()
-        assert registry.live_consumers(IDENTITY) == 1
-    finally:
-        for workers in (*consumers, provider):
-            workers.close()
-    assert registry.lookup(IDENTITY) is None and starts[0].url is None
-
-
-def test_workers_of_one_identity_start_one_server(registry: ServiceRegistry, starts: list[StandIn]) -> None:
-    """Providing and consuming sets of one identity start one server: every set after the first consumes it."""
-    sets = [_provider(registry, starts) for _ in range(3)] + [WorkerSet(1, registry=registry) for _ in range(2)]
-    try:
-        served = [workers.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY) for workers in sets]
-        assert len(starts) == 1 and served[0] is starts[0]
-        assert all(isinstance(s, ConsumerLease) and s.url == starts[0].url for s in served[1:])
-        assert registry.live_consumers(IDENTITY) == len(sets) - 1
-    finally:
-        for workers in reversed(sets):
-            workers.close()
-
-
-def test_each_device_set_registers_its_own_server(tmp_path: Path, starts: list[StandIn]) -> None:
-    """Providers on two devices start two servers, two on one device one; a consumer binds to its card's."""
-    profile = PROFILE.model_copy(update={"env_roots": {**PROFILE.env_roots, "server": str(tmp_path / "servers")}})
-    on = {d: service_registry(profile, {"CUDA_VISIBLE_DEVICES": d}) for d in ("0", "1")}
-    sets = [_provider(on["0"], starts), _provider(on["1"], starts), _provider(on["0"], starts)]
-    consumer = WorkerSet(1, registry=on["1"])
-    try:
-        served = [w.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY) for w in (*sets, consumer)]
-        assert len(starts) == 2 and on["0"].root != on["1"].root
-        assert served[2].url == starts[0].url and served[3].url == starts[1].url
-    finally:
-        for workers in (consumer, *reversed(sets)):
-            workers.close()
-
-
-def test_service_exits_after_idle_consumers(
-    tmp_path: Path, starts: list[StandIn], lease_clock: Callable[..., ManualClock]
-) -> None:
-    """A `svc` worker with an empty queue stays while a consumer lease is live and exits `idle_exit_s` after it ends."""
-    clock = lease_clock()
-    registry = ServiceRegistry(tmp_path / "registry", lease=PROFILE.lease, clock=clock)
-    provider = _provider(registry, starts)
-    provider.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY)
-    consumer = registry.consume(IDENTITY)
-    idle_s, poll_s = PROFILE.services.idle_exit_s, PROFILE.pool.poll_s
-    held_s = 4 * idle_s
-    assert held_s > PROFILE.pool.idle_polls * poll_s
-    store = ResultStore(tmp_path / "store")
-    worker = PoolWorker(
-        tmp_path / "run" / RUN_QUEUES, ["svc:pii"], profile=PROFILE, store=store, workers=provider, clock=clock
-    )
-    exits: list[int] = []
-    thread = threading.Thread(target=lambda: exits.append(worker.serve()), daemon=True)
-    thread.start()
-    try:
-        for _ in range(round(held_s / poll_s)):
-            clock.settle(parked=3)
-            clock.advance(poll_s)
-        clock.settle(parked=3)
-        assert thread.is_alive()
-        consumer.stop()
-        left = clock.now()
-        clock.drive(thread, poll_s)
-        assert exits == [0]
-        assert idle_s - poll_s <= clock.now() - left <= idle_s + 2 * poll_s
-    finally:
-        worker.halt()
-        thread.join(clock.hang_s)
-        consumer.stop()
-        provider.close()
-    assert worker.served == [] and registry.lookup(IDENTITY) is None
 
 
 def test_attestation_checked_per_reply(registry: ServiceRegistry, starts: list[StandIn]) -> None:
@@ -299,32 +186,6 @@ SETTINGS: dict[str, Any] = {
 }
 
 
-def test_the_key_takes_the_attestation_of_the_service_entry(
-    tmp_path: Path, registry: ServiceRegistry, starts: list[StandIn]
-) -> None:
-    """A call's key takes the entry's attestation: two configs give two keys, a restart of one config the same key."""
-    lock = tmp_path / "vllm-server.txt"
-    lock.write_text("vllm==0.31.0\n")
-    call = Call(task=fake.ECHO, params=fake.EchoParams(), inputs={"payload": "content:" + "a" * 64}, model=MODEL)
-    keys = []
-    for seqs in (4, 8, 4):
-        backend = BACKEND.model_copy(update={"server": ServerConfig(settings={**SETTINGS, "max_num_seqs": seqs})})
-        expected = expected_of(backend, lock, MODEL)
-        provider, consumer = _provider(registry, starts, expected), WorkerSet(1, registry=registry)
-        try:
-            provider.server(backend, ENV, MODEL, PROFILE, expected)
-            served = consumer.server(backend, ENV, MODEL, PROFILE, expected)
-            assert isinstance(served, ConsumerLease) and served.attestation == expected
-            placement = Placement(backend=backend, backend_params=backend.params(), device="cpu")
-            keys.append(call_key(replace(call, service=served.attestation), placement).digest())
-            with pytest.raises(ValueError, match="is a server backend"):
-                call_key(call, placement)
-        finally:
-            consumer.close()
-            provider.close()
-    assert keys[0] != keys[1] and keys[0] == keys[2] and len(starts) == 3
-
-
 def test_a_dead_consumer_counts_until_its_lease_is_stale(registry: ServiceRegistry) -> None:
     """A consumer that died without releasing counts as live until its lease is stale, then is removed."""
     consumers = registry.root / f"{registry.name(IDENTITY)}.consumers"
@@ -333,42 +194,6 @@ def test_a_dead_consumer_counts_until_its_lease_is_stale(registry: ServiceRegist
     assert registry.live_consumers(IDENTITY) == 1
     age(consumers, 10 * PROFILE.lease.stale_after_s)
     assert registry.live_consumers(IDENTITY) == 0 and list(consumers.iterdir()) == []
-
-
-def test_two_providers_racing_start_one_server(registry: ServiceRegistry, tier_bound: float) -> None:
-    """Two providing sets of one identity: one reserves, starts and publishes; the other starts nothing."""
-    starts: list[StandIn] = []
-    barrier, refused = threading.Barrier(2), threading.Event()
-
-    def start(backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profile: ExecutionProfile) -> StandIn:  # noqa: ARG001 - a ServerStart
-        assert refused.wait(tier_bound)
-        starts.append(StandIn(IDENTITY))
-        return starts[-1]
-
-    providers = [WorkerSet(1, start_server=start, registry=registry, provide=True) for _ in range(2)]
-    outcomes: list[object] = []
-
-    def provide(workers: WorkerSet) -> None:
-        barrier.wait()
-        try:
-            outcomes.append(workers.server(BACKEND, ENV, MODEL, PROFILE, IDENTITY))
-        except LeaseTimeout as busy:
-            outcomes.append(busy)
-            refused.set()
-
-    threads = [threading.Thread(target=provide, args=(p,)) for p in providers]
-    try:
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        assert len(starts) == 1 and sum(isinstance(o, LeaseTimeout) for o in outcomes) == 1
-        assert registry.lookup(IDENTITY) == ServiceEntry(identity=IDENTITY, endpoint=str(starts[0].url))
-    finally:
-        for workers in providers:
-            workers.close()
-        for server in starts:
-            server.stop()
 
 
 def test_a_reservation_withdraws_a_dead_holders_entry(registry: ServiceRegistry) -> None:
@@ -557,17 +382,6 @@ def test_a_fault_releasing_the_lease_is_raised_after_the_renewer_ended(
     assert [t.name for t in threading.enumerate() if t.name.startswith("lease-renewer")] == []
 
 
-def test_a_pooled_worker_that_fails_to_close_does_not_skip_the_servers(registry: ServiceRegistry) -> None:
-    """`WorkerSet.close` with a pooled client whose close raises: the provided server still stops and is withdrawn."""
-    calls: list[str] = []
-    workers, [server] = _provided(registry, calls, fails=(False,))
-    broken = _BrokenClient()
-    workers._pool[("k", "b", "m")] = broken  # noqa: SLF001 - a pooled worker that fails to close
-    with pytest.raises(OSError, match="storage fault"):
-        workers.close()
-    assert broken.closed and server.url is None and registry.lookup(server.identity) is None
-
-
 class Recording(StandIn):
     """A stand-in server that records whether its entry was still registered when `stop` ran, and may fail."""
 
@@ -597,63 +411,55 @@ class _BrokenClient(WorkerClient):
         raise FAULT
 
 
-def _provided(
-    registry: ServiceRegistry, calls: list[str], *, fails: tuple[bool, ...]
-) -> tuple[WorkerSet, list[Recording]]:
-    """A providing set with one server per entry of `fails`, each of its own identity."""
-    servers: list[Recording] = []
-    identities = [
-        IDENTITY.model_copy(update={"served_model": f"org/m{i}", "model_identity": f"{i}" * 40})
-        for i in range(len(fails))
-    ]
-
-    def start(backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profile: ExecutionProfile) -> Recording:  # noqa: ARG001 - a ServerStart
-        identity = identities[len(servers)]
-        servers.append(Recording(identity, registry, calls, fails[len(servers)]))
-        return servers[-1]
-
-    workers = WorkerSet(1, start_server=start, registry=registry, provide=True)
-    for identity in identities:
-        model = ResolvedModel(
-            ref=ModelRef.parse(f"{identity.served_model}@{identity.model_identity}"), identity=identity.model_identity
-        )
-        workers.server(BACKEND, ENV, model, PROFILE, identity)
-    return workers, servers
+STARTED: list["StandIn"] = []
+"""The stand-in servers `_start` started, across the providers of one test."""
 
 
-def test_a_server_is_stopped_before_its_registration_is_withdrawn(registry: ServiceRegistry) -> None:
-    """The process stops while its entry still stands; only then is the entry withdrawn."""
-    calls: list[str] = []
-    workers, [server] = _provided(registry, calls, fails=(False,))
-    workers.close()
-    assert calls == [f"stop:{server.label}:registered=True"]
-    assert registry.lookup(server.identity) is None and workers.provided() == []
+def _start(backend: BackendSpec, env: EnvHandle, model: ResolvedModel, profile: ExecutionProfile) -> "StandIn":  # noqa: ARG001 - a ServerStart
+    STARTED.append(StandIn(IDENTITY))
+    return STARTED[-1]
 
 
-def test_a_server_that_fails_to_stop_is_still_withdrawn_and_later_servers_still_stop(
-    registry: ServiceRegistry,
+@pytest.fixture
+def hosted(tmp_path: Path) -> Iterator[tuple[ExecutionProfile, ServiceRegistry]]:
+    """The profile with its server root under `tmp_path`, and the registry the providers on device `0` use."""
+    profile = PROFILE.model_copy(update={"env_roots": {**PROFILE.env_roots, "server": str(tmp_path / "servers")}})
+    STARTED.clear()
+    yield profile, service_registry(profile)
+    for server in STARTED:
+        server.stop()
+
+
+def _loaded(profile: ExecutionProfile) -> Model:
+    provider = SenselabWorker(_start)
+    backend = BACKEND.model_copy(update={"worker": "backends.served_backend_fixture"})
+    return provider.load(provider.add(Loader(backend, ENV, MODEL, "cpu", profile, IDENTITY)), None)
+
+
+def test_pool_workers_of_one_identity_share_one_registered_server(
+    hosted: tuple[ExecutionProfile, ServiceRegistry],
 ) -> None:
-    """`close` over three servers, the first failing to stop: all three stop, none stays registered, the error rises."""
-    calls: list[str] = []
-    workers, servers = _provided(registry, calls, fails=(True, False, False))
-    with pytest.raises(OSError, match="storage fault"):
-        workers.close()
-    assert len(calls) == 3
-    assert all(registry.lookup(s.identity) is None and s.url is None for s in servers)
-    assert workers.provided() == []
+    """The first worker's load starts and registers the server; the next ones consume it under leases of their own."""
+    profile, registry = hosted
+    models = [_loaded(profile) for _ in range(3)]
+    try:
+        assert len(STARTED) == 1 and registry.lookup(IDENTITY) is not None
+        assert registry.live_consumers(IDENTITY) == 2
+        models[1].close()
+        assert registry.live_consumers(IDENTITY) == 1
+    finally:
+        for model in reversed(models):
+            model.close()
+    assert registry.lookup(IDENTITY) is None and STARTED[0].url is None
 
 
-def test_a_fault_withdrawing_one_registration_does_not_leave_a_later_server_running(
-    registry: ServiceRegistry, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A storage fault in each registration's proof: every server is stopped and no lease is held afterwards."""
-    calls: list[str] = []
-    workers, servers = _provided(registry, calls, fails=(False, False))
-    with monkeypatch.context() as patch:
-        refuse_call(patch, "mkdir", "proof-", FAULT)
-        with pytest.raises(OSError, match="storage fault"):
-            workers.close()
-    assert [s.url for s in servers] == [None, None]
-    for server in servers:
-        assert registry.lookup(server.identity) is None
-        registry.reserve(server.identity).close()
+def test_a_service_record_holds_no_host_name(tmp_path: Path, hosted: tuple[ExecutionProfile, ServiceRegistry]) -> None:
+    """A providing and a consuming load on the host-keyed registry leave no host name, account or home path there."""
+    profile, registry = hosted
+    models = [_loaded(profile), _loaded(profile)]
+    try:
+        assert registry.root.relative_to(tmp_path / "servers").parts[1] == host_token()
+        assert identity_leaks(tmp_path / "servers", tmp_path) == []
+    finally:
+        for model in reversed(models):
+            model.close()

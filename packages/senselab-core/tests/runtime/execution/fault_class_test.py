@@ -1,29 +1,23 @@
 """A fault's class survives every wrapper (ADR-009): a load failure keeps its cause's class and is never split."""
 
 import ast
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from pool_stack_fixture import host_env, packaged, registry
-from pool_worker_test import _profile, _put, _refs, _run, _sender
+from pool_stack_fixture import host_env, registry, scoring
 from senselab_core.kernel.declare import BackendSpec
-from senselab_core.runtime.execution.executor import FaultRecord, JobRef
-from senselab_core.runtime.execution.job import Failed, Job, JobOutcome
-from senselab_core.runtime.execution.pool_worker import PoolWorker
-from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
-from senselab_core.runtime.fake_backend import ECHO, FAKE, EchoParams
-from senselab_core.runtime.keys import Call, Placement
+from senselab_core.runtime.execution.executor import FaultRecord
+from senselab_core.runtime.execution.providers import Loader, SenselabHost
+from senselab_core.runtime.execution.workers import WorkerLoadFailed, loaded
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.worker_client import WorkerFatal
 from senselab_worker.faults import MAX_TEXT_CHARS, ContentFault, InfrastructureFault, ResourceFault, error_record
-from worker_set_test import _attestation, _model
-
-from pool_worker_test import BROKEN  # isort: skip
 
 pytestmark = pytest.mark.logic
 
 OOM_BACKEND = "backends.oom_load_backend_fixture"
+BROKEN = scoring("fault_class_test.broken")
 TYPED: dict[str, type[Exception]] = {
     "content": ContentFault,
     "resource": ResourceFault,
@@ -37,31 +31,27 @@ def _backend() -> BackendSpec:
 
 
 def host_load_failure(raised: Exception) -> WorkerLoadFailed:
-    """Return the `WorkerLoadFailed` a real host checkout raises when its backend's load raises `raised`."""
+    """Return the `WorkerLoadFailed` the host provider raises when its backend's load raises `raised`."""
     from backends import oom_load_backend_fixture as fixture  # noqa: PLC0415 - the module holds what load raises
 
     fixture.LOADS.clear()
     fixture.RAISE[:] = [raised]
     backend, profile = _backend(), ExecutionProfile.load()
+    provider = SenselabHost()
+    spec = provider.add(Loader(backend, host_env(backend, profile), None, "cpu", profile))
     with pytest.raises(WorkerLoadFailed) as caught:
-        with WorkerSet(1).checkout(backend, host_env(backend, profile), None, device="cpu", profile=profile):
-            pass
+        provider.load(spec, None)
     return caught.value
 
 
 def _server_load_failure(raised: Exception) -> WorkerLoadFailed:
-    from senselab_core.kernel.declare import Env, ServerConfig  # noqa: PLC0415
+    """Return the `WorkerLoadFailed` a server's start raises when the start raises `raised`."""
 
-    def start(*_: object) -> object:
+    def start() -> object:
         raise raised
 
-    backend = _backend().model_copy(update={"env": Env.server("s"), "server": ServerConfig(settings={})})
-    model, profile = _model("b" * 40), ExecutionProfile.load()
     with pytest.raises(WorkerLoadFailed) as caught:
-        with WorkerSet(1, start_server=start).checkout(  # type: ignore[arg-type]
-            backend, host_env(backend, profile), model, device="cpu", profile=profile, expected=_attestation(model)
-        ):
-            pass
+        loaded(start)
     return caught.value
 
 
@@ -105,34 +95,6 @@ def test_a_load_failure_the_table_classified_is_a_gap_of_that_class() -> None:
     assert FaultRecord.from_exception(_fatal_load_failure(RuntimeError("env"))).fault == "infrastructure"
 
 
-@pytest.mark.parametrize(
-    "raised", [ResourceFault("out of memory"), MemoryError("out of memory")], ids=["typed", "table"]
-)
-def test_a_load_oom_is_a_resource_fault_costing_one_load_and_never_split(tmp_path: Path, raised: Exception) -> None:
-    """A claim of 8 whose backend runs out of memory at load is one request and one load, each job `resource`."""
-    from backends import oom_load_backend_fixture as fixture  # noqa: PLC0415 - the module records loads
-
-    fixture.LOADS.clear()
-    fixture.RAISE[:] = [raised]
-    fixture.SUCCEED[:] = [0]
-    profile = _profile(quantum_items=8)
-    with packaged(registry(BROKEN, worker=OOM_BACKEND, name="broken"), tmp_path / "cache"):
-        placed, store, pool_dir = _run(tmp_path, profile, [f"t{i}" for i in range(8)], BROKEN)
-        _put(placed, pool_dir, range(8))
-        send, sizes = _sender(store, profile), []
-
-        def counted(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
-            sizes.append(len(jobs))
-            return send(jobs, placement)
-
-        assert PoolWorker(pool_dir, ["cpu"], profile=profile, store=store, send=counted).serve() == 0
-    refs = _refs(pool_dir, profile)
-    assert sizes == [8] and len(fixture.LOADS) == 1 and len(refs) == 8
-    assert {(r.failure.type, r.failure.fault, r.failure.charged) for r in refs if r.failure} == {
-        ("WorkerLoadFailed", "resource", False)
-    }
-
-
 def test_a_load_is_serialised_only_when_true() -> None:
     """A record that is no load's has no `load` key, so a reader of the earlier record shape still reads it."""
     assert "load" not in FaultRecord.gap_of("X", "m").model_dump(mode="json")
@@ -172,38 +134,3 @@ def test_no_fault_record_is_built_from_a_literal_class_outside_the_one_construct
             if (keyword or literal) and not own:
                 found.append(f"{path.relative_to(PACKAGES)}:{node.lineno}")
     assert found == []
-
-
-def test_a_reload_that_runs_out_of_memory_is_a_load_never_split(tmp_path: Path) -> None:
-    """A state the cache evicted reloads inside a request; its OOM fails the claim as one request, a resource load."""
-    from backends import oom_load_backend_fixture as fixture  # noqa: PLC0415 - the module holds what load raises
-    from senselab_core.runtime.execution.pool_worker import Member, run_members  # noqa: PLC0415
-    from senselab_core.runtime.host_worker import HostWorker  # noqa: PLC0415
-    from senselab_worker.model_cache import ModelCache  # noqa: PLC0415
-
-    fixture.LOADS.clear()
-    fixture.SUCCEED[:] = [1]
-    fixture.RAISE[:] = [MemoryError("CUDA out of memory")]
-    cache = ModelCache(2**20)
-    worker = HostWorker(
-        OOM_BACKEND, init={"device": "cpu"}, key=("oom", "a" * 40, "cpu", "fp32"), cache=cache, size_of=lambda _: 1
-    )
-    cache.clear()
-    sizes: list[int] = []
-
-    def send(jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:  # noqa: ARG001 - a Send
-        sizes.append(len(jobs))
-        worker.run([{"id": str(i), "inputs": {}} for i in range(len(jobs))], {})
-        raise AssertionError("the reload did not fail")
-
-    members = [
-        Member(
-            "d", i, Job(JobRef(plan_hash="0" * 64, node="n", element=(i,)), Call(ECHO, EchoParams(), {}), {}), f"k{i}"
-        )
-        for i in range(8)
-    ]
-    outcomes = run_members(members, Placement(backend=FAKE, backend_params=FAKE.params(), device="cpu"), send)
-    fixture.SUCCEED[:] = [0]
-    assert sizes == [8] and len(fixture.LOADS) == 2
-    failures = {(o.failure.fault, o.failure.load, o.failure.charged) for o in outcomes if isinstance(o, Failed)}
-    assert failures == {("resource", True, False)}

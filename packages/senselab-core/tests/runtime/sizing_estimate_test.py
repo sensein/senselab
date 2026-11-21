@@ -19,17 +19,15 @@ from senselab_core.runtime.calibration import (
     StratumBatch,
 )
 from senselab_core.runtime.execution.executor import JobRef
-from senselab_core.runtime.execution.in_process import InProcess
 from senselab_core.runtime.execution.job import Job
 from senselab_core.runtime.execution_settings import ResourceClass
 from senselab_core.runtime.fake_backend import EchoParams
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
-from senselab_core.runtime.keys import Call, Placement
-from senselab_core.runtime.measures import MeasureSource, MeasureUnit
+from senselab_core.runtime.keys import Call
+from senselab_core.runtime.measures import MeasureUnit
 from senselab_core.runtime.probe import memory_batch, peak
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.sizing import ExtrapolationLog, Grant, Sizing, size
-from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.calibration_samples import UNIT
 
 PROFILE = ExecutionProfile.load("laptop")
@@ -193,29 +191,6 @@ def _text_jobs(*texts: str) -> list[Job]:
 class _Root:
     def observations(self, unit: MeasureUnit) -> Sequence[object]:
         return (object(),)
-
-
-@pytest.mark.logic
-def test_in_process_sizing_is_size_on_the_same_estimate_grant_and_lengths(tmp_path: object) -> None:
-    """The in-process executor's sizing of a unit is `size` on the same estimate, grant and lengths."""
-    estimate = _estimate(unit_kind="chars", host=MemoryFit(resident=GB, m0=0.0, m1=1e6, n=6), device=None)
-    estimate = estimate.model_copy(update={"batch": (StratumBatch(lo=2.0, hi=1000.0, batch=8),)})
-    source = MeasureSource([_Root()], estimate=lambda unit, observed: estimate)  # type: ignore[list-item]
-    profile = ExecutionProfile.load("laptop", {"resource_classes": {"cpu": {"mem_bytes": 2**33}}})
-    executor = InProcess(
-        store=ResultStore(tmp_path / "store"),  # type: ignore[operator]
-        profile=profile,
-        measures=source,
-        units=lambda call, placement, decoder: UNIT,
-    )
-    jobs = _text_jobs("a" * 10, "b" * 20, "c" * 30)
-    backend = _backend()
-    placement = Placement(backend=backend, backend_params=backend.params(), device="cpu")
-    grant = Grant.seen(profile.resource_classes["cpu"], profile.pool, None)
-    direct = size(estimate, grant, SIZING, _work(10.0, 20.0, 30.0), calibration=CALIBRATION)
-    assert executor.sizing(jobs, placement) == direct and direct.batch_at(30.0, 3) == 3
-    bare = InProcess(store=ResultStore(tmp_path / "bare"), profile=profile)  # type: ignore[operator]
-    assert bare.sizing(jobs, placement) == size(None, grant, SIZING, _work(0.0, 0.0, 0.0), calibration=CALIBRATION)
 
 
 def _backend() -> BackendSpec:

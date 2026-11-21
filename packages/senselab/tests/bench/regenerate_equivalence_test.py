@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from senselab_core.kernel.identity import member_key
 from senselab_core.runtime.equivalence import EquivalenceEvidence, EvidenceSide, parse_equivalence
-from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.execution.portable import open_store, record_evidence
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -29,7 +29,8 @@ def test_regenerate_reads_every_store(tmp_path: Path) -> None:
     """Evidence split across two stores, one per context's job, joins into one class; no store gives no class."""
     cpu, gpu = {"device_kind": "cpu"}, {"device_kind": "cuda"}
     for n, (a, b) in enumerate(((cpu, gpu), (gpu, cpu))):
-        ResultStore(tmp_path / str(n)).add_evidence(
+        record_evidence(
+            open_store(tmp_path / str(n), tmp_path / "work"),
             EquivalenceEvidence(
                 task="t",
                 backend="b",
@@ -39,7 +40,7 @@ def test_regenerate_reads_every_store(tmp_path: Path) -> None:
                 mismatched=(),
                 thresholds="c" * 64,
                 run=f"slurm-{n}",
-            )
+            ),
         )
     script = _script()
     out = script.regenerate([tmp_path / "0", tmp_path / "1"], tmp_path / "equivalence.yaml")
