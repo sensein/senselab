@@ -47,7 +47,6 @@ from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.units import UnitResolver, Unresolved, decoder_of, default_measures, measure_roots
 from senselab_core.testing.calibration_samples import observation
 from senselab_core.testing.interpreter import source_tree_python
-from senselab_core.testing.pools import served
 
 CLUSTER = (
     next(p for p in Path(__file__).resolve().parents if p.name == "packages")
@@ -330,8 +329,9 @@ def test_jobs_of_two_decoders_are_two_units(tmp_path: Path) -> None:
 
 def _warm(tmp_path: Path, profile: ExecutionProfile, rows: Sequence[str]) -> None:
     """Run a plan over `rows` into the result store a run uses by default, on a pool served here."""
+    pools = pytest.importorskip("senselab_core.testing.pools", exc_type=ImportError)
     warmed, values = _plan(rows, profile)
-    with served(tmp_path / "warm", profile, store=results_root()) as (session, _):
+    with pools.served(tmp_path / "warm", profile, store=results_root()) as (session, _):
         assert start(warmed, session, values=values).wait(timeout=120).done
 
 

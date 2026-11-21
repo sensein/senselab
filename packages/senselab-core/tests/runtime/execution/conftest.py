@@ -1,5 +1,6 @@
 """Shared fixtures of the job engine tests."""
 
+import importlib.util
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,13 @@ from lease_clock_fixture import ManualClock
 from senselab_core.runtime.execution.provenance_check import check_provenance
 
 CLOCK_START = 1000.0
+
+collect_ignore = (
+    []
+    if importlib.util.find_spec("pydra") is not None
+    else ["provenance_check_test.py", "resume_test.py", "run_test.py", "runner_test.py", "warm_pool_test.py"]
+)
+"""The modules that run on pydra's pool, not collected where pydra is not installed (the core-only job)."""
 
 
 @pytest.fixture(autouse=True)
