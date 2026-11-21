@@ -17,10 +17,8 @@ from senselab_core.runtime import planner
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.execution import run as run_module
 from senselab_core.runtime.execution.events import RunStatus
-from senselab_core.runtime.execution.executor import Executor
-from senselab_core.runtime.execution.in_process import InProcess
-from senselab_core.runtime.execution.pool import Pool
-from senselab_core.runtime.execution.substrates import Local, Slurm, Substrate, substrate_of
+from senselab_core.runtime.execution.warm import PoolSession, worker_classes
+from senselab_core.runtime.execution.warm import substrate_of as pool_substrate
 from senselab_core.runtime.fetch import DataManifest
 from senselab_core.runtime.profiles import ExecutionProfile, packaged_profiles
 from senselab_core.runtime.site_placement import PlacementAnswer, PlacementRequest
@@ -127,33 +125,19 @@ Properties:
 
 
 def executors_page() -> str:
-    """Return the executor reference: `Executor`, `InProcess`, `Pool` and the substrates."""
+    """Return the execution reference: `PoolSession`, how a profile becomes pydra worker classes and a substrate."""
     return f"""{BADGES["2x"]}
 
-An executor runs the fragments of an admitted plan. `Plan.run` takes one, and the session default is set with
-`senselab.use(executor=..., store=...)`. With none, a plan under a local substrate runs on `InProcess`, and a plan
-under a `slurm` substrate on a `Pool` over `Slurm`.
+A plan runs on pydra's warm worker pool (`pydra.workers.pool.WarmPool`): long-running workers, started by a
+substrate, load a backend's model once and run job after job. `Plan.run` takes a `PoolSession` its caller owns and
+closes, whose workers and models stay resident from one run to the next; the session default is set with
+`senselab.use(pool=..., store=...)`. With none, a run makes its own session over its run directory and closes it
+when it ends. A profile's `local` substrate starts workers as processes on this host; a `slurm` one submits one
+`sbatch` per worker, with typed GPUs and never a QOS.
 
-| Executor | Runs jobs | Workers |
-|---|---|---|
-| `InProcess` | in this process, before `submit` returns | this process's own worker set |
-| `Pool` | on queues in the run directory | pool workers that a substrate starts: `Local` processes or `Slurm` jobs |
-
-## `Executor`
-
-{_api.doc(Executor)}
-
-{_api.members(Executor, ("admit", "release", "fragment_size", "submit", "status", "cancel", "poll", "bind_epoch"))}
-{_api.entry("InProcess", InProcess, level=2)}
-{_api.entry("Pool", Pool, level=2)}
-## Substrates
-
-{_api.doc(Substrate)}
-
-{_api.members(Substrate, ("start", "live", "running", "stop"))}
-{_api.entry("Local", Local, level=3)}
-{_api.entry("Slurm", Slurm, level=3)}
-{_api.entry("substrate_of", substrate_of, level=3)}
+{_api.entry("PoolSession", PoolSession, level=2)}
+{_api.entry("worker_classes", worker_classes, level=3)}
+{_api.entry("substrate_of", pool_substrate, level=3)}
 ## Site placement
 
 senselab holds no site scheduling policy. A group that runs on a scheduler writes its policy as a placement hook;

@@ -287,7 +287,7 @@ class UnfitRecord(Frozen):
     """A unit's load that ran out of memory in a grant of `grant_bytes`: the unit does not fit a class with no more.
 
     `resource` is the memory that ran out. `source` and `overlay` are the digests of the senselab source and of the
-    worker overlay the load ran under (`fit.code_of`): a record binds only the code that wrote it. `worker` is the
+    worker overlay the load ran under: a record binds only the code that wrote it. `worker` is the
     `worker_id()` of the worker that failed to load, None when its outcome names none.
     """
 

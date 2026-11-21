@@ -54,5 +54,5 @@ def provenance_is_complete(request: pytest.FixtureRequest, tmp_path: Path) -> It
     yield
     if f"{request.node.module.__name__}::{request.node.originalname}" in UNCHECKED:
         return
-    for run_dir in sorted({p.parent for p in tmp_path.rglob("plan.json") if (p.parent / "epoch").is_dir()}):
+    for run_dir in sorted({p.parent for p in tmp_path.rglob("plan.json")}):
         check_provenance(run_dir).require()

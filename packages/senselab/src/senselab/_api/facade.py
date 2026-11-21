@@ -12,7 +12,6 @@ from senselab_core.kernel.graph import Graph
 from senselab_core.runtime.bids import bids_dataset
 from senselab_core.runtime.call import RunConfig, TaskCall
 from senselab_core.runtime.datasets import from_records
-from senselab_core.runtime.execution.executor import Executor
 from senselab_core.runtime.execution.run import ResultSet, Run
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.planner import Plan, one_node_graph
@@ -20,7 +19,6 @@ from senselab_core.runtime.planner import plan as plan_runtime
 from senselab_core.runtime.planner import resume as resume_runtime
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.site_placement import PlacementHook
-from senselab_core.runtime.store import ResultStore
 
 from senselab._api.call import ConfiguredTask, reraise
 
@@ -29,12 +27,16 @@ __all__ = ["Dataset", "PlanKwargs", "Session", "map_over", "plan", "resume", "ru
 
 @dataclass(frozen=True)
 class Session:
-    """The defaults of `plan` and `run`: the execution profile, the run config, the executor and its result store."""
+    """The defaults of `plan` and `run`: the execution profile, the run config, the pool session and the result store.
+
+    `pool` is a `PoolSession` its caller owns and closes, whose workers and models stay resident from one run to the
+    next; with none, each run makes its own. `store` is the root of the result store runs write and read.
+    """
 
     execution: ExecutionProfile | None = None
     config: RunConfig | None = None
-    executor: Executor | None = None
-    store: ResultStore | None = None
+    pool: Any = None
+    store: Path | None = None
 
 
 _SESSION: contextvars.ContextVar[Session] = contextvars.ContextVar("senselab_session", default=Session())
@@ -48,11 +50,8 @@ def session() -> Session:
 class use:  # noqa: N801 - a context manager used as a function
     """Set the session defaults for the context it is used in; as a `with` block, restore them on exit.
 
-    `execution` is a profile or the name of a packaged one; a default not given keeps the one in force. An
-    `executor` is given with the result `store` it writes to, which runs read their results from.
-
-    Raises:
-        ValueError: the session would have an executor and no store.
+    `execution` is a profile or the name of a packaged one; a default not given keeps the one in force. `pool` is a
+    `PoolSession`, whose store is the session's.
     """
 
     def __init__(
@@ -60,8 +59,8 @@ class use:  # noqa: N801 - a context manager used as a function
         *,
         execution: ExecutionProfile | str | None = None,
         config: RunConfig | None = None,
-        executor: Executor | None = None,
-        store: ResultStore | None = None,
+        pool: Any = None,  # noqa: ANN401 - a PoolSession; pydra is imported only by a run
+        store: Path | None = None,
     ) -> None:
         """Set the given defaults now."""
         current = session()
@@ -69,11 +68,9 @@ class use:  # noqa: N801 - a context manager used as a function
         self.session = Session(
             execution=profile if profile is not None else current.execution,
             config=config if config is not None else current.config,
-            executor=executor if executor is not None else current.executor,
-            store=store if store is not None else None if executor is not None else current.store,
+            pool=pool if pool is not None else current.pool,
+            store=store if store is not None else None if pool is not None else current.store,
         )
-        if self.session.executor is not None and self.session.store is None:
-            raise ValueError("an executor is used with the result store it writes to; give `store`")
         self._token = _SESSION.set(self.session)
 
     def __enter__(self) -> Session:
@@ -132,9 +129,9 @@ def plan(
 def run(
     target: Graph | TaskCall | ConfiguredTask, dataset: DatasetProtocol | None = None, **plan_kwargs: Unpack[PlanKwargs]
 ) -> ResultSet:
-    """Plan `target` over `dataset` (`plan`), run it on the session's executor, wait and return its results."""
+    """Plan `target` over `dataset` (`plan`), run it on the session's pool, wait and return its results."""
     current = session()
-    started = plan(target, dataset, **plan_kwargs).run(current.executor, store=current.store)
+    started = plan(target, dataset, **plan_kwargs).run(current.pool, store=current.store)
     started.wait()
     return started.results()
 
@@ -148,14 +145,14 @@ def resume(
     """Resume a run by its plan hash (`senselab_core.runtime.planner.resume`), wait and return its results.
 
     The run is read from its directory: its plan, its input sources and its result store, so jobs the store serves
-    are not recomputed. It is placed afresh under the session's execution profile and run on the session's executor
-    and store. `placement` and `placement_hook` are as in `plan`: a run a site refused continues from the store with
+    are not recomputed. It is placed afresh under the session's execution profile and run on the session's pool and
+    store. `placement` and `placement_hook` are as in `plan`: a run a site refused continues from the store with
     corrected values.
 
     Raises:
         NoRun, ValueError, InputChanged, InputsUnavailable: as `resume`; a run whose inputs were
             held in memory raises `InputsUnavailable`.
-        StaleCoordinator: a newer attempt of the run superseded this one.
+        QueueHeld: the pool held jobs of the run.
     """
     plan_hash = target if isinstance(target, str) else target.run_dir.name if isinstance(target, Run) else target.hash
     current = session()
@@ -163,7 +160,7 @@ def resume(
         plan_hash,
         execution=current.execution,
         store=current.store,
-        executor=current.executor,
+        session=current.pool,
         config=current.config,
         placement=placement,
         placement_hook=placement_hook,

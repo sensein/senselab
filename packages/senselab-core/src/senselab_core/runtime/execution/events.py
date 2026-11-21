@@ -210,7 +210,7 @@ class BrokenEnv(Frozen):
 
 
 UNPLACEABLE = "Unplaceable"
-"""The `type` of the failure record of a plan that fits no resource class (`fit.Unplaceable`)."""
+"""The `type` of the failure record of a job that fits no worker class of the pool (pydra's `UnplaceableJob`)."""
 
 
 @dataclass(frozen=True)

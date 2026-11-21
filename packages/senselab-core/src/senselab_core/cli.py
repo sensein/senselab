@@ -1,4 +1,4 @@
-"""The ``data`` group and the ``status``, ``plan``, ``explain``, ``coordinate`` and ``execute`` commands."""
+"""The ``data`` group and the ``status``, ``plan``, ``explain`` and ``run`` commands."""
 
 import argparse
 import json
@@ -7,23 +7,27 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
+from senselab_core.kernel.identity import ReusePolicy
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
-from senselab_core.runtime.execution.epoch import StaleCoordinator
+from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.events import UNPLACEABLE, Event, placements, runs_root
 from senselab_core.runtime.execution.executor import FaultRecord, QueueHeld
-from senselab_core.runtime.execution.pool import coordinate, run_plan, run_store
-from senselab_core.runtime.execution.pool_worker import serve_pool
 from senselab_core.runtime.execution.provenance_check import check_provenance
-from senselab_core.runtime.execution.run import PLACEMENTS_DIR, PLAN_FILE, Run, latest_placement, read_placement
-from senselab_core.runtime.execution.substrates import ExternalWorkers, substrate_of
+from senselab_core.runtime.execution.run import (
+    PLACEMENTS_DIR,
+    PLAN_FILE,
+    Run,
+    latest_placement,
+    load_plan,
+    read_placement,
+    stored_policy,
+)
 from senselab_core.runtime.explain import node_line
 from senselab_core.runtime.fetch import DataManifest, FetchError, ManifestError, default_cache_root, fetch
-from senselab_core.runtime.fit import Unplaceable
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.site_placement import PlacementHookFailed, load_overrides
-from senselab_core.runtime.units import measure_roots
 
 
 def mount_data(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -253,52 +257,37 @@ def run_plan_request(args: argparse.Namespace) -> int:
     return 0
 
 
-UNPLACEABLE_EXIT = 3
-"""The exit status of a command whose plan fits no resource class: not 1 (an error) and not 2 (a usage error)."""
+def run_plan(run_dir: Path, profile: ExecutionProfile) -> Plan:
+    """Return the plan of the run in `run_dir` under its latest placement, `profile` and its policies.
+
+    Raises:
+        ValueError: the plan was placed under another profile than `profile`.
+        FileNotFoundError: the run has no plan, or no claimed attempt.
+    """
+    stored = load_plan(run_dir)
+    if stored.placement.profile_digest != profile.canonical_digest():
+        raise ValueError(f"plan {stored.hash} was placed under another execution profile; name the one it was")
+    config = RunConfig(reuse=ReusePolicy(stored.logical.reuse), licenses=stored_policy(run_dir))
+    return replace(stored, execution=profile, config=config)
 
 
-def run_coordinate(args: argparse.Namespace) -> int:
-    """Run a parsed ``coordinate``: take the run's next epoch and send its jobs to its queues, for pool workers.
+def run_run(args: argparse.Namespace) -> int:
+    """Run a parsed ``run``: run the plan of a run directory again, as a new attempt on a warm pool, and wait.
 
-    A plan whose unit fits no resource class prints the unit, each class tried and the numbers, and exits 3.
-
-    The profile's substrate starts the workers unless ``--external`` says they are started on their own.
+    The run makes its pool under the profile, whose substrate starts its workers, and closes it when it ends.
     """
     try:
         profile = _profile(args.profile)
         run_dir = _run_directory(args.run_ref)
-        substrate = (
-            ExternalWorkers() if args.external else substrate_of(profile, run_dir, run_plan(run_dir, profile).hash)
-        )
-        outcome = coordinate(
-            run_dir,
-            substrate=substrate,
-            profile=profile,
-            overrides=load_overrides(args.placement),
-            hook=args.placement_hook,
-        )
-    except Unplaceable as err:
-        print(f"senselab: unplaceable: {' '.join(str(err).split())}", file=sys.stderr)
-        return UNPLACEABLE_EXIT
-    except (OSError, ValueError, StaleCoordinator, QueueHeld, PlacementHookFailed) as err:
+        placed = _with_placement(run_plan(run_dir, profile), args)
+        run = placed.run()
+        status = run.wait()
+    except (OSError, ValueError, QueueHeld, PlacementHookFailed) as err:
         print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
         return 1
-    blocked = sum(len(e) for e in outcome.blocked.values())
-    failed = sum(r.failure is not None for refs in outcome.results.values() for r in refs)
-    print(f"run {outcome.plan_hash}: {'done' if outcome.done else 'not done'}; {failed} failed, {blocked} blocked")
-    return 0 if outcome.done else 1
-
-
-def run_execute(args: argparse.Namespace) -> int:
-    """Run a parsed ``execute``: serve a run's queues of the named resource classes as one pool worker."""
-    pool = Path(args.pool)
-    classes = [c for c in args.classes.split(",") if c]
-    try:
-        profile = _profile(args.profile)
-        return serve_pool(pool, classes, profile=profile, store=run_store(pool.parent, profile))
-    except (OSError, ValueError) as err:
-        print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
-        return 1
+    counts = ", ".join(f"{n} {state}" for state, n in sorted(status.counts.items()))
+    print(f"run {placed.hash}: {'done' if status.done else 'not done'}; {counts}")
+    return 0 if status.done else 1
 
 
 def _placement_arguments(parser: argparse.ArgumentParser) -> None:
@@ -308,46 +297,6 @@ def _placement_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--placement-hook", default=None, help="the site's placement hook, `module:callable`; replaces the profile's"
     )
-
-
-def run_unfit(args: argparse.Namespace) -> int:
-    """Run a parsed ``unfit``: list the units recorded as not fitting a class, or ``--clear`` one unit's records.
-
-    A unit is named by the digest label ``explain`` prints, or any prefix of its digest; ``--clear`` needs the prefix
-    to name one unit. A record binds the code that
-    wrote it, so a fixed loader needs no clearing; this is for a record of a load a busy card, not the unit, failed.
-    """
-    try:
-        profile = _profile(args.profile)
-        roots = measure_roots(profile)
-        found = [
-            (unit, records)
-            for unit in roots.units()
-            if unit.digest().startswith(args.unit or "") and (records := roots.unfit_records(unit))
-        ]
-        if args.clear and not args.unit:
-            print("senselab: error: --clear names no unit; give the unit's digest label", file=sys.stderr)
-            return 1
-        if args.clear and len(found) > 1:
-            listed = ", ".join(u.label() for u, _ in found)
-            print(
-                f"senselab: error: {args.unit!r} matches {len(found)} units ({listed}); give more of the label",
-                file=sys.stderr,
-            )
-            return 1
-        for unit, records in found:
-            if args.clear:
-                print(f"unit {unit.label()}: removed {roots.remove_unfit(unit)} record(s)")
-                continue
-            for record in records:
-                print(
-                    f"unit {unit.label()} ({unit.task} {unit.backend}): a load ran out of {record.resource} memory in "
-                    f"a grant of {record.grant_bytes} bytes"
-                )
-    except (OSError, ValueError) as err:
-        print(f"senselab: error: {' '.join(str(err).split())}", file=sys.stderr)
-        return 1
-    return 0
 
 
 def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -377,32 +326,15 @@ def mount_runs(groups: "argparse._SubParsersAction[argparse.ArgumentParser]") ->
     explain.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
     explain.add_argument("target", help="a node id, or a key digest or its prefix")
     explain.set_defaults(run=run_explain)
-    coordinating = groups.add_parser("coordinate", help="coordinate a run on its queues, as the next epoch")
-    coordinating.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
-    coordinating.add_argument("--profile", default=None, help="the execution profile the run was placed under")
-    _placement_arguments(coordinating)
-    coordinating.add_argument(
-        "--external", action="store_true", help="start no workers: they are started on their own (execute --pool)"
-    )
-    coordinating.set_defaults(run=run_coordinate)
-    unfit = groups.add_parser("unfit", help="the units recorded as not fitting a resource class; --clear removes one's")
-    unfit.add_argument(
-        "unit", nargs="?", default=None, help="a unit's digest label (or digest prefix); all when omitted"
-    )
-    unfit.add_argument("--clear", action="store_true", help="remove the named unit's records")
-    unfit.add_argument("--profile", default=None, help="the execution profile whose measures roots are read")
-    unfit.set_defaults(run=run_unfit)
-    executing = groups.add_parser("execute", help="serve a run's queues as one pool worker")
-    executing.add_argument("--pool", required=True, help="the run's queues directory, <run dir>/queues")
-    executing.add_argument("--classes", required=True, help="the resource classes to serve, comma-separated")
-    executing.add_argument(
-        "--profile", default=None, help="the execution profile the run was placed under: a packaged name, or a file"
-    )
-    executing.set_defaults(run=run_execute)
+    running = groups.add_parser("run", help="run a run's plan again as a new attempt on a warm pool, and wait")
+    running.add_argument("run_ref", metavar="run", help="a run directory, or a plan hash (or its unique prefix)")
+    running.add_argument("--profile", default=None, help="the execution profile the run was placed under")
+    _placement_arguments(running)
+    running.set_defaults(run=run_run)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the ``data`` group and the ``status``, ``explain``, ``coordinate`` and ``execute`` commands."""
+    """Run the ``data`` group and the ``status``, ``plan``, ``explain`` and ``run`` commands."""
     parser = argparse.ArgumentParser(prog="senselab")
     groups = parser.add_subparsers(dest="group", required=True)
     mount_data(groups)

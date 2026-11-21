@@ -6,6 +6,7 @@ logical plan under an execution profile on this host (`runtime.placement`), givi
 """
 
 import functools
+import importlib.util
 import json
 import os
 import re
@@ -21,7 +22,7 @@ from senselab_core.kernel.graph import Edge, Graph, GraphIssue, Node, validate
 from senselab_core.kernel.identity import InputIdentity, ModelRef, ResolvedModel, ReusePolicy
 from senselab_core.kernel.placement import NodePlacement, PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan, plan_hash
-from senselab_core.runtime.calibration import Estimate, LengthProfile, UnfitRecord
+from senselab_core.runtime.calibration import Estimate, LengthProfile
 from senselab_core.runtime.call import (
     ITEM_ID,
     RunConfig,
@@ -36,17 +37,14 @@ from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import record_bind, sourced_manifest
 from senselab_core.runtime.explain import (
     NodeSized,
-    class_grant,
     class_needs,
     explain,
-    fit_lines,
     item_lines,
     node_sizing,
     sized_node,
     undetermined_lines,
     waits,
 )
-from senselab_core.runtime.fit import Choice, Unplaceable, choose, current_unfit, moved_why
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import profile_slices
 from senselab_core.runtime.licenses import laxer_than
@@ -64,9 +62,7 @@ from senselab_core.runtime.site_placement import (
 from senselab_core.runtime.storage import StorageCapabilities, probe_capabilities
 
 if TYPE_CHECKING:
-    from senselab_core.runtime.execution.executor import Executor
     from senselab_core.runtime.execution.run import Run
-    from senselab_core.runtime.store import ResultStore
     from senselab_core.runtime.units import Unresolved
 
 CALL_NODE = "call"
@@ -372,7 +368,7 @@ class _Reading:
     """What a plan is read against: the measures, the store, the bound inputs (or why not) and the unit resolvers."""
 
     source: MeasureSource
-    store: "ResultStore"
+    store: Any
     bound: Mapping[InputIdentity, object] | None
     unbound: str
     resolver: Any
@@ -424,20 +420,19 @@ class Plan:
     overrides: Mapping[str, PlacementValues] = field(default_factory=dict, compare=False, repr=False)
     hook: PlacementHook | str | None = field(default=None, compare=False, repr=False)
 
-    def run(self, executor: "Executor | None" = None, *, store: "ResultStore | None" = None) -> "Run":
-        """Start this plan on `executor` and return its `Run`, which runs in the background.
+    def run(self, session: Any = None, *, store: Path | None = None) -> "Run":  # noqa: ANN401 - a PoolSession
+        """Start this plan on a warm pool and return its `Run`, which runs in the background (`run.start`).
 
-        `None` means `InProcess` over the result store under `cache_root()/results`, under the plan's own profile and
-        run config, when the profile's substrate is local, and a `Pool` over `Slurm` when it is `slurm`. `store` is the
-        result store the run's results are read from; give it with an executor that stores results.
+        `session` is a `PoolSession` its caller owns; with none, the run makes and closes its own under the plan's
+        profile. `store` is the root of the result store the run's results go to and are read from.
 
         Raises:
-            ValueError: as `Executor.admit`.
+            ValueError: as `run.start`.
             MissingExtra: the `pydra` extra is not installed.
         """
         from senselab_core.runtime.execution.run import start  # noqa: PLC0415 - run imports this module
 
-        return start(self, executor, store=store)
+        return start(self, session, store=store)
 
     def explain(  # noqa: PLR0913 - what a plan is read against: its measures, units, lengths, hardware and store
         self,
@@ -446,9 +441,8 @@ class Plan:
         units: "Callable[[str], MeasureUnit | Unresolved] | None" = None,
         lengths: Mapping[str, LengthProfile] | None = None,
         hardware: HardwareInfo | None = None,
-        store: "ResultStore | None" = None,
+        store: Path | None = None,
         values: Mapping[InputIdentity, object] | None = None,
-        unfit: "Callable[[MeasureUnit], Sequence[UnfitRecord]] | None" = None,
     ) -> str:
         """Return, per node, the backend, stack, env, device, batch, resource class, partition, licenses and reason.
 
@@ -459,12 +453,11 @@ class Plan:
         probe, a download or a worker start, over `lengths[node]` or, with `values`, the lengths of the node's jobs.
         Each figure is labelled `measured` with its source or `unmeasured` with the reason the unit or estimate is
         missing, and a flag marks a batch-1 request over the class's memory cap. Each resource class says how many
-        jobs the `store` (by default the one a run uses, `default_store`) would serve and how many compute
-        (`ResultStore.admits`); `values` default to the plan's inputs bound from their sources. Inputs that cannot be
-        bound leave the counts undetermined and the lengths unknown, with the binding error's reason. The last lines
-        name where measures are written and the waits on another run. A node whose unit does not fit its class
-        (`fit`) is shown on the class it moves to, with each class tried and its numbers, or as unplaceable;
-        `unfit` reads a unit's `unfit` records (by default the profile's roots).
+        jobs the result store at `store` (by default the one a run uses, `results_root`) would serve and how many
+        compute (`portable.admits`); `values` default to the plan's inputs bound from their sources. Inputs that
+        cannot be bound, or a store that cannot be read without pydra, leave the counts undetermined, with the reason.
+        The last lines name where measures are written and the waits on another run. Which class a node runs on is the
+        pool's placement, made when its jobs are submitted.
 
         Raises:
             As `count_items`.
@@ -476,13 +469,10 @@ class Plan:
 
         reading = self._reading(profile, measures, units, hardware, values, store)
         estimates = self._estimates(reading)
-        choices = self._choices(reading, estimates, unfit, hardware)
-        moved = self._moved(choices)
         sizing = {}
         for node_id, read in self._read_nodes(reading, lengths, estimates).items():
-            sizing[node_id] = [*fit_lines(choices[node_id])] if node_id in choices else []
-            sizing[node_id] += node_sizing(
-                moved.nodes[node_id],
+            sizing[node_id] = node_sizing(
+                self.placement.nodes[node_id],
                 profile,
                 read.estimate,
                 read.work,
@@ -496,12 +486,12 @@ class Plan:
         run = self.config if self.config is not None else RunConfig()
         counted = (
             undetermined_lines(self.placement, unbound)
-            if bound is None
+            if bound is None or found is None
             else item_lines(
-                plan_reads.count_items(self, bound, store=found, run=run, profile=profile, envs=resolver.envs)
+                plan_reads.count_items(self, bound, admits=found, run=run, profile=profile, envs=resolver.envs)
             )
         )
-        return explain(self.hash, self.logical, moved, sizing=sizing, footer=[*counted, *waits(profile)])
+        return explain(self.hash, self.logical, self.placement, sizing=sizing, footer=[*counted, *waits(profile)])
 
     def _reading(  # noqa: PLR0913 - what a plan is read against
         self,
@@ -510,15 +500,19 @@ class Plan:
         units: "Callable[[str], MeasureUnit | Unresolved] | None",
         hardware: HardwareInfo | None,
         values: Mapping[InputIdentity, object] | None,
-        store: "ResultStore | None",
+        store: Path | None,
     ) -> "_Reading":
-        """Return what `explain` and `placement_request` read a plan against: measures, inputs, store and units."""
-        from senselab_core.runtime.execution.in_process import default_store  # noqa: PLC0415 - as above
+        """Return what `explain` and `placement_request` read a plan against: measures, inputs, store and units.
+
+        The store is opened only where pydra is installed; without it, nothing is read from one.
+        """
+        from senselab_core.runtime.execution.events import run_dir_of  # noqa: PLC0415 - as above
         from senselab_core.runtime.execution.run import (  # noqa: PLC0415 - run imports this module
             InputChanged,
             InputsUnavailable,
             SourcesUnrecorded,
             bind_sources,
+            results_root,
         )
 
         unit_reads = self._unit_reads(profile, measures, units, hardware)
@@ -528,9 +522,18 @@ class Plan:
                 bound = bind_sources(self)
             except (InputChanged, InputsUnavailable, SourcesUnrecorded) as err:
                 unbound = str(err)
+        opened = None
+        if importlib.util.find_spec("pydra") is not None:
+            from senselab_core.runtime.execution.portable import admits, open_store  # noqa: PLC0415 - needs pydra
+
+            work = run_dir_of(self.hash) / "private" / "work"
+            opened = functools.partial(admits, open_store(store if store is not None else results_root(), work))
+        elif bound is not None:
+            unbound = "the result store is read through pydra, which is not installed"
+            bound = None
         return _Reading(
             unit_reads.source,
-            store if store is not None else default_store(profile),
+            opened,
             bound,
             unbound,
             unit_reads.resolver,
@@ -600,95 +603,6 @@ class Plan:
             )
         return found
 
-    def _choices(  # noqa: PLR0913 - what the nodes were read through and as, the records and the hardware
-        self,
-        reading: "_Reading | _UnitReads",
-        estimates: "Mapping[str, tuple[MeasureUnit | Unresolved, Estimate | None]]",
-        unfit: "Callable[[MeasureUnit], Sequence[UnfitRecord]] | None",
-        hardware: HardwareInfo | None,
-    ) -> dict[str, Choice]:
-        """Return the class each node whose unit has a measure or an `unfit` record goes to, judged by `choose`.
-
-        A node whose unit is unresolved, unmeasured and without a record is not judged. The records and the
-        estimate are those of the unit as placed; a larger class is judged by its grant against them.
-        """
-        from senselab_core.runtime.units import Unresolved  # noqa: PLC0415 - units imports the executor
-
-        profile = self.execution
-        assert profile is not None
-        read_unfit = unfit if unfit is not None else functools.partial(current_unfit, reading.roots)
-        found: dict[str, Choice] = {}
-        for node_id, placed in self.placement.nodes.items():
-            unit, estimate = estimates[node_id]
-            if isinstance(unit, Unresolved):
-                continue
-            records = read_unfit(unit)
-            if estimate is None and not records:
-                continue
-            seen = hardware if hardware is not None else reading.resolver.hardware
-            device = class_grant(profile, placed.resource_class, seen).on_device
-
-            def grant_of(name: str, seen: HardwareInfo = seen) -> int | None:
-                return class_grant(profile, name, seen).memory_bytes
-
-            found[node_id] = choose(
-                profile,
-                placed.resource_class,
-                fit=None if estimate is None else estimate.device if device else estimate.host,
-                resource="device" if device else "host",
-                unfit=records,
-                grant_of=grant_of,
-            )
-        return found
-
-    def _moved(self, choices: Mapping[str, Choice]) -> PlanPlacement:
-        """Return the placement with each node of `choices` on the class it goes to; an unplaceable node stays."""
-        profile = self.execution
-        assert profile is not None
-        current = current_values(profile.resource_classes, self.overrides)
-        nodes = dict(self.placement.nodes)
-        for node_id, choice in choices.items():
-            placed = nodes[node_id]
-            if choice.to is None or choice.to == placed.resource_class:
-                continue
-            nodes[node_id] = placed.model_copy(
-                update={
-                    "resource_class": choice.to,
-                    "partition": current[choice.to].partition,
-                    "why": moved_why(placed.why, placed.resource_class),
-                }
-            )
-        return self.placement.model_copy(update={"nodes": nodes})
-
-    def fit(  # noqa: PLR0913 - what a plan is read against, as `explain`
-        self,
-        *,
-        measures: MeasureSource | None = None,
-        units: "Callable[[str], MeasureUnit | Unresolved] | None" = None,
-        unfit: "Callable[[MeasureUnit], Sequence[UnfitRecord]] | None" = None,
-        hardware: HardwareInfo | None = None,
-    ) -> "Plan":
-        """Return this plan with each node on the smallest class its unit fits, from the class it was placed on up.
-
-        A class is skipped when the unit's measured resident memory plus `m0` exceeds `sizing.memory_headroom` of its
-        grant, or a load of the unit ran out of memory in a grant at least as large (`UnfitRecord`). It is read as
-        `explain` reads: from the measures that exist, never a probe or a worker start; a node with no measure and no
-        record stays where it is. The plan hash is unchanged.
-
-        Raises:
-            Unplaceable: a node's unit fits no class from its own up; it names the node, each class tried and the
-                numbers.
-        """
-        profile = self.execution
-        if profile is None:
-            return self
-        reads = self._unit_reads(profile, measures, units, hardware)
-        choices = self._choices(reads, self._estimates(reads), unfit, hardware)
-        for node_id, choice in choices.items():
-            if choice.to is None:
-                raise Unplaceable(f"node {node_id!r}", choice.tried)
-        return replace(self, placement=self._moved(choices))
-
     def placement_request(  # noqa: PLR0913 - what a plan is read against, as `explain`
         self,
         *,
@@ -696,7 +610,7 @@ class Plan:
         units: "Callable[[str], MeasureUnit | Unresolved] | None" = None,
         lengths: Mapping[str, LengthProfile] | None = None,
         hardware: HardwareInfo | None = None,
-        store: "ResultStore | None" = None,
+        store: Path | None = None,
         values: Mapping[InputIdentity, object] | None = None,
     ) -> PlacementRequest:
         """Return what each resource class of this plan needs, as `placement-request@1.0`: the figures `explain` prints.
@@ -894,8 +808,8 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
     plan_hash: str,
     *,
     execution: ExecutionProfile | str | None = None,
-    store: "ResultStore | None" = None,
-    executor: "Executor | None" = None,
+    store: Path | None = None,
+    session: Any = None,  # noqa: ANN401 - a PoolSession
     config: RunConfig | None = None,
     hardware: HardwareInfo | None = None,
     placement: Mapping[str, Any] | Path | str | None = None,
@@ -909,10 +823,10 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
     this host, probed); every input is then bound again and checked against the manifest's identity, all before
     anything is written. The plan is started (`Plan.run`), the placement written to a new
     `placements/<attempt>.json`. The plan hash is unchanged; a node placed on another backend has another key and is
-    computed again, and a job the store holds is served from it. `store` is where results are read and written: by
-    default the one `manifest.json` names. `executor` defaults as in `Plan.run`.
+    computed again, and a job the store holds is served from it. `store` is the root of the store results are read
+    and written in: by default the one `manifest.json` names. `session` is as in `Plan.run`.
     `config` defaults to `RunConfig()` under the plan's reuse policy and the license policy the run was started under;
-    given with an executor, it is that executor's run config, and its license policy may not be laxer than the run's.
+    its license policy may not be laxer than the run's.
     `placement` and `placement_hook` are as in `plan`: a run a site refused continues from the store with
     corrected values.
 
@@ -933,7 +847,6 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
         start,
         stored_policy,
     )
-    from senselab_core.runtime.store import ResultStore  # noqa: PLC0415 - as above
 
     run_dir = run_dir_of(plan_hash)
     try:
@@ -959,7 +872,7 @@ def resume(  # noqa: PLR0913 - the plan hash, then keyword-only run inputs
     placed = replace(
         stored, placement=placed_at, execution=profile, config=config, overrides=overrides, hook=placement_hook
     )
-    if store is None:
+    if store is None and session is None:
         named = Run(run_dir).manifest().get("store")
-        store = ResultStore(Path(named), settings=profile.store) if isinstance(named, str) else None
-    return start(placed, executor, store=store, values=values)
+        store = Path(named) if isinstance(named, str) else None
+    return start(placed, session, store=store, values=values)

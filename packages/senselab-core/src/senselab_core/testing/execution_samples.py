@@ -11,7 +11,6 @@ from senselab_core.runtime.execution.events import BrokenEnv, Event, LeaseBreak,
 from senselab_core.runtime.execution.executor import (
     Admission,
     FaultRecord,
-    Handle,
     JobRef,
     PlanFragment,
     ResultRef,
@@ -129,7 +128,6 @@ def register_execution_samples(register: Register) -> None:
         lambda: [Admission(id="admission-0", plan_hash=_PLAN), Admission(id="admission-1", plan_hash="cd" * 32)],
         invalid_updates=[{"id": ""}, {"plan_hash": "p"}],
     )
-    register(Handle, lambda: [Handle(id="fragment-0"), Handle(id="fragment-1")], invalid_updates=[{"id": ""}])
     register_event_samples(register, jobs, faults)
 
 

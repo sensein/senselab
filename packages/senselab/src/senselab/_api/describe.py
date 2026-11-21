@@ -217,7 +217,7 @@ def describe(name: str, registry: Registry = REGISTRY, catalogue: Catalogue | No
     description states (an object, a file path or the text itself; a port that is not a kernel type takes a JSON
     value). The one call shape of
     the CLI and JSON, `{task, inputs, params, model, backend_params}`, validates as a `TaskCall` and runs with
-    `InProcess.call`.
+    `calls.call`.
 
     Raises:
         ApiError: `unknown_task`, with the closest declared names.

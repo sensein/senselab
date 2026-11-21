@@ -10,7 +10,7 @@ from senselab_core.runtime.calibration import Estimate, LengthProfile
 from senselab_core.runtime.call import RunConfig, env_license, input_binding, input_decoder, packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.batching import BucketGrid, bucket_edges, keyed_formation
-from senselab_core.runtime.execution.in_process import (
+from senselab_core.runtime.execution.fragments import (
     fragment_jobs,
     job_units,
     node_call,
@@ -25,13 +25,15 @@ from senselab_core.runtime.keys import Placement, request_components
 from senselab_core.runtime.measures import MeasureUnit
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import EnvStates, UnitResolver, Unresolved
+
+Admits = Callable[[str, ExecutionContext, RunConfig, str], bool]
+"""Whether the result store would serve a job: its key digest, its context, the run config and the backend's name."""
 
 
 @dataclass(frozen=True)
 class ItemCounts:
-    """What a resource class's jobs will do: `servable` from the store (`ResultStore.admits`), the rest computed.
+    """What a resource class's jobs will do: `servable` from the store (`admits`), the rest computed.
 
     `computed` jobs are those the store would not serve. `undetermined` jobs cannot be told at plan time, for the
     reasons in `why`; `later` names the nodes whose jobs wait on an upstream result.
@@ -44,10 +46,6 @@ class ItemCounts:
     later: tuple[str, ...] = ()
 
 
-def _admitted(store: ResultStore, key: str, context: ExecutionContext, run: RunConfig, backend: str) -> bool:
-    return store.admits(key, context, run, backend=backend) is not None
-
-
 def job_asks(  # noqa: PLR0913 - the jobs and their keys, the env, and what the predicate reads
     jobs: Sequence[Job],
     placement: Placement,
@@ -55,11 +53,11 @@ def job_asks(  # noqa: PLR0913 - the jobs and their keys, the env, and what the 
     env: EnvHandle,
     *,
     profile: ExecutionProfile,
-    store: ResultStore,
+    admits: Admits,
     run: RunConfig,
     grid: BucketGrid,
 ) -> list[Callable[[], bool]]:
-    """Return, per job, the call that asks `ResultStore.admits` whether the store would serve it in its context."""
+    """Return, per job, the call that asks `admits` whether the store would serve it in its context."""
     backend = placement.backend
     expected = service_of(backend, jobs[0].call.model) if jobs else None
     code = env_license(backend)
@@ -68,7 +66,7 @@ def job_asks(  # noqa: PLR0913 - the jobs and their keys, the env, and what the 
         picked, _ = keyed_formation(job, backend, grid)
         keyed = replace(placement, **request_components(backend, picked))
         context = job_context(keyed, env, expected, profile, job, code)
-        asks.append(functools.partial(_admitted, store, key, context, run, backend.name))
+        asks.append(functools.partial(admits, key, context, run, backend.name))
     return asks
 
 
@@ -79,17 +77,17 @@ def servable_jobs(  # noqa: PLR0913 - the fragment's jobs and keys, the env, and
     envs: EnvStates,
     *,
     profile: ExecutionProfile,
-    store: ResultStore,
+    admits: Admits,
     run: RunConfig,
 ) -> list[bool]:
-    """Return whether the store would serve each job (`ResultStore.admits`, on `pool.admit_threads` threads).
+    """Return whether the store would serve each job (`admits`, on `pool.admit_threads` threads).
 
     Every job is computed where its env is not known: not built, not readable, or on a slurm node.
     """
     env = envs.get(placement.backend)
     if isinstance(env, Unresolved):
         return [False] * len(jobs)
-    asks = job_asks(jobs, placement, keys, env, profile=profile, store=store, run=run, grid=BucketGrid.load_default())
+    asks = job_asks(jobs, placement, keys, env, profile=profile, admits=admits, run=run, grid=BucketGrid.load_default())
     with ThreadPoolExecutor(max_workers=profile.pool.admit_threads) as threads:
         return list(threads.map(lambda ask: ask(), asks))
 
@@ -98,20 +96,20 @@ def count_items(  # noqa: PLR0913 - the plan and its values, the store and run, 
     placed: Plan,
     values: Mapping[InputIdentity, object],
     *,
-    store: ResultStore,
+    admits: Admits,
     run: RunConfig,
     profile: ExecutionProfile,
     envs: EnvStates | None = None,
 ) -> dict[str, ItemCounts]:
     """Return, per resource class, the jobs of `placed` the store would serve under `run` and the ones computed.
 
-    The one servable predicate is `ResultStore.admits`, asked of each job's key digest and the context it would run
+    The one servable predicate is `admits`, asked of each job's key digest and the context it would run
     in (`job_context`), on up to `pool.admit_threads` threads. Nothing is read from a result, built or started: a job
     whose env is not built or not readable, whose context is not knowable before a worker starts (a slurm node), or
     whose key waits on an upstream result, is undetermined.
 
     Raises:
-        As `ResultStore.admits`, `fragment_jobs` and `service_of`.
+        As `admits`, `fragment_jobs` and `service_of`.
     """
     states = envs if envs is not None else EnvStates(profile)
     counts: dict[str, ItemCounts] = {}
@@ -132,7 +130,7 @@ def count_items(  # noqa: PLR0913 - the plan and its values, the store and run, 
                 held, undetermined=held.undetermined + len(jobs), why=(*held.why, env.reason)
             )
             continue
-        for ask in job_asks(jobs, placement, known.keys, env, profile=profile, store=store, run=run, grid=grid):
+        for ask in job_asks(jobs, placement, known.keys, env, profile=profile, admits=admits, run=run, grid=grid):
             asked.append((record.resource_class, ask))
     with ThreadPoolExecutor(max_workers=profile.pool.admit_threads) as pool:
         answers = list(pool.map(lambda a: a[1](), asked))
