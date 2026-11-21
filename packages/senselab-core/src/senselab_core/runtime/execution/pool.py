@@ -610,13 +610,30 @@ class Pool:
             QueueHeld: the fragment's env is held on its queue; nothing is put.
             ValueError: the fragment's admission is not held by this pool; nothing is put.
         """
-        followed = Followed([])
-        self._put(fragment, followed)
-        handle = Handle(id=f"pool-{self.epoch}-{next(self._ids)}")
-        with self._lock:
-            self._followed[handle.id] = followed
+        [taken] = self.submit_many([fragment])
+        if isinstance(taken, Exception):
+            raise taken
+        return taken
+
+    def submit_many(self, fragments: Sequence[PlanFragment]) -> list[Handle | Exception]:
+        """Put each of a round's `fragments` as `submit` does, then wake the scaler once, seeing the whole round.
+
+        Returns each fragment's handle, or the exception it was refused with (as `submit` raises it), in order.
+        """
+        taken: list[Handle | Exception] = []
+        for fragment in fragments:
+            followed = Followed([])
+            try:
+                self._put(fragment, followed)
+            except Exception as refused:  # noqa: BLE001 - the fragment's outcome, returned in its place
+                taken.append(refused)
+                continue
+            handle = Handle(id=f"pool-{self.epoch}-{next(self._ids)}")
+            with self._lock:
+                self._followed[handle.id] = followed
+            taken.append(handle)
         self._wake_scaler()
-        return handle
+        return taken
 
     def status(self, handle: Handle) -> Status:
         """Return where the fragment of `handle` is: running once any item of it is claimed or has an outcome.

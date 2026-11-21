@@ -1,10 +1,12 @@
 """`InProcess`: the `Executor` that runs a fragment's jobs through `execute` in this process."""
 
 import atexit
+import contextvars
 import itertools
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import ClassVar
 
@@ -35,6 +37,7 @@ from senselab_core.runtime.execution.executor import (
     ResultRef,
     Status,
     UpstreamRef,
+    submit_each,
 )
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, Upstream, execute
 from senselab_core.runtime.execution.outputs import anchors_of
@@ -531,6 +534,18 @@ class InProcess:
             self._outcomes[handle.id] = outcomes
             self._status[handle.id] = Status.DONE
         return handle
+
+    def submit_many(self, fragments: Sequence[PlanFragment]) -> list[Handle | Exception]:
+        """Run each of a round's `fragments` as `submit` does, at most the worker set's bound at once.
+
+        Returns each fragment's handle, or the exception its `submit` raised, in the order of `fragments`.
+        """
+        if len(fragments) <= 1:
+            return submit_each(self, fragments)
+        width = min(len(fragments), self.workers.bound)
+        with ThreadPoolExecutor(width, thread_name_prefix="senselab-in-process") as running:
+            sent = [running.submit(contextvars.copy_context().run, submit_each, self, [f]) for f in fragments]
+            return [taken.result()[0] for taken in sent]
 
     def _run(self, jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
         """Run `jobs` in runs of one batch each: a run ends where the batch for a job's length changes."""

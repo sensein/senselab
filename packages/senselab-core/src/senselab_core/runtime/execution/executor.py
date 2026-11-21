@@ -5,7 +5,7 @@ import os
 import pwd
 import re
 import socket
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Protocol
 
@@ -355,6 +355,8 @@ class WorkersBroken(QueueHeld):
 class Executor(Protocol):
     """Runs plan fragments of admitted plans: `admit` a plan, `submit` its fragments, follow, stop and read them.
 
+    The runner sends each round of ready jobs, the fragments of every node it released, in one `submit_many` call.
+
     An admission holds the values of the plan's graph inputs by content identity, until it is released; an
     `output:` input is read from the result store. Two admissions of one plan are independent. `logs_claims` says
     whether the executor's workers log each job `claimed`, in which case the runner logs no `started` as it sends one.
@@ -380,6 +382,9 @@ class Executor(Protocol):
     def submit(self, fragment: PlanFragment) -> Handle:
         """Take `fragment` and return its handle."""
 
+    def submit_many(self, fragments: Sequence[PlanFragment]) -> list[Handle | Exception]:
+        """Take a round's `fragments`; return, in their order, each one's handle or the exception that refused it."""
+
     def status(self, handle: Handle) -> Status:
         """Return where the fragment of `handle` is."""
 
@@ -388,6 +393,17 @@ class Executor(Protocol):
 
     def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
         """Return the results of `handle` landed and not yet given, and whether every one is given; never wait."""
+
+
+def submit_each(executor: Executor, fragments: Sequence[PlanFragment]) -> list[Handle | Exception]:
+    """Submit `fragments` one by one through `executor.submit`: each one's handle, or the exception it raised."""
+    taken: list[Handle | Exception] = []
+    for fragment in fragments:
+        try:
+            taken.append(executor.submit(fragment))
+        except Exception as refused:  # noqa: BLE001 - the fragment's outcome, returned in its place
+            taken.append(refused)
+    return taken
 
 
 def follow(
